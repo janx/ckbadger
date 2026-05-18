@@ -8863,7 +8863,7 @@ async fn test_address_activities_reads_from_store() {
         10,
         0,
         &tx_hash,
-        &AddrTxValue::new(0, false, true),
+        &AddrTxValue::new(0, false, true, 0),
     );
     core_batch.commit().unwrap();
     core_store
@@ -8943,7 +8943,7 @@ async fn test_address_activities_returns_protocol_metadata() {
         88,
         1,
         &tx_hash,
-        &AddrTxValue::new(0, false, true),
+        &AddrTxValue::new(0, false, true, 0),
     );
     batch.commit().unwrap();
     core_store
@@ -9051,12 +9051,14 @@ async fn test_address_activities_return_type_calls_and_support_type_call_filter(
 
     let mut core_batch = StoreBatch::new(core_store.as_ref());
     core_batch.put_tx_actions(&actions);
+    // AddrTxValue.tags must mirror the participant's tags so filtered scans
+    // hit the entry (list_activities pre-filters on AddrTxValue.tags).
     core_batch.put_addr_tx(
         &lock_hash,
         88,
         0,
         &tx_hash,
-        &AddrTxValue::new(0, false, true),
+        &AddrTxValue::new(0, false, true, TAG_TYPE_CALL),
     );
     core_batch.put_tx_hash_map(&tx_hash, 88, 0);
     core_batch.put_tx_index(
@@ -9738,7 +9740,7 @@ async fn test_address_transactions_reads_from_derived_store() {
         10,
         0,
         &tx_hash,
-        &AddrTxValue::new(0, false, true),
+        &AddrTxValue::new(0, false, true, 0),
     );
     derived_batch.commit().unwrap();
 

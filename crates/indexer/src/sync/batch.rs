@@ -1371,15 +1371,21 @@ impl Indexer {
             }
         }
 
-        // Compute per-tx address entries for addr_txs index
+        // Compute per-tx address entries for addr_txs index.
+        // Defer AddrTxValue construction until participant tags are known: the
+        // actual write is performed after TxActions is built below, where
+        // `tags_by_addr_tx` provides the tag bitmask for `AddrTxValue.tags`.
         // per_addr: lock_hash -> (output_cap_sum, input_cap_sum, has_outputs, has_inputs)
-        let mut addr_tx_entries: Vec<(
-            Vec<u8>,
-            i64,
-            i32,
-            Vec<u8>,
-            ckbadger_store::types::AddrTxValue,
-        )> = Vec::new();
+        struct PendingAddrTx {
+            lock_hash: Vec<u8>,
+            block_number: i64,
+            tx_index: i32,
+            tx_hash: Vec<u8>,
+            capacity_change: i64,
+            has_in: bool,
+            has_out: bool,
+        }
+        let mut addr_tx_entries: Vec<PendingAddrTx> = Vec::new();
         for tx_data in &all_tx_data {
             let mut per_addr: HashMap<Vec<u8>, (i64, i64, bool, bool)> = HashMap::new();
             for cell in &tx_data.cells {
@@ -1432,13 +1438,15 @@ impl Indexer {
                         tx_data.block_number
                     )
                 })?;
-                addr_tx_entries.push((
+                addr_tx_entries.push(PendingAddrTx {
                     lock_hash,
-                    tx_data.block_number,
-                    tx_data.tx_index,
-                    tx_data.hash.to_vec(),
-                    ckbadger_store::types::AddrTxValue::new(capacity_change, has_in, has_out),
-                ));
+                    block_number: tx_data.block_number,
+                    tx_index: tx_data.tx_index,
+                    tx_hash: tx_data.hash.to_vec(),
+                    capacity_change,
+                    has_in,
+                    has_out,
+                });
             }
         }
 
@@ -1656,18 +1664,8 @@ impl Indexer {
             )?;
         }
 
-        // Write addr_txs entries
-        for (lock_hash, block_num, tx_idx, tx_hash, addr_tx_value) in &addr_tx_entries {
-            put_addr_tx(
-                &mut append_history_batch,
-                &mut append_undo_seq_by_block,
-                lock_hash,
-                *block_num,
-                *tx_idx,
-                tx_hash,
-                addr_tx_value,
-            );
-        }
+        // addr_tx writes are deferred until participant tags are known (see
+        // tags_by_addr_tx construction during TxActions processing below).
 
         // DAO withdraw-request outpoints for activity classification (no per-input DB reads).
         let dao_withdraw_outpoints: HashSet<(Vec<u8>, i16)>;
@@ -2691,6 +2689,10 @@ impl Indexer {
             .filter(|d| d.might_apply_batch(&batch_lock_code_hashes, &batch_type_code_hashes))
             .collect();
         let mut activity_batch = StoreBatch::new(self.writer.store());
+        // Per-(block, tx_idx, lock_hash) participant tag bitmap. Populated as
+        // TxActions are built below, then consumed by the deferred addr_tx
+        // write loop so each `AddrTxValue.tags` matches its TxActions sibling.
+        let mut tags_by_addr_tx: HashMap<(i64, i32, Vec<u8>), u16> = HashMap::new();
         {
             let mut block_tx_idx = 0usize;
             for parsed in all_parsed_blocks {
@@ -2747,6 +2749,19 @@ impl Indexer {
                 )?;
 
                 for tx_actions in &tx_actions_list {
+                    // Capture participant tags so the deferred addr_tx writes
+                    // populate AddrTxValue.tags consistently with TxActions.
+                    for participant in &tx_actions.participants {
+                        tags_by_addr_tx.insert(
+                            (
+                                tx_actions.block_number,
+                                tx_actions.tx_index,
+                                participant.lock_hash.clone(),
+                            ),
+                            participant.tags,
+                        );
+                    }
+
                     // Accumulate daily activity stats
                     let date = ckbadger_common::block_date_from_ms(tx_actions.timestamp)
                         .format("%Y%m%d")
@@ -2801,6 +2816,36 @@ impl Indexer {
                     )?;
                 }
             }
+        }
+
+        // Deferred addr_tx writes. Each entry pairs with a TxActions participant
+        // populated above; the participant's tag bitmap drives `AddrTxValue.tags`.
+        for entry in &addr_tx_entries {
+            let tags = *tags_by_addr_tx
+                .get(&(entry.block_number, entry.tx_index, entry.lock_hash.clone()))
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "missing participant tags for addr_tx: block={}, tx_idx={}, lock_hash=0x{}",
+                        entry.block_number,
+                        entry.tx_index,
+                        hex::encode(&entry.lock_hash)
+                    )
+                })?;
+            let addr_tx_value = ckbadger_store::types::AddrTxValue::new(
+                entry.capacity_change,
+                entry.has_in,
+                entry.has_out,
+                tags,
+            );
+            put_addr_tx(
+                &mut append_history_batch,
+                &mut append_undo_seq_by_block,
+                &entry.lock_hash,
+                entry.block_number,
+                entry.tx_index,
+                &entry.tx_hash,
+                &addr_tx_value,
+            );
         }
 
         // Merge all secondary domain batches into data_batch for atomic commit

@@ -122,7 +122,7 @@ mod tests {
             100,
             0,
             &[0x11; 32],
-            &AddrTxValue::new(0, false, true),
+            &AddrTxValue::new(0, false, true, 0),
         );
         batch.commit().unwrap();
 
@@ -142,9 +142,15 @@ mod tests {
             100,
             1,
             &[0x10; 32],
-            &AddrTxValue::new(0, false, true),
+            &AddrTxValue::new(0, false, true, 0),
         );
-        batch.put_addr_tx(&lock, 99, 0, &[0x20; 32], &AddrTxValue::new(0, false, true));
+        batch.put_addr_tx(
+            &lock,
+            99,
+            0,
+            &[0x20; 32],
+            &AddrTxValue::new(0, false, true, 0),
+        );
         batch.commit().unwrap();
 
         let rows = store.list_addr_txs_recent(&lock, 10, None).unwrap();
@@ -169,16 +175,22 @@ mod tests {
             100,
             1,
             &[0x10; 32],
-            &AddrTxValue::new(0, false, true),
+            &AddrTxValue::new(0, false, true, 0),
         );
         batch.put_addr_tx(
             &lock,
             100,
             1,
             &[0x20; 32],
-            &AddrTxValue::new(0, false, true),
+            &AddrTxValue::new(0, false, true, 0),
         );
-        batch.put_addr_tx(&lock, 99, 0, &[0x30; 32], &AddrTxValue::new(0, false, true));
+        batch.put_addr_tx(
+            &lock,
+            99,
+            0,
+            &[0x30; 32],
+            &AddrTxValue::new(0, false, true, 0),
+        );
         batch.commit().unwrap();
 
         let rows = store.list_addr_txs_recent(&lock, 10, None).unwrap();
@@ -207,8 +219,8 @@ mod tests {
         let dir = tempdir().unwrap();
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         let lock = [0xBB; 32];
-        let val_sent = AddrTxValue::new(-500, true, false);
-        let val_recv = AddrTxValue::new(1000, false, true);
+        let val_sent = AddrTxValue::new(-500, true, false, 0);
+        let val_recv = AddrTxValue::new(1000, false, true, 0);
         let mut batch = StoreBatch::new(&store);
         batch.put_addr_tx(&lock, 200, 0, &[0xAA; 32], &val_sent);
         batch.put_addr_tx(&lock, 100, 0, &[0xBB; 32], &val_recv);

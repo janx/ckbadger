@@ -83,11 +83,15 @@ pub struct ConsumedCellMeta {
 }
 
 /// Pre-computed value stored in CF_ADDR_TXS.
-/// Encodes capacity change and transaction type for fast query-time access.
+/// Encodes capacity change, transaction type, and the participant tag bitmask
+/// (mirrors `ParticipantDelta::tags` for the same `(lock_hash, block, tx_idx, tx_hash)`),
+/// so filtered scans of the addr_tx index can reject non-matching entries without
+/// reading `CF_TX_ACTIONS`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AddrTxValue {
     pub capacity_change: i64,
     pub flags: u8,
+    pub tags: u16,
 }
 
 impl AddrTxValue {
@@ -96,7 +100,7 @@ impl AddrTxValue {
     pub const TX_TYPE_INTERNAL: u8 = 2;
     pub const TX_TYPE_TRANSFER: u8 = 3;
 
-    pub fn new(capacity_change: i64, has_inputs: bool, has_outputs: bool) -> Self {
+    pub fn new(capacity_change: i64, has_inputs: bool, has_outputs: bool, tags: u16) -> Self {
         let tx_type = match (has_inputs, has_outputs) {
             (true, true) => {
                 if capacity_change > 0 {
@@ -114,6 +118,7 @@ impl AddrTxValue {
         Self {
             capacity_change,
             flags: tx_type,
+            tags,
         }
     }
 
@@ -1650,6 +1655,24 @@ mod tests {
             udt_amount: Some(42),
             data_hash: None,
         }
+    }
+
+    #[test]
+    fn test_addr_tx_value_stores_tags_from_new() {
+        let value = AddrTxValue::new(1_000_000_000, true, true, TAG_TOKEN | TAG_DAO);
+        assert_eq!(value.tags, TAG_TOKEN | TAG_DAO);
+        assert_eq!(value.capacity_change, 1_000_000_000);
+        assert_eq!(value.flags, AddrTxValue::TX_TYPE_RECEIVED);
+    }
+
+    #[test]
+    fn test_addr_tx_value_roundtrip_preserves_tags() {
+        let value = AddrTxValue::new(-500, true, false, TAG_TOKEN | TAG_PROTOCOL);
+        let bytes = bincode::serialize(&value).unwrap();
+        let decoded: AddrTxValue = bincode::deserialize(&bytes).unwrap();
+        assert_eq!(decoded.tags, TAG_TOKEN | TAG_PROTOCOL);
+        assert_eq!(decoded.capacity_change, -500);
+        assert_eq!(decoded.flags, AddrTxValue::TX_TYPE_SENT);
     }
 
     #[test]

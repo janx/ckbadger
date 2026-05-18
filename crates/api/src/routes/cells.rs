@@ -3707,21 +3707,21 @@ mod tests {
             30,
             0,
             &stale_tx,
-            &ckbadger_store::types::AddrTxValue::new(0, false, true),
+            &ckbadger_store::types::AddrTxValue::new(0, false, true, 0),
         );
         domain_batch.put_addr_tx(
             &lock_hash,
             20,
             0,
             &canonical_tx_new,
-            &ckbadger_store::types::AddrTxValue::new(0, false, true),
+            &ckbadger_store::types::AddrTxValue::new(0, false, true, 0),
         );
         domain_batch.put_addr_tx(
             &lock_hash,
             10,
             0,
             &canonical_tx_old,
-            &ckbadger_store::types::AddrTxValue::new(0, false, true),
+            &ckbadger_store::types::AddrTxValue::new(0, false, true, 0),
         );
         domain_batch.put_tx_hash_map(&stale_tx, 30, 0);
         domain_batch.put_tx_hash_map(&canonical_tx_new, 20, 0);

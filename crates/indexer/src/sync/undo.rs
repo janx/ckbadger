@@ -470,7 +470,7 @@ mod tests {
             100,
             0,
             &[0xAA; 32],
-            &ckbadger_store::types::AddrTxValue::new(0, false, true),
+            &ckbadger_store::types::AddrTxValue::new(0, false, true, 0),
         );
         domain_batch.commit().unwrap();
 

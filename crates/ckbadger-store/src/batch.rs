@@ -1609,7 +1609,7 @@ mod tests {
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         let lock = [0xAD; 32];
         let tx_hash = [0xBE; 32];
-        let addr_tx_value = AddrTxValue::new(500, false, true);
+        let addr_tx_value = AddrTxValue::new(500, false, true, 0);
 
         let mut batch = StoreBatch::new(&store);
         batch.put_addr_tx(&lock, 100, 0, &tx_hash, &addr_tx_value);

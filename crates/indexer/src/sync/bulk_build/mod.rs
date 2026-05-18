@@ -2757,6 +2757,129 @@ fn semantic_tag_to_bit(tag: facts::CellSemanticTag) -> u16 {
     tag.to_bit()
 }
 
+/// Build the TxActions list for a block. Shared by the up-front computation
+/// (whose participant tags drive `AddrTxValue.tags`) and the CF_TX_ACTIONS
+/// materialization later in the same function. Cellbase txs are included in
+/// the returned list because activity stats accumulation walks the full list;
+/// CF_TX_ACTIONS itself excludes cellbase at materialize time.
+fn build_tx_actions_list_for_bulk(
+    block_txs: &[facts::TxFacts],
+    block_resolved: &[facts::ResolvedTxFacts<'_>],
+    interner: &interner::FrozenIdentityView,
+    detectors: &[Box<dyn crate::db::writer::activities::ProtocolDetector>],
+) -> Result<Vec<ckbadger_store::types::TxActions>> {
+    let mut block_inputs = Vec::with_capacity(block_txs.len());
+    let mut block_outputs = Vec::with_capacity(block_txs.len());
+    for (tx, resolved_tx) in block_txs.iter().zip(block_resolved) {
+        if tx.hash != resolved_tx.tx_hash
+            || tx.block_number != resolved_tx.block_number
+            || tx.tx_index != resolved_tx.tx_index
+        {
+            bail!(
+                "bulk build activity tx alignment mismatch: facts_tx=0x{} facts_block={} facts_tx_index={} resolved_tx=0x{} resolved_block={} resolved_tx_index={}",
+                hex::encode(tx.hash),
+                tx.block_number,
+                tx.tx_index,
+                hex::encode(resolved_tx.tx_hash),
+                resolved_tx.block_number,
+                resolved_tx.tx_index
+            );
+        }
+
+        block_outputs.push(
+            resolved_tx
+                .cells
+                .iter()
+                .map(|cell| crate::db::writer::activities::OutputCellView {
+                    capacity: cell.capacity,
+                    lock_code_hash: interner.resolve_bytes(cell.lock_code_hash_id),
+                    lock_hash_type: cell.lock_hash_type,
+                    lock_args: interner.resolve_bytes(cell.lock_args_id),
+                    lock_script_hash: interner.resolve_bytes(cell.lock_script_hash_id),
+                    type_code_hash: cell.type_code_hash_id.map(|id| interner.resolve_bytes(id)),
+                    type_hash_type: cell.type_hash_type,
+                    type_args: cell.type_args_id.map(|id| interner.resolve_bytes(id)),
+                    type_script_hash: cell
+                        .type_script_hash_id
+                        .map(|id| interner.resolve_bytes(id)),
+                    data_hash: cell.data_hash.as_ref().map_or(&[], |h| h.as_slice()),
+                    data_size: cell.data_size,
+                    data: &cell.data,
+                })
+                .collect::<Vec<_>>(),
+        );
+        block_inputs.push(
+            resolved_tx
+                .resolved_inputs
+                .iter()
+                .map(|input| -> Result<crate::db::writer::activities::InputCellView<'_>> {
+                    let (is_dao_withdraw_request, dao_compensation) = match (
+                        input.dao_state,
+                        input.dao_compensation_ars,
+                    ) {
+                        (
+                            Some(facts::DaoCellState::WithdrawRequest { .. }),
+                            Some(facts::DaoCompensationArs {
+                                deposit_ar,
+                                withdraw_request_ar,
+                            }),
+                        ) => (
+                            true,
+                            Some(crate::db::writer::dao::calculate_dao_compensation_from_ar(
+                                input.capacity, deposit_ar, withdraw_request_ar,
+                            )?),
+                        ),
+                        (Some(facts::DaoCellState::WithdrawRequest { .. }), None) => {
+                            bail!(
+                                "missing DAO compensation ARs while building bulk DAO activity input: outpoint=0x{}:{}",
+                                hex::encode(input.outpoint.tx_hash),
+                                input.outpoint.index
+                            );
+                        }
+                        _ => (false, None),
+                    };
+                    Ok(crate::db::writer::activities::InputCellView {
+                        lock_script_hash: interner.resolve_bytes(input.lock_script_hash_id),
+                        lock_code_hash: interner.resolve_bytes(input.lock_code_hash_id),
+                        lock_hash_type: input.lock_hash_type,
+                        lock_args: interner.resolve_bytes(input.lock_args_id),
+                        capacity: input.capacity,
+                        occupied_capacity: input.occupied_capacity,
+                        type_code_hash: input.type_code_hash_id.map(|id| interner.resolve_bytes(id)),
+                        type_hash_type: input.type_hash_type,
+                        type_script_hash: input.type_script_hash_id.map(|id| interner.resolve_bytes(id)),
+                        type_args: input.type_args_id.map(|id| interner.resolve_bytes(id)),
+                        udt_amount: input.udt_amount,
+                        data: &[],
+                        is_dao_withdraw_request,
+                        dao_compensation,
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?,
+        );
+    }
+
+    let tx_views = block_txs
+        .iter()
+        .zip(block_inputs)
+        .zip(block_outputs)
+        .map(
+            |((tx, inputs), outputs)| crate::db::writer::activities::TxView {
+                tx_hash: &tx.hash,
+                block_hash: &tx.block_hash,
+                tx_index: tx.tx_index,
+                block_number: tx.block_number,
+                timestamp: tx.timestamp_ms,
+                is_cellbase: tx.is_cellbase,
+                inputs,
+                outputs,
+            },
+        )
+        .collect::<Vec<_>>();
+
+    crate::db::writer::activities::build_tx_actions_for_block(&tx_views, detectors)
+}
+
 /// Serialize into a pre-allocated Vec, avoiding realloc overhead of `bincode::serialize`
 /// which starts with a small buffer and grows. Pre-computes exact size first.
 ///
@@ -2819,8 +2942,36 @@ fn build_history_rows_for_block(
         );
     }
 
+    // Compute TxActions for the block up-front. The addr_tx materialization below
+    // reads each participant's `tags` from this list to populate `AddrTxValue.tags`,
+    // letting filtered scans of CF_ADDR_TXS skip non-matching entries without
+    // multi_get-ing CF_TX_ACTIONS. CF_TX_ACTIONS rows themselves are still pushed
+    // later in this function, alongside the in-memory list returned for stats.
+    let tx_actions_list =
+        build_tx_actions_list_for_bulk(block_txs, block_resolved, interner, detectors)?;
+    if tx_actions_list.len() != block_txs.len() {
+        bail!(
+            "bulk build TxActions count mismatch with block_txs: block={} tx_actions={} block_txs={}",
+            block.number,
+            tx_actions_list.len(),
+            block_txs.len()
+        );
+    }
+    // Per-tx-position participant tag lookup, keyed by 32-byte lock_hash.
+    // Length-prefixed by tx position to keep lookup O(1) per (tx, lock_hash) pair.
+    let participant_tags: Vec<FxHashMap<&[u8], u16>> = tx_actions_list
+        .iter()
+        .map(|actions| {
+            actions
+                .participants
+                .iter()
+                .map(|p| (p.lock_hash.as_slice(), p.tags))
+                .collect()
+        })
+        .collect();
+
     // Per-tx: tx_index, tx_hash_map, addr_txs, consumed_cells.
-    for (tx, resolved_tx) in block_txs.iter().zip(block_resolved) {
+    for (tx_position, (tx, resolved_tx)) in block_txs.iter().zip(block_resolved).enumerate() {
         if tx.hash != resolved_tx.tx_hash
             || tx.block_number != resolved_tx.block_number
             || tx.tx_index != resolved_tx.tx_index
@@ -2892,6 +3043,7 @@ fn build_history_rows_for_block(
             })?;
             e.3 = true;
         }
+        let tags_for_tx = &participant_tags[tx_position];
         for (lock_hash_id, (out_cap, in_cap, has_out, has_in)) in per_addr {
             let capacity_change = out_cap.checked_sub(in_cap).ok_or_else(|| {
                 anyhow::anyhow!(
@@ -2901,16 +3053,24 @@ fn build_history_rows_for_block(
                     tx.block_number
                 )
             })?;
-            let value = ckbadger_store::types::AddrTxValue::new(capacity_change, has_in, has_out);
+            let lock_hash_bytes = interner.resolve_bytes(lock_hash_id);
+            // ParticipantDelta is emitted for every (lock_hash) that touched inputs
+            // or outputs of this tx, which is exactly the same set we iterate here,
+            // so a missing entry is a real invariant violation, not a normal case.
+            let tags = *tags_for_tx.get(lock_hash_bytes).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "missing participant tags for addr_tx: block={}, tx_idx={}, lock_hash=0x{}",
+                    tx.block_number,
+                    tx.tx_index,
+                    hex::encode(lock_hash_bytes)
+                )
+            })?;
+            let value =
+                ckbadger_store::types::AddrTxValue::new(capacity_change, has_in, has_out, tags);
             let encoded_value = bincode_serialize_presized(&value)?;
             rows.push(materialize::MaterializedRow::new(
                 CF_ADDR_TXS,
-                keys::encode_addr_tx_key(
-                    interner.resolve_bytes(lock_hash_id),
-                    tx.block_number,
-                    tx.tx_index,
-                    &tx.hash,
-                ),
+                keys::encode_addr_tx_key(lock_hash_bytes, tx.block_number, tx.tx_index, &tx.hash),
                 encoded_value,
             ));
         }
@@ -2985,146 +3145,21 @@ fn build_history_rows_for_block(
         }
     }
 
-    // TxActions for this block.
-    let mut tx_actions_list;
-    {
-        if block_txs.len() != block_resolved.len() {
-            bail!(
-                "bulk build activity tx count mismatch within block: block={} facts_txs={} resolved_txs={}",
-                block.number,
-                block_txs.len(),
-                block_resolved.len()
-            );
-        }
-
-        let mut block_inputs = Vec::with_capacity(block_txs.len());
-        let mut block_outputs = Vec::with_capacity(block_txs.len());
-        for (tx, resolved_tx) in block_txs.iter().zip(block_resolved) {
-            if tx.hash != resolved_tx.tx_hash
-                || tx.block_number != resolved_tx.block_number
-                || tx.tx_index != resolved_tx.tx_index
-            {
-                bail!(
-                    "bulk build activity tx alignment mismatch: facts_tx=0x{} facts_block={} facts_tx_index={} resolved_tx=0x{} resolved_block={} resolved_tx_index={}",
-                    hex::encode(tx.hash),
-                    tx.block_number,
-                    tx.tx_index,
-                    hex::encode(resolved_tx.tx_hash),
-                    resolved_tx.block_number,
-                    resolved_tx.tx_index
-                );
-            }
-
-            block_outputs.push(
-                resolved_tx
-                    .cells
-                    .iter()
-                    .map(|cell| crate::db::writer::activities::OutputCellView {
-                        capacity: cell.capacity,
-                        lock_code_hash: interner.resolve_bytes(cell.lock_code_hash_id),
-                        lock_hash_type: cell.lock_hash_type,
-                        lock_args: interner.resolve_bytes(cell.lock_args_id),
-                        lock_script_hash: interner.resolve_bytes(cell.lock_script_hash_id),
-                        type_code_hash: cell.type_code_hash_id.map(|id| interner.resolve_bytes(id)),
-                        type_hash_type: cell.type_hash_type,
-                        type_args: cell.type_args_id.map(|id| interner.resolve_bytes(id)),
-                        type_script_hash: cell
-                            .type_script_hash_id
-                            .map(|id| interner.resolve_bytes(id)),
-                        data_hash: cell.data_hash.as_ref().map_or(&[], |h| h.as_slice()),
-                        data_size: cell.data_size,
-                        data: &cell.data,
-                    })
-                    .collect::<Vec<_>>(),
-            );
-            block_inputs.push(
-                resolved_tx
-                    .resolved_inputs
-                    .iter()
-                    .map(|input| -> Result<crate::db::writer::activities::InputCellView<'_>> {
-                        let (is_dao_withdraw_request, dao_compensation) = match (
-                            input.dao_state,
-                            input.dao_compensation_ars,
-                        ) {
-                            (
-                                Some(facts::DaoCellState::WithdrawRequest { .. }),
-                                Some(facts::DaoCompensationArs {
-                                    deposit_ar,
-                                    withdraw_request_ar,
-                                }),
-                            ) => (
-                                true,
-                                Some(crate::db::writer::dao::calculate_dao_compensation_from_ar(
-                                    input.capacity, deposit_ar, withdraw_request_ar,
-                                )?),
-                            ),
-                            (Some(facts::DaoCellState::WithdrawRequest { .. }), None) => {
-                                bail!(
-                                    "missing DAO compensation ARs while building bulk DAO activity input: outpoint=0x{}:{}",
-                                    hex::encode(input.outpoint.tx_hash),
-                                    input.outpoint.index
-                                );
-                            }
-                            _ => (false, None),
-                        };
-                        Ok(crate::db::writer::activities::InputCellView {
-                            lock_script_hash: interner.resolve_bytes(input.lock_script_hash_id),
-                            lock_code_hash: interner.resolve_bytes(input.lock_code_hash_id),
-                            lock_hash_type: input.lock_hash_type,
-                            lock_args: interner.resolve_bytes(input.lock_args_id),
-                            capacity: input.capacity,
-                            occupied_capacity: input.occupied_capacity,
-                            type_code_hash: input.type_code_hash_id.map(|id| interner.resolve_bytes(id)),
-                            type_hash_type: input.type_hash_type,
-                            type_script_hash: input.type_script_hash_id.map(|id| interner.resolve_bytes(id)),
-                            type_args: input.type_args_id.map(|id| interner.resolve_bytes(id)),
-                            udt_amount: input.udt_amount,
-                            data: &[],
-                            is_dao_withdraw_request,
-                            dao_compensation,
-                        })
-                    })
-                    .collect::<Result<Vec<_>>>()?,
-            );
-        }
-
-        let tx_views = block_txs
-            .iter()
-            .zip(block_inputs)
-            .zip(block_outputs)
-            .map(
-                |((tx, inputs), outputs)| crate::db::writer::activities::TxView {
-                    tx_hash: &tx.hash,
-                    block_hash: &tx.block_hash,
-                    tx_index: tx.tx_index,
-                    block_number: tx.block_number,
-                    timestamp: tx.timestamp_ms,
-                    is_cellbase: tx.is_cellbase,
-                    inputs,
-                    outputs,
-                },
-            )
-            .collect::<Vec<_>>();
-
-        let actions_list =
-            crate::db::writer::activities::build_tx_actions_for_block(&tx_views, detectors)?;
-        tx_actions_list = Vec::with_capacity(actions_list.len());
-        for tx_actions in actions_list {
-            // Skip cellbase from CF_TX_ACTIONS — the API filters them at read time
-            // (activities.rs:795) and they are never displayed. Activity stats
-            // accumulation uses tx_actions_list (in-memory), not CF_TX_ACTIONS.
-            if !tx_actions.is_cellbase {
-                rows.push(materialize::MaterializedRow::new(
-                    CF_TX_ACTIONS,
-                    keys::encode_tx_actions_key(
-                        tx_actions.block_number,
-                        tx_actions.tx_index,
-                        &tx_actions.tx_hash,
-                    ),
-                    bincode_serialize_presized(&tx_actions)?,
-                ));
-            }
-            tx_actions_list.push(tx_actions);
+    // CF_TX_ACTIONS materialization from the tx_actions_list computed at the top
+    // of this function. Cellbase txs are excluded from CF_TX_ACTIONS — the API
+    // filters them at read time (activities.rs:795) and they are never displayed.
+    // Activity stats accumulation uses the returned in-memory list, not CF_TX_ACTIONS.
+    for tx_actions in &tx_actions_list {
+        if !tx_actions.is_cellbase {
+            rows.push(materialize::MaterializedRow::new(
+                CF_TX_ACTIONS,
+                keys::encode_tx_actions_key(
+                    tx_actions.block_number,
+                    tx_actions.tx_index,
+                    &tx_actions.tx_hash,
+                ),
+                bincode_serialize_presized(tx_actions)?,
+            ));
         }
     }
 

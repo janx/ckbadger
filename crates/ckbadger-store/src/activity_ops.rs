@@ -6,6 +6,35 @@ use crate::types::*;
 
 use crate::bytes_to_hex;
 
+/// Necessary-but-not-sufficient filter check using only the tag bitmask
+/// stored in `AddrTxValue`. Used to skip CF_TX_ACTIONS reads for entries
+/// that can't possibly match. Sufficient for all filters except `protocol:X`,
+/// where this only verifies `TAG_PROTOCOL` is set and the protocol-name
+/// match still requires the full `TxActions` payload.
+fn tags_pass_filter(tags: u16, filter: Option<&str>) -> bool {
+    match filter {
+        None | Some("") | Some("all") => true,
+        Some("ckb") => {
+            let non_ckb_mask = TAG_TOKEN
+                | TAG_OBJECT
+                | TAG_IDENTITY
+                | TAG_DAO
+                | TAG_PROTOCOL
+                | TAG_TYPE_CALL
+                | TAG_LOCK_CALL;
+            tags & non_ckb_mask == 0
+        }
+        Some("token") => tags & TAG_TOKEN != 0,
+        Some("object") => tags & TAG_OBJECT != 0,
+        Some("identity") => tags & TAG_IDENTITY != 0,
+        Some("dao") => tags & TAG_DAO != 0,
+        Some("type_call") => tags & TAG_TYPE_CALL != 0,
+        Some("lock_call") => tags & TAG_LOCK_CALL != 0,
+        Some(proto) if proto.starts_with("protocol:") => tags & TAG_PROTOCOL != 0,
+        Some(_) => false,
+    }
+}
+
 fn validate_tx_actions_identity(
     actions: &TxActions,
     block_num: i64,
@@ -168,56 +197,69 @@ impl CkbadgerStore {
                 break;
             }
 
-            let action_keys: Vec<Vec<u8>> = rows
-                .iter()
-                .map(|(block_num, tx_idx, tx_hash, _addr_tx_value)| {
-                    keys::encode_tx_actions_key(*block_num, *tx_idx, tx_hash)
-                })
-                .collect();
-            let action_refs: Vec<(&rocksdb::ColumnFamily, &[u8])> = action_keys
-                .iter()
-                .map(|key| (activity_cf, key.as_slice()))
-                .collect();
-            let action_values = self.multi_get_cf(action_refs);
+            // Always advance the scan cursor by the last row we saw, even if the
+            // tag pre-filter excludes the entire chunk — otherwise filtered scans
+            // on top addresses would re-read the same chunk forever.
+            let last_seen = rows.last().map(|(b, t, _, _)| (*b, *t));
 
-            let mut last_seen = None;
-            for ((block_num, tx_idx, tx_hash, _addr_tx_value), value_result) in
-                rows.iter().zip(action_values)
-            {
-                last_seen = Some((*block_num, *tx_idx));
-                let value = match value_result {
-                    Ok(Some(value)) => value,
-                    Ok(None) => {
-                        // Cellbase txs are written to CF_ADDR_TXS but intentionally
-                        // excluded from CF_TX_ACTIONS (see batch.rs/bulk_build). Skip.
-                        continue;
-                    }
-                    Err(e) => {
-                        anyhow::bail!(
-                            "rocksdb multi_get failed in list_activities: lock_hash=0x{}, block_num={}, tx_idx={}, tx_hash=0x{}, error={}",
+            // Pre-filter on AddrTxValue.tags from the thin index so we don't
+            // multi_get CF_TX_ACTIONS for entries that can't match. This is the
+            // perf-critical path for filtered scans on high-cardinality addresses.
+            let surviving: Vec<&(i64, i32, Vec<u8>, AddrTxValue)> = rows
+                .iter()
+                .filter(|(_, _, _, addr_tx_value)| tags_pass_filter(addr_tx_value.tags, filter))
+                .collect();
+
+            if !surviving.is_empty() {
+                let action_keys: Vec<Vec<u8>> = surviving
+                    .iter()
+                    .map(|(block_num, tx_idx, tx_hash, _)| {
+                        keys::encode_tx_actions_key(*block_num, *tx_idx, tx_hash)
+                    })
+                    .collect();
+                let action_refs: Vec<(&rocksdb::ColumnFamily, &[u8])> = action_keys
+                    .iter()
+                    .map(|key| (activity_cf, key.as_slice()))
+                    .collect();
+                let action_values = self.multi_get_cf(action_refs);
+
+                for ((block_num, tx_idx, tx_hash, _addr_tx_value), value_result) in
+                    surviving.iter().zip(action_values)
+                {
+                    let value = match value_result {
+                        Ok(Some(value)) => value,
+                        Ok(None) => {
+                            // Cellbase txs are written to CF_ADDR_TXS but intentionally
+                            // excluded from CF_TX_ACTIONS (see batch.rs/bulk_build). Skip.
+                            continue;
+                        }
+                        Err(e) => {
+                            anyhow::bail!(
+                                "rocksdb multi_get failed in list_activities: lock_hash=0x{}, block_num={}, tx_idx={}, tx_hash=0x{}, error={}",
+                                bytes_to_hex(lock_hash),
+                                block_num,
+                                tx_idx,
+                                bytes_to_hex(tx_hash),
+                                e
+                            );
+                        }
+                    };
+                    let actions: TxActions = bincode::deserialize(&value).map_err(|e| {
+                        anyhow::anyhow!(
+                            "failed to deserialize tx actions in list_activities: lock_hash=0x{}, block_num={}, tx_idx={}, tx_hash=0x{}, error={}",
                             bytes_to_hex(lock_hash),
                             block_num,
                             tx_idx,
                             bytes_to_hex(tx_hash),
                             e
-                        );
-                    }
-                };
-                let actions: TxActions = bincode::deserialize(&value).map_err(|e| {
-                    anyhow::anyhow!(
-                        "failed to deserialize tx actions in list_activities: lock_hash=0x{}, block_num={}, tx_idx={}, tx_hash=0x{}, error={}",
-                        bytes_to_hex(lock_hash),
-                        block_num,
-                        tx_idx,
-                        bytes_to_hex(tx_hash),
-                        e
-                    )
-                })?;
-                validate_tx_actions_identity(&actions, *block_num, *tx_idx, tx_hash)?;
-                if Self::matches_activity_filter(&actions, lock_hash, filter) {
-                    results.push(actions);
-                    if results.len() >= limit {
-                        return Ok(results);
+                        )
+                    })?;
+                    validate_tx_actions_identity(&actions, *block_num, *tx_idx, tx_hash)?;
+                    if Self::matches_activity_filter(&actions, lock_hash, filter) {
+                        results.push(actions);
+                        if results.len() >= limit {
+                            return Ok(results);
+                        }
                     }
                 }
             }
@@ -445,6 +487,76 @@ mod tests {
             &lock_hash,
             Some("protocol:fiber")
         ));
+    }
+
+    #[test]
+    fn test_list_activities_filter_skips_cf_tx_actions_read_when_tags_reject() {
+        // Asserts the perf optimization: when filter=token and the AddrTxValue.tags
+        // does NOT contain TAG_TOKEN, list_activities must reject the entry from the
+        // thin index alone without ever touching CF_TX_ACTIONS for it.
+        //
+        // Proof technique: write deliberately CORRUPT CF_TX_ACTIONS bytes for the
+        // non-matching entry. If the implementation reads them, bincode::deserialize
+        // returns an error. If the optimization is correct, the entry is skipped on
+        // the AddrTxValue.tags check before the read happens.
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+
+        let lock = vec![0xAA; 32];
+        let matching_tx_hash = [0x01; 32];
+        let non_matching_tx_hash = [0x02; 32];
+
+        let mut batch = StoreBatch::new(&store);
+        // Matching entry: AddrTxValue.tags has TAG_TOKEN. Real TxActions also written.
+        batch.put_addr_tx(
+            &lock,
+            100,
+            0,
+            &matching_tx_hash,
+            &AddrTxValue::new(50, false, true, TAG_TOKEN),
+        );
+        let matching_actions = TxActions {
+            tx_hash: matching_tx_hash.to_vec(),
+            block_hash: vec![0xBB; 32],
+            block_number: 100,
+            tx_index: 0,
+            timestamp: 1_700_000_100,
+            is_cellbase: false,
+            protocol_actions: vec![],
+            type_calls: vec![],
+            lock_calls: vec![],
+            participants: vec![ParticipantDelta {
+                lock_hash: lock.clone(),
+                ckb_delta: 50,
+                used_delta: 0,
+                item_deltas: vec![],
+                tags: TAG_TOKEN,
+            }],
+        };
+        batch.put_tx_actions(&matching_actions);
+
+        // Non-matching entry: AddrTxValue.tags = 0 (no TAG_TOKEN). CF_TX_ACTIONS
+        // intentionally corrupt — list_activities(filter=token) must NOT read it.
+        batch.put_addr_tx(
+            &lock,
+            99,
+            0,
+            &non_matching_tx_hash,
+            &AddrTxValue::new(10, false, true, 0),
+        );
+        batch.commit().unwrap();
+
+        let corrupt_key = keys::encode_tx_actions_key(99, 0, &non_matching_tx_hash);
+        store
+            .put_cf(store.cf_tx_actions(), &corrupt_key, &[0xFF; 7])
+            .unwrap();
+
+        let results = store
+            .list_activities(&lock, 10, None, Some("token"))
+            .expect("filter=token must skip non-token entries without reading their CF_TX_ACTIONS");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].block_number, 100);
+        assert_eq!(results[0].tx_index, 0);
     }
 
     #[test]

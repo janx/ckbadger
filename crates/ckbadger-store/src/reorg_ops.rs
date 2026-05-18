@@ -3989,14 +3989,14 @@ mod tests {
             1,
             0,
             &tx_hash_keep,
-            &AddrTxValue::new(0, false, true),
+            &AddrTxValue::new(0, false, true, 0),
         );
         batch.put_addr_tx(
             &lock_hash,
             2,
             0,
             &tx_hash_drop,
-            &AddrTxValue::new(0, false, true),
+            &AddrTxValue::new(0, false, true, 0),
         );
         batch.commit().unwrap();
         seed_sync_status(&store, 2, &header2.hash, 2, 2, 2);
@@ -5809,7 +5809,7 @@ mod tests {
             2,
             0,
             &tx_hash,
-            &AddrTxValue::new(0, false, true),
+            &AddrTxValue::new(0, false, true, 0),
         );
         batch.put_addr_balance(
             &lock_hash,
