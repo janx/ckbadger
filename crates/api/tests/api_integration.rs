@@ -13,7 +13,7 @@ use ckbadger_api::cycles::CyclesClient;
 use ckbadger_api::routes::api_routes;
 use ckbadger_api::utils::address::compute_script_hash;
 use ckbadger_api::ws::WsManager;
-use ckbadger_api::{create_router, AppConfig, AppState, CleanupPathGuard};
+use ckbadger_api::{create_router, dispatch_initial_warmup, AppConfig, AppState, CleanupPathGuard};
 use ckbadger_common::{BackgroundTaskKind, BackgroundTaskState};
 use ckbadger_indexer::label_import::run_label_import_bundled;
 use ckbadger_store::batch::StoreBatch;
@@ -102,8 +102,8 @@ fn test_config(store: Arc<CkbadgerStore>) -> AppConfig {
     test_config_with_append_only(store.clone(), store)
 }
 
-fn create_router_without_warmup(config: AppConfig) -> axum::Router {
-    let state = Arc::new(AppState {
+fn test_app_state(config: AppConfig) -> Arc<AppState> {
+    Arc::new(AppState {
         store: config.store,
         append_only_store: config.append_only_store,
         ws_manager: Arc::new(WsManager::new()),
@@ -120,11 +120,94 @@ fn create_router_without_warmup(config: AppConfig) -> axum::Router {
         spore_cache: Arc::new(arc_swap::ArcSwap::from_pointee(None)),
         token_cache: Arc::new(arc_swap::ArcSwap::from_pointee(None)),
         object_cache: Arc::new(arc_swap::ArcSwap::from_pointee(None)),
-    });
+    })
+}
+
+fn create_router_without_warmup(config: AppConfig) -> axum::Router {
+    let state = test_app_state(config);
 
     axum::Router::new()
         .nest("/api/v1", api_routes())
         .with_state(state)
+}
+
+/// Regression test for the "API down for a long time after restart" bug.
+///
+/// `warmup_assets_cache_once` performs full-store scans that previously ran on
+/// the listener-bind path, so port 8101 stayed closed for the whole warmup. The
+/// fix defers the warmup (spawns it) when background refresh loops are enabled
+/// (`start_background_tasks == true`), so the API binds immediately.
+///
+/// This runs on the default current-thread test runtime: a `tokio::spawn`ed
+/// task is not polled until the current task yields, so right after
+/// `dispatch_initial_warmup(.., true).await` returns the warmup has provably
+/// not run yet — `token_cache` is still `None`. It then populates in the
+/// background once we yield.
+#[tokio::test]
+async fn test_initial_warmup_deferred_when_background_tasks_enabled() {
+    let store = test_store();
+    let state = test_app_state(test_config(store));
+
+    // Sanity: cache starts cold.
+    assert!(state.token_cache.load().is_none());
+
+    // defer = true: warmup must be spawned, not awaited.
+    dispatch_initial_warmup(state.clone(), true).await;
+
+    // The spawned warmup has not been polled yet (no yield since the spawn),
+    // so the cache is still cold. If the warmup were awaited (the old bug),
+    // this would already be `Some`.
+    assert!(
+        state.token_cache.load().is_none(),
+        "warmup must be deferred, not run synchronously on the bind path"
+    );
+
+    // The status indicator is wired up immediately (visible the instant the
+    // API starts accepting connections).
+    let warming = {
+        let data = state.background_tasks.read().unwrap();
+        data.tasks
+            .iter()
+            .find(|t| t.name == "cache_warmup")
+            .map(|t| (t.kind, t.state))
+    };
+    assert_eq!(
+        warming,
+        Some((BackgroundTaskKind::Job, BackgroundTaskState::Running)),
+        "cache_warmup task should be marked Running synchronously"
+    );
+
+    // Yielding lets the background warmup run to completion.
+    let mut populated = false;
+    for _ in 0..200 {
+        if state.token_cache.load().is_some() {
+            populated = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    assert!(
+        populated,
+        "deferred warmup should populate the cache in the background"
+    );
+}
+
+/// Counterpart: with background loops disabled (tests / embedded use), the
+/// warmup must run synchronously so caches are seeded before the first request.
+#[tokio::test]
+async fn test_initial_warmup_blocks_when_background_tasks_disabled() {
+    let store = test_store();
+    let state = test_app_state(test_config(store));
+
+    assert!(state.token_cache.load().is_none());
+
+    // defer = false: warmup is awaited, so the cache is warm on return.
+    dispatch_initial_warmup(state.clone(), false).await;
+
+    assert!(
+        state.token_cache.load().is_some(),
+        "blocking warmup should seed the cache before returning"
+    );
 }
 
 #[tokio::test]

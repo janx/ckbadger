@@ -180,6 +180,45 @@ pub struct AppConfig {
     pub cycles_request_dir: Option<PathBuf>,
 }
 
+/// Run the one-shot asset/address/script cache warmup.
+///
+/// The warmup performs full-store scans (every address, every token + holders,
+/// spores/clusters) and can take minutes on a synced mainnet DB. It must NOT
+/// block the API's HTTP listener bind.
+///
+/// - `defer == true` (production, where the recurring refresh loops also run):
+///   spawn the warmup so `create_router` returns immediately and the listener
+///   binds at once. Asset/address/script endpoints return `503 warmup_pending`
+///   until the first pass lands; the refresh loops keep them seeded thereafter.
+/// - `defer == false` (tests / embedded use without background loops): run it
+///   synchronously so caches are seeded before the first request is served.
+///
+/// In both cases the `cache_warmup` background task is marked `Running`
+/// synchronously, so the status endpoint and TUI reflect "warming up" the
+/// instant the API starts accepting connections.
+pub async fn dispatch_initial_warmup(state: Arc<AppState>, defer: bool) {
+    state.update_background_task("cache_warmup", |entry| {
+        entry.kind = BackgroundTaskKind::Job;
+        entry.state = BackgroundTaskState::Running;
+        entry.started_at = Some(chrono::Utc::now().timestamp());
+        entry.message = Some("Warming up asset caches...".to_string());
+    });
+
+    if defer {
+        tracing::info!(
+            "API accepting connections; asset cache warmup running in background \
+             (asset/address/script endpoints return 503 warmup_pending until ready)"
+        );
+        tokio::spawn(async move {
+            if let Err(e) = warmup::warmup_assets_cache_once(state).await {
+                tracing::warn!("Initial assets cache warmup failed: {}", e);
+            }
+        });
+    } else if let Err(e) = warmup::warmup_assets_cache_once(state).await {
+        tracing::warn!("Initial assets cache warmup failed: {}", e);
+    }
+}
+
 pub async fn create_router(config: AppConfig) -> Router {
     let ws_manager = Arc::new(WsManager::new());
 
@@ -227,9 +266,7 @@ pub async fn create_router(config: AppConfig) -> Router {
         object_cache: Arc::new(ArcSwap::from_pointee(None)),
     });
 
-    if let Err(e) = warmup::warmup_assets_cache_once(state.clone()).await {
-        tracing::warn!("Initial assets cache warmup failed: {}", e);
-    }
+    dispatch_initial_warmup(state.clone(), config.start_background_tasks).await;
 
     let cors = CorsLayer::new()
         .allow_origin(Any)

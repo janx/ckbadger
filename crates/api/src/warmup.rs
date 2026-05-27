@@ -1052,6 +1052,7 @@ pub async fn warmup_assets_cache_once(state: Arc<AppState>) -> anyhow::Result<()
         let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
         match &result {
             Ok(()) => {
+                tracing::info!(elapsed_ms, "Asset cache warmup completed");
                 state.update_background_task("cache_warmup", |entry| {
                     entry.state = BackgroundTaskState::Completed;
                     entry.elapsed_ms = Some(elapsed_ms);
