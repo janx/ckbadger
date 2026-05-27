@@ -134,66 +134,38 @@ fn create_router_without_warmup(config: AppConfig) -> axum::Router {
 /// Regression test for the "API down for a long time after restart" bug.
 ///
 /// `warmup_assets_cache_once` performs full-store scans that previously ran on
-/// the listener-bind path, so port 8101 stayed closed for the whole warmup. The
-/// fix defers the warmup (spawns it) when background refresh loops are enabled
-/// (`start_background_tasks == true`), so the API binds immediately.
-///
-/// This runs on the default current-thread test runtime: a `tokio::spawn`ed
-/// task is not polled until the current task yields, so right after
-/// `dispatch_initial_warmup(.., true).await` returns the warmup has provably
-/// not run yet — `token_cache` is still `None`. It then populates in the
-/// background once we yield.
+/// the listener-bind path, so port 8101 stayed closed for the whole warmup. In
+/// production (`start_background_tasks == true`) the refresh loops own the
+/// single seeding path, so the bind path must do no warmup work at all —
+/// `dispatch_initial_warmup(.., true)` returns without touching the caches and
+/// without creating a blocking `cache_warmup` job.
 #[tokio::test]
-async fn test_initial_warmup_deferred_when_background_tasks_enabled() {
+async fn test_initial_warmup_does_no_work_on_production_bind_path() {
     let store = test_store();
     let state = test_app_state(test_config(store));
 
-    // Sanity: cache starts cold.
     assert!(state.token_cache.load().is_none());
 
-    // defer = true: warmup must be spawned, not awaited.
+    // defer = true (production): the refresh loops seed the caches, not this.
     dispatch_initial_warmup(state.clone(), true).await;
 
-    // The spawned warmup has not been polled yet (no yield since the spawn),
-    // so the cache is still cold. If the warmup were awaited (the old bug),
-    // this would already be `Some`.
     assert!(
         state.token_cache.load().is_none(),
-        "warmup must be deferred, not run synchronously on the bind path"
+        "production bind path must not build caches; the refresh loops do"
     );
-
-    // The status indicator is wired up immediately (visible the instant the
-    // API starts accepting connections).
-    let warming = {
+    let has_warmup_job = {
         let data = state.background_tasks.read().unwrap();
-        data.tasks
-            .iter()
-            .find(|t| t.name == "cache_warmup")
-            .map(|t| (t.kind, t.state))
+        data.tasks.iter().any(|t| t.name == "cache_warmup")
     };
-    assert_eq!(
-        warming,
-        Some((BackgroundTaskKind::Job, BackgroundTaskState::Running)),
-        "cache_warmup task should be marked Running synchronously"
-    );
-
-    // Yielding lets the background warmup run to completion.
-    let mut populated = false;
-    for _ in 0..200 {
-        if state.token_cache.load().is_some() {
-            populated = true;
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-    }
     assert!(
-        populated,
-        "deferred warmup should populate the cache in the background"
+        !has_warmup_job,
+        "production bind path must not create a blocking cache_warmup job"
     );
 }
 
 /// Counterpart: with background loops disabled (tests / embedded use), the
-/// warmup must run synchronously so caches are seeded before the first request.
+/// warmup must run synchronously so caches are seeded before the first request,
+/// and the `cache_warmup` task surfaces it.
 #[tokio::test]
 async fn test_initial_warmup_blocks_when_background_tasks_disabled() {
     let store = test_store();
@@ -207,6 +179,51 @@ async fn test_initial_warmup_blocks_when_background_tasks_disabled() {
     assert!(
         state.token_cache.load().is_some(),
         "blocking warmup should seed the cache before returning"
+    );
+    let completed = {
+        let data = state.background_tasks.read().unwrap();
+        data.tasks
+            .iter()
+            .find(|t| t.name == "cache_warmup")
+            .map(|t| t.state)
+    };
+    assert_eq!(
+        completed,
+        Some(BackgroundTaskState::Completed),
+        "cache_warmup task should be marked Completed after the blocking warmup"
+    );
+}
+
+/// In production the refresh loops are the single seeding path. Verify the
+/// assets loop seeds the cache on its first iteration (the build the deferred
+/// bind path intentionally skips), so warming is never lost — just moved off
+/// the bind path with no redundant second build.
+#[tokio::test]
+async fn test_refresh_assets_loop_seeds_cache_in_background() {
+    let store = test_store();
+    let state = test_app_state(test_config(store));
+
+    assert!(state.token_cache.load().is_none());
+
+    let loop_state = state.clone();
+    let handle =
+        tokio::spawn(
+            async move { ckbadger_api::warmup::refresh_assets_cache_loop(loop_state).await },
+        );
+
+    let mut populated = false;
+    for _ in 0..200 {
+        if state.token_cache.load().is_some() {
+            populated = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    handle.abort();
+
+    assert!(
+        populated,
+        "the assets refresh loop should seed the cache on its first iteration"
     );
 }
 

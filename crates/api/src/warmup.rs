@@ -338,9 +338,24 @@ pub async fn refresh_assets_cache_loop(state: Arc<AppState>) {
             continue;
         }
 
+        // The first build (no prior refreshed tip) is the initial warmup: the
+        // caches are still cold and asset/address/script endpoints return 503
+        // until it lands. Mark it distinctly so api/log/TUI show "warming up"
+        // rather than a routine refresh.
+        let is_initial_warmup = last_refreshed_tip.is_none();
         state.update_background_task("api_cache_refresh", |entry| {
             set_api_cache_refresh_cycle_start(entry);
+            if is_initial_warmup {
+                entry.message = Some("Initial cache warmup".to_string());
+            }
         });
+        if is_initial_warmup {
+            tracing::info!(
+                tip = ?current_tip,
+                "Building API asset caches (initial warmup); \
+                 asset/address/script endpoints return 503 until ready"
+            );
+        }
 
         let cycle_start = std::time::Instant::now();
         let state_clone = state.clone();

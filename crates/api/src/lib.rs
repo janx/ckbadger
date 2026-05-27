@@ -180,41 +180,39 @@ pub struct AppConfig {
     pub cycles_request_dir: Option<PathBuf>,
 }
 
-/// Run the one-shot asset/address/script cache warmup.
+/// Seed the asset/address/script caches at startup *only when no background
+/// refresh loops will do it*.
 ///
 /// The warmup performs full-store scans (every address, every token + holders,
-/// spores/clusters) and can take minutes on a synced mainnet DB. It must NOT
+/// spores/clusters) and can take minutes on a synced mainnet DB. It must never
 /// block the API's HTTP listener bind.
 ///
-/// - `defer == true` (production, where the recurring refresh loops also run):
-///   spawn the warmup so `create_router` returns immediately and the listener
-///   binds at once. Asset/address/script endpoints return `503 warmup_pending`
-///   until the first pass lands; the refresh loops keep them seeded thereafter.
-/// - `defer == false` (tests / embedded use without background loops): run it
-///   synchronously so caches are seeded before the first request is served.
-///
-/// In both cases the `cache_warmup` background task is marked `Running`
-/// synchronously, so the status endpoint and TUI reflect "warming up" the
-/// instant the API starts accepting connections.
+/// - `defer == true` (production): `create_router` spawns the recurring refresh
+///   loops, which seed every cache on their first iteration and keep them fresh,
+///   reporting progress via the `api_cache_refresh` task. Running a one-shot
+///   warmup here too would duplicate those full-store scans — in particular the
+///   minutes-long asset build, which outlasts the loop interval and so cannot be
+///   deduplicated by timing. So the bind path does no warmup work; the loops own
+///   the single seeding path and the listener binds immediately.
+/// - `defer == false` (tests / embedded use without loops): no loop will seed
+///   the caches, so run the warmup synchronously before the first request is
+///   served, surfacing progress via the `cache_warmup` task.
 pub async fn dispatch_initial_warmup(state: Arc<AppState>, defer: bool) {
+    if defer {
+        tracing::info!(
+            "API accepting connections; asset caches warming in background via refresh loops \
+             (asset/address/script endpoints return 503 warmup_pending until ready)"
+        );
+        return;
+    }
+
     state.update_background_task("cache_warmup", |entry| {
         entry.kind = BackgroundTaskKind::Job;
         entry.state = BackgroundTaskState::Running;
         entry.started_at = Some(chrono::Utc::now().timestamp());
         entry.message = Some("Warming up asset caches...".to_string());
     });
-
-    if defer {
-        tracing::info!(
-            "API accepting connections; asset cache warmup running in background \
-             (asset/address/script endpoints return 503 warmup_pending until ready)"
-        );
-        tokio::spawn(async move {
-            if let Err(e) = warmup::warmup_assets_cache_once(state).await {
-                tracing::warn!("Initial assets cache warmup failed: {}", e);
-            }
-        });
-    } else if let Err(e) = warmup::warmup_assets_cache_once(state).await {
+    if let Err(e) = warmup::warmup_assets_cache_once(state).await {
         tracing::warn!("Initial assets cache warmup failed: {}", e);
     }
 }
