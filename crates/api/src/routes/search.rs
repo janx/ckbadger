@@ -174,6 +174,15 @@ fn normalize_hash32(value: &str) -> Option<String> {
     Some(format!("0x{}", no_prefix.to_ascii_lowercase()))
 }
 
+/// Truncate a `0x`-prefixed hash to `0xAAAA...BBBB`, matching the frontend
+/// `truncateHash(hash, 6, 4)` shape used by the spore detail page title.
+fn short_hash(hash: &str) -> String {
+    if hash.len() <= 10 {
+        return hash.to_string();
+    }
+    format!("{}...{}", &hash[..6], &hash[hash.len() - 4..])
+}
+
 fn parse_output_index(raw: &str) -> Option<i16> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -309,12 +318,14 @@ async fn search(
                 Option<ckbadger_store::AddressBalance>,
                 Option<ckbadger_store::TokenInfo>,
                 Option<ckbadger_store::ObjectEntry>,
+                Option<String>,
             ) = tokio::task::spawn_blocking(move || -> anyhow::Result<(
                 Option<(i64, i32)>,
                 Option<i64>,
                 Option<ckbadger_store::AddressBalance>,
                 Option<ckbadger_store::TokenInfo>,
                 Option<ckbadger_store::ObjectEntry>,
+                Option<String>,
             )> {
                 let tx_loc = if check_tx {
                     store.get_tx_location(&hash_c)?
@@ -341,13 +352,27 @@ async fn search(
                 } else {
                     None
                 };
-                Ok((tx_loc, block_num, addr_bal, token, spore))
+                // A spore cell has no name of its own; the display name falls back to
+                // the owning cluster's name (the single naming path the detail page uses).
+                let spore_cluster_name = match spore.as_ref() {
+                    Some(entry) if !entry.standard.is_cluster() && entry.name.is_none() => {
+                        match entry.collection_id.as_deref() {
+                            Some(cluster_id) => {
+                                store.get_spore(cluster_id)?.and_then(|cluster| cluster.name)
+                            }
+                            None => None,
+                        }
+                    }
+                    _ => None,
+                };
+                Ok((tx_loc, block_num, addr_bal, token, spore, spore_cluster_name))
             })
             .await
             .map_err(|e| ApiError::internal(e.to_string()))?
             .map_err(|e| ApiError::internal(e.to_string()))?;
 
-            let (tx_loc, block_num_result, addr_bal, token_info, spore_entry) = hash_results;
+            let (tx_loc, block_num_result, addr_bal, token_info, spore_entry, spore_cluster_name) =
+                hash_results;
 
             if scope_allows(scope, &[SearchScope::Transaction]) {
                 if let Some((block_num, _)) = tx_loc {
@@ -467,13 +492,19 @@ async fn search(
                             match_kind: "exact_hash".to_string(),
                         });
                     } else {
+                        let label = match entry.name.as_deref() {
+                            Some(name) => format!("Spore {}", name),
+                            None => match spore_cluster_name.as_deref() {
+                                Some(cluster_name) => {
+                                    format!("{}#{}", cluster_name, short_hash(&hash_query))
+                                }
+                                None => format!("Spore {}", short_hash(&hash_query)),
+                            },
+                        };
                         results.push(SearchResult {
                             result_type: "spore".to_string(),
                             id: hash_query.clone(),
-                            label: format!(
-                                "Spore {}",
-                                entry.name.as_deref().unwrap_or("Unnamed spore")
-                            ),
+                            label,
                             url: format!("/objects/{}", hash_query),
                             match_kind: "exact_hash".to_string(),
                         });

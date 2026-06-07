@@ -1795,6 +1795,91 @@ async fn test_search_name_matches_script_token_and_cluster_assets() {
 }
 
 #[tokio::test]
+async fn test_search_exact_spore_hash_falls_back_to_cluster_name() {
+    // A spore cell carries no name of its own (ObjectEntry.name is always None for
+    // spores). The detail page shows the owning cluster's name, so the global search
+    // dropdown must use the same single naming path instead of showing "Unnamed spore".
+    let store = test_store();
+    let cluster_id = [0xc1u8; 32];
+    let spore_id = [0xa6u8; 32];
+
+    store
+        .put_spore_direct(
+            &cluster_id,
+            &ObjectEntry {
+                standard: ObjectStandard::SporeCluster,
+                collection_id: None,
+                token_id: None,
+                owner_lock_hash: Some(vec![0x11; 32]),
+                name: Some("Cosmic Repository".to_string()),
+                description: None,
+                is_live: true,
+                created_at_block: 1,
+                created_at_tx: vec![0x22; 32],
+                extra: ObjectExtra::SporeCluster,
+            },
+        )
+        .unwrap();
+
+    store
+        .put_spore_direct(
+            &spore_id,
+            &ObjectEntry {
+                standard: ObjectStandard::Spore,
+                collection_id: Some(cluster_id.to_vec()),
+                token_id: None,
+                owner_lock_hash: Some(vec![0x33; 32]),
+                name: None,
+                description: None,
+                is_live: true,
+                created_at_block: 2,
+                created_at_tx: vec![0x44; 32],
+                extra: ObjectExtra::Spore {
+                    content_type: "image/png".to_string(),
+                    content_length: 3623,
+                    media_profile: SporeMediaProfile::default(),
+                },
+            },
+        )
+        .unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let spore_id_hex = format!("0x{}", hex::encode(spore_id));
+    let request = Request::builder()
+        .uri(format!("/api/v1/search?q={}", spore_id_hex))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let rows = json["results"].as_array().unwrap();
+
+    let spore_row = rows
+        .iter()
+        .find(|row| row["resultType"].as_str() == Some("spore"))
+        .expect("expected a spore search result");
+
+    let short = format!(
+        "{}...{}",
+        &spore_id_hex[..6],
+        &spore_id_hex[spore_id_hex.len() - 4..]
+    );
+    assert_eq!(
+        spore_row["label"].as_str().unwrap(),
+        format!("Cosmic Repository#{}", short)
+    );
+    assert!(!spore_row["label"]
+        .as_str()
+        .unwrap()
+        .to_ascii_lowercase()
+        .contains("unnamed"));
+}
+
+#[tokio::test]
 async fn test_search_cell_prefix_supports_colon_and_hex_output_index() {
     let store = test_store();
     let tx_hash = vec![0xab; 32];
