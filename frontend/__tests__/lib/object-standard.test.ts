@@ -57,14 +57,10 @@ describe('getStandardInfo', () => {
     expect(getStandardInfo('text/plain').supportsDobDecode).toBe(false);
   });
 
-  it('returns parsing method for known types', () => {
-    expect(getStandardInfo('dob/0').parsingMethod).toContain('DOB/0');
-    expect(getStandardInfo('dob/1').parsingMethod).toContain('DOB/1');
-    expect(getStandardInfo('image/png').parsingMethod).toContain('image');
-  });
-
-  it('returns null parsing method for generic', () => {
-    expect(getStandardInfo('application/octet-stream').parsingMethod).toBeNull();
+  it('classifies the standard for each content type', () => {
+    expect(getStandardInfo('dob/0').standard).toBe('dob/0');
+    expect(getStandardInfo('image/png').standard).toBe('plain-image');
+    expect(getStandardInfo('application/octet-stream').standard).toBe('generic');
   });
 });
 
@@ -215,8 +211,23 @@ describe('buildMediaCompositionView', () => {
     expect(view.issues).toEqual(['some issue']);
   });
 
-  it('includes parsing method from standard info', () => {
-    const view = buildMediaCompositionView('dob/1', emptyProfile, [], null);
-    expect(view.parsingMethod).toContain('DOB/1');
+  it('plain-image referenced off-chain: groups the source as off-chain', () => {
+    // Content type image/png;ipfs=Qm... — the PNG bytes live on IPFS, so the
+    // ipfs source must land in the off-chain group, not on-chain.
+    const offChainProfile = {
+      sources: [
+        {
+          uri: 'ipfs://QmafNETq4kKGHTuhaZPvfxfe9vY24NgMUmxC6xYkVUGaK8',
+          scheme: 'ipfs',
+          sourceLocation: 'content_type_param',
+          dependencyTier: 'decentralized_mixture' as const,
+        },
+      ],
+      issues: [],
+    };
+    const view = buildMediaCompositionView('image/png;ipfs=Qm...', offChainProfile, [], null);
+    expect(view.standard).toBe('plain-image');
+    expect(view.offChainSources).toHaveLength(1);
+    expect(view.onChainSources).toHaveLength(0);
   });
 });

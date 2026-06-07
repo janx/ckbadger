@@ -212,11 +212,6 @@ function MediaCompositionsPanel({ view }: { view: MediaCompositionView }) {
       <TerminalPanelHeader indicator="active">Media Compositions</TerminalPanelHeader>
       <TerminalPanelContent>
         <div className="space-y-4">
-          {view.parsingMethod && (
-            <div className="border-info/20 bg-info/5 rounded border px-2.5 py-1.5">
-              <span className="text-info-dim font-mono text-[10px]">{view.parsingMethod}</span>
-            </div>
-          )}
           {view.decodedItems.length > 0 && (
             <div className="space-y-2">
               {view.decodedItems.map((item) => {

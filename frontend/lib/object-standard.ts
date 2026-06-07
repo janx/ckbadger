@@ -30,35 +30,16 @@ export function classifyObjectStandard(contentType: string): ObjectStandard {
 
 export interface StandardInfo {
   standard: ObjectStandard;
-  parsingMethod: string | null;
   supportsDobDecode: boolean;
 }
 
 const STANDARD_INFO: Record<ObjectStandard, Omit<StandardInfo, 'standard'>> = {
-  'dob/0': {
-    parsingMethod: 'DOB/0: single decoder, DNA + pattern in cluster description',
-    supportsDobDecode: true,
-  },
-  'dob/1': {
-    parsingMethod: 'DOB/1: multi-step decoder chain executed in CKB-VM',
-    supportsDobDecode: true,
-  },
-  'plain-image': {
-    parsingMethod: 'Raw on-chain image in Spore cell data',
-    supportsDobDecode: false,
-  },
-  'plain-svg': {
-    parsingMethod: 'Raw on-chain SVG in Spore cell data',
-    supportsDobDecode: false,
-  },
-  'plain-text': {
-    parsingMethod: 'Raw on-chain text in Spore cell data',
-    supportsDobDecode: false,
-  },
-  generic: {
-    parsingMethod: null,
-    supportsDobDecode: false,
-  },
+  'dob/0': { supportsDobDecode: true },
+  'dob/1': { supportsDobDecode: true },
+  'plain-image': { supportsDobDecode: false },
+  'plain-svg': { supportsDobDecode: false },
+  'plain-text': { supportsDobDecode: false },
+  generic: { supportsDobDecode: false },
 };
 
 export function getStandardInfo(contentType: string): StandardInfo {
@@ -128,7 +109,6 @@ export interface MediaSourceView {
 
 export interface MediaCompositionView {
   standard: ObjectStandard;
-  parsingMethod: string | null;
   decodedItems: MediaViewItem[];
   rawPayload: string | null;
   onChainSources: MediaSourceView[];
@@ -167,7 +147,6 @@ export function buildMediaCompositionView(
 
   return {
     standard: info.standard,
-    parsingMethod: info.parsingMethod,
     decodedItems: buildDecodedItems(info.standard, dobMedia),
     rawPayload: dobMedia.length === 0 && !info.supportsDobDecode ? textPayload : null,
     onChainSources: onChain,
