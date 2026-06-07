@@ -52,7 +52,7 @@ jobs:
             api_routes:
               - 'crates/api/src/routes/**'
             api_integration:
-              - 'crates/api/tests/api_integration.rs'
+              - 'crates/api/tests/api_*.rs'
 
   api-scope-guard:
     name: API Scope Guard

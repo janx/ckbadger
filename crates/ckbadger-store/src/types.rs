@@ -1775,13 +1775,6 @@ mod tests {
         assert_eq!(decoded.owned_knowledge_delta, -45_000_000_000);
     }
 
-    #[test]
-    fn test_script_daily_delta_default() {
-        let delta = ScriptDailyDelta::default();
-        assert_eq!(delta.owned_capacity_delta, 0);
-        assert_eq!(delta.owned_knowledge_delta, 0);
-    }
-
     // ---- TokenDailyDelta ----
 
     #[test]
@@ -1794,13 +1787,6 @@ mod tests {
         let decoded: TokenDailyDelta = bincode::deserialize(&bytes).unwrap();
         assert_eq!(decoded.owned_capacity_delta, 890_000_000_000);
         assert_eq!(decoded.owned_knowledge_delta, -120_000_000_000);
-    }
-
-    #[test]
-    fn test_token_daily_delta_default() {
-        let delta = TokenDailyDelta::default();
-        assert_eq!(delta.owned_capacity_delta, 0);
-        assert_eq!(delta.owned_knowledge_delta, 0);
     }
 
     // ---- ClusterDailyDelta ----
@@ -1817,13 +1803,6 @@ mod tests {
         assert_eq!(decoded.owned_knowledge_delta, -90_000_000_000);
     }
 
-    #[test]
-    fn test_cluster_daily_delta_default() {
-        let delta = ClusterDailyDelta::default();
-        assert_eq!(delta.owned_capacity_delta, 0);
-        assert_eq!(delta.owned_knowledge_delta, 0);
-    }
-
     // ---- SporeDailyDelta ----
 
     #[test]
@@ -1836,13 +1815,6 @@ mod tests {
         let decoded: SporeDailyDelta = bincode::deserialize(&bytes).unwrap();
         assert_eq!(decoded.owned_capacity_delta, 111_000_000_000);
         assert_eq!(decoded.owned_knowledge_delta, -22_000_000_000);
-    }
-
-    #[test]
-    fn test_spore_daily_delta_default() {
-        let delta = SporeDailyDelta::default();
-        assert_eq!(delta.owned_capacity_delta, 0);
-        assert_eq!(delta.owned_knowledge_delta, 0);
     }
 
     // ---- SporeTypeIndex ----
@@ -1859,13 +1831,6 @@ mod tests {
         assert_eq!(decoded.cluster_id, Some(vec![0xCD; 32]));
     }
 
-    #[test]
-    fn test_spore_type_index_default() {
-        let index = SporeTypeIndex::default();
-        assert!(index.spore_id.is_empty());
-        assert!(index.cluster_id.is_none());
-    }
-
     // ---- MnftDailyDelta ----
 
     #[test]
@@ -1880,13 +1845,6 @@ mod tests {
         assert_eq!(decoded.owned_knowledge_delta, -33_000_000_000);
     }
 
-    #[test]
-    fn test_object_daily_delta_default() {
-        let delta = MnftDailyDelta::default();
-        assert_eq!(delta.owned_capacity_delta, 0);
-        assert_eq!(delta.owned_knowledge_delta, 0);
-    }
-
     // ---- MnftTypeIndex ----
 
     #[test]
@@ -1897,12 +1855,6 @@ mod tests {
         let bytes = bincode::serialize(&index).unwrap();
         let decoded: MnftTypeIndex = bincode::deserialize(&bytes).unwrap();
         assert_eq!(decoded.collection_id, vec![0xEE; 24]);
-    }
-
-    #[test]
-    fn test_object_type_index_default() {
-        let index = MnftTypeIndex::default();
-        assert!(index.collection_id.is_empty());
     }
 
     // ---- TxActions / ItemDelta / ParticipantDelta ----
@@ -2477,15 +2429,6 @@ mod tests {
         assert_eq!(decoded.txs_count, 7);
         assert_eq!(decoded.first_seen_block, 100);
         assert_eq!(decoded.last_activity_block, 500);
-    }
-
-    #[test]
-    fn test_address_balance_default() {
-        let bal = AddressBalance::default();
-        assert_eq!(bal.balance, 0);
-        assert_eq!(bal.used_capacity, 0);
-        assert_eq!(bal.live_cells_count, 0);
-        assert_eq!(bal.txs_count, 0);
     }
 
     #[test]

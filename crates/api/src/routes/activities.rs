@@ -1069,7 +1069,7 @@ mod tests {
         assert_eq!(parse_activity_cursor("100"), None);
     }
 
-    // Integration tests for activities are in crates/api/tests/api_integration.rs
+    // Integration tests for activities are in crates/api/tests/api_activities.rs
 
     #[test]
     fn test_decode_rgbpp_lock_args_valid() {

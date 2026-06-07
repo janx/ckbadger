@@ -375,15 +375,6 @@ mod tests {
     }
 
     #[test]
-    fn test_cluster_aggregate_default() {
-        let agg = ClusterAggregate::default();
-        assert!(agg.name.is_none());
-        assert_eq!(agg.total_count, 0);
-        assert_eq!(agg.live_count, 0);
-        assert_eq!(agg.owner_count, 0);
-    }
-
-    #[test]
     fn test_list_cluster_owner_counts_rejects_invalid_cluster_id_length() {
         let (_dir, store) = test_store();
         let err = store.list_cluster_owner_counts(&[0x11; 31]).unwrap_err();

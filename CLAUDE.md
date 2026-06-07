@@ -230,7 +230,7 @@ ckbadger verify --list-checks             # List all checks
 | Change Type            | Required Action                                                      |
 | ---------------------- | -------------------------------------------------------------------- |
 | New parser function    | Add unit test in same file's `#[cfg(test)]` module                   |
-| New API endpoint       | Add test case in `crates/api/tests/api_integration.rs`               |
+| New API endpoint       | Add test case in the matching `crates/api/tests/api_*.rs` file       |
 | New frontend component | Add test in `frontend/__tests__/components/`                         |
 | New hook/util function | Add test in `frontend/__tests__/hooks/` or `frontend/__tests__/lib/` |
 | Bug fix                | Add regression test that reproduces the bug FIRST, then fix          |
@@ -341,7 +341,7 @@ const DAO_OCCUPIED_CAPACITY: u64 = 102_00000000; // 102 CKB
 | LLM discovery    | `frontend/public/llms.txt`, `frontend/public/llms-full.txt`                                                                                        |
 | UI components    | `frontend/components/ui/`                                                                                                                          |
 | Pages            | `frontend/app/` (dynamic routes split: `page.tsx` wrapper + `client-page.tsx`)                                                                     |
-| Tests (Rust)     | Inline `#[cfg(test)]`, `crates/api/tests/api_integration.rs`                                                                                       |
+| Tests (Rust)     | Inline `#[cfg(test)]`, per-resource `crates/api/tests/api_*.rs` (shared helpers in `crates/api/tests/common/mod.rs`)                               |
 | Tests (Frontend) | `frontend/__tests__/**/*.test.{ts,tsx}`, `frontend/__tests__/msw/handlers.ts`                                                                      |
 | CI               | `.github/workflows/ci.yml`                                                                                                                         |
 
