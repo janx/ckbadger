@@ -221,6 +221,21 @@ describe('SporeDetailPage', () => {
     expect(screen.getByText('Spore Overview')).toBeInTheDocument();
   });
 
+  it('wraps a long content type so it does not overflow the overview cards', async () => {
+    const longContentType = 'image/png;ipfs=QmafNETq4kKGHTuhaZPvfxfe9vY24NgMUmxC6xYkVUGaK8';
+    vi.mocked(api.getSporeObject).mockResolvedValue({
+      ...mockSpore,
+      contentType: longContentType,
+    } as any);
+
+    render(<SporeDetailPage sporeId={mockParams.sporeId} />);
+
+    const contentTypeValue = await screen.findByText(longContentType);
+    // break-all lets the unbreakable IPFS token wrap inside its grid column
+    // instead of overflowing into the neighbouring "Created" card.
+    expect(contentTypeValue).toHaveClass('break-all');
+  });
+
   it('labels the spore composition card as Object Composition', async () => {
     vi.mocked(api.getSporeObject).mockResolvedValue({
       ...mockSpore,

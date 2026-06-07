@@ -1020,7 +1020,7 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
                   </div>
                   <Link
                     href={`/clusters/${cluster.clusterId}`}
-                    className="text-text-bright font-mono text-sm font-semibold hover:underline"
+                    className="text-text-bright block break-words font-mono text-sm font-semibold hover:underline"
                   >
                     {cluster.name || 'Unnamed'}
                   </Link>
@@ -1035,7 +1035,7 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
                 <div className="text-text-dim mb-1.5 font-mono text-[10px] uppercase tracking-wider">
                   Content
                 </div>
-                <div className="text-text-bright font-mono text-sm font-semibold">
+                <div className="text-text-bright break-all font-mono text-sm font-semibold">
                   {previewContentType}
                 </div>
                 <div className="text-text-dim font-mono text-xs">
