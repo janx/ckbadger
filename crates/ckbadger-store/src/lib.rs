@@ -39,6 +39,7 @@ mod dotbit_ops;
 mod fiber_ops;
 mod identity_ops;
 mod mnft_ops;
+mod network_ops;
 mod object_ops;
 mod proposal_ops;
 mod reorg_ops;
