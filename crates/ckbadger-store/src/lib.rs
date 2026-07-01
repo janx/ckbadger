@@ -22,6 +22,7 @@
 
 pub mod batch;
 pub mod keys;
+pub mod network_types;
 pub mod store;
 pub mod types;
 
@@ -61,6 +62,7 @@ pub fn bytes_to_hex(bytes: &[u8]) -> String {
 }
 
 pub use batch::{merge_write_batches, StoreBatch};
+pub use network_types::*;
 pub use reorg_ops::RollbackResult;
 pub use store::{
     cf_write_policy, is_append_only_cf_name, known_append_only_secondary_store_paths,
