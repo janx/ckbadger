@@ -356,6 +356,11 @@ pub const CF_ADDR_FIBER_CHANNELS: &str = "addr_fiber_channels";
 pub const CF_DOB_DECODED: &str = "dob_decoded";
 pub const CF_LOCK_SCRIPTS: &str = "lock_scripts";
 
+// Network crawler store column families (mutable / domain-like — NOT append-only).
+// These live in the standalone "network" store class, not in domain or append-only.
+pub const CF_NET_NODES: &str = "net_nodes";
+pub const CF_NET_STATS: &str = "net_stats";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CfWritePolicy {
     AppendOnly,
@@ -434,6 +439,10 @@ const CF_WRITE_POLICY_FINAL_SNAPSHOT: &[&str] = &[
     CF_FIBER_CHANNEL_BY_COMMITMENT,
     CF_FIBER_CHANNEL_BY_FUNDING_ARGS,
     CF_ADDR_FIBER_CHANNELS,
+    // Network crawler CFs use the normal mutable (final-snapshot) write policy,
+    // never append-only. They live in the separate network store.
+    CF_NET_NODES,
+    CF_NET_STATS,
 ];
 
 pub fn cf_write_policy(cf_name: &str) -> CfWritePolicy {
@@ -459,6 +468,8 @@ pub enum StoreClass {
     Domain,
     AppendOnly,
     TestUnified,
+    /// Standalone whole-network crawler store (mutable, domain-like CFs).
+    Network,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -604,6 +615,9 @@ pub const DOMAIN_CFS: &[&str] = &[
 /// Column families for the append-only store (immutable, hash-keyed cell payloads).
 pub const APPEND_CFS: &[&str] = &[CF_CELLS];
 
+/// Column families for the standalone network crawler store (mutable, domain-like).
+pub const NETWORK_CFS: &[&str] = &[CF_NET_NODES, CF_NET_STATS];
+
 fn append_path_from_domain(domain_path: &Path) -> PathBuf {
     if domain_path.file_name().and_then(|name| name.to_str()) == Some("domain") {
         return domain_path.with_file_name("append-only");
@@ -685,6 +699,7 @@ impl CkbadgerStore {
             StoreClass::Domain => DOMAIN_CFS,
             StoreClass::AppendOnly => APPEND_CFS,
             StoreClass::TestUnified => ALL_CFS,
+            StoreClass::Network => NETWORK_CFS,
         }
     }
 
@@ -693,6 +708,7 @@ impl CkbadgerStore {
             StoreClass::Domain => DOMAIN_CFS.contains(&name),
             StoreClass::AppendOnly => APPEND_CFS.contains(&name),
             StoreClass::TestUnified => true,
+            StoreClass::Network => NETWORK_CFS.contains(&name),
         }
     }
 
@@ -788,6 +804,10 @@ impl CkbadgerStore {
                 let append = append_path_from_domain(&domain);
                 (domain, append)
             }
+            StoreClass::Network => {
+                // Standalone store: no domain/append split. Both paths point here.
+                (db_path.clone(), db_path.clone())
+            }
         };
 
         let memory_profile = MemoryProfile::for_primary_with_config(runtime_config);
@@ -823,6 +843,7 @@ impl CkbadgerStore {
                         StoreClass::Domain => "domain",
                         StoreClass::AppendOnly => "append-only",
                         StoreClass::TestUnified => "test-unified",
+                        StoreClass::Network => "network",
                     },
                     db_path.display(),
                     allowed
@@ -879,6 +900,10 @@ impl CkbadgerStore {
                 let append = append_path_from_domain(&domain);
                 (domain, append)
             }
+            StoreClass::Network => {
+                // Standalone store: no domain/append split. Both paths point here.
+                (db_path.clone(), db_path.clone())
+            }
         };
         let memory_profile = MemoryProfile::for_secondary_with_config(runtime_config);
         let (opts, block_cache, write_buffer_manager) =
@@ -912,6 +937,7 @@ impl CkbadgerStore {
                         StoreClass::Domain => "domain",
                         StoreClass::AppendOnly => "append-only",
                         StoreClass::TestUnified => "test-unified",
+                        StoreClass::Network => "network",
                     },
                     db_path.display(),
                     allowed
@@ -1019,6 +1045,29 @@ impl CkbadgerStore {
             StoreClass::TestUnified,
             StoreRuntimeConfig::default(),
         )
+    }
+
+    /// Open the standalone network crawler store (read-write, primary).
+    pub fn open_network<P: AsRef<Path>>(path: P) -> anyhow::Result<Self> {
+        Self::open_with_class(path, StoreClass::Network, StoreRuntimeConfig::default())
+    }
+
+    /// Open the network crawler store as a read-only secondary.
+    pub fn open_network_secondary<P: AsRef<Path>>(
+        primary_path: P,
+        secondary_path: P,
+    ) -> anyhow::Result<Self> {
+        Self::open_secondary_with_class(
+            primary_path,
+            secondary_path,
+            StoreClass::Network,
+            StoreRuntimeConfig::default(),
+        )
+    }
+
+    /// Test helper: open a fresh network store (mirrors [`Self::open_test_unified`]).
+    pub fn open_test_network<P: AsRef<Path>>(path: P) -> anyhow::Result<Self> {
+        Self::open_network(path)
     }
 
     /// Catch up with primary instance writes (secondary only).
@@ -1252,6 +1301,14 @@ impl CkbadgerStore {
         self.db
             .cf_handle(name)
             .unwrap_or_else(|| panic!("CF '{}' not found", name))
+    }
+
+    /// Returns true when the DB currently holds a live handle for `name`.
+    ///
+    /// Unlike [`Self::has_cf`] (which checks the store-class allow-list), this
+    /// inspects the actually-opened column family handle.
+    pub fn cf_handle_exists(&self, name: &str) -> bool {
+        self.db.cf_handle(name).is_some()
     }
 
     pub fn cf_live_cells(&self) -> &ColumnFamily {
@@ -3238,5 +3295,22 @@ mod tests {
         let one = store.multi_get_cf_sorted(vec![(cf, k.as_slice())]);
         assert_eq!(one.len(), 1);
         assert_eq!(one[0].as_ref().unwrap().as_deref(), Some(b"only" as &[u8]));
+    }
+
+    #[test]
+    fn network_store_opens_with_two_cfs_rw() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_network(dir.path()).unwrap();
+        // Both CFs must be resolvable as live handles in the opened store.
+        assert!(store.cf_handle_exists(CF_NET_NODES));
+        assert!(store.cf_handle_exists(CF_NET_STATS));
+        assert!(!store.is_secondary());
+    }
+
+    #[test]
+    fn network_cfs_are_not_append_only() {
+        // Network store is mutable/domain-like; it must NOT be classified append-only.
+        assert!(!is_append_only_cf_name(CF_NET_NODES));
+        assert!(!is_append_only_cf_name(CF_NET_STATS));
     }
 }
