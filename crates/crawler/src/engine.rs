@@ -61,6 +61,11 @@ pub struct RoundConfig {
     pub top_n: usize,
     /// Optional hard cap on addresses dialed per round (deterministic partial rounds/tests).
     pub max_addrs: Option<usize>,
+    /// Optional cap on the total distinct queued frontier set. Bounds memory
+    /// against a peer flooding `discovered_addrs`; discoveries past the cap are
+    /// dropped and the round is marked `frontier_drained = false`. Independent
+    /// of `max_addrs` (which caps dials, not the queued set).
+    pub max_frontier: Option<usize>,
 }
 
 impl RoundConfig {
@@ -70,6 +75,7 @@ impl RoundConfig {
             hourly_retention_days: 30,
             top_n: 20,
             max_addrs: None,
+            max_frontier: None,
         }
     }
 }
@@ -134,9 +140,21 @@ pub async fn run_round(
                     addr_to_peer.insert(a.clone(), o.peer_id.clone());
                 }
                 for a in &o.discovered_addrs {
-                    if queued.insert(a.clone()) {
-                        frontier.push_back(a.clone());
+                    // Already queued this round: not a new frontier entry.
+                    if queued.contains(a) {
+                        continue;
                     }
+                    // Change 1 — frontier bound: defend against a peer flooding
+                    // `discovered_addrs` into unbounded memory. Caps the total
+                    // distinct queued set; independent of the `max_addrs` dial cap.
+                    if let Some(cap) = cfg.max_frontier {
+                        if queued.len() >= cap {
+                            frontier_drained = false;
+                            continue;
+                        }
+                    }
+                    queued.insert(a.clone());
+                    frontier.push_back(a.clone());
                 }
                 reachable_outcomes.insert(o.peer_id.clone(), o);
             }
@@ -185,7 +203,43 @@ pub async fn run_round(
         )?;
     }
 
-    // 6. Aggregate from post-write state + write status/history singletons.
+    // 4. Prune stale nodes + old hourly history BEFORE aggregating (Change 3),
+    //    so this round's published stats reflect the post-prune node set.
+    //    `now.saturating_sub(..)` is a time-window floor on injected
+    //    observational time, NOT a masking guard on a correctness-critical
+    //    value: when `now < ttl` the prune horizon is legitimately 0 (nothing is
+    //    old enough to prune, since no `last_seen < 0`).
+    store.prune_nodes_older_than(now.saturating_sub(cfg.node_ttl_secs))?;
+    let hourly_cutoff = bucket_of(
+        now.saturating_sub(cfg.hourly_retention_days * 86_400),
+        Granularity::Hour,
+    );
+    for m in [
+        Metric::TotalNodes,
+        Metric::ReachableNodes,
+        Metric::VersionShare,
+        Metric::CountryShare,
+    ] {
+        store.prune_history_before(m, Granularity::Hour, hourly_cutoff)?;
+    }
+
+    // 5. Reachable downgrade (Change 2): a node that survived the prune but was
+    //    NOT probed-reachable this round must stop advertising `reachable=true`.
+    //    Rewrite ONLY the `reachable` flag; last_seen / last_reachable_at /
+    //    first_seen / own_addrs / known_peers / geo / asn are left untouched so
+    //    TTL pruning (via the preserved last_seen) still governs eventual removal.
+    //    The reachable-this-round set is exactly the peers we persisted above.
+    let reachable_this_round: HashSet<Vec<u8>> = reachable_outcomes.keys().cloned().collect();
+    for (peer, rec) in store.scan_nodes()? {
+        if rec.reachable && !reachable_this_round.contains(&peer) {
+            let mut downgraded = rec;
+            downgraded.reachable = false;
+            store.put_node(&peer, &downgraded)?;
+        }
+    }
+
+    // 6. Aggregate from the fresh, post-prune, post-downgrade node set + write
+    //    the status singleton and Hour/Day history points.
     let nodes = store.scan_nodes()?;
     let total_known = nodes.len() as u64;
     let reachable = nodes.iter().filter(|(_, r)| r.reachable).count() as u64;
@@ -250,24 +304,6 @@ pub async fn run_round(
                 buckets: countries.clone(),
             },
         )?;
-    }
-
-    // 7. Prune stale nodes + old hourly history. `now.saturating_sub(..)` is a
-    //    time-window floor on injected observational time, NOT a masking guard on
-    //    a correctness-critical value: when `now < ttl` the prune horizon is
-    //    legitimately 0 (nothing is old enough to prune, since no `last_seen < 0`).
-    store.prune_nodes_older_than(now.saturating_sub(cfg.node_ttl_secs))?;
-    let hourly_cutoff = bucket_of(
-        now.saturating_sub(cfg.hourly_retention_days * 86_400),
-        Granularity::Hour,
-    );
-    for m in [
-        Metric::TotalNodes,
-        Metric::ReachableNodes,
-        Metric::VersionShare,
-        Metric::CountryShare,
-    ] {
-        store.prune_history_before(m, Granularity::Hour, hourly_cutoff)?;
     }
 
     Ok(RoundReport { status })
@@ -405,5 +441,65 @@ mod tests {
             .await
             .unwrap();
         assert!(store.get_node(b"OLD").unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn unreachable_node_downgraded_but_retained() {
+        // Round 1: bootnode A is reachable and discovers B; B is reachable too.
+        let mut g1 = std::collections::HashMap::new();
+        g1.insert("addrA".to_string(), oc(b"A", "addrA", &["addrB"]));
+        g1.insert("addrB".to_string(), oc(b"B", "addrB", &[]));
+        let prober1 = MockProber::new(vec!["addrA".into()], g1);
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_network(dir.path()).unwrap();
+        let cfg = RoundConfig::test_defaults();
+        run_round(&store, &prober1, &NoGeo, &cfg, 1_000_000, 1)
+            .await
+            .unwrap();
+        // Baseline: both A and B recorded as reachable.
+        assert!(store.get_node(b"A").unwrap().unwrap().reachable);
+        assert!(store.get_node(b"B").unwrap().unwrap().reachable);
+
+        // Round 2: only A is reachable now (addrB is absent -> probes to None).
+        let mut g2 = std::collections::HashMap::new();
+        g2.insert("addrA".to_string(), oc(b"A", "addrA", &["addrB"]));
+        let prober2 = MockProber::new(vec!["addrA".into()], g2);
+        let report = run_round(&store, &prober2, &NoGeo, &cfg, 1_000_100, 2)
+            .await
+            .unwrap();
+
+        // B is retained (not pruned) but honestly downgraded to unreachable;
+        // A stays reachable. Round status counts only A as reachable.
+        let b = store.get_node(b"B").unwrap();
+        assert!(b.is_some());
+        assert!(!b.unwrap().reachable);
+        assert!(store.get_node(b"A").unwrap().unwrap().reachable);
+        assert_eq!(report.status.reachable, 1);
+        assert_eq!(report.status.total_known, 2);
+    }
+
+    #[tokio::test]
+    async fn frontier_bound_truncates_and_marks_partial() {
+        // Bootnode A is reachable and floods 10 discovered addrs (none reachable).
+        let flood = [
+            "addr1", "addr2", "addr3", "addr4", "addr5", "addr6", "addr7", "addr8", "addr9",
+            "addr10",
+        ];
+        let mut g = std::collections::HashMap::new();
+        g.insert("addrA".to_string(), oc(b"A", "addrA", &flood));
+        let prober = MockProber::new(vec!["addrA".into()], g);
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_network(dir.path()).unwrap();
+        let mut cfg = RoundConfig::test_defaults();
+        cfg.max_frontier = Some(3);
+        cfg.max_addrs = None;
+        let report = run_round(&store, &prober, &NoGeo, &cfg, 10_000, 1)
+            .await
+            .unwrap();
+        // The frontier cap dropped discoveries past the bound, so the round is
+        // partial (frontier not fully drained).
+        assert!(!report.status.frontier_drained);
     }
 }
