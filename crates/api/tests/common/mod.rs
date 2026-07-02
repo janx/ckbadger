@@ -89,6 +89,8 @@ pub fn test_config_with_ckb_db_path(
     AppConfig {
         append_only_store,
         store,
+        network_store: None,
+        crawler_enabled: false,
         ckb_rpc_url: "http://localhost:8114".to_string(),
         ckb_network: "mainnet".to_string(),
         rate_limit_per_second: Some(1000),
@@ -106,10 +108,25 @@ pub fn test_config(store: Arc<CkbadgerStore>) -> AppConfig {
     test_config_with_append_only(store.clone(), store)
 }
 
+/// Build an [`AppConfig`] wired with a seeded network store (for `/network` endpoint tests).
+pub fn test_config_with_network(
+    store: Arc<CkbadgerStore>,
+    network_store: Arc<CkbadgerStore>,
+    crawler_enabled: bool,
+) -> AppConfig {
+    AppConfig {
+        network_store: Some(network_store),
+        crawler_enabled,
+        ..test_config(store)
+    }
+}
+
 pub fn test_app_state(config: AppConfig) -> Arc<AppState> {
     Arc::new(AppState {
         store: config.store,
         append_only_store: config.append_only_store,
+        network_store: config.network_store,
+        crawler_enabled: config.crawler_enabled,
         ws_manager: Arc::new(WsManager::new()),
         cache: CacheBackend::new(),
         ckb_rpc_url: config.ckb_rpc_url,
@@ -295,4 +312,67 @@ pub fn make_test_participant(
         item_deltas: vec![],
         tags,
     }
+}
+
+/// Open a fresh seeded network store for API tests (a couple of nodes + a status + history).
+pub fn test_network_store() -> std::sync::Arc<ckbadger_store::CkbadgerStore> {
+    use ckbadger_store::network_keys::{Granularity, Metric};
+    use ckbadger_store::{CkbadgerStore, HistoryPoint, LatestStatus, NodeRecord};
+    let dir = tempfile::tempdir().expect("tmp");
+    let s = std::sync::Arc::new(CkbadgerStore::open_test_network(dir.path()).unwrap());
+    std::mem::forget(dir); // keep the temp dir alive for the store's lifetime (mirrors test_store())
+    let mut node = NodeRecord {
+        own_addrs: vec!["/ip4/1.2.3.4/tcp/8115".into()],
+        client_version: "0.119.0".into(),
+        flags: 0,
+        protocols: vec!["/ckb/discovery".into()],
+        first_seen: 100,
+        last_seen: 200,
+        last_reachable_at: 200,
+        reachable: true,
+        geo: Some(ckbadger_store::Geo {
+            country: "US".into(),
+            city: "NYC".into(),
+            lat: 0.0,
+            lon: 0.0,
+        }),
+        asn: Some(ckbadger_store::Asn {
+            number: 65000,
+            org: "Ex".into(),
+        }),
+        last_rtt_ms: Some(9),
+        known_peers: vec![],
+    };
+    s.put_node(b"peerA", &node).unwrap();
+    node.reachable = false;
+    node.client_version = "0.118.0".into();
+    node.geo = None;
+    s.put_node(b"peerB", &node).unwrap();
+    s.put_network_status(&LatestStatus {
+        round_id: 5,
+        reachable: 1,
+        unreachable: 1,
+        total_known: 2,
+        frontier_drained: true,
+        ..Default::default()
+    })
+    .unwrap();
+    s.put_history_point(
+        Metric::TotalNodes,
+        Granularity::Hour,
+        10,
+        &HistoryPoint {
+            scalar: 2,
+            buckets: vec![],
+        },
+    )
+    .unwrap();
+    s
+}
+
+#[test]
+fn network_store_helper_seeds_two_nodes() {
+    let s = test_network_store();
+    assert_eq!(s.scan_nodes().unwrap().len(), 2);
+    assert!(s.get_network_status().unwrap().is_some());
 }

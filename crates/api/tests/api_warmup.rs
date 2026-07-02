@@ -125,6 +125,8 @@ async fn test_network_stats_includes_api_background_tasks() {
     let state = Arc::new(AppState {
         store: config.store,
         append_only_store: config.append_only_store,
+        network_store: config.network_store,
+        crawler_enabled: config.crawler_enabled,
         ws_manager: Arc::new(WsManager::new()),
         cache: CacheBackend::new(),
         ckb_rpc_url: config.ckb_rpc_url,

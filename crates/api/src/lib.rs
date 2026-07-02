@@ -59,6 +59,12 @@ impl Drop for CleanupPathGuard {
 pub struct AppState {
     pub store: Arc<CkbadgerStore>,
     pub append_only_store: Arc<CkbadgerStore>,
+    /// Optional read-only secondary of the network-crawler store. `None` when the
+    /// opt-in crawler has never produced a primary store (the common case).
+    pub network_store: Option<Arc<CkbadgerStore>>,
+    /// Whether the network crawler is enabled in config (drives UI availability
+    /// hints independently of whether a store snapshot exists yet).
+    pub crawler_enabled: bool,
     pub ws_manager: Arc<WsManager>,
     pub cache: CacheBackend,
     pub ckb_rpc_url: String,
@@ -164,6 +170,10 @@ impl AppState {
 pub struct AppConfig {
     pub store: Arc<CkbadgerStore>,
     pub append_only_store: Arc<CkbadgerStore>,
+    /// Optional read-only secondary of the network-crawler store (opt-in).
+    pub network_store: Option<Arc<CkbadgerStore>>,
+    /// Whether the network crawler is enabled in config.
+    pub crawler_enabled: bool,
     pub ckb_rpc_url: String,
     pub ckb_network: String,
     pub rate_limit_per_second: Option<u32>,
@@ -248,6 +258,8 @@ pub async fn create_router(config: AppConfig) -> Router {
     let state = Arc::new(AppState {
         store: config.store,
         append_only_store: config.append_only_store,
+        network_store: config.network_store,
+        crawler_enabled: config.crawler_enabled,
         ws_manager,
         cache,
         ckb_rpc_url: config.ckb_rpc_url,
@@ -328,12 +340,14 @@ pub async fn create_router(config: AppConfig) -> Router {
     let refresh_store = state.store.clone();
     let refresh_append_only_store = state.append_only_store.clone();
     let refresh_ckb_store = state.ckb_store.clone();
+    let refresh_network_store = state.network_store.clone();
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
             let store = refresh_store.clone();
             let append_only = refresh_append_only_store.clone();
             let ckb = refresh_ckb_store.clone();
+            let network = refresh_network_store.clone();
             let result = tokio::task::spawn_blocking(move || {
                 // Refresh append-only BEFORE domain to match the indexer's commit
                 // order (append-only first, domain second). This eliminates a
@@ -348,6 +362,12 @@ pub async fn create_router(config: AppConfig) -> Router {
                 if let Some(ref ckb_store) = ckb {
                     if let Err(e) = ckb_store.refresh() {
                         tracing::warn!("CKB store refresh failed: {}", e);
+                    }
+                }
+                // Opt-in network-crawler secondary: refresh only when present.
+                if let Some(ref net) = network {
+                    if let Err(e) = net.refresh() {
+                        tracing::warn!("Network store refresh failed: {}", e);
                     }
                 }
             })

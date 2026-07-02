@@ -437,6 +437,13 @@ async fn cmd_internal(workdir: &Path, args: &InternalArgs) -> Result<()> {
                 store_runtime_config,
                 dob_decode_dir: work.dob_decode_dir.clone(),
                 cycles_request_dir: Some(work.cycles_request_dir.clone()),
+                // Resolve the network-store path the same way the crawler does
+                // (workdir + relative), so the API secondary targets the crawler's
+                // primary. Opening is opt-in and handled in run_api.
+                network_data_path: resolve_workdir_path(workdir, &config.store.network_data_path)
+                    .to_string_lossy()
+                    .to_string(),
+                crawler_enabled: config.crawler.enabled,
             };
             run_api(api_config).await
         }

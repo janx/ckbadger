@@ -33,6 +33,11 @@ pub struct ApiServiceConfig {
     pub dob_decode_dir: PathBuf,
     /// Directory where API writes cycles calculation request files for the indexer worker.
     pub cycles_request_dir: Option<std::path::PathBuf>,
+    /// Path to the network-crawler store primary. The API opens a read-only
+    /// secondary only when this primary already exists (opt-in crawler).
+    pub network_data_path: String,
+    /// Whether the network crawler is enabled in config (surfaced to the UI).
+    pub crawler_enabled: bool,
 }
 
 /// Configuration for the standalone frontend server.
@@ -99,9 +104,36 @@ pub async fn run_api(config: ApiServiceConfig) -> Result<()> {
         config.store_runtime_config,
     )?);
 
+    // The network-crawler store is opt-in: open a read-only secondary only when
+    // the crawler has already produced a primary (CURRENT marker present). A
+    // missing primary or an open failure is a normal `None`, never a startup
+    // error — the API stays read-only and never writes this store.
+    let network_store = {
+        let primary = Path::new(&config.network_data_path);
+        if primary.join("CURRENT").exists() {
+            let sec = secondary_store_path(&config.network_data_path, SecondaryStoreOwner::Api);
+            info!(
+                "Opening ckbadger network store (secondary) at: {} -> {}",
+                config.network_data_path,
+                sec.display()
+            );
+            match CkbadgerStore::open_network_secondary(primary, sec.as_path()) {
+                Ok(s) => Some(Arc::new(s)),
+                Err(e) => {
+                    tracing::warn!("network store present but failed to open secondary: {e}");
+                    None
+                }
+            }
+        } else {
+            None
+        }
+    };
+
     let app_config = AppConfig {
         store,
         append_only_store,
+        network_store,
+        crawler_enabled: config.crawler_enabled,
         ckb_rpc_url: config.ckb_rpc_url,
         ckb_network: config.ckb_network,
         rate_limit_per_second: Some(config.rate_limit),
@@ -486,6 +518,8 @@ mod tests {
             store_runtime_config: StoreRuntimeConfig::default(),
             dob_decode_dir: PathBuf::from("/data/media"),
             cycles_request_dir: None,
+            network_data_path: "/data/network".to_string(),
+            crawler_enabled: false,
         };
 
         assert_eq!(config.domain_data_path, "/data/domain");
@@ -499,6 +533,8 @@ mod tests {
         assert_eq!(config.ckb_db_path, "/ckb/data/db");
         assert_eq!(config.store_runtime_config, StoreRuntimeConfig::default());
         assert_eq!(config.dob_decode_dir, PathBuf::from("/data/media"));
+        assert_eq!(config.network_data_path, "/data/network");
+        assert!(!config.crawler_enabled);
     }
 
     #[test]
