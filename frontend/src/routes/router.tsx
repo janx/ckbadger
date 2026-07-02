@@ -105,6 +105,7 @@ const FiberChannelsPage = lazyPage(() => import('@/app/fiber/channels/page'));
 const FiberChannelDetailPage = lazyPage(() => import('@/app/fiber/channels/[id]/page'));
 const DaoPage = lazyPage(() => import('@/app/dao/page'));
 const HardforksPage = lazyPage(() => import('@/app/hardforks/page'));
+const NetworkPage = lazyPage(() => import('@/app/network/page'));
 const ScriptByCodeHashRoute = lazyParamPage(
   () => import('@/app/script/[codeHash]/client-page'),
   (params) => ({
@@ -368,6 +369,10 @@ export function createAppRouter(): RouteObject[] {
         {
           path: 'hardforks',
           element: <HardforksPage />,
+        },
+        {
+          path: 'network',
+          element: <NetworkPage />,
         },
         {
           path: 'script/:codeHash',

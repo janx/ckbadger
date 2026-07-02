@@ -47,6 +47,7 @@ export type ParsedMarkdownPage =
   | { kind: 'forks_list'; pathname: '/forks' }
   | { kind: 'fork_detail'; pathname: string; id: string }
   | { kind: 'hardforks'; pathname: '/hardforks' }
+  | { kind: 'network_overview'; pathname: '/network' }
   | { kind: 'identity_collection'; pathname: string; collectionId: string }
   | { kind: 'objects_list'; pathname: '/objects' }
   | { kind: 'object_detail'; pathname: string; sporeId: string }
@@ -83,6 +84,7 @@ export const MARKDOWN_ROUTE_PATTERNS = [
   '/forks',
   '/forks/{id}',
   '/hardforks',
+  '/network',
   '/identities/{collectionId}',
   '/identities/dotbit/{identityId}',
   '/identities/did/{identityId}',
@@ -147,6 +149,7 @@ export function parseMarkdownSourcePath(pathname: string): ParsedMarkdownPage {
   }
   if (normalized === '/forks') return { kind: 'forks_list', pathname: '/forks' };
   if (normalized === '/hardforks') return { kind: 'hardforks', pathname: '/hardforks' };
+  if (normalized === '/network') return { kind: 'network_overview', pathname: '/network' };
   if (normalized === '/objects') return { kind: 'objects_list', pathname: '/objects' };
   if (normalized === '/scripts') return { kind: 'scripts_list', pathname: '/scripts' };
   if (normalized === '/tokens') return { kind: 'tokens_list', pathname: '/tokens' };

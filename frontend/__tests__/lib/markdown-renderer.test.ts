@@ -21,6 +21,7 @@ vi.mock('@/lib/api', () => ({
     getDidCkbItemActivities: vi.fn(),
     getMnftItemDetail: vi.fn(),
     getMnftItemActivities: vi.fn(),
+    getNetworkSummary: vi.fn(),
   },
   isWarmupPendingError: vi.fn(() => false),
 }));
@@ -508,6 +509,56 @@ describe('renderMarkdownPage', () => {
       cursor: undefined,
       action: undefined,
     });
+  });
+
+  it('renders peers markdown with the reachability caveat when the crawler is off', async () => {
+    vi.mocked(api.getNetworkSummary).mockResolvedValue({
+      enabled: false,
+      hasData: false,
+      lastRound: null,
+    });
+
+    const result = await renderMarkdownPage({
+      page: parseMarkdownSourcePath('/network'),
+      searchParams: new URLSearchParams(),
+      origin: 'http://localhost:3000',
+    });
+
+    expect(result.status).toBe(200);
+    expect(result.body).toContain('# Peers');
+    expect(result.body).toContain('discoverable / reachable');
+    expect(result.body).toContain('Crawler disabled');
+    expect(result.body).toContain('/network/summary');
+  });
+
+  it('renders peers markdown with last-round stats when crawl data exists', async () => {
+    vi.mocked(api.getNetworkSummary).mockResolvedValue({
+      enabled: true,
+      hasData: true,
+      lastRound: {
+        roundId: 5,
+        started: 0,
+        finished: 1700000000,
+        dialed: 2,
+        reachable: 1,
+        unreachable: 1,
+        foreignDropped: 0,
+        newNodes: 0,
+        totalKnown: 2,
+        frontierDrained: true,
+      },
+    });
+
+    const result = await renderMarkdownPage({
+      page: parseMarkdownSourcePath('/network'),
+      searchParams: new URLSearchParams(),
+      origin: 'http://localhost:3000',
+    });
+
+    expect(result.status).toBe(200);
+    expect(result.body).toContain('## Last Round');
+    expect(result.body).toContain('discoveredReachable');
+    expect(result.body).toContain('| totalKnown | 2 |');
   });
 
   it('renders tx detail markdown with witness summary', async () => {

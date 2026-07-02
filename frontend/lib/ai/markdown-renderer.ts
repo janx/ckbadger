@@ -748,6 +748,68 @@ export async function renderMarkdownPage(
       ]);
       return { status: 200, body };
     }
+    case 'network_overview': {
+      const summary = await api.getNetworkSummary();
+      const sections: string[] = [
+        '# Peers',
+        '',
+        'Whole-network CKB L1 peer discovery. Honest caveat: these are discoverable / reachable',
+        'nodes only — not the full network. Nodes behind NAT or firewalls, or that refuse dials,',
+        'stay hidden.',
+        '',
+        '## Status',
+        '',
+        markdownTable(
+          ['field', 'value'],
+          [
+            ['crawlerEnabled', summary.enabled],
+            ['hasData', summary.hasData],
+          ]
+        ),
+      ];
+      if (summary.lastRound) {
+        const round = summary.lastRound;
+        sections.push(
+          '',
+          '## Last Round',
+          '',
+          markdownTable(
+            ['field', 'value'],
+            [
+              ['roundId', round.roundId],
+              ['discoveredReachable', round.reachable],
+              ['unreachable', round.unreachable],
+              ['totalKnown', round.totalKnown],
+              ['frontierDrained', round.frontierDrained],
+              ['finished', round.finished],
+            ]
+          )
+        );
+      } else {
+        sections.push(
+          '',
+          summary.enabled
+            ? 'Crawler enabled — waiting for the first round to finish.'
+            : 'Crawler disabled. Enable it in ckbadger.toml under `[crawler]` with `enabled = true`.'
+        );
+      }
+      sections.push(
+        '',
+        '## API',
+        '',
+        markdownTable(
+          ['endpoint', 'description'],
+          [
+            ['/network/summary', 'onboarding vs dashboard switch (this page)'],
+            ['/network/distributions', 'version / country / ASN / protocol counts'],
+            ['/network/history', 'historical node / reachable / share trends'],
+            ['/network/nodes', 'filterable, cursor-paginated node table'],
+          ]
+        )
+      );
+      const body = buildMarkdownDocument(buildMeta(page.pathname, page.kind, origin), sections);
+      return { status: 200, body };
+    }
     case 'blocks_list': {
       const limit = parseLimit(searchParams);
       const cursor = searchParams.get('cursor') ?? undefined;
