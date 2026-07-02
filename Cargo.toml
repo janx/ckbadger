@@ -80,6 +80,18 @@ ckb-types = "0.119"
 ckb-jsonrpc-types = "0.119"
 ckb-hash = "0.119"
 
+# CKB p2p network (crawler prober)
+ckb-network = "0.119"
+ckb-app-config = "0.119"
+ckb-spawn = "0.119"
+# Transitive p2p-stack pins for ckb-network 0.119. This workspace does not commit
+# Cargo.lock, so without these a fresh resolve grabs newer tentacle patch releases
+# (tokio-yamux 0.3.18) whose `try_recv` usage was removed in current futures 0.3.x and
+# fails to compile. These are the versions CKB v0.119.0 itself locks. Referenced (unused)
+# by ckbadger-crawler solely to constrain resolution; only ckb-network consumes them.
+tokio-yamux = "=0.3.8"
+tentacle-secio = "=0.6.2"
+
 # System
 libc = "0.2"
 
