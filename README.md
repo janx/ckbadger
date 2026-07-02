@@ -143,25 +143,26 @@ Documents under `docs/prompts/` are manually marinated texts capturing the ideas
 
 ### Services
 
-| Service    | Description                   | Port |
-| ---------- | ----------------------------- | ---- |
-| `indexer`  | Blockchain sync daemon        | -    |
-| `api`      | REST/WebSocket API server     | 8101 |
-| `frontend` | Static file HTTP server (SPA) | 8100 |
+| Service    | Description                                                             | Port |
+| ---------- | ----------------------------------------------------------------------- | ---- |
+| `indexer`  | Blockchain sync daemon                                                  | -    |
+| `api`      | REST/WebSocket API server                                               | 8101 |
+| `frontend` | Static file HTTP server (SPA)                                           | 8100 |
+| `crawler`  | Opt-in whole-network CKB L1 p2p peer crawler (writes the network store) | -    |
 
 ### Tech Stack
 
-| Layer             | Technology                                              | Purpose                         |
-| ----------------- | ------------------------------------------------------- | ------------------------------- |
-| **CLI**           | Rust (Clap), single `ckbadger` binary                   | All subcommands, supervisor     |
-| **Frontend**      | Vite, React 19, React Router, TanStack Query            | Local-first SPA shell           |
-| **UI**            | Tailwind CSS, Custom Components                         | Responsive design               |
-| **Visualization** | react-force-graph-2d, D3.js                             | Cell relationship graphs        |
-| **API**           | Rust (Axum)                                             | High-performance REST/WebSocket |
-| **Indexer**       | Rust (3-stage pipeline)                                 | Block parsing, cell tracking    |
-| **Storage**       | RocksDB (60 domain + 1 append-only CFs, ckbadger-store) | Embedded dual-store data engine |
-| **Cache**         | In-memory LRU                                           | API response cache              |
-| **IPC**           | Unix domain sockets                                     | Inter-process communication     |
+| Layer             | Technology                                                          | Purpose                          |
+| ----------------- | ------------------------------------------------------------------- | -------------------------------- |
+| **CLI**           | Rust (Clap), single `ckbadger` binary                               | All subcommands, supervisor      |
+| **Frontend**      | Vite, React 19, React Router, TanStack Query                        | Local-first SPA shell            |
+| **UI**            | Tailwind CSS, Custom Components                                     | Responsive design                |
+| **Visualization** | react-force-graph-2d, D3.js                                         | Cell relationship graphs         |
+| **API**           | Rust (Axum)                                                         | High-performance REST/WebSocket  |
+| **Indexer**       | Rust (3-stage pipeline)                                             | Block parsing, cell tracking     |
+| **Storage**       | RocksDB (60 domain + 1 append-only + 2 network CFs, ckbadger-store) | Embedded three-store data engine |
+| **Cache**         | In-memory LRU                                                       | API response cache               |
+| **IPC**           | Unix domain sockets                                                 | Inter-process communication      |
 
 ### Deployment
 
@@ -175,7 +176,8 @@ CKBadger is designed local-first, but the architecture doesn't lock you in. The 
 ├── metadata/                  # Optional: local metadata overrides
 ├── data/
 │   ├── domain/                # Mutable canonical state (RocksDB)
-│   └── append-only/           # Immutable history (RocksDB)
+│   ├── append-only/           # Immutable cell payloads (RocksDB)
+│   └── network/               # Opt-in crawler p2p observations (RocksDB; exempt from rebuild-from-genesis)
 ├── media/                     # Content-addressed decoded media blobs (DOB artwork)
 ├── run/                       # Runtime state (gitignored)
 │   ├── supervisor.pid

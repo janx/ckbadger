@@ -33,6 +33,8 @@ ckbadger verify --checks genesis_block,dao_statistics_sane  # Specific checks
 
 `--depth fast` runs Fast tier only. `--depth sampling` runs all three tiers (Fast + Sampling + Explorer). Explorer checks can be skipped with `--no-explorer`.
 
+> **Scope:** `verify` covers only chain-derived data (the domain + append-only stores). The **network store** (`net_nodes` / `net_stats`, written by the opt-in `ckbadger-crawler`) is **outside** all 55 checks — it holds observational, non-chain p2p-crawler data that is non-deterministic and not subject to chain-integrity invariants, so none of these checks apply to it.
+
 ### CLI Reference
 
 ```

@@ -4,7 +4,7 @@ Performance analysis and tuning guide for ckbadger's RocksDB storage on encrypte
 
 ## Context
 
-ckbadger stores data in two RocksDB instances (domain + append-only). During bulk sync, the indexer pipeline reads blocks from the CKB node's RocksDB and writes parsed data to ckbadger's RocksDB. Both read and write paths go through the host filesystem.
+ckbadger's bulk-sync path writes two RocksDB instances (domain + append-only); a third, opt-in network store (written separately by the crawler, not the indexer) is outside this tuning scope. During bulk sync, the indexer pipeline reads blocks from the CKB node's RocksDB and writes parsed data to ckbadger's RocksDB. Both read and write paths go through the host filesystem.
 
 This document captures findings from benchmarking on a LUKS-encrypted btrfs root partition and provides tuning recommendations.
 
