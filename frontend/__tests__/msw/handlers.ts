@@ -498,4 +498,26 @@ export const handlers = [
       expiredAt: null,
     });
   }),
+
+  // --- Network peer crawler mock handlers ---
+
+  http.get(`${API_BASE}/network/summary`, () => {
+    return HttpResponse.json({
+      enabled: false,
+      hasData: false,
+      lastRound: null,
+    });
+  }),
+
+  http.get(`${API_BASE}/network/distributions`, () => {
+    return HttpResponse.json({
+      totalKnown: 0,
+      reachable: 0,
+      unreachable: 0,
+      versions: [],
+      countries: [],
+      asns: [],
+      protocols: [],
+    });
+  }),
 ];

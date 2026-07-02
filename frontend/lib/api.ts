@@ -1775,6 +1775,69 @@ export type {
 
 export { TAG_TOKEN, TAG_OBJECT, TAG_IDENTITY, TAG_DAO, TAG_PROTOCOL, TAG_CELLBASE };
 
+export interface LabelCount {
+  label: string;
+  count: number;
+}
+
+export interface NetworkLastRound {
+  roundId: number;
+  started: number;
+  finished: number;
+  dialed: number;
+  reachable: number;
+  unreachable: number;
+  foreignDropped: number;
+  newNodes: number;
+  totalKnown: number;
+  frontierDrained: boolean;
+}
+
+export interface NetworkSummary {
+  enabled: boolean;
+  hasData: boolean;
+  lastRound: NetworkLastRound | null;
+}
+
+export interface NetworkDistributions {
+  totalKnown: number;
+  reachable: number;
+  unreachable: number;
+  versions: LabelCount[];
+  countries: LabelCount[];
+  asns: LabelCount[];
+  protocols: LabelCount[];
+}
+
+export interface NetworkHistoryPoint {
+  ts: number;
+  scalar: number;
+  buckets: LabelCount[];
+}
+
+export interface NetworkHistory {
+  metric: string;
+  granularity: string;
+  points: NetworkHistoryPoint[];
+}
+
+export interface NodeSummary {
+  peerId: string;
+  addr: string;
+  version: string;
+  country: string;
+  asn: string;
+  reachable: boolean;
+  lastSeen: number;
+  lastReachableAt: number;
+  rttMs: number | null;
+}
+
+export interface NetworkNodesPage {
+  items: NodeSummary[];
+  nextCursor: string | null;
+}
+
 export const api = {
   getForks: (params: CursorQueryParams = {}): Promise<CursorPaginatedResponse<ReorgEvent>> => {
     const query = new URLSearchParams();
@@ -2709,5 +2772,37 @@ export const api = {
       title: 'Daily CKB Transfer Volume',
       yAxisLabel: 'CKB (shannons)',
     };
+  },
+
+  getNetworkSummary: async (): Promise<NetworkSummary> => fetchApi('/network/summary'),
+
+  getNetworkDistributions: async (): Promise<NetworkDistributions> =>
+    fetchApi('/network/distributions'),
+
+  getNetworkHistory: async (
+    metric: string,
+    granularity: string,
+    from?: number,
+    to?: number
+  ): Promise<NetworkHistory> => {
+    const p = new URLSearchParams({ metric, granularity });
+    if (from != null) p.set('from', String(from));
+    if (to != null) p.set('to', String(to));
+    return fetchApi(`/network/history?${p.toString()}`);
+  },
+
+  getNetworkNodes: async (params?: {
+    cursor?: string;
+    reachable?: boolean;
+    country?: string;
+    version?: string;
+  }): Promise<NetworkNodesPage> => {
+    const p = new URLSearchParams();
+    if (params?.cursor) p.set('cursor', params.cursor);
+    if (params?.reachable != null) p.set('reachable', String(params.reachable));
+    if (params?.country) p.set('country', params.country);
+    if (params?.version) p.set('version', params.version);
+    const qs = p.toString();
+    return fetchApi(`/network/nodes${qs ? `?${qs}` : ''}`);
   },
 };
