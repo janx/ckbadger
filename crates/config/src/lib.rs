@@ -23,6 +23,7 @@ pub struct CkbadgerConfig {
     pub indexer: IndexerConfig,
     pub store: StoreConfig,
     pub log: LogConfig,
+    pub crawler: CrawlerConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -64,6 +65,9 @@ pub struct IndexerConfig {
 pub struct StoreConfig {
     pub domain_data_path: String,
     pub append_only_data_path: String,
+    /// Network-crawler store (third store class; exempt from
+    /// rebuild-from-genesis since it holds derived p2p topology, not chain data).
+    pub network_data_path: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub memory_budget_gb: Option<u64>,
     pub direct_io_reads: bool,
@@ -79,6 +83,38 @@ fn default_decoder_cache_path() -> String {
 #[serde(default)]
 pub struct LogConfig {
     pub level: String,
+}
+
+/// Whole-network CKB L1 p2p crawler configuration (`[crawler]`).
+///
+/// Opt-in: an absent `[crawler]` section (or `enabled = false`) leaves the
+/// crawler fully disabled. All fields fall back to their defaults via the
+/// container-level `#[serde(default)]` + [`CrawlerConfig::default`], mirroring
+/// how `StoreConfig` wires its defaults.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct CrawlerConfig {
+    /// Master switch. When false the crawler service does not run.
+    pub enabled: bool,
+    /// Delay between the end of one crawl round and the start of the next.
+    pub round_interval_secs: u64,
+    /// Maximum number of concurrent outbound dials within a round.
+    pub max_dial_concurrency: usize,
+    /// Per-dial connect/handshake timeout.
+    pub dial_timeout_secs: u64,
+    /// Wall-clock budget for a single crawl round before it is cut short.
+    pub round_budget_secs: u64,
+    /// Retention window (days) for hourly history rollups.
+    pub history_hourly_retention_days: u64,
+    /// Upper bound on the crawl frontier size, guarding against a peer that
+    /// floods us with addresses. Wired into `RoundConfig.max_frontier`.
+    pub max_frontier: usize,
+    /// Optional MaxMind GeoLite2 City database path (enables geo enrichment).
+    pub geoip_city_path: Option<String>,
+    /// Optional MaxMind GeoLite2 ASN database path (enables ASN enrichment).
+    pub geoip_asn_path: Option<String>,
+    /// Seed nodes used to bootstrap the first crawl round.
+    pub bootnodes: Vec<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -130,6 +166,7 @@ impl Default for StoreConfig {
         Self {
             domain_data_path: "data/domain".to_string(),
             append_only_data_path: "data/append-only".to_string(),
+            network_data_path: "data/network".to_string(),
             memory_budget_gb: None,
             direct_io_reads: true,
             decoder_cache_path: default_decoder_cache_path(),
@@ -141,6 +178,23 @@ impl Default for LogConfig {
     fn default() -> Self {
         Self {
             level: "info".to_string(),
+        }
+    }
+}
+
+impl Default for CrawlerConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            round_interval_secs: 900,
+            max_dial_concurrency: 128,
+            dial_timeout_secs: 15,
+            round_budget_secs: 600,
+            history_hourly_retention_days: 30,
+            max_frontier: 100_000,
+            geoip_city_path: None,
+            geoip_asn_path: None,
+            bootnodes: Vec::new(),
         }
     }
 }
@@ -499,6 +553,25 @@ mod tests {
         assert_eq!(cfg.log.level, "info");
     }
 
+    #[test]
+    fn crawler_config_defaults_and_parse() {
+        // Absent [crawler] section => defaults, crawler disabled.
+        let c =
+            parse_config("[ckb]\nrpc_url=\"x\"\nnetwork=\"mainnet\"\nworkdir=\"/w\"\n").unwrap();
+        assert!(!c.crawler.enabled);
+        assert_eq!(c.crawler.round_interval_secs, 900);
+        assert_eq!(c.crawler.max_dial_concurrency, 128);
+        assert_eq!(c.crawler.max_frontier, 100_000);
+        assert_eq!(c.store.network_data_path, "data/network");
+        // Explicit [crawler] section overrides.
+        let c2 = parse_config(
+            "[ckb]\nrpc_url=\"x\"\nnetwork=\"mainnet\"\nworkdir=\"/w\"\n[crawler]\nenabled=true\nround_interval_secs=60\n",
+        )
+        .unwrap();
+        assert!(c2.crawler.enabled);
+        assert_eq!(c2.crawler.round_interval_secs, 60);
+    }
+
     // -- TOML parsing --
 
     #[test]
@@ -656,6 +729,7 @@ data_path = "/var/lib/ckb/data/db"
         let store = StoreConfig {
             domain_data_path: "custom/domain".to_string(),
             append_only_data_path: "/ssd/append-only".to_string(),
+            network_data_path: "data/network".to_string(),
             memory_budget_gb: Some(32),
             direct_io_reads: false,
             decoder_cache_path: default_decoder_cache_path(),
