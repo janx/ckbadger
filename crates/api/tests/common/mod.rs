@@ -152,6 +152,21 @@ pub fn create_router_without_warmup(config: AppConfig) -> axum::Router {
         .with_state(state)
 }
 
+/// Issue a GET against the router and parse the JSON body.
+/// `path` is relative to the `/api/v1` mount (e.g. `/network/summary`).
+/// Mirrors the inline `oneshot` + `to_bytes` + `from_slice` idiom used across `api_*.rs`.
+pub async fn get_json(app: &axum::Router, path: &str) -> (StatusCode, serde_json::Value) {
+    let request = Request::builder()
+        .uri(format!("/api/v1{path}"))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    let status = response.status();
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    (status, json)
+}
+
 pub fn compute_blake2b_data_hash(data: &[u8]) -> Vec<u8> {
     let mut hasher = ckb_hash::new_blake2b();
     hasher.update(data);
