@@ -15,6 +15,7 @@ ckbadger-api = { path = "../api" }
 ckbadger-ipc = { path = "../ipc" }
 ckbadger-tui = { path = "../tui" }
 ckbadger-store = { path = "../ckbadger-store" }
+ckbadger-crawler = { path = "../crawler" }
 clap = { workspace = true }
 anyhow = { workspace = true }
 tokio = { workspace = true }

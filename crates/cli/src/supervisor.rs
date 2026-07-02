@@ -123,6 +123,20 @@ async fn stop_child_gracefully(name: &str, child: &mut Child) {
 // Public API
 // ---------------------------------------------------------------------------
 
+/// The default set of services `ckbadger run` supervises.
+///
+/// Returns the base set (`indexer`, `api`, `frontend-server`) always, plus
+/// `crawler` when `[crawler].enabled` is set. Each name maps 1:1 to an
+/// `internal <name>` subcommand via [`spawn_service`] (e.g. `"crawler"` ->
+/// `internal crawler`). An explicit `--only` flag overrides this default.
+pub fn enabled_services(cfg: &CkbadgerConfig) -> Vec<&'static str> {
+    let mut services = vec!["indexer", "api", "frontend-server"];
+    if cfg.crawler.enabled {
+        services.push("crawler");
+    }
+    services
+}
+
 /// Run the supervisor: spawn services, start IPC server, monitor children.
 ///
 /// Blocks until Ctrl+C or IPC shutdown request. Returns after all
@@ -478,6 +492,16 @@ impl IpcHandler for SupervisorIpcHandler {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    #[test]
+    fn crawler_included_only_when_enabled() {
+        let mut cfg = ckbadger_config::CkbadgerConfig::default();
+        assert!(!enabled_services(&cfg).contains(&"crawler"));
+        cfg.crawler.enabled = true;
+        assert!(enabled_services(&cfg).contains(&"crawler"));
+        // Core services always present.
+        assert!(enabled_services(&cfg).contains(&"indexer"));
+    }
 
     #[test]
     fn test_backoff_calculation() {

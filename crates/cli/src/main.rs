@@ -178,6 +178,8 @@ enum Command {
     Status,
     /// Verify data integrity
     Verify(VerifyArgs),
+    /// Run one or continuous whole-network peer crawl rounds
+    Crawl(CrawlArgs),
     /// Import token and script labels
     LabelImport(LabelImportArgs),
     /// Purge derived data, keep config
@@ -206,6 +208,13 @@ struct VerifyArgs {
 }
 
 #[derive(clap::Args)]
+struct CrawlArgs {
+    /// Run a single round and exit (manual verification)
+    #[arg(long)]
+    once: bool,
+}
+
+#[derive(clap::Args)]
 struct LabelImportArgs {
     // Will be expanded later
 }
@@ -231,6 +240,8 @@ enum InternalService {
     Api,
     /// Run the frontend server subprocess
     FrontendServer,
+    /// Run the crawler subprocess
+    Crawler,
 }
 
 // ---------------------------------------------------------------------------
@@ -283,6 +294,10 @@ async fn main() -> Result<()> {
         Command::Verify(args) => {
             init_tracing_from_config(&workdir);
             cmd_verify(&workdir, &args).await
+        }
+        Command::Crawl(args) => {
+            init_tracing_from_config(&workdir);
+            ckbadger_crawler::entry::run_crawler(&workdir, args.once).await
         }
         Command::LabelImport(_) => {
             init_tracing_from_config(&workdir);
@@ -359,7 +374,16 @@ async fn cmd_run(workdir: &Path, args: &RunArgs) -> Result<()> {
     let config = load_config(workdir)?;
     let work = WorkDir::resolve(workdir);
 
-    let services = parse_only_flag(&args.only);
+    // An explicit `--only` selects services verbatim; otherwise the default
+    // spawn set comes from `enabled_services`, which appends the crawler only
+    // when `[crawler].enabled` is set.
+    let services = match &args.only {
+        Some(_) => parse_only_flag(&args.only),
+        None => supervisor::enabled_services(&config)
+            .into_iter()
+            .map(String::from)
+            .collect(),
+    };
 
     if services.is_empty() {
         bail!("no services selected to run");
@@ -429,6 +453,7 @@ async fn cmd_internal(workdir: &Path, args: &InternalArgs) -> Result<()> {
             };
             run_frontend_server(frontend_config).await
         }
+        InternalService::Crawler => ckbadger_crawler::entry::run_crawler(workdir, false).await,
     }
 }
 
