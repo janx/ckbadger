@@ -174,16 +174,16 @@ view: clean snapshots, simple, one time-series point per round.)
 Tolerating dial failures does **not** violate "no silent fallback": the failure **is** the datum
 (reachability). We record it; we do not paper over it.
 
-| Condition                                                                  | Handling                                                          |
-| -------------------------------------------------------------------------- | ----------------------------------------------------------------- |
-| No resolvable bootnodes                                                    | **fail-fast**, refuse to start                                    |
-| MMDB path set but unreadable/corrupt                                       | **fail-fast** (misconfig)                                         |
-| network store cannot open RW / write fails                                 | **fail-fast** with `round_id`+key context                         |
-| `[ckb].network` unknown / genesis mismatch                                 | **fail-fast**                                                     |
-| connect refused/timeout, handshake fail, Identify timeout, peer disconnect | **record** as unreachable this round, continue                    |
-| foreign network-id (auto-rejected by ckb-network)                          | **drop** node, count `foreign_dropped`                            |
-| geo/asn lookup miss                                                        | `Unknown` (honest empty, not abort)                               |
-| crawler crash mid-round                                                    | lossless — per-node upserts are idempotent; next round overwrites |
+| Condition                                                                  | Handling                                                                                                                                                                                                                                                      |
+| -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| No resolvable bootnodes                                                    | **fail-fast**, refuse to start                                                                                                                                                                                                                                |
+| MMDB path set but unreadable/corrupt                                       | **fail-fast** (misconfig)                                                                                                                                                                                                                                     |
+| network store cannot open RW / write fails                                 | **fail-fast** with `round_id`+key context                                                                                                                                                                                                                     |
+| `[ckb].network` unknown / genesis mismatch                                 | **fail-fast**                                                                                                                                                                                                                                                 |
+| connect refused/timeout, handshake fail, Identify timeout, peer disconnect | **record** as unreachable this round, continue                                                                                                                                                                                                                |
+| foreign network-id (auto-rejected by ckb-network)                          | **drop** node, count `foreign_dropped`                                                                                                                                                                                                                        |
+| geo/asn lookup miss                                                        | `Unknown` (honest empty, not abort)                                                                                                                                                                                                                           |
+| crawler crash mid-round                                                    | a crawl round is the persistence unit — this round's reachable observations are written after its (wall-clock-bounded) BFS completes; a crash mid-round discards that round's in-progress observations, which are re-collected idempotently on the next round |
 
 ## Honesty Invariants
 
@@ -284,6 +284,34 @@ the network store's exemption from the `verify` suite in `docs/TESTING.md`.
 3. **Retention** — hourly buckets 30d, daily long-term; node records deleted after 30d absence;
    `known_peers` replaced each round.
 4. **enabled** — default `false` (opt-in).
+
+---
+
+## Known Limitations & Pre-Enable Follow-ups (Foundation)
+
+The Foundation branch ships the round engine and its deterministic tests, but the
+following MUST be addressed before the crawler is enabled/run on a real network:
+
+- Dialing is sequential; `max_dial_concurrency` is not yet applied (bounded
+  concurrency is a planned optimization now that rounds are time-bounded).
+- Persistence is per-round (batched after the BFS), not incremental; a mid-round
+  crash re-crawls next round.
+- **A live `ckbadger crawl --once` against a real testnet/mainnet node has NOT
+  been run — the `ckb-network` prober path is unverified end-to-end and MUST be
+  confirmed before enabling.**
+- `LatestStatus.foreign_dropped` is currently always 0 (foreign-network peers are
+  counted as unreachable); populate it if the transparency metric is wanted.
+- `MaxmindGeoIp` can produce `Geo { country: "" }`; enforce empty-country ⇒ drop
+  to `None` per the `NodeRecord` invariant.
+- The p2p identity/peer-store lives under the OS temp dir; move it under the work
+  dir (shared-host secret-key hygiene).
+- Commit `Cargo.lock` for the deployable binary so the `tokio-yamux` /
+  `tentacle-secio` version pins can be removed.
+- Bootnodes are not read from the supervised node's `[ckb].workdir` `ckb.toml`
+  (only config override + built-in defaults).
+- `default_config_toml()` has no `[crawler]` sample (discoverability);
+  `parse_only_flag`'s None arm duplicates `enabled_services`' base list.
+- `open_network_secondary` (the API read path) ships untested (covered in Plan 2).
 
 ---
 

@@ -99,6 +99,10 @@ pub struct CrawlerConfig {
     /// Delay between the end of one crawl round and the start of the next.
     pub round_interval_secs: u64,
     /// Maximum number of concurrent outbound dials within a round.
+    ///
+    /// NOTE: not yet applied — the crawler currently dials sequentially; bounded
+    /// concurrency is a planned pre-enable follow-up (rounds are already
+    /// time-bounded by `round_budget_secs`).
     pub max_dial_concurrency: usize,
     /// Per-dial connect/handshake timeout.
     pub dial_timeout_secs: u64,

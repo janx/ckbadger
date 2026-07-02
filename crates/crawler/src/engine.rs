@@ -66,6 +66,9 @@ pub struct RoundConfig {
     /// dropped and the round is marked `frontier_drained = false`. Independent
     /// of `max_addrs` (which caps dials, not the queued set).
     pub max_frontier: Option<usize>,
+    /// Wall-clock budget for one round's BFS; on elapse the round stops and is
+    /// marked `frontier_drained=false`. `None` = no time bound (tests).
+    pub round_budget: Option<std::time::Duration>,
 }
 
 impl RoundConfig {
@@ -76,6 +79,7 @@ impl RoundConfig {
             top_n: 20,
             max_addrs: None,
             max_frontier: None,
+            round_budget: None,
         }
     }
 }
@@ -125,9 +129,18 @@ pub async fn run_round(
     let mut reachable_outcomes: HashMap<Vec<u8>, crate::prober::ProbeOutcome> = HashMap::new();
     let mut unreachable = 0u64;
     let mut frontier_drained = true;
+    let deadline = cfg.round_budget.map(|b| std::time::Instant::now() + b);
     while let Some(addr) = frontier.pop_front() {
         if let Some(cap) = cfg.max_addrs {
             if dialed as usize >= cap {
+                frontier_drained = false;
+                break;
+            }
+        }
+        // Wall-clock budget: a round that outruns its time bound stops here and
+        // is marked partial (mirrors the `max_addrs`/`max_frontier` pattern).
+        if let Some(dl) = deadline {
+            if std::time::Instant::now() >= dl {
                 frontier_drained = false;
                 break;
             }
@@ -404,6 +417,26 @@ mod tests {
         let store = CkbadgerStore::open_test_network(dir.path()).unwrap();
         let mut cfg = RoundConfig::test_defaults();
         cfg.max_addrs = Some(1); // stop after one dial
+        let report = run_round(&store, &prober, &NoGeo, &cfg, 10_000, 1)
+            .await
+            .unwrap();
+        assert!(!report.status.frontier_drained);
+    }
+
+    #[tokio::test]
+    async fn round_budget_zero_marks_partial_immediately() {
+        // A ZERO wall-clock budget is always already elapsed at the top of the
+        // BFS loop, so the round stops before dialing and is marked partial.
+        // Deterministic (no sleeps): `Instant::now() >= now + ZERO` always holds.
+        let mut g = std::collections::HashMap::new();
+        g.insert("addrA".to_string(), oc(b"A", "addrA", &["addrB"]));
+        let prober = MockProber::new(vec!["addrA".into()], g);
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_network(dir.path()).unwrap();
+        let cfg = RoundConfig {
+            round_budget: Some(std::time::Duration::ZERO),
+            ..RoundConfig::test_defaults()
+        };
         let report = run_round(&store, &prober, &NoGeo, &cfg, 10_000, 1)
             .await
             .unwrap();

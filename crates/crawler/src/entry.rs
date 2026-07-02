@@ -46,6 +46,9 @@ pub async fn run_crawler(work_dir: &Path, run_once: bool) -> anyhow::Result<()> 
         top_n: 20,
         max_addrs: None,
         max_frontier: Some(cfg.crawler.max_frontier),
+        round_budget: Some(std::time::Duration::from_secs(
+            cfg.crawler.round_budget_secs,
+        )),
     };
 
     // Resume the round counter from the persisted status so round ids are
