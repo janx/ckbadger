@@ -1,9 +1,14 @@
-use axum::{extract::State, routing::get, Router};
-use serde::Serialize;
+use axum::{
+    extract::{Query, State},
+    routing::get,
+    Router,
+};
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use crate::response::{ok, ApiError, ApiResult};
 use crate::AppState;
+use ckbadger_store::network_keys::{bucket_of, Granularity, Metric};
 use ckbadger_store::{LatestStatus, NodeRecord};
 
 /// Latest crawl-round status, camelCase-serialized for the API.
@@ -53,6 +58,7 @@ pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/network/summary", get(summary))
         .route("/network/distributions", get(distributions))
+        .route("/network/history", get(history))
 }
 
 async fn summary(State(state): State<Arc<AppState>>) -> ApiResult<NetworkSummary> {
@@ -144,5 +150,105 @@ async fn distributions(State(state): State<Arc<AppState>>) -> ApiResult<NetworkD
         countries: histogram(nodes.iter().map(|(_, r)| country_label(r))),
         asns: histogram(nodes.iter().map(|(_, r)| asn_label(r))),
         protocols: histogram(nodes.iter().flat_map(|(_, r)| r.protocols.clone())),
+    })
+}
+
+/// Query parameters for `/network/history`. `metric`/`granularity` are required
+/// enum strings; `from`/`to` are optional inclusive unix-seconds bounds (omitted
+/// bounds scan the whole series).
+#[derive(Debug, Deserialize)]
+pub struct HistoryQuery {
+    pub metric: String,
+    pub granularity: String,
+    pub from: Option<u64>,
+    pub to: Option<u64>,
+}
+
+/// One point in a metric trend series: `ts` is the bucket boundary in unix
+/// seconds, `scalar` carries scalar metrics, and `buckets` carries the top-N
+/// `(label, count)` slices for share metrics (empty for scalar metrics).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HistoryPointResponse {
+    pub ts: u64,
+    pub scalar: u64,
+    pub buckets: Vec<LabelCount>,
+}
+
+/// A single metric's trend series, echoing back the requested `metric` and
+/// `granularity` alongside the resolved `points` (ascending by `ts`).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NetworkHistory {
+    pub metric: String,
+    pub granularity: String,
+    pub points: Vec<HistoryPointResponse>,
+}
+
+/// Map an API metric string to its store [`Metric`], or `None` if unknown.
+fn parse_metric(s: &str) -> Option<Metric> {
+    match s {
+        "totalNodes" => Some(Metric::TotalNodes),
+        "reachableNodes" => Some(Metric::ReachableNodes),
+        "versionShare" => Some(Metric::VersionShare),
+        "countryShare" => Some(Metric::CountryShare),
+        _ => None,
+    }
+}
+
+/// Map an API granularity string to its store [`Granularity`], or `None` if unknown.
+fn parse_gran(s: &str) -> Option<Granularity> {
+    match s {
+        "hour" => Some(Granularity::Hour),
+        "day" => Some(Granularity::Day),
+        _ => None,
+    }
+}
+
+/// Range-scan a `(metric, granularity)` history series from `CF_NET_STATS` into a
+/// trend series. Unknown `metric`/`granularity` ⇒ `400`. When no network store is
+/// configured (crawler opt-out), returns an empty `points` series rather than an error.
+///
+/// Daily series exclude the incomplete current day: when `granularity==day` and a
+/// `to` bound is provided, the current-day bucket (`bucket_of(to, Day)`) is dropped.
+async fn history(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<HistoryQuery>,
+) -> ApiResult<NetworkHistory> {
+    let metric = parse_metric(&q.metric)
+        .ok_or_else(|| ApiError::bad_request(format!("unknown metric '{}'", q.metric)))?;
+    let gran = parse_gran(&q.granularity)
+        .ok_or_else(|| ApiError::bad_request(format!("unknown granularity '{}'", q.granularity)))?;
+    let points = match &state.network_store {
+        None => Vec::new(),
+        Some(s) => {
+            let from_b = q.from.map(|t| bucket_of(t, gran)).unwrap_or(0);
+            let to_b = q.to.map(|t| bucket_of(t, gran)).unwrap_or(u64::MAX);
+            let mut rows = s
+                .scan_history(metric, gran, from_b, to_b)
+                .map_err(|e| ApiError::internal(e.to_string()))?;
+            // Daily series exclude the incomplete current day: drop the current-day
+            // bucket (`bucket_of(to, Day)`, and anything at/after it) when `to` is given.
+            if let (Granularity::Day, Some(to)) = (gran, q.to) {
+                let cur = bucket_of(to, Granularity::Day);
+                rows.retain(|(b, _)| *b < cur);
+            }
+            rows.into_iter()
+                .map(|(b, p)| HistoryPointResponse {
+                    ts: b * gran.seconds(),
+                    scalar: p.scalar,
+                    buckets: p
+                        .buckets
+                        .into_iter()
+                        .map(|(label, count)| LabelCount { label, count })
+                        .collect(),
+                })
+                .collect()
+        }
+    };
+    ok(NetworkHistory {
+        metric: q.metric,
+        granularity: q.granularity,
+        points,
     })
 }

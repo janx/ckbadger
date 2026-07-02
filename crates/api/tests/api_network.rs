@@ -51,3 +51,20 @@ async fn distributions_empty_when_no_store() {
     assert_eq!(v["totalKnown"], 0);
     assert_eq!(v["versions"].as_array().unwrap().len(), 0);
 }
+
+#[tokio::test]
+async fn history_returns_scalar_series() {
+    let cfg = test_config_with_network(test_store(), test_network_store(), true);
+    let app = create_router_without_warmup(cfg);
+    let (_c, v) = get_json(&app, "/network/history?metric=totalNodes&granularity=hour").await;
+    assert_eq!(v["metric"], "totalNodes");
+    let pts = v["points"].as_array().unwrap();
+    assert!(pts.iter().any(|p| p["scalar"] == 2));
+}
+
+#[tokio::test]
+async fn history_empty_when_no_store() {
+    let app = create_router_without_warmup(test_config(test_store()));
+    let (_c, v) = get_json(&app, "/network/history?metric=totalNodes&granularity=hour").await;
+    assert_eq!(v["points"].as_array().unwrap().len(), 0);
+}
