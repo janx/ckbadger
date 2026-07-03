@@ -21,11 +21,6 @@ pub(crate) enum DobDecodeError {
     Internal(anyhow::Error),
 }
 
-// `is_transient`/`category` currently have only unit-test callers. Their
-// non-test consumer is the decode worker's failure-recording path, added in the
-// follow-up task; the `-D warnings` lib target (compiled without `cfg(test)`)
-// sees them as dead until that caller lands, so the allow stays one more task.
-#[allow(dead_code)]
 impl DobDecodeError {
     pub fn is_transient(&self) -> bool {
         matches!(

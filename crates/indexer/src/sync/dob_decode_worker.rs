@@ -161,6 +161,8 @@ impl DobDecodeWorker {
 
             // Separate successes from failures
             let mut decoded_results: Vec<(Vec<u8>, DobDecodedEntry)> = Vec::new();
+            let mut failed_records: Vec<(Vec<u8>, ckbadger_store::types::DobDecodeFailure)> =
+                Vec::new();
             let mut batch_skipped: u64 = 0;
 
             for (spore_id, result) in results {
@@ -176,11 +178,29 @@ impl DobDecodeWorker {
                     }
                     Err(e) => {
                         batch_skipped += 1;
-                        warn!(
-                            spore_id = hex::encode(&spore_id),
-                            error = %e,
-                            "skipping DOB spore decode"
-                        );
+                        if e.is_transient() {
+                            // Not a data problem — keep it retryable (no record).
+                            warn!(
+                                spore_id = hex::encode(&spore_id),
+                                error = %e,
+                                "skipping DOB spore decode (transient — will retry)"
+                            );
+                        } else {
+                            // Deterministic — record once so it is not re-attempted.
+                            debug!(
+                                spore_id = hex::encode(&spore_id),
+                                error = %e,
+                                "recording un-decodable DOB spore"
+                            );
+                            failed_records.push((
+                                spore_id,
+                                ckbadger_store::types::DobDecodeFailure {
+                                    category: e.category(),
+                                    message: e.to_string(),
+                                    failed_at: chrono::Utc::now().timestamp(),
+                                },
+                            ));
+                        }
                     }
                 }
             }
@@ -208,6 +228,15 @@ impl DobDecodeWorker {
                 store_batch.put_dob_decoded(spore_id, entry);
                 store_batch.commit()?;
                 batch_committed += 1;
+            }
+
+            // Persist deterministic failures per-spore so they are not
+            // re-listed for decode. Transient failures were dropped above and
+            // remain in list_undecoded_dob_spores to retry next run.
+            for (spore_id, failure) in &failed_records {
+                let mut store_batch = StoreBatch::new(&self.store);
+                store_batch.put_dob_decode_failure(spore_id, failure);
+                store_batch.commit()?;
             }
 
             total_decoded += batch_committed;
@@ -1472,5 +1501,65 @@ mod tests {
             "cluster-not-found must be deterministic"
         );
         assert!(matches!(err, DobDecodeError::ClusterNotFound { .. }));
+    }
+
+    #[tokio::test]
+    async fn test_worker_records_deterministic_failure_and_stops_relisting() {
+        use ckbadger_store::types::{
+            CompositionTier, DecodeOutcome, ObjectEntry, ObjectExtra, ObjectStandard,
+            SporeMediaProfile,
+        };
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+        let decoder_cache = Arc::new(DecoderBinaryCache::new(&dir.path().join("cache")).unwrap());
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let worker = DobDecodeWorker::new(
+            store.clone(),
+            store.clone(),
+            decoder_cache,
+            dir.path().join("media"),
+            "http://localhost:9999".to_string(),
+            shutdown,
+        );
+
+        // A dob/0 spore whose collection points at a non-existent cluster.
+        let spore_id = [0x22u8; 32];
+        let spore = ObjectEntry {
+            standard: ObjectStandard::Spore,
+            collection_id: Some(vec![0x99u8; 32]),
+            token_id: None,
+            owner_lock_hash: Some(vec![0x33; 32]),
+            name: None,
+            description: None,
+            is_live: true,
+            created_at_block: 1,
+            created_at_tx: vec![0x44; 32],
+            extra: ObjectExtra::Spore {
+                content_type: "dob/0".to_string(),
+                content_length: 3,
+                media_profile: SporeMediaProfile {
+                    tier: CompositionTier::PureCkb,
+                    sources: vec![],
+                    issues: vec![],
+                },
+            },
+        };
+        store.put_spore_direct(&spore_id, &spore).unwrap();
+
+        assert_eq!(store.list_undecoded_dob_spores(100, None).unwrap().len(), 1);
+
+        worker.run().await.unwrap();
+
+        // A Failed outcome is recorded ...
+        match store.get_dob_decode_outcome(&spore_id).unwrap().unwrap() {
+            DecodeOutcome::Failed(f) => assert_eq!(
+                f.category,
+                ckbadger_store::types::DobDecodeFailureCategory::ClusterNotFound
+            ),
+            DecodeOutcome::Decoded(_) => panic!("expected Failed"),
+        }
+        // ... and the spore is no longer re-listed for decode.
+        assert_eq!(store.list_undecoded_dob_spores(100, None).unwrap().len(), 0);
     }
 }
