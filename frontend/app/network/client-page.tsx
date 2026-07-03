@@ -9,6 +9,7 @@ import { api, NetworkLastRound } from '@/lib/api';
 import { formatTimeAgo } from '@/lib/utils';
 import { NetworkDistributions } from '@/app/network/distributions';
 import { NetworkTrends } from '@/app/network/trends';
+import { NodesTable } from '@/app/network/nodes-table';
 
 function PageShell({ children }: { children: ReactNode }) {
   return (
@@ -120,6 +121,7 @@ function PeersDashboard({ lastRound }: { lastRound: NetworkLastRound }) {
 
       <NetworkDistributions />
       <NetworkTrends />
+      <NodesTable />
     </div>
   );
 }

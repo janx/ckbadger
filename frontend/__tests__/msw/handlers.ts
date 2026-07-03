@@ -562,4 +562,36 @@ export const handlers = [
       points: days.map((ts, i) => ({ ts, scalar: base + i * 10, buckets: [] })),
     });
   }),
+
+  http.get(`${API_BASE}/network/nodes`, ({ request }) => {
+    // Two canned nodes: one reachable, one not. Honour the reachable filter so a toggle in the UI
+    // triggers a real refetch that narrows the page to just the reachable node.
+    const nodes = [
+      {
+        peerId: 'QmReachablePeer1111111111111111111111111111AaBb',
+        addr: '/ip4/1.2.3.4/tcp/8115',
+        version: '0.114.0',
+        country: 'United States',
+        asn: 'AS24940 Hetzner',
+        reachable: true,
+        lastSeen: 1751500800,
+        lastReachableAt: 1751500800,
+        rttMs: 42,
+      },
+      {
+        peerId: 'QmUnreachablePeer22222222222222222222222222CcDd',
+        addr: '/ip4/5.6.7.8/tcp/8115',
+        version: '0.113.0',
+        country: 'Germany',
+        asn: 'AS3320 Deutsche Telekom',
+        reachable: false,
+        lastSeen: 1751414400,
+        lastReachableAt: 1751328000,
+        rttMs: null,
+      },
+    ];
+    const reachable = new URL(request.url).searchParams.get('reachable');
+    const items = reachable === 'true' ? nodes.filter((n) => n.reachable) : nodes;
+    return HttpResponse.json({ items, nextCursor: null });
+  }),
 ];
