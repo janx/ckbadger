@@ -7,6 +7,8 @@ import { PageHeader, Badge } from '@/components/ui/page-header';
 import { StatBlock, StatGrid } from '@/components/ui/stat-block';
 import { api, NetworkLastRound } from '@/lib/api';
 import { formatTimeAgo } from '@/lib/utils';
+import { NetworkDistributions } from '@/app/network/distributions';
+import { NetworkTrends } from '@/app/network/trends';
 
 function PageShell({ children }: { children: ReactNode }) {
   return (
@@ -115,6 +117,9 @@ function PeersDashboard({ lastRound }: { lastRound: NetworkLastRound }) {
       </StatGrid>
 
       <ReachabilityCaveat />
+
+      <NetworkDistributions />
+      <NetworkTrends />
     </div>
   );
 }

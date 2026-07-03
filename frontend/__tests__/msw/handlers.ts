@@ -520,4 +520,46 @@ export const handlers = [
       protocols: [],
     });
   }),
+
+  http.get(`${API_BASE}/network/history`, ({ request }) => {
+    const metric = new URL(request.url).searchParams.get('metric') ?? 'totalNodes';
+    // Canned daily points that already exclude the current (incomplete) day.
+    const days = [1751328000, 1751414400, 1751500800];
+
+    if (metric === 'versionShare') {
+      return HttpResponse.json({
+        metric,
+        granularity: 'day',
+        points: days.map((ts) => ({
+          ts,
+          scalar: 0,
+          buckets: [
+            { label: '0.114.0', count: 4 },
+            { label: '0.113.0', count: 2 },
+          ],
+        })),
+      });
+    }
+    if (metric === 'countryShare') {
+      return HttpResponse.json({
+        metric,
+        granularity: 'day',
+        points: days.map((ts) => ({
+          ts,
+          scalar: 0,
+          buckets: [
+            { label: 'United States', count: 3 },
+            { label: 'Germany', count: 2 },
+          ],
+        })),
+      });
+    }
+    // Scalar metrics: totalNodes / reachableNodes.
+    const base = metric === 'reachableNodes' ? 60 : 100;
+    return HttpResponse.json({
+      metric,
+      granularity: 'day',
+      points: days.map((ts, i) => ({ ts, scalar: base + i * 10, buckets: [] })),
+    });
+  }),
 ];
