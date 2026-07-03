@@ -1150,7 +1150,7 @@ async fn decode_spore(
     // Check CF_DOB_DECODED for cached decode result
     let store = state.store.clone();
     let id_for_decode = id.clone();
-    let decoded = tokio::task::spawn_blocking(move || store.get_dob_decoded(&id_for_decode))
+    let decoded = tokio::task::spawn_blocking(move || store.get_dob_decode_outcome(&id_for_decode))
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?
         .map_err(|e| ApiError::internal(e.to_string()))?;
@@ -1158,7 +1158,7 @@ async fn decode_spore(
     let spore_id_hex = format!("0x{}", hex::encode(&id));
 
     match decoded {
-        Some(decoded_entry) => {
+        Some(ckbadger_store::DecodeOutcome::Decoded(decoded_entry)) => {
             // Merge traits across all steps: later steps override same-name traits,
             // earlier steps' unique traits are preserved. Insertion order maintained.
             let mut traits: Vec<DobTraitResponse> = Vec::new();
@@ -1250,6 +1250,15 @@ async fn decode_spore(
                 issues: Vec::new(),
             })
         }
+        Some(ckbadger_store::DecodeOutcome::Failed(failure)) => ok(SporeDobDecodeResponse {
+            status: "failed".to_string(),
+            spore_id: spore_id_hex,
+            content_type,
+            dna_hex: None,
+            traits: Vec::new(),
+            media: vec![],
+            issues: vec![failure.message],
+        }),
         None => ok(SporeDobDecodeResponse {
             status: "pending".to_string(),
             spore_id: spore_id_hex,

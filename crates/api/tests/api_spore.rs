@@ -624,6 +624,70 @@ async fn test_spore_decode_endpoint_returns_decoded_from_cache() {
 }
 
 #[tokio::test]
+async fn test_decode_endpoint_reports_failed_with_reason() {
+    use ckbadger_store::types::{DobDecodeFailure, DobDecodeFailureCategory};
+
+    let store = test_store();
+    let spore_id = [0x55u8; 32];
+    let spore_id_hex = format!("0x{}", hex::encode(spore_id));
+
+    // A dob/0 spore whose decode was attempted and deterministically failed.
+    let spore_entry = ObjectEntry {
+        standard: ObjectStandard::Spore,
+        collection_id: Some(vec![0x11; 32]),
+        token_id: None,
+        owner_lock_hash: Some(vec![0xAA; 32]),
+        name: None,
+        description: None,
+        is_live: true,
+        created_at_block: 321,
+        created_at_tx: vec![0xBB; 32],
+        extra: ObjectExtra::Spore {
+            content_type: "dob/0".to_string(),
+            content_length: 128,
+            media_profile: SporeMediaProfile::default(),
+        },
+    };
+    store.put_spore_direct(&spore_id, &spore_entry).unwrap();
+
+    // Record a persisted Failed outcome (mirrors the worker recording a
+    // deterministic failure via StoreBatch::put_dob_decode_failure).
+    let mut batch = StoreBatch::new(&store);
+    batch.put_dob_decode_failure(
+        &spore_id,
+        &DobDecodeFailure {
+            category: DobDecodeFailureCategory::ClusterMetadataInvalid,
+            message: "cluster description is not valid JSON: expected value at line 1".to_string(),
+            failed_at: 1_700_000_000,
+        },
+    );
+    batch.commit().unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri(format!("/api/v1/spore/objects/{}/decode", spore_id_hex))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["status"], "failed");
+    assert_eq!(json["sporeId"], spore_id_hex);
+    assert_eq!(json["contentType"], "dob/0");
+    assert_eq!(json["traits"], serde_json::json!([]));
+    assert_eq!(json["media"], serde_json::json!([]));
+    // The recorded reason is surfaced verbatim as the sole issue.
+    assert!(json["issues"][0]
+        .as_str()
+        .unwrap()
+        .contains("not valid JSON"));
+}
+
+#[tokio::test]
 async fn test_spore_decode_endpoint_non_dob_returns_pending_with_content_type() {
     let store = test_store();
     let spore_id = [0x66u8; 32];
