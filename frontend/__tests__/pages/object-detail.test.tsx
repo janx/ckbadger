@@ -328,6 +328,27 @@ describe('SporeDetailPage', () => {
     });
   });
 
+  it('shows the failure reason when DOB decode failed', async () => {
+    vi.mocked(api.getSporeObject).mockResolvedValue({
+      ...mockSpore,
+      contentType: 'dob/0',
+    } as any);
+    vi.mocked(api.getSporeObjectDecoded).mockResolvedValue({
+      status: 'failed',
+      sporeId: mockSpore.sporeId,
+      contentType: 'dob/0',
+      dnaHex: null,
+      traits: [],
+      media: [],
+      issues: ['cluster description is not valid JSON: expected value at line 1'],
+    } as any);
+
+    render(<SporeDetailPage sporeId={mockParams.sporeId} />);
+
+    expect(await screen.findByText(/cluster description is not valid JSON/i)).toBeInTheDocument();
+    expect(screen.getByText('Undecodable DOB')).toBeInTheDocument();
+  });
+
   it('does not repeat raw media traits in DOB/1 details', async () => {
     vi.mocked(api.getSporeObject).mockResolvedValue({
       ...mockSpore,

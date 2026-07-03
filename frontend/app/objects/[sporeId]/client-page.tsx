@@ -1174,6 +1174,20 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
           </>
         )}
 
+        {/* Undecodable DOB notice: surface the deterministic decode failure reason */}
+        {decodedDobByApi?.status === 'failed' && decodedDobByApi.issues.length > 0 && (
+          <div className="border-warning/30 bg-warning/5 mb-6 rounded border px-3 py-2">
+            <div className="text-warning font-mono text-[10px] uppercase tracking-wider">
+              Undecodable DOB
+            </div>
+            {decodedDobByApi.issues.map((issue, i) => (
+              <div key={i} className="text-warning/80 mt-1 font-mono text-xs">
+                {issue}
+              </div>
+            ))}
+          </div>
+        )}
+
         {/* Media Preview */}
         {preview && (
           <div className={`mb-6 grid gap-6 ${hasDecodedTraits ? 'lg:grid-cols-2' : ''}`}>
