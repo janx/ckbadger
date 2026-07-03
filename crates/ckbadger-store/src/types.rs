@@ -489,6 +489,51 @@ pub struct DobDecodedEntry {
     pub decoded_at: i64,
 }
 
+/// Persisted outcome of a DOB decode attempt for one spore.
+///
+/// Stored in `CF_DOB_DECODED`. A `Failed` value is written only for
+/// deterministic failures (bad/dangling on-chain data or a decoder that
+/// rejected immutable DNA); transient RPC/node errors are never persisted so
+/// they keep retrying on the next worker run.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum DecodeOutcome {
+    Decoded(DobDecodedEntry),
+    Failed(DobDecodeFailure),
+}
+
+/// A recorded deterministic DOB decode failure.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DobDecodeFailure {
+    pub category: DobDecodeFailureCategory,
+    /// Human-readable detail (surfaced to the API `issues` list).
+    pub message: String,
+    /// Epoch seconds when the failure was recorded.
+    pub failed_at: i64,
+}
+
+/// Stable taxonomy of deterministic decode failures.
+///
+/// Bincode-serialized: only append new variants at the END.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DobDecodeFailureCategory {
+    /// Clusterless "Sole Spores" — collection_id is SOLE_SPORES_SENTINEL_COLLECTION,
+    /// so there is no DOB cluster/decoder to decode against.
+    Clusterless,
+    /// A real (non-sentinel) cluster_id that is not present in the index.
+    ClusterNotFound,
+    /// Cluster exists but its metadata is unusable (no description, not JSON,
+    /// missing `dob` field, or an invalid decoder reference).
+    ClusterMetadataInvalid,
+    /// Referenced decoder cell (code_hash or type_id) has no live cell.
+    DecoderNotFound,
+    /// The decoder binary ran and rejected the spore (non-zero exit, etc.).
+    DecoderExecutionFailed,
+    /// The spore's on-chain content could not yield valid DNA.
+    DnaInvalid,
+    /// Any other deterministic failure.
+    Other,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DobDecodedTrait {
     pub name: String,
@@ -1673,6 +1718,35 @@ mod tests {
         assert_eq!(decoded.tags, TAG_TOKEN | TAG_PROTOCOL);
         assert_eq!(decoded.capacity_change, -500);
         assert_eq!(decoded.flags, AddrTxValue::TX_TYPE_SENT);
+    }
+
+    #[test]
+    fn test_decode_outcome_bincode_roundtrip() {
+        let decoded = DecodeOutcome::Decoded(DobDecodedEntry {
+            steps: vec![],
+            media_sources: vec![],
+            decoded_at: 1_700_000_000,
+        });
+        let bytes = bincode::serialize(&decoded).unwrap();
+        match bincode::deserialize::<DecodeOutcome>(&bytes).unwrap() {
+            DecodeOutcome::Decoded(e) => assert_eq!(e.decoded_at, 1_700_000_000),
+            DecodeOutcome::Failed(_) => panic!("expected Decoded"),
+        }
+
+        let failed = DecodeOutcome::Failed(DobDecodeFailure {
+            category: DobDecodeFailureCategory::DecoderExecutionFailed,
+            message: "decoder exited with non-zero code: 7".to_string(),
+            failed_at: 1_700_000_001,
+        });
+        let bytes = bincode::serialize(&failed).unwrap();
+        match bincode::deserialize::<DecodeOutcome>(&bytes).unwrap() {
+            DecodeOutcome::Failed(f) => {
+                assert_eq!(f.category, DobDecodeFailureCategory::DecoderExecutionFailed);
+                assert_eq!(f.message, "decoder exited with non-zero code: 7");
+                assert_eq!(f.failed_at, 1_700_000_001);
+            }
+            DecodeOutcome::Decoded(_) => panic!("expected Failed"),
+        }
     }
 
     #[test]
