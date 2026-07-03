@@ -848,14 +848,19 @@ pub(crate) enum PeersView {
 }
 
 pub(crate) fn peers_view_state(data: &PeersData) -> PeersView {
-    if let Some(e) = &data.error {
-        return PeersView::Error(e.clone());
-    }
+    // Status-first: if we have a usable last round, show the Dashboard even when a
+    // *secondary* (distributions/history) fetch errored — the status block is the tab's
+    // primary content and missing charts degrade to their own empty states ("No distribution
+    // data" / blank trend). Fall back to Error only when there is no usable status at all
+    // (i.e. the /network/summary fetch itself failed).
     match &data.summary {
-        None => PeersView::Waiting, // fetched nothing yet
+        Some(s) if s.enabled && s.has_data && s.last_round.is_some() => PeersView::Dashboard,
         Some(s) if !s.enabled => PeersView::Disabled,
-        Some(s) if !s.has_data || s.last_round.is_none() => PeersView::Waiting,
-        Some(_) => PeersView::Dashboard,
+        Some(_) => PeersView::Waiting, // enabled but no data / no last round yet
+        None => match &data.error {
+            Some(e) => PeersView::Error(e.clone()),
+            None => PeersView::Waiting,
+        },
     }
 }
 
@@ -6085,6 +6090,24 @@ mod tests {
             ..Default::default()
         };
         assert!(matches!(peers_view_state(&dashboard), PeersView::Dashboard));
+    }
+
+    #[test]
+    fn view_state_prefers_dashboard_over_secondary_error() {
+        use crate::db::{NetworkSummary, PeersData};
+        // A usable last round + a *secondary* (distributions/history) fetch error must still
+        // render the Dashboard — the crawler status block is the tab's primary content and
+        // must not be hidden behind a full-screen Error for a missing chart endpoint.
+        let summary: NetworkSummary = serde_json::from_str(
+            r#"{"enabled":true,"hasData":true,"lastRound":{"roundId":1,"started":0,"finished":0,"dialed":0,"reachable":0,"unreachable":0,"foreignDropped":0,"newNodes":0,"totalKnown":0,"frontierDrained":true}}"#,
+        )
+        .unwrap();
+        let data = PeersData {
+            summary: Some(summary),
+            error: Some("distributions unavailable".into()),
+            ..Default::default()
+        };
+        assert!(matches!(peers_view_state(&data), PeersView::Dashboard));
     }
 
     #[test]
