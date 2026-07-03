@@ -211,8 +211,10 @@ fn parse_gran(s: &str) -> Option<Granularity> {
 /// trend series. Unknown `metric`/`granularity` ⇒ `400`. When no network store is
 /// configured (crawler opt-out), returns an empty `points` series rather than an error.
 ///
-/// Daily series exclude the incomplete current day: when `granularity==day` and a
-/// `to` bound is provided, the current-day bucket (`bucket_of(to, Day)`) is dropped.
+/// Daily series exclude the incomplete current day: when `granularity==day` the
+/// current-day bucket (and anything at/after it) is dropped. The current-day
+/// reference is `to` when provided, otherwise the server clock — so the rule is
+/// enforced regardless of caller.
 async fn history(
     State(state): State<Arc<AppState>>,
     Query(q): Query<HistoryQuery>,
@@ -230,9 +232,20 @@ async fn history(
                 .scan_history(metric, gran, from_b, to_b)
                 .map_err(|e| ApiError::internal(e.to_string()))?;
             // Daily series exclude the incomplete current day: drop the current-day
-            // bucket (`bucket_of(to, Day)`, and anything at/after it) when `to` is given.
-            if let (Granularity::Day, Some(to)) = (gran, q.to) {
-                let cur = bucket_of(to, Granularity::Day);
+            // bucket (and anything at/after it). Derive the current-day reference from
+            // `to` when the caller supplies it, else from the server clock, so the rule
+            // holds regardless of caller (this endpoint is agent-advertised).
+            if gran == Granularity::Day {
+                let now_secs = match q.to {
+                    Some(t) => t,
+                    None => std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map_err(|e| {
+                            ApiError::internal(format!("system clock before UNIX epoch: {e}"))
+                        })?
+                        .as_secs(),
+                };
+                let cur = bucket_of(now_secs, Granularity::Day);
                 rows.retain(|(b, _)| *b < cur);
             }
             rows.into_iter()

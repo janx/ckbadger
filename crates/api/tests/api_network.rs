@@ -70,6 +70,51 @@ async fn history_empty_when_no_store() {
 }
 
 #[tokio::test]
+async fn history_day_excludes_current_day_without_to() {
+    use ckbadger_store::network_keys::{bucket_of, Granularity, Metric};
+    use ckbadger_store::{CkbadgerStore, HistoryPoint};
+    // Seed a network store with two Day buckets for TotalNodes: the incomplete
+    // current day (scalar 99) and the complete previous day (scalar 5).
+    let dir = tempfile::tempdir().unwrap();
+    let net = Arc::new(CkbadgerStore::open_test_network(dir.path()).unwrap());
+    std::mem::forget(dir); // keep the temp dir alive for the store's lifetime
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let cur = bucket_of(now, Granularity::Day);
+    net.put_history_point(
+        Metric::TotalNodes,
+        Granularity::Day,
+        cur,
+        &HistoryPoint {
+            scalar: 99,
+            buckets: vec![],
+        },
+    )
+    .unwrap();
+    net.put_history_point(
+        Metric::TotalNodes,
+        Granularity::Day,
+        cur - 1,
+        &HistoryPoint {
+            scalar: 5,
+            buckets: vec![],
+        },
+    )
+    .unwrap();
+
+    let cfg = test_config_with_network(test_store(), net, true);
+    let app = create_router_without_warmup(cfg);
+    // No `to`: the endpoint must still drop the incomplete current day (server clock).
+    let (_c, v) = get_json(&app, "/network/history?metric=totalNodes&granularity=day").await;
+    let pts = v["points"].as_array().unwrap();
+    // Previous-day point survives; current-day point is excluded.
+    assert!(pts.iter().any(|p| p["scalar"] == 5));
+    assert!(!pts.iter().any(|p| p["scalar"] == 99));
+}
+
+#[tokio::test]
 async fn nodes_lists_and_filters() {
     let cfg = test_config_with_network(test_store(), test_network_store(), true);
     let app = create_router_without_warmup(cfg);
