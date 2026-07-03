@@ -48,13 +48,12 @@ const DASHBOARD_SUMMARY = {
 };
 
 describe('Peers nav entry', () => {
-  it('renders a "Peers" link that points at /network', () => {
+  // Peers was removed from the navbar; it is now reachable via the `g p` keyboard
+  // shortcut and the command palette (see command-palette.test.tsx).
+  it('does not render a "Peers" link in the navbar', () => {
     render(<Header />);
 
-    expect(screen.getAllByRole('link', { name: 'Peers' }).at(0)).toHaveAttribute(
-      'href',
-      '/network'
-    );
+    expect(screen.queryByRole('link', { name: 'Peers' })).not.toBeInTheDocument();
   });
 });
 

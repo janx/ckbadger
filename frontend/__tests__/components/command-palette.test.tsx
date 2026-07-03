@@ -60,6 +60,18 @@ describe('CommandPalette', () => {
     expect(pushMock).toHaveBeenCalledWith('/fiber/channels');
   });
 
+  it('exposes the peers command in the palette (it is no longer in the navbar)', () => {
+    render(<CommandPalette />);
+
+    fireEvent.keyDown(window, { key: 'k', ctrlKey: true });
+
+    const input = screen.getByLabelText('Command palette input');
+    fireEvent.change(input, { target: { value: 'peers' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+
+    expect(pushMock).toHaveBeenCalledWith('/network');
+  });
+
   it('executes highlighted go-to command when query is empty', () => {
     render(<CommandPalette />);
 
@@ -142,6 +154,15 @@ describe('CommandPalette', () => {
     fireEvent.keyDown(window, { key: 'c' });
 
     expect(pushMock).toHaveBeenCalledWith('/charts');
+  });
+
+  it('navigates to peers with g p chord', () => {
+    render(<CommandPalette />);
+
+    fireEvent.keyDown(window, { key: 'g' });
+    fireEvent.keyDown(window, { key: 'p' });
+
+    expect(pushMock).toHaveBeenCalledWith('/network');
   });
 
   it('does not navigate with g f chord', () => {

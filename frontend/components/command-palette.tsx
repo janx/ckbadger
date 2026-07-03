@@ -65,6 +65,12 @@ const COMMANDS: CommandItem[] = [
     keywords: ['hardfork', 'hard fork', 'upgrade', 'network upgrade'],
     href: '/hardforks',
   },
+  {
+    id: 'go-peers',
+    label: 'Go to Peers',
+    keywords: ['peers', 'network', 'nodes', 'node', 'p2p', 'crawler'],
+    href: '/network',
+  },
 ];
 
 const GOTO_CHORD_TIMEOUT_MS = 1200;
@@ -77,6 +83,7 @@ const GOTO_SHORTCUTS: Record<string, { href?: string; focusSearch?: boolean }> =
   i: { href: '/inventory/tokens' },
   s: { href: '/scripts' },
   c: { href: '/charts' },
+  p: { href: '/network' },
 };
 
 const SHORTCUT_HINTS: ShortcutHint[] = [
@@ -89,6 +96,7 @@ const SHORTCUT_HINTS: ShortcutHint[] = [
   { keys: 'g i', description: 'Go to Inventory' },
   { keys: 'g s', description: 'Go to Scripts' },
   { keys: 'g c', description: 'Go to Charts' },
+  { keys: 'g p', description: 'Go to Peers' },
   { keys: 'g h', description: 'Go to Home' },
   { keys: 'Esc', description: 'Close panel' },
 ];
