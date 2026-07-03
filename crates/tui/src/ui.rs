@@ -17,8 +17,8 @@ use std::time::{Duration, Instant};
 
 use crate::chart::{render_bar_chart, render_stacked_bar_chart, ChartStats};
 use crate::db::{
-    ApiServiceInfo, ChainInfoData, PeersData, RuntimeDiagData, ServiceLogTailData,
-    SupervisorServiceData, SyncStatusRow, TuiDb,
+    ApiServiceInfo, ChainInfoData, LabelCount, NetworkHistoryPoint, PeersData, RuntimeDiagData,
+    ServiceLogTailData, SupervisorServiceData, SyncStatusRow, TuiDb,
 };
 
 const RATE_HISTORY_SIZE: usize = 3600;
@@ -839,11 +839,432 @@ fn draw_content(f: &mut Frame, app: &App, area: Rect) {
     }
 }
 
+/// Which of the four Peers-tab presentations to render, derived purely from [`PeersData`].
+pub(crate) enum PeersView {
+    Error(String),
+    Disabled,
+    Waiting,
+    Dashboard,
+}
+
+pub(crate) fn peers_view_state(data: &PeersData) -> PeersView {
+    if let Some(e) = &data.error {
+        return PeersView::Error(e.clone());
+    }
+    match &data.summary {
+        None => PeersView::Waiting, // fetched nothing yet
+        Some(s) if !s.enabled => PeersView::Disabled,
+        Some(s) if !s.has_data || s.last_round.is_none() => PeersView::Waiting,
+        Some(_) => PeersView::Dashboard,
+    }
+}
+
+/// "just now" / "45s ago" / "3m ago" / "2h ago". Clock skew (finished > now) => "just now".
+pub(crate) fn format_last_round_age(finished: u64, now: u64) -> String {
+    // Duration floor: an age can never be negative, so a `finished > now` clock skew is shown
+    // as "just now". This is a legitimate duration floor, not a masked correctness value.
+    let secs = now.saturating_sub(finished);
+    if secs < 5 {
+        "just now".to_string()
+    } else if secs < 60 {
+        format!("{secs}s ago")
+    } else if secs < 3600 {
+        format!("{}m ago", secs / 60)
+    } else {
+        format!("{}h ago", secs / 3600)
+    }
+}
+
+/// Zip totalNodes + reachableNodes hourly points on `ts`; drop buckets where the reachable point
+/// is missing or `reachable > total` (upstream invariant violation — surfaced as a gap, never
+/// masked with `saturating_sub`). Returns (reachable_series, unreachable_series) as f64 for the
+/// stacked-bar chart.
+pub(crate) fn peers_trend_series(
+    total: &[NetworkHistoryPoint],
+    reachable: &[NetworkHistoryPoint],
+) -> (VecDeque<f64>, VecDeque<f64>) {
+    use std::collections::HashMap;
+    let r_by_ts: HashMap<u64, u64> = reachable.iter().map(|p| (p.ts, p.scalar)).collect();
+    let mut r_out = VecDeque::new();
+    let mut u_out = VecDeque::new();
+    for t in total {
+        if let Some(&r) = r_by_ts.get(&t.ts) {
+            if r <= t.scalar {
+                r_out.push_back(r as f64);
+                u_out.push_back((t.scalar - r) as f64);
+            }
+        }
+    }
+    (r_out, u_out)
+}
+
 fn draw_peers_content(f: &mut Frame, app: &App, area: Rect) {
-    // Filled in Task 3. For now render a placeholder block so the tab is reachable and compiles.
-    let block = Block::default().borders(Borders::ALL).title(" Peers ");
+    let Some(data) = &app.peers_data else {
+        draw_peers_message(
+            f,
+            area,
+            vec![Line::from(Span::styled(
+                "Loading peers…",
+                Style::default().fg(SLATE_500),
+            ))],
+        );
+        return;
+    };
+
+    match peers_view_state(data) {
+        PeersView::Error(msg) => {
+            // Reuse the API-health error style: SLATE label + AMBER message text.
+            draw_peers_message(
+                f,
+                area,
+                vec![Line::from(vec![
+                    Span::styled("Crawler error: ", Style::default().fg(SLATE_500)),
+                    Span::styled(
+                        trim_for_panel(&msg, area.width as usize),
+                        Style::default().fg(AMBER),
+                    ),
+                ])],
+            );
+        }
+        PeersView::Disabled => draw_peers_message(
+            f,
+            area,
+            vec![Line::from(Span::styled(
+                "Crawler disabled — set `[crawler].enabled = true` in ckbadger.toml",
+                Style::default().fg(SLATE_500),
+            ))],
+        ),
+        PeersView::Waiting => draw_peers_message(
+            f,
+            area,
+            vec![Line::from(Span::styled(
+                "Crawler enabled — waiting for the first round…",
+                Style::default().fg(SLATE_500),
+            ))],
+        ),
+        PeersView::Dashboard => draw_peers_dashboard(f, data, area),
+    }
+}
+
+/// Bordered "Network Peers" panel with `lines` vertically + horizontally centered.
+fn draw_peers_message(f: &mut Frame, area: Rect, lines: Vec<Line<'static>>) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(SLATE_800))
+        .title(Span::styled(
+            "Network Peers",
+            Style::default().fg(FOREGROUND),
+        ));
+    let inner = block.inner(area);
     f.render_widget(block, area);
-    let _ = app; // peers_data consumed in Task 3
+    if inner.height == 0 {
+        return;
+    }
+
+    let pad = (inner.height as usize).saturating_sub(lines.len()) / 2;
+    let mut all: Vec<Line> = Vec::with_capacity(pad + lines.len());
+    for _ in 0..pad {
+        all.push(Line::from(""));
+    }
+    all.extend(lines);
+    f.render_widget(
+        Paragraph::new(all)
+            .alignment(Alignment::Center)
+            .wrap(Wrap { trim: true }),
+        inner,
+    );
+}
+
+fn draw_peers_dashboard(f: &mut Frame, data: &PeersData, area: Rect) {
+    // Vertical split mirroring the Sync tab: status block / distributions / trend.
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(8),  // status block
+            Constraint::Length(12), // version + country distributions
+            Constraint::Min(6),     // reachable/unreachable trend
+        ])
+        .split(area);
+
+    draw_peers_status(f, data, chunks[0]);
+    draw_peers_distributions(f, data, chunks[1]);
+    draw_peers_trend(f, data, chunks[2]);
+}
+
+fn draw_peers_status(f: &mut Frame, data: &PeersData, area: Rect) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(SLATE_800))
+        .title(Span::styled(
+            "Crawler Status",
+            Style::default().fg(FOREGROUND),
+        ));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+    if inner.height == 0 {
+        return;
+    }
+
+    // Dashboard invariant guarantees `last_round` is Some; guard (not mask) to avoid any panic.
+    let Some(lr) = data.summary.as_ref().and_then(|s| s.last_round.as_ref()) else {
+        f.render_widget(
+            Paragraph::new(Span::styled(
+                "Waiting for round data…",
+                Style::default().fg(SLATE_500),
+            )),
+            inner,
+        );
+        return;
+    };
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+
+    // Line 1: crawler on · #round · age · PARTIAL (when the frontier was not drained)
+    let mut line1 = vec![
+        Span::styled("Crawler ", Style::default().fg(SLATE_500)),
+        Span::styled(
+            " on ",
+            Style::default()
+                .fg(Color::Black)
+                .bg(TERMINAL_GREEN)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!("  #{}", lr.round_id),
+            Style::default()
+                .fg(TERMINAL_GREEN)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled("  ·  ", Style::default().fg(SLATE_700)),
+        Span::styled(
+            format_last_round_age(lr.finished, now),
+            Style::default().fg(FOREGROUND),
+        ),
+    ];
+    if !lr.frontier_drained {
+        line1.push(Span::styled("  ·  ", Style::default().fg(SLATE_700)));
+        line1.push(Span::styled(
+            "PARTIAL",
+            Style::default().fg(AMBER).add_modifier(Modifier::BOLD),
+        ));
+    }
+
+    // Line 2: discovered totals (honest wording — "discovered", not "total network")
+    let line2 = Line::from(vec![
+        Span::styled("Discovered ", Style::default().fg(SLATE_500)),
+        Span::styled(
+            format_num_u64(lr.total_known),
+            Style::default()
+                .fg(TERMINAL_GREEN)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" known  ·  ", Style::default().fg(SLATE_700)),
+        Span::styled(
+            format_num_u64(lr.reachable),
+            Style::default().fg(TERMINAL_GREEN),
+        ),
+        Span::styled(" reachable  ·  ", Style::default().fg(SLATE_700)),
+        Span::styled(
+            format_num_u64(lr.unreachable),
+            Style::default().fg(SLATE_500),
+        ),
+        Span::styled(" unreachable", Style::default().fg(SLATE_500)),
+    ]);
+
+    // Line 3: this-round activity
+    let line3 = Line::from(vec![
+        Span::styled("This round ", Style::default().fg(SLATE_500)),
+        Span::styled(format_num_u64(lr.dialed), Style::default().fg(FOREGROUND)),
+        Span::styled(" dialed  ·  ", Style::default().fg(SLATE_700)),
+        Span::styled(
+            format_num_u64(lr.new_nodes),
+            Style::default().fg(TERMINAL_GREEN),
+        ),
+        Span::styled(" new  ·  ", Style::default().fg(SLATE_700)),
+        Span::styled(
+            format_num_u64(lr.foreign_dropped),
+            Style::default().fg(SLATE_500),
+        ),
+        Span::styled(" foreign dropped", Style::default().fg(SLATE_500)),
+    ]);
+
+    f.render_widget(Paragraph::new(vec![Line::from(line1), line2, line3]), inner);
+}
+
+const PEERS_DIST_TOP_N: usize = 8;
+
+fn draw_peers_distributions(f: &mut Frame, data: &PeersData, area: Rect) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(SLATE_800))
+        .title(Span::styled(
+            "Distributions",
+            Style::default().fg(FOREGROUND),
+        ));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+    if inner.height == 0 || inner.width == 0 {
+        return;
+    }
+
+    let Some(dist) = &data.distributions else {
+        f.render_widget(
+            Paragraph::new(Span::styled(
+                "No distribution data",
+                Style::default().fg(SLATE_500),
+            )),
+            inner,
+        );
+        return;
+    };
+
+    // Reserve the bottom line for the reachable/unreachable summary.
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(1), Constraint::Length(1)])
+        .split(inner);
+
+    let cols = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(rows[0]);
+
+    draw_label_count_chart(f, cols[0], "Versions", &dist.versions);
+    draw_label_count_chart(f, cols[1], "Countries", &dist.countries);
+
+    let summary = Line::from(vec![
+        Span::styled("discovered reachable ", Style::default().fg(SLATE_500)),
+        Span::styled(
+            format_num_u64(dist.reachable),
+            Style::default().fg(TERMINAL_GREEN),
+        ),
+        Span::styled("  ·  unreachable ", Style::default().fg(SLATE_500)),
+        Span::styled(
+            format_num_u64(dist.unreachable),
+            Style::default().fg(SLATE_500),
+        ),
+        Span::styled("  ·  known ", Style::default().fg(SLATE_500)),
+        Span::styled(
+            format_num_u64(dist.total_known),
+            Style::default().fg(FOREGROUND),
+        ),
+    ]);
+    f.render_widget(Paragraph::new(summary), rows[1]);
+}
+
+/// A titled legend line plus a bar chart of the first [`PEERS_DIST_TOP_N`] category counts.
+fn draw_label_count_chart(f: &mut Frame, area: Rect, title: &str, items: &[LabelCount]) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Min(1)])
+        .split(area);
+
+    let mut legend_spans = vec![Span::styled(
+        format!("{title}: "),
+        Style::default().fg(FOREGROUND),
+    )];
+    if items.is_empty() {
+        legend_spans.push(Span::styled("none", Style::default().fg(SLATE_500)));
+    } else {
+        for (i, item) in items.iter().take(PEERS_DIST_TOP_N).enumerate() {
+            if i > 0 {
+                legend_spans.push(Span::styled(" ", Style::default().fg(SLATE_700)));
+            }
+            legend_spans.push(Span::styled(
+                format!("{}:{}", item.label, item.count),
+                Style::default().fg(TERMINAL_DIM),
+            ));
+        }
+    }
+    f.render_widget(Paragraph::new(Line::from(legend_spans)), rows[0]);
+
+    if rows[1].height == 0 || rows[1].width == 0 {
+        return;
+    }
+    let counts: VecDeque<f64> = items
+        .iter()
+        .take(PEERS_DIST_TOP_N)
+        .map(|item| item.count as f64)
+        .collect();
+    let chart = render_bar_chart(&counts, rows[1].width as usize, rows[1].height as usize);
+    let chart_lines: Vec<Line> = chart
+        .rows
+        .into_iter()
+        .map(|row| Line::from(Span::styled(row.content, Style::default().fg(row.color))))
+        .collect();
+    f.render_widget(
+        Paragraph::new(chart_lines).wrap(Wrap { trim: false }),
+        rows[1],
+    );
+}
+
+fn draw_peers_trend(f: &mut Frame, data: &PeersData, area: Rect) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(SLATE_800))
+        .title(Span::styled(
+            "Discovered Nodes (hourly)",
+            Style::default().fg(FOREGROUND),
+        ));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+    if inner.height == 0 || inner.width == 0 {
+        return;
+    }
+
+    let (r, u) = peers_trend_series(&data.total_history, &data.reachable_history);
+
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Min(1)])
+        .split(inner);
+
+    let legend = Line::from(vec![
+        Span::styled("■ reachable ", Style::default().fg(Color::Green)),
+        Span::styled(
+            r.back()
+                .map(|v| format!("{v:.0}"))
+                .unwrap_or_else(|| "-".to_string()),
+            Style::default().fg(Color::Green),
+        ),
+        Span::styled("   ■ unreachable ", Style::default().fg(SLATE_500)),
+        Span::styled(
+            u.back()
+                .map(|v| format!("{v:.0}"))
+                .unwrap_or_else(|| "-".to_string()),
+            Style::default().fg(SLATE_500),
+        ),
+    ]);
+    f.render_widget(Paragraph::new(legend), rows[0]);
+
+    if rows[1].height == 0 || rows[1].width == 0 {
+        return;
+    }
+    // Zero-filled 3rd series satisfies the 3-series stacked API; the visible height is
+    // reachable + unreachable = total discovered nodes for the bucket.
+    let zeros: VecDeque<f64> = std::iter::repeat_n(0.0, r.len()).collect();
+    let chart = render_stacked_bar_chart(
+        [&r, &u, &zeros],
+        [Color::Green, Color::DarkGray, Color::Reset],
+        rows[1].width as usize,
+        rows[1].height as usize,
+    );
+    let chart_lines: Vec<Line> = chart
+        .rows
+        .into_iter()
+        .map(|row| Line::from(Span::styled(row.content, Style::default().fg(row.color))))
+        .collect();
+    f.render_widget(
+        Paragraph::new(chart_lines).wrap(Wrap { trim: false }),
+        rows[1],
+    );
 }
 
 fn draw_overview_content(f: &mut Frame, app: &App, area: Rect) {
@@ -5533,19 +5954,20 @@ mod tests {
         compact_overview_layout, consumed_cells_source_color, consumed_cells_source_label,
         controller_panel_lines, dense_right_lines, detail_right_lines, diagnostics_dense_panel,
         direct_io_reads_label, disk_pressure_lines, eta_confidence_label, footer_hint_line,
-        footer_status_message, format_age_secs, format_num, format_num_commas, format_num_compact,
-        format_rate_expanded, format_signed_num_i128, format_stage_commit_gap_ms,
-        header_right_line, header_title_line, heartbeat_is_on, io_fetch_write_jitter_line,
-        is_rate_drop, merged_sparkline_p95_line, overview_log_min_height,
-        overview_services_min_height, percentile_from_history, pipeline_bottleneck,
-        pipeline_flow_state, rate_jitter, render_gauge, runtime_health_state, runtime_live_delta,
+        footer_status_message, format_age_secs, format_last_round_age, format_num,
+        format_num_commas, format_num_compact, format_rate_expanded, format_signed_num_i128,
+        format_stage_commit_gap_ms, header_right_line, header_title_line, heartbeat_is_on,
+        io_fetch_write_jitter_line, is_rate_drop, merged_sparkline_p95_line,
+        overview_log_min_height, overview_services_min_height, peers_trend_series,
+        peers_view_state, percentile_from_history, pipeline_bottleneck, pipeline_flow_state,
+        rate_jitter, render_gauge, runtime_health_state, runtime_live_delta,
         service_log_tails_line, sparkline, split_background_tasks, stale_age_secs, stale_status,
         startup_phase_label, storage_pressure_l0_line, storage_pressure_wbm_line,
         storage_runtime_columns, supervisor_services_line, sync_bottleneck, system_kv_line,
         system_store_path_lines, system_workdir_lines, trend_delta, trim_for_panel,
         visible_background_tasks, App, Color, CompactOverviewLayout, ControllerDeltas,
-        DiagnosticsViewMode, MainTab, SyncBottleneck, AMBER, CYAN, STATUS_MESSAGE_TTL_SECS,
-        TERMINAL_DIM,
+        DiagnosticsViewMode, MainTab, PeersView, SyncBottleneck, AMBER, CYAN,
+        STATUS_MESSAGE_TTL_SECS, TERMINAL_DIM,
     };
     use crate::db::{
         ApiServiceInfo, RuntimeDiagData, ServiceLogTailData, SupervisorServiceData, TuiDb,
@@ -5600,6 +6022,69 @@ mod tests {
         assert_eq!(Peers.prev(), System);
         assert_eq!(System.prev(), Sync);
         assert_eq!(Sync.prev(), Overview);
+    }
+
+    #[test]
+    fn last_round_age_formats() {
+        assert_eq!(format_last_round_age(1_000, 1_000), "just now");
+        assert_eq!(format_last_round_age(1_000, 1_045), "45s ago");
+        assert_eq!(format_last_round_age(1_000, 1_180), "3m ago");
+        assert_eq!(format_last_round_age(1_000, 8_200), "2h ago");
+        // clock skew (finished in the future) never panics
+        assert_eq!(format_last_round_age(2_000, 1_000), "just now");
+    }
+
+    #[test]
+    fn trend_series_zips_and_skips_invariant_violations() {
+        use crate::db::NetworkHistoryPoint as P;
+        let total = vec![
+            P { ts: 1, scalar: 4 },
+            P { ts: 2, scalar: 6 },
+            P { ts: 3, scalar: 2 },
+        ];
+        // ts=2 reachable(7) > total(6) => skip; ts=3 has no reachable point => skip
+        let reachable = vec![P { ts: 1, scalar: 3 }, P { ts: 2, scalar: 7 }];
+        let (r, u) = peers_trend_series(&total, &reachable);
+        assert_eq!(Vec::from(r), vec![3.0]); // only ts=1 survives
+        assert_eq!(Vec::from(u), vec![1.0]); // 4 - 3
+    }
+
+    #[test]
+    fn view_state_selects_correctly() {
+        use crate::db::{NetworkSummary, PeersData};
+        let err = PeersData {
+            error: Some("boom".into()),
+            ..Default::default()
+        };
+        assert!(matches!(peers_view_state(&err), PeersView::Error(_)));
+        let disabled = PeersData {
+            summary: Some(NetworkSummary {
+                enabled: false,
+                has_data: false,
+                last_round: None,
+            }),
+            ..Default::default()
+        };
+        assert!(matches!(peers_view_state(&disabled), PeersView::Disabled));
+        let waiting = PeersData {
+            summary: Some(NetworkSummary {
+                enabled: true,
+                has_data: false,
+                last_round: None,
+            }),
+            ..Default::default()
+        };
+        assert!(matches!(peers_view_state(&waiting), PeersView::Waiting));
+        // has_data true with a lastRound => Dashboard.
+        let dash_summary: NetworkSummary = serde_json::from_str(
+            r#"{"enabled":true,"hasData":true,"lastRound":{"roundId":5,"started":1,"finished":2,"dialed":8,"reachable":3,"unreachable":1,"foreignDropped":0,"newNodes":2,"totalKnown":4,"frontierDrained":true}}"#,
+        )
+        .unwrap();
+        let dashboard = PeersData {
+            summary: Some(dash_summary),
+            ..Default::default()
+        };
+        assert!(matches!(peers_view_state(&dashboard), PeersView::Dashboard));
     }
 
     #[test]
