@@ -33,7 +33,7 @@
 - Produces:
   - `pub enum DecodeOutcome { Decoded(DobDecodedEntry), Failed(DobDecodeFailure) }`
   - `pub struct DobDecodeFailure { pub category: DobDecodeFailureCategory, pub message: String, pub failed_at: i64 }`
-  - `pub enum DobDecodeFailureCategory { ClusterNotFound, ClusterMetadataInvalid, DecoderNotFound, DecoderExecutionFailed, DnaInvalid, Other }`
+  - `pub enum DobDecodeFailureCategory { Clusterless, ClusterNotFound, ClusterMetadataInvalid, DecoderNotFound, DecoderExecutionFailed, DnaInvalid, Other }` (see Step 3 for the authoritative definition with doc comments)
 
 - [ ] **Step 1: Write the failing test**
 
