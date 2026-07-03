@@ -67,7 +67,8 @@ impl CkbadgerStore {
         spore_id: &[u8],
         entry: &crate::types::DobDecodedEntry,
     ) -> anyhow::Result<()> {
-        let value = bincode::serialize(entry)?;
+        let outcome = crate::types::DecodeOutcome::Decoded(entry.clone());
+        let value = bincode::serialize(&outcome)?;
         self.put_cf(self.cf_dob_decoded(), spore_id, &value)
     }
 
@@ -334,14 +335,28 @@ impl CkbadgerStore {
 
     // ---- DOB decoded cache ----
 
-    pub fn get_dob_decoded(
+    pub fn get_dob_decode_outcome(
         &self,
         spore_id: &[u8],
-    ) -> anyhow::Result<Option<crate::types::DobDecodedEntry>> {
+    ) -> anyhow::Result<Option<crate::types::DecodeOutcome>> {
         match self.get_cf(self.cf_dob_decoded(), spore_id)? {
             Some(value) => Ok(Some(bincode::deserialize(&value)?)),
             None => Ok(None),
         }
+    }
+
+    /// Success-only convenience: returns `Some` only for a `Decoded` outcome.
+    /// A `Failed` outcome (or absence) returns `None`.
+    pub fn get_dob_decoded(
+        &self,
+        spore_id: &[u8],
+    ) -> anyhow::Result<Option<crate::types::DobDecodedEntry>> {
+        Ok(self
+            .get_dob_decode_outcome(spore_id)?
+            .and_then(|o| match o {
+                crate::types::DecodeOutcome::Decoded(e) => Some(e),
+                crate::types::DecodeOutcome::Failed(_) => None,
+            }))
     }
 
     /// List spores with DOB content types that have not yet been decoded.
@@ -485,6 +500,85 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
         (dir, store)
+    }
+
+    #[test]
+    fn test_dob_outcome_read_write_and_undecoded_skip() {
+        use crate::batch::StoreBatch;
+        use crate::types::{
+            CompositionTier, DobDecodeFailure, DobDecodeFailureCategory, DobDecodedEntry,
+            ObjectEntry, ObjectExtra, ObjectStandard, SporeMediaProfile,
+        };
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+
+        // Two dob/0 spores so list_undecoded has candidates.
+        let mk = |content: &str| ObjectEntry {
+            standard: ObjectStandard::Spore,
+            collection_id: Some(vec![0x11; 32]),
+            token_id: None,
+            owner_lock_hash: Some(vec![0x33; 32]),
+            name: None,
+            description: None,
+            is_live: true,
+            created_at_block: 1,
+            created_at_tx: vec![0x44; 32],
+            extra: ObjectExtra::Spore {
+                content_type: content.to_string(),
+                content_length: 3,
+                media_profile: SporeMediaProfile {
+                    tier: CompositionTier::PureCkb,
+                    sources: vec![],
+                    issues: vec![],
+                },
+            },
+        };
+        let decoded_id = [0xAA_u8; 32];
+        let failed_id = [0xBB_u8; 32];
+        store.put_spore_direct(&decoded_id, &mk("dob/0")).unwrap();
+        store.put_spore_direct(&failed_id, &mk("dob/0")).unwrap();
+
+        // Write one Decoded, one Failed.
+        let mut b = StoreBatch::new(&store);
+        b.put_dob_decoded(
+            &decoded_id,
+            &DobDecodedEntry {
+                steps: vec![],
+                media_sources: vec![],
+                decoded_at: 1,
+            },
+        );
+        b.put_dob_decode_failure(
+            &failed_id,
+            &DobDecodeFailure {
+                category: DobDecodeFailureCategory::ClusterNotFound,
+                message: "cluster entry not found".to_string(),
+                failed_at: 2,
+            },
+        );
+        b.commit().unwrap();
+
+        // get_dob_decode_outcome returns the right variant.
+        match store.get_dob_decode_outcome(&decoded_id).unwrap().unwrap() {
+            crate::types::DecodeOutcome::Decoded(e) => assert_eq!(e.decoded_at, 1),
+            _ => panic!("expected Decoded"),
+        }
+        match store.get_dob_decode_outcome(&failed_id).unwrap().unwrap() {
+            crate::types::DecodeOutcome::Failed(f) => {
+                assert_eq!(f.category, DobDecodeFailureCategory::ClusterNotFound)
+            }
+            _ => panic!("expected Failed"),
+        }
+
+        // get_dob_decoded is success-only.
+        assert!(store.get_dob_decoded(&decoded_id).unwrap().is_some());
+        assert!(store.get_dob_decoded(&failed_id).unwrap().is_none());
+
+        // list_undecoded skips BOTH (decoded and failed count as processed).
+        let undecoded = store.list_undecoded_dob_spores(100, None).unwrap();
+        assert!(undecoded.iter().all(|(k, _, _)| k != &decoded_id.to_vec()));
+        assert!(undecoded.iter().all(|(k, _, _)| k != &failed_id.to_vec()));
     }
 
     #[test]

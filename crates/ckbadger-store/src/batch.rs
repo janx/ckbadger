@@ -950,7 +950,18 @@ impl<'a> StoreBatch<'a> {
     // ---- DOB decoded cache ----
 
     pub fn put_dob_decoded(&mut self, spore_id: &[u8], entry: &crate::types::DobDecodedEntry) {
-        let value = bincode::serialize(entry).expect("serialize DobDecodedEntry");
+        let outcome = crate::types::DecodeOutcome::Decoded(entry.clone());
+        let value = bincode::serialize(&outcome).expect("serialize DecodeOutcome::Decoded");
+        self.put_cf(self.store.cf_dob_decoded(), spore_id, &value);
+    }
+
+    pub fn put_dob_decode_failure(
+        &mut self,
+        spore_id: &[u8],
+        failure: &crate::types::DobDecodeFailure,
+    ) {
+        let outcome = crate::types::DecodeOutcome::Failed(failure.clone());
+        let value = bincode::serialize(&outcome).expect("serialize DecodeOutcome::Failed");
         self.put_cf(self.store.cf_dob_decoded(), spore_id, &value);
     }
 
