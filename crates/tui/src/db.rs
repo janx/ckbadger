@@ -650,6 +650,130 @@ impl TuiDb {
     }
 }
 
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NetworkLastRound {
+    pub round_id: u64,
+    pub started: u64,
+    pub finished: u64,
+    pub dialed: u64,
+    pub reachable: u64,
+    pub unreachable: u64,
+    pub foreign_dropped: u64,
+    pub new_nodes: u64,
+    pub total_known: u64,
+    pub frontier_drained: bool,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NetworkSummary {
+    pub enabled: bool,
+    pub has_data: bool,
+    pub last_round: Option<NetworkLastRound>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct LabelCount {
+    pub label: String,
+    pub count: u64,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NetworkDistributions {
+    pub total_known: u64,
+    pub reachable: u64,
+    pub unreachable: u64,
+    pub versions: Vec<LabelCount>,
+    pub countries: Vec<LabelCount>,
+    pub asns: Vec<LabelCount>,
+    pub protocols: Vec<LabelCount>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct NetworkHistoryPoint {
+    pub ts: u64,
+    pub scalar: u64,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct NetworkHistory {
+    pub points: Vec<NetworkHistoryPoint>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct PeersData {
+    pub summary: Option<NetworkSummary>,
+    pub distributions: Option<NetworkDistributions>,
+    pub total_history: Vec<NetworkHistoryPoint>,
+    pub reachable_history: Vec<NetworkHistoryPoint>,
+    pub error: Option<String>,
+}
+
+impl TuiDb {
+    /// Fetch crawler status + (if it has data) distributions and hourly trend from the
+    /// Plan-2 `/network/*` API. Best-effort: any error is recorded in `error`, never panics.
+    pub async fn get_peers_data(&self) -> PeersData {
+        let mut out = PeersData::default();
+
+        // 1. summary (drives the off/waiting/dashboard switch)
+        match self.fetch_json::<NetworkSummary>("/network/summary").await {
+            Ok(s) => out.summary = Some(s),
+            Err(e) => {
+                out.error = Some(e);
+                return out;
+            }
+        }
+        // 2. off / no-data => nothing to chart
+        let has_data = out.summary.as_ref().map(|s| s.has_data).unwrap_or(false);
+        if !has_data {
+            return out;
+        }
+        // 3. distributions + hourly trend (best-effort)
+        match self
+            .fetch_json::<NetworkDistributions>("/network/distributions")
+            .await
+        {
+            Ok(d) => out.distributions = Some(d),
+            Err(e) => out.error = Some(e),
+        }
+        match self
+            .fetch_json::<NetworkHistory>("/network/history?metric=totalNodes&granularity=hour")
+            .await
+        {
+            Ok(h) => out.total_history = h.points,
+            Err(e) => out.error = Some(e),
+        }
+        match self
+            .fetch_json::<NetworkHistory>("/network/history?metric=reachableNodes&granularity=hour")
+            .await
+        {
+            Ok(h) => out.reachable_history = h.points,
+            Err(e) => out.error = Some(e),
+        }
+        out
+    }
+
+    /// GET `self.api_url + path` and decode JSON, mapping every failure to a String
+    /// (mirrors the error handling around the existing `/statistics/network` fetch).
+    async fn fetch_json<T: serde::de::DeserializeOwned>(&self, path: &str) -> Result<T, String> {
+        let url = format!("{}{}", self.api_url, path);
+        let resp = self
+            .http
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("request failed: {e}"))?;
+        if !resp.status().is_success() {
+            return Err(format!("http {}", resp.status()));
+        }
+        resp.json::<T>()
+            .await
+            .map_err(|e| format!("decode failed: {e}"))
+    }
+}
+
 fn read_last_non_empty_line(path: &Path) -> Option<String> {
     let content = std::fs::read_to_string(path).ok()?;
     content.lines().rev().find_map(|line| {
@@ -665,8 +789,9 @@ fn read_last_non_empty_line(path: &Path) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        parse_epoch_string, sync_modes_from_progress, sync_progress_is_stale, TuiDb, TuiPathConfig,
-        LEGACY_BULK_SYNC_THRESHOLD_BLOCKS, SYNC_PROGRESS_STALE_SECS,
+        parse_epoch_string, sync_modes_from_progress, sync_progress_is_stale, NetworkDistributions,
+        NetworkHistory, NetworkSummary, TuiDb, TuiPathConfig, LEGACY_BULK_SYNC_THRESHOLD_BLOCKS,
+        SYNC_PROGRESS_STALE_SECS,
     };
     use ckbadger_common::{SyncProgressData, SyncStatusData};
     use ckbadger_ipc::{
@@ -728,6 +853,36 @@ mod tests {
     #[test]
     fn parse_epoch_invalid() {
         assert_eq!(parse_epoch_string("bad"), (0, 0, 1800));
+    }
+
+    #[test]
+    fn parse_network_summary_null_and_populated() {
+        let off: NetworkSummary =
+            serde_json::from_str(r#"{"enabled":false,"hasData":false,"lastRound":null}"#).unwrap();
+        assert!(!off.enabled && !off.has_data && off.last_round.is_none());
+
+        let on: NetworkSummary = serde_json::from_str(
+            r#"{"enabled":true,"hasData":true,"lastRound":{"roundId":5,"started":1,"finished":2,"dialed":8,"reachable":3,"unreachable":1,"foreignDropped":0,"newNodes":2,"totalKnown":4,"frontierDrained":true}}"#,
+        ).unwrap();
+        let lr = on.last_round.unwrap();
+        assert_eq!(lr.total_known, 4);
+        assert_eq!(lr.reachable, 3);
+        assert!(lr.frontier_drained);
+    }
+
+    #[test]
+    fn parse_distributions_and_history() {
+        let d: NetworkDistributions = serde_json::from_str(
+            r#"{"totalKnown":4,"reachable":3,"unreachable":1,"versions":[{"label":"0.119.0","count":3}],"countries":[{"label":"US","count":2}],"asns":[],"protocols":[]}"#,
+        ).unwrap();
+        assert_eq!(d.versions[0].label, "0.119.0");
+        assert_eq!(d.countries[0].count, 2);
+
+        let h: NetworkHistory =
+            serde_json::from_str(r#"{"points":[{"ts":3600,"scalar":4},{"ts":7200,"scalar":5}]}"#)
+                .unwrap();
+        assert_eq!(h.points.len(), 2);
+        assert_eq!(h.points[1].scalar, 5);
     }
 
     #[test]
