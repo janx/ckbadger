@@ -17,8 +17,8 @@ use std::time::{Duration, Instant};
 
 use crate::chart::{render_bar_chart, render_stacked_bar_chart, ChartStats};
 use crate::db::{
-    ApiServiceInfo, ChainInfoData, RuntimeDiagData, ServiceLogTailData, SupervisorServiceData,
-    SyncStatusRow, TuiDb,
+    ApiServiceInfo, ChainInfoData, PeersData, RuntimeDiagData, ServiceLogTailData,
+    SupervisorServiceData, SyncStatusRow, TuiDb,
 };
 
 const RATE_HISTORY_SIZE: usize = 3600;
@@ -79,6 +79,29 @@ pub enum MainTab {
     Overview,
     Sync,
     System,
+    Peers,
+}
+
+impl MainTab {
+    /// Cycle to the next tab: Overview -> Sync -> System -> Peers -> Overview.
+    pub fn next(self) -> Self {
+        match self {
+            MainTab::Overview => MainTab::Sync,
+            MainTab::Sync => MainTab::System,
+            MainTab::System => MainTab::Peers,
+            MainTab::Peers => MainTab::Overview,
+        }
+    }
+
+    /// Cycle to the previous tab (reverse of [`MainTab::next`]).
+    pub fn prev(self) -> Self {
+        match self {
+            MainTab::Overview => MainTab::Peers,
+            MainTab::Peers => MainTab::System,
+            MainTab::System => MainTab::Sync,
+            MainTab::Sync => MainTab::Overview,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -126,6 +149,7 @@ pub struct App {
     background_tasks: Vec<BackgroundTaskEntry>,
     supervisor_services: Option<Vec<SupervisorServiceData>>,
     service_log_tails: Option<Vec<ServiceLogTailData>>,
+    peers_data: Option<PeersData>,
     last_refresh: Instant,
     last_sample: Instant,
     status_message: Option<(String, Instant)>,
@@ -191,6 +215,7 @@ impl App {
             background_tasks: Vec::new(),
             supervisor_services: None,
             service_log_tails: None,
+            peers_data: None,
             last_refresh: Instant::now(),
             last_sample: Instant::now(),
             status_message: None,
@@ -233,19 +258,11 @@ impl App {
     }
 
     pub fn next_tab(&mut self) {
-        self.main_tab = match self.main_tab {
-            MainTab::Overview => MainTab::Sync,
-            MainTab::Sync => MainTab::System,
-            MainTab::System => MainTab::Overview,
-        };
+        self.main_tab = self.main_tab.next();
     }
 
     pub fn previous_tab(&mut self) {
-        self.main_tab = match self.main_tab {
-            MainTab::Overview => MainTab::System,
-            MainTab::Sync => MainTab::Overview,
-            MainTab::System => MainTab::Sync,
-        };
+        self.main_tab = self.main_tab.prev();
     }
 
     pub fn toggle_help(&mut self) {
@@ -297,7 +314,7 @@ impl App {
                     self.log_scroll += 1;
                 }
             }
-            MainTab::Sync | MainTab::System => {}
+            MainTab::Sync | MainTab::System | MainTab::Peers => {}
         }
     }
 
@@ -306,21 +323,21 @@ impl App {
             MainTab::Overview => {
                 self.log_scroll = self.log_scroll.saturating_sub(1);
             }
-            MainTab::Sync | MainTab::System => {}
+            MainTab::Sync | MainTab::System | MainTab::Peers => {}
         }
     }
 
     pub fn scroll_log_to_bottom(&mut self) {
         match self.main_tab {
             MainTab::Overview => self.log_scroll = 0,
-            MainTab::Sync | MainTab::System => {}
+            MainTab::Sync | MainTab::System | MainTab::Peers => {}
         }
     }
 
     pub fn scroll_log_to_top(&mut self) {
         match self.main_tab {
             MainTab::Overview => self.log_scroll = self.log_entries.len().saturating_sub(1),
-            MainTab::Sync | MainTab::System => {}
+            MainTab::Sync | MainTab::System | MainTab::Peers => {}
         }
     }
 
@@ -361,6 +378,7 @@ impl App {
         self.runtime_diag = runtime_diag;
         self.supervisor_services = services;
         self.service_log_tails = log_tails;
+        self.peers_data = Some(self.db.get_peers_data().await);
         self.last_refresh = Instant::now();
 
         self.detect_events();
@@ -766,6 +784,11 @@ fn draw_tabs(f: &mut Frame, app: &App, area: Rect) {
     } else {
         inactive_style
     };
+    let peers_style = if app.main_tab == MainTab::Peers {
+        active_style
+    } else {
+        inactive_style
+    };
 
     let mut spans = vec![
         Span::styled(" Tabs: ", Style::default().fg(SLATE_500)),
@@ -774,10 +797,12 @@ fn draw_tabs(f: &mut Frame, app: &App, area: Rect) {
         Span::styled(" Sync ", sync_style),
         Span::styled("  ", Style::default().fg(SLATE_700)),
         Span::styled(" System ", system_style),
+        Span::styled("  ", Style::default().fg(SLATE_700)),
+        Span::styled(" Peers ", peers_style),
     ];
 
     // Layout/diagnostics indicators only relevant on Overview and Sync tabs
-    if app.main_tab != MainTab::System {
+    if matches!(app.main_tab, MainTab::Overview | MainTab::Sync) {
         spans.push(Span::styled(
             if app.force_compact_layout {
                 "  [Compact]"
@@ -810,7 +835,15 @@ fn draw_content(f: &mut Frame, app: &App, area: Rect) {
         MainTab::Overview => draw_overview_content(f, app, area),
         MainTab::Sync => draw_sync_content(f, app, area),
         MainTab::System => draw_system_content(f, app, area),
+        MainTab::Peers => draw_peers_content(f, app, area),
     }
+}
+
+fn draw_peers_content(f: &mut Frame, app: &App, area: Rect) {
+    // Filled in Task 3. For now render a placeholder block so the tab is reachable and compiles.
+    let block = Block::default().borders(Borders::ALL).title(" Peers ");
+    f.render_widget(block, area);
+    let _ = app; // peers_data consumed in Task 3
 }
 
 fn draw_overview_content(f: &mut Frame, app: &App, area: Rect) {
@@ -4961,7 +4994,7 @@ fn draw_help_popup(f: &mut Frame) {
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from("  q        Quit"),
-        Line::from("  Tab/s/l  Next tab (Overview / Sync / System)"),
+        Line::from("  Tab/s/l  Next tab (Overview / Sync / System / Peers)"),
         Line::from("  h        Previous tab"),
         Line::from("  c        Toggle compact layout override"),
         Line::from("  v        Cycle diagnostics view (Auto/Compact/Detail)"),
@@ -5511,7 +5544,8 @@ mod tests {
         storage_runtime_columns, supervisor_services_line, sync_bottleneck, system_kv_line,
         system_store_path_lines, system_workdir_lines, trend_delta, trim_for_panel,
         visible_background_tasks, App, Color, CompactOverviewLayout, ControllerDeltas,
-        DiagnosticsViewMode, SyncBottleneck, AMBER, CYAN, STATUS_MESSAGE_TTL_SECS, TERMINAL_DIM,
+        DiagnosticsViewMode, MainTab, SyncBottleneck, AMBER, CYAN, STATUS_MESSAGE_TTL_SECS,
+        TERMINAL_DIM,
     };
     use crate::db::{
         ApiServiceInfo, RuntimeDiagData, ServiceLogTailData, SupervisorServiceData, TuiDb,
@@ -5552,6 +5586,20 @@ mod tests {
             last_trigger_reason: None,
             error: None,
         }
+    }
+
+    #[test]
+    fn main_tab_cycle_includes_peers() {
+        use MainTab::*;
+        assert_eq!(Overview.next(), Sync);
+        assert_eq!(Sync.next(), System);
+        assert_eq!(System.next(), Peers);
+        assert_eq!(Peers.next(), Overview);
+        // reverse
+        assert_eq!(Overview.prev(), Peers);
+        assert_eq!(Peers.prev(), System);
+        assert_eq!(System.prev(), Sync);
+        assert_eq!(Sync.prev(), Overview);
     }
 
     #[test]
