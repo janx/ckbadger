@@ -711,6 +711,17 @@ pub struct PeersData {
     pub error: Option<String>,
 }
 
+/// Recent window (seconds) bounding the hourly `/network/history` trend fetches so the API
+/// payload stays flat over time. 48h is generous versus the handful of visible trend bars.
+const PEERS_TREND_WINDOW_SECS: u64 = 48 * 3600;
+
+/// Path (relative to `api_url`) for an hourly `/network/history` query bounded to a recent window.
+/// `from` is a UNIX-seconds lower bound; the API drops the incomplete current day only for `day`
+/// granularity, so `hour` here just bounds the payload.
+fn peers_history_path(metric: &str, from_secs: u64) -> String {
+    format!("/network/history?metric={metric}&granularity=hour&from={from_secs}")
+}
+
 impl TuiDb {
     /// Fetch crawler status + (if it has data) distributions and hourly trend from the
     /// Plan-2 `/network/*` API. Best-effort: any error is recorded in `error`, never panics.
@@ -730,27 +741,31 @@ impl TuiDb {
         if !has_data {
             return out;
         }
-        // 3. distributions + hourly trend (best-effort)
-        match self
-            .fetch_json::<NetworkDistributions>("/network/distributions")
-            .await
-        {
-            Ok(d) => out.distributions = Some(d),
-            Err(e) => out.error = Some(e),
+        // 3. distributions + hourly trend (best-effort, run concurrently).
+        // Window floor on wall-clock, NOT a masking guard: a `from` lower bound can't be
+        // negative and `now < window` is impossible in practice.
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let from = now.saturating_sub(PEERS_TREND_WINDOW_SECS);
+        let total_path = peers_history_path("totalNodes", from);
+        let reach_path = peers_history_path("reachableNodes", from);
+        let (dist, total, reach) = tokio::join!(
+            self.fetch_json::<NetworkDistributions>("/network/distributions"),
+            self.fetch_json::<NetworkHistory>(&total_path),
+            self.fetch_json::<NetworkHistory>(&reach_path),
+        );
+        // Best-effort: set field on success, leave empty on error. Per the status-first
+        // design the Dashboard ignores `error`, so secondary failures no longer set it.
+        if let Ok(d) = dist {
+            out.distributions = Some(d);
         }
-        match self
-            .fetch_json::<NetworkHistory>("/network/history?metric=totalNodes&granularity=hour")
-            .await
-        {
-            Ok(h) => out.total_history = h.points,
-            Err(e) => out.error = Some(e),
+        if let Ok(h) = total {
+            out.total_history = h.points;
         }
-        match self
-            .fetch_json::<NetworkHistory>("/network/history?metric=reachableNodes&granularity=hour")
-            .await
-        {
-            Ok(h) => out.reachable_history = h.points,
-            Err(e) => out.error = Some(e),
+        if let Ok(h) = reach {
+            out.reachable_history = h.points;
         }
         out
     }
@@ -789,9 +804,9 @@ fn read_last_non_empty_line(path: &Path) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        parse_epoch_string, sync_modes_from_progress, sync_progress_is_stale, NetworkDistributions,
-        NetworkHistory, NetworkSummary, TuiDb, TuiPathConfig, LEGACY_BULK_SYNC_THRESHOLD_BLOCKS,
-        SYNC_PROGRESS_STALE_SECS,
+        parse_epoch_string, peers_history_path, sync_modes_from_progress, sync_progress_is_stale,
+        NetworkDistributions, NetworkHistory, NetworkSummary, TuiDb, TuiPathConfig,
+        LEGACY_BULK_SYNC_THRESHOLD_BLOCKS, SYNC_PROGRESS_STALE_SECS,
     };
     use ckbadger_common::{SyncProgressData, SyncStatusData};
     use ckbadger_ipc::{
@@ -915,6 +930,14 @@ mod tests {
     #[test]
     fn sync_modes_legacy_threshold_constant_is_stable() {
         assert_eq!(LEGACY_BULK_SYNC_THRESHOLD_BLOCKS, 1000);
+    }
+
+    #[test]
+    fn peers_history_path_bounds_window() {
+        assert_eq!(
+            peers_history_path("totalNodes", 1000),
+            "/network/history?metric=totalNodes&granularity=hour&from=1000"
+        );
     }
 
     #[test]
