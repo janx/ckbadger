@@ -5,7 +5,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Header } from '@/components/layout/header';
 import { PageHeader, Badge } from '@/components/ui/page-header';
 import { StatBlock, StatGrid } from '@/components/ui/stat-block';
-import { api, NetworkLastRound } from '@/lib/api';
+import { api, LabelCount, NetworkLastRound } from '@/lib/api';
 import { formatTimeAgo } from '@/lib/utils';
 import { NetworkDistributions } from '@/app/network/distributions';
 import { NetworkTrends } from '@/app/network/trends';
@@ -94,6 +94,34 @@ enabled = true
   );
 }
 
+// Geo/ASN is only present when the optional MaxMind GeoLite2 databases are configured. When they
+// are not, every country groups under "Unknown" — so real geo means at least one non-"Unknown"
+// country label. Only then do we owe MaxMind an attribution.
+function hasGeoData(countries: LabelCount[]): boolean {
+  return countries.some((c) => {
+    const label = c.label.trim();
+    return label.length > 0 && label !== 'Unknown';
+  });
+}
+
+// Shares the ['network', 'distributions'] query key with <NetworkDistributions/>, so this is a
+// single fetch (react-query dedupes) rather than a second request or a divergent geo signal.
+function MaxMindAttribution() {
+  const { data } = useQuery({
+    queryKey: ['network', 'distributions'],
+    queryFn: api.getNetworkDistributions,
+    refetchInterval: 30000,
+  });
+
+  if (!data || !hasGeoData(data.countries)) return null;
+
+  return (
+    <p className="text-text-dim border-base-border/60 mt-2 border-t pt-3 font-mono text-xs">
+      Geo/ASN data © MaxMind (GeoLite2)
+    </p>
+  );
+}
+
 function PeersDashboard({ lastRound }: { lastRound: NetworkLastRound }) {
   const updatedAgo = formatTimeAgo(lastRound.finished * 1000);
 
@@ -122,6 +150,7 @@ function PeersDashboard({ lastRound }: { lastRound: NetworkLastRound }) {
       <NetworkDistributions />
       <NetworkTrends />
       <NodesTable />
+      <MaxMindAttribution />
     </div>
   );
 }

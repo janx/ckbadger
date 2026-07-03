@@ -38,6 +38,7 @@ const navItems: NavItem[] = [
   },
   { href: '/scripts', label: 'Scripts' },
   { href: '/charts', label: 'Charts' },
+  { href: '/network', label: 'Peers' },
 ];
 
 const DESKTOP_START_COLUMN = 'hidden md:block md:w-[108px] md:shrink-0';
