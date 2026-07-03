@@ -15,9 +15,10 @@ async-trait = { workspace = true }
 maxminddb = { workspace = true }
 ckb-network = { workspace = true }
 ckb-types = { workspace = true }
-ckb-app-config = { workspace = true }
-ckb-spawn = { workspace = true }
-# Version pins only (not used directly) — see root Cargo.toml for rationale.
+# Direct tentacle handle: the crawler builds the p2p Service itself so Discovery is
+# registered UNCOMPRESSED (matching real CKB nodes' built-in discovery). Pinned to the
+# exact version ckb-network 0.119 resolves, so protocol/meta types are identical.
+p2p = { package = "tentacle", version = "=0.6.1" }
 tokio-yamux = { workspace = true }
 tentacle-secio = { workspace = true }
 

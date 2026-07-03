@@ -1,49 +1,51 @@
-//! Real `ckb-network` 0.119 prober: a discovery-only, feeler-style probe of CKB L1 peers.
+//! Real CKB L1 p2p prober, built **directly on tentacle** (not `ckb-network`'s
+//! `NetworkService`).
 //!
-//! # How this maps onto the `ckb-network` API
+//! # Why tentacle-direct
 //!
-//! `ckb-network` ships the Identify / Ping / Discovery / Feeler / DisconnectMessage protocols as
-//! *built-in* handlers registered inside [`NetworkService::new`], driven by
-//! `config.support_protocols`. They cannot be replaced by user handlers (Identify is even
-//! registered unconditionally). So the "capture per connected peer" the crawler needs is split:
+//! `ckb-network` only exposes custom protocols through [`ckb_network::CKBProtocol`], whose
+//! `build()` unconditionally attaches `before_send(compress)` / `before_receive(decompress)`.
+//! But CKB nodes register **Discovery / Identify as *built-in* protocols with NO compression**
+//! (only Sync / Relay / Time are compressed). Routing our Discovery handler through
+//! `CKBProtocol` therefore prefixed every `GetNodes` with a spurious compression-flag byte,
+//! which shifts the molecule length header so real peers fail to decode it and never reply
+//! with `Nodes` — the crawler then never learned any peer beyond its bootnodes.
 //!
-//! * **Identify + Ping** are captured by the built-in handlers into [`NetworkState`]'s peer
-//!   registry. We read them back per peer via [`NetworkController::connected_peers`] →
-//!   [`ckb_network::Peer`] (`identify_info` = client version + flags, `listened_addrs` = the
-//!   node's own listen multiaddrs, `ping_rtt`, negotiated `protocols`).
-//! * **Discovery `Nodes`** land only in the `pub(crate)` peer store, which is *not* readable from
-//!   outside the crate. So we register our own discovery-only [`CKBProtocolHandler`] on the
-//!   Discovery protocol id: on `connected` it sends a `GetNodes` request and on `received` it
-//!   decodes the `Nodes` reply and records the advertised addresses, keyed by session. This is the
-//!   feeler interrogation; we then disconnect. (`GetNodes` is honored by peers only for *outbound*
-//!   dials — RFC 0012 — which every crawler dial is.)
+//! So we build the tentacle `Service` ourselves and register **Identify + Discovery
+//! uncompressed** via [`SupportProtocols::build_meta_with_service_handle`] (the same path CKB's
+//! built-in protocols use). This mirrors cryptape's own `ckb-node-probe`.
 //!
-//! The network identifier is derived from the selected network's spec id + genesis hash exactly as
-//! CKB does (`/{spec_id}/{genesis_hash[..8]}`). It is announced in Identify, so `ckb-network`
-//! auto-rejects (and bans) foreign-network peers for us.
+//! # Probe shape
 //!
-//! A single long-lived [`NetworkController`] backs every probe; the engine drives probes
-//! sequentially, so [`probe`](CkbProber::probe) dials one address, waits (bounded by
-//! `dial_timeout_secs`) for the handshake, assembles a [`ProbeOutcome`], disconnects, and returns
-//! `Ok(None)` on timeout/refusal — never an error (the trait reserves `Err` for prober-internal
-//! invariant failures only).
+//! Each probe is short-lived (dial → grab identify → brief discovery grace → disconnect), so we
+//! stay under a full node's 10s "must open Sync" eviction floor and never need the Sync protocol.
+//! We are *outbound-only*; inbound sessions are rejected. Identify is grab-and-go: we read the
+//! peer's Identify (verifying the network id) but do not send our own — the peer emits its
+//! Identify immediately on connect, well within the probe window.
 
-use std::collections::HashMap;
-use std::path::PathBuf;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 
-use ckb_app_config::{NetworkConfig, SupportProtocol};
-use ckb_network::{
-    bytes::Bytes, extract_peer_id, multiaddr::Multiaddr, CKBProtocol, CKBProtocolContext,
-    CKBProtocolHandler, Flags, NetworkController, NetworkService, NetworkState, Peer, PeerId,
-    PeerIndex, ProtocolId, SupportProtocols,
-};
+use ckb_network::{extract_peer_id, SupportProtocols};
 use ckb_types::{packed, prelude::*};
 use ckbadger_config::CrawlerConfig;
+use p2p::{
+    builder::ServiceBuilder,
+    bytes::Bytes,
+    context::{ProtocolContext, ProtocolContextMutRef, ServiceContext},
+    multiaddr::Multiaddr,
+    secio::{PeerId, PublicKey, SecioKeyPair},
+    service::{
+        ProtocolHandle, ProtocolMeta, ServiceAsyncControl, ServiceError, ServiceEvent,
+        TargetProtocol,
+    },
+    traits::{ServiceHandle, ServiceProtocol},
+    ProtocolId, SessionId,
+};
 
 use crate::prober::{ProbeOutcome, Prober};
 
@@ -108,65 +110,10 @@ fn identify_name(spec_id: &str, genesis_hash: &str) -> String {
     format!("/{}/{}", spec_id, &genesis_hash[..8])
 }
 
-/// Per-session capture of discovery-advertised addresses: `session id → advertised multiaddrs`.
-type DiscoveryCapture = Arc<Mutex<HashMap<PeerIndex, Vec<String>>>>;
-
 // ---------------------------------------------------------------------------
-// Discovery-only protocol handler
+// Discovery message codec (raw molecule; tentacle applies NO compression to
+// these protocols, exactly like a real CKB node's built-in Discovery).
 // ---------------------------------------------------------------------------
-
-/// A discovery-only [`CKBProtocolHandler`]: on connect it asks the peer for its address book
-/// (`GetNodes`) and records the `Nodes` reply per session. Registered on the Discovery protocol
-/// id in place of the built-in discovery handler so the crawler can read the reply back.
-struct DiscoveryProbeHandler {
-    capture: DiscoveryCapture,
-}
-
-#[async_trait]
-impl CKBProtocolHandler for DiscoveryProbeHandler {
-    async fn init(&mut self, _nc: Arc<dyn CKBProtocolContext + Sync>) {}
-
-    async fn connected(
-        &mut self,
-        nc: Arc<dyn CKBProtocolContext + Sync>,
-        peer_index: PeerIndex,
-        _version: &str,
-    ) {
-        // Feeler interrogation: request the peer's address book. Honored because we are the
-        // outbound side of the connection (RFC 0012).
-        if let Err(err) = nc
-            .async_send_message_to(peer_index, encode_get_nodes())
-            .await
-        {
-            tracing::debug!(?err, %peer_index, "crawler: send GetNodes failed");
-        }
-    }
-
-    async fn received(
-        &mut self,
-        _nc: Arc<dyn CKBProtocolContext + Sync>,
-        peer_index: PeerIndex,
-        data: Bytes,
-    ) {
-        let addrs = decode_nodes_addrs(&data);
-        if addrs.is_empty() {
-            return;
-        }
-        if let Ok(mut map) = self.capture.lock() {
-            map.entry(peer_index).or_default().extend(addrs);
-        }
-    }
-
-    async fn disconnected(
-        &mut self,
-        _nc: Arc<dyn CKBProtocolContext + Sync>,
-        peer_index: PeerIndex,
-    ) {
-        if let Ok(mut map) = self.capture.lock() {
-            map.remove(&peer_index);
-        }
-    }
-}
 
 /// Encode a discovery `GetNodes` request. Mirrors `ckb-network`'s own encoding, reusing the
 /// molecule types re-exported through `ckb_types::packed`.
@@ -210,19 +157,165 @@ fn decode_nodes_addrs(data: &Bytes) -> Vec<String> {
 }
 
 // ---------------------------------------------------------------------------
-// Spawn adapter — `ckb-network` starts on a `ckb_spawn::Spawn` handle.
+// Identify parsing (grab-and-go: we only read the peer's Identify).
 // ---------------------------------------------------------------------------
 
-/// Minimal [`ckb_spawn::Spawn`] over `tokio::spawn`. Requires an active tokio runtime, which is
-/// guaranteed because [`CkbProber::new`] is only called from the async crawler service loop.
-struct TokioSpawn;
+/// The bits we keep from a peer's Identify handshake.
+struct ParsedIdentify {
+    /// Network identifier (`/{spec_id}/{genesis_hash[..8]}`); used to reject foreign networks.
+    net_name: String,
+    client_version: String,
+    flags: u64,
+    listen_addrs: Vec<String>,
+}
 
-impl ckb_spawn::Spawn for TokioSpawn {
-    fn spawn_task<F>(&self, task: F)
-    where
-        F: std::future::Future<Output = ()> + Send + 'static,
-    {
-        tokio::spawn(task);
+/// Parse a wire `IdentifyMessage` (the peer wraps a `packed::Identify` payload inside it).
+/// Returns `None` for anything that is not a well-formed CKB Identify.
+fn parse_identify(data: &[u8]) -> Option<ParsedIdentify> {
+    let msg = packed::IdentifyMessageReader::from_compatible_slice(data).ok()?;
+    let inner = msg.identify().raw_data();
+    let id = packed::IdentifyReader::from_compatible_slice(inner).ok()?;
+    let net_name = String::from_utf8(id.name().raw_data().to_vec()).ok()?;
+    let client_version = String::from_utf8(id.client_version().raw_data().to_vec()).ok()?;
+    let flags: u64 = id.flag().unpack();
+    let listen_addrs = msg
+        .listen_addrs()
+        .iter()
+        .filter_map(|a| Multiaddr::try_from(a.bytes().raw_data().to_vec()).ok())
+        .map(|a| a.to_string())
+        .collect();
+    Some(ParsedIdentify {
+        net_name,
+        client_version,
+        flags,
+        listen_addrs,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Per-peer capture shared between the tentacle handler and the prober.
+// ---------------------------------------------------------------------------
+
+#[derive(Default)]
+struct PeerCapture {
+    session_id: Option<SessionId>,
+    client_version: Option<String>,
+    flags: u64,
+    listen_addrs: Vec<String>,
+    /// Names of protocols we successfully opened with this peer.
+    opened_protocols: BTreeSet<String>,
+    discovered_addrs: Vec<String>,
+    /// Set once we have parsed a same-network Identify (⇒ reachable).
+    identify_seen: bool,
+}
+
+type Captures = Arc<Mutex<HashMap<Vec<u8>, PeerCapture>>>;
+
+/// The authenticated peer id of a session (from the secio-verified remote pubkey).
+fn session_peer_id(pubkey: &Option<PublicKey>) -> Option<PeerId> {
+    pubkey.as_ref().map(PeerId::from_public_key)
+}
+
+// ---------------------------------------------------------------------------
+// Tentacle handler: one `Clone`-shared value used as every protocol's handler
+// AND as the service handle. All state lives behind `Arc`s.
+// ---------------------------------------------------------------------------
+
+#[derive(Clone)]
+struct CrawlerHandler {
+    net_id: Arc<String>,
+    captures: Captures,
+    identify_id: ProtocolId,
+    discovery_id: ProtocolId,
+}
+
+impl CrawlerHandler {
+    fn record<F: FnOnce(&mut PeerCapture)>(&self, key: Vec<u8>, f: F) {
+        let mut guard = self.captures.lock().expect("captures poisoned");
+        f(guard.entry(key).or_default());
+    }
+
+    /// Human-readable name for one of our two registered protocols.
+    fn proto_name(&self, proto_id: ProtocolId) -> String {
+        if proto_id == self.identify_id {
+            SupportProtocols::Identify.name()
+        } else if proto_id == self.discovery_id {
+            SupportProtocols::Discovery.name()
+        } else {
+            String::new()
+        }
+    }
+}
+
+#[async_trait]
+impl ServiceProtocol for CrawlerHandler {
+    async fn init(&mut self, _context: &mut ProtocolContext) {}
+
+    async fn connected(&mut self, context: ProtocolContextMutRef<'_>, _version: &str) {
+        let Some(peer_id) = session_peer_id(&context.session.remote_pubkey) else {
+            return;
+        };
+        let proto_id = context.proto_id();
+        let proto_name = self.proto_name(proto_id);
+        let session_id = context.session.id;
+        self.record(peer_id.as_bytes().to_vec(), |c| {
+            c.session_id = Some(session_id);
+            if !proto_name.is_empty() {
+                c.opened_protocols.insert(proto_name);
+            }
+        });
+        // Feeler-style interrogation: ask the peer for its address book. Sent RAW (uncompressed),
+        // matching the peer's built-in Discovery framing.
+        if proto_id == self.discovery_id {
+            let _ = context.send_message(encode_get_nodes()).await;
+        }
+    }
+
+    async fn received(&mut self, context: ProtocolContextMutRef<'_>, data: Bytes) {
+        let Some(peer_id) = session_peer_id(&context.session.remote_pubkey) else {
+            return;
+        };
+        let key = peer_id.as_bytes().to_vec();
+        let proto_id = context.proto_id();
+        if proto_id == self.identify_id {
+            if let Some(parsed) = parse_identify(&data) {
+                // Only a same-network peer counts as reachable.
+                if parsed.net_name == *self.net_id {
+                    self.record(key, |c| {
+                        c.client_version = Some(parsed.client_version);
+                        c.flags = parsed.flags;
+                        c.listen_addrs = parsed.listen_addrs;
+                        c.identify_seen = true;
+                    });
+                }
+            }
+        } else if proto_id == self.discovery_id {
+            let addrs = decode_nodes_addrs(&data);
+            if !addrs.is_empty() {
+                self.record(key, |c| c.discovered_addrs.extend(addrs));
+            }
+        }
+    }
+}
+
+#[async_trait]
+impl ServiceHandle for CrawlerHandler {
+    async fn handle_error(&mut self, _context: &mut ServiceContext, _error: ServiceError) {}
+
+    async fn handle_event(&mut self, context: &mut ServiceContext, event: ServiceEvent) {
+        if let ServiceEvent::SessionOpen { session_context } = event {
+            // Outbound-only crawler: never serve inbound peers.
+            if session_context.ty.is_inbound() {
+                let _ = context.disconnect(session_context.id).await;
+                return;
+            }
+            if let Some(peer_id) = session_peer_id(&session_context.remote_pubkey) {
+                let session_id = session_context.id;
+                self.record(peer_id.as_bytes().to_vec(), |c| {
+                    c.session_id = Some(session_id);
+                });
+            }
+        }
     }
 }
 
@@ -230,13 +323,10 @@ impl ckb_spawn::Spawn for TokioSpawn {
 // CkbProber
 // ---------------------------------------------------------------------------
 
-/// Real prober backed by a long-lived `ckb-network` [`NetworkController`].
+/// Real prober backed by a long-lived tentacle `Service` we build and run ourselves.
 pub struct CkbProber {
-    controller: NetworkController,
-    network_state: Arc<NetworkState>,
-    capture: DiscoveryCapture,
-    /// protocol id → protocol name, for reporting a peer's negotiated protocols.
-    proto_names: HashMap<ProtocolId, String>,
+    control: ServiceAsyncControl,
+    captures: Captures,
     bootnodes: Vec<String>,
     dial_timeout: Duration,
 }
@@ -271,138 +361,116 @@ impl CkbProber {
         }
 
         let net_id = identify_name(spec_id, genesis_hash);
-
-        // Ephemeral p2p identity + peer store live under a per-network temp dir. This is
-        // network-layer state (exempt from the chain stores' persistence rules); losing it only
-        // costs a fresh node id next start.
-        let p2p_dir = std::env::temp_dir().join("ckbadger-crawler").join(network);
-        std::fs::create_dir_all(&p2p_dir)
-            .with_context(|| format!("create crawler p2p dir {}", p2p_dir.display()))?;
-
-        let config = build_network_config(p2p_dir);
-        // required_flags = empty ⇒ we interrogate every peer that identifies (no capability
-        // gate); ckb2023 left false ⇒ no protocol-version gate on our side.
-        let network_state = Arc::new(
-            NetworkState::from_config(config)
-                .map_err(|e| anyhow!("init crawler network state: {e}"))?
-                .required_flags(Flags::empty()),
-        );
-
-        // Custom discovery handler in place of the built-in one (Discovery omitted from
-        // config.support_protocols so there is no protocol-id collision).
-        let capture: DiscoveryCapture = Arc::new(Mutex::new(HashMap::new()));
-        let discovery = CKBProtocol::new_with_support_protocol(
-            SupportProtocols::Discovery,
-            Box::new(DiscoveryProbeHandler {
-                capture: Arc::clone(&capture),
-            }),
-            Arc::clone(&network_state),
-        );
-
-        // Announce all capability flags so the widest set of peers (full nodes require
-        // SYNC|DISCOVERY|RELAY) accept us and open Discovery; we never open Sync/Relay ourselves.
-        let announce = (
+        Self::start(
             net_id,
-            format!("ckbadger-crawler/{}", env!("CARGO_PKG_VERSION")),
-            Flags::all(),
-        );
-        let controller = NetworkService::new(
-            Arc::clone(&network_state),
-            vec![discovery],
-            Vec::new(), // no required protocols → peers are not evicted for missing Sync
-            announce,
+            bootnodes,
+            Duration::from_secs(cfg.dial_timeout_secs.max(1)),
         )
-        .start(&TokioSpawn)
-        .map_err(|e| anyhow!("start crawler network service: {e}"))?;
+    }
 
-        let proto_names = controller
-            .protocols()
+    /// Assemble + spawn the tentacle service; return a prober that dials over its control.
+    fn start(net_id: String, bootnodes: Vec<String>, dial_timeout: Duration) -> Result<Self> {
+        let captures: Captures = Arc::new(Mutex::new(HashMap::new()));
+        let handler = CrawlerHandler {
+            net_id: Arc::new(net_id),
+            captures: Arc::clone(&captures),
+            identify_id: SupportProtocols::Identify.protocol_id(),
+            discovery_id: SupportProtocols::Discovery.protocol_id(),
+        };
+
+        // Identify + Discovery, both UNCOMPRESSED (built-in framing). No Sync: probes are short.
+        let metas: Vec<ProtocolMeta> = [SupportProtocols::Identify, SupportProtocols::Discovery]
             .into_iter()
-            .map(|(id, name, _versions)| (id, name))
+            .map(|proto| {
+                let h = handler.clone();
+                proto.build_meta_with_service_handle(move || ProtocolHandle::Callback(Box::new(h)))
+            })
             .collect();
 
+        let mut builder = ServiceBuilder::<SecioKeyPair>::new().forever(true);
+        for meta in metas {
+            builder = builder.insert_protocol(meta);
+        }
+        let key = SecioKeyPair::secp256k1_generated();
+        let mut service = builder.handshake_type(key.into()).build(handler);
+        let control = service.control().to_owned();
+        tokio::spawn(async move { service.run().await });
+
         Ok(Self {
-            controller,
-            network_state,
-            capture,
-            proto_names,
+            control,
+            captures,
             bootnodes,
-            dial_timeout: Duration::from_secs(cfg.dial_timeout_secs.max(1)),
+            dial_timeout,
         })
     }
 
-    /// Find the currently-connected peer for `peer_id`, if any.
-    fn find_peer(&self, peer_id: &PeerId) -> Option<(PeerIndex, Peer)> {
-        self.controller
-            .connected_peers()
-            .into_iter()
-            .find(|(_, p)| extract_peer_id(&p.connected_addr).as_ref() == Some(peer_id))
+    /// Wait until the peer's same-network Identify has been captured (⇒ reachable).
+    async fn await_identify(&self, key: &[u8]) {
+        loop {
+            if self
+                .captures
+                .lock()
+                .expect("captures poisoned")
+                .get(key)
+                .is_some_and(|c| c.identify_seen)
+            {
+                return;
+            }
+            tokio::time::sleep(POLL_INTERVAL).await;
+        }
     }
 
-    /// Snapshot the discovery addresses captured for `session` so far.
-    fn peek_discovered(&self, session: PeerIndex) -> Vec<String> {
-        self.capture
+    /// Wait a bounded grace period for at least one discovery `Nodes` reply.
+    async fn await_discovery(&self, key: &[u8]) {
+        let deadline = Instant::now() + DISCOVERY_GRACE;
+        loop {
+            let has_addrs = self
+                .captures
+                .lock()
+                .expect("captures poisoned")
+                .get(key)
+                .is_some_and(|c| !c.discovered_addrs.is_empty());
+            if has_addrs || Instant::now() >= deadline {
+                return;
+            }
+            tokio::time::sleep(POLL_INTERVAL).await;
+        }
+    }
+
+    /// Snapshot + remove the capture for `key`, returning the assembled outcome if reachable.
+    fn take_outcome(&self, key: &[u8], peer_id: &PeerId, rtt: Duration) -> Option<ProbeOutcome> {
+        let cap = self
+            .captures
             .lock()
-            .ok()
-            .and_then(|m| m.get(&session).cloned())
-            .unwrap_or_default()
-    }
-
-    /// Disconnect `peer_id` (feeler behaviour) and drop its capture entry.
-    fn disconnect(&self, peer_id: &PeerId) {
-        if let Some((session, _)) = self.find_peer(peer_id) {
-            if let Ok(mut m) = self.capture.lock() {
-                m.remove(&session);
-            }
-            self.controller.remove_node(peer_id);
+            .expect("captures poisoned")
+            .remove(key)?;
+        if !cap.identify_seen {
+            return None;
         }
-    }
-
-    /// Block until the peer completes Identify (= handshake done = reachable), returning its
-    /// session id and a snapshot of its peer record.
-    async fn await_identify(&self, peer_id: &PeerId) -> (PeerIndex, Peer) {
-        loop {
-            if let Some((session, peer)) = self.find_peer(peer_id) {
-                if peer.identify_info.is_some() {
-                    return (session, peer);
-                }
-            }
-            tokio::time::sleep(POLL_INTERVAL).await;
-        }
-    }
-
-    /// Wait a bounded grace period for the discovery `Nodes` reply for `session`.
-    async fn await_discovery(&self, session: PeerIndex) -> Vec<String> {
-        let deadline = tokio::time::Instant::now() + DISCOVERY_GRACE;
-        loop {
-            let discovered = self.peek_discovered(session);
-            if !discovered.is_empty() || tokio::time::Instant::now() >= deadline {
-                return discovered;
-            }
-            tokio::time::sleep(POLL_INTERVAL).await;
-        }
-    }
-
-    /// Assemble a [`ProbeOutcome`] from a reachable peer's record + captured discovery addresses.
-    fn assemble(&self, peer_id: &PeerId, peer: &Peer, mut discovered: Vec<String>) -> ProbeOutcome {
-        let info = peer.identify_info.as_ref();
-        let protocols = peer
-            .protocols
-            .keys()
-            .filter_map(|id| self.proto_names.get(id).cloned())
-            .collect();
+        let mut discovered = cap.discovered_addrs;
         discovered.sort();
         discovered.dedup();
-        ProbeOutcome {
+        Some(ProbeOutcome {
             peer_id: peer_id.as_bytes().to_vec(),
-            client_version: info.map(|i| i.client_version.clone()).unwrap_or_default(),
-            flags: info.map(|i| i.flags.bits()).unwrap_or(0),
-            protocols,
-            own_addrs: peer.listened_addrs.iter().map(|a| a.to_string()).collect(),
-            rtt_ms: peer
-                .ping_rtt
-                .map(|d| u32::try_from(d.as_millis()).unwrap_or(u32::MAX)),
+            client_version: cap.client_version.unwrap_or_default(),
+            flags: cap.flags,
+            protocols: cap.opened_protocols.into_iter().collect(),
+            own_addrs: cap.listen_addrs,
+            rtt_ms: Some(u32::try_from(rtt.as_millis()).unwrap_or(u32::MAX)),
             discovered_addrs: discovered,
+        })
+    }
+
+    /// Disconnect the session recorded for `key` (feeler behaviour) if still open.
+    async fn disconnect(&self, key: &[u8]) {
+        let session_id = self
+            .captures
+            .lock()
+            .expect("captures poisoned")
+            .get(key)
+            .and_then(|c| c.session_id);
+        if let Some(id) = session_id {
+            let _ = self.control.disconnect(id).await;
         }
     }
 }
@@ -419,55 +487,46 @@ impl Prober for CkbProber {
             Some(p) => p,
             None => return Ok(None),
         };
+        let key = peer_id.as_bytes().to_vec();
 
-        // Outbound identify dial; on identify success ckb-network auto-opens Discovery + Ping.
-        self.network_state
-            .dial_identify(self.controller.p2p_control(), multiaddr);
+        // Fresh capture for this probe (drop any stale entry from a prior round).
+        self.captures
+            .lock()
+            .expect("captures poisoned")
+            .remove(&key);
 
-        // Phase 1: bounded wait for the handshake. Timeout ⇒ unreachable (Ok(None)).
-        let reached = tokio::time::timeout(self.dial_timeout, self.await_identify(&peer_id)).await;
-        let (session, peer) = match reached {
-            Ok(v) => v,
-            Err(_elapsed) => {
-                self.disconnect(&peer_id);
-                return Ok(None);
-            }
-        };
+        let start = Instant::now();
+        // Dial + open Identify & Discovery. A dial error is an unreachable observation.
+        if self
+            .control
+            .dial(multiaddr.clone(), TargetProtocol::All)
+            .await
+            .is_err()
+        {
+            return Ok(None);
+        }
+
+        // Phase 1: bounded wait for the same-network Identify. Timeout ⇒ unreachable.
+        let reached = tokio::time::timeout(self.dial_timeout, self.await_identify(&key)).await;
+        let rtt = start.elapsed();
+        if reached.is_err() {
+            self.disconnect(&key).await;
+            self.captures
+                .lock()
+                .expect("captures poisoned")
+                .remove(&key);
+            return Ok(None);
+        }
 
         // Phase 2: node is reachable; give the Discovery reply a brief, bounded grace.
-        let discovered = self.await_discovery(session).await;
-        // Refresh the peer record so a late-arriving ping rtt is reflected.
-        let peer = self.find_peer(&peer_id).map(|(_, p)| p).unwrap_or(peer);
-        let outcome = self.assemble(&peer_id, &peer, discovered);
-
-        self.disconnect(&peer_id);
-        Ok(Some(outcome))
+        self.await_discovery(&key).await;
+        let outcome = self.take_outcome(&key, &peer_id, rtt);
+        self.disconnect(&key).await;
+        Ok(outcome)
     }
 
     fn bootnodes(&self) -> Vec<String> {
         self.bootnodes.clone()
-    }
-}
-
-/// Build the `ckb-network` config for a discovery-only, outbound-only feeler crawler.
-fn build_network_config(path: PathBuf) -> NetworkConfig {
-    NetworkConfig {
-        path,
-        // All connections are outbound (we dial); no inbound slots.
-        max_peers: 4096,
-        max_outbound_peers: 4096,
-        ping_interval_secs: 15,
-        ping_timeout_secs: 20,
-        // 0 ⇒ disable the auto outbound-peer service; the engine drives all dials explicitly.
-        connect_outbound_interval_secs: 0,
-        // Built-in protocols to register. Discovery is intentionally omitted (custom handler);
-        // Identify is always registered by ckb-network regardless. No Sync/Relay/Feeler.
-        support_protocols: vec![
-            SupportProtocol::Ping,
-            SupportProtocol::Identify,
-            SupportProtocol::DisconnectMessage,
-        ],
-        ..Default::default()
     }
 }
 
@@ -500,5 +559,201 @@ mod tests {
     #[test]
     fn decode_ignores_malformed_data() {
         assert!(decode_nodes_addrs(&Bytes::from_static(b"not molecule")).is_empty());
+    }
+
+    /// Build a wire `IdentifyMessage` exactly as a CKB node does (see `ckb-network`
+    /// `protocols/identify`), so we can round-trip it through [`parse_identify`].
+    fn encode_identify(
+        net_name: &str,
+        flags: u64,
+        client_version: &str,
+        listens: &[&str],
+    ) -> Bytes {
+        let inner = packed::Identify::new_builder()
+            .name(net_name.as_bytes().pack())
+            .flag(flags.pack())
+            .client_version(client_version.as_bytes().pack())
+            .build();
+        let mut listen_addrs = Vec::new();
+        for l in listens {
+            let ma: Multiaddr = l.parse().unwrap();
+            listen_addrs.push(
+                packed::Address::new_builder()
+                    .bytes(
+                        packed::Bytes::new_builder()
+                            .set(ma.to_vec().into_iter().map(Into::into).collect())
+                            .build(),
+                    )
+                    .build(),
+            );
+        }
+        let msg = packed::IdentifyMessage::new_builder()
+            .identify(
+                packed::Bytes::new_builder()
+                    .set(inner.as_bytes().into_iter().map(Into::into).collect())
+                    .build(),
+            )
+            .listen_addrs(packed::AddressVec::new_builder().set(listen_addrs).build())
+            .observed_addr(packed::Address::default())
+            .build();
+        Bytes::from(msg.as_bytes().to_vec())
+    }
+
+    #[test]
+    fn parse_identify_extracts_name_version_flags_listens() {
+        let wire = encode_identify(
+            "/ckb/92b197aa",
+            0b1111,
+            "ckb/0.119.0",
+            &["/ip4/1.2.3.4/tcp/8114"],
+        );
+        let parsed = parse_identify(&wire).expect("valid identify parses");
+        assert_eq!(parsed.net_name, "/ckb/92b197aa");
+        assert_eq!(parsed.client_version, "ckb/0.119.0");
+        assert_eq!(parsed.flags, 0b1111);
+        assert_eq!(
+            parsed.listen_addrs,
+            vec!["/ip4/1.2.3.4/tcp/8114".to_string()]
+        );
+    }
+
+    #[test]
+    fn parse_identify_rejects_garbage() {
+        assert!(parse_identify(b"not an identify message").is_none());
+    }
+
+    // ---- Loopback regression test: crawler ↔ a mock uncompressed-discovery peer -----------
+    //
+    // The mock decodes GetNodes RAW (no decompress), exactly like a real CKB node's built-in
+    // Discovery. If the crawler ever re-compresses Discovery (the original bug), the mock's raw
+    // decode fails, it never replies with `Nodes`, and `discovered_addrs` comes back empty —
+    // failing this test.
+
+    use p2p::{
+        builder::ServiceBuilder as P2PServiceBuilder,
+        secio::SecioKeyPair,
+        service::{ProtocolHandle, ProtocolMeta},
+    };
+
+    /// Encode a discovery `Nodes` reply advertising `addrs` (mirrors `ckb-network`'s encoding).
+    fn encode_nodes(addrs: &[&str]) -> Bytes {
+        let announce = packed::Bool::new_builder().set([0u8.into()]).build();
+        let mut items = Vec::new();
+        for a in addrs {
+            let ma: Multiaddr = a.parse().unwrap();
+            let raw = packed::Bytes::new_builder()
+                .set(ma.to_vec().into_iter().map(Into::into).collect())
+                .build();
+            let node = packed::Node2::new_builder()
+                .addresses(packed::BytesVec::new_builder().set(vec![raw]).build())
+                .flags(0u64.pack())
+                .build();
+            items.push(node);
+        }
+        let nodes2 = packed::Nodes2::new_builder()
+            .announce(announce)
+            .items(packed::Node2Vec::new_builder().set(items).build())
+            .build();
+        let nodes = packed::Nodes::new_unchecked(nodes2.as_bytes());
+        let payload = packed::DiscoveryPayload::new_builder().set(nodes).build();
+        let msg = packed::DiscoveryMessage::new_builder()
+            .payload(payload)
+            .build();
+        Bytes::from(msg.as_bytes().to_vec())
+    }
+
+    /// A minimal CKB-node stand-in: sends a same-network Identify on connect and answers
+    /// `GetNodes` with a fixed `Nodes` — all UNCOMPRESSED, like a real node's built-in protocols.
+    #[derive(Clone)]
+    struct MockPeer {
+        net_id: Arc<String>,
+        advertised: Arc<String>,
+        identify_id: ProtocolId,
+        discovery_id: ProtocolId,
+    }
+
+    #[async_trait]
+    impl ServiceProtocol for MockPeer {
+        async fn init(&mut self, _context: &mut ProtocolContext) {}
+
+        async fn connected(&mut self, context: ProtocolContextMutRef<'_>, _version: &str) {
+            if context.proto_id() == self.identify_id {
+                let msg = encode_identify(&self.net_id, 0b1111, "mock-client/1.0", &[]);
+                let _ = context.send_message(msg).await;
+            }
+        }
+
+        async fn received(&mut self, context: ProtocolContextMutRef<'_>, data: Bytes) {
+            if context.proto_id() == self.discovery_id {
+                // RAW decode — no decompress. A compressed GetNodes fails here (the bug).
+                if let Ok(reader) =
+                    packed::DiscoveryMessageReader::from_compatible_slice(data.as_ref())
+                {
+                    if matches!(
+                        reader.payload().to_enum(),
+                        packed::DiscoveryPayloadUnionReader::GetNodes(_)
+                    ) {
+                        let _ = context
+                            .send_message(encode_nodes(&[&self.advertised]))
+                            .await;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Start the mock peer on an ephemeral loopback port; returns its dial multiaddr.
+    async fn start_mock_peer(net_id: &str, advertised: &str) -> String {
+        let key = SecioKeyPair::secp256k1_generated();
+        let peer_id = key.peer_id();
+        let handler = MockPeer {
+            net_id: Arc::new(net_id.to_string()),
+            advertised: Arc::new(advertised.to_string()),
+            identify_id: SupportProtocols::Identify.protocol_id(),
+            discovery_id: SupportProtocols::Discovery.protocol_id(),
+        };
+        let metas: Vec<ProtocolMeta> = [SupportProtocols::Identify, SupportProtocols::Discovery]
+            .into_iter()
+            .map(|proto| {
+                let h = handler.clone();
+                proto.build_meta_with_service_handle(move || ProtocolHandle::Callback(Box::new(h)))
+            })
+            .collect();
+        let mut builder = P2PServiceBuilder::<SecioKeyPair>::new().forever(true);
+        for meta in metas {
+            builder = builder.insert_protocol(meta);
+        }
+        let mut service = builder.handshake_type(key.into()).build(());
+        let listen = service
+            .listen("/ip4/127.0.0.1/tcp/0".parse().unwrap())
+            .await
+            .expect("mock peer listens");
+        tokio::spawn(async move { service.run().await });
+        format!("{}/p2p/{}", listen, peer_id.to_base58())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn probe_captures_discovery_from_uncompressed_peer() {
+        let net_id = "/ckbtest/deadbeef".to_string();
+        let advertised = "/ip4/9.9.9.9/tcp/8114/p2p/QmaZMemLXSsxKUrYNucjEbPxVX3rBKsGhWW2muWtWxUWyh";
+        let expected = advertised.parse::<Multiaddr>().unwrap().to_string();
+
+        let dial_addr = start_mock_peer(&net_id, advertised).await;
+        let prober =
+            CkbProber::start(net_id, vec![], Duration::from_secs(8)).expect("prober starts");
+
+        let outcome = prober
+            .probe(&dial_addr)
+            .await
+            .expect("probe is infallible")
+            .expect("mock peer is reachable (identify captured)");
+
+        assert_eq!(outcome.client_version, "mock-client/1.0");
+        assert!(
+            outcome.discovered_addrs.contains(&expected),
+            "expected discovered addr {expected:?}, got {:?} — an empty list means Discovery \
+             was re-compressed and the peer could not decode our GetNodes",
+            outcome.discovered_addrs
+        );
     }
 }
