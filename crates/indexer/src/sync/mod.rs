@@ -6,6 +6,7 @@ pub(crate) mod dao_helpers;
 pub use dao_helpers::DaoConsumedRow;
 pub(crate) mod diagnostics;
 pub(crate) use diagnostics::ParserCellLookupSnapshot;
+mod dob_decode_error;
 pub mod dob_decode_worker;
 mod helpers;
 mod indexer;
