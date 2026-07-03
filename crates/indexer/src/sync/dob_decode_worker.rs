@@ -19,7 +19,7 @@ use ckbadger_dob_decoder::types::{DecoderRef, DobTrait};
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::types::{
     ClusterAggregate, CompositionTier, DobDecodedEntry, DobDecodedStep, DobDecodedTrait,
-    ObjectEntry, ObjectExtra, SporeMediaProfile, SporeMediaSource,
+    ObjectEntry, ObjectExtra, SporeMediaProfile, SporeMediaSource, SOLE_SPORES_SENTINEL_COLLECTION,
 };
 use ckbadger_store::CkbadgerStore;
 
@@ -30,6 +30,7 @@ use crate::parser::media_source::{
 };
 use crate::parser::spore::SporeParser;
 use crate::rpc::{parse_hex_to_bytes, CkbRpcClient};
+use crate::sync::dob_decode_error::DobDecodeError;
 
 const BATCH_SIZE: usize = 500;
 const MAX_MEDIA_SOURCES: usize = 24;
@@ -449,35 +450,50 @@ async fn decode_single_spore(
     content_type: &str,
     collection_id: Option<&[u8]>,
     ctx: &DecodeContext,
-) -> Result<DobDecodedEntry> {
-    // Load cluster entry for DOB metadata
-    let cluster_id = collection_id
-        .context("DOB spore has no collection_id — cannot resolve cluster metadata")?;
-
-    let cluster_entry = ctx.store.get_spore(cluster_id)?.with_context(|| {
-        format!(
-            "cluster entry not found for cluster_id=0x{}",
-            hex::encode(cluster_id)
-        )
+) -> Result<DobDecodedEntry, DobDecodeError> {
+    let cluster_id = collection_id.ok_or_else(|| DobDecodeError::ClusterMetadataInvalid {
+        detail: "DOB spore has no collection_id — cannot resolve cluster metadata".to_string(),
     })?;
 
-    let cluster_description = cluster_entry
-        .description
-        .as_deref()
-        .context("cluster entry has no description")?;
+    // Clusterless "Sole Spores": the indexer assigns this sentinel to spores with
+    // no real cluster. There is no DOB cluster/decoder to decode — short-circuit
+    // with a precise reason instead of a doomed get_spore(sentinel) lookup.
+    if cluster_id == SOLE_SPORES_SENTINEL_COLLECTION {
+        return Err(DobDecodeError::Clusterless);
+    }
 
-    let metadata: Value = serde_json::from_str(cluster_description)
-        .context("cluster description is not valid JSON")?;
+    let cluster_entry = ctx
+        .store
+        .get_spore(cluster_id)
+        .map_err(DobDecodeError::Internal)?
+        .ok_or_else(|| DobDecodeError::ClusterNotFound {
+            cluster_id: cluster_id.to_vec(),
+        })?;
 
-    // Extract DNA hex from the spore cell's on-chain content.
+    let cluster_description = cluster_entry.description.as_deref().ok_or_else(|| {
+        DobDecodeError::ClusterMetadataInvalid {
+            detail: "cluster entry has no description".to_string(),
+        }
+    })?;
+
+    let metadata: Value = serde_json::from_str(cluster_description).map_err(|e| {
+        DobDecodeError::ClusterMetadataInvalid {
+            detail: format!("cluster description is not valid JSON: {e}"),
+        }
+    })?;
+
     let dna_hex = extract_dna_from_spore(spore_id, &ctx.store, &ctx.rpc_client).await?;
 
-    // Parse decoder reference from cluster DOB metadata
     let dob_obj = metadata
         .get("dob")
-        .context("cluster metadata missing 'dob' field")?;
+        .ok_or_else(|| DobDecodeError::ClusterMetadataInvalid {
+            detail: "cluster metadata missing 'dob' field".to_string(),
+        })?;
 
-    let decoder_steps = parse_decoder_steps(dob_obj)?;
+    let decoder_steps =
+        parse_decoder_steps(dob_obj).map_err(|e| DobDecodeError::ClusterMetadataInvalid {
+            detail: e.to_string(),
+        })?;
     let mut resolved_steps = Vec::with_capacity(decoder_steps.len());
     for step in decoder_steps {
         let binary = load_decoder_binary(&step.decoder_ref, ctx).await?;
@@ -487,10 +503,8 @@ async fn decode_single_spore(
         });
     }
 
-    // Determine DOB version from content type
     let dob_version = parse_dob_version(content_type);
 
-    // Execute decoder on a blocking thread (CKB-VM is CPU-bound)
     let decoded = tokio::task::spawn_blocking(move || match dob_version {
         0 => {
             let Some(first_step) = resolved_steps.first() else {
@@ -512,18 +526,23 @@ async fn decode_single_spore(
         v => Err(anyhow::anyhow!("unsupported DOB version: {v}")),
     })
     .await
-    .context("CKB-VM spawn_blocking panicked")??;
+    .map_err(|e| DobDecodeError::Internal(anyhow::anyhow!("CKB-VM spawn_blocking panicked: {e}")))?
+    .map_err(|e| DobDecodeError::DecoderExecution {
+        detail: e.to_string(),
+    })?;
 
-    let coll_id = collection_id.expect("collection_id guaranteed by earlier bail");
+    let coll_id = collection_id.expect("collection_id guaranteed by earlier check");
 
-    // Store each step's raw output as a media blob and record parsed metadata
     let mut steps = Vec::with_capacity(decoded.step_outputs.len());
     let mut all_traits = Vec::new();
 
     for step_output in &decoded.step_outputs {
         let raw_bytes = step_output.raw_output.as_bytes();
         let media_type = sniff_media_type(raw_bytes);
-        let hash = ctx.media_store.write(coll_id, raw_bytes)?;
+        let hash = ctx
+            .media_store
+            .write(coll_id, raw_bytes)
+            .map_err(DobDecodeError::Internal)?;
 
         let traits: Vec<DobDecodedTrait> = step_output
             .traits
@@ -545,7 +564,6 @@ async fn decode_single_spore(
         });
     }
 
-    // Extract media sources from all decoded trait values
     let media_sources = extract_media_sources_from_traits(&all_traits);
 
     Ok(DobDecodedEntry {
@@ -556,7 +574,10 @@ async fn decode_single_spore(
 }
 
 /// Load a decoder binary from cache or chain. Standalone for concurrent use.
-async fn load_decoder_binary(decoder_ref: &DecoderRef, ctx: &DecodeContext) -> Result<Vec<u8>> {
+async fn load_decoder_binary(
+    decoder_ref: &DecoderRef,
+    ctx: &DecodeContext,
+) -> Result<Vec<u8>, DobDecodeError> {
     match decoder_ref {
         DecoderRef::CodeHash(code_hash) => {
             let cache_key = DecoderBinaryCache::code_hash_key(code_hash);
@@ -567,43 +588,28 @@ async fn load_decoder_binary(decoder_ref: &DecoderRef, ctx: &DecodeContext) -> R
             let (tx_hash, output_index, _) = ctx
                 .store
                 .find_any_cell_by_data_hash(code_hash, ctx.append_only_store.as_ref())
-                .with_context(|| {
-                    format!(
-                        "failed to resolve decoder code cell from local data-hash index: code_hash=0x{}",
-                        hex::encode(code_hash)
-                    )
-                })?
-                .with_context(|| {
-                    format!(
+                .map_err(DobDecodeError::Internal)?
+                .ok_or_else(|| DobDecodeError::DecoderNotFound {
+                    detail: format!(
                         "decoder code cell missing from local data-hash index: code_hash=0x{}",
                         hex::encode(code_hash)
-                    )
+                    ),
                 })?;
 
-            let binary =
-                fetch_output_data_by_outpoint(&tx_hash, output_index, &ctx.rpc_client)
-                    .await
-                    .with_context(|| {
-                        format!(
-                            "failed to fetch decoder binary via resolved code cell: code_hash=0x{}, tx_hash=0x{}, output_index={}",
-                            hex::encode(code_hash),
-                            hex::encode(&tx_hash),
-                            output_index
-                        )
-                    })?;
+            let binary = fetch_output_data_by_outpoint(&tx_hash, output_index, &ctx.rpc_client)
+                .await
+                .map_err(DobDecodeError::DecoderBinaryFetch)?;
 
-            verify_blake2b_hash(&binary, code_hash).with_context(|| {
-                format!(
-                    "resolved decoder binary hash mismatch: code_hash=0x{}, tx_hash=0x{}, output_index={}",
-                    hex::encode(code_hash),
-                    hex::encode(&tx_hash),
-                    output_index
-                )
+            verify_blake2b_hash(&binary, code_hash).map_err(|e| {
+                DobDecodeError::Internal(anyhow::anyhow!(
+                    "resolved decoder binary hash mismatch: code_hash=0x{}: {e}",
+                    hex::encode(code_hash)
+                ))
             })?;
 
             ctx.decoder_cache
                 .put(&cache_key, &binary)
-                .context("failed to cache resolved decoder binary")?;
+                .map_err(DobDecodeError::Internal)?;
 
             Ok(binary)
         }
@@ -613,49 +619,37 @@ async fn load_decoder_binary(decoder_ref: &DecoderRef, ctx: &DecodeContext) -> R
                 return Ok(Arc::try_unwrap(binary).unwrap_or_else(|arc| (*arc).clone()));
             }
 
-            // Compute the script hash of the TypeID type script so we can look
-            // it up in our cell_by_type index — avoids the CKB node indexer
-            // `get_cells` RPC which requires the Indexer module to be enabled.
             let type_id_code_hash =
                 hex::decode(crate::parser::script::TYPE_ID_CODE_HASH).expect("valid hex constant");
             let type_script_hash = crate::parser::script::ScriptParser::compute_script_hash_raw(
                 &type_id_code_hash,
-                1, // hash_type "type"
+                1,
                 type_id_hash,
             );
 
             let cells = ctx
                 .store
                 .list_cells_by_type(&type_script_hash, 1, None, ctx.append_only_store.as_ref())
-                .with_context(|| {
-                    format!(
-                        "failed to query local cell_by_type index for TypeID decoder: type_id=0x{}",
-                        hex::encode(type_id_hash)
-                    )
-                })?;
+                .map_err(DobDecodeError::Internal)?;
 
-            let (tx_hash, output_index, _) = cells.into_iter().next().with_context(|| {
-                format!(
-                    "no live cell found in local index for TypeID decoder: type_id=0x{}",
-                    hex::encode(type_id_hash)
-                )
-            })?;
-
-            let binary =
-                fetch_output_data_by_outpoint(&tx_hash, output_index, &ctx.rpc_client)
-                    .await
-                    .with_context(|| {
-                        format!(
-                            "failed to fetch TypeID decoder binary: type_id=0x{}, tx_hash=0x{}, output_index={}",
-                            hex::encode(type_id_hash),
-                            hex::encode(&tx_hash),
-                            output_index
-                        )
+            let (tx_hash, output_index, _) =
+                cells
+                    .into_iter()
+                    .next()
+                    .ok_or_else(|| DobDecodeError::DecoderNotFound {
+                        detail: format!(
+                            "no live cell found in local index for TypeID decoder: type_id=0x{}",
+                            hex::encode(type_id_hash)
+                        ),
                     })?;
+
+            let binary = fetch_output_data_by_outpoint(&tx_hash, output_index, &ctx.rpc_client)
+                .await
+                .map_err(DobDecodeError::DecoderBinaryFetch)?;
 
             ctx.decoder_cache
                 .put(&cache_key, &binary)
-                .context("failed to cache TypeID decoder binary")?;
+                .map_err(DobDecodeError::Internal)?;
 
             Ok(binary)
         }
@@ -672,50 +666,35 @@ async fn extract_dna_from_spore(
     spore_id: &[u8],
     store: &CkbadgerStore,
     rpc_client: &CkbRpcClient,
-) -> Result<String> {
-    // Step 1: Find the spore's outpoint (most recent first).
+) -> Result<String, DobDecodeError> {
     let outpoints = store
         .list_spore_outpoints_by_spore_id(spore_id)
-        .with_context(|| {
-            format!(
-                "failed to list outpoints for spore_id=0x{}",
-                hex::encode(spore_id)
-            )
-        })?;
+        .map_err(DobDecodeError::Internal)?;
 
-    let (tx_hash, output_index) = outpoints
-        .first()
-        .with_context(|| format!("no outpoint found for spore_id=0x{}", hex::encode(spore_id)))?;
+    let (tx_hash, output_index) = outpoints.first().ok_or_else(|| {
+        DobDecodeError::Internal(anyhow::anyhow!(
+            "no outpoint found for spore_id=0x{}",
+            hex::encode(spore_id)
+        ))
+    })?;
 
-    // Step 2: Fetch the spore cell data from CKB node via RPC.
+    // Transient: RPC fetch of the spore's own creation tx.
     let output_data = fetch_output_data_by_outpoint(tx_hash, *output_index, rpc_client)
         .await
-        .with_context(|| {
-            format!(
-                "failed to fetch spore cell data via RPC: spore_id=0x{}, tx_hash=0x{}, output_index={}",
-                hex::encode(spore_id),
-                hex::encode(tx_hash),
-                output_index
-            )
-        })?;
+        .map_err(DobDecodeError::SporeCellFetch)?;
 
-    // Step 3: Parse the Spore molecule to extract content bytes.
+    // Deterministic: the on-chain content is immutable. Both parsers return
+    // Option (None = malformed molecule / missing DNA), mapped to DnaInvalid.
     let content_bytes =
-        SporeParser::parse_spore_content_from_data(&output_data).with_context(|| {
-            format!(
-                "failed to parse Spore molecule content: spore_id=0x{}, tx_hash=0x{}",
-                hex::encode(spore_id),
-                hex::encode(tx_hash)
-            )
+        SporeParser::parse_spore_content_from_data(&output_data).ok_or_else(|| {
+            DobDecodeError::DnaInvalid {
+                detail: "failed to parse Spore molecule content".to_string(),
+            }
         })?;
 
-    // Step 4: Convert content to text and extract DNA hex.
     let content_text = String::from_utf8_lossy(&content_bytes);
-    parse_dna_hex_from_content_text(&content_text).with_context(|| {
-        format!(
-            "failed to extract DNA hex from spore content: spore_id=0x{}",
-            hex::encode(spore_id)
-        )
+    parse_dna_hex_from_content_text(&content_text).ok_or_else(|| DobDecodeError::DnaInvalid {
+        detail: "failed to extract DNA hex from spore content".to_string(),
     })
 }
 
@@ -1345,11 +1324,8 @@ mod tests {
         let result = extract_dna_from_spore(&spore_id, &store, &rpc_client).await;
         assert!(result.is_err());
         assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("no outpoint found"),
-            "should fail when no outpoints exist for the spore"
+            result.unwrap_err().is_transient(),
+            "no-outpoint maps to transient Internal"
         );
     }
 
@@ -1467,5 +1443,34 @@ mod tests {
 
         let cache_key = DecoderBinaryCache::code_hash_key(&code_hash);
         assert_eq!(*decoder_cache.get(&cache_key).unwrap(), decoder_binary);
+    }
+
+    #[tokio::test]
+    async fn test_decode_single_spore_cluster_not_found_is_deterministic() {
+        use super::super::dob_decode_error::DobDecodeError;
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+        let cache_dir = dir.path().join("decoder-cache");
+        let decoder_cache = Arc::new(DecoderBinaryCache::new(&cache_dir).unwrap());
+        let media_store = Arc::new(MediaBlobStore::new(dir.path().join("media")));
+        let ctx = DecodeContext {
+            store: store.clone(),
+            append_only_store: store.clone(),
+            decoder_cache,
+            media_store,
+            rpc_client: CkbRpcClient::new("http://localhost:9999"),
+        };
+
+        // collection_id points to a cluster that does not exist -> ClusterNotFound.
+        let spore_id = [0x22u8; 32];
+        let missing_cluster = vec![0x99u8; 32];
+        let err = decode_single_spore(&spore_id, "dob/0", Some(&missing_cluster), &ctx)
+            .await
+            .unwrap_err();
+        assert!(
+            !err.is_transient(),
+            "cluster-not-found must be deterministic"
+        );
+        assert!(matches!(err, DobDecodeError::ClusterNotFound { .. }));
     }
 }

@@ -6,11 +6,6 @@
 
 use ckbadger_store::types::DobDecodeFailureCategory;
 
-// This classifier is intentionally standalone in this change; it is wired into
-// the decode worker in the follow-up task. The pre-commit clippy runs with
-// `-D warnings`, so the not-yet-referenced type and methods are explicitly
-// allowed until the worker consumes them.
-#[allow(dead_code)]
 #[derive(Debug)]
 pub(crate) enum DobDecodeError {
     // --- deterministic: recorded then skipped ---
@@ -26,6 +21,10 @@ pub(crate) enum DobDecodeError {
     Internal(anyhow::Error),
 }
 
+// `is_transient`/`category` currently have only unit-test callers. Their
+// non-test consumer is the decode worker's failure-recording path, added in the
+// follow-up task; the `-D warnings` lib target (compiled without `cfg(test)`)
+// sees them as dead until that caller lands, so the allow stays one more task.
 #[allow(dead_code)]
 impl DobDecodeError {
     pub fn is_transient(&self) -> bool {
