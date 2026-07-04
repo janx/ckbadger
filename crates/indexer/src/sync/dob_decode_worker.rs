@@ -90,6 +90,9 @@ impl DobDecodeWorker {
         let mut cursor: Option<Vec<u8>> = None;
         let mut total_decoded: u64 = 0;
         let mut total_skipped: u64 = 0;
+        // Deterministic failures actually persisted as `Failed` (a subset of
+        // `total_skipped`; the remainder are transient skips kept for retry).
+        let mut total_recorded: u64 = 0;
 
         loop {
             if self.shutdown.load(Ordering::Relaxed) {
@@ -241,6 +244,7 @@ impl DobDecodeWorker {
 
             total_decoded += batch_committed;
             total_skipped += batch_skipped;
+            total_recorded += failed_records.len() as u64;
 
             // Update progress at batch boundary
             let elapsed = start.elapsed();
@@ -257,8 +261,8 @@ impl DobDecodeWorker {
                 entry.rate = Some(rate);
                 entry.eta_seconds = None;
                 entry.message = Some(format!(
-                    "Decoded {}, skipped {}",
-                    total_decoded, total_skipped
+                    "Decoded {}, recorded {} un-decodable, skipped {}",
+                    total_decoded, total_recorded, total_skipped
                 ));
             });
 
@@ -280,8 +284,8 @@ impl DobDecodeWorker {
             entry.rate = None;
             entry.eta_seconds = None;
             entry.message = Some(format!(
-                "Done: {} decoded, {} skipped",
-                total_decoded, total_skipped
+                "Done: {} decoded, {} recorded un-decodable, {} skipped",
+                total_decoded, total_recorded, total_skipped
             ));
         });
 
@@ -1561,5 +1565,85 @@ mod tests {
         }
         // ... and the spore is no longer re-listed for decode.
         assert_eq!(store.list_undecoded_dob_spores(100, None).unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_worker_transient_failure_writes_no_record_and_stays_relisted() {
+        use ckbadger_store::types::{
+            CompositionTier, ObjectEntry, ObjectExtra, ObjectStandard, SporeMediaProfile,
+        };
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+        let decoder_cache = Arc::new(DecoderBinaryCache::new(&dir.path().join("cache")).unwrap());
+        let shutdown = Arc::new(AtomicBool::new(false));
+        // Unreachable RPC endpoint; not even reached in this test — the spore
+        // fails transiently at outpoint lookup, before any RPC call.
+        let worker = DobDecodeWorker::new(
+            store.clone(),
+            store.clone(),
+            decoder_cache,
+            dir.path().join("media"),
+            "http://127.0.0.1:9".to_string(),
+            shutdown,
+        );
+
+        // A real cluster with a valid-JSON description, so decode gets PAST
+        // ClusterNotFound / ClusterMetadataInvalid and actually reaches
+        // extract_dna_from_spore (where the transient fault occurs).
+        let cluster_id = vec![0x11u8; 32];
+        let cluster = ObjectEntry {
+            standard: ObjectStandard::SporeCluster,
+            collection_id: None,
+            token_id: None,
+            owner_lock_hash: Some(vec![0x22; 32]),
+            name: None,
+            description: Some("{}".to_string()),
+            is_live: true,
+            created_at_block: 1,
+            created_at_tx: vec![0x33; 32],
+            extra: ObjectExtra::SporeCluster,
+        };
+        store.put_spore_direct(&cluster_id, &cluster).unwrap();
+
+        // A dob/0 spore in that cluster with NO outpoint recorded:
+        // extract_dna_from_spore finds no outpoint and returns
+        // DobDecodeError::Internal — a TRANSIENT variant — so the worker must
+        // write NO outcome and leave the spore listed for retry.
+        let spore_id = [0x44u8; 32];
+        let spore = ObjectEntry {
+            standard: ObjectStandard::Spore,
+            collection_id: Some(cluster_id.clone()),
+            token_id: None,
+            owner_lock_hash: Some(vec![0x55; 32]),
+            name: None,
+            description: None,
+            is_live: true,
+            created_at_block: 2,
+            created_at_tx: vec![0x66; 32],
+            extra: ObjectExtra::Spore {
+                content_type: "dob/0".to_string(),
+                content_length: 3,
+                media_profile: SporeMediaProfile {
+                    tier: CompositionTier::PureCkb,
+                    sources: vec![],
+                    issues: vec![],
+                },
+            },
+        };
+        store.put_spore_direct(&spore_id, &spore).unwrap();
+
+        // Only the dob spore is undecoded (the SporeCluster is not a dob item).
+        assert_eq!(store.list_undecoded_dob_spores(100, None).unwrap().len(), 1);
+
+        worker.run().await.unwrap();
+
+        // A transient failure must NOT persist any outcome ...
+        assert!(
+            store.get_dob_decode_outcome(&spore_id).unwrap().is_none(),
+            "transient failure must not write a DecodeOutcome"
+        );
+        // ... and the spore must remain listed so it retries on the next run.
+        assert_eq!(store.list_undecoded_dob_spores(100, None).unwrap().len(), 1);
     }
 }
