@@ -414,13 +414,16 @@ for the full design rationale.
 After sync catches up to the chain tip (bulk sync completes), the indexer spawns a background DOB
 decode worker that processes Spore NFTs with DOB0/DOB1 content types:
 
-1. Worker scans `spore_data` CF for undecoded DOB spores
+1. Worker scans `spore_data` CF for undecoded DOB spores (those with no `dob_decoded` entry yet)
 2. Fetches decoder binaries from CKB RPC (cached to filesystem via `dob-decoder` crate)
 3. Executes decoders in CKB-VM sandbox to extract DNA/trait data
-4. Writes results to `dob_decoded` CF (domain store, Class D — bulk-disabled)
-5. API reads decoded results from `dob_decoded` for spore detail pages
+4. Writes a `DecodeOutcome` to `dob_decoded` CF (domain store, Class D — bulk-disabled):
+   - success → `Decoded(DobDecodedEntry)`
+   - deterministic failure (bad/dangling on-chain data, or a decoder that rejects the DNA) → `Failed(DobDecodeFailure)`, recorded once so the spore is not re-attempted (a `failed_recorded` count is added to the end-of-run summary)
+   - transient failure (RPC/node fetch) → nothing written; the spore stays undecoded and is retried next run
+5. API reads the outcome from `dob_decoded` for spore detail pages (`decoded` / `failed` / `pending` status)
 
-The decoder crate (`crates/dob-decoder/`) handles CKB-VM execution, binary caching, and RPC fetching.
+Failures are classified via a typed `DobDecodeError` (`crates/indexer/src/sync/dob_decode_error.rs`); see `docs/OBJECT_SYSTEM.md` for the failure taxonomy. The decoder crate (`crates/dob-decoder/`) handles CKB-VM execution, binary caching, and RPC fetching.
 
 ### Bulk-Build Performance Infrastructure
 

@@ -100,7 +100,7 @@ Both forms are preserved. The decode worker stores each step's raw output indepe
 │   Execute decoder chain in CKB-VM                       │
 │   Store each step's raw output → dob_decode/{hash}      │
 │   Parse traits from JSON outputs                        │
-│   Write DobDecodedEntry → CF_DOB_DECODED                │
+│   Write DecodeOutcome → CF_DOB_DECODED                  │
 └───────────────────────────┬─────────────────────────────┘
                             │
 ┌───────────────────────────▼─────────────────────────────┐
@@ -127,14 +127,14 @@ Both forms are preserved. The decode worker stores each step's raw output indepe
 
 ### RocksDB (Domain Store)
 
-| CF                       | Key                       | Value                     | Purpose                       |
-| ------------------------ | ------------------------- | ------------------------- | ----------------------------- |
-| `CF_SPORE_DATA`          | spore_id (32B)            | ObjectEntry (bincode)     | Spore + cluster entries       |
-| `CF_SPORE_BY_CLUSTER`    | cluster_id + spore_id     | empty                     | Index: spores in cluster      |
-| `CF_DOB_DECODED`         | spore_id (32B)            | DobDecodedEntry (bincode) | Cached decode results         |
-| `CF_MNFT_DATA`           | object_id                 | ObjectEntry (bincode)     | m-NFT entries                 |
-| `CF_MNFT_BY_COLLECTION`  | collection_id + object_id | empty                     | Index: mNFTs in collection    |
-| `CF_MNFT_COLLECTION_AGG` | collection_id             | aggregate (bincode)       | Pre-computed collection stats |
+| CF                       | Key                       | Value                   | Purpose                       |
+| ------------------------ | ------------------------- | ----------------------- | ----------------------------- |
+| `CF_SPORE_DATA`          | spore_id (32B)            | ObjectEntry (bincode)   | Spore + cluster entries       |
+| `CF_SPORE_BY_CLUSTER`    | cluster_id + spore_id     | empty                   | Index: spores in cluster      |
+| `CF_DOB_DECODED`         | spore_id (32B)            | DecodeOutcome (bincode) | Cached decode outcome         |
+| `CF_MNFT_DATA`           | object_id                 | ObjectEntry (bincode)   | m-NFT entries                 |
+| `CF_MNFT_BY_COLLECTION`  | collection_id + object_id | empty                   | Index: mNFTs in collection    |
+| `CF_MNFT_COLLECTION_AGG` | collection_id             | aggregate (bincode)     | Pre-computed collection stats |
 
 ### Filesystem (DOB Decode Blobs)
 
@@ -172,11 +172,53 @@ Tier represents the storage dependency of the spore's content — fully on-chain
 
 ## API Decode Response
 
-The `/decode` endpoint assembles data from per-step storage:
+The `/decode` endpoint reports a `status` for the spore, read from its single `CF_DOB_DECODED` outcome:
+
+- **`decoded`** — decode succeeded; `traits` and `media` are populated as below.
+- **`failed`** — decode was attempted and deterministically failed; `issues` carries the human-readable reason and `traits`/`media` are empty (see [Decode Failure Handling](#decode-failure-handling)).
+- **`pending`** — the background worker has not produced an outcome yet (not-yet-run, or the last attempt failed transiently); it will be retried.
+
+For a `decoded` spore the endpoint assembles data from per-step storage:
 
 1. **Traits**: merged from all steps in order. Step 0 traits form the base; later steps can override same-name traits but don't erase earlier unique traits.
 2. **Media**: one entry per decoder step, each with its MIME type, size, hash, and URL.
 3. **Render**: if any step's traits contain `<svg` markup, or the cluster has DOB/1 SVG patterns, a render URL is added.
+
+## Decode Failure Handling
+
+`CF_DOB_DECODED` stores a `DecodeOutcome` per spore — either `Decoded(DobDecodedEntry)` or `Failed(DobDecodeFailure)` — so one lookup answers "what happened to this spore's decode." This keeps a single authoritative read path (no parallel success/failure sources) and stops the worker from re-attempting permanently-undecodable spores on every run.
+
+The decode worker classifies each failure (typed `DobDecodeError` in `crates/indexer/src/sync/dob_decode_error.rs`) as **transient** or **deterministic**:
+
+- **Transient** (RPC/node fetch of the spore cell or decoder binary, internal IO): never persisted. The spore stays undecoded and is retried next run, so a briefly-unavailable node self-heals.
+- **Deterministic** (bad or dangling on-chain data, or a decoder that rejects immutable DNA): persisted once as `Failed`, then skipped thereafter — zero repeated CKB-VM/RPC work, zero recurring warnings.
+
+Because `list_undecoded_dob_spores` is a presence check on `CF_DOB_DECODED`, writing a `Failed` entry removes the spore from the retry set; a transient failure writes nothing and keeps it in the set.
+
+### DobDecodeFailure Schema
+
+```
+DobDecodeFailure
+├── category: DobDecodeFailureCategory   // stable taxonomy (below)
+├── message: String                      // human-readable detail → API `issues`
+└── failed_at: i64                       // epoch seconds recorded
+```
+
+Deterministic categories (`DobDecodeFailureCategory`):
+
+| Category                 | Meaning                                                                                                 |
+| ------------------------ | ------------------------------------------------------------------------------------------------------- |
+| `Clusterless`            | Clusterless "Sole Spore" (collection_id is the sole-spores sentinel) — no DOB cluster to decode against |
+| `ClusterNotFound`        | A real (non-sentinel) cluster_id not present in the index                                               |
+| `ClusterMetadataInvalid` | Cluster exists but metadata is unusable (no description, not JSON, missing `dob`, or bad decoder ref)   |
+| `DecoderNotFound`        | Referenced decoder cell (code_hash or type_id) has no live cell                                         |
+| `DecoderExecutionFailed` | Decoder binary ran and rejected the spore (non-zero exit, etc.)                                         |
+| `DnaInvalid`             | On-chain content could not yield valid DNA                                                              |
+| `Other`                  | Any other deterministic failure                                                                         |
+
+The taxonomy is bincode-serialized in RocksDB, so new variants may only be **appended at the end**. The API surfaces the `message` (not the category enum) in the decode response's `issues`.
+
+**Rebuild note**: deterministic failures are remembered only for this DB's lifetime. A `ckbadger purge` + re-sync from genesis re-attempts and re-classifies every spore, so a dependency that legitimately appears on-chain later self-heals on rebuild. (The `CF_DOB_DECODED` value format changed from a bare `DobDecodedEntry` to `DecodeOutcome`, so shipping this feature required a re-sync.)
 
 ## Frontend Per-Standard Behavior
 
@@ -241,6 +283,7 @@ The `ObjectGalleryPanel` chooses between `CellLife` and `CellLifePlaceholder` ba
 | Media analysis     | `crates/indexer/src/parser/media_source.rs`           |
 | DOB decoder        | `crates/dob-decoder/src/lib.rs`                       |
 | Decode worker      | `crates/indexer/src/sync/dob_decode_worker.rs`        |
+| Decode error types | `crates/indexer/src/sync/dob_decode_error.rs`         |
 | Blob store         | `crates/indexer/src/media_store.rs`                   |
 | API routes         | `crates/api/src/routes/spore.rs`                      |
 | Frontend standard  | `frontend/lib/object-standard.ts`                     |

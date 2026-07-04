@@ -438,7 +438,7 @@ output_index`; activity cursors encode `block_num:tx_idx:seq`.
 - `CursorPaginatedResponse<SporeResponse>` / `SporeResponse` — spore_id, content_type/size, owner, owned capacity, `media_profile`
 - `CursorPaginatedResponse<ClusterHolderResponse>` / `CursorPaginatedResponse<ClusterActivityResponse>`
 - `CursorPaginatedResponse<MnftItemActivityResponse>` for per-spore activities
-- `SporeDobDecodeResponse` — status, traits, `media: Vec<DecodedMediaResponse>`, issues
+- `SporeDobDecodeResponse` — `status` (`decoded` \| `failed` \| `pending`), traits, `media: Vec<DecodedMediaResponse>`, `issues` (carries the failure reason when `failed`)
 - `axum::Response` for `serve_media` (any media MIME) and `render_spore_svg` (`image/svg+xml`) — not JSON
 - `StackedAreaChartResponse` for capacity history charts
 
