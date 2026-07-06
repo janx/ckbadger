@@ -681,7 +681,7 @@ fn cmd_purge(workdir: &Path, args: &PurgeArgs) -> Result<()> {
 
     if !work.is_initialized() {
         bail!(
-            "work directory not initialized (no ckbadger.toml at {})",
+            "work directory not initialized (no config.toml at {})",
             work.config_path.display()
         );
     }
@@ -1064,7 +1064,7 @@ mod tests {
         cmd_init(&root).unwrap();
 
         let work = WorkDir::resolve(&root);
-        assert!(work.config_path.exists(), "ckbadger.toml should exist");
+        assert!(work.config_path.exists(), "config.toml should exist");
         assert!(work.domain_data.exists(), "data/domain/ should exist");
         assert!(
             work.append_only_data.exists(),
@@ -1094,7 +1094,7 @@ mod tests {
         cmd_init(&root).unwrap();
 
         // Modify the config so we can verify it isn't overwritten
-        let config_path = root.join("ckbadger.toml");
+        let config_path = root.join("config.toml");
         let original = std::fs::read_to_string(&config_path).unwrap();
         let modified = original.replace("mainnet", "testnet");
         std::fs::write(&config_path, &modified).unwrap();
@@ -1116,7 +1116,7 @@ mod tests {
 
         cmd_init(&root).unwrap();
 
-        assert!(root.join("ckbadger.toml").exists());
+        assert!(root.join("config.toml").exists());
         assert!(root.join("data/domain").exists());
         assert!(root.join("data/append-only").exists());
         assert!(root.join("run/logs").exists());
@@ -1226,7 +1226,7 @@ mod tests {
 
         // Config and metadata should be preserved
         assert!(
-            root.join("ckbadger.toml").exists(),
+            root.join("config.toml").exists(),
             "config should be preserved"
         );
         assert!(
@@ -1360,7 +1360,7 @@ mod tests {
 
         cmd_init(&root).unwrap();
 
-        let config_path = root.join("ckbadger.toml");
+        let config_path = root.join("config.toml");
         let custom_config = std::fs::read_to_string(&config_path)
             .unwrap()
             .replace(

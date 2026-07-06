@@ -935,7 +935,7 @@ fn draw_peers_content(f: &mut Frame, app: &App, area: Rect) {
             f,
             area,
             vec![Line::from(Span::styled(
-                "Crawler disabled — set `[crawler].enabled = true` in ckbadger.toml",
+                "Crawler disabled — set `[crawler].enabled = true` in config.toml",
                 Style::default().fg(SLATE_500),
             ))],
         ),

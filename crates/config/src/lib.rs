@@ -3,7 +3,7 @@
 //! Provides TOML-based configuration parsing, work directory resolution,
 //! and share directory discovery.
 //!
-//! Priority: CLI args > ckbadger.toml > defaults
+//! Priority: CLI args > config.toml > defaults
 
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 // Config structs
 // ---------------------------------------------------------------------------
 
-/// Top-level configuration, parsed from ckbadger.toml.
+/// Top-level configuration, parsed from config.toml.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct CkbadgerConfig {
@@ -216,7 +216,7 @@ impl Default for CrawlerConfig {
 pub struct WorkDir {
     /// The work directory root.
     pub root: PathBuf,
-    /// Path to ckbadger.toml.
+    /// Path to config.toml.
     pub config_path: PathBuf,
     /// Mutable canonical state (RocksDB domain store).
     pub domain_data: PathBuf,
@@ -251,7 +251,7 @@ impl WorkDir {
     /// already exists on disk.
     pub fn resolve(root: &Path) -> Self {
         let root = root.to_path_buf();
-        let config_path = root.join("ckbadger.toml");
+        let config_path = root.join("config.toml");
         let data_dir = root.join("data");
         let domain_data = data_dir.join("domain");
         let append_only_data = data_dir.join("append-only");
@@ -291,7 +291,7 @@ impl WorkDir {
     }
 
     /// Returns true if the work directory has been initialized
-    /// (i.e. ckbadger.toml exists).
+    /// (i.e. config.toml exists).
     pub fn is_initialized(&self) -> bool {
         self.config_path.exists()
     }
@@ -301,13 +301,13 @@ impl WorkDir {
 // Config loading
 // ---------------------------------------------------------------------------
 
-/// Load configuration from `ckbadger.toml` inside the given work directory.
+/// Load configuration from `config.toml` inside the given work directory.
 ///
 /// Missing keys in the TOML file fall back to their default values.
 /// If the file does not exist, returns an error (the work directory
 /// should be initialized first via `ckbadger init`).
 pub fn load_config(work_dir: &Path) -> Result<CkbadgerConfig> {
-    let config_path = work_dir.join("ckbadger.toml");
+    let config_path = work_dir.join("config.toml");
     let content = std::fs::read_to_string(&config_path)
         .with_context(|| format!("failed to read config file: {}", config_path.display()))?;
     parse_config(&content)
@@ -317,7 +317,7 @@ pub fn load_config(work_dir: &Path) -> Result<CkbadgerConfig> {
 ///
 /// Missing keys fall back to their default values via `#[serde(default)]`.
 pub fn parse_config(toml_str: &str) -> Result<CkbadgerConfig> {
-    let value: toml::Value = toml::from_str(toml_str).context("failed to parse ckbadger.toml")?;
+    let value: toml::Value = toml::from_str(toml_str).context("failed to parse config.toml")?;
     if value
         .get("ckb")
         .and_then(toml::Value::as_table)
@@ -327,14 +327,14 @@ pub fn parse_config(toml_str: &str) -> Result<CkbadgerConfig> {
         bail!("[ckb].data_path has been removed; use [ckb].workdir");
     }
 
-    toml::from_str(toml_str).context("failed to parse ckbadger.toml")
+    toml::from_str(toml_str).context("failed to parse config.toml")
 }
 
 // ---------------------------------------------------------------------------
 // Default config generation
 // ---------------------------------------------------------------------------
 
-/// Generate the default ckbadger.toml content for `ckbadger init`.
+/// Generate the default config.toml content for `ckbadger init`.
 ///
 /// The output is a hand-crafted TOML string (not serialized from the struct)
 /// so we can include comments explaining each field.
@@ -799,7 +799,7 @@ data_path = "/var/lib/ckb/data/db"
 [ckb]
 network = "testnet"
 "#;
-        std::fs::write(dir.path().join("ckbadger.toml"), config_content).unwrap();
+        std::fs::write(dir.path().join("config.toml"), config_content).unwrap();
 
         let cfg = load_config(dir.path()).unwrap();
         assert_eq!(cfg.ckb.network, "testnet");
@@ -828,7 +828,7 @@ network = "testnet"
         let wd = WorkDir::resolve(root);
 
         assert_eq!(wd.root, root);
-        assert_eq!(wd.config_path, root.join("ckbadger.toml"));
+        assert_eq!(wd.config_path, root.join("config.toml"));
         assert_eq!(wd.domain_data, root.join("data/domain"));
         assert_eq!(wd.append_only_data, root.join("data/append-only"));
         assert_eq!(wd.run_dir, root.join("run"));
@@ -870,9 +870,15 @@ network = "testnet"
         let wd = WorkDir::resolve(root);
         assert!(!wd.is_initialized());
 
-        std::fs::write(root.join("ckbadger.toml"), "").unwrap();
+        std::fs::write(root.join("config.toml"), "").unwrap();
         let wd = WorkDir::resolve(root);
         assert!(wd.is_initialized());
+    }
+
+    #[test]
+    fn workdir_uses_config_toml_filename() {
+        let wd = WorkDir::resolve(Path::new("/tmp/ckb-mainnet"));
+        assert_eq!(wd.config_path, Path::new("/tmp/ckb-mainnet/config.toml"));
     }
 
     // -- Share directory resolution --
