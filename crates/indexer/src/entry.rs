@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -10,6 +10,8 @@ use ckbadger_store::{types::SyncStatus, CkbadgerStore, RuntimeStatus, StoreRunti
 use crate::cycles_worker::spawn_cycles_worker;
 use crate::db::Repository;
 use crate::label_import::run_label_import as label_import_run;
+use crate::network_guard::{verify_db_network, verify_genesis_hash};
+use crate::rpc::CkbRpcClient;
 use crate::runtime_diag::{generate_run_id, read_cgroup_memory_snapshot};
 use crate::sync::Indexer;
 use crate::Config;
@@ -292,6 +294,27 @@ pub async fn run_indexer_sync(mut config: Config) -> Result<()> {
     }
 
     info!("Connecting to CKB node: {}", config.ckb_rpc_url);
+
+    // --- chain-network guards (fail fast before any block is processed) ---
+    // `Indexer::new` builds its own RPC client internally, so a local client is
+    // constructed here purely for the guard. This runs on the single startup
+    // path shared by bulk and live sync — before label import and before any
+    // block is written — so a network/DB mismatch aborts immediately.
+    let guard_rpc = CkbRpcClient::new(&config.ckb_rpc_url);
+    let node_genesis = guard_rpc
+        .get_block_hash(0)
+        .await
+        .context("failed to fetch genesis hash from CKB node")?
+        .ok_or_else(|| anyhow::anyhow!("CKB node returned no genesis block (block 0)"))?;
+    verify_genesis_hash(&config.network, &node_genesis)?;
+
+    let existing_identity = store.get_network_identity()?;
+    verify_db_network(existing_identity.as_deref(), &config.network)?;
+    if existing_identity.is_none() {
+        // First sync for this DB: stamp the network tag.
+        store.set_network_identity(&config.network)?;
+    }
+
     run_startup_label_import(store.clone(), &config).await?;
 
     let indexer = Indexer::new(

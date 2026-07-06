@@ -7,6 +7,7 @@ pub mod entry;
 pub mod health_monitor;
 pub mod label_import;
 pub mod media_store;
+mod network_guard;
 pub mod parser;
 pub mod rpc;
 pub mod runtime_diag;
