@@ -4,7 +4,9 @@ use anyhow::anyhow;
 
 use crate::keys::sync_meta_keys;
 use crate::store::CkbadgerStore;
-use crate::types::{BulkBuildSessionMarker, DeepForkInfo, ReorgEvent, RuntimeStatus, SyncStatus};
+use crate::types::{
+    BulkBuildSessionMarker, DeepForkInfo, GenesisBaseline, ReorgEvent, RuntimeStatus, SyncStatus,
+};
 
 impl CkbadgerStore {
     pub fn get_bulk_build_session_marker(&self) -> anyhow::Result<Option<BulkBuildSessionMarker>> {
@@ -348,6 +350,24 @@ impl CkbadgerStore {
         )
     }
 
+    /// Read the genesis economic baseline, if it has been derived+persisted.
+    pub fn get_genesis_baseline(&self) -> anyhow::Result<Option<GenesisBaseline>> {
+        match self.get_cf(self.cf_sync_meta(), sync_meta_keys::GENESIS_BASELINE)? {
+            Some(value) => Ok(Some(bincode::deserialize(&value)?)),
+            None => Ok(None),
+        }
+    }
+
+    /// Persist the genesis economic baseline (write-once at first sync).
+    pub fn set_genesis_baseline(&self, baseline: &GenesisBaseline) -> anyhow::Result<()> {
+        let value = bincode::serialize(baseline)?;
+        self.put_cf(
+            self.cf_sync_meta(),
+            sync_meta_keys::GENESIS_BASELINE,
+            &value,
+        )
+    }
+
     /// Store memory stats data (JSON serialized, ephemeral monitoring).
     pub fn put_memory_stats(&self, data: &[u8]) -> anyhow::Result<()> {
         self.put_cf(self.cf_sync_meta(), sync_meta_keys::MEMORY_STATS, data)
@@ -635,6 +655,22 @@ mod tests {
             store.get_network_identity().unwrap(),
             Some("mainnet".to_string())
         );
+    }
+
+    #[test]
+    fn genesis_baseline_roundtrip_and_absent_none() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+
+        assert_eq!(store.get_genesis_baseline().unwrap(), None);
+
+        let baseline = GenesisBaseline {
+            total_issuance: 3_360_000_145_238_488_200,
+            burnt: 840_000_000_000_000_000,
+            virtual_occupied: 504_000_000_000_000_000,
+        };
+        store.set_genesis_baseline(&baseline).unwrap();
+        assert_eq!(store.get_genesis_baseline().unwrap(), Some(baseline));
     }
 
     #[test]

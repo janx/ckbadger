@@ -331,6 +331,16 @@ pub struct DaoDailySnapshot {
     pub protocol_deposited: Option<i128>,
 }
 
+/// Genesis economic baseline, derived once from block 0 and persisted.
+/// All values are shannons. `virtual_occupied` = `burnt` × the network's
+/// occupied ratio (CKB-Explorer accounting), NOT the genesis DAO U field.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GenesisBaseline {
+    pub total_issuance: i128,
+    pub burnt: i128,
+    pub virtual_occupied: i128,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DaoLatestStatistics {
     pub tip_block_number: i64,

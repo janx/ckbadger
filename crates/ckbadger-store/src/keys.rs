@@ -1297,6 +1297,8 @@ pub mod sync_meta_keys {
     pub const BACKGROUND_TASKS: &[u8] = b"background_tasks";
     /// Chain-network tag ("mainnet"/"testnet") the DB was first synced for.
     pub const NETWORK_IDENTITY: &[u8] = b"network_identity";
+    /// Genesis economic baseline (bincode `GenesisBaseline`), derived at block 0.
+    pub const GENESIS_BASELINE: &[u8] = b"genesis_baseline";
 }
 
 // -- Fiber Channels --
