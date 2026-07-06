@@ -43,13 +43,16 @@ pub fn parse_orchestrator_config(s: &str) -> Result<OrchestratorConfig> {
     }
     let mut seen = HashSet::new();
     for entry in &cfg.networks {
-        if normalize_network(&entry.name).is_none() {
-            bail!(
+        // Dedup on the CANONICAL chain, not the raw name, so aliases of the same
+        // network (e.g. "mainnet"/"ckb", "testnet"/"pudge") cannot spawn two stacks.
+        let canonical = match normalize_network(&entry.name) {
+            Some(canonical) => canonical,
+            None => bail!(
                 "unknown network '{}' in [[network]] (expected mainnet or testnet)",
                 entry.name
-            );
-        }
-        if !seen.insert(entry.name.to_ascii_lowercase()) {
+            ),
+        };
+        if !seen.insert(canonical) {
             bail!("duplicate network name '{}' in [[network]]", entry.name);
         }
     }
@@ -77,6 +80,7 @@ pub fn network_workdir(root: &Path, entry: &NetworkEntry) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::TempDir;
 
     #[test]
     fn parses_network_array_and_defaults_dir_to_name() {
@@ -124,6 +128,16 @@ level = "debug"
     }
 
     #[test]
+    fn rejects_duplicate_canonical_network_aliases() {
+        // "mainnet" and "ckb" are aliases of the same canonical chain: reject.
+        let dup_alias = "[[network]]\nname=\"mainnet\"\n[[network]]\nname=\"ckb\"\n";
+        assert!(parse_orchestrator_config(dup_alias)
+            .unwrap_err()
+            .to_string()
+            .contains("duplicate network name"));
+    }
+
+    #[test]
     fn network_workdir_joins_dir() {
         let entry = NetworkEntry {
             name: "testnet".into(),
@@ -133,5 +147,44 @@ level = "debug"
             network_workdir(Path::new("/srv/ckb"), &entry),
             Path::new("/srv/ckb/testnet")
         );
+    }
+
+    #[test]
+    fn is_orchestrator_detects_ckbadger_toml() {
+        let dir = TempDir::new().unwrap();
+        // Empty dir (no ckbadger.toml) => not an orchestrator root.
+        assert!(!is_orchestrator(dir.path()));
+
+        std::fs::write(
+            dir.path().join("ckbadger.toml"),
+            "[[network]]\nname=\"mainnet\"\n",
+        )
+        .unwrap();
+        assert!(is_orchestrator(dir.path()));
+    }
+
+    #[test]
+    fn load_orchestrator_config_reads_and_parses_file() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("ckbadger.toml"),
+            "[[network]]\nname=\"mainnet\"\n[[network]]\nname=\"testnet\"\ndir=\"test-chain\"\n",
+        )
+        .unwrap();
+
+        let cfg = load_orchestrator_config(dir.path()).unwrap();
+        assert_eq!(cfg.networks.len(), 2);
+        assert_eq!(cfg.networks[0].name, "mainnet");
+        assert_eq!(cfg.networks[0].dir(), "mainnet");
+        assert_eq!(cfg.networks[1].dir(), "test-chain");
+    }
+
+    #[test]
+    fn load_orchestrator_config_missing_file_errors() {
+        let dir = TempDir::new().unwrap();
+        let err = load_orchestrator_config(dir.path()).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("failed to read orchestrator config"));
     }
 }
