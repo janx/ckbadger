@@ -2747,11 +2747,16 @@ async fn get_total_supply_chart(
     ok(response)
 }
 
-async fn get_nominal_apc_chart(State(_state): State<Arc<AppState>>) -> ApiResult<ChartResponse> {
+async fn get_nominal_apc_chart(State(state): State<Arc<AppState>>) -> ApiResult<ChartResponse> {
+    // Derived genesis circulating supply in CKB (25.2B on mainnet), from the
+    // persisted per-network GenesisBaseline — not a hardcoded mainnet literal.
+    let baseline = state.genesis_baseline()?;
+    let genesis_supply_ckb =
+        (baseline.total_issuance - baseline.burnt) as f64 / SHANNONS_PER_CKB as f64;
     let data: Vec<ChartDataPoint> = (0..=80)
         .map(|i| {
             let year = i as f64 * 0.25;
-            let apc = calculate_nominal_apc(year);
+            let apc = calculate_nominal_apc(year, genesis_supply_ckb);
             ChartDataPoint {
                 date: format!("{}", year),
                 value: format!("{:.4}", apc),
@@ -2768,10 +2773,11 @@ async fn get_nominal_apc_chart(State(_state): State<Arc<AppState>>) -> ApiResult
     })
 }
 
-fn calculate_nominal_apc(year: f64) -> f64 {
-    // Genesis actual supply is 25.2B (33.6B - 8.4B burnt at genesis)
-    const GENESIS_SUPPLY: f64 = 25_200_000_000.0;
-    const SECONDARY_ISSUANCE_PER_YEAR: f64 = 1_344_000_000.0;
+fn calculate_nominal_apc(year: f64, genesis_supply_ckb: f64) -> f64 {
+    // Secondary issuance is a fixed protocol invariant (1.344B CKB/year on every
+    // network), so it stays a literal; only the genesis circulating base differs
+    // per network and is passed in as `genesis_supply_ckb`.
+    const SECONDARY_ISSUANCE_PER_YEAR_CKB: f64 = 1_344_000_000.0;
 
     let halving_count = (year / 4.0).floor() as u32;
 
@@ -2785,10 +2791,10 @@ fn calculate_nominal_apc(year: f64) -> f64 {
     let current_era_rate = 4_200_000_000.0 / 2.0_f64.powi(halving_count as i32);
     total_primary_issued += current_era_rate * years_in_current_era;
 
-    let total_secondary_issued = SECONDARY_ISSUANCE_PER_YEAR * year;
-    let total_supply = GENESIS_SUPPLY + total_primary_issued + total_secondary_issued;
+    let total_secondary_issued = SECONDARY_ISSUANCE_PER_YEAR_CKB * year;
+    let total_supply = genesis_supply_ckb + total_primary_issued + total_secondary_issued;
 
-    (SECONDARY_ISSUANCE_PER_YEAR / total_supply) * 100.0
+    (SECONDARY_ISSUANCE_PER_YEAR_CKB / total_supply) * 100.0
 }
 
 async fn get_secondary_issuance_chart(

@@ -1,4 +1,4 @@
-use ckbadger_common::dao::{GENESIS_BURNT, SHANNON};
+use ckbadger_common::dao::SHANNON;
 use ckbadger_indexer::parser::spore::{
     CLUSTER_CODE_HASH_MAINNET_V2, SPORE_CODE_HASH_MAINNET_DID, SPORE_CODE_HASH_MAINNET_V2,
 };
@@ -87,14 +87,19 @@ fn fixture_dao_type_script() -> Script {
 
 #[test]
 fn fixture_header_with_ar_uses_total_issuance_above_genesis_burn() {
+    // 8.4B CKB burnt at genesis (in shannons); the unspendable Satoshi gift.
+    // Formerly `ckbadger_common::dao::GENESIS_BURNT`, now derived per-network
+    // into `GenesisBaseline::burnt`. Inlined here as the mainnet network
+    // invariant this fixture models.
+    const GENESIS_BURNT_SHANNONS: u128 = 840_000_000_000_000_000;
     let header = fixture_header_with_ar(100, 0xaa, 10_000_000_000_000_000, 1_710_000_000_000);
     let dao = DaoField::from_hex(&header.dao).expect("parse dao field");
 
     assert!(
-        u128::from(dao.total_issuance) >= GENESIS_BURNT,
+        u128::from(dao.total_issuance) >= GENESIS_BURNT_SHANNONS,
         "fixture dao total issuance {} must be >= genesis burnt {}",
         dao.total_issuance,
-        GENESIS_BURNT
+        GENESIS_BURNT_SHANNONS
     );
 }
 

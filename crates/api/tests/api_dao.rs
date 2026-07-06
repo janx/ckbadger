@@ -92,6 +92,7 @@ async fn test_dao_stats_uses_precomputed_latest_stats_when_tip_matches() {
 #[tokio::test]
 async fn test_dao_stats_ignores_stale_precomputed_latest_stats() {
     let store = test_store();
+    seed_genesis_baseline(&store);
 
     let mut dao = vec![0u8; 32];
     dao[8..16].copy_from_slice(&1u64.to_le_bytes());
@@ -158,6 +159,7 @@ async fn test_dao_stats_ignores_stale_precomputed_latest_stats() {
 #[tokio::test]
 async fn test_dao_stats_cached_response_is_stable_within_ttl() {
     let store = test_store();
+    seed_genesis_baseline(&store);
     let mut batch = StoreBatch::new(store.as_ref());
 
     let mut dao = vec![0u8; 32];

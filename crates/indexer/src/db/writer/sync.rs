@@ -490,6 +490,16 @@ mod tests {
         let store = Arc::new(CkbadgerStore::open_domain(dir.path().join("domain")).unwrap());
         let append_store =
             Arc::new(CkbadgerStore::open_append_only(dir.path().join("append")).unwrap());
+        // The indexer always derives the genesis baseline at block 0 before any
+        // stats refresh runs; seed the mainnet values so the estimated-APC path
+        // (which reads GenesisBaseline::total_issuance) can compute.
+        store
+            .set_genesis_baseline(&ckbadger_store::GenesisBaseline {
+                total_issuance: 3_360_000_000_000_000_000,
+                burnt: 840_000_000_000_000_000,
+                virtual_occupied: 504_000_000_000_000_000,
+            })
+            .unwrap();
         let writer = BatchWriter::new(store.clone(), store.clone());
         (dir, store, append_store, writer)
     }

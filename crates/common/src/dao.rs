@@ -51,15 +51,6 @@ pub fn calculate_dao_compensation_from_ar(
         .map_err(|_| anyhow!("DAO compensation exceeds i64: {}", compensation_u128))
 }
 
-/// 8.4B CKB burnt at genesis (in shannons).
-/// This is 25% of the 33.6B genesis issuance, split as:
-/// - 5.04B (15%) hard-coded as "occupied" capacity (ensures miner rewards)
-/// - 3.36B (10%) hard-coded as "liquid" (ensures treasury/burnt portion)
-///
-/// See: <https://medium.com/nervosnetwork/nervos-ckbyte-distribution-and-why-we-are-burning-25-in-the-genesis-block-9a7ddf7f6779>
-pub const GENESIS_BURNT: u128 = 840_000_000_000_000_000;
-pub const SECONDARY_ISSUANCE_PER_YEAR: u64 = 134_400_000_000_000_000;
-
 /// Extract the S field (secondary pool) from a 32-byte DAO header as u64.
 pub fn extract_s_from_dao(dao: &[u8]) -> Option<u64> {
     if dao.len() < 24 {
@@ -76,26 +67,9 @@ pub const SATOSHI_PUBKEY_HASH: [u8; 20] = [
     0xeb, 0xb8, 0x8f, 0x18,
 ];
 
-/// 60% of the burnt 8.4B is treated as "occupied" for secondary issuance calculation.
-pub const GENESIS_SPECIAL_BURN_CELL_OCCUPIED_RATIO_NUM: u64 = 6;
-pub const GENESIS_SPECIAL_BURN_CELL_OCCUPIED_RATIO_DENOM: u64 = 10;
-
-/// Virtual occupied capacity of the Satoshi cell: 5.04B CKB in shannons.
-/// = 8.4B * 60% = 5.04B
-pub const GENESIS_SPECIAL_BURN_CELL_VIRTUAL_OCCUPIED: u128 = 504_000_000_000_000_000;
-
-/// Check if a cell is the genesis special burn cell (8.4B burnt CKB).
-/// Must match both the Satoshi pubkey hash AND be from genesis block.
-pub fn is_genesis_special_burn_cell(lock_args: &[u8], created_at_block: i64) -> bool {
-    lock_args == SATOSHI_PUBKEY_HASH && created_at_block == 0
-}
-
 // ---------------------------------------------------------------------------
 // APC model constants (CKB Explorer-compatible)
 // ---------------------------------------------------------------------------
-
-/// Genesis block total issuance: 33.6B CKB in shannons.
-const GENESIS_ISSUANCE: f64 = 3_360_000_000_000_000_000.0;
 
 /// Base primary issuance: 4.2B CKB/year in shannons. Halves every 4 years.
 const PRIMARY_PER_YEAR_BASE: f64 = 420_000_000_000_000_000.0;
@@ -121,7 +95,18 @@ const SECONDARY_PER_EPOCH: f64 = SECONDARY_PER_YEAR / EPOCHS_PER_YEAR;
 /// ratio of primary to secondary issuance per epoch for the current halving
 /// period, sn is secondary issuance over the segment, and C is the
 /// theoretical cumulative total issuance.
-pub fn calculate_estimated_apc(epoch_number: i64, epoch_index: i32, epoch_length: i32) -> f64 {
+///
+/// `genesis_issuance` is the exact genesis block total issuance in shannons
+/// (the DAO `C` field of block 0), derived per-network from the persisted
+/// `GenesisBaseline`. It seeds the theoretical cumulative primary issuance so
+/// mainnet and testnet share one calculation path with a network-correct base
+/// instead of a hardcoded 33.6B approximation.
+pub fn calculate_estimated_apc(
+    epoch_number: i64,
+    epoch_index: i32,
+    epoch_length: i32,
+    genesis_issuance: i128,
+) -> f64 {
     if epoch_length == 0 || epoch_number < 0 {
         return 0.0;
     }
@@ -159,7 +144,7 @@ pub fn calculate_estimated_apc(epoch_number: i64, epoch_index: i32, epoch_length
         let sn = SECONDARY_PER_EPOCH * (seg_end_frac - seg_start_frac);
 
         let alpha = apc_alpha(w[0] as i64);
-        let ti = apc_theoretical_total_issuance(w[0] as i64, norm_idx, norm_len);
+        let ti = apc_theoretical_total_issuance(w[0] as i64, norm_idx, norm_len, genesis_issuance);
 
         if ti > 0.0 {
             let rate = ((alpha + 1.0) * sn / ti + 1.0).ln() / (alpha + 1.0);
@@ -181,15 +166,20 @@ fn apc_alpha(epoch_number: i64) -> f64 {
 }
 
 /// Theoretical cumulative total issuance at a given epoch (primary + secondary).
-fn apc_theoretical_total_issuance(epoch_number: i64, epoch_index: f64, epoch_length: f64) -> f64 {
-    apc_theoretical_primary(epoch_number)
+fn apc_theoretical_total_issuance(
+    epoch_number: i64,
+    epoch_index: f64,
+    epoch_length: f64,
+    genesis_issuance: i128,
+) -> f64 {
+    apc_theoretical_primary(epoch_number, genesis_issuance)
         + apc_theoretical_secondary(epoch_number, epoch_index, epoch_length)
 }
 
 /// Cumulative primary issuance: genesis + sum of completed halving periods + partial current period.
-fn apc_theoretical_primary(epoch_number: i64) -> f64 {
+fn apc_theoretical_primary(epoch_number: i64, genesis_issuance: i128) -> f64 {
     let periods = (epoch_number as f64 / EPOCHS_PER_HALVING).floor() as i32;
-    let mut cumulative = GENESIS_ISSUANCE;
+    let mut cumulative = genesis_issuance as f64;
     for i in 0..periods {
         cumulative += PRIMARY_PER_YEAR_BASE * 4.0 / 2_f64.powi(i);
     }
@@ -209,10 +199,15 @@ fn apc_theoretical_secondary(epoch_number: i64, epoch_index: f64, epoch_length: 
 mod tests {
     use super::*;
 
+    /// Exact mainnet genesis total issuance (DAO `C` field of block 0), in
+    /// shannons — 33.6B CKB + 145238488200 shannons of genesis rounding, NOT
+    /// the 33.6B approximation previously hardcoded here.
+    const MAINNET_GENESIS_ISSUANCE: i128 = 3_360_000_145_238_488_200;
+
     #[test]
     fn test_apc_at_genesis() {
         // Epoch 0, index 0, length 1800
-        let apc = calculate_estimated_apc(0, 0, 1800);
+        let apc = calculate_estimated_apc(0, 0, 1800, MAINNET_GENESIS_ISSUANCE);
         // At genesis: alpha=3.125 (1st halving), total_issuance≈33.6B
         // Model gives ~3.70% (lower than the naive 1.344B/25.2B=5.33%
         // because the model accounts for primary issuance dilution via alpha)
@@ -227,7 +222,7 @@ mod tests {
     fn test_apc_second_halving() {
         // ~6.3 years in: epoch ≈ 13900, 2nd halving period
         // alpha = 1.5625, theoretical total_issuance ≈ 63.9B
-        let apc = calculate_estimated_apc(13900, 500, 1800);
+        let apc = calculate_estimated_apc(13900, 500, 1800, MAINNET_GENESIS_ISSUANCE);
         // Explorer shows ~2.05% for current mainnet state
         assert!(
             (apc - 2.05).abs() < 0.1,
@@ -238,9 +233,9 @@ mod tests {
 
     #[test]
     fn test_apc_decreases_over_time() {
-        let apc_early = calculate_estimated_apc(100, 0, 1800);
-        let apc_mid = calculate_estimated_apc(5000, 0, 1800);
-        let apc_late = calculate_estimated_apc(13000, 0, 1800);
+        let apc_early = calculate_estimated_apc(100, 0, 1800, MAINNET_GENESIS_ISSUANCE);
+        let apc_mid = calculate_estimated_apc(5000, 0, 1800, MAINNET_GENESIS_ISSUANCE);
+        let apc_late = calculate_estimated_apc(13000, 0, 1800, MAINNET_GENESIS_ISSUANCE);
         assert!(
             apc_early > apc_mid && apc_mid > apc_late,
             "APC should decrease over time: {:.4} > {:.4} > {:.4}",
@@ -252,27 +247,60 @@ mod tests {
 
     #[test]
     fn test_apc_zero_epoch_length_returns_zero() {
-        assert_eq!(calculate_estimated_apc(100, 0, 0), 0.0);
+        assert_eq!(
+            calculate_estimated_apc(100, 0, 0, MAINNET_GENESIS_ISSUANCE),
+            0.0
+        );
     }
 
     #[test]
     fn test_apc_negative_epoch_returns_zero() {
-        assert_eq!(calculate_estimated_apc(-1, 0, 1800), 0.0);
+        assert_eq!(
+            calculate_estimated_apc(-1, 0, 1800, MAINNET_GENESIS_ISSUANCE),
+            0.0
+        );
     }
 
     #[test]
     fn test_apc_spans_halving_boundary() {
         // Deposit window from epoch 7600..9790 spans 1st→2nd halving at 8760
-        let apc = calculate_estimated_apc(7600, 0, 1800);
+        let apc = calculate_estimated_apc(7600, 0, 1800, MAINNET_GENESIS_ISSUANCE);
         // Should be between pure 1st-halving and pure 2nd-halving APC
-        let apc_pure_first = calculate_estimated_apc(5000, 0, 1800);
-        let apc_pure_second = calculate_estimated_apc(10000, 0, 1800);
+        let apc_pure_first = calculate_estimated_apc(5000, 0, 1800, MAINNET_GENESIS_ISSUANCE);
+        let apc_pure_second = calculate_estimated_apc(10000, 0, 1800, MAINNET_GENESIS_ISSUANCE);
         assert!(
             apc < apc_pure_first && apc > apc_pure_second,
             "Cross-boundary APC ({:.4}) should be between 1st ({:.4}) and 2nd ({:.4})",
             apc,
             apc_pure_first,
             apc_pure_second
+        );
+    }
+
+    #[test]
+    fn test_apc_exact_genesis_base_is_finite_positive() {
+        // Regression: the model must run off the exact genesis DAO `C` (not the
+        // old 33.6B literal) and still produce a finite, positive APC.
+        let apc = calculate_estimated_apc(0, 0, 1800, MAINNET_GENESIS_ISSUANCE);
+        assert!(
+            apc.is_finite() && apc > 0.0,
+            "expected finite positive APC, got {apc}"
+        );
+    }
+
+    #[test]
+    fn test_apc_varies_with_genesis_issuance() {
+        // Proves the genesis_issuance param is wired into the model (not ignored):
+        // a larger cumulative base dilutes the secondary-issuance rate → lower APC.
+        let exact = calculate_estimated_apc(0, 0, 1800, MAINNET_GENESIS_ISSUANCE);
+        let doubled = calculate_estimated_apc(0, 0, 1800, MAINNET_GENESIS_ISSUANCE * 2);
+        assert_ne!(
+            exact, doubled,
+            "genesis_issuance must change APC output (exact {exact} vs doubled {doubled})"
+        );
+        assert!(
+            doubled < exact,
+            "larger genesis issuance should dilute APC: doubled {doubled} < exact {exact}"
         );
     }
 
@@ -296,37 +324,5 @@ mod tests {
             "Expected alpha=1.5625 for 2nd halving, got {}",
             alpha
         );
-    }
-
-    #[test]
-    fn test_is_genesis_special_burn_cell_matches() {
-        assert!(is_genesis_special_burn_cell(&SATOSHI_PUBKEY_HASH, 0));
-    }
-
-    #[test]
-    fn test_is_genesis_special_burn_cell_rejects_wrong_hash() {
-        assert!(!is_genesis_special_burn_cell(&[0u8; 20], 0));
-        assert!(!is_genesis_special_burn_cell(&[0xff; 20], 0));
-    }
-
-    #[test]
-    fn test_is_genesis_special_burn_cell_rejects_non_genesis_block() {
-        assert!(!is_genesis_special_burn_cell(&SATOSHI_PUBKEY_HASH, 1));
-        assert!(!is_genesis_special_burn_cell(&SATOSHI_PUBKEY_HASH, 2983824));
-    }
-
-    #[test]
-    fn test_is_genesis_special_burn_cell_rejects_wrong_length() {
-        assert!(!is_genesis_special_burn_cell(&SATOSHI_PUBKEY_HASH[..19], 0));
-        let mut longer = [0u8; 21];
-        longer[..20].copy_from_slice(&SATOSHI_PUBKEY_HASH);
-        assert!(!is_genesis_special_burn_cell(&longer, 0));
-    }
-
-    #[test]
-    fn test_genesis_special_burn_cell_virtual_occupied_is_60_percent() {
-        // 8.4B * 60% = 5.04B
-        let expected = (GENESIS_BURNT as f64 * 0.6) as u128;
-        assert_eq!(GENESIS_SPECIAL_BURN_CELL_VIRTUAL_OCCUPIED, expected);
     }
 }

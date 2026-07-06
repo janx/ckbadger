@@ -596,10 +596,18 @@ fn estimated_apc_from_store(
         .map_err(|e: anyhow::Error| ApiError::internal(e.to_string()))?;
     match tip {
         Some((_, header)) if header.epoch_length > 0 => {
+            let genesis_issuance = store
+                .get_genesis_baseline()
+                .map_err(|e: anyhow::Error| ApiError::internal(e.to_string()))?
+                .ok_or_else(|| {
+                    ApiError::internal("genesis baseline not yet derived (indexer still starting?)")
+                })?
+                .total_issuance;
             let apc = calculate_estimated_apc(
                 header.epoch_number,
                 header.epoch_index,
                 header.epoch_length,
+                genesis_issuance,
             );
             Ok(if apc > 0.0 {
                 format!("{:.2}", apc)

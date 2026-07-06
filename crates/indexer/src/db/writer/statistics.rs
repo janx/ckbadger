@@ -145,6 +145,17 @@ impl BatchWriter {
             .virtual_occupied)
     }
 
+    /// Exact genesis total issuance (DAO `C` of block 0) from the persisted
+    /// per-network baseline. Seeds the APC model's theoretical cumulative
+    /// issuance instead of a hardcoded 33.6B approximation.
+    fn genesis_total_issuance(&self) -> Result<i128> {
+        Ok(self
+            .store
+            .get_genesis_baseline()?
+            .ok_or_else(|| anyhow!("genesis baseline not derived; cannot compute estimated APC"))?
+            .total_issuance)
+    }
+
     /// Update daily statistics for a given date. Returns the final DailyStats
     /// so the caller can thread cumulative totals forward when multiple dates
     /// are processed in the same batch.
@@ -1007,7 +1018,8 @@ impl BatchWriter {
         }
 
         let latest_snapshot = self.store.get_latest_dao_daily_snapshot()?;
-        let estimated_apc = estimated_apc_from_header(&header).unwrap_or_default();
+        let estimated_apc =
+            estimated_apc_from_header(&header, self.genesis_total_issuance()?).unwrap_or_default();
         let (mining_reward, deposit_compensation, burnt) = if let Some(s) = latest_snapshot.as_ref()
         {
             if s.cum_miner_secondary < 0 {
@@ -1132,11 +1144,16 @@ fn extract_ar_from_dao_field(dao: &[u8]) -> Option<u64> {
     Some(u64::from_le_bytes(bytes))
 }
 
-fn estimated_apc_from_header(header: &CachedBlockHeader) -> Option<String> {
+fn estimated_apc_from_header(header: &CachedBlockHeader, genesis_issuance: i128) -> Option<String> {
     if header.epoch_length == 0 {
         return None;
     }
-    let apc = calculate_estimated_apc(header.epoch_number, header.epoch_index, header.epoch_length);
+    let apc = calculate_estimated_apc(
+        header.epoch_number,
+        header.epoch_index,
+        header.epoch_length,
+        genesis_issuance,
+    );
     (apc > 0.0).then(|| format!("{:.2}", apc))
 }
 
@@ -1175,6 +1192,19 @@ mod tests {
     use ckbadger_store::CkbadgerStore;
 
     const BURN_ADJUSTMENT: i128 = 504_000_000_000_000_000;
+
+    /// Seed the genesis baseline the indexer always derives at block 0. Refresh
+    /// paths that compute estimated APC read `GenesisBaseline::total_issuance`,
+    /// so tests exercising them must seed it first. Values mirror mainnet genesis.
+    fn seed_test_genesis_baseline(store: &Arc<CkbadgerStore>) {
+        store
+            .set_genesis_baseline(&ckbadger_store::GenesisBaseline {
+                total_issuance: 3_360_000_000_000_000_000,
+                burnt: 840_000_000_000_000_000,
+                virtual_occupied: 504_000_000_000_000_000,
+            })
+            .unwrap();
+    }
 
     #[test]
     fn test_calculate_knowledge_size_extracts_u_field() {
@@ -1299,6 +1329,7 @@ mod tests {
     fn test_refresh_latest_dao_statistics_persists_latest_entry() {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        seed_test_genesis_baseline(&store);
         let writer = BatchWriter::new(store.clone(), store.clone());
 
         // AR = 2, S = 130 CKB.
@@ -1414,6 +1445,7 @@ mod tests {
     fn test_refresh_dao_statistics_excludes_status1_from_explorer_totals() {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        seed_test_genesis_baseline(&store);
         let writer = BatchWriter::new(store.clone(), store.clone());
 
         // Tip block: AR=4, S=200 CKB, timestamp = day 10
