@@ -6,7 +6,6 @@ use axum::{
     Router,
 };
 use chrono::{DateTime, Utc};
-use ckbadger_common::dao::GENESIS_BURNT;
 use ckbadger_common::sync::{format_duration_smart, BackgroundTaskEntry, SyncProgressData};
 use ckbadger_store::types::{DailyAddressCohort, DailyCellDistribution};
 use serde::{Deserialize, Serialize};
@@ -1186,7 +1185,8 @@ async fn get_knowledge_size_chart(State(state): State<Arc<AppState>>) -> ApiResu
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?
         .map_err(|e| ApiError::internal(e.to_string()))?;
-    let circulating_by_date = build_circulating_supply_by_date_map(&snapshots)?;
+    let genesis_burnt = state.genesis_baseline()?.burnt;
+    let circulating_by_date = build_circulating_supply_by_date_map(&snapshots, genesis_burnt)?;
 
     // Exclude the current incomplete day to prevent cache divergence with composition chart.
     let today_key = current_ckb_date_key();
@@ -1288,6 +1288,7 @@ pub(crate) fn shannon_to_ckb_string(value: i128) -> String {
 
 fn build_circulating_supply_by_date_map(
     snapshots: &[ckbadger_store::DaoDailySnapshot],
+    genesis_burnt: i128,
 ) -> Result<HashMap<String, i128>, ApiRouteError> {
     let mut by_date = HashMap::with_capacity(snapshots.len());
 
@@ -1302,7 +1303,7 @@ fn build_circulating_supply_by_date_map(
                 snapshot.date, snapshot.total_deposited
             )));
         }
-        let burnt = GENESIS_BURNT as i128 + explorer_treasury;
+        let burnt = genesis_burnt + explorer_treasury;
         let circulating = total_supply - burnt - snapshot.total_deposited;
         if circulating < 0 {
             return Err(ApiError::internal(format!(
@@ -2337,7 +2338,7 @@ async fn fetch_network_stats_from_db(
         Some(s) => {
             let total_supply = s.total_issuance;
             let explorer_treasury = snapshot_explorer_treasury(s)?;
-            let burnt = GENESIS_BURNT as i128 + explorer_treasury;
+            let burnt = state.genesis_baseline()?.burnt + explorer_treasury;
             Some((total_supply - burnt - s.total_deposited).to_string())
         }
         None => None,
@@ -2666,6 +2667,7 @@ async fn get_total_supply_chart(
         .map_err(|e| ApiError::internal(e.to_string()))?
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
+    let genesis_burnt = state.genesis_baseline()?.burnt;
     let mut data = Vec::with_capacity(snapshots.len());
     for snapshot in &snapshots {
         let Some(total_supply) = snapshot_total_issuance(snapshot) else {
@@ -2675,7 +2677,7 @@ async fn get_total_supply_chart(
             )));
         };
         let explorer_treasury = snapshot_explorer_treasury(snapshot)?;
-        let burnt = GENESIS_BURNT as i128 + explorer_treasury;
+        let burnt = genesis_burnt + explorer_treasury;
 
         // Nervos DAO locked = active deposits (can be unlocked, but currently locked)
         if snapshot.total_deposited < 0 {
@@ -3548,18 +3550,21 @@ mod tests {
 
     #[test]
     fn test_build_circulating_supply_by_date_map_uses_total_minus_burnt_and_dao() {
-        let total = GENESIS_BURNT as i128 + 1_000_000;
+        // Genesis burnt is now threaded in from the derived baseline (8.4B CKB).
+        let genesis_burnt = 840_000_000_000_000_000i128;
+        let total = genesis_burnt + 1_000_000;
         let mut s = snapshot("2026-02-17", 100, total, 0, 0);
         s.cum_treasury = 30;
-        let map = build_circulating_supply_by_date_map(&[s]).unwrap();
+        let map = build_circulating_supply_by_date_map(&[s], genesis_burnt).unwrap();
         assert_eq!(map.get("2026-02-17"), Some(&(1_000_000 - 30 - 100)));
     }
 
     #[test]
     fn test_build_circulating_supply_by_date_map_errors_on_negative_dao_locked() {
-        let total = GENESIS_BURNT as i128 + 1_000_000;
+        let genesis_burnt = 840_000_000_000_000_000i128;
+        let total = genesis_burnt + 1_000_000;
         let s = snapshot("2026-02-17", -1, total, 0, 0);
-        let err = build_circulating_supply_by_date_map(&[s]).unwrap_err();
+        let err = build_circulating_supply_by_date_map(&[s], genesis_burnt).unwrap_err();
         assert!(err.1 .0.message.contains("negative total_deposited"));
     }
 

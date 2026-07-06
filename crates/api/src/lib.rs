@@ -165,6 +165,19 @@ impl AppState {
             ApiError::warmup_pending(pending_message)
         }
     }
+
+    /// The genesis economic baseline (issuance / burnt / virtual-occupied),
+    /// derived once at block 0 and persisted by the indexer. Read-only from the
+    /// secondary domain store. Fails fast if the indexer has not derived it yet
+    /// rather than silently substituting a hardcoded constant.
+    pub fn genesis_baseline(&self) -> Result<ckbadger_store::GenesisBaseline, ApiRouteError> {
+        self.store
+            .get_genesis_baseline()
+            .map_err(|e| ApiError::internal(format!("read genesis baseline: {e}")))?
+            .ok_or_else(|| {
+                ApiError::internal("genesis baseline not yet derived (indexer still starting?)")
+            })
+    }
 }
 
 pub struct AppConfig {

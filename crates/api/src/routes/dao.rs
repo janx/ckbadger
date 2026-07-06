@@ -613,8 +613,8 @@ fn estimated_apc_from_store(
 
 fn snapshot_circulating_supply(
     snapshot: &ckbadger_store::DaoDailySnapshot,
+    burnt: i128,
 ) -> Result<Option<i128>, ApiRouteError> {
-    const GENESIS_BURNT: i128 = 8_400_000_000 * 100_000_000;
     let total_issuance = snapshot.total_issuance;
     if total_issuance <= 0 {
         return Ok(None);
@@ -630,11 +630,11 @@ fn snapshot_circulating_supply(
             snapshot.date, explorer_treasury
         )));
     }
-    let circulating = total_issuance - GENESIS_BURNT - explorer_treasury;
+    let circulating = total_issuance - burnt - explorer_treasury;
     if circulating < 0 {
         return Err(ApiError::internal(format!(
             "negative circulating supply for {}: total_issuance={}, burnt={}, treasury={}",
-            snapshot.date, total_issuance, GENESIS_BURNT, explorer_treasury
+            snapshot.date, total_issuance, burnt, explorer_treasury
         )));
     }
     Ok(Some(circulating))
@@ -1326,9 +1326,10 @@ async fn get_circulation_ratio_chart(
         .map_err(|e| ApiError::internal(e.to_string()))?
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
+    let burnt = state.genesis_baseline()?.burnt;
     let mut data = Vec::with_capacity(snapshots.len());
     for s in &snapshots {
-        let Some(circulating) = snapshot_circulating_supply(s)? else {
+        let Some(circulating) = snapshot_circulating_supply(s, burnt)? else {
             return Err(ApiError::internal(format!(
                 "missing DAO snapshot total_issuance for {}. delete RocksDB and re-sync from genesis",
                 s.date
@@ -1398,11 +1399,16 @@ mod tests {
 
     #[test]
     fn test_snapshot_circulating_supply_uses_cum_treasury() {
+        // Genesis burnt (8.4B CKB) is now supplied from the derived baseline.
+        let burnt = 840_000_000_000_000_000i128;
         let total_issuance = 1_000_000_000_000_000_000i128;
         let cum_treasury = 20_000_000_000_000_000i128;
         let s = snapshot(total_issuance, cum_treasury);
-        let expected = total_issuance - (8_400_000_000i128 * 100_000_000i128) - cum_treasury;
-        assert_eq!(snapshot_circulating_supply(&s).unwrap(), Some(expected));
+        let expected = total_issuance - burnt - cum_treasury;
+        assert_eq!(
+            snapshot_circulating_supply(&s, burnt).unwrap(),
+            Some(expected)
+        );
     }
 
     fn header_at(ms: i64) -> CachedBlockHeader {

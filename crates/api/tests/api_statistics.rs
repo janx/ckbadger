@@ -623,6 +623,16 @@ async fn test_network_stats_includes_hero_metrics_from_dao_snapshot() {
         .put_cf(core_store.cf_stats_dao(), &snapshot_key, &snapshot_value)
         .unwrap();
 
+    // Genesis baseline supplies the burnt amount used in circulating-supply math.
+    // Seed the mainnet 8.4B burn so the hero-metric assertion below reflects it.
+    core_store
+        .set_genesis_baseline(&ckbadger_store::GenesisBaseline {
+            total_issuance: 3_500_000_000_000_000_000,
+            burnt: 840_000_000_000_000_000,
+            virtual_occupied: 0,
+        })
+        .unwrap();
+
     let config = test_config_with_append_only(core_store, append_only_store);
     let app = create_router(config).await;
 
@@ -638,13 +648,174 @@ async fn test_network_stats_includes_hero_metrics_from_dao_snapshot() {
 
     // knowledge_size = occupied_capacity
     assert_eq!(json["knowledgeSize"], "1000000000000000000");
-    // circulating_supply = total_issuance - (GENESIS_BURNT + cum_treasury) - total_deposited
+    // circulating_supply = total_issuance - (baseline.burnt + cum_treasury) - total_deposited
     let expected_circulating: i128 = 3_500_000_000_000_000_000
         - (840_000_000_000_000_000 + 2_000_000_000_000_000)
         - 50_000_000_000_000_000;
     assert_eq!(json["circulatingSupply"], expected_circulating.to_string());
     // dao_locked = total_deposited
     assert_eq!(json["daoLocked"], "50000000000000000");
+}
+
+/// Regression: circulating supply must derive `burnt` from the seeded genesis
+/// baseline, NOT from the hardcoded mainnet 8.4B constant. Seeding a distinct
+/// (testnet-style) burn proves the value flows through `state.genesis_baseline()`.
+#[tokio::test]
+async fn test_network_stats_circulating_supply_uses_seeded_genesis_baseline() {
+    let core_store = test_store();
+    let append_only_store = test_append_only_store();
+
+    let now = chrono::Utc::now();
+    let now_ms = now.timestamp_millis();
+
+    // Minimal block header so fetch_network_stats_from_db succeeds.
+    let mut core_batch = StoreBatch::new(core_store.as_ref());
+    core_batch.put_block_header(
+        200,
+        &CachedBlockHeader {
+            hash: vec![0x33; 32],
+            parent_hash: vec![0u8; 32],
+            timestamp: now_ms,
+            epoch_number: 42,
+            epoch_index: 10,
+            epoch_length: 1800,
+            dao: vec![0; 32],
+            transactions_count: 1,
+            uncles_count: 0,
+            cycles: None,
+        },
+    );
+    core_batch.commit().unwrap();
+
+    // Distinct, non-mainnet burn (1.23M CKB) so the assertion fails if the old
+    // hardcoded 8.4B constant is used instead of the baseline.
+    let seeded_burnt: i128 = 123_000_000_000_000;
+    let total_issuance: i128 = 3_500_000_000_000_000_000;
+    let cum_treasury: i128 = 2_000_000_000_000_000;
+    let total_deposited: i128 = 50_000_000_000_000_000;
+
+    let snapshot = DaoDailySnapshot {
+        date: "2026-03-10".to_string(),
+        total_deposited,
+        depositors_count: 100,
+        new_deposits: 5,
+        withdrawals: 2,
+        compensation: 100_000_000_000_000,
+        cumulative_deposit_amount: 60_000_000_000_000_000,
+        total_issuance,
+        secondary_pool: 10_000_000_000_000_000,
+        occupied_capacity: 1_000_000_000_000_000_000,
+        cum_miner_secondary: 5_000_000_000_000_000,
+        cum_dao_compensation: 3_000_000_000_000_000,
+        cum_treasury,
+        unclaimed_compensation: 0,
+        unmade_dao_interests: 0,
+        cumulative_depositors: 0,
+        daily_depositor_addresses: 0,
+        protocol_deposited: None,
+    };
+    let snapshot_key = ckbadger_store::keys::encode_stats_key(
+        ckbadger_store::keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT,
+        b"20260310",
+    );
+    let snapshot_value = bincode::serialize(&snapshot).unwrap();
+    core_store
+        .put_cf(core_store.cf_stats_dao(), &snapshot_key, &snapshot_value)
+        .unwrap();
+
+    core_store
+        .set_genesis_baseline(&ckbadger_store::GenesisBaseline {
+            total_issuance,
+            burnt: seeded_burnt,
+            virtual_occupied: 0,
+        })
+        .unwrap();
+
+    let config = test_config_with_append_only(core_store, append_only_store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri("/api/v1/statistics/network")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    let expected_circulating: i128 =
+        total_issuance - (seeded_burnt + cum_treasury) - total_deposited;
+    assert_eq!(json["circulatingSupply"], expected_circulating.to_string());
+}
+
+/// The circulating-supply hero metric must fail fast (500) when the genesis
+/// baseline has not been derived yet but a DAO snapshot already exists.
+#[tokio::test]
+async fn test_network_stats_fails_fast_when_baseline_missing() {
+    let core_store = test_store();
+    let append_only_store = test_append_only_store();
+
+    let now = chrono::Utc::now();
+    let now_ms = now.timestamp_millis();
+
+    let mut core_batch = StoreBatch::new(core_store.as_ref());
+    core_batch.put_block_header(
+        200,
+        &CachedBlockHeader {
+            hash: vec![0x44; 32],
+            parent_hash: vec![0u8; 32],
+            timestamp: now_ms,
+            epoch_number: 42,
+            epoch_index: 10,
+            epoch_length: 1800,
+            dao: vec![0; 32],
+            transactions_count: 1,
+            uncles_count: 0,
+            cycles: None,
+        },
+    );
+    core_batch.commit().unwrap();
+
+    let snapshot = DaoDailySnapshot {
+        date: "2026-03-10".to_string(),
+        total_deposited: 50_000_000_000_000_000,
+        depositors_count: 100,
+        new_deposits: 5,
+        withdrawals: 2,
+        compensation: 100_000_000_000_000,
+        cumulative_deposit_amount: 60_000_000_000_000_000,
+        total_issuance: 3_500_000_000_000_000_000,
+        secondary_pool: 10_000_000_000_000_000,
+        occupied_capacity: 1_000_000_000_000_000_000,
+        cum_miner_secondary: 5_000_000_000_000_000,
+        cum_dao_compensation: 3_000_000_000_000_000,
+        cum_treasury: 2_000_000_000_000_000,
+        unclaimed_compensation: 0,
+        unmade_dao_interests: 0,
+        cumulative_depositors: 0,
+        daily_depositor_addresses: 0,
+        protocol_deposited: None,
+    };
+    let snapshot_key = ckbadger_store::keys::encode_stats_key(
+        ckbadger_store::keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT,
+        b"20260310",
+    );
+    let snapshot_value = bincode::serialize(&snapshot).unwrap();
+    core_store
+        .put_cf(core_store.cf_stats_dao(), &snapshot_key, &snapshot_value)
+        .unwrap();
+
+    // Intentionally do NOT seed the genesis baseline.
+    let config = test_config_with_append_only(core_store, append_only_store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri("/api/v1/statistics/network")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
 }
 
 #[tokio::test]
