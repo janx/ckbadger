@@ -340,19 +340,20 @@ pub fn parse_config(toml_str: &str) -> Result<CkbadgerConfig> {
 // Default config generation
 // ---------------------------------------------------------------------------
 
-/// Generate the default config.toml content for `ckbadger init`.
+/// Per-network `config.toml` template for `ckbadger init`.
 ///
 /// The output is a hand-crafted TOML string (not serialized from the struct)
 /// so we can include comments explaining each field.
-pub fn default_config_toml() -> String {
-    r#"[ckb]
+pub fn default_config_toml(network: &str, api_port: u16) -> String {
+    format!(
+        r#"[ckb]
 rpc_url = "http://127.0.0.1:8114"
-network = "mainnet"               # mainnet | testnet
+network = "{network}"               # mainnet | testnet
 workdir = ""                      # REQUIRED: CKB node config directory
 
 [api]
 host = "127.0.0.1"
-port = 8101
+port = {api_port}
 rate_limit = 100
 rate_limit_burst = 200
 slow_request_threshold_ms = 100
@@ -374,7 +375,25 @@ direct_io_reads = true
 [log]
 level = "info"
 "#
-    .to_string()
+    )
+}
+
+/// Top-level orchestrator `ckbadger.toml` template.
+pub fn default_orchestrator_toml(networks: &[&str]) -> String {
+    let mut out = String::new();
+    for name in networks {
+        out.push_str(&format!("[[network]]\nname = \"{name}\"\n\n"));
+    }
+    out.push_str(
+        r#"[frontend]
+host = "127.0.0.1"
+port = 8100
+
+[log]
+level = "info"
+"#,
+    );
+    out
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -692,27 +711,50 @@ data_path = "/var/lib/ckb/data/db"
 
     #[test]
     fn test_default_config_toml_round_trips_to_defaults() {
-        let toml_str = default_config_toml();
+        let toml_str = default_config_toml("mainnet", 8101);
         let cfg = parse_config(&toml_str).unwrap();
         assert_eq!(cfg, CkbadgerConfig::default());
     }
 
     #[test]
     fn test_default_config_toml_declares_ckb_workdir() {
-        let toml_str = default_config_toml();
+        let toml_str = default_config_toml("mainnet", 8101);
         assert!(toml_str.contains("workdir = "));
         assert!(!toml_str.contains("\ndata_path = "));
     }
 
     #[test]
     fn test_default_config_toml_contains_all_sections() {
-        let toml_str = default_config_toml();
+        let toml_str = default_config_toml("mainnet", 8101);
         assert!(toml_str.contains("[ckb]"));
         assert!(toml_str.contains("[api]"));
         assert!(toml_str.contains("[frontend]"));
         assert!(toml_str.contains("[indexer]"));
         assert!(toml_str.contains("[store]"));
         assert!(toml_str.contains("[log]"));
+    }
+
+    #[test]
+    fn default_config_toml_is_parametrized_and_parses() {
+        let toml = default_config_toml("testnet", 8102);
+        assert!(toml.contains("network = \"testnet\""));
+        assert!(toml.contains("port = 8102"));
+        let cfg = parse_config(&toml).unwrap();
+        assert_eq!(cfg.ckb.network, "testnet");
+        assert_eq!(cfg.api.port, 8102);
+    }
+
+    #[test]
+    fn default_orchestrator_toml_parses_and_lists_networks() {
+        let toml = default_orchestrator_toml(&["mainnet", "testnet"]);
+        let cfg = parse_orchestrator_config(&toml).unwrap();
+        assert_eq!(
+            cfg.networks
+                .iter()
+                .map(|n| n.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["mainnet", "testnet"]
+        );
     }
 
     #[test]

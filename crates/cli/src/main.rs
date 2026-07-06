@@ -657,7 +657,8 @@ fn cmd_init(workdir: &Path) -> Result<()> {
         .with_context(|| format!("failed to create {}", work.perf_dir.display()))?;
 
     // Write default config
-    let config_content = default_config_toml();
+    // Stopgap: Task 7 rewrites cmd_init to scaffold per-network configs.
+    let config_content = default_config_toml("mainnet", 8101);
     std::fs::write(&work.config_path, &config_content)
         .with_context(|| format!("failed to write {}", work.config_path.display()))?;
 
