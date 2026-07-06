@@ -638,6 +638,28 @@ mod tests {
     }
 
     #[test]
+    fn network_identity_non_utf8_fails_fast() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+
+        // Write a raw non-UTF-8 payload directly under the identity key.
+        store
+            .put_cf(
+                store.cf_sync_meta(),
+                sync_meta_keys::NETWORK_IDENTITY,
+                &[0xff, 0xfe],
+            )
+            .unwrap();
+
+        let err = store.get_network_identity().unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("network_identity record is not valid UTF-8"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
     fn test_get_latest_reorg_event_fails_on_malformed_latest_marker() {
         let dir = tempfile::tempdir().unwrap();
         let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
