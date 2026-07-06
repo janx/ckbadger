@@ -329,6 +329,25 @@ impl CkbadgerStore {
         self.get_cf(self.cf_sync_meta(), sync_meta_keys::SYNC_PROGRESS)
     }
 
+    /// Read the chain-network tag persisted at first sync, if any.
+    pub fn get_network_identity(&self) -> anyhow::Result<Option<String>> {
+        match self.get_cf(self.cf_sync_meta(), sync_meta_keys::NETWORK_IDENTITY)? {
+            Some(bytes) => Ok(Some(String::from_utf8(bytes).map_err(|e| {
+                anyhow!("network_identity record is not valid UTF-8: {e}")
+            })?)),
+            None => Ok(None),
+        }
+    }
+
+    /// Persist the chain-network tag (idempotent overwrite at storage layer).
+    pub fn set_network_identity(&self, network: &str) -> anyhow::Result<()> {
+        self.put_cf(
+            self.cf_sync_meta(),
+            sync_meta_keys::NETWORK_IDENTITY,
+            network.as_bytes(),
+        )
+    }
+
     /// Store memory stats data (JSON serialized, ephemeral monitoring).
     pub fn put_memory_stats(&self, data: &[u8]) -> anyhow::Result<()> {
         self.put_cf(self.cf_sync_meta(), sync_meta_keys::MEMORY_STATS, data)
@@ -594,6 +613,28 @@ mod tests {
         let latest = store.get_latest_reorg_event().unwrap().unwrap();
         assert_eq!(latest.detected_at, 999);
         assert_eq!(latest.rollback_from, 21);
+    }
+
+    #[test]
+    fn network_identity_roundtrip_and_absent_default() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+
+        // Absent before first write.
+        assert_eq!(store.get_network_identity().unwrap(), None);
+
+        store.set_network_identity("testnet").unwrap();
+        assert_eq!(
+            store.get_network_identity().unwrap(),
+            Some("testnet".to_string())
+        );
+
+        // Overwrite is allowed at the storage layer (policy enforced above it).
+        store.set_network_identity("mainnet").unwrap();
+        assert_eq!(
+            store.get_network_identity().unwrap(),
+            Some("mainnet".to_string())
+        );
     }
 
     #[test]

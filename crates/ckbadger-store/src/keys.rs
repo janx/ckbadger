@@ -1295,6 +1295,8 @@ pub mod sync_meta_keys {
     pub const BULK_BATCH_IN_PROGRESS: &[u8] = b"bulk_batch_in_progress";
     pub const BULK_BUILD_SESSION_IN_PROGRESS: &[u8] = b"bulk_build_session_in_progress";
     pub const BACKGROUND_TASKS: &[u8] = b"background_tasks";
+    /// Chain-network tag ("mainnet"/"testnet") the DB was first synced for.
+    pub const NETWORK_IDENTITY: &[u8] = b"network_identity";
 }
 
 // -- Fiber Channels --
