@@ -58,6 +58,16 @@ mod tests {
     }
 
     #[test]
+    fn genesis_guard_rejects_unknown_network() {
+        let err = verify_genesis_hash(
+            "devnet",
+            "0x92b197aa1fba0f63633922c61c92375c9c074a93e85963554f5499fe1450d0e5",
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("unknown"));
+    }
+
+    #[test]
     fn db_identity_guard() {
         // Fresh DB (no tag) is fine.
         assert!(verify_db_network(None, "mainnet").is_ok());
