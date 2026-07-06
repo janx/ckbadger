@@ -312,6 +312,10 @@ pub async fn run_indexer_sync(mut config: Config) -> Result<()> {
     verify_db_network(existing_identity.as_deref(), &config.network)?;
     if existing_identity.is_none() {
         // First sync for this DB: stamp the network tag.
+        // NOTE: this DB-identity guard only binds DBs first synced AFTER this
+        // change. A pre-existing untagged DB (synced before the tag existed) is
+        // adopted by whatever network is configured on the first post-upgrade
+        // run — acceptable under the mandatory re-sync policy (rebuild-from-genesis).
         store.set_network_identity(&config.network)?;
     }
 

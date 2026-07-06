@@ -423,7 +423,16 @@ async fn cmd_run(workdir: &Path, args: &RunArgs) -> Result<()> {
 /// one shared supervisor rooted at the orchestrator dir. The frontend is NOT
 /// spawned per-network (a unified frontend proxy is a later plan); each API is
 /// reachable on its own configured port.
-async fn cmd_run_orchestrator(root: &Path, _args: &RunArgs) -> Result<()> {
+async fn cmd_run_orchestrator(root: &Path, args: &RunArgs) -> Result<()> {
+    // `--only` selects services within a single-network workdir; there is no
+    // coherent meaning at an orchestrator root (which network?). Fail fast
+    // rather than silently ignoring the flag.
+    if args.only.is_some() {
+        bail!(
+            "--only is not supported in orchestrator mode; run a single network with `ckbadger -C <root>/<network> run --only ...`"
+        );
+    }
+
     let orch = load_orchestrator_config(root)?;
     let root_work = WorkDir::resolve(root);
 
@@ -432,6 +441,8 @@ async fn cmd_run_orchestrator(root: &Path, _args: &RunArgs) -> Result<()> {
     check_fd_limit_for_indexer(fd_limit)?;
 
     let mut specs = Vec::new();
+    // (network_name, api_port, resolved_workdir) for fail-fast binding checks.
+    let mut nets: Vec<(String, u16, PathBuf)> = Vec::new();
     for entry in &orch.networks {
         let sub = network_workdir(root, entry);
         if !sub.join("config.toml").is_file() {
@@ -442,6 +453,7 @@ async fn cmd_run_orchestrator(root: &Path, _args: &RunArgs) -> Result<()> {
             );
         }
         let cfg = load_config(&sub)?;
+        nets.push((entry.name.clone(), cfg.api.port, sub.clone()));
         // Per-network services EXCEPT the frontend (one shared frontend proxy
         // is added in a later plan).
         let mut services = vec!["indexer", "api"];
@@ -462,8 +474,42 @@ async fn cmd_run_orchestrator(root: &Path, _args: &RunArgs) -> Result<()> {
             cfg.api.port
         );
     }
+
+    // Fail fast on host-global collisions workdir isolation can't catch:
+    // duplicate TCP ports (second API restart-loops) and duplicate workdirs
+    // (RocksDB LOCK / DB-identity confusion). Must run BEFORE any child spawns.
+    check_orchestrator_bindings(&nets)?;
+
     println!("Frontend proxy: deferred to a later plan (reach each API on its own port for now).");
     supervisor::run_supervisor_multi(&root_work, specs).await
+}
+
+/// Fail-fast validation of orchestrator network bindings before spawning.
+/// `nets` = (network_name, api_port, resolved_workdir) per [[network]].
+///
+/// Workdir isolation covers sockets/logs/data but NOT host-global TCP ports,
+/// so two networks sharing an `[api].port` would make the second API fail to
+/// bind and restart-loop into a degraded state. Two entries resolving to the
+/// same workdir would collide on the RocksDB LOCK / DB identity. Reject both
+/// up front instead of degrading at runtime.
+fn check_orchestrator_bindings(nets: &[(String, u16, PathBuf)]) -> Result<()> {
+    for i in 0..nets.len() {
+        for j in (i + 1)..nets.len() {
+            if nets[i].1 == nets[j].1 {
+                bail!(
+                    "networks '{}' and '{}' both use API port {} — each network needs a distinct [api].port",
+                    nets[i].0, nets[j].0, nets[i].1
+                );
+            }
+            if nets[i].2 == nets[j].2 {
+                bail!(
+                    "networks '{}' and '{}' resolve to the same workdir {} — give each a distinct [[network]].dir",
+                    nets[i].0, nets[j].0, nets[i].2.display()
+                );
+            }
+        }
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -1277,6 +1323,44 @@ mod tests {
         let cfg = load_config(&root.join("testnet")).unwrap();
         assert_eq!(cfg.ckb.network, "testnet");
         assert_eq!(cfg.api.port, 8102);
+    }
+
+    // -- orchestrator binding fail-fast --
+
+    #[test]
+    fn test_check_orchestrator_bindings_distinct_ports_and_dirs_ok() {
+        let nets = vec![
+            ("mainnet".to_string(), 8101, PathBuf::from("/root/mainnet")),
+            ("testnet".to_string(), 8102, PathBuf::from("/root/testnet")),
+        ];
+        assert!(check_orchestrator_bindings(&nets).is_ok());
+    }
+
+    #[test]
+    fn test_check_orchestrator_bindings_duplicate_port_errors() {
+        let nets = vec![
+            ("mainnet".to_string(), 8101, PathBuf::from("/root/mainnet")),
+            ("testnet".to_string(), 8101, PathBuf::from("/root/testnet")),
+        ];
+        let err = check_orchestrator_bindings(&nets).unwrap_err().to_string();
+        assert!(err.contains("mainnet"), "error names first network: {err}");
+        assert!(err.contains("testnet"), "error names second network: {err}");
+        assert!(err.contains("8101"), "error names the port: {err}");
+    }
+
+    #[test]
+    fn test_check_orchestrator_bindings_duplicate_workdir_errors() {
+        let nets = vec![
+            ("mainnet".to_string(), 8101, PathBuf::from("/root/shared")),
+            ("testnet".to_string(), 8102, PathBuf::from("/root/shared")),
+        ];
+        let err = check_orchestrator_bindings(&nets).unwrap_err().to_string();
+        assert!(err.contains("mainnet"), "error names first network: {err}");
+        assert!(err.contains("testnet"), "error names second network: {err}");
+        assert!(
+            err.contains("/root/shared"),
+            "error names the shared workdir: {err}"
+        );
     }
 
     #[test]
