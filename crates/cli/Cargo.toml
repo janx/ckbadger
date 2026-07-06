@@ -9,6 +9,7 @@ name = "ckbadger"
 path = "src/main.rs"
 
 [dependencies]
+ckbadger-common = { path = "../common" }
 ckbadger-config = { path = "../config" }
 ckbadger-indexer = { path = "../indexer" }
 ckbadger-api = { path = "../api" }

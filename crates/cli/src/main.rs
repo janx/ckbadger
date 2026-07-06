@@ -562,9 +562,11 @@ async fn cmd_tui(workdir: &Path) -> Result<()> {
 // ---------------------------------------------------------------------------
 
 async fn cmd_status(workdir: &Path) -> Result<()> {
-    let config = load_config(workdir)?;
+    if ckbadger_config::is_orchestrator(workdir) {
+        return cmd_status_orchestrator(workdir).await;
+    }
+
     let work = WorkDir::resolve(workdir);
-    let store_paths = resolve_store_paths(workdir, &config.store);
 
     // 1. Try IPC to get service status from the supervisor
     if work.indexer_sock.exists() {
@@ -610,6 +612,18 @@ async fn cmd_status(workdir: &Path) -> Result<()> {
     }
 
     // 2. Always show sync status from RocksDB
+    print_single_network_sync_status(workdir).await
+}
+
+/// Print the RocksDB sync status for a single-network workdir.
+///
+/// Extracted verbatim from `cmd_status`'s "sync status from RocksDB" block so
+/// both the single-network `cmd_status` and the orchestrator aggregate can reuse
+/// it against each network's subdir store.
+async fn print_single_network_sync_status(workdir: &Path) -> Result<()> {
+    let config = load_config(workdir)?;
+    let store_paths = resolve_store_paths(workdir, &config.store);
+
     let secondary_path = secondary_store_path(&store_paths.domain_data, SecondaryStoreOwner::Cli);
     match CkbadgerStore::open_domain_secondary_with_runtime(
         &store_paths.domain_data,
@@ -639,9 +653,76 @@ async fn cmd_status(workdir: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Aggregate `status` across all networks in an orchestrator root: query the
+/// orchestrator supervisor for service status, then print each network's sync
+/// status from its subdir store.
+async fn cmd_status_orchestrator(root: &Path) -> Result<()> {
+    use ckbadger_config::{load_orchestrator_config, network_workdir};
+    let orch = load_orchestrator_config(root)?;
+    let root_work = WorkDir::resolve(root);
+
+    if root_work.indexer_sock.exists() {
+        match ckbadger_ipc::ipc_request(
+            &root_work.indexer_sock,
+            &ckbadger_ipc::IpcRequest::GetServiceStatus,
+        )
+        .await
+        {
+            Ok(ckbadger_ipc::IpcResponse::ServiceStatus { services }) => {
+                println!("Services:");
+                for svc in &services {
+                    println!(
+                        "  {}: {} (pid {}, uptime {}s)",
+                        svc.name, svc.status, svc.pid, svc.uptime_secs
+                    );
+                }
+                println!();
+            }
+            Ok(other) => println!("Unexpected IPC response: {:?}", other),
+            Err(e) => println!("Supervisor not reachable: {}", e),
+        }
+    } else {
+        println!("Supervisor: not running\n");
+    }
+
+    for entry in &orch.networks {
+        let sub = network_workdir(root, entry);
+        println!("[{}] {}", entry.name, sub.display());
+        // Delegate to the existing per-workdir sync-status reader.
+        if let Err(e) = print_single_network_sync_status(&sub).await {
+            println!("  could not read sync status: {e}");
+        }
+    }
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // verify command
 // ---------------------------------------------------------------------------
+
+/// Explorer API base for verify, network-aware, failing fast on unknown nets.
+fn verify_explorer_url(network: &str) -> Result<String> {
+    ckbadger_common::network::explorer_api_url(network)
+        .map(str::to_string)
+        .ok_or_else(|| anyhow::anyhow!("no explorer API URL for network '{network}'"))
+}
+
+#[cfg(test)]
+mod verify_url_tests {
+    use super::*;
+    #[test]
+    fn explorer_url_is_network_aware() {
+        assert_eq!(
+            verify_explorer_url("mainnet").unwrap(),
+            "https://mainnet-api.explorer.nervos.org"
+        );
+        assert_eq!(
+            verify_explorer_url("testnet").unwrap(),
+            "https://testnet-api.explorer.nervos.org"
+        );
+        assert!(verify_explorer_url("devnet").is_err());
+    }
+}
 
 async fn cmd_verify(workdir: &Path, args: &VerifyArgs) -> Result<()> {
     let config = load_config(workdir)?;
@@ -655,7 +736,7 @@ async fn cmd_verify(workdir: &Path, args: &VerifyArgs) -> Result<()> {
     let verify_args = indexer_verify::VerifyArgs {
         api_url: format!("http://{}:{}/api/v1", config.api.host, config.api.port),
         rpc_url: Some(config.ckb.rpc_url.clone()),
-        explorer_url: "https://mainnet-api.explorer.nervos.org".to_string(),
+        explorer_url: verify_explorer_url(&config.ckb.network)?,
         no_explorer: false,
         depth,
         sample_count: 1000,
