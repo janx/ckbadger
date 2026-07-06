@@ -88,6 +88,13 @@ mod tests {
     }
 
     #[test]
+    fn spec_ids_per_network() {
+        assert_eq!(spec_id("mainnet"), Some("ckb"));
+        assert_eq!(spec_id("testnet"), Some("ckb_testnet"));
+        assert_eq!(spec_id("devnet"), None);
+    }
+
+    #[test]
     fn explorer_urls_per_network() {
         assert_eq!(
             explorer_api_url("mainnet"),
