@@ -130,6 +130,21 @@ impl BatchWriter {
         Ok(())
     }
 
+    /// Fetch the genesis-derived virtual occupied capacity (the knowledge-size
+    /// burn adjustment) from the persisted `GenesisBaseline`.
+    ///
+    /// Fail-fast if the baseline has not been derived yet: knowledge_size has a
+    /// single calculation path and must never silently fall back to a hardcoded
+    /// mainnet constant. The indexer derives the baseline at startup (block 0)
+    /// before any block — and therefore any daily-stats row — is written.
+    fn genesis_virtual_occupied(&self) -> Result<i128> {
+        Ok(self
+            .store
+            .get_genesis_baseline()?
+            .ok_or_else(|| anyhow!("genesis baseline not derived; cannot compute knowledge_size"))?
+            .virtual_occupied)
+    }
+
     /// Update daily statistics for a given date. Returns the final DailyStats
     /// so the caller can thread cumulative totals forward when multiple dates
     /// are processed in the same batch.
@@ -191,14 +206,21 @@ impl BatchWriter {
                 s.total_all_cells += cells_created as i64;
                 s.total_data_size += data_size_added - data_size_consumed;
                 if let Some(dao) = dao_field {
-                    if let Some(ks) = calculate_knowledge_size(dao) {
+                    let virtual_occupied = self.genesis_virtual_occupied()?;
+                    if let Some(ks) = calculate_knowledge_size(dao, virtual_occupied) {
                         s.knowledge_size = Some(ks);
                     }
                 }
                 s
             }
             None => {
-                let knowledge_size = dao_field.and_then(calculate_knowledge_size);
+                let knowledge_size = match dao_field {
+                    Some(dao) => {
+                        let virtual_occupied = self.genesis_virtual_occupied()?;
+                        calculate_knowledge_size(dao, virtual_occupied)
+                    }
+                    None => None,
+                };
 
                 // Carry forward cumulative totals from the previous day.
                 // Prefer in-memory stats (from same batch) over DB to handle
@@ -1129,13 +1151,17 @@ fn format_days(days: f64) -> String {
 }
 
 /// Calculates knowledge_size from DAO field bytes.
-pub fn calculate_knowledge_size(dao_field: &[u8]) -> Option<i128> {
-    const BURN_ADJUSTMENT: i128 = 504_000_000_000_000_000;
-
+///
+/// `virtual_occupied` is the genesis-derived burn adjustment sourced from the
+/// persisted `GenesisBaseline` (`GenesisBaseline::virtual_occupied`). It is
+/// subtracted from the DAO `U` field so mainnet and testnet share one single
+/// calculation path with a network-correct constant instead of a hardcoded
+/// mainnet-only literal.
+pub fn calculate_knowledge_size(dao_field: &[u8], virtual_occupied: i128) -> Option<i128> {
     if dao_field.len() >= 32 {
         let bytes: [u8; 8] = dao_field[24..32].try_into().ok()?;
         let u_field = u64::from_le_bytes(bytes) as i128;
-        Some(u_field - BURN_ADJUSTMENT)
+        Some(u_field - virtual_occupied)
     } else {
         None
     }
@@ -1156,7 +1182,7 @@ mod tests {
         let u_value: u64 = 600_000_000_000_000_000;
         dao[24..32].copy_from_slice(&u_value.to_le_bytes());
 
-        let result = calculate_knowledge_size(&dao);
+        let result = calculate_knowledge_size(&dao, BURN_ADJUSTMENT);
         assert!(result.is_some());
         let expected = u_value as i128 - BURN_ADJUSTMENT;
         assert_eq!(result.unwrap(), expected);
@@ -1166,10 +1192,10 @@ mod tests {
     #[test]
     fn test_calculate_knowledge_size_returns_none_for_short_dao() {
         let short_dao = vec![0u8; 24];
-        assert!(calculate_knowledge_size(&short_dao).is_none());
+        assert!(calculate_knowledge_size(&short_dao, BURN_ADJUSTMENT).is_none());
 
         let empty_dao: Vec<u8> = vec![];
-        assert!(calculate_knowledge_size(&empty_dao).is_none());
+        assert!(calculate_knowledge_size(&empty_dao, BURN_ADJUSTMENT).is_none());
     }
 
     #[test]
@@ -1178,7 +1204,7 @@ mod tests {
         let u_value: u64 = BURN_ADJUSTMENT as u64;
         dao[24..32].copy_from_slice(&u_value.to_le_bytes());
 
-        let result = calculate_knowledge_size(&dao);
+        let result = calculate_knowledge_size(&dao, BURN_ADJUSTMENT);
         assert_eq!(result, Some(0));
     }
 

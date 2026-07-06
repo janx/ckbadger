@@ -6,10 +6,15 @@
 use super::checks::*;
 use super::report::format_number;
 use super::sampling::LcgSampler;
-use ckbadger_common::dao::GENESIS_BURNT;
 
 const SYNC_COMPLETE_MAX_LAG_BLOCKS: i64 = 100;
 const SHANNONS_PER_CKB: i128 = 100_000_000;
+/// Genesis burnt supply in shannons — a network invariant shared by mainnet and
+/// testnet (8.4B CKB, the unspendable Satoshi gift). The authoritative source is
+/// the persisted `GenesisBaseline::burnt` (derived from block 0); these
+/// API-backed verify checks have no store handle, so they assert against this
+/// documented network-invariant literal instead of the constant it derives to.
+const GENESIS_BURNT_SHANNONS: i128 = 840_000_000_000_000_000;
 const TOKEN_ACTIVITY_ADDRESS_LIMIT: usize = 20;
 const TOKEN_ACTIVITY_PAGE_LIMIT: usize = 100;
 const TOKEN_ACTIVITY_MAX_PAGES_PER_ADDRESS: usize = 3;
@@ -882,6 +887,90 @@ impl Check for DaoStatisticsSane {
             ))
         } else {
             Ok(CheckResult::fail(1, findings))
+        }
+    }
+}
+
+/// F7: The persisted genesis economic baseline is present and its burnt supply
+/// equals the network invariant (8.4B CKB).
+///
+/// The verify harness is purely API-backed and has no store handle, so this
+/// check observes the baseline through the API rather than reading
+/// `store.get_genesis_baseline()` directly:
+///  - Presence: both `/charts/total-supply` and `/charts/secondary-issuance`
+///    are derived from `GenesisBaseline` on the API side and fail-fast if it
+///    was never derived, so a successful fetch proves the baseline is present.
+///  - Value: `total-supply.burnt - secondary-issuance.burnt` isolates the
+///    genesis burnt, which must equal 8.4B CKB (mainnet and testnet share it).
+///
+/// This is the Fast-tier, latest-point counterpart to S17
+/// (`BurntSupplyGenesisInvariant`), which checks every overlapping date.
+pub struct GenesisBaselineBurntInvariant;
+
+impl Check for GenesisBaselineBurntInvariant {
+    fn name(&self) -> &'static str {
+        "genesis_baseline_burnt_invariant"
+    }
+    fn description(&self) -> &'static str {
+        "genesis baseline present and burnt equals network invariant (8.4B CKB)"
+    }
+    fn tier(&self) -> CheckTier {
+        CheckTier::Fast
+    }
+    fn run(&self, ctx: &CheckContext, _progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
+        // A successful fetch of these endpoints proves the baseline is present:
+        // both derive `burnt` from `GenesisBaseline` and error if it is missing.
+        let total_supply: ChartWrapper<StackedChartDataPoint> =
+            api_get(ctx, "charts/total-supply")?;
+        let secondary: ChartWrapper<StackedChartDataPoint> =
+            api_get(ctx, "charts/secondary-issuance")?;
+
+        let mut secondary_burnt_by_date = std::collections::HashMap::<&str, i128>::new();
+        for point in &secondary.data {
+            if let Some(burnt) = point
+                .values
+                .get("burnt")
+                .and_then(|v| parse_non_negative_i128(v))
+            {
+                secondary_burnt_by_date.insert(point.date.as_str(), burnt);
+            }
+        }
+
+        // Latest date present in both charts (data is date-ascending).
+        let latest = total_supply.data.iter().rev().find_map(|point| {
+            let total_burnt = point
+                .values
+                .get("burnt")
+                .and_then(|v| parse_non_negative_i128(v))?;
+            let secondary_burnt = secondary_burnt_by_date.get(point.date.as_str())?;
+            Some((point.date.as_str(), total_burnt - secondary_burnt))
+        });
+
+        let Some((date, gap_ckb)) = latest else {
+            return Ok(CheckResult::pass_with_detail(
+                0,
+                "no overlapping dates between total-supply and secondary-issuance charts"
+                    .to_string(),
+            ));
+        };
+
+        let expected_gap_ckb = GENESIS_BURNT_SHANNONS / SHANNONS_PER_CKB;
+        if gap_ckb == expected_gap_ckb {
+            Ok(CheckResult::pass_with_detail(
+                1,
+                format!("genesis burnt = {} CKB at {}", gap_ckb, date),
+            ))
+        } else {
+            Ok(CheckResult::fail(
+                1,
+                vec![Finding {
+                    entity: date.to_string(),
+                    details: vec![format!(
+                        "genesis burnt = {} CKB, expected {} CKB (8.4B network invariant)",
+                        gap_ckb, expected_gap_ckb
+                    )],
+                }],
+            ))
         }
     }
 }
@@ -2265,7 +2354,7 @@ impl Check for BurntSupplyGenesisInvariant {
             }
         }
 
-        let expected_gap_ckb = (GENESIS_BURNT as i128) / SHANNONS_PER_CKB;
+        let expected_gap_ckb = GENESIS_BURNT_SHANNONS / SHANNONS_PER_CKB;
         let mut checked = 0u64;
 
         for point in &total_supply.data {
@@ -3376,6 +3465,7 @@ pub fn api_checks() -> Vec<Box<dyn Check>> {
         Box::new(TipBlock),
         Box::new(DeepForkClear),
         Box::new(DaoStatisticsSane),
+        Box::new(GenesisBaselineBurntInvariant),
         // Sampling
         Box::new(BlockHashRoundtrip),
         Box::new(BlockParentChain),
@@ -3430,11 +3520,12 @@ mod tests {
     #[test]
     fn test_api_checks_registered() {
         let checks = api_checks();
-        assert_eq!(checks.len(), 29);
+        assert_eq!(checks.len(), 30);
         // Verify names are unique
         let names: Vec<&str> = checks.iter().map(|c| c.name()).collect();
         let unique: std::collections::HashSet<&str> = names.iter().copied().collect();
         assert_eq!(names.len(), unique.len(), "Duplicate check names found");
+        assert!(names.contains(&"genesis_baseline_burnt_invariant"));
         assert!(names.contains(&"chart_block_time_distribution_sane"));
         assert!(names.contains(&"chart_epoch_time_distribution_sane"));
         assert!(names.contains(&"chart_epoch_time_length_sane"));
@@ -3464,8 +3555,79 @@ mod tests {
             .iter()
             .filter(|c| c.tier() == CheckTier::Sampling)
             .count();
-        assert_eq!(fast_count, 6);
+        assert_eq!(fast_count, 7);
         assert_eq!(sampling_count, 23);
+    }
+
+    fn mock_ctx(server: &MockServer) -> CheckContext {
+        CheckContext {
+            api_url: format!("{}/api/v1", server.uri()),
+            rpc_url: None,
+            explorer_url: None,
+            http: reqwest::blocking::Client::new(),
+            sample_count: 10,
+            seed: 42,
+            tolerance: 0.001,
+            cache_dir: None,
+        }
+    }
+
+    fn mount_burnt_charts(
+        runtime: &tokio::runtime::Runtime,
+        server: &MockServer,
+        total_supply_burnt_ckb: &str,
+        secondary_burnt_ckb: &str,
+    ) {
+        let total = json!({
+            "data": [{ "date": "2024-01-01", "values": { "burnt": total_supply_burnt_ckb } }]
+        });
+        let secondary = json!({
+            "data": [{ "date": "2024-01-01", "values": { "burnt": secondary_burnt_ckb } }]
+        });
+        runtime.block_on(async {
+            Mock::given(method("GET"))
+                .and(path("/api/v1/charts/total-supply"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(total))
+                .mount(server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/api/v1/charts/secondary-issuance"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(secondary))
+                .mount(server)
+                .await;
+        });
+    }
+
+    #[test]
+    fn test_genesis_baseline_burnt_invariant_passes_when_gap_is_8_4b() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let server = runtime.block_on(MockServer::start());
+        // total burnt - secondary burnt = 8,400,000,000 CKB (the network invariant).
+        mount_burnt_charts(&runtime, &server, "8400001000", "1000");
+
+        let ctx = mock_ctx(&server);
+        let progress = ProgressReporter::new(None);
+        let result = GenesisBaselineBurntInvariant.run(&ctx, &progress).unwrap();
+        assert!(
+            result.passed,
+            "expected pass, got findings: {:?}",
+            result.findings
+        );
+    }
+
+    #[test]
+    fn test_genesis_baseline_burnt_invariant_fails_on_wrong_gap() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let server = runtime.block_on(MockServer::start());
+        // Gap is 8,399,999,000 CKB — off by 1000, must fail.
+        mount_burnt_charts(&runtime, &server, "8400000000", "1000");
+
+        let ctx = mock_ctx(&server);
+        let progress = ProgressReporter::new(None);
+        let result = GenesisBaselineBurntInvariant.run(&ctx, &progress).unwrap();
+        assert!(!result.passed);
+        assert_eq!(result.findings.len(), 1);
+        assert!(result.findings[0].details[0].contains("8.4B network invariant"));
     }
 
     #[test]

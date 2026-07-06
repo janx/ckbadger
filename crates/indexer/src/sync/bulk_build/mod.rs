@@ -512,7 +512,17 @@ impl BulkBuildEngine {
             .bulk_build_perf
             .record_finalize_step(1, finalize_started.elapsed());
         let flush_drain = flush_channel.begin_shutdown();
-        let prepared_finalize = match runtime.prepare_finalize_artifacts() {
+        // Genesis-derived burn adjustment for knowledge_size. Fail-fast if the
+        // baseline was never derived (single calculation path, no fallback).
+        let virtual_occupied = indexer
+            .writer
+            .store()
+            .get_genesis_baseline()?
+            .ok_or_else(|| {
+                anyhow!("genesis baseline not derived; cannot finalize bulk-build knowledge_size")
+            })?
+            .virtual_occupied;
+        let prepared_finalize = match runtime.prepare_finalize_artifacts(virtual_occupied) {
             Ok(prepared) => prepared,
             Err(err) => {
                 let _ = flush_drain.wait().await;
@@ -1338,7 +1348,10 @@ impl ChainStatsAccumulator {
     }
 
     /// Build sealed aggregate rows for `CF_STATS_CHAIN`.
-    fn build_rows(&self) -> Result<Vec<materialize::MaterializedRow>> {
+    ///
+    /// `virtual_occupied` is the genesis-derived burn adjustment (from
+    /// `GenesisBaseline::virtual_occupied`) used by the knowledge_size calc.
+    fn build_rows(&self, virtual_occupied: i128) -> Result<Vec<materialize::MaterializedRow>> {
         let mut rows = Vec::new();
 
         // --- DailyStats (cumulative totals threaded forward) ---
@@ -1371,7 +1384,7 @@ impl ChainStatsAccumulator {
             let knowledge_size = self
                 .daily_dao_fields
                 .get(date)
-                .and_then(|dao| crate::db::writer::calculate_knowledge_size(dao));
+                .and_then(|dao| crate::db::writer::calculate_knowledge_size(dao, virtual_occupied));
 
             let (block_time_sum_ms, block_time_count) = self
                 .daily_block_times
@@ -2035,7 +2048,15 @@ impl BulkBuildRuntimeState {
         domain_store: &CkbadgerStore,
         materializer: &mut materialize::Materializer<'_>,
     ) -> Result<()> {
-        let prepared_finalize = self.prepare_finalize_artifacts()?;
+        // Genesis-derived burn adjustment for knowledge_size. Fail-fast if the
+        // baseline was never derived (single calculation path, no fallback).
+        let virtual_occupied = domain_store
+            .get_genesis_baseline()?
+            .ok_or_else(|| {
+                anyhow!("genesis baseline not derived; cannot finalize bulk-build knowledge_size")
+            })?
+            .virtual_occupied;
+        let prepared_finalize = self.prepare_finalize_artifacts(virtual_occupied)?;
         let BulkBuildRuntimeState {
             owners,
             hodl_tracker,
@@ -2059,11 +2080,14 @@ impl BulkBuildRuntimeState {
         Ok(())
     }
 
-    fn prepare_finalize_artifacts(&self) -> Result<PreparedFinalizeArtifacts> {
+    fn prepare_finalize_artifacts(
+        &self,
+        virtual_occupied: i128,
+    ) -> Result<PreparedFinalizeArtifacts> {
         let frozen = self.interner.snapshot_for_reads();
         Ok(PreparedFinalizeArtifacts {
             activity_sealed_rows: self.activity_stats.build_rows()?,
-            chain_sealed_rows: self.chain_stats.build_rows()?,
+            chain_sealed_rows: self.chain_stats.build_rows(virtual_occupied)?,
             final_snapshot_rows: build_final_snapshot_rows(&self.sequencer, &frozen)?,
         })
     }
@@ -2347,6 +2371,21 @@ struct BulkStageTestState {
     sync_status: SyncStatus,
 }
 
+/// Seed the mainnet genesis economic baseline into a test domain store.
+///
+/// Production derives the baseline at startup (block 0) before the sync loop,
+/// so the bulk-build finalize path can read `virtual_occupied` for the
+/// knowledge_size calc. These test-session helpers drive finalize directly
+/// without that startup step, so they must seed it first (fail-fast otherwise).
+/// Values mirror mainnet genesis: 33.6B issued, 8.4B burnt, 6/10 occupied ratio.
+fn seed_test_genesis_baseline(domain_store: &CkbadgerStore) -> Result<()> {
+    domain_store.set_genesis_baseline(&ckbadger_store::GenesisBaseline {
+        total_issuance: 3_360_000_000_000_000_000,
+        burnt: 840_000_000_000_000_000,
+        virtual_occupied: 504_000_000_000_000_000,
+    })
+}
+
 fn run_bulk_stage_test_session<T, F>(
     blocks: &[BlockResponseWithCycles],
     chain_tip: u64,
@@ -2371,6 +2410,7 @@ where
         let domain_store = Arc::new(CkbadgerStore::open_domain(&domain_path)?);
         let append_store = Arc::new(CkbadgerStore::open_append_only(&append_path)?);
         domain_store.update_sync_status(|status| status.init_sync_start(0, true))?;
+        seed_test_genesis_baseline(domain_store.as_ref())?;
         start_bulk_build_session_marker(domain_store.as_ref(), "bulk-build-test-session", 0)?;
         let mut materializer =
             materialize::Materializer::new(domain_store.as_ref(), append_store.as_ref());
@@ -2513,6 +2553,7 @@ fn materialize_bulk_artifacts_from_block_batches_for_test_impl(
         let domain_store = Arc::new(CkbadgerStore::open_domain(&domain_path)?);
         let append_store = Arc::new(CkbadgerStore::open_append_only(&append_path)?);
         domain_store.update_sync_status(|status| status.init_sync_start(0, true))?;
+        seed_test_genesis_baseline(domain_store.as_ref())?;
         start_bulk_build_session_marker(domain_store.as_ref(), "bulk-build-test-session", 0)?;
         let mut materializer =
             materialize::Materializer::new(domain_store.as_ref(), append_store.as_ref());
@@ -6519,12 +6560,16 @@ mod tests {
             .apply_blocks_hex(std::slice::from_ref(&block), true, &FxHashMap::default())
             .unwrap();
 
+        // Mainnet genesis virtual-occupied; both paths must use the same value.
+        let virtual_occupied: i128 = 504_000_000_000_000_000;
         let direct_activity_rows = runtime.activity_stats.build_rows().unwrap();
-        let direct_chain_rows = runtime.chain_stats.build_rows().unwrap();
+        let direct_chain_rows = runtime.chain_stats.build_rows(virtual_occupied).unwrap();
         let frozen = runtime.interner.snapshot_for_reads();
         let direct_snapshot_rows = build_final_snapshot_rows(&runtime.sequencer, &frozen).unwrap();
 
-        let prepared = runtime.prepare_finalize_artifacts().unwrap();
+        let prepared = runtime
+            .prepare_finalize_artifacts(virtual_occupied)
+            .unwrap();
         assert_eq!(prepared.activity_sealed_rows, direct_activity_rows);
         assert_eq!(prepared.chain_sealed_rows, direct_chain_rows);
         assert_eq!(prepared.final_snapshot_rows, direct_snapshot_rows);
@@ -6908,7 +6953,7 @@ mod tests {
         acc.daily_stats
             .insert(day2, (8, 15, 3, 1, 800, 300, 100, 50, 10));
 
-        let rows = acc.build_rows().unwrap();
+        let rows = acc.build_rows(0).unwrap();
 
         // Find daily stats rows (prefix DAILY = 0x01)
         let daily_rows: Vec<_> = rows
@@ -7031,7 +7076,7 @@ mod tests {
         assert_eq!(e6.5, 1);
 
         // build_rows should produce EpochStats rows
-        let rows = acc.build_rows().unwrap();
+        let rows = acc.build_rows(0).unwrap();
         let epoch_rows: Vec<_> = rows
             .iter()
             .filter(|r| {
@@ -7104,7 +7149,7 @@ mod tests {
         let resolved: Vec<facts::ResolvedTxFacts<'_>> = vec![];
         acc.apply_blocks(&arena, &resolved).unwrap();
 
-        let rows = acc.build_rows().unwrap();
+        let rows = acc.build_rows(0).unwrap();
         let epoch_rows: Vec<_> = rows
             .iter()
             .filter(|r| {
