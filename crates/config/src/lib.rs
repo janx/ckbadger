@@ -9,6 +9,12 @@ use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+mod orchestrator;
+pub use orchestrator::{
+    is_orchestrator, load_orchestrator_config, network_workdir, parse_orchestrator_config,
+    NetworkEntry, OrchestratorConfig,
+};
+
 // ---------------------------------------------------------------------------
 // Config structs
 // ---------------------------------------------------------------------------
