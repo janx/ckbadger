@@ -5,6 +5,7 @@ pub mod error;
 pub mod hardfork;
 pub mod hex;
 pub mod label_import;
+pub mod network;
 pub mod proposal;
 pub mod sync;
 pub mod types;
