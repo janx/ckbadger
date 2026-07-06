@@ -319,6 +319,49 @@ pub async fn run_indexer_sync(mut config: Config) -> Result<()> {
         store.set_network_identity(&config.network)?;
     }
 
+    // --- genesis economic baseline (derive once from block 0) ---
+    // Runs on the shared startup path (same place as the Plan-1 guards, before
+    // `Indexer::new` and the sync loop), so it covers both bulk and live sync.
+    // Reuses `guard_rpc` (the local client the guards built). Idempotent: the
+    // `is_none()` check makes re-runs a no-op once the baseline is persisted.
+    if store.get_genesis_baseline()?.is_none() {
+        use crate::genesis_baseline::{compute_genesis_baseline, GenesisCell};
+        use crate::parser::{block::BlockParser, cell::CellParser};
+
+        let genesis = guard_rpc
+            .get_block_by_number(0)
+            .await
+            .context("failed to fetch genesis block for economic baseline")?
+            .ok_or_else(|| anyhow::anyhow!("CKB node returned no genesis block (block 0)"))?;
+
+        let parsed = BlockParser::parse(&genesis.block).context("failed to parse genesis block")?;
+        let mut cells: Vec<GenesisCell> = Vec::new();
+        for tx in &genesis.block.transactions {
+            for pc in CellParser::parse_outputs(tx)
+                .context("failed to parse genesis transaction outputs")?
+            {
+                cells.push(GenesisCell {
+                    capacity: pc.capacity,
+                    lock_args: pc.lock_args,
+                });
+            }
+        }
+
+        let baseline = compute_genesis_baseline(
+            &parsed.dao,
+            &cells,
+            ckbadger_common::burn_policy::burn_policy(&config.network).as_ref(),
+        )?;
+        info!(
+            network = %config.network,
+            total_issuance = %baseline.total_issuance,
+            burnt = %baseline.burnt,
+            virtual_occupied = %baseline.virtual_occupied,
+            "derived genesis economic baseline"
+        );
+        store.set_genesis_baseline(&baseline)?;
+    }
+
     run_startup_label_import(store.clone(), &config).await?;
 
     let indexer = Indexer::new(
