@@ -495,7 +495,8 @@ mod tests {
         // (which reads GenesisBaseline::total_issuance) can compute.
         store
             .set_genesis_baseline(&ckbadger_store::GenesisBaseline {
-                total_issuance: 3_360_000_000_000_000_000,
+                // Exact mainnet genesis DAO `C` (not the rounded 33.6B).
+                total_issuance: 3_360_000_145_238_488_200,
                 burnt: 840_000_000_000_000_000,
                 virtual_occupied: 504_000_000_000_000_000,
             })
