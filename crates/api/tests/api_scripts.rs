@@ -971,6 +971,9 @@ async fn test_script_lookup_and_code_cells_surface_type_reference_ambiguity() {
 #[tokio::test]
 async fn test_cells_by_script_resolves_reference_hash_type_alias() {
     let store = test_store();
+    // The cells-by-script listing reads the genesis baseline once per request
+    // (fail-fast if absent) for burn-cell tagging.
+    seed_genesis_baseline(&store);
 
     let data_hash = vec![0x70; 32];
     let type_hash = vec![0x9b; 32];
@@ -1051,6 +1054,9 @@ async fn test_cells_by_script_resolves_reference_hash_type_alias() {
 #[tokio::test]
 async fn test_cells_by_script_type_request_returns_empty_for_data_only_deployment() {
     let store = test_store();
+    // The cells-by-script listing reads the genesis baseline once per request
+    // (fail-fast if absent) for burn-cell tagging.
+    seed_genesis_baseline(&store);
 
     let data_hash = vec![0x70; 32];
     let tx_hash = vec![0xab; 32];

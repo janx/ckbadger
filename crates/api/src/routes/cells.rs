@@ -6,10 +6,6 @@ use axum::{
     routing::get,
     Router,
 };
-use ckbadger_common::dao::{
-    is_genesis_special_burn_cell, GENESIS_SPECIAL_BURN_CELL_VIRTUAL_OCCUPIED,
-};
-
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
@@ -1672,12 +1668,20 @@ fn parse_address_token_cursor(
 }
 
 /// Helper to convert a LiveCellInfo into a CellResponse.
+///
+/// `network` selects the per-network genesis burn policy and `virtual_occupied`
+/// is the derived `baseline.virtual_occupied` (shannons) reported for genesis
+/// burn cells; both are read once per request in the handler and threaded in.
 fn cell_info_to_response(
     tx_hash: &[u8],
     output_index: i16,
     info: &ckbadger_store::PositionedCellInfo,
+    network: &str,
+    virtual_occupied: i128,
 ) -> CellResponse {
-    let is_special_burn = is_genesis_special_burn_cell(&info.lock_args, info.created_at_block);
+    let is_special_burn = info.created_at_block == 0
+        && ckbadger_common::burn_policy::burn_policy(network)
+            .is_some_and(|p| info.lock_args.as_slice() == p.lock_args);
     CellResponse {
         tx_hash: format!("0x{}", hex::encode(tx_hash)),
         output_index: output_index as i32,
@@ -1699,7 +1703,7 @@ fn cell_info_to_response(
             None
         },
         virtual_used_capacity: if is_special_burn {
-            Some(GENESIS_SPECIAL_BURN_CELL_VIRTUAL_OCCUPIED.to_string())
+            Some(virtual_occupied.to_string())
         } else {
             None
         },
@@ -1923,9 +1927,18 @@ async fn list_live_cells(
         None
     };
 
+    let virtual_occupied = state.genesis_baseline()?.virtual_occupied;
     let cells: Vec<CellResponse> = raw_cells
         .iter()
-        .map(|(tx_hash, output_index, info)| cell_info_to_response(tx_hash, *output_index, info))
+        .map(|(tx_hash, output_index, info)| {
+            cell_info_to_response(
+                tx_hash,
+                *output_index,
+                info,
+                &state.ckb_network,
+                virtual_occupied,
+            )
+        })
         .collect();
 
     // Return pre-computed total when filtering by lock_script_hash only.
@@ -2111,9 +2124,18 @@ async fn list_cells_by_script(
         None
     };
 
+    let virtual_occupied = state.genesis_baseline()?.virtual_occupied;
     let cells: Vec<CellResponse> = results
         .iter()
-        .map(|(tx_hash, output_index, info)| cell_info_to_response(tx_hash, *output_index, info))
+        .map(|(tx_hash, output_index, info)| {
+            cell_info_to_response(
+                tx_hash,
+                *output_index,
+                info,
+                &state.ckb_network,
+                virtual_occupied,
+            )
+        })
         .collect();
 
     ok(CursorPaginatedResponse::new(
@@ -2528,11 +2550,14 @@ async fn get_cell(
             .saturating_mul(SHANNONS_PER_CKB)
     };
 
-    let is_satoshi = is_genesis_special_burn_cell(&info.lock_args, info.created_at_block);
+    let is_satoshi = info.created_at_block == 0
+        && ckbadger_common::burn_policy::burn_policy(&state.ckb_network)
+            .is_some_and(|p| info.lock_args.as_slice() == p.lock_args);
     let (cell_type, virtual_occupied_capacity) = if is_satoshi {
+        let virtual_occupied = state.genesis_baseline()?.virtual_occupied;
         (
             Some("genesis_special_burn".to_string()),
-            Some(GENESIS_SPECIAL_BURN_CELL_VIRTUAL_OCCUPIED.to_string()),
+            Some(virtual_occupied.to_string()),
         )
     } else {
         (None, None)
@@ -3024,6 +3049,10 @@ mod tests {
         out
     }
 
+    /// The mainnet-derived `baseline.virtual_occupied` (shannons): the genesis
+    /// burnt capacity (8.4B CKB) times the 6/10 occupied ratio == 504e15.
+    const VIRTUAL_OCCUPIED_MAINNET: i128 = 504_000_000_000_000_000;
+
     fn make_payload() -> LiveCellInfo {
         LiveCellInfo {
             capacity: 10000000000,
@@ -3099,7 +3128,7 @@ mod tests {
     fn test_cell_info_to_response_normal() {
         let info = make_info();
         let tx_hash = vec![3u8; 32];
-        let resp = cell_info_to_response(&tx_hash, 0, &info);
+        let resp = cell_info_to_response(&tx_hash, 0, &info, "mainnet", VIRTUAL_OCCUPIED_MAINNET);
         assert_eq!(resp.output_index, 0);
         assert_eq!(resp.capacity, "10000000000");
         assert!(resp.cell_type.is_none());
@@ -3115,8 +3144,66 @@ mod tests {
         };
         let info = positioned(info);
         let tx_hash = vec![4u8; 32];
-        let resp = cell_info_to_response(&tx_hash, 1, &info);
+        let resp = cell_info_to_response(&tx_hash, 1, &info, "mainnet", VIRTUAL_OCCUPIED_MAINNET);
         assert_eq!(resp.udt_amount.as_deref(), Some("12345"));
+    }
+
+    /// A genesis (block 0) output whose lock args equal the Satoshi dead-address
+    /// pubkey hash is tagged `genesis_special_burn` and reports the network's
+    /// derived `baseline.virtual_occupied` as `virtualUsedCapacity`.
+    #[test]
+    fn test_cell_info_to_response_genesis_satoshi_burn_tagged() {
+        use ckbadger_common::dao::SATOSHI_PUBKEY_HASH;
+        let payload = LiveCellInfo {
+            lock_args: SATOSHI_PUBKEY_HASH.to_vec(),
+            ..make_payload()
+        };
+        // created_at_block == 0 -> genesis output
+        let info = ckbadger_store::PositionedCellInfo::new(payload, 0);
+        let tx_hash = vec![5u8; 32];
+        let resp = cell_info_to_response(&tx_hash, 0, &info, "mainnet", VIRTUAL_OCCUPIED_MAINNET);
+        assert_eq!(resp.cell_type.as_deref(), Some("genesis_special_burn"));
+        assert_eq!(
+            resp.virtual_used_capacity.as_deref(),
+            Some("504000000000000000")
+        );
+    }
+
+    /// A Satoshi-args output that is NOT at genesis (block > 0) is not tagged;
+    /// nor is a genesis output with non-Satoshi lock args.
+    #[test]
+    fn test_cell_info_to_response_non_genesis_or_non_satoshi_not_tagged() {
+        use ckbadger_common::dao::SATOSHI_PUBKEY_HASH;
+        // Satoshi args but block 100 -> not a genesis burn cell.
+        let satoshi_non_genesis = ckbadger_store::PositionedCellInfo::new(
+            LiveCellInfo {
+                lock_args: SATOSHI_PUBKEY_HASH.to_vec(),
+                ..make_payload()
+            },
+            100,
+        );
+        let tx_hash = vec![6u8; 32];
+        let resp = cell_info_to_response(
+            &tx_hash,
+            0,
+            &satoshi_non_genesis,
+            "mainnet",
+            VIRTUAL_OCCUPIED_MAINNET,
+        );
+        assert!(resp.cell_type.is_none());
+        assert!(resp.virtual_used_capacity.is_none());
+
+        // Genesis (block 0) but non-Satoshi args -> not tagged.
+        let genesis_non_satoshi = ckbadger_store::PositionedCellInfo::new(make_payload(), 0);
+        let resp = cell_info_to_response(
+            &tx_hash,
+            0,
+            &genesis_non_satoshi,
+            "mainnet",
+            VIRTUAL_OCCUPIED_MAINNET,
+        );
+        assert!(resp.cell_type.is_none());
+        assert!(resp.virtual_used_capacity.is_none());
     }
 
     #[test]

@@ -40,6 +40,23 @@ pub fn test_store() -> Arc<CkbadgerStore> {
     store
 }
 
+/// Seed a synced-chain genesis economic baseline into a domain store.
+///
+/// The indexer always derives this at block 0. Read-only handlers that report
+/// genesis-derived economics (circulating supply, and the genesis burn-cell
+/// tagging in the cell/tx builders) fail-fast if it is absent, so any test
+/// whose endpoint touches those paths must seed it first. Values mirror mainnet
+/// genesis: 33.6B issued, 8.4B burnt, 6/10 occupied ratio == 504e15 shannons.
+pub fn seed_genesis_baseline(store: &Arc<CkbadgerStore>) {
+    store
+        .set_genesis_baseline(&ckbadger_store::GenesisBaseline {
+            total_issuance: 3_360_000_000_000_000_000,
+            burnt: 840_000_000_000_000_000,
+            virtual_occupied: 504_000_000_000_000_000,
+        })
+        .unwrap();
+}
+
 pub fn test_append_only_store() -> Arc<CkbadgerStore> {
     let dir = tempfile::tempdir().unwrap();
     let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());

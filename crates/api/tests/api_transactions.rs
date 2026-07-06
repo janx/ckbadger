@@ -4,6 +4,9 @@ use common::*;
 #[tokio::test]
 async fn test_transaction_detail_returns_pending_mempool_transaction() {
     let store = test_store();
+    // The tx-output builder reads `baseline.virtual_occupied` once per request
+    // (fail-fast if absent), so a synced-chain baseline must be present.
+    seed_genesis_baseline(&store);
     let server = MockServer::start().await;
     let hash = pending_tx_hash_hex();
     mount_pending_transaction_rpc(&server, &hash, "pending").await;
@@ -50,6 +53,102 @@ async fn test_transaction_detail_returns_pending_mempool_transaction() {
         pending_previous_output_hash_hex()
     );
     assert_eq!(json["outputs"][0]["capacity"], "100000000000");
+    // This output is at block 0 but its lock args are not the Satoshi dead
+    // address, so it must NOT be tagged as a genesis special burn cell.
+    assert_eq!(json["outputs"][0]["cellType"], serde_json::Value::Null);
+    assert_eq!(
+        json["outputs"][0]["virtualCommonKnowledgeSize"],
+        serde_json::Value::Null
+    );
+}
+
+/// A pending genesis (block 0) output whose lock args equal the Satoshi
+/// dead-address pubkey hash is tagged `genesis_special_burn` and reports the
+/// network's seeded `baseline.virtual_occupied` as `virtualUsedCapacity`,
+/// proving the burn policy + baseline flow through the tx-output builder.
+#[tokio::test]
+async fn test_pending_transaction_genesis_satoshi_output_tagged() {
+    let store = test_store();
+    // Seed the synced-chain baseline; `seed_genesis_baseline` uses mainnet's
+    // 8.4B burnt * 6/10 == 504e15 shannons, the value asserted below.
+    seed_genesis_baseline(&store);
+
+    let server = MockServer::start().await;
+    let hash = pending_tx_hash_hex();
+    let satoshi_args = format!(
+        "0x{}",
+        hex::encode(ckbadger_common::dao::SATOSHI_PUBKEY_HASH)
+    );
+    let rpc_response = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+            "transaction": {
+                "hash": hash,
+                "version": "0x0",
+                "cell_deps": [],
+                "header_deps": [],
+                "inputs": [
+                    {
+                        "previous_output": {
+                            "tx_hash": pending_previous_output_hash_hex(),
+                            "index": "0x0"
+                        },
+                        "since": "0x0"
+                    }
+                ],
+                "outputs": [
+                    {
+                        "capacity": "0x174876e800",
+                        "lock": {
+                            "code_hash": format!("0x{}", "11".repeat(32)),
+                            "hash_type": "type",
+                            "args": satoshi_args
+                        },
+                        "type": null
+                    }
+                ],
+                "outputs_data": ["0x"],
+                "witnesses": ["0x"]
+            },
+            "cycles": "0x5208",
+            "fee": "0x174",
+            "time_added_to_pool": pending_tx_pool_timestamp_hex(),
+            "min_replace_fee": "0x175",
+            "tx_status": {
+                "status": "pending",
+                "block_hash": null,
+                "block_number": null,
+                "reason": null
+            }
+        }
+    });
+    Mock::given(method("POST"))
+        .and(body_partial_json(
+            serde_json::json!({ "method": "get_transaction" }),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(rpc_response))
+        .mount(&server)
+        .await;
+
+    let mut config = test_config(store);
+    config.ckb_rpc_url = server.uri();
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri(format!("/api/v1/transactions/{hash}/detail"))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["outputs"][0]["cellType"], "genesis_special_burn");
+    assert_eq!(
+        json["outputs"][0]["virtualCommonKnowledgeSize"],
+        "504000000000000000"
+    );
 }
 
 #[tokio::test]

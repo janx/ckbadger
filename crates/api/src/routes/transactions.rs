@@ -4,9 +4,6 @@ use axum::{
     Router,
 };
 use ckbadger_common::cycles_task::{CyclesTaskResult, CyclesTaskStatus};
-use ckbadger_common::dao::{
-    is_genesis_special_burn_cell, GENESIS_SPECIAL_BURN_CELL_VIRTUAL_OCCUPIED,
-};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Duration as StdDuration;
@@ -722,6 +719,7 @@ async fn get_transaction_detail(
             &state.store,
             &state.ckb_network,
             0,
+            state.genesis_baseline()?.virtual_occupied,
         )?;
 
         let pending_since = tx_lookup.time_added_to_pool.and_then(|timestamp| {
@@ -848,6 +846,7 @@ async fn get_transaction_detail(
                     &state.store,
                     &state.ckb_network,
                     block_number,
+                    state.genesis_baseline()?.virtual_occupied,
                 )?
             } else {
                 empty_inputs_outputs()
@@ -914,6 +913,7 @@ fn build_inputs_outputs_from_rpc_pending(
     store: &ckbadger_store::CkbadgerStore,
     network: &str,
     block_number: i64,
+    virtual_occupied: i128,
 ) -> Result<PendingTxIoBundle, ApiRouteError> {
     if rpc_tx.outputs.len() != rpc_tx.outputs_data.len() {
         return Err(ApiError::internal(format!(
@@ -1151,11 +1151,13 @@ fn build_inputs_outputs_from_rpc_pending(
                 let occ = occupied_capacity_bytes(args_bytes.len(), type_args_len, data_size);
                 outputs_occupied_capacity += occ as u128;
 
-                let is_satoshi = is_genesis_special_burn_cell(&args_bytes, block_number);
+                let is_satoshi = block_number == 0
+                    && ckbadger_common::burn_policy::burn_policy(network)
+                        .is_some_and(|p| args_bytes.as_slice() == p.lock_args);
                 let (cell_type, virtual_occupied_capacity) = if is_satoshi {
                     (
                         Some("genesis_special_burn".to_string()),
-                        Some(GENESIS_SPECIAL_BURN_CELL_VIRTUAL_OCCUPIED.to_string()),
+                        Some(virtual_occupied.to_string()),
                     )
                 } else {
                     (None, None)
@@ -1208,6 +1210,7 @@ fn build_inputs_outputs_from_rpc_pending(
 }
 
 /// Build inputs/outputs from CKB node's RocksDB transaction view.
+#[allow(clippy::too_many_arguments)]
 fn build_inputs_outputs_from_ckb(
     tx_view: &ckb_types::core::TransactionView,
     ckb_store: &ckb_store_reader::CkbChainReader,
@@ -1216,6 +1219,7 @@ fn build_inputs_outputs_from_ckb(
     store: &ckbadger_store::CkbadgerStore,
     network: &str,
     block_number: i64,
+    virtual_occupied: i128,
 ) -> Result<TxIoBundle, ApiRouteError> {
     let rpc_tx = ckb_store_reader::convert_transaction_view(tx_view);
     let witnesses = rpc_tx.witnesses.clone();
@@ -1441,11 +1445,13 @@ fn build_inputs_outputs_from_ckb(
                 let occ = occupied_capacity_bytes(args_bytes.len(), type_args_len, data_size);
                 outputs_occupied_capacity += occ as u128;
 
-                let is_satoshi = is_genesis_special_burn_cell(&args_bytes, block_number);
+                let is_satoshi = block_number == 0
+                    && ckbadger_common::burn_policy::burn_policy(network)
+                        .is_some_and(|p| args_bytes.as_slice() == p.lock_args);
                 let (cell_type, virtual_occupied_capacity) = if is_satoshi {
                     (
                         Some("genesis_special_burn".to_string()),
-                        Some(GENESIS_SPECIAL_BURN_CELL_VIRTUAL_OCCUPIED.to_string()),
+                        Some(virtual_occupied.to_string()),
                     )
                 } else {
                     (None, None)
