@@ -144,8 +144,9 @@ async fn stop_child_gracefully(name: &str, child: &mut Child) {
 ///
 /// Returns the base set (`indexer`, `api`, `frontend-server`) always, plus
 /// `crawler` when `[crawler].enabled` is set. Each name maps 1:1 to an
-/// `internal <name>` subcommand via [`spawn_service`] (e.g. `"crawler"` ->
-/// `internal crawler`). An explicit `--only` flag overrides this default.
+/// `internal <name>` subcommand that [`run_supervisor`] spawns via
+/// [`spawn_child`] (e.g. `"crawler"` -> `internal crawler`). An explicit
+/// `--only` flag overrides this default.
 pub fn enabled_services(cfg: &CkbadgerConfig) -> Vec<&'static str> {
     let mut services = vec!["indexer", "api", "frontend-server"];
     if cfg.crawler.enabled {
@@ -332,26 +333,6 @@ fn spawn_child(exe: &PathBuf, spec: &ChildSpec, log_dir: &Path) -> Result<Manage
         restart_count: 0,
         started_at: Instant::now(),
     })
-}
-
-/// Thin adapter: spawn a service in a single workdir under its own name.
-///
-/// Kept so single-network tests can spawn without constructing a [`ChildSpec`]
-/// (label == service, so the log stays `<service>.log`). Production paths build
-/// [`ChildSpec`]s and call [`spawn_child`] directly, so this is test-only.
-#[cfg(test)]
-fn spawn_service(
-    exe: &PathBuf,
-    workdir: &str,
-    service: &str,
-    log_dir: &Path,
-) -> Result<ManagedChild> {
-    let spec = ChildSpec {
-        label: service.to_string(),
-        service: service.to_string(),
-        workdir: workdir.to_string(),
-    };
-    spawn_child(exe, &spec, log_dir)
 }
 
 // ---------------------------------------------------------------------------
@@ -615,27 +596,6 @@ mod tests {
         // Verify the shutdown signal was sent
         assert!(shutdown_rx.changed().await.is_ok());
         assert!(*shutdown_rx.borrow());
-    }
-
-    #[tokio::test]
-    async fn test_spawn_service_creates_log_file() {
-        let dir = TempDir::new().unwrap();
-        let workdir = dir.path();
-        let log_dir = workdir.join("run/logs");
-        std::fs::create_dir_all(&log_dir).unwrap();
-
-        let exe = std::env::current_exe().unwrap();
-        let mut child =
-            spawn_service(&exe, &workdir.to_string_lossy(), "indexer", &log_dir).unwrap();
-        let log_file = log_dir.join("indexer.log");
-
-        assert!(
-            log_file.exists(),
-            "service log file should be created at spawn time"
-        );
-
-        let _ = child.child.kill().await;
-        let _ = child.child.wait().await;
     }
 
     #[test]
