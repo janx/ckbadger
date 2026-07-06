@@ -11,8 +11,10 @@ use clap::{Parser, Subcommand};
 use tracing::info;
 
 use ckbadger_config::{
-    default_config_toml, load_config, resolve_ckb_paths, resolve_share_dir, resolve_store_paths,
-    resolve_workdir_path, CkbadgerConfig, ResolvedCkbPaths, StoreConfig, WorkDir,
+    default_config_toml, default_orchestrator_toml, is_orchestrator, load_config,
+    load_orchestrator_config, network_workdir, resolve_ckb_paths, resolve_share_dir,
+    resolve_store_paths, resolve_workdir_path, CkbadgerConfig, ResolvedCkbPaths, StoreConfig,
+    WorkDir,
 };
 
 use ckbadger_api::entry::{run_api, run_frontend_server, ApiServiceConfig, FrontendServiceConfig};
@@ -169,7 +171,7 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     /// Initialize work directory
-    Init,
+    Init(InitArgs),
     /// Start all services (supervisor mode)
     Run(RunArgs),
     /// Terminal monitoring UI
@@ -187,6 +189,13 @@ enum Command {
     /// Internal subprocess commands (not user-facing)
     #[command(hide = true)]
     Internal(InternalArgs),
+}
+
+#[derive(clap::Args)]
+struct InitArgs {
+    /// Also scaffold a testnet network subdir (api port 8102).
+    #[arg(long)]
+    with_testnet: bool,
 }
 
 #[derive(clap::Args)]
@@ -263,11 +272,11 @@ async fn main() -> Result<()> {
     }
 
     match cli.command {
-        Command::Init => {
+        Command::Init(args) => {
             // For init, set up tracing with default "info" level since
             // no config file exists yet.
             init_tracing("info");
-            cmd_init(&workdir)
+            cmd_init(&workdir, &args)
         }
         Command::Purge(args) => {
             // For purge, load config to get log level if available,
@@ -371,6 +380,12 @@ fn build_indexer_service_config(
 // ---------------------------------------------------------------------------
 
 async fn cmd_run(workdir: &Path, args: &RunArgs) -> Result<()> {
+    // Orchestrator dir (`ckbadger.toml`) launches one stack per network subdir.
+    if is_orchestrator(workdir) {
+        return cmd_run_orchestrator(workdir, args).await;
+    }
+
+    // --- single-network path ---
     let config = load_config(workdir)?;
     let work = WorkDir::resolve(workdir);
 
@@ -398,6 +413,57 @@ async fn cmd_run(workdir: &Path, args: &RunArgs) -> Result<()> {
     print_startup_info(workdir, &config, &work, &services, fd_limit);
 
     supervisor::run_supervisor(&work, &config, services).await
+}
+
+/// Orchestrator-mode `run`: launch one `(indexer, api[, crawler])` stack per
+/// network subdir listed in the top-level `ckbadger.toml`.
+///
+/// Each subdir is a standard single-network workdir with its own `config.toml`.
+/// Services are spawned as `ckbadger internal <service> -C <subdir>` children of
+/// one shared supervisor rooted at the orchestrator dir. The frontend is NOT
+/// spawned per-network (a unified frontend proxy is a later plan); each API is
+/// reachable on its own configured port.
+async fn cmd_run_orchestrator(root: &Path, _args: &RunArgs) -> Result<()> {
+    let orch = load_orchestrator_config(root)?;
+    let root_work = WorkDir::resolve(root);
+
+    // At least one indexer will run; fail fast if the fd limit is too low.
+    let fd_limit = raise_fd_limit()?;
+    check_fd_limit_for_indexer(fd_limit)?;
+
+    let mut specs = Vec::new();
+    for entry in &orch.networks {
+        let sub = network_workdir(root, entry);
+        if !sub.join("config.toml").is_file() {
+            bail!(
+                "network '{}' has no config.toml at {}",
+                entry.name,
+                sub.display()
+            );
+        }
+        let cfg = load_config(&sub)?;
+        // Per-network services EXCEPT the frontend (one shared frontend proxy
+        // is added in a later plan).
+        let mut services = vec!["indexer", "api"];
+        if cfg.crawler.enabled {
+            services.push("crawler");
+        }
+        for svc in services {
+            specs.push(supervisor::ChildSpec {
+                label: format!("{}/{}", entry.name, svc),
+                service: svc.to_string(),
+                workdir: sub.to_string_lossy().to_string(),
+            });
+        }
+        println!(
+            "network '{}' -> {} (api :{})",
+            entry.name,
+            sub.display(),
+            cfg.api.port
+        );
+    }
+    println!("Frontend proxy: deferred to a later plan (reach each API on its own port for now).");
+    supervisor::run_supervisor_multi(&root_work, specs).await
 }
 
 // ---------------------------------------------------------------------------
@@ -632,44 +698,47 @@ async fn cmd_label_import(workdir: &Path) -> Result<()> {
 // init command
 // ---------------------------------------------------------------------------
 
-fn cmd_init(workdir: &Path) -> Result<()> {
-    let work = WorkDir::resolve(workdir);
-    let default_config = CkbadgerConfig::default();
-    let store_paths = resolve_store_paths(workdir, &default_config.store);
-
-    if work.is_initialized() {
-        println!("Already initialized: {}", work.config_path.display());
+/// Scaffold an orchestrator work directory: a top-level `ckbadger.toml`
+/// (`[[network]]` array) plus one standard single-network workdir subdir per
+/// network (each with its own `config.toml` and data/log dirs).
+fn cmd_init(root: &Path, args: &InitArgs) -> Result<()> {
+    let orch_path = root.join("ckbadger.toml");
+    if orch_path.exists() {
+        println!("Already initialized: {}", orch_path.display());
         return Ok(());
     }
 
-    // Create directory structure
-    std::fs::create_dir_all(&store_paths.domain_data)
-        .with_context(|| format!("failed to create {}", store_paths.domain_data.display()))?;
-    std::fs::create_dir_all(&store_paths.append_only_data).with_context(|| {
-        format!(
-            "failed to create {}",
-            store_paths.append_only_data.display()
-        )
-    })?;
-    std::fs::create_dir_all(&work.log_dir)
-        .with_context(|| format!("failed to create {}", work.log_dir.display()))?;
-    std::fs::create_dir_all(&work.perf_dir)
-        .with_context(|| format!("failed to create {}", work.perf_dir.display()))?;
+    // Networks + their api ports.
+    let mut nets: Vec<(&str, u16)> = vec![("mainnet", 8101)];
+    if args.with_testnet {
+        nets.push(("testnet", 8102));
+    }
 
-    // Write default config
-    // Stopgap: Task 7 rewrites cmd_init to scaffold per-network configs.
-    let config_content = default_config_toml("mainnet", 8101);
-    std::fs::write(&work.config_path, &config_content)
-        .with_context(|| format!("failed to write {}", work.config_path.display()))?;
+    std::fs::create_dir_all(root)
+        .with_context(|| format!("failed to create {}", root.display()))?;
+    let orch_toml = default_orchestrator_toml(&nets.iter().map(|(n, _)| *n).collect::<Vec<_>>());
+    std::fs::write(&orch_path, orch_toml)
+        .with_context(|| format!("failed to write {}", orch_path.display()))?;
 
-    info!(path = %work.root.display(), "work directory initialized");
-    println!("Initialized work directory: {}", work.root.display());
-    println!("  config:      {}", work.config_path.display());
-    println!("  domain data: {}", store_paths.domain_data.display());
-    println!("  append-only: {}", store_paths.append_only_data.display());
-    println!("  logs:        {}", work.log_dir.display());
-    println!("  perf:        {}", work.perf_dir.display());
+    for (name, api_port) in &nets {
+        let sub = root.join(name);
+        let sub_work = WorkDir::resolve(&sub);
+        let sub_store = resolve_store_paths(&sub, &CkbadgerConfig::default().store);
+        std::fs::create_dir_all(&sub_store.domain_data)
+            .with_context(|| format!("failed to create {}", sub_store.domain_data.display()))?;
+        std::fs::create_dir_all(&sub_store.append_only_data).with_context(|| {
+            format!("failed to create {}", sub_store.append_only_data.display())
+        })?;
+        std::fs::create_dir_all(&sub_work.log_dir)
+            .with_context(|| format!("failed to create {}", sub_work.log_dir.display()))?;
+        std::fs::write(&sub_work.config_path, default_config_toml(name, *api_port))
+            .with_context(|| format!("failed to write {}", sub_work.config_path.display()))?;
+        info!(network = %name, path = %sub.display(), "network workdir initialized");
+        println!("initialized network '{}' at {}", name, sub.display());
+    }
 
+    println!("Orchestrator written: {}", orch_path.display());
+    println!("Edit each <network>/config.toml to set [ckb].workdir before `ckbadger run`.");
     Ok(())
 }
 
@@ -1057,33 +1126,93 @@ mod tests {
 
     // -- init command --
 
-    #[test]
-    fn test_init_creates_directory_structure() {
-        let dir = TempDir::new().unwrap();
-        let root = dir.path().to_path_buf();
-
-        cmd_init(&root).unwrap();
-
-        let work = WorkDir::resolve(&root);
-        assert!(work.config_path.exists(), "config.toml should exist");
-        assert!(work.domain_data.exists(), "data/domain/ should exist");
-        assert!(
-            work.append_only_data.exists(),
-            "data/append-only/ should exist"
-        );
-        assert!(work.log_dir.exists(), "run/logs/ should exist");
-        assert!(work.perf_dir.exists(), "perf/ should exist");
+    /// Scaffold a single-network workdir at `root` (the pre-orchestrator layout).
+    /// Used by the purge tests, which operate on a plain single-network workdir.
+    fn init_single_network(root: &Path) {
+        let work = WorkDir::resolve(root);
+        let store_paths = resolve_store_paths(root, &CkbadgerConfig::default().store);
+        std::fs::create_dir_all(&store_paths.domain_data).unwrap();
+        std::fs::create_dir_all(&store_paths.append_only_data).unwrap();
+        std::fs::create_dir_all(&work.log_dir).unwrap();
+        std::fs::create_dir_all(&work.perf_dir).unwrap();
+        std::fs::write(&work.config_path, default_config_toml("mainnet", 8101)).unwrap();
     }
 
     #[test]
-    fn test_init_writes_valid_config() {
+    fn test_init_creates_orchestrator_structure() {
         let dir = TempDir::new().unwrap();
         let root = dir.path().to_path_buf();
 
-        cmd_init(&root).unwrap();
+        cmd_init(
+            &root,
+            &InitArgs {
+                with_testnet: false,
+            },
+        )
+        .unwrap();
 
-        // The written config should be parseable and match defaults
-        let cfg = load_config(&root).unwrap();
+        // Orchestrator config at the root.
+        assert!(
+            root.join("ckbadger.toml").exists(),
+            "orchestrator ckbadger.toml should exist"
+        );
+        assert!(
+            is_orchestrator(&root),
+            "root should be detected as an orchestrator"
+        );
+
+        // Default is mainnet-only: mainnet subdir is a full single-network workdir.
+        let mainnet = WorkDir::resolve(&root.join("mainnet"));
+        assert!(mainnet.config_path.exists(), "mainnet/config.toml exists");
+        assert!(mainnet.domain_data.exists(), "mainnet data/domain/ exists");
+        assert!(
+            mainnet.append_only_data.exists(),
+            "mainnet data/append-only/ exists"
+        );
+        assert!(mainnet.log_dir.exists(), "mainnet run/logs/ exists");
+
+        // No testnet subdir without --with-testnet.
+        assert!(
+            !root.join("testnet").exists(),
+            "testnet subdir should not exist by default"
+        );
+    }
+
+    #[test]
+    fn test_init_with_testnet_scaffolds_second_network() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().to_path_buf();
+
+        cmd_init(&root, &InitArgs { with_testnet: true }).unwrap();
+
+        // Both networks listed in the orchestrator config.
+        let orch = load_orchestrator_config(&root).unwrap();
+        let names: Vec<&str> = orch.networks.iter().map(|n| n.name.as_str()).collect();
+        assert_eq!(names, vec!["mainnet", "testnet"]);
+
+        // Testnet subdir is a full workdir with the testnet config on port 8102.
+        let testnet = WorkDir::resolve(&root.join("testnet"));
+        assert!(testnet.config_path.exists(), "testnet/config.toml exists");
+        let cfg = load_config(&root.join("testnet")).unwrap();
+        assert_eq!(cfg.ckb.network, "testnet");
+        assert_eq!(cfg.api.port, 8102);
+    }
+
+    #[test]
+    fn test_init_mainnet_config_matches_defaults() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().to_path_buf();
+
+        cmd_init(
+            &root,
+            &InitArgs {
+                with_testnet: false,
+            },
+        )
+        .unwrap();
+
+        // The written mainnet config should parse and match defaults.
+        let cfg = load_config(&root.join("mainnet")).unwrap();
         assert_eq!(cfg, ckbadger_config::CkbadgerConfig::default());
     }
 
@@ -1092,21 +1221,33 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let root = dir.path().to_path_buf();
 
-        cmd_init(&root).unwrap();
+        cmd_init(
+            &root,
+            &InitArgs {
+                with_testnet: false,
+            },
+        )
+        .unwrap();
 
-        // Modify the config so we can verify it isn't overwritten
-        let config_path = root.join("config.toml");
-        let original = std::fs::read_to_string(&config_path).unwrap();
-        let modified = original.replace("mainnet", "testnet");
-        std::fs::write(&config_path, &modified).unwrap();
+        // Modify the orchestrator config so we can verify it isn't overwritten.
+        let orch_path = root.join("ckbadger.toml");
+        let original = std::fs::read_to_string(&orch_path).unwrap();
+        let modified = format!("# sentinel comment\n{original}");
+        std::fs::write(&orch_path, &modified).unwrap();
 
-        // Second init should NOT overwrite
-        cmd_init(&root).unwrap();
+        // Second init should NOT overwrite (orchestrator already exists).
+        cmd_init(
+            &root,
+            &InitArgs {
+                with_testnet: false,
+            },
+        )
+        .unwrap();
 
-        let content = std::fs::read_to_string(&config_path).unwrap();
+        let content = std::fs::read_to_string(&orch_path).unwrap();
         assert!(
-            content.contains("testnet"),
-            "config should not be overwritten on re-init"
+            content.contains("sentinel comment"),
+            "orchestrator config should not be overwritten on re-init"
         );
     }
 
@@ -1115,12 +1256,19 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let root = dir.path().join("deeply").join("nested").join("workdir");
 
-        cmd_init(&root).unwrap();
+        cmd_init(
+            &root,
+            &InitArgs {
+                with_testnet: false,
+            },
+        )
+        .unwrap();
 
-        assert!(root.join("config.toml").exists());
-        assert!(root.join("data/domain").exists());
-        assert!(root.join("data/append-only").exists());
-        assert!(root.join("run/logs").exists());
+        assert!(root.join("ckbadger.toml").exists());
+        assert!(root.join("mainnet/config.toml").exists());
+        assert!(root.join("mainnet/data/domain").exists());
+        assert!(root.join("mainnet/data/append-only").exists());
+        assert!(root.join("mainnet/run/logs").exists());
     }
 
     // -- purge command --
@@ -1130,7 +1278,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let root = dir.path().to_path_buf();
 
-        cmd_init(&root).unwrap();
+        init_single_network(&root);
 
         let args = PurgeArgs { confirm: false };
         let result = cmd_purge(&root, &args);
@@ -1162,7 +1310,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let root = dir.path().to_path_buf();
 
-        cmd_init(&root).unwrap();
+        init_single_network(&root);
 
         // Create some files in the data directories
         let domain_file = root.join("data/domain/test.db");
@@ -1213,7 +1361,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let root = dir.path().to_path_buf();
 
-        cmd_init(&root).unwrap();
+        init_single_network(&root);
 
         // Create metadata directory
         std::fs::create_dir_all(root.join("metadata/tokens")).unwrap();
@@ -1251,7 +1399,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let root = dir.path().to_path_buf();
 
-        cmd_init(&root).unwrap();
+        init_single_network(&root);
 
         let perf_run_dir = root.join("perf/bulk-sync/run-1");
         std::fs::create_dir_all(&perf_run_dir).unwrap();
@@ -1269,7 +1417,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let root = dir.path().to_path_buf();
 
-        cmd_init(&root).unwrap();
+        init_single_network(&root);
 
         let bench_dir = root.join("bench");
         std::fs::create_dir_all(&bench_dir).unwrap();
@@ -1291,7 +1439,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let root = dir.path().to_path_buf();
 
-        cmd_init(&root).unwrap();
+        init_single_network(&root);
 
         // Purge with empty data directories should succeed
         let args = PurgeArgs { confirm: true };
@@ -1303,7 +1451,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let root = dir.path().to_path_buf();
 
-        cmd_init(&root).unwrap();
+        init_single_network(&root);
 
         // Create nested directory structure in domain data
         let nested = root.join("data/domain/subdir/deep/deeper");
@@ -1328,7 +1476,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let root = dir.path().to_path_buf();
 
-        cmd_init(&root).unwrap();
+        init_single_network(&root);
 
         let secondary_dirs = [
             root.join("data/domain-api-secondary"),
@@ -1359,7 +1507,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let root = dir.path().to_path_buf();
 
-        cmd_init(&root).unwrap();
+        init_single_network(&root);
 
         let config_path = root.join("config.toml");
         let custom_config = std::fs::read_to_string(&config_path)

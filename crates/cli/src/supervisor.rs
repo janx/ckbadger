@@ -71,6 +71,23 @@ struct SupervisorState {
     shutdown_requested: bool,
 }
 
+/// A single supervised child: which service, in which workdir, under what label.
+#[derive(Debug, Clone)]
+pub struct ChildSpec {
+    /// Display/log label, e.g. "testnet/indexer" (single-network: just "indexer").
+    pub label: String,
+    /// The `internal <service>` name, e.g. "indexer" / "api" / "crawler".
+    pub service: String,
+    /// Absolute workdir passed as `-C <workdir>` (the network subdir).
+    pub workdir: String,
+}
+
+impl ChildSpec {
+    fn log_file_name(&self) -> String {
+        format!("{}.log", self.label.replace('/', "-"))
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Graceful shutdown
 // ---------------------------------------------------------------------------
@@ -137,46 +154,56 @@ pub fn enabled_services(cfg: &CkbadgerConfig) -> Vec<&'static str> {
     services
 }
 
-/// Run the supervisor: spawn services, start IPC server, monitor children.
+/// Run the supervisor for a single-network workdir.
 ///
-/// Blocks until Ctrl+C or IPC shutdown request. Returns after all
-/// children have been stopped.
+/// Thin wrapper over [`run_supervisor_multi`]: each requested service maps to
+/// one [`ChildSpec`] rooted at `work_dir` (label == service, so its log stays
+/// `<service>.log`). Blocks until Ctrl+C or IPC shutdown request.
 pub async fn run_supervisor(
     work_dir: &WorkDir,
     _config: &CkbadgerConfig,
     services: Vec<String>,
 ) -> Result<()> {
-    // Ensure run directory exists
-    std::fs::create_dir_all(&work_dir.run_dir).with_context(|| {
-        format!(
-            "failed to create run directory: {}",
-            work_dir.run_dir.display()
-        )
-    })?;
-    std::fs::create_dir_all(&work_dir.log_dir).with_context(|| {
-        format!(
-            "failed to create log directory: {}",
-            work_dir.log_dir.display()
-        )
-    })?;
+    let workdir_str = work_dir.root.to_string_lossy().to_string();
+    let specs = services
+        .into_iter()
+        .map(|service| ChildSpec {
+            label: service.clone(),
+            service,
+            workdir: workdir_str.clone(),
+        })
+        .collect();
+    run_supervisor_multi(work_dir, specs).await
+}
+
+/// Supervise an arbitrary set of children (used by orchestrator/multi-network).
+///
+/// Spawns every [`ChildSpec`] as a `ckbadger internal <service> -C <workdir>`
+/// subprocess, starts the IPC server on `root`'s socket, and monitors/restarts
+/// children with exponential backoff. Blocks until Ctrl+C or IPC shutdown.
+pub async fn run_supervisor_multi(root: &WorkDir, specs: Vec<ChildSpec>) -> Result<()> {
+    // Ensure run + log directories exist
+    std::fs::create_dir_all(&root.run_dir)
+        .with_context(|| format!("failed to create run directory: {}", root.run_dir.display()))?;
+    std::fs::create_dir_all(&root.log_dir)
+        .with_context(|| format!("failed to create log directory: {}", root.log_dir.display()))?;
 
     // Write PID file
     let pid = std::process::id();
-    std::fs::write(&work_dir.supervisor_pid, pid.to_string()).with_context(|| {
+    std::fs::write(&root.supervisor_pid, pid.to_string()).with_context(|| {
         format!(
             "failed to write PID file: {}",
-            work_dir.supervisor_pid.display()
+            root.supervisor_pid.display()
         )
     })?;
 
-    // Spawn initial children
     let exe = std::env::current_exe().context("failed to determine executable path")?;
-    let workdir_str = work_dir.root.to_string_lossy().to_string();
 
+    // Spawn initial children
     let mut children = Vec::new();
-    for service in &services {
-        let child = spawn_service(&exe, &workdir_str, service, &work_dir.log_dir)?;
-        info!(service = %service, pid = child.pid(), "started service");
+    for spec in &specs {
+        let child = spawn_child(&exe, spec, &root.log_dir)?;
+        info!(child = %spec.label, pid = child.pid(), "started service");
         children.push(child);
     }
 
@@ -191,7 +218,7 @@ pub async fn run_supervisor(
     // Start IPC server
     let ipc_state = state.clone();
     let ipc_shutdown_tx = shutdown_tx.clone();
-    let sock_path = work_dir.indexer_sock.clone();
+    let sock_path = root.indexer_sock.clone();
     let ipc_handle = tokio::spawn(async move {
         let handler: Arc<dyn IpcHandler + Send + Sync> =
             Arc::new(SupervisorIpcHandler::new(ipc_state, ipc_shutdown_tx));
@@ -204,17 +231,15 @@ pub async fn run_supervisor(
     // Monitor loop
     let monitor_state = state.clone();
     let monitor_exe = exe.clone();
-    let monitor_workdir = workdir_str.clone();
-    let monitor_log_dir = work_dir.log_dir.clone();
-    let monitor_services = services.clone();
+    let monitor_log_dir = root.log_dir.clone();
+    let monitor_specs = specs.clone();
     let monitor_shutdown = shutdown_rx.clone();
     let monitor_handle = tokio::spawn(async move {
-        monitor_children(
+        monitor_children_multi(
             monitor_state,
             &monitor_exe,
-            &monitor_workdir,
             &monitor_log_dir,
-            &monitor_services,
+            &monitor_specs,
             monitor_shutdown,
         )
         .await;
@@ -245,7 +270,7 @@ pub async fn run_supervisor(
         let mut locked = state.lock().await;
         locked.shutdown_requested = true;
         for managed in &mut locked.children {
-            info!(service = %managed.name, pid = managed.pid(), "stopping service");
+            info!(child = %managed.name, pid = managed.pid(), "stopping service");
             stop_child_gracefully(&managed.name, &mut managed.child).await;
         }
     }
@@ -255,8 +280,8 @@ pub async fn run_supervisor(
     monitor_handle.abort();
 
     // Remove PID file and socket
-    let _ = std::fs::remove_file(&work_dir.supervisor_pid);
-    let _ = std::fs::remove_file(&work_dir.indexer_sock);
+    let _ = std::fs::remove_file(&root.supervisor_pid);
+    let _ = std::fs::remove_file(&root.indexer_sock);
 
     info!("supervisor stopped");
     Ok(())
@@ -266,16 +291,15 @@ pub async fn run_supervisor(
 // Service spawning
 // ---------------------------------------------------------------------------
 
-fn spawn_service(
-    exe: &PathBuf,
-    workdir: &str,
-    service: &str,
-    log_dir: &Path,
-) -> Result<ManagedChild> {
+/// Spawn one child subprocess from a [`ChildSpec`].
+///
+/// Runs `ckbadger internal <spec.service> -C <spec.workdir>`, redirecting both
+/// stdout and stderr to `<log_dir>/<spec.log_file_name()>`.
+fn spawn_child(exe: &PathBuf, spec: &ChildSpec, log_dir: &Path) -> Result<ManagedChild> {
     std::fs::create_dir_all(log_dir)
         .with_context(|| format!("failed to create log directory: {}", log_dir.display()))?;
 
-    let log_file_path = log_dir.join(format!("{service}.log"));
+    let log_file_path = log_dir.join(spec.log_file_name());
     let stdout_log = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -288,38 +312,57 @@ fn spawn_service(
         })?;
     let stderr_log = stdout_log
         .try_clone()
-        .with_context(|| format!("failed to clone log handle for service {}", service))?;
+        .with_context(|| format!("failed to clone log handle for {}", spec.label))?;
 
     let child = Command::new(exe)
         .arg("internal")
-        .arg(service)
+        .arg(&spec.service)
         .arg("-C")
-        .arg(workdir)
+        .arg(&spec.workdir)
         .stdin(Stdio::null())
         .stdout(Stdio::from(stdout_log))
         .stderr(Stdio::from(stderr_log))
         .kill_on_drop(true)
         .spawn()
-        .with_context(|| format!("failed to spawn {} subprocess", service))?;
+        .with_context(|| format!("failed to spawn {} subprocess", spec.label))?;
 
     Ok(ManagedChild {
-        name: service.to_string(),
+        name: spec.label.clone(),
         child,
         restart_count: 0,
         started_at: Instant::now(),
     })
 }
 
+/// Thin adapter: spawn a service in a single workdir under its own name.
+///
+/// Kept so single-network tests can spawn without constructing a [`ChildSpec`]
+/// (label == service, so the log stays `<service>.log`). Production paths build
+/// [`ChildSpec`]s and call [`spawn_child`] directly, so this is test-only.
+#[cfg(test)]
+fn spawn_service(
+    exe: &PathBuf,
+    workdir: &str,
+    service: &str,
+    log_dir: &Path,
+) -> Result<ManagedChild> {
+    let spec = ChildSpec {
+        label: service.to_string(),
+        service: service.to_string(),
+        workdir: workdir.to_string(),
+    };
+    spawn_child(exe, &spec, log_dir)
+}
+
 // ---------------------------------------------------------------------------
 // Health monitoring
 // ---------------------------------------------------------------------------
 
-async fn monitor_children(
+async fn monitor_children_multi(
     state: Arc<Mutex<SupervisorState>>,
     exe: &PathBuf,
-    workdir: &str,
     log_dir: &Path,
-    services: &[String],
+    specs: &[ChildSpec],
     mut shutdown_rx: watch::Receiver<bool>,
 ) {
     loop {
@@ -346,7 +389,7 @@ async fn monitor_children(
                 Ok(None) => None,
                 Err(e) => {
                     warn!(
-                        service = %locked.children[i].name,
+                        child = %locked.children[i].name,
                         error = %e,
                         "failed to check child status"
                     );
@@ -355,7 +398,7 @@ async fn monitor_children(
             };
 
             if let Some(status) = exited {
-                let name = &locked.children[i].name;
+                let label = &specs[i].label;
                 let uptime = locked.children[i].started_at.elapsed();
                 let mut restart_count = locked.children[i].restart_count;
 
@@ -364,7 +407,7 @@ async fn monitor_children(
                 // from being penalized by earlier transient startup failures.
                 if uptime >= STABLE_RUNNING_THRESHOLD && restart_count > 0 {
                     info!(
-                        service = %name,
+                        child = %label,
                         previous_restart_count = restart_count,
                         uptime_secs = uptime.as_secs(),
                         "service ran stably, resetting restart counter"
@@ -374,7 +417,7 @@ async fn monitor_children(
 
                 if restart_count >= MAX_RESTART_ATTEMPTS {
                     error!(
-                        service = %name,
+                        child = %label,
                         restarts = restart_count,
                         "service exceeded max restart attempts, giving up"
                     );
@@ -382,7 +425,7 @@ async fn monitor_children(
                 }
 
                 warn!(
-                    service = %name,
+                    child = %label,
                     exit_status = %status,
                     restart_count = restart_count + 1,
                     "service exited, restarting..."
@@ -403,13 +446,12 @@ async fn monitor_children(
                     return;
                 }
 
-                // Respawn
-                let service_name = &services[i];
-                match spawn_service(exe, workdir, service_name, log_dir) {
+                // Respawn with the correct per-child spec.
+                match spawn_child(exe, &specs[i], log_dir) {
                     Ok(mut new_child) => {
                         new_child.restart_count = restart_count + 1;
                         info!(
-                            service = %service_name,
+                            child = %specs[i].label,
                             pid = new_child.pid(),
                             restart_count = restart_count + 1,
                             "service restarted"
@@ -418,7 +460,7 @@ async fn monitor_children(
                     }
                     Err(e) => {
                         error!(
-                            service = %service_name,
+                            child = %specs[i].label,
                             error = %e,
                             "failed to restart service"
                         );
@@ -592,6 +634,35 @@ mod tests {
             "service log file should be created at spawn time"
         );
 
+        let _ = child.child.kill().await;
+        let _ = child.child.wait().await;
+    }
+
+    #[test]
+    fn child_spec_log_and_label() {
+        let spec = ChildSpec {
+            label: "testnet/indexer".to_string(),
+            service: "indexer".to_string(),
+            workdir: "/srv/ckb/testnet".to_string(),
+        };
+        // Log filename derives from the label with '/' replaced by '-'.
+        assert_eq!(spec.log_file_name(), "testnet-indexer.log");
+    }
+
+    #[tokio::test]
+    async fn spawn_child_creates_labeled_log_file() {
+        let dir = TempDir::new().unwrap();
+        let log_dir = dir.path().join("run/logs");
+        std::fs::create_dir_all(&log_dir).unwrap();
+        let exe = std::env::current_exe().unwrap();
+
+        let spec = ChildSpec {
+            label: "mainnet/indexer".to_string(),
+            service: "indexer".to_string(),
+            workdir: dir.path().to_string_lossy().to_string(),
+        };
+        let mut child = spawn_child(&exe, &spec, &log_dir).unwrap();
+        assert!(log_dir.join("mainnet-indexer.log").exists());
         let _ = child.child.kill().await;
         let _ = child.child.wait().await;
     }
