@@ -5,6 +5,7 @@ pub mod dotbit;
 pub mod fiber;
 pub mod media_source;
 pub mod mnft;
+pub mod registry;
 pub mod rgbpp;
 pub mod script;
 pub mod spore;

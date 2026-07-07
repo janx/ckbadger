@@ -8,7 +8,7 @@ use tracing::{debug, info};
 use crate::parser::script::ScriptParser;
 use crate::rpc::Script;
 
-mod bundled {
+pub(crate) mod bundled {
     use super::*;
 
     const BUNDLED_UDT_LABELS: &[u8] =
@@ -178,13 +178,13 @@ impl<'de> Deserialize<'de> for ValidatedHashType {
 }
 
 #[derive(Debug, Clone)]
-enum ImportDeployment {
+pub(crate) enum ImportDeployment {
     Version(ScriptDeploymentEntry),
     Pseudo(PseudoScriptDeployment),
 }
 
 impl ScriptNetworkMetadata {
-    fn import_deployments(&self) -> Vec<ImportDeployment> {
+    pub(crate) fn import_deployments(&self) -> Vec<ImportDeployment> {
         if let Some(pseudo) = &self.pseudo {
             return vec![ImportDeployment::Pseudo(pseudo.clone())];
         }
