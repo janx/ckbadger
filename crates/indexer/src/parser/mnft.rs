@@ -1,5 +1,3 @@
-use std::sync::LazyLock;
-
 use crate::rpc::{parse_hex_to_bytes, CellOutput, TransactionView};
 
 use super::bytes_to_safe_string;
@@ -14,13 +12,6 @@ pub const MNFT_CLASS_CODE_HASH: &str =
 
 pub const MNFT_TOKEN_CODE_HASH: &str =
     "0x2b24f0d644ccbdd77bbf86b27c8cca02efa0ad051e447c212636d9ee7acaaec9";
-
-static MNFT_ISSUER_HASH: LazyLock<Vec<u8>> =
-    LazyLock::new(|| parse_hex_to_bytes(MNFT_ISSUER_CODE_HASH));
-static MNFT_CLASS_HASH: LazyLock<Vec<u8>> =
-    LazyLock::new(|| parse_hex_to_bytes(MNFT_CLASS_CODE_HASH));
-static MNFT_TOKEN_HASH: LazyLock<Vec<u8>> =
-    LazyLock::new(|| parse_hex_to_bytes(MNFT_TOKEN_CODE_HASH));
 
 #[derive(Debug, Clone)]
 pub struct ParsedMnftIssuer {
@@ -63,15 +54,24 @@ pub struct MnftParser;
 
 impl MnftParser {
     pub fn is_issuer_type_script(code_hash: &[u8]) -> bool {
-        code_hash == MNFT_ISSUER_HASH.as_slice()
+        crate::parser::registry::PROTOCOL_REGISTRY.is(
+            code_hash,
+            crate::parser::registry::ProtocolScript::MnftIssuer,
+        )
     }
 
     pub fn is_class_type_script(code_hash: &[u8]) -> bool {
-        code_hash == MNFT_CLASS_HASH.as_slice()
+        crate::parser::registry::PROTOCOL_REGISTRY.is(
+            code_hash,
+            crate::parser::registry::ProtocolScript::MnftClass,
+        )
     }
 
     pub fn is_token_type_script(code_hash: &[u8]) -> bool {
-        code_hash == MNFT_TOKEN_HASH.as_slice()
+        crate::parser::registry::PROTOCOL_REGISTRY.is(
+            code_hash,
+            crate::parser::registry::ProtocolScript::MnftToken,
+        )
     }
 
     pub fn parse_issuer_cell(output: &CellOutput, data_hex: &str) -> Option<ParsedMnftIssuer> {
@@ -527,6 +527,16 @@ mod tests {
     fn test_is_token_type_script() {
         let hash = parse_hex_to_bytes(MNFT_TOKEN_CODE_HASH);
         assert!(MnftParser::is_token_type_script(&hash));
+    }
+
+    #[test]
+    fn detects_testnet_mnft_issuer() {
+        // Testnet mNFT issuer type script — resolved via the network-agnostic
+        // ProtocolRegistry (previously undetected by the mainnet-only byte table).
+        let t = parse_hex_to_bytes(
+            "0xb59879b6ea6fff985223117fa499ce84f8cfb028c4ffdfdf5d3ec19e905a11ed",
+        );
+        assert!(MnftParser::is_issuer_type_script(&t));
     }
 
     #[test]
