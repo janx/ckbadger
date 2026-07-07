@@ -1,0 +1,15 @@
+name = "Fiber Commitment Lock"
+description = "Fiber payment-channel commitment lock."
+website = "https://www.fiber.world/"
+
+[mainnet]
+[[mainnet.versions]]
+canonical_ref_hash = "0x2d45c4d3ed3e942f1945386ee82a5d1b7e4bb16d7fe1ab015421174ab747406c"
+version_hash = "0x2d45c4d3ed3e942f1945386ee82a5d1b7e4bb16d7fe1ab015421174ab747406c"
+canonical_hash_type = "type"
+
+[testnet]
+[[testnet.versions]]
+canonical_ref_hash = "0x740dee83f87c6f309824d8fd3fbdd3c8380ee6fc9acc90b1a748438afcdf81d8"
+version_hash = "0x740dee83f87c6f309824d8fd3fbdd3c8380ee6fc9acc90b1a748438afcdf81d8"
+canonical_hash_type = "type"

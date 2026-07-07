@@ -1,0 +1,15 @@
+name = "Fiber Funding Lock"
+description = "Fiber payment-channel funding lock."
+website = "https://www.fiber.world/"
+
+[mainnet]
+[[mainnet.versions]]
+canonical_ref_hash = "0xe45b1f8f21bff23137035a3ab751d75b36a981deec3e7820194b9c042967f4f1"
+version_hash = "0xe45b1f8f21bff23137035a3ab751d75b36a981deec3e7820194b9c042967f4f1"
+canonical_hash_type = "type"
+
+[testnet]
+[[testnet.versions]]
+canonical_ref_hash = "0x6c67887fe201ee0c7853f1682c0b77c0e6214044c156c7558269390a8afa6d7c"
+version_hash = "0x6c67887fe201ee0c7853f1682c0b77c0e6214044c156c7558269390a8afa6d7c"
+canonical_hash_type = "type"

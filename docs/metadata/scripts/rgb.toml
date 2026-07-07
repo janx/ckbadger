@@ -12,3 +12,9 @@ canonical_hash_type = "type"
 canonical_ref_hash = "0xd07598deec7ce7b5665310386b4abd06a6d48843e953c5cc2112ad0d5a220364"
 version_hash = "0x7e458568bc12ba00bfb10ec1805a485ee1c14b16f4a6930ce1498e2e36e6374a"
 canonical_hash_type = "type"
+
+[[testnet.versions]]
+# BTC Testnet3 deployment (registry previously had only the Signet variant).
+canonical_ref_hash = "0x61ca7a4796a4eb19ca4f0d065cb9b10ddcf002f10f7cbb810c706cb6bb5c3248"
+version_hash = "0x61ca7a4796a4eb19ca4f0d065cb9b10ddcf002f10f7cbb810c706cb6bb5c3248"
+canonical_hash_type = "type"

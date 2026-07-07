@@ -1,0 +1,17 @@
+name = "UTXOSwap Intent Lock"
+description = "UTXOSwap v1 intent lock. On-chain verified as authentic but the v1 generation is superseded; the current production lock is served from a gated API and is undocumented."
+website = "https://utxoswap.xyz/"
+
+[mainnet]
+[[mainnet.versions]]
+canonical_ref_hash = "0x3547c9aa563804e47ba3ebd37e6012e447c91a238f7aa71b1a75319f11df060e"
+version_hash = "0x3547c9aa563804e47ba3ebd37e6012e447c91a238f7aa71b1a75319f11df060e"
+canonical_hash_type = "type"
+deprecated = true
+
+[testnet]
+[[testnet.versions]]
+canonical_ref_hash = "0x4e9c30c8d6ce275740fbe69eae49c3d8c213578c5bd066f4938fe3c7dec6e101"
+version_hash = "0x4e9c30c8d6ce275740fbe69eae49c3d8c213578c5bd066f4938fe3c7dec6e101"
+canonical_hash_type = "type"
+deprecated = true
