@@ -12,6 +12,10 @@ use super::script::ScriptParser;
 pub const DOTBIT_ACCOUNT_CELL_TYPE_ID: &str =
     "0x4f170a048198408f4f4d36bdbcddcebe7a0ae85244d3ab08fd40a80cbfc70918";
 
+// Kept as a canonical reference value for other modules / later tasks. The
+// detector predicate below now classifies via PROTOCOL_REGISTRY, so this static
+// currently has no readers inside this module.
+#[allow(dead_code)]
 static DOTBIT_TYPE_ID_HASH: LazyLock<Vec<u8>> =
     LazyLock::new(|| parse_hex_to_bytes(DOTBIT_ACCOUNT_CELL_TYPE_ID));
 
@@ -57,7 +61,10 @@ pub struct DotbitParser;
 
 impl DotbitParser {
     pub fn is_account_cell_type_script(code_hash: &[u8]) -> bool {
-        code_hash == DOTBIT_TYPE_ID_HASH.as_slice()
+        crate::parser::registry::PROTOCOL_REGISTRY.is(
+            code_hash,
+            crate::parser::registry::ProtocolScript::DotbitAccount,
+        )
     }
 
     pub fn parse_account_cell(output: &CellOutput, data_hex: &str) -> Option<ParsedDotbitAccount> {
@@ -729,6 +736,14 @@ mod tests {
             "0x0000000000000000000000000000000000000000000000000000000000000000",
         );
         assert!(!DotbitParser::is_account_cell_type_script(&other));
+    }
+
+    #[test]
+    fn detects_testnet_bit_account() {
+        let t = crate::rpc::parse_hex_to_bytes(
+            "0x1106d9eaccde0995a7e07e80dd0ce7509f21752538dfdd1ee2526d24574846b1",
+        );
+        assert!(DotbitParser::is_account_cell_type_script(&t));
     }
 
     #[test]

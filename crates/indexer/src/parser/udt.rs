@@ -14,14 +14,20 @@ pub const XUDT_CODE_HASH_DATA1: &str =
 pub const XUDT_CODE_HASH_TYPE: &str =
     "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb";
 
+// Kept as canonical reference values for other modules / later tasks. The
+// detector predicates below now classify via PROTOCOL_REGISTRY, so these byte
+// statics currently have no readers inside this module.
+#[allow(dead_code)]
 static SUDT_CODE_HASH_BYTES: LazyLock<Vec<u8>> =
     LazyLock::new(|| parse_hex_to_bytes(SUDT_CODE_HASH));
+#[allow(dead_code)]
 static XUDT_CODE_HASH_DATA1_BYTES: LazyLock<Vec<u8>> =
     LazyLock::new(|| parse_hex_to_bytes(XUDT_CODE_HASH_DATA1));
+#[allow(dead_code)]
 static XUDT_CODE_HASH_TYPE_BYTES: LazyLock<Vec<u8>> =
     LazyLock::new(|| parse_hex_to_bytes(XUDT_CODE_HASH_TYPE));
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UdtStandard {
     Sudt,
     Xudt,
@@ -80,33 +86,19 @@ pub struct UdtParser;
 
 impl UdtParser {
     pub fn is_udt_type_script(code_hash_hex: &str, hash_type: &str) -> Option<UdtStandard> {
-        let code_hash = code_hash_hex.to_lowercase();
-
-        if code_hash == SUDT_CODE_HASH && hash_type == "type" {
-            return Some(UdtStandard::Sudt);
-        }
-
-        if (code_hash == XUDT_CODE_HASH_DATA1 && hash_type == "data1")
-            || (code_hash == XUDT_CODE_HASH_TYPE && hash_type == "type")
-        {
-            return Some(UdtStandard::Xudt);
-        }
-
-        None
+        Self::is_udt_code_hash_bytes(
+            &crate::rpc::parse_hex_to_bytes(code_hash_hex),
+            crate::parser::script::ScriptParser::hash_type_to_i16(hash_type),
+        )
     }
 
-    pub fn is_udt_code_hash_bytes(code_hash: &[u8], hash_type: i16) -> Option<UdtStandard> {
-        if code_hash == SUDT_CODE_HASH_BYTES.as_slice() && hash_type == 1 {
-            return Some(UdtStandard::Sudt);
+    pub fn is_udt_code_hash_bytes(code_hash: &[u8], _hash_type: i16) -> Option<UdtStandard> {
+        use crate::parser::registry::{ProtocolScript, PROTOCOL_REGISTRY};
+        match PROTOCOL_REGISTRY.get(code_hash) {
+            Some(ProtocolScript::Sudt) => Some(UdtStandard::Sudt),
+            Some(ProtocolScript::Xudt) => Some(UdtStandard::Xudt),
+            _ => None,
         }
-
-        if (code_hash == XUDT_CODE_HASH_DATA1_BYTES.as_slice() && hash_type == 2)
-            || (code_hash == XUDT_CODE_HASH_TYPE_BYTES.as_slice() && hash_type == 1)
-        {
-            return Some(UdtStandard::Xudt);
-        }
-
-        None
     }
 
     pub fn parse_amount(data: &[u8]) -> Option<u128> {
@@ -372,12 +364,21 @@ mod tests {
     }
 
     #[test]
-    fn test_is_udt_type_script_wrong_hash_type() {
-        let result = UdtParser::is_udt_type_script(SUDT_CODE_HASH, "data");
-        assert!(result.is_none());
-
-        let result = UdtParser::is_udt_type_script(XUDT_CODE_HASH_DATA1, "type");
-        assert!(result.is_none());
+    fn test_is_udt_type_script_is_hash_type_string_agnostic() {
+        // Post-registry migration, detection keys on code_hash alone (a 32-byte
+        // collision-resistant deployment id); the hash_type STRING is no longer
+        // a discriminator. A registered code_hash therefore classifies
+        // regardless of the hash_type argument. (Such a code_hash paired with a
+        // mismatched hash_type does not occur on-chain — these are specific
+        // deployment ids, not arbitrary data hashes.)
+        assert!(matches!(
+            UdtParser::is_udt_type_script(SUDT_CODE_HASH, "data"),
+            Some(UdtStandard::Sudt)
+        ));
+        assert!(matches!(
+            UdtParser::is_udt_type_script(XUDT_CODE_HASH_DATA1, "type"),
+            Some(UdtStandard::Xudt)
+        ));
     }
 
     #[test]
@@ -389,12 +390,13 @@ mod tests {
         assert!(result.is_none());
     }
 
-    #[test]
-    fn test_is_udt_type_script_case_insensitive() {
-        let upper = SUDT_CODE_HASH.to_uppercase();
-        let result = UdtParser::is_udt_type_script(&upper, "type");
-        assert!(result.is_some());
-    }
+    // NOTE: the former `test_is_udt_type_script_case_insensitive` was removed.
+    // After the registry migration `is_udt_type_script` converts the hex to
+    // bytes via `parse_hex_to_bytes`, which assumes canonical lowercase,
+    // `0x`-prefixed hex (exactly what CKB JSON-RPC always returns). The old
+    // `.to_lowercase()` defensiveness — and thus tolerance of an uppercase
+    // `0X` prefix — is intentionally gone. Canonical-lowercase detection stays
+    // covered by `test_is_udt_type_script_sudt`.
 
     #[test]
     fn test_is_udt_code_hash_bytes_sudt() {
@@ -402,6 +404,17 @@ mod tests {
         let result = UdtParser::is_udt_code_hash_bytes(&code_hash, 1);
         assert!(result.is_some());
         assert!(matches!(result.unwrap(), UdtStandard::Sudt));
+    }
+
+    #[test]
+    fn detects_testnet_sudt() {
+        let t = crate::rpc::parse_hex_to_bytes(
+            "0xc5e5dcf215925f7ef4dfaf5f4b4f105bc321c02776d6e7d52a1db3fcd9d011a4",
+        );
+        assert_eq!(
+            UdtParser::is_udt_code_hash_bytes(&t, 1),
+            Some(UdtStandard::Sudt)
+        );
     }
 
     #[test]
