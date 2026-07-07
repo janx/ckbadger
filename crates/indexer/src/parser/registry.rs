@@ -86,7 +86,17 @@ impl ProtocolRegistry {
                         ImportDeployment::Version(version) => &version.canonical_ref_hash,
                         ImportDeployment::Pseudo(pseudo) => &pseudo.code_hash,
                     };
-                    by_code_hash.insert(parse_hex_to_bytes(code_hash_hex), protocol);
+                    let bytes = parse_hex_to_bytes(code_hash_hex);
+                    // Fail-fast: the network-agnostic union premise is that a code_hash
+                    // uniquely identifies one protocol. Same-protocol duplicates are
+                    // idempotent; a DIFFERENT protocol on the same key is a data bug.
+                    if let Some(prev) = by_code_hash.insert(bytes.clone(), protocol) {
+                        assert_eq!(
+                            prev, protocol,
+                            "protocol registry code_hash collision: 0x{} maps to both {prev:?} and {protocol:?} — two scripts/*.toml share a canonical_ref_hash",
+                            hex::encode(&bytes)
+                        );
+                    }
                 }
             }
         }
@@ -158,11 +168,12 @@ mod tests {
             )),
             Some(ProtocolScript::StablePpVault)
         );
-        assert_ne!(
+        // The old pool-lock value must not map to ANY protocol (not just "not vault").
+        assert_eq!(
             r.get(&parse_hex_to_bytes(
                 "0xff352022029a6ecf03e8a838b979a46e1231f05f9a3df9b4198f7eeb4afc2e67"
             )),
-            Some(ProtocolScript::StablePpVault)
+            None
         );
         // unknown hash → None
         assert_eq!(
