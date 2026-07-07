@@ -1,5 +1,4 @@
 use std::collections::BTreeMap;
-use std::sync::LazyLock;
 
 use crate::rpc::{parse_hex_to_bytes, CellOutput, TransactionView};
 
@@ -13,19 +12,6 @@ pub const XUDT_CODE_HASH_DATA1: &str =
 
 pub const XUDT_CODE_HASH_TYPE: &str =
     "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb";
-
-// Kept as canonical reference values for other modules / later tasks. The
-// detector predicates below now classify via PROTOCOL_REGISTRY, so these byte
-// statics currently have no readers inside this module.
-#[allow(dead_code)]
-static SUDT_CODE_HASH_BYTES: LazyLock<Vec<u8>> =
-    LazyLock::new(|| parse_hex_to_bytes(SUDT_CODE_HASH));
-#[allow(dead_code)]
-static XUDT_CODE_HASH_DATA1_BYTES: LazyLock<Vec<u8>> =
-    LazyLock::new(|| parse_hex_to_bytes(XUDT_CODE_HASH_DATA1));
-#[allow(dead_code)]
-static XUDT_CODE_HASH_TYPE_BYTES: LazyLock<Vec<u8>> =
-    LazyLock::new(|| parse_hex_to_bytes(XUDT_CODE_HASH_TYPE));
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UdtStandard {

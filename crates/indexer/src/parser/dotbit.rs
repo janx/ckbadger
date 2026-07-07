@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::sync::LazyLock;
 
 use anyhow::{anyhow, Result};
 use tracing::warn;
@@ -11,13 +10,6 @@ use super::script::ScriptParser;
 
 pub const DOTBIT_ACCOUNT_CELL_TYPE_ID: &str =
     "0x4f170a048198408f4f4d36bdbcddcebe7a0ae85244d3ab08fd40a80cbfc70918";
-
-// Kept as a canonical reference value for other modules / later tasks. The
-// detector predicate below now classifies via PROTOCOL_REGISTRY, so this static
-// currently has no readers inside this module.
-#[allow(dead_code)]
-static DOTBIT_TYPE_ID_HASH: LazyLock<Vec<u8>> =
-    LazyLock::new(|| parse_hex_to_bytes(DOTBIT_ACCOUNT_CELL_TYPE_ID));
 
 const HASH_BYTES_LEN: usize = 32;
 const ACCOUNT_ID_LEN: usize = 20;

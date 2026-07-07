@@ -1,17 +1,9 @@
-use std::sync::LazyLock;
-
 use crate::rpc::{parse_hex_to_bytes, CellOutput, TransactionView};
 
 use super::script::ScriptParser;
 
 pub const DAO_CODE_HASH: &str =
     "0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e";
-
-// Kept as a canonical reference value for other modules / later tasks. The
-// detector predicates below now classify via PROTOCOL_REGISTRY, so this static
-// currently has no readers inside this module.
-#[allow(dead_code)]
-static DAO_CODE_HASH_BYTES: LazyLock<Vec<u8>> = LazyLock::new(|| parse_hex_to_bytes(DAO_CODE_HASH));
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DaoState {
