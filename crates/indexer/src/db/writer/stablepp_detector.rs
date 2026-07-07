@@ -211,10 +211,15 @@ impl ProtocolDetector for StableppDetector {
 mod tests {
     use super::*;
     use crate::db::writer::activities::{build_tx_actions_for_block, OutputCellView, TxView};
-    use crate::parser::stablepp::{
-        INTENT_LOCK_CODE_HASH_MAINNET, POOL_CODE_HASH_MAINNET, VAULT_LOCK_CODE_HASH_MAINNET,
-    };
+    use crate::parser::stablepp::{INTENT_LOCK_CODE_HASH_MAINNET, POOL_CODE_HASH_MAINNET};
     use crate::rpc::parse_hex_to_bytes;
+
+    /// Corrected Stable++ vault lock code_hash (registry-mapped). The parser const
+    /// VAULT_LOCK_CODE_HASH_MAINNET still holds the old pool-guard value (0xff35…),
+    /// which detection no longer treats as a vault; these fixtures must use the
+    /// real vault hash to exercise vault detection.
+    const VAULT_LOCK_CODE_HASH: &str =
+        "0x4ed68fcb7eaa4ff78d46a2fad88a32ce9caffd4b96a0a4bba96ff4871f018675";
 
     struct OwnedInput {
         lock_script_hash: Vec<u8>,
@@ -364,7 +369,7 @@ mod tests {
     fn test_open_vault() {
         // Vault only in outputs + pool type call, no token delta -> deposit
         // (open_vault requires positive token delta, i.e. minted RUSD)
-        let vault_code_hash = parse_hex_to_bytes(VAULT_LOCK_CODE_HASH_MAINNET);
+        let vault_code_hash = parse_hex_to_bytes(VAULT_LOCK_CODE_HASH);
         let pool_code_hash = parse_hex_to_bytes(POOL_CODE_HASH_MAINNET);
         let standard_lock = vec![0x11; 32];
 
@@ -429,7 +434,7 @@ mod tests {
     #[test]
     fn test_close_vault() {
         // Vault only in inputs, token_delta < 0 -> close_vault
-        let vault_code_hash = parse_hex_to_bytes(VAULT_LOCK_CODE_HASH_MAINNET);
+        let vault_code_hash = parse_hex_to_bytes(VAULT_LOCK_CODE_HASH);
         let pool_code_hash = parse_hex_to_bytes(POOL_CODE_HASH_MAINNET);
         let standard_lock = vec![0x11; 32];
 
@@ -494,7 +499,7 @@ mod tests {
     #[test]
     fn test_adjust_vault() {
         // Vault in both inputs and outputs, no token delta -> adjust
-        let vault_code_hash = parse_hex_to_bytes(VAULT_LOCK_CODE_HASH_MAINNET);
+        let vault_code_hash = parse_hex_to_bytes(VAULT_LOCK_CODE_HASH);
         let pool_code_hash = parse_hex_to_bytes(POOL_CODE_HASH_MAINNET);
         let standard_lock = vec![0x11; 32];
 
@@ -570,7 +575,7 @@ mod tests {
     #[test]
     fn test_intent_lock_metadata() {
         // Intent lock in inputs -> hasIntent: true
-        let vault_code_hash = parse_hex_to_bytes(VAULT_LOCK_CODE_HASH_MAINNET);
+        let vault_code_hash = parse_hex_to_bytes(VAULT_LOCK_CODE_HASH);
         let intent_code_hash = parse_hex_to_bytes(INTENT_LOCK_CODE_HASH_MAINNET);
         let pool_code_hash = parse_hex_to_bytes(POOL_CODE_HASH_MAINNET);
         let standard_lock = vec![0x11; 32];
@@ -737,7 +742,7 @@ mod tests {
     fn test_vault_lock_in_outputs_triggers_detection() {
         // Vault lock in outputs triggers detection via lock_calls
         // (Asset code hash is xudt_compatible, classified as UDT, won't appear in type_calls)
-        let vault_code_hash = parse_hex_to_bytes(VAULT_LOCK_CODE_HASH_MAINNET);
+        let vault_code_hash = parse_hex_to_bytes(VAULT_LOCK_CODE_HASH);
         let standard_lock = vec![0x11; 32];
 
         let vault_owner: u8 = 0xF0;

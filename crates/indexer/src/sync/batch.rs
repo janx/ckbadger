@@ -2672,9 +2672,8 @@ impl Indexer {
         // Activity writes (live sync)
         let protocol_detectors: Vec<Box<dyn crate::db::writer::activities::ProtocolDetector>> =
             vec![
-                Box::new(crate::db::writer::rgbpp_detector::RgbppDetector::new(
-                    self.config.is_mainnet(),
-                )) as Box<dyn crate::db::writer::activities::ProtocolDetector>,
+                Box::new(crate::db::writer::rgbpp_detector::RgbppDetector::new())
+                    as Box<dyn crate::db::writer::activities::ProtocolDetector>,
                 Box::new(crate::db::writer::fiber_detector::FiberDetector::new(
                     self.config.is_mainnet(),
                 )),

@@ -1,20 +1,14 @@
-use std::sync::LazyLock;
-
-use crate::rpc::parse_hex_to_bytes;
-
 // UTXOSwap Intent Lock (lock script)
 pub const INTENT_LOCK_CODE_HASH_MAINNET: &str =
     "0x3547c9aa563804e47ba3ebd37e6012e447c91a238f7aa71b1a75319f11df060e";
 pub const INTENT_LOCK_CODE_HASH_TESTNET: &str =
     "0x4e9c30c8d6ce275740fbe69eae49c3d8c213578c5bd066f4938fe3c7dec6e101";
 
-static INTENT_MAINNET: LazyLock<Vec<u8>> =
-    LazyLock::new(|| parse_hex_to_bytes(INTENT_LOCK_CODE_HASH_MAINNET));
-static INTENT_TESTNET: LazyLock<Vec<u8>> =
-    LazyLock::new(|| parse_hex_to_bytes(INTENT_LOCK_CODE_HASH_TESTNET));
-
 pub fn is_intent_lock(code_hash: &[u8]) -> bool {
-    code_hash == INTENT_MAINNET.as_slice() || code_hash == INTENT_TESTNET.as_slice()
+    crate::parser::registry::PROTOCOL_REGISTRY.is(
+        code_hash,
+        crate::parser::registry::ProtocolScript::UtxoSwapIntent,
+    )
 }
 
 // --- Intent args parsing ---

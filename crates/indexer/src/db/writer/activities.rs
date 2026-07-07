@@ -1945,7 +1945,7 @@ mod tests {
             outputs: outputs.iter().map(|o| o.view()).collect(),
         };
 
-        let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(RgbppDetector::new(true))];
+        let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(RgbppDetector::new())];
         let actions_list = build_tx_actions_for_block(&[tx], &detectors).unwrap();
 
         assert_eq!(actions_list.len(), 1);
@@ -2015,7 +2015,7 @@ mod tests {
             outputs: outputs.iter().map(|o| o.view()).collect(),
         };
 
-        let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(RgbppDetector::new(true))];
+        let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(RgbppDetector::new())];
         let actions_list = build_tx_actions_for_block(&[tx], &detectors).unwrap();
 
         assert_eq!(actions_list.len(), 1);
@@ -2079,7 +2079,7 @@ mod tests {
             outputs: outputs.iter().map(|o| o.view()).collect(),
         };
 
-        let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(RgbppDetector::new(true))];
+        let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(RgbppDetector::new())];
         let actions_list = build_tx_actions_for_block(&[tx], &detectors).unwrap();
 
         assert_eq!(actions_list.len(), 1);
@@ -2148,7 +2148,7 @@ mod tests {
             outputs: vec![output],
         };
 
-        let rgbpp = RgbppDetector::new(true);
+        let rgbpp = RgbppDetector::new();
         let fiber = FiberDetector::new(true);
         let stablepp = StableppDetector::new(true);
         let utxoswap = UtxoSwapDetector::new(true);
@@ -2182,7 +2182,7 @@ mod tests {
         let empty_locks: HashSet<[u8; 32]> = HashSet::new();
         let empty_types: HashSet<[u8; 32]> = HashSet::new();
 
-        let rgbpp = RgbppDetector::new(true);
+        let rgbpp = RgbppDetector::new();
         let fiber = FiberDetector::new(true);
         let stablepp = StableppDetector::new(true);
         let utxoswap = UtxoSwapDetector::new(true);
@@ -2201,7 +2201,6 @@ mod tests {
         use super::super::utxoswap_detector::UtxoSwapDetector;
         use crate::parser::fiber::FUNDING_LOCK_CODE_HASH_MAINNET;
         use crate::parser::rgbpp::RGBPP_LOCK_CODE_HASH_MAINNET;
-        use crate::parser::stablepp::VAULT_LOCK_CODE_HASH_MAINNET as STABLEPP_VAULT;
         use crate::parser::utxoswap::INTENT_LOCK_CODE_HASH_MAINNET;
         use crate::rpc::parse_hex_to_bytes;
         use std::collections::HashSet;
@@ -2214,7 +2213,7 @@ mod tests {
         let mut h = [0u8; 32];
         h.copy_from_slice(&rgbpp_hash);
         locks.insert(h);
-        let rgbpp = RgbppDetector::new(true);
+        let rgbpp = RgbppDetector::new();
         assert!(rgbpp.might_apply_batch(&locks, &empty_types));
 
         // FiberDetector should match when funding lock code_hash is in the set
@@ -2226,8 +2225,10 @@ mod tests {
         let fiber = FiberDetector::new(true);
         assert!(fiber.might_apply_batch(&locks, &empty_types));
 
-        // StableppDetector should match when vault lock code_hash is in the set
-        let stablepp_hash = parse_hex_to_bytes(STABLEPP_VAULT);
+        // StableppDetector should match when the corrected vault lock code_hash is in the set
+        let stablepp_hash = parse_hex_to_bytes(
+            "0x4ed68fcb7eaa4ff78d46a2fad88a32ce9caffd4b96a0a4bba96ff4871f018675",
+        );
         let mut locks: HashSet<[u8; 32]> = HashSet::new();
         let mut h = [0u8; 32];
         h.copy_from_slice(&stablepp_hash);
@@ -2260,7 +2261,7 @@ mod tests {
         let mut types: HashSet<[u8; 32]> = HashSet::new();
         types.insert(unrelated);
 
-        assert!(!RgbppDetector::new(true).might_apply_batch(&locks, &types));
+        assert!(!RgbppDetector::new().might_apply_batch(&locks, &types));
         assert!(!FiberDetector::new(true).might_apply_batch(&locks, &types));
         assert!(!StableppDetector::new(true).might_apply_batch(&locks, &types));
         assert!(!UtxoSwapDetector::new(true).might_apply_batch(&locks, &types));

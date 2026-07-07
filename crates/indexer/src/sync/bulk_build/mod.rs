@@ -3737,9 +3737,8 @@ fn build_activity_protocol_detectors(
     }
 
     Ok(vec![
-        Box::new(crate::db::writer::rgbpp_detector::RgbppDetector::new(
-            is_mainnet,
-        )) as Box<dyn crate::db::writer::activities::ProtocolDetector>,
+        Box::new(crate::db::writer::rgbpp_detector::RgbppDetector::new())
+            as Box<dyn crate::db::writer::activities::ProtocolDetector>,
         Box::new(crate::db::writer::fiber_detector::FiberDetector::new(
             is_mainnet,
         )),

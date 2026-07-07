@@ -1,5 +1,3 @@
-use std::sync::LazyLock;
-
 use crate::rpc::parse_hex_to_bytes;
 
 // Mainnet code hashes
@@ -13,15 +11,6 @@ pub const FUNDING_LOCK_CODE_HASH_TESTNET: &str =
     "0x6c67887fe201ee0c7853f1682c0b77c0e6214044c156c7558269390a8afa6d7c";
 pub const COMMITMENT_LOCK_CODE_HASH_TESTNET: &str =
     "0x740dee83f87c6f309824d8fd3fbdd3c8380ee6fc9acc90b1a748438afcdf81d8";
-
-static FUNDING_MAINNET: LazyLock<Vec<u8>> =
-    LazyLock::new(|| parse_hex_to_bytes(FUNDING_LOCK_CODE_HASH_MAINNET));
-static FUNDING_TESTNET: LazyLock<Vec<u8>> =
-    LazyLock::new(|| parse_hex_to_bytes(FUNDING_LOCK_CODE_HASH_TESTNET));
-static COMMITMENT_MAINNET: LazyLock<Vec<u8>> =
-    LazyLock::new(|| parse_hex_to_bytes(COMMITMENT_LOCK_CODE_HASH_MAINNET));
-static COMMITMENT_TESTNET: LazyLock<Vec<u8>> =
-    LazyLock::new(|| parse_hex_to_bytes(COMMITMENT_LOCK_CODE_HASH_TESTNET));
 
 /// Minimum length for funding lock args: 20 bytes (pubkey_hash).
 const FUNDING_LOCK_ARGS_MIN_LEN: usize = 20;
@@ -56,24 +45,30 @@ pub struct CommitmentLockArgs {
     pub settlement_flag: Option<u8>,
 }
 
-/// Returns true if the given code_hash matches a Fiber funding-lock (mainnet or testnet).
+/// Returns true if the given code_hash matches a Fiber funding-lock (any network).
 pub fn is_funding_lock(code_hash: &[u8]) -> bool {
-    code_hash == FUNDING_MAINNET.as_slice() || code_hash == FUNDING_TESTNET.as_slice()
+    crate::parser::registry::PROTOCOL_REGISTRY.is(
+        code_hash,
+        crate::parser::registry::ProtocolScript::FiberFunding,
+    )
 }
 
-/// Returns true if the given code_hash matches a Fiber commitment-lock (mainnet or testnet).
+/// Returns true if the given code_hash matches a Fiber commitment-lock (any network).
 pub fn is_commitment_lock(code_hash: &[u8]) -> bool {
-    code_hash == COMMITMENT_MAINNET.as_slice() || code_hash == COMMITMENT_TESTNET.as_slice()
+    crate::parser::registry::PROTOCOL_REGISTRY.is(
+        code_hash,
+        crate::parser::registry::ProtocolScript::FiberCommitment,
+    )
 }
 
 /// Returns all Fiber lock code hashes (funding + commitment, mainnet + testnet) as byte vectors.
 /// Used for populating PROTOCOL_ACTION_LOCKS.
 pub fn all_fiber_lock_code_hashes() -> Vec<Vec<u8>> {
     vec![
-        FUNDING_MAINNET.clone(),
-        FUNDING_TESTNET.clone(),
-        COMMITMENT_MAINNET.clone(),
-        COMMITMENT_TESTNET.clone(),
+        parse_hex_to_bytes(FUNDING_LOCK_CODE_HASH_MAINNET),
+        parse_hex_to_bytes(FUNDING_LOCK_CODE_HASH_TESTNET),
+        parse_hex_to_bytes(COMMITMENT_LOCK_CODE_HASH_MAINNET),
+        parse_hex_to_bytes(COMMITMENT_LOCK_CODE_HASH_TESTNET),
     ]
 }
 
