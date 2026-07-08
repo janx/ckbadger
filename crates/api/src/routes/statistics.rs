@@ -1254,20 +1254,15 @@ enum KnowledgeBucket {
 }
 
 fn classify_knowledge_bucket(code_hash: &[u8]) -> KnowledgeBucket {
-    if PROTOCOL_REGISTRY.is(code_hash, ProtocolScript::Dao) {
-        KnowledgeBucket::Dao
-    } else if matches!(
-        PROTOCOL_REGISTRY.get(code_hash),
-        Some(ProtocolScript::Sudt | ProtocolScript::Xudt)
-    ) {
-        KnowledgeBucket::Udt
-    } else if matches!(
-        PROTOCOL_REGISTRY.get(code_hash),
-        Some(ProtocolScript::SporeNft | ProtocolScript::SporeDid | ProtocolScript::Cluster)
-    ) {
-        KnowledgeBucket::NftSpore
-    } else {
-        KnowledgeBucket::OtherTyped
+    // Single registry lookup; precedence Dao -> Udt -> NftSpore -> OtherTyped is preserved
+    // by match-arm order (registry variants are mutually exclusive, so no overlap anyway).
+    match PROTOCOL_REGISTRY.get(code_hash) {
+        Some(ProtocolScript::Dao) => KnowledgeBucket::Dao,
+        Some(ProtocolScript::Sudt | ProtocolScript::Xudt) => KnowledgeBucket::Udt,
+        Some(ProtocolScript::SporeNft | ProtocolScript::SporeDid | ProtocolScript::Cluster) => {
+            KnowledgeBucket::NftSpore
+        }
+        _ => KnowledgeBucket::OtherTyped,
     }
 }
 
@@ -3596,6 +3591,20 @@ mod tests {
         assert_eq!(
             classify_knowledge_bucket(&code_hash_bytes(
                 "0x685a60219309029d01310311dba953d67029170ca4848a4ff638e57002130a0d"
+            )),
+            KnowledgeBucket::NftSpore
+        );
+    }
+
+    #[test]
+    fn test_knowledge_bucket_classifies_testnet_spore_did_as_nft_spore() {
+        // Testnet Spore-DID (bit-cell.toml `[testnet]`) — the genuinely-new addition the
+        // registry brings in. It has no counterpart in the old mainnet-only
+        // `NFT_SPORE_CODE_HASHES` const set, so it was unreachable/undercounted before and
+        // must now bucket as NftSpore.
+        assert_eq!(
+            classify_knowledge_bucket(&code_hash_bytes(
+                "0x0b1f412fbae26853ff7d082d422c2bdd9e2ff94ee8aaec11240a5b34cc6e890f"
             )),
             KnowledgeBucket::NftSpore
         );
