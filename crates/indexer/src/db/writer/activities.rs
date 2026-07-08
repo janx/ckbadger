@@ -48,37 +48,34 @@ struct CodeHashes {
 
 impl CodeHashes {
     fn new() -> Self {
-        use crate::parser::dao::DAO_CODE_HASH;
-        use crate::parser::dotbit::DOTBIT_ACCOUNT_CELL_TYPE_ID;
-        use crate::parser::mnft::MNFT_TOKEN_CODE_HASH;
-        use crate::parser::spore::{
-            CLUSTER_CODE_HASH_MAINNET_V2, CLUSTER_CODE_HASH_TESTNET_V1,
-            CLUSTER_CODE_HASH_TESTNET_V2, SPORE_CODE_HASH_MAINNET_DID, SPORE_CODE_HASH_MAINNET_V2,
-            SPORE_CODE_HASH_TESTNET_V1, SPORE_CODE_HASH_TESTNET_V2,
-        };
-        use crate::parser::udt::{SUDT_CODE_HASH, XUDT_CODE_HASH_DATA1, XUDT_CODE_HASH_TYPE};
+        use crate::parser::registry::{ProtocolScript, PROTOCOL_REGISTRY};
         use crate::rpc::parse_hex_to_bytes;
 
-        let entries: &[(&str, AssetKind)] = &[
-            (SUDT_CODE_HASH, AssetKind::Udt),
-            (XUDT_CODE_HASH_DATA1, AssetKind::Udt),
-            (XUDT_CODE_HASH_TYPE, AssetKind::Udt),
-            (DAO_CODE_HASH, AssetKind::Dao),
-            (SPORE_CODE_HASH_MAINNET_DID, AssetKind::SporeDid),
-            (SPORE_CODE_HASH_MAINNET_V2, AssetKind::Spore),
-            (SPORE_CODE_HASH_TESTNET_V2, AssetKind::Spore),
-            (SPORE_CODE_HASH_TESTNET_V1, AssetKind::Spore),
-            (CLUSTER_CODE_HASH_MAINNET_V2, AssetKind::Cluster),
-            (CLUSTER_CODE_HASH_TESTNET_V2, AssetKind::Cluster),
-            (CLUSTER_CODE_HASH_TESTNET_V1, AssetKind::Cluster),
-            (MNFT_TOKEN_CODE_HASH, AssetKind::MnftToken),
-            (DOTBIT_ACCOUNT_CELL_TYPE_ID, AssetKind::Dotbit),
-        ];
-
-        let mut type_lookup: HashMap<Vec<u8>, AssetKind> = entries
-            .iter()
-            .map(|(hex, kind)| (parse_hex_to_bytes(hex), *kind))
-            .collect();
+        // Build the type-script → AssetKind lookup from the bundled protocol
+        // registry (a network-agnostic union of mainnet + testnet code_hashes),
+        // replacing the previous hardcoded parser-const list. This is what lets
+        // testnet assets (e.g. testnet sUDT / mNFT token) classify in activities.
+        //
+        // Coverage is intentionally identical to the old const map: only the
+        // asset-bearing protocols below receive an AssetKind. Every other
+        // registry protocol — mNFT issuer/class, all locks, and the
+        // fiber/stablepp/utxoswap scripts — is skipped via the `_` arm, exactly
+        // as the old `entries` array omitted them. (Stable++/ccBTC style
+        // xudt_compatible assets are still picked up below via EXTRA_UDT.)
+        let mut type_lookup: HashMap<Vec<u8>, AssetKind> = HashMap::new();
+        for (code_hash, protocol) in PROTOCOL_REGISTRY.iter() {
+            let kind = match protocol {
+                ProtocolScript::Sudt | ProtocolScript::Xudt => AssetKind::Udt,
+                ProtocolScript::Dao => AssetKind::Dao,
+                ProtocolScript::SporeDid => AssetKind::SporeDid,
+                ProtocolScript::SporeNft => AssetKind::Spore,
+                ProtocolScript::Cluster => AssetKind::Cluster,
+                ProtocolScript::MnftToken => AssetKind::MnftToken,
+                ProtocolScript::DotbitAccount => AssetKind::Dotbit,
+                _ => continue,
+            };
+            type_lookup.insert(code_hash.clone(), kind);
+        }
 
         // Extend with xudt_compatible scripts from bundled script labels (decoderType "udt").
         let extra: Vec<String> = serde_json::from_slice(bundled_udt::EXTRA_UDT_CODE_HASHES)
@@ -1699,6 +1696,104 @@ mod tests {
 
         // Random unknown code_hash should still be None
         assert_eq!(hashes.classify(&[0x99; 32]), None);
+    }
+
+    #[test]
+    fn test_registry_preserves_exact_old_asset_coverage() {
+        // Regression guard: every code_hash the pre-registry const `entries`
+        // array covered must still classify to the *exact same* AssetKind after
+        // the migration to PROTOCOL_REGISTRY. If the bundled registry ever drops
+        // one of these hashes (or a slug remaps), this fails loudly instead of
+        // silently regressing activity classification.
+        use crate::parser::dao::DAO_CODE_HASH;
+        use crate::parser::dotbit::DOTBIT_ACCOUNT_CELL_TYPE_ID;
+        use crate::parser::mnft::MNFT_TOKEN_CODE_HASH;
+        use crate::parser::spore::{
+            CLUSTER_CODE_HASH_MAINNET_V2, CLUSTER_CODE_HASH_TESTNET_V1,
+            CLUSTER_CODE_HASH_TESTNET_V2, SPORE_CODE_HASH_MAINNET_DID, SPORE_CODE_HASH_MAINNET_V2,
+            SPORE_CODE_HASH_TESTNET_V1, SPORE_CODE_HASH_TESTNET_V2,
+        };
+        use crate::parser::udt::{SUDT_CODE_HASH, XUDT_CODE_HASH_DATA1, XUDT_CODE_HASH_TYPE};
+        use crate::rpc::parse_hex_to_bytes;
+
+        let hashes = CodeHashes::new();
+        let expected: &[(&str, AssetKind)] = &[
+            (SUDT_CODE_HASH, AssetKind::Udt),
+            (XUDT_CODE_HASH_DATA1, AssetKind::Udt),
+            (XUDT_CODE_HASH_TYPE, AssetKind::Udt),
+            (DAO_CODE_HASH, AssetKind::Dao),
+            (SPORE_CODE_HASH_MAINNET_DID, AssetKind::SporeDid),
+            (SPORE_CODE_HASH_MAINNET_V2, AssetKind::Spore),
+            (SPORE_CODE_HASH_TESTNET_V2, AssetKind::Spore),
+            (SPORE_CODE_HASH_TESTNET_V1, AssetKind::Spore),
+            (CLUSTER_CODE_HASH_MAINNET_V2, AssetKind::Cluster),
+            (CLUSTER_CODE_HASH_TESTNET_V2, AssetKind::Cluster),
+            (CLUSTER_CODE_HASH_TESTNET_V1, AssetKind::Cluster),
+            (MNFT_TOKEN_CODE_HASH, AssetKind::MnftToken),
+            (DOTBIT_ACCOUNT_CELL_TYPE_ID, AssetKind::Dotbit),
+        ];
+        for (hex, kind) in expected {
+            assert_eq!(
+                hashes.classify(&parse_hex_to_bytes(hex)),
+                Some(*kind),
+                "old-const code_hash {hex} must still classify as {kind:?}"
+            );
+        }
+
+        // Negative coverage must also hold: mNFT issuer/class and lock scripts
+        // were NOT asset-classified by the old map and must stay unclassified.
+        assert_eq!(
+            hashes.classify(&parse_hex_to_bytes(
+                crate::parser::mnft::MNFT_ISSUER_CODE_HASH
+            )),
+            None,
+            "mNFT issuer must not be classified as an asset"
+        );
+        assert_eq!(
+            hashes.classify(&parse_hex_to_bytes(
+                crate::parser::mnft::MNFT_CLASS_CODE_HASH
+            )),
+            None,
+            "mNFT class must not be classified as an asset"
+        );
+    }
+
+    #[test]
+    fn test_testnet_sudt_classifies_as_udt() {
+        use crate::rpc::parse_hex_to_bytes;
+        let hashes = CodeHashes::new();
+        // Testnet sUDT code_hash — absent from the old mainnet-only const map,
+        // now classified via the network-agnostic ProtocolRegistry.
+        let testnet_sudt = parse_hex_to_bytes(
+            "0xc5e5dcf215925f7ef4dfaf5f4b4f105bc321c02776d6e7d52a1db3fcd9d011a4",
+        );
+        assert_eq!(
+            hashes.classify(&testnet_sudt),
+            Some(AssetKind::Udt),
+            "testnet sUDT should classify as Udt via the registry"
+        );
+        // Sanity: this is the testnet hash, distinct from the mainnet sUDT const.
+        assert_ne!(
+            testnet_sudt,
+            parse_hex_to_bytes(crate::parser::udt::SUDT_CODE_HASH),
+            "testnet sUDT must differ from mainnet sUDT"
+        );
+    }
+
+    #[test]
+    fn test_testnet_mnft_token_classifies_as_mnft_token() {
+        use crate::rpc::parse_hex_to_bytes;
+        let hashes = CodeHashes::new();
+        // Testnet mNFT token code_hash — mainnet-only in the old const map,
+        // now classified via the registry.
+        let testnet_mnft = parse_hex_to_bytes(
+            "0xb1837b5ad01a88558731953062d1f5cb547adf89ece01e8934a9f0aeed2d959f",
+        );
+        assert_eq!(
+            hashes.classify(&testnet_mnft),
+            Some(AssetKind::MnftToken),
+            "testnet mNFT token should classify as MnftToken via the registry"
+        );
     }
 
     #[test]

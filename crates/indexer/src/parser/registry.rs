@@ -121,6 +121,17 @@ impl ProtocolRegistry {
     pub fn is(&self, code_hash: &[u8], script: ProtocolScript) -> bool {
         self.by_code_hash.get(code_hash) == Some(&script)
     }
+
+    /// Iterate every `(code_hash, protocol)` entry in the registry.
+    ///
+    /// The `ProtocolScript` is yielded by value (it is `Copy`); the code_hash
+    /// is borrowed. Used by consumers that need to build their own derived
+    /// lookup (e.g. the activity builder's `code_hash → AssetKind` map).
+    pub fn iter(&self) -> impl Iterator<Item = (&Vec<u8>, ProtocolScript)> + '_ {
+        self.by_code_hash
+            .iter()
+            .map(|(code_hash, p)| (code_hash, *p))
+    }
 }
 
 pub static PROTOCOL_REGISTRY: LazyLock<ProtocolRegistry> =
