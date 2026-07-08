@@ -854,6 +854,7 @@ impl Indexer {
         let pipeline_perf_for_parser = Arc::clone(&self.pipeline_perf);
         let pipeline_epoch_for_parser = Arc::clone(&self.pipeline_reset_epoch);
         let parser_exit_reason_for_parser = Arc::clone(&parser_exit_reason);
+        let parser_unrecoverable_for_parser = self.unrecoverable_exit_flag();
         let cell_lookup_stats_for_parser = Arc::clone(&self.parser_cell_lookup_stats);
         let parse_tx_for_writer_depth = parse_tx.clone();
         let parser = tokio::spawn(async move {
@@ -1101,6 +1102,11 @@ impl Indexer {
                                     // append-only writes. Retrying can NEVER resolve it (the
                                     // payload will not reappear), so fail fast instead of
                                     // livelocking; the DB must be repaired/rebuilt.
+                                    //
+                                    // Flag it unrecoverable so the process exits with
+                                    // EXIT_CODE_UNRECOVERABLE and the supervisor halts the
+                                    // service instead of restarting it into the same wall.
+                                    parser_unrecoverable_for_parser.store(true, Ordering::SeqCst);
                                     error!(
                                         start_block,
                                         end_block,

@@ -14,6 +14,14 @@ use crate::runtime_diag::{generate_run_id, read_cgroup_memory_snapshot};
 use crate::sync::Indexer;
 use crate::Config;
 
+/// Process exit code signalling an **unrecoverable** indexer error — one a
+/// restart cannot fix (e.g. a cross-store inconsistency: a domain live-cell
+/// marker with no append-only payload, left by a prior unclean shutdown). The
+/// `ckbadger run` supervisor recognises this code and halts the service instead
+/// of restarting it; the operator must rebuild the DB (purge + re-sync from
+/// genesis). Normal/transient failures exit with 1 and stay retryable.
+pub const EXIT_CODE_UNRECOVERABLE: i32 = 3;
+
 /// Configuration for starting the indexer sync daemon.
 /// This is the interface the CLI binary uses to start the indexer.
 pub struct IndexerServiceConfig {
@@ -677,6 +685,19 @@ pub async fn run_indexer_sync(mut config: Config) -> Result<()> {
             indexer.mark_runtime_shutdown("run_completed", 0);
         }
         Err(e) => {
+            if indexer.hit_unrecoverable_exit() {
+                tracing::error!(
+                    "Indexer hit an UNRECOVERABLE error and will not be restarted; the DB is \
+                     corrupted (cross-store inconsistency). Purge the RocksDB data dirs and \
+                     re-sync from genesis. Cause: {}",
+                    e
+                );
+                indexer.finalize_bulk_sync_perf_failed();
+                indexer.mark_runtime_shutdown("run_error_unrecoverable", EXIT_CODE_UNRECOVERABLE);
+                // Exit with the distinguished code so the `ckbadger run` supervisor
+                // halts this service instead of restarting it into the same wall.
+                std::process::exit(EXIT_CODE_UNRECOVERABLE);
+            }
             tracing::error!("Indexer terminated with error: {}", e);
             indexer.finalize_bulk_sync_perf_failed();
             indexer.mark_runtime_shutdown("run_error", 1);

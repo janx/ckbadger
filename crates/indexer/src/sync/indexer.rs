@@ -391,6 +391,12 @@ pub struct Indexer {
     pub(crate) incident_dir: PathBuf,
     pub(crate) bulk_sync_perf_run: std::sync::Mutex<Option<BulkSyncPerfRun>>,
     pub(crate) shutdown_requested: Arc<AtomicBool>,
+    /// Set when the sync hits an unrecoverable, non-retryable condition (e.g. a
+    /// cross-store inconsistency: a live-cell marker with no append-only
+    /// payload). Read at the process boundary to exit with
+    /// [`crate::entry::EXIT_CODE_UNRECOVERABLE`] so the supervisor halts the
+    /// service instead of restarting it into the same wall.
+    pub(crate) unrecoverable_exit: Arc<AtomicBool>,
     pub(crate) ckb_store: Option<Arc<CkbChainReader>>,
     pub(crate) hodl_tracker: std::sync::Mutex<HodlWaveTracker>,
     pub(crate) cell_dist_tracker: std::sync::Mutex<CellDistributionTracker>,
@@ -498,6 +504,7 @@ impl Indexer {
             incident_dir,
             bulk_sync_perf_run: std::sync::Mutex::new(None),
             shutdown_requested: Arc::new(AtomicBool::new(false)),
+            unrecoverable_exit: Arc::new(AtomicBool::new(false)),
             ckb_store,
             hodl_tracker: std::sync::Mutex::new(hodl_tracker),
             cell_dist_tracker: std::sync::Mutex::new(cell_dist_tracker),
@@ -522,6 +529,17 @@ impl Indexer {
 
     pub fn shutdown_flag(&self) -> Arc<AtomicBool> {
         Arc::clone(&self.shutdown_requested)
+    }
+
+    /// Handle to the unrecoverable-exit flag, for the parser to set on a hard
+    /// cross-store inconsistency and for the entry point to read at shutdown.
+    pub(crate) fn unrecoverable_exit_flag(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.unrecoverable_exit)
+    }
+
+    /// True if the sync stopped due to an unrecoverable, non-retryable condition.
+    pub fn hit_unrecoverable_exit(&self) -> bool {
+        self.unrecoverable_exit.load(Ordering::SeqCst)
     }
 
     pub fn is_bulk_sync_active(&self) -> bool {

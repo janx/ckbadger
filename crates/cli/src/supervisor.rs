@@ -7,6 +7,7 @@
 
 use anyhow::{Context, Result};
 use ckbadger_config::{CkbadgerConfig, WorkDir};
+use ckbadger_indexer::entry::EXIT_CODE_UNRECOVERABLE;
 use ckbadger_ipc::{IpcHandler, IpcRequest, IpcResponse, IpcServer, ServiceInfo, ServiceStatus};
 use std::future::Future;
 use std::path::Path;
@@ -43,6 +44,89 @@ const HEALTH_CHECK_INTERVAL: Duration = Duration::from_secs(2);
 /// Time to wait for a child to exit after SIGTERM before sending SIGKILL.
 const GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// Sliding window for the crash-loop rate limit.
+const RESTART_RATE_WINDOW: Duration = Duration::from_secs(3600);
+
+/// More than this many restarts within `RESTART_RATE_WINDOW` is a persistent
+/// crash-loop: give up even if every individual run outlived
+/// `STABLE_RUNNING_THRESHOLD`. Without this backstop, a service that crashes
+/// just after the stable threshold resets the consecutive counter on every
+/// iteration and never reaches `MAX_RESTART_ATTEMPTS` — the exact shape of a
+/// ~9h, ~250-restart loop observed in the field. Set above `MAX_RESTART_ATTEMPTS`
+/// so fast startup-failure loops still trip the consecutive cap first.
+const RESTART_RATE_LIMIT: u32 = 15;
+
+// ---------------------------------------------------------------------------
+// Restart decision
+// ---------------------------------------------------------------------------
+
+/// Why the supervisor stopped restarting a service.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HaltReason {
+    /// Child exited with [`EXIT_CODE_UNRECOVERABLE`] — a restart cannot fix it.
+    UnrecoverableExit,
+    /// Too many restarts within [`RESTART_RATE_WINDOW`] — persistent crash-loop.
+    CrashLoop,
+    /// Consecutive restart attempts reached [`MAX_RESTART_ATTEMPTS`].
+    MaxConsecutive,
+}
+
+/// Outcome of [`decide_restart`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RestartDecision {
+    /// Stop restarting this service.
+    Halt(HaltReason),
+    /// Restart after `backoff`, carrying `next_count` as the new consecutive count.
+    Restart { backoff: Duration, next_count: u32 },
+}
+
+/// Decide whether to restart a service that just exited.
+///
+/// Pure (no I/O, no clock) so it can be unit-tested exhaustively; the caller
+/// supplies the observed state.
+///
+/// - `exit_code`: the child's process exit code (`None` if killed by a signal).
+/// - `uptime`: how long the child ran before exiting.
+/// - `consecutive_restart_count`: restarts since the last stable run.
+/// - `restarts_in_window`: restarts within the last [`RESTART_RATE_WINDOW`].
+fn decide_restart(
+    exit_code: Option<i32>,
+    uptime: Duration,
+    consecutive_restart_count: u32,
+    restarts_in_window: u32,
+) -> RestartDecision {
+    // Unrecoverable exit: a restart cannot fix it (e.g. a corrupted DB /
+    // cross-store inconsistency). Halt immediately — never burn retries.
+    if exit_code == Some(EXIT_CODE_UNRECOVERABLE) {
+        return RestartDecision::Halt(HaltReason::UnrecoverableExit);
+    }
+
+    // Persistent crash-loop: give up regardless of per-run uptime. This catches
+    // slow loops where each run outlives STABLE_RUNNING_THRESHOLD and would
+    // otherwise reset the consecutive counter on every iteration.
+    if restarts_in_window >= RESTART_RATE_LIMIT {
+        return RestartDecision::Halt(HaltReason::CrashLoop);
+    }
+
+    // A run that lasted long enough clears accumulated consecutive startup
+    // failures — a one-off crash after stable operation isn't penalised.
+    let effective = if uptime >= STABLE_RUNNING_THRESHOLD {
+        0
+    } else {
+        consecutive_restart_count
+    };
+
+    if effective >= MAX_RESTART_ATTEMPTS {
+        return RestartDecision::Halt(HaltReason::MaxConsecutive);
+    }
+
+    let backoff = std::cmp::min(BASE_BACKOFF * 2u32.saturating_pow(effective), MAX_BACKOFF);
+    RestartDecision::Restart {
+        backoff,
+        next_count: effective + 1,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -53,6 +137,10 @@ struct ManagedChild {
     child: Child,
     restart_count: u32,
     started_at: Instant,
+    /// Timestamps of recent restarts, pruned to `RESTART_RATE_WINDOW`. Carried
+    /// across respawns so a persistent crash-loop can be detected by rate even
+    /// when each individual run outlives `STABLE_RUNNING_THRESHOLD`.
+    restart_history: Vec<Instant>,
 }
 
 impl ManagedChild {
@@ -307,6 +395,7 @@ fn spawn_service(
         child,
         restart_count: 0,
         started_at: Instant::now(),
+        restart_history: Vec::new(),
     })
 }
 
@@ -355,43 +444,62 @@ async fn monitor_children(
             };
 
             if let Some(status) = exited {
-                let name = &locked.children[i].name;
+                let name = locked.children[i].name.clone();
                 let uptime = locked.children[i].started_at.elapsed();
-                let mut restart_count = locked.children[i].restart_count;
+                let restart_count = locked.children[i].restart_count;
 
-                // Reset restart counter if the service ran stably before crashing.
-                // This prevents a one-time crash after hours of stable operation
-                // from being penalized by earlier transient startup failures.
-                if uptime >= STABLE_RUNNING_THRESHOLD && restart_count > 0 {
-                    info!(
-                        service = %name,
-                        previous_restart_count = restart_count,
-                        uptime_secs = uptime.as_secs(),
-                        "service ran stably, resetting restart counter"
-                    );
-                    restart_count = 0;
-                }
+                // Prune the restart history to the rate window and count it, so
+                // decide_restart can catch a persistent crash-loop even when each
+                // run outlives STABLE_RUNNING_THRESHOLD (which resets the
+                // consecutive counter every iteration).
+                let now = Instant::now();
+                locked.children[i]
+                    .restart_history
+                    .retain(|t| now.duration_since(*t) < RESTART_RATE_WINDOW);
+                let restarts_in_window = locked.children[i].restart_history.len() as u32;
 
-                if restart_count >= MAX_RESTART_ATTEMPTS {
-                    error!(
-                        service = %name,
-                        restarts = restart_count,
-                        "service exceeded max restart attempts, giving up"
-                    );
-                    continue;
-                }
+                let (backoff, next_count) = match decide_restart(
+                    status.code(),
+                    uptime,
+                    restart_count,
+                    restarts_in_window,
+                ) {
+                    RestartDecision::Halt(reason) => {
+                        match reason {
+                            HaltReason::UnrecoverableExit => error!(
+                                service = %name,
+                                exit_status = %status,
+                                "service exited with an UNRECOVERABLE error and will not be \
+                                 restarted; the DB is corrupted (cross-store inconsistency). \
+                                 Purge the RocksDB data dirs and re-sync from genesis."
+                            ),
+                            HaltReason::CrashLoop => error!(
+                                service = %name,
+                                restarts_in_window,
+                                window_secs = RESTART_RATE_WINDOW.as_secs(),
+                                "service is in a persistent crash-loop; giving up (restart rate \
+                                 limit exceeded). Investigate the logs before restarting."
+                            ),
+                            HaltReason::MaxConsecutive => error!(
+                                service = %name,
+                                restarts = restart_count,
+                                "service exceeded max restart attempts, giving up"
+                            ),
+                        }
+                        continue;
+                    }
+                    RestartDecision::Restart {
+                        backoff,
+                        next_count,
+                    } => (backoff, next_count),
+                };
 
                 warn!(
                     service = %name,
                     exit_status = %status,
-                    restart_count = restart_count + 1,
+                    restart_count = next_count,
+                    backoff_secs = backoff.as_secs(),
                     "service exited, restarting..."
-                );
-
-                // Calculate backoff
-                let backoff = std::cmp::min(
-                    BASE_BACKOFF * 2u32.saturating_pow(restart_count),
-                    MAX_BACKOFF,
                 );
 
                 // Drop lock during sleep
@@ -403,15 +511,21 @@ async fn monitor_children(
                     return;
                 }
 
+                // Carry the pruned restart history across the respawn and record
+                // this restart so the rate window spans process lifetimes.
+                let mut carried_history = std::mem::take(&mut locked.children[i].restart_history);
+                carried_history.push(Instant::now());
+
                 // Respawn
                 let service_name = &services[i];
                 match spawn_service(exe, workdir, service_name, log_dir) {
                     Ok(mut new_child) => {
-                        new_child.restart_count = restart_count + 1;
+                        new_child.restart_count = next_count;
+                        new_child.restart_history = carried_history;
                         info!(
                             service = %service_name,
                             pid = new_child.pid(),
-                            restart_count = restart_count + 1,
+                            restart_count = next_count,
                             "service restarted"
                         );
                         locked.children[i] = new_child;
@@ -522,6 +636,74 @@ mod tests {
     // Compile-time checks for supervisor constants
     const _: () = assert!(MAX_RESTART_ATTEMPTS > 0);
     const _: () = assert!(HEALTH_CHECK_INTERVAL.as_secs() > 0);
+    // Rate limit must sit above the consecutive cap so fast startup-failure
+    // loops trip MaxConsecutive first and the rate window stays a slow-loop
+    // backstop.
+    const _: () = assert!(RESTART_RATE_LIMIT > MAX_RESTART_ATTEMPTS);
+
+    #[test]
+    fn decide_restart_halts_on_unrecoverable_exit_code() {
+        // A corrupted-DB / cross-store-inconsistency exit must never be retried,
+        // no matter how healthy the counts/uptime look.
+        let d = decide_restart(
+            Some(EXIT_CODE_UNRECOVERABLE),
+            Duration::from_secs(10_000),
+            0,
+            0,
+        );
+        assert_eq!(d, RestartDecision::Halt(HaltReason::UnrecoverableExit));
+    }
+
+    #[test]
+    fn decide_restart_halts_on_crash_loop_even_when_each_run_looks_stable() {
+        // Regression for the ~9h / ~250-restart loop: each run lasted ~131s
+        // (> the 120s stable threshold), so the consecutive counter reset every
+        // iteration and MAX_RESTART_ATTEMPTS was never reached. The rate-window
+        // backstop must still catch it.
+        let stable_uptime = STABLE_RUNNING_THRESHOLD + Duration::from_secs(11);
+        let d = decide_restart(Some(1), stable_uptime, 0, RESTART_RATE_LIMIT);
+        assert_eq!(d, RestartDecision::Halt(HaltReason::CrashLoop));
+    }
+
+    #[test]
+    fn decide_restart_halts_after_max_consecutive_fast_failures() {
+        // Fast startup-failure loop: runs shorter than the stable threshold, so
+        // the consecutive counter climbs to the cap. Window count kept below the
+        // rate limit to isolate the consecutive cap.
+        let d = decide_restart(
+            Some(1),
+            Duration::from_secs(2),
+            MAX_RESTART_ATTEMPTS,
+            MAX_RESTART_ATTEMPTS,
+        );
+        assert_eq!(d, RestartDecision::Halt(HaltReason::MaxConsecutive));
+    }
+
+    #[test]
+    fn decide_restart_restarts_with_exponential_backoff() {
+        let d = decide_restart(Some(1), Duration::from_secs(2), 3, 3);
+        assert_eq!(
+            d,
+            RestartDecision::Restart {
+                backoff: Duration::from_secs(8), // 1s * 2^3
+                next_count: 4,
+            }
+        );
+    }
+
+    #[test]
+    fn decide_restart_resets_consecutive_counter_after_stable_run() {
+        // A single crash after a long stable run isn't penalised by earlier
+        // transient failures: the consecutive counter resets to 0.
+        let d = decide_restart(Some(1), STABLE_RUNNING_THRESHOLD, 5, 1);
+        assert_eq!(
+            d,
+            RestartDecision::Restart {
+                backoff: Duration::from_secs(1), // 1s * 2^0
+                next_count: 1,
+            }
+        );
+    }
 
     #[tokio::test]
     async fn test_supervisor_ipc_handler_ping() {
