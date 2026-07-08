@@ -14,6 +14,7 @@ use tracing::{debug, error, info, warn};
 
 use ckbadger_store::types::{LiveCellInfo, MnftTypeIndex, PositionedCellInfo, SporeTypeIndex};
 
+use crate::db::writer::is_cross_store_inconsistency;
 use crate::parser::block::BlockParser;
 use crate::parser::cell::{CellParser, ParsedCell};
 use crate::parser::dao::{DaoParser, DaoState};
@@ -1093,6 +1094,31 @@ impl Indexer {
                                 }
                             }
                             Ok(Ok(Err(e))) => {
+                                if is_cross_store_inconsistency(&e) {
+                                    // A live marker exists in the domain store without its
+                                    // append-only payload — a hard cross-store invariant
+                                    // violation left by an unclean shutdown that lost unsynced
+                                    // append-only writes. Retrying can NEVER resolve it (the
+                                    // payload will not reappear), so fail fast instead of
+                                    // livelocking; the DB must be repaired/rebuilt.
+                                    error!(
+                                        start_block,
+                                        end_block,
+                                        total_keys,
+                                        "Parser: cross-store inconsistency (live marker without \
+                                         append-only payload); failing fast — DB corrupted by a \
+                                         prior unclean shutdown, rebuild required: {}",
+                                        e
+                                    );
+                                    record_worker_exit_reason(
+                                        &parser_exit_reason_for_parser,
+                                        format!(
+                                            "cross-store inconsistency for range {}-{}: {}",
+                                            start_block, end_block, e
+                                        ),
+                                    );
+                                    return;
+                                }
                                 error!(total_keys, "Parser: DB error fetching cell info: {}", e);
                                 db_lookup_failed = true;
                             }

@@ -3336,20 +3336,29 @@ impl Indexer {
                 bulk_sync_mode,
                 "Atomic domain batch commit start"
             );
-            // Commit append-only cell payloads immediately before the domain
-            // batch to minimise the non-atomic window between the two stores.
+            // Cross-store durability ordering (crash consistency).
             //
-            // SAFETY: append-only commits first because orphan cell payloads (crash
-            // after CF_CELLS commit, before domain commit) are inert — content-addressed
-            // by outpoint, never referenced until the domain batch also lands, and
-            // overwritten with identical data on re-sync.  The reverse order (domain
-            // first) would leave live_cell_markers pointing at missing payloads,
-            // breaking cross-store reads.  Startup cleanup only inspects domain state;
-            // orphan payloads in CF_CELLS are harmless and require no rollback.
+            // Commit the append-only cell payloads AND fsync them (commit_synced)
+            // BEFORE committing the domain batch that advances the recovery-trusted
+            // sync tip. Commit *ordering* alone is not enough: the domain and
+            // append-only stores are independent RocksDB instances with independent
+            // WALs, and a default WAL write only reaches the OS page cache. An
+            // unclean/host-level shutdown (OOM/abort/power loss) can then persist the
+            // domain tip while losing the append-only store's unsynced WAL, leaving
+            // live-cell markers pointing at missing payloads — a cross-store
+            // inconsistency that resume-from-tip cannot detect (startup cleanup
+            // inspects domain state only) and that livelocks the parser.
+            //
+            // Fsyncing append-only first makes a durable domain tip T always imply
+            // durable append-only payloads for every cell created at blocks <= T, so
+            // resume from T is always crash-safe. The reverse direction stays
+            // harmless: if the domain batch is lost, the tip rolls back and the now
+            // orphan payloads (content-addressed by outpoint, never referenced
+            // without a marker) are re-written identically on re-sync.
             if !cells_batch.is_empty() {
-                cells_batch.commit().with_context(|| {
+                cells_batch.commit_synced().with_context(|| {
                     format!(
-                        "append-only cell payload commit failed for blocks {}-{}",
+                        "append-only cell payload synced commit failed for blocks {}-{}",
                         first_block, last_block
                     )
                 })?;

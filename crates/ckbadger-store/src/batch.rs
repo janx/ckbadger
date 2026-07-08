@@ -34,15 +34,27 @@ impl<'a> StoreBatch<'a> {
         }
     }
 
-    /// Commit all accumulated writes atomically.
+    /// Commit all accumulated writes atomically (WAL enabled, no fsync).
     pub fn commit(self) -> anyhow::Result<()> {
-        self.commit_inner(false)
+        self.commit_inner(false, false)
     }
 
     /// Commit with WAL disabled. Use during bulk sync where crash recovery
     /// re-syncs from the last committed block header.
     pub fn commit_no_wal(self) -> anyhow::Result<()> {
-        self.commit_inner(true)
+        self.commit_inner(true, false)
+    }
+
+    /// Commit atomically and fsync the WAL before returning (`WriteOptions::sync`).
+    ///
+    /// Used on the live-sync path for the append-only cell-payload batch, which
+    /// must be durable *before* the domain batch that advances the recovery-trusted
+    /// sync tip commits. Without this, an unclean shutdown can persist the domain
+    /// tip while losing the append-only store's unsynced WAL, leaving live-cell
+    /// markers pointing at missing payloads — a cross-store inconsistency that
+    /// resume-from-tip cannot detect or repair.
+    pub fn commit_synced(self) -> anyhow::Result<()> {
+        self.commit_inner(false, true)
     }
 
     /// Get the number of operations in the batch.
@@ -140,7 +152,11 @@ impl<'a> StoreBatch<'a> {
         self.pending_dao_deposits.extend(other.pending_dao_deposits);
     }
 
-    fn commit_inner(self, no_wal: bool) -> anyhow::Result<()> {
+    fn commit_inner(self, no_wal: bool, sync: bool) -> anyhow::Result<()> {
+        debug_assert!(
+            !(no_wal && sync),
+            "commit_inner: no_wal and sync are mutually exclusive"
+        );
         if self.store.is_append_only_store() {
             let intent = if self.store.is_bulk_sync_mode() {
                 StoreWriteIntent::BulkSyncAppendValidated
@@ -190,11 +206,16 @@ impl<'a> StoreBatch<'a> {
             if no_wal {
                 self.store
                     .write_batch_no_wal_with_intent(filtered_batch, intent)
+            } else if sync {
+                self.store
+                    .write_batch_with_intent_synced(filtered_batch, intent)
             } else {
                 self.store.write_batch_with_intent(filtered_batch, intent)
             }
         } else if no_wal {
             self.store.write_batch_no_wal(self.batch)
+        } else if sync {
+            self.store.write_batch_synced(self.batch)
         } else {
             self.store.write_batch(self.batch)
         }
@@ -1485,6 +1506,29 @@ mod tests {
         let cf = store.cf_sync_meta();
         assert!(store.get_cf(cf, b"key1").unwrap().is_some());
         assert!(store.get_cf(cf, b"key2").unwrap().is_some());
+    }
+
+    #[test]
+    fn test_commit_synced_persists_batch() {
+        // Fix A (cross-store durability ordering): the live-sync finalize commits the
+        // append-only cell-payload batch with commit_synced() (WAL fsync) *before* the
+        // domain batch that advances the recovery-trusted sync tip. That guarantees a
+        // durable domain tip always implies durable append-only payloads, so resume
+        // from tip is crash-safe. Here we assert the synced commit round-trips; the
+        // fsync durability itself is enforced by WriteOptions::set_sync and cannot be
+        // observed in-process.
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_sync_meta(b"synced_key", b"synced_val");
+        batch.commit_synced().unwrap();
+
+        let cf = store.cf_sync_meta();
+        assert_eq!(
+            store.get_cf(cf, b"synced_key").unwrap().as_deref(),
+            Some(b"synced_val".as_slice())
+        );
     }
 
     #[test]

@@ -11,6 +11,30 @@ use crate::parser::cell::ParsedCell;
 
 use super::BatchWriter;
 
+/// A live-cell marker is present in the domain store but its canonical payload
+/// is missing from the append-only store.
+///
+/// This is a hard cross-store invariant violation. A marker is only ever written
+/// *after* its payload commits (append-only commits first, synced, before the
+/// domain batch — see the live finalize path), so a visible marker implies a
+/// committed payload. When it does not, the store was left inconsistent by an
+/// unclean shutdown that lost unsynced append-only writes. The payload will
+/// never appear on its own, so this must fail fast — never be retried as a
+/// transient "writer behind" condition.
+#[derive(Debug, thiserror::Error)]
+#[error("missing canonical cell for live marker in {context}: outpoint=0x{outpoint}:{index}")]
+pub struct MissingCanonicalCellError {
+    pub outpoint: String,
+    pub index: i16,
+    pub context: &'static str,
+}
+
+/// True when `err` is a [`MissingCanonicalCellError`]. The parser uses this to
+/// decide fail-fast (true) vs retry (false) when a cell lookup fails.
+pub fn is_cross_store_inconsistency(err: &anyhow::Error) -> bool {
+    err.downcast_ref::<MissingCanonicalCellError>().is_some()
+}
+
 /// Compute CKB occupied capacity in shannons for a cell.
 ///
 /// `data_size`: length of cell data in bytes
@@ -296,11 +320,12 @@ impl BatchWriter {
                     );
                 }
                 Ok(None) => {
-                    bail!(
-                        "missing canonical cell for live marker in get_full_cells_info_batch: outpoint=0x{}:{}",
-                        hex::encode(tx_hash),
-                        output_index,
-                    );
+                    return Err(MissingCanonicalCellError {
+                        outpoint: hex::encode(tx_hash),
+                        index: output_index,
+                        context: "get_full_cells_info_batch",
+                    }
+                    .into());
                 }
                 Err(e) => {
                     bail!(
@@ -633,6 +658,44 @@ mod tests {
                 .contains("missing canonical cell for live marker"),
             "expected invariant violation error, got: {}",
             err
+        );
+    }
+
+    #[test]
+    fn test_missing_append_only_payload_is_classified_cross_store_inconsistency() {
+        // Regression for the crash-loop root cause: a live marker present in the
+        // domain store with a missing append-only payload must be classifiable as
+        // a *cross-store inconsistency* so the parser fails fast, rather than being
+        // retried as a transient "writer behind" condition (which livelocked the
+        // indexer for ~9h in production, ~250 restarts).
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone(), store.clone());
+
+        let tx_hash = vec![0xEE; 32];
+        let outpoint_key = ckbadger_store::keys::encode_outpoint(&tx_hash, 0);
+        let marker = ckbadger_store::types::encode_live_cell_marker(100);
+        store
+            .put_cf(store.cf_live_cells(), &outpoint_key, &marker)
+            .unwrap();
+
+        let outpoints = vec![(tx_hash.as_slice(), 0i16)];
+        let err = writer.get_full_cells_info_batch(&outpoints).unwrap_err();
+
+        // The parser uses this classifier to decide fail-fast (true) vs retry.
+        assert!(
+            is_cross_store_inconsistency(&err),
+            "marker-without-payload must be a cross-store inconsistency (fail-fast), got: {}",
+            err
+        );
+
+        // A genuinely transient error (e.g. lookup timeout) must NOT be
+        // classified as a cross-store inconsistency — it stays retryable.
+        let transient =
+            anyhow!("parser cell lookup exceeded hard cap 1500ms (chunk 0, total_keys=10)");
+        assert!(
+            !is_cross_store_inconsistency(&transient),
+            "transient lookup error must remain retryable"
         );
     }
 

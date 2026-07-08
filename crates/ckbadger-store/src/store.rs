@@ -1566,6 +1566,15 @@ impl CkbadgerStore {
         Ok(self.db.write(batch)?)
     }
 
+    /// Write a batch and fsync the WAL before returning (`WriteOptions::sync`).
+    /// Durable across an unclean/host-level shutdown, unlike the default
+    /// (page-cache-buffered) WAL write. Used by [`StoreBatch::commit_synced`].
+    fn write_batch_synced_unchecked(&self, batch: WriteBatch) -> anyhow::Result<()> {
+        let mut opts = rocksdb::WriteOptions::default();
+        opts.set_sync(true);
+        Ok(self.db.write_opt(batch, &opts)?)
+    }
+
     pub(crate) fn write_batch_with_intent(
         &self,
         batch: WriteBatch,
@@ -1586,8 +1595,32 @@ impl CkbadgerStore {
         self.write_batch_unchecked(batch)
     }
 
+    pub(crate) fn write_batch_with_intent_synced(
+        &self,
+        batch: WriteBatch,
+        intent: StoreWriteIntent,
+    ) -> anyhow::Result<()> {
+        if self.is_append_only_store()
+            && !matches!(
+                intent,
+                StoreWriteIntent::AppendValidated | StoreWriteIntent::BulkSyncAppendValidated
+            )
+        {
+            anyhow::bail!(
+                "append-only raw write_batch_synced blocked for intent={:?}; \
+                 use StoreBatch commit_synced path",
+                intent
+            );
+        }
+        self.write_batch_synced_unchecked(batch)
+    }
+
     pub fn write_batch(&self, batch: WriteBatch) -> anyhow::Result<()> {
         self.write_batch_with_intent(batch, StoreWriteIntent::Normal)
+    }
+
+    pub fn write_batch_synced(&self, batch: WriteBatch) -> anyhow::Result<()> {
+        self.write_batch_with_intent_synced(batch, StoreWriteIntent::Normal)
     }
 
     /// Write a batch with WAL disabled. Use during bulk sync where crash recovery
