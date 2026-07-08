@@ -6,15 +6,13 @@
 //!
 //! The output is byte-identical to `parse_single_block()` in `pipeline.rs`.
 
-use std::collections::HashMap;
-use std::sync::LazyLock;
-
 use anyhow::{anyhow, Result};
 use ckb_types::prelude::*;
 
 use crate::parser::cell::ParsedCell;
 use crate::parser::dao::{DaoParser, DaoState};
 use crate::parser::dotbit::DotbitWitnessBundle;
+use crate::parser::registry::{ProtocolScript, PROTOCOL_REGISTRY};
 use crate::parser::script::ScriptParser;
 use crate::parser::udt::UdtParser;
 use crate::sync::dao_helpers::occupied_capacity_shannons_i64;
@@ -302,10 +300,14 @@ pub(crate) fn parse_block_to_facts(
                 )
             })?;
 
-            // -- Semantic tag (O(1) lookup from raw code_hash bytes) -----------
+            // -- Semantic tag (registry lookup from raw code_hash bytes) -------
 
-            let semantic_tag =
-                classify_semantic_tag_from_code_hash(type_code_hash_bytes.as_ref(), type_hash_type);
+            let semantic_tag = match type_code_hash_bytes.as_ref() {
+                Some(code_hash) => {
+                    code_hash_to_semantic_tag(code_hash, type_hash_type.unwrap_or(-1))
+                }
+                None => CellSemanticTag::Plain,
+            };
 
             // -- Occupied capacity -------------------------------------------
 
@@ -578,125 +580,34 @@ fn parse_binary_dotbit_witnesses(witnesses: &ckb_types::packed::BytesVec) -> Dot
 }
 
 // ---------------------------------------------------------------------------
-// O(1) semantic tag lookup table
+// Semantic tag classification (via the shared protocol registry)
 // ---------------------------------------------------------------------------
 
-/// Raw code_hash tag before hash_type refinement.
-#[derive(Debug, Clone, Copy)]
-enum CodeHashTag {
-    Dao,
-    Sudt,      // requires hash_type == 1
-    XudtData1, // requires hash_type == 2
-    XudtType,  // requires hash_type == 1
-    Dotbit,
-    MnftIssuer,
-    MnftClass,
-    MnftToken,
-    SporeNft,
-    SporeDid,
-    Cluster,
-}
-
-fn parse_code_hash_32(hex_str: &str) -> [u8; 32] {
-    let bytes = crate::rpc::parse_hex_to_bytes(hex_str);
-    bytes.try_into().expect("code hash must be 32 bytes")
-}
-
-static CODE_HASH_TAG_MAP: LazyLock<HashMap<[u8; 32], CodeHashTag>> = LazyLock::new(|| {
-    use crate::parser::dao::DAO_CODE_HASH;
-    use crate::parser::dotbit::DOTBIT_ACCOUNT_CELL_TYPE_ID;
-    use crate::parser::mnft::{MNFT_CLASS_CODE_HASH, MNFT_ISSUER_CODE_HASH, MNFT_TOKEN_CODE_HASH};
-    use crate::parser::spore::{
-        CLUSTER_CODE_HASH_MAINNET_V2, CLUSTER_CODE_HASH_TESTNET_V1, CLUSTER_CODE_HASH_TESTNET_V2,
-        SPORE_CODE_HASH_MAINNET_DID, SPORE_CODE_HASH_MAINNET_V2, SPORE_CODE_HASH_TESTNET_V1,
-        SPORE_CODE_HASH_TESTNET_V2,
-    };
-    use crate::parser::udt::{SUDT_CODE_HASH, XUDT_CODE_HASH_DATA1, XUDT_CODE_HASH_TYPE};
-
-    let mut m = HashMap::with_capacity(16);
-    m.insert(parse_code_hash_32(DAO_CODE_HASH), CodeHashTag::Dao);
-    m.insert(parse_code_hash_32(SUDT_CODE_HASH), CodeHashTag::Sudt);
-    m.insert(
-        parse_code_hash_32(XUDT_CODE_HASH_DATA1),
-        CodeHashTag::XudtData1,
-    );
-    m.insert(
-        parse_code_hash_32(XUDT_CODE_HASH_TYPE),
-        CodeHashTag::XudtType,
-    );
-    m.insert(
-        parse_code_hash_32(DOTBIT_ACCOUNT_CELL_TYPE_ID),
-        CodeHashTag::Dotbit,
-    );
-    m.insert(
-        parse_code_hash_32(MNFT_ISSUER_CODE_HASH),
-        CodeHashTag::MnftIssuer,
-    );
-    m.insert(
-        parse_code_hash_32(MNFT_CLASS_CODE_HASH),
-        CodeHashTag::MnftClass,
-    );
-    m.insert(
-        parse_code_hash_32(MNFT_TOKEN_CODE_HASH),
-        CodeHashTag::MnftToken,
-    );
-    m.insert(
-        parse_code_hash_32(SPORE_CODE_HASH_MAINNET_V2),
-        CodeHashTag::SporeNft,
-    );
-    m.insert(
-        parse_code_hash_32(SPORE_CODE_HASH_MAINNET_DID),
-        CodeHashTag::SporeDid,
-    );
-    m.insert(
-        parse_code_hash_32(SPORE_CODE_HASH_TESTNET_V2),
-        CodeHashTag::SporeNft,
-    );
-    m.insert(
-        parse_code_hash_32(SPORE_CODE_HASH_TESTNET_V1),
-        CodeHashTag::SporeNft,
-    );
-    m.insert(
-        parse_code_hash_32(CLUSTER_CODE_HASH_MAINNET_V2),
-        CodeHashTag::Cluster,
-    );
-    m.insert(
-        parse_code_hash_32(CLUSTER_CODE_HASH_TESTNET_V2),
-        CodeHashTag::Cluster,
-    );
-    m.insert(
-        parse_code_hash_32(CLUSTER_CODE_HASH_TESTNET_V1),
-        CodeHashTag::Cluster,
-    );
-    m
-});
-
-/// Classify a cell's semantic tag from raw code_hash bytes and hash_type.
-/// O(1) HashMap lookup replaces the sequential if-chain.
-fn classify_semantic_tag_from_code_hash(
-    type_code_hash: Option<&[u8; 32]>,
-    type_hash_type: Option<i16>,
-) -> CellSemanticTag {
-    let Some(code_hash) = type_code_hash else {
-        return CellSemanticTag::Plain;
-    };
-    let Some(&raw_tag) = CODE_HASH_TAG_MAP.get(code_hash) else {
-        return CellSemanticTag::Plain;
-    };
-    let hash_type = type_hash_type.unwrap_or(-1);
-    match raw_tag {
-        // DAO does not enforce hash_type — matches existing behavior in classify_bulk_cell_semantic_tag
-        CodeHashTag::Dao => CellSemanticTag::Dao,
-        CodeHashTag::Sudt if hash_type == 1 => CellSemanticTag::Sudt,
-        CodeHashTag::XudtData1 if hash_type == 2 => CellSemanticTag::Xudt,
-        CodeHashTag::XudtType if hash_type == 1 => CellSemanticTag::Xudt,
-        CodeHashTag::Dotbit => CellSemanticTag::Dotbit,
-        CodeHashTag::MnftIssuer | CodeHashTag::MnftClass | CodeHashTag::MnftToken => {
-            CellSemanticTag::Mnft
-        }
-        CodeHashTag::SporeNft | CodeHashTag::SporeDid => CellSemanticTag::Spore,
-        CodeHashTag::Cluster => CellSemanticTag::Cluster,
-        // hash_type mismatch for UDT entries
+/// Classify a cell's semantic tag from its type-script `code_hash` bytes and
+/// `hash_type`, keyed on the network-agnostic `PROTOCOL_REGISTRY`.
+///
+/// The registry maps a `code_hash` to a protocol identity regardless of network,
+/// so testnet deployments classify identically to their mainnet counterparts in
+/// bulk sync (the previous mainnet-only static lookup table silently dropped
+/// testnet cells to `Plain`). The `hash_type` guards below mirror the historical
+/// UDT rules; every other protocol classifies on `code_hash` alone. An
+/// unregistered `code_hash`, a non-cell protocol (locks, fiber, stable++, …), or
+/// a UDT `hash_type` that fails its guard falls through to `Plain`.
+fn code_hash_to_semantic_tag(code_hash: &[u8], hash_type: i16) -> CellSemanticTag {
+    match PROTOCOL_REGISTRY.get(code_hash) {
+        // DAO does not enforce hash_type — matches historical behavior.
+        Some(ProtocolScript::Dao) => CellSemanticTag::Dao,
+        Some(ProtocolScript::Sudt) if hash_type == 1 => CellSemanticTag::Sudt,
+        // xUDT: mainnet code_hash is data1 (hash_type 2), testnet is type (hash_type 1);
+        // each code_hash is unambiguous, so accept its on-chain hash_type.
+        Some(ProtocolScript::Xudt) if hash_type == 1 || hash_type == 2 => CellSemanticTag::Xudt,
+        Some(ProtocolScript::DotbitAccount) => CellSemanticTag::Dotbit,
+        Some(
+            ProtocolScript::MnftIssuer | ProtocolScript::MnftClass | ProtocolScript::MnftToken,
+        ) => CellSemanticTag::Mnft,
+        Some(ProtocolScript::SporeNft | ProtocolScript::SporeDid) => CellSemanticTag::Spore,
+        Some(ProtocolScript::Cluster) => CellSemanticTag::Cluster,
+        // Unregistered code_hash, a non-cell protocol, or a UDT hash_type-guard miss.
         _ => CellSemanticTag::Plain,
     }
 }
@@ -1001,23 +912,20 @@ mod tests {
     }
 
     #[test]
-    fn classify_plain_cell_without_type_script() {
+    fn classify_unregistered_code_hash_is_plain() {
+        // The historical "no type script" case reduces to Plain at the call site;
+        // the classifier itself maps any unregistered code_hash to Plain.
         assert_eq!(
-            classify_semantic_tag_from_code_hash(None, None),
+            code_hash_to_semantic_tag(&[0u8; 32], -1),
             CellSemanticTag::Plain
         );
     }
 
     #[test]
     fn classify_dao_cell() {
-        let dao_code_hash =
-            hex::decode("82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e")
-                .unwrap();
-        let hash: [u8; 32] = dao_code_hash.try_into().unwrap();
-        assert_eq!(
-            classify_semantic_tag_from_code_hash(Some(&hash), Some(1)),
-            CellSemanticTag::Dao
-        );
+        let hash = hex::decode("82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e")
+            .unwrap();
+        assert_eq!(code_hash_to_semantic_tag(&hash, 1), CellSemanticTag::Dao);
     }
 
     // -----------------------------------------------------------------------
@@ -1117,123 +1025,110 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // classify_semantic_tag_from_code_hash tests
+    // code_hash_to_semantic_tag tests
     // -----------------------------------------------------------------------
 
     #[test]
     fn classify_from_code_hash_plain_without_type() {
+        // A cell whose code_hash is not in the registry classifies as Plain.
         assert_eq!(
-            classify_semantic_tag_from_code_hash(None, None),
-            CellSemanticTag::Plain,
+            code_hash_to_semantic_tag(&[0u8; 32], 1),
+            CellSemanticTag::Plain
         );
     }
 
     #[test]
     fn classify_from_code_hash_dao() {
-        let hash = parse_code_hash_32(crate::parser::dao::DAO_CODE_HASH);
-        assert_eq!(
-            classify_semantic_tag_from_code_hash(Some(&hash), Some(1)),
-            CellSemanticTag::Dao,
-        );
+        let hash = crate::rpc::parse_hex_to_bytes(crate::parser::dao::DAO_CODE_HASH);
+        assert_eq!(code_hash_to_semantic_tag(&hash, 1), CellSemanticTag::Dao);
     }
 
     #[test]
     fn classify_from_code_hash_sudt() {
-        let hash = parse_code_hash_32(crate::parser::udt::SUDT_CODE_HASH);
+        let hash = crate::rpc::parse_hex_to_bytes(crate::parser::udt::SUDT_CODE_HASH);
         // hash_type 1 → Sudt
-        assert_eq!(
-            classify_semantic_tag_from_code_hash(Some(&hash), Some(1)),
-            CellSemanticTag::Sudt,
-        );
-        // hash_type 0 → Plain (mismatch)
-        assert_eq!(
-            classify_semantic_tag_from_code_hash(Some(&hash), Some(0)),
-            CellSemanticTag::Plain,
-        );
+        assert_eq!(code_hash_to_semantic_tag(&hash, 1), CellSemanticTag::Sudt);
+        // hash_type 0 → Plain (guard miss)
+        assert_eq!(code_hash_to_semantic_tag(&hash, 0), CellSemanticTag::Plain);
     }
 
     #[test]
     fn classify_from_code_hash_xudt_data1() {
-        let hash = parse_code_hash_32(crate::parser::udt::XUDT_CODE_HASH_DATA1);
-        // hash_type 2 → Xudt
-        assert_eq!(
-            classify_semantic_tag_from_code_hash(Some(&hash), Some(2)),
-            CellSemanticTag::Xudt,
-        );
-        // hash_type 1 → Plain (mismatch)
-        assert_eq!(
-            classify_semantic_tag_from_code_hash(Some(&hash), Some(1)),
-            CellSemanticTag::Plain,
-        );
+        let hash = crate::rpc::parse_hex_to_bytes(crate::parser::udt::XUDT_CODE_HASH_DATA1);
+        // hash_type 2 (data1) → Xudt
+        assert_eq!(code_hash_to_semantic_tag(&hash, 2), CellSemanticTag::Xudt);
+        // Registry migration trusts each xUDT code_hash's on-chain hash_type, so
+        // hash_type 1 on the data1 code_hash is also accepted (was Plain before).
+        assert_eq!(code_hash_to_semantic_tag(&hash, 1), CellSemanticTag::Xudt);
+        // hash_type 0 → Plain (guard miss)
+        assert_eq!(code_hash_to_semantic_tag(&hash, 0), CellSemanticTag::Plain);
     }
 
     #[test]
     fn classify_from_code_hash_xudt_type() {
-        let hash = parse_code_hash_32(crate::parser::udt::XUDT_CODE_HASH_TYPE);
-        assert_eq!(
-            classify_semantic_tag_from_code_hash(Some(&hash), Some(1)),
-            CellSemanticTag::Xudt,
-        );
+        let hash = crate::rpc::parse_hex_to_bytes(crate::parser::udt::XUDT_CODE_HASH_TYPE);
+        assert_eq!(code_hash_to_semantic_tag(&hash, 1), CellSemanticTag::Xudt);
     }
 
     #[test]
     fn classify_from_code_hash_spore_mainnet_v2() {
-        let hash = parse_code_hash_32(crate::parser::spore::SPORE_CODE_HASH_MAINNET_V2);
-        assert_eq!(
-            classify_semantic_tag_from_code_hash(Some(&hash), Some(1)),
-            CellSemanticTag::Spore,
-        );
+        let hash = crate::rpc::parse_hex_to_bytes(crate::parser::spore::SPORE_CODE_HASH_MAINNET_V2);
+        assert_eq!(code_hash_to_semantic_tag(&hash, 1), CellSemanticTag::Spore);
     }
 
     #[test]
     fn classify_from_code_hash_spore_did() {
-        let hash = parse_code_hash_32(
+        let hash = crate::rpc::parse_hex_to_bytes(
             "0xcfba73b58b6f30e70caed8a999748781b164ef9a1e218424a6fb55ebf641cb33",
         );
-        assert_eq!(
-            classify_semantic_tag_from_code_hash(Some(&hash), Some(1)),
-            CellSemanticTag::Spore,
-        );
+        assert_eq!(code_hash_to_semantic_tag(&hash, 1), CellSemanticTag::Spore);
     }
 
     #[test]
     fn classify_from_code_hash_cluster() {
-        let hash = parse_code_hash_32(crate::parser::spore::CLUSTER_CODE_HASH_MAINNET_V2);
+        let hash =
+            crate::rpc::parse_hex_to_bytes(crate::parser::spore::CLUSTER_CODE_HASH_MAINNET_V2);
         assert_eq!(
-            classify_semantic_tag_from_code_hash(Some(&hash), Some(1)),
-            CellSemanticTag::Cluster,
+            code_hash_to_semantic_tag(&hash, 1),
+            CellSemanticTag::Cluster
         );
     }
 
     #[test]
     fn classify_from_code_hash_dotbit() {
-        let hash = parse_code_hash_32(
+        let hash = crate::rpc::parse_hex_to_bytes(
             "0x4f170a048198408f4f4d36bdbcddcebe7a0ae85244d3ab08fd40a80cbfc70918",
         );
-        assert_eq!(
-            classify_semantic_tag_from_code_hash(Some(&hash), Some(1)),
-            CellSemanticTag::Dotbit,
-        );
+        assert_eq!(code_hash_to_semantic_tag(&hash, 1), CellSemanticTag::Dotbit);
     }
 
     #[test]
     fn classify_from_code_hash_mnft_issuer() {
-        let hash = parse_code_hash_32(
+        let hash = crate::rpc::parse_hex_to_bytes(
             "0x24b04faf80ded836efc05247778eec4ec02548dab6e2012c0107374aa3f68b81",
         );
-        assert_eq!(
-            classify_semantic_tag_from_code_hash(Some(&hash), Some(1)),
-            CellSemanticTag::Mnft,
-        );
+        assert_eq!(code_hash_to_semantic_tag(&hash, 1), CellSemanticTag::Mnft);
     }
 
     #[test]
     fn classify_from_code_hash_unknown_type_is_plain() {
         let hash = [0xFF; 32];
-        assert_eq!(
-            classify_semantic_tag_from_code_hash(Some(&hash), Some(1)),
-            CellSemanticTag::Plain,
+        assert_eq!(code_hash_to_semantic_tag(&hash, 1), CellSemanticTag::Plain);
+    }
+
+    /// Testnet regression: testnet sUDT + testnet mNFT token classify in bulk
+    /// sync via the registry. Under the old mainnet-only static lookup table
+    /// these code_hashes were absent and silently fell through to `Plain`.
+    #[test]
+    fn classifies_testnet_sudt_and_mnft() {
+        let sudt_t = crate::rpc::parse_hex_to_bytes(
+            "0xc5e5dcf215925f7ef4dfaf5f4b4f105bc321c02776d6e7d52a1db3fcd9d011a4",
         );
+        assert_eq!(code_hash_to_semantic_tag(&sudt_t, 1), CellSemanticTag::Sudt);
+        let mnft_t = crate::rpc::parse_hex_to_bytes(
+            "0xb1837b5ad01a88558731953062d1f5cb547adf89ece01e8934a9f0aeed2d959f",
+        );
+        assert_eq!(code_hash_to_semantic_tag(&mnft_t, 1), CellSemanticTag::Mnft);
     }
 
     // -----------------------------------------------------------------------
