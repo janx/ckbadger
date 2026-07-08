@@ -1486,7 +1486,6 @@ impl Indexer {
         }
         let precompute_ms = t_precompute.elapsed().as_secs_f64() * 1000.0;
 
-        let dao_code_hash = crate::rpc::parse_hex_to_bytes(crate::parser::dao::DAO_CODE_HASH);
         let mut batch_new_addresses = 0i64;
 
         let t_write = Instant::now();
@@ -1881,7 +1880,9 @@ impl Indexer {
                                 )
                             })?;
                             if let Some(ref type_code_hash) = cell.type_code_hash {
-                                if type_code_hash == &dao_code_hash && cell.data_size == 8 {
+                                if DaoParser::is_dao_code_hash(type_code_hash)
+                                    && cell.data_size == 8
+                                {
                                     if let Some(data) = tx_data.outputs_data.get(idx) {
                                         let data_bytes = crate::rpc::parse_hex_to_bytes(data);
                                         if let Some(deposit_block) =
@@ -2919,8 +2920,8 @@ impl Indexer {
                 for cell in &tx_data.cells {
                     if cell
                         .type_code_hash
-                        .as_ref()
-                        .is_some_and(|code_hash| code_hash.as_slice() == dao_code_hash_for_stats)
+                        .as_deref()
+                        .is_some_and(DaoParser::is_dao_code_hash)
                     {
                         touched_lock_hashes.insert(cell.lock_script_hash.clone());
                     }
@@ -2940,9 +2941,9 @@ impl Indexer {
                         .get(&key)
                         .or_else(|| batch_cell_infos.get(&key))
                         .filter(|info| {
-                            info.type_code_hash.as_ref().is_some_and(|code_hash| {
-                                code_hash.as_slice() == dao_code_hash_for_stats
-                            })
+                            info.type_code_hash
+                                .as_deref()
+                                .is_some_and(DaoParser::is_dao_code_hash)
                         })
                     {
                         touched_lock_hashes.insert(info.lock_script_hash.clone());

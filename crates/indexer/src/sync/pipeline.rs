@@ -1355,8 +1355,6 @@ impl Indexer {
 
                 // Pass 2: Compute input capacity + fee
                 let compute_fee_started = Instant::now();
-                let dao_code_hash =
-                    crate::rpc::parse_hex_to_bytes(crate::parser::dao::DAO_CODE_HASH);
                 for tx_data in &mut all_tx_data {
                     if !tx_data.is_cellbase {
                         let mut has_dao_input = false;
@@ -1380,13 +1378,19 @@ impl Indexer {
                             let key = (input.previous_tx_hash.to_vec(), output_index);
                             if let Some(info) = input_cell_info.get(&key) {
                                 tx_data.total_input_capacity += info.capacity;
-                                if info.type_code_hash.as_deref() == Some(dao_code_hash.as_slice())
+                                if info
+                                    .type_code_hash
+                                    .as_deref()
+                                    .is_some_and(DaoParser::is_dao_code_hash)
                                 {
                                     has_dao_input = true;
                                 }
                             } else if let Some(info) = batch_cell_infos.get(&key) {
                                 tx_data.total_input_capacity += info.capacity;
-                                if info.type_code_hash.as_deref() == Some(dao_code_hash.as_slice())
+                                if info
+                                    .type_code_hash
+                                    .as_deref()
+                                    .is_some_and(DaoParser::is_dao_code_hash)
                                 {
                                     has_dao_input = true;
                                 }
