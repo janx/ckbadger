@@ -40,6 +40,13 @@ pub struct ApiServiceConfig {
     pub crawler_enabled: bool,
 }
 
+/// One backend network the frontend proxy can route to.
+#[derive(Clone, Debug)]
+pub struct FrontendNetwork {
+    pub name: String,
+    pub api_port: u16,
+}
+
 /// Configuration for the standalone frontend server.
 #[derive(Clone)]
 pub struct FrontendServiceConfig {
@@ -52,6 +59,11 @@ pub struct FrontendServiceConfig {
     /// Local filesystem override directory (e.g. workdir/frontend/).
     /// When set, serves from disk instead of embedded assets.
     pub frontend_dir: Option<PathBuf>,
+    /// All networks this frontend serves (proxy targets). Single-network mode
+    /// is a one-element vec matching `ckb_network`/`api_port`.
+    pub networks: Vec<FrontendNetwork>,
+    /// Default network for the `/` redirect + un-prefixed paths.
+    pub default_network: String,
 }
 
 /// Run the API server (API + WebSocket only, no frontend). Blocks until shutdown.
@@ -191,6 +203,13 @@ struct FrontendRuntimeConfig {
     ckb_network: String,
     ckb_rpc_url: String,
     build_version: String,
+    // Carried from `FrontendServiceConfig` for the multi-network switcher; the
+    // runtime-config handler emits these to the SPA in a later task, so they are
+    // populated here but not yet read.
+    #[allow(dead_code)]
+    networks: Vec<FrontendNetwork>,
+    #[allow(dead_code)]
+    default_network: String,
 }
 
 pub fn build_frontend_router(config: FrontendServiceConfig) -> Result<Router> {
@@ -200,6 +219,8 @@ pub fn build_frontend_router(config: FrontendServiceConfig) -> Result<Router> {
         ckb_network: config.ckb_network.clone(),
         ckb_rpc_url: config.ckb_rpc_url.clone(),
         build_version: config.build_version.clone(),
+        networks: config.networks.clone(),
+        default_network: config.default_network.clone(),
     };
 
     if let Some(frontend_dir) = config.frontend_dir {
@@ -547,6 +568,11 @@ mod tests {
             ckb_rpc_url: "http://127.0.0.1:8114".to_string(),
             build_version: "0.1.0+testbuild".to_string(),
             frontend_dir: Some(PathBuf::from("/work/frontend")),
+            default_network: "mainnet".to_string(),
+            networks: vec![FrontendNetwork {
+                name: "mainnet".to_string(),
+                api_port: 8101,
+            }],
         };
 
         assert_eq!(config.host, "127.0.0.1");
@@ -558,6 +584,10 @@ mod tests {
             config.frontend_dir.as_ref().unwrap(),
             &PathBuf::from("/work/frontend")
         );
+        assert_eq!(config.default_network, "mainnet");
+        assert_eq!(config.networks.len(), 1);
+        assert_eq!(config.networks[0].name, "mainnet");
+        assert_eq!(config.networks[0].api_port, 8101);
     }
 
     #[test]
@@ -570,6 +600,11 @@ mod tests {
             ckb_rpc_url: "http://127.0.0.1:8114".to_string(),
             build_version: "0.1.0+testbuild".to_string(),
             frontend_dir: None,
+            default_network: "mainnet".to_string(),
+            networks: vec![FrontendNetwork {
+                name: "mainnet".to_string(),
+                api_port: 8101,
+            }],
         };
 
         assert!(config.frontend_dir.is_none());
@@ -598,6 +633,11 @@ mod tests {
             ckb_rpc_url: "http://127.0.0.1:8114".to_string(),
             build_version: "0.1.0+testbuild".to_string(),
             frontend_dir: Some(dir.path().to_path_buf()),
+            default_network: "mainnet".to_string(),
+            networks: vec![FrontendNetwork {
+                name: "mainnet".to_string(),
+                api_port: 8101,
+            }],
         })
         .unwrap_err();
 
@@ -616,6 +656,11 @@ mod tests {
             ckb_rpc_url: "http://127.0.0.1:8114".to_string(),
             build_version: "0.1.0+testbuild".to_string(),
             frontend_dir: Some(dir.path().to_path_buf()),
+            default_network: "mainnet".to_string(),
+            networks: vec![FrontendNetwork {
+                name: "mainnet".to_string(),
+                api_port: 8101,
+            }],
         })
         .unwrap();
 
@@ -647,6 +692,11 @@ mod tests {
             ckb_rpc_url: "http://127.0.0.1:18114".to_string(),
             build_version: "0.1.0+feature/foo@abcdef123456".to_string(),
             frontend_dir: Some(dir.path().to_path_buf()),
+            default_network: "testnet".to_string(),
+            networks: vec![FrontendNetwork {
+                name: "testnet".to_string(),
+                api_port: 9101,
+            }],
         })
         .unwrap();
 
@@ -682,6 +732,43 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_build_frontend_router_multi_network_config_builds() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("index.html"), "<html>spa</html>").unwrap();
+
+        // An orchestrator-shape config carrying two networks must build a router
+        // without panic (single-network is just the one-element case).
+        let router = build_frontend_router(FrontendServiceConfig {
+            host: "127.0.0.1".to_string(),
+            port: 8100,
+            api_port: 8101,
+            ckb_network: "mainnet".to_string(),
+            ckb_rpc_url: String::new(),
+            build_version: "0.1.0+testbuild".to_string(),
+            frontend_dir: Some(dir.path().to_path_buf()),
+            default_network: "mainnet".to_string(),
+            networks: vec![
+                FrontendNetwork {
+                    name: "mainnet".to_string(),
+                    api_port: 8101,
+                },
+                FrontendNetwork {
+                    name: "testnet".to_string(),
+                    api_port: 8102,
+                },
+            ],
+        })
+        .expect("two-network config should build a router");
+
+        // The SPA still serves through the multi-network router.
+        let response = router
+            .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
     async fn test_capabilities_route_returns_valid_json() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("index.html"), "<html>spa</html>").unwrap();
@@ -694,6 +781,11 @@ mod tests {
             ckb_rpc_url: "http://127.0.0.1:8114".to_string(),
             build_version: "0.1.0+testbuild".to_string(),
             frontend_dir: Some(dir.path().to_path_buf()),
+            default_network: "mainnet".to_string(),
+            networks: vec![FrontendNetwork {
+                name: "mainnet".to_string(),
+                api_port: 8101,
+            }],
         })
         .unwrap();
 

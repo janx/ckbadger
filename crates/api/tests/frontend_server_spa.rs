@@ -1,6 +1,6 @@
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use ckbadger_api::entry::{build_frontend_router, FrontendServiceConfig};
+use ckbadger_api::entry::{build_frontend_router, FrontendNetwork, FrontendServiceConfig};
 use http_body_util::BodyExt;
 use std::path::PathBuf;
 use tempfile::tempdir;
@@ -25,6 +25,11 @@ async fn frontend_server_falls_back_to_index_html_for_spa_route() {
         ckb_rpc_url: "http://127.0.0.1:8114".to_string(),
         build_version: "0.1.0+testbuild".to_string(),
         frontend_dir: Some(PathBuf::from(dir.path())),
+        default_network: "mainnet".to_string(),
+        networks: vec![FrontendNetwork {
+            name: "mainnet".to_string(),
+            api_port: 8101,
+        }],
     })
     .unwrap();
 

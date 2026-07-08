@@ -416,13 +416,14 @@ async fn cmd_run(workdir: &Path, args: &RunArgs) -> Result<()> {
 }
 
 /// Orchestrator-mode `run`: launch one `(indexer, api[, crawler])` stack per
-/// network subdir listed in the top-level `ckbadger.toml`.
+/// network subdir listed in the top-level `ckbadger.toml`, plus one shared
+/// frontend proxy serving all networks.
 ///
 /// Each subdir is a standard single-network workdir with its own `config.toml`.
 /// Services are spawned as `ckbadger internal <service> -C <subdir>` children of
 /// one shared supervisor rooted at the orchestrator dir. The frontend is NOT
-/// spawned per-network (a unified frontend proxy is a later plan); each API is
-/// reachable on its own configured port.
+/// spawned per-network; a single frontend child (spawned with `-C <root>`) serves
+/// every network, and each API is also reachable on its own configured port.
 async fn cmd_run_orchestrator(root: &Path, args: &RunArgs) -> Result<()> {
     // `--only` selects services within a single-network workdir; there is no
     // coherent meaning at an orchestrator root (which network?). Fail fast
@@ -455,7 +456,7 @@ async fn cmd_run_orchestrator(root: &Path, args: &RunArgs) -> Result<()> {
         let cfg = load_config(&sub)?;
         nets.push((entry.name.clone(), cfg.api.port, sub.clone()));
         // Per-network services EXCEPT the frontend (one shared frontend proxy
-        // is added in a later plan).
+        // is added after this loop).
         let mut services = vec!["indexer", "api"];
         if cfg.crawler.enabled {
             services.push("crawler");
@@ -480,7 +481,13 @@ async fn cmd_run_orchestrator(root: &Path, args: &RunArgs) -> Result<()> {
     // (RocksDB LOCK / DB-identity confusion). Must run BEFORE any child spawns.
     check_orchestrator_bindings(&nets)?;
 
-    println!("Frontend proxy: deferred to a later plan (reach each API on its own port for now).");
+    // One shared frontend proxy for all networks (the child re-reads the
+    // orchestrator config; label "frontend" -> run/logs/frontend.log).
+    specs.push(frontend_child_spec(root));
+    println!(
+        "frontend proxy -> :{} (serves /{{network}}/...)",
+        orch.frontend.port
+    );
     supervisor::run_supervisor_multi(&root_work, specs).await
 }
 
@@ -512,11 +519,72 @@ fn check_orchestrator_bindings(nets: &[(String, u16, PathBuf)]) -> Result<()> {
     Ok(())
 }
 
+/// Build the shared frontend's multi-network config from an orchestrator root.
+///
+/// Re-reads `<root>/ckbadger.toml` plus each network subdir's `config.toml`
+/// (the same shape [`cmd_run_orchestrator`] uses) so the frontend child — spawned
+/// with `-C <root>` — can route to every network's API. `default_network` is the
+/// first listed network (the `/` redirect target for the proxy). `frontend_dir`
+/// is resolved by the caller and passed through unchanged.
+fn build_orchestrator_frontend_config(
+    root: &Path,
+    frontend_dir: Option<PathBuf>,
+) -> Result<FrontendServiceConfig> {
+    let orch = load_orchestrator_config(root)?;
+    let mut networks = Vec::new();
+    for entry in &orch.networks {
+        let sub = network_workdir(root, entry);
+        let cfg = load_config(&sub)
+            .with_context(|| format!("frontend: reading config for network '{}'", entry.name))?;
+        networks.push(ckbadger_api::entry::FrontendNetwork {
+            name: entry.name.clone(),
+            api_port: cfg.api.port,
+        });
+    }
+    let default_network = networks
+        .first()
+        .map(|n| n.name.clone())
+        .ok_or_else(|| anyhow::anyhow!("orchestrator has no networks for the frontend"))?;
+    Ok(FrontendServiceConfig {
+        host: orch.frontend.host.clone(),
+        port: orch.frontend.port,
+        api_port: networks[0].api_port, // legacy field; proxy uses `networks`
+        ckb_network: default_network.clone(),
+        ckb_rpc_url: String::new(), // per-network rpc not surfaced to the frontend proxy
+        build_version: BUILD_VERSION.to_string(),
+        frontend_dir,
+        default_network,
+        networks,
+    })
+}
+
+/// The shared-frontend supervised child. Spawned with `-C <root>` (the
+/// orchestrator dir) so [`cmd_internal`] detects `is_orchestrator` and builds the
+/// multi-network config. Label "frontend" -> `run/logs/frontend.log`.
+fn frontend_child_spec(root: &Path) -> supervisor::ChildSpec {
+    supervisor::ChildSpec {
+        label: "frontend".to_string(),
+        service: "frontend-server".to_string(),
+        workdir: root.to_string_lossy().to_string(),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // internal command (subprocess entry points)
 // ---------------------------------------------------------------------------
 
 async fn cmd_internal(workdir: &Path, args: &InternalArgs) -> Result<()> {
+    // The shared frontend is spawned with `-C <orchestrator-root>`, which holds
+    // `ckbadger.toml` (not the single-network `config.toml`). Build its
+    // multi-network config from the orchestrator config here, before the
+    // single-network `load_config` below (which would fail at that root).
+    if matches!(args.service, InternalService::FrontendServer) && is_orchestrator(workdir) {
+        let work = WorkDir::resolve(workdir);
+        let frontend_dir = resolve_frontend_dir(&work);
+        let frontend_config = build_orchestrator_frontend_config(workdir, frontend_dir)?;
+        return run_frontend_server(frontend_config).await;
+    }
+
     let config = load_config(workdir)?;
     let work = WorkDir::resolve(workdir);
     let store_runtime_config = store_runtime_config(&config.store);
@@ -560,7 +628,13 @@ async fn cmd_internal(workdir: &Path, args: &InternalArgs) -> Result<()> {
             run_api(api_config).await
         }
         InternalService::FrontendServer => {
+            // Single-network mode: one-element `networks` matching this workdir's
+            // own API. The orchestrator (multi-network) case returns early above.
             let frontend_dir = resolve_frontend_dir(&work);
+            let networks = vec![ckbadger_api::entry::FrontendNetwork {
+                name: config.ckb.network.clone(),
+                api_port: config.api.port,
+            }];
             let frontend_config = FrontendServiceConfig {
                 host: config.frontend.host.clone(),
                 port: config.frontend.port,
@@ -569,6 +643,8 @@ async fn cmd_internal(workdir: &Path, args: &InternalArgs) -> Result<()> {
                 ckb_rpc_url: config.ckb.rpc_url.clone(),
                 build_version: BUILD_VERSION.to_string(),
                 frontend_dir,
+                default_network: config.ckb.network.clone(),
+                networks,
             };
             run_frontend_server(frontend_config).await
         }
@@ -1361,6 +1437,60 @@ mod tests {
             err.contains("/root/shared"),
             "error names the shared workdir: {err}"
         );
+    }
+
+    // -- shared frontend (orchestrator) --
+
+    #[test]
+    fn test_build_orchestrator_frontend_config_reads_every_network_port() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+
+        // Orchestrator root lists two networks; each subdir is a single-network
+        // workdir with a distinct [api].port.
+        std::fs::write(
+            root.join("ckbadger.toml"),
+            default_orchestrator_toml(&["mainnet", "testnet"]),
+        )
+        .unwrap();
+        std::fs::create_dir_all(root.join("mainnet")).unwrap();
+        std::fs::create_dir_all(root.join("testnet")).unwrap();
+        std::fs::write(
+            root.join("mainnet").join("config.toml"),
+            default_config_toml("mainnet", 8101),
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("testnet").join("config.toml"),
+            default_config_toml("testnet", 8102),
+        )
+        .unwrap();
+
+        let cfg = build_orchestrator_frontend_config(root, None).unwrap();
+
+        assert_eq!(cfg.networks.len(), 2);
+        assert_eq!(cfg.networks[0].name, "mainnet");
+        assert_eq!(cfg.networks[0].api_port, 8101);
+        assert_eq!(cfg.networks[1].name, "testnet");
+        assert_eq!(cfg.networks[1].api_port, 8102);
+        // default_network is the first listed network.
+        assert_eq!(cfg.default_network, "mainnet");
+        // Legacy single-port field mirrors the first (default) network.
+        assert_eq!(cfg.api_port, 8101);
+        // Shared frontend host/port come from the orchestrator [frontend] section.
+        assert_eq!(cfg.port, 8100);
+        // No frontend assets dir was passed through.
+        assert!(cfg.frontend_dir.is_none());
+    }
+
+    #[test]
+    fn test_frontend_child_spec_targets_orchestrator_root() {
+        let spec = frontend_child_spec(Path::new("/srv/ckb"));
+        assert_eq!(spec.label, "frontend");
+        // Maps to `ckbadger internal frontend-server`.
+        assert_eq!(spec.service, "frontend-server");
+        // Spawned with `-C <root>` so cmd_internal detects the orchestrator config.
+        assert_eq!(spec.workdir, "/srv/ckb");
     }
 
     #[test]
