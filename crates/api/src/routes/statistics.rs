@@ -1231,22 +1231,47 @@ async fn get_knowledge_size_chart(State(state): State<Arc<AppState>>) -> ApiResu
 
 const SHANNONS_PER_CKB: i128 = 100_000_000;
 
-const UDT_CODE_HASHES: &[&str] = &[
-    "0x5e7a36a77e68eecc013dfa2fe6a23f3b6c344b04005808694ae6dd45eea4cfd5",
-    "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95",
-    "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb",
-];
+/// Knowledge-size composition bucket for a typed cell's `code_hash`, derived from the
+/// shared network-agnostic `PROTOCOL_REGISTRY` (mainnet + testnet union). This replaces
+/// the former mainnet-only `UDT_CODE_HASHES` / `NFT_SPORE_CODE_HASHES` const sets, which
+/// undercounted testnet assets because they enumerated only mainnet code_hashes.
+///
+/// Coverage is preserved exactly (plus the testnet hashes the registry adds):
+///
+/// - `Dao` = registry `Dao`.
+/// - `Udt` = registry `Sudt | Xudt`. The old set was sUDT + 2 xUDT canonical hashes, all
+///   of which map to `Sudt`/`Xudt`; it carried NO udt-compatible (Stable++/ccBTC/USDI)
+///   hashes, so none are added here.
+/// - `NftSpore` = registry `SporeNft | SporeDid | Cluster`. The old set was 4 Spore
+///   (3 SporeNft + 1 SporeDid/bit-cell) + 3 Cluster hashes.
+/// - `OtherTyped` = every other typed cell (unchanged residual bucket).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum KnowledgeBucket {
+    Dao,
+    Udt,
+    NftSpore,
+    OtherTyped,
+}
 
-const NFT_SPORE_CODE_HASHES: &[&str] = &[
-    "0x4a4dce1df3dffff7f8b2cd7dff7303df3b6150c9788cb75dcf6747247132b9f5",
-    "0xcfba73b58b6f30e70caed8a999748781b164ef9a1e218424a6fb55ebf641cb33",
-    "0x685a60219309029d01310311dba953d67029170ca4848a4ff638e57002130a0d",
-    "0xbbad126377d45f90a8ee120da988a2d7332c78ba8fd679aab478a19d6c133494",
-    "0x7366a61534fa7c7e6225ecc0d828ea3b5366adec2b58206f2ee84995fe030075",
-    "0x0bbe768b519d8ea7b96d58f1182eb7e6ef96c541fbd9526975077ee09f049058",
-    "0x598d793defef36e2eeba54a9b45130e4ca92822e1d193671f490950c3b856080",
-];
+fn classify_knowledge_bucket(code_hash: &[u8]) -> KnowledgeBucket {
+    if PROTOCOL_REGISTRY.is(code_hash, ProtocolScript::Dao) {
+        KnowledgeBucket::Dao
+    } else if matches!(
+        PROTOCOL_REGISTRY.get(code_hash),
+        Some(ProtocolScript::Sudt | ProtocolScript::Xudt)
+    ) {
+        KnowledgeBucket::Udt
+    } else if matches!(
+        PROTOCOL_REGISTRY.get(code_hash),
+        Some(ProtocolScript::SporeNft | ProtocolScript::SporeDid | ProtocolScript::Cluster)
+    ) {
+        KnowledgeBucket::NftSpore
+    } else {
+        KnowledgeBucket::OtherTyped
+    }
+}
 
+#[cfg(test)]
 fn parse_code_hash_set(hexes: &[&str]) -> HashSet<Vec<u8>> {
     hexes
         .iter()
@@ -1367,9 +1392,6 @@ async fn get_common_knowledge_composition_chart(
         .map(|(code_hash, _)| code_hash)
         .collect();
 
-    let udt_hashes = parse_code_hash_set(UDT_CODE_HASHES);
-    let nft_spore_hashes = parse_code_hash_set(NFT_SPORE_CODE_HASHES);
-
     let mut type_daily_delta: HashMap<u32, i128> = HashMap::new();
     let mut dao_daily_delta: HashMap<u32, i128> = HashMap::new();
     let mut udt_daily_delta: HashMap<u32, i128> = HashMap::new();
@@ -1388,12 +1410,13 @@ async fn get_common_knowledge_composition_chart(
             let used_delta = delta.owned_knowledge_delta;
             *type_daily_delta.entry(date).or_insert(0) += used_delta;
 
-            if PROTOCOL_REGISTRY.is(&code_hash, ProtocolScript::Dao) {
-                *dao_daily_delta.entry(date).or_insert(0) += used_delta;
-            } else if udt_hashes.contains(&code_hash) {
-                *udt_daily_delta.entry(date).or_insert(0) += used_delta;
-            } else if nft_spore_hashes.contains(&code_hash) {
-                *nft_spore_daily_delta.entry(date).or_insert(0) += used_delta;
+            match classify_knowledge_bucket(&code_hash) {
+                KnowledgeBucket::Dao => *dao_daily_delta.entry(date).or_insert(0) += used_delta,
+                KnowledgeBucket::Udt => *udt_daily_delta.entry(date).or_insert(0) += used_delta,
+                KnowledgeBucket::NftSpore => {
+                    *nft_spore_daily_delta.entry(date).or_insert(0) += used_delta
+                }
+                KnowledgeBucket::OtherTyped => {}
             }
         }
     }
@@ -3549,6 +3572,94 @@ mod tests {
             "0xzzzz",
         ]);
         assert_eq!(hashes.len(), 1);
+    }
+
+    fn code_hash_bytes(hex_str: &str) -> Vec<u8> {
+        hex::decode(hex_str.trim_start_matches("0x")).expect("valid 32-byte hex")
+    }
+
+    #[test]
+    fn test_knowledge_bucket_classifies_testnet_udt_as_udt() {
+        // Testnet sUDT (simple-udt.toml `[testnet]`). The mainnet-only const set could
+        // not reach this hash, so testnet UDT knowledge was undercounted before.
+        assert_eq!(
+            classify_knowledge_bucket(&code_hash_bytes(
+                "0xc5e5dcf215925f7ef4dfaf5f4b4f105bc321c02776d6e7d52a1db3fcd9d011a4"
+            )),
+            KnowledgeBucket::Udt
+        );
+    }
+
+    #[test]
+    fn test_knowledge_bucket_classifies_testnet_spore_as_nft_spore() {
+        // Testnet Spore NFT (spore.toml `[testnet]`).
+        assert_eq!(
+            classify_knowledge_bucket(&code_hash_bytes(
+                "0x685a60219309029d01310311dba953d67029170ca4848a4ff638e57002130a0d"
+            )),
+            KnowledgeBucket::NftSpore
+        );
+    }
+
+    #[test]
+    fn test_knowledge_bucket_preserves_old_mainnet_udt_and_nft_spore_coverage() {
+        // Exact-coverage regression (Task 7 style): every code_hash the pre-migration
+        // mainnet-only const sets bucketed must land in the SAME bucket via the registry,
+        // proving the registry migration does not narrow coverage.
+
+        // Old `UDT_CODE_HASHES`: sUDT + 2 xUDT canonical hashes.
+        for udt in [
+            "0x5e7a36a77e68eecc013dfa2fe6a23f3b6c344b04005808694ae6dd45eea4cfd5",
+            "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95",
+            "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb",
+        ] {
+            assert_eq!(
+                classify_knowledge_bucket(&code_hash_bytes(udt)),
+                KnowledgeBucket::Udt,
+                "old UDT hash {udt} must still bucket as UDT"
+            );
+        }
+
+        // Old `NFT_SPORE_CODE_HASHES`: 4 Spore (3 SporeNft + 1 SporeDid/bit-cell) + 3 Cluster.
+        for nft in [
+            "0x4a4dce1df3dffff7f8b2cd7dff7303df3b6150c9788cb75dcf6747247132b9f5",
+            "0xcfba73b58b6f30e70caed8a999748781b164ef9a1e218424a6fb55ebf641cb33",
+            "0x685a60219309029d01310311dba953d67029170ca4848a4ff638e57002130a0d",
+            "0xbbad126377d45f90a8ee120da988a2d7332c78ba8fd679aab478a19d6c133494",
+            "0x7366a61534fa7c7e6225ecc0d828ea3b5366adec2b58206f2ee84995fe030075",
+            "0x0bbe768b519d8ea7b96d58f1182eb7e6ef96c541fbd9526975077ee09f049058",
+            "0x598d793defef36e2eeba54a9b45130e4ca92822e1d193671f490950c3b856080",
+        ] {
+            assert_eq!(
+                classify_knowledge_bucket(&code_hash_bytes(nft)),
+                KnowledgeBucket::NftSpore,
+                "old NFT/Spore hash {nft} must still bucket as NftSpore"
+            );
+        }
+
+        // DAO hash still classifies as Dao (checked first in the chain).
+        assert_eq!(
+            classify_knowledge_bucket(&code_hash_bytes(
+                "0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e"
+            )),
+            KnowledgeBucket::Dao
+        );
+    }
+
+    #[test]
+    fn test_knowledge_bucket_udt_compatible_hash_is_not_udt() {
+        // Faithful-preservation guard: the old `UDT_CODE_HASHES` held ONLY the 3 canonical
+        // sUDT/xUDT hashes and no udt-compatible (Stable++/ccBTC/USDI) hashes, so those
+        // never counted toward the UDT bucket. USDI's own type-script code_hash
+        // (usdi-asset.toml `canonical_ref_hash`) is not a registry Sudt/Xudt, so it must
+        // stay in the residual `OtherTyped` bucket — the registry migration must NOT
+        // silently widen mainnet UDT coverage to compatibles.
+        assert_eq!(
+            classify_knowledge_bucket(&code_hash_bytes(
+                "0xbfa35a9c38a676682b65ade8f02be164d48632281477e36f8dc2f41f79e56bfc"
+            )),
+            KnowledgeBucket::OtherTyped
+        );
     }
 
     #[test]

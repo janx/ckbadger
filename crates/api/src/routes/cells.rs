@@ -8,7 +8,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::{Arc, LazyLock};
+use std::sync::Arc;
 
 use crate::cache::{CacheKeys, CacheTtl};
 use crate::response::{
@@ -28,11 +28,12 @@ use ckbadger_indexer::parser::registry::{ProtocolScript, PROTOCOL_REGISTRY};
 use ckbadger_store::{keys, CkbadgerStore};
 
 const SHANNONS_PER_CKB: i64 = 100_000_000;
-// DAO / sUDT / xUDT / .bit-account protocol detection is delegated to the shared
-// `ckbadger_indexer::parser::registry::PROTOCOL_REGISTRY` (network-agnostic, covers
-// mainnet + testnet). The string consts below survive only as TEST fixtures that
-// construct cells whose type_code_hash matches a known protocol; they are compiled
-// under `cfg(test)` so the library build carries no dead detection constants.
+// All protocol detection (DAO / sUDT / xUDT / .bit-account / mNFT issuer·class·token /
+// Spore NFT+DID / Spore Cluster) is delegated to the shared network-agnostic
+// `ckbadger_indexer::parser::registry::PROTOCOL_REGISTRY`, which covers mainnet + testnet.
+// The string consts below survive only as TEST fixtures that construct cells whose
+// type_code_hash matches a known protocol; they are compiled under `cfg(test)` so the
+// library build carries no dead detection constants.
 #[cfg(test)]
 const DAO_CODE_HASH: &str = "0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e";
 #[cfg(test)]
@@ -40,44 +41,29 @@ const SUDT_CODE_HASH: &str = "0x5e7a36a77e68eecc013dfa2fe6a23f3b6c344b0400580869
 #[cfg(test)]
 const DOTBIT_ACCOUNT_CELL_TYPE_ID: &str =
     "0x4f170a048198408f4f4d36bdbcddcebe7a0ae85244d3ab08fd40a80cbfc70918";
+#[cfg(test)]
 const MNFT_ISSUER_CODE_HASH: &str =
     "0x24b04faf80ded836efc05247778eec4ec02548dab6e2012c0107374aa3f68b81";
+#[cfg(test)]
 const MNFT_CLASS_CODE_HASH: &str =
     "0xd51e6eaf48124c601f41abe173f1da550b4cbca9c6a166781906a287abbb3d9a";
+#[cfg(test)]
 const MNFT_TOKEN_CODE_HASH: &str =
     "0x2b24f0d644ccbdd77bbf86b27c8cca02efa0ad051e447c212636d9ee7acaaec9";
+#[cfg(test)]
 const SPORE_CODE_HASHES: [&str; 4] = [
     "0x4a4dce1df3dffff7f8b2cd7dff7303df3b6150c9788cb75dcf6747247132b9f5",
     "0xcfba73b58b6f30e70caed8a999748781b164ef9a1e218424a6fb55ebf641cb33",
     "0x685a60219309029d01310311dba953d67029170ca4848a4ff638e57002130a0d",
     "0xbbad126377d45f90a8ee120da988a2d7332c78ba8fd679aab478a19d6c133494",
 ];
+#[cfg(test)]
 const CLUSTER_CODE_HASHES: [&str; 3] = [
     "0x7366a61534fa7c7e6225ecc0d828ea3b5366adec2b58206f2ee84995fe030075",
     "0x0bbe768b519d8ea7b96d58f1182eb7e6ef96c541fbd9526975077ee09f049058",
     "0x598d793defef36e2eeba54a9b45130e4ca92822e1d193671f490950c3b856080",
 ];
 const ADDR_TX_SCAN_CHUNK_SIZE: usize = 128;
-
-/// Decode a hex string constant (with or without "0x" prefix) into a 32-byte array at init time.
-fn decode_code_hash_bytes(hex_str: &str) -> Vec<u8> {
-    hex::decode(hex_str.strip_prefix("0x").unwrap_or(hex_str))
-        .expect("invalid hex constant in code hash definition")
-}
-
-// Pre-decoded byte arrays for code hash comparisons (avoids per-call hex encoding allocations).
-// DAO and .bit-account are detected via PROTOCOL_REGISTRY, so no local byte arrays are needed
-// for them; the mNFT / Spore / Cluster protocols below are not yet registry-migrated.
-static MNFT_ISSUER_CODE_HASH_BYTES: LazyLock<Vec<u8>> =
-    LazyLock::new(|| decode_code_hash_bytes(MNFT_ISSUER_CODE_HASH));
-static MNFT_CLASS_CODE_HASH_BYTES: LazyLock<Vec<u8>> =
-    LazyLock::new(|| decode_code_hash_bytes(MNFT_CLASS_CODE_HASH));
-static MNFT_TOKEN_CODE_HASH_BYTES: LazyLock<Vec<u8>> =
-    LazyLock::new(|| decode_code_hash_bytes(MNFT_TOKEN_CODE_HASH));
-static SPORE_CODE_HASH_BYTES: LazyLock<[Vec<u8>; 4]> =
-    LazyLock::new(|| SPORE_CODE_HASHES.map(decode_code_hash_bytes));
-static CLUSTER_CODE_HASH_BYTES: LazyLock<[Vec<u8>; 3]> =
-    LazyLock::new(|| CLUSTER_CODE_HASHES.map(decode_code_hash_bytes));
 
 /// Convert a `semantic_tags` bitmap into human-readable script label strings.
 /// Returns an empty vec when no bits are set (including legacy `0` values).
@@ -219,15 +205,15 @@ pub(crate) fn parse_dep_group(data: &[u8], data_size: i32) -> DepGroupParseResul
 }
 
 fn is_spore_type_code_hash(code_hash: &[u8]) -> bool {
-    SPORE_CODE_HASH_BYTES
-        .iter()
-        .any(|h| h.as_slice() == code_hash)
+    // Spore covers both plain Spore NFTs and Spore-DID cells (bit-cell.toml maps to
+    // SporeDid); the old 4-entry `SPORE_CODE_HASHES` fixture was exactly 3 SporeNft
+    // (1 mainnet + 2 testnet) + 1 SporeDid, so the registry union preserves it exactly.
+    PROTOCOL_REGISTRY.is(code_hash, ProtocolScript::SporeNft)
+        || PROTOCOL_REGISTRY.is(code_hash, ProtocolScript::SporeDid)
 }
 
 fn is_cluster_type_code_hash(code_hash: &[u8]) -> bool {
-    CLUSTER_CODE_HASH_BYTES
-        .iter()
-        .any(|h| h.as_slice() == code_hash)
+    PROTOCOL_REGISTRY.is(code_hash, ProtocolScript::Cluster)
 }
 
 fn is_dotbit_account_type_code_hash(code_hash: &[u8]) -> bool {
@@ -239,15 +225,15 @@ fn is_dao_type_code_hash(code_hash: &[u8]) -> bool {
 }
 
 fn is_mnft_issuer_type_code_hash(code_hash: &[u8]) -> bool {
-    code_hash == MNFT_ISSUER_CODE_HASH_BYTES.as_slice()
+    PROTOCOL_REGISTRY.is(code_hash, ProtocolScript::MnftIssuer)
 }
 
 fn is_mnft_class_type_code_hash(code_hash: &[u8]) -> bool {
-    code_hash == MNFT_CLASS_CODE_HASH_BYTES.as_slice()
+    PROTOCOL_REGISTRY.is(code_hash, ProtocolScript::MnftClass)
 }
 
 fn is_mnft_token_type_code_hash(code_hash: &[u8]) -> bool {
-    code_hash == MNFT_TOKEN_CODE_HASH_BYTES.as_slice()
+    PROTOCOL_REGISTRY.is(code_hash, ProtocolScript::MnftToken)
 }
 
 fn read_molecule_bytes_field(
@@ -3485,6 +3471,39 @@ mod tests {
             .segments
             .iter()
             .any(|s| s.label == "state" && s.human_value == "0x04"));
+    }
+
+    // Testnet mNFT token code_hash (m-nft.toml `[testnet]`). Proves the registry-backed
+    // `is_mnft_token_type_code_hash` classifies testnet cells — the mainnet-only local
+    // const could not, which is exactly the testnet gap this migration closes.
+    const TESTNET_MNFT_TOKEN_CODE_HASH: &str =
+        "0xb1837b5ad01a88558731953062d1f5cb547adf89ece01e8934a9f0aeed2d959f";
+
+    #[test]
+    fn test_analyze_cell_data_detects_testnet_mnft_token_segments() {
+        let info = LiveCellInfo {
+            type_code_hash: Some(
+                hex::decode(TESTNET_MNFT_TOKEN_CODE_HASH.trim_start_matches("0x")).unwrap(),
+            ),
+            type_script_hash: Some(vec![0x24; 32]),
+            ..make_payload()
+        };
+        let info = positioned(info);
+        let mut data = Vec::new();
+        data.push(3); // version
+        data.extend_from_slice(&[0xde, 0xad, 0xbe, 0xef, 0x00, 0x11, 0x22, 0x33]); // characteristic
+        data.push(0x00); // configure
+        data.push(0x00); // state
+
+        let analysis = analyze_cell_data(&info, &data, data.len() as i32);
+        let deterministic = analysis
+            .deterministic
+            .expect("testnet mNFT token must classify via the registry");
+        assert_eq!(deterministic.kind, "mnft_token_cell");
+        assert!(deterministic
+            .segments
+            .iter()
+            .any(|s| s.label == "characteristic" && s.human_value == "0xdeadbeef00112233"));
     }
 
     #[test]
