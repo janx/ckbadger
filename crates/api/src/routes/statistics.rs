@@ -7,6 +7,7 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use ckbadger_common::sync::{format_duration_smart, BackgroundTaskEntry, SyncProgressData};
+use ckbadger_indexer::parser::registry::{ProtocolScript, PROTOCOL_REGISTRY};
 use ckbadger_store::types::{DailyAddressCohort, DailyCellDistribution};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
@@ -1230,9 +1231,6 @@ async fn get_knowledge_size_chart(State(state): State<Arc<AppState>>) -> ApiResu
 
 const SHANNONS_PER_CKB: i128 = 100_000_000;
 
-const DAO_CODE_HASHES: &[&str] =
-    &["0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e"];
-
 const UDT_CODE_HASHES: &[&str] = &[
     "0x5e7a36a77e68eecc013dfa2fe6a23f3b6c344b04005808694ae6dd45eea4cfd5",
     "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95",
@@ -1369,7 +1367,6 @@ async fn get_common_knowledge_composition_chart(
         .map(|(code_hash, _)| code_hash)
         .collect();
 
-    let dao_hashes = parse_code_hash_set(DAO_CODE_HASHES);
     let udt_hashes = parse_code_hash_set(UDT_CODE_HASHES);
     let nft_spore_hashes = parse_code_hash_set(NFT_SPORE_CODE_HASHES);
 
@@ -1391,7 +1388,7 @@ async fn get_common_knowledge_composition_chart(
             let used_delta = delta.owned_knowledge_delta;
             *type_daily_delta.entry(date).or_insert(0) += used_delta;
 
-            if dao_hashes.contains(&code_hash) {
+            if PROTOCOL_REGISTRY.is(&code_hash, ProtocolScript::Dao) {
                 *dao_daily_delta.entry(date).or_insert(0) += used_delta;
             } else if udt_hashes.contains(&code_hash) {
                 *udt_daily_delta.entry(date).or_insert(0) += used_delta;

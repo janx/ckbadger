@@ -24,15 +24,20 @@ use crate::warmup::{
     CachedAddressEntry, CACHE_KEY_ADDRESSES_ACTIVE, CACHE_KEY_ADDRESSES_TOP, CACHE_KEY_SCRIPTS_ALL,
 };
 use crate::AppState;
+use ckbadger_indexer::parser::registry::{ProtocolScript, PROTOCOL_REGISTRY};
 use ckbadger_store::{keys, CkbadgerStore};
 
 const SHANNONS_PER_CKB: i64 = 100_000_000;
+// DAO / sUDT / xUDT / .bit-account protocol detection is delegated to the shared
+// `ckbadger_indexer::parser::registry::PROTOCOL_REGISTRY` (network-agnostic, covers
+// mainnet + testnet). The string consts below survive only as TEST fixtures that
+// construct cells whose type_code_hash matches a known protocol; they are compiled
+// under `cfg(test)` so the library build carries no dead detection constants.
+#[cfg(test)]
 const DAO_CODE_HASH: &str = "0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e";
+#[cfg(test)]
 const SUDT_CODE_HASH: &str = "0x5e7a36a77e68eecc013dfa2fe6a23f3b6c344b04005808694ae6dd45eea4cfd5";
-const XUDT_CODE_HASH_DATA1: &str =
-    "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95";
-const XUDT_CODE_HASH_TYPE: &str =
-    "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb";
+#[cfg(test)]
 const DOTBIT_ACCOUNT_CELL_TYPE_ID: &str =
     "0x4f170a048198408f4f4d36bdbcddcebe7a0ae85244d3ab08fd40a80cbfc70918";
 const MNFT_ISSUER_CODE_HASH: &str =
@@ -61,10 +66,8 @@ fn decode_code_hash_bytes(hex_str: &str) -> Vec<u8> {
 }
 
 // Pre-decoded byte arrays for code hash comparisons (avoids per-call hex encoding allocations).
-static DAO_CODE_HASH_BYTES: LazyLock<Vec<u8>> =
-    LazyLock::new(|| decode_code_hash_bytes(DAO_CODE_HASH));
-static DOTBIT_ACCOUNT_CELL_TYPE_ID_BYTES: LazyLock<Vec<u8>> =
-    LazyLock::new(|| decode_code_hash_bytes(DOTBIT_ACCOUNT_CELL_TYPE_ID));
+// DAO and .bit-account are detected via PROTOCOL_REGISTRY, so no local byte arrays are needed
+// for them; the mNFT / Spore / Cluster protocols below are not yet registry-migrated.
 static MNFT_ISSUER_CODE_HASH_BYTES: LazyLock<Vec<u8>> =
     LazyLock::new(|| decode_code_hash_bytes(MNFT_ISSUER_CODE_HASH));
 static MNFT_CLASS_CODE_HASH_BYTES: LazyLock<Vec<u8>> =
@@ -228,11 +231,11 @@ fn is_cluster_type_code_hash(code_hash: &[u8]) -> bool {
 }
 
 fn is_dotbit_account_type_code_hash(code_hash: &[u8]) -> bool {
-    code_hash == DOTBIT_ACCOUNT_CELL_TYPE_ID_BYTES.as_slice()
+    PROTOCOL_REGISTRY.is(code_hash, ProtocolScript::DotbitAccount)
 }
 
 fn is_dao_type_code_hash(code_hash: &[u8]) -> bool {
-    code_hash == DAO_CODE_HASH_BYTES.as_slice()
+    PROTOCOL_REGISTRY.is(code_hash, ProtocolScript::Dao)
 }
 
 fn is_mnft_issuer_type_code_hash(code_hash: &[u8]) -> bool {
@@ -812,14 +815,11 @@ fn maybe_parse_dao_decode(
 }
 
 fn detect_udt_standard_from_code_hash(code_hash: &[u8]) -> Option<&'static str> {
-    let code_hash_hex = format!("0x{}", hex::encode(code_hash));
-    if code_hash_hex == SUDT_CODE_HASH {
-        return Some("sudt");
+    match PROTOCOL_REGISTRY.get(code_hash) {
+        Some(ProtocolScript::Sudt) => Some("sudt"),
+        Some(ProtocolScript::Xudt) => Some("xudt"),
+        _ => None,
     }
-    if code_hash_hex == XUDT_CODE_HASH_DATA1 || code_hash_hex == XUDT_CODE_HASH_TYPE {
-        return Some("xudt");
-    }
-    None
 }
 
 fn maybe_parse_udt_decode(
@@ -3255,6 +3255,38 @@ mod tests {
 
         let analysis = analyze_cell_data(&info, &data, 16);
         let deterministic = analysis.deterministic.expect("deterministic decode");
+        assert_eq!(deterministic.kind, "udt_amount");
+        assert_eq!(deterministic.segments.len(), 1);
+        assert_eq!(deterministic.segments[0].label, "amount");
+        assert_eq!(deterministic.segments[0].start, 0);
+        assert_eq!(deterministic.segments[0].end, 16);
+        assert_eq!(deterministic.segments[0].human_value, "42");
+    }
+
+    // Testnet sUDT type-script code_hash. Distinct from the mainnet SUDT_CODE_HASH,
+    // it is only classifiable because detection now flows through the shared
+    // network-agnostic PROTOCOL_REGISTRY instead of mainnet-only local consts.
+    const TESTNET_SUDT_CODE_HASH: &str =
+        "0xc5e5dcf215925f7ef4dfaf5f4b4f105bc321c02776d6e7d52a1db3fcd9d011a4";
+
+    #[test]
+    fn test_analyze_cell_data_detects_testnet_udt_amount_segments() {
+        let info = LiveCellInfo {
+            type_code_hash: Some(
+                hex::decode(TESTNET_SUDT_CODE_HASH.trim_start_matches("0x")).unwrap(),
+            ),
+            type_script_hash: Some(vec![0x11; 32]),
+            data_size: 16,
+            ..make_payload()
+        };
+        let info = positioned(info);
+        let mut data = vec![0u8; 16];
+        data[0] = 0x2a;
+
+        let analysis = analyze_cell_data(&info, &data, 16);
+        let deterministic = analysis
+            .deterministic
+            .expect("testnet sUDT must classify as UDT via the registry");
         assert_eq!(deterministic.kind, "udt_amount");
         assert_eq!(deterministic.segments.len(), 1);
         assert_eq!(deterministic.segments[0].label, "amount");
