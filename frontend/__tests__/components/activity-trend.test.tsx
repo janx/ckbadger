@@ -72,7 +72,7 @@ describe('ActivityTrend', () => {
     expect(screen.getByText(/Tokens:/)).toBeInTheDocument();
     expect(screen.getByText(/Objects:/)).toBeInTheDocument();
     const headerLink = screen.getByRole('link', { name: /activity trend/i });
-    expect(headerLink).toHaveAttribute('href', '/charts');
+    expect(headerLink).toHaveAttribute('href', '/mainnet/charts');
   });
 
   it('renders bar chart with 14 bars', async () => {

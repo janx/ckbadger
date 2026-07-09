@@ -152,7 +152,7 @@ describe('ClusterDetailPage', () => {
       // Search/filter controls are always visible in the gallery panel header
       expect(screen.getByLabelText('Search spores')).toBeInTheDocument();
       const backLink = screen.getByText('\u2190 Back to Objects');
-      expect(backLink.closest('a')).toHaveAttribute('href', '/inventory/objects');
+      expect(backLink.closest('a')).toHaveAttribute('href', '/mainnet/inventory/objects');
     });
   });
 
@@ -439,7 +439,7 @@ describe('ClusterDetailPage', () => {
       expect(ownerLink).toBeInTheDocument();
       expect(ownerLink).toHaveAttribute(
         'href',
-        '/address/ckb1qyqszqgpqyqszqgpqyqszqgpqyqszqgp9f0v3'
+        '/mainnet/address/ckb1qyqszqgpqyqszqgpqyqszqgpqyqszqgp9f0v3'
       );
     });
   });
@@ -477,12 +477,13 @@ describe('ClusterDetailPage', () => {
       const addressLinks = screen.getAllByRole('link');
       expect(
         addressLinks.find(
-          (link) => link.getAttribute('href') === `/address/${resolvedSporeOwnerAddress}`
+          (link) => link.getAttribute('href') === `/mainnet/address/${resolvedSporeOwnerAddress}`
         )
       ).toBeTruthy();
       expect(
         addressLinks.find(
-          (link) => link.getAttribute('href') === `/address/${mockSpores.data[1].ownerLockHash}`
+          (link) =>
+            link.getAttribute('href') === `/mainnet/address/${mockSpores.data[1].ownerLockHash}`
         )
       ).toBeUndefined();
     });

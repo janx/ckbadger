@@ -76,10 +76,16 @@ describe('ForkDetailPage', () => {
     });
 
     expect(screen.getByText('REORG')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: '#198' })).toHaveAttribute('href', '/blocks/198');
+    expect(screen.getByRole('link', { name: '#198' })).toHaveAttribute(
+      'href',
+      '/mainnet/blocks/198'
+    );
     expect(screen.getByText('Orphaned Blocks (1)')).toBeInTheDocument();
     expect(screen.getByText('Orphaned Transactions (1)')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: '#199' })).toHaveAttribute('href', '/blocks/199');
+    expect(screen.getByRole('link', { name: '#199' })).toHaveAttribute(
+      'href',
+      '/mainnet/blocks/199'
+    );
 
     fireEvent.click(screen.getByRole('button', { name: 'Orphaned Transactions (1)' }));
 
@@ -90,7 +96,7 @@ describe('ForkDetailPage', () => {
           .some(
             (link) =>
               link.getAttribute('href') ===
-              '/tx/0x2222222222222222222222222222222222222222222222222222222222222222'
+              '/mainnet/tx/0x2222222222222222222222222222222222222222222222222222222222222222'
           )
       ).toBe(true);
     });

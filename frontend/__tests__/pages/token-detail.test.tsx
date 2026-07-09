@@ -178,14 +178,17 @@ describe('TokenDetailPage', () => {
     expect(screen.getAllByText('Activities').length).toBeGreaterThan(0);
     expect(screen.getByText('mint')).toBeInTheDocument();
     expect(screen.getByText('transfer')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: '#12,345' })).toHaveAttribute('href', '/blocks/12345');
+    expect(screen.getByRole('link', { name: '#12,345' })).toHaveAttribute(
+      'href',
+      '/mainnet/blocks/12345'
+    );
     expect(
       screen
         .getAllByRole('link')
         .some(
           (link) =>
             link.getAttribute('href') ===
-            '/tx/0xabcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234'
+            '/mainnet/tx/0xabcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234'
         )
     ).toBe(true);
   });

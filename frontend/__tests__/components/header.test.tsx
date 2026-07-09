@@ -53,30 +53,33 @@ describe('Header', () => {
     expect(screen.getByTestId('search-bar')).toBeInTheDocument();
     expect(screen.getByTestId('global-stats-bar')).toBeInTheDocument();
     expect(searchBarMock.mock.calls.some(([props]) => props.variant === 'compact')).toBeTruthy();
-    expect(screen.getAllByRole('link', { name: 'DAO' }).at(0)).toHaveAttribute('href', '/dao');
+    expect(screen.getAllByRole('link', { name: 'DAO' }).at(0)).toHaveAttribute(
+      'href',
+      '/mainnet/dao'
+    );
     expect(screen.getAllByRole('link', { name: 'Activities' }).at(0)).toHaveAttribute(
       'href',
-      '/activities'
+      '/mainnet/activities'
     );
     expect(screen.getAllByRole('link', { name: 'Tokens' }).at(0)).toHaveAttribute(
       'href',
-      '/inventory/tokens'
+      '/mainnet/inventory/tokens'
     );
     expect(screen.getAllByRole('link', { name: 'Objects' }).at(0)).toHaveAttribute(
       'href',
-      '/inventory/objects'
+      '/mainnet/inventory/objects'
     );
     expect(screen.getAllByRole('link', { name: 'Identities' }).at(0)).toHaveAttribute(
       'href',
-      '/inventory/identities'
+      '/mainnet/inventory/identities'
     );
     expect(screen.getAllByRole('link', { name: 'Scripts' }).at(0)).toHaveAttribute(
       'href',
-      '/scripts'
+      '/mainnet/scripts'
     );
     expect(screen.getAllByRole('link', { name: 'Charts' }).at(0)).toHaveAttribute(
       'href',
-      '/charts'
+      '/mainnet/charts'
     );
     expect(screen.queryByRole('link', { name: 'Fiber' })).not.toBeInTheDocument();
   });

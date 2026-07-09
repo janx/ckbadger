@@ -78,15 +78,24 @@ describe('AssetEcosystem', () => {
 
     expect(screen.getByRole('link', { name: 'Asset Ecosystem' })).toHaveAttribute(
       'href',
-      '/tokens'
+      '/mainnet/tokens'
     );
-    expect(screen.getByRole('link', { name: /VIEW ALL/i })).toHaveAttribute('href', '/tokens');
+    expect(screen.getByRole('link', { name: /VIEW ALL/i })).toHaveAttribute(
+      'href',
+      '/mainnet/tokens'
+    );
     expect(screen.getByText('SEAL')).toBeInTheDocument();
     expect(screen.getByText('CKBull')).toBeInTheDocument();
     expect(screen.getByText('JoyID')).toBeInTheDocument();
     expect(screen.getByText('RUSD')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'USDT' })).toHaveAttribute('href', '/tokens/0xaaa111');
-    expect(screen.getByRole('link', { name: 'SEAL' })).toHaveAttribute('href', '/tokens/0xbbb222');
+    expect(screen.getByRole('link', { name: 'USDT' })).toHaveAttribute(
+      'href',
+      '/mainnet/tokens/0xaaa111'
+    );
+    expect(screen.getByRole('link', { name: 'SEAL' })).toHaveAttribute(
+      'href',
+      '/mainnet/tokens/0xbbb222'
+    );
     expect(screen.getByText('1,500 holders')).toBeInTheDocument();
     expect(screen.getByText('800 holders')).toBeInTheDocument();
 

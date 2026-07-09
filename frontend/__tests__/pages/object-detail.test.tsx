@@ -214,7 +214,7 @@ describe('SporeDetailPage', () => {
 
     expect(screen.getByRole('link', { name: '← Back to Objects' })).toHaveAttribute(
       'href',
-      '/inventory/objects'
+      '/mainnet/inventory/objects'
     );
     expect(screen.getByText('Spore Asset (0x1234...cdef)')).toBeInTheDocument();
     expect(screen.getByText('Spore Overview')).toBeInTheDocument();
@@ -300,7 +300,10 @@ describe('SporeDetailPage', () => {
       { timeout: 3000 }
     );
     expect(ownerLink).toBeInTheDocument();
-    expect(ownerLink).toHaveAttribute('href', '/address/ckb1qyqszqgpqyqszqgpqyqszqgpqyqszqgp9f0v3');
+    expect(ownerLink).toHaveAttribute(
+      'href',
+      '/mainnet/address/ckb1qyqszqgpqyqszqgpqyqszqgpqyqszqgp9f0v3'
+    );
   });
 
   it('renders decoded traits panel for DOB spores', async () => {
@@ -656,7 +659,8 @@ describe('SporeDetailPage', () => {
     const link = screen
       .getAllByRole('link')
       .find(
-        (el) => el.getAttribute('href') === '/objects/mnft/0x1111' && el.textContent === '0x1111'
+        (el) =>
+          el.getAttribute('href') === '/mainnet/objects/mnft/0x1111' && el.textContent === '0x1111'
       );
     expect(link).toBeDefined();
   });

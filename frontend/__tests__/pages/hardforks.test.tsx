@@ -73,8 +73,8 @@ describe('HardforksPage', () => {
     expect(screen.getAllByText('ACTIVATED').length).toBeGreaterThanOrEqual(2);
     const activationLinks = screen.getAllByRole('link', { name: 'View activation block' });
     expect(activationLinks.length).toBe(2);
-    expect(activationLinks[0]).toHaveAttribute('href', '/blocks/18430000');
-    expect(activationLinks[1]).toHaveAttribute('href', '/blocks/8775638');
+    expect(activationLinks[0]).toHaveAttribute('href', '/mainnet/blocks/18430000');
+    expect(activationLinks[1]).toHaveAttribute('href', '/mainnet/blocks/8775638');
     expect(screen.getByRole('link', { name: 'CKB2023' })).toHaveAttribute(
       'href',
       'https://example.com/ckb2023'

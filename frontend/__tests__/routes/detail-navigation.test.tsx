@@ -76,7 +76,7 @@ describe('detail navigation', () => {
     const user = userEvent.setup();
 
     render(
-      <MemoryRouter initialEntries={['/scripts']}>
+      <MemoryRouter initialEntries={['/mainnet/scripts']}>
         <RouterHarness />
       </MemoryRouter>
     );
@@ -95,7 +95,9 @@ describe('detail navigation', () => {
     await user.click(links[0]);
 
     await waitFor(() => {
-      expect(screen.getByTestId('pathname')).toHaveTextContent('/scripts/SECP256K1_BLAKE160');
+      expect(screen.getByTestId('pathname')).toHaveTextContent(
+        '/mainnet/scripts/SECP256K1_BLAKE160'
+      );
       expect(screen.getByText('named script detail SECP256K1_BLAKE160')).toBeInTheDocument();
     });
   });

@@ -241,7 +241,7 @@ describe('TransactionDetailPage', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Scripts' }, { timeout: 5000 }));
 
     const link = document.querySelector(
-      `a[href="/script/${TYPE_CODE_HASH}?hashType=type&kind=type"]`
+      `a[href="/mainnet/script/${TYPE_CODE_HASH}?hashType=type&kind=type"]`
     );
     expect(link).not.toBeNull();
     expect(document.querySelector('a[href="/scripts/Unknown"]')).toBeNull();

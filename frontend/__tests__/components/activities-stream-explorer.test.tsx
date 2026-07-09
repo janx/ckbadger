@@ -325,7 +325,7 @@ describe('ActivitiesStreamExplorer', () => {
     expect(
       within(row)
         .getAllByRole('link')
-        .some((link) => link.getAttribute('href')?.startsWith('/address/'))
+        .some((link) => link.getAttribute('href')?.startsWith('/mainnet/address/'))
     ).toBe(true);
     expect(row.className).toContain('py-4');
     expect(row.className).not.toContain('grid-cols-[0.625rem_minmax(0,1fr)]');

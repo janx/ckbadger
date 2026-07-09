@@ -108,13 +108,15 @@ describe('IdentityItemDetail', () => {
 
     expect(screen.getByRole('link', { name: /Back to \.bit Collection/ })).toHaveAttribute(
       'href',
-      '/identities/dotbit'
+      '/mainnet/identities/dotbit'
     );
     expect(screen.getByText('.bit Name')).toBeInTheDocument();
     expect(screen.getByText('Account ID')).toBeInTheDocument();
     expect(screen.getByText('Expires At')).toBeInTheDocument();
     expect(
-      screen.getAllByRole('link').some((link) => link.getAttribute('href') === '/cell/0xtx-2')
+      screen
+        .getAllByRole('link')
+        .some((link) => link.getAttribute('href') === '/mainnet/cell/0xtx-2')
     ).toBe(true);
   });
 

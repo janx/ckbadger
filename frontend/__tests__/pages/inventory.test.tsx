@@ -470,7 +470,7 @@ describe('Objects Inventory Page', () => {
         links.some(
           (link) =>
             link.getAttribute('href') ===
-            '/clusters/0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890'
+            '/mainnet/clusters/0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890'
         )
       ).toBe(true);
     });
@@ -567,13 +567,13 @@ describe('Identities Inventory Page', () => {
       {
         assets: mockDotbitIdentityAssets,
         linkName: /\.bit/i,
-        href: '/identities/dotbit',
+        href: '/mainnet/identities/dotbit',
         standard: 'DOTBIT',
       },
       {
         assets: mockDidCkbIdentityAssets,
         linkName: /did:ckb/i,
-        href: '/identities/did:ckb',
+        href: '/mainnet/identities/did:ckb',
         standard: 'did:ckb',
       },
     ];

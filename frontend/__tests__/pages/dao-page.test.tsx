@@ -78,7 +78,7 @@ describe('DaoPage', () => {
 
     expect(screen.getByRole('link', { name: 'Default Lock' })).toHaveAttribute(
       'href',
-      '/scripts/Default%20Lock'
+      '/mainnet/scripts/Default%20Lock'
     );
     expect(screen.getByRole('button', { name: 'Active Deposits' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Deposits' })).toBeInTheDocument();
@@ -123,7 +123,7 @@ describe('DaoPage', () => {
           .some(
             (link) =>
               link.getAttribute('href') ===
-              '/cell/0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc-3'
+              '/mainnet/cell/0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc-3'
           )
       ).toBe(true);
     });
@@ -163,7 +163,7 @@ describe('DaoPage', () => {
           .some(
             (link) =>
               link.getAttribute('href') ===
-              '/cell/0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-2'
+              '/mainnet/cell/0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-2'
           )
       ).toBe(true);
     });

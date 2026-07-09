@@ -92,7 +92,7 @@ describe('DidCkbItemDetailPage', () => {
 
     expect(screen.getByRole('link', { name: /Back to did:ckb Collection/ })).toHaveAttribute(
       'href',
-      '/identities/did:ckb'
+      '/mainnet/identities/did:ckb'
     );
     expect(screen.getByText('did:ckb Name')).toBeInTheDocument();
     expect(screen.getByText('DID ID')).toBeInTheDocument();

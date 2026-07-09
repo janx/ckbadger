@@ -1,7 +1,8 @@
 'use client';
 
 import { forwardRef, useContext } from 'react';
-import { UNSAFE_NavigationContext } from 'react-router-dom';
+import { UNSAFE_LocationContext, UNSAFE_NavigationContext } from 'react-router-dom';
+import { prefixNetwork, resolveActiveNetwork } from '@/lib/active-network';
 
 export interface LinkProps extends React.AnchorHTMLAttributes<HTMLAnchorElement> {
   href: string;
@@ -17,6 +18,15 @@ export const Link = forwardRef<HTMLAnchorElement, LinkProps>(function Link(
   ref
 ) {
   const navigationContext = useContext(UNSAFE_NavigationContext);
+  const locationContext = useContext(UNSAFE_LocationContext);
+  // Derive the active network from the router location (falls back to the window
+  // path when rendered outside a router). External / already-prefixed hrefs are
+  // returned unchanged by prefixNetwork.
+  const net = resolveActiveNetwork(
+    locationContext?.location.pathname ??
+      (typeof window === 'undefined' ? '/' : window.location.pathname)
+  );
+  const target = prefixNetwork(href, net);
 
   const handleClick: React.MouseEventHandler<HTMLAnchorElement> = (event) => {
     props.onClick?.(event);
@@ -43,15 +53,15 @@ export const Link = forwardRef<HTMLAnchorElement, LinkProps>(function Link(
     };
 
     if (replace) {
-      navigator.replace(href);
+      navigator.replace(target);
       return;
     }
 
-    navigator.push(href);
+    navigator.push(target);
   };
 
   return (
-    <a ref={ref} href={href} {...props} onClick={handleClick}>
+    <a ref={ref} href={target} {...props} onClick={handleClick}>
       {children}
     </a>
   );

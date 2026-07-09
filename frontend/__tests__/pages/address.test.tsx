@@ -171,7 +171,7 @@ describe('AddressDetailPage', () => {
     });
 
     const lockScriptLink = screen.getByText('Default Lock');
-    expect(lockScriptLink.closest('a')).toHaveAttribute('href', '/scripts/Default%20Lock');
+    expect(lockScriptLink.closest('a')).toHaveAttribute('href', '/mainnet/scripts/Default%20Lock');
   });
 
   it('renders address section when lockScriptInfo is null', async () => {
@@ -297,7 +297,7 @@ describe('AddressDetailPage', () => {
     await waitFor(() => {
       expect(screen.getAllByRole('link', { name: fallbackLabel })[0]).toHaveAttribute(
         'href',
-        `/tokens/${typeScriptHash}`
+        `/mainnet/tokens/${typeScriptHash}`
       );
     });
   });
@@ -345,7 +345,7 @@ describe('AddressDetailPage', () => {
       const links = screen.getAllByRole('link');
       const tokenLink = links.find(
         (l) =>
-          l.getAttribute('href') === `/tokens/${typeScriptHash}` &&
+          l.getAttribute('href') === `/mainnet/tokens/${typeScriptHash}` &&
           l.textContent?.includes(fallbackLabel)
       );
       expect(tokenLink).toBeDefined();
@@ -654,7 +654,7 @@ describe('AddressDetailPage', () => {
     // Script call name is a link to the script detail page
     expect(screen.getAllByRole('link', { name: 'RGB++ Lock' })[0]).toHaveAttribute(
       'href',
-      '/scripts/RGB%2B%2B%20Lock'
+      '/mainnet/scripts/RGB%2B%2B%20Lock'
     );
   });
 });

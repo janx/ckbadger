@@ -197,7 +197,7 @@ describe('IdentityCollectionPage', () => {
     await waitFor(() => {
       const link = screen.getByRole('link', { name: 'alice.bit' });
       expect(link).toBeInTheDocument();
-      expect(link).toHaveAttribute('href', '/identities/dotbit/0x1111');
+      expect(link).toHaveAttribute('href', '/mainnet/identities/dotbit/0x1111');
     });
   });
 

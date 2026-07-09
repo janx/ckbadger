@@ -56,23 +56,23 @@ describe('HeroStatRow', () => {
     expect(screen.getByText('#8,234')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /Knowledge Size/i })).toHaveAttribute(
       'href',
-      '/charts/knowledge-size'
+      '/mainnet/charts/knowledge-size'
     );
     expect(screen.getByRole('link', { name: /Circulating/i })).toHaveAttribute(
       'href',
-      '/charts/total-supply'
+      '/mainnet/charts/total-supply'
     );
     expect(screen.getByRole('link', { name: /DAO Locked/i })).toHaveAttribute(
       'href',
-      '/nervos-dao'
+      '/mainnet/nervos-dao'
     );
     expect(screen.getByRole('link', { name: /Block Height/i })).toHaveAttribute(
       'href',
-      '/blocks/14235678'
+      '/mainnet/blocks/14235678'
     );
     expect(screen.getByRole('link', { name: /Epoch/i })).toHaveAttribute(
       'href',
-      '/charts/epoch-time-length'
+      '/mainnet/charts/epoch-time-length'
     );
   });
 

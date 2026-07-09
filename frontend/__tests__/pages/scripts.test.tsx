@@ -222,7 +222,7 @@ describe('ScriptsPage', () => {
     expect(screen.getAllByText(unknownScriptRefDisplay)[0]).toBeInTheDocument();
     expect(screen.getAllByRole('link', { name: unknownScriptRefLabel })[0]).toHaveAttribute(
       'href',
-      `/script/${encodeURIComponent(unknownCodeHash)}?hashType=type&kind=type`
+      `/mainnet/script/${encodeURIComponent(unknownCodeHash)}?hashType=type&kind=type`
     );
     expect(screen.getAllByRole('link', { name: unknownScriptRefLabel })[0]).toHaveAttribute(
       'title',

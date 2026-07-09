@@ -49,7 +49,7 @@ describe('CommonKnowledgeCompositionPage', () => {
     expect(screen.getByText('Common Knowledge Bytes Composition')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /Back to Charts/i })).toHaveAttribute(
       'href',
-      '/charts'
+      '/mainnet/charts'
     );
 
     await waitFor(() => {

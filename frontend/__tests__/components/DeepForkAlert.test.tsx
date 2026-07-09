@@ -36,6 +36,9 @@ describe('DeepForkAlert', () => {
     expect(screen.getByText('#1,000')).toBeInTheDocument();
     expect(screen.getByText('#1,050')).toBeInTheDocument();
     expect(screen.getByText('#950')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /View Details/i })).toHaveAttribute('href', '/forks');
+    expect(screen.getByRole('link', { name: /View Details/i })).toHaveAttribute(
+      'href',
+      '/mainnet/forks'
+    );
   });
 });

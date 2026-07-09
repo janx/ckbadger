@@ -48,11 +48,11 @@ describe('LatestTransactions', () => {
 
     expect(screen.getByRole('link', { name: '#8,775,638' })).toHaveAttribute(
       'href',
-      '/blocks/8775638'
+      '/mainnet/blocks/8775638'
     );
     expect(screen.getByTitle('Click to copy: 0xtx1').closest('a')).toHaveAttribute(
       'href',
-      '/tx/0xtx1'
+      '/mainnet/tx/0xtx1'
     );
     expect(screen.getByText('2')).toBeInTheDocument();
     expect(screen.getByText('3')).toBeInTheDocument();

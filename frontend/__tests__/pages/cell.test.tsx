@@ -350,19 +350,23 @@ describe('CellDetailPage', () => {
     const unknownLink = await screen.findByRole('link', { name: fallbackLabel });
     expect(unknownLink).toHaveAttribute(
       'href',
-      `/script/${DEPLOYMENT_TYPE_HASH}?hashType=type&kind=both`
+      `/mainnet/script/${DEPLOYMENT_TYPE_HASH}?hashType=type&kind=both`
     );
     expect(document.querySelector('a[href="/scripts/Unknown"]')).toBeNull();
 
     expect(screen.getByRole('link', { name: 'Default Lock' })).toHaveAttribute(
       'href',
-      '/scripts/Default%20Lock'
+      '/mainnet/scripts/Default%20Lock'
     );
     expect(
-      document.querySelector(`a[href="/script/${DEPLOYMENT_TYPE_HASH}?hashType=type&kind=both"]`)
+      document.querySelector(
+        `a[href="/mainnet/script/${DEPLOYMENT_TYPE_HASH}?hashType=type&kind=both"]`
+      )
     ).toBeTruthy();
     expect(
-      document.querySelector(`a[href="/script/${DEPLOYMENT_DATA_HASH}?hashType=data&kind=both"]`)
+      document.querySelector(
+        `a[href="/mainnet/script/${DEPLOYMENT_DATA_HASH}?hashType=data&kind=both"]`
+      )
     ).toBeTruthy();
     expect(screen.queryByText(/Deployment refs are shown as/i)).not.toBeInTheDocument();
   });

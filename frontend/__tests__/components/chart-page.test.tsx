@@ -93,7 +93,7 @@ describe('ChartPage', () => {
     expect(queryFn).toHaveBeenCalledTimes(1);
     expect(screen.getByRole('link', { name: /Back to Charts/i })).toHaveAttribute(
       'href',
-      '/charts'
+      '/mainnet/charts'
     );
     expect(screen.getByText('Cell Size Distribution')).toBeInTheDocument();
     expect(screen.getByText('Count')).toBeInTheDocument();

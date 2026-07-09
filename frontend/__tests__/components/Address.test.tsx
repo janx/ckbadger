@@ -10,7 +10,7 @@ describe('Address', () => {
       render(<Address address={testAddress} />);
       const link = screen.getByRole('link');
       expect(link).toBeInTheDocument();
-      expect(link).toHaveAttribute('href', `/address/${testAddress}`);
+      expect(link).toHaveAttribute('href', `/mainnet/address/${testAddress}`);
     });
 
     it('sets title attribute for full address on hover', () => {
@@ -54,7 +54,7 @@ describe('Address', () => {
     it('preserves custom className while keeping link behavior intact', () => {
       render(<Address address={testAddress} className="my-custom-class" />);
       const link = screen.getByRole('link');
-      expect(link).toHaveAttribute('href', `/address/${testAddress}`);
+      expect(link).toHaveAttribute('href', `/mainnet/address/${testAddress}`);
       expect(link).toHaveClass('my-custom-class');
     });
   });
