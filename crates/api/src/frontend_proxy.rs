@@ -147,9 +147,19 @@ pub async fn proxy_ws(
 
 /// Pump frames in both directions between the browser client and the upstream API
 /// WebSocket until either side closes or errors.
-async fn relay_ws(client: WebSocket, port: u16) {
+async fn relay_ws(mut client: WebSocket, port: u16) {
     let url = format!("ws://127.0.0.1:{port}/ws");
     let Ok((upstream, _)) = tokio_tungstenite::connect_async(&url).await else {
+        // Upstream is unreachable: tell the browser why with an explicit Close
+        // frame (1011 = server terminating due to an internal error) instead of
+        // silently dropping the socket, which surfaces as a bare 1006 in the
+        // browser. Ignore the send error — the client may already be gone.
+        let _ = client
+            .send(AxMessage::Close(Some(AxCloseFrame {
+                code: 1011,
+                reason: "upstream unreachable".into(),
+            })))
+            .await;
         return;
     };
     let (mut up_tx, mut up_rx) = upstream.split();
@@ -370,6 +380,68 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
         let body = resp.into_body().collect().await.unwrap().to_bytes();
         assert_eq!(String::from_utf8(body.to_vec()).unwrap(), payload);
+    }
+
+    #[tokio::test]
+    async fn proxy_unreachable_upstream_returns_502() {
+        // Bind an ephemeral port, capture it, then drop the listener so nothing
+        // is listening on it: the upstream is guaranteed unreachable.
+        let dead_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let dead_port = dead_listener.local_addr().unwrap().port();
+        drop(dead_listener);
+
+        let resp = testnet_proxy(dead_port)
+            .oneshot(
+                Request::builder()
+                    .uri("/api/testnet/v1/ping")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::BAD_GATEWAY);
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let text = String::from_utf8(body.to_vec()).unwrap();
+        // Actionable: names the unreachable network and the failure mode.
+        assert!(
+            text.contains("testnet") && text.contains("unreachable"),
+            "502 body should explain the unreachable upstream: {text}"
+        );
+    }
+
+    #[tokio::test]
+    async fn ws_unknown_network_returns_404() {
+        // proxy_ws returns 404 for an unknown network *before* on_upgrade — but
+        // the check sits after WebSocketUpgrade extraction, so it only fires for
+        // a real upgrade request (a plain GET is rejected by the extractor with
+        // a 400 first). Drive it with a real WS client; the proxy rejects the
+        // handshake with a 404 whose body names the unknown network.
+        let upstream_port = spawn_mock_upstream().await;
+        let proxy = testnet_proxy(upstream_port);
+        let proxy_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let proxy_port = proxy_listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            axum::serve(proxy_listener, proxy).await.unwrap();
+        });
+
+        let err =
+            tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{proxy_port}/ws/devnet"))
+                .await
+                .expect_err("unknown network must reject the handshake before on_upgrade");
+
+        match err {
+            tokio_tungstenite::tungstenite::Error::Http(resp) => {
+                assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+                let body = resp.body().as_ref().expect("404 handshake body present");
+                let text = String::from_utf8_lossy(body);
+                assert!(
+                    text.contains("devnet"),
+                    "should name the bad network: {text}"
+                );
+            }
+            other => panic!("expected an HTTP 404 handshake rejection, got {other:?}"),
+        }
     }
 
     #[tokio::test]
