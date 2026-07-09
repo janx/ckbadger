@@ -223,6 +223,20 @@ pub fn build_frontend_router(config: FrontendServiceConfig) -> Result<Router> {
         default_network: config.default_network.clone(),
     };
 
+    // Network-aware reverse proxy for `/api/{network}/v1/*` + `/ws/{network}`.
+    // Built as a self-contained `Router<()>` (its state is erased by `.with_state`)
+    // so it can be merged into either serving branch ahead of the SPA fallback.
+    // Only one branch runs (each `return`s), so moving it into the first branch
+    // that executes and again in the next is sound — the earlier move diverges.
+    let proxy_state = Arc::new(crate::frontend_proxy::ProxyState {
+        ports: config
+            .networks
+            .iter()
+            .map(|n| (n.name.clone(), n.api_port))
+            .collect(),
+    });
+    let proxy_router = crate::frontend_proxy::proxy_router(proxy_state);
+
     if let Some(frontend_dir) = config.frontend_dir {
         let index_path = frontend_dir.join("index.html");
         if !index_path.is_file() {
@@ -251,6 +265,7 @@ pub fn build_frontend_router(config: FrontendServiceConfig) -> Result<Router> {
                 }),
             )
             .route("/capabilities", get(frontend_capabilities_handler))
+            .merge(proxy_router)
             .fallback({
                 let state = state.clone();
                 move |uri| frontend_filesystem_handler(State(state.clone()), uri)
@@ -268,6 +283,7 @@ pub fn build_frontend_router(config: FrontendServiceConfig) -> Result<Router> {
                 }),
             )
             .route("/capabilities", get(frontend_capabilities_handler))
+            .merge(proxy_router)
             .fallback(embedded_frontend::embedded_frontend_handler));
     }
 
