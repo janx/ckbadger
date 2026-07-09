@@ -198,24 +198,17 @@ struct FrontendFsState {
 
 #[derive(Clone)]
 struct FrontendRuntimeConfig {
-    api_port: u16,
-    frontend_port: u16,
     ckb_network: String,
     ckb_rpc_url: String,
     build_version: String,
-    // Carried from `FrontendServiceConfig` for the multi-network switcher; the
-    // runtime-config handler emits these to the SPA in a later task, so they are
-    // populated here but not yet read.
-    #[allow(dead_code)]
+    /// Live networks offered by the SPA switcher; emitted as `[{ name }]`.
     networks: Vec<FrontendNetwork>,
-    #[allow(dead_code)]
+    /// Network the SPA selects by default on first load.
     default_network: String,
 }
 
 pub fn build_frontend_router(config: FrontendServiceConfig) -> Result<Router> {
     let runtime_config = FrontendRuntimeConfig {
-        api_port: config.api_port,
-        frontend_port: config.port,
         ckb_network: config.ckb_network.clone(),
         ckb_rpc_url: config.ckb_rpc_url.clone(),
         build_version: config.build_version.clone(),
@@ -296,37 +289,35 @@ pub fn build_frontend_router(config: FrontendServiceConfig) -> Result<Router> {
 }
 
 async fn frontend_runtime_config_handler(config: FrontendRuntimeConfig) -> Response {
-    let network = serde_json::to_string(&config.ckb_network)
-        .expect("failed to serialize ckb_network for runtime config");
-    let rpc_url =
-        serde_json::to_string(&config.ckb_rpc_url).expect("failed to serialize ckb_rpc_url");
-    let build_version = serde_json::to_string(&config.build_version)
-        .expect("failed to serialize build_version for runtime config");
-    let body = format!(
-        r#"(() => {{
-  const protocol = window.location.protocol === 'https:' ? 'https:' : 'http:';
-  const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const defaultPort = window.location.protocol === 'https:' ? '443' : '80';
-  const currentPort = window.location.port || defaultPort;
-  const behindProxy = currentPort !== '{api_port}' && currentPort !== '{frontend_port}';
-  const host = behindProxy
-    ? window.location.host
-    : (window.location.hostname || '127.0.0.1') + ':{api_port}';
-  window.__CKBADGER_RUNTIME_CONFIG__ = {{
-    apiBase: `${{protocol}}//${{host}}/api/v1`,
-    wsUrl: `${{wsProtocol}}//${{host}}/ws`,
-    ckbNetwork: {network},
-    ckbRpcUrl: {rpc_url},
-    buildVersion: {build_version},
-  }};
-}})();
-"#,
-        api_port = config.api_port,
-        frontend_port = config.frontend_port,
-        network = network,
-        rpc_url = rpc_url,
-        build_version = build_version,
-    );
+    // Live network list for the SPA switcher. Element shape is `{ name }` — the
+    // switcher reads `n.name`; per-network backend ports stay server-side (the
+    // reverse proxy owns them) and are intentionally not exposed here.
+    let networks = config
+        .networks
+        .iter()
+        .map(|n| serde_json::json!({ "name": n.name }))
+        .collect::<Vec<_>>();
+
+    // Base patterns are RELATIVE + same-origin. The literal `{network}` token is
+    // a placeholder the SPA substitutes with the active network at call time
+    // (and it builds an absolute ws://|wss:// URL from `wsUrlPattern`), so no
+    // absolute host/port is computed here anymore.
+    let runtime_config = serde_json::json!({
+        "networks": networks,
+        "defaultNetwork": config.default_network,
+        "apiBasePattern": "/api/{network}/v1",
+        "wsUrlPattern": "/ws/{network}",
+        // Back-compat: still read by resolveCkbNetwork/resolveCkbRpcUrl until
+        // their consumers migrate to the per-network patterns (later task).
+        // `ckbNetwork` mirrors the orchestrator's default network.
+        "ckbNetwork": config.ckb_network,
+        "ckbRpcUrl": config.ckb_rpc_url,
+        "buildVersion": config.build_version,
+    });
+    let runtime_config_json =
+        serde_json::to_string(&runtime_config).expect("failed to serialize runtime config");
+
+    let body = format!("window.__CKBADGER_RUNTIME_CONFIG__ = {runtime_config_json};\n");
 
     (
         StatusCode::OK,
@@ -700,19 +691,26 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("index.html"), "<html>spa</html>").unwrap();
 
+        // Orchestrator-shape config: two live networks, default mainnet.
         let router = build_frontend_router(FrontendServiceConfig {
             host: "127.0.0.1".to_string(),
             port: 8100,
-            api_port: 9101,
-            ckb_network: "testnet".to_string(),
-            ckb_rpc_url: "http://127.0.0.1:18114".to_string(),
+            api_port: 8101,
+            ckb_network: "mainnet".to_string(),
+            ckb_rpc_url: "http://127.0.0.1:8114".to_string(),
             build_version: "0.1.0+feature/foo@abcdef123456".to_string(),
             frontend_dir: Some(dir.path().to_path_buf()),
-            default_network: "testnet".to_string(),
-            networks: vec![FrontendNetwork {
-                name: "testnet".to_string(),
-                api_port: 9101,
-            }],
+            default_network: "mainnet".to_string(),
+            networks: vec![
+                FrontendNetwork {
+                    name: "mainnet".to_string(),
+                    api_port: 8101,
+                },
+                FrontendNetwork {
+                    name: "testnet".to_string(),
+                    api_port: 8102,
+                },
+            ],
         })
         .unwrap();
 
@@ -727,24 +725,66 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get("content-type").unwrap(),
+            "application/javascript; charset=utf-8"
+        );
+
         let body = response.into_body().collect().await.unwrap().to_bytes();
         let text = String::from_utf8(body.to_vec()).unwrap();
+
+        // Assigns the global the SPA reads.
         assert!(
-            text.contains("'9101'"),
-            "should contain api_port for proxy detection"
+            text.contains("window.__CKBADGER_RUNTIME_CONFIG__ ="),
+            "missing global assignment: {text}"
+        );
+
+        // Live-network list (the SPA switcher reads `n.name`).
+        assert!(
+            text.contains("\"networks\""),
+            "missing networks key: {text}"
+        );
+        assert!(text.contains("\"mainnet\""), "missing mainnet name: {text}");
+        assert!(text.contains("\"testnet\""), "missing testnet name: {text}");
+        assert!(
+            text.contains("\"defaultNetwork\":\"mainnet\""),
+            "missing defaultNetwork: {text}"
+        );
+
+        // Network-relative, same-origin base patterns; the literal {network}
+        // placeholder is substituted by the SPA for the active network.
+        assert!(
+            text.contains("\"apiBasePattern\":\"/api/{network}/v1\""),
+            "missing apiBasePattern: {text}"
         );
         assert!(
-            text.contains("'8100'"),
-            "should contain frontend_port for proxy detection"
+            text.contains("\"wsUrlPattern\":\"/ws/{network}\""),
+            "missing wsUrlPattern: {text}"
+        );
+
+        // Back-compat fields still emitted for un-migrated consumers.
+        assert!(
+            text.contains("buildVersion"),
+            "missing buildVersion: {text}"
         );
         assert!(
-            text.contains(":9101"),
-            "should contain api_port in host fallback"
+            text.contains("\"0.1.0+feature/foo@abcdef123456\""),
+            "missing build version value: {text}"
         );
-        assert!(text.contains("\"testnet\""));
-        assert!(text.contains("\"http://127.0.0.1:18114\""));
-        assert!(text.contains("buildVersion"));
-        assert!(text.contains("\"0.1.0+feature/foo@abcdef123456\""));
+        assert!(
+            text.contains("\"ckbNetwork\":\"mainnet\""),
+            "missing ckbNetwork: {text}"
+        );
+
+        // Old absolute-URL fields are gone (superseded by the relative patterns).
+        assert!(
+            !text.contains("\"apiBase\":"),
+            "legacy apiBase should be removed: {text}"
+        );
+        assert!(
+            !text.contains("\"wsUrl\":"),
+            "legacy wsUrl should be removed: {text}"
+        );
     }
 
     #[tokio::test]
