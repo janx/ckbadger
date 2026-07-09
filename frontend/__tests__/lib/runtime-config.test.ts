@@ -5,10 +5,14 @@ import {
   DEFAULT_CKB_RPC_URL,
   DEFAULT_WS_URL,
   resolveApiBase,
+  resolveApiBasePattern,
   resolveBuildVersion,
   resolveCkbNetwork,
   resolveCkbRpcUrl,
+  resolveDefaultNetwork,
+  resolveNetworks,
   resolveWsUrl,
+  resolveWsUrlPattern,
 } from '@/lib/runtime-config';
 
 describe('runtime config helpers', () => {
@@ -42,5 +46,46 @@ describe('runtime config helpers', () => {
     expect(resolveCkbNetwork(config)).toBe(DEFAULT_CKB_NETWORK);
     expect(resolveCkbRpcUrl(config)).toBe(DEFAULT_CKB_RPC_URL);
     expect(resolveBuildVersion(config)).toBe(DEFAULT_BUILD_VERSION);
+  });
+});
+
+describe('runtime network resolvers', () => {
+  afterEach(() => {
+    // jsdom's window persists across tests in a file; clear seeded config so it
+    // does not leak into other tests (including the ones above that pass config
+    // explicitly and the default-fallback assertions below).
+    delete window.__CKBADGER_RUNTIME_CONFIG__;
+  });
+
+  it('reads networks and patterns from a seeded window config', () => {
+    window.__CKBADGER_RUNTIME_CONFIG__ = {
+      networks: [{ name: 'mainnet' }, { name: 'testnet' }],
+      defaultNetwork: 'mainnet',
+      apiBasePattern: '/api/{network}/v1',
+      wsUrlPattern: '/ws/{network}',
+    };
+
+    expect(resolveNetworks()).toEqual(['mainnet', 'testnet']);
+    expect(resolveDefaultNetwork()).toBe('mainnet');
+    expect(resolveApiBasePattern()).toBe('/api/{network}/v1');
+    expect(resolveWsUrlPattern()).toBe('/ws/{network}');
+  });
+
+  it('defaultNetwork falls back to the first configured network when unset', () => {
+    window.__CKBADGER_RUNTIME_CONFIG__ = {
+      networks: [{ name: 'testnet' }, { name: 'mainnet' }],
+    };
+
+    expect(resolveNetworks()).toEqual(['testnet', 'mainnet']);
+    expect(resolveDefaultNetwork()).toBe('testnet');
+  });
+
+  it('falls back to defaults when no window config is present', () => {
+    delete window.__CKBADGER_RUNTIME_CONFIG__;
+
+    expect(resolveNetworks()).toEqual([DEFAULT_CKB_NETWORK]);
+    expect(resolveDefaultNetwork()).toBe(DEFAULT_CKB_NETWORK);
+    expect(resolveApiBasePattern()).toBe('/api/{network}/v1');
+    expect(resolveWsUrlPattern()).toBe('/ws/{network}');
   });
 });
