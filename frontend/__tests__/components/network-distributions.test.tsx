@@ -1,12 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import { http, HttpResponse } from 'msw';
-import { DEFAULT_API_BASE } from '@/lib/runtime-config';
 import { render, screen, waitFor } from '../utils/test-utils';
 import { server } from '../msw/server';
 import { NetworkDistributions } from '@/app/network/distributions';
 import { NetworkTrends } from '@/app/network/trends';
 
-const API_BASE = DEFAULT_API_BASE;
+const API_BASE = '/api/:network/v1';
 
 describe('NetworkDistributions', () => {
   it('renders version / country / asn / protocol bars and a reachable-vs-unreachable stat', async () => {

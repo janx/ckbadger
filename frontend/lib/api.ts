@@ -1,8 +1,13 @@
-import { resolveApiBase } from '@/lib/runtime-config';
 import type { ScriptRefHashType } from '@/lib/script-ref';
+import { apiBaseFor, resolveActiveNetwork } from '@/lib/active-network';
 export { resolveApiBase } from '@/lib/runtime-config';
 
-const API_BASE = resolveApiBase();
+// The active network is derived from the URL path per call (not module-init): the
+// network can change as the user navigates, so the API base must be recomputed each
+// request rather than frozen at import time.
+function activeApiBase(): string {
+  return apiBaseFor(resolveActiveNetwork());
+}
 
 interface ApiErrorPayload {
   error?: unknown;
@@ -1576,7 +1581,7 @@ interface TransactionLifecycle {
 }
 
 async function fetchApi<T>(endpoint: string): Promise<T> {
-  return fetchJson(`${API_BASE}${endpoint}`);
+  return fetchJson(`${activeApiBase()}${endpoint}`);
 }
 
 interface TopTokenEntry {
@@ -2628,7 +2633,7 @@ export const api = {
     if (codeHashes.length === 0) return {};
     const body: Record<string, unknown> = { codeHashes };
     if (txHash) body.txHash = txHash;
-    return fetchJson(`${API_BASE}/scripts/lookup`, {
+    return fetchJson(`${activeApiBase()}/scripts/lookup`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
@@ -2657,7 +2662,7 @@ export const api = {
   },
 
   triggerCyclesCalculation: async (hash: string): Promise<CyclesStatusResponse> => {
-    return fetchJson(`${API_BASE}/transactions/${hash}/calculate-cycles`, {
+    return fetchJson(`${activeApiBase()}/transactions/${hash}/calculate-cycles`, {
       method: 'POST',
     });
   },

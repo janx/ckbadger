@@ -3,11 +3,10 @@ import { renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { http, HttpResponse } from 'msw';
 import { server } from '@/__tests__/msw/server';
-import { DEFAULT_API_BASE } from '@/lib/runtime-config';
 import type { Cell } from '@/lib/api';
 import { useInventoryLabel } from '@/components/cell/inventory-context';
 
-const API_BASE = DEFAULT_API_BASE;
+const API_BASE = '/api/:network/v1';
 
 function wrapper({ children }: { children: React.ReactNode }) {
   const queryClient = new QueryClient({

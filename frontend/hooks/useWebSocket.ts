@@ -1,6 +1,6 @@
 'use client';
 
-import { resolveWsUrl } from '@/lib/runtime-config';
+import { resolveActiveNetwork, wsUrlFor } from '@/lib/active-network';
 import { useEffect, useRef, useState, useCallback } from 'react';
 
 interface WebSocketMessage {
@@ -31,7 +31,7 @@ export function useWebSocket(options: UseWebSocketOptions = {}) {
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   const connect = useCallback(() => {
-    const wsUrl = resolveWsUrl();
+    const wsUrl = wsUrlFor(resolveActiveNetwork());
 
     try {
       const ws = new WebSocket(wsUrl);

@@ -19,7 +19,6 @@ vi.mock('@/lib/api', () => ({
     getObjectCollectionHolders: vi.fn(),
     getObjectCollectionActivities: vi.fn(),
   },
-  resolveApiBase: vi.fn(() => 'http://localhost:8101/api/v1'),
   isWarmupPendingError: vi.fn(() => false),
 }));
 
@@ -420,10 +419,7 @@ describe('SporeDetailPage', () => {
     render(<SporeDetailPage sporeId={mockParams.sporeId} />);
 
     const previewImage = await screen.findByAltText('Spore decoded media preview');
-    expect(previewImage).toHaveAttribute(
-      'src',
-      'http://localhost:8101/api/v1/spore/objects/0x1/render'
-    );
+    expect(previewImage).toHaveAttribute('src', '/api/mainnet/v1/spore/objects/0x1/render');
     expect(previewImage).toHaveClass('h-80');
     expect(previewImage).toHaveClass('w-80');
   });
