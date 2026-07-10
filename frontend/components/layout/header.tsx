@@ -6,6 +6,7 @@ import { useState } from 'react';
 import { CommandPalette } from '@/components/command-palette';
 import { SearchBar } from '@/components/search-bar';
 import { Logo } from '@/components/layout/logo';
+import { NetworkSwitcher } from '@/components/layout/network-switcher';
 import { GlobalStatsBar } from '@/components/stats-bar';
 import { useHomeScrollStore } from '@/hooks/useHomeScrollStore';
 
@@ -172,7 +173,8 @@ export function Header() {
           )}
         </div>
 
-        <div className="flex min-w-0 flex-1 items-center justify-end">
+        <div className="flex min-w-0 flex-1 items-center justify-end gap-3">
+          <NetworkSwitcher />
           <div className="w-full max-w-[clamp(18rem,36vw,36rem)]">
             <SearchBar variant="compact" />
           </div>

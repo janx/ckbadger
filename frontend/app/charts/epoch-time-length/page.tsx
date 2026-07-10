@@ -4,11 +4,13 @@ import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { ChartPage } from '@/components/charts/chart-page';
 import { api } from '@/lib/api';
+import { useActiveNetwork } from '@/hooks/useActiveNetwork';
 
 export default function EpochTimeLengthPage() {
+  const network = useActiveNetwork();
   const { data: hardforkTimeline } = useQuery({
     queryKey: ['hardforks-for-epoch-time-length'],
-    queryFn: () => api.getHardforks(),
+    queryFn: () => api.getHardforks({ network }),
     staleTime: 60_000,
   });
 

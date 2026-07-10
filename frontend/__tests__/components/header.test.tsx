@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '../utils/test-utils';
 import { Header } from '@/components/layout/header';
 import { useHomeScrollStore } from '@/hooks/useHomeScrollStore';
@@ -12,6 +12,7 @@ const searchBarMock = vi.fn(({ variant }: { variant?: 'default' | 'compact' | 'h
 
 vi.mock('@/src/navigation', () => ({
   usePathname: () => usePathnameMock(),
+  useRouter: () => ({ push: vi.fn() }),
 }));
 
 vi.mock('@/components/command-palette', () => ({
@@ -35,6 +36,10 @@ describe('Header', () => {
     usePathnameMock.mockReset();
     searchBarMock.mockClear();
     useHomeScrollStore.setState({ heroVisible: true });
+  });
+
+  afterEach(() => {
+    delete window.__CKBADGER_RUNTIME_CONFIG__;
   });
 
   it('uses compact search variant on home page', () => {
@@ -103,5 +108,24 @@ describe('Header', () => {
     fireEvent.click(toggleMenu);
 
     expect(screen.getAllByRole('link', { name: 'DAO' })).toHaveLength(1);
+  });
+
+  it('mounts the network switcher when multiple networks are live', () => {
+    usePathnameMock.mockReturnValue('/');
+    window.__CKBADGER_RUNTIME_CONFIG__ = {
+      networks: [{ name: 'mainnet' }, { name: 'testnet' }],
+      defaultNetwork: 'mainnet',
+    };
+    render(<Header />);
+
+    expect(screen.getByTestId('network-switcher')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Switch to testnet' })).toBeInTheDocument();
+  });
+
+  it('hides the network switcher for single-network deployments', () => {
+    usePathnameMock.mockReturnValue('/');
+    render(<Header />);
+
+    expect(screen.queryByTestId('network-switcher')).not.toBeInTheDocument();
   });
 });

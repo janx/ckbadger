@@ -12,15 +12,17 @@ import {
 } from '@/components/ui/terminal-panel';
 import { Badge, PageHeader } from '@/components/ui/page-header';
 import { api } from '@/lib/api';
+import { useActiveNetwork } from '@/hooks/useActiveNetwork';
 
 function statusVariant(status: 'activated' | 'upcoming'): 'green' | 'gold' {
   return status === 'activated' ? 'green' : 'gold';
 }
 
 export default function HardforksPage() {
+  const network = useActiveNetwork();
   const { data, isLoading, error } = useQuery({
     queryKey: ['hardforks'],
-    queryFn: () => api.getHardforks(),
+    queryFn: () => api.getHardforks({ network }),
     staleTime: 60_000,
   });
 

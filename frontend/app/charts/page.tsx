@@ -16,6 +16,7 @@ import {
   MostUtilizedScriptsChartResponse,
   StackedAreaChartResponse,
 } from '@/lib/api';
+import { useActiveNetwork } from '@/hooks/useActiveNetwork';
 
 function ChartDataWarning({ show }: { show: boolean }) {
   if (!show) return null;
@@ -376,9 +377,10 @@ export default function ChartsPage() {
     queryFn: () => api.getCkbVolumeChart(),
   });
 
+  const network = useActiveNetwork();
   const { data: hardforkTimeline } = useQuery({
     queryKey: ['hardforks-for-charts'],
-    queryFn: () => api.getHardforks(),
+    queryFn: () => api.getHardforks({ network }),
     staleTime: 60_000,
   });
 

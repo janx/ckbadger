@@ -18,6 +18,7 @@ import { PageHeader, Badge } from '@/components/ui/page-header';
 import { DataField, DataGrid } from '@/components/ui/data-field';
 import { UsageBar, ProgressBar } from '@/components/ui/progress-bar';
 import { api } from '@/lib/api';
+import { useActiveNetwork } from '@/hooks/useActiveNetwork';
 import { isEditableElement } from '@/lib/search-focus';
 import { formatCkbAmount } from '@/lib/utils';
 
@@ -51,6 +52,7 @@ export default function BlockDetailPage() {
   const params = useParams();
   const router = useRouter();
   const id = params.id as string;
+  const network = useActiveNetwork();
 
   const {
     data: block,
@@ -87,7 +89,7 @@ export default function BlockDetailPage() {
 
   const { data: hardforkTimeline } = useQuery({
     queryKey: ['hardforks-for-block', block?.hardforkActivation?.id],
-    queryFn: () => api.getHardforks(),
+    queryFn: () => api.getHardforks({ network }),
     enabled:
       !!block?.hardforkActivation &&
       (!block.hardforkActivation.resources || block.hardforkActivation.resources.length === 0),
