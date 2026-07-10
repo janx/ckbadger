@@ -96,8 +96,8 @@ For any non-trivial task, use this structure in the final summary or PR descript
 ```bash
 # CLI usage
 cargo build -p ckbadger                  # Build CLI binary
-ckbadger init                            # Create ckbadger.toml config
-ckbadger run                             # Start supervisor (indexer + api + frontend)
+ckbadger init                            # Create orchestrator ckbadger.toml + per-network config.toml (add --with-testnet)
+ckbadger run                             # Start supervisor (indexer + api per network + shared frontend)
 ckbadger tui                             # Run monitoring TUI
 ckbadger status                          # Show service and sync status
 ckbadger verify --depth fast             # Data integrity verification
@@ -146,7 +146,7 @@ make verify                              # Run verify --depth fast
 ```
 crates/
   cli/            # Single CLI binary (ckbadger) with subcommands + supervisor
-  config/         # ckbadger.toml config parsing (ckbadger-config)
+  config/         # config parsing: per-network config.toml + orchestrator ckbadger.toml (ckbadger-config)
   ipc/            # Unix socket IPC protocol (ckbadger-ipc)
   api/            # Axum REST/WebSocket server library (port 8101)
   indexer/        # Blockchain sync daemon library (three-stage pipeline)
@@ -326,7 +326,7 @@ const DAO_OCCUPIED_CAPACITY: u64 = 102_00000000; // 102 CKB
 | What             | Where                                                                                                                                              |
 | ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
 | CLI binary       | `crates/cli/src/main.rs` (subcommands, supervisor)                                                                                                 |
-| Config           | `crates/config/src/lib.rs` (ckbadger.toml parsing)                                                                                                 |
+| Config           | `crates/config/src/lib.rs` (per-network `config.toml`); `crates/config/src/orchestrator.rs` (orchestrator `ckbadger.toml`, `[[network]]`)          |
 | IPC protocol     | `crates/ipc/src/` (Unix socket server/client)                                                                                                      |
 | Storage engine   | `crates/ckbadger-store/src/` (types, store, keys, \*\_ops.rs)                                                                                      |
 | API routes       | `crates/api/src/routes/*.rs` (18 modules)                                                                                                          |

@@ -74,21 +74,23 @@ If you can run a CKB node, you can run CKBadger. If you don't know how to run CK
 ### Usage
 
 ```bash
-# Initialize work directory, without -C it will use the current dir
+# Initialize a work directory (creates an orchestrator + a mainnet stack).
+# Without -C it uses the current dir; add --with-testnet to run testnet too.
 ckbadger init -C workdir
 
-# Start all services (indexer + API + frontend server)
+# Start all services (one indexer + API per network, plus a shared frontend)
 ckbadger run
 
-# Access the explorer
+# Access the explorer (switch networks from the header)
 open http://localhost:8100
 ```
 
 ### Subcommands
 
 ```bash
-ckbadger init             # Initialize work directory (ckbadger.toml, data/, run/, perf/)
-ckbadger run              # Supervisor: start indexer + api + frontend-server
+ckbadger init             # Initialize orchestrator (ckbadger.toml) + a mainnet work dir
+ckbadger init --with-testnet  # ... plus a testnet stack alongside mainnet
+ckbadger run              # Supervisor: start indexer + api per network + shared frontend
 ckbadger run --only X     # Start specific services (indexer, api, frontend)
 ckbadger tui              # Terminal monitoring UI
 ckbadger status           # Lightweight sync/service status query
@@ -170,26 +172,43 @@ CKBadger is designed local-first, but the architecture doesn't lock you in. The 
 
 ### Work Directory Structure
 
+`ckbadger init` sets up an **orchestrator root**: a top-level `ckbadger.toml` plus one work directory per network. Each network subdirectory is a self-contained single-network work dir.
+
 ```
-./
-├── ckbadger.toml              # Sole configuration file
-├── metadata/                  # Optional: local metadata overrides
-├── data/
-│   ├── domain/                # Mutable canonical state (RocksDB)
-│   ├── append-only/           # Immutable cell payloads (RocksDB)
-│   └── network/               # Opt-in crawler p2p observations (RocksDB; exempt from rebuild-from-genesis)
-├── media/                     # Content-addressed decoded media blobs (DOB artwork)
-├── run/                       # Runtime state (gitignored)
-│   ├── supervisor.pid
-│   ├── indexer.sock           # Indexer IPC socket
-│   └── logs/                  # Process logs
-└── perf/
-    └── bulk-sync/             # Auto-generated bulk-sync perf artifacts + latest baseline
+./                             # Orchestrator root
+├── ckbadger.toml              # Orchestrator config: [[network]] list + shared [frontend]/[log]
+├── mainnet/                   # A standard single-network work directory
+│   ├── config.toml            #   this network's config ([ckb] node, [api] port, [store], …)
+│   ├── metadata/              #   Optional: local metadata overrides
+│   ├── data/
+│   │   ├── domain/            #   Mutable canonical state (RocksDB)
+│   │   ├── append-only/       #   Immutable cell payloads (RocksDB)
+│   │   └── network/           #   Opt-in crawler p2p observations (exempt from rebuild-from-genesis)
+│   ├── media/                 #   Content-addressed decoded media blobs (DOB artwork)
+│   ├── run/                   #   Runtime state — supervisor.pid, indexer.sock, logs/ (gitignored)
+│   └── perf/                  #   Auto-generated bulk-sync perf artifacts + latest baseline
+└── testnet/                   # With --with-testnet: a second network, same layout
+    └── …
 ```
+
+A bare work directory containing only `config.toml` (no `ckbadger.toml`) runs as a single standalone network — the orchestrator is just one-stack-per-network on top of that.
 
 ### Configuration
 
-All configuration lives in a single `ckbadger.toml` file. Priority: **CLI args > ckbadger.toml > defaults**. No `.env` files. No environment variables. If you don't know what a config key means, ask Claude Code or Codex.
+`ckbadger init` writes two kinds of config:
+
+- **Orchestrator** — `ckbadger.toml` at the root: a `[[network]]` list plus the shared `[frontend]` (default `127.0.0.1:8100`) and `[log]`. `ckbadger run` here launches one indexer + API per network and one shared frontend.
+- **Per-network** — `<network>/config.toml`: a standard single-network config (`[ckb]` node + `[api]` port + `[store]` …). Each network gets its own API port (mainnet `8101`, testnet `8102`) and its own data directory; set the REQUIRED `[ckb].workdir` in each before `ckbadger run`.
+
+Priority: **CLI args > config.toml > defaults**. No `.env` files. No environment variables. If you don't know what a config key means, ask Claude Code or Codex.
+
+### Multiple networks (mainnet + testnet)
+
+`ckbadger init --with-testnet` runs mainnet and testnet side by side behind **one** explorer at `http://localhost:8100`:
+
+- The frontend reverse-proxies `/api/<network>/v1/*` and `/ws/<network>` to each network's API port — single origin, no CORS; the per-network API servers stay unaware.
+- The active network lives in the URL path (`/mainnet/…`, `/testnet/…`); a header switcher flips between the live networks, and deep links like `/testnet/tx/0x…` preserve the network when shared.
+- Each network syncs independently from its own CKB node (`[ckb].workdir` in each `<network>/config.toml`).
 
 ### Testing
 
