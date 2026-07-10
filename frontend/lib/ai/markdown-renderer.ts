@@ -27,6 +27,7 @@ import { classifyActivity } from '@/lib/activity-classify';
 import { buildMarkdownDocument, markdownList, markdownTable } from '@/lib/ai/markdown-format';
 import { CHART_PAGE_SLUGS, type ParsedMarkdownPage } from '@/lib/ai/markdown-route';
 import { resolveBuildVersion } from '@/lib/runtime-config';
+import { resolveActiveNetwork } from '@/lib/active-network';
 import { analyzeWitness, buildScriptGroupLens, inferWitnessInsights } from '@/lib/witness-analysis';
 
 const DEFAULT_LIMIT = 20;
@@ -740,7 +741,7 @@ export async function renderMarkdownPage(
       return { status: 200, body };
     }
     case 'hardforks': {
-      const hardforks = await api.getHardforks();
+      const hardforks = await api.getHardforks({ network: resolveActiveNetwork() });
       const body = buildMarkdownDocument(buildMeta(page.pathname, page.kind, origin), [
         '# Hardforks',
         '',
