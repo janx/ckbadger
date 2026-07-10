@@ -1,7 +1,8 @@
 'use client';
 
 import { create } from 'zustand';
-import { resolveActiveNetwork, wsUrlFor } from '@/lib/active-network';
+import { wsUrlFor } from '@/lib/active-network';
+import { useActiveNetwork } from '@/hooks/useActiveNetwork';
 import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useCallback } from 'react';
 
@@ -56,6 +57,7 @@ interface RealtimeState {
   setConnected: (connected: boolean) => void;
   setLatestBlock: (block: Block) => void;
   setLatestTx: (tx: Transaction) => void;
+  reset: () => void;
 }
 
 export const useRealtimeStore = create<RealtimeState>((set) => ({
@@ -65,9 +67,13 @@ export const useRealtimeStore = create<RealtimeState>((set) => ({
   setConnected: (connected) => set({ isConnected: connected }),
   setLatestBlock: (block) => set({ latestBlock: block }),
   setLatestTx: (tx) => set({ latestTx: tx }),
+  reset: () => set({ isConnected: false, latestBlock: null, latestTx: null }),
 }));
 
 let wsInstance: WebSocket | null = null;
+// The network the current socket targets, so we can detect a network switch and
+// reconnect instead of silently streaming the wrong network's data.
+let wsNetwork: string | null = null;
 let wsSubscribers = 0;
 let reconnectAttempts = 0;
 let reconnectTimeout: NodeJS.Timeout | null = null;
@@ -77,10 +83,26 @@ const RECONNECT_INTERVAL = 3000;
 type MessageHandler = (message: WebSocketMessage) => void;
 const messageHandlers = new Set<MessageHandler>();
 
-function connectWebSocket() {
-  if (wsInstance?.readyState === WebSocket.OPEN) return;
+function connectWebSocket(network: string) {
+  // Already connected to the right network — nothing to do.
+  if (wsInstance?.readyState === WebSocket.OPEN && wsNetwork === network) return;
 
-  const wsUrl = wsUrlFor(resolveActiveNetwork());
+  // A socket exists but targets a different network (or is stale): tear it down
+  // WITHOUT letting its onclose auto-reconnect to the old network.
+  if (wsInstance) {
+    wsInstance.onclose = null;
+    wsInstance.onerror = null;
+    wsInstance.close();
+    wsInstance = null;
+  }
+  if (reconnectTimeout) {
+    clearTimeout(reconnectTimeout);
+    reconnectTimeout = null;
+  }
+  reconnectAttempts = 0;
+  wsNetwork = network;
+
+  const wsUrl = wsUrlFor(network);
 
   try {
     wsInstance = new WebSocket(wsUrl);
@@ -108,7 +130,7 @@ function connectWebSocket() {
       if (wsSubscribers > 0 && reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
         reconnectTimeout = setTimeout(() => {
           reconnectAttempts++;
-          connectWebSocket();
+          connectWebSocket(network);
         }, RECONNECT_INTERVAL);
       }
     };
@@ -129,12 +151,16 @@ function disconnectWebSocket() {
   reconnectAttempts = MAX_RECONNECT_ATTEMPTS;
   wsInstance?.close();
   wsInstance = null;
+  wsNetwork = null;
 }
 
 export function useRealtimeData() {
   const queryClient = useQueryClient();
-  const { isConnected, latestBlock, latestTx, setLatestBlock, setLatestTx } = useRealtimeStore();
+  const network = useActiveNetwork();
+  const { isConnected, latestBlock, latestTx, setLatestBlock, setLatestTx, reset } =
+    useRealtimeStore();
   const handlerRef = useRef<MessageHandler | null>(null);
+  const previousNetwork = useRef(network);
 
   const handleMessage = useCallback(
     (message: WebSocketMessage) => {
@@ -209,11 +235,21 @@ export function useRealtimeData() {
     [queryClient, setLatestBlock, setLatestTx]
   );
 
+  // Clear stale realtime data (blocks/txs/connection) when the active network
+  // changes, so a switched-away network's data isn't shown while the socket
+  // reconnects to the new network.
+  useEffect(() => {
+    if (previousNetwork.current !== network) {
+      reset();
+      previousNetwork.current = network;
+    }
+  }, [network, reset]);
+
   useEffect(() => {
     wsSubscribers++;
     handlerRef.current = handleMessage;
     messageHandlers.add(handleMessage);
-    connectWebSocket();
+    connectWebSocket(network);
 
     return () => {
       wsSubscribers--;
@@ -224,7 +260,7 @@ export function useRealtimeData() {
         disconnectWebSocket();
       }
     };
-  }, [handleMessage]);
+  }, [handleMessage, network]);
 
   return { isConnected, latestBlock, latestTx };
 }

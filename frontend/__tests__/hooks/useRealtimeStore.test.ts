@@ -67,6 +67,34 @@ describe('useRealtimeStore', () => {
       setLatestTx(tx);
       expect(useRealtimeStore.getState().latestTx).toEqual(tx);
     });
+
+    it('reset clears connection state and latest block/tx', () => {
+      const { setConnected, setLatestTx, reset } = useRealtimeStore.getState();
+      setConnected(true);
+      setLatestTx({
+        hash: '0xdef456',
+        blockNumber: 12345,
+        inputsCount: 2,
+        outputsCount: 3,
+        fee: '1000',
+        timestamp: '2024-01-01T00:00:00Z',
+      });
+      useRealtimeStore.setState({
+        latestBlock: {
+          number: 12345,
+          hash: '0xabc',
+          timestamp: '2024-01-01T00:00:00Z',
+          transactionsCount: 1,
+        } as never,
+      });
+
+      reset();
+
+      const state = useRealtimeStore.getState();
+      expect(state.isConnected).toBe(false);
+      expect(state.latestBlock).toBeNull();
+      expect(state.latestTx).toBeNull();
+    });
   });
 
   describe('latest-blocks cache update logic', () => {
