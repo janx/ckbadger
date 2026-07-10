@@ -2,6 +2,7 @@ import type { ComponentType, ReactElement } from 'react';
 import type { RouteObject } from 'react-router-dom';
 import { Navigate, Outlet, useLocation, useParams } from 'react-router-dom';
 import { SiteFooter } from '@/components/layout/site-footer';
+import { NetworkQueryScope } from '@/components/network-query-scope';
 import { NotFoundPage } from '@/components/not-found-page';
 import { RouteErrorBoundary } from '@/components/route-error-boundary';
 import { isKnownNetwork, resolveDefaultNetwork } from '@/lib/active-network';
@@ -17,7 +18,9 @@ function AppFrame() {
   return (
     <div className="flex min-h-screen flex-col">
       <div className="flex-1">
-        <Outlet />
+        <NetworkQueryScope>
+          <Outlet />
+        </NetworkQueryScope>
       </div>
       <SiteFooter />
     </div>
