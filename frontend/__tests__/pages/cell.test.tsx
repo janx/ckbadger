@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import CellDetailPage from '@/app/cell/[outpoint]/client-page';
+import { formatCapacity } from '@/lib/utils';
 
 const mockPush = vi.fn();
 
@@ -216,6 +217,46 @@ describe('CellDetailPage', () => {
     expect(screen.getByText('Deposit Time')).toBeInTheDocument();
     const blockLinks = screen.getAllByText('#5,000,000');
     expect(blockLinks.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('derives the genesis special burn copy from the API cell values', async () => {
+    mockGetCell.mockResolvedValue({
+      ...mockCellWithoutDao,
+      cellType: 'genesis_special_burn',
+      capacity: '840000000000000000', // 8.4B CKB burnt at genesis
+      virtualCommonKnowledgeSize: '504000000000000000', // 5.04B CKB virtual common knowledge
+    });
+
+    renderWithQueryClient(<CellDetailPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Genesis Special Burn Cell')).toBeInTheDocument();
+    });
+
+    // Both figures come from the API response (formatCapacity), not hardcoded strings.
+    expect(screen.getByText(formatCapacity('840000000000000000'))).toBeInTheDocument();
+    expect(screen.getByText('Virtual Common Knowledge Size:')).toBeInTheDocument();
+    expect(screen.getByText(formatCapacity('504000000000000000'))).toBeInTheDocument();
+    // The superseded hardcoded copy is gone.
+    expect(screen.queryByText(/25% of 33\.6B/)).not.toBeInTheDocument();
+  });
+
+  it('omits the virtual common knowledge line when the field is absent', async () => {
+    // Base mock carries no virtualCommonKnowledgeSize, so the guarded line must not render.
+    mockGetCell.mockResolvedValue({
+      ...mockCellWithoutDao,
+      cellType: 'genesis_special_burn',
+      capacity: '840000000000000000',
+    });
+
+    renderWithQueryClient(<CellDetailPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Genesis Special Burn Cell')).toBeInTheDocument();
+    });
+
+    expect(screen.getByText(formatCapacity('840000000000000000'))).toBeInTheDocument();
+    expect(screen.queryByText('Virtual Common Knowledge Size:')).not.toBeInTheDocument();
   });
 
   it('renders regular cell without DAO badge or info panel', async () => {
