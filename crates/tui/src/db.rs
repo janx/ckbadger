@@ -595,59 +595,74 @@ impl TuiDb {
 
     pub async fn get_supervisor_services(&self) -> Option<Vec<SupervisorServiceData>> {
         let socket_path = self.supervisor_socket_path.as_ref()?;
-        if !socket_path.exists() {
-            return None;
-        }
-
-        let request = ckbadger_ipc::IpcRequest::GetServiceStatus;
-        let response = tokio::time::timeout(
-            Duration::from_millis(400),
-            ckbadger_ipc::ipc_request(socket_path, &request),
-        )
-        .await
-        .ok()?
-        .ok()?;
-
-        let ckbadger_ipc::IpcResponse::ServiceStatus { services } = response else {
-            return None;
-        };
-
-        Some(
-            services
-                .into_iter()
-                .map(|service| SupervisorServiceData {
-                    name: service.name,
-                    pid: service.pid,
-                    status: service.status.to_string(),
-                    uptime_secs: service.uptime_secs,
-                })
-                .collect(),
-        )
+        fetch_supervisor_services(socket_path).await
     }
 
     pub async fn get_service_log_tails(&self) -> Option<Vec<ServiceLogTailData>> {
         let log_dir = self.service_log_dir.as_ref()?;
-        if !log_dir.exists() {
-            return None;
-        }
-
-        let entries = std::fs::read_dir(log_dir).ok()?;
-        let mut tails = Vec::new();
-        for entry in entries {
-            let entry = entry.ok()?;
-            let path = entry.path();
-            if path.extension().and_then(|ext| ext.to_str()) != Some("log") {
-                continue;
-            }
-            let service = path.file_stem()?.to_str()?.to_string();
-            if let Some(last_line) = read_last_non_empty_line(&path) {
-                tails.push(ServiceLogTailData { service, last_line });
-            }
-        }
-
-        tails.sort_by(|a, b| a.service.cmp(&b.service));
-        Some(tails)
+        fetch_service_log_tails(log_dir).await
     }
+}
+
+/// Query the supervisor's single IPC socket for service status. Standalone so the
+/// multi-network aggregator can call it with the shared root socket (the per-network
+/// `TuiDb`s carry no socket of their own).
+pub(crate) async fn fetch_supervisor_services(
+    socket_path: &Path,
+) -> Option<Vec<SupervisorServiceData>> {
+    if !socket_path.exists() {
+        return None;
+    }
+
+    let request = ckbadger_ipc::IpcRequest::GetServiceStatus;
+    let response = tokio::time::timeout(
+        Duration::from_millis(400),
+        ckbadger_ipc::ipc_request(socket_path, &request),
+    )
+    .await
+    .ok()?
+    .ok()?;
+
+    let ckbadger_ipc::IpcResponse::ServiceStatus { services } = response else {
+        return None;
+    };
+
+    Some(
+        services
+            .into_iter()
+            .map(|service| SupervisorServiceData {
+                name: service.name,
+                pid: service.pid,
+                status: service.status.to_string(),
+                uptime_secs: service.uptime_secs,
+            })
+            .collect(),
+    )
+}
+
+/// Tail every `*.log` in a directory (last non-empty line each), sorted by service.
+/// Standalone so the aggregator can call it with the shared root log dir.
+pub(crate) async fn fetch_service_log_tails(log_dir: &Path) -> Option<Vec<ServiceLogTailData>> {
+    if !log_dir.exists() {
+        return None;
+    }
+
+    let entries = std::fs::read_dir(log_dir).ok()?;
+    let mut tails = Vec::new();
+    for entry in entries {
+        let entry = entry.ok()?;
+        let path = entry.path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("log") {
+            continue;
+        }
+        let service = path.file_stem()?.to_str()?.to_string();
+        if let Some(last_line) = read_last_non_empty_line(&path) {
+            tails.push(ServiceLogTailData { service, last_line });
+        }
+    }
+
+    tails.sort_by(|a, b| a.service.cmp(&b.service));
+    Some(tails)
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -1311,5 +1326,32 @@ mod tests {
         assert_eq!(tails[1].last_line, "2026-01-01 pipeline mismatch");
 
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn fetch_service_log_tails_reads_dot_log_files() {
+        use super::fetch_service_log_tails;
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("mainnet-indexer.log"),
+            "line one\nlast line\n",
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("ignore.txt"), "not a log\n").unwrap();
+
+        let tails = fetch_service_log_tails(dir.path())
+            .await
+            .expect("some tails");
+        assert_eq!(tails.len(), 1, "only .log files are tailed");
+        assert_eq!(tails[0].service, "mainnet-indexer");
+        assert_eq!(tails[0].last_line, "last line");
+    }
+
+    #[tokio::test]
+    async fn fetch_supervisor_services_missing_socket_is_none() {
+        use super::fetch_supervisor_services;
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("nope.sock");
+        assert!(fetch_supervisor_services(&missing).await.is_none());
     }
 }
