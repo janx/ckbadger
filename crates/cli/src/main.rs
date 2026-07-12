@@ -27,6 +27,7 @@ use ckbadger_store::{
     secondary_store_path, CkbadgerStore, SecondaryStoreOwner, StoreRuntimeConfig,
 };
 use ckbadger_tui::entry::{run_tui, TuiServiceConfig};
+use ckbadger_tui::TuiNetwork;
 
 const BUILD_VERSION: &str = env!("CKBADGER_BUILD_VERSION");
 
@@ -662,17 +663,22 @@ async fn cmd_tui(workdir: &Path) -> Result<()> {
     let store_paths = resolve_store_paths(workdir, &config.store);
     let ckb_paths = resolve_ckb_paths(workdir, &config.ckb)?;
 
-    let tui_config = TuiServiceConfig {
+    let network = TuiNetwork {
+        name: config.ckb.network.clone(),
         domain_data_path: store_paths.domain_data.to_string_lossy().to_string(),
         append_only_data_path: store_paths.append_only_data.to_string_lossy().to_string(),
         ckbadger_workdir: work.root.to_string_lossy().to_string(),
         ckb_workdir: ckb_paths.ckb_workdir.to_string_lossy().to_string(),
         ckb_db_path: ckb_paths.ckb_db_path.to_string_lossy().to_string(),
         api_url: format!("http://{}:{}/api/v1", config.api.host, config.api.port),
+        store_runtime_config: store_runtime_config(&config.store),
+    };
+
+    let tui_config = TuiServiceConfig {
+        networks: vec![network],
         refresh_ms: 1000,
         supervisor_socket_path: Some(work.indexer_sock.to_string_lossy().to_string()),
         service_log_dir: Some(work.log_dir.to_string_lossy().to_string()),
-        store_runtime_config: store_runtime_config(&config.store),
         build_version: BUILD_VERSION.to_string(),
     };
 

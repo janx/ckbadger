@@ -20,6 +20,7 @@ use crate::db::{
     ApiServiceInfo, ChainInfoData, LabelCount, NetworkHistoryPoint, PeersData, RuntimeDiagData,
     ServiceLogTailData, SupervisorServiceData, SyncStatusRow, TuiDb,
 };
+use crate::multi::MultiNetworkDb;
 
 const RATE_HISTORY_SIZE: usize = 3600;
 const LOG_HISTORY_SIZE: usize = 200;
@@ -140,7 +141,7 @@ struct ControllerDeltas {
 
 pub struct App {
     build_version: String,
-    db: TuiDb,
+    db: MultiNetworkDb,
     sync_status: Option<SyncStatusRow>,
     memory_stats: Option<MemoryStatsData>,
     chain_info: Option<ChainInfoData>,
@@ -197,7 +198,7 @@ enum SyncBottleneck {
 }
 
 impl App {
-    pub fn new(db: TuiDb, build_version: String) -> Self {
+    pub fn new(db: MultiNetworkDb, build_version: String) -> Self {
         let mut log_entries = VecDeque::with_capacity(LOG_HISTORY_SIZE);
         log_entries.push_back(LogEntry {
             timestamp: Local::now(),
@@ -254,7 +255,7 @@ impl App {
     }
 
     pub fn db(&self) -> &TuiDb {
-        &self.db
+        self.db.selected()
     }
 
     pub fn next_tab(&mut self) {
@@ -342,16 +343,17 @@ impl App {
     }
 
     pub async fn refresh(&mut self) {
-        let (
-            (sync_status_result, memory_stats, runtime_diag, indexer_bg_tasks),
-            (chain_info, api_service, api_bg_tasks),
-            services,
-            log_tails,
-        ) = tokio::join!(
-            self.db.get_local_snapshot(),
-            self.db.get_chain_info_and_api_service_info(),
+        // Selected network's cheap local snapshot (RocksDB secondary reads).
+        let (sync_status_result, memory_stats, runtime_diag, indexer_bg_tasks) =
+            self.db.selected_local().await;
+
+        // Shared services/logs (one IPC call to the root socket) + selected-network
+        // HTTP (chain stats + peers), all concurrently.
+        let (services, log_tails, (chain_info, api_service, api_bg_tasks), peers) = tokio::join!(
             self.db.get_supervisor_services(),
             self.db.get_service_log_tails(),
+            self.db.selected_chain_info_and_api(),
+            self.db.selected_peers(),
         );
 
         match sync_status_result {
@@ -378,7 +380,7 @@ impl App {
         self.runtime_diag = runtime_diag;
         self.supervisor_services = services;
         self.service_log_tails = log_tails;
-        self.peers_data = Some(self.db.get_peers_data().await);
+        self.peers_data = Some(peers);
         self.last_refresh = Instant::now();
 
         self.detect_events();
@@ -5974,13 +5976,13 @@ mod tests {
         DiagnosticsViewMode, MainTab, PeersView, SyncBottleneck, AMBER, CYAN,
         STATUS_MESSAGE_TTL_SECS, TERMINAL_DIM,
     };
-    use crate::db::{
-        ApiServiceInfo, RuntimeDiagData, ServiceLogTailData, SupervisorServiceData, TuiDb,
-    };
+    use crate::db::{ApiServiceInfo, RuntimeDiagData, ServiceLogTailData, SupervisorServiceData};
+    use crate::multi::{MultiNetworkDb, TuiNetwork};
     use ckbadger_common::{
         BackgroundTaskEntry, BackgroundTaskKind, BackgroundTaskState, BulkBuildProgressData,
         MemoryStatsData,
     };
+    use ckbadger_store::StoreRuntimeConfig;
     use ratatui::layout::{Constraint, Direction, Layout, Rect};
     use ratatui::text::Line;
     use std::collections::VecDeque;
@@ -6897,9 +6899,31 @@ mod tests {
         assert!(footer_status_message(Some(&expired)).is_none());
     }
 
+    /// Build a 1-element aggregator over one (possibly absent) store — the
+    /// multi-network replacement for the old `TuiDb::new` test convenience now
+    /// that `App` holds a `MultiNetworkDb`. A nonexistent path yields no store,
+    /// so downstream reads stay `None`, exactly as before.
+    async fn single_network_db(api_url: &str, domain: &str, append_only: &str) -> MultiNetworkDb {
+        MultiNetworkDb::new(
+            vec![TuiNetwork {
+                name: "mainnet".to_string(),
+                domain_data_path: domain.to_string(),
+                append_only_data_path: append_only.to_string(),
+                ckbadger_workdir: ".".to_string(),
+                ckb_workdir: ".".to_string(),
+                ckb_db_path: ".".to_string(),
+                api_url: api_url.to_string(),
+                store_runtime_config: StoreRuntimeConfig::default(),
+            }],
+            None,
+            None,
+        )
+        .await
+    }
+
     #[tokio::test]
     async fn test_app_refresh_without_store_dependency() {
-        let db = TuiDb::new(
+        let db = single_network_db(
             "http://127.0.0.1:9/api/v1",
             "/tmp/ckbadger-store",
             "/tmp/ckbadger-store-append-only",
@@ -6914,7 +6938,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_log_warning_deduplicates_recent_same_message() {
-        let db = TuiDb::new(
+        let db = single_network_db(
             "http://127.0.0.1:9/api/v1",
             "/tmp/ckbadger-store",
             "/tmp/ckbadger-store-append-only",
