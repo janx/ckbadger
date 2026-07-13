@@ -5916,12 +5916,24 @@ fn draw_system_environment(
     f.render_widget(Paragraph::new(lines), inner);
 }
 
+/// Render a CKB node path, or an explicit "unavailable" label when it's empty.
+/// The CLI leaves a network's CKB paths empty when that network's CKB node can't
+/// be resolved (display-only data — the store + API still work), so make that
+/// visible instead of showing a blank field.
+fn ckb_path_display(p: &std::path::Path) -> String {
+    if p.as_os_str().is_empty() {
+        "unavailable (CKB node not resolved)".to_string()
+    } else {
+        p.display().to_string()
+    }
+}
+
 fn system_workdir_lines(
     ckbadger_workdir: &std::path::Path,
     ckb_workdir: &std::path::Path,
 ) -> Vec<Line<'static>> {
     vec![
-        system_kv_line("CKB workdir", ckb_workdir.display().to_string(), FOREGROUND),
+        system_kv_line("CKB workdir", ckb_path_display(ckb_workdir), FOREGROUND),
         system_kv_line(
             "ckbadger workdir",
             ckbadger_workdir.display().to_string(),
@@ -5960,7 +5972,7 @@ fn system_store_path_lines(
     let append_cf_count = APPEND_CFS.len();
 
     vec![
-        system_kv_line("CKB RocksDB", ckb_db_path.display().to_string(), FOREGROUND),
+        system_kv_line("CKB RocksDB", ckb_path_display(ckb_db_path), FOREGROUND),
         system_kv_line(
             "Domain store",
             domain_path.display().to_string(),
@@ -6205,7 +6217,7 @@ mod tests {
     use super::{
         api_health_state, background_task_last_result, background_task_state_label,
         build_controller_column_lines, build_finalize_left_column, build_pipeline_column,
-        build_resources_column, bulk_queue_indicator_line, chart_height_warning,
+        build_resources_column, bulk_queue_indicator_line, chart_height_warning, ckb_path_display,
         compact_overview_layout, consumed_cells_source_color, consumed_cells_source_label,
         controller_panel_lines, dense_right_lines, detail_right_lines, diagnostics_dense_panel,
         direct_io_reads_label, disk_pressure_lines, eta_confidence_label, footer_hint_line,
@@ -7219,6 +7231,13 @@ mod tests {
             app.last_tx_rate_drop_alert.is_none(),
             "tx rate-drop dedup reset on switch"
         );
+    }
+
+    #[test]
+    fn ckb_path_display_labels_empty_as_unavailable() {
+        use std::path::Path;
+        assert!(ckb_path_display(Path::new("")).contains("unavailable"));
+        assert_eq!(ckb_path_display(Path::new("/ckb/data/db")), "/ckb/data/db");
     }
 
     #[tokio::test]

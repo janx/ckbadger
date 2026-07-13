@@ -662,14 +662,27 @@ fn build_tui_network(name: &str, workdir: &Path) -> Result<TuiNetwork> {
     let config = load_config(workdir)?;
     let work = WorkDir::resolve(workdir);
     let store_paths = resolve_store_paths(workdir, &config.store);
-    let ckb_paths = resolve_ckb_paths(workdir, &config.ckb)?;
+    // CKB node paths are display-only on the System tab (the TUI never opens the CKB
+    // RocksDB). A network whose CKB node isn't on disk must still be monitorable via its
+    // own store + API, so degrade to empty paths rather than aborting the whole (possibly
+    // multi-network) TUI. The System tab renders empty CKB paths as "unavailable".
+    let (ckb_workdir, ckb_db_path) = match resolve_ckb_paths(workdir, &config.ckb) {
+        Ok(p) => (
+            p.ckb_workdir.to_string_lossy().to_string(),
+            p.ckb_db_path.to_string_lossy().to_string(),
+        ),
+        Err(e) => {
+            eprintln!("ckbadger tui: network '{name}': CKB node paths unavailable ({e})");
+            (String::new(), String::new())
+        }
+    };
     Ok(TuiNetwork {
         name: name.to_string(),
         domain_data_path: store_paths.domain_data.to_string_lossy().to_string(),
         append_only_data_path: store_paths.append_only_data.to_string_lossy().to_string(),
         ckbadger_workdir: work.root.to_string_lossy().to_string(),
-        ckb_workdir: ckb_paths.ckb_workdir.to_string_lossy().to_string(),
-        ckb_db_path: ckb_paths.ckb_db_path.to_string_lossy().to_string(),
+        ckb_workdir,
+        ckb_db_path,
         api_url: format!("http://{}:{}/api/v1", config.api.host, config.api.port),
         store_runtime_config: store_runtime_config(&config.store),
     })
@@ -967,6 +980,43 @@ mod tui_config_tests {
         let cfg = resolve_tui_service_config(dir.path()).unwrap();
         assert_eq!(cfg.networks.len(), 1);
         assert_eq!(cfg.networks[0].name, "mainnet");
+    }
+
+    /// A network whose config.toml exists but whose CKB node isn't on disk: the
+    /// default template's `workdir = ""` is unresolvable, so `resolve_ckb_paths`
+    /// fails and `build_tui_network` degrades the CKB paths (rather than aborting).
+    fn write_network_no_ckb_node(dir: &Path, name: &str, api_port: u16) {
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::write(
+            dir.join("config.toml"),
+            ckbadger_config::default_config_toml(name, api_port),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn resolve_tolerates_a_network_with_no_ckb_node() {
+        let root = TempDir::new().unwrap();
+        std::fs::write(
+            root.path().join("ckbadger.toml"),
+            "[[network]]\nname=\"mainnet\"\n[[network]]\nname=\"testnet\"\n",
+        )
+        .unwrap();
+        write_single_network(&root.path().join("mainnet"), "mainnet", 8101);
+        write_network_no_ckb_node(&root.path().join("testnet"), "testnet", 8102);
+
+        // A missing CKB node no longer aborts the whole TUI: testnet degrades, both build.
+        let cfg = resolve_tui_service_config(root.path()).unwrap();
+        assert_eq!(cfg.networks.len(), 2);
+        assert!(
+            !cfg.networks[0].ckb_workdir.is_empty(),
+            "mainnet CKB node resolved"
+        );
+        assert!(
+            cfg.networks[1].ckb_workdir.is_empty(),
+            "testnet CKB paths degraded to empty"
+        );
+        assert!(cfg.networks[1].ckb_db_path.is_empty());
     }
 }
 
