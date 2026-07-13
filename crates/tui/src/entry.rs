@@ -95,6 +95,8 @@ async fn run_app<B: ratatui::backend::Backend>(
                         KeyCode::Char('v') => app.cycle_diagnostics_view_mode(),
                         KeyCode::Char('R') => app.refresh().await,
                         KeyCode::Char('e') => app.toggle_build_subphases(),
+                        KeyCode::Char(']') => app.select_next_network().await,
+                        KeyCode::Char('[') => app.select_prev_network().await,
                         _ => {}
                     }
                 }
