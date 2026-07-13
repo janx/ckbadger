@@ -320,6 +320,8 @@ impl App {
         self.prev_pipeline_reset_epoch = None;
         self.prev_bottleneck = None;
         self.stale_warning_active = false;
+        self.last_rate_drop_alert = None;
+        self.last_tx_rate_drop_alert = None;
         self.status_message = Some((
             format!("Network: {}", self.db.selected_name()),
             Instant::now(),
@@ -7185,6 +7187,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn switching_network_resets_rate_drop_dedup() {
+        use std::time::Instant;
+        fn net(name: &str) -> TuiNetwork {
+            TuiNetwork {
+                name: name.to_string(),
+                domain_data_path: format!("/nonexistent-tui/{name}/domain"),
+                append_only_data_path: format!("/nonexistent-tui/{name}/append"),
+                ckbadger_workdir: ".".to_string(),
+                ckb_workdir: ".".to_string(),
+                ckb_db_path: ".".to_string(),
+                api_url: format!("http://127.0.0.1:1/{name}"),
+                store_runtime_config: StoreRuntimeConfig::default(),
+            }
+        }
+        let db = MultiNetworkDb::new(vec![net("mainnet"), net("testnet")], None, None).await;
+        let mut app = App::new(db, "test".to_string());
+
+        // Simulate an active rate-drop dedup window on the current network.
+        app.last_rate_drop_alert = Some(Instant::now());
+        app.last_tx_rate_drop_alert = Some(Instant::now());
+
+        app.select_next_network().await;
+
+        assert_eq!(app.db.selected_index(), 1, "switched to testnet");
+        assert!(
+            app.last_rate_drop_alert.is_none(),
+            "rate-drop dedup reset on switch"
+        );
+        assert!(
+            app.last_tx_rate_drop_alert.is_none(),
+            "tx rate-drop dedup reset on switch"
+        );
+    }
+
+    #[tokio::test]
     async fn test_log_warning_deduplicates_recent_same_message() {
         let db = single_network_db(
             "http://127.0.0.1:9/api/v1",
@@ -8027,6 +8064,8 @@ mod tests {
         let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(text.contains("testnet"));
         assert!(text.contains("error"));
+        assert!(!text.contains('%'), "error row shows no progress metric");
+        assert!(!text.contains("blk/s"), "error row shows no rate metric");
     }
 
     #[test]

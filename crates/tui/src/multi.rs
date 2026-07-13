@@ -130,18 +130,6 @@ impl MultiNetworkDb {
         out
     }
 
-    /// Cheap local snapshot for the SELECTED network only.
-    pub async fn selected_local(
-        &self,
-    ) -> (
-        Result<SyncStatusRow>,
-        Option<MemoryStatsData>,
-        Option<RuntimeDiagData>,
-        Option<BackgroundTasksData>,
-    ) {
-        self.selected().get_local_snapshot().await
-    }
-
     /// Service status from the single SHARED supervisor socket (all networks,
     /// labeled `"<net>/<svc>"`).
     pub async fn get_supervisor_services(&self) -> Option<Vec<SupervisorServiceData>> {
