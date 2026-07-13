@@ -13,6 +13,7 @@ use crate::ui::{self, App};
 
 /// Configuration for starting the TUI.
 /// This is the interface the CLI binary uses to start the TUI.
+#[derive(Debug)]
 pub struct TuiServiceConfig {
     pub networks: Vec<TuiNetwork>,
     pub refresh_ms: u64,

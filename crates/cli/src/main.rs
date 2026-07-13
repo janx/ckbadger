@@ -657,14 +657,14 @@ async fn cmd_internal(workdir: &Path, args: &InternalArgs) -> Result<()> {
 // tui command
 // ---------------------------------------------------------------------------
 
-async fn cmd_tui(workdir: &Path) -> Result<()> {
+/// Resolve one network subdir into a `TuiNetwork` (paths + api endpoint).
+fn build_tui_network(name: &str, workdir: &Path) -> Result<TuiNetwork> {
     let config = load_config(workdir)?;
     let work = WorkDir::resolve(workdir);
     let store_paths = resolve_store_paths(workdir, &config.store);
     let ckb_paths = resolve_ckb_paths(workdir, &config.ckb)?;
-
-    let network = TuiNetwork {
-        name: config.ckb.network.clone(),
+    Ok(TuiNetwork {
+        name: name.to_string(),
         domain_data_path: store_paths.domain_data.to_string_lossy().to_string(),
         append_only_data_path: store_paths.append_only_data.to_string_lossy().to_string(),
         ckbadger_workdir: work.root.to_string_lossy().to_string(),
@@ -672,16 +672,55 @@ async fn cmd_tui(workdir: &Path) -> Result<()> {
         ckb_db_path: ckb_paths.ckb_db_path.to_string_lossy().to_string(),
         api_url: format!("http://{}:{}/api/v1", config.api.host, config.api.port),
         store_runtime_config: store_runtime_config(&config.store),
-    };
+    })
+}
 
-    let tui_config = TuiServiceConfig {
-        networks: vec![network],
-        refresh_ms: 1000,
-        supervisor_socket_path: Some(work.indexer_sock.to_string_lossy().to_string()),
-        service_log_dir: Some(work.log_dir.to_string_lossy().to_string()),
-        build_version: BUILD_VERSION.to_string(),
-    };
+/// Build the TUI config for either a single-network workdir or an orchestrator root.
+/// Orchestrator: iterate `[[network]]`, resolve each subdir, and use the SHARED
+/// root supervisor socket + log dir (mirrors `cmd_status_orchestrator`).
+fn resolve_tui_service_config(workdir: &Path) -> Result<TuiServiceConfig> {
+    if ckbadger_config::is_orchestrator(workdir) {
+        use ckbadger_config::{load_orchestrator_config, network_workdir};
+        let orch = load_orchestrator_config(workdir)?;
+        let root_work = WorkDir::resolve(workdir);
 
+        let mut networks = Vec::with_capacity(orch.networks.len());
+        for entry in &orch.networks {
+            let sub = network_workdir(workdir, entry);
+            let config_path = sub.join("config.toml");
+            if !config_path.is_file() {
+                anyhow::bail!(
+                    "network '{}' is missing its config.toml at {} (has `ckbadger init` scaffolded it?)",
+                    entry.name,
+                    config_path.display()
+                );
+            }
+            networks.push(build_tui_network(&entry.name, &sub)?);
+        }
+
+        Ok(TuiServiceConfig {
+            networks,
+            refresh_ms: 1000,
+            supervisor_socket_path: Some(root_work.indexer_sock.to_string_lossy().to_string()),
+            service_log_dir: Some(root_work.log_dir.to_string_lossy().to_string()),
+            build_version: BUILD_VERSION.to_string(),
+        })
+    } else {
+        let config = load_config(workdir)?;
+        let work = WorkDir::resolve(workdir);
+        let network = build_tui_network(&config.ckb.network, workdir)?;
+        Ok(TuiServiceConfig {
+            networks: vec![network],
+            refresh_ms: 1000,
+            supervisor_socket_path: Some(work.indexer_sock.to_string_lossy().to_string()),
+            service_log_dir: Some(work.log_dir.to_string_lossy().to_string()),
+            build_version: BUILD_VERSION.to_string(),
+        })
+    }
+}
+
+async fn cmd_tui(workdir: &Path) -> Result<()> {
+    let tui_config = resolve_tui_service_config(workdir)?;
     run_tui(tui_config).await
 }
 
@@ -849,6 +888,85 @@ mod verify_url_tests {
             "https://testnet-api.explorer.nervos.org"
         );
         assert!(verify_explorer_url("devnet").is_err());
+    }
+}
+
+#[cfg(test)]
+mod tui_config_tests {
+    use super::*;
+    use std::path::Path;
+    use tempfile::TempDir;
+
+    /// Write a network subdir that `resolve_tui_service_config` can fully resolve:
+    /// a `config.toml` pointing `ckb.workdir` at a minimal CKB node dir (a `ckb.toml`
+    /// whose resolved RocksDB path exists on disk), which `resolve_ckb_paths` requires.
+    fn write_single_network(dir: &Path, name: &str, api_port: u16) {
+        std::fs::create_dir_all(dir).unwrap();
+        let config = ckbadger_config::default_config_toml(name, api_port)
+            .replace("workdir = \"\"", "workdir = \"ckb\"");
+        std::fs::write(dir.join("config.toml"), config).unwrap();
+
+        // Minimal resolvable CKB node under <dir>/ckb: ckb.toml (data_dir = "data")
+        // + the default db path <dir>/ckb/data/db must exist.
+        let ckb_dir = dir.join("ckb");
+        std::fs::create_dir_all(ckb_dir.join("data").join("db")).unwrap();
+        std::fs::write(ckb_dir.join("ckb.toml"), "data_dir = \"data\"\n").unwrap();
+    }
+
+    #[test]
+    fn resolve_orchestrator_builds_one_network_per_entry() {
+        let root = TempDir::new().unwrap();
+        std::fs::write(
+            root.path().join("ckbadger.toml"),
+            "[[network]]\nname=\"mainnet\"\n[[network]]\nname=\"testnet\"\n",
+        )
+        .unwrap();
+        write_single_network(&root.path().join("mainnet"), "mainnet", 8101);
+        write_single_network(&root.path().join("testnet"), "testnet", 8102);
+
+        let cfg = resolve_tui_service_config(root.path()).unwrap();
+        assert_eq!(cfg.networks.len(), 2);
+        assert_eq!(cfg.networks[0].name, "mainnet");
+        assert_eq!(cfg.networks[1].name, "testnet");
+        assert!(cfg.networks[0].api_url.contains(":8101"));
+        assert!(cfg.networks[1].api_url.contains(":8102"));
+
+        // Shared socket + log dir come from the orchestrator ROOT, not a subdir.
+        let root_sock = WorkDir::resolve(root.path())
+            .indexer_sock
+            .to_string_lossy()
+            .to_string();
+        assert_eq!(
+            cfg.supervisor_socket_path.as_deref(),
+            Some(root_sock.as_str())
+        );
+    }
+
+    #[test]
+    fn resolve_orchestrator_missing_config_errors_with_network_name() {
+        let root = TempDir::new().unwrap();
+        std::fs::write(
+            root.path().join("ckbadger.toml"),
+            "[[network]]\nname=\"mainnet\"\n[[network]]\nname=\"testnet\"\n",
+        )
+        .unwrap();
+        write_single_network(&root.path().join("mainnet"), "mainnet", 8101);
+        // testnet subdir intentionally has no config.toml.
+
+        let err = resolve_tui_service_config(root.path()).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("testnet"), "error names the network: {msg}");
+        assert!(msg.contains("config.toml"), "error names the file: {msg}");
+    }
+
+    #[test]
+    fn resolve_single_network_builds_one_network() {
+        let dir = TempDir::new().unwrap();
+        write_single_network(dir.path(), "mainnet", 8101);
+
+        let cfg = resolve_tui_service_config(dir.path()).unwrap();
+        assert_eq!(cfg.networks.len(), 1);
+        assert_eq!(cfg.networks[0].name, "mainnet");
     }
 }
 
