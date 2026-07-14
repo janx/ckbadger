@@ -1,3 +1,4 @@
+mod sequencer;
 mod supervisor;
 
 #[cfg(test)]
