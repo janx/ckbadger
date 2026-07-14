@@ -54,6 +54,7 @@ pub enum SecondaryStoreOwner {
     Api,
     Tui,
     Cli,
+    Supervisor,
 }
 
 impl SecondaryStoreOwner {
@@ -62,6 +63,7 @@ impl SecondaryStoreOwner {
             Self::Api => "api-secondary",
             Self::Tui => "tui-secondary",
             Self::Cli => "cli-secondary",
+            Self::Supervisor => "supervisor-secondary",
         }
     }
 }
@@ -75,12 +77,13 @@ pub fn secondary_store_path<P: AsRef<Path>>(
     PathBuf::from(path)
 }
 
-pub fn known_domain_secondary_store_paths<P: AsRef<Path>>(primary_path: P) -> [PathBuf; 3] {
+pub fn known_domain_secondary_store_paths<P: AsRef<Path>>(primary_path: P) -> [PathBuf; 4] {
     let primary_path = primary_path.as_ref();
     [
         secondary_store_path(primary_path, SecondaryStoreOwner::Api),
         secondary_store_path(primary_path, SecondaryStoreOwner::Tui),
         secondary_store_path(primary_path, SecondaryStoreOwner::Cli),
+        secondary_store_path(primary_path, SecondaryStoreOwner::Supervisor),
     ]
 }
 
@@ -3059,6 +3062,30 @@ mod tests {
             secondary_store_path("/tmp/domain", SecondaryStoreOwner::Cli),
             PathBuf::from("/tmp/domain-cli-secondary")
         );
+    }
+
+    #[test]
+    fn supervisor_secondary_owner_is_distinct() {
+        use super::{secondary_store_path, SecondaryStoreOwner};
+        assert_eq!(
+            SecondaryStoreOwner::Supervisor.suffix(),
+            "supervisor-secondary"
+        );
+        let owners = [
+            SecondaryStoreOwner::Api,
+            SecondaryStoreOwner::Tui,
+            SecondaryStoreOwner::Cli,
+            SecondaryStoreOwner::Supervisor,
+        ];
+        for i in 0..owners.len() {
+            for j in (i + 1)..owners.len() {
+                assert_ne!(owners[i].suffix(), owners[j].suffix());
+                assert_ne!(
+                    secondary_store_path("/x/domain", owners[i]),
+                    secondary_store_path("/x/domain", owners[j]),
+                );
+            }
+        }
     }
 
     #[test]
