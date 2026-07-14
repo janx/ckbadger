@@ -210,8 +210,11 @@ async fn wait_for_stores(domain_current: PathBuf, append_current: PathBuf) {
     }
 }
 
-/// Re-bind after the pre-sync listener was dropped; a freed LISTEN socket normally
-/// rebinds immediately, but retry briefly to cover any transient EADDRINUSE.
+/// Re-bind after the pre-sync listener was dropped. On the Linux/localhost target a
+/// freed LISTEN socket rebinds immediately — TIME_WAIT on the pre-sync client
+/// connections does not block re-binding the listening port — so a short retry
+/// (rather than SO_REUSEADDR) is enough to cover the sub-second drop→rebind gap; the
+/// real bind error surfaces if every attempt fails.
 async fn bind_with_retry(addr: &str) -> Result<tokio::net::TcpListener> {
     for attempt in 0..20 {
         match tokio::net::TcpListener::bind(addr).await {

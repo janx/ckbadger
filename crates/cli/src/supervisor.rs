@@ -384,9 +384,19 @@ async fn run_supervisor_inner_with_sequencer(
                     let spec = specs[first_indexer_idx + i].clone();
                     async move {
                         match spawn_child(&exe, &spec, &log_dir) {
-                            Ok(child) => {
-                                info!(child = %spec.label, pid = child.pid(), "started service (sequenced)");
+                            Ok(mut child) => {
                                 let mut locked = state.lock().await;
+                                if locked.shutdown_requested {
+                                    // Shutdown fired between the past-bulk check and here, so the
+                                    // stop-all loop has already run and will not see this child.
+                                    // Stop it gracefully (SIGTERM) ourselves rather than leaking it
+                                    // to the kill_on_drop SIGKILL. Drop the lock first — don't hold
+                                    // it across the graceful-stop await.
+                                    drop(locked);
+                                    stop_child_gracefully(&spec.label, &mut child.child).await;
+                                    return;
+                                }
+                                info!(child = %spec.label, pid = child.pid(), "started service (sequenced)");
                                 locked.children.push(child);
                             }
                             Err(e) => {
