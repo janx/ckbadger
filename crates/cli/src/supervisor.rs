@@ -8,6 +8,9 @@
 use anyhow::{Context, Result};
 use ckbadger_config::{CkbadgerConfig, WorkDir};
 use ckbadger_ipc::{IpcHandler, IpcRequest, IpcResponse, IpcServer, ServiceInfo, ServiceStatus};
+use ckbadger_store::{
+    secondary_store_path, CkbadgerStore, SecondaryStoreOwner, StoreRuntimeConfig,
+};
 use std::future::Future;
 use std::path::Path;
 use std::path::PathBuf;
@@ -187,11 +190,107 @@ pub async fn run_supervisor_multi(root: &WorkDir, specs: Vec<ChildSpec>) -> Resu
     run_supervisor_inner(root, specs, initial).await
 }
 
+/// One network's indexer, deferred until the previous network is past bulk.
+pub struct SequencedIndexer {
+    pub spec: ChildSpec,
+    /// Resolved domain store path — opened secondary to read the network's bulk status.
+    pub domain_data_path: PathBuf,
+    pub bulk_sync_threshold: u64,
+}
+
+/// Deferred-indexer plan handed to the supervisor's sequencer task.
+struct SequencerPlan {
+    /// Index of the first deferred indexer in the full `specs` vec
+    /// (== number of immediate children).
+    first_indexer_idx: usize,
+    indexers: Vec<SequencedIndexer>,
+    poll: Duration,
+}
+
+/// How often the sequencer re-reads the previous network's store for bulk status.
+const SEQUENCER_POLL_INTERVAL: Duration = Duration::from_secs(5);
+
+/// Read a network's domain store secondary and decide whether it is past bulk.
+/// Returns `None` on any open/read error (store not created yet, etc.) so the
+/// sequencer keeps waiting rather than advancing on a bad read.
+fn read_past_bulk(idx: &SequencedIndexer) -> Option<bool> {
+    let secondary = secondary_store_path(&idx.domain_data_path, SecondaryStoreOwner::Supervisor);
+    let store = CkbadgerStore::open_domain_secondary_with_runtime(
+        &idx.domain_data_path,
+        &secondary,
+        StoreRuntimeConfig::default(),
+    )
+    .ok()?;
+    store.refresh().ok()?;
+    let status = store.get_sync_status().ok()?;
+    let bulk_completed = status.bulk_sync_completed_at.is_some();
+    let lag = store
+        .get_sync_progress()
+        .ok()
+        .flatten()
+        .and_then(|bytes| serde_json::from_slice::<ckbadger_common::SyncProgressData>(&bytes).ok())
+        .map(|p| p.target_block as i64 - p.current_block as i64);
+    Some(crate::sequencer::is_past_bulk(
+        bulk_completed,
+        lag,
+        idx.bulk_sync_threshold,
+    ))
+}
+
+/// Orchestrator supervisor: start `immediate` children + the FIRST indexer now, then
+/// start each subsequent indexer once the previous exits bulk. Only one network
+/// bulk-syncs at a time. Blocks until Ctrl+C / IPC shutdown.
+pub async fn run_supervisor_sequenced(
+    root: &WorkDir,
+    immediate: Vec<ChildSpec>,
+    indexers: Vec<SequencedIndexer>,
+) -> Result<()> {
+    // Full spec list = immediate ++ indexer specs (same order children are appended,
+    // so the monitor's index-based restart matching stays correct).
+    let mut specs: Vec<ChildSpec> = immediate.clone();
+    specs.extend(indexers.iter().map(|i| i.spec.clone()));
+    let first_indexer_idx = immediate.len();
+    // Spawn immediate + the first indexer (if any) up front; defer the rest.
+    let initial = (first_indexer_idx + 1).min(specs.len());
+
+    // The sequencer task is spawned INSIDE run_supervisor_inner_with_sequencer once
+    // state + shutdown exist. Pass the deferred plan through.
+    run_supervisor_inner_with_sequencer(
+        root,
+        specs,
+        initial,
+        Some(SequencerPlan {
+            first_indexer_idx,
+            indexers,
+            poll: SEQUENCER_POLL_INTERVAL,
+        }),
+    )
+    .await
+}
+
 /// Supervise `specs`, spawning `specs[0..initial]` immediately and leaving
 /// `specs[initial..]` to be started later (by the caller via the shared
 /// `SupervisorState`). The monitor manages whatever is in `SupervisorState.children`
 /// and restart-matches by index against the full `specs`.
+///
+/// Thin wrapper: no deferred-indexer sequencer. See
+/// [`run_supervisor_inner_with_sequencer`].
 async fn run_supervisor_inner(root: &WorkDir, specs: Vec<ChildSpec>, initial: usize) -> Result<()> {
+    run_supervisor_inner_with_sequencer(root, specs, initial, None).await
+}
+
+/// Supervise `specs` (spawning `specs[0..initial]` immediately), and — when `plan`
+/// is `Some` — additionally run a sequencer task that starts each deferred indexer
+/// (`specs[initial..]`) one at a time, once the previous network is past bulk sync.
+/// The monitor manages whatever is in `SupervisorState.children` and restart-matches
+/// by index against the full `specs`; the sequencer appends children in `specs` order
+/// to keep that matching correct.
+async fn run_supervisor_inner_with_sequencer(
+    root: &WorkDir,
+    specs: Vec<ChildSpec>,
+    initial: usize,
+    plan: Option<SequencerPlan>,
+) -> Result<()> {
     // Ensure run + log directories exist
     std::fs::create_dir_all(&root.run_dir)
         .with_context(|| format!("failed to create run directory: {}", root.run_dir.display()))?;
@@ -255,6 +354,54 @@ async fn run_supervisor_inner(root: &WorkDir, specs: Vec<ChildSpec>, initial: us
         .await;
     });
 
+    // When a deferred-indexer plan is present, start a sequencer task that spawns
+    // each subsequent indexer once the previous network is past bulk sync. The
+    // sequencer appends children in the same order as `specs` (immediate ++
+    // indexers), keeping the monitor's index-based restart matching correct. Its
+    // shutdown receiver is a clone of `shutdown_rx`; `shutdown_tx` stays alive until
+    // cleanup below, so the sequencer's `select!` never sees a dropped sender.
+    let seq_handle = plan.map(|plan| {
+        let state = state.clone();
+        let exe = exe.clone();
+        let log_dir = root.log_dir.clone();
+        let specs = specs.clone();
+        let seq_shutdown = shutdown_rx.clone();
+        tokio::spawn(async move {
+            let SequencerPlan {
+                first_indexer_idx,
+                indexers,
+                poll,
+            } = plan;
+            crate::sequencer::sequence_indexers(
+                indexers.len(),
+                |prev| read_past_bulk(&indexers[prev]),
+                |i| {
+                    // Spawn indexers[i] == specs[first_indexer_idx + i]; append to
+                    // children so the monitor picks it up (index stays aligned).
+                    let state = state.clone();
+                    let exe = exe.clone();
+                    let log_dir = log_dir.clone();
+                    let spec = specs[first_indexer_idx + i].clone();
+                    async move {
+                        match spawn_child(&exe, &spec, &log_dir) {
+                            Ok(child) => {
+                                info!(child = %spec.label, pid = child.pid(), "started service (sequenced)");
+                                let mut locked = state.lock().await;
+                                locked.children.push(child);
+                            }
+                            Err(e) => {
+                                error!(child = %spec.label, error = %e, "failed to spawn sequenced indexer");
+                            }
+                        }
+                    }
+                },
+                poll,
+                seq_shutdown,
+            )
+            .await;
+        })
+    });
+
     // Wait for Ctrl+C or IPC shutdown
     let mut ctrl_c_rx = shutdown_rx.clone();
     tokio::select! {
@@ -288,6 +435,9 @@ async fn run_supervisor_inner(root: &WorkDir, specs: Vec<ChildSpec>, initial: us
     // Cleanup
     ipc_handle.abort();
     monitor_handle.abort();
+    if let Some(h) = seq_handle {
+        h.abort();
+    }
 
     // Remove PID file and socket
     let _ = std::fs::remove_file(&root.supervisor_pid);

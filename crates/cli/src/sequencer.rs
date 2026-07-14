@@ -11,8 +11,6 @@ use tokio::sync::watch;
 /// `lag` = `sync-progress target_block − current_block` (as i64; `None` when no
 /// progress record exists yet). i64 (not saturating) so caught-up/ahead (lag ≤ 0)
 /// reads as past-bulk without masking anything.
-// Wired into the supervisor by Task 4 (`run_supervisor_sequenced`); unused until then.
-#[allow(dead_code)]
 pub(crate) fn is_past_bulk(bulk_completed: bool, lag: Option<i64>, threshold: u64) -> bool {
     bulk_completed || matches!(lag, Some(l) if l <= threshold as i64)
 }
@@ -24,9 +22,11 @@ pub(crate) fn is_past_bulk(bulk_completed: bool, lag: Option<i64>, threshold: u6
 ///
 /// `past_bulk(prev)` returns `Some(true|false)` on a successful read, or `None`
 /// when the store can't be read yet (treated as "not past bulk" — keep waiting).
-// Wired into the supervisor by Task 4 (`run_supervisor_sequenced`); unused until then.
-#[allow(dead_code)]
-pub(crate) async fn sequence_indexers<R, S>(
+///
+/// `spawn(i)` is `async`: the real supervisor callback appends to the shared
+/// `SupervisorState` behind a `tokio::sync::Mutex`, which must be awaited (a
+/// `blocking_lock` in this async context would panic), so the gate is async.
+pub(crate) async fn sequence_indexers<R, S, Fut>(
     count: usize,
     mut past_bulk: R,
     mut spawn: S,
@@ -34,7 +34,8 @@ pub(crate) async fn sequence_indexers<R, S>(
     mut shutdown: watch::Receiver<bool>,
 ) where
     R: FnMut(usize) -> Option<bool>,
-    S: FnMut(usize),
+    S: FnMut(usize) -> Fut,
+    Fut: std::future::Future<Output = ()>,
 {
     for i in 1..count {
         loop {
@@ -42,7 +43,7 @@ pub(crate) async fn sequence_indexers<R, S>(
                 return;
             }
             if past_bulk(i - 1) == Some(true) {
-                spawn(i);
+                spawn(i).await;
                 break;
             }
             tokio::select! {
@@ -103,7 +104,12 @@ mod tests {
                 *c += 1;
                 Some((*c).is_multiple_of(2))
             },
-            |i| spawned.borrow_mut().push(i),
+            |i| {
+                let spawned = &spawned;
+                async move {
+                    spawned.borrow_mut().push(i);
+                }
+            },
             Duration::from_millis(1),
             rx,
         )
@@ -126,7 +132,12 @@ mod tests {
                 *calls.borrow_mut() += 1;
                 Some(true)
             },
-            |i| spawned.borrow_mut().push(i),
+            |i| {
+                let spawned = &spawned;
+                async move {
+                    spawned.borrow_mut().push(i);
+                }
+            },
             Duration::from_millis(1),
             rx,
         )
@@ -143,7 +154,12 @@ mod tests {
         sequence_indexers(
             3,
             |_prev| Some(false),
-            |i| spawned.borrow_mut().push(i),
+            |i| {
+                let spawned = &spawned;
+                async move {
+                    spawned.borrow_mut().push(i);
+                }
+            },
             Duration::from_millis(1),
             rx,
         )

@@ -443,7 +443,11 @@ async fn cmd_run_orchestrator(root: &Path, args: &RunArgs) -> Result<()> {
     let fd_limit = raise_fd_limit()?;
     check_fd_limit_for_indexer(fd_limit)?;
 
-    let mut specs = Vec::new();
+    // Immediate children (frontend + every api + every enabled crawler) start up
+    // front; indexers are deferred and started one at a time by the sequencer so
+    // only one network bulk-syncs at a time (see `run_supervisor_sequenced`).
+    let mut immediate: Vec<supervisor::ChildSpec> = Vec::new();
+    let mut indexers: Vec<supervisor::SequencedIndexer> = Vec::new();
     // (network_name, api_port, resolved_workdir) for fail-fast binding checks.
     let mut nets: Vec<(String, u16, PathBuf)> = Vec::new();
     for entry in &orch.networks {
@@ -457,19 +461,30 @@ async fn cmd_run_orchestrator(root: &Path, args: &RunArgs) -> Result<()> {
         }
         let cfg = load_config(&sub)?;
         nets.push((entry.name.clone(), cfg.api.port, sub.clone()));
-        // Per-network services EXCEPT the frontend (one shared frontend proxy
-        // is added after this loop).
-        let mut services = vec!["indexer", "api"];
+        let sub_str = sub.to_string_lossy().to_string();
+
+        immediate.push(supervisor::ChildSpec {
+            label: format!("{}/api", entry.name),
+            service: "api".to_string(),
+            workdir: sub_str.clone(),
+        });
         if cfg.crawler.enabled {
-            services.push("crawler");
-        }
-        for svc in services {
-            specs.push(supervisor::ChildSpec {
-                label: format!("{}/{}", entry.name, svc),
-                service: svc.to_string(),
-                workdir: sub.to_string_lossy().to_string(),
+            immediate.push(supervisor::ChildSpec {
+                label: format!("{}/crawler", entry.name),
+                service: "crawler".to_string(),
+                workdir: sub_str.clone(),
             });
         }
+        let store_paths = resolve_store_paths(&sub, &cfg.store);
+        indexers.push(supervisor::SequencedIndexer {
+            spec: supervisor::ChildSpec {
+                label: format!("{}/indexer", entry.name),
+                service: "indexer".to_string(),
+                workdir: sub_str,
+            },
+            domain_data_path: store_paths.domain_data,
+            bulk_sync_threshold: cfg.indexer.bulk_sync_threshold,
+        });
         println!(
             "network '{}' -> {} (api :{})",
             entry.name,
@@ -485,12 +500,13 @@ async fn cmd_run_orchestrator(root: &Path, args: &RunArgs) -> Result<()> {
 
     // One shared frontend proxy for all networks (the child re-reads the
     // orchestrator config; label "frontend" -> run/logs/frontend.log).
-    specs.push(frontend_child_spec(root));
+    immediate.push(frontend_child_spec(root));
     println!(
         "frontend proxy -> :{} (serves /{{network}}/...)",
         orch.frontend.port
     );
-    supervisor::run_supervisor_multi(&root_work, specs).await
+    println!("bulk sync is sequential: one network at a time, in [[network]] order");
+    supervisor::run_supervisor_sequenced(&root_work, immediate, indexers).await
 }
 
 /// Fail-fast validation of orchestrator network bindings before spawning.
@@ -569,6 +585,28 @@ fn frontend_child_spec(root: &Path) -> supervisor::ChildSpec {
         service: "frontend-server".to_string(),
         workdir: root.to_string_lossy().to_string(),
     }
+}
+
+/// Split networks into immediate child labels (apis + enabled crawlers + one shared
+/// frontend) and ordered indexer labels. Pure; encodes the same spec-building order
+/// [`cmd_run_orchestrator`] uses, so the sequenced supervisor's index matching stays
+/// correct. Test-only: the real orchestrated run builds full specs inline (its
+/// subprocess spawning isn't unit-testable), so this mirror is the ordering coverage.
+#[cfg(test)]
+fn orchestrator_child_split(
+    networks: impl Iterator<Item = (String, bool)>, // (name, crawler_enabled)
+) -> (Vec<String>, Vec<String>) {
+    let mut immediate = Vec::new();
+    let mut indexers = Vec::new();
+    for (name, crawler_enabled) in networks {
+        immediate.push(format!("{name}/api"));
+        if crawler_enabled {
+            immediate.push(format!("{name}/crawler"));
+        }
+        indexers.push(format!("{name}/indexer"));
+    }
+    immediate.push("frontend".to_string());
+    (immediate, indexers)
 }
 
 // ---------------------------------------------------------------------------
@@ -902,6 +940,30 @@ mod verify_url_tests {
             "https://testnet-api.explorer.nervos.org"
         );
         assert!(verify_explorer_url("devnet").is_err());
+    }
+}
+
+#[cfg(test)]
+mod orchestrator_split_tests {
+    use super::*;
+
+    #[test]
+    fn split_puts_apis_crawlers_frontend_immediate_and_indexers_ordered() {
+        // (network_name, crawler_enabled) in [[network]] order
+        let nets = [("mainnet", false), ("testnet", true)];
+        let (immediate_labels, indexer_labels) =
+            orchestrator_child_split(nets.iter().map(|(n, c)| (n.to_string(), *c)));
+        // immediate = every api + every enabled crawler + one shared frontend
+        assert!(immediate_labels.contains(&"mainnet/api".to_string()));
+        assert!(immediate_labels.contains(&"testnet/api".to_string()));
+        assert!(immediate_labels.contains(&"testnet/crawler".to_string()));
+        assert!(!immediate_labels.contains(&"mainnet/crawler".to_string())); // crawler disabled
+        assert!(immediate_labels.contains(&"frontend".to_string()));
+        // indexers = one per network, in array order, NOT in immediate
+        assert_eq!(indexer_labels, vec!["mainnet/indexer", "testnet/indexer"]);
+        for l in &indexer_labels {
+            assert!(!immediate_labels.contains(l));
+        }
     }
 }
 
