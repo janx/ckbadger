@@ -1187,6 +1187,12 @@ fn cmd_init(root: &Path, args: &InitArgs) -> Result<()> {
 // ---------------------------------------------------------------------------
 
 fn cmd_purge(workdir: &Path, args: &PurgeArgs) -> Result<()> {
+    // Orchestrator root: no config.toml at the root — purge each network subdir
+    // plus the shared root run dir (mirrors cmd_run/cmd_status orchestrator handling).
+    if is_orchestrator(workdir) {
+        return cmd_purge_orchestrator(workdir, args);
+    }
+
     let work = WorkDir::resolve(workdir);
 
     if !work.is_initialized() {
@@ -1196,14 +1202,93 @@ fn cmd_purge(workdir: &Path, args: &PurgeArgs) -> Result<()> {
         );
     }
 
-    let config = load_config(workdir)?;
-    let store_paths = resolve_store_paths(workdir, &config.store);
-
     if !args.confirm {
         bail!("purge requires --confirm flag to proceed");
     }
 
     let mut deleted = Vec::new();
+    purge_workdir(workdir, &mut deleted)?;
+
+    if deleted.is_empty() {
+        println!("Nothing to purge.");
+    } else {
+        info!(path = %work.root.display(), "purged derived data");
+        println!("Purged derived data:");
+        for d in &deleted {
+            println!("{d}");
+        }
+        println!();
+        println!("Preserved:");
+        println!("  {}", work.config_path.display());
+        if let Some(ref md) = work.metadata {
+            println!("  {}/", md.display());
+        }
+    }
+
+    Ok(())
+}
+
+/// Purge every network's derived data in an orchestrator deployment, plus the shared
+/// root run dir (supervisor socket/logs/pid). Preserves `ckbadger.toml` and each
+/// network's `config.toml`.
+fn cmd_purge_orchestrator(root: &Path, args: &PurgeArgs) -> Result<()> {
+    use ckbadger_config::{load_orchestrator_config, network_workdir};
+
+    if !args.confirm {
+        bail!("purge requires --confirm flag to proceed");
+    }
+
+    let orch = load_orchestrator_config(root)?;
+    let root_work = WorkDir::resolve(root);
+    let mut deleted = Vec::new();
+
+    for entry in &orch.networks {
+        let sub = network_workdir(root, entry);
+        if !sub.join("config.toml").is_file() {
+            bail!(
+                "network '{}' has no config.toml at {}",
+                entry.name,
+                sub.display()
+            );
+        }
+        purge_workdir(&sub, &mut deleted)?;
+    }
+
+    // The shared root run dir holds the supervisor socket/logs/pid (each network's own
+    // run dir is purged by purge_workdir above).
+    if root_work.run_dir.exists() {
+        remove_dir_contents(&root_work.run_dir)
+            .with_context(|| format!("failed to purge {}", root_work.run_dir.display()))?;
+        deleted.push(format!("  {}/", root_work.run_dir.display()));
+    }
+
+    if deleted.is_empty() {
+        println!("Nothing to purge.");
+    } else {
+        info!(path = %root.display(), "purged derived data (orchestrator)");
+        println!("Purged derived data:");
+        for d in &deleted {
+            println!("{d}");
+        }
+        println!();
+        println!("Preserved:");
+        println!("  {}", root.join("ckbadger.toml").display());
+        for entry in &orch.networks {
+            println!("  {}/config.toml", network_workdir(root, entry).display());
+        }
+    }
+
+    Ok(())
+}
+
+/// Purge one workdir's derived data: domain/append-only/decoder-cache stores, DOB
+/// media, run + bench dirs, and all known secondary-store dirs. Appends each deleted
+/// path to `deleted`. Does not check init/confirm or print; reused by both the
+/// single-network and orchestrator purge paths.
+fn purge_workdir(workdir: &Path, deleted: &mut Vec<String>) -> Result<()> {
+    let work = WorkDir::resolve(workdir);
+    let config = load_config(workdir)?;
+    let store_paths = resolve_store_paths(workdir, &config.store);
 
     // Delete domain data contents
     if store_paths.domain_data.exists() {
@@ -1261,22 +1346,6 @@ fn cmd_purge(workdir: &Path, args: &PurgeArgs) -> Result<()> {
             .with_context(|| format!("failed to purge {}", secondary_path.display()))?
         {
             deleted.push(format!("  {}/", secondary_path.display()));
-        }
-    }
-
-    if deleted.is_empty() {
-        println!("Nothing to purge.");
-    } else {
-        info!(path = %work.root.display(), "purged derived data");
-        println!("Purged derived data:");
-        for d in &deleted {
-            println!("{d}");
-        }
-        println!();
-        println!("Preserved:");
-        println!("  {}", work.config_path.display());
-        if let Some(ref md) = work.metadata {
-            println!("  {}/", md.display());
         }
     }
 
@@ -1834,6 +1903,52 @@ mod tests {
         assert!(
             err.contains("not initialized"),
             "error should mention not initialized: {err}"
+        );
+    }
+
+    #[test]
+    fn test_purge_orchestrator_purges_all_networks() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().to_path_buf();
+
+        // Real orchestrator scaffold: ckbadger.toml + mainnet/ + testnet/.
+        cmd_init(&root, &InitArgs { with_testnet: true }).unwrap();
+        assert!(
+            is_orchestrator(&root),
+            "init --with-testnet makes an orchestrator root"
+        );
+
+        // Seed derived data in each network + a stale file in the shared root run dir.
+        let mainnet_domain = root.join("mainnet/data/domain/x.db");
+        let testnet_domain = root.join("testnet/data/domain/x.db");
+        std::fs::create_dir_all(mainnet_domain.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(testnet_domain.parent().unwrap()).unwrap();
+        std::fs::write(&mainnet_domain, "m").unwrap();
+        std::fs::write(&testnet_domain, "t").unwrap();
+        std::fs::create_dir_all(root.join("run")).unwrap();
+        let root_run_file = root.join("run/supervisor.pid");
+        std::fs::write(&root_run_file, "999").unwrap();
+
+        // The bug: this used to bail "not initialized (no config.toml at <root>/config.toml)"
+        // because cmd_purge never checked is_orchestrator.
+        let args = PurgeArgs { confirm: true };
+        cmd_purge(&root, &args).unwrap();
+
+        assert!(!mainnet_domain.exists(), "mainnet data purged");
+        assert!(!testnet_domain.exists(), "testnet data purged");
+        assert!(!root_run_file.exists(), "shared root run dir purged");
+        // Configs preserved.
+        assert!(
+            root.join("ckbadger.toml").is_file(),
+            "orchestrator config preserved"
+        );
+        assert!(
+            root.join("mainnet/config.toml").is_file(),
+            "mainnet config preserved"
+        );
+        assert!(
+            root.join("testnet/config.toml").is_file(),
+            "testnet config preserved"
         );
     }
 
