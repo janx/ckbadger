@@ -11,6 +11,7 @@ vi.mock('@/lib/api', () => ({
     getHardforks: getHardforksMock,
   },
   isWarmupPendingError: vi.fn(() => false),
+  isNetworkInitializingError: vi.fn(() => false),
 }));
 
 vi.mock('@/components/charts/chart-page', () => ({

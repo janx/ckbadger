@@ -14,6 +14,7 @@ vi.mock('@/lib/api', () => ({
     getForkDetail: vi.fn(),
   },
   isWarmupPendingError: vi.fn(() => false),
+  isNetworkInitializingError: vi.fn(() => false),
 }));
 
 vi.mock('@/components/layout/header', () => ({

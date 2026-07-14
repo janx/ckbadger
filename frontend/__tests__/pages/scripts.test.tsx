@@ -15,6 +15,7 @@ vi.mock('@/lib/api', () => ({
       (error as { code?: string; status?: number }).code === 'warmup_pending' &&
       (error as { code?: string; status?: number }).status === 503
     ),
+  isNetworkInitializingError: vi.fn(() => false),
 }));
 
 vi.mock('@/components/layout/header', () => ({

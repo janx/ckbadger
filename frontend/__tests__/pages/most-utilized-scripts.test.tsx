@@ -11,6 +11,7 @@ vi.mock('@/lib/api', () => ({
     getMostUtilizedScriptsChart: vi.fn(),
   },
   isWarmupPendingError: vi.fn(() => false),
+  isNetworkInitializingError: vi.fn(() => false),
 }));
 
 vi.mock('@/components/layout/header', () => ({

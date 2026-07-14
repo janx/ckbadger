@@ -8,6 +8,7 @@ vi.mock('@/lib/api', () => ({
     getTransactions: vi.fn(),
   },
   isWarmupPendingError: vi.fn(() => false),
+  isNetworkInitializingError: vi.fn(() => false),
 }));
 
 function mockTx(hash: string): Transaction {

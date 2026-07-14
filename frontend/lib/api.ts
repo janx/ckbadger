@@ -67,6 +67,14 @@ export function isWarmupPendingError(error: unknown): error is ApiRequestError {
   return candidate.code === 'warmup_pending' && candidate.status === 503;
 }
 
+export function isNetworkInitializingError(error: unknown): error is ApiRequestError {
+  if (!error || typeof error !== 'object') {
+    return false;
+  }
+  const candidate = error as Partial<ApiRequestError>;
+  return candidate.code === 'initializing' && candidate.status === 503;
+}
+
 interface PaginatedResponse<T> {
   data: T[];
   total: number;

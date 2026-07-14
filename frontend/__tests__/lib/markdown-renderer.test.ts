@@ -24,6 +24,7 @@ vi.mock('@/lib/api', () => ({
     getNetworkSummary: vi.fn(),
   },
   isWarmupPendingError: vi.fn(() => false),
+  isNetworkInitializingError: vi.fn(() => false),
 }));
 
 describe('renderMarkdownPage', () => {

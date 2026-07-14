@@ -180,6 +180,7 @@ vi.mock('@/lib/api', () => ({
     lookupScripts: vi.fn(() => Promise.resolve({})),
   },
   isWarmupPendingError: vi.fn(() => false),
+  isNetworkInitializingError: vi.fn(() => false),
 }));
 
 import { api } from '@/lib/api';
