@@ -68,29 +68,28 @@ pub struct FrontendServiceConfig {
 
 /// Run the API server (API + WebSocket only, no frontend). Blocks until shutdown.
 pub async fn run_api(config: ApiServiceConfig) -> Result<()> {
-    // When started by the supervisor alongside the indexer, the domain store
-    // may not exist yet (the indexer creates it on first open).  Wait up to
-    // 60 seconds for the CURRENT marker file before attempting to open the
-    // secondary instance — this avoids the "No such file or directory"
-    // crash-restart loop on fresh installs.
+    let addr = format!("{}:{}", config.host, config.port);
     let domain_current = Path::new(&config.domain_data_path).join("CURRENT");
-    let wait_start = std::time::Instant::now();
-    let max_wait = std::time::Duration::from_secs(60);
-    while !domain_current.exists() {
-        if wait_start.elapsed() >= max_wait {
-            bail!(
-                "domain store not found after {}s — is the indexer running? (expected: {})",
-                max_wait.as_secs(),
-                domain_current.display(),
-            );
-        }
-        info!(
-            "Waiting for indexer to create domain store ({}s)...",
-            wait_start.elapsed().as_secs()
-        );
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    let append_current = Path::new(&config.append_only_data_path).join("CURRENT");
+
+    // Phase 1: bind immediately, serve 503 "initializing" until the stores exist.
+    // When started by the supervisor alongside the indexer — especially a network
+    // still queued for sequential bulk sync — the stores may not exist for hours.
+    // Instead of bailing and crash-looping under the supervisor, bind the port now
+    // and serve 503 "initializing" until the indexer creates both stores, then fall
+    // through to phase 2 and serve the real router.
+    if !(domain_current.exists() && append_current.exists()) {
+        info!("API pre-sync on {} (store not present yet)", addr);
+        let listener = tokio::net::TcpListener::bind(&addr).await?;
+        axum::serve(listener, presync_router(&config.ckb_network))
+            .with_graceful_shutdown(wait_for_stores(
+                domain_current.clone(),
+                append_current.clone(),
+            ))
+            .await?;
     }
 
+    // Phase 2: stores exist — open them and serve the real router (unchanged below).
     let secondary_path = secondary_store_path(&config.domain_data_path, SecondaryStoreOwner::Api);
     info!(
         "Opening ckbadger domain store (secondary) at: {} -> {}",
@@ -159,10 +158,8 @@ pub async fn run_api(config: ApiServiceConfig) -> Result<()> {
     };
     let app = create_router(app_config).await;
 
-    let addr = format!("{}:{}", config.host, config.port);
     info!("Starting API server on {}", addr);
-
-    let listener = tokio::net::TcpListener::bind(&addr).await?;
+    let listener = bind_with_retry(&addr).await?;
     axum::serve(
         listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),
@@ -170,6 +167,62 @@ pub async fn run_api(config: ApiServiceConfig) -> Result<()> {
     .await?;
 
     Ok(())
+}
+
+/// A minimal router served while a network's store doesn't exist yet: every route
+/// returns 503 with the codebase's error shape (`error` = code) so the frontend's
+/// `isNetworkInitializingError` (mirroring `warmup_pending`) can detect it.
+fn presync_router(network: &str) -> axum::Router {
+    let network = network.to_string();
+    axum::Router::new().fallback(move || {
+        let network = network.clone();
+        async move {
+            (
+                axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                axum::Json(serde_json::json!({
+                    "error": "initializing",
+                    "network": network,
+                    "message": "This network has not started syncing yet",
+                })),
+            )
+        }
+    })
+}
+
+/// Resolve once both the domain and append-only stores exist (indefinite wait, with
+/// periodic progress logs — a queued network may wait hours for its turn).
+///
+/// Takes owned paths so the returned future is `'static`, as required by
+/// `axum::serve(..).with_graceful_shutdown(..)`.
+async fn wait_for_stores(domain_current: PathBuf, append_current: PathBuf) {
+    let start = std::time::Instant::now();
+    loop {
+        if domain_current.exists() && append_current.exists() {
+            return;
+        }
+        if start.elapsed().as_secs().is_multiple_of(30) {
+            info!(
+                "Waiting for indexer to create stores ({}s)...",
+                start.elapsed().as_secs()
+            );
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
+}
+
+/// Re-bind after the pre-sync listener was dropped; a freed LISTEN socket normally
+/// rebinds immediately, but retry briefly to cover any transient EADDRINUSE.
+async fn bind_with_retry(addr: &str) -> Result<tokio::net::TcpListener> {
+    for attempt in 0..20 {
+        match tokio::net::TcpListener::bind(addr).await {
+            Ok(l) => return Ok(l),
+            Err(_) if attempt < 19 => {
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await
+            }
+            Err(e) => return Err(e.into()),
+        }
+    }
+    unreachable!()
 }
 
 /// Run the standalone frontend server. Blocks until shutdown.
@@ -878,5 +931,33 @@ mod tests {
             json["rawProfiles"]["txDebuggerProfile"]["profile"],
             "debugger"
         );
+    }
+}
+
+#[cfg(test)]
+mod presync_tests {
+    use super::presync_router;
+    use axum::body::to_bytes;
+    use axum::http::{Request, StatusCode};
+    use tower::ServiceExt; // oneshot
+
+    #[tokio::test]
+    async fn presync_router_returns_503_initializing_for_any_path() {
+        let app = presync_router("testnet");
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/statistics/network")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body = to_bytes(res.into_body(), 64 * 1024).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["error"], "initializing");
+        assert_eq!(json["network"], "testnet");
+        assert!(json["message"].as_str().unwrap().contains("sync"));
     }
 }
