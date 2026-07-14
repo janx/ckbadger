@@ -183,6 +183,15 @@ pub async fn run_supervisor(
 /// subprocess, starts the IPC server on `root`'s socket, and monitors/restarts
 /// children with exponential backoff. Blocks until Ctrl+C or IPC shutdown.
 pub async fn run_supervisor_multi(root: &WorkDir, specs: Vec<ChildSpec>) -> Result<()> {
+    let initial = specs.len();
+    run_supervisor_inner(root, specs, initial).await
+}
+
+/// Supervise `specs`, spawning `specs[0..initial]` immediately and leaving
+/// `specs[initial..]` to be started later (by the caller via the shared
+/// `SupervisorState`). The monitor manages whatever is in `SupervisorState.children`
+/// and restart-matches by index against the full `specs`.
+async fn run_supervisor_inner(root: &WorkDir, specs: Vec<ChildSpec>, initial: usize) -> Result<()> {
     // Ensure run + log directories exist
     std::fs::create_dir_all(&root.run_dir)
         .with_context(|| format!("failed to create run directory: {}", root.run_dir.display()))?;
@@ -202,7 +211,7 @@ pub async fn run_supervisor_multi(root: &WorkDir, specs: Vec<ChildSpec>) -> Resu
 
     // Spawn initial children
     let mut children = Vec::new();
-    for spec in &specs {
+    for spec in &specs[..initial] {
         let child = spawn_child(&exe, spec, &root.log_dir)?;
         info!(child = %spec.label, pid = child.pid(), "started service");
         children.push(child);
