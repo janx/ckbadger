@@ -20,6 +20,14 @@ pub type KvResult = Result<(Box<[u8]>, Box<[u8]>), rocksdb::Error>;
 const GB: u64 = 1024 * 1024 * 1024;
 const MB: u64 = 1024 * 1024;
 
+/// Serde default for `StoreRuntimeConfig::network_count`.
+///
+/// A bare `#[serde(default)]` would resolve to `usize::default()` == 0, which
+/// would divide the RAM budget by zero's guard and silently missize the store.
+fn default_network_count() -> usize {
+    1
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StoreRuntimeConfig {
     pub memory_budget_gb: Option<u64>,
@@ -29,6 +37,16 @@ pub struct StoreRuntimeConfig {
     /// and no concurrent memtable readers. Set at DB open time and persists
     /// for the lifetime of the process (cannot be changed at runtime).
     pub vector_memtable: bool,
+    /// Number of network stacks co-resident on this host (see
+    /// `ckbadger_config::co_resident_network_count`). The detected host RAM is
+    /// divided by this so N networks' budgets sum to one network's share instead
+    /// of N times it, which otherwise over-commits the host and gets bulk sync
+    /// OOM-killed. 1 yields the full detected RAM.
+    ///
+    /// At very large N the divided budget can hit `compute`'s 2 GB floor, so the
+    /// sum would exceed the intended share; realistic N (2-4) is unaffected.
+    #[serde(default = "default_network_count")]
+    pub network_count: usize,
 }
 
 impl Default for StoreRuntimeConfig {
@@ -37,6 +55,7 @@ impl Default for StoreRuntimeConfig {
             memory_budget_gb: None,
             direct_io_reads: true,
             vector_memtable: false,
+            network_count: 1,
         }
     }
 }
@@ -267,26 +286,52 @@ fn read_cgroup_memory_limit() -> Option<u64> {
     None
 }
 
+/// RAM budget this store may size itself against.
+///
+/// Precedence: an explicit `memory_budget_gb` override wins and is used as-is —
+/// never divided, because it is already the operator's per-network value.
+/// Otherwise the detected host RAM is split across the co-resident networks.
+/// `network_count == 1` yields the full detected RAM, so the single-network path
+/// is this same expression rather than a separate branch.
+///
+/// `detect` is lazy so an explicit override skips detection entirely.
+fn effective_ram_bytes(
+    memory_budget_gb: Option<u64>,
+    network_count: usize,
+    detect: impl FnOnce() -> u64,
+) -> u64 {
+    match memory_budget_gb {
+        Some(gb) if gb > 0 => gb * GB,
+        _ => detect() / network_count.max(1) as u64,
+    }
+}
+
 /// Returns (ram_bytes, physical_cores, logical_cores).
 fn detect_system_resources(runtime_config: StoreRuntimeConfig) -> (u64, usize, usize) {
-    let ram = if let Some(gb) = runtime_config.memory_budget_gb {
-        if gb > 0 {
-            info!(gb, "Using explicit RocksDB memory_budget_gb override");
-            gb * GB
-        } else {
-            warn!("Ignoring zero memory_budget_gb override, falling back to detection");
+    match runtime_config.memory_budget_gb {
+        Some(gb) if gb > 0 => info!(gb, "Using explicit RocksDB memory_budget_gb override"),
+        Some(_) => warn!("Ignoring zero memory_budget_gb override, falling back to detection"),
+        None => {}
+    }
+    if runtime_config.network_count > 1 {
+        info!(
+            network_count = runtime_config.network_count,
+            "Dividing detected RAM across co-resident network stacks"
+        );
+    }
+
+    let ram = effective_ram_bytes(
+        runtime_config.memory_budget_gb,
+        runtime_config.network_count,
+        || {
             read_system_memory()
                 .or_else(read_cgroup_memory_limit)
-                .unwrap_or(32 * GB)
-        }
-    } else {
-        read_system_memory()
-            .or_else(read_cgroup_memory_limit)
-            .unwrap_or_else(|| {
-                warn!("Could not detect system RAM, defaulting to 32 GB");
-                32 * GB
-            })
-    };
+                .unwrap_or_else(|| {
+                    warn!("Could not detect system RAM, defaulting to 32 GB");
+                    32 * GB
+                })
+        },
+    );
 
     let physical = num_cpus::get_physical().max(1);
     let logical = std::thread::available_parallelism()
@@ -2708,6 +2753,7 @@ mod tests {
             memory_budget_gb: Some(12),
             direct_io_reads: false,
             vector_memtable: false,
+            network_count: 1,
         };
 
         let store = CkbadgerStore::open_domain_with_runtime(dir.path(), runtime_config).unwrap();
@@ -3339,5 +3385,56 @@ mod tests {
         // Network store is mutable/domain-like; it must NOT be classified append-only.
         assert!(!is_append_only_cf_name(CF_NET_NODES));
         assert!(!is_append_only_cf_name(CF_NET_STATS));
+    }
+
+    #[test]
+    fn effective_ram_explicit_override_wins_and_is_never_divided() {
+        // memory_budget_gb is already the operator's per-network value: dividing it
+        // by N would silently halve what they asked for. The closure must not run.
+        let ram = effective_ram_bytes(Some(40), 2, || panic!("must not detect when overridden"));
+        assert_eq!(ram, 40 * GB);
+    }
+
+    #[test]
+    fn effective_ram_single_network_is_the_full_detected_ram() {
+        // N=1 is the degenerate case of the same expression, not a special branch.
+        let ram = effective_ram_bytes(None, 1, || 93 * GB);
+        assert_eq!(ram, 93 * GB);
+    }
+
+    #[test]
+    fn effective_ram_divides_detected_ram_across_co_resident_networks() {
+        let ram = effective_ram_bytes(None, 2, || 93 * GB);
+        assert_eq!(ram, 93 * GB / 2);
+    }
+
+    #[test]
+    fn effective_ram_guards_a_zero_network_count() {
+        let ram = effective_ram_bytes(None, 0, || 64 * GB);
+        assert_eq!(ram, 64 * GB);
+    }
+
+    #[test]
+    fn effective_ram_zero_override_falls_back_to_divided_detection() {
+        let ram = effective_ram_bytes(Some(0), 2, || 64 * GB);
+        assert_eq!(ram, 32 * GB);
+    }
+
+    #[test]
+    fn store_runtime_config_defaults_to_one_network() {
+        // Must be 1, not usize::default() == 0 — see the serde default fn.
+        assert_eq!(StoreRuntimeConfig::default().network_count, 1);
+    }
+
+    #[test]
+    fn network_count_deserializes_to_one_when_absent() {
+        // Guards the serde attribute itself. The Default-impl test above passes
+        // even with a bare #[serde(default)], which would resolve this payload's
+        // missing field to usize::default() == 0 and missize the store.
+        let cfg: StoreRuntimeConfig = serde_json::from_str(
+            r#"{"memory_budget_gb":null,"direct_io_reads":true,"vector_memtable":false}"#,
+        )
+        .unwrap();
+        assert_eq!(cfg.network_count, 1);
     }
 }
