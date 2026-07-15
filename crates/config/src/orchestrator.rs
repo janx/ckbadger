@@ -81,42 +81,62 @@ pub fn network_workdir(root: &Path, entry: &NetworkEntry) -> PathBuf {
 ///
 /// Locates the governing orchestrator root — the nearest ancestor whose
 /// `ckbadger.toml` lists `workdir` as one of its `[[network]]` entries — and
-/// returns that orchestrator's network count. Returns 1 when no orchestrator
-/// governs `workdir` (a single-network workdir, or a standalone invocation), so
-/// the single-network case is the degenerate N=1 of one rule rather than a
-/// special case.
+/// returns that orchestrator's network count.
+///
+/// Returns `Ok(1)` when no orchestrator governs `workdir`: a single-network
+/// workdir, a standalone invocation, or an orchestrator that exists but does not
+/// list `workdir`. That is the legitimate degenerate N=1 of one rule rather than
+/// a special case.
+///
+/// Returns `Err` when an ancestor's `ckbadger.toml` is present but does not
+/// parse. `is_orchestrator` having returned true proves a governing config
+/// exists, so an unparseable one is a real error rather than an absent
+/// orchestrator — and whether it governs `workdir` is unknowable without
+/// parsing it. Guessing N=1 there would size every network to the whole host's
+/// RAM, the exact over-commit this count exists to prevent, so an unreadable
+/// config found anywhere in the walk fails fast instead of being skipped.
+///
+/// Never returns `Ok(0)`: each success path is either the literal 1 above or a
+/// network count that `parse_orchestrator_config` has already rejected as empty.
+/// Callers divide the detected host RAM by this without a zero check; see
+/// `StoreRuntimeConfig::network_count`.
 ///
 /// Ancestors are walked rather than only checking the immediate parent because a
 /// `[[network]].dir` may be nested (e.g. `dir = "nets/mainnet"`).
-///
-/// Callers divide the detected host RAM by this; see `StoreRuntimeConfig::network_count`.
-pub fn co_resident_network_count(workdir: &Path) -> usize {
+pub fn co_resident_network_count(workdir: &Path) -> Result<usize> {
     // Canonicalize both sides so a relative `-C work/testnet` still matches the
     // orchestrator's resolved `root/<dir>`. A path that cannot be canonicalized
     // does not exist, so no orchestrator can be governing it.
     let Ok(target) = workdir.canonicalize() else {
-        return 1;
+        return Ok(1);
     };
 
     let mut cursor = target.as_path();
     while let Some(root) = cursor.parent() {
         if is_orchestrator(root) {
-            if let Ok(orch) = load_orchestrator_config(root) {
-                let governs = orch.networks.iter().any(|entry| {
-                    network_workdir(root, entry)
-                        .canonicalize()
-                        .map(|resolved| resolved == target)
-                        .unwrap_or(false)
-                });
-                if governs {
-                    return orch.networks.len();
-                }
+            // A governing config is present; only its contents can say whether it
+            // lists `workdir`. Propagate rather than fall through to 1, which
+            // would silently budget this network against the entire host.
+            let orch = load_orchestrator_config(root).with_context(|| {
+                format!(
+                    "unreadable orchestrator config at {}: cannot determine how many networks share this host's RAM",
+                    root.join("ckbadger.toml").display()
+                )
+            })?;
+            let governs = orch.networks.iter().any(|entry| {
+                network_workdir(root, entry)
+                    .canonicalize()
+                    .map(|resolved| resolved == target)
+                    .unwrap_or(false)
+            });
+            if governs {
+                return Ok(orch.networks.len());
             }
         }
         cursor = root;
     }
 
-    1
+    Ok(1)
 }
 
 #[cfg(test)]
@@ -248,8 +268,8 @@ name = "testnet"
         std::fs::create_dir_all(root.join("mainnet")).unwrap();
         std::fs::create_dir_all(root.join("testnet")).unwrap();
 
-        assert_eq!(co_resident_network_count(&root.join("mainnet")), 2);
-        assert_eq!(co_resident_network_count(&root.join("testnet")), 2);
+        assert_eq!(co_resident_network_count(&root.join("mainnet")).unwrap(), 2);
+        assert_eq!(co_resident_network_count(&root.join("testnet")).unwrap(), 2);
     }
 
     #[test]
@@ -259,8 +279,8 @@ name = "testnet"
         std::fs::create_dir_all(&workdir).unwrap();
         std::fs::write(workdir.join("config.toml"), "").unwrap();
 
-        // No orchestrator governs this workdir: the degenerate N=1 case.
-        assert_eq!(co_resident_network_count(&workdir), 1);
+        // No orchestrator governs this workdir: the degenerate N=1 case, not an error.
+        assert_eq!(co_resident_network_count(&workdir).unwrap(), 1);
     }
 
     #[test]
@@ -276,7 +296,9 @@ name = "testnet"
         let stray = root.join("not-a-network");
         std::fs::create_dir_all(&stray).unwrap();
 
-        assert_eq!(co_resident_network_count(&stray), 1);
+        // Orchestrator present and valid, but does not list this workdir: the walk
+        // continues past it and still reaches the degenerate N=1.
+        assert_eq!(co_resident_network_count(&stray).unwrap(), 1);
     }
 
     #[test]
@@ -300,12 +322,46 @@ dir = "nets/testnet"
         std::fs::create_dir_all(root.join("nets/testnet")).unwrap();
 
         // The root is two levels up, so an immediate-parent-only check would miss it.
-        assert_eq!(co_resident_network_count(&root.join("nets/mainnet")), 2);
+        assert_eq!(
+            co_resident_network_count(&root.join("nets/mainnet")).unwrap(),
+            2
+        );
     }
 
     #[test]
     fn co_resident_count_is_one_for_a_nonexistent_path() {
         let tmp = TempDir::new().unwrap();
-        assert_eq!(co_resident_network_count(&tmp.path().join("missing")), 1);
+        assert_eq!(
+            co_resident_network_count(&tmp.path().join("missing")).unwrap(),
+            1
+        );
+    }
+
+    #[test]
+    fn co_resident_count_errors_on_a_present_but_unreadable_orchestrator_config() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        // Present (so `is_orchestrator` is true) but not parseable: a governing
+        // config exists and we cannot read it. Guessing 1 here would size this
+        // network to the whole host's RAM — the over-commit this count prevents.
+        std::fs::write(
+            root.join("ckbadger.toml"),
+            "[[network]\nname = \"mainnet\"\n",
+        )
+        .unwrap();
+        let workdir = root.join("mainnet");
+        std::fs::create_dir_all(&workdir).unwrap();
+
+        let err = co_resident_network_count(&workdir).unwrap_err();
+        let msg = format!("{err:#}");
+        let offending = root.canonicalize().unwrap().join("ckbadger.toml");
+        assert!(
+            msg.contains(&offending.display().to_string()),
+            "error must name the offending config path, got: {msg}"
+        );
+        assert!(
+            msg.contains("unreadable"),
+            "error must say the config is unreadable, got: {msg}"
+        );
     }
 }
