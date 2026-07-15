@@ -12,8 +12,8 @@ use clap::{Parser, Subcommand};
 use tracing::info;
 
 use ckbadger_config::{
-    default_config_toml, default_orchestrator_toml, is_orchestrator, load_config,
-    load_orchestrator_config, network_workdir, resolve_ckb_paths, resolve_share_dir,
+    co_resident_network_count, default_config_toml, default_orchestrator_toml, is_orchestrator,
+    load_config, load_orchestrator_config, network_workdir, resolve_ckb_paths, resolve_share_dir,
     resolve_store_paths, resolve_workdir_path, CkbadgerConfig, ResolvedCkbPaths, StoreConfig,
     WorkDir,
 };
@@ -339,13 +339,16 @@ fn init_tracing_from_config(workdir: &Path) {
     init_tracing(&log_level);
 }
 
-fn store_runtime_config(store: &StoreConfig) -> StoreRuntimeConfig {
-    StoreRuntimeConfig {
+fn store_runtime_config(store: &StoreConfig, workdir: &Path) -> Result<StoreRuntimeConfig> {
+    Ok(StoreRuntimeConfig {
         memory_budget_gb: store.memory_budget_gb,
         direct_io_reads: store.direct_io_reads,
         vector_memtable: false, // set by indexer entry at runtime
-        network_count: 1,
-    }
+        // Derived from ckbadger.toml rather than passed down from the supervisor,
+        // so openers the supervisor never spawns (tui, verify, a direct
+        // `internal indexer`) size themselves correctly too.
+        network_count: co_resident_network_count(workdir)?,
+    })
 }
 
 fn build_indexer_service_config(
@@ -371,7 +374,7 @@ fn build_indexer_service_config(
         network: config.ckb.network.clone(),
         poll_interval_ms: config.indexer.poll_interval_ms,
         bulk_sync_threshold: config.indexer.bulk_sync_threshold,
-        store_runtime_config: store_runtime_config(&config.store),
+        store_runtime_config: store_runtime_config(&config.store, workdir)?,
         decoder_cache_path: store_paths.decoder_cache.to_string_lossy().to_string(),
         dob_decode_dir: work.dob_decode_dir.to_string_lossy().to_string(),
         cycles_request_dir: Some(work.cycles_request_dir.to_string_lossy().to_string()),
@@ -628,7 +631,7 @@ async fn cmd_internal(workdir: &Path, args: &InternalArgs) -> Result<()> {
 
     let config = load_config(workdir)?;
     let work = WorkDir::resolve(workdir);
-    let store_runtime_config = store_runtime_config(&config.store);
+    let store_runtime_config = store_runtime_config(&config.store, workdir)?;
     let store_paths = resolve_store_paths(workdir, &config.store);
 
     match args.service {
@@ -724,7 +727,7 @@ fn build_tui_network(name: &str, workdir: &Path) -> Result<TuiNetwork> {
         ckb_workdir,
         ckb_db_path,
         api_url: format!("http://{}:{}/api/v1", config.api.host, config.api.port),
-        store_runtime_config: store_runtime_config(&config.store),
+        store_runtime_config: store_runtime_config(&config.store, workdir)?,
     })
 }
 
@@ -848,7 +851,7 @@ async fn print_single_network_sync_status(workdir: &Path) -> Result<()> {
     match CkbadgerStore::open_domain_secondary_with_runtime(
         &store_paths.domain_data,
         &secondary_path,
-        store_runtime_config(&config.store),
+        store_runtime_config(&config.store, workdir)?,
     ) {
         Ok(store) => match store.get_sync_status() {
             Ok(status) => {
@@ -1129,7 +1132,7 @@ async fn cmd_label_import(workdir: &Path) -> Result<()> {
         append_only_data_path: store_paths.append_only_data.to_string_lossy().to_string(),
         metadata_path: work.metadata.map(|p| p.to_string_lossy().to_string()),
         network: config.ckb.network.clone(),
-        store_runtime_config: store_runtime_config(&config.store),
+        store_runtime_config: store_runtime_config(&config.store, workdir)?,
     };
 
     run_label_import(import_config).await
@@ -2425,5 +2428,77 @@ data_dir = "data"
             msg.contains("launchctl") || msg.contains("systemd"),
             "error should include fix instructions: {msg}"
         );
+    }
+}
+
+#[cfg(test)]
+mod store_runtime_config_tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn network_count_comes_from_the_governing_orchestrator_config() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        std::fs::write(
+            root.join("ckbadger.toml"),
+            "[[network]]\nname = \"mainnet\"\n\n[[network]]\nname = \"testnet\"\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(root.join("mainnet")).unwrap();
+
+        let cfg = store_runtime_config(&StoreConfig::default(), &root.join("mainnet")).unwrap();
+
+        // Two co-resident networks -> each store sizes to half the host RAM.
+        assert_eq!(cfg.network_count, 2);
+    }
+
+    #[test]
+    fn network_count_is_one_for_a_single_network_workdir() {
+        let tmp = TempDir::new().unwrap();
+        let workdir = tmp.path().join("work");
+        std::fs::create_dir_all(&workdir).unwrap();
+
+        let cfg = store_runtime_config(&StoreConfig::default(), &workdir).unwrap();
+
+        // No governing orchestrator: the degenerate N=1 case, full detected RAM.
+        assert_eq!(cfg.network_count, 1);
+    }
+
+    #[test]
+    fn an_unreadable_governing_orchestrator_config_propagates_instead_of_sizing_to_one() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        // An orchestrator IS present but will not parse. Silently sizing to 1 here
+        // would hand every network the whole host — the over-commit this fix exists
+        // to prevent — so the builder must propagate, not guess.
+        std::fs::write(root.join("ckbadger.toml"), "not valid toml {{{").unwrap();
+        let workdir = root.join("mainnet");
+        std::fs::create_dir_all(&workdir).unwrap();
+
+        assert!(store_runtime_config(&StoreConfig::default(), &workdir).is_err());
+    }
+
+    #[test]
+    fn explicit_memory_budget_is_preserved_alongside_the_network_count() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        std::fs::write(
+            root.join("ckbadger.toml"),
+            "[[network]]\nname = \"mainnet\"\n\n[[network]]\nname = \"testnet\"\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(root.join("mainnet")).unwrap();
+
+        let store = StoreConfig {
+            memory_budget_gb: Some(40),
+            ..StoreConfig::default()
+        };
+        let cfg = store_runtime_config(&store, &root.join("mainnet")).unwrap();
+
+        // The store layer decides precedence (override wins, undivided); the
+        // builder just carries both values through.
+        assert_eq!(cfg.memory_budget_gb, Some(40));
+        assert_eq!(cfg.network_count, 2);
     }
 }
