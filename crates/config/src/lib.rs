@@ -11,8 +11,8 @@ use std::path::{Path, PathBuf};
 
 mod orchestrator;
 pub use orchestrator::{
-    is_orchestrator, load_orchestrator_config, network_workdir, parse_orchestrator_config,
-    NetworkEntry, OrchestratorConfig,
+    co_resident_network_count, is_orchestrator, load_orchestrator_config, network_workdir,
+    parse_orchestrator_config, NetworkEntry, OrchestratorConfig,
 };
 
 // ---------------------------------------------------------------------------
