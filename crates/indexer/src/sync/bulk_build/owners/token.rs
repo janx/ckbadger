@@ -665,16 +665,14 @@ impl TokenCellView {
         };
 
         let Some(amount) = udt_amount else {
-            if matches!(semantic_tag, CellSemanticTag::Xudt) {
-                return Ok(None);
-            }
-            bail!(
-                "missing UDT amount for fungible token cell: block={}, tx=0x{}, tx_index={}, {}",
-                tx.block_number,
-                hex::encode(tx.tx_hash),
-                tx.tx_index,
-                location
-            );
+            // Owner-mode / non-standard fungible cells (both sUDT and xUDT) can carry
+            // payloads too short for a u128 amount. The type script skips amount
+            // validation in owner mode, so these are legitimate on-chain cells with no
+            // trackable fungible amount — skip them as token owners rather than
+            // fail-fast the whole sync. The parse layer (binary_facts / token_helpers)
+            // already warned when it recorded the missing amount; consistent with the
+            // bulk_build/mod.rs token-transfer path and the parse layers.
+            return Ok(None);
         };
 
         let type_hash = ctx
@@ -1254,5 +1252,67 @@ mod tests {
             .expect_err("invalid hash_type should fail fast");
         assert!(err.to_string().contains("out of u8 range"));
         assert!(err.to_string().contains("type_hash"));
+    }
+
+    #[test]
+    fn token_owner_tolerates_sudt_cell_without_amount() {
+        // Owner-mode / non-standard sUDT cells can carry data too short for a u128
+        // amount. The sUDT type script skips amount validation in owner mode, so such
+        // cells are legitimate on-chain state (seen live on testnet:
+        // tx=0x6deec710afc17a2a8071879d0eabe9dda84b5715c55053fac450fe8df56ef7d8,
+        // block=1001688, 5-byte data). The parse layer records `udt_amount=None`;
+        // the reducer must skip such cells as token owners, not fail-fast the whole
+        // sync — consistent with the xUDT branch and bulk_build/mod.rs token-transfer.
+        let interner = IdentityInterner::default();
+        let lock_hash_id = interner.intern_bytes(vec![0xaa; 32]);
+        let type_hash_id = interner.intern_bytes(vec![0xbb; 32]);
+        let type_code_hash_id =
+            interner.intern_bytes(hex::decode(&crate::parser::udt::SUDT_CODE_HASH[2..]).unwrap());
+        let type_args_id = interner.intern_bytes(vec![0x11; 32]);
+        let lock_code_hash_id = interner.intern_bytes(vec![0x22; 32]);
+        let lock_args_id = interner.intern_bytes(vec![0x33; 20]);
+        let frozen = interner.snapshot_for_reads();
+        let ctx = ReducerContext::new(&frozen);
+
+        let tx = ResolvedTxFacts {
+            tx_hash: [0x6d; 32],
+            block_number: 1_001_688,
+            block_hash: [0x66; 32],
+            timestamp_ms: 1_700_000_000_000,
+            block_dao_ar: 1,
+            tx_index: 1,
+            dotbit_action: None,
+            resolved_inputs: Vec::new(),
+            cells: vec![CellFacts {
+                outpoint: OutPointKey::new([0x6d; 32], 0),
+                created_at_block: 1_001_688,
+                created_by_block_dao_ar: 1,
+                capacity: 200_00000000,
+                lock_script_hash_id: lock_hash_id,
+                lock_code_hash_id,
+                lock_hash_type: 1,
+                lock_args_id,
+                type_script_hash_id: Some(type_hash_id),
+                type_code_hash_id: Some(type_code_hash_id),
+                type_hash_type: Some(1),
+                type_args_id: Some(type_args_id),
+                occupied_capacity: 142_00000000,
+                data_size: 5,
+                data: Vec::new(),
+                data_hash: None,
+                udt_amount: None,
+                semantic_tag: CellSemanticTag::Sudt,
+                dao_state: None,
+                protocol_facts: None,
+            }]
+            .into(),
+        };
+
+        let mut owner = TokenOwner::default();
+        owner
+            .apply_tx(&tx, &ctx)
+            .expect("sUDT cell without amount must be tolerated, not fail-fast");
+        // The amount-less cell is skipped entirely: no token accumulator is created.
+        assert!(!owner.tokens.contains_key(&vec![0xbb; 32]));
     }
 }

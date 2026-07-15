@@ -201,21 +201,16 @@ impl BatchWriter {
 
                 let amount = match info.udt_amount {
                     Some(amount) => amount,
-                    None => match standard {
-                        crate::parser::UdtStandard::Xudt => {
-                            // xUDT-compatible typed cells can be owner/metadata cells that do not
-                            // carry a fungible amount. Skip them from UDT transfer matching.
-                            continue;
-                        }
-                        crate::parser::UdtStandard::Sudt => {
-                            return Err(anyhow::anyhow!(
-                                "missing udt_amount in cell info for UDT input: outpoint=0x{}:{}, type_script_hash=0x{}",
-                                hex::encode(tx_hash),
-                                output_index,
-                                hex::encode(type_script_hash)
-                            ));
-                        }
-                    },
+                    None => {
+                        // Owner-mode / non-standard fungible cells (both sUDT and xUDT) can be
+                        // typed cells that do not carry a fungible amount. The type script skips
+                        // amount validation in owner mode, so these are legitimate on-chain cells
+                        // with no trackable amount — skip them from UDT transfer matching rather
+                        // than fail-fast the live writer. Consistent with the bulk reducer
+                        // (owners/token.rs) and the parse layers, which already warned when they
+                        // recorded the missing amount.
+                        continue;
+                    }
                 };
                 result.insert(
                     (tx_hash.to_vec(), output_index),
@@ -883,7 +878,11 @@ mod tests {
     }
 
     #[test]
-    fn test_get_udt_cells_info_batch_errors_on_sudt_cells_without_amount() {
+    fn test_get_udt_cells_info_batch_tolerates_sudt_cells_without_amount() {
+        // Owner-mode / non-standard sUDT cells can be typed cells that carry no
+        // fungible amount (seen live on testnet). They must be skipped from UDT
+        // transfer matching, not fail-fast the live writer — consistent with the
+        // xUDT branch, the bulk reducer (owners/token.rs), and the parse layers.
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone(), store.clone());
@@ -930,8 +929,8 @@ mod tests {
         batch.commit().unwrap();
 
         let outpoints = vec![(tx_hash.as_slice(), output_index)];
-        let err = writer.get_udt_cells_info_batch(&outpoints).unwrap_err();
-        assert!(err.to_string().contains("missing udt_amount"));
+        let result = writer.get_udt_cells_info_batch(&outpoints).unwrap();
+        assert!(result.is_empty());
     }
 
     #[test]
