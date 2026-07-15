@@ -630,15 +630,21 @@ fn parse_binary_udt_amount(
 ) -> Result<Option<u128>> {
     match semantic_tag {
         CellSemanticTag::Sudt => {
-            let amount = UdtParser::parse_amount(data).ok_or_else(|| {
-                anyhow!(
-                    "failed to parse sUDT amount in binary facts: tx=0x{}, output_index={}, data_len={}",
-                    hex::encode(tx_hash),
+            let amount = UdtParser::parse_amount(data);
+            if amount.is_none() {
+                // A cell tagged sUDT but with data too short for a u128 amount is a
+                // non-standard on-chain cell (the real sUDT type script with malformed
+                // data — seen on testnet). Record no amount rather than fail-fasting
+                // the whole bulk sync; matches the xUDT branch below (identical amount
+                // encoding). Logged, not silently dropped, so it stays visible.
+                tracing::warn!(
+                    tx = %format!("0x{}", hex::encode(tx_hash)),
                     output_index,
-                    data.len()
-                )
-            })?;
-            Ok(Some(amount))
+                    data_len = data.len(),
+                    "sUDT cell amount data too short (<16 bytes); recording no amount"
+                );
+            }
+            Ok(amount)
         }
         CellSemanticTag::Xudt => Ok(UdtParser::parse_amount(data)),
         _ => Ok(None),
@@ -954,10 +960,13 @@ mod tests {
     }
 
     #[test]
-    fn parse_binary_udt_amount_sudt_short_data_errors() {
+    fn parse_binary_udt_amount_sudt_short_data_returns_none() {
+        // A cell tagged sUDT but with data too short for a u128 amount (a non-standard
+        // on-chain cell, e.g. testnet ~block 988318) must be tolerated, not fail-fast
+        // the whole bulk sync — matching the xUDT branch above.
         let data = vec![0u8; 8];
-        let result = parse_binary_udt_amount(CellSemanticTag::Sudt, &data, &[0xAA; 32], 0);
-        assert!(result.is_err());
+        let result = parse_binary_udt_amount(CellSemanticTag::Sudt, &data, &[0xAA; 32], 0).unwrap();
+        assert_eq!(result, None);
     }
 
     #[test]

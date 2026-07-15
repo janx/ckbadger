@@ -701,17 +701,23 @@ pub(crate) fn parse_parsed_cell_udt_amount(
     let type_code_hash = cell.type_code_hash.as_deref().unwrap_or(&[]);
 
     let Some(amount) = crate::parser::UdtParser::parse_amount(&cell.data) else {
-        // xUDT-compatible cells can carry non-amount payloads (for example owner-mode cells).
-        // They should not be indexed as fungible UDT balances/transfers.
+        // xUDT-compatible cells can carry non-amount payloads (for example owner-mode
+        // cells). They should not be indexed as fungible UDT balances/transfers —
+        // common and expected, tolerated silently.
         if matches!(standard, crate::parser::UdtStandard::Xudt) {
             return Ok(None);
         }
-        return Err(anyhow!(
-            "failed to parse UDT amount from parsed output data: outpoint=0x{}:{}, type_code_hash=0x{}",
-            hex::encode(tx_hash),
-            output_index,
-            hex::encode(type_code_hash)
-        ));
+        // A cell using the sUDT type script but with data too short for a u128 amount is
+        // a rare non-standard on-chain cell (seen on testnet). Record no amount rather
+        // than fail-fasting the whole sync (consistent with the bulk-build binary_facts
+        // path); logged since it is unexpected for sUDT.
+        tracing::warn!(
+            outpoint = %format!("0x{}:{}", hex::encode(tx_hash), output_index),
+            type_code_hash = %format!("0x{}", hex::encode(type_code_hash)),
+            data_len = cell.data.len(),
+            "sUDT cell amount data too short (<16 bytes); recording no amount"
+        );
+        return Ok(None);
     };
     Ok(Some(amount))
 }
@@ -947,7 +953,11 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_parsed_cell_udt_amount_rejects_invalid_sudt_payload() {
+    fn test_parse_parsed_cell_udt_amount_tolerates_invalid_sudt_payload() {
+        // A cell using the sUDT type script but with data too short for a u128 amount
+        // (a non-standard on-chain cell, e.g. testnet) is tolerated — recorded as no
+        // amount rather than fail-fasting the sync (consistent with the bulk-build path
+        // and the xUDT branch), so one junk cell can't halt the whole index.
         let sudt_code_hash = crate::rpc::parse_hex_to_bytes(crate::parser::udt::SUDT_CODE_HASH);
         let cell = crate::parser::cell::ParsedCell {
             capacity: 100_00000000,
@@ -965,9 +975,8 @@ mod tests {
         };
 
         let tx_hash = [0x82; 32];
-        let err = parse_parsed_cell_udt_amount(&cell, &tx_hash, 7, None).unwrap_err();
-        assert!(err.to_string().contains("failed to parse UDT amount"));
-        assert!(err.to_string().contains("0x8282828282828282"));
+        let amount = parse_parsed_cell_udt_amount(&cell, &tx_hash, 7, None).unwrap();
+        assert_eq!(amount, None);
     }
 
     #[test]
