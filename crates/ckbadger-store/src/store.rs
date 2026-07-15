@@ -22,8 +22,10 @@ const MB: u64 = 1024 * 1024;
 
 /// Serde default for `StoreRuntimeConfig::network_count`.
 ///
-/// A bare `#[serde(default)]` would resolve to `usize::default()` == 0, which
-/// would divide the RAM budget by zero's guard and silently missize the store.
+/// Must stay an explicit `1`. A bare `#[serde(default)]` resolves a missing field
+/// to `usize::default()` == 0, and `effective_ram_bytes`'s `.max(1)` guard turns
+/// that 0 back into 1 — so every co-resident network would size itself against the
+/// full detected host RAM again, reintroducing the OOM this division prevents.
 fn default_network_count() -> usize {
     1
 }
@@ -313,17 +315,23 @@ fn detect_system_resources(runtime_config: StoreRuntimeConfig) -> (u64, usize, u
         Some(_) => warn!("Ignoring zero memory_budget_gb override, falling back to detection"),
         None => {}
     }
-    if runtime_config.network_count > 1 {
-        info!(
-            network_count = runtime_config.network_count,
-            "Dividing detected RAM across co-resident network stacks"
-        );
-    }
 
     let ram = effective_ram_bytes(
         runtime_config.memory_budget_gb,
         runtime_config.network_count,
         || {
+            // Logged from inside the detection closure on purpose: it runs only on
+            // the non-override path, which is exactly the path that divides. An
+            // explicit memory_budget_gb short-circuits before this and is never
+            // divided, so it must not claim division happened. Gating on the override
+            // here instead would restate that precedence where it could drift from
+            // `effective_ram_bytes`.
+            if runtime_config.network_count > 1 {
+                info!(
+                    network_count = runtime_config.network_count,
+                    "Dividing detected RAM across co-resident network stacks"
+                );
+            }
             read_system_memory()
                 .or_else(read_cgroup_memory_limit)
                 .unwrap_or_else(|| {
@@ -3418,6 +3426,29 @@ mod tests {
     fn effective_ram_zero_override_falls_back_to_divided_detection() {
         let ram = effective_ram_bytes(Some(0), 2, || 64 * GB);
         assert_eq!(ram, 32 * GB);
+    }
+
+    #[test]
+    fn detect_system_resources_divides_detected_ram_by_the_configured_network_count() {
+        // Guards the wiring, not the arithmetic: the `effective_ram_*` tests call the
+        // helper directly, so they stay green even if the call site stops forwarding
+        // `runtime_config.network_count` and passes a literal 1. That single argument
+        // is all that stands between this fix and being silently inert, so pin it
+        // through the real (private) entry point that the store actually opens with.
+        //
+        // Host-independent: both calls detect the same RAM R in this process, and
+        // (R / 1) / 2 == R / 2 exactly for u64 — same floor, no truncation drift.
+        let one = detect_system_resources(StoreRuntimeConfig {
+            network_count: 1,
+            ..Default::default()
+        })
+        .0;
+        let two = detect_system_resources(StoreRuntimeConfig {
+            network_count: 2,
+            ..Default::default()
+        })
+        .0;
+        assert_eq!(two, one / 2);
     }
 
     #[test]
