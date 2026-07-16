@@ -2434,6 +2434,7 @@ data_dir = "data"
 #[cfg(test)]
 mod store_runtime_config_tests {
     use super::*;
+    use std::num::NonZeroUsize;
     use tempfile::TempDir;
 
     #[test]
@@ -2450,7 +2451,7 @@ mod store_runtime_config_tests {
         let cfg = store_runtime_config(&StoreConfig::default(), &root.join("mainnet")).unwrap();
 
         // Two co-resident networks -> each store sizes to half the host RAM.
-        assert_eq!(cfg.network_count, 2);
+        assert_eq!(cfg.network_count, NonZeroUsize::new(2).unwrap());
     }
 
     #[test]
@@ -2462,7 +2463,7 @@ mod store_runtime_config_tests {
         let cfg = store_runtime_config(&StoreConfig::default(), &workdir).unwrap();
 
         // No governing orchestrator: the degenerate N=1 case, full detected RAM.
-        assert_eq!(cfg.network_count, 1);
+        assert_eq!(cfg.network_count, NonZeroUsize::MIN);
     }
 
     #[test]
@@ -2499,6 +2500,6 @@ mod store_runtime_config_tests {
         // The store layer decides precedence (override wins, undivided); the
         // builder just carries both values through.
         assert_eq!(cfg.memory_budget_gb, Some(40));
-        assert_eq!(cfg.network_count, 2);
+        assert_eq!(cfg.network_count, NonZeroUsize::new(2).unwrap());
     }
 }

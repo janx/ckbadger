@@ -1521,7 +1521,7 @@ mod tests {
                 memory_budget_gb: Some(24),
                 direct_io_reads: false,
                 vector_memtable: false,
-                network_count: 1,
+                network_count: std::num::NonZeroUsize::MIN,
             },
             decoder_cache_path: "/data/decoder-cache".to_string(),
             dob_decode_dir: "/workdir/media".to_string(),

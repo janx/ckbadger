@@ -1,5 +1,6 @@
 //! Core RocksDB store.
 
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -36,14 +37,10 @@ const MB: u64 = 1024 * 1024;
 /// — so the first open establishes the process's budget.
 static SHARED_BUDGET: OnceLock<(rocksdb::Cache, WriteBufferManager)> = OnceLock::new();
 
-/// Serde default for `StoreRuntimeConfig::network_count`.
-///
-/// Must stay an explicit `1`. A bare `#[serde(default)]` resolves a missing field
-/// to `usize::default()` == 0, and `effective_ram_bytes`'s `.max(1)` guard turns
-/// that 0 back into 1 — so every co-resident network would size itself against the
-/// full detected host RAM again, reintroducing the OOM this division prevents.
-fn default_network_count() -> usize {
-    1
+/// Serde default for `StoreRuntimeConfig::network_count`, applied when the field
+/// is absent. `NonZeroUsize` has no `Default`, so this must be named explicitly.
+fn default_network_count() -> NonZeroUsize {
+    NonZeroUsize::MIN
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -64,7 +61,7 @@ pub struct StoreRuntimeConfig {
     /// At very large N the divided budget can hit `compute`'s 2 GB floor, so the
     /// sum would exceed the intended share; realistic N (2-4) is unaffected.
     #[serde(default = "default_network_count")]
-    pub network_count: usize,
+    pub network_count: NonZeroUsize,
 }
 
 impl Default for StoreRuntimeConfig {
@@ -73,7 +70,7 @@ impl Default for StoreRuntimeConfig {
             memory_budget_gb: None,
             direct_io_reads: true,
             vector_memtable: false,
-            network_count: 1,
+            network_count: NonZeroUsize::MIN,
         }
     }
 }
@@ -315,12 +312,12 @@ fn read_cgroup_memory_limit() -> Option<u64> {
 /// `detect` is lazy so an explicit override skips detection entirely.
 fn effective_ram_bytes(
     memory_budget_gb: Option<u64>,
-    network_count: usize,
+    network_count: NonZeroUsize,
     detect: impl FnOnce() -> u64,
 ) -> u64 {
     match memory_budget_gb {
         Some(gb) if gb > 0 => gb * GB,
-        _ => detect() / network_count.max(1) as u64,
+        _ => detect() / network_count.get() as u64,
     }
 }
 
@@ -342,9 +339,9 @@ fn detect_system_resources(runtime_config: StoreRuntimeConfig) -> (u64, usize, u
             // divided, so it must not claim division happened. Gating on the override
             // here instead would restate that precedence where it could drift from
             // `effective_ram_bytes`.
-            if runtime_config.network_count > 1 {
+            if runtime_config.network_count > NonZeroUsize::MIN {
                 info!(
-                    network_count = runtime_config.network_count,
+                    network_count = runtime_config.network_count.get(),
                     "Dividing detected RAM across co-resident network stacks"
                 );
             }
@@ -2786,7 +2783,7 @@ mod tests {
             memory_budget_gb: Some(12),
             direct_io_reads: false,
             vector_memtable: false,
-            network_count: 1,
+            network_count: NonZeroUsize::MIN,
         };
 
         let store = CkbadgerStore::open_domain_with_runtime(dir.path(), runtime_config).unwrap();
@@ -3424,32 +3421,28 @@ mod tests {
     fn effective_ram_explicit_override_wins_and_is_never_divided() {
         // memory_budget_gb is already the operator's per-network value: dividing it
         // by N would silently halve what they asked for. The closure must not run.
-        let ram = effective_ram_bytes(Some(40), 2, || panic!("must not detect when overridden"));
+        let ram = effective_ram_bytes(Some(40), NonZeroUsize::new(2).unwrap(), || {
+            panic!("must not detect when overridden")
+        });
         assert_eq!(ram, 40 * GB);
     }
 
     #[test]
     fn effective_ram_single_network_is_the_full_detected_ram() {
         // N=1 is the degenerate case of the same expression, not a special branch.
-        let ram = effective_ram_bytes(None, 1, || 93 * GB);
+        let ram = effective_ram_bytes(None, NonZeroUsize::MIN, || 93 * GB);
         assert_eq!(ram, 93 * GB);
     }
 
     #[test]
     fn effective_ram_divides_detected_ram_across_co_resident_networks() {
-        let ram = effective_ram_bytes(None, 2, || 93 * GB);
+        let ram = effective_ram_bytes(None, NonZeroUsize::new(2).unwrap(), || 93 * GB);
         assert_eq!(ram, 93 * GB / 2);
     }
 
     #[test]
-    fn effective_ram_guards_a_zero_network_count() {
-        let ram = effective_ram_bytes(None, 0, || 64 * GB);
-        assert_eq!(ram, 64 * GB);
-    }
-
-    #[test]
     fn effective_ram_zero_override_falls_back_to_divided_detection() {
-        let ram = effective_ram_bytes(Some(0), 2, || 64 * GB);
+        let ram = effective_ram_bytes(Some(0), NonZeroUsize::new(2).unwrap(), || 64 * GB);
         assert_eq!(ram, 32 * GB);
     }
 
@@ -3464,12 +3457,12 @@ mod tests {
         // Host-independent: both calls detect the same RAM R in this process, and
         // (R / 1) / 2 == R / 2 exactly for u64 — same floor, no truncation drift.
         let one = detect_system_resources(StoreRuntimeConfig {
-            network_count: 1,
+            network_count: NonZeroUsize::MIN,
             ..Default::default()
         })
         .0;
         let two = detect_system_resources(StoreRuntimeConfig {
-            network_count: 2,
+            network_count: NonZeroUsize::new(2).unwrap(),
             ..Default::default()
         })
         .0;
@@ -3478,20 +3471,36 @@ mod tests {
 
     #[test]
     fn store_runtime_config_defaults_to_one_network() {
-        // Must be 1, not usize::default() == 0 — see the serde default fn.
-        assert_eq!(StoreRuntimeConfig::default().network_count, 1);
+        // A default-constructed config is the standalone single-network opener, so it
+        // must resolve to the full detected RAM rather than a fraction of it.
+        assert_eq!(
+            StoreRuntimeConfig::default().network_count,
+            NonZeroUsize::MIN
+        );
     }
 
     #[test]
     fn network_count_deserializes_to_one_when_absent() {
-        // Guards the serde attribute itself. The Default-impl test above passes
-        // even with a bare #[serde(default)], which would resolve this payload's
-        // missing field to usize::default() == 0 and missize the store.
+        // Guards the serde attribute itself, which the Default-impl test above cannot:
+        // without it the field is REQUIRED and this payload — the shape every opener
+        // predating the field still sends — fails to parse outright.
         let cfg: StoreRuntimeConfig = serde_json::from_str(
             r#"{"memory_budget_gb":null,"direct_io_reads":true,"vector_memtable":false}"#,
         )
         .unwrap();
-        assert_eq!(cfg.network_count, 1);
+        assert_eq!(cfg.network_count, NonZeroUsize::MIN);
+    }
+
+    #[test]
+    fn store_runtime_config_rejects_a_zero_network_count() {
+        // 0 must be unrepresentable, not clamped: a clamped 0 resolves to the FULL
+        // detected RAM per network, which is the over-commit this division prevents.
+        // NonZeroUsize makes serde reject it at parse time, with no runtime guard.
+        let err = serde_json::from_str::<StoreRuntimeConfig>(
+            r#"{"memory_budget_gb":null,"direct_io_reads":true,"vector_memtable":false,"network_count":0}"#,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("zero"), "got: {err}");
     }
 
     #[test]
