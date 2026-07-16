@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 use tracing::{error, info, warn};
 
 use rocksdb::{
@@ -19,6 +19,22 @@ pub type KvResult = Result<(Box<[u8]>, Box<[u8]>), rocksdb::Error>;
 
 const GB: u64 = 1024 * 1024 * 1024;
 const MB: u64 = 1024 * 1024;
+
+/// Process-wide RocksDB `Cache` + `WriteBufferManager`, shared by every store this
+/// process opens.
+///
+/// RocksDB budgets are per-PROCESS, not per-DB: both objects are designed to be
+/// handed to every DB a process opens. Minting a fresh pair per open gave each
+/// store its own full budget, so an indexer (domain + append-only) provisioned
+/// `2 x budget` and N co-resident networks provisioned N x the host — the
+/// over-commit that got bulk sync OOM-killed. Sharing one pair makes `budget` mean
+/// what it says, so `MemoryProfile`'s arithmetic holds however many stores a
+/// process opens.
+///
+/// Sized from the first open's profile. A process's opens are homogeneous by
+/// construction — the indexer opens primaries; api/tui/supervisor open secondaries
+/// — so the first open establishes the process's budget.
+static SHARED_BUDGET: OnceLock<(rocksdb::Cache, WriteBufferManager)> = OnceLock::new();
 
 /// Serde default for `StoreRuntimeConfig::network_count`.
 ///
@@ -1270,18 +1286,27 @@ impl CkbadgerStore {
             opts.set_unordered_write(true);
         }
 
-        let block_cache = rocksdb::Cache::new_lru_cache(profile.block_cache_normal_bytes);
-        let block_opts = Self::default_block_options(&block_cache);
-        opts.set_block_based_table_factory(&block_opts);
-
         // Global WriteBufferManager: controls total memtable memory across all CFs.
         // With many CFs, per-CF memtable limits cause unpredictable flush storms.
         // WBM replaces that with a global budget — flush only happens when total
         // memtable usage crosses the threshold, giving predictable flush behavior.
+        //
+        // Shared per process (see SHARED_BUDGET): cache_normal + wbm_normal == budget,
+        // so one shared pair means a process provisions exactly `budget` no matter how
+        // many stores it opens.
+        //
         // allow_stall=true: stall writes when memtable memory exceeds budget rather
-        // than OOM; the adaptive batch controller will detect stalls and reduce batch size.
-        let write_buffer_manager =
-            WriteBufferManager::new_write_buffer_manager(profile.wbm_normal_bytes, true);
+        // than OOM; the adaptive batch controller detects stalls and reduces batch size.
+        let (block_cache, write_buffer_manager) = SHARED_BUDGET
+            .get_or_init(|| {
+                (
+                    rocksdb::Cache::new_lru_cache(profile.block_cache_normal_bytes),
+                    WriteBufferManager::new_write_buffer_manager(profile.wbm_normal_bytes, true),
+                )
+            })
+            .clone();
+        let block_opts = Self::default_block_options(&block_cache);
+        opts.set_block_based_table_factory(&block_opts);
         opts.set_write_buffer_manager(&write_buffer_manager);
 
         (opts, block_cache, write_buffer_manager)
@@ -3467,5 +3492,33 @@ mod tests {
         )
         .unwrap();
         assert_eq!(cfg.network_count, 1);
+    }
+
+    #[test]
+    fn configured_options_shares_one_budget_across_opens_in_a_process() {
+        // RocksDB budgets are per-process. Minting a fresh Cache/WBM per open gave a
+        // process that opens two stores (domain + append-only) twice its intended
+        // budget, and N co-resident networks N x the host -- the over-commit that got
+        // bulk sync OOM-killed. Two opens must hand back the same shared objects.
+        //
+        // The two profiles deliberately differ: if the pair were re-minted per open,
+        // the handles would report different buffer sizes. This asserts only that the
+        // two handles AGREE, never an absolute size -- another test in this process may
+        // have initialized SHARED_BUDGET first, which is exactly the sharing intended.
+        // (The Cache is built in the same get_or_init closure, so it shares by
+        // construction; rocksdb exposes no Cache capacity getter to assert on.)
+        let profile_a = MemoryProfile::compute(64 * GB, 4, 8, false);
+        let profile_b = MemoryProfile::compute(8 * GB, 4, 8, false);
+        assert_ne!(
+            profile_a.wbm_normal_bytes, profile_b.wbm_normal_bytes,
+            "profiles must differ or this test proves nothing"
+        );
+
+        let (_, _, wbm_a) =
+            CkbadgerStore::configured_options(&profile_a, StoreRuntimeConfig::default());
+        let (_, _, wbm_b) =
+            CkbadgerStore::configured_options(&profile_b, StoreRuntimeConfig::default());
+
+        assert_eq!(wbm_b.get_buffer_size(), wbm_a.get_buffer_size());
     }
 }
