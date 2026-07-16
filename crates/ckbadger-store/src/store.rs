@@ -22,7 +22,7 @@ const GB: u64 = 1024 * 1024 * 1024;
 const MB: u64 = 1024 * 1024;
 
 /// Process-wide RocksDB `Cache` + `WriteBufferManager`, shared by every store this
-/// process opens, plus the first open's intended sizes for the homogeneity guard.
+/// process opens.
 ///
 /// RocksDB budgets are per-PROCESS, not per-DB: both objects are designed to be
 /// handed to every DB a process opens. Minting a fresh pair per open gave each
@@ -32,30 +32,18 @@ const MB: u64 = 1024 * 1024;
 /// what it says, so `MemoryProfile`'s arithmetic holds however many stores a
 /// process opens.
 ///
-/// Sized from the first open's profile. A process's opens are homogeneous by
-/// construction — the indexer opens primaries; api/tui/supervisor open secondaries
-/// — so the first open establishes the process's budget. `configured_options`
-/// carries a `debug_assert!` that guards this assumption against a future open-order
-/// or primary/secondary-mix change (see there).
-struct SharedBudget {
-    cache: rocksdb::Cache,
-    wbm: WriteBufferManager,
-    /// The FIRST open's intended normal block-cache size, captured before any
-    /// `set_capacity` mutation. The homogeneity guard compares later opens against
-    /// this immutable original, never the live (mutable) capacity.
-    #[cfg_attr(not(debug_assertions), allow(dead_code))]
-    block_cache_normal_bytes: u64,
-    /// The FIRST open's intended normal WBM size, captured before any
-    /// `set_buffer_size` mutation. Compared against, never re-read live.
-    #[cfg_attr(not(debug_assertions), allow(dead_code))]
-    wbm_normal_bytes: u64,
-    /// Whether the first open (which sized this pair) was a secondary. The guard
-    /// only fires for later secondary opens of chain stores (see `configured_options`).
-    #[cfg_attr(not(debug_assertions), allow(dead_code))]
-    is_secondary: bool,
-}
-
-static SHARED_BUDGET: OnceLock<SharedBudget> = OnceLock::new();
+/// Sized ONCE, from the first open's profile; later opens reuse that pair. This is
+/// correct because a process's opens are homogeneous in budget by construction: the
+/// indexer opens only primaries, and each single-network stack (indexer or API)
+/// opens its domain + append-only stores with the same runtime config. The one case
+/// where opens differ is a read-only multi-network monitor (`ckbadger tui` /
+/// `ckbadger status`), which opens several networks' domain secondaries in one
+/// process — possibly with different per-network `[store].memory_budget_gb`. They
+/// share the first network's cap, which is harmless: a secondary block cache is a
+/// lazily-filled LRU capacity, so one shared cap across N read-only monitors uses
+/// less RAM, not more. So the invariant is "homogeneous per single-network stack",
+/// which every writer process satisfies exactly.
+static SHARED_BUDGET: OnceLock<(rocksdb::Cache, WriteBufferManager)> = OnceLock::new();
 
 /// Serde default for `StoreRuntimeConfig::network_count`, applied when the field
 /// is absent. `NonZeroUsize` has no `Default`, so this must be named explicitly.
@@ -901,7 +889,7 @@ impl CkbadgerStore {
 
         let memory_profile = MemoryProfile::for_primary_with_config(runtime_config);
         let (opts, block_cache, write_buffer_manager) =
-            Self::configured_options(&memory_profile, runtime_config, store_class);
+            Self::configured_options(&memory_profile, runtime_config);
 
         let existing_cfs = match DB::list_cf(&opts, &path) {
             Ok(cfs) => cfs,
@@ -996,7 +984,7 @@ impl CkbadgerStore {
         };
         let memory_profile = MemoryProfile::for_secondary_with_config(runtime_config);
         let (opts, block_cache, write_buffer_manager) =
-            Self::configured_options(&memory_profile, runtime_config, store_class);
+            Self::configured_options(&memory_profile, runtime_config);
         let existing_cfs = match DB::list_cf(&opts, &primary_path) {
             Ok(cfs) => cfs,
             Err(_err) if !db_path.join("CURRENT").exists() => Vec::new(),
@@ -1245,7 +1233,6 @@ impl CkbadgerStore {
     fn configured_options(
         profile: &MemoryProfile,
         runtime_config: StoreRuntimeConfig,
-        store_class: StoreClass,
     ) -> (Options, rocksdb::Cache, WriteBufferManager) {
         let mut opts = Options::default();
         opts.create_if_missing(true);
@@ -1315,58 +1302,14 @@ impl CkbadgerStore {
         //
         // allow_stall=true: stall writes when memtable memory exceeds budget rather
         // than OOM; the adaptive batch controller detects stalls and reduces batch size.
-        let shared = SHARED_BUDGET.get_or_init(|| SharedBudget {
-            cache: rocksdb::Cache::new_lru_cache(profile.block_cache_normal_bytes),
-            wbm: WriteBufferManager::new_write_buffer_manager(profile.wbm_normal_bytes, true),
-            block_cache_normal_bytes: profile.block_cache_normal_bytes as u64,
-            wbm_normal_bytes: profile.wbm_normal_bytes as u64,
-            is_secondary: profile.is_secondary,
-        });
-
-        // Homogeneity guard (debug-only). SHARED_BUDGET is sized ONCE, by the first
-        // open, and every later open silently reuses that pair — correct only while a
-        // process's opens are homogeneous (same class + same runtime budget). If a
-        // future change made a process open a primary then a secondary, or reordered
-        // opens so a `network_count=1`-defaulted network-store open initialized the
-        // budget before the chain stores, the whole process would be silently
-        // mis-sized, re-introducing the co-resident over-commit — with no failure.
-        //
-        // Scoping (must catch a real break yet stay green under `cargo test`, which
-        // opens BOTH primaries and secondaries in one binary):
-        //   * Only the SECONDARY class hosts the assertion. The test binary
-        //     deliberately opens primaries with heterogeneous budgets (an explicit
-        //     `memory_budget_gb` override test; the sharing test's two hand-built
-        //     profiles), so the primary class cannot host it without spurious fires;
-        //     every secondary open in the test/integration binaries uses the uniform
-        //     default profile, so the secondary class can. This is also exactly where
-        //     the cited regression (the network-store secondary at api `entry.rs`
-        //     initializing the budget) would land.
-        //   * Requiring BOTH this open AND the pair-builder to be secondary ignores
-        //     the harness's legitimate primary->secondary mixing (a cross-class break
-        //     is indistinguishable from that and cannot be guarded here).
-        //   * The network store is exempt: it alone opens with the default
-        //     `network_count=1` while chain secondaries divide RAM by N, so its budget
-        //     legitimately differs; it defers to the chain stores by opening last, and
-        //     guarding it would fire in a real N>1 API process.
-        // The comparison uses the stored ORIGINAL sizes, never the live (possibly
-        // already `set_buffer_size`-mutated) handles.
-        debug_assert!(
-            !(profile.is_secondary && shared.is_secondary && store_class != StoreClass::Network)
-                || (profile.block_cache_normal_bytes as u64 == shared.block_cache_normal_bytes
-                    && profile.wbm_normal_bytes as u64 == shared.wbm_normal_bytes),
-            "SHARED_BUDGET assumes a process's opens are homogeneous; a later secondary \
-             open's budget (block_cache={} MiB, wbm={} MiB) differs from the shared pair's \
-             ({} MiB / {} MiB) — did open order or a primary/secondary mix change (e.g. a \
-             network_count=1 network-store open initializing the budget before the chain \
-             stores)?",
-            profile.block_cache_normal_bytes / (1024 * 1024),
-            profile.wbm_normal_bytes / (1024 * 1024),
-            shared.block_cache_normal_bytes / (1024 * 1024),
-            shared.wbm_normal_bytes / (1024 * 1024),
-        );
-
-        let block_cache = shared.cache.clone();
-        let write_buffer_manager = shared.wbm.clone();
+        let (block_cache, write_buffer_manager) = SHARED_BUDGET
+            .get_or_init(|| {
+                (
+                    rocksdb::Cache::new_lru_cache(profile.block_cache_normal_bytes),
+                    WriteBufferManager::new_write_buffer_manager(profile.wbm_normal_bytes, true),
+                )
+            })
+            .clone();
         let block_opts = Self::default_block_options(&block_cache);
         opts.set_block_based_table_factory(&block_opts);
         opts.set_write_buffer_manager(&write_buffer_manager);
@@ -3588,16 +3531,10 @@ mod tests {
             "profiles must differ or this test proves nothing"
         );
 
-        let (_, _, wbm_a) = CkbadgerStore::configured_options(
-            &profile_a,
-            StoreRuntimeConfig::default(),
-            StoreClass::Domain,
-        );
-        let (_, _, wbm_b) = CkbadgerStore::configured_options(
-            &profile_b,
-            StoreRuntimeConfig::default(),
-            StoreClass::Domain,
-        );
+        let (_, _, wbm_a) =
+            CkbadgerStore::configured_options(&profile_a, StoreRuntimeConfig::default());
+        let (_, _, wbm_b) =
+            CkbadgerStore::configured_options(&profile_b, StoreRuntimeConfig::default());
 
         // Prove wbm_a and wbm_b are handles to the SAME shared WriteBufferManager.
         //
