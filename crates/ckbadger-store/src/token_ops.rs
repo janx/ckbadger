@@ -99,11 +99,11 @@ impl CkbadgerStore {
         &self,
         type_hash: &[u8],
         lock_hash: &[u8],
-    ) -> anyhow::Result<Option<i128>> {
+    ) -> anyhow::Result<Option<u128>> {
         let key = keys::encode_token_holder_key(type_hash, lock_hash);
         match self.get_cf(self.cf_token_holders(), &key)? {
             Some(value) if value.len() == 16 => {
-                Ok(Some(i128::from_le_bytes(value[..16].try_into().unwrap())))
+                Ok(Some(u128::from_le_bytes(value[..16].try_into().unwrap())))
             }
             Some(value) => anyhow::bail!(
                 "token_holders: corrupt value length {} (expected 16) for type_hash=0x{}, lock_hash=0x{}",
@@ -733,7 +733,7 @@ impl CkbadgerStore {
                 break;
             }
             if key.len() == 64 && value.len() == 16 {
-                let balance = i128::from_le_bytes(value[..16].try_into().unwrap());
+                let balance = u128::from_le_bytes(value[..16].try_into().unwrap());
                 if balance > 0 {
                     count += 1;
                 }
@@ -746,10 +746,10 @@ impl CkbadgerStore {
     ///
     /// This derives correctness-critical read data from the holder source of truth
     /// instead of trusting any cached aggregate embedded in `TokenInfo`.
-    pub fn aggregate_token_holder_stats(&self, type_hash: &[u8]) -> anyhow::Result<(i64, i128)> {
+    pub fn aggregate_token_holder_stats(&self, type_hash: &[u8]) -> anyhow::Result<(i64, u128)> {
         let iter = self.prefix_iterator_cf(self.cf_token_holders(), type_hash);
         let mut holders_count: i64 = 0;
-        let mut total_supply: i128 = 0;
+        let mut total_supply: u128 = 0;
 
         for item in iter {
             let (key, value) = item.map_err(|e| {
@@ -766,15 +766,7 @@ impl CkbadgerStore {
             }
 
             let lock_hash = &key[32..64];
-            let balance = i128::from_le_bytes(value[..16].try_into().unwrap());
-            if balance < 0 {
-                anyhow::bail!(
-                    "negative token holder balance in aggregate_token_holder_stats: type_hash=0x{}, lock_hash=0x{}, balance={}",
-                    bytes_to_hex(type_hash),
-                    bytes_to_hex(lock_hash),
-                    balance
-                );
-            }
+            let balance = u128::from_le_bytes(value[..16].try_into().unwrap());
             if balance == 0 {
                 continue;
             }
@@ -806,7 +798,7 @@ impl CkbadgerStore {
         &self,
         type_hash: &[u8],
         limit: usize,
-    ) -> anyhow::Result<Vec<(Vec<u8>, i128)>> {
+    ) -> anyhow::Result<Vec<(Vec<u8>, u128)>> {
         let iter = self.prefix_iterator_cf(self.cf_token_holders(), type_hash);
         let mut results = Vec::new();
 
@@ -823,7 +815,7 @@ impl CkbadgerStore {
             // Key: type_hash(32) + lock_hash(32) = 64
             if key.len() == 64 && value.len() == 16 {
                 let lock_hash = key[32..64].to_vec();
-                let balance = i128::from_le_bytes(value[..16].try_into().unwrap());
+                let balance = u128::from_le_bytes(value[..16].try_into().unwrap());
                 results.push((lock_hash, balance));
                 if results.len() >= limit {
                     break;
@@ -840,8 +832,8 @@ impl CkbadgerStore {
         &self,
         type_hash: &[u8],
         limit: usize,
-        cursor: Option<(i128, Vec<u8>)>,
-    ) -> anyhow::Result<Vec<(Vec<u8>, i128)>> {
+        cursor: Option<(u128, Vec<u8>)>,
+    ) -> anyhow::Result<Vec<(Vec<u8>, u128)>> {
         if type_hash.len() != 32 {
             anyhow::bail!(
                 "list_token_holders_by_balance expects 32-byte type_hash, got {} bytes",
@@ -908,8 +900,8 @@ impl CkbadgerStore {
         &self,
         lock_hash: &[u8],
         limit: usize,
-        cursor: Option<(i128, Vec<u8>)>,
-    ) -> anyhow::Result<Vec<(Vec<u8>, i128)>> {
+        cursor: Option<(u128, Vec<u8>)>,
+    ) -> anyhow::Result<Vec<(Vec<u8>, u128)>> {
         if lock_hash.len() != 32 {
             anyhow::bail!(
                 "list_address_tokens_by_balance expects 32-byte lock_hash, got {} bytes",
@@ -987,6 +979,30 @@ mod tests {
         let (_dir, store) = test_store();
         let type_hash = [0x01u8; 32];
         assert_eq!(store.get_token_transfers_count(&type_hash).unwrap(), 0);
+    }
+
+    #[test]
+    fn holder_balance_round_trips_above_i128_max() {
+        // sUDT amounts are u128; a valid amount > i128::MAX must survive storage read-back
+        // (the bug widened here is the i128 interpretation of the 16 stored bytes).
+        let (_dir, store) = test_store();
+        let type_hash = vec![0xABu8; 32];
+        let lock_hash = vec![0xCDu8; 32];
+        let big: u128 = 222_044_604_925_031_325_468_940_491_728_862_838_784; // ~2.22e38, > i128::MAX
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_token_holder(&type_hash, &lock_hash, big);
+        batch.commit().unwrap();
+
+        assert_eq!(
+            store
+                .get_token_holder_balance(&type_hash, &lock_hash)
+                .unwrap(),
+            Some(big)
+        );
+        let (count, supply) = store.aggregate_token_holder_stats(&type_hash).unwrap();
+        assert_eq!(count, 1);
+        assert_eq!(supply, big);
     }
 
     #[test]
