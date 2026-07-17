@@ -2868,21 +2868,27 @@ impl CkbadgerStore {
             let current = self
                 .get_token_holder_balance(type_hash, lock_hash)?
                 .unwrap_or(0);
-            // Underflow (removed > current + added) is an invariant violation → fail fast;
-            // this checked_sub replaces the former `new_balance < 0` bail.
-            let new_balance = current
-                .checked_add(added)
-                .and_then(|b| b.checked_sub(removed))
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "token holder balance underflow during rollback: type_hash=0x{}, lock_hash=0x{}, current={}, added={}, removed={}",
-                        bytes_to_hex(type_hash),
-                        bytes_to_hex(lock_hash),
-                        current,
-                        added,
-                        removed
-                    )
-                })?;
+            // Apply the net holder-balance change to the unsigned u128 balance. Compute
+            // the net difference first (added>=removed ? add : subtract) so a large
+            // `added` never transiently overflows u128 before the offsetting `removed`
+            // is applied (e.g. a self-transfer where current==added==removed==big).
+            // A true underflow (removed > current + added) is still an invariant
+            // violation → fail fast. Mirrors the total_supply apply below.
+            let new_balance = if added >= removed {
+                current.checked_add(added - removed)
+            } else {
+                current.checked_sub(removed - added)
+            }
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "token holder balance underflow during rollback: type_hash=0x{}, lock_hash=0x{}, current={}, added={}, removed={}",
+                    bytes_to_hex(type_hash),
+                    bytes_to_hex(lock_hash),
+                    current,
+                    added,
+                    removed
+                )
+            })?;
             let entry = type_hash_holder_changes
                 .entry(type_hash.clone())
                 .or_insert((0, 0, 0));
@@ -5212,6 +5218,202 @@ mod tests {
         );
         // total_supply is unchanged (big moved from lock_b back to lock_a): the signed
         // supply split (added=big, removed=big) nets to zero without u128 overflow.
+        assert_eq!(
+            store.get_token(&type_hash).unwrap().unwrap().total_supply,
+            Some(big)
+        );
+    }
+
+    /// Regression: rolling back a UDT **self-transfer** (consume own cell of amount
+    /// `big`, create a new cell of amount `big` back to the SAME (type_hash, lock))
+    /// must not spuriously overflow u128 while applying the per-holder balance delta.
+    ///
+    /// On rollback of that block the holder delta for lock_a is (added=big, removed=big)
+    /// and the tip balance is `current=big`. A naive `current + added` first computes
+    /// `2*big`, which overflows u128 whenever `big > u128::MAX/2` — halting a legitimate
+    /// reorg. `big` here is ~2.22e38, so `2*big > u128::MAX`. The net-difference form
+    /// (`current + (added - removed)`) applies the zero net change without overflowing.
+    #[test]
+    fn test_rollback_restores_self_transfer_holder_balance_above_half_u128_max() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+
+        // ~2.22e38: > u128::MAX/2 (~1.70e38), so 2*big overflows u128; still < u128::MAX.
+        let big: u128 = 222_044_604_925_031_325_468_940_491_728_862_838_784;
+
+        let header1 = CachedBlockHeader {
+            hash: vec![0x01; 32],
+            parent_hash: vec![0u8; 32],
+            timestamp: 1_700_000_000_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+            uncles_count: 0,
+            cycles: None,
+        };
+        let header2 = CachedBlockHeader {
+            hash: vec![0x02; 32],
+            parent_hash: vec![0u8; 32],
+            timestamp: 1_700_000_010_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+            uncles_count: 0,
+            cycles: None,
+        };
+
+        let type_hash = vec![0x90; 32];
+        let lock_a = vec![0xA1; 32];
+        let lock_code_hash = vec![0x11; 32];
+        let type_code_hash = vec![0x22; 32];
+        let input_tx = vec![0x41; 32];
+        let transfer_tx = vec![0x42; 32];
+
+        // Self-transfer: input (lock_a, big) consumed and output (lock_a, big) created
+        // back to the SAME lock + type in one tx at block 2.
+        let input_cell = LiveCellInfo {
+            capacity: 100,
+            lock_script_hash: lock_a.clone(),
+            lock_code_hash: lock_code_hash.clone(),
+            lock_hash_type: 1,
+            lock_args: vec![],
+            type_script_hash: Some(type_hash.clone()),
+            type_code_hash: Some(type_code_hash.clone()),
+            type_hash_type: Some(1),
+            type_args: Some(vec![0x33; 20]),
+            data_size: 16,
+            occupied_capacity: 100,
+            udt_amount: Some(big),
+            data_hash: None,
+        };
+        let output_cell = LiveCellInfo {
+            capacity: 100,
+            lock_script_hash: lock_a.clone(),
+            lock_code_hash: lock_code_hash.clone(),
+            lock_hash_type: 1,
+            lock_args: vec![],
+            type_script_hash: Some(type_hash.clone()),
+            type_code_hash: Some(type_code_hash.clone()),
+            type_hash_type: Some(1),
+            type_args: Some(vec![0x33; 20]),
+            data_size: 16,
+            occupied_capacity: 100,
+            udt_amount: Some(big),
+            data_hash: None,
+        };
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_block_header(1, &header1);
+        batch.put_block_header(2, &header2);
+        put_canonical_tx(&mut batch, 2, 0, &transfer_tx);
+        batch.put_cell(&input_tx, 0, &input_cell, 1);
+        batch.put_cell(&transfer_tx, 0, &output_cell, 2);
+        batch.put_consumed_cell_with_consumer(&input_tx, 0, &input_cell, 1, 2, Some(&transfer_tx));
+        batch.delete_cell(&input_tx, 0);
+        batch.put_reorg_undo_log_by_block(
+            2,
+            0,
+            &UndoLogEntry::TxContext(UndoTxContext {
+                tx_hash: transfer_tx.clone(),
+                outputs_count: 1,
+                inputs: vec![UndoInputOutPoint {
+                    tx_hash: input_tx.clone(),
+                    output_index: 0,
+                }],
+            }),
+        );
+        // Tip addr_balance for lock_a: the output cell is live (input consumed). Two cells
+        // were ever created for lock_a (input @ block1, output @ block2) → total=2.
+        batch.put_addr_balance(
+            &lock_a,
+            &AddressBalance {
+                balance: 100,
+                used_capacity: 100,
+                live_cells_count: 1,
+                total_cells_count: 2,
+                ..Default::default()
+            },
+        );
+        batch.put_script_info(
+            &lock_code_hash,
+            &ScriptInfo {
+                code_hash: lock_code_hash.clone(),
+                lock_live_cells_count: 1,
+                lock_owned_capacity_sum: 100,
+                lock_owned_knowledge_sum: 100,
+                ..Default::default()
+            },
+        );
+        batch.put_script_info(
+            &type_code_hash,
+            &ScriptInfo {
+                code_hash: type_code_hash.clone(),
+                type_live_cells_count: 1,
+                type_owned_capacity_sum: 100,
+                type_owned_knowledge_sum: 100,
+                ..Default::default()
+            },
+        );
+        batch.put_token(
+            &type_hash,
+            &TokenInfo {
+                type_code_hash: type_code_hash.clone(),
+                hash_type: 1,
+                type_args: vec![0x33; 20],
+                standard: "sudt".to_string(),
+                name: None,
+                symbol: None,
+                decimals: Some(8),
+                total_supply: Some(big),
+                max_supply: None,
+                holders_count: 1,
+                first_seen_block: 1,
+                icon_url: None,
+                description: None,
+                transfers_count: 0,
+            },
+        );
+        // Tip holder balance for lock_a is `big` (held by the live output cell).
+        batch.put_token_holder(&type_hash, &lock_a, big);
+        batch.put_token_holder_by_balance(&type_hash, &lock_a, big);
+        batch.put_addr_token_by_balance(&lock_a, &type_hash, big);
+        batch.commit().unwrap();
+        seed_sync_status(&store, 2, &header2.hash, 1, 1, 1);
+
+        assert_eq!(
+            store
+                .list_token_holders_by_balance(&type_hash, 10, None)
+                .unwrap(),
+            vec![(lock_a.clone(), big)]
+        );
+
+        // Naive `current.checked_add(added)` computes big+big (=2*big) and overflows
+        // u128 → this rollback errors. Net-difference form restores cleanly.
+        store.rollback_to_block(1).unwrap();
+
+        // lock_a's balance is restored to its prior value `big` (input cell live again,
+        // output cell removed; the self-transfer nets to no change).
+        assert_eq!(
+            store.get_token_holder_balance(&type_hash, &lock_a).unwrap(),
+            Some(big)
+        );
+        assert_eq!(
+            store
+                .list_token_holders_by_balance(&type_hash, 10, None)
+                .unwrap(),
+            vec![(lock_a.clone(), big)]
+        );
+        assert_eq!(
+            store
+                .list_address_tokens_by_balance(&lock_a, 10, None)
+                .unwrap(),
+            vec![(type_hash.clone(), big)]
+        );
+        // total_supply unchanged: added=big, removed=big nets to zero without u128 overflow.
         assert_eq!(
             store.get_token(&type_hash).unwrap().unwrap().total_supply,
             Some(big)
