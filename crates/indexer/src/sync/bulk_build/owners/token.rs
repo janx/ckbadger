@@ -25,7 +25,7 @@ use crate::sync::pipeline::build_bulk_facts_arena_from_blocks;
 pub(crate) struct TokenOwner {
     tokens: FxHashMap<Vec<u8>, TokenAccum>,
     /// On-chain max_supply observations collected from omnilock supply info cells.
-    max_supply_observations: FxHashMap<Vec<u8>, i128>,
+    max_supply_observations: FxHashMap<Vec<u8>, u128>,
     /// On-chain token info collected from xUDT Unique Cells (keyed by unique type_args, 20 bytes).
     unique_cell_info: FxHashMap<Vec<u8>, crate::sync::token_helpers::UniqueTokenInfo>,
     /// Resolved on-chain token info (keyed by token type_hash).
@@ -337,7 +337,7 @@ impl TokenOwner {
                 bincode::serialize(&info)?,
             ));
 
-            let mut holders: Vec<(&Vec<u8>, &i128)> = token
+            let mut holders: Vec<(&Vec<u8>, &u128)> = token
                 .holders
                 .iter()
                 .filter(|(_, balance)| **balance > 0)
@@ -384,8 +384,8 @@ struct TokenAccum {
     type_args: Vec<u8>,
     standard: &'static str,
     first_seen_block: i64,
-    live_supply: i128,
-    holders: FxHashMap<Vec<u8>, i128>,
+    live_supply: u128,
+    holders: FxHashMap<Vec<u8>, u128>,
     transfers_count: i64,
     hourly_transfers: FxHashMap<i64, i64>,
     daily_deltas: FxHashMap<u32, TokenDailyDelta>,
@@ -425,18 +425,18 @@ impl TokenAccum {
 
     fn apply_input(&mut self, view: &TokenCellView, tx: &ResolvedTxFacts<'_>) -> Result<()> {
         self.ensure_metadata(view, tx)?;
-        self.live_supply = checked_next_i128(
+        self.live_supply = checked_sub_amount(
             self.live_supply,
-            -(view.amount as i128),
+            view.amount,
             "token live_supply",
             &view.type_hash,
             tx,
         )?;
 
         let current = *self.holders.get(&view.lock_hash).unwrap_or(&0);
-        let next = checked_next_i128(
+        let next = checked_sub_amount(
             current,
-            -(view.amount as i128),
+            view.amount,
             "token holder balance",
             &view.type_hash,
             tx,
@@ -463,18 +463,18 @@ impl TokenAccum {
         if tx.block_number < self.first_seen_block {
             self.first_seen_block = tx.block_number;
         }
-        self.live_supply = checked_next_i128(
+        self.live_supply = checked_add_amount(
             self.live_supply,
-            view.amount as i128,
+            view.amount,
             "token live_supply",
             &view.type_hash,
             tx,
         )?;
 
         let current = *self.holders.get(&view.lock_hash).unwrap_or(&0);
-        let next = checked_next_i128(
+        let next = checked_add_amount(
             current,
-            view.amount as i128,
+            view.amount,
             "token holder balance",
             &view.type_hash,
             tx,
@@ -760,39 +760,46 @@ impl TokenCellView {
     }
 }
 
-fn checked_next_i128(
-    current: i128,
-    delta: i128,
+fn checked_add_amount(
+    current: u128,
+    amount: u128,
     metric: &str,
     type_hash: &[u8],
     tx: &ResolvedTxFacts<'_>,
-) -> Result<i128> {
-    let next = current.checked_add(delta).ok_or_else(|| {
+) -> Result<u128> {
+    current.checked_add(amount).ok_or_else(|| {
         anyhow!(
-            "{} overflow: type_hash=0x{}, current={}, delta={}, block={}, tx=0x{}, tx_index={}",
+            "{} overflow: type_hash=0x{}, current={}, amount={}, block={}, tx=0x{}, tx_index={}",
             metric,
             hex::encode(type_hash),
             current,
-            delta,
+            amount,
             tx.block_number,
             hex::encode(tx.tx_hash),
             tx.tx_index
         )
-    })?;
-    if next < 0 {
-        bail!(
-            "{} underflow: type_hash=0x{}, current={}, delta={}, next={}, block={}, tx=0x{}, tx_index={}",
+    })
+}
+
+fn checked_sub_amount(
+    current: u128,
+    amount: u128,
+    metric: &str,
+    type_hash: &[u8],
+    tx: &ResolvedTxFacts<'_>,
+) -> Result<u128> {
+    current.checked_sub(amount).ok_or_else(|| {
+        anyhow!(
+            "{} underflow: type_hash=0x{}, current={}, amount={}, block={}, tx=0x{}, tx_index={}",
             metric,
             hex::encode(type_hash),
             current,
-            delta,
-            next,
+            amount,
             tx.block_number,
             hex::encode(tx.tx_hash),
             tx.tx_index
-        );
-    }
-    Ok(next)
+        )
+    })
 }
 
 fn checked_next_i64(
@@ -855,8 +862,8 @@ fn checked_signed_i128(
 #[derive(Debug, Default, Clone)]
 pub struct TokenStateSnapshot {
     pub tokens: HashMap<Vec<u8>, TokenInfo>,
-    pub token_holders: HashMap<Vec<u8>, HashMap<Vec<u8>, i128>>,
-    pub addr_tokens: HashMap<Vec<u8>, HashMap<Vec<u8>, i128>>,
+    pub token_holders: HashMap<Vec<u8>, HashMap<Vec<u8>, u128>>,
+    pub addr_tokens: HashMap<Vec<u8>, HashMap<Vec<u8>, u128>>,
     pub token_transfer_counts: HashMap<Vec<u8>, i64>,
     pub token_hourly_transfers: HashMap<Vec<u8>, HashMap<i64, i64>>,
     pub token_daily_deltas: HashMap<Vec<u8>, HashMap<u32, TokenDailyDelta>>,
@@ -897,7 +904,7 @@ pub(crate) fn materialize_token_state_for_test(
             .into_iter()
             .collect::<HashMap<_, _>>();
 
-        let mut token_holders: HashMap<Vec<u8>, HashMap<Vec<u8>, i128>> = HashMap::new();
+        let mut token_holders: HashMap<Vec<u8>, HashMap<Vec<u8>, u128>> = HashMap::new();
         let mut token_transfer_counts = HashMap::new();
         let mut token_hourly_transfers = HashMap::new();
         let mut token_daily_deltas = HashMap::new();
@@ -966,7 +973,7 @@ pub(crate) fn materialize_token_state_for_test(
             }
         }
 
-        let mut addr_tokens: HashMap<Vec<u8>, HashMap<Vec<u8>, i128>> = HashMap::new();
+        let mut addr_tokens: HashMap<Vec<u8>, HashMap<Vec<u8>, u128>> = HashMap::new();
         let iter = domain_store.iterator_cf(
             domain_store.cf_addr_tokens_by_balance(),
             IteratorMode::Start,
@@ -1198,6 +1205,69 @@ mod tests {
         assert_eq!(token.holders.len(), 1);
         assert_eq!(token.holders.get(&vec![0xbb; 32]), Some(&1000));
         assert!(!token.holders.contains_key(&vec![0xaa; 32]));
+    }
+
+    #[test]
+    fn token_owner_handles_amount_above_i128_max() {
+        // Regression: a canonical sUDT mint whose amount (LE u128) exceeds i128::MAX must
+        // NOT wrap/underflow. On-chain example: block 4743232, amount bytes
+        // 0x000000000000000000704ea6403c0ca7 (LE) = 2.22e38. `as i128` wrapped this to
+        // -1.18e38 and drove live_supply negative.
+        let big: u128 = 222_044_604_925_031_325_468_940_491_728_862_838_784;
+        let interner = IdentityInterner::default();
+        let lock_a = interner.intern_bytes(vec![0xaa; 32]);
+        let type_hash_id = interner.intern_bytes(vec![0xcc; 32]);
+        let type_code_hash_id =
+            interner.intern_bytes(hex::decode(&crate::parser::udt::SUDT_CODE_HASH[2..]).unwrap());
+        let type_args_id = interner.intern_bytes(vec![0x12; 32]);
+        for i in interner.len()..=100 {
+            interner.intern_bytes(vec![0xf0, (i >> 8) as u8, i as u8]);
+        }
+        let frozen = interner.snapshot_for_reads();
+        let ctx = ReducerContext::new(&frozen);
+
+        // Issuance: no UDT inputs, one sUDT output holding `big`.
+        let tx0 = ResolvedTxFacts {
+            tx_hash: [0x70; 32],
+            block_number: 4_743_232,
+            block_hash: [0x03; 32],
+            timestamp_ms: 1_700_000_000_000,
+            block_dao_ar: 1,
+            tx_index: 1,
+            dotbit_action: None,
+            resolved_inputs: Vec::new(),
+            cells: vec![CellFacts {
+                outpoint: OutPointKey::new([0x70; 32], 1),
+                created_at_block: 4_743_232,
+                created_by_block_dao_ar: 1,
+                capacity: 200_00000000,
+                lock_script_hash_id: lock_a,
+                lock_code_hash_id: InternId::new(99),
+                lock_hash_type: 1,
+                lock_args_id: InternId::new(98),
+                type_script_hash_id: Some(type_hash_id),
+                type_code_hash_id: Some(type_code_hash_id),
+                type_hash_type: Some(1),
+                type_args_id: Some(type_args_id),
+                occupied_capacity: 142_00000000,
+                data_size: 16,
+                data: Vec::new(),
+                data_hash: None,
+                udt_amount: Some(big),
+                semantic_tag: CellSemanticTag::Sudt,
+                dao_state: None,
+                protocol_facts: None,
+            }]
+            .into(),
+        };
+
+        let mut owner = TokenOwner::default();
+        owner
+            .apply_tx(&tx0, &ctx)
+            .expect("mint above i128::MAX must not wrap/underflow");
+        let token = owner.tokens.get(&vec![0xcc; 32]).expect("token");
+        assert_eq!(token.live_supply, big);
+        assert_eq!(token.holders.get(&vec![0xaa; 32]), Some(&big));
     }
 
     #[test]

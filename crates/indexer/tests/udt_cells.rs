@@ -140,7 +140,7 @@ fn make_token(
     name: &str,
     symbol: &str,
     decimals: i32,
-    total_supply: i128,
+    total_supply: u128,
     holders_count: i64,
     first_seen_block: i64,
 ) -> TokenInfo {
@@ -308,7 +308,7 @@ fn test_list_token_holders_with_limit() {
     assert_eq!(single.len(), 1, "limit of 1 should return exactly 1");
 
     // Verify all balances are correct by collecting them
-    let all_balances: Vec<i128> = all.iter().map(|(_, bal)| *bal).collect();
+    let all_balances: Vec<u128> = all.iter().map(|(_, bal)| *bal).collect();
     assert!(all_balances.contains(&1000_00000000));
     assert!(all_balances.contains(&2000_00000000));
     assert!(all_balances.contains(&3000_00000000));
@@ -350,14 +350,14 @@ fn bulk_build_token_owner_materializes_live_token_and_holder_state_without_db_re
 
     let holders = snapshot.token_holders.get(type_hash).expect("holders");
     assert_eq!(holders.len(), 1);
-    let holder_balances: Vec<i128> = holders.values().copied().collect();
+    let holder_balances: Vec<u128> = holders.values().copied().collect();
     assert_eq!(holder_balances, vec![1000]);
 
     assert_eq!(snapshot.addr_tokens.len(), 1);
     let mut addr_balances = snapshot
         .addr_tokens
         .values()
-        .map(|tokens: &std::collections::HashMap<Vec<u8>, i128>| {
+        .map(|tokens: &std::collections::HashMap<Vec<u8>, u128>| {
             assert_eq!(tokens.len(), 1);
             *tokens.get(type_hash).expect("address token balance")
         })

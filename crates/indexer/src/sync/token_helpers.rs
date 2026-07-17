@@ -102,7 +102,7 @@ pub(crate) fn extract_omnilock_supply_info_type_hash(lock_args: &[u8]) -> Option
     Some(hash)
 }
 
-pub(crate) fn parse_omnilock_supply_info_cell_data(data: &[u8]) -> Option<(i128, [u8; 32])> {
+pub(crate) fn parse_omnilock_supply_info_cell_data(data: &[u8]) -> Option<(u128, [u8; 32])> {
     if data.len() < OMNILOCK_SUPPLY_INFO_CELL_MIN_DATA_LEN {
         return None;
     }
@@ -117,13 +117,10 @@ pub(crate) fn parse_omnilock_supply_info_cell_data(data: &[u8]) -> Option<(i128,
     if current_supply > max_supply {
         return None;
     }
-    if max_supply > i128::MAX as u128 {
-        return None;
-    }
 
     let mut token_type_hash = [0u8; 32];
     token_type_hash.copy_from_slice(&data[33..65]);
-    Some((max_supply as i128, token_type_hash))
+    Some((max_supply, token_type_hash))
 }
 
 // ---------------------------------------------------------------------------
@@ -336,7 +333,7 @@ pub(crate) struct UniqueTokenInfo {
     pub decimal: u8,
     pub name: String,
     pub symbol: String,
-    pub total_supply: Option<i128>,
+    pub total_supply: Option<u128>,
 }
 
 /// Parse all fields from a Unique Cell's data:
@@ -384,10 +381,8 @@ pub(crate) fn parse_unique_cell_token_info(data: &[u8]) -> Option<UniqueTokenInf
         let value = &data[index..index + data_len];
         if tag == TOKEN_INFO_TAG_TOTAL_SUPPLY && data_len == TOKEN_INFO_TOTAL_SUPPLY_DATA_LEN {
             let raw = u128::from_le_bytes(value.try_into().ok()?);
-            if raw <= i128::MAX as u128 {
-                total_supply = Some(raw as i128);
-                break;
-            }
+            total_supply = Some(raw);
+            break;
         }
         index += data_len;
     }
@@ -400,13 +395,13 @@ pub(crate) fn parse_unique_cell_token_info(data: &[u8]) -> Option<UniqueTokenInf
     })
 }
 
-pub(crate) fn parse_token_info_total_supply(data: &[u8]) -> Option<i128> {
+pub(crate) fn parse_token_info_total_supply(data: &[u8]) -> Option<u128> {
     parse_unique_cell_token_info(data)?.total_supply
 }
 
 pub(crate) fn collect_unique_cell_total_supply_by_type_args(
     cells: &[crate::parser::cell::ParsedCell],
-) -> HashMap<Vec<u8>, i128> {
+) -> HashMap<Vec<u8>, u128> {
     let mut totals = HashMap::new();
     for cell in cells {
         let Some(type_args) = cell.type_args.as_ref() else {
@@ -501,10 +496,10 @@ pub(crate) fn collect_token_onchain_info(
 }
 
 pub(crate) fn observe_max_supply(
-    observations: &mut HashMap<Vec<u8>, i128>,
+    observations: &mut HashMap<Vec<u8>, u128>,
     tx_hash: &[u8; 32],
     token_type_hash: Vec<u8>,
-    max_supply: i128,
+    max_supply: u128,
     source: &str,
 ) {
     if let Some(existing) = observations.get(&token_type_hash) {
@@ -526,7 +521,7 @@ pub(crate) fn observe_max_supply(
 
 pub(crate) fn collect_token_max_supply_observations(
     all_tx_data: &[TxData],
-) -> HashMap<Vec<u8>, i128> {
+) -> HashMap<Vec<u8>, u128> {
     let mut observations = HashMap::new();
 
     for tx_data in all_tx_data {
@@ -1103,7 +1098,7 @@ mod tests {
         let observations = collect_token_max_supply_observations(&[tx]);
         assert_eq!(
             observations.get(token_type_hash.as_slice()),
-            Some(&(total_supply as i128))
+            Some(&total_supply)
         );
     }
 
@@ -1134,7 +1129,7 @@ mod tests {
         let observations = collect_token_max_supply_observations(&[tx]);
         assert_eq!(
             observations.get(token_type_hash.as_slice()),
-            Some(&(total_supply as i128))
+            Some(&total_supply)
         );
     }
 

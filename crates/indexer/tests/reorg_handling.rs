@@ -522,7 +522,7 @@ fn test_rollback_updates_derived_cfs_inline() {
 
     let reg_cap: i128 = 10_000_000_000;
     let udt_cap: i128 = 14_200_000_000;
-    let udt_amount: i128 = 500_000_000;
+    let udt_amount: u128 = 500_000_000;
 
     // 1. Insert blocks 1-4 with regular cells for lock_hash.
     for i in 1..=4 {

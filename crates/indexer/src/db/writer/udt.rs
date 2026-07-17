@@ -236,7 +236,7 @@ impl BatchWriter {
     pub fn process_udt_transfers_batch(
         &self,
         transfers: &[(&ParsedUdtTransfer, &[u8], i64)],
-        max_supply_observations: &HashMap<Vec<u8>, i128>,
+        max_supply_observations: &HashMap<Vec<u8>, u128>,
         onchain_token_info: &HashMap<Vec<u8>, crate::sync::token_helpers::UniqueTokenInfo>,
         block_timestamps: &HashMap<i64, i64>,
         batch: &mut StoreBatch,
@@ -255,7 +255,7 @@ impl BatchWriter {
     pub(crate) fn process_udt_transfers_batch_with_state(
         &self,
         transfers: &[(&ParsedUdtTransfer, &[u8], i64)],
-        max_supply_observations: &HashMap<Vec<u8>, i128>,
+        max_supply_observations: &HashMap<Vec<u8>, u128>,
         onchain_token_info: &HashMap<Vec<u8>, crate::sync::token_helpers::UniqueTokenInfo>,
         block_timestamps: &HashMap<i64, i64>,
         batch: &mut StoreBatch,
@@ -291,14 +291,33 @@ impl BatchWriter {
                     transfer,
                     first_seen_block: *block_number,
                     transfers_count: 0,
-                    supply_delta: 0i128,
+                    supply_added: 0,
+                    supply_removed: 0,
                 });
             entry.transfers_count += 1;
 
             if transfer.is_mint {
-                entry.supply_delta += transfer.amount as i128;
+                let current = entry.supply_added;
+                entry.supply_added = current.checked_add(transfer.amount).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "token mint supply overflow: type_hash=0x{}, tx_hash=0x{}, added={}, amount={}",
+                        hex::encode(&transfer.type_script_hash),
+                        hex::encode(tx_hash),
+                        current,
+                        transfer.amount
+                    )
+                })?;
             } else if transfer.is_burn {
-                entry.supply_delta -= transfer.amount as i128;
+                let current = entry.supply_removed;
+                entry.supply_removed = current.checked_add(transfer.amount).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "token burn supply overflow: type_hash=0x{}, tx_hash=0x{}, removed={}, amount={}",
+                        hex::encode(&transfer.type_script_hash),
+                        hex::encode(tx_hash),
+                        current,
+                        transfer.amount
+                    )
+                })?;
             }
 
             let ts_ms = block_timestamps
@@ -331,19 +350,45 @@ impl BatchWriter {
             let current_total = self.store.get_token_transfers_count(type_hash)?;
             let new_total = current_total + update.transfers_count;
 
+            // Single net-difference supply path for both new and existing tokens: no amount
+            // passes through a narrowing cast, and no transient (current + added) overflow
+            // occurs. `current` is 0 for a not-yet-seen token. checked_sub None is the
+            // supply-underflow guard (was `next_supply < 0`): a burn exceeding the known
+            // supply — including a net burn on a first-seen token — is an invariant
+            // violation and fails fast rather than clamping to 0.
+            let current_supply = existing
+                .as_ref()
+                .and_then(|info| info.total_supply)
+                .unwrap_or(0);
+            let next_supply = if update.supply_added >= update.supply_removed {
+                current_supply
+                    .checked_add(update.supply_added - update.supply_removed)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "token supply overflow: type_hash=0x{}, supply={}, added={}, removed={}",
+                            hex::encode(type_hash),
+                            current_supply,
+                            update.supply_added,
+                            update.supply_removed
+                        )
+                    })?
+            } else {
+                current_supply
+                    .checked_sub(update.supply_removed - update.supply_added)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "token supply underflow: type_hash=0x{}, supply={}, added={}, removed={}",
+                            hex::encode(type_hash),
+                            current_supply,
+                            update.supply_added,
+                            update.supply_removed
+                        )
+                    })?
+            };
+
             let mut updated = match existing {
                 Some(mut info) => {
-                    let supply = info.total_supply.get_or_insert(0);
-                    let next_supply = *supply + update.supply_delta;
-                    if next_supply < 0 {
-                        bail!(
-                            "token supply underflow: type_hash=0x{}, supply={}, delta={}",
-                            hex::encode(type_hash),
-                            *supply,
-                            update.supply_delta
-                        );
-                    }
-                    *supply = next_supply;
+                    info.total_supply = Some(next_supply);
                     info
                 }
                 None => TokenInfo {
@@ -354,11 +399,7 @@ impl BatchWriter {
                     name: None,
                     symbol: None,
                     decimals: None,
-                    total_supply: if update.supply_delta > 0 {
-                        Some(update.supply_delta)
-                    } else {
-                        Some(0)
-                    },
+                    total_supply: Some(next_supply),
                     max_supply: None,
                     holders_count: 0,
                     first_seen_block: update.first_seen_block,
@@ -410,43 +451,85 @@ impl BatchWriter {
             state.put_hourly_transfer(key, updated_hourly);
         }
 
-        // Step 3: Aggregate balance changes per (type_hash, lock_hash)
-        let mut balance_changes: HashMap<(Vec<u8>, Vec<u8>), i128> = HashMap::new();
+        // Step 3: Aggregate balance changes per (type_hash, lock_hash) as (received, sent)
+        // u128 sums. UDT amounts are u128, so a signed i128 delta cannot hold a valid
+        // amount > i128::MAX and `amount as i128` would wrap; the net difference is applied
+        // in Step 4 with no narrowing cast.
+        let mut balance_changes: HashMap<(Vec<u8>, Vec<u8>), (u128, u128)> = HashMap::new();
 
-        for (transfer, _tx_hash, _block_number) in transfers {
+        for (transfer, tx_hash, _block_number) in transfers {
             let type_hash = &transfer.type_script_hash;
 
             if let Some(ref from_lock) = transfer.from_lock_hash {
                 if !from_lock.is_empty() {
-                    *balance_changes
+                    let entry = balance_changes
                         .entry((type_hash.clone(), from_lock.clone()))
-                        .or_default() -= transfer.amount as i128;
+                        .or_default();
+                    let current_sent = entry.1;
+                    entry.1 = current_sent.checked_add(transfer.amount).ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "token holder sent-amount overflow: type_hash=0x{}, lock_hash=0x{}, tx_hash=0x{}, sent={}, amount={}",
+                            hex::encode(type_hash),
+                            hex::encode(from_lock),
+                            hex::encode(tx_hash),
+                            current_sent,
+                            transfer.amount
+                        )
+                    })?;
                 }
             }
 
             if !transfer.to_lock_hash.is_empty() {
-                *balance_changes
+                let entry = balance_changes
                     .entry((type_hash.clone(), transfer.to_lock_hash.clone()))
-                    .or_default() += transfer.amount as i128;
+                    .or_default();
+                let current_received = entry.0;
+                entry.0 = current_received.checked_add(transfer.amount).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "token holder received-amount overflow: type_hash=0x{}, lock_hash=0x{}, tx_hash=0x{}, received={}, amount={}",
+                        hex::encode(type_hash),
+                        hex::encode(&transfer.to_lock_hash),
+                        hex::encode(tx_hash),
+                        current_received,
+                        transfer.amount
+                    )
+                })?;
             }
         }
 
         // Step 4: Apply balance changes with holder count tracking
         let mut holder_count_changes: HashMap<Vec<u8>, i64> = HashMap::new();
 
-        for ((type_hash, lock_hash), delta) in &balance_changes {
+        for ((type_hash, lock_hash), (received, sent)) in &balance_changes {
+            let received = *received;
+            let sent = *sent;
             let existing = self.store.get_token_holder_balance(type_hash, lock_hash)?;
             let old_balance = existing.unwrap_or(0);
-            let new_balance = old_balance + delta;
-            if new_balance < 0 {
-                bail!(
-                    "token holder balance underflow: type_hash=0x{}, lock_hash=0x{}, balance={}, delta={}",
-                    hex::encode(type_hash),
-                    hex::encode(lock_hash),
-                    old_balance,
-                    delta
-                );
-            }
+            // Net-difference apply; checked_sub None is the preserved balance-underflow
+            // guard (was `new_balance < 0`).
+            let new_balance = if received >= sent {
+                old_balance.checked_add(received - sent).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "token holder balance overflow: type_hash=0x{}, lock_hash=0x{}, balance={}, received={}, sent={}",
+                        hex::encode(type_hash),
+                        hex::encode(lock_hash),
+                        old_balance,
+                        received,
+                        sent
+                    )
+                })?
+            } else {
+                old_balance.checked_sub(sent - received).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "token holder balance underflow: type_hash=0x{}, lock_hash=0x{}, balance={}, received={}, sent={}",
+                        hex::encode(type_hash),
+                        hex::encode(lock_hash),
+                        old_balance,
+                        received,
+                        sent
+                    )
+                })?
+            };
 
             if old_balance > 0 {
                 batch.delete_token_holder_by_balance(type_hash, lock_hash, old_balance);
@@ -544,7 +627,7 @@ impl BatchWriter {
     fn apply_observed_max_supply(
         type_hash: &[u8],
         info: &mut TokenInfo,
-        observations: &HashMap<Vec<u8>, i128>,
+        observations: &HashMap<Vec<u8>, u128>,
     ) {
         let Some(&observed) = observations.get(type_hash) else {
             return;
@@ -569,7 +652,12 @@ struct TokenUpdate<'a> {
     transfer: &'a ParsedUdtTransfer,
     first_seen_block: i64,
     transfers_count: i64,
-    supply_delta: i128,
+    /// UDT amounts are u128; a signed `i128` supply delta cannot hold a valid amount
+    /// exceeding i128::MAX (`amount as i128` would wrap). Track minted/burned as separate
+    /// u128 sums and apply the net difference (added minus removed, or removed minus
+    /// added) so no amount ever passes through a narrowing cast.
+    supply_added: u128,
+    supply_removed: u128,
 }
 
 fn apply_onchain_token_info(
@@ -976,7 +1064,7 @@ mod tests {
         block_timestamps.insert(100i64, 1_700_000_000_000i64);
         let transfers = vec![(&transfer, tx_hash.as_slice(), 100i64)];
         let mut max_supply_observations = HashMap::new();
-        max_supply_observations.insert(type_hash.clone(), 1_000i128);
+        max_supply_observations.insert(type_hash.clone(), 1_000u128);
 
         let mut batch = StoreBatch::new(&store);
         writer
@@ -1340,7 +1428,7 @@ mod tests {
         let transfers: Vec<(&ParsedUdtTransfer, &[u8], i64)> = Vec::new();
         let block_timestamps = HashMap::new();
         let mut max_supply_observations = HashMap::new();
-        max_supply_observations.insert(type_hash.clone(), 1_000_000i128);
+        max_supply_observations.insert(type_hash.clone(), 1_000_000u128);
 
         let mut batch = StoreBatch::new(&store);
         writer
@@ -1358,6 +1446,59 @@ mod tests {
         assert_eq!(updated.max_supply, Some(1_000_000));
         assert_eq!(updated.total_supply, Some(42));
         assert_eq!(updated.transfers_count, 5);
+    }
+
+    #[test]
+    fn test_process_udt_transfers_batch_mint_amount_above_i128_max() {
+        // Regression (live-sync twin of the bulk-reducer crash): a canonical sUDT mint
+        // whose amount (LE u128) exceeds i128::MAX must land in total_supply and the
+        // holder balance without wrapping. The old `amount as i128` accumulation wrapped
+        // 2.22e38 negative and drove the supply/holder underflow guards.
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone(), store.clone());
+
+        let big: u128 = 222_044_604_925_031_325_468_940_491_728_862_838_784;
+        let type_hash = vec![0xAF; 32];
+        let to_lock_hash = vec![0x33; 32];
+        let transfer = ParsedUdtTransfer {
+            type_script_hash: type_hash.clone(),
+            type_code_hash: vec![0xCD; 32],
+            type_hash_type: 1,
+            type_args: vec![0x11; 20],
+            from_lock_hash: None,
+            to_lock_hash: to_lock_hash.clone(),
+            amount: big,
+            standard: crate::parser::UdtStandard::Sudt,
+            is_mint: true,
+            is_burn: false,
+        };
+
+        let tx_hash = [0xEF; 32];
+        let mut block_timestamps = HashMap::new();
+        block_timestamps.insert(4_743_232i64, 1_700_000_000_000i64);
+        let transfers = vec![(&transfer, tx_hash.as_slice(), 4_743_232i64)];
+
+        let mut batch = StoreBatch::new(&store);
+        writer
+            .process_udt_transfers_batch(
+                &transfers,
+                &HashMap::new(),
+                &HashMap::new(),
+                &block_timestamps,
+                &mut batch,
+            )
+            .expect("mint above i128::MAX must not wrap/underflow");
+        batch.commit().unwrap();
+
+        let updated = store.get_token(&type_hash).unwrap().unwrap();
+        assert_eq!(updated.total_supply, Some(big));
+        assert_eq!(
+            store
+                .get_token_holder_balance(&type_hash, &to_lock_hash)
+                .unwrap(),
+            Some(big)
+        );
     }
 
     #[test]
