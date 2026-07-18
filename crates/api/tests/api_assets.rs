@@ -479,6 +479,105 @@ async fn test_assets_list_defaults_to_capacity_sort_and_supports_cursor_paginati
 }
 
 #[tokio::test]
+async fn test_assets_supply_sort_orders_by_u128_magnitude_beyond_i128_max() {
+    // total_supply is a u128 UDT amount. Sorting by supply must order by the true
+    // u128 magnitude even when a value exceeds i128::MAX. Under the old i128 sort
+    // key such a value failed to parse (treated as absent) and mis-sorted.
+    let store = test_store();
+    let token_small = [0x51u8; 32];
+    let token_huge = [0x52u8; 32];
+
+    // 170141183460469231731687303715884105728 == i128::MAX + 1 (within u128 range).
+    let huge_supply: u128 = 170_141_183_460_469_231_731_687_303_715_884_105_728;
+
+    store
+        .put_token_direct(
+            &token_small,
+            &TokenInfo {
+                type_code_hash: vec![0xAA; 32],
+                hash_type: 1,
+                type_args: vec![0x01; 20],
+                standard: "xudt".to_string(),
+                name: Some("Small Supply".to_string()),
+                symbol: Some("SMALL".to_string()),
+                decimals: Some(8),
+                total_supply: Some(1000),
+                max_supply: None,
+                holders_count: 1,
+                first_seen_block: 1,
+                icon_url: None,
+                description: None,
+                transfers_count: 0,
+            },
+        )
+        .unwrap();
+    store
+        .put_token_direct(
+            &token_huge,
+            &TokenInfo {
+                type_code_hash: vec![0xBB; 32],
+                hash_type: 1,
+                type_args: vec![0x02; 20],
+                standard: "xudt".to_string(),
+                name: Some("Huge Supply".to_string()),
+                symbol: Some("HUGE".to_string()),
+                decimals: Some(8),
+                total_supply: Some(huge_supply),
+                max_supply: None,
+                holders_count: 1,
+                first_seen_block: 1,
+                icon_url: None,
+                description: None,
+                transfers_count: 0,
+            },
+        )
+        .unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    // Descending by supply: the > i128::MAX token must come first.
+    let request = Request::builder()
+        .uri("/api/v1/assets?type=token&sort_key=supply&sort_direction=desc")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        json["data"][0]["id"],
+        format!("0x{}", hex::encode(token_huge))
+    );
+    assert_eq!(
+        json["data"][0]["totalSupply"],
+        "170141183460469231731687303715884105728"
+    );
+    assert_eq!(
+        json["data"][1]["id"],
+        format!("0x{}", hex::encode(token_small))
+    );
+
+    // Ascending by supply: the small token must come first.
+    let request = Request::builder()
+        .uri("/api/v1/assets?type=token&sort_key=supply&sort_direction=asc")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        json["data"][0]["id"],
+        format!("0x{}", hex::encode(token_small))
+    );
+    assert_eq!(
+        json["data"][1]["id"],
+        format!("0x{}", hex::encode(token_huge))
+    );
+}
+
+#[tokio::test]
 async fn test_assets_list_token_errors_when_daily_deltas_invalid() {
     let store = test_store();
     let healthy_token = [0x31u8; 32];

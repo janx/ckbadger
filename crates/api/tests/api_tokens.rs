@@ -206,6 +206,75 @@ async fn test_get_token_includes_maximum_supply() {
 }
 
 #[tokio::test]
+async fn test_get_token_supply_exceeding_i128_max_serializes_as_decimal_string() {
+    // UDT amounts are u128. A token whose supply exceeds i128::MAX must serialize
+    // as an exact decimal string (the JSON contract) rather than overflow the
+    // ckbadger-internal supply type. The detail `totalSupply` is derived from
+    // aggregate_token_holder_stats (the u128 sum of holder balances).
+    let store = test_store();
+    let type_hash = vec![0x7c; 32];
+    let type_hash_hex = format!("0x{}", hex::encode(&type_hash));
+    let holder_lock = [0x13; 32];
+
+    // 170141183460469231731687303715884105728 == i128::MAX + 1 (within u128 range).
+    let huge_supply: u128 = 170_141_183_460_469_231_731_687_303_715_884_105_728;
+    // u128::MAX == 340282366920938463463374607431768211455.
+    let huge_max_supply: u128 = u128::MAX;
+
+    store
+        .put_token_direct(
+            &type_hash,
+            &TokenInfo {
+                type_code_hash: vec![0x55; 32],
+                hash_type: 1,
+                type_args: vec![0x66; 20],
+                standard: "xudt".to_string(),
+                name: Some("Huge Supply".to_string()),
+                symbol: Some("HUGE".to_string()),
+                decimals: Some(8),
+                total_supply: Some(huge_supply),
+                max_supply: Some(huge_max_supply),
+                holders_count: 1,
+                first_seen_block: 0,
+                icon_url: None,
+                description: None,
+                transfers_count: 0,
+            },
+        )
+        .unwrap();
+
+    let mut batch = StoreBatch::new(&store);
+    batch.put_token_holder(&type_hash, &holder_lock, huge_supply);
+    batch.put_token_holder_by_balance(&type_hash, &holder_lock, huge_supply);
+    batch.put_addr_token_by_balance(&holder_lock, &type_hash, huge_supply);
+    batch.commit().unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri(format!("/api/v1/tokens/{}", type_hash_hex))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        json["totalSupply"],
+        "170141183460469231731687303715884105728"
+    );
+    assert_eq!(json["totalSupply"], huge_supply.to_string());
+    assert_eq!(
+        json["maximumSupply"],
+        "340282366920938463463374607431768211455"
+    );
+    assert_eq!(json["maximumSupply"], huge_max_supply.to_string());
+    assert_eq!(json["maximumSupplyStatus"], "limited");
+}
+
+#[tokio::test]
 async fn test_get_token_returns_store_backed_detail_when_filtered_from_warmup_cache() {
     let store = test_store();
     let type_hash = vec![0x78; 32];

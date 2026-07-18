@@ -117,7 +117,7 @@ pub struct TokenTransferResponse {
 }
 
 struct TokenDerivedStats {
-    total_supply: i128,
+    total_supply: u128,
     holders_count: i64,
     transfers_count: i64,
     transfers_24h: i64,
@@ -240,12 +240,12 @@ fn parse_token_list_cursor(cursor: &str) -> Result<(i64, &str), ApiRouteError> {
     Ok((holders_count, token_id))
 }
 
-fn parse_token_holder_cursor(cursor: &str) -> Result<(i128, Vec<u8>), ApiRouteError> {
+fn parse_token_holder_cursor(cursor: &str) -> Result<(u128, Vec<u8>), ApiRouteError> {
     let (balance, lock_hash_hex) = cursor
         .split_once(':')
         .ok_or_else(|| ApiError::bad_request("Invalid token holders cursor"))?;
     let balance = balance
-        .parse::<i128>()
+        .parse::<u128>()
         .map_err(|_| ApiError::bad_request("Invalid token holders cursor"))?;
     let lock_hash = hex::decode(lock_hash_hex.strip_prefix("0x").unwrap_or(lock_hash_hex))
         .map_err(|_| ApiError::bad_request("Invalid token holders cursor"))?;

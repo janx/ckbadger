@@ -639,6 +639,27 @@ fn compare_optional_i128(
     }
 }
 
+/// Parse a UDT amount (u128) for the `total_supply` sort column.
+///
+/// UDT amounts are unsigned 128-bit; the capacity/knowledge columns are
+/// signed capacities and keep [`parse_i128_opt`]/[`compare_optional_i128`].
+fn parse_u128_opt(value: Option<&str>) -> Option<u128> {
+    value?.parse::<u128>().ok()
+}
+
+fn compare_optional_u128(
+    left: Option<u128>,
+    right: Option<u128>,
+    direction: SortDirection,
+) -> Ordering {
+    match (left, right) {
+        (None, None) => Ordering::Equal,
+        (None, Some(_)) => Ordering::Greater,
+        (Some(_), None) => Ordering::Less,
+        (Some(l), Some(r)) => apply_direction(l.cmp(&r), direction),
+    }
+}
+
 fn compare_optional_i64(
     left: Option<i64>,
     right: Option<i64>,
@@ -809,9 +830,9 @@ fn compare_asset_entries(
             direction,
         ),
         AssetSortKey::Type => apply_direction(left.standard.cmp(&right.standard), direction),
-        AssetSortKey::Supply => compare_optional_i128(
-            parse_i128_opt(left.total_supply.as_deref()),
-            parse_i128_opt(right.total_supply.as_deref()),
+        AssetSortKey::Supply => compare_optional_u128(
+            parse_u128_opt(left.total_supply.as_deref()),
+            parse_u128_opt(right.total_supply.as_deref()),
             direction,
         ),
         AssetSortKey::Transfers24h => {

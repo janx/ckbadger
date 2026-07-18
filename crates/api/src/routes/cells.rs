@@ -1638,12 +1638,12 @@ pub struct AddressTokenResponse {
 
 fn parse_address_token_cursor(
     cursor: &str,
-) -> Result<(i128, Vec<u8>), (axum::http::StatusCode, axum::Json<ApiError>)> {
+) -> Result<(u128, Vec<u8>), (axum::http::StatusCode, axum::Json<ApiError>)> {
     let (balance, type_hash_hex) = cursor
         .split_once(':')
         .ok_or_else(|| ApiError::bad_request("Invalid address token cursor"))?;
     let balance = balance
-        .parse::<i128>()
+        .parse::<u128>()
         .map_err(|_| ApiError::bad_request("Invalid address token cursor"))?;
     let type_hash = hex::decode(type_hash_hex.strip_prefix("0x").unwrap_or(type_hash_hex))
         .map_err(|_| ApiError::bad_request("Invalid address token cursor"))?;
