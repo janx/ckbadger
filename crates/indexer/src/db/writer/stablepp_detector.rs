@@ -104,7 +104,7 @@ impl StableppDetector {
             .filter(|d| {
                 d.kind == ITEM_KIND_TOKEN && stablepp_type_script_hashes.contains(&d.item_id)
             })
-            .map(|d| d.delta)
+            .map(|d| d.signed_i128_saturating())
             .sum()
     }
 

@@ -182,24 +182,24 @@ fn convert_item_delta(
             let (symbol, decimals) = lookup_token_info(store, token_cache, &item.item_id);
             ItemDeltaResponse::Token {
                 type_script_hash: format!("0x{}", hex::encode(&item.item_id)),
-                delta: item.delta.to_string(),
+                delta: format!("{}{}", if item.negative { "-" } else { "" }, item.magnitude),
                 symbol,
                 decimals,
             }
         }
         ITEM_KIND_OBJECT => ItemDeltaResponse::Object {
             object_id: format!("0x{}", hex::encode(&item.item_id)),
-            delta: item.delta as i8,
+            delta: item.signed_i128_saturating() as i8,
         },
         ITEM_KIND_IDENTITY => ItemDeltaResponse::Identity {
             identity_id: format!("0x{}", hex::encode(&item.item_id)),
-            delta: item.delta as i8,
+            delta: item.signed_i128_saturating() as i8,
         },
         _ => {
             // Unknown kind — treat as token for forward compatibility
             ItemDeltaResponse::Token {
                 type_script_hash: format!("0x{}", hex::encode(&item.item_id)),
-                delta: item.delta.to_string(),
+                delta: format!("{}{}", if item.negative { "-" } else { "" }, item.magnitude),
                 symbol: None,
                 decimals: None,
             }

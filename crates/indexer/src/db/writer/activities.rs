@@ -246,8 +246,9 @@ pub(crate) struct OwnerAccum<'a> {
     pub(crate) output_capacity: i128,
     pub(crate) input_used: i64,
     pub(crate) output_used: i64,
-    /// UDT: type_script_hash -> (input_amount, output_amount)
-    pub(crate) udt_deltas: HashMap<&'a [u8], (i128, i128)>,
+    /// UDT: type_script_hash -> (input_amount, output_amount). u128 amounts (per the
+    /// sUDT/xUDT standard); the signed net delta is derived at emit time.
+    pub(crate) udt_deltas: HashMap<&'a [u8], (u128, u128)>,
     /// DAO deposits (output cells with DAO type and data == 0x00..00)
     pub(crate) dao_deposits: Vec<i64>,
     /// DAO withdraw requests (output cells with DAO type and non-zero deposit block)
@@ -462,16 +463,22 @@ fn build_tx_actions<'a>(
         // Build item deltas
         let mut item_deltas = Vec::new();
 
-        // UDT changes → ItemDelta (token)
+        // UDT changes → ItemDelta (token). Net-difference (u128, no intermediate overflow).
         for (type_script_hash, (input_amt, output_amt)) in &accum.udt_deltas {
-            let delta = *output_amt - *input_amt;
-            if delta != 0 {
-                item_deltas.push(ItemDelta {
-                    item_id: type_script_hash.to_vec(),
-                    kind: ITEM_KIND_TOKEN,
-                    delta,
-                });
+            if output_amt == input_amt {
+                continue;
             }
+            let (magnitude, negative) = if output_amt >= input_amt {
+                (output_amt - input_amt, false)
+            } else {
+                (input_amt - output_amt, true)
+            };
+            item_deltas.push(ItemDelta {
+                item_id: type_script_hash.to_vec(),
+                kind: ITEM_KIND_TOKEN,
+                magnitude,
+                negative,
+            });
         }
 
         // Spore/DOB changes → ItemDelta (object, +1/-1)
@@ -687,7 +694,12 @@ fn classify_input<'a>(
             if let Some(tsh) = type_script_hash {
                 if let Some(amount) = udt_amount {
                     let entry = accum.udt_deltas.entry(tsh).or_insert((0, 0));
-                    entry.0 += amount as i128;
+                    entry.0 = entry.0.checked_add(amount).ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "udt input delta overflow: type_hash=0x{}",
+                            hex::encode(tsh)
+                        )
+                    })?;
                 }
             }
         }
@@ -751,7 +763,12 @@ fn classify_output<'a>(
             if let Some(tsh) = type_script_hash {
                 if let Some(amount) = UdtParser::parse_amount(cell_data) {
                     let entry = accum.udt_deltas.entry(tsh).or_insert((0, 0));
-                    entry.1 += amount as i128;
+                    entry.1 = entry.1.checked_add(amount).ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "udt output delta overflow: type_hash=0x{}",
+                            hex::encode(tsh)
+                        )
+                    })?;
                 }
             }
         }
@@ -882,7 +899,8 @@ fn emit_object_item_deltas<T: AsRef<[u8]>>(
             item_deltas.push(ItemDelta {
                 item_id: id.to_vec(),
                 kind: ITEM_KIND_OBJECT,
-                delta: 1,
+                magnitude: 1,
+                negative: false,
             });
         }
     }
@@ -893,7 +911,8 @@ fn emit_object_item_deltas<T: AsRef<[u8]>>(
             item_deltas.push(ItemDelta {
                 item_id: id.to_vec(),
                 kind: ITEM_KIND_OBJECT,
-                delta: -1,
+                magnitude: 1,
+                negative: true,
             });
         }
     }
@@ -914,7 +933,8 @@ fn emit_identity_item_deltas<T: AsRef<[u8]>>(
             item_deltas.push(ItemDelta {
                 item_id: id.to_vec(),
                 kind: ITEM_KIND_IDENTITY,
-                delta: 1,
+                magnitude: 1,
+                negative: false,
             });
         }
     }
@@ -925,7 +945,8 @@ fn emit_identity_item_deltas<T: AsRef<[u8]>>(
             item_deltas.push(ItemDelta {
                 item_id: id.to_vec(),
                 kind: ITEM_KIND_IDENTITY,
-                delta: -1,
+                magnitude: 1,
+                negative: true,
             });
         }
     }
@@ -1325,7 +1346,7 @@ mod tests {
             .iter()
             .find(|d| d.kind == ITEM_KIND_TOKEN)
             .expect("alice should have token item delta");
-        assert_eq!(alice_token.delta, -1000);
+        assert_eq!(alice_token.signed_i128_saturating(), -1000);
         assert_eq!(alice_token.item_id, type_script_hash);
 
         let bob_p = find_participant(actions, bob);
@@ -1334,7 +1355,54 @@ mod tests {
             .iter()
             .find(|d| d.kind == ITEM_KIND_TOKEN)
             .expect("bob should have token item delta");
-        assert_eq!(bob_token.delta, 1000);
+        assert_eq!(bob_token.signed_i128_saturating(), 1000);
+    }
+
+    #[test]
+    fn udt_item_delta_above_i128_max_is_not_wrapped() {
+        // Regression: an activity-feed token delta for a valid sUDT amount > i128::MAX must
+        // not wrap. On-chain: block 4743232 sUDT amount 0x00…704ea6403c0ca7 (LE) = 2.22e38.
+        // Under the old `delta: i128` / `amount as i128` code this stored a wrapped-negative
+        // delta (~-1.18e38); now it must be magnitude = big, negative = false.
+        let big: u128 = 222_044_604_925_031_325_468_940_491_728_862_838_784;
+        let bob = 0xBB;
+        let sudt_code_hash = crate::rpc::parse_hex_to_bytes(crate::parser::udt::SUDT_CODE_HASH);
+        let type_script_hash = vec![0xDD; 32];
+
+        // Plain (non-UDT) funding input; a single sUDT mint output of `big` to bob.
+        let alice_input = make_input(0xAA, 300_00000000, 61_00000000);
+        let outputs = vec![make_output(
+            bob,
+            142_00000000,
+            Some(sudt_code_hash),
+            Some(type_script_hash.clone()),
+            Some(vec![0xEE; 20]),
+            big.to_le_bytes().to_vec(),
+        )];
+
+        let tx = TxView {
+            tx_hash: &[0x06; 32],
+            block_hash: &[0xA6; 32],
+            tx_index: 1,
+            block_number: 4_743_232,
+            timestamp: 1_700_000_000,
+            is_cellbase: false,
+            inputs: vec![alice_input.view()],
+            outputs: outputs.iter().map(|o| o.view()).collect(),
+        };
+
+        let actions_list = build_tx_actions_for_block_no_detectors(&[tx]).unwrap();
+        let actions = &actions_list[0];
+        let bob_p = find_participant(actions, bob);
+        let bob_token = bob_p
+            .item_deltas
+            .iter()
+            .find(|d| d.kind == ITEM_KIND_TOKEN)
+            .expect("bob should have token item delta");
+        assert_eq!(bob_token.magnitude, big);
+        assert!(!bob_token.negative);
+        // The signed helper saturates instead of wrapping negative like the old `as i128`.
+        assert_eq!(bob_token.signed_i128_saturating(), i128::MAX);
     }
 
     #[test]
@@ -1388,7 +1456,7 @@ mod tests {
             .iter()
             .find(|d| d.kind == ITEM_KIND_TOKEN)
             .expect("alice should have token item delta");
-        assert_eq!(alice_token.delta, -1000);
+        assert_eq!(alice_token.signed_i128_saturating(), -1000);
     }
 
     #[test]
@@ -1437,7 +1505,7 @@ mod tests {
             .find(|d| d.kind == ITEM_KIND_IDENTITY)
             .expect("dotbit identity item delta should be present");
         assert_eq!(identity_delta.item_id, account_id);
-        assert_eq!(identity_delta.delta, 1); // output-only = +1
+        assert_eq!(identity_delta.signed_i128_saturating(), 1); // output-only = +1
     }
 
     #[test]
@@ -1477,7 +1545,7 @@ mod tests {
             .find(|d| d.kind == ITEM_KIND_IDENTITY)
             .expect("did_ckb identity item delta should be present");
         assert_eq!(identity_delta.item_id, did_id);
-        assert_eq!(identity_delta.delta, 1); // output-only = +1
+        assert_eq!(identity_delta.signed_i128_saturating(), 1); // output-only = +1
     }
 
     #[test]

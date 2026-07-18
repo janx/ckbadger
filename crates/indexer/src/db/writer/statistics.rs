@@ -2215,7 +2215,8 @@ mod activity_stats_tests {
                 p.item_deltas = vec![ItemDelta {
                     item_id: vec![0xAA; 32],
                     kind: ITEM_KIND_TOKEN,
-                    delta: 1000,
+                    magnitude: 1000,
+                    negative: false,
                 }];
                 p
             }],
@@ -2237,7 +2238,8 @@ mod activity_stats_tests {
                 p.item_deltas = vec![ItemDelta {
                     item_id: vec![0xBB; 32],
                     kind: ITEM_KIND_OBJECT,
-                    delta: 1,
+                    magnitude: 1,
+                    negative: false,
                 }];
                 p
             }],
@@ -2259,7 +2261,8 @@ mod activity_stats_tests {
                 p.item_deltas = vec![ItemDelta {
                     item_id: vec![0xCC; 32],
                     kind: ITEM_KIND_IDENTITY,
-                    delta: 1,
+                    magnitude: 1,
+                    negative: false,
                 }];
                 p
             }],
@@ -2281,7 +2284,8 @@ mod activity_stats_tests {
                 p.item_deltas = vec![ItemDelta {
                     item_id: vec![0xAA; 32],
                     kind: ITEM_KIND_TOKEN,
-                    delta: 1000,
+                    magnitude: 1000,
+                    negative: false,
                 }];
                 p
             }],

@@ -1358,7 +1358,27 @@ pub const ITEM_KIND_IDENTITY: u8 = 2;
 pub struct ItemDelta {
     pub item_id: Vec<u8>,
     pub kind: u8,
-    pub delta: i128,
+    /// Absolute value of the delta. For a token item this is a UDT amount (u128); for
+    /// object/identity items it is a small count. Stored only for non-zero deltas, so
+    /// `magnitude` is always >= 1 when persisted.
+    pub magnitude: u128,
+    /// Sign of the delta (true = negative).
+    pub negative: bool,
+}
+
+impl ItemDelta {
+    /// Signed value for consumers that need one (object/identity counts, or Stable++ sign
+    /// detection). Saturates at i128::MIN/MAX — only lossy for token amounts > i128::MAX,
+    /// whose exact value no signed consumer needs (the API renders tokens from
+    /// `magnitude` + `negative` directly as a decimal string).
+    pub fn signed_i128_saturating(&self) -> i128 {
+        let m = i128::try_from(self.magnitude).unwrap_or(i128::MAX);
+        if self.negative {
+            -m
+        } else {
+            m
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1948,13 +1968,41 @@ mod tests {
         let item = ItemDelta {
             item_id: vec![0xAA; 32],
             kind: ITEM_KIND_TOKEN,
-            delta: -999_000_000,
+            magnitude: 999000000,
+            negative: true,
         };
         let bytes = bincode::serialize(&item).unwrap();
         let decoded: ItemDelta = bincode::deserialize(&bytes).unwrap();
         assert_eq!(decoded.item_id, vec![0xAA; 32]);
         assert_eq!(decoded.kind, ITEM_KIND_TOKEN);
-        assert_eq!(decoded.delta, -999_000_000);
+        assert_eq!(decoded.signed_i128_saturating(), -999_000_000);
+    }
+
+    #[test]
+    fn item_delta_signed_i128_saturating() {
+        let pos = ItemDelta {
+            item_id: vec![],
+            kind: 0,
+            magnitude: 5,
+            negative: false,
+        };
+        assert_eq!(pos.signed_i128_saturating(), 5);
+        let neg = ItemDelta {
+            item_id: vec![],
+            kind: 0,
+            magnitude: 5,
+            negative: true,
+        };
+        assert_eq!(neg.signed_i128_saturating(), -5);
+        // A token amount > i128::MAX saturates (documents the sign-only contract; the API
+        // renders tokens from magnitude+negative directly, not through this helper).
+        let huge = ItemDelta {
+            item_id: vec![],
+            kind: 0,
+            magnitude: u128::MAX,
+            negative: false,
+        };
+        assert_eq!(huge.signed_i128_saturating(), i128::MAX);
     }
 
     #[test]
@@ -1967,12 +2015,14 @@ mod tests {
                 ItemDelta {
                     item_id: vec![0xAA; 32],
                     kind: ITEM_KIND_TOKEN,
-                    delta: 1_000_000,
+                    magnitude: 1000000,
+                    negative: false,
                 },
                 ItemDelta {
                     item_id: vec![0xCC; 32],
                     kind: ITEM_KIND_OBJECT,
-                    delta: 1,
+                    magnitude: 1,
+                    negative: false,
                 },
             ],
             tags: TAG_TOKEN | TAG_OBJECT,
@@ -2019,7 +2069,8 @@ mod tests {
                 item_deltas: vec![ItemDelta {
                     item_id: vec![0xBB; 32],
                     kind: ITEM_KIND_TOKEN,
-                    delta: 42,
+                    magnitude: 42,
+                    negative: false,
                 }],
                 tags: TAG_TOKEN | TAG_PROTOCOL,
             }],
@@ -2111,12 +2162,14 @@ mod tests {
                         ItemDelta {
                             item_id: vec![0x11; 32],
                             kind: ITEM_KIND_TOKEN,
-                            delta: -50,
+                            magnitude: 50,
+                            negative: true,
                         },
                         ItemDelta {
                             item_id: vec![0x22; 32],
                             kind: ITEM_KIND_IDENTITY,
-                            delta: -1,
+                            magnitude: 1,
+                            negative: true,
                         },
                     ],
                     tags: TAG_TOKEN | TAG_IDENTITY,
@@ -2129,12 +2182,14 @@ mod tests {
                         ItemDelta {
                             item_id: vec![0x11; 32],
                             kind: ITEM_KIND_TOKEN,
-                            delta: 50,
+                            magnitude: 50,
+                            negative: false,
                         },
                         ItemDelta {
                             item_id: vec![0x22; 32],
                             kind: ITEM_KIND_IDENTITY,
-                            delta: 1,
+                            magnitude: 1,
+                            negative: false,
                         },
                     ],
                     tags: TAG_TOKEN | TAG_IDENTITY,
