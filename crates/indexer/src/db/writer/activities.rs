@@ -1346,7 +1346,8 @@ mod tests {
             .iter()
             .find(|d| d.kind == ITEM_KIND_TOKEN)
             .expect("alice should have token item delta");
-        assert_eq!(alice_token.signed_i128_saturating(), -1000);
+        assert_eq!(alice_token.magnitude, 1000);
+        assert!(alice_token.negative);
         assert_eq!(alice_token.item_id, type_script_hash);
 
         let bob_p = find_participant(actions, bob);
@@ -1355,7 +1356,8 @@ mod tests {
             .iter()
             .find(|d| d.kind == ITEM_KIND_TOKEN)
             .expect("bob should have token item delta");
-        assert_eq!(bob_token.signed_i128_saturating(), 1000);
+        assert_eq!(bob_token.magnitude, 1000);
+        assert!(!bob_token.negative);
     }
 
     #[test]
@@ -1401,8 +1403,6 @@ mod tests {
             .expect("bob should have token item delta");
         assert_eq!(bob_token.magnitude, big);
         assert!(!bob_token.negative);
-        // The signed helper saturates instead of wrapping negative like the old `as i128`.
-        assert_eq!(bob_token.signed_i128_saturating(), i128::MAX);
     }
 
     #[test]
@@ -1456,7 +1456,8 @@ mod tests {
             .iter()
             .find(|d| d.kind == ITEM_KIND_TOKEN)
             .expect("alice should have token item delta");
-        assert_eq!(alice_token.signed_i128_saturating(), -1000);
+        assert_eq!(alice_token.magnitude, 1000);
+        assert!(alice_token.negative);
     }
 
     #[test]
@@ -1505,7 +1506,8 @@ mod tests {
             .find(|d| d.kind == ITEM_KIND_IDENTITY)
             .expect("dotbit identity item delta should be present");
         assert_eq!(identity_delta.item_id, account_id);
-        assert_eq!(identity_delta.signed_i128_saturating(), 1); // output-only = +1
+        assert_eq!(identity_delta.magnitude, 1); // output-only = +1
+        assert!(!identity_delta.negative);
     }
 
     #[test]
@@ -1545,7 +1547,8 @@ mod tests {
             .find(|d| d.kind == ITEM_KIND_IDENTITY)
             .expect("did_ckb identity item delta should be present");
         assert_eq!(identity_delta.item_id, did_id);
-        assert_eq!(identity_delta.signed_i128_saturating(), 1); // output-only = +1
+        assert_eq!(identity_delta.magnitude, 1); // output-only = +1
+        assert!(!identity_delta.negative);
     }
 
     #[test]

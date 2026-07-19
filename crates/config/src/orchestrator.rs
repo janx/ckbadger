@@ -5,7 +5,7 @@ use std::path::{Component, Path, PathBuf};
 use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::{FrontendConfig, LogConfig};
+use crate::{canonical_network_name, FrontendConfig, LogConfig};
 use ckbadger_common::hardfork::normalize_network;
 
 /// One launched network stack: a subdir workdir under the orchestrator root.
@@ -27,6 +27,26 @@ impl NetworkEntry {
     pub fn dir(&self) -> &str {
         self.dir.as_deref().unwrap_or(&self.name)
     }
+}
+
+/// Validate that an orchestrator entry points at a child config for the same
+/// canonical chain. The returned name is safe to use for service labels,
+/// frontend routing, and persisted network identity.
+pub fn validate_network_entry(
+    entry: &NetworkEntry,
+    configured_network: &str,
+) -> Result<&'static str> {
+    let declared = canonical_network_name(&entry.name)?;
+    let configured = canonical_network_name(configured_network)?;
+    if declared != configured {
+        bail!(
+            "network mismatch for [[network]] '{}': child config selects '{}'; \
+             the orchestrator entry and its config.toml must identify the same chain",
+            entry.name,
+            configured_network
+        );
+    }
+    Ok(configured)
 }
 
 /// True iff `dir` resolves to one or more plain path components, i.e. iff
@@ -67,13 +87,13 @@ pub struct OrchestratorConfig {
 }
 
 pub fn parse_orchestrator_config(s: &str) -> Result<OrchestratorConfig> {
-    let cfg: OrchestratorConfig =
+    let mut cfg: OrchestratorConfig =
         toml::from_str(s).context("failed to parse orchestrator ckbadger.toml")?;
     if cfg.networks.is_empty() {
         bail!("orchestrator ckbadger.toml must define at least one [[network]]");
     }
     let mut seen = HashSet::new();
-    for entry in &cfg.networks {
+    for entry in &mut cfg.networks {
         // Dedup on the CANONICAL chain, not the raw name, so aliases of the same
         // network (e.g. "mainnet"/"ckb", "testnet"/"pudge") cannot spawn two stacks.
         let canonical = match normalize_network(&entry.name) {
@@ -102,6 +122,15 @@ pub fn parse_orchestrator_config(s: &str) -> Result<OrchestratorConfig> {
                 entry.dir(),
                 entry.name
             );
+        }
+
+        // Expose one canonical identity to every downstream consumer while
+        // preserving the original implicit workdir for alias spellings.
+        if entry.name != canonical {
+            if entry.dir.is_none() {
+                entry.dir = Some(entry.name.clone());
+            }
+            entry.name = canonical.to_string();
         }
     }
     Ok(cfg)
@@ -260,6 +289,32 @@ level = "debug"
             .unwrap_err()
             .to_string()
             .contains("unknown network"));
+    }
+
+    #[test]
+    fn validates_entry_against_canonical_child_network() {
+        let entry = NetworkEntry {
+            name: "ckb".to_string(),
+            dir: None,
+        };
+        assert_eq!(
+            validate_network_entry(&entry, "mainnet").unwrap(),
+            "mainnet"
+        );
+
+        let err = validate_network_entry(&entry, "testnet")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("ckb"));
+        assert!(err.contains("testnet"));
+        assert!(err.contains("mismatch"));
+    }
+
+    #[test]
+    fn canonicalizes_entry_alias_without_changing_implicit_workdir() {
+        let cfg = parse_orchestrator_config("[[network]]\nname=\"ckb\"\n").unwrap();
+        assert_eq!(cfg.networks[0].name, "mainnet");
+        assert_eq!(cfg.networks[0].dir(), "ckb");
     }
 
     #[test]

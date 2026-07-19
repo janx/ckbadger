@@ -1,33 +1,48 @@
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen } from '@testing-library/react';
+import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NetworkQueryScope } from '@/components/network-query-scope';
+import { useActiveNetwork } from '@/hooks/useActiveNetwork';
 
-// Buttons that drive a router navigation, so the `:network` segment (and thus
-// `useActiveNetwork`) changes exactly the way the real network switcher does.
-function NavButtons() {
+function NetworkData({ fetchNetwork }: { fetchNetwork: (network: string) => Promise<string> }) {
+  const network = useActiveNetwork();
+  const { data } = useQuery({
+    queryKey: ['stats'],
+    queryFn: () => fetchNetwork(network),
+  });
+
+  return <span data-testid="network-data">{data ?? 'loading'}</span>;
+}
+
+// Drive router navigation so the `:network` segment changes exactly as it does
+// through the real network switcher.
+function TestPage({ fetchNetwork }: { fetchNetwork: (network: string) => Promise<string> }) {
   const navigate = useNavigate();
   return (
     <>
       <button onClick={() => navigate('/mainnet/blocks')}>go-mainnet</button>
       <button onClick={() => navigate('/testnet/blocks')}>go-testnet</button>
       <button onClick={() => navigate('/testnet/transactions')}>go-testnet-other</button>
+      <NetworkData fetchNetwork={fetchNetwork} />
     </>
   );
 }
 
-function renderScope(queryClient: QueryClient) {
-  return render(
-    <QueryClientProvider client={queryClient}>
+function renderScope(fetchNetwork: (network: string) => Promise<string>) {
+  const outerQueryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  const rendered = render(
+    <QueryClientProvider client={outerQueryClient}>
       <MemoryRouter initialEntries={['/mainnet/blocks']}>
         <Routes>
           <Route
             path="/:network/*"
             element={
               <NetworkQueryScope>
-                <NavButtons />
+                <TestPage fetchNetwork={fetchNetwork} />
               </NetworkQueryScope>
             }
           />
@@ -35,55 +50,63 @@ function renderScope(queryClient: QueryClient) {
       </MemoryRouter>
     </QueryClientProvider>
   );
+
+  return { ...rendered, outerQueryClient };
 }
 
 describe('NetworkQueryScope', () => {
-  let queryClient: QueryClient;
-  let clearSpy: ReturnType<typeof vi.spyOn>;
+  let fetchNetwork: ReturnType<typeof vi.fn<(network: string) => Promise<string>>>;
 
   beforeEach(() => {
-    queryClient = new QueryClient();
-    clearSpy = vi.spyOn(queryClient, 'clear');
+    fetchNetwork = vi.fn(async (network: string) => network);
   });
 
   afterEach(() => {
-    clearSpy.mockRestore();
-    queryClient.clear();
+    vi.restoreAllMocks();
   });
 
-  it('does not clear the cache on initial mount', () => {
-    renderScope(queryClient);
-    expect(clearSpy).not.toHaveBeenCalled();
-  });
-
-  it('clears the cache once when the active network changes', async () => {
+  it('re-fetches a network-neutral query when the active network changes', async () => {
     const user = userEvent.setup();
-    renderScope(queryClient);
+    renderScope(fetchNetwork);
+
+    expect(await screen.findByText('mainnet')).toBeInTheDocument();
+    expect(fetchNetwork).toHaveBeenCalledWith('mainnet');
 
     await user.click(screen.getByRole('button', { name: 'go-testnet' }));
 
-    expect(clearSpy).toHaveBeenCalledTimes(1);
+    await waitFor(() => {
+      expect(screen.getByTestId('network-data')).toHaveTextContent('testnet');
+    });
+    expect(fetchNetwork).toHaveBeenCalledWith('testnet');
+    expect(fetchNetwork).toHaveBeenCalledTimes(2);
   });
 
-  it('does not clear again while navigating within the same network', async () => {
+  it('keeps the same query client while navigating within one network', async () => {
     const user = userEvent.setup();
-    renderScope(queryClient);
+    renderScope(fetchNetwork);
 
+    expect(await screen.findByText('mainnet')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'go-testnet' }));
-    expect(clearSpy).toHaveBeenCalledTimes(1);
-
-    // Same `:network` segment, different sub-path — must NOT clear again.
+    await waitFor(() => {
+      expect(screen.getByTestId('network-data')).toHaveTextContent('testnet');
+    });
     await user.click(screen.getByRole('button', { name: 'go-testnet-other' }));
-    expect(clearSpy).toHaveBeenCalledTimes(1);
+
+    expect(screen.getByTestId('network-data')).toHaveTextContent('testnet');
+    expect(fetchNetwork).toHaveBeenCalledTimes(2);
   });
 
-  it('clears again when switching to another network', async () => {
+  it('does not mutate the parent query cache', async () => {
     const user = userEvent.setup();
-    renderScope(queryClient);
+    const { outerQueryClient } = renderScope(fetchNetwork);
+    const clearSpy = vi.spyOn(outerQueryClient, 'clear');
 
+    expect(await screen.findByText('mainnet')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'go-testnet' }));
-    await user.click(screen.getByRole('button', { name: 'go-mainnet' }));
+    await waitFor(() => {
+      expect(screen.getByTestId('network-data')).toHaveTextContent('testnet');
+    });
 
-    expect(clearSpy).toHaveBeenCalledTimes(2);
+    expect(clearSpy).not.toHaveBeenCalled();
   });
 });

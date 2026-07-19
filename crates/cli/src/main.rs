@@ -14,8 +14,8 @@ use tracing::info;
 use ckbadger_config::{
     co_resident_network_count, default_config_toml, default_orchestrator_toml, is_orchestrator,
     load_config, load_orchestrator_config, network_workdir, resolve_ckb_paths, resolve_share_dir,
-    resolve_store_paths, resolve_workdir_path, CkbadgerConfig, ResolvedCkbPaths, StoreConfig,
-    WorkDir,
+    resolve_store_paths, resolve_workdir_path, validate_network_entry, CkbadgerConfig,
+    ResolvedCkbPaths, StoreConfig, WorkDir,
 };
 
 use ckbadger_api::entry::{run_api, run_frontend_server, ApiServiceConfig, FrontendServiceConfig};
@@ -464,17 +464,18 @@ async fn cmd_run_orchestrator(root: &Path, args: &RunArgs) -> Result<()> {
             );
         }
         let cfg = load_config(&sub)?;
-        nets.push((entry.name.clone(), cfg.api.port, sub.clone()));
+        let network = validate_network_entry(entry, &cfg.ckb.network)?.to_string();
+        nets.push((network.clone(), cfg.api.port, sub.clone()));
         let sub_str = sub.to_string_lossy().to_string();
 
         immediate.push(supervisor::ChildSpec {
-            label: format!("{}/api", entry.name),
+            label: format!("{network}/api"),
             service: "api".to_string(),
             workdir: sub_str.clone(),
         });
         if cfg.crawler.enabled {
             immediate.push(supervisor::ChildSpec {
-                label: format!("{}/crawler", entry.name),
+                label: format!("{network}/crawler"),
                 service: "crawler".to_string(),
                 workdir: sub_str.clone(),
             });
@@ -482,7 +483,7 @@ async fn cmd_run_orchestrator(root: &Path, args: &RunArgs) -> Result<()> {
         let store_paths = resolve_store_paths(&sub, &cfg.store);
         indexers.push(supervisor::SequencedIndexer {
             spec: supervisor::ChildSpec {
-                label: format!("{}/indexer", entry.name),
+                label: format!("{network}/indexer"),
                 service: "indexer".to_string(),
                 workdir: sub_str,
             },
@@ -491,7 +492,7 @@ async fn cmd_run_orchestrator(root: &Path, args: &RunArgs) -> Result<()> {
         });
         println!(
             "network '{}' -> {} (api :{})",
-            entry.name,
+            network,
             sub.display(),
             cfg.api.port
         );
@@ -558,8 +559,9 @@ fn build_orchestrator_frontend_config(
         let sub = network_workdir(root, entry);
         let cfg = load_config(&sub)
             .with_context(|| format!("frontend: reading config for network '{}'", entry.name))?;
+        let network = validate_network_entry(entry, &cfg.ckb.network)?;
         networks.push(ckbadger_api::entry::FrontendNetwork {
-            name: entry.name.clone(),
+            name: network.to_string(),
             api_port: cfg.api.port,
         });
     }
@@ -703,6 +705,11 @@ async fn cmd_internal(workdir: &Path, args: &InternalArgs) -> Result<()> {
 /// Resolve one network subdir into a `TuiNetwork` (paths + api endpoint).
 fn build_tui_network(name: &str, workdir: &Path) -> Result<TuiNetwork> {
     let config = load_config(workdir)?;
+    let entry = ckbadger_config::NetworkEntry {
+        name: name.to_string(),
+        dir: None,
+    };
+    let network = validate_network_entry(&entry, &config.ckb.network)?;
     let work = WorkDir::resolve(workdir);
     let store_paths = resolve_store_paths(workdir, &config.store);
     // CKB node paths are display-only on the System tab (the TUI never opens the CKB
@@ -720,7 +727,7 @@ fn build_tui_network(name: &str, workdir: &Path) -> Result<TuiNetwork> {
         }
     };
     Ok(TuiNetwork {
-        name: name.to_string(),
+        name: network.to_string(),
         domain_data_path: store_paths.domain_data.to_string_lossy().to_string(),
         append_only_data_path: store_paths.append_only_data.to_string_lossy().to_string(),
         ckbadger_workdir: work.root.to_string_lossy().to_string(),
@@ -910,7 +917,10 @@ async fn cmd_status_orchestrator(root: &Path) -> Result<()> {
 
     for entry in &orch.networks {
         let sub = network_workdir(root, entry);
-        println!("[{}] {}", entry.name, sub.display());
+        let config = load_config(&sub)
+            .with_context(|| format!("status: reading config for network '{}'", entry.name))?;
+        let network = validate_network_entry(entry, &config.ckb.network)?;
+        println!("[{network}] {}", sub.display());
         // Delegate to the existing per-workdir sync-status reader.
         if let Err(e) = print_single_network_sync_status(&sub).await {
             println!("  could not read sync status: {e}");
@@ -1246,6 +1256,8 @@ fn cmd_purge_orchestrator(root: &Path, args: &PurgeArgs) -> Result<()> {
     let root_work = WorkDir::resolve(root);
     let mut deleted = Vec::new();
 
+    // Validate every child before deleting anything, so a misplaced config is
+    // reported atomically rather than leaving a partially purged deployment.
     for entry in &orch.networks {
         let sub = network_workdir(root, entry);
         if !sub.join("config.toml").is_file() {
@@ -1255,6 +1267,12 @@ fn cmd_purge_orchestrator(root: &Path, args: &PurgeArgs) -> Result<()> {
                 sub.display()
             );
         }
+        let config = load_config(&sub)?;
+        validate_network_entry(entry, &config.ckb.network)?;
+    }
+
+    for entry in &orch.networks {
+        let sub = network_workdir(root, entry);
         purge_workdir(&sub, &mut deleted)?;
     }
 
@@ -1791,6 +1809,32 @@ mod tests {
         assert_eq!(cfg.port, 8100);
         // No frontend assets dir was passed through.
         assert!(cfg.frontend_dir.is_none());
+    }
+
+    #[test]
+    fn test_build_orchestrator_frontend_config_rejects_entry_child_network_mismatch() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+
+        std::fs::write(
+            root.join("ckbadger.toml"),
+            default_orchestrator_toml(&["mainnet"]),
+        )
+        .unwrap();
+        std::fs::create_dir_all(root.join("mainnet")).unwrap();
+        std::fs::write(
+            root.join("mainnet").join("config.toml"),
+            default_config_toml("testnet", 8101),
+        )
+        .unwrap();
+
+        let err = match build_orchestrator_frontend_config(root, None) {
+            Ok(_) => panic!("mismatched child network must be rejected"),
+            Err(err) => err.to_string(),
+        };
+        assert!(err.contains("mainnet"));
+        assert!(err.contains("testnet"));
+        assert!(err.contains("mismatch"));
     }
 
     #[test]

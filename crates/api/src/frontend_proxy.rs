@@ -18,13 +18,14 @@
 //! fast with an actionable `404` rather than silently misrouting.
 
 use std::collections::HashMap;
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use axum::body::Body;
 use axum::extract::ws::{
     CloseFrame as AxCloseFrame, Message as AxMessage, WebSocket, WebSocketUpgrade,
 };
-use axum::extract::{Path, Request, State};
+use axum::extract::{ConnectInfo, Path, Request, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get};
@@ -78,6 +79,10 @@ fn is_hop_by_hop(name: &str) -> bool {
     )
 }
 
+fn is_client_forwarding_header(name: &str) -> bool {
+    name.eq_ignore_ascii_case("x-forwarded-for") || name.eq_ignore_ascii_case("x-real-ip")
+}
+
 /// Forward `/api/{network}/v1/{*rest}` (with query string) to the network's API
 /// server at `http://127.0.0.1:{port}/api/v1/{rest}`.
 ///
@@ -94,6 +99,14 @@ pub async fn proxy_api(
     };
 
     let (parts, body) = req.into_parts();
+    let Some(peer) = parts.extensions.get::<ConnectInfo<SocketAddr>>() else {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "proxy client address unavailable",
+        )
+            .into_response();
+    };
+    let client_ip = peer.0.ip().to_string();
     let query = parts
         .uri
         .query()
@@ -105,11 +118,14 @@ pub async fn proxy_api(
     let reqwest_body = reqwest::Body::wrap_stream(body.into_data_stream());
     let mut builder = client.request(parts.method, &url).body(reqwest_body);
     for (name, value) in parts.headers.iter() {
-        if is_hop_by_hop(name.as_str()) {
+        if is_hop_by_hop(name.as_str()) || is_client_forwarding_header(name.as_str()) {
             continue;
         }
         builder = builder.header(name, value);
     }
+    builder = builder
+        .header("x-forwarded-for", &client_ip)
+        .header("x-real-ip", &client_ip);
 
     match builder.send().await {
         Ok(upstream) => {
@@ -243,9 +259,11 @@ fn tungstenite_msg_to_axum(msg: TgMessage) -> Option<AxMessage> {
 mod tests {
     use super::*;
     use axum::body::Bytes;
-    use axum::http::Uri;
+    use axum::extract::ConnectInfo;
+    use axum::http::{HeaderMap, Uri};
     use axum::routing::post;
     use http_body_util::BodyExt;
+    use std::net::SocketAddr;
     use tower::ServiceExt; // for `oneshot`
 
     /// Spin a mock upstream `ckbadger-api`-shaped server on an ephemeral port.
@@ -261,6 +279,20 @@ mod tests {
                 get(|uri: Uri| async move { uri.query().unwrap_or("").to_owned() }),
             )
             .route("/api/v1/echo", post(|body: Bytes| async move { body }))
+            .route(
+                "/api/v1/echo-forwarded",
+                get(|headers: HeaderMap| async move {
+                    let forwarded = headers
+                        .get("x-forwarded-for")
+                        .and_then(|value| value.to_str().ok())
+                        .unwrap_or("missing");
+                    let real = headers
+                        .get("x-real-ip")
+                        .and_then(|value| value.to_str().ok())
+                        .unwrap_or("missing");
+                    format!("{forwarded}|{real}")
+                }),
+            )
             .route("/ws", get(mock_upstream_ws));
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -295,16 +327,43 @@ mod tests {
         }))
     }
 
+    fn with_peer(mut request: Request, peer: &str) -> Request {
+        request.extensions_mut().insert(ConnectInfo(
+            peer.parse::<SocketAddr>().expect("valid test peer"),
+        ));
+        request
+    }
+
+    #[tokio::test]
+    async fn proxy_replaces_spoofed_forwarding_headers_with_socket_peer() {
+        let port = spawn_mock_upstream().await;
+        let request = Request::builder()
+            .uri("/api/testnet/v1/echo-forwarded")
+            .header("x-forwarded-for", "127.0.0.1")
+            .header("x-real-ip", "127.0.0.1")
+            .body(Body::empty())
+            .unwrap();
+        let resp = testnet_proxy(port)
+            .oneshot(with_peer(request, "203.0.113.42:4242"))
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        assert_eq!(&body[..], b"203.0.113.42|203.0.113.42");
+    }
+
     #[tokio::test]
     async fn proxy_forwards_get_to_known_network() {
         let port = spawn_mock_upstream().await;
         let resp = testnet_proxy(port)
-            .oneshot(
+            .oneshot(with_peer(
                 Request::builder()
                     .uri("/api/testnet/v1/ping")
                     .body(Body::empty())
                     .unwrap(),
-            )
+                "203.0.113.1:4001",
+            ))
             .await
             .unwrap();
 
@@ -344,12 +403,13 @@ mod tests {
     async fn proxy_forwards_query_string() {
         let port = spawn_mock_upstream().await;
         let resp = testnet_proxy(port)
-            .oneshot(
+            .oneshot(with_peer(
                 Request::builder()
                     .uri("/api/testnet/v1/echo-query?limit=5&cursor=abc%20def")
                     .body(Body::empty())
                     .unwrap(),
-            )
+                "203.0.113.2:4002",
+            ))
             .await
             .unwrap();
 
@@ -366,14 +426,15 @@ mod tests {
         let port = spawn_mock_upstream().await;
         let payload = r#"{"hello":"world","n":42}"#;
         let resp = testnet_proxy(port)
-            .oneshot(
+            .oneshot(with_peer(
                 Request::builder()
                     .method("POST")
                     .uri("/api/testnet/v1/echo")
                     .header("content-type", "application/json")
                     .body(Body::from(payload))
                     .unwrap(),
-            )
+                "203.0.113.3:4003",
+            ))
             .await
             .unwrap();
 
@@ -391,12 +452,13 @@ mod tests {
         drop(dead_listener);
 
         let resp = testnet_proxy(dead_port)
-            .oneshot(
+            .oneshot(with_peer(
                 Request::builder()
                     .uri("/api/testnet/v1/ping")
                     .body(Body::empty())
                     .unwrap(),
-            )
+                "203.0.113.4:4004",
+            ))
             .await
             .unwrap();
 

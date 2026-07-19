@@ -10,7 +10,7 @@ use ckbadger_store::{types::SyncStatus, CkbadgerStore, RuntimeStatus, StoreRunti
 use crate::cycles_worker::spawn_cycles_worker;
 use crate::db::Repository;
 use crate::label_import::run_label_import as label_import_run;
-use crate::network_guard::{verify_db_network, verify_genesis_hash};
+use crate::network_guard::{establish_db_network_identity, verify_genesis_hash};
 use crate::rpc::CkbRpcClient;
 use crate::runtime_diag::{generate_run_id, read_cgroup_memory_snapshot};
 use crate::sync::Indexer;
@@ -121,6 +121,18 @@ async fn run_startup_label_import(store: Arc<CkbadgerStore>, config: &Config) ->
 pub async fn run_indexer_sync(mut config: Config) -> Result<()> {
     config.validate()?;
 
+    info!("Connecting to CKB node: {}", config.ckb_rpc_url);
+
+    // Resolve the node's chain before opening or mutating either chain store.
+    // The same validated client is reused for the genesis economic baseline.
+    let guard_rpc = CkbRpcClient::new(&config.ckb_rpc_url);
+    let node_genesis = guard_rpc
+        .get_block_hash(0)
+        .await
+        .context("failed to fetch genesis hash from CKB node")?
+        .ok_or_else(|| anyhow::anyhow!("CKB node returned no genesis block (block 0)"))?;
+    verify_genesis_hash(&config.network, &node_genesis)?;
+
     // Use VectorRep memtable (O(1) insert) for the indexer. The indexer is
     // the sole writer — no concurrent memtable access. Sort deferred to
     // background memtable→SST flush. Safe for both bulk sync and live sync
@@ -135,6 +147,12 @@ pub async fn run_indexer_sync(mut config: Config) -> Result<()> {
         &config.domain_data_path,
         config.store_runtime_config,
     )?);
+
+    // This is the first domain-store mutation on startup. Existing tagged DBs
+    // must match; old untagged DBs must prove their chain through persisted
+    // block 0 before the canonical identity is written.
+    establish_db_network_identity(&store, &config.network, &node_genesis)?;
+
     info!(
         "Opening ckbadger append-only store at: {}",
         config.append_only_data_path
@@ -291,32 +309,6 @@ pub async fn run_indexer_sync(mut config: Config) -> Result<()> {
         info!("Fresh database detected (tip=0), starting initial sync");
     } else {
         info!("Resuming sync from block {}", db_tip);
-    }
-
-    info!("Connecting to CKB node: {}", config.ckb_rpc_url);
-
-    // --- chain-network guards (fail fast before any block is processed) ---
-    // `Indexer::new` builds its own RPC client internally, so a local client is
-    // constructed here purely for the guard. This runs on the single startup
-    // path shared by bulk and live sync — before label import and before any
-    // block is written — so a network/DB mismatch aborts immediately.
-    let guard_rpc = CkbRpcClient::new(&config.ckb_rpc_url);
-    let node_genesis = guard_rpc
-        .get_block_hash(0)
-        .await
-        .context("failed to fetch genesis hash from CKB node")?
-        .ok_or_else(|| anyhow::anyhow!("CKB node returned no genesis block (block 0)"))?;
-    verify_genesis_hash(&config.network, &node_genesis)?;
-
-    let existing_identity = store.get_network_identity()?;
-    verify_db_network(existing_identity.as_deref(), &config.network)?;
-    if existing_identity.is_none() {
-        // First sync for this DB: stamp the network tag.
-        // NOTE: this DB-identity guard only binds DBs first synced AFTER this
-        // change. A pre-existing untagged DB (synced before the tag existed) is
-        // adopted by whatever network is configured on the first post-upgrade
-        // run — acceptable under the mandatory re-sync policy (rebuild-from-genesis).
-        store.set_network_identity(&config.network)?;
     }
 
     // --- genesis economic baseline (derive once from block 0) ---

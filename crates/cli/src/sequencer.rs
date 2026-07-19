@@ -3,16 +3,19 @@
 //! the prod store-reader + spawn wiring live in `supervisor.rs`.
 
 use std::time::Duration;
+
+use anyhow::Result;
 use tokio::sync::watch;
 
 /// Whether a watched network is out of bulk sync (safe to start the next indexer).
 ///
 /// `bulk_completed` = its `SyncStatus.bulk_sync_completed_at.is_some()`.
-/// `lag` = `sync-progress target_block − current_block` (as i64; `None` when no
-/// progress record exists yet). i64 (not saturating) so caught-up/ahead (lag ≤ 0)
+/// `lag` = `sync-progress target_block − current_block` (as i128; `None` when no
+/// progress record exists yet). i128 preserves the exact difference between two
+/// u64 heights, so caught-up/ahead (lag ≤ 0)
 /// reads as past-bulk without masking anything.
-pub(crate) fn is_past_bulk(bulk_completed: bool, lag: Option<i64>, threshold: u64) -> bool {
-    bulk_completed || matches!(lag, Some(l) if l <= threshold as i64)
+pub(crate) fn is_past_bulk(bulk_completed: bool, lag: Option<i128>, threshold: u64) -> bool {
+    bulk_completed || matches!(lag, Some(l) if l <= i128::from(threshold))
 }
 
 /// Start deferred indexers one at a time. `indexers[0]` is assumed already spawned
@@ -20,8 +23,9 @@ pub(crate) fn is_past_bulk(bulk_completed: bool, lag: Option<i64>, threshold: u6
 /// bulk, then `spawn(i)`. Generic over the status reader and spawn action so the
 /// gating logic is testable without real stores/processes.
 ///
-/// `past_bulk(prev)` returns `Some(true|false)` on a successful read, or `None`
-/// when the store can't be read yet (treated as "not past bulk" — keep waiting).
+/// `past_bulk(prev)` returns `Ok(Some(true|false))` on a successful read,
+/// `Ok(None)` only while the store has not been created, and `Err` for an
+/// existing store that cannot be read or decoded.
 ///
 /// `spawn(i)` is `async`: the real supervisor callback appends to the shared
 /// `SupervisorState` behind a `tokio::sync::Mutex`, which must be awaited (a
@@ -32,30 +36,32 @@ pub(crate) async fn sequence_indexers<R, S, Fut>(
     mut spawn: S,
     poll: Duration,
     mut shutdown: watch::Receiver<bool>,
-) where
-    R: FnMut(usize) -> Option<bool>,
+) -> Result<()>
+where
+    R: FnMut(usize) -> Result<Option<bool>>,
     S: FnMut(usize) -> Fut,
-    Fut: std::future::Future<Output = ()>,
+    Fut: std::future::Future<Output = Result<()>>,
 {
     for i in 1..count {
         loop {
             if *shutdown.borrow() {
-                return;
+                return Ok(());
             }
-            if past_bulk(i - 1) == Some(true) {
-                spawn(i).await;
+            if past_bulk(i - 1)? == Some(true) {
+                spawn(i).await?;
                 break;
             }
             tokio::select! {
                 _ = tokio::time::sleep(poll) => {}
                 _ = shutdown.changed() => {
                     if *shutdown.borrow() {
-                        return;
+                        return Ok(());
                     }
                 }
             }
         }
     }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -102,18 +108,20 @@ mod tests {
             |_prev| {
                 let mut c = calls.borrow_mut();
                 *c += 1;
-                Some((*c).is_multiple_of(2))
+                Ok(Some((*c).is_multiple_of(2)))
             },
             |i| {
                 let spawned = &spawned;
                 async move {
                     spawned.borrow_mut().push(i);
+                    Ok(())
                 }
             },
             Duration::from_millis(1),
             rx,
         )
-        .await;
+        .await
+        .unwrap();
         assert_eq!(*spawned.borrow(), vec![1, 2]);
         assert!(
             *calls.borrow() >= 4,
@@ -130,18 +138,20 @@ mod tests {
             1,
             |_prev| {
                 *calls.borrow_mut() += 1;
-                Some(true)
+                Ok(Some(true))
             },
             |i| {
                 let spawned = &spawned;
                 async move {
                     spawned.borrow_mut().push(i);
+                    Ok(())
                 }
             },
             Duration::from_millis(1),
             rx,
         )
-        .await;
+        .await
+        .unwrap();
         assert!(spawned.borrow().is_empty());
         assert_eq!(*calls.borrow(), 0);
     }
@@ -153,17 +163,67 @@ mod tests {
         let spawned = RefCell::new(Vec::<usize>::new());
         sequence_indexers(
             3,
-            |_prev| Some(false),
+            |_prev| Ok(Some(false)),
             |i| {
                 let spawned = &spawned;
                 async move {
                     spawned.borrow_mut().push(i);
+                    Ok(())
                 }
             },
             Duration::from_millis(1),
             rx,
         )
-        .await;
+        .await
+        .unwrap();
         assert!(spawned.borrow().is_empty());
+    }
+
+    #[tokio::test]
+    async fn status_read_error_stops_sequence_without_spawning() {
+        let (_tx, rx) = watch::channel(false);
+        let spawned = RefCell::new(Vec::<usize>::new());
+        let err = sequence_indexers(
+            2,
+            |_prev| Err(anyhow::anyhow!("corrupt sync progress")),
+            |i| {
+                let spawned = &spawned;
+                async move {
+                    spawned.borrow_mut().push(i);
+                    Ok(())
+                }
+            },
+            Duration::from_millis(1),
+            rx,
+        )
+        .await
+        .unwrap_err();
+
+        assert!(err.to_string().contains("corrupt sync progress"));
+        assert!(spawned.borrow().is_empty());
+    }
+
+    #[tokio::test]
+    async fn spawn_error_stops_before_later_indexers() {
+        let (_tx, rx) = watch::channel(false);
+        let attempted = RefCell::new(Vec::<usize>::new());
+        let err = sequence_indexers(
+            3,
+            |_prev| Ok(Some(true)),
+            |i| {
+                let attempted = &attempted;
+                async move {
+                    attempted.borrow_mut().push(i);
+                    Err(anyhow::anyhow!("spawn {i} failed"))
+                }
+            },
+            Duration::from_millis(1),
+            rx,
+        )
+        .await
+        .unwrap_err();
+
+        assert!(err.to_string().contains("spawn 1 failed"));
+        assert_eq!(*attempted.borrow(), vec![1]);
     }
 }

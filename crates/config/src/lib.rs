@@ -6,14 +6,26 @@
 //! Priority: CLI args > config.toml > defaults
 
 use anyhow::{bail, Context, Result};
+use ckbadger_common::hardfork::normalize_network;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 mod orchestrator;
 pub use orchestrator::{
     co_resident_network_count, is_orchestrator, load_orchestrator_config, network_workdir,
-    parse_orchestrator_config, NetworkEntry, OrchestratorConfig,
+    parse_orchestrator_config, validate_network_entry, NetworkEntry, OrchestratorConfig,
 };
+
+/// Resolve every accepted network spelling to the one identity used by all
+/// services, persisted metadata, and frontend routes.
+pub fn canonical_network_name(network: &str) -> Result<&'static str> {
+    normalize_network(network).ok_or_else(|| {
+        anyhow::anyhow!(
+            "unknown network '{}' (expected mainnet or testnet)",
+            network
+        )
+    })
+}
 
 // ---------------------------------------------------------------------------
 // Config structs
@@ -333,7 +345,10 @@ pub fn parse_config(toml_str: &str) -> Result<CkbadgerConfig> {
         bail!("[ckb].data_path has been removed; use [ckb].workdir");
     }
 
-    toml::from_str(toml_str).context("failed to parse config.toml")
+    let mut config: CkbadgerConfig =
+        toml::from_str(toml_str).context("failed to parse config.toml")?;
+    config.ckb.network = canonical_network_name(&config.ckb.network)?.to_string();
+    Ok(config)
 }
 
 // ---------------------------------------------------------------------------
@@ -742,6 +757,24 @@ data_path = "/var/lib/ckb/data/db"
         let cfg = parse_config(&toml).unwrap();
         assert_eq!(cfg.ckb.network, "testnet");
         assert_eq!(cfg.api.port, 8102);
+    }
+
+    #[test]
+    fn parse_config_canonicalizes_known_network_aliases() {
+        let mainnet = parse_config("[ckb]\nnetwork = \" CKB \"\n").unwrap();
+        assert_eq!(mainnet.ckb.network, "mainnet");
+
+        let testnet = parse_config("[ckb]\nnetwork = \"pudge\"\n").unwrap();
+        assert_eq!(testnet.ckb.network, "testnet");
+    }
+
+    #[test]
+    fn parse_config_rejects_unknown_network() {
+        let err = parse_config("[ckb]\nnetwork = \"devnet\"\n")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("devnet"));
+        assert!(err.contains("mainnet or testnet"));
     }
 
     #[test]

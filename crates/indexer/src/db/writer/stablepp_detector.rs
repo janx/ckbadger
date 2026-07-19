@@ -1,6 +1,8 @@
 //! Stable++ protocol detector: identifies CDP vault lifecycle events
 //! by analyzing Vault Lock cell transitions and token deltas.
 
+use std::cmp::Ordering;
+
 use ckbadger_store::types::{
     ItemDelta, LockCallEntry, ProtocolAction, TypeCallEntry, ITEM_KIND_TOKEN,
 };
@@ -12,6 +14,48 @@ use crate::parser::stablepp::{
 use super::activities::{OwnerAccum, ProtocolDetector, TxView};
 
 pub(crate) struct StableppDetector;
+
+/// Arbitrary-width unsigned sum stored as little-endian 64-bit limbs. Stable++
+/// only needs to compare total positive and negative token magnitudes, so this
+/// keeps the full deterministic value without introducing a lossy signed cast.
+#[derive(Default, Eq, PartialEq)]
+struct ExactMagnitude {
+    limbs: Vec<u64>,
+}
+
+impl ExactMagnitude {
+    fn add_u128(&mut self, value: u128) {
+        self.add_limb(0, value as u64);
+        self.add_limb(1, (value >> 64) as u64);
+    }
+
+    fn add_limb(&mut self, mut index: usize, mut value: u64) {
+        while value != 0 {
+            if self.limbs.len() <= index {
+                self.limbs.resize(index + 1, 0);
+            }
+            let (sum, carry) = self.limbs[index].overflowing_add(value);
+            self.limbs[index] = sum;
+            value = u64::from(carry);
+            index += 1;
+        }
+    }
+}
+
+impl Ord for ExactMagnitude {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.limbs
+            .len()
+            .cmp(&other.limbs.len())
+            .then_with(|| self.limbs.iter().rev().cmp(other.limbs.iter().rev()))
+    }
+}
+
+impl PartialOrd for ExactMagnitude {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
 
 impl StableppDetector {
     pub fn new(_is_mainnet: bool) -> Self {
@@ -93,29 +137,40 @@ impl StableppDetector {
         hashes
     }
 
-    /// Sum Token deltas only for Stable++ Asset tokens (identified by type_script_hash).
-    fn stablepp_token_delta(
+    /// Compare exact positive and negative Token totals only for Stable++ Asset
+    /// tokens (identified by type_script_hash).
+    fn stablepp_token_delta_sign(
         &self,
         item_deltas: &[ItemDelta],
         stablepp_type_script_hashes: &[Vec<u8>],
-    ) -> i128 {
-        item_deltas
-            .iter()
-            .filter(|d| {
-                d.kind == ITEM_KIND_TOKEN && stablepp_type_script_hashes.contains(&d.item_id)
-            })
-            .map(|d| d.signed_i128_saturating())
-            .sum()
+    ) -> Ordering {
+        let mut positive = ExactMagnitude::default();
+        let mut negative = ExactMagnitude::default();
+        for delta in item_deltas.iter().filter(|d| {
+            d.kind == ITEM_KIND_TOKEN && stablepp_type_script_hashes.contains(&d.item_id)
+        }) {
+            if delta.negative {
+                negative.add_u128(delta.magnitude);
+            } else {
+                positive.add_u128(delta.magnitude);
+            }
+        }
+        positive.cmp(&negative)
     }
 
     /// Infer the Stable++ action from vault cell transitions and token delta.
-    fn infer_action(&self, vault_in: usize, vault_out: usize, token_delta: i128) -> &'static str {
+    fn infer_action(
+        &self,
+        vault_in: usize,
+        vault_out: usize,
+        token_delta_sign: Ordering,
+    ) -> &'static str {
         match (vault_in > 0, vault_out > 0) {
             (false, true) => {
                 // Vault created in outputs, none consumed from inputs
-                if token_delta > 0 {
+                if token_delta_sign == Ordering::Greater {
                     "open_vault"
-                } else if token_delta == 0 {
+                } else if token_delta_sign == Ordering::Equal {
                     "deposit"
                 } else {
                     // token_delta < 0: vault opened with immediate borrow
@@ -124,9 +179,9 @@ impl StableppDetector {
             }
             (true, true) => {
                 // Vault in both inputs and outputs (vault updated)
-                if token_delta > 0 {
+                if token_delta_sign == Ordering::Greater {
                     "borrow"
-                } else if token_delta < 0 {
+                } else if token_delta_sign == Ordering::Less {
                     "repay"
                 } else {
                     "adjust"
@@ -134,7 +189,7 @@ impl StableppDetector {
             }
             (true, false) => {
                 // Vault consumed from inputs, none created in outputs
-                if token_delta < 0 {
+                if token_delta_sign == Ordering::Less {
                     "close_vault"
                 } else {
                     // token_delta >= 0: liquidation
@@ -143,7 +198,7 @@ impl StableppDetector {
             }
             (false, false) => {
                 // No vault cells at all
-                if token_delta != 0 {
+                if token_delta_sign != Ordering::Equal {
                     "redemption"
                 } else {
                     "interaction"
@@ -192,9 +247,9 @@ impl ProtocolDetector for StableppDetector {
         let (vault_in, vault_out) = self.count_vault_cells(tx);
         let has_intent = self.has_intent_in_inputs(tx);
         let stablepp_hashes = self.stablepp_asset_type_script_hashes(tx);
-        let token_delta = self.stablepp_token_delta(item_deltas, &stablepp_hashes);
+        let token_delta_sign = self.stablepp_token_delta_sign(item_deltas, &stablepp_hashes);
 
-        let action = self.infer_action(vault_in, vault_out, token_delta);
+        let action = self.infer_action(vault_in, vault_out, token_delta_sign);
 
         let vault_count = std::cmp::max(vault_in, vault_out);
         let metadata = serde_json::json!({
@@ -711,31 +766,92 @@ mod tests {
 
         // (vault_in, vault_out, token_delta) -> expected action
         // false, true, positive -> open_vault
-        assert_eq!(detector.infer_action(0, 1, 100), "open_vault");
+        assert_eq!(detector.infer_action(0, 1, Ordering::Greater), "open_vault");
         // false, true, zero -> deposit
-        assert_eq!(detector.infer_action(0, 1, 0), "deposit");
+        assert_eq!(detector.infer_action(0, 1, Ordering::Equal), "deposit");
         // false, true, negative -> open_vault
-        assert_eq!(detector.infer_action(0, 1, -50), "open_vault");
+        assert_eq!(detector.infer_action(0, 1, Ordering::Less), "open_vault");
 
         // true, true, positive -> borrow
-        assert_eq!(detector.infer_action(1, 1, 100), "borrow");
+        assert_eq!(detector.infer_action(1, 1, Ordering::Greater), "borrow");
         // true, true, negative -> repay
-        assert_eq!(detector.infer_action(1, 1, -100), "repay");
+        assert_eq!(detector.infer_action(1, 1, Ordering::Less), "repay");
         // true, true, zero -> adjust
-        assert_eq!(detector.infer_action(1, 1, 0), "adjust");
+        assert_eq!(detector.infer_action(1, 1, Ordering::Equal), "adjust");
 
         // true, false, negative -> close_vault
-        assert_eq!(detector.infer_action(1, 0, -100), "close_vault");
+        assert_eq!(detector.infer_action(1, 0, Ordering::Less), "close_vault");
         // true, false, zero -> liquidation
-        assert_eq!(detector.infer_action(1, 0, 0), "liquidation");
+        assert_eq!(detector.infer_action(1, 0, Ordering::Equal), "liquidation");
         // true, false, positive -> liquidation
-        assert_eq!(detector.infer_action(1, 0, 100), "liquidation");
+        assert_eq!(
+            detector.infer_action(1, 0, Ordering::Greater),
+            "liquidation"
+        );
 
         // false, false, positive or negative -> redemption
-        assert_eq!(detector.infer_action(0, 0, 100), "redemption");
-        assert_eq!(detector.infer_action(0, 0, -100), "redemption");
+        assert_eq!(detector.infer_action(0, 0, Ordering::Greater), "redemption");
+        assert_eq!(detector.infer_action(0, 0, Ordering::Less), "redemption");
         // false, false, zero -> interaction
-        assert_eq!(detector.infer_action(0, 0, 0), "interaction");
+        assert_eq!(detector.infer_action(0, 0, Ordering::Equal), "interaction");
+    }
+
+    #[test]
+    fn stablepp_token_delta_sign_is_exact_above_i128_range() {
+        let detector = StableppDetector::new(true);
+        let token = vec![0xAB; 32];
+        let hashes = vec![token.clone()];
+        let deltas = vec![
+            ItemDelta {
+                item_id: token.clone(),
+                kind: ITEM_KIND_TOKEN,
+                magnitude: u128::MAX,
+                negative: false,
+            },
+            ItemDelta {
+                item_id: token,
+                kind: ITEM_KIND_TOKEN,
+                magnitude: u128::MAX - 1,
+                negative: true,
+            },
+        ];
+
+        assert_eq!(
+            detector.stablepp_token_delta_sign(&deltas, &hashes),
+            std::cmp::Ordering::Greater
+        );
+    }
+
+    #[test]
+    fn stablepp_token_delta_sign_handles_sums_larger_than_u128() {
+        let detector = StableppDetector::new(true);
+        let token = vec![0xCD; 32];
+        let hashes = vec![token.clone()];
+        let deltas = vec![
+            ItemDelta {
+                item_id: token.clone(),
+                kind: ITEM_KIND_TOKEN,
+                magnitude: u128::MAX,
+                negative: false,
+            },
+            ItemDelta {
+                item_id: token.clone(),
+                kind: ITEM_KIND_TOKEN,
+                magnitude: u128::MAX,
+                negative: false,
+            },
+            ItemDelta {
+                item_id: token,
+                kind: ITEM_KIND_TOKEN,
+                magnitude: u128::MAX,
+                negative: true,
+            },
+        ];
+
+        assert_eq!(
+            detector.stablepp_token_delta_sign(&deltas, &hashes),
+            std::cmp::Ordering::Greater
+        );
     }
 
     #[test]

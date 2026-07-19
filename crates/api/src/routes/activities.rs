@@ -176,35 +176,42 @@ fn convert_item_delta(
     item: &ItemDelta,
     token_cache: &mut HashMap<Vec<u8>, Option<(Option<String>, Option<u8>)>>,
     store: &CkbadgerStore,
-) -> ItemDeltaResponse {
+) -> anyhow::Result<ItemDeltaResponse> {
     match item.kind {
         ITEM_KIND_TOKEN => {
             let (symbol, decimals) = lookup_token_info(store, token_cache, &item.item_id);
-            ItemDeltaResponse::Token {
+            Ok(ItemDeltaResponse::Token {
                 type_script_hash: format!("0x{}", hex::encode(&item.item_id)),
                 delta: format!("{}{}", if item.negative { "-" } else { "" }, item.magnitude),
                 symbol,
                 decimals,
-            }
+            })
         }
-        ITEM_KIND_OBJECT => ItemDeltaResponse::Object {
+        ITEM_KIND_OBJECT => Ok(ItemDeltaResponse::Object {
             object_id: format!("0x{}", hex::encode(&item.item_id)),
-            delta: item.signed_i128_saturating() as i8,
-        },
-        ITEM_KIND_IDENTITY => ItemDeltaResponse::Identity {
+            delta: discrete_item_delta(item)?,
+        }),
+        ITEM_KIND_IDENTITY => Ok(ItemDeltaResponse::Identity {
             identity_id: format!("0x{}", hex::encode(&item.item_id)),
-            delta: item.signed_i128_saturating() as i8,
-        },
-        _ => {
-            // Unknown kind — treat as token for forward compatibility
-            ItemDeltaResponse::Token {
-                type_script_hash: format!("0x{}", hex::encode(&item.item_id)),
-                delta: format!("{}{}", if item.negative { "-" } else { "" }, item.magnitude),
-                symbol: None,
-                decimals: None,
-            }
-        }
+            delta: discrete_item_delta(item)?,
+        }),
+        kind => anyhow::bail!(
+            "unknown activity item kind {kind} for item 0x{}",
+            hex::encode(&item.item_id)
+        ),
     }
+}
+
+fn discrete_item_delta(item: &ItemDelta) -> anyhow::Result<i8> {
+    if item.magnitude != 1 {
+        anyhow::bail!(
+            "activity discrete-item invariant violated: kind={} item=0x{} magnitude={} (expected 1)",
+            item.kind,
+            hex::encode(&item.item_id),
+            item.magnitude
+        );
+    }
+    Ok(if item.negative { -1 } else { 1 })
 }
 
 /// Look up token symbol and decimals from CF_TOKENS, caching results.
@@ -522,7 +529,7 @@ pub(crate) fn build_activity_response(
         .item_deltas
         .iter()
         .map(|item| convert_item_delta(item, token_cache, store))
-        .collect();
+        .collect::<anyhow::Result<Vec<_>>>()?;
 
     let participants = actions
         .participants
@@ -574,16 +581,16 @@ pub(crate) fn build_global_activity_response(
                 .item_deltas
                 .iter()
                 .map(|item| convert_item_delta(item, &mut token_cache, store))
-                .collect();
-            ParticipantResponse {
+                .collect::<anyhow::Result<Vec<_>>>()?;
+            Ok(ParticipantResponse {
                 address,
                 ckb_delta: p.ckb_delta.to_string(),
                 used_delta: p.used_delta.to_string(),
                 item_deltas,
                 tags: p.tags,
-            }
+            })
         })
-        .collect();
+        .collect::<anyhow::Result<Vec<_>>>()?;
 
     Ok(GlobalActivityResponse {
         tx_hash: format!("0x{}", hex::encode(&actions.tx_hash)),
@@ -1033,6 +1040,32 @@ async fn get_latest_activities(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn discrete_item_delta_requires_exact_unit_magnitude() {
+        let item = ItemDelta {
+            item_id: vec![0xAA; 32],
+            kind: ITEM_KIND_OBJECT,
+            magnitude: 2,
+            negative: false,
+        };
+        let err = discrete_item_delta(&item).unwrap_err().to_string();
+        assert!(err.contains("magnitude=2"));
+        assert!(err.contains("expected 1"));
+    }
+
+    #[test]
+    fn discrete_item_delta_preserves_sign() {
+        let mut item = ItemDelta {
+            item_id: vec![0xBB; 32],
+            kind: ITEM_KIND_IDENTITY,
+            magnitude: 1,
+            negative: false,
+        };
+        assert_eq!(discrete_item_delta(&item).unwrap(), 1);
+        item.negative = true;
+        assert_eq!(discrete_item_delta(&item).unwrap(), -1);
+    }
 
     #[test]
     fn test_validate_activity_filter_rejects_unknown() {

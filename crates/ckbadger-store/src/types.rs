@@ -1366,22 +1366,6 @@ pub struct ItemDelta {
     pub negative: bool,
 }
 
-impl ItemDelta {
-    /// Signed value for consumers that need one (object/identity counts, or Stable++ sign
-    /// detection). The magnitude saturates at `i128::MAX` (so a negative value floors at
-    /// `-i128::MAX`) — only lossy for token amounts > `i128::MAX`, whose exact value no
-    /// signed consumer needs (the API renders tokens from `magnitude` + `negative`
-    /// directly as a decimal string).
-    pub fn signed_i128_saturating(&self) -> i128 {
-        let m = i128::try_from(self.magnitude).unwrap_or(i128::MAX);
-        if self.negative {
-            -m
-        } else {
-            m
-        }
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ParticipantDelta {
     pub lock_hash: Vec<u8>,
@@ -1976,42 +1960,22 @@ mod tests {
         let decoded: ItemDelta = bincode::deserialize(&bytes).unwrap();
         assert_eq!(decoded.item_id, vec![0xAA; 32]);
         assert_eq!(decoded.kind, ITEM_KIND_TOKEN);
-        assert_eq!(decoded.signed_i128_saturating(), -999_000_000);
+        assert_eq!(decoded.magnitude, 999_000_000);
+        assert!(decoded.negative);
     }
 
     #[test]
-    fn item_delta_signed_i128_saturating() {
-        let pos = ItemDelta {
+    fn item_delta_preserves_full_u128_signed_magnitude() {
+        let item = ItemDelta {
             item_id: vec![],
-            kind: 0,
-            magnitude: 5,
-            negative: false,
-        };
-        assert_eq!(pos.signed_i128_saturating(), 5);
-        let neg = ItemDelta {
-            item_id: vec![],
-            kind: 0,
-            magnitude: 5,
-            negative: true,
-        };
-        assert_eq!(neg.signed_i128_saturating(), -5);
-        // A token amount > i128::MAX saturates (documents the sign-only contract; the API
-        // renders tokens from magnitude+negative directly, not through this helper).
-        let huge = ItemDelta {
-            item_id: vec![],
-            kind: 0,
-            magnitude: u128::MAX,
-            negative: false,
-        };
-        assert_eq!(huge.signed_i128_saturating(), i128::MAX);
-        // Negative saturation floors at -i128::MAX (panic-safe: never -i128::MIN).
-        let huge_neg = ItemDelta {
-            item_id: vec![],
-            kind: 0,
+            kind: ITEM_KIND_TOKEN,
             magnitude: u128::MAX,
             negative: true,
         };
-        assert_eq!(huge_neg.signed_i128_saturating(), -i128::MAX);
+        let bytes = bincode::serialize(&item).unwrap();
+        let decoded: ItemDelta = bincode::deserialize(&bytes).unwrap();
+        assert_eq!(decoded.magnitude, u128::MAX);
+        assert!(decoded.negative);
     }
 
     #[test]

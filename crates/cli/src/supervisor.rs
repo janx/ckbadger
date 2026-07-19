@@ -211,30 +211,73 @@ struct SequencerPlan {
 const SEQUENCER_POLL_INTERVAL: Duration = Duration::from_secs(5);
 
 /// Read a network's domain store secondary and decide whether it is past bulk.
-/// Returns `None` on any open/read error (store not created yet, etc.) so the
-/// sequencer keeps waiting rather than advancing on a bad read.
-fn read_past_bulk(idx: &SequencedIndexer) -> Option<bool> {
+/// A missing RocksDB `CURRENT` is the sole not-ready state. Once the store
+/// exists, every open/read/decode failure is a fatal sequencer error.
+fn read_past_bulk(idx: &SequencedIndexer) -> Result<Option<bool>> {
+    if !idx.domain_data_path.join("CURRENT").is_file() {
+        return Ok(None);
+    }
     let secondary = secondary_store_path(&idx.domain_data_path, SecondaryStoreOwner::Supervisor);
     let store = CkbadgerStore::open_domain_secondary_with_runtime(
         &idx.domain_data_path,
         &secondary,
         StoreRuntimeConfig::default(),
     )
-    .ok()?;
-    store.refresh().ok()?;
-    let status = store.get_sync_status().ok()?;
+    .with_context(|| {
+        format!(
+            "failed to open existing domain store {} for sequencer status",
+            idx.domain_data_path.display()
+        )
+    })?;
+    store.refresh().with_context(|| {
+        format!(
+            "failed to refresh sequencer secondary for {}",
+            idx.domain_data_path.display()
+        )
+    })?;
+    let status = store.get_sync_status().with_context(|| {
+        format!(
+            "failed to read sync status from {}",
+            idx.domain_data_path.display()
+        )
+    })?;
     let bulk_completed = status.bulk_sync_completed_at.is_some();
-    let lag = store
-        .get_sync_progress()
-        .ok()
-        .flatten()
-        .and_then(|bytes| serde_json::from_slice::<ckbadger_common::SyncProgressData>(&bytes).ok())
-        .map(|p| p.target_block as i64 - p.current_block as i64);
-    Some(crate::sequencer::is_past_bulk(
+    let lag = match store.get_sync_progress().with_context(|| {
+        format!(
+            "failed to read sync progress from {}",
+            idx.domain_data_path.display()
+        )
+    })? {
+        None => None,
+        Some(bytes) => {
+            let progress: ckbadger_common::SyncProgressData = serde_json::from_slice(&bytes)
+                .with_context(|| {
+                    format!(
+                        "invalid sync progress in {}",
+                        idx.domain_data_path.display()
+                    )
+                })?;
+            Some(i128::from(progress.target_block) - i128::from(progress.current_block))
+        }
+    };
+    Ok(Some(crate::sequencer::is_past_bulk(
         bulk_completed,
         lag,
         idx.bulk_sync_threshold,
-    ))
+    )))
+}
+
+async fn wait_for_sequencer_failure(
+    handle: Option<&mut tokio::task::JoinHandle<Result<()>>>,
+) -> anyhow::Error {
+    let Some(handle) = handle else {
+        return std::future::pending::<anyhow::Error>().await;
+    };
+    match handle.await {
+        Ok(Err(error)) => error,
+        Err(join_error) => anyhow::anyhow!("sequencer task failed: {join_error}"),
+        Ok(Ok(())) => std::future::pending::<anyhow::Error>().await,
+    }
 }
 
 /// Orchestrator supervisor: start `immediate` children + the FIRST indexer now, then
@@ -360,7 +403,7 @@ async fn run_supervisor_inner_with_sequencer(
     // indexers), keeping the monitor's index-based restart matching correct. Its
     // shutdown receiver is a clone of `shutdown_rx`; `shutdown_tx` stays alive until
     // cleanup below, so the sequencer's `select!` never sees a dropped sender.
-    let seq_handle = plan.map(|plan| {
+    let mut seq_handle = plan.map(|plan| {
         let state = state.clone();
         let exe = exe.clone();
         let log_dir = root.log_dir.clone();
@@ -381,39 +424,66 @@ async fn run_supervisor_inner_with_sequencer(
                     let state = state.clone();
                     let exe = exe.clone();
                     let log_dir = log_dir.clone();
-                    let spec = specs[first_indexer_idx + i].clone();
+                    let expected_index = first_indexer_idx + i;
+                    let spec = specs.get(expected_index).cloned();
                     async move {
-                        match spawn_child(&exe, &spec, &log_dir) {
-                            Ok(mut child) => {
-                                let mut locked = state.lock().await;
-                                if locked.shutdown_requested {
-                                    // Shutdown fired between the past-bulk check and here, so the
-                                    // stop-all loop has already run and will not see this child.
-                                    // Stop it gracefully (SIGTERM) ourselves rather than leaking it
-                                    // to the kill_on_drop SIGKILL. Drop the lock first — don't hold
-                                    // it across the graceful-stop await.
-                                    drop(locked);
-                                    stop_child_gracefully(&spec.label, &mut child.child).await;
-                                    return;
-                                }
-                                info!(child = %spec.label, pid = child.pid(), "started service (sequenced)");
-                                locked.children.push(child);
+                        let spec = spec.ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "sequencer spec index {expected_index} is out of bounds"
+                            )
+                        })?;
+                        {
+                            let locked = state.lock().await;
+                            if locked.shutdown_requested {
+                                return Ok(());
                             }
-                            Err(e) => {
-                                error!(child = %spec.label, error = %e, "failed to spawn sequenced indexer");
+                            if locked.children.len() != expected_index {
+                                anyhow::bail!(
+                                    "sequencer child order invariant violated before spawning '{}': expected {} children, found {}",
+                                    spec.label,
+                                    expected_index,
+                                    locked.children.len()
+                                );
                             }
                         }
+
+                        let mut child = spawn_child(&exe, &spec, &log_dir).with_context(|| {
+                            format!("failed to spawn sequenced indexer '{}'", spec.label)
+                        })?;
+                        let mut locked = state.lock().await;
+                        if locked.shutdown_requested {
+                            // Shutdown fired between the past-bulk check and here, so the
+                            // stop-all loop may not see this child. Stop it explicitly.
+                            drop(locked);
+                            stop_child_gracefully(&spec.label, &mut child.child).await;
+                            return Ok(());
+                        }
+                        if locked.children.len() != expected_index {
+                            let actual = locked.children.len();
+                            drop(locked);
+                            stop_child_gracefully(&spec.label, &mut child.child).await;
+                            anyhow::bail!(
+                                "sequencer child order invariant violated after spawning '{}': expected {} children, found {}",
+                                spec.label,
+                                expected_index,
+                                actual
+                            );
+                        }
+                        info!(child = %spec.label, pid = child.pid(), "started service (sequenced)");
+                        locked.children.push(child);
+                        Ok(())
                     }
                 },
                 poll,
                 seq_shutdown,
             )
-            .await;
+            .await
         })
     });
 
     // Wait for Ctrl+C or IPC shutdown
     let mut ctrl_c_rx = shutdown_rx.clone();
+    let mut supervisor_error = None;
     tokio::select! {
         _ = tokio::signal::ctrl_c() => {
             info!("received Ctrl+C, shutting down...");
@@ -426,6 +496,10 @@ async fn run_supervisor_inner_with_sequencer(
             }
         } => {
             info!("received IPC shutdown request, shutting down...");
+        }
+        error = wait_for_sequencer_failure(seq_handle.as_mut()) => {
+            error!(error = %error, "sequencer failed, shutting down supervisor");
+            supervisor_error = Some(error);
         }
     }
 
@@ -454,7 +528,10 @@ async fn run_supervisor_inner_with_sequencer(
     let _ = std::fs::remove_file(&root.indexer_sock);
 
     info!("supervisor stopped");
-    Ok(())
+    match supervisor_error {
+        Some(error) => Err(error.context("orchestrator indexer sequencer failed")),
+        None => Ok(()),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -693,6 +770,46 @@ mod tests {
         assert!(enabled_services(&cfg).contains(&"crawler"));
         // Core services always present.
         assert!(enabled_services(&cfg).contains(&"indexer"));
+    }
+
+    fn test_sequenced_indexer(path: PathBuf) -> SequencedIndexer {
+        SequencedIndexer {
+            spec: ChildSpec {
+                label: "testnet/indexer".to_string(),
+                service: "indexer".to_string(),
+                workdir: "/tmp/testnet".to_string(),
+            },
+            domain_data_path: path,
+            bulk_sync_threshold: 1_000,
+        }
+    }
+
+    #[test]
+    fn sequencer_waits_only_while_domain_store_is_absent() {
+        let dir = TempDir::new().unwrap();
+        let idx = test_sequenced_indexer(dir.path().join("domain"));
+        assert_eq!(read_past_bulk(&idx).unwrap(), None);
+    }
+
+    #[test]
+    fn sequencer_surfaces_malformed_existing_progress() {
+        let dir = TempDir::new().unwrap();
+        let domain = dir.path().join("domain");
+        let store = CkbadgerStore::open_domain_with_runtime(&domain, StoreRuntimeConfig::default())
+            .unwrap();
+        store.put_sync_progress(b"not-json").unwrap();
+        let idx = test_sequenced_indexer(domain);
+
+        let err = read_past_bulk(&idx).unwrap_err().to_string();
+        assert!(err.contains("invalid sync progress"));
+        assert!(err.contains("domain"));
+    }
+
+    #[tokio::test]
+    async fn sequencer_task_error_is_returned_to_supervisor_waiter() {
+        let mut handle = tokio::spawn(async { Err(anyhow::anyhow!("status read failed")) });
+        let error = wait_for_sequencer_failure(Some(&mut handle)).await;
+        assert!(error.to_string().contains("status read failed"));
     }
 
     #[test]

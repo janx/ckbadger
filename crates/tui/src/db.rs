@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use ckbadger_common::{
     format_duration_smart, BackgroundTaskEntry, BackgroundTasksData, BulkBuildProgressData,
     MemoryStatsData, PipelineProgressData, SyncProgressData, SyncStatusData,
@@ -8,7 +8,7 @@ use ckbadger_store::{
 };
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use std::time::Instant;
 
@@ -165,7 +165,7 @@ fn sync_progress_is_stale(progress: &SyncProgressData, now_ts: i64) -> bool {
 }
 
 pub struct TuiDb {
-    store: Option<Arc<CkbadgerStore>>,
+    store: RwLock<Option<Arc<CkbadgerStore>>>,
     api_url: String,
     supervisor_socket_path: Option<PathBuf>,
     service_log_dir: Option<PathBuf>,
@@ -289,7 +289,7 @@ impl TuiDb {
             .unwrap_or_default();
 
         Self {
-            store,
+            store: RwLock::new(store),
             api_url: api_url.to_string(),
             supervisor_socket_path: supervisor_socket_path.map(PathBuf::from),
             service_log_dir: service_log_dir.map(PathBuf::from),
@@ -304,28 +304,72 @@ impl TuiDb {
         }
     }
 
-    /// Refresh the secondary store to catch up with the primary.
-    fn refresh_store(&self) {
-        if let Some(ref store) = self.store {
-            if let Err(e) = store.refresh() {
-                eprintln!("TUI: store refresh failed: {e}");
+    fn store_handle(&self) -> Option<Arc<CkbadgerStore>> {
+        self.store
+            .read()
+            .expect("TUI store handle lock poisoned")
+            .clone()
+    }
+
+    /// Refresh the secondary store to catch up with the primary. If the TUI
+    /// started before the indexer created RocksDB, open the secondary as soon as
+    /// the primary's `CURRENT` marker appears.
+    fn refresh_store(&self) -> Result<()> {
+        if let Some(store) = self.store_handle() {
+            if let Err(error) = store.refresh() {
+                let mut slot = self.store.write().expect("TUI store handle lock poisoned");
+                if slot
+                    .as_ref()
+                    .is_some_and(|current| Arc::ptr_eq(current, &store))
+                {
+                    *slot = None;
+                }
+                return Err(error).context("failed to refresh TUI domain-store secondary");
             }
+            return Ok(());
         }
+
+        if !self.domain_data_path.join("CURRENT").is_file() {
+            return Ok(());
+        }
+
+        let mut slot = self.store.write().expect("TUI store handle lock poisoned");
+        if slot.is_some() {
+            return Ok(());
+        }
+        let secondary_path = secondary_store_path(&self.domain_data_path, SecondaryStoreOwner::Tui);
+        let store = CkbadgerStore::open_domain_secondary_with_runtime(
+            &self.domain_data_path,
+            &secondary_path,
+            self.store_runtime_config,
+        )
+        .with_context(|| {
+            format!(
+                "failed to open newly-created domain store {} for TUI",
+                self.domain_data_path.display()
+            )
+        })?;
+        eprintln!(
+            "TUI: opened newly-created domain store (secondary) at {}",
+            self.domain_data_path.display()
+        );
+        *slot = Some(Arc::new(store));
+        Ok(())
     }
 
     pub async fn get_sync_status(&self) -> Result<SyncStatusRow> {
-        self.refresh_store();
+        self.refresh_store()?;
         self.get_sync_status_without_refresh()
     }
 
     fn get_sync_progress_from_store(&self) -> Option<SyncProgressData> {
-        let store = self.store.as_ref()?;
+        let store = self.store_handle()?;
         let bytes = store.get_sync_progress().ok()??;
         serde_json::from_slice(&bytes).ok()
     }
 
     fn get_sync_status_from_store(&self) -> Option<SyncStatusData> {
-        let store = self.store.as_ref()?;
+        let store = self.store_handle()?;
         let sync = store.get_sync_status().ok()?;
         let tip = sync.tip_block_number;
         let total_tx = sync.total_transactions;
@@ -458,12 +502,18 @@ impl TuiDb {
     }
 
     pub async fn get_memory_stats(&self) -> Option<MemoryStatsData> {
-        self.refresh_store();
+        if let Err(error) = self.refresh_store() {
+            eprintln!("TUI: store refresh failed: {error:#}");
+            return None;
+        }
         self.get_memory_stats_without_refresh()
     }
 
     pub async fn get_runtime_diag(&self) -> Option<RuntimeDiagData> {
-        self.refresh_store();
+        if let Err(error) = self.refresh_store() {
+            eprintln!("TUI: store refresh failed: {error:#}");
+            return None;
+        }
         self.get_runtime_diag_without_refresh()
     }
 
@@ -475,11 +525,12 @@ impl TuiDb {
         Option<RuntimeDiagData>,
         Option<BackgroundTasksData>,
     ) {
-        self.refresh_store();
+        if let Err(error) = self.refresh_store() {
+            return (Err(error), None, None, None);
+        }
         let bg_tasks = self
-            .store
-            .as_ref()
-            .and_then(|s| s.get_background_tasks().ok());
+            .store_handle()
+            .and_then(|store| store.get_background_tasks().ok());
         (
             self.get_sync_status_without_refresh(),
             self.get_memory_stats_without_refresh(),
@@ -509,7 +560,7 @@ impl TuiDb {
     }
 
     fn get_memory_stats_without_refresh(&self) -> Option<MemoryStatsData> {
-        let store = self.store.as_ref()?;
+        let store = self.store_handle()?;
         let bytes = store.get_memory_stats().ok()??;
         let mut mem: MemoryStatsData = serde_json::from_slice(&bytes).ok()?;
 
@@ -525,7 +576,7 @@ impl TuiDb {
     }
 
     fn get_runtime_diag_without_refresh(&self) -> Option<RuntimeDiagData> {
-        let store = self.store.as_ref()?;
+        let store = self.store_handle()?;
         let status = store.get_runtime_status().ok()?;
         let heartbeat_age_secs = if status.last_heartbeat_at > 0 {
             Some((chrono::Utc::now().timestamp() - status.last_heartbeat_at).max(0))
@@ -984,6 +1035,42 @@ mod tests {
         assert_eq!(db.ckb_workdir(), Path::new("."));
         assert_eq!(db.ckb_db_path(), Path::new("."));
         assert!(db.memory_profile().is_secondary);
+    }
+
+    #[tokio::test]
+    async fn tui_db_opens_store_created_after_tui_startup() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let domain_path = dir.path().join("domain");
+        let append_path = dir.path().join("append-only");
+        let db = TuiDb::new(
+            "http://127.0.0.1:3001/api/v1",
+            domain_path.to_str().unwrap(),
+            append_path.to_str().unwrap(),
+        )
+        .await;
+        assert!(db.get_sync_status().await.is_err());
+
+        let store = CkbadgerStore::open_domain(&domain_path).unwrap();
+        store
+            .set_sync_status(&ckbadger_store::types::SyncStatus {
+                tip_block_number: 42,
+                tip_block_hash: vec![0x42; 32],
+                total_transactions: 10,
+                total_cells_created: 20,
+                total_cells_consumed: 5,
+                last_synced_at: chrono::Utc::now().timestamp(),
+                sync_started_at: Some(1_700_000_000),
+                sync_started_block: 0,
+                sync_ema_rate: Some(12.0),
+                bulk_sync_completed_at: None,
+                bulk_sync_completed_block: None,
+                deep_fork_detected: false,
+                deep_fork_info: None,
+            })
+            .unwrap();
+
+        let sync = db.get_sync_status().await.unwrap();
+        assert_eq!(sync.tip_block, 42);
     }
 
     #[tokio::test]
