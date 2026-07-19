@@ -290,16 +290,34 @@ fn normalize_hex_key(raw: &str) -> String {
         .to_ascii_lowercase()
 }
 
-fn parse_i128_strict(raw: &str, field_name: &str) -> anyhow::Result<i128> {
-    raw.parse::<i128>()
+/// Parse an unsigned UDT amount/balance decimal string. UDT amounts are u128 (up to
+/// ~3.4e38), so the old i128 parse errored on valid amounts > i128::MAX.
+fn parse_u128_strict(raw: &str, field_name: &str) -> anyhow::Result<u128> {
+    raw.parse::<u128>()
         .map_err(|e| anyhow::anyhow!("invalid {} '{}': {}", field_name, raw, e))
 }
 
-fn parse_u128_to_i128_strict(raw: &str, field_name: &str) -> anyhow::Result<i128> {
-    let value = raw
+/// Parse a signed UDT delta decimal string (e.g. "-1000", "222...784") into
+/// (magnitude, negative). A ±u128 net delta does not fit i128, so it is carried as
+/// signed-magnitude. "0"/"-0" normalize to (0, false).
+fn parse_signed_decimal(raw: &str, field_name: &str) -> anyhow::Result<(u128, bool)> {
+    let (neg, digits) = match raw.strip_prefix('-') {
+        Some(d) => (true, d),
+        None => (false, raw),
+    };
+    let magnitude = digits
         .parse::<u128>()
         .map_err(|e| anyhow::anyhow!("invalid {} '{}': {}", field_name, raw, e))?;
-    i128::try_from(value).map_err(|_| anyhow::anyhow!("{} overflows i128: {}", field_name, raw))
+    Ok((magnitude, magnitude != 0 && neg))
+}
+
+/// Render a signed-magnitude value as a canonical decimal string ("0", "130", "-100").
+fn signed_decimal_string(magnitude: u128, negative: bool) -> String {
+    if negative && magnitude != 0 {
+        format!("-{}", magnitude)
+    } else {
+        magnitude.to_string()
+    }
 }
 
 #[derive(Clone)]
@@ -410,7 +428,7 @@ fn token_holder_balance_mismatch_details(
     holder_balance: &str,
 ) -> anyhow::Result<Vec<String>> {
     let mut details = vec![];
-    let holder_balance_value = parse_i128_strict(holder_balance, "token holder balance")?;
+    let holder_balance_value = parse_u128_strict(holder_balance, "token holder balance")?;
     let token_key = normalize_hex_key(token_type_hash);
 
     // The address-tokens list is sorted by balance DESC, so a holder with
@@ -420,7 +438,7 @@ fn token_holder_balance_mismatch_details(
     // the full list until we find the target or exhaust the pages.
     let mut cursor: Option<String> = None;
     let mut pages_scanned = 0usize;
-    let mut found_balance: Option<i128> = None;
+    let mut found_balance: Option<u128> = None;
     loop {
         let path = match cursor.as_deref() {
             Some(c) => format!(
@@ -440,7 +458,7 @@ fn token_holder_balance_mismatch_details(
             .iter()
             .find(|entry| normalize_hex_key(&entry.type_script_hash) == token_key)
         {
-            found_balance = Some(parse_i128_strict(&entry.balance, "address token balance")?);
+            found_balance = Some(parse_u128_strict(&entry.balance, "address token balance")?);
             break;
         }
 
@@ -501,7 +519,7 @@ fn load_address_snapshot(
 
 fn extract_activity_token_deltas(
     activity: &AddressActivityRecord,
-) -> anyhow::Result<Vec<(String, i128)>> {
+) -> anyhow::Result<Vec<(String, (u128, bool))>> {
     let mut deltas = Vec::new();
 
     for item in &activity.item_deltas {
@@ -515,7 +533,7 @@ fn extract_activity_token_deltas(
         let delta_raw = item.get("delta").and_then(|v| v.as_str()).ok_or_else(|| {
             anyhow::anyhow!("token activity missing delta: tx_hash={}", activity.tx_hash)
         })?;
-        let delta = parse_i128_strict(delta_raw, "token activity delta")?;
+        let delta = parse_signed_decimal(delta_raw, "token activity delta")?;
 
         deltas.push((normalize_hex_key(type_hash), delta));
     }
@@ -524,41 +542,41 @@ fn extract_activity_token_deltas(
 }
 
 fn apply_transfer_delta_to_lookup(
-    lookup: &mut std::collections::HashMap<(String, String, String), i128>,
+    lookup: &mut std::collections::HashMap<(String, String, String), (u128, u128)>,
     token_type_hash: &str,
     transfer: &TokenTransferApiRecord,
 ) -> anyhow::Result<()> {
     let token_key = normalize_hex_key(token_type_hash);
     let tx_key = normalize_hex_key(&transfer.tx_hash);
-    let amount = parse_u128_to_i128_strict(&transfer.amount, "token transfer amount")?;
+    let amount = parse_u128_strict(&transfer.amount, "token transfer amount")?;
 
+    // Per (token, tx, lock) net delta carried as (received, sent) u128 sums; the signed
+    // net is derived by difference at comparison time (a ±u128 net does not fit i128).
     let to_lock_key = normalize_hex_key(&transfer.to_lock_hash);
     if !to_lock_key.is_empty() {
         let key = (token_key.clone(), tx_key.clone(), to_lock_key);
-        let current = lookup.get(&key).copied().unwrap_or(0);
-        let next = current.checked_add(amount).ok_or_else(|| {
+        let entry = lookup.entry(key).or_insert((0, 0));
+        entry.0 = entry.0.checked_add(amount).ok_or_else(|| {
             anyhow::anyhow!(
-                "token transfer lookup overflow: tx_hash={}, token_type_hash={}",
+                "token transfer received overflow: tx_hash={}, token_type_hash={}",
                 transfer.tx_hash,
                 token_type_hash
             )
         })?;
-        lookup.insert(key, next);
     }
 
     if let Some(from_lock_hash) = transfer.from_lock_hash.as_deref() {
         let from_lock_key = normalize_hex_key(from_lock_hash);
         if !from_lock_key.is_empty() {
             let key = (token_key, tx_key, from_lock_key);
-            let current = lookup.get(&key).copied().unwrap_or(0);
-            let next = current.checked_sub(amount).ok_or_else(|| {
+            let entry = lookup.entry(key).or_insert((0, 0));
+            entry.1 = entry.1.checked_add(amount).ok_or_else(|| {
                 anyhow::anyhow!(
-                    "token transfer lookup underflow: tx_hash={}, token_type_hash={}",
+                    "token transfer sent overflow: tx_hash={}, token_type_hash={}",
                     transfer.tx_hash,
                     token_type_hash
                 )
             })?;
-            lookup.insert(key, next);
         }
     }
 
@@ -2495,7 +2513,8 @@ struct TokenActivitySample {
     tx_hash: String,
     block_number: i64,
     token_type_hash: String,
-    delta: i128,
+    /// Signed net delta as (magnitude, negative) — a ±u128 net does not fit i128.
+    delta: (u128, bool),
 }
 
 /// S19: sampled token activity entries must match token transfers for tx/token/address net delta.
@@ -2591,7 +2610,7 @@ impl Check for TokenActivityTransferBidirectional {
         }
 
         let mut transfer_delta_lookup =
-            std::collections::HashMap::<(String, String, String), i128>::new();
+            std::collections::HashMap::<(String, String, String), (u128, u128)>::new();
 
         for (token_type_hash, min_block) in min_block_by_token {
             let mut cursor: Option<String> = None;
@@ -2643,14 +2662,21 @@ impl Check for TokenActivityTransferBidirectional {
         let mut checked = 0u64;
 
         for sample in &samples {
-            let actual = transfer_delta_lookup
+            let (recv, sent) = transfer_delta_lookup
                 .get(&(
                     sample.token_type_hash.clone(),
                     sample.tx_hash.clone(),
                     sample.lock_hash.clone(),
                 ))
                 .copied()
-                .unwrap_or(0);
+                .unwrap_or((0, 0));
+            // Net-difference (no i128 wrap); normalize a zero net to (0, false).
+            let (amag, aneg) = if recv >= sent {
+                (recv - sent, false)
+            } else {
+                (sent - recv, true)
+            };
+            let actual = (amag, amag != 0 && aneg);
             if actual != sample.delta {
                 findings.push(Finding {
                     entity: format!(
@@ -2659,7 +2685,8 @@ impl Check for TokenActivityTransferBidirectional {
                     ),
                     details: vec![format!(
                         "activity delta={} but transfer delta={}",
-                        sample.delta, actual
+                        signed_decimal_string(sample.delta.0, sample.delta.1),
+                        signed_decimal_string(actual.0, actual.1)
                     )],
                 });
             }
@@ -4031,7 +4058,10 @@ mod tests {
         let parsed = extract_activity_token_deltas(&activity).unwrap();
         assert_eq!(
             parsed,
-            vec![("aabb".to_string(), -10), ("ccdd".to_string(), 25),]
+            vec![
+                ("aabb".to_string(), (10u128, true)),
+                ("ccdd".to_string(), (25u128, false)),
+            ]
         );
     }
 
@@ -4070,7 +4100,7 @@ mod tests {
 
     #[test]
     fn test_apply_transfer_delta_to_lookup_handles_transfer_mint_and_burn() {
-        let mut lookup = std::collections::HashMap::<(String, String, String), i128>::new();
+        let mut lookup = std::collections::HashMap::<(String, String, String), (u128, u128)>::new();
 
         let transfer = TokenTransferApiRecord {
             tx_hash: "0x01".to_string(),
@@ -4099,23 +4129,25 @@ mod tests {
         };
         apply_transfer_delta_to_lookup(&mut lookup, "0xTT", &burn).unwrap();
 
+        // aaaa: sent 100 -> (received 0, sent 100), net -100.
         assert_eq!(
             lookup
                 .get(&("tt".to_string(), "01".to_string(), "aaaa".to_string()))
                 .copied(),
-            Some(-100)
+            Some((0u128, 100u128))
         );
+        // bbbb: received 100+50=150, sent 20 -> net +130.
         assert_eq!(
             lookup
                 .get(&("tt".to_string(), "01".to_string(), "bbbb".to_string()))
                 .copied(),
-            Some(130)
+            Some((150u128, 20u128))
         );
     }
 
     #[test]
     fn test_apply_transfer_delta_to_lookup_ignores_empty_lock_hashes() {
-        let mut lookup = std::collections::HashMap::<(String, String, String), i128>::new();
+        let mut lookup = std::collections::HashMap::<(String, String, String), (u128, u128)>::new();
         let transfer = TokenTransferApiRecord {
             tx_hash: "0x01".to_string(),
             block_number: 10,
@@ -4126,6 +4158,84 @@ mod tests {
 
         apply_transfer_delta_to_lookup(&mut lookup, "0xTT", &transfer).unwrap();
         assert!(lookup.is_empty());
+    }
+
+    #[test]
+    fn test_parse_signed_decimal_and_render() {
+        assert_eq!(parse_signed_decimal("-1000", "x").unwrap(), (1000, true));
+        assert_eq!(parse_signed_decimal("25", "x").unwrap(), (25, false));
+        assert_eq!(parse_signed_decimal("0", "x").unwrap(), (0, false));
+        assert_eq!(parse_signed_decimal("-0", "x").unwrap(), (0, false)); // -0 normalizes
+        let big = "222044604925031325468940491728862838784"; // 2.22e38 > i128::MAX
+        assert_eq!(
+            parse_signed_decimal(big, "x").unwrap(),
+            (
+                222_044_604_925_031_325_468_940_491_728_862_838_784u128,
+                false
+            )
+        );
+        assert!(parse_signed_decimal("nope", "x").is_err());
+        assert_eq!(signed_decimal_string(1000, true), "-1000");
+        assert_eq!(signed_decimal_string(25, false), "25");
+        assert_eq!(signed_decimal_string(0, true), "0"); // zero never shows a sign
+    }
+
+    #[test]
+    fn test_extract_activity_token_deltas_handles_amount_above_i128_max() {
+        // A canonical sUDT can have a per-tx net delta > i128::MAX (block 4743232, 2.22e38);
+        // the activity delta string must parse without the old i128 error.
+        let big = "222044604925031325468940491728862838784";
+        let activity = AddressActivityRecord {
+            tx_hash: "0xabc".to_string(),
+            block_number: 4_743_232,
+            item_deltas: vec![
+                serde_json::json!({ "kind": "token", "typeScriptHash": "0xDD", "delta": big }),
+                serde_json::json!({ "kind": "token", "typeScriptHash": "0xEE", "delta": format!("-{}", big) }),
+            ],
+        };
+        let parsed = extract_activity_token_deltas(&activity).unwrap();
+        assert_eq!(
+            parsed,
+            vec![
+                (
+                    "dd".to_string(),
+                    (
+                        222_044_604_925_031_325_468_940_491_728_862_838_784u128,
+                        false
+                    )
+                ),
+                (
+                    "ee".to_string(),
+                    (
+                        222_044_604_925_031_325_468_940_491_728_862_838_784u128,
+                        true
+                    )
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_apply_transfer_delta_to_lookup_handles_amount_above_i128_max() {
+        let mut lookup = std::collections::HashMap::<(String, String, String), (u128, u128)>::new();
+        let mint = TokenTransferApiRecord {
+            tx_hash: "0x01".to_string(),
+            block_number: 10,
+            from_lock_hash: None,
+            to_lock_hash: "0xbbbb".to_string(),
+            amount: "222044604925031325468940491728862838784".to_string(), // 2.22e38 > i128::MAX
+        };
+        // Under the old parse_u128_to_i128_strict this errored on `i128::try_from`; now it accumulates.
+        apply_transfer_delta_to_lookup(&mut lookup, "0xTT", &mint).unwrap();
+        assert_eq!(
+            lookup
+                .get(&("tt".to_string(), "01".to_string(), "bbbb".to_string()))
+                .copied(),
+            Some((
+                222_044_604_925_031_325_468_940_491_728_862_838_784u128,
+                0u128
+            ))
+        );
     }
 
     #[test]
