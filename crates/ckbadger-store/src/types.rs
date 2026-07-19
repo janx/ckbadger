@@ -1368,9 +1368,10 @@ pub struct ItemDelta {
 
 impl ItemDelta {
     /// Signed value for consumers that need one (object/identity counts, or Stable++ sign
-    /// detection). Saturates at i128::MIN/MAX — only lossy for token amounts > i128::MAX,
-    /// whose exact value no signed consumer needs (the API renders tokens from
-    /// `magnitude` + `negative` directly as a decimal string).
+    /// detection). The magnitude saturates at `i128::MAX` (so a negative value floors at
+    /// `-i128::MAX`) — only lossy for token amounts > `i128::MAX`, whose exact value no
+    /// signed consumer needs (the API renders tokens from `magnitude` + `negative`
+    /// directly as a decimal string).
     pub fn signed_i128_saturating(&self) -> i128 {
         let m = i128::try_from(self.magnitude).unwrap_or(i128::MAX);
         if self.negative {
@@ -2003,6 +2004,14 @@ mod tests {
             negative: false,
         };
         assert_eq!(huge.signed_i128_saturating(), i128::MAX);
+        // Negative saturation floors at -i128::MAX (panic-safe: never -i128::MIN).
+        let huge_neg = ItemDelta {
+            item_id: vec![],
+            kind: 0,
+            magnitude: u128::MAX,
+            negative: true,
+        };
+        assert_eq!(huge_neg.signed_i128_saturating(), -i128::MAX);
     }
 
     #[test]

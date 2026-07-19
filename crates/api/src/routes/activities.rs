@@ -1334,5 +1334,24 @@ mod tests {
             "missing kind: {}",
             json
         );
+
+        // A token delta > i128::MAX must render as its exact decimal string. This is the
+        // exact expression convert_item_delta uses for a token (`format!("{sign}{magnitude}")`),
+        // proving no truncation at the API/JSON boundary. (The indexer-side regression test
+        // pins that `magnitude` reaches here un-wrapped.)
+        let magnitude: u128 = 222_044_604_925_031_325_468_940_491_728_862_838_784; // 2.22e38
+        let negative = false;
+        let big_token = ItemDeltaResponse::Token {
+            type_script_hash: "0xdd".to_string(),
+            delta: format!("{}{}", if negative { "-" } else { "" }, magnitude),
+            symbol: None,
+            decimals: None,
+        };
+        let json = serde_json::to_string(&big_token).unwrap();
+        assert!(
+            json.contains("\"222044604925031325468940491728862838784\""),
+            "big token delta must serialize as exact decimal string: {}",
+            json
+        );
     }
 }
