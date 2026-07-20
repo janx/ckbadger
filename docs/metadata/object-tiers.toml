@@ -3,3 +3,4 @@
 "did:ckb" = "pure_ckb"
 "did_ckb" = "pure_ckb"
 "dotbit" = "pure_ckb"
+"bit_cell" = "pure_ckb"

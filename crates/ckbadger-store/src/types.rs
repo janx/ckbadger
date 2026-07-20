@@ -142,6 +142,7 @@ pub mod semantic_tags {
     pub const MNFT: u16 = 1 << 4;
     pub const SPORE: u16 = 1 << 5;
     pub const CLUSTER: u16 = 1 << 6;
+    pub const BIT_CELL: u16 = 1 << 7;
 }
 
 /// Aggregated cell statistics for a token.
@@ -667,6 +668,8 @@ pub enum IdentityStandard {
     /// .bit (DotBit) domain name account.
     #[default]
     DotBit,
+    /// `.bit Cell`, the DID companion asset issued by the .bit protocol.
+    BitCell,
     /// did:ckb decentralized identity.
     DidCkb,
 }
@@ -676,6 +679,7 @@ impl IdentityStandard {
     pub fn as_str(&self) -> &'static str {
         match self {
             IdentityStandard::DotBit => "dotbit",
+            IdentityStandard::BitCell => "bit_cell",
             IdentityStandard::DidCkb => "did_ckb",
         }
     }
@@ -684,6 +688,7 @@ impl IdentityStandard {
     pub fn asset_standard(&self) -> &'static str {
         match self {
             IdentityStandard::DotBit => "dotbit",
+            IdentityStandard::BitCell => "bit_cell",
             IdentityStandard::DidCkb => "did_ckb",
         }
     }
@@ -692,6 +697,7 @@ impl IdentityStandard {
     pub fn sentinel_collection_id(&self) -> &'static [u8; 32] {
         match self {
             IdentityStandard::DotBit => &DOTBIT_SENTINEL_COLLECTION,
+            IdentityStandard::BitCell => &BIT_CELL_SENTINEL_COLLECTION,
             IdentityStandard::DidCkb => &DID_CKB_SENTINEL_COLLECTION,
         }
     }
@@ -699,6 +705,8 @@ impl IdentityStandard {
 
 /// Sentinel collection key for the .bit identity collection (32 bytes).
 pub const DOTBIT_SENTINEL_COLLECTION: [u8; 32] = *b"dotbit_collection_______________";
+/// Sentinel collection key for the `.bit Cell` identity collection (32 bytes).
+pub const BIT_CELL_SENTINEL_COLLECTION: [u8; 32] = *b"bit_cell_collection_____________";
 /// Sentinel collection key for the did:ckb identity collection (32 bytes).
 pub const DID_CKB_SENTINEL_COLLECTION: [u8; 32] = *b"did_ckb_collection______________";
 /// Sentinel collection key for clusterless Spore objects (32 bytes).
@@ -718,13 +726,19 @@ pub enum IdentityExtra {
         #[serde(default)]
         status: Option<u8>,
     },
+    /// `.bit Cell` metadata. `account_id` links the companion DID asset to its
+    /// canonical 20-byte .bit AccountCell identity without merging lifecycles.
+    BitCell {
+        account_id: Vec<u8>,
+        expired_at: u64,
+    },
     /// did:ckb identity: reserved for future fields.
     DidCkb,
 }
 
 /// An Identity entry stored in the `identity_data` column family.
 ///
-/// Covers all identity standards: .bit (DotBit), did:ckb.
+/// Covers all identity standards: .bit AccountCell, `.bit Cell`, and did:ckb.
 /// Standard-specific data lives in `extra`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IdentityEntry {
@@ -2283,13 +2297,19 @@ mod tests {
     #[test]
     fn test_identity_standard_as_str() {
         assert_eq!(IdentityStandard::DotBit.as_str(), "dotbit");
+        assert_eq!(IdentityStandard::BitCell.as_str(), "bit_cell");
         assert_eq!(IdentityStandard::DidCkb.as_str(), "did_ckb");
     }
 
     #[test]
     fn test_identity_standard_asset_standard() {
         assert_eq!(IdentityStandard::DotBit.asset_standard(), "dotbit");
+        assert_eq!(IdentityStandard::BitCell.asset_standard(), "bit_cell");
         assert_eq!(IdentityStandard::DidCkb.asset_standard(), "did_ckb");
+        assert_eq!(
+            IdentityStandard::BitCell.sentinel_collection_id(),
+            &BIT_CELL_SENTINEL_COLLECTION
+        );
     }
 
     // ---- Bincode roundtrip: ObjectEntry variants ----
@@ -2515,6 +2535,33 @@ mod tests {
         assert_eq!(decoded.standard, IdentityStandard::DidCkb);
         assert_eq!(decoded.name.as_deref(), Some("did:ckb:test"));
         assert!(matches!(decoded.extra, IdentityExtra::DidCkb));
+    }
+
+    #[test]
+    fn test_identity_entry_bit_cell_roundtrip() {
+        let entry = IdentityEntry {
+            standard: IdentityStandard::BitCell,
+            owner_lock_hash: Some(vec![0x77; 32]),
+            name: Some("20240507.bit".to_string()),
+            is_live: true,
+            created_at_block: 13_184_726,
+            created_at_tx: vec![0x88; 32],
+            extra: IdentityExtra::BitCell {
+                account_id: vec![0x99; 20],
+                expired_at: 1_778_140_699,
+            },
+        };
+        let bytes = bincode::serialize(&entry).unwrap();
+        let decoded: IdentityEntry = bincode::deserialize(&bytes).unwrap();
+        assert_eq!(decoded.standard, IdentityStandard::BitCell);
+        assert_eq!(decoded.name.as_deref(), Some("20240507.bit"));
+        assert!(matches!(
+            decoded.extra,
+            IdentityExtra::BitCell {
+                account_id,
+                expired_at: 1_778_140_699
+            } if account_id == vec![0x99; 20]
+        ));
     }
 
     // ---- AddressBalance ----

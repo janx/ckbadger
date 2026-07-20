@@ -29,7 +29,7 @@ use ckbadger_store::{keys, CkbadgerStore};
 
 const SHANNONS_PER_CKB: i64 = 100_000_000;
 // All protocol detection (DAO / sUDT / xUDT / .bit-account / mNFT issuer·class·token /
-// Spore NFT+DID / Spore Cluster) is delegated to the shared network-agnostic
+// Spore NFT / Spore Cluster) is delegated to the shared network-agnostic
 // `ckbadger_indexer::parser::registry::PROTOCOL_REGISTRY`, which covers mainnet + testnet.
 // The string consts below survive only as TEST fixtures that construct cells whose
 // type_code_hash matches a known protocol; they are compiled under `cfg(test)` so the
@@ -51,9 +51,8 @@ const MNFT_CLASS_CODE_HASH: &str =
 const MNFT_TOKEN_CODE_HASH: &str =
     "0x2b24f0d644ccbdd77bbf86b27c8cca02efa0ad051e447c212636d9ee7acaaec9";
 #[cfg(test)]
-const SPORE_CODE_HASHES: [&str; 4] = [
+const SPORE_CODE_HASHES: [&str; 3] = [
     "0x4a4dce1df3dffff7f8b2cd7dff7303df3b6150c9788cb75dcf6747247132b9f5",
-    "0xcfba73b58b6f30e70caed8a999748781b164ef9a1e218424a6fb55ebf641cb33",
     "0x685a60219309029d01310311dba953d67029170ca4848a4ff638e57002130a0d",
     "0xbbad126377d45f90a8ee120da988a2d7332c78ba8fd679aab478a19d6c133494",
 ];
@@ -205,11 +204,7 @@ pub(crate) fn parse_dep_group(data: &[u8], data_size: i32) -> DepGroupParseResul
 }
 
 fn is_spore_type_code_hash(code_hash: &[u8]) -> bool {
-    // Spore covers both plain Spore NFTs and Spore-DID cells (bit-cell.toml maps to
-    // SporeDid); the old 4-entry `SPORE_CODE_HASHES` fixture was exactly 3 SporeNft
-    // (1 mainnet + 2 testnet) + 1 SporeDid, so the registry union preserves it exactly.
     PROTOCOL_REGISTRY.is(code_hash, ProtocolScript::SporeNft)
-        || PROTOCOL_REGISTRY.is(code_hash, ProtocolScript::SporeDid)
 }
 
 fn is_cluster_type_code_hash(code_hash: &[u8]) -> bool {
@@ -3308,6 +3303,17 @@ mod tests {
         assert!(deterministic.segments.iter().any(|s| {
             s.label == "cluster_id" && s.human_value == format!("0x{}", hex::encode(&cluster_id))
         }));
+    }
+
+    #[test]
+    fn test_bit_cell_is_not_classified_as_spore() {
+        for code_hash in [
+            "0xcfba73b58b6f30e70caed8a999748781b164ef9a1e218424a6fb55ebf641cb33",
+            "0x0b1f412fbae26853ff7d082d422c2bdd9e2ff94ee8aaec11240a5b34cc6e890f",
+        ] {
+            let bytes = hex::decode(code_hash.trim_start_matches("0x")).unwrap();
+            assert!(!is_spore_type_code_hash(&bytes));
+        }
     }
 
     #[test]

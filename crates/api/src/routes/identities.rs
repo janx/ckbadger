@@ -3,7 +3,9 @@ use axum::{
     routing::get,
     Json, Router,
 };
-use ckbadger_store::types::{DID_CKB_SENTINEL_COLLECTION, DOTBIT_SENTINEL_COLLECTION};
+use ckbadger_store::types::{
+    BIT_CELL_SENTINEL_COLLECTION, DID_CKB_SENTINEL_COLLECTION, DOTBIT_SENTINEL_COLLECTION,
+};
 use ckbadger_store::CkbadgerStore;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -11,12 +13,12 @@ use std::time::Duration;
 
 use super::assets::{
     build_nft_item_activities_response, decode_activity_cursor, decode_item_id,
-    decode_object_item_cursor, list_canonical_nft_collection_activities_page,
-    list_identity_items_inner, normalize_activity_action_filter,
-    normalize_identity_activity_action_filter, normalize_nft_items_search,
-    normalize_nft_items_status, CollectionActivitiesParams, CollectionActivityResponse,
-    CollectionHolderResponse, CollectionItemResponse, MnftItemActivitiesParams,
-    MnftItemActivityResponse, NftLifecycleStandard, ObjectItemsParams,
+    decode_object_item_cursor, get_live_bit_cell_outpoints_by_identity_ids,
+    list_canonical_nft_collection_activities_page, list_identity_items_inner,
+    normalize_activity_action_filter, normalize_identity_activity_action_filter,
+    normalize_nft_items_search, normalize_nft_items_status, CollectionActivitiesParams,
+    CollectionActivityResponse, CollectionHolderResponse, CollectionItemResponse,
+    MnftItemActivitiesParams, MnftItemActivityResponse, NftLifecycleStandard, ObjectItemsParams,
 };
 use crate::cache::InMemoryCache;
 use crate::response::{
@@ -27,9 +29,9 @@ use crate::AppState;
 
 /// Decode an identity collection ID from a URL path segment.
 ///
-/// Accepts human-readable aliases ("dotbit", ".bit", "did:ckb", "did_ckb")
+/// Accepts human-readable aliases for DotBit, `.bit Cell`, and did:ckb
 /// and hex-encoded sentinel IDs. Rejects any collection ID that does not
-/// resolve to one of the two identity sentinels.
+/// resolve to an identity sentinel.
 fn decode_identity_collection_id(
     raw: &str,
 ) -> Result<Vec<u8>, (axum::http::StatusCode, Json<ApiError>)> {
@@ -40,9 +42,15 @@ fn decode_identity_collection_id(
     if normalized == "did:ckb" || normalized == "did_ckb" {
         return Ok(DID_CKB_SENTINEL_COLLECTION.to_vec());
     }
+    if matches!(normalized.as_str(), "bit_cell" | "bit-cell" | ".bit-cell") {
+        return Ok(BIT_CELL_SENTINEL_COLLECTION.to_vec());
+    }
     let bytes = hex::decode(raw.strip_prefix("0x").unwrap_or(raw))
         .map_err(|_| ApiError::bad_request("Invalid identity collection ID"))?;
-    if bytes != DOTBIT_SENTINEL_COLLECTION && bytes != DID_CKB_SENTINEL_COLLECTION {
+    if bytes != DOTBIT_SENTINEL_COLLECTION
+        && bytes != BIT_CELL_SENTINEL_COLLECTION
+        && bytes != DID_CKB_SENTINEL_COLLECTION
+    {
         return Err(ApiError::bad_request(
             "Collection ID is not an identity collection",
         ));
@@ -379,6 +387,9 @@ async fn list_identity_collection_items(
             ckbadger_store::types::IdentityStandard::DotBit => {
                 ckbadger_store::types::ObjectStandard::Spore
             }
+            ckbadger_store::types::IdentityStandard::BitCell => {
+                ckbadger_store::types::ObjectStandard::Spore
+            }
             ckbadger_store::types::IdentityStandard::DidCkb => {
                 ckbadger_store::types::ObjectStandard::Spore
             }
@@ -513,6 +524,69 @@ async fn get_did_ckb_item_detail(
     })
 }
 
+async fn get_bit_cell_item_detail(
+    State(state): State<Arc<AppState>>,
+    Path(identity_id): Path<String>,
+) -> ApiResult<CollectionItemResponse> {
+    let identity_id_bytes = decode_item_id(&identity_id)?;
+    let store = state.store.clone();
+    let identity_id_bytes_c = identity_id_bytes.clone();
+    let entry = tokio::task::spawn_blocking(move || store.get_identity(&identity_id_bytes_c))
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .ok_or_else(|| ApiError::not_found(".bit Cell identity not found"))?;
+
+    if entry.standard != ckbadger_store::types::IdentityStandard::BitCell {
+        return Err(ApiError::bad_request("Item is not a .bit Cell identity"));
+    }
+    let expired_at = match &entry.extra {
+        ckbadger_store::types::IdentityExtra::BitCell { expired_at, .. } => Some(*expired_at),
+        _ => {
+            return Err(ApiError::internal(format!(
+                ".bit Cell identity has wrong extra variant: identity_id=0x{}",
+                hex::encode(&identity_id_bytes)
+            )))
+        }
+    };
+    let (tx_hash, output_index) = if entry.is_live {
+        let outpoints = get_live_bit_cell_outpoints_by_identity_ids(
+            state.store.as_ref(),
+            state.append_only_store.as_ref(),
+            std::slice::from_ref(&identity_id_bytes),
+        )?;
+        let (tx_hash, output_index) = outpoints.get(&identity_id_bytes).ok_or_else(|| {
+            ApiError::internal(format!(
+                "live .bit Cell identity missing outpoint index: identity_id=0x{}",
+                hex::encode(&identity_id_bytes)
+            ))
+        })?;
+        (
+            Some(format!("0x{}", hex::encode(tx_hash))),
+            Some(*output_index),
+        )
+    } else {
+        (None, None)
+    };
+
+    ok(CollectionItemResponse {
+        nft_id: format!("0x{}", hex::encode(&identity_id_bytes)),
+        name: entry.name,
+        standard: entry.standard.asset_standard().to_string(),
+        owner_lock_hash: entry
+            .owner_lock_hash
+            .as_ref()
+            .map(|h| format!("0x{}", hex::encode(h))),
+        is_live: entry.is_live,
+        created_at_block: entry.created_at_block,
+        expired_at,
+        registered_at: None,
+        status: None,
+        tx_hash,
+        output_index,
+    })
+}
+
 async fn list_dotbit_item_activities(
     State(state): State<Arc<AppState>>,
     Path(identity_id): Path<String>,
@@ -586,6 +660,41 @@ async fn list_did_ckb_item_activities(
     ok(response)
 }
 
+async fn list_bit_cell_item_activities(
+    State(state): State<Arc<AppState>>,
+    Path(identity_id): Path<String>,
+    Query(params): Query<MnftItemActivitiesParams>,
+) -> ApiResult<CursorPaginatedResponse<MnftItemActivityResponse>> {
+    let limit = params.limit.clamp(1, 100);
+    let action_filter = normalize_activity_action_filter(params.action.as_deref())?;
+    let identity_id_bytes = decode_item_id(&identity_id)?;
+    let store = state.store.clone();
+    let identity_id_bytes_c = identity_id_bytes.clone();
+    let entry = tokio::task::spawn_blocking(move || store.get_identity(&identity_id_bytes_c))
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .ok_or_else(|| ApiError::not_found(".bit Cell identity not found"))?;
+    if entry.standard != ckbadger_store::types::IdentityStandard::BitCell {
+        return Err(ApiError::bad_request("Item is not a .bit Cell identity"));
+    }
+
+    let cursor = params
+        .cursor
+        .as_deref()
+        .map(decode_activity_cursor)
+        .transpose()?;
+    let response = build_nft_item_activities_response(
+        &state,
+        &identity_id_bytes,
+        NftLifecycleStandard::BitCell,
+        limit,
+        cursor,
+        action_filter.as_deref(),
+    )?;
+    ok(response)
+}
+
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route(
@@ -603,6 +712,14 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route(
             "/assets/identities/did/items/{identity_id}/activities",
             get(list_did_ckb_item_activities),
+        )
+        .route(
+            "/assets/identities/bit-cell/items/{identity_id}",
+            get(get_bit_cell_item_detail),
+        )
+        .route(
+            "/assets/identities/bit-cell/items/{identity_id}/activities",
+            get(list_bit_cell_item_activities),
         )
         .route(
             "/assets/identities/{collection_id}",
@@ -639,6 +756,12 @@ mod tests {
 
         let did_ckb_alt = decode_identity_collection_id("did_ckb").unwrap();
         assert_eq!(did_ckb_alt, DID_CKB_SENTINEL_COLLECTION.to_vec());
+
+        let bit_cell = decode_identity_collection_id("bit_cell").unwrap();
+        assert_eq!(bit_cell, BIT_CELL_SENTINEL_COLLECTION.to_vec());
+
+        let bit_cell_alt = decode_identity_collection_id(".bit-cell").unwrap();
+        assert_eq!(bit_cell_alt, BIT_CELL_SENTINEL_COLLECTION.to_vec());
     }
 
     #[test]
@@ -648,6 +771,9 @@ mod tests {
 
         let result = decode_identity_collection_id("DID:CKB").unwrap();
         assert_eq!(result, DID_CKB_SENTINEL_COLLECTION.to_vec());
+
+        let result = decode_identity_collection_id("BIT-CELL").unwrap();
+        assert_eq!(result, BIT_CELL_SENTINEL_COLLECTION.to_vec());
     }
 
     #[test]

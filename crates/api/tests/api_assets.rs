@@ -1414,6 +1414,108 @@ async fn test_assets_nft_collection_items_dotbit_human_readable_and_pagination()
 }
 
 #[tokio::test]
+async fn test_assets_bit_cell_collection_and_detail_keep_independent_identity() {
+    let store = test_store();
+    let collection_id = b"bit_cell_collection_____________".to_vec();
+    let identity_id =
+        hex::decode("81d34cd1dfc27716073d1018a63712926d8e3ab36345847129d0cc4135d1ffd4").unwrap();
+    let account_id = hex::decode("81d34cd1dfc27716073d1018a63712926d8e3ab3").unwrap();
+    let tx_hash = vec![0xc1; 32];
+    let output_index = 1_i16;
+
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_identity_collection_aggregate(
+        &collection_id,
+        &IdentityCollectionAggregate {
+            name: Some(".bit Cell".to_string()),
+            standard: IdentityStandard::BitCell,
+            total_count: 1,
+            live_count: 1,
+            holders_count: 1,
+            activities_count: 1,
+        },
+    );
+    batch.put_identity(
+        &identity_id,
+        &IdentityEntry {
+            standard: IdentityStandard::BitCell,
+            owner_lock_hash: Some(vec![0x31; 32]),
+            name: Some("20240507.bit".to_string()),
+            is_live: true,
+            created_at_block: 13_184_726,
+            created_at_tx: tx_hash.clone(),
+            extra: IdentityExtra::BitCell {
+                account_id,
+                expired_at: 1_778_140_699,
+            },
+        },
+    );
+    batch.put_identity_by_collection(&collection_id, &identity_id);
+    batch.put_cell(
+        &tx_hash,
+        output_index,
+        &LiveCellInfo {
+            capacity: 200_00000000,
+            lock_script_hash: vec![0x31; 32],
+            lock_code_hash: vec![0x41; 32],
+            lock_hash_type: 1,
+            lock_args: vec![0x51; 20],
+            type_script_hash: Some(vec![0x61; 32]),
+            type_code_hash: Some(vec![0x71; 32]),
+            type_hash_type: Some(1),
+            type_args: Some(Vec::new()),
+            data_size: 72,
+            occupied_capacity: 158_00000000,
+            udt_amount: None,
+            data_hash: None,
+        },
+        13_184_726,
+    );
+    batch.put_spore_outpoint(&tx_hash, output_index, &identity_id);
+    batch.commit().unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri("/api/v1/assets/identities/bit_cell/items?limit=20")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["total"], 1);
+    assert_eq!(
+        json["data"][0]["nftId"],
+        format!("0x{}", hex::encode(&identity_id))
+    );
+    assert_eq!(json["data"][0]["standard"], "bit_cell");
+    assert_eq!(json["data"][0]["name"], "20240507.bit");
+    assert_eq!(json["data"][0]["expiredAt"], 1_778_140_699u64);
+    assert_eq!(
+        json["data"][0]["txHash"],
+        format!("0x{}", hex::encode(&tx_hash))
+    );
+    assert_eq!(json["data"][0]["outputIndex"], output_index);
+
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/assets/identities/bit-cell/items/0x{}",
+            hex::encode(&identity_id)
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["standard"], "bit_cell");
+    assert_eq!(json["name"], "20240507.bit");
+    assert_eq!(json["txHash"], format!("0x{}", hex::encode(tx_hash)));
+}
+
+#[tokio::test]
 async fn test_assets_nft_collection_items_dotbit_requires_outpoint_index_even_with_live_cell() {
     let store = test_store();
     let collection_id = b"dotbit_collection_______________".to_vec();

@@ -1242,8 +1242,8 @@ const SHANNONS_PER_CKB: i128 = 100_000_000;
 /// - `Udt` = registry `Sudt | Xudt`. The old set was sUDT + 2 xUDT canonical hashes, all
 ///   of which map to `Sudt`/`Xudt`; it carried NO udt-compatible (Stable++/ccBTC/USDI)
 ///   hashes, so none are added here.
-/// - `NftSpore` = registry `SporeNft | SporeDid | Cluster`. The old set was 4 Spore
-///   (3 SporeNft + 1 SporeDid/bit-cell) + 3 Cluster hashes.
+/// - `NftSpore` = registry `SporeNft | SporeDid | Cluster`. `.bit Cell` is an independent
+///   identity protocol and therefore remains in `OtherTyped`, not the Spore bucket.
 /// - `OtherTyped` = every other typed cell (unchanged residual bucket).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum KnowledgeBucket {
@@ -3597,16 +3597,14 @@ mod tests {
     }
 
     #[test]
-    fn test_knowledge_bucket_classifies_testnet_spore_did_as_nft_spore() {
-        // Testnet Spore-DID (bit-cell.toml `[testnet]`) — the genuinely-new addition the
-        // registry brings in. It has no counterpart in the old mainnet-only
-        // `NFT_SPORE_CODE_HASHES` const set, so it was unreachable/undercounted before and
-        // must now bucket as NftSpore.
+    fn test_knowledge_bucket_classifies_testnet_bit_cell_as_other_typed() {
+        // `.bit Cell` uses a SporeData envelope in its current layout, but its
+        // protocol semantics are DotBit identity rather than a Spore NFT.
         assert_eq!(
             classify_knowledge_bucket(&code_hash_bytes(
                 "0x0b1f412fbae26853ff7d082d422c2bdd9e2ff94ee8aaec11240a5b34cc6e890f"
             )),
-            KnowledgeBucket::NftSpore
+            KnowledgeBucket::OtherTyped
         );
     }
 
@@ -3629,10 +3627,10 @@ mod tests {
             );
         }
 
-        // Old `NFT_SPORE_CODE_HASHES`: 4 Spore (3 SporeNft + 1 SporeDid/bit-cell) + 3 Cluster.
+        // Actual Spore/Cluster hashes retain their historical bucket. The old list's
+        // `.bit Cell` entry was a semantic misclassification and is asserted separately.
         for nft in [
             "0x4a4dce1df3dffff7f8b2cd7dff7303df3b6150c9788cb75dcf6747247132b9f5",
-            "0xcfba73b58b6f30e70caed8a999748781b164ef9a1e218424a6fb55ebf641cb33",
             "0x685a60219309029d01310311dba953d67029170ca4848a4ff638e57002130a0d",
             "0xbbad126377d45f90a8ee120da988a2d7332c78ba8fd679aab478a19d6c133494",
             "0x7366a61534fa7c7e6225ecc0d828ea3b5366adec2b58206f2ee84995fe030075",
@@ -3645,6 +3643,13 @@ mod tests {
                 "old NFT/Spore hash {nft} must still bucket as NftSpore"
             );
         }
+        assert_eq!(
+            classify_knowledge_bucket(&code_hash_bytes(
+                "0xcfba73b58b6f30e70caed8a999748781b164ef9a1e218424a6fb55ebf641cb33"
+            )),
+            KnowledgeBucket::OtherTyped,
+            ".bit Cell must not be counted as a Spore NFT"
+        );
 
         // DAO hash still classifies as Dao (checked first in the chain).
         assert_eq!(

@@ -13,7 +13,7 @@ use ckbadger_store::types::{
     TAG_LOCK_CALL, TAG_OBJECT, TAG_PROTOCOL, TAG_TOKEN, TAG_TYPE_CALL,
 };
 
-use crate::parser::udt::UdtParser;
+use crate::parser::{bit_cell::BitCellParser, dotbit::DotbitParser, udt::UdtParser};
 
 mod bundled_udt {
     pub const EXTRA_UDT_CODE_HASHES: &[u8] = include_bytes!(concat!(
@@ -38,6 +38,7 @@ enum AssetKind {
     Cluster,
     MnftToken,
     Dotbit,
+    BitCell,
 }
 
 /// Pre-computed code hashes for asset detection via HashMap lookup.
@@ -56,12 +57,12 @@ impl CodeHashes {
         // replacing the previous hardcoded parser-const list. This is what lets
         // testnet assets (e.g. testnet sUDT / mNFT token) classify in activities.
         //
-        // Coverage is intentionally identical to the old const map: only the
-        // asset-bearing protocols below receive an AssetKind. Every other
-        // registry protocol — mNFT issuer/class, all locks, and the
-        // fiber/stablepp/utxoswap scripts — is skipped via the `_` arm, exactly
-        // as the old `entries` array omitted them. (Stable++/ccBTC style
-        // xudt_compatible assets are still picked up below via EXTRA_UDT.)
+        // Only the asset-bearing protocols below receive an AssetKind. `.bit
+        // Cell`, AccountCell, Spore, and the Web5 did:ckb contract are distinct
+        // protocol identities and must not share lifecycle calculations. Every
+        // other registry protocol — mNFT issuer/class, all locks, and the
+        // fiber/stablepp/utxoswap scripts — is skipped via the `_` arm.
+        // Stable++/ccBTC-style xUDT-compatible assets are added below.
         let mut type_lookup: HashMap<Vec<u8>, AssetKind> = HashMap::new();
         for (code_hash, protocol) in PROTOCOL_REGISTRY.iter() {
             let kind = match protocol {
@@ -72,6 +73,7 @@ impl CodeHashes {
                 ProtocolScript::Cluster => AssetKind::Cluster,
                 ProtocolScript::MnftToken => AssetKind::MnftToken,
                 ProtocolScript::DotbitAccount => AssetKind::Dotbit,
+                ProtocolScript::BitCell => AssetKind::BitCell,
                 _ => continue,
             };
             type_lookup.insert(code_hash.clone(), kind);
@@ -155,6 +157,9 @@ pub struct InputCellView<'a> {
     pub type_script_hash: Option<&'a [u8]>,
     pub type_args: Option<&'a [u8]>,
     pub udt_amount: Option<u128>,
+    /// Pre-parsed `.bit Cell` identity ID carried by the bulk live-cell arena.
+    /// Live sync leaves this unset because it retains the input cell data.
+    pub bit_cell_identity_id: Option<&'a [u8]>,
     pub data: &'a [u8],
     pub is_dao_withdraw_request: bool,
     pub dao_compensation: Option<i64>,
@@ -268,6 +273,10 @@ pub(crate) struct OwnerAccum<'a> {
     pub(crate) dotbit_inputs: Vec<Vec<u8>>,
     /// DotBit IDs seen as outputs
     pub(crate) dotbit_outputs: Vec<Vec<u8>>,
+    /// `.bit Cell` identity IDs seen as inputs
+    pub(crate) bit_cell_inputs: Vec<Vec<u8>>,
+    /// `.bit Cell` identity IDs seen as outputs
+    pub(crate) bit_cell_outputs: Vec<Vec<u8>>,
     /// did:ckb IDs seen as inputs
     pub(crate) did_ckb_inputs: Vec<&'a [u8]>,
     /// did:ckb IDs seen as outputs
@@ -281,9 +290,6 @@ pub(crate) struct OwnerAccum<'a> {
     /// Non-standard lock scripts seen on output cells in this tx, keyed by (code_hash, hash_type, args)
     pub(crate) unrecognized_lock_calls: BTreeSet<(&'a [u8], i16, &'a [u8])>,
 }
-
-const DOTBIT_TYPE_ARGS_LEN: usize = 20;
-const DOTBIT_DATA_HASH_PREFIX_LEN: usize = 32;
 
 fn record_owner_lock_script<'a>(
     accum: &mut OwnerAccum<'a>,
@@ -371,6 +377,7 @@ fn build_tx_actions<'a>(
                 input.type_script_hash,
                 input.type_args,
                 input.udt_amount,
+                input.bit_cell_identity_id,
                 input.data,
                 input.is_dao_withdraw_request,
                 input.dao_compensation,
@@ -491,6 +498,13 @@ fn build_tx_actions<'a>(
         emit_identity_item_deltas(
             &accum.dotbit_inputs,
             &accum.dotbit_outputs,
+            &mut item_deltas,
+        );
+
+        // `.bit Cell` changes → independent identity ItemDelta.
+        emit_identity_item_deltas(
+            &accum.bit_cell_inputs,
+            &accum.bit_cell_outputs,
             &mut item_deltas,
         );
 
@@ -682,6 +696,7 @@ fn classify_input<'a>(
     type_script_hash: Option<&'a [u8]>,
     type_args: Option<&'a [u8]>,
     udt_amount: Option<u128>,
+    bit_cell_identity_id: Option<&[u8]>,
     data: &'a [u8],
     is_dao_withdraw_request: bool,
     dao_compensation: Option<i64>,
@@ -736,9 +751,35 @@ fn classify_input<'a>(
             }
         }
         Some(AssetKind::Dotbit) => {
-            if let Some(account_id) = resolve_dotbit_account_id(type_args, data) {
+            if let Some(account_id) =
+                DotbitParser::resolve_account_id(type_code_hash, type_args, data)
+            {
                 accum.dotbit_inputs.push(account_id);
             }
+        }
+        Some(AssetKind::BitCell) => {
+            let identity_id = if let Some(identity_id) = bit_cell_identity_id {
+                if identity_id.len() != 32 || identity_id.iter().all(|byte| *byte == 0) {
+                    bail!(
+                        "invalid pre-parsed .bit Cell input identity ID: code_hash=0x{}, identity_id_len={}, identity_id=0x{}",
+                        hex::encode(type_code_hash),
+                        identity_id.len(),
+                        hex::encode(identity_id)
+                    );
+                }
+                identity_id.to_vec()
+            } else {
+                BitCellParser::parse_identity_id_from_data(type_code_hash, type_args, data)
+                    .ok_or_else(|| {
+                        anyhow!(
+                            "failed to parse .bit Cell input identity ID: code_hash=0x{}, type_args_len={}, data_len={}",
+                            hex::encode(type_code_hash),
+                            type_args.map_or(0, <[u8]>::len),
+                            data.len()
+                        )
+                    })?
+            };
+            accum.bit_cell_inputs.push(identity_id);
         }
         None => {
             record_script_call(accum, type_code_hash, type_hash_type, type_args)?;
@@ -818,9 +859,27 @@ fn classify_output<'a>(
             }
         }
         Some(AssetKind::Dotbit) => {
-            if let Some(account_id) = resolve_dotbit_account_id(type_args, cell_data) {
+            if let Some(account_id) =
+                DotbitParser::resolve_account_id(type_code_hash, type_args, cell_data)
+            {
                 accum.dotbit_outputs.push(account_id);
             }
+        }
+        Some(AssetKind::BitCell) => {
+            let identity_id = BitCellParser::parse_identity_id_from_data(
+                type_code_hash,
+                type_args,
+                cell_data,
+            )
+            .ok_or_else(|| {
+                anyhow!(
+                    "failed to resolve .bit Cell output identity ID: code_hash=0x{}, type_args_len={}, data_len={}",
+                    hex::encode(type_code_hash),
+                    type_args.map_or(0, <[u8]>::len),
+                    cell_data.len()
+                )
+            })?;
+            accum.bit_cell_outputs.push(identity_id);
         }
         None => {
             record_script_call(accum, type_code_hash, type_hash_type, type_args)?;
@@ -851,35 +910,6 @@ fn record_script_call<'a>(
         .unrecognized_type_calls
         .insert((type_code_hash, hash_type, args));
     Ok(())
-}
-
-fn resolve_dotbit_account_id(type_args: Option<&[u8]>, cell_data: &[u8]) -> Option<Vec<u8>> {
-    if let Some(args) = type_args {
-        // Normal case: .bit account_id comes from type args.
-        if args.len() == DOTBIT_TYPE_ARGS_LEN && !args.iter().all(|&b| b == 0) {
-            return Some(args.to_vec());
-        }
-        if !args.is_empty() {
-            return Some(args.to_vec());
-        }
-    }
-
-    // Compatibility path for old .bit layouts: account_id in cell data.
-    // Accepts both full cell data (≥52 bytes: 32-byte prefix + 20-byte id)
-    // and a pre-resolved account_id (exactly 20 bytes, from DB lookup for
-    // consumed inputs whose raw cell data is unavailable).
-    let min_len = DOTBIT_DATA_HASH_PREFIX_LEN + DOTBIT_TYPE_ARGS_LEN;
-    let account_id = if cell_data.len() >= min_len {
-        &cell_data[DOTBIT_DATA_HASH_PREFIX_LEN..DOTBIT_DATA_HASH_PREFIX_LEN + DOTBIT_TYPE_ARGS_LEN]
-    } else if cell_data.len() == DOTBIT_TYPE_ARGS_LEN {
-        cell_data
-    } else {
-        return None;
-    };
-    if account_id.iter().all(|&b| b == 0) {
-        return None;
-    }
-    Some(account_id.to_vec())
 }
 
 /// Emit object ItemDeltas by comparing input vs output ID sets.
@@ -1042,6 +1072,7 @@ mod tests {
                 type_script_hash: self.type_script_hash.as_deref(),
                 type_args: self.type_args.as_deref(),
                 udt_amount: self.udt_amount,
+                bit_cell_identity_id: None,
                 data: &self.data,
                 is_dao_withdraw_request: self.is_dao_withdraw_request,
                 dao_compensation: self.dao_compensation,
@@ -1511,19 +1542,24 @@ mod tests {
     }
 
     #[test]
-    fn test_did_ckb_changes_are_labeled_as_identity() {
+    fn test_bit_cell_changes_are_labeled_as_independent_identity() {
         let owner = 0xBB;
-        let did_code_hash =
-            crate::rpc::parse_hex_to_bytes(crate::parser::spore::SPORE_CODE_HASH_MAINNET_DID);
-        let did_id = vec![0x6b; 32];
+        let bit_cell_code_hash =
+            crate::rpc::parse_hex_to_bytes(crate::parser::bit_cell::BIT_CELL_CODE_HASH_TESTNET);
+        let identity_id = crate::rpc::parse_hex_to_bytes(
+            "0x81d34cd1dfc27716073d1018a63712926d8e3ab36345847129d0cc4135d1ffd4",
+        );
+        let bit_cell_data = crate::rpc::parse_hex_to_bytes(
+            "0x000000003c00000010000000240000002c000000a7d4860aaf1dc83daedf75d6022811d2c2ae250b1b46fc69000000000c00000032303234303530372e626974",
+        );
 
         let outputs = vec![make_output(
             owner,
             100_00000000,
-            Some(did_code_hash),
+            Some(bit_cell_code_hash),
             Some(vec![0x22; 32]),
-            Some(did_id.clone()),
-            vec![0u8; 16],
+            Some(Vec::new()),
+            bit_cell_data,
         )];
 
         let tx = TxView {
@@ -1545,8 +1581,8 @@ mod tests {
             .item_deltas
             .iter()
             .find(|d| d.kind == ITEM_KIND_IDENTITY)
-            .expect("did_ckb identity item delta should be present");
-        assert_eq!(identity_delta.item_id, did_id);
+            .expect(".bit identity item delta should be present");
+        assert_eq!(identity_delta.item_id, identity_id);
         assert_eq!(identity_delta.magnitude, 1); // output-only = +1
         assert!(!identity_delta.negative);
     }
@@ -1776,13 +1812,14 @@ mod tests {
         // the migration to PROTOCOL_REGISTRY. If the bundled registry ever drops
         // one of these hashes (or a slug remaps), this fails loudly instead of
         // silently regressing activity classification.
+        use crate::parser::bit_cell::BIT_CELL_CODE_HASH_MAINNET;
         use crate::parser::dao::DAO_CODE_HASH;
         use crate::parser::dotbit::DOTBIT_ACCOUNT_CELL_TYPE_ID;
         use crate::parser::mnft::MNFT_TOKEN_CODE_HASH;
         use crate::parser::spore::{
             CLUSTER_CODE_HASH_MAINNET_V2, CLUSTER_CODE_HASH_TESTNET_V1,
-            CLUSTER_CODE_HASH_TESTNET_V2, SPORE_CODE_HASH_MAINNET_DID, SPORE_CODE_HASH_MAINNET_V2,
-            SPORE_CODE_HASH_TESTNET_V1, SPORE_CODE_HASH_TESTNET_V2,
+            CLUSTER_CODE_HASH_TESTNET_V2, SPORE_CODE_HASH_MAINNET_V2, SPORE_CODE_HASH_TESTNET_V1,
+            SPORE_CODE_HASH_TESTNET_V2,
         };
         use crate::parser::udt::{SUDT_CODE_HASH, XUDT_CODE_HASH_DATA1, XUDT_CODE_HASH_TYPE};
         use crate::rpc::parse_hex_to_bytes;
@@ -1793,7 +1830,7 @@ mod tests {
             (XUDT_CODE_HASH_DATA1, AssetKind::Udt),
             (XUDT_CODE_HASH_TYPE, AssetKind::Udt),
             (DAO_CODE_HASH, AssetKind::Dao),
-            (SPORE_CODE_HASH_MAINNET_DID, AssetKind::SporeDid),
+            (BIT_CELL_CODE_HASH_MAINNET, AssetKind::BitCell),
             (SPORE_CODE_HASH_MAINNET_V2, AssetKind::Spore),
             (SPORE_CODE_HASH_TESTNET_V2, AssetKind::Spore),
             (SPORE_CODE_HASH_TESTNET_V1, AssetKind::Spore),
@@ -2283,6 +2320,7 @@ mod tests {
             type_script_hash: None,
             type_args: None,
             udt_amount: None,
+            bit_cell_identity_id: None,
             data: &input_data,
             is_dao_withdraw_request: false,
             dao_compensation: None,

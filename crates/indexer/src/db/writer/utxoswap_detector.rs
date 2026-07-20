@@ -160,6 +160,7 @@ mod tests {
                 type_script_hash: None,
                 type_args: None,
                 udt_amount: None,
+                bit_cell_identity_id: None,
                 data: &self.data,
                 is_dao_withdraw_request: false,
                 dao_compensation: None,

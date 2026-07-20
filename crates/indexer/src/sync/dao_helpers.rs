@@ -13,9 +13,11 @@ use chrono::NaiveDate;
 
 use ckbadger_store::types::{AddressBalance, PositionedCellInfo};
 
-pub(crate) use ckbadger_store::types::{DID_CKB_SENTINEL_COLLECTION, DOTBIT_SENTINEL_COLLECTION};
+pub(crate) use ckbadger_store::types::{
+    BIT_CELL_SENTINEL_COLLECTION, DID_CKB_SENTINEL_COLLECTION, DOTBIT_SENTINEL_COLLECTION,
+};
 
-use crate::parser::{DaoParser, DotbitParser, MnftParser, SporeParser};
+use crate::parser::{BitCellParser, DaoParser, DotbitParser, MnftParser, SporeParser};
 
 use super::helpers::{checked_usize_to_i16, parsed_input_outpoint_index_i16};
 use super::types::TxData;
@@ -131,6 +133,9 @@ pub(crate) fn classify_object_collection_id(
     }
     if DotbitParser::is_account_cell_type_script(type_code_hash) {
         return Some(DOTBIT_SENTINEL_COLLECTION.to_vec());
+    }
+    if BitCellParser::is_type_script(type_code_hash) {
+        return Some(BIT_CELL_SENTINEL_COLLECTION.to_vec());
     }
     if SporeParser::is_did_type_script(type_code_hash) {
         return Some(DID_CKB_SENTINEL_COLLECTION.to_vec());
@@ -1001,12 +1006,12 @@ mod tests {
     }
 
     #[test]
-    fn test_classify_object_collection_id_did_ckb_uses_sentinel_collection() {
-        let did_code_hash =
-            crate::rpc::parse_hex_to_bytes(crate::parser::spore::SPORE_CODE_HASH_MAINNET_DID);
-        let collection_id = classify_object_collection_id(&did_code_hash, &[0x99; 32])
-            .expect("did:ckb type should map to sentinel collection");
-        assert_eq!(collection_id, DID_CKB_SENTINEL_COLLECTION.to_vec());
+    fn test_classify_object_collection_id_bit_cell_uses_own_sentinel_collection() {
+        let bit_cell_code_hash =
+            crate::rpc::parse_hex_to_bytes(crate::parser::bit_cell::BIT_CELL_CODE_HASH_MAINNET);
+        let collection_id = classify_object_collection_id(&bit_cell_code_hash, &[0x99; 32])
+            .expect(".bit Cell type should map to sentinel collection");
+        assert_eq!(collection_id, BIT_CELL_SENTINEL_COLLECTION.to_vec());
     }
 
     #[test]

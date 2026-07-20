@@ -3383,6 +3383,27 @@ impl CkbadgerStore {
                         batch.delete_cf(self.cf_stats_mnft(), &by_id_key);
                     }
                 }
+                if entry.standard == IdentityStandard::BitCell && identity_id.len() == 32 {
+                    let by_id_prefix = keys::encode_spore_outpoint_by_id_prefix(&identity_id);
+                    let by_id_iter = self.prefix_iterator_cf(self.cf_stats_spore(), &by_id_prefix);
+                    for by_id_item in by_id_iter {
+                        let (by_id_key, _) = by_id_item.map_err(|e| {
+                            anyhow::anyhow!(
+                                "failed to iterate .bit Cell outpoint reverse index during rollback cleanup: identity_id=0x{}, error={}",
+                                bytes_to_hex(&identity_id),
+                                e
+                            )
+                        })?;
+                        if !by_id_key.starts_with(&by_id_prefix) {
+                            break;
+                        }
+                        let (tx_hash, output_index) =
+                            keys::decode_spore_outpoint_by_id_key(&by_id_key);
+                        let fwd_key = keys::encode_spore_outpoint_key(&tx_hash, output_index);
+                        batch.delete_cf(self.cf_stats_spore(), fwd_key);
+                        batch.delete_cf(self.cf_stats_spore(), &by_id_key);
+                    }
+                }
                 secondary_keys_deleted += 1;
                 stage.tick(
                     spore_deleted
@@ -3398,6 +3419,7 @@ impl CkbadgerStore {
             let collection_id = match entry.standard {
                 IdentityStandard::DotBit => DOTBIT_SENTINEL_COLLECTION.to_vec(),
                 IdentityStandard::DidCkb => DID_CKB_SENTINEL_COLLECTION.to_vec(),
+                IdentityStandard::BitCell => BIT_CELL_SENTINEL_COLLECTION.to_vec(),
             };
 
             // Rebuild identity_by_collection index
@@ -3412,6 +3434,7 @@ impl CkbadgerStore {
                     name: match entry.standard {
                         IdentityStandard::DotBit => Some(".bit".to_string()),
                         IdentityStandard::DidCkb => Some("did:ckb".to_string()),
+                        IdentityStandard::BitCell => Some(".bit Cell".to_string()),
                     },
                     ..Default::default()
                 });

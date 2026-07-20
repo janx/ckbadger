@@ -17,7 +17,8 @@ use ckbadger_store::types::{
     DailyCellDistribution, DailyHodlWave, DaoDailySnapshot, DaoLatestStatistics, DaoTopDepositors,
     HodlTrackerState, LiveCellInfo, LockScriptEntry, ObjectStandard, ScriptDailyDelta,
     SporeTypeIndex, SyncStatus, TokenTransferRecord, TxActions, TxIndexEntry,
-    DID_CKB_SENTINEL_COLLECTION, DOTBIT_SENTINEL_COLLECTION, SOLE_SPORES_SENTINEL_COLLECTION,
+    BIT_CELL_SENTINEL_COLLECTION, DID_CKB_SENTINEL_COLLECTION, DOTBIT_SENTINEL_COLLECTION,
+    SOLE_SPORES_SENTINEL_COLLECTION,
 };
 use ckbadger_store::{
     AddressBalance, CkbadgerStore, ScriptInfo, CF_ADDR_TXS, CF_BLOCK_HASH_INDEX, CF_BLOCK_HEADERS,
@@ -2891,6 +2892,12 @@ fn build_tx_actions_list_for_bulk(
                         type_script_hash: input.type_script_hash_id.map(|id| interner.resolve_bytes(id)),
                         type_args: input.type_args_id.map(|id| interner.resolve_bytes(id)),
                         udt_amount: input.udt_amount,
+                        bit_cell_identity_id: match input.protocol_facts.as_ref() {
+                            Some(facts::CellProtocolFacts::BitCell(bit_cell)) => {
+                                Some(bit_cell.identity_id.as_slice())
+                            }
+                            _ => None,
+                        },
                         data: &[],
                         is_dao_withdraw_request,
                         dao_compensation,
@@ -3251,6 +3258,18 @@ fn build_history_rows_for_block(
                     facts::CellProtocolFacts::Dotbit(dotbit) => {
                         dotbit_consumed_account_ids.insert(dotbit.account_id.to_vec());
                     }
+                    facts::CellProtocolFacts::BitCell(bit_cell) => {
+                        identity_activity_acc.record(
+                            &BIT_CELL_SENTINEL_COLLECTION,
+                            &tx.tx_hash,
+                            &bit_cell.identity_id,
+                            &tx.block_hash,
+                            tx.block_number,
+                            tx.tx_index,
+                            tx.timestamp_ms,
+                            false,
+                        );
+                    }
                     _ => {}
                 }
             }
@@ -3302,6 +3321,18 @@ fn build_history_rows_for_block(
                     }
                     facts::CellProtocolFacts::Dotbit(dotbit) => {
                         dotbit_created_account_ids.insert(dotbit.account_id.to_vec());
+                    }
+                    facts::CellProtocolFacts::BitCell(bit_cell) => {
+                        identity_activity_acc.record(
+                            &BIT_CELL_SENTINEL_COLLECTION,
+                            &tx.tx_hash,
+                            &bit_cell.identity_id,
+                            &tx.block_hash,
+                            tx.block_number,
+                            tx.tx_index,
+                            tx.timestamp_ms,
+                            true,
+                        );
                     }
                     _ => {}
                 }
@@ -3502,6 +3533,18 @@ fn build_object_collection_activity_rows(
                 facts::CellProtocolFacts::Dotbit(dotbit) => {
                     dotbit_consumed_account_ids.insert(dotbit.account_id.to_vec());
                 }
+                facts::CellProtocolFacts::BitCell(bit_cell) => {
+                    identity_activity_acc.record(
+                        &BIT_CELL_SENTINEL_COLLECTION,
+                        &tx.tx_hash,
+                        &bit_cell.identity_id,
+                        &tx.block_hash,
+                        tx.block_number,
+                        tx.tx_index,
+                        tx.timestamp_ms,
+                        false,
+                    );
+                }
                 _ => {}
             }
         }
@@ -3553,6 +3596,18 @@ fn build_object_collection_activity_rows(
                 }
                 facts::CellProtocolFacts::Dotbit(dotbit) => {
                     dotbit_created_account_ids.insert(dotbit.account_id.to_vec());
+                }
+                facts::CellProtocolFacts::BitCell(bit_cell) => {
+                    identity_activity_acc.record(
+                        &BIT_CELL_SENTINEL_COLLECTION,
+                        &tx.tx_hash,
+                        &bit_cell.identity_id,
+                        &tx.block_hash,
+                        tx.block_number,
+                        tx.tx_index,
+                        tx.timestamp_ms,
+                        true,
+                    );
                 }
                 _ => {}
             }
@@ -4596,15 +4651,21 @@ fn collect_core_owner_state_snapshot(
         .into_iter()
         .collect::<HashMap<_, _>>();
     let did_agg = domain_store.get_identity_collection_aggregate(&DID_CKB_SENTINEL_COLLECTION)?;
+    let dotbit_agg = domain_store.get_identity_collection_aggregate(&DOTBIT_SENTINEL_COLLECTION)?;
+    let bit_cell_agg =
+        domain_store.get_identity_collection_aggregate(&BIT_CELL_SENTINEL_COLLECTION)?;
     let mut identities_by_collection = HashMap::new();
-    let mut did_ids = domain_store.list_identity_ids_by_collection(
+    for collection_id in [
         &DID_CKB_SENTINEL_COLLECTION,
-        None,
-        usize::MAX,
-    )?;
-    did_ids.sort();
-    if !did_ids.is_empty() {
-        identities_by_collection.insert(DID_CKB_SENTINEL_COLLECTION.to_vec(), did_ids);
+        &DOTBIT_SENTINEL_COLLECTION,
+        &BIT_CELL_SENTINEL_COLLECTION,
+    ] {
+        let mut identity_ids =
+            domain_store.list_identity_ids_by_collection(collection_id, None, usize::MAX)?;
+        identity_ids.sort();
+        if !identity_ids.is_empty() {
+            identities_by_collection.insert(collection_id.to_vec(), identity_ids);
+        }
     }
     let mut spores_by_cluster = HashMap::new();
     let mut cluster_owner_counts = HashMap::new();
@@ -4624,6 +4685,14 @@ fn collect_core_owner_state_snapshot(
     }
     let did_owner_counts = domain_store
         .list_identity_owner_counts(&DID_CKB_SENTINEL_COLLECTION)?
+        .into_iter()
+        .collect::<HashMap<_, _>>();
+    let dotbit_owner_counts = domain_store
+        .list_identity_owner_counts(&DOTBIT_SENTINEL_COLLECTION)?
+        .into_iter()
+        .collect::<HashMap<_, _>>();
+    let bit_cell_owner_counts = domain_store
+        .list_identity_owner_counts(&BIT_CELL_SENTINEL_COLLECTION)?
         .into_iter()
         .collect::<HashMap<_, _>>();
     let mut spore_outpoints = HashMap::new();
@@ -4660,9 +4729,13 @@ fn collect_core_owner_state_snapshot(
         identities,
         cluster_aggs,
         did_agg,
+        dotbit_agg,
+        bit_cell_agg,
         identities_by_collection,
         spores_by_cluster,
         did_owner_counts,
+        dotbit_owner_counts,
+        bit_cell_owner_counts,
         cluster_owner_counts,
         spore_outpoints,
         spore_type_indexes,
@@ -4703,10 +4776,9 @@ fn build_unique_temp_test_dir(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::parser::bit_cell::BIT_CELL_CODE_HASH_TESTNET;
     use crate::parser::fiber::FUNDING_LOCK_CODE_HASH_MAINNET;
-    use crate::parser::spore::{
-        CLUSTER_CODE_HASH_MAINNET_V2, SPORE_CODE_HASH_MAINNET_DID, SPORE_CODE_HASH_MAINNET_V2,
-    };
+    use crate::parser::spore::{CLUSTER_CODE_HASH_MAINNET_V2, SPORE_CODE_HASH_MAINNET_V2};
     use crate::parser::udt::SUDT_CODE_HASH;
     use crate::parser::ScriptParser;
     use crate::rpc::{
@@ -4721,7 +4793,7 @@ mod tests {
     use ckbadger_store::store::CF_TOKEN_TRANSFERS;
     use ckbadger_store::types::{
         AssetAction, FiberChannelState, ObjectCollectionActivityEntry, TokenInfo,
-        TokenTransferRecord, TxActions, DID_CKB_SENTINEL_COLLECTION, DOTBIT_SENTINEL_COLLECTION,
+        TokenTransferRecord, TxActions, BIT_CELL_SENTINEL_COLLECTION,
     };
     use ckbadger_store::{
         keys, CF_ADDR_TXS, CF_IDENTITY_COLLECTION_ACTIVITIES, CF_OBJECT_COLLECTION_ACTIVITIES,
@@ -4880,11 +4952,11 @@ mod tests {
         }
     }
 
-    fn create_did_type_script(did_id: &[u8; 32]) -> Script {
+    fn create_bit_cell_type_script() -> Script {
         Script {
-            code_hash: SPORE_CODE_HASH_MAINNET_DID.to_string(),
+            code_hash: BIT_CELL_CODE_HASH_TESTNET.to_string(),
             hash_type: "type".to_string(),
-            args: format!("0x{}", hex::encode(did_id)),
+            args: "0x".to_string(),
         }
     }
 
@@ -5078,7 +5150,6 @@ mod tests {
     fn bulk_build_object_activity_fixture() -> Vec<BlockResponseWithCycles> {
         let cluster_id = [0x11; 32];
         let spore_id = [0x22; 32];
-        let did_id = [0x33; 32];
 
         let create_tx = TransactionView {
             hash: format!("0x{}", "a1".repeat(32)),
@@ -5104,9 +5175,9 @@ mod tests {
                     type_: Some(create_spore_type_script(&spore_id)),
                 },
                 CellOutput {
-                    capacity: format!("0x{:x}", 150_00000000u64),
+                    capacity: format!("0x{:x}", 200_00000000u64),
                     lock: fixture_lock_script(&format!("0x{}", "03".repeat(20))),
-                    type_: Some(create_did_type_script(&did_id)),
+                    type_: Some(create_bit_cell_type_script()),
                 },
             ],
             outputs_data: vec![
@@ -5125,7 +5196,7 @@ mod tests {
                         Some(&cluster_id)
                     ))
                 ),
-                "0x".to_string(),
+                "0x000000003c00000010000000240000002c000000a7d4860aaf1dc83daedf75d6022811d2c2ae250b1b46fc69000000000c00000032303234303530372e626974".to_string(),
             ],
             witnesses: vec!["0x".to_string()],
         };
@@ -5757,7 +5828,7 @@ mod tests {
     }
 
     #[test]
-    fn build_history_rows_materializes_spore_and_did_collection_activities() {
+    fn build_history_rows_materializes_spore_and_bit_cell_identity_activities() {
         let blocks = bulk_build_object_activity_fixture();
         let cluster_id = [0x11; 32];
         let create_block_hash = vec![0x81; 32];
@@ -5774,7 +5845,7 @@ mod tests {
             .expect("resolved txs");
         let frozen = interner.snapshot_for_reads();
 
-        let root = unique_temp_test_dir("bulk-build-spore-did-activity-test");
+        let root = unique_temp_test_dir("bulk-build-spore-bit-cell-activity-test");
         std::fs::create_dir_all(&root).expect("create root");
         let domain_path = root.join("domain");
         let append_path = root.join("append-only");
@@ -5848,16 +5919,23 @@ mod tests {
             &transfer_block_hash,
             &transfer_tx_hash,
         );
-        let did_mint_key = keys::encode_object_collection_activity_key(
-            &DID_CKB_SENTINEL_COLLECTION,
+        let bit_cell_mint_key = keys::encode_object_collection_activity_key(
+            &BIT_CELL_SENTINEL_COLLECTION,
             14_001_000,
             0,
             &create_block_hash,
             &create_tx_hash,
         );
+        let bit_cell_burn_key = keys::encode_object_collection_activity_key(
+            &BIT_CELL_SENTINEL_COLLECTION,
+            14_001_001,
+            1,
+            &transfer_block_hash,
+            &transfer_tx_hash,
+        );
 
         assert_eq!(object_rows.len(), 2);
-        assert_eq!(identity_rows.len(), 1);
+        assert_eq!(identity_rows.len(), 2);
 
         let cluster_mint = object_rows
             .get(cluster_mint_key.as_slice())
@@ -5875,13 +5953,21 @@ mod tests {
         assert_eq!(cluster_transfer.actions.len(), 1);
         assert!(matches!(cluster_transfer.actions[0], AssetAction::Transfer));
 
-        let did_mint = identity_rows
-            .get(did_mint_key.as_slice())
-            .expect("did mint activity");
-        assert_eq!(did_mint.tx_hash, create_tx_hash);
-        assert_eq!(did_mint.block_hash, create_block_hash);
-        assert_eq!(did_mint.actions.len(), 1);
-        assert!(matches!(did_mint.actions[0], AssetAction::Mint));
+        let bit_cell_mint = identity_rows
+            .get(bit_cell_mint_key.as_slice())
+            .expect(".bit Cell mint activity");
+        assert_eq!(bit_cell_mint.tx_hash, create_tx_hash);
+        assert_eq!(bit_cell_mint.block_hash, create_block_hash);
+        assert_eq!(bit_cell_mint.actions.len(), 1);
+        assert!(matches!(bit_cell_mint.actions[0], AssetAction::Mint));
+
+        let bit_cell_burn = identity_rows
+            .get(bit_cell_burn_key.as_slice())
+            .expect(".bit Cell burn activity");
+        assert_eq!(bit_cell_burn.tx_hash, transfer_tx_hash);
+        assert_eq!(bit_cell_burn.block_hash, transfer_block_hash);
+        assert_eq!(bit_cell_burn.actions.len(), 1);
+        assert!(matches!(bit_cell_burn.actions[0], AssetAction::Burn));
     }
 
     #[test]

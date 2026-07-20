@@ -1,16 +1,19 @@
+use ckbadger_indexer::parser::bit_cell::BIT_CELL_CODE_HASH_TESTNET;
+use ckbadger_indexer::parser::dotbit::DOTBIT_ACCOUNT_CELL_TYPE_ID_TESTNET;
 use ckbadger_indexer::parser::mnft::{
     MNFT_CLASS_CODE_HASH, MNFT_ISSUER_CODE_HASH, MNFT_TOKEN_CODE_HASH,
 };
-use ckbadger_indexer::parser::spore::{
-    CLUSTER_CODE_HASH_MAINNET_V2, SPORE_CODE_HASH_MAINNET_DID, SPORE_CODE_HASH_MAINNET_V2,
-};
+use ckbadger_indexer::parser::spore::{CLUSTER_CODE_HASH_MAINNET_V2, SPORE_CODE_HASH_MAINNET_V2};
 use ckbadger_indexer::parser::ScriptParser;
 use ckbadger_indexer::rpc::{
     BlockResponseWithCycles, BlockView, CellInput, CellOutput, HeaderView, OutPoint, Script,
     TransactionView,
 };
 use ckbadger_indexer::sync::{materialize_object_state_for_test, ObjectStateSnapshot};
-use ckbadger_store::types::{ObjectStandard, DID_CKB_SENTINEL_COLLECTION};
+use ckbadger_store::types::{
+    IdentityExtra, IdentityStandard, ObjectStandard, BIT_CELL_SENTINEL_COLLECTION,
+    DOTBIT_SENTINEL_COLLECTION,
+};
 
 fn fixture_lock_script(args_hex: &str) -> Script {
     Script {
@@ -44,6 +47,68 @@ fn encode_molecule_bytes(data: &[u8]) -> Vec<u8> {
     result
 }
 
+fn encode_molecule_table(fields: &[Vec<u8>]) -> Vec<u8> {
+    let header_size = 4 + fields.len() * 4;
+    let total_size = header_size + fields.iter().map(Vec::len).sum::<usize>();
+    let mut result = Vec::with_capacity(total_size);
+    result.extend_from_slice(&(total_size as u32).to_le_bytes());
+
+    let mut offset = header_size as u32;
+    for field in fields {
+        result.extend_from_slice(&offset.to_le_bytes());
+        offset += field.len() as u32;
+    }
+    for field in fields {
+        result.extend_from_slice(field);
+    }
+    result
+}
+
+fn encode_molecule_dynvec(items: &[Vec<u8>]) -> Vec<u8> {
+    if items.is_empty() {
+        return 4u32.to_le_bytes().to_vec();
+    }
+
+    encode_molecule_table(items)
+}
+
+fn encode_dotbit_account_cell_witness(account_id: &[u8; 20], account: &str) -> String {
+    let account_items = account
+        .strip_suffix(".bit")
+        .unwrap_or(account)
+        .chars()
+        .map(|character| {
+            encode_molecule_table(&[
+                2u32.to_le_bytes().to_vec(),
+                encode_molecule_bytes(character.to_string().as_bytes()),
+            ])
+        })
+        .collect::<Vec<_>>();
+    let entity = encode_molecule_table(&[
+        account_id.to_vec(),
+        encode_molecule_dynvec(&account_items),
+        0u64.to_le_bytes().to_vec(),
+        0u64.to_le_bytes().to_vec(),
+        0u64.to_le_bytes().to_vec(),
+        0u64.to_le_bytes().to_vec(),
+        vec![0],
+        encode_molecule_dynvec(&[]),
+        vec![0],
+        0u64.to_le_bytes().to_vec(),
+    ]);
+    let data_entity = encode_molecule_table(&[
+        0u32.to_le_bytes().to_vec(),
+        3u32.to_le_bytes().to_vec(),
+        encode_molecule_bytes(&entity),
+    ]);
+    let data = encode_molecule_table(&[Vec::new(), Vec::new(), data_entity]);
+
+    let mut witness = b"das".to_vec();
+    witness.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]);
+    witness.extend_from_slice(&data);
+    format!("0x{}", hex::encode(witness))
+}
+
 fn create_spore_type_script(spore_id: &[u8; 32]) -> Script {
     Script {
         code_hash: SPORE_CODE_HASH_MAINNET_V2.to_string(),
@@ -52,11 +117,19 @@ fn create_spore_type_script(spore_id: &[u8; 32]) -> Script {
     }
 }
 
-fn create_did_type_script(did_id: &[u8; 32]) -> Script {
+fn create_bit_cell_type_script() -> Script {
     Script {
-        code_hash: SPORE_CODE_HASH_MAINNET_DID.to_string(),
+        code_hash: BIT_CELL_CODE_HASH_TESTNET.to_string(),
         hash_type: "type".to_string(),
-        args: format!("0x{}", hex::encode(did_id)),
+        args: "0x".to_string(),
+    }
+}
+
+fn create_testnet_dotbit_account_type_script() -> Script {
+    Script {
+        code_hash: DOTBIT_ACCOUNT_CELL_TYPE_ID_TESTNET.to_string(),
+        hash_type: "type".to_string(),
+        args: "0x".to_string(),
     }
 }
 
@@ -181,7 +254,6 @@ fn create_mnft_token_data(characteristic: &[u8; 8], configure: u8, state: u8) ->
 fn bulk_build_object_fixture() -> Vec<BlockResponseWithCycles> {
     let cluster_id = [0x11; 32];
     let spore_id = [0x22; 32];
-    let did_id = [0x33; 32];
 
     let create_tx = TransactionView {
         hash: format!("0x{}", "a1".repeat(32)),
@@ -207,9 +279,9 @@ fn bulk_build_object_fixture() -> Vec<BlockResponseWithCycles> {
                 type_: Some(create_spore_type_script(&spore_id)),
             },
             CellOutput {
-                capacity: format!("0x{:x}", 150_00000000u64),
+                capacity: format!("0x{:x}", 200_00000000u64),
                 lock: fixture_lock_script(&format!("0x{}", "03".repeat(20))),
-                type_: Some(create_did_type_script(&did_id)),
+                type_: Some(create_bit_cell_type_script()),
             },
         ],
         outputs_data: vec![
@@ -228,7 +300,7 @@ fn bulk_build_object_fixture() -> Vec<BlockResponseWithCycles> {
                     Some(&cluster_id)
                 ))
             ),
-            "0x".to_string(),
+            "0x000000003c00000010000000240000002c000000a7d4860aaf1dc83daedf75d6022811d2c2ae250b1b46fc69000000000c00000032303234303530372e626974".to_string(),
         ],
         witnesses: vec!["0x".to_string()],
     };
@@ -529,11 +601,118 @@ fn bulk_build_mnft_object_fixture() -> Vec<BlockResponseWithCycles> {
     ]
 }
 
+fn failed_testnet_transaction_fixture_with_account_and_bit_cell() -> Vec<BlockResponseWithCycles> {
+    let account_id: [u8; 20] = hex::decode("81d34cd1dfc27716073d1018a63712926d8e3ab3")
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let tx = TransactionView {
+        hash: "0xccef03c785caba4144d106b98e87f8bab2dedbb850dd8002356ab6eba5d572be"
+            .to_string(),
+        version: "0x0".to_string(),
+        cell_deps: vec![],
+        header_deps: vec![],
+        inputs: vec![CellInput {
+            since: "0x0".to_string(),
+            previous_output: OutPoint {
+                tx_hash: format!("0x{}", "00".repeat(32)),
+                index: "0xffffffff".to_string(),
+            },
+        }],
+        outputs: vec![
+            CellOutput {
+                capacity: format!("0x{:x}", 200_00000000u64),
+                lock: fixture_lock_script(&format!("0x{}", "03".repeat(20))),
+                type_: Some(create_testnet_dotbit_account_type_script()),
+            },
+            CellOutput {
+                capacity: format!("0x{:x}", 200_00000000u64),
+                lock: fixture_lock_script(&format!("0x{}", "03".repeat(20))),
+                type_: Some(create_bit_cell_type_script()),
+            },
+        ],
+        outputs_data: vec![
+            "0x7e66fb709ae616f18452d6dc08221bb9fba7b270bdc7615e80b41597ca9bbde281d34cd1dfc27716073d1018a63712926d8e3ab3828195525add4b66d20445678f6dd6ef5ba877151b46fc690000000032303234303530372e626974".to_string(),
+            "0x000000003c00000010000000240000002c000000a7d4860aaf1dc83daedf75d6022811d2c2ae250b1b46fc69000000000c00000032303234303530372e626974".to_string(),
+        ],
+        witnesses: vec![encode_dotbit_account_cell_witness(
+            &account_id,
+            "20240507.bit",
+        )],
+    };
+
+    vec![BlockResponseWithCycles {
+        block: BlockView {
+            header: fixture_header(13_184_726, 0xc9, 1_741_000_000_000),
+            uncles: vec![],
+            transactions: vec![tx],
+            proposals: vec![],
+        },
+        cycles: None,
+    }]
+}
+
 #[test]
-fn bulk_build_object_owner_materializes_spore_cluster_and_did_state_without_db_reads() {
+fn bulk_build_keeps_simultaneous_account_cell_and_bit_cell_lifecycles_separate() {
+    let account_id = hex::decode("81d34cd1dfc27716073d1018a63712926d8e3ab3").expect("account ID");
+    let bit_cell_id =
+        hex::decode("81d34cd1dfc27716073d1018a63712926d8e3ab36345847129d0cc4135d1ffd4")
+            .expect(".bit Cell identity ID");
+    let snapshot = materialize_object_state_for_test(
+        &failed_testnet_transaction_fixture_with_account_and_bit_cell(),
+    )
+    .expect("both protocol identities must materialize");
+
+    assert_eq!(
+        snapshot.identities.len(),
+        2,
+        "simultaneous identity rows: {:?}",
+        snapshot.identities
+    );
+    assert_eq!(
+        snapshot.identities[account_id.as_slice()].standard,
+        IdentityStandard::DotBit
+    );
+    let bit_cell = &snapshot.identities[bit_cell_id.as_slice()];
+    assert_eq!(bit_cell.standard, IdentityStandard::BitCell);
+    assert!(matches!(
+        &bit_cell.extra,
+        IdentityExtra::BitCell {
+            account_id: linked_account_id,
+            expired_at: 1_778_140_699
+        } if linked_account_id == &account_id
+    ));
+    assert_eq!(
+        snapshot
+            .dotbit_agg
+            .expect("AccountCell aggregate")
+            .total_count,
+        1
+    );
+    assert_eq!(
+        snapshot
+            .bit_cell_agg
+            .expect(".bit Cell aggregate")
+            .total_count,
+        1
+    );
+    assert_eq!(
+        snapshot.identities_by_collection[DOTBIT_SENTINEL_COLLECTION.as_slice()],
+        vec![account_id]
+    );
+    assert_eq!(
+        snapshot.identities_by_collection[BIT_CELL_SENTINEL_COLLECTION.as_slice()],
+        vec![bit_cell_id]
+    );
+}
+
+#[test]
+fn bulk_build_object_owner_materializes_spore_cluster_and_bit_cell_state_without_db_reads() {
     let cluster_id = [0x11; 32];
     let spore_id = [0x22; 32];
-    let did_id = [0x33; 32];
+    let bit_identity_id =
+        hex::decode("81d34cd1dfc27716073d1018a63712926d8e3ab36345847129d0cc4135d1ffd4")
+            .expect("fixture identity ID");
     let lock_a_hash =
         ScriptParser::compute_script_hash(&fixture_lock_script(&format!("0x{}", "01".repeat(20))));
     let lock_b_hash =
@@ -586,26 +765,36 @@ fn bulk_build_object_owner_materializes_spore_cluster_and_did_state_without_db_r
     assert_eq!(cluster_owner_counts.get(lock_a_hash.as_slice()), None);
     assert_eq!(cluster_owner_counts.get(lock_b_hash.as_slice()), Some(&1));
 
-    let did_entry = snapshot
+    let bit_entry = snapshot
         .identities
-        .get(did_id.as_slice())
-        .expect("did entry exists");
-    assert!(!did_entry.is_live);
-    assert!(did_entry.owner_lock_hash.is_none());
+        .get(bit_identity_id.as_slice())
+        .expect(".bit Cell identity entry exists");
+    assert_eq!(bit_entry.standard, IdentityStandard::BitCell);
+    assert_eq!(bit_entry.name.as_deref(), Some("20240507.bit"));
+    assert!(matches!(
+        &bit_entry.extra,
+        IdentityExtra::BitCell {
+            account_id,
+            expired_at: 1_778_140_699
+        } if account_id == &hex::decode("81d34cd1dfc27716073d1018a63712926d8e3ab3")
+            .expect("fixture account ID")
+    ));
+    assert!(!bit_entry.is_live);
+    assert!(bit_entry.owner_lock_hash.is_none());
 
-    let did_agg = snapshot.did_agg.expect("did aggregate exists");
-    assert_eq!(did_agg.total_count, 1);
-    assert_eq!(did_agg.live_count, 0);
-    assert_eq!(did_agg.holders_count, 0);
+    let bit_cell_agg = snapshot.bit_cell_agg.expect(".bit Cell aggregate exists");
+    assert_eq!(bit_cell_agg.total_count, 1);
+    assert_eq!(bit_cell_agg.live_count, 0);
+    assert_eq!(bit_cell_agg.holders_count, 0);
 
     assert_eq!(
         snapshot
             .identities_by_collection
-            .get(DID_CKB_SENTINEL_COLLECTION.as_slice())
-            .expect("did collection ids"),
-        &vec![did_id.to_vec()]
+            .get(BIT_CELL_SENTINEL_COLLECTION.as_slice())
+            .expect(".bit Cell collection ids"),
+        &vec![bit_identity_id]
     );
-    assert!(snapshot.did_owner_counts.is_empty());
+    assert!(snapshot.bit_cell_owner_counts.is_empty());
 
     let outpoints = snapshot
         .spore_outpoints

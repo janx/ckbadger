@@ -9,7 +9,8 @@ use ckbadger_store::types::{
     ClusterAggregate, ClusterDailyDelta, CompositionTier, IdentityCollectionAggregate,
     IdentityEntry, IdentityExtra, IdentityStandard, MnftCollectionAggregate, MnftDailyDelta,
     MnftTypeIndex, ObjectEntry, ObjectExtra, ObjectStandard, SporeDailyDelta, SporeTypeIndex,
-    DID_CKB_SENTINEL_COLLECTION, DOTBIT_SENTINEL_COLLECTION, SOLE_SPORES_SENTINEL_COLLECTION,
+    BIT_CELL_SENTINEL_COLLECTION, DID_CKB_SENTINEL_COLLECTION, DOTBIT_SENTINEL_COLLECTION,
+    SOLE_SPORES_SENTINEL_COLLECTION,
 };
 use ckbadger_store::{
     CkbadgerStore, CF_CLUSTER_AGG, CF_IDENTITY_AGG, CF_IDENTITY_DATA, CF_MNFT_COLLECTION_AGG,
@@ -37,6 +38,7 @@ pub(crate) struct ObjectOwner {
     object_collection_aggs: BTreeMap<Vec<u8>, MnftCollectionAggregate>,
     did_agg: Option<IdentityCollectionAggregate>,
     dotbit_agg: Option<IdentityCollectionAggregate>,
+    bit_cell_agg: Option<IdentityCollectionAggregate>,
     identity_by_collection: BTreeSet<Vec<u8>>,
     spore_by_cluster: BTreeSet<Vec<u8>>,
     stats_spore_rows: BTreeMap<Vec<u8>, Vec<u8>>,
@@ -49,6 +51,7 @@ pub(crate) struct ObjectOwner {
     spore_hourly_transfers: BTreeMap<Vec<u8>, i64>,
     did_owner_counts: BTreeMap<Vec<u8>, i64>,
     dotbit_owner_counts: BTreeMap<Vec<u8>, i64>,
+    bit_cell_owner_counts: BTreeMap<Vec<u8>, i64>,
     dotbit_outpoints: BTreeMap<Vec<u8>, Vec<u8>>,
     dotbit_outpoints_by_account: BTreeSet<Vec<u8>>,
     dotbit_hourly_transfers: BTreeMap<Vec<u8>, i64>,
@@ -328,6 +331,13 @@ impl ObjectOwner {
                 bincode::serialize(agg)?,
             ));
         }
+        if let Some(agg) = &self.bit_cell_agg {
+            final_rows.push(MaterializedRow::new(
+                CF_IDENTITY_AGG,
+                BIT_CELL_SENTINEL_COLLECTION.to_vec(),
+                bincode::serialize(agg)?,
+            ));
+        }
         for (cluster_id, agg) in &self.cluster_aggs {
             final_rows.push(MaterializedRow::new(
                 CF_CLUSTER_AGG,
@@ -362,6 +372,16 @@ impl ObjectOwner {
                 count.to_le_bytes().to_vec(),
             ));
         }
+        for (lock_hash, count) in &self.bit_cell_owner_counts {
+            if *count <= 0 {
+                continue;
+            }
+            final_rows.push(MaterializedRow::new(
+                CF_STATS_IDENTITY,
+                keys::encode_identity_owner_key(&BIT_CELL_SENTINEL_COLLECTION, lock_hash).to_vec(),
+                count.to_le_bytes().to_vec(),
+            ));
+        }
         Ok(final_rows)
     }
 
@@ -386,6 +406,10 @@ impl ObjectOwner {
                 .map_or(0, crate::sync::bulk_build::accounting::serialized_bytes)
             + self
                 .dotbit_agg
+                .as_ref()
+                .map_or(0, crate::sync::bulk_build::accounting::serialized_bytes)
+            + self
+                .bit_cell_agg
                 .as_ref()
                 .map_or(0, crate::sync::bulk_build::accounting::serialized_bytes)
             + crate::sync::bulk_build::accounting::btree_set_serialized_bytes(
@@ -423,6 +447,9 @@ impl ObjectOwner {
             )
             + crate::sync::bulk_build::accounting::btree_map_serialized_bytes(
                 &self.dotbit_owner_counts,
+            )
+            + crate::sync::bulk_build::accounting::btree_map_serialized_bytes(
+                &self.bit_cell_owner_counts,
             )
             + crate::sync::bulk_build::accounting::btree_map_serialized_bytes(
                 &self.dotbit_outpoints,
@@ -471,6 +498,15 @@ impl ObjectOwner {
                         .get_or_insert_with(|| IdentityCollectionAggregate {
                             name: Some(".bit".to_string()),
                             standard: IdentityStandard::DotBit,
+                            ..IdentityCollectionAggregate::default()
+                        }),
+                ),
+                x if x == BIT_CELL_SENTINEL_COLLECTION => (
+                    ".bit Cell",
+                    self.bit_cell_agg
+                        .get_or_insert_with(|| IdentityCollectionAggregate {
+                            name: Some(".bit Cell".to_string()),
+                            standard: IdentityStandard::BitCell,
                             ..IdentityCollectionAggregate::default()
                         }),
                 ),
@@ -550,6 +586,7 @@ impl ObjectOwner {
             CellProtocolFacts::MnftToken(token) => self.consume_mnft_token(&token.token_id),
             CellProtocolFacts::Cluster(cluster) => self.consume_cluster(&cluster.cluster_id),
             CellProtocolFacts::Dotbit(dotbit) => self.consume_dotbit(&dotbit.account_id),
+            CellProtocolFacts::BitCell(bit_cell) => self.consume_bit_cell(&bit_cell.identity_id),
         }
     }
 
@@ -596,6 +633,7 @@ impl ObjectOwner {
                     .get(dotbit.account_id.as_slice())
                     .map(Vec::as_slice),
             ),
+            CellProtocolFacts::BitCell(bit_cell) => self.insert_bit_cell(bit_cell, cell, ctx, tx),
         }
     }
 
@@ -1456,6 +1494,119 @@ impl ObjectOwner {
         Ok(())
     }
 
+    fn insert_bit_cell(
+        &mut self,
+        bit_cell: &crate::sync::bulk_build::facts::BitCellProtocolFacts,
+        cell: &CellFacts,
+        ctx: &ReducerContext<'_>,
+        tx: &ResolvedTxFacts<'_>,
+    ) -> Result<()> {
+        let identity_id = bit_cell.identity_id.to_vec();
+        let owner_lock = ctx.resolve_identity(cell.lock_script_hash_id).to_vec();
+        let existing = self.identities.get(&identity_id).cloned();
+        if existing
+            .as_ref()
+            .is_some_and(|entry| entry.standard != IdentityStandard::BitCell)
+        {
+            bail!(
+                ".bit Cell identity ID collides with another identity standard: identity_id=0x{} block={}",
+                hex::encode(&identity_id),
+                tx.block_number
+            );
+        }
+
+        let was_live = existing.as_ref().is_some_and(|entry| entry.is_live);
+        let old_owner = if was_live {
+            existing
+                .as_ref()
+                .and_then(|entry| entry.owner_lock_hash.clone())
+        } else {
+            None
+        };
+        if was_live && old_owner.is_none() {
+            bail!(
+                ".bit Cell live identity missing owner_lock_hash during transfer: identity_id=0x{} block={}",
+                hex::encode(&identity_id),
+                tx.block_number
+            );
+        }
+
+        self.identities.insert(
+            identity_id.clone(),
+            IdentityEntry {
+                standard: IdentityStandard::BitCell,
+                owner_lock_hash: Some(owner_lock.clone()),
+                name: Some(bit_cell.account.clone()),
+                is_live: true,
+                created_at_block: existing
+                    .as_ref()
+                    .map(|entry| entry.created_at_block)
+                    .unwrap_or(tx.block_number),
+                created_at_tx: existing
+                    .as_ref()
+                    .map(|entry| entry.created_at_tx.clone())
+                    .unwrap_or_else(|| tx.tx_hash.to_vec()),
+                extra: IdentityExtra::BitCell {
+                    account_id: bit_cell.account_id.to_vec(),
+                    expired_at: bit_cell.expired_at,
+                },
+            },
+        );
+
+        if existing.is_none() {
+            self.identity_by_collection.insert(
+                keys::encode_identity_by_collection_key(
+                    &BIT_CELL_SENTINEL_COLLECTION,
+                    &identity_id,
+                )
+                .to_vec(),
+            );
+        }
+
+        let owner_counts = &mut self.bit_cell_owner_counts;
+        let agg = self
+            .bit_cell_agg
+            .get_or_insert_with(|| IdentityCollectionAggregate {
+                name: Some(".bit Cell".to_string()),
+                standard: IdentityStandard::BitCell,
+                ..IdentityCollectionAggregate::default()
+            });
+        if existing.is_none() {
+            agg.total_count = checked_next_i64(
+                agg.total_count,
+                1,
+                ".bit Cell total_count",
+                &identity_id,
+                tx.block_number,
+            )?;
+            agg.live_count = checked_next_i64(
+                agg.live_count,
+                1,
+                ".bit Cell live_count",
+                &identity_id,
+                tx.block_number,
+            )?;
+        } else if !was_live {
+            agg.live_count = checked_next_i64(
+                agg.live_count,
+                1,
+                ".bit Cell live_count reactivate",
+                &identity_id,
+                tx.block_number,
+            )?;
+        }
+
+        Self::apply_identity_owner_transition(
+            owner_counts,
+            old_owner.as_deref(),
+            Some(owner_lock.as_slice()),
+            agg,
+            ".bit Cell",
+        )?;
+        self.insert_spore_outpoint_rows(&identity_id, cell)?;
+        Ok(())
+    }
+
     fn consume_did(&mut self, did_id: &[u8]) -> Result<()> {
         let entry = self.identities.get_mut(did_id).ok_or_else(|| {
             anyhow!(
@@ -1739,6 +1890,114 @@ impl ObjectOwner {
             None,
             agg,
         )
+    }
+
+    fn consume_bit_cell(&mut self, identity_id: &[u8; 32]) -> Result<()> {
+        let entry = self
+            .identities
+            .get_mut(identity_id.as_slice())
+            .ok_or_else(|| {
+                anyhow!(
+                    "missing .bit Cell identity during consume: identity_id=0x{}",
+                    hex::encode(identity_id)
+                )
+            })?;
+        if entry.standard != IdentityStandard::BitCell {
+            bail!(
+                "consume_bit_cell expected BitCell identity entry, found {:?}: identity_id=0x{}",
+                entry.standard,
+                hex::encode(identity_id)
+            );
+        }
+        if !entry.is_live {
+            bail!(
+                ".bit Cell identity already consumed: identity_id=0x{}",
+                hex::encode(identity_id)
+            );
+        }
+        let old_owner = entry.owner_lock_hash.clone().ok_or_else(|| {
+            anyhow!(
+                ".bit Cell live identity missing owner_lock_hash during consume: identity_id=0x{}",
+                hex::encode(identity_id)
+            )
+        })?;
+        entry.is_live = false;
+        entry.owner_lock_hash = None;
+
+        let owner_counts = &mut self.bit_cell_owner_counts;
+        let agg = self
+            .bit_cell_agg
+            .get_or_insert_with(|| IdentityCollectionAggregate {
+                name: Some(".bit Cell".to_string()),
+                standard: IdentityStandard::BitCell,
+                ..IdentityCollectionAggregate::default()
+            });
+        agg.live_count = checked_next_i64(
+            agg.live_count,
+            -1,
+            ".bit Cell live_count consume",
+            identity_id,
+            0,
+        )?;
+        Self::apply_identity_owner_transition(
+            owner_counts,
+            Some(old_owner.as_slice()),
+            None,
+            agg,
+            ".bit Cell",
+        )
+    }
+
+    fn apply_identity_owner_transition(
+        owner_counts: &mut BTreeMap<Vec<u8>, i64>,
+        old_owner: Option<&[u8]>,
+        new_owner: Option<&[u8]>,
+        agg: &mut IdentityCollectionAggregate,
+        label: &str,
+    ) -> Result<()> {
+        if old_owner == new_owner {
+            return Ok(());
+        }
+
+        if let Some(old_owner) = old_owner {
+            let current = *owner_counts.get(old_owner).unwrap_or(&0);
+            if current <= 0 {
+                bail!(
+                    "{} owner count underflow: lock_hash=0x{}, current={}",
+                    label,
+                    hex::encode(old_owner),
+                    current
+                );
+            }
+            if current == 1 {
+                owner_counts.remove(old_owner);
+                agg.holders_count = checked_next_i64(
+                    agg.holders_count,
+                    -1,
+                    &format!("{} holders_count remove", label),
+                    old_owner,
+                    0,
+                )?;
+            } else {
+                owner_counts.insert(old_owner.to_vec(), current - 1);
+            }
+        }
+
+        if let Some(new_owner) = new_owner {
+            let current = *owner_counts.get(new_owner).unwrap_or(&0);
+            if current == 0 {
+                agg.holders_count = checked_next_i64(
+                    agg.holders_count,
+                    1,
+                    &format!("{} holders_count add", label),
+                    new_owner,
+                    0,
+                )?;
+            }
+            owner_counts.insert(new_owner.to_vec(), current + 1);
+        }
+
+        Ok(())
     }
 
     fn apply_did_owner_transition(
@@ -2169,6 +2428,7 @@ fn classify_nft_collection_from_protocol(
     match protocol_facts.as_ref()? {
         CellProtocolFacts::MnftToken(token) => Some(token.class_id.clone()),
         CellProtocolFacts::Dotbit(_) => Some(DOTBIT_SENTINEL_COLLECTION.to_vec()),
+        CellProtocolFacts::BitCell(_) => Some(BIT_CELL_SENTINEL_COLLECTION.to_vec()),
         CellProtocolFacts::Spore(spore) if spore.is_did => {
             Some(DID_CKB_SENTINEL_COLLECTION.to_vec())
         }
@@ -2215,10 +2475,14 @@ pub struct ObjectStateSnapshot {
     pub cluster_aggs: HashMap<Vec<u8>, ClusterAggregate>,
     pub object_collection_aggs: HashMap<Vec<u8>, MnftCollectionAggregate>,
     pub did_agg: Option<IdentityCollectionAggregate>,
+    pub dotbit_agg: Option<IdentityCollectionAggregate>,
+    pub bit_cell_agg: Option<IdentityCollectionAggregate>,
     pub identities_by_collection: HashMap<Vec<u8>, Vec<Vec<u8>>>,
     pub spores_by_cluster: HashMap<Vec<u8>, Vec<Vec<u8>>>,
     pub objects_by_collection: HashMap<Vec<u8>, Vec<Vec<u8>>>,
     pub did_owner_counts: HashMap<Vec<u8>, i64>,
+    pub dotbit_owner_counts: HashMap<Vec<u8>, i64>,
+    pub bit_cell_owner_counts: HashMap<Vec<u8>, i64>,
     pub cluster_owner_counts: HashMap<Vec<u8>, HashMap<Vec<u8>, i64>>,
     pub object_owner_counts: HashMap<Vec<u8>, HashMap<Vec<u8>, i64>>,
     pub spore_outpoints: HashMap<Vec<u8>, Vec<(Vec<u8>, i16)>>,
@@ -2283,16 +2547,23 @@ pub(crate) fn materialize_object_state_for_test(
             .collect::<HashMap<_, _>>();
         let did_agg =
             domain_store.get_identity_collection_aggregate(&DID_CKB_SENTINEL_COLLECTION)?;
+        let dotbit_agg =
+            domain_store.get_identity_collection_aggregate(&DOTBIT_SENTINEL_COLLECTION)?;
+        let bit_cell_agg =
+            domain_store.get_identity_collection_aggregate(&BIT_CELL_SENTINEL_COLLECTION)?;
 
         let mut identities_by_collection = HashMap::new();
-        let mut did_ids = domain_store.list_identity_ids_by_collection(
+        for collection_id in [
             &DID_CKB_SENTINEL_COLLECTION,
-            None,
-            usize::MAX,
-        )?;
-        did_ids.sort();
-        if !did_ids.is_empty() {
-            identities_by_collection.insert(DID_CKB_SENTINEL_COLLECTION.to_vec(), did_ids);
+            &DOTBIT_SENTINEL_COLLECTION,
+            &BIT_CELL_SENTINEL_COLLECTION,
+        ] {
+            let mut identity_ids =
+                domain_store.list_identity_ids_by_collection(collection_id, None, usize::MAX)?;
+            identity_ids.sort();
+            if !identity_ids.is_empty() {
+                identities_by_collection.insert(collection_id.to_vec(), identity_ids);
+            }
         }
 
         let mut spores_by_cluster = HashMap::new();
@@ -2379,6 +2650,14 @@ pub(crate) fn materialize_object_state_for_test(
 
         let did_owner_counts = domain_store
             .list_identity_owner_counts(&DID_CKB_SENTINEL_COLLECTION)?
+            .into_iter()
+            .collect::<HashMap<_, _>>();
+        let dotbit_owner_counts = domain_store
+            .list_identity_owner_counts(&DOTBIT_SENTINEL_COLLECTION)?
+            .into_iter()
+            .collect::<HashMap<_, _>>();
+        let bit_cell_owner_counts = domain_store
+            .list_identity_owner_counts(&BIT_CELL_SENTINEL_COLLECTION)?
             .into_iter()
             .collect::<HashMap<_, _>>();
 
@@ -2511,10 +2790,14 @@ pub(crate) fn materialize_object_state_for_test(
             cluster_aggs,
             object_collection_aggs,
             did_agg,
+            dotbit_agg,
+            bit_cell_agg,
             identities_by_collection,
             spores_by_cluster,
             objects_by_collection,
             did_owner_counts,
+            dotbit_owner_counts,
+            bit_cell_owner_counts,
             cluster_owner_counts,
             object_owner_counts,
             spore_outpoints,

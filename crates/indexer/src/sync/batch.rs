@@ -23,8 +23,8 @@ use crate::db::writer::dotbit::resolve_dotbit_tx_activity;
 use crate::db::writer::object_activity_acc::ObjectCollectionActivityAccumulator;
 use crate::db::{BatchWriter, DaoWithdrawalContext};
 use crate::parser::{
-    BlockParser, CellParser, DaoParser, DotbitParser, MnftParser, ScriptParser, SporeParser,
-    TransactionParser, UdtParser,
+    BitCellParser, BlockParser, CellParser, DaoParser, DotbitParser, MnftParser, ScriptParser,
+    SporeParser, TransactionParser, UdtParser,
 };
 
 use crate::rpc::{BlockResponseWithCycles, CkbRpcClient};
@@ -144,14 +144,19 @@ fn resolve_consumed_stats(
     Ok((data_size_consumed, used_capacity_consumed))
 }
 
+struct ActivityInputIndexes<'a> {
+    cell_info: &'a HashMap<(Vec<u8>, i16), PositionedCellInfo>,
+    batch_cell_info: &'a HashMap<(Vec<u8>, i16), PositionedCellInfo>,
+    dao_withdraw_outpoints: &'a HashSet<(Vec<u8>, i16)>,
+    dao_compensations: &'a HashMap<(Vec<u8>, i16), i64>,
+    dotbit_ids: &'a HashMap<(Vec<u8>, i16), Vec<u8>>,
+    bit_cell_identity_ids: &'a HashMap<(Vec<u8>, i16), Vec<u8>>,
+}
+
 fn build_activity_input_views<'a>(
     tx_data: &TxData,
     block_number: i64,
-    input_cell_info: &'a HashMap<(Vec<u8>, i16), PositionedCellInfo>,
-    batch_cell_infos: &'a HashMap<(Vec<u8>, i16), PositionedCellInfo>,
-    dao_withdraw_outpoints: &HashSet<(Vec<u8>, i16)>,
-    dao_compensations: &HashMap<(Vec<u8>, i16), i64>,
-    dotbit_ids: &'a HashMap<(Vec<u8>, i16), Vec<u8>>,
+    indexes: ActivityInputIndexes<'a>,
 ) -> Result<Vec<crate::db::writer::activities::InputCellView<'a>>> {
     if tx_data.is_cellbase {
         return Ok(Vec::new());
@@ -174,9 +179,10 @@ fn build_activity_input_views<'a>(
                     )
                 })?;
             let key = (input.previous_tx_hash.to_vec(), previous_output_index);
-            let info = input_cell_info
+            let info = indexes
+                .cell_info
                 .get(&key)
-                .or_else(|| batch_cell_infos.get(&key))
+                .or_else(|| indexes.batch_cell_info.get(&key))
                 .ok_or_else(|| {
                     anyhow!(
                         "missing input cell info while building activities: block={}, tx_hash=0x{}, tx_index={}, input_index={}, prev_outpoint=0x{}:{}",
@@ -188,10 +194,9 @@ fn build_activity_input_views<'a>(
                         previous_output_index
                     )
                 })?;
-            let is_dao_withdraw_request =
-                dao_withdraw_outpoints.contains(&key);
+            let is_dao_withdraw_request = indexes.dao_withdraw_outpoints.contains(&key);
             let dao_compensation = if is_dao_withdraw_request {
-                dao_compensations.get(&key).copied()
+                indexes.dao_compensations.get(&key).copied()
             } else {
                 None
             };
@@ -200,7 +205,8 @@ fn build_activity_input_views<'a>(
             // type_args are empty (old .bit layout).  Raw cell data is
             // unavailable for inputs; the account_id comes from
             // CF_DOTBIT_OUTPOINT via the dotbit_map built earlier.
-            let data: &[u8] = dotbit_ids
+            let data: &[u8] = indexes
+                .dotbit_ids
                 .get(&key)
                 .map(|v| v.as_slice())
                 .unwrap_or(&[]);
@@ -217,6 +223,10 @@ fn build_activity_input_views<'a>(
                 type_script_hash: info.type_script_hash.as_deref(),
                 type_args: info.type_args.as_deref(),
                 udt_amount: info.udt_amount,
+                bit_cell_identity_id: indexes
+                    .bit_cell_identity_ids
+                    .get(&key)
+                    .map(Vec::as_slice),
                 data,
                 is_dao_withdraw_request,
                 dao_compensation,
@@ -2099,6 +2109,10 @@ impl Indexer {
 
         // Dotbit account IDs resolved during consume, needed later by activity builder.
         let mut resolved_dotbit_ids: HashMap<(Vec<u8>, i16), Vec<u8>> = HashMap::new();
+        // `.bit Cell` identity IDs resolved from the outpoint index. Legacy
+        // testnet cells have empty type args, so the activity builder must use
+        // the parser result retained by the identity write path.
+        let mut resolved_bit_cell_ids: HashMap<(Vec<u8>, i16), Vec<u8>> = HashMap::new();
 
         // Group C: Object/Spore processing
         //
@@ -2272,13 +2286,44 @@ impl Indexer {
                             if !bulk_sync_active {
                                 // Spore consumption
                                 if let Some(spore_id) = spore_map.get(&key) {
-                                    if let Some(coll_id) = self.writer.consume_spore(
+                                    let identity_collection_id = input_cell_info
+                                        .get(&key)
+                                        .or_else(|| batch_cell_infos.get(&key))
+                                        .and_then(|info| info.type_code_hash.as_deref())
+                                        .and_then(|type_code_hash| {
+                                            if BitCellParser::is_type_script(type_code_hash) {
+                                                Some(BIT_CELL_SENTINEL_COLLECTION.as_slice())
+                                            } else if SporeParser::is_did_type_script(
+                                                type_code_hash,
+                                            ) {
+                                                Some(DID_CKB_SENTINEL_COLLECTION.as_slice())
+                                            } else {
+                                                None
+                                            }
+                                        });
+                                    let object_collection_id = self.writer.consume_spore(
                                         spore_id,
                                         parsed.number,
                                         &tx_data.hash,
                                         &mut data_batch,
                                         &mut spore_state,
-                                    )? {
+                                    )?;
+                                    if let Some(collection_id) = identity_collection_id {
+                                        if collection_id == BIT_CELL_SENTINEL_COLLECTION {
+                                            resolved_bit_cell_ids
+                                                .insert(key.clone(), spore_id.clone());
+                                        }
+                                        identity_activity_acc.record(
+                                            collection_id,
+                                            &tx_data.hash,
+                                            spore_id,
+                                            &parsed.hash,
+                                            parsed.number,
+                                            checked_usize_to_i32(tx_idx, "tx_idx")?,
+                                            ts_ms,
+                                            false,
+                                        );
+                                    } else if let Some(coll_id) = object_collection_id {
                                         object_activity_acc.record(
                                             &coll_id,
                                             &tx_data.hash,
@@ -2295,7 +2340,9 @@ impl Indexer {
                                     .or_else(|| batch_cell_infos.get(&key))
                                 {
                                     if let Some(tch) = info.type_code_hash.as_ref() {
-                                        if SporeParser::is_spore_type_script(tch) {
+                                        if SporeParser::is_spore_type_script(tch)
+                                            || BitCellParser::is_type_script(tch)
+                                        {
                                             bail!(
                                                 "spore outpoint-id mapping missing for consumed spore cell: block={}, tx=0x{}, prev_outpoint=0x{}:{}",
                                                 parsed.number,
@@ -2464,6 +2511,26 @@ impl Indexer {
                                 true,
                             );
                         }
+                    }
+                    for bit_cell_output in BitCellParser::parse_cells(tx)? {
+                        self.writer.insert_bit_cell(
+                            &bit_cell_output.cell,
+                            &tx_data.hash,
+                            bit_cell_output.output_index,
+                            parsed.number,
+                            &mut data_batch,
+                            &mut spore_state,
+                        )?;
+                        identity_activity_acc.record(
+                            &BIT_CELL_SENTINEL_COLLECTION,
+                            &tx_data.hash,
+                            &bit_cell_output.cell.identity_id,
+                            &parsed.hash,
+                            parsed.number,
+                            checked_usize_to_i32(tx_idx, "tx_idx")?,
+                            ts_ms,
+                            true,
+                        );
                     }
                     for (output_index, issuer) in MnftParser::parse_issuers_with_output_indices(tx)
                     {
@@ -2706,11 +2773,14 @@ impl Indexer {
                         let inputs = build_activity_input_views(
                             td,
                             parsed.number,
-                            &input_cell_info,
-                            &batch_cell_infos,
-                            &dao_withdraw_outpoints,
-                            &dao_compensations,
-                            &resolved_dotbit_ids,
+                            ActivityInputIndexes {
+                                cell_info: &input_cell_info,
+                                batch_cell_info: &batch_cell_infos,
+                                dao_withdraw_outpoints: &dao_withdraw_outpoints,
+                                dao_compensations: &dao_compensations,
+                                dotbit_ids: &resolved_dotbit_ids,
+                                bit_cell_identity_ids: &resolved_bit_cell_ids,
+                            },
                         )?;
                         let outputs: Vec<crate::db::writer::activities::OutputCellView<'_>> = td
                             .cells
@@ -4025,11 +4095,14 @@ mod tests {
         let err = match build_activity_input_views(
             &tx,
             99,
-            &empty_cell_info,
-            &empty_batch_info,
-            &empty_dao_outpoints,
-            &empty_dao_comp,
-            &empty_dotbit,
+            ActivityInputIndexes {
+                cell_info: &empty_cell_info,
+                batch_cell_info: &empty_batch_info,
+                dao_withdraw_outpoints: &empty_dao_outpoints,
+                dao_compensations: &empty_dao_comp,
+                dotbit_ids: &empty_dotbit,
+                bit_cell_identity_ids: &empty_dotbit,
+            },
         ) {
             Ok(_) => panic!("missing input cell info should fail fast"),
             Err(err) => err,
@@ -4075,11 +4148,14 @@ mod tests {
         let inputs = build_activity_input_views(
             &tx,
             100,
-            &empty_cell_info,
-            &batch_cell_infos,
-            &empty_dao_outpoints,
-            &empty_dao_comp,
-            &empty_dotbit,
+            ActivityInputIndexes {
+                cell_info: &empty_cell_info,
+                batch_cell_info: &batch_cell_infos,
+                dao_withdraw_outpoints: &empty_dao_outpoints,
+                dao_compensations: &empty_dao_comp,
+                dotbit_ids: &empty_dotbit,
+                bit_cell_identity_ids: &empty_dotbit,
+            },
         )
         .expect("input lookup should fall back to same-batch cell cache");
         assert_eq!(inputs.len(), 1);
@@ -4127,16 +4203,68 @@ mod tests {
         let inputs = build_activity_input_views(
             &tx,
             200,
-            &input_cell_info,
-            &empty_batch_info,
-            &dao_withdraw_outpoints,
-            &dao_compensations,
-            &empty_dotbit,
+            ActivityInputIndexes {
+                cell_info: &input_cell_info,
+                batch_cell_info: &empty_batch_info,
+                dao_withdraw_outpoints: &dao_withdraw_outpoints,
+                dao_compensations: &dao_compensations,
+                dotbit_ids: &empty_dotbit,
+                bit_cell_identity_ids: &empty_dotbit,
+            },
         )
         .unwrap();
         assert_eq!(inputs.len(), 1);
         assert!(inputs[0].is_dao_withdraw_request);
         assert_eq!(inputs[0].dao_compensation, Some(5_00000000));
+    }
+
+    #[test]
+    fn test_build_activity_input_views_carries_legacy_bit_cell_identity_id() {
+        let previous_tx_hash = [0x67; 32];
+        let outpoint = (previous_tx_hash.to_vec(), 1_i16);
+        let tx = dummy_tx_data(
+            [0x34; 32],
+            false,
+            vec![crate::parser::transaction::ParsedInput {
+                previous_tx_hash,
+                previous_output_index: 1,
+                since: 0,
+            }],
+            vec![],
+            vec![],
+            vec![],
+        );
+        let mut info = dummy_live_cell_info();
+        info.type_code_hash = Some(crate::rpc::parse_hex_to_bytes(
+            crate::parser::bit_cell::BIT_CELL_CODE_HASH_TESTNET,
+        ));
+        info.type_args = Some(Vec::new());
+        let mut input_cell_info = HashMap::new();
+        input_cell_info.insert(outpoint.clone(), PositionedCellInfo::new(info, 1));
+        let identity_id = vec![0x81; 32];
+        let bit_cell_ids = HashMap::from([(outpoint, identity_id.clone())]);
+        let empty_batch_info = HashMap::new();
+        let empty_dao_outpoints = HashSet::new();
+        let empty_dao_compensations = HashMap::new();
+        let empty_dotbit_ids = HashMap::new();
+
+        let inputs = build_activity_input_views(
+            &tx,
+            201,
+            ActivityInputIndexes {
+                cell_info: &input_cell_info,
+                batch_cell_info: &empty_batch_info,
+                dao_withdraw_outpoints: &empty_dao_outpoints,
+                dao_compensations: &empty_dao_compensations,
+                dotbit_ids: &empty_dotbit_ids,
+                bit_cell_identity_ids: &bit_cell_ids,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(inputs.len(), 1);
+        assert_eq!(inputs[0].bit_cell_identity_id, Some(identity_id.as_slice()));
+        assert!(inputs[0].data.is_empty());
     }
 
     #[test]

@@ -1,7 +1,6 @@
 use ckbadger_common::dao::SHANNON;
-use ckbadger_indexer::parser::spore::{
-    CLUSTER_CODE_HASH_MAINNET_V2, SPORE_CODE_HASH_MAINNET_DID, SPORE_CODE_HASH_MAINNET_V2,
-};
+use ckbadger_indexer::parser::bit_cell::BIT_CELL_CODE_HASH_TESTNET;
+use ckbadger_indexer::parser::spore::{CLUSTER_CODE_HASH_MAINNET_V2, SPORE_CODE_HASH_MAINNET_V2};
 use ckbadger_indexer::parser::ScriptParser;
 use ckbadger_indexer::rpc::{
     BlockResponseWithCycles, BlockView, CellInput, CellOutput, DaoField, HeaderView, OutPoint,
@@ -13,7 +12,7 @@ use ckbadger_indexer::sync::{
     run_sample_bulk_materialization_for_test, simulate_startup_sync_path_for_test,
 };
 use ckbadger_store::keys;
-use ckbadger_store::types::{ConsumedCellMeta, DID_CKB_SENTINEL_COLLECTION};
+use ckbadger_store::types::{ConsumedCellMeta, BIT_CELL_SENTINEL_COLLECTION};
 use ckbadger_store::SyncStatus;
 
 fn fixture_lock_script() -> Script {
@@ -278,11 +277,11 @@ fn create_spore_type_script(spore_id: &[u8; 32]) -> Script {
     }
 }
 
-fn create_did_type_script(did_id: &[u8; 32]) -> Script {
+fn create_bit_cell_type_script() -> Script {
     Script {
-        code_hash: SPORE_CODE_HASH_MAINNET_DID.to_string(),
+        code_hash: BIT_CELL_CODE_HASH_TESTNET.to_string(),
         hash_type: "type".to_string(),
-        args: format!("0x{}", hex::encode(did_id)),
+        args: "0x".to_string(),
     }
 }
 
@@ -341,7 +340,6 @@ fn create_cluster_data(name: &str, description: &str) -> Vec<u8> {
 fn object_activity_fixture() -> Vec<BlockResponseWithCycles> {
     let cluster_id = [0x11; 32];
     let spore_id = [0x22; 32];
-    let did_id = [0x33; 32];
 
     let create_tx = TransactionView {
         hash: format!("0x{}", "a1".repeat(32)),
@@ -367,13 +365,13 @@ fn object_activity_fixture() -> Vec<BlockResponseWithCycles> {
                 type_: Some(create_spore_type_script(&spore_id)),
             },
             CellOutput {
-                capacity: format!("0x{:x}", 150_00000000u64),
+                capacity: format!("0x{:x}", 200_00000000u64),
                 lock: Script {
                     code_hash: fixture_lock_script().code_hash,
                     hash_type: fixture_lock_script().hash_type,
                     args: format!("0x{}", "03".repeat(20)),
                 },
-                type_: Some(create_did_type_script(&did_id)),
+                type_: Some(create_bit_cell_type_script()),
             },
         ],
         outputs_data: vec![
@@ -392,7 +390,7 @@ fn object_activity_fixture() -> Vec<BlockResponseWithCycles> {
                     Some(&cluster_id)
                 ))
             ),
-            "0x".to_string(),
+            "0x000000003c00000010000000240000002c000000a7d4860aaf1dc83daedf75d6022811d2c2ae250b1b46fc69000000000c00000032303234303530372e626974".to_string(),
         ],
         witnesses: vec!["0x".to_string()],
     };
@@ -1056,29 +1054,31 @@ fn bulk_build_materializes_sealed_activity_stats_from_single_pass() {
 }
 
 #[test]
-fn bulk_build_materializes_did_activity_count_from_collection_activity_history() {
+fn bulk_build_materializes_bit_cell_as_independent_collection_history() {
     let snapshot = materialize_bulk_artifacts_for_test(&object_activity_fixture())
         .expect("bulk build artifact snapshot");
 
-    let did_agg = snapshot
+    let bit_cell_agg = snapshot
         .core
         .object_state
-        .did_agg
+        .bit_cell_agg
         .as_ref()
-        .expect("did collection aggregate");
-    assert_eq!(did_agg.activities_count, 1);
-    assert_eq!(did_agg.total_count, 1);
-    assert_eq!(did_agg.live_count, 0);
-    assert_eq!(did_agg.holders_count, 0);
+        .expect(".bit Cell collection aggregate");
+    assert_eq!(bit_cell_agg.activities_count, 2);
+    assert_eq!(bit_cell_agg.total_count, 1);
+    assert_eq!(bit_cell_agg.live_count, 0);
+    assert_eq!(bit_cell_agg.holders_count, 0);
     assert_eq!(
         snapshot
             .core
             .object_state
             .identities_by_collection
-            .get(DID_CKB_SENTINEL_COLLECTION.as_slice())
-            .expect("did collection identities")
-            .len(),
-        1
+            .get(BIT_CELL_SENTINEL_COLLECTION.as_slice())
+            .expect(".bit Cell collection identities"),
+        &vec![
+            hex::decode("81d34cd1dfc27716073d1018a63712926d8e3ab36345847129d0cc4135d1ffd4")
+                .expect("fixture identity ID")
+        ]
     );
 }
 
@@ -1115,16 +1115,16 @@ fn bulk_build_multi_batch_materialization_matches_single_pass_for_cross_batch_st
         split
             .core
             .object_state
-            .did_agg
+            .bit_cell_agg
             .as_ref()
-            .expect("split did agg")
+            .expect("split .bit Cell aggregate")
             .activities_count,
         single
             .core
             .object_state
-            .did_agg
+            .bit_cell_agg
             .as_ref()
-            .expect("single did agg")
+            .expect("single .bit Cell aggregate")
             .activities_count
     );
 

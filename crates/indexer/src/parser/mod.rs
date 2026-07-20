@@ -1,3 +1,4 @@
+pub mod bit_cell;
 pub mod block;
 pub mod cell;
 pub mod dao;
@@ -14,6 +15,7 @@ pub mod transaction;
 pub mod udt;
 pub mod utxoswap;
 
+pub use bit_cell::{BitCellParser, ParsedBitCell, ParsedBitCellOutput};
 pub use block::BlockParser;
 pub use cell::CellParser;
 pub use dao::{DaoParser, DaoState, ParsedDaoDeposit, ParsedDaoWithdrawRequest};

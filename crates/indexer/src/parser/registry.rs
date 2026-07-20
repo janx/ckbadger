@@ -15,6 +15,11 @@ pub enum ProtocolScript {
     Sudt,
     Xudt,
     SporeNft,
+    BitCell,
+    DidCkb,
+    // Retained for the legacy Spore identity writer. No bundled metadata slug
+    // currently maps to this variant; `.bit Cell` and `did:ckb` are distinct
+    // protocols and must never enter this path.
     SporeDid,
     Cluster,
     MnftIssuer,
@@ -40,9 +45,8 @@ fn slug_to_protocol(slug: &str) -> Option<ProtocolScript> {
         "simple-udt" => ProtocolScript::Sudt,
         "xudt" => ProtocolScript::Xudt,
         "spore" => ProtocolScript::SporeNft,
-        // Spore-DID hashes live in bit-cell.toml (metadata_slug = "bit-cell"),
-        // NOT a spore-did.toml. Keep both arms so the DID hashes are picked up.
-        "spore-did" | "bit-cell" => ProtocolScript::SporeDid,
+        "bit-cell" => ProtocolScript::BitCell,
+        "did-ckb" => ProtocolScript::DidCkb,
         "spore-cluster" => ProtocolScript::Cluster,
         "m-nft-issuer" => ProtocolScript::MnftIssuer,
         "m-nft-class" => ProtocolScript::MnftClass,
@@ -157,6 +161,25 @@ mod tests {
                 "0xc5e5dcf215925f7ef4dfaf5f4b4f105bc321c02776d6e7d52a1db3fcd9d011a4"
             )),
             Some(ProtocolScript::Sudt)
+        );
+        // `.bit Cell` and the Web5 `did:ckb` contract are separate protocols.
+        assert_eq!(
+            r.get(&parse_hex_to_bytes(
+                "0x0b1f412fbae26853ff7d082d422c2bdd9e2ff94ee8aaec11240a5b34cc6e890f"
+            )),
+            Some(ProtocolScript::BitCell)
+        );
+        assert_eq!(
+            r.get(&parse_hex_to_bytes(
+                crate::parser::dotbit::DOTBIT_ACCOUNT_CELL_TYPE_ID_TESTNET
+            )),
+            Some(ProtocolScript::DotbitAccount)
+        );
+        assert_eq!(
+            r.get(&parse_hex_to_bytes(
+                "0x510150477b10d6ab551a509b71265f3164e9fd4137fcb5a4322f49f03092c7c5"
+            )),
+            Some(ProtocolScript::DidCkb)
         );
         // mNFT issuer testnet
         assert_eq!(

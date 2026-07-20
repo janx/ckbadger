@@ -1,7 +1,7 @@
 use anyhow::{anyhow, bail, Result};
 use ckbadger_store::types::{
-    ObjectStandard, DID_CKB_SENTINEL_COLLECTION, DOTBIT_SENTINEL_COLLECTION,
-    SOLE_SPORES_SENTINEL_COLLECTION,
+    ObjectStandard, BIT_CELL_SENTINEL_COLLECTION, DID_CKB_SENTINEL_COLLECTION,
+    DOTBIT_SENTINEL_COLLECTION, SOLE_SPORES_SENTINEL_COLLECTION,
 };
 use ckbadger_store::CkbadgerStore;
 use serde::Deserialize;
@@ -42,7 +42,15 @@ const VALID_TIERS: &[&str] = &[
 
 fn default_object_composition_tier_overrides() -> HashMap<String, String> {
     let mut defaults = HashMap::new();
-    for standard in [".bit", "dotbit", "did:ckb", "did_ckb"] {
+    for standard in [
+        ".bit",
+        "dotbit",
+        ".bit-cell",
+        "bit-cell",
+        "bit_cell",
+        "did:ckb",
+        "did_ckb",
+    ] {
         defaults.insert(
             normalize_standard_alias_key(standard),
             "pure_ckb".to_string(),
@@ -92,6 +100,7 @@ fn normalize_standard_alias_key(standard: &str) -> String {
     let normalized = standard.trim().to_ascii_lowercase();
     match normalized.as_str() {
         "did_ckb" => "did:ckb".to_string(),
+        ".bit-cell" | "bit-cell" => "bit_cell".to_string(),
         _ => normalized,
     }
 }
@@ -203,6 +212,9 @@ pub fn resolve_collection_standard(collection_id: &[u8], agg_standard: &str) -> 
     if collection_id == DID_CKB_SENTINEL_COLLECTION {
         return "did_ckb".to_string();
     }
+    if collection_id == BIT_CELL_SENTINEL_COLLECTION {
+        return "bit_cell".to_string();
+    }
     agg_standard.to_string()
 }
 
@@ -224,6 +236,9 @@ pub fn resolve_object_collection_name(
     }
     if standard.eq_ignore_ascii_case("did_ckb") || standard.eq_ignore_ascii_case("did:ckb") {
         return Some("did:ckb".to_string());
+    }
+    if standard.eq_ignore_ascii_case("bit_cell") || standard.eq_ignore_ascii_case("bit-cell") {
+        return Some(".bit Cell".to_string());
     }
 
     None
@@ -333,7 +348,15 @@ mod tests {
     }
 
     #[test]
-    fn object_composition_tier_overrides_cover_dotbit_and_did_ckb() {
+    fn resolve_object_name_falls_back_to_bit_cell_default() {
+        assert_eq!(
+            resolve_object_collection_name("bit_cell", None).as_deref(),
+            Some(".bit Cell")
+        );
+    }
+
+    #[test]
+    fn object_composition_tier_overrides_cover_identity_standards() {
         assert_eq!(
             resolve_object_collection_composition_tier_override("dotbit"),
             Some("pure_ckb")
@@ -344,6 +367,10 @@ mod tests {
         );
         assert_eq!(
             resolve_object_collection_composition_tier_override("did_ckb"),
+            Some("pure_ckb")
+        );
+        assert_eq!(
+            resolve_object_collection_composition_tier_override("bit_cell"),
             Some("pure_ckb")
         );
         assert_eq!(

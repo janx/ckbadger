@@ -1,7 +1,9 @@
 use anyhow::{bail, Result};
 use std::collections::{HashMap, HashSet};
 
-use crate::parser::{analyze_spore_media_profile, ParsedClusterCell, ParsedSporeCell};
+use crate::parser::{
+    analyze_spore_media_profile, ParsedBitCell, ParsedClusterCell, ParsedSporeCell,
+};
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::keys;
 use ckbadger_store::store::{CF_IDENTITY_DATA, CF_SPORE_DATA};
@@ -9,7 +11,9 @@ use ckbadger_store::types::{
     ClusterAggregate, CompositionTier, IdentityCollectionAggregate, IdentityEntry, IdentityExtra,
     IdentityStandard, ObjectEntry, ObjectExtra, ObjectStandard, SporeTypeIndex,
 };
-use ckbadger_store::types::{DID_CKB_SENTINEL_COLLECTION, SOLE_SPORES_SENTINEL_COLLECTION};
+use ckbadger_store::types::{
+    BIT_CELL_SENTINEL_COLLECTION, DID_CKB_SENTINEL_COLLECTION, SOLE_SPORES_SENTINEL_COLLECTION,
+};
 use ckbadger_store::CkbadgerStore;
 
 #[cfg(test)]
@@ -778,6 +782,108 @@ impl BatchWriter {
         Ok(())
     }
 
+    pub(crate) fn insert_bit_cell(
+        &self,
+        bit_cell: &ParsedBitCell,
+        tx_hash: &[u8],
+        output_index: i16,
+        block_number: i64,
+        batch: &mut StoreBatch,
+        state: &mut SporeBatchState,
+    ) -> Result<()> {
+        let identity_id = bit_cell.identity_id.as_slice();
+        let existing = state.get_identity(self.store.as_ref(), identity_id)?;
+        if let Some(existing) = existing.as_ref() {
+            if existing.standard != IdentityStandard::BitCell {
+                bail!(
+                    ".bit Cell identity ID collides with another identity standard: identity_id=0x{}, existing_standard={}",
+                    hex::encode(identity_id),
+                    existing.standard.as_str()
+                );
+            }
+        }
+
+        self.record_object_undo(
+            batch,
+            block_number,
+            CF_IDENTITY_DATA,
+            identity_id,
+            existing
+                .as_ref()
+                .and_then(|entry| bincode::serialize(entry).ok()),
+            &mut state.undo_seq_by_block,
+        );
+        let was_live = existing.as_ref().is_some_and(|entry| entry.is_live);
+        let old_owner = if was_live {
+            existing
+                .as_ref()
+                .and_then(|entry| entry.owner_lock_hash.clone())
+        } else {
+            None
+        };
+        let identity = IdentityEntry {
+            standard: IdentityStandard::BitCell,
+            owner_lock_hash: Some(bit_cell.owner_lock_hash.clone()),
+            name: Some(bit_cell.account.clone()),
+            is_live: true,
+            created_at_block: existing
+                .as_ref()
+                .map(|entry| entry.created_at_block)
+                .unwrap_or(block_number),
+            created_at_tx: existing
+                .as_ref()
+                .map(|entry| entry.created_at_tx.clone())
+                .unwrap_or_else(|| tx_hash.to_vec()),
+            extra: IdentityExtra::BitCell {
+                account_id: bit_cell.account_id.clone(),
+                expired_at: bit_cell.expired_at,
+            },
+        };
+        batch.put_identity(identity_id, &identity);
+        state.put_identity(identity_id, identity);
+        batch.put_spore_outpoint(tx_hash, output_index, identity_id);
+        state.put_spore_outpoint(tx_hash, output_index, identity_id);
+
+        let collection_id = &BIT_CELL_SENTINEL_COLLECTION;
+        let mut aggregate = state.get_identity_agg(self.store.as_ref(), collection_id)?;
+        if aggregate.standard == IdentityStandard::default() && aggregate.total_count == 0 {
+            aggregate.standard = IdentityStandard::BitCell;
+            aggregate.name = Some(".bit Cell".to_string());
+        }
+        if existing.is_none() {
+            batch.put_identity_by_collection(collection_id, identity_id);
+            aggregate.total_count = aggregate.total_count.checked_add(1).ok_or_else(|| {
+                anyhow::anyhow!(
+                    ".bit Cell identity total_count overflow: identity_id=0x{}",
+                    hex::encode(identity_id)
+                )
+            })?;
+            aggregate.live_count = aggregate.live_count.checked_add(1).ok_or_else(|| {
+                anyhow::anyhow!(
+                    ".bit Cell identity live_count overflow: identity_id=0x{}",
+                    hex::encode(identity_id)
+                )
+            })?;
+        } else if !was_live {
+            aggregate.live_count = aggregate.live_count.checked_add(1).ok_or_else(|| {
+                anyhow::anyhow!(
+                    ".bit Cell identity live_count overflow on reactivate: identity_id=0x{}",
+                    hex::encode(identity_id)
+                )
+            })?;
+        }
+        self.apply_identity_owner_transition(
+            collection_id,
+            if was_live { old_owner.as_deref() } else { None },
+            Some(bit_cell.owner_lock_hash.as_slice()),
+            &mut aggregate,
+            batch,
+            state,
+        )?;
+        state.put_identity_agg(collection_id, aggregate, batch);
+        Ok(())
+    }
+
     /// Consume a spore/object or did:ckb identity.
     ///
     /// For did:ckb entries: marks the identity as consumed in the identity store.
@@ -794,7 +900,7 @@ impl BatchWriter {
         batch: &mut StoreBatch,
         state: &mut SporeBatchState,
     ) -> Result<Option<Vec<u8>>> {
-        // Check identity store first (did:ckb)
+        // Check identity store first (`.bit Cell` or future did:ckb).
         if let Some(mut identity) = state.get_identity(self.store.as_ref(), spore_id)? {
             if !identity.is_live {
                 bail!(
@@ -811,17 +917,19 @@ impl BatchWriter {
                 &mut state.undo_seq_by_block,
             );
             let old_owner = identity.owner_lock_hash.clone();
+            let identity_standard = identity.standard;
             identity.is_live = false;
             identity.owner_lock_hash = None;
             batch.put_identity(spore_id, &identity);
             state.put_identity(spore_id, identity);
 
-            // Update identity collection aggregate
-            let cid = &DID_CKB_SENTINEL_COLLECTION;
+            // Update the aggregate belonging to the stored identity standard.
+            let cid = identity_standard.sentinel_collection_id();
             let mut agg = state.get_identity_agg(self.store.as_ref(), cid)?;
             if agg.live_count <= 0 {
                 bail!(
-                    "did:ckb identity live_count underflow on consume: spore_id=0x{}, live_count={}",
+                    "identity live_count underflow on consume: standard={}, identity_id=0x{}, live_count={}",
+                    identity_standard.as_str(),
                     hex::encode(spore_id),
                     agg.live_count
                 );

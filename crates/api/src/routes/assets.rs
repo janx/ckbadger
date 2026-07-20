@@ -5,8 +5,8 @@ use axum::{
 };
 use ckbadger_store::{
     types::{
-        MnftCollectionAggregate, ObjectCollectionActivityEntry, DID_CKB_SENTINEL_COLLECTION,
-        DOTBIT_SENTINEL_COLLECTION,
+        IdentityStandard, MnftCollectionAggregate, ObjectCollectionActivityEntry,
+        BIT_CELL_SENTINEL_COLLECTION, DID_CKB_SENTINEL_COLLECTION, DOTBIT_SENTINEL_COLLECTION,
     },
     CkbadgerStore,
 };
@@ -30,7 +30,9 @@ use crate::warmup::CachedAssetEntry;
 use crate::AppState;
 
 fn is_identity_sentinel(collection_id: &[u8]) -> bool {
-    collection_id == DOTBIT_SENTINEL_COLLECTION || collection_id == DID_CKB_SENTINEL_COLLECTION
+    collection_id == DOTBIT_SENTINEL_COLLECTION
+        || collection_id == BIT_CELL_SENTINEL_COLLECTION
+        || collection_id == DID_CKB_SENTINEL_COLLECTION
 }
 
 /// Read the collection aggregate from the correct CF (identity vs object).
@@ -54,6 +56,7 @@ fn get_collection_aggregate(
                 // resolve_collection_standard() using collection_id, not this field.
                 standard: match id_agg.standard {
                     ckbadger_store::types::IdentityStandard::DotBit => ObjectStandard::Spore,
+                    ckbadger_store::types::IdentityStandard::BitCell => ObjectStandard::Spore,
                     ckbadger_store::types::IdentityStandard::DidCkb => ObjectStandard::Spore,
                 },
                 total_count: id_agg.total_count,
@@ -96,6 +99,9 @@ fn get_collection_aggregate(
 const NFT_ACTIVITY_SCAN_CHUNK_SIZE: usize = 128;
 const NFT_ACTIVITY_COUNT_CACHE_TTL: Duration = Duration::from_secs(300);
 const NFT_HOLDER_LIST_CACHE_TTL: Duration = Duration::from_secs(30);
+
+type CellOutpoint = (Vec<u8>, i16);
+pub(super) type LiveBitCellOutpoints = HashMap<Vec<u8>, CellOutpoint>;
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
@@ -894,6 +900,9 @@ fn decode_object_collection_id(
     if normalized == "did:ckb" || normalized == "did_ckb" {
         return Ok(DID_CKB_SENTINEL_COLLECTION.to_vec());
     }
+    if matches!(normalized.as_str(), "bit_cell" | "bit-cell" | ".bit-cell") {
+        return Ok(BIT_CELL_SENTINEL_COLLECTION.to_vec());
+    }
     hex::decode(raw.strip_prefix("0x").unwrap_or(raw))
         .map_err(|_| ApiError::bad_request("Invalid object collection ID"))
 }
@@ -1576,6 +1585,7 @@ async fn get_object_item_detail(
 pub(super) enum NftLifecycleStandard {
     MnftToken,
     DotBit,
+    BitCell,
     DidCkb,
     Spore,
 }
@@ -1594,7 +1604,9 @@ fn collect_nft_item_lifecycle_actions(
             .store
             .list_dotbit_account_outpoints_by_account_id(nft_id_bytes)
             .map_err(|e| ApiError::internal(e.to_string()))?,
-        NftLifecycleStandard::DidCkb | NftLifecycleStandard::Spore => state
+        NftLifecycleStandard::BitCell
+        | NftLifecycleStandard::DidCkb
+        | NftLifecycleStandard::Spore => state
             .store
             .list_spore_outpoints_by_spore_id(nft_id_bytes)
             .map_err(|e| ApiError::internal(e.to_string()))?,
@@ -1947,10 +1959,11 @@ async fn get_object_collection(
     })
 }
 
-pub(crate) fn fetch_did_collection_entries_by_ids(
+fn fetch_identity_collection_entries_by_ids(
     store: &CkbadgerStore,
     collection_id_bytes: &[u8],
     nft_ids: &[Vec<u8>],
+    expected_standard: IdentityStandard,
 ) -> Result<Vec<(Vec<u8>, ckbadger_store::types::IdentityEntry)>, ApiRouteError> {
     let mut out = Vec::with_capacity(nft_ids.len());
 
@@ -1960,16 +1973,18 @@ pub(crate) fn fetch_did_collection_entries_by_ids(
             .map_err(|e| ApiError::internal(e.to_string()))?
             .ok_or_else(|| {
                 ApiError::internal(format!(
-                    "nft_by_collection index points to missing identity_data did:ckb entry: collection_id=0x{}, nft_id=0x{}",
+                    "identity_by_collection index points to missing identity_data entry: collection_id=0x{}, nft_id=0x{}, expected_standard={}",
                     hex::encode(collection_id_bytes),
-                    hex::encode(nft_id)
+                    hex::encode(nft_id),
+                    expected_standard.as_str()
                 ))
             })?;
-        if entry.standard != ckbadger_store::types::IdentityStandard::DidCkb {
+        if entry.standard != expected_standard {
             return Err(ApiError::internal(format!(
-                "did:ckb collection index mismatch: collection_id=0x{}, nft_id=0x{}, entry_standard={}",
+                "identity collection index mismatch: collection_id=0x{}, nft_id=0x{}, expected_standard={}, entry_standard={}",
                 hex::encode(collection_id_bytes),
                 hex::encode(nft_id),
+                expected_standard.as_str(),
                 entry.standard.as_str()
             )));
         }
@@ -1979,36 +1994,59 @@ pub(crate) fn fetch_did_collection_entries_by_ids(
     Ok(out)
 }
 
-pub(crate) fn fetch_dotbit_collection_entries_by_ids(
+pub(super) fn get_live_bit_cell_outpoints_by_identity_ids(
     store: &CkbadgerStore,
-    collection_id_bytes: &[u8],
-    nft_ids: &[Vec<u8>],
-) -> Result<Vec<(Vec<u8>, ckbadger_store::types::IdentityEntry)>, ApiRouteError> {
-    let mut out = Vec::with_capacity(nft_ids.len());
-
-    for nft_id in nft_ids {
-        let entry = store
-            .get_identity(nft_id)
-            .map_err(|e| ApiError::internal(e.to_string()))?
-            .ok_or_else(|| {
-                ApiError::internal(format!(
-                    "nft_by_collection index points to missing identity_data dotbit entry: collection_id=0x{}, nft_id=0x{}",
-                    hex::encode(collection_id_bytes),
-                    hex::encode(nft_id)
-                ))
-            })?;
-        if entry.standard != ckbadger_store::types::IdentityStandard::DotBit {
-            return Err(ApiError::internal(format!(
-                "dotbit collection index mismatch: collection_id=0x{}, nft_id=0x{}, entry_standard={}",
-                hex::encode(collection_id_bytes),
-                hex::encode(nft_id),
-                entry.standard.as_str()
-            )));
+    append_only_store: &CkbadgerStore,
+    identity_ids: &[Vec<u8>],
+) -> Result<LiveBitCellOutpoints, ApiRouteError> {
+    let mut identity_by_outpoint: HashMap<CellOutpoint, Vec<u8>> = HashMap::new();
+    for identity_id in identity_ids {
+        let outpoints = store
+            .list_spore_outpoints_by_spore_id(identity_id)
+            .map_err(|e| ApiError::internal(e.to_string()))?;
+        for outpoint in outpoints {
+            if identity_by_outpoint
+                .insert(outpoint.clone(), identity_id.clone())
+                .is_some()
+            {
+                return Err(ApiError::internal(format!(
+                    ".bit Cell outpoint belongs to multiple identities: outpoint=0x{}:{}",
+                    hex::encode(&outpoint.0),
+                    outpoint.1
+                )));
+            }
         }
-        out.push((nft_id.clone(), entry));
     }
 
-    Ok(out)
+    let outpoint_refs = identity_by_outpoint
+        .keys()
+        .map(|(tx_hash, output_index)| (tx_hash.as_slice(), *output_index))
+        .collect::<Vec<_>>();
+    let live_cells = store
+        .get_cells_batch(&outpoint_refs, append_only_store)
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let mut result = HashMap::with_capacity(identity_ids.len());
+    for ((tx_hash, output_index), _cell) in live_cells {
+        let identity_id = identity_by_outpoint
+            .get(&(tx_hash.clone(), output_index))
+            .ok_or_else(|| {
+                ApiError::internal(format!(
+                    "live .bit Cell outpoint missing reverse lookup: outpoint=0x{}:{}",
+                    hex::encode(&tx_hash),
+                    output_index
+                ))
+            })?;
+        if let Some(previous) = result.insert(identity_id.clone(), (tx_hash, output_index)) {
+            return Err(ApiError::internal(format!(
+                ".bit Cell identity has multiple live outpoints: identity_id=0x{}, first=0x{}:{}, second_output_index={}",
+                hex::encode(identity_id),
+                hex::encode(previous.0),
+                previous.1,
+                output_index
+            )));
+        }
+    }
+    Ok(result)
 }
 
 fn fetch_nft_collection_entries_by_ids(
@@ -2063,7 +2101,17 @@ pub(crate) fn list_identity_items_inner(
     status_filter: NftItemStatusFilter,
     agg: &MnftCollectionAggregate,
 ) -> ApiResult<CursorPaginatedResponse<CollectionItemResponse>> {
-    let is_dotbit = collection_id_bytes == DOTBIT_SENTINEL_COLLECTION;
+    let identity_standard = match collection_id_bytes {
+        id if id == DOTBIT_SENTINEL_COLLECTION => IdentityStandard::DotBit,
+        id if id == BIT_CELL_SENTINEL_COLLECTION => IdentityStandard::BitCell,
+        id if id == DID_CKB_SENTINEL_COLLECTION => IdentityStandard::DidCkb,
+        _ => {
+            return Err(ApiError::internal(format!(
+                "unsupported identity collection sentinel: collection_id=0x{}",
+                hex::encode(collection_id_bytes)
+            )))
+        }
+    };
 
     let mut matched_items: Vec<(Vec<u8>, ckbadger_store::types::IdentityEntry)> =
         Vec::with_capacity((limit + 1) as usize);
@@ -2085,11 +2133,12 @@ pub(crate) fn list_identity_items_inner(
                 break;
             }
 
-            let entries = if is_dotbit {
-                fetch_dotbit_collection_entries_by_ids(store, collection_id_bytes, &nft_ids)?
-            } else {
-                fetch_did_collection_entries_by_ids(store, collection_id_bytes, &nft_ids)?
-            };
+            let entries = fetch_identity_collection_entries_by_ids(
+                store,
+                collection_id_bytes,
+                &nft_ids,
+                identity_standard,
+            )?;
 
             for (nft_id, entry) in entries {
                 let status_match = match status_filter {
@@ -2136,11 +2185,12 @@ pub(crate) fn list_identity_items_inner(
             )
             .map_err(|e| ApiError::internal(e.to_string()))?;
 
-        let entries = if is_dotbit {
-            fetch_dotbit_collection_entries_by_ids(store, collection_id_bytes, &nft_ids)?
-        } else {
-            fetch_did_collection_entries_by_ids(store, collection_id_bytes, &nft_ids)?
-        };
+        let entries = fetch_identity_collection_entries_by_ids(
+            store,
+            collection_id_bytes,
+            &nft_ids,
+            identity_standard,
+        )?;
         matched_items.extend(entries);
     }
 
@@ -2150,7 +2200,7 @@ pub(crate) fn list_identity_items_inner(
 
     let mut rows = Vec::with_capacity(page_items.len());
 
-    if is_dotbit {
+    if identity_standard == IdentityStandard::DotBit {
         // Resolve live outpoints for dotbit accounts
         let live_account_ids: Vec<Vec<u8>> = page_items
             .iter()
@@ -2206,9 +2256,71 @@ pub(crate) fn list_identity_items_inner(
                 output_index,
             });
         }
+    } else if identity_standard == IdentityStandard::BitCell {
+        let live_identity_ids: Vec<Vec<u8>> = page_items
+            .iter()
+            .filter(|(_, entry)| entry.is_live)
+            .map(|(identity_id, _)| identity_id.clone())
+            .collect();
+        let live_outpoints = get_live_bit_cell_outpoints_by_identity_ids(
+            store,
+            append_only_store,
+            &live_identity_ids,
+        )?;
+
+        for (identity_id, entry) in &page_items {
+            let expired_at = match &entry.extra {
+                ckbadger_store::types::IdentityExtra::BitCell { expired_at, .. } => {
+                    Some(*expired_at)
+                }
+                _ => {
+                    return Err(ApiError::internal(format!(
+                        ".bit Cell identity has wrong extra variant: identity_id=0x{}",
+                        hex::encode(identity_id)
+                    )))
+                }
+            };
+            let (tx_hash, output_index) = if entry.is_live {
+                let (tx_hash, output_index) = live_outpoints.get(identity_id).ok_or_else(|| {
+                    ApiError::internal(format!(
+                        "live .bit Cell identity missing outpoint index: identity_id=0x{}",
+                        hex::encode(identity_id)
+                    ))
+                })?;
+                (
+                    Some(format!("0x{}", hex::encode(tx_hash))),
+                    Some(*output_index),
+                )
+            } else {
+                (None, None)
+            };
+
+            rows.push(CollectionItemResponse {
+                nft_id: format!("0x{}", hex::encode(identity_id)),
+                name: entry.name.clone(),
+                standard: IdentityStandard::BitCell.asset_standard().to_string(),
+                owner_lock_hash: entry
+                    .owner_lock_hash
+                    .as_ref()
+                    .map(|h| format!("0x{}", hex::encode(h))),
+                is_live: entry.is_live,
+                created_at_block: entry.created_at_block,
+                expired_at,
+                registered_at: None,
+                status: None,
+                tx_hash,
+                output_index,
+            });
+        }
     } else {
         // did:ckb — no outpoint resolution needed
         for (nft_id, entry) in &page_items {
+            if !matches!(entry.extra, ckbadger_store::types::IdentityExtra::DidCkb) {
+                return Err(ApiError::internal(format!(
+                    "did:ckb identity has wrong extra variant: identity_id=0x{}",
+                    hex::encode(nft_id)
+                )));
+            }
             rows.push(CollectionItemResponse {
                 nft_id: format!("0x{}", hex::encode(nft_id)),
                 name: entry.name.clone(),
@@ -2236,14 +2348,13 @@ pub(crate) fn list_identity_items_inner(
         None
     };
 
-    // For dotbit, compute status-aware total; for did:ckb use total_count directly.
     if search_lower.is_some() {
         ok(CursorPaginatedResponse::without_total(
             rows,
             limit,
             next_cursor,
         ))
-    } else if is_dotbit {
+    } else {
         let total = match status_filter {
             NftItemStatusFilter::All => agg.total_count,
             NftItemStatusFilter::Live => agg.live_count,
@@ -2252,7 +2363,7 @@ pub(crate) fn list_identity_items_inner(
                     .checked_sub(agg.live_count)
                     .ok_or_else(|| {
                         ApiError::internal(format!(
-                            "invalid dotbit collection aggregate counts: collection_id=0x{}, total_count={}, live_count={}",
+                            "invalid identity collection aggregate counts: collection_id=0x{}, total_count={}, live_count={}",
                             hex::encode(collection_id_bytes),
                             agg.total_count,
                             agg.live_count
@@ -2263,13 +2374,6 @@ pub(crate) fn list_identity_items_inner(
         ok(CursorPaginatedResponse::new(
             rows,
             total,
-            limit,
-            next_cursor,
-        ))
-    } else {
-        ok(CursorPaginatedResponse::new(
-            rows,
-            agg.total_count,
             limit,
             next_cursor,
         ))

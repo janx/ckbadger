@@ -367,7 +367,8 @@ pub(crate) fn parse_block_to_facts(
                 CellSemanticTag::Spore
                 | CellSemanticTag::Cluster
                 | CellSemanticTag::Mnft
-                | CellSemanticTag::Dotbit => {
+                | CellSemanticTag::Dotbit
+                | CellSemanticTag::BitCell => {
                     let parsed_cell = ParsedCell {
                         capacity,
                         lock_code_hash: lock_code_hash_bytes.to_vec(),
@@ -602,6 +603,7 @@ fn code_hash_to_semantic_tag(code_hash: &[u8], hash_type: i16) -> CellSemanticTa
         // each code_hash is unambiguous, so accept its on-chain hash_type.
         Some(ProtocolScript::Xudt) if hash_type == 1 || hash_type == 2 => CellSemanticTag::Xudt,
         Some(ProtocolScript::DotbitAccount) => CellSemanticTag::Dotbit,
+        Some(ProtocolScript::BitCell) => CellSemanticTag::BitCell,
         Some(
             ProtocolScript::MnftIssuer | ProtocolScript::MnftClass | ProtocolScript::MnftToken,
         ) => CellSemanticTag::Mnft,
@@ -1086,11 +1088,85 @@ mod tests {
     }
 
     #[test]
-    fn classify_from_code_hash_spore_did() {
+    fn classify_from_code_hash_bit_cell_independently() {
         let hash = crate::rpc::parse_hex_to_bytes(
             "0xcfba73b58b6f30e70caed8a999748781b164ef9a1e218424a6fb55ebf641cb33",
         );
-        assert_eq!(code_hash_to_semantic_tag(&hash, 1), CellSemanticTag::Spore);
+        assert_eq!(
+            code_hash_to_semantic_tag(&hash, 1),
+            CellSemanticTag::BitCell
+        );
+    }
+
+    #[test]
+    fn binary_facts_parse_legacy_testnet_bit_cell_from_failed_sync_transaction() {
+        use ckb_types::{bytes::Bytes, packed};
+
+        let code_hash = packed::Byte32::from_slice(&crate::rpc::parse_hex_to_bytes(
+            crate::parser::bit_cell::BIT_CELL_CODE_HASH_TESTNET,
+        ))
+        .unwrap();
+        let type_script = packed::Script::new_builder()
+            .code_hash(code_hash)
+            .hash_type(packed::Byte::new(1))
+            .args(Bytes::new().pack())
+            .build();
+        let output = packed::CellOutput::new_builder()
+            .capacity(packed::Uint64::from_slice(&200_00000000u64.to_le_bytes()).unwrap())
+            .lock(
+                packed::Script::new_builder()
+                    .code_hash(packed::Byte32::default())
+                    .hash_type(packed::Byte::new(1))
+                    .args(Bytes::new().pack())
+                    .build(),
+            )
+            .type_(Some(type_script).pack())
+            .build();
+        let data = crate::rpc::parse_hex_to_bytes(
+            "0x000000003c00000010000000240000002c000000a7d4860aaf1dc83daedf75d6022811d2c2ae250b1b46fc69000000000c00000032303234303530372e626974",
+        );
+        let tx = packed::Transaction::new_builder()
+            .raw(
+                packed::RawTransaction::new_builder()
+                    .outputs(packed::CellOutputVec::new_builder().push(output).build())
+                    .outputs_data(
+                        packed::BytesVec::new_builder()
+                            .push(Bytes::from(data).pack())
+                            .build(),
+                    )
+                    .build(),
+            )
+            .build();
+        let block = packed::Block::new_builder()
+            .header(
+                packed::Header::new_builder()
+                    .raw(packed::RawHeader::new_builder().build())
+                    .build(),
+            )
+            .transactions(packed::TransactionVec::new_builder().push(tx).build())
+            .build();
+        let raw = RawCkbBlock {
+            block: block.into_view(),
+            cycles: Vec::new(),
+        };
+
+        let (_, _, cells) = parse_block_to_facts(&raw, &IdentityInterner::default())
+            .expect("production binary facts path must parse the legacy testnet .bit Cell");
+        assert_eq!(cells.len(), 1);
+        assert_eq!(cells[0].semantic_tag, CellSemanticTag::BitCell);
+        let crate::sync::bulk_build::facts::CellProtocolFacts::BitCell(bit_cell) = cells[0]
+            .protocol_facts
+            .as_ref()
+            .expect(".bit Cell protocol facts")
+        else {
+            panic!("expected independent .bit Cell facts");
+        };
+        assert_eq!(bit_cell.account, "20240507.bit");
+        assert_eq!(bit_cell.expired_at, 1_778_140_699);
+        assert_eq!(
+            hex::encode(bit_cell.identity_id),
+            "81d34cd1dfc27716073d1018a63712926d8e3ab36345847129d0cc4135d1ffd4"
+        );
     }
 
     #[test]

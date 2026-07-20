@@ -9,9 +9,6 @@ use super::script::ScriptParser;
 // Mainnet Spore v2 (latest)
 pub const SPORE_CODE_HASH_MAINNET_V2: &str =
     "0x4a4dce1df3dffff7f8b2cd7dff7303df3b6150c9788cb75dcf6747247132b9f5";
-// Mainnet Spore v2 DID (type script based)
-pub const SPORE_CODE_HASH_MAINNET_DID: &str =
-    "0xcfba73b58b6f30e70caed8a999748781b164ef9a1e218424a6fb55ebf641cb33";
 // Testnet Spore v2 preview
 pub const SPORE_CODE_HASH_TESTNET_V2: &str =
     "0x685a60219309029d01310311dba953d67029170ca4848a4ff638e57002130a0d";
@@ -365,6 +362,7 @@ struct ClusterData {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::parser::bit_cell::BIT_CELL_CODE_HASH_MAINNET;
     use crate::parser::cell::CellParser;
     use crate::parser::test_helpers::create_lock_script;
     use crate::rpc::{CellOutput, Script, TransactionView};
@@ -377,11 +375,11 @@ mod tests {
         }
     }
 
-    fn create_did_type_script(did_id: &str) -> Script {
+    fn create_bit_cell_type_script(type_args: &str) -> Script {
         Script {
-            code_hash: SPORE_CODE_HASH_MAINNET_DID.to_string(),
+            code_hash: BIT_CELL_CODE_HASH_MAINNET.to_string(),
             hash_type: "type".to_string(),
-            args: did_id.to_string(),
+            args: type_args.to_string(),
         }
     }
 
@@ -448,8 +446,8 @@ mod tests {
         let spore_hash = parse_hex_to_bytes(SPORE_CODE_HASH_MAINNET_V2);
         assert!(SporeParser::is_spore_type_script(&spore_hash));
 
-        let did_hash = parse_hex_to_bytes(SPORE_CODE_HASH_MAINNET_DID);
-        assert!(SporeParser::is_spore_type_script(&did_hash));
+        let bit_cell_hash = parse_hex_to_bytes(BIT_CELL_CODE_HASH_MAINNET);
+        assert!(!SporeParser::is_spore_type_script(&bit_cell_hash));
 
         let other_hash = parse_hex_to_bytes(
             "0x0000000000000000000000000000000000000000000000000000000000000000",
@@ -458,12 +456,12 @@ mod tests {
     }
 
     #[test]
-    fn test_is_spore_nft_type_script_excludes_did() {
+    fn test_is_spore_nft_type_script_excludes_bit_cell() {
         let spore_hash = parse_hex_to_bytes(SPORE_CODE_HASH_MAINNET_V2);
         assert!(SporeParser::is_spore_nft_type_script(&spore_hash));
 
-        let did_hash = parse_hex_to_bytes(SPORE_CODE_HASH_MAINNET_DID);
-        assert!(!SporeParser::is_spore_nft_type_script(&did_hash));
+        let bit_cell_hash = parse_hex_to_bytes(BIT_CELL_CODE_HASH_MAINNET);
+        assert!(!SporeParser::is_spore_nft_type_script(&bit_cell_hash));
     }
 
     #[test]
@@ -478,13 +476,12 @@ mod tests {
     }
 
     #[test]
-    fn detects_testnet_spore_did() {
-        // Testnet did:ckb type script — resolved via the network-agnostic
-        // ProtocolRegistry (previously undetected by the mainnet-only byte table).
+    fn excludes_testnet_bit_cell_from_spore() {
         let t = parse_hex_to_bytes(
             "0x0b1f412fbae26853ff7d082d422c2bdd9e2ff94ee8aaec11240a5b34cc6e890f",
         );
-        assert!(SporeParser::is_did_type_script(&t));
+        assert!(!SporeParser::is_did_type_script(&t));
+        assert!(!SporeParser::is_spore_type_script(&t));
     }
 
     #[test]
@@ -532,21 +529,15 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_did_cell_uses_did_path_without_cluster_id() {
-        let did_id = "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef";
+    fn test_parse_bit_cell_is_not_spore() {
+        let type_args = "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef";
         let output = CellOutput {
             capacity: "0x174876e800".to_string(),
             lock: create_lock_script(),
-            type_: Some(create_did_type_script(did_id)),
+            type_: Some(create_bit_cell_type_script(type_args)),
         };
 
-        // did:ckb uses its own object standard; parser must not interpret payload as spore molecule.
-        let data_hex = "0x0102030405";
-        let parsed = SporeParser::parse_spore_cell(&output, data_hex).expect("should parse did");
-        assert!(parsed.is_did);
-        assert!(parsed.cluster_id.is_none());
-        assert!(parsed.content_type.is_empty());
-        assert!(parsed.content.is_empty());
+        assert!(SporeParser::parse_spore_cell(&output, "0x0102030405").is_none());
     }
 
     #[test]
@@ -635,22 +626,16 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_spore_parsed_cell_uses_did_path_without_molecule_decode() {
-        let did_id = "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef";
+    fn test_parse_spore_parsed_cell_excludes_bit_cell() {
+        let type_args = "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef";
         let output = CellOutput {
             capacity: "0x174876e800".to_string(),
             lock: create_lock_script(),
-            type_: Some(create_did_type_script(did_id)),
+            type_: Some(create_bit_cell_type_script(type_args)),
         };
         let parsed_cell = CellParser::parse_output(&output, "0x0102030405").expect("parsed cell");
 
-        let parsed = SporeParser::parse_spore_parsed_cell(&parsed_cell).expect("did facts");
-
-        assert!(parsed.is_did);
-        assert!(parsed.cluster_id.is_none());
-        assert!(parsed.content_type.is_empty());
-        assert!(parsed.content.is_empty());
-        assert_eq!(parsed.spore_id.len(), 32);
+        assert!(SporeParser::parse_spore_parsed_cell(&parsed_cell).is_none());
     }
 
     #[test]

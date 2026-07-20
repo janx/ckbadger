@@ -21,7 +21,7 @@ use crate::parser::transaction::TransactionParser;
 use crate::parser::udt::UdtStandard;
 use crate::parser::{
     dotbit::{may_contain_das_witness, parse_dotbit_witness_bundle, DotbitWitnessBundle},
-    DotbitParser, MnftParser, SporeParser, UdtParser,
+    BitCellParser, DotbitParser, MnftParser, SporeParser, UdtParser,
 };
 use crate::rpc::BlockResponseWithCycles;
 use ckbadger_store::types::{DOTBIT_SENTINEL_COLLECTION, SOLE_SPORES_SENTINEL_COLLECTION};
@@ -87,6 +87,10 @@ pub(crate) fn classify_bulk_cell_semantic_tag(cell: &ParsedCell) -> CellSemantic
         return CellSemanticTag::Dotbit;
     }
 
+    if BitCellParser::is_type_script(type_code_hash) {
+        return CellSemanticTag::BitCell;
+    }
+
     if MnftParser::is_issuer_type_script(type_code_hash)
         || MnftParser::is_class_type_script(type_code_hash)
         || MnftParser::is_token_type_script(type_code_hash)
@@ -126,6 +130,10 @@ pub(crate) fn classify_live_cell_semantic_tag(cell: &LiveCellInfo) -> CellSemant
 
     if DotbitParser::is_account_cell_type_script(type_code_hash) {
         return CellSemanticTag::Dotbit;
+    }
+
+    if BitCellParser::is_type_script(type_code_hash) {
+        return CellSemanticTag::BitCell;
     }
 
     if MnftParser::is_issuer_type_script(type_code_hash)
@@ -3342,6 +3350,7 @@ mod tests {
                         | CellSemanticTag::Sudt
                         | CellSemanticTag::Xudt
                         | CellSemanticTag::Dotbit
+                        | CellSemanticTag::BitCell
                         | CellSemanticTag::Mnft
                         | CellSemanticTag::Spore
                         | CellSemanticTag::Cluster

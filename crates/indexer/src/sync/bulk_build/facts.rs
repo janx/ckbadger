@@ -5,6 +5,7 @@ use anyhow::{anyhow, Result};
 use serde::Serialize;
 use tracing::warn;
 
+use crate::parser::bit_cell::BitCellParser;
 use crate::parser::cell::ParsedCell;
 use crate::parser::dotbit::{DotbitParser, DotbitWitnessBundle};
 use crate::parser::mnft::MnftParser;
@@ -92,6 +93,14 @@ pub(crate) struct DotbitProtocolFacts {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct BitCellProtocolFacts {
+    pub(crate) identity_id: [u8; 32],
+    pub(crate) account_id: [u8; 20],
+    pub(crate) account: String,
+    pub(crate) expired_at: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) enum CellProtocolFacts {
     Spore(SporeProtocolFacts),
     Cluster(ClusterProtocolFacts),
@@ -99,6 +108,7 @@ pub(crate) enum CellProtocolFacts {
     MnftClass(MnftClassProtocolFacts),
     MnftToken(MnftTokenProtocolFacts),
     Dotbit(DotbitProtocolFacts),
+    BitCell(BitCellProtocolFacts),
 }
 
 #[derive(Debug, Clone, Default)]
@@ -139,6 +149,7 @@ pub enum CellSemanticTag {
     Sudt,
     Xudt,
     Dotbit,
+    BitCell,
     Mnft,
     Spore,
     Cluster,
@@ -154,6 +165,7 @@ impl CellSemanticTag {
             Self::Sudt => semantic_tags::SUDT,
             Self::Xudt => semantic_tags::XUDT,
             Self::Dotbit => semantic_tags::DOTBIT,
+            Self::BitCell => semantic_tags::BIT_CELL,
             Self::Mnft => semantic_tags::MNFT,
             Self::Spore => semantic_tags::SPORE,
             Self::Cluster => semantic_tags::CLUSTER,
@@ -312,6 +324,32 @@ pub(crate) fn parse_protocol_facts(
         | CellSemanticTag::Dao
         | CellSemanticTag::Sudt
         | CellSemanticTag::Xudt => Ok(None),
+        CellSemanticTag::BitCell => {
+            let cell = BitCellParser::parse_parsed_cell(cell).ok_or_else(|| {
+                anyhow!(
+                    "failed to parse .bit Cell semantics in protocol facts: tx=0x{}, output_index={}, data_len={}",
+                    hex::encode(tx_hash),
+                    output_index,
+                    cell.data.len()
+                )
+            })?;
+            Ok(Some(CellProtocolFacts::BitCell(BitCellProtocolFacts {
+                identity_id: parse_fixed_protocol_id::<32>(
+                    &cell.identity_id,
+                    ".bit Cell identity_id",
+                    tx_hash,
+                    output_index,
+                )?,
+                account_id: parse_fixed_protocol_id::<20>(
+                    &cell.account_id,
+                    ".bit Cell account_id",
+                    tx_hash,
+                    output_index,
+                )?,
+                account: cell.account,
+                expired_at: cell.expired_at,
+            })))
+        }
         CellSemanticTag::Spore => {
             let spore = SporeParser::parse_spore_parsed_cell(cell).ok_or_else(|| {
                 anyhow!(
@@ -462,6 +500,41 @@ pub(crate) fn parse_protocol_facts(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn malformed_bit_cell_fails_protocol_fact_parsing_with_context() {
+        let tx_hash = [0x7a; 32];
+        let cell = ParsedCell {
+            capacity: 100_00000000,
+            lock_code_hash: vec![0; 32],
+            lock_hash_type: 1,
+            lock_args: Vec::new(),
+            lock_script_hash: vec![0x11; 32],
+            type_code_hash: Some(crate::rpc::parse_hex_to_bytes(
+                crate::parser::bit_cell::BIT_CELL_CODE_HASH_TESTNET,
+            )),
+            type_hash_type: Some(1),
+            type_args: Some(Vec::new()),
+            type_script_hash: Some(vec![0x22; 32]),
+            data_hash: [0; 32],
+            data_size: 3,
+            data: vec![1, 2, 3],
+        };
+
+        let err = parse_protocol_facts(
+            &cell,
+            CellSemanticTag::BitCell,
+            &DotbitWitnessBundle::default(),
+            &tx_hash,
+            4,
+        )
+        .expect_err("recognized malformed .bit Cell must fail fast");
+
+        let message = err.to_string();
+        assert!(message.contains("failed to parse .bit Cell semantics"));
+        assert!(message.contains(&format!("tx=0x{}", hex::encode(tx_hash))));
+        assert!(message.contains("output_index=4"));
+    }
 
     #[test]
     fn facts_arena_defaults_to_empty_indexes() {
