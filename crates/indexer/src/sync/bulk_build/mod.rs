@@ -9,6 +9,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use anyhow::Result;
 use anyhow::{anyhow, bail};
 use ckb_types::utilities::compact_to_difficulty as ckb_compact_to_difficulty;
+use ckbadger_common::TokenBalance;
 use ckbadger_store::keys;
 use ckbadger_store::store::CF_TOKEN_TRANSFERS;
 use ckbadger_store::types::{
@@ -4478,7 +4479,7 @@ fn collect_core_owner_state_snapshot(
         .list_tokens()?
         .into_iter()
         .collect::<HashMap<_, _>>();
-    let mut token_holders: HashMap<Vec<u8>, HashMap<Vec<u8>, u128>> = HashMap::new();
+    let mut token_holders: HashMap<Vec<u8>, HashMap<Vec<u8>, TokenBalance>> = HashMap::new();
     let mut token_transfer_counts = HashMap::new();
     let mut token_hourly_transfers = HashMap::new();
     let mut token_daily_deltas = HashMap::new();
@@ -4546,7 +4547,7 @@ fn collect_core_owner_state_snapshot(
             token_daily_deltas.insert(type_hash.clone(), daily_deltas);
         }
     }
-    let mut addr_tokens: HashMap<Vec<u8>, HashMap<Vec<u8>, u128>> = HashMap::new();
+    let mut addr_tokens: HashMap<Vec<u8>, HashMap<Vec<u8>, TokenBalance>> = HashMap::new();
     let addr_tokens_iter = domain_store.iterator_cf(
         domain_store.cf_addr_tokens_by_balance(),
         IteratorMode::Start,
@@ -5525,9 +5526,7 @@ mod tests {
                     name: Some("Seal".to_string()),
                     symbol: Some("SEAL".to_string()),
                     decimals: Some(8),
-                    total_supply: Some(200),
                     max_supply: None,
-                    holders_count: 1,
                     first_seen_block: 14_000_889,
                     icon_url: None,
                     description: None,

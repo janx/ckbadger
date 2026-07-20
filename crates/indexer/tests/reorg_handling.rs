@@ -1,5 +1,6 @@
 //! Integration tests for chain reorganization (rollback) handling via ckbadger-store.
 
+use ckbadger_common::TokenBalance;
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::types::{
     AddrTxValue, AddressBalance, FiberChannel, FiberChannelState, ParticipantDelta, ScriptInfo,
@@ -584,9 +585,7 @@ fn test_rollback_updates_derived_cfs_inline() {
         name: None,
         symbol: None,
         decimals: None,
-        total_supply: Some(2 * udt_amount),
         max_supply: None,
-        holders_count: 1,
         first_seen_block: 3,
         icon_url: None,
         description: None,
@@ -657,26 +656,13 @@ fn test_rollback_updates_derived_cfs_inline() {
         "token_holder should be deleted when balance reaches 0"
     );
 
-    // token_info: the inline delta sets holders_count=0 and total_supply=Some(0),
-    // then the rebuild_token_state_from_transfers runs and finds no transfers
-    // for this type_hash, deleting the token_info entirely.
-    // When the rebuild is removed (later task), this should become:
-    //   ti.holders_count == 0, ti.total_supply == Some(0)
-    let ti = store.get_token(&type_script_hash).unwrap();
-    match ti {
-        None => {
-            // Rebuild path deleted the token (no token_transfers in test).
-        }
-        Some(ref info) => {
-            // Inline-only path: verify the deltas were applied correctly.
-            assert_eq!(info.holders_count, 0, "token_info holders_count: 1 - 1 = 0");
-            assert_eq!(
-                info.total_supply,
-                Some(0),
-                "token_info total_supply: 2*udt_amount - 2*udt_amount = 0"
-            );
-        }
-    }
+    // Supply and holder count have one authoritative calculation path: token_holders.
+    assert_eq!(
+        store
+            .aggregate_token_holder_stats(&type_script_hash)
+            .unwrap(),
+        (0, TokenBalance::zero())
+    );
 }
 
 // ---------------------------------------------------------------------------

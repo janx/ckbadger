@@ -6,6 +6,7 @@
 use super::checks::*;
 use super::report::format_number;
 use super::sampling::LcgSampler;
+use ckbadger_common::TokenBalance;
 
 const SYNC_COMPLETE_MAX_LAG_BLOCKS: i64 = 100;
 const SHANNONS_PER_CKB: i128 = 100_000_000;
@@ -290,8 +291,13 @@ fn normalize_hex_key(raw: &str) -> String {
         .to_ascii_lowercase()
 }
 
-/// Parse an unsigned UDT amount/balance decimal string. UDT amounts are u128 (up to
-/// ~3.4e38), so the old i128 parse errored on valid amounts > i128::MAX.
+/// Parse an exact aggregate token balance. Holder balances may sum many u128 cells.
+fn parse_token_balance_strict(raw: &str, field_name: &str) -> anyhow::Result<TokenBalance> {
+    raw.parse::<TokenBalance>()
+        .map_err(|e| anyhow::anyhow!("invalid {} '{}': {}", field_name, raw, e))
+}
+
+/// Parse a single UDT transfer amount, whose on-chain representation is u128.
 fn parse_u128_strict(raw: &str, field_name: &str) -> anyhow::Result<u128> {
     raw.parse::<u128>()
         .map_err(|e| anyhow::anyhow!("invalid {} '{}': {}", field_name, raw, e))
@@ -428,7 +434,7 @@ fn token_holder_balance_mismatch_details(
     holder_balance: &str,
 ) -> anyhow::Result<Vec<String>> {
     let mut details = vec![];
-    let holder_balance_value = parse_u128_strict(holder_balance, "token holder balance")?;
+    let holder_balance_value = parse_token_balance_strict(holder_balance, "token holder balance")?;
     let token_key = normalize_hex_key(token_type_hash);
 
     // The address-tokens list is sorted by balance DESC, so a holder with
@@ -438,7 +444,7 @@ fn token_holder_balance_mismatch_details(
     // the full list until we find the target or exhaust the pages.
     let mut cursor: Option<String> = None;
     let mut pages_scanned = 0usize;
-    let mut found_balance: Option<u128> = None;
+    let mut found_balance: Option<TokenBalance> = None;
     loop {
         let path = match cursor.as_deref() {
             Some(c) => format!(
@@ -458,7 +464,10 @@ fn token_holder_balance_mismatch_details(
             .iter()
             .find(|entry| normalize_hex_key(&entry.type_script_hash) == token_key)
         {
-            found_balance = Some(parse_u128_strict(&entry.balance, "address token balance")?);
+            found_balance = Some(parse_token_balance_strict(
+                &entry.balance,
+                "address token balance",
+            )?);
             break;
         }
 

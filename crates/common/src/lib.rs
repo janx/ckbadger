@@ -9,6 +9,7 @@ pub mod label_import;
 pub mod network;
 pub mod proposal;
 pub mod sync;
+pub mod token;
 pub mod types;
 
 pub use error::{Error, Result};
@@ -17,6 +18,7 @@ pub use hex::{parse_capacity, parse_hex_to_bytes, parse_hex_to_hash, parse_hex_u
 pub use label_import::*;
 pub use proposal::*;
 pub use sync::*;
+pub use token::*;
 pub use types::*;
 
 use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, Utc};

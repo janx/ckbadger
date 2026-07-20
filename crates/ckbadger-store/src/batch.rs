@@ -3,6 +3,8 @@
 use rocksdb::{ColumnFamily, WriteBatch};
 use std::collections::HashMap;
 
+use ckbadger_common::TokenBalance;
+
 use crate::keys;
 use crate::store::{CkbadgerStore, StoreWriteIntent};
 use crate::types::*;
@@ -750,33 +752,46 @@ impl<'a> StoreBatch<'a> {
         self.put_cf(self.store.cf_tokens(), type_hash, &value);
     }
 
-    pub fn put_token_holder(&mut self, type_hash: &[u8], lock_hash: &[u8], balance: u128) {
+    pub fn put_token_holder(
+        &mut self,
+        type_hash: &[u8],
+        lock_hash: &[u8],
+        balance: impl Into<TokenBalance>,
+    ) {
+        let balance = balance.into();
         let key = keys::encode_token_holder_key(type_hash, lock_hash);
-        self.put_cf(self.store.cf_token_holders(), key, balance.to_le_bytes());
+        self.put_cf(self.store.cf_token_holders(), key, balance.to_be_bytes());
     }
 
     pub fn put_token_holder_by_balance(
         &mut self,
         type_hash: &[u8],
         lock_hash: &[u8],
-        balance: u128,
+        balance: impl Into<TokenBalance>,
     ) {
+        let balance = balance.into();
         assert!(
-            balance > 0,
+            !balance.is_zero(),
             "put_token_holder_by_balance expects positive balance, got {}",
             balance
         );
-        let key = keys::encode_token_holder_balance_key(type_hash, balance, lock_hash);
+        let key = keys::encode_token_holder_balance_key(type_hash, &balance, lock_hash);
         self.put_cf(self.store.cf_token_holders_by_balance(), key, []);
     }
 
-    pub fn put_addr_token_by_balance(&mut self, lock_hash: &[u8], type_hash: &[u8], balance: u128) {
+    pub fn put_addr_token_by_balance(
+        &mut self,
+        lock_hash: &[u8],
+        type_hash: &[u8],
+        balance: impl Into<TokenBalance>,
+    ) {
+        let balance = balance.into();
         assert!(
-            balance > 0,
+            !balance.is_zero(),
             "put_addr_token_by_balance expects positive balance, got {}",
             balance
         );
-        let key = keys::encode_addr_token_balance_key(lock_hash, balance, type_hash);
+        let key = keys::encode_addr_token_balance_key(lock_hash, &balance, type_hash);
         self.put_cf(self.store.cf_addr_tokens_by_balance(), key, []);
     }
 
@@ -892,9 +907,10 @@ impl<'a> StoreBatch<'a> {
         &mut self,
         type_hash: &[u8],
         lock_hash: &[u8],
-        balance: u128,
+        balance: impl Into<TokenBalance>,
     ) {
-        let key = keys::encode_token_holder_balance_key(type_hash, balance, lock_hash);
+        let balance = balance.into();
+        let key = keys::encode_token_holder_balance_key(type_hash, &balance, lock_hash);
         self.delete_cf(self.store.cf_token_holders_by_balance(), key);
     }
 
@@ -902,9 +918,10 @@ impl<'a> StoreBatch<'a> {
         &mut self,
         lock_hash: &[u8],
         type_hash: &[u8],
-        balance: u128,
+        balance: impl Into<TokenBalance>,
     ) {
-        let key = keys::encode_addr_token_balance_key(lock_hash, balance, type_hash);
+        let balance = balance.into();
+        let key = keys::encode_addr_token_balance_key(lock_hash, &balance, type_hash);
         self.delete_cf(self.store.cf_addr_tokens_by_balance(), key);
     }
 

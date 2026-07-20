@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use ckbadger_common::TokenBalance;
+
 use super::statistics::{StackedAreaChartResponse, StackedAreaDataPoint, StackedAreaSeries};
 use crate::response::{
     default_limit, hash_type_to_str, ok, ApiError, ApiResult, ApiRouteError,
@@ -84,7 +86,7 @@ pub struct TokenResponse {
     pub total_supply: String,
     pub maximum_supply: Option<String>,
     pub maximum_supply_status: String,
-    pub holders_count: i32,
+    pub holders_count: i64,
     pub transfers_count: i64,
     pub transfers_24h: i64,
     pub cells_count: Option<i64>,
@@ -117,7 +119,7 @@ pub struct TokenTransferResponse {
 }
 
 struct TokenDerivedStats {
-    total_supply: u128,
+    total_supply: TokenBalance,
     holders_count: i64,
     transfers_count: i64,
     transfers_24h: i64,
@@ -167,7 +169,7 @@ fn token_info_to_response(
         )
         .to_string(),
         maximum_supply,
-        holders_count: derived.holders_count as i32,
+        holders_count: derived.holders_count,
         transfers_count: derived.transfers_count,
         transfers_24h: derived.transfers_24h,
         cells_count: None,
@@ -240,12 +242,12 @@ fn parse_token_list_cursor(cursor: &str) -> Result<(i64, &str), ApiRouteError> {
     Ok((holders_count, token_id))
 }
 
-fn parse_token_holder_cursor(cursor: &str) -> Result<(u128, Vec<u8>), ApiRouteError> {
+fn parse_token_holder_cursor(cursor: &str) -> Result<(TokenBalance, Vec<u8>), ApiRouteError> {
     let (balance, lock_hash_hex) = cursor
         .split_once(':')
         .ok_or_else(|| ApiError::bad_request("Invalid token holders cursor"))?;
     let balance = balance
-        .parse::<u128>()
+        .parse::<TokenBalance>()
         .map_err(|_| ApiError::bad_request("Invalid token holders cursor"))?;
     let lock_hash = hex::decode(lock_hash_hex.strip_prefix("0x").unwrap_or(lock_hash_hex))
         .map_err(|_| ApiError::bad_request("Invalid token holders cursor"))?;
@@ -366,7 +368,7 @@ fn serve_tokens_from_cache(
                     decoded_type_args.as_deref(),
                 )
                 .to_string(),
-                holders_count: entry.holders_count as i32,
+                holders_count: entry.holders_count,
                 transfers_count: entry.transfers_count,
                 transfers_24h: entry.transfers_24h,
                 cells_count: None,
@@ -1191,6 +1193,19 @@ mod tests {
         let (balance, lock_hash) = super::parse_token_holder_cursor(&cursor).unwrap();
         assert_eq!(balance, 100);
         assert_eq!(lock_hash, vec![0xAA; 32]);
+    }
+
+    #[test]
+    fn test_parse_token_holder_cursor_accepts_balance_above_u128() {
+        let cursor = format!(
+            "531691198313966349161522824112137830400:{}",
+            "aa".repeat(32)
+        );
+        let (balance, _) = super::parse_token_holder_cursor(&cursor).unwrap();
+        assert_eq!(
+            balance.to_string(),
+            "531691198313966349161522824112137830400"
+        );
     }
 
     #[test]

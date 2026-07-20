@@ -5,6 +5,8 @@ use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 use tracing::info;
 
+use ckbadger_common::TokenBalance;
+
 use crate::keys;
 use crate::store::*;
 use crate::sync_ops::checked_rollback_total;
@@ -633,10 +635,11 @@ fn put_cell_index_entries(
 /// (cells_delta, live_delta, capacity_delta, owned_cap_delta, used_delta, owned_knowledge_delta)
 type ScriptReferenceDelta = (i64, i64, i128, i128, i128, i128);
 
-/// `(added, removed)`: signed split of a UDT holder-balance delta. Amounts are `u128`,
-/// so a signed delta cannot fit one integer; `added` sums cells restored to live
+/// `(added, removed)`: signed split of a UDT holder-balance delta. Per-cell amounts
+/// are `u128`, but each side may aggregate many cells and uses `TokenBalance`.
+/// `added` sums cells restored to live
 /// (sign > 0) and `removed` sums cells removed from live (sign < 0).
-type TokenHolderDelta = (u128, u128);
+type TokenHolderDelta = (TokenBalance, TokenBalance);
 
 #[allow(clippy::too_many_arguments)]
 fn accumulate_cell_deltas(
@@ -731,9 +734,10 @@ fn accumulate_cell_deltas(
         if udt_amount > 0 {
             let e = token_holder_deltas
                 .entry((type_script_hash.clone(), cell.lock_script_hash.clone()))
-                .or_insert((0u128, 0u128));
+                .or_insert_with(|| (TokenBalance::zero(), TokenBalance::zero()));
+            let amount = TokenBalance::from(udt_amount);
             if sign > 0 {
-                e.0 = e.0.checked_add(udt_amount).ok_or_else(|| {
+                e.0 = e.0.checked_add(&amount).ok_or_else(|| {
                     anyhow::anyhow!(
                         "reorg holder-balance added overflow: type_hash=0x{}, lock_hash=0x{}",
                         bytes_to_hex(type_script_hash),
@@ -741,7 +745,7 @@ fn accumulate_cell_deltas(
                     )
                 })?;
             } else {
-                e.1 = e.1.checked_add(udt_amount).ok_or_else(|| {
+                e.1 = e.1.checked_add(&amount).ok_or_else(|| {
                     anyhow::anyhow!(
                         "reorg holder-balance removed overflow: type_hash=0x{}, lock_hash=0x{}",
                         bytes_to_hex(type_script_hash),
@@ -2855,29 +2859,28 @@ impl CkbadgerStore {
             script_refs_updated += 1;
         }
 
-        // 9c. token_holders — apply balance deltas, track per-type_hash holder count changes.
-        // Per-type accumulator: (supply_added, supply_removed, holders_delta). UDT amounts are
-        // u128, so the supply change is tracked as a signed (added, removed) split (matching the
-        // per-holder delta shape) rather than a single i128 that cannot hold amounts > i128::MAX.
-        let mut type_hash_holder_changes: HashMap<Vec<u8>, (u128, u128, i64)> = HashMap::new();
+        // 9c. token_holders — apply exact aggregate balance deltas. Token-level supply and
+        // holder count are derived from this CF and are intentionally not updated separately.
         for ((type_hash, lock_hash), delta) in &token_holder_deltas {
-            let (added, removed) = *delta;
-            if added == 0 && removed == 0 {
+            let (added, removed) = delta;
+            if added.is_zero() && removed.is_zero() {
                 continue;
             }
             let current = self
                 .get_token_holder_balance(type_hash, lock_hash)?
-                .unwrap_or(0);
-            // Apply the net holder-balance change to the unsigned u128 balance. Compute
-            // the net difference first (added>=removed ? add : subtract) so a large
-            // `added` never transiently overflows u128 before the offsetting `removed`
-            // is applied (e.g. a self-transfer where current==added==removed==big).
-            // A true underflow (removed > current + added) is still an invariant
-            // violation → fail fast. Mirrors the total_supply apply below.
+                .unwrap_or_else(TokenBalance::zero);
+            // Compute the net change before applying it so self-transfers do not create
+            // a transient overflow. A true underflow remains an invariant violation.
             let new_balance = if added >= removed {
-                current.checked_add(added - removed)
+                let net = added
+                    .checked_sub(removed)
+                    .expect("ordered TokenBalance subtraction");
+                current.checked_add(&net)
             } else {
-                current.checked_sub(removed - added)
+                let net = removed
+                    .checked_sub(added)
+                    .expect("ordered TokenBalance subtraction");
+                current.checked_sub(&net)
             }
             .ok_or_else(|| {
                 anyhow::anyhow!(
@@ -2889,117 +2892,70 @@ impl CkbadgerStore {
                     removed
                 )
             })?;
-            let entry = type_hash_holder_changes
-                .entry(type_hash.clone())
-                .or_insert((0, 0, 0));
-            entry.0 = entry.0.checked_add(added).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "token supply added overflow during rollback: type_hash=0x{}",
-                    bytes_to_hex(type_hash)
-                )
-            })?;
-            entry.1 = entry.1.checked_add(removed).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "token supply removed overflow during rollback: type_hash=0x{}",
-                    bytes_to_hex(type_hash)
-                )
-            })?;
-
-            if current > 0 {
+            if !current.is_zero() {
                 batch.delete_cf(
                     self.cf_token_holders_by_balance(),
-                    keys::encode_token_holder_balance_key(type_hash, current, lock_hash),
+                    keys::encode_token_holder_balance_key(type_hash, &current, lock_hash),
                 );
                 batch.delete_cf(
                     self.cf_addr_tokens_by_balance(),
-                    keys::encode_addr_token_balance_key(lock_hash, current, type_hash),
+                    keys::encode_addr_token_balance_key(lock_hash, &current, type_hash),
                 );
             }
 
-            if new_balance == 0 {
+            if new_balance.is_zero() {
                 let key = keys::encode_token_holder_key(type_hash, lock_hash);
                 batch.delete_cf(self.cf_token_holders(), key);
-                if current > 0 {
-                    entry.2 -= 1; // lost a holder
-                }
                 holders_removed += 1;
             } else {
                 let key = keys::encode_token_holder_key(type_hash, lock_hash);
-                batch.put_cf(self.cf_token_holders(), key, new_balance.to_le_bytes());
+                batch.put_cf(self.cf_token_holders(), key, new_balance.to_be_bytes());
                 batch.put_cf(
                     self.cf_token_holders_by_balance(),
-                    keys::encode_token_holder_balance_key(type_hash, new_balance, lock_hash),
+                    keys::encode_token_holder_balance_key(type_hash, &new_balance, lock_hash),
                     [],
                 );
                 batch.put_cf(
                     self.cf_addr_tokens_by_balance(),
-                    keys::encode_addr_token_balance_key(lock_hash, new_balance, type_hash),
+                    keys::encode_addr_token_balance_key(lock_hash, &new_balance, type_hash),
                     [],
                 );
-                if current == 0 {
-                    entry.2 += 1; // gained a holder
-                }
                 holders_updated += 1;
             }
         }
 
-        // 9d. token_info — merge holder changes and transfer count deltas
-        let mut all_type_hashes: HashSet<Vec<u8>> =
-            type_hash_holder_changes.keys().cloned().collect();
-        all_type_hashes.extend(transfer_count_deltas.keys().cloned());
-        for type_hash in &all_type_hashes {
-            let (supply_added, supply_removed, holders_delta) = type_hash_holder_changes
-                .get(type_hash)
-                .copied()
-                .unwrap_or((0, 0, 0));
-            let transfers_removed = transfer_count_deltas.get(type_hash).copied().unwrap_or(0);
-            if supply_added == 0
-                && supply_removed == 0
-                && holders_delta == 0
-                && transfers_removed == 0
-            {
+        // 9d. token_info — transfer count is metadata; holder-derived aggregates are not cached.
+        for (type_hash, transfers_removed) in &transfer_count_deltas {
+            if *transfers_removed == 0 {
                 continue;
             }
             if let Some(mut ti) = self.get_token(type_hash)? {
-                ti.holders_count += holders_delta;
-                if let Some(ref mut ts) = ti.total_supply {
-                    // Apply the net supply change to the unsigned u128 total. Compute the
-                    // net difference first (added>=removed ? add : subtract) so a large
-                    // `added` never transiently overflows u128 before the offsetting
-                    // `removed` is applied (e.g. current==added==removed==big).
-                    let current_ts = *ts;
-                    *ts = if supply_added >= supply_removed {
-                        current_ts.checked_add(supply_added - supply_removed).ok_or_else(|| {
-                            anyhow::anyhow!(
-                                "token total_supply overflow during rollback: type_hash=0x{}, current={}, added={}, removed={}",
-                                bytes_to_hex(type_hash),
-                                current_ts,
-                                supply_added,
-                                supply_removed
-                            )
-                        })?
-                    } else {
-                        current_ts.checked_sub(supply_removed - supply_added).ok_or_else(|| {
-                            anyhow::anyhow!(
-                                "token total_supply underflow during rollback: type_hash=0x{}, current={}, added={}, removed={}",
-                                bytes_to_hex(type_hash),
-                                current_ts,
-                                supply_added,
-                                supply_removed
-                            )
-                        })?
-                    };
-                }
-                ti.transfers_count -= transfers_removed;
+                ti.transfers_count = ti.transfers_count.checked_sub(*transfers_removed).ok_or_else(
+                    || {
+                        anyhow::anyhow!(
+                            "token transfers_count underflow during rollback: type_hash=0x{}, current={}, removed={}",
+                            bytes_to_hex(type_hash),
+                            ti.transfers_count,
+                            transfers_removed
+                        )
+                    },
+                )?;
                 batch.put_cf(
                     self.cf_tokens(),
                     type_hash.as_slice(),
                     bincode::serialize(&ti).expect("serialize TokenInfo"),
                 );
                 // Also update CF_STATS_TOKEN total transfers count
-                if transfers_removed != 0 {
+                if *transfers_removed != 0 {
                     let current_count = self.get_token_transfers_count(type_hash)?;
-                    let new_count = current_count - transfers_removed;
+                    let new_count = current_count.checked_sub(*transfers_removed).ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "token stats transfers_count underflow during rollback: type_hash=0x{}, current={}, removed={}",
+                            bytes_to_hex(type_hash),
+                            current_count,
+                            transfers_removed
+                        )
+                    })?;
                     let stats_key = keys::encode_token_transfers_key(type_hash);
                     batch.put_cf(self.cf_stats_token(), &stats_key, new_count.to_le_bytes());
                 }
@@ -5006,9 +4962,7 @@ mod tests {
                 name: None,
                 symbol: None,
                 decimals: Some(8),
-                total_supply: Some(100),
                 max_supply: None,
-                holders_count: 1,
                 first_seen_block: 1,
                 icon_url: None,
                 description: None,
@@ -5025,14 +4979,14 @@ mod tests {
             store
                 .list_token_holders_by_balance(&type_hash, 10, None)
                 .unwrap(),
-            vec![(lock_b.clone(), 100)]
+            vec![(lock_b.clone(), TokenBalance::from(100))]
         );
 
         store.rollback_to_block(1).unwrap();
 
         assert_eq!(
             store.get_token_holder_balance(&type_hash, &lock_a).unwrap(),
-            Some(100)
+            Some(TokenBalance::from(100))
         );
         assert_eq!(
             store.get_token_holder_balance(&type_hash, &lock_b).unwrap(),
@@ -5042,13 +4996,13 @@ mod tests {
             store
                 .list_token_holders_by_balance(&type_hash, 10, None)
                 .unwrap(),
-            vec![(lock_a.clone(), 100)]
+            vec![(lock_a.clone(), TokenBalance::from(100))]
         );
         assert_eq!(
             store
                 .list_address_tokens_by_balance(&lock_a, 10, None)
                 .unwrap(),
-            vec![(type_hash.clone(), 100)]
+            vec![(type_hash.clone(), TokenBalance::from(100))]
         );
         assert!(store
             .list_address_tokens_by_balance(&lock_b, 10, None)
@@ -5057,7 +5011,7 @@ mod tests {
     }
 
     /// Rolling back a UDT transfer whose amount exceeds `i128::MAX` must restore the
-    /// prior holder to its exact balance (and keep `total_supply`) without wrapping.
+    /// prior holder to its exact balance (and keep the derived supply) without wrapping.
     /// Under the old `i128` accounting `big as i128` was negative, corrupting the
     /// delta and tripping the underflow bail.
     #[test]
@@ -5194,9 +5148,7 @@ mod tests {
                 name: None,
                 symbol: None,
                 decimals: Some(8),
-                total_supply: Some(big),
                 max_supply: None,
-                holders_count: 1,
                 first_seen_block: 1,
                 icon_url: None,
                 description: None,
@@ -5213,7 +5165,7 @@ mod tests {
             store
                 .list_token_holders_by_balance(&type_hash, 10, None)
                 .unwrap(),
-            vec![(lock_b.clone(), big)]
+            vec![(lock_b.clone(), TokenBalance::from(big))]
         );
 
         store.rollback_to_block(1).unwrap();
@@ -5221,7 +5173,7 @@ mod tests {
         // lock_a's input cell (amount = big) is restored to live; lock_b's output removed.
         assert_eq!(
             store.get_token_holder_balance(&type_hash, &lock_a).unwrap(),
-            Some(big)
+            Some(TokenBalance::from(big))
         );
         assert_eq!(
             store.get_token_holder_balance(&type_hash, &lock_b).unwrap(),
@@ -5231,19 +5183,18 @@ mod tests {
             store
                 .list_token_holders_by_balance(&type_hash, 10, None)
                 .unwrap(),
-            vec![(lock_a.clone(), big)]
+            vec![(lock_a.clone(), TokenBalance::from(big))]
         );
         assert_eq!(
             store
                 .list_address_tokens_by_balance(&lock_a, 10, None)
                 .unwrap(),
-            vec![(type_hash.clone(), big)]
+            vec![(type_hash.clone(), TokenBalance::from(big))]
         );
-        // total_supply is unchanged (big moved from lock_b back to lock_a): the signed
-        // supply split (added=big, removed=big) nets to zero without u128 overflow.
+        // Derived supply is unchanged (big moved from lock_b back to lock_a).
         assert_eq!(
-            store.get_token(&type_hash).unwrap().unwrap().total_supply,
-            Some(big)
+            store.aggregate_token_holder_stats(&type_hash).unwrap().1,
+            TokenBalance::from(big)
         );
     }
 
@@ -5391,9 +5342,7 @@ mod tests {
                 name: None,
                 symbol: None,
                 decimals: Some(8),
-                total_supply: Some(big),
                 max_supply: None,
-                holders_count: 1,
                 first_seen_block: 1,
                 icon_url: None,
                 description: None,
@@ -5411,7 +5360,7 @@ mod tests {
             store
                 .list_token_holders_by_balance(&type_hash, 10, None)
                 .unwrap(),
-            vec![(lock_a.clone(), big)]
+            vec![(lock_a.clone(), TokenBalance::from(big))]
         );
 
         // Naive `current.checked_add(added)` computes big+big (=2*big) and overflows
@@ -5422,24 +5371,24 @@ mod tests {
         // output cell removed; the self-transfer nets to no change).
         assert_eq!(
             store.get_token_holder_balance(&type_hash, &lock_a).unwrap(),
-            Some(big)
+            Some(TokenBalance::from(big))
         );
         assert_eq!(
             store
                 .list_token_holders_by_balance(&type_hash, 10, None)
                 .unwrap(),
-            vec![(lock_a.clone(), big)]
+            vec![(lock_a.clone(), TokenBalance::from(big))]
         );
         assert_eq!(
             store
                 .list_address_tokens_by_balance(&lock_a, 10, None)
                 .unwrap(),
-            vec![(type_hash.clone(), big)]
+            vec![(type_hash.clone(), TokenBalance::from(big))]
         );
-        // total_supply unchanged: added=big, removed=big nets to zero without u128 overflow.
+        // Derived supply is unchanged: added=big, removed=big nets to zero.
         assert_eq!(
-            store.get_token(&type_hash).unwrap().unwrap().total_supply,
-            Some(big)
+            store.aggregate_token_holder_stats(&type_hash).unwrap().1,
+            TokenBalance::from(big)
         );
     }
 
@@ -6798,6 +6747,55 @@ mod tests {
         let err = truncate_hodl_tracker_state_for_rollback(&mut state, 1, -5, &HashMap::new())
             .unwrap_err();
         assert!(err.to_string().contains("holder_count underflow"));
+    }
+
+    #[test]
+    fn accumulate_reorg_holder_delta_supports_amount_above_u128() {
+        let amount = 200u128 << 120;
+        let type_hash = vec![0x91; 32];
+        let lock_hash = vec![0x92; 32];
+        let cell = LiveCellInfo {
+            capacity: 200_00000000,
+            lock_script_hash: lock_hash.clone(),
+            lock_code_hash: vec![0x11; 32],
+            lock_hash_type: 1,
+            lock_args: vec![],
+            type_script_hash: Some(type_hash.clone()),
+            type_code_hash: Some(vec![0x22; 32]),
+            type_hash_type: Some(1),
+            type_args: Some(vec![0x33; 20]),
+            data_size: 16,
+            occupied_capacity: 142_00000000,
+            udt_amount: Some(amount),
+            data_hash: None,
+        };
+        let mut addr = HashMap::new();
+        let mut script = HashMap::new();
+        let mut token = HashMap::new();
+        let mut script_ref = HashMap::new();
+        let mut cell_dist_count = [0i64; 6];
+        let mut cell_dist_capacity = [0i128; 6];
+        let mut hodl = HashMap::new();
+
+        for created_at_block in [1, 2] {
+            accumulate_cell_deltas(
+                &cell,
+                1,
+                &mut addr,
+                &mut script,
+                &mut token,
+                &mut script_ref,
+                &mut cell_dist_count,
+                &mut cell_dist_capacity,
+                created_at_block,
+                &mut hodl,
+            )
+            .unwrap();
+        }
+
+        let (added, removed) = token.get(&(type_hash, lock_hash)).unwrap();
+        assert_eq!(added.to_string(), "531691198313966349161522824112137830400");
+        assert!(removed.is_zero());
     }
 
     #[test]

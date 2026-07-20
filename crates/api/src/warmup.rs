@@ -717,11 +717,9 @@ fn build_asset_caches_sync(
     let mut token_assets: Vec<CachedAssetEntry> = Vec::with_capacity(tokens.len());
 
     for (hash, info) in &tokens {
-        // Live-scan CF_TOKEN_HOLDERS for the authoritative holder count.
-        // TokenInfo.holders_count is an incremental counter that can drift;
-        // aggregate_token_holder_stats is the single source of truth (same
-        // path used by the token detail endpoint).
-        let (holders_count, _total_supply) = state.store.aggregate_token_holder_stats(hash)?;
+        // Live-scan CF_TOKEN_HOLDERS for both authoritative aggregates. This is the
+        // same single calculation path used by the token detail endpoint.
+        let (holders_count, total_supply) = state.store.aggregate_token_holder_stats(hash)?;
 
         // Skip noise tokens: no name/symbol and no holders
         if info.name.is_none() && info.symbol.is_none() && holders_count == 0 {
@@ -754,7 +752,7 @@ fn build_asset_caches_sync(
             transfers_count: info.transfers_count,
             transfers_24h,
             decimals: info.decimals.map(|d| d as i16),
-            total_supply: info.total_supply.map(|s| s.to_string()),
+            total_supply: Some(total_supply.to_string()),
             maximum_supply: info.max_supply.map(|s| s.to_string()),
             content_type: None,
             content_size: None,

@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 
+use ckbadger_common::TokenBalance;
 use rocksdb::IteratorMode;
 
 use crate::keys;
@@ -12,6 +13,34 @@ use crate::types::{
 };
 
 use crate::bytes_to_hex;
+
+fn decode_token_holder_entry(
+    type_hash: &[u8],
+    key: &[u8],
+    value: &[u8],
+    operation: &str,
+) -> anyhow::Result<(Vec<u8>, TokenBalance)> {
+    if key.len() != 64 {
+        anyhow::bail!(
+            "token_holders key must be 64 bytes in {}: type_hash=0x{}, key=0x{}, key_len={}",
+            operation,
+            bytes_to_hex(type_hash),
+            bytes_to_hex(key),
+            key.len()
+        );
+    }
+    let balance = TokenBalance::from_be_bytes(value).map_err(|err| {
+        anyhow::anyhow!(
+            "invalid token_holders balance in {}: type_hash=0x{}, lock_hash=0x{}, value_len={}, error={}",
+            operation,
+            bytes_to_hex(type_hash),
+            bytes_to_hex(&key[32..64]),
+            value.len(),
+            err
+        )
+    })?;
+    Ok((key[32..64].to_vec(), balance))
+}
 
 #[derive(Debug, Clone)]
 pub struct TokenDailyValidationError {
@@ -99,18 +128,20 @@ impl CkbadgerStore {
         &self,
         type_hash: &[u8],
         lock_hash: &[u8],
-    ) -> anyhow::Result<Option<u128>> {
+    ) -> anyhow::Result<Option<TokenBalance>> {
         let key = keys::encode_token_holder_key(type_hash, lock_hash);
         match self.get_cf(self.cf_token_holders(), &key)? {
-            Some(value) if value.len() == 16 => {
-                Ok(Some(u128::from_le_bytes(value[..16].try_into().unwrap())))
-            }
-            Some(value) => anyhow::bail!(
-                "token_holders: corrupt value length {} (expected 16) for type_hash=0x{}, lock_hash=0x{}",
-                value.len(),
-                bytes_to_hex(type_hash),
-                bytes_to_hex(lock_hash)
-            ),
+            Some(value) => TokenBalance::from_be_bytes(&value)
+                .map(Some)
+                .map_err(|err| {
+                    anyhow::anyhow!(
+                        "invalid token_holders balance in get_token_holder_balance: type_hash=0x{}, lock_hash=0x{}, value_len={}, error={}",
+                        bytes_to_hex(type_hash),
+                        bytes_to_hex(lock_hash),
+                        value.len(),
+                        err
+                    )
+                }),
             None => Ok(None),
         }
     }
@@ -715,41 +746,22 @@ impl CkbadgerStore {
         }
     }
 
-    /// Count holders for a token (prefix scan by type_hash).
-    ///
-    /// Counts entries with balance > 0 without collecting them.
+    /// Count holders through the canonical holder-aggregate calculation path.
     pub fn count_token_holders(&self, type_hash: &[u8]) -> anyhow::Result<i64> {
-        let iter = self.prefix_iterator_cf(self.cf_token_holders(), type_hash);
-        let mut count: i64 = 0;
-
-        for item in iter {
-            let (key, value) = item.map_err(|e| {
-                anyhow::anyhow!(
-                    "failed to iterate token_holders in count_token_holders: {}",
-                    e
-                )
-            })?;
-            if !key.starts_with(type_hash) {
-                break;
-            }
-            if key.len() == 64 && value.len() == 16 {
-                let balance = u128::from_le_bytes(value[..16].try_into().unwrap());
-                if balance > 0 {
-                    count += 1;
-                }
-            }
-        }
-        Ok(count)
+        Ok(self.aggregate_token_holder_stats(type_hash)?.0)
     }
 
     /// Aggregate live holder count and total live supply for a token from `token_holders`.
     ///
     /// This derives correctness-critical read data from the holder source of truth
     /// instead of trusting any cached aggregate embedded in `TokenInfo`.
-    pub fn aggregate_token_holder_stats(&self, type_hash: &[u8]) -> anyhow::Result<(i64, u128)> {
+    pub fn aggregate_token_holder_stats(
+        &self,
+        type_hash: &[u8],
+    ) -> anyhow::Result<(i64, TokenBalance)> {
         let iter = self.prefix_iterator_cf(self.cf_token_holders(), type_hash);
         let mut holders_count: i64 = 0;
-        let mut total_supply: u128 = 0;
+        let mut total_supply = TokenBalance::zero();
 
         for item in iter {
             let (key, value) = item.map_err(|e| {
@@ -761,13 +773,9 @@ impl CkbadgerStore {
             if !key.starts_with(type_hash) {
                 break;
             }
-            if key.len() != 64 || value.len() != 16 {
-                continue;
-            }
-
-            let lock_hash = &key[32..64];
-            let balance = u128::from_le_bytes(value[..16].try_into().unwrap());
-            if balance == 0 {
+            let (lock_hash, balance) =
+                decode_token_holder_entry(type_hash, &key, &value, "aggregate_token_holder_stats")?;
+            if balance.is_zero() {
                 continue;
             }
 
@@ -777,11 +785,11 @@ impl CkbadgerStore {
                     bytes_to_hex(type_hash)
                 )
             })?;
-            total_supply = total_supply.checked_add(balance).ok_or_else(|| {
+            total_supply = total_supply.checked_add(&balance).ok_or_else(|| {
                 anyhow::anyhow!(
                     "token total_supply overflow in aggregate_token_holder_stats: type_hash=0x{}, lock_hash=0x{}, current_total={}, balance={}",
                     bytes_to_hex(type_hash),
-                    bytes_to_hex(lock_hash),
+                    bytes_to_hex(&lock_hash),
                     total_supply,
                     balance
                 )
@@ -798,7 +806,7 @@ impl CkbadgerStore {
         &self,
         type_hash: &[u8],
         limit: usize,
-    ) -> anyhow::Result<Vec<(Vec<u8>, u128)>> {
+    ) -> anyhow::Result<Vec<(Vec<u8>, TokenBalance)>> {
         let iter = self.prefix_iterator_cf(self.cf_token_holders(), type_hash);
         let mut results = Vec::new();
 
@@ -812,14 +820,11 @@ impl CkbadgerStore {
             if !key.starts_with(type_hash) {
                 break;
             }
-            // Key: type_hash(32) + lock_hash(32) = 64
-            if key.len() == 64 && value.len() == 16 {
-                let lock_hash = key[32..64].to_vec();
-                let balance = u128::from_le_bytes(value[..16].try_into().unwrap());
-                results.push((lock_hash, balance));
-                if results.len() >= limit {
-                    break;
-                }
+            let (lock_hash, balance) =
+                decode_token_holder_entry(type_hash, &key, &value, "list_token_holders")?;
+            results.push((lock_hash, balance));
+            if results.len() >= limit {
+                break;
             }
         }
         Ok(results)
@@ -832,8 +837,8 @@ impl CkbadgerStore {
         &self,
         type_hash: &[u8],
         limit: usize,
-        cursor: Option<(u128, Vec<u8>)>,
-    ) -> anyhow::Result<Vec<(Vec<u8>, u128)>> {
+        cursor: Option<(TokenBalance, Vec<u8>)>,
+    ) -> anyhow::Result<Vec<(Vec<u8>, TokenBalance)>> {
         if type_hash.len() != 32 {
             anyhow::bail!(
                 "list_token_holders_by_balance expects 32-byte type_hash, got {} bytes",
@@ -854,7 +859,7 @@ impl CkbadgerStore {
 
         let start_key = match cursor {
             Some((balance, lock_hash)) => {
-                keys::encode_token_holder_balance_seek_after_key(type_hash, balance, &lock_hash)
+                keys::encode_token_holder_balance_seek_after_key(type_hash, &balance, &lock_hash)
             }
             None => type_hash.to_vec(),
         };
@@ -875,19 +880,26 @@ impl CkbadgerStore {
             if !key.starts_with(type_hash) {
                 break;
             }
-            if key.len() == keys::TOKEN_HOLDER_BALANCE_KEY_SIZE {
-                if !value.is_empty() {
-                    anyhow::bail!(
-                        "token_holders_by_balance value must be empty in list_token_holders_by_balance: type_hash=0x{}, value_len={}",
-                        bytes_to_hex(type_hash),
-                        value.len()
-                    );
-                }
-                let (_, balance, lock_hash) = keys::decode_token_holder_balance_key(&key);
-                results.push((lock_hash, balance));
-                if results.len() >= limit {
-                    break;
-                }
+            if key.len() != keys::TOKEN_HOLDER_BALANCE_KEY_SIZE {
+                anyhow::bail!(
+                    "token_holders_by_balance key must be {} bytes: type_hash=0x{}, key=0x{}, key_len={}",
+                    keys::TOKEN_HOLDER_BALANCE_KEY_SIZE,
+                    bytes_to_hex(type_hash),
+                    bytes_to_hex(&key),
+                    key.len()
+                );
+            }
+            if !value.is_empty() {
+                anyhow::bail!(
+                    "token_holders_by_balance value must be empty in list_token_holders_by_balance: type_hash=0x{}, value_len={}",
+                    bytes_to_hex(type_hash),
+                    value.len()
+                );
+            }
+            let (_, balance, lock_hash) = keys::decode_token_holder_balance_key(&key);
+            results.push((lock_hash, balance));
+            if results.len() >= limit {
+                break;
             }
         }
         Ok(results)
@@ -900,8 +912,8 @@ impl CkbadgerStore {
         &self,
         lock_hash: &[u8],
         limit: usize,
-        cursor: Option<(u128, Vec<u8>)>,
-    ) -> anyhow::Result<Vec<(Vec<u8>, u128)>> {
+        cursor: Option<(TokenBalance, Vec<u8>)>,
+    ) -> anyhow::Result<Vec<(Vec<u8>, TokenBalance)>> {
         if lock_hash.len() != 32 {
             anyhow::bail!(
                 "list_address_tokens_by_balance expects 32-byte lock_hash, got {} bytes",
@@ -922,7 +934,7 @@ impl CkbadgerStore {
 
         let start_key = match cursor {
             Some((balance, type_hash)) => {
-                keys::encode_addr_token_balance_seek_after_key(lock_hash, balance, &type_hash)
+                keys::encode_addr_token_balance_seek_after_key(lock_hash, &balance, &type_hash)
             }
             None => lock_hash.to_vec(),
         };
@@ -943,19 +955,26 @@ impl CkbadgerStore {
             if !key.starts_with(lock_hash) {
                 break;
             }
-            if key.len() == keys::ADDR_TOKEN_BALANCE_KEY_SIZE {
-                if !value.is_empty() {
-                    anyhow::bail!(
-                        "addr_tokens_by_balance value must be empty in list_address_tokens_by_balance: lock_hash=0x{}, value_len={}",
-                        bytes_to_hex(lock_hash),
-                        value.len()
-                    );
-                }
-                let (_, balance, type_hash) = keys::decode_addr_token_balance_key(&key);
-                results.push((type_hash, balance));
-                if results.len() >= limit {
-                    break;
-                }
+            if key.len() != keys::ADDR_TOKEN_BALANCE_KEY_SIZE {
+                anyhow::bail!(
+                    "addr_tokens_by_balance key must be {} bytes: lock_hash=0x{}, key=0x{}, key_len={}",
+                    keys::ADDR_TOKEN_BALANCE_KEY_SIZE,
+                    bytes_to_hex(lock_hash),
+                    bytes_to_hex(&key),
+                    key.len()
+                );
+            }
+            if !value.is_empty() {
+                anyhow::bail!(
+                    "addr_tokens_by_balance value must be empty in list_address_tokens_by_balance: lock_hash=0x{}, value_len={}",
+                    bytes_to_hex(lock_hash),
+                    value.len()
+                );
+            }
+            let (_, balance, type_hash) = keys::decode_addr_token_balance_key(&key);
+            results.push((type_hash, balance));
+            if results.len() >= limit {
+                break;
             }
         }
         Ok(results)
@@ -998,7 +1017,7 @@ mod tests {
             store
                 .get_token_holder_balance(&type_hash, &lock_hash)
                 .unwrap(),
-            Some(big)
+            Some(TokenBalance::from(big))
         );
         let (count, supply) = store.aggregate_token_holder_stats(&type_hash).unwrap();
         assert_eq!(count, 1);
@@ -1587,6 +1606,114 @@ mod tests {
     }
 
     #[test]
+    fn aggregate_token_holder_stats_supports_supply_above_u128() {
+        let (_dir, store) = test_store();
+        let type_hash = [0x22u8; 32];
+        // This is the exact per-cell amount from testnet transaction
+        // 0x059db0c2b055ec18857126c6b0cd7ca5e28143e8113333c1bb9828d9bb520076.
+        // Each amount is a valid sUDT u128, while their aggregate exceeds u128::MAX.
+        let amount = 200u128 << 120;
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_token_holder(&type_hash, &[0x01; 32], amount);
+        batch.put_token_holder(&type_hash, &[0x02; 32], amount);
+        batch.commit().unwrap();
+
+        let (holders_count, total_supply) = store.aggregate_token_holder_stats(&type_hash).unwrap();
+        assert_eq!(holders_count, 2);
+        assert_eq!(
+            total_supply.to_string(),
+            "531691198313966349161522824112137830400"
+        );
+    }
+
+    #[test]
+    fn holder_balance_round_trips_above_u128() {
+        let (_dir, store) = test_store();
+        let type_hash = [0x23u8; 32];
+        let lock_hash = [0x24u8; 32];
+        let amount = TokenBalance::from(200u128 << 120);
+        let balance = amount.checked_add(&amount).unwrap();
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_token_holder(&type_hash, &lock_hash, &balance);
+        batch.commit().unwrap();
+
+        assert_eq!(
+            store
+                .get_token_holder_balance(&type_hash, &lock_hash)
+                .unwrap(),
+            Some(balance)
+        );
+    }
+
+    #[test]
+    fn ranked_token_balances_order_and_paginate_across_u128_boundary() {
+        let (_dir, store) = test_store();
+        let type_hash = [0x25u8; 32];
+        let lock_high = [0x01u8; 32];
+        let lock_u128 = [0x02u8; 32];
+        let lock_low = [0x03u8; 32];
+        let amount = TokenBalance::from(200u128 << 120);
+        let above_u128 = amount.checked_add(&amount).unwrap();
+        let at_u128_max = TokenBalance::from(u128::MAX);
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_token_holder_by_balance(&type_hash, &lock_high, &above_u128);
+        batch.put_token_holder_by_balance(&type_hash, &lock_u128, &at_u128_max);
+        batch.put_token_holder_by_balance(&type_hash, &lock_low, 1u128);
+        batch.commit().unwrap();
+
+        let first = store
+            .list_token_holders_by_balance(&type_hash, 1, None)
+            .unwrap();
+        assert_eq!(first, vec![(lock_high.to_vec(), above_u128.clone())]);
+
+        let rest = store
+            .list_token_holders_by_balance(&type_hash, 10, Some((above_u128, lock_high.to_vec())))
+            .unwrap();
+        assert_eq!(
+            rest,
+            vec![
+                (lock_u128.to_vec(), at_u128_max),
+                (lock_low.to_vec(), TokenBalance::from(1)),
+            ]
+        );
+    }
+
+    #[test]
+    fn aggregate_token_holder_stats_rejects_corrupt_balance_width() {
+        let (_dir, store) = test_store();
+        let type_hash = [0x26u8; 32];
+        let lock_hash = [0x27u8; 32];
+        let key = keys::encode_token_holder_key(&type_hash, &lock_hash);
+        store
+            .put_cf(store.cf_token_holders(), &key, &[0u8; 16])
+            .unwrap();
+
+        let error = store.aggregate_token_holder_stats(&type_hash).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("token balance encoding must be exactly 32 bytes"));
+    }
+
+    #[test]
+    fn ranked_token_holder_scan_rejects_corrupt_key_width() {
+        let (_dir, store) = test_store();
+        let type_hash = [0x28u8; 32];
+        let mut corrupt_key = type_hash.to_vec();
+        corrupt_key.push(0xFF);
+        store
+            .put_cf(store.cf_token_holders_by_balance(), &corrupt_key, &[])
+            .unwrap();
+
+        let error = store
+            .list_token_holders_by_balance(&type_hash, 10, None)
+            .unwrap_err();
+        assert!(error.to_string().contains("key must be 96 bytes"));
+    }
+
+    #[test]
     fn test_list_token_holders_by_balance_keeps_equal_balances_with_cursor() {
         let (_dir, store) = test_store();
         let type_hash = [0x11u8; 32];
@@ -1600,12 +1727,16 @@ mod tests {
         let first = store
             .list_token_holders_by_balance(&type_hash, 1, None)
             .unwrap();
-        assert_eq!(first, vec![(vec![0x01; 32], 100)]);
+        assert_eq!(first, vec![(vec![0x01; 32], TokenBalance::from(100))]);
 
         let second = store
-            .list_token_holders_by_balance(&type_hash, 1, Some((100, vec![0x01; 32])))
+            .list_token_holders_by_balance(
+                &type_hash,
+                1,
+                Some((TokenBalance::from(100), vec![0x01; 32])),
+            )
             .unwrap();
-        assert_eq!(second, vec![(vec![0x02; 32], 100)]);
+        assert_eq!(second, vec![(vec![0x02; 32], TokenBalance::from(100))]);
     }
 
     #[test]
@@ -1621,12 +1752,16 @@ mod tests {
         let first = store
             .list_address_tokens_by_balance(&lock_hash, 1, None)
             .unwrap();
-        assert_eq!(first, vec![(vec![0x11; 32], 200)]);
+        assert_eq!(first, vec![(vec![0x11; 32], TokenBalance::from(200))]);
 
         let second = store
-            .list_address_tokens_by_balance(&lock_hash, 1, Some((200, vec![0x11; 32])))
+            .list_address_tokens_by_balance(
+                &lock_hash,
+                1,
+                Some((TokenBalance::from(200), vec![0x11; 32])),
+            )
             .unwrap();
-        assert_eq!(second, vec![(vec![0x22; 32], 100)]);
+        assert_eq!(second, vec![(vec![0x22; 32], TokenBalance::from(100))]);
     }
 
     // ---- list_token_activities ----

@@ -10,6 +10,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use ckbadger_common::TokenBalance;
+
 use crate::cache::{CacheKeys, CacheTtl};
 use crate::response::{
     decode_cursor, default_limit, encode_cursor, ok, ApiError, ApiResult, CursorPaginatedResponse,
@@ -1633,12 +1635,12 @@ pub struct AddressTokenResponse {
 
 fn parse_address_token_cursor(
     cursor: &str,
-) -> Result<(u128, Vec<u8>), (axum::http::StatusCode, axum::Json<ApiError>)> {
+) -> Result<(TokenBalance, Vec<u8>), (axum::http::StatusCode, axum::Json<ApiError>)> {
     let (balance, type_hash_hex) = cursor
         .split_once(':')
         .ok_or_else(|| ApiError::bad_request("Invalid address token cursor"))?;
     let balance = balance
-        .parse::<u128>()
+        .parse::<TokenBalance>()
         .map_err(|_| ApiError::bad_request("Invalid address token cursor"))?;
     let type_hash = hex::decode(type_hash_hex.strip_prefix("0x").unwrap_or(type_hash_hex))
         .map_err(|_| ApiError::bad_request("Invalid address token cursor"))?;
@@ -3939,6 +3941,19 @@ mod tests {
         let (balance, type_hash) = super::parse_address_token_cursor(&cursor).unwrap();
         assert_eq!(balance, 200);
         assert_eq!(type_hash, vec![0xBB; 32]);
+    }
+
+    #[test]
+    fn test_parse_address_token_cursor_accepts_balance_above_u128() {
+        let cursor = format!(
+            "531691198313966349161522824112137830400:{}",
+            "bb".repeat(32)
+        );
+        let (balance, _) = super::parse_address_token_cursor(&cursor).unwrap();
+        assert_eq!(
+            balance.to_string(),
+            "531691198313966349161522824112137830400"
+        );
     }
 
     #[test]

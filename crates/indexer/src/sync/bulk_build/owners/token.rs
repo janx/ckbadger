@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use anyhow::{anyhow, bail, Result};
+use ckbadger_common::TokenBalance;
 use ckbadger_store::keys;
 use ckbadger_store::{
     CkbadgerStore, TokenDailyDelta, TokenInfo, CF_ADDR_TOKENS_BY_BALANCE, CF_STATS_TOKEN,
@@ -8,7 +9,6 @@ use ckbadger_store::{
 };
 use rocksdb::IteratorMode;
 use rustc_hash::FxHashMap;
-use serde::Serialize;
 
 use super::{BulkReducer, ReducerContext};
 use crate::parser::{ParsedUdtCell, UdtParser};
@@ -337,10 +337,10 @@ impl TokenOwner {
                 bincode::serialize(&info)?,
             ));
 
-            let mut holders: Vec<(&Vec<u8>, &u128)> = token
+            let mut holders: Vec<(&Vec<u8>, &TokenBalance)> = token
                 .holders
                 .iter()
-                .filter(|(_, balance)| **balance > 0)
+                .filter(|(_, balance)| !balance.is_zero())
                 .collect();
             holders.sort_by(|(lock_a, _), (lock_b, _)| lock_a.cmp(lock_b));
 
@@ -348,16 +348,16 @@ impl TokenOwner {
                 rows.push(MaterializedRow::new(
                     CF_TOKEN_HOLDERS,
                     keys::encode_token_holder_key(type_hash, lock_hash).to_vec(),
-                    balance.to_le_bytes().to_vec(),
+                    balance.to_be_bytes().to_vec(),
                 ));
                 rows.push(MaterializedRow::new(
                     CF_TOKEN_HOLDERS_BY_BALANCE,
-                    keys::encode_token_holder_balance_key(type_hash, *balance, lock_hash).to_vec(),
+                    keys::encode_token_holder_balance_key(type_hash, balance, lock_hash).to_vec(),
                     Vec::new(),
                 ));
                 rows.push(MaterializedRow::new(
                     CF_ADDR_TOKENS_BY_BALANCE,
-                    keys::encode_addr_token_balance_key(lock_hash, *balance, type_hash).to_vec(),
+                    keys::encode_addr_token_balance_key(lock_hash, balance, type_hash).to_vec(),
                     Vec::new(),
                 ));
             }
@@ -377,15 +377,14 @@ impl TokenOwner {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone)]
 struct TokenAccum {
     type_code_hash: Vec<u8>,
     hash_type: u8,
     type_args: Vec<u8>,
     standard: &'static str,
     first_seen_block: i64,
-    live_supply: u128,
-    holders: FxHashMap<Vec<u8>, u128>,
+    holders: FxHashMap<Vec<u8>, TokenBalance>,
     transfers_count: i64,
     hourly_transfers: FxHashMap<i64, i64>,
     daily_deltas: FxHashMap<u32, TokenDailyDelta>,
@@ -415,7 +414,6 @@ impl TokenAccum {
             type_args: view.type_args.clone(),
             standard: view.standard,
             first_seen_block,
-            live_supply: 0,
             holders: FxHashMap::default(),
             transfers_count: 0,
             hourly_transfers: FxHashMap::default(),
@@ -425,23 +423,19 @@ impl TokenAccum {
 
     fn apply_input(&mut self, view: &TokenCellView, tx: &ResolvedTxFacts<'_>) -> Result<()> {
         self.ensure_metadata(view, tx)?;
-        self.live_supply = checked_sub_amount(
-            self.live_supply,
-            view.amount,
-            "token live_supply",
-            &view.type_hash,
-            tx,
-        )?;
-
-        let current = *self.holders.get(&view.lock_hash).unwrap_or(&0);
-        let next = checked_sub_amount(
-            current,
-            view.amount,
+        let current = self
+            .holders
+            .get(&view.lock_hash)
+            .cloned()
+            .unwrap_or_else(TokenBalance::zero);
+        let next = checked_sub_balance(
+            &current,
+            &TokenBalance::from(view.amount),
             "token holder balance",
             &view.type_hash,
             tx,
         )?;
-        if next == 0 {
+        if next.is_zero() {
             self.holders.remove(&view.lock_hash);
         } else {
             self.holders.insert(view.lock_hash.clone(), next);
@@ -463,18 +457,14 @@ impl TokenAccum {
         if tx.block_number < self.first_seen_block {
             self.first_seen_block = tx.block_number;
         }
-        self.live_supply = checked_add_amount(
-            self.live_supply,
-            view.amount,
-            "token live_supply",
-            &view.type_hash,
-            tx,
-        )?;
-
-        let current = *self.holders.get(&view.lock_hash).unwrap_or(&0);
-        let next = checked_add_amount(
-            current,
-            view.amount,
+        let current = self
+            .holders
+            .get(&view.lock_hash)
+            .cloned()
+            .unwrap_or_else(TokenBalance::zero);
+        let next = checked_add_balance(
+            &current,
+            &TokenBalance::from(view.amount),
             "token holder balance",
             &view.type_hash,
             tx,
@@ -568,9 +558,7 @@ impl TokenAccum {
             name: None,
             symbol: None,
             decimals: None,
-            total_supply: Some(self.live_supply),
             max_supply: None,
-            holders_count: i64::try_from(self.holders.len()).expect("holders count exceeds i64"),
             first_seen_block: self.first_seen_block,
             icon_url: None,
             description: None,
@@ -760,13 +748,13 @@ impl TokenCellView {
     }
 }
 
-fn checked_add_amount(
-    current: u128,
-    amount: u128,
+fn checked_add_balance(
+    current: &TokenBalance,
+    amount: &TokenBalance,
     metric: &str,
     type_hash: &[u8],
     tx: &ResolvedTxFacts<'_>,
-) -> Result<u128> {
+) -> Result<TokenBalance> {
     current.checked_add(amount).ok_or_else(|| {
         anyhow!(
             "{} overflow: type_hash=0x{}, current={}, amount={}, block={}, tx=0x{}, tx_index={}",
@@ -781,13 +769,13 @@ fn checked_add_amount(
     })
 }
 
-fn checked_sub_amount(
-    current: u128,
-    amount: u128,
+fn checked_sub_balance(
+    current: &TokenBalance,
+    amount: &TokenBalance,
     metric: &str,
     type_hash: &[u8],
     tx: &ResolvedTxFacts<'_>,
-) -> Result<u128> {
+) -> Result<TokenBalance> {
     current.checked_sub(amount).ok_or_else(|| {
         anyhow!(
             "{} underflow: type_hash=0x{}, current={}, amount={}, block={}, tx=0x{}, tx_index={}",
@@ -862,8 +850,8 @@ fn checked_signed_i128(
 #[derive(Debug, Default, Clone)]
 pub struct TokenStateSnapshot {
     pub tokens: HashMap<Vec<u8>, TokenInfo>,
-    pub token_holders: HashMap<Vec<u8>, HashMap<Vec<u8>, u128>>,
-    pub addr_tokens: HashMap<Vec<u8>, HashMap<Vec<u8>, u128>>,
+    pub token_holders: HashMap<Vec<u8>, HashMap<Vec<u8>, TokenBalance>>,
+    pub addr_tokens: HashMap<Vec<u8>, HashMap<Vec<u8>, TokenBalance>>,
     pub token_transfer_counts: HashMap<Vec<u8>, i64>,
     pub token_hourly_transfers: HashMap<Vec<u8>, HashMap<i64, i64>>,
     pub token_daily_deltas: HashMap<Vec<u8>, HashMap<u32, TokenDailyDelta>>,
@@ -904,7 +892,7 @@ pub(crate) fn materialize_token_state_for_test(
             .into_iter()
             .collect::<HashMap<_, _>>();
 
-        let mut token_holders: HashMap<Vec<u8>, HashMap<Vec<u8>, u128>> = HashMap::new();
+        let mut token_holders: HashMap<Vec<u8>, HashMap<Vec<u8>, TokenBalance>> = HashMap::new();
         let mut token_transfer_counts = HashMap::new();
         let mut token_hourly_transfers = HashMap::new();
         let mut token_daily_deltas = HashMap::new();
@@ -973,7 +961,7 @@ pub(crate) fn materialize_token_state_for_test(
             }
         }
 
-        let mut addr_tokens: HashMap<Vec<u8>, HashMap<Vec<u8>, u128>> = HashMap::new();
+        let mut addr_tokens: HashMap<Vec<u8>, HashMap<Vec<u8>, TokenBalance>> = HashMap::new();
         let iter = domain_store.iterator_cf(
             domain_store.cf_addr_tokens_by_balance(),
             IteratorMode::Start,
@@ -1014,7 +1002,7 @@ mod tests {
     use crate::sync::types::InternId;
 
     #[test]
-    fn token_owner_reduces_live_supply_and_holder_removal() {
+    fn token_owner_reduces_live_balances_and_removes_empty_holder() {
         let interner = IdentityInterner::default();
         let lock_a = interner.intern_bytes(vec![0xaa; 32]);
         let lock_b = interner.intern_bytes(vec![0xbb; 32]);
@@ -1201,21 +1189,22 @@ mod tests {
         owner.apply_tx(&tx2, &ctx).expect("apply tx2");
 
         let token = owner.tokens.get(&vec![0xcc; 32]).expect("token");
-        assert_eq!(token.live_supply, 1000);
         assert_eq!(token.holders.len(), 1);
-        assert_eq!(token.holders.get(&vec![0xbb; 32]), Some(&1000));
+        assert_eq!(
+            token.holders.get(&vec![0xbb; 32]),
+            Some(&TokenBalance::from(1000))
+        );
         assert!(!token.holders.contains_key(&vec![0xaa; 32]));
     }
 
     #[test]
-    fn token_owner_handles_amount_above_i128_max() {
-        // Regression: a canonical sUDT mint whose amount (LE u128) exceeds i128::MAX must
-        // NOT wrap/underflow. On-chain example: block 4743232, amount bytes
-        // 0x000000000000000000704ea6403c0ca7 (LE) = 2.22e38. `as i128` wrapped this to
-        // -1.18e38 and drove live_supply negative.
-        let big: u128 = 222_044_604_925_031_325_468_940_491_728_862_838_784;
+    fn token_owner_supports_supply_above_u128() {
+        // Exact regression for the testnet bulk-sync failure: every cell amount is a valid
+        // u128, while two live cells make both the token supply and aggregate domain wider.
+        let amount = 200u128 << 120;
         let interner = IdentityInterner::default();
         let lock_a = interner.intern_bytes(vec![0xaa; 32]);
+        let lock_b = interner.intern_bytes(vec![0xbb; 32]);
         let type_hash_id = interner.intern_bytes(vec![0xcc; 32]);
         let type_code_hash_id =
             interner.intern_bytes(hex::decode(&crate::parser::udt::SUDT_CODE_HASH[2..]).unwrap());
@@ -1226,48 +1215,67 @@ mod tests {
         let frozen = interner.snapshot_for_reads();
         let ctx = ReducerContext::new(&frozen);
 
-        // Issuance: no UDT inputs, one sUDT output holding `big`.
+        let cell_a = CellFacts {
+            outpoint: OutPointKey::new([0x70; 32], 1),
+            created_at_block: 6_019_278,
+            created_by_block_dao_ar: 1,
+            capacity: 200_00000000,
+            lock_script_hash_id: lock_a,
+            lock_code_hash_id: InternId::new(99),
+            lock_hash_type: 1,
+            lock_args_id: InternId::new(98),
+            type_script_hash_id: Some(type_hash_id),
+            type_code_hash_id: Some(type_code_hash_id),
+            type_hash_type: Some(1),
+            type_args_id: Some(type_args_id),
+            occupied_capacity: 142_00000000,
+            data_size: 16,
+            data: Vec::new(),
+            data_hash: None,
+            udt_amount: Some(amount),
+            semantic_tag: CellSemanticTag::Sudt,
+            dao_state: None,
+            protocol_facts: None,
+        };
+        let mut cell_b = cell_a.clone();
+        cell_b.outpoint = OutPointKey::new([0x70; 32], 2);
+        cell_b.lock_script_hash_id = lock_b;
+
+        // Issuance: no UDT inputs, two sUDT outputs whose exact sum exceeds u128.
         let tx0 = ResolvedTxFacts {
             tx_hash: [0x70; 32],
-            block_number: 4_743_232,
+            block_number: 6_019_278,
             block_hash: [0x03; 32],
             timestamp_ms: 1_700_000_000_000,
             block_dao_ar: 1,
             tx_index: 1,
             dotbit_action: None,
             resolved_inputs: Vec::new(),
-            cells: vec![CellFacts {
-                outpoint: OutPointKey::new([0x70; 32], 1),
-                created_at_block: 4_743_232,
-                created_by_block_dao_ar: 1,
-                capacity: 200_00000000,
-                lock_script_hash_id: lock_a,
-                lock_code_hash_id: InternId::new(99),
-                lock_hash_type: 1,
-                lock_args_id: InternId::new(98),
-                type_script_hash_id: Some(type_hash_id),
-                type_code_hash_id: Some(type_code_hash_id),
-                type_hash_type: Some(1),
-                type_args_id: Some(type_args_id),
-                occupied_capacity: 142_00000000,
-                data_size: 16,
-                data: Vec::new(),
-                data_hash: None,
-                udt_amount: Some(big),
-                semantic_tag: CellSemanticTag::Sudt,
-                dao_state: None,
-                protocol_facts: None,
-            }]
-            .into(),
+            cells: vec![cell_a, cell_b].into(),
         };
 
         let mut owner = TokenOwner::default();
         owner
             .apply_tx(&tx0, &ctx)
-            .expect("mint above i128::MAX must not wrap/underflow");
+            .expect("aggregate supply above u128 must remain exact");
         let token = owner.tokens.get(&vec![0xcc; 32]).expect("token");
-        assert_eq!(token.live_supply, big);
-        assert_eq!(token.holders.get(&vec![0xaa; 32]), Some(&big));
+        assert_eq!(token.holders.len(), 2);
+        assert_eq!(
+            token.holders.get(&vec![0xaa; 32]),
+            Some(&TokenBalance::from(amount))
+        );
+        assert_eq!(
+            token.holders.get(&vec![0xbb; 32]),
+            Some(&TokenBalance::from(amount))
+        );
+        let total = token
+            .holders
+            .values()
+            .try_fold(TokenBalance::zero(), |sum, balance| {
+                sum.checked_add(balance)
+            })
+            .expect("test aggregate must fit TokenBalance");
+        assert_eq!(total.to_string(), "531691198313966349161522824112137830400");
     }
 
     #[test]

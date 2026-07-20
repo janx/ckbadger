@@ -88,9 +88,7 @@ async fn test_assets_list_supports_standard_filter_for_tokens_and_nfts() {
                     name: Some(format!("{symbol} Token")),
                     symbol: Some(symbol.to_string()),
                     decimals: Some(8),
-                    total_supply: Some(1000),
                     max_supply: None,
-                    holders_count: 10,
                     first_seen_block: 1,
                     icon_url: None,
                     description: None,
@@ -382,9 +380,7 @@ async fn test_assets_list_defaults_to_capacity_sort_and_supports_cursor_paginati
                 name: Some("Alpha Token".to_string()),
                 symbol: Some("ALPHA".to_string()),
                 decimals: Some(8),
-                total_supply: Some(1000),
                 max_supply: None,
-                holders_count: 10,
                 first_seen_block: 1,
                 icon_url: None,
                 description: None,
@@ -403,9 +399,7 @@ async fn test_assets_list_defaults_to_capacity_sort_and_supports_cursor_paginati
                 name: Some("Beta Token".to_string()),
                 symbol: Some("BETA".to_string()),
                 decimals: Some(8),
-                total_supply: Some(2000),
                 max_supply: None,
-                holders_count: 20,
                 first_seen_block: 1,
                 icon_url: None,
                 description: None,
@@ -479,16 +473,13 @@ async fn test_assets_list_defaults_to_capacity_sort_and_supports_cursor_paginati
 }
 
 #[tokio::test]
-async fn test_assets_supply_sort_orders_by_u128_magnitude_beyond_i128_max() {
-    // total_supply is a u128 UDT amount. Sorting by supply must order by the true
-    // u128 magnitude even when a value exceeds i128::MAX. Under the old i128 sort
-    // key such a value failed to parse (treated as absent) and mis-sorted.
+async fn test_assets_supply_sort_orders_aggregate_beyond_u128() {
+    // Sorting uses the exact aggregate domain, including values beyond u128.
     let store = test_store();
     let token_small = [0x51u8; 32];
     let token_huge = [0x52u8; 32];
 
-    // 170141183460469231731687303715884105728 == i128::MAX + 1 (within u128 range).
-    let huge_supply: u128 = 170_141_183_460_469_231_731_687_303_715_884_105_728;
+    let amount = 200u128 << 120;
 
     store
         .put_token_direct(
@@ -501,9 +492,7 @@ async fn test_assets_supply_sort_orders_by_u128_magnitude_beyond_i128_max() {
                 name: Some("Small Supply".to_string()),
                 symbol: Some("SMALL".to_string()),
                 decimals: Some(8),
-                total_supply: Some(1000),
                 max_supply: None,
-                holders_count: 1,
                 first_seen_block: 1,
                 icon_url: None,
                 description: None,
@@ -522,9 +511,7 @@ async fn test_assets_supply_sort_orders_by_u128_magnitude_beyond_i128_max() {
                 name: Some("Huge Supply".to_string()),
                 symbol: Some("HUGE".to_string()),
                 decimals: Some(8),
-                total_supply: Some(huge_supply),
                 max_supply: None,
-                holders_count: 1,
                 first_seen_block: 1,
                 icon_url: None,
                 description: None,
@@ -533,10 +520,16 @@ async fn test_assets_supply_sort_orders_by_u128_magnitude_beyond_i128_max() {
         )
         .unwrap();
 
+    let mut batch = StoreBatch::new(&store);
+    batch.put_token_holder(&token_small, &[0x01; 32], 1_000u128);
+    batch.put_token_holder(&token_huge, &[0x02; 32], amount);
+    batch.put_token_holder(&token_huge, &[0x03; 32], amount);
+    batch.commit().unwrap();
+
     let config = test_config(store);
     let app = create_router(config).await;
 
-    // Descending by supply: the > i128::MAX token must come first.
+    // Descending by supply: the > u128::MAX token must come first.
     let request = Request::builder()
         .uri("/api/v1/assets?type=token&sort_key=supply&sort_direction=desc")
         .body(Body::empty())
@@ -551,7 +544,7 @@ async fn test_assets_supply_sort_orders_by_u128_magnitude_beyond_i128_max() {
     );
     assert_eq!(
         json["data"][0]["totalSupply"],
-        "170141183460469231731687303715884105728"
+        "531691198313966349161522824112137830400"
     );
     assert_eq!(
         json["data"][1]["id"],
@@ -598,9 +591,7 @@ async fn test_assets_list_token_errors_when_daily_deltas_invalid() {
                     name: Some(name.to_string()),
                     symbol: Some(symbol.to_string()),
                     decimals: Some(8),
-                    total_supply: Some(1000),
                     max_supply: None,
-                    holders_count: 10,
                     first_seen_block: 1,
                     icon_url: None,
                     description: None,

@@ -3,6 +3,7 @@ use axum::{
     routing::get,
     Json, Router,
 };
+use ckbadger_common::TokenBalance;
 use ckbadger_store::{
     types::{
         IdentityStandard, MnftCollectionAggregate, ObjectCollectionActivityEntry,
@@ -645,17 +646,14 @@ fn compare_optional_i128(
     }
 }
 
-/// Parse a UDT amount (u128) for the `total_supply` sort column.
-///
-/// UDT amounts are unsigned 128-bit; the capacity/knowledge columns are
-/// signed capacities and keep [`parse_i128_opt`]/[`compare_optional_i128`].
-fn parse_u128_opt(value: Option<&str>) -> Option<u128> {
-    value?.parse::<u128>().ok()
+/// Parse an exact aggregate token balance for the `total_supply` sort column.
+fn parse_token_balance_opt(value: Option<&str>) -> Option<TokenBalance> {
+    value?.parse::<TokenBalance>().ok()
 }
 
-fn compare_optional_u128(
-    left: Option<u128>,
-    right: Option<u128>,
+fn compare_optional_token_balance(
+    left: Option<TokenBalance>,
+    right: Option<TokenBalance>,
     direction: SortDirection,
 ) -> Ordering {
     match (left, right) {
@@ -836,9 +834,9 @@ fn compare_asset_entries(
             direction,
         ),
         AssetSortKey::Type => apply_direction(left.standard.cmp(&right.standard), direction),
-        AssetSortKey::Supply => compare_optional_u128(
-            parse_u128_opt(left.total_supply.as_deref()),
-            parse_u128_opt(right.total_supply.as_deref()),
+        AssetSortKey::Supply => compare_optional_token_balance(
+            parse_token_balance_opt(left.total_supply.as_deref()),
+            parse_token_balance_opt(right.total_supply.as_deref()),
             direction,
         ),
         AssetSortKey::Transfers24h => {

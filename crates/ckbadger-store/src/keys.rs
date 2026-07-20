@@ -3,6 +3,8 @@
 //! All numeric keys use big-endian encoding for correct lexicographic sort order.
 //! Fixed-size fields with no delimiters needed.
 
+use ckbadger_common::TokenBalance;
+
 /// Outpoint key: tx_hash(32B) + output_index(2B BE) = 34 bytes
 pub const OUTPOINT_KEY_SIZE: usize = 34;
 pub const SCRIPT_VERSION_BY_LABEL_LEN_SIZE: usize = 2;
@@ -276,17 +278,27 @@ fn decode_desc_tx_idx(bytes: &[u8]) -> i32 {
     i32::MAX - i32::from_be_bytes(bytes.try_into().unwrap())
 }
 
-fn encode_desc_u128(value: u128) -> [u8; 16] {
-    (u128::MAX - value).to_be_bytes()
+fn encode_desc_token_balance(value: &TokenBalance) -> [u8; TokenBalance::ENCODED_LEN] {
+    let mut bytes = value.to_be_bytes();
+    for byte in &mut bytes {
+        *byte = !*byte;
+    }
+    bytes
 }
 
-fn decode_desc_u128(bytes: &[u8]) -> u128 {
+fn decode_desc_token_balance(bytes: &[u8]) -> TokenBalance {
     assert!(
-        bytes.len() == 16,
-        "decode_desc_u128: expected 16 bytes, got {}",
+        bytes.len() == TokenBalance::ENCODED_LEN,
+        "decode_desc_token_balance: expected {} bytes, got {}",
+        TokenBalance::ENCODED_LEN,
         bytes.len()
     );
-    u128::MAX - u128::from_be_bytes(bytes.try_into().unwrap())
+    let mut ascending = [0u8; TokenBalance::ENCODED_LEN];
+    for (output, input) in ascending.iter_mut().zip(bytes) {
+        *output = !*input;
+    }
+    TokenBalance::from_be_bytes(&ascending)
+        .expect("fixed-width complemented token balance must decode")
 }
 
 /// Encode a cell-by-lock/type index key:
@@ -369,12 +381,12 @@ pub fn encode_token_holder_key(type_hash: &[u8], lock_hash: &[u8]) -> [u8; 64] {
 }
 
 /// Token holder ranked index key:
-/// type_hash(32B) + balance_desc(16B BE) + lock_hash(32B) = 80 bytes
-pub const TOKEN_HOLDER_BALANCE_KEY_SIZE: usize = 80;
+/// type_hash(32B) + balance_desc(32B BE) + lock_hash(32B) = 96 bytes
+pub const TOKEN_HOLDER_BALANCE_KEY_SIZE: usize = 96;
 
 pub fn encode_token_holder_balance_key(
     type_hash: &[u8],
-    balance: u128,
+    balance: &TokenBalance,
     lock_hash: &[u8],
 ) -> [u8; TOKEN_HOLDER_BALANCE_KEY_SIZE] {
     assert!(
@@ -389,14 +401,14 @@ pub fn encode_token_holder_balance_key(
     );
     let mut key = [0u8; TOKEN_HOLDER_BALANCE_KEY_SIZE];
     key[..32].copy_from_slice(&type_hash[..32]);
-    key[32..48].copy_from_slice(&encode_desc_u128(balance));
-    key[48..80].copy_from_slice(&lock_hash[..32]);
+    key[32..64].copy_from_slice(&encode_desc_token_balance(balance));
+    key[64..96].copy_from_slice(&lock_hash[..32]);
     key
 }
 
 pub fn encode_token_holder_balance_seek_after_key(
     type_hash: &[u8],
-    balance: u128,
+    balance: &TokenBalance,
     lock_hash: &[u8],
 ) -> Vec<u8> {
     let mut key = Vec::with_capacity(TOKEN_HOLDER_BALANCE_KEY_SIZE + 1);
@@ -407,24 +419,24 @@ pub fn encode_token_holder_balance_seek_after_key(
     key
 }
 
-pub fn decode_token_holder_balance_key(key: &[u8]) -> (Vec<u8>, u128, Vec<u8>) {
+pub fn decode_token_holder_balance_key(key: &[u8]) -> (Vec<u8>, TokenBalance, Vec<u8>) {
     assert!(
         key.len() == TOKEN_HOLDER_BALANCE_KEY_SIZE,
         "decode_token_holder_balance_key: expected {} bytes, got {}",
         TOKEN_HOLDER_BALANCE_KEY_SIZE,
         key.len()
     );
-    let balance = decode_desc_u128(&key[32..48]);
-    (key[..32].to_vec(), balance, key[48..80].to_vec())
+    let balance = decode_desc_token_balance(&key[32..64]);
+    (key[..32].to_vec(), balance, key[64..96].to_vec())
 }
 
 /// Address-token ranked index key:
-/// lock_hash(32B) + balance_desc(16B BE) + type_hash(32B) = 80 bytes
-pub const ADDR_TOKEN_BALANCE_KEY_SIZE: usize = 80;
+/// lock_hash(32B) + balance_desc(32B BE) + type_hash(32B) = 96 bytes
+pub const ADDR_TOKEN_BALANCE_KEY_SIZE: usize = 96;
 
 pub fn encode_addr_token_balance_key(
     lock_hash: &[u8],
-    balance: u128,
+    balance: &TokenBalance,
     type_hash: &[u8],
 ) -> [u8; ADDR_TOKEN_BALANCE_KEY_SIZE] {
     assert!(
@@ -439,14 +451,14 @@ pub fn encode_addr_token_balance_key(
     );
     let mut key = [0u8; ADDR_TOKEN_BALANCE_KEY_SIZE];
     key[..32].copy_from_slice(&lock_hash[..32]);
-    key[32..48].copy_from_slice(&encode_desc_u128(balance));
-    key[48..80].copy_from_slice(&type_hash[..32]);
+    key[32..64].copy_from_slice(&encode_desc_token_balance(balance));
+    key[64..96].copy_from_slice(&type_hash[..32]);
     key
 }
 
 pub fn encode_addr_token_balance_seek_after_key(
     lock_hash: &[u8],
-    balance: u128,
+    balance: &TokenBalance,
     type_hash: &[u8],
 ) -> Vec<u8> {
     let mut key = Vec::with_capacity(ADDR_TOKEN_BALANCE_KEY_SIZE + 1);
@@ -457,15 +469,15 @@ pub fn encode_addr_token_balance_seek_after_key(
     key
 }
 
-pub fn decode_addr_token_balance_key(key: &[u8]) -> (Vec<u8>, u128, Vec<u8>) {
+pub fn decode_addr_token_balance_key(key: &[u8]) -> (Vec<u8>, TokenBalance, Vec<u8>) {
     assert!(
         key.len() == ADDR_TOKEN_BALANCE_KEY_SIZE,
         "decode_addr_token_balance_key: expected {} bytes, got {}",
         ADDR_TOKEN_BALANCE_KEY_SIZE,
         key.len()
     );
-    let balance = decode_desc_u128(&key[32..48]);
-    (key[..32].to_vec(), balance, key[48..80].to_vec())
+    let balance = decode_desc_token_balance(&key[32..64]);
+    (key[..32].to_vec(), balance, key[64..96].to_vec())
 }
 
 /// Stats key: prefix(1B) + variable key

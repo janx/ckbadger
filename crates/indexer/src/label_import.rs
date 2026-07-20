@@ -393,16 +393,14 @@ fn upsert_token_label(
                 name: None,
                 symbol: None,
                 decimals: None,
-                total_supply: Some(0),
                 max_supply: None,
-                holders_count: 0,
                 first_seen_block: 0,
                 icon_url: None,
                 description: None,
                 transfers_count: 0,
             });
 
-    // Update label fields (preserve indexer-maintained stats like holders_count, total_supply).
+    // Update label fields while preserving chain-derived metadata.
     info.name = Some(token.name.clone());
     info.symbol = Some(token.symbol.clone());
     info.decimals = Some(token.decimals as i32);
@@ -1403,9 +1401,7 @@ canonical_hash_type = "data1"
                     name: None,
                     symbol: None,
                     decimals: None,
-                    total_supply: Some(0),
                     max_supply: Some(1_000_000),
-                    holders_count: 0,
                     first_seen_block: 0,
                     icon_url: None,
                     description: None,
@@ -1441,7 +1437,6 @@ canonical_hash_type = "data1"
         // The original type_hash entry with max_supply should still be intact
         let original = store.get_token(&type_hash).unwrap().unwrap();
         assert_eq!(original.max_supply, Some(1_000_000));
-        assert_eq!(original.total_supply, Some(0));
     }
 
     #[test]

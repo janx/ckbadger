@@ -1,4 +1,5 @@
 mod common;
+use ckbadger_common::TokenBalance;
 use common::*;
 
 #[tokio::test]
@@ -36,9 +37,7 @@ async fn test_tokens_list_includes_maximum_supply_status() {
                 name: Some("Limited XUDT".to_string()),
                 symbol: Some("CAP".to_string()),
                 decimals: Some(8),
-                total_supply: Some(500),
                 max_supply: Some(1000),
-                holders_count: 50,
                 first_seen_block: 0,
                 icon_url: None,
                 description: None,
@@ -55,9 +54,7 @@ async fn test_tokens_list_includes_maximum_supply_status() {
                 name: Some("Plain XUDT".to_string()),
                 symbol: Some("PX".to_string()),
                 decimals: Some(8),
-                total_supply: Some(500),
                 max_supply: None,
-                holders_count: 40,
                 first_seen_block: 0,
                 icon_url: None,
                 description: None,
@@ -74,9 +71,7 @@ async fn test_tokens_list_includes_maximum_supply_status() {
                 name: Some("Extended XUDT".to_string()),
                 symbol: Some("EX".to_string()),
                 decimals: Some(8),
-                total_supply: Some(500),
                 max_supply: None,
-                holders_count: 30,
                 first_seen_block: 0,
                 icon_url: None,
                 description: None,
@@ -93,9 +88,7 @@ async fn test_tokens_list_includes_maximum_supply_status() {
                 name: Some("Plain SUDT".to_string()),
                 symbol: Some("SD".to_string()),
                 decimals: Some(8),
-                total_supply: Some(500),
                 max_supply: None,
-                holders_count: 20,
                 first_seen_block: 0,
                 icon_url: None,
                 description: None,
@@ -169,9 +162,7 @@ async fn test_get_token_includes_maximum_supply() {
                 name: Some("Cap Token".to_string()),
                 symbol: Some("CAP".to_string()),
                 decimals: Some(8),
-                total_supply: Some(500_00000000),
                 max_supply: Some(100_000_000_000),
-                holders_count: 0,
                 first_seen_block: 0,
                 icon_url: None,
                 description: None,
@@ -206,18 +197,16 @@ async fn test_get_token_includes_maximum_supply() {
 }
 
 #[tokio::test]
-async fn test_get_token_supply_exceeding_i128_max_serializes_as_decimal_string() {
-    // UDT amounts are u128. A token whose supply exceeds i128::MAX must serialize
-    // as an exact decimal string (the JSON contract) rather than overflow the
-    // ckbadger-internal supply type. The detail `totalSupply` is derived from
-    // aggregate_token_holder_stats (the u128 sum of holder balances).
+async fn test_get_token_supply_exceeding_u128_serializes_as_decimal_string() {
+    // Per-cell UDT amounts are u128, while the exact sum across live holders can exceed
+    // u128 and must still serialize through the API's decimal-string contract.
     let store = test_store();
     let type_hash = vec![0x7c; 32];
     let type_hash_hex = format!("0x{}", hex::encode(&type_hash));
-    let holder_lock = [0x13; 32];
+    let holder_a = [0x13; 32];
+    let holder_b = [0x14; 32];
 
-    // 170141183460469231731687303715884105728 == i128::MAX + 1 (within u128 range).
-    let huge_supply: u128 = 170_141_183_460_469_231_731_687_303_715_884_105_728;
+    let amount = 200u128 << 120;
     // u128::MAX == 340282366920938463463374607431768211455.
     let huge_max_supply: u128 = u128::MAX;
 
@@ -232,9 +221,7 @@ async fn test_get_token_supply_exceeding_i128_max_serializes_as_decimal_string()
                 name: Some("Huge Supply".to_string()),
                 symbol: Some("HUGE".to_string()),
                 decimals: Some(8),
-                total_supply: Some(huge_supply),
                 max_supply: Some(huge_max_supply),
-                holders_count: 1,
                 first_seen_block: 0,
                 icon_url: None,
                 description: None,
@@ -244,9 +231,8 @@ async fn test_get_token_supply_exceeding_i128_max_serializes_as_decimal_string()
         .unwrap();
 
     let mut batch = StoreBatch::new(&store);
-    batch.put_token_holder(&type_hash, &holder_lock, huge_supply);
-    batch.put_token_holder_by_balance(&type_hash, &holder_lock, huge_supply);
-    batch.put_addr_token_by_balance(&holder_lock, &type_hash, huge_supply);
+    batch.put_token_holder(&type_hash, &holder_a, amount);
+    batch.put_token_holder(&type_hash, &holder_b, amount);
     batch.commit().unwrap();
 
     let config = test_config(store);
@@ -263,9 +249,8 @@ async fn test_get_token_supply_exceeding_i128_max_serializes_as_decimal_string()
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(
         json["totalSupply"],
-        "170141183460469231731687303715884105728"
+        "531691198313966349161522824112137830400"
     );
-    assert_eq!(json["totalSupply"], huge_supply.to_string());
     assert_eq!(
         json["maximumSupply"],
         "340282366920938463463374607431768211455"
@@ -292,9 +277,7 @@ async fn test_get_token_returns_store_backed_detail_when_filtered_from_warmup_ca
                 name: None,
                 symbol: None,
                 decimals: Some(8),
-                total_supply: Some(500_00000000),
                 max_supply: None,
-                holders_count: 0,
                 first_seen_block: 0,
                 icon_url: None,
                 description: Some("Store-backed token detail".to_string()),
@@ -344,9 +327,7 @@ async fn test_get_token_derives_stats_from_holder_and_stats_cfs_when_token_row_i
                 name: Some("Placeholder Label".to_string()),
                 symbol: Some("PLH".to_string()),
                 decimals: Some(8),
-                total_supply: Some(0),
                 max_supply: None,
-                holders_count: 0,
                 first_seen_block: 0,
                 icon_url: Some("logo.png".to_string()),
                 description: Some("label metadata only".to_string()),
@@ -427,9 +408,7 @@ async fn test_get_token_holders_preserves_equal_balance_pagination() {
                 name: Some("Paged Holders".to_string()),
                 symbol: Some("PH".to_string()),
                 decimals: Some(8),
-                total_supply: Some(300),
                 max_supply: None,
-                holders_count: 3,
                 first_seen_block: 0,
                 icon_url: None,
                 description: None,
@@ -507,6 +486,92 @@ async fn test_get_token_holders_preserves_equal_balance_pagination() {
 }
 
 #[tokio::test]
+async fn test_get_token_holders_paginates_balance_above_u128() {
+    let store = test_store();
+    let type_hash = vec![0x7d; 32];
+    store
+        .put_token_direct(
+            &type_hash,
+            &TokenInfo {
+                type_code_hash: vec![0x55; 32],
+                hash_type: 1,
+                type_args: vec![0x66; 20],
+                standard: "sudt".to_string(),
+                name: Some("Wide Holder".to_string()),
+                symbol: Some("WIDE".to_string()),
+                decimals: Some(8),
+                max_supply: None,
+                first_seen_block: 0,
+                icon_url: None,
+                description: None,
+                transfers_count: 0,
+            },
+        )
+        .unwrap();
+
+    let amount = TokenBalance::from(200u128 << 120);
+    let above_u128 = amount.checked_add(&amount).unwrap();
+    let at_u128_max = TokenBalance::from(u128::MAX);
+    let lock_high = [0x01; 32];
+    let lock_next = [0x02; 32];
+    let mut batch = StoreBatch::new(&store);
+    batch.put_token_holder(&type_hash, &lock_high, &above_u128);
+    batch.put_token_holder(&type_hash, &lock_next, &at_u128_max);
+    batch.put_token_holder_by_balance(&type_hash, &lock_high, &above_u128);
+    batch.put_token_holder_by_balance(&type_hash, &lock_next, &at_u128_max);
+    batch.commit().unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+    let type_hash_hex = format!("0x{}", hex::encode(&type_hash));
+    let first_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/v1/tokens/{type_hash_hex}/holders?limit=1"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(first_response.status(), StatusCode::OK);
+    let first_body = first_response
+        .into_body()
+        .collect()
+        .await
+        .unwrap()
+        .to_bytes();
+    let first_json: serde_json::Value = serde_json::from_slice(&first_body).unwrap();
+    assert_eq!(
+        first_json["data"][0]["balance"],
+        "531691198313966349161522824112137830400"
+    );
+    let next_cursor = first_json["nextCursor"].as_str().unwrap();
+    assert!(next_cursor.starts_with("531691198313966349161522824112137830400:"));
+
+    let second_response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/api/v1/tokens/{type_hash_hex}/holders?limit=1&cursor={next_cursor}"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(second_response.status(), StatusCode::OK);
+    let second_body = second_response
+        .into_body()
+        .collect()
+        .await
+        .unwrap()
+        .to_bytes();
+    let second_json: serde_json::Value = serde_json::from_slice(&second_body).unwrap();
+    assert_eq!(second_json["data"][0]["balance"], u128::MAX.to_string());
+}
+
+#[tokio::test]
 async fn test_get_address_tokens_uses_store_backed_pagination_without_warmup_cache() {
     let store = test_store();
     let lock_hash = vec![0x88; 32];
@@ -524,9 +589,7 @@ async fn test_get_address_tokens_uses_store_backed_pagination_without_warmup_cac
                 name: Some("Alpha".to_string()),
                 symbol: Some("ALP".to_string()),
                 decimals: Some(8),
-                total_supply: Some(500),
                 max_supply: None,
-                holders_count: 1,
                 first_seen_block: 0,
                 icon_url: None,
                 description: None,
@@ -545,9 +608,7 @@ async fn test_get_address_tokens_uses_store_backed_pagination_without_warmup_cac
                 name: Some("Beta".to_string()),
                 symbol: Some("BET".to_string()),
                 decimals: Some(4),
-                total_supply: Some(300),
                 max_supply: None,
-                holders_count: 1,
                 first_seen_block: 0,
                 icon_url: None,
                 description: None,
@@ -637,9 +698,7 @@ async fn test_get_token_maximum_supply_status_without_cap() {
                 name: Some("Plain sUDT".to_string()),
                 symbol: Some("SUDT".to_string()),
                 decimals: Some(8),
-                total_supply: Some(123),
                 max_supply: None,
-                holders_count: 0,
                 first_seen_block: 0,
                 icon_url: None,
                 description: None,
@@ -662,9 +721,7 @@ async fn test_get_token_maximum_supply_status_without_cap() {
                 name: Some("Extensible Token".to_string()),
                 symbol: Some("XUDT".to_string()),
                 decimals: Some(8),
-                total_supply: Some(456),
                 max_supply: None,
-                holders_count: 0,
                 first_seen_block: 0,
                 icon_url: None,
                 description: None,
@@ -687,9 +744,7 @@ async fn test_get_token_maximum_supply_status_without_cap() {
                 name: Some("Plain XUDT".to_string()),
                 symbol: Some("PXUDT".to_string()),
                 decimals: Some(8),
-                total_supply: Some(789),
                 max_supply: None,
-                holders_count: 0,
                 first_seen_block: 0,
                 icon_url: None,
                 description: None,
@@ -770,9 +825,7 @@ async fn test_token_capacity_chart_returns_cumulative_series() {
                 name: Some("Test Token".to_string()),
                 symbol: Some("TEST".to_string()),
                 decimals: Some(8),
-                total_supply: Some(0),
                 max_supply: None,
-                holders_count: 0,
                 first_seen_block: 0,
                 icon_url: None,
                 description: None,
@@ -866,9 +919,7 @@ async fn test_token_capacity_chart_reads_daily_deltas_from_derived_store() {
                 name: Some("Derived Delta Token".to_string()),
                 symbol: Some("DDT".to_string()),
                 decimals: Some(8),
-                total_supply: Some(0),
                 max_supply: None,
-                holders_count: 0,
                 first_seen_block: 0,
                 icon_url: None,
                 description: None,
@@ -927,9 +978,7 @@ async fn test_token_capacity_chart_rejects_invalid_date_range() {
                 name: Some("Test Token".to_string()),
                 symbol: Some("TEST".to_string()),
                 decimals: Some(8),
-                total_supply: Some(0),
                 max_supply: None,
-                holders_count: 0,
                 first_seen_block: 0,
                 icon_url: None,
                 description: None,
