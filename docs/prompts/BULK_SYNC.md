@@ -68,9 +68,13 @@ architecture details.
 ### Key invariants
 
 - **LiveCellOwner** is the authoritative in-memory live-cell set. All input resolution uses it
-  directly — no DB reads for correctness-critical data.
+  directly — no DB reads for correctness-critical data. Canonical data hashes stay inline in the
+  live-cell slot; the side maps contain only genuinely sparse protocol/UDT/DAO facts.
 - **IdentityInterner** deduplicates lock/type/data hashes into `u32` IDs, keeping per-cell memory
-  compact; lookup and ID tables share each interned byte payload.
+  compact; lookup and ID tables share each interned byte payload. Live-cell creation/consumption
+  maintains exact per-ID reference counts. Zero-live IDs are reclaimed only between batches after
+  all frozen read views and batch-local facts have been released; slot reuse must first invalidate
+  any per-ID write-dedup marker.
 - **AddressOwner** keeps fixed-size lock/transaction hashes in memory and converts to the stable
   store representation only while emitting final rows.
 - **Owner reducers** (address, script, token, DAO, object, fiber) consume resolved tx facts and

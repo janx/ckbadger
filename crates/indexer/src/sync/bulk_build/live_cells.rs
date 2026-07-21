@@ -14,6 +14,7 @@ pub(crate) struct LiveCellOwner {
     live: FxHashMap<OutPointKey, LiveCellSlot>,
     extras: FxHashMap<OutPointKey, LiveCellExtras>,
     protocol_facts: FxHashMap<OutPointKey, CellProtocolFacts>,
+    protocol_heap_bytes: u64,
 }
 
 impl LiveCellOwner {
@@ -26,9 +27,14 @@ impl LiveCellOwner {
     }
 
     pub(crate) fn estimated_bytes(&self) -> u64 {
-        super::accounting::hash_map_serialized_bytes(&self.live)
-            + super::accounting::hash_map_serialized_bytes(&self.extras)
-            + super::accounting::hash_map_serialized_bytes(&self.protocol_facts)
+        std::mem::size_of::<Self>() as u64
+            + self.live.capacity() as u64
+                * std::mem::size_of::<(OutPointKey, LiveCellSlot)>() as u64
+            + self.extras.capacity() as u64
+                * std::mem::size_of::<(OutPointKey, LiveCellExtras)>() as u64
+            + self.protocol_facts.capacity() as u64
+                * std::mem::size_of::<(OutPointKey, CellProtocolFacts)>() as u64
+            + self.protocol_heap_bytes
     }
 
     pub(crate) fn insert_created(
@@ -52,6 +58,18 @@ impl LiveCellOwner {
             self.extras.insert(outpoint, extras);
         }
         if let Some(facts) = protocol_facts {
+            let heap_bytes = protocol_facts_heap_bytes(&facts);
+            self.protocol_heap_bytes = self
+                .protocol_heap_bytes
+                .checked_add(heap_bytes)
+                .ok_or_else(|| {
+                    anyhow!(
+                        "live protocol-facts heap accounting overflow: outpoint={} current_bytes={} added_bytes={}",
+                        format_outpoint(&outpoint),
+                        self.protocol_heap_bytes,
+                        heap_bytes,
+                    )
+                })?;
             self.protocol_facts.insert(outpoint, facts);
         }
         Ok(())
@@ -74,6 +92,20 @@ impl LiveCellOwner {
         })?;
         let extras = self.extras.remove(outpoint).unwrap_or_default();
         let facts = self.protocol_facts.remove(outpoint);
+        if let Some(facts) = facts.as_ref() {
+            let heap_bytes = protocol_facts_heap_bytes(facts);
+            self.protocol_heap_bytes = self
+                .protocol_heap_bytes
+                .checked_sub(heap_bytes)
+                .ok_or_else(|| {
+                    anyhow!(
+                        "live protocol-facts heap accounting underflow: outpoint={} current_bytes={} removed_bytes={}",
+                        format_outpoint(outpoint),
+                        self.protocol_heap_bytes,
+                        heap_bytes,
+                    )
+                })?;
+        }
 
         Ok(slot.into_resolved_input_facts(*outpoint, extras, facts))
     }
@@ -94,6 +126,7 @@ pub(crate) struct LiveCellSlot {
     pub(crate) capacity: i64,
     pub(crate) occupied_capacity: i64,
     pub(crate) data_size: i32,
+    pub(crate) data_hash: [u8; 32],
     pub(crate) lock_script_hash_id: InternId,
     pub(crate) lock_code_hash_id: InternId,
     pub(crate) lock_hash_type: i16,
@@ -109,7 +142,6 @@ pub(crate) struct LiveCellSlot {
 /// map avoids paying their large enum/`Option<u128>` layout for every entry.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
 pub(crate) struct LiveCellExtras {
-    pub(crate) data_hash: Option<[u8; 32]>,
     pub(crate) udt_amount: Option<u128>,
     pub(crate) dao_state: Option<DaoCellState>,
     pub(crate) dao_compensation_ars: Option<DaoCompensationArs>,
@@ -121,13 +153,11 @@ impl LiveCellExtras {
         dao_compensation_ars: Option<DaoCompensationArs>,
     ) -> Option<Self> {
         let extras = Self {
-            data_hash: cell.data_hash,
             udt_amount: cell.udt_amount,
             dao_state: cell.dao_state,
             dao_compensation_ars,
         };
-        (extras.data_hash.is_some()
-            || extras.udt_amount.is_some()
+        (extras.udt_amount.is_some()
             || extras.dao_state.is_some()
             || extras.dao_compensation_ars.is_some())
         .then_some(extras)
@@ -135,13 +165,20 @@ impl LiveCellExtras {
 }
 
 impl LiveCellSlot {
-    pub(crate) fn from_cell_facts(cell: &CellFacts) -> Self {
-        Self {
+    pub(crate) fn from_cell_facts(cell: &CellFacts) -> Result<Self> {
+        let data_hash = cell.data_hash.ok_or_else(|| {
+            anyhow!(
+                "live cell is missing its canonical data hash: outpoint={}",
+                format_outpoint(&cell.outpoint)
+            )
+        })?;
+        Ok(Self {
             created_at_block: cell.created_at_block,
             created_by_block_dao_ar: cell.created_by_block_dao_ar,
             capacity: cell.capacity,
             occupied_capacity: cell.occupied_capacity,
             data_size: cell.data_size,
+            data_hash,
             lock_script_hash_id: cell.lock_script_hash_id,
             lock_code_hash_id: cell.lock_code_hash_id,
             lock_hash_type: cell.lock_hash_type,
@@ -151,7 +188,7 @@ impl LiveCellSlot {
             type_hash_type: cell.type_hash_type,
             type_args_id: cell.type_args_id,
             semantic_tag: cell.semantic_tag,
-        }
+        })
     }
 
     fn into_resolved_input_facts(
@@ -167,7 +204,7 @@ impl LiveCellSlot {
             capacity: self.capacity,
             occupied_capacity: self.occupied_capacity,
             data_size: self.data_size,
-            data_hash: extras.data_hash,
+            data_hash: Some(self.data_hash),
             udt_amount: extras.udt_amount,
             lock_script_hash_id: self.lock_script_hash_id,
             lock_code_hash_id: self.lock_code_hash_id,
@@ -182,6 +219,39 @@ impl LiveCellSlot {
             dao_compensation_ars: extras.dao_compensation_ars,
             protocol_facts,
         }
+    }
+}
+
+fn protocol_facts_heap_bytes(facts: &CellProtocolFacts) -> u64 {
+    fn string_bytes(value: &Option<String>) -> u64 {
+        value.as_ref().map_or(0, |value| value.capacity() as u64)
+    }
+
+    fn vec_bytes(value: &Option<Vec<u8>>) -> u64 {
+        value.as_ref().map_or(0, |value| value.capacity() as u64)
+    }
+
+    match facts {
+        CellProtocolFacts::Spore(facts) => {
+            facts.content_type.capacity() as u64 + facts.content.capacity() as u64
+        }
+        CellProtocolFacts::Cluster(facts) => {
+            string_bytes(&facts.name) + string_bytes(&facts.description)
+        }
+        CellProtocolFacts::MnftIssuer(facts) => string_bytes(&facts.name) + vec_bytes(&facts.info),
+        CellProtocolFacts::MnftClass(facts) => {
+            facts.class_id.capacity() as u64
+                + string_bytes(&facts.name)
+                + string_bytes(&facts.description)
+                + string_bytes(&facts.renderer)
+        }
+        CellProtocolFacts::MnftToken(facts) => {
+            facts.token_id.capacity() as u64
+                + facts.class_id.capacity() as u64
+                + facts.characteristic.capacity() as u64
+        }
+        CellProtocolFacts::Dotbit(facts) => string_bytes(&facts.account),
+        CellProtocolFacts::BitCell(facts) => facts.account.capacity() as u64,
     }
 }
 
@@ -240,7 +310,7 @@ fn format_outpoint(outpoint: &OutPointKey) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sync::bulk_build::facts::{CellSemanticTag, OutPointKey};
+    use crate::sync::bulk_build::facts::{CellFacts, CellSemanticTag, OutPointKey};
     use crate::sync::types::InternId;
 
     fn sample_outpoint() -> OutPointKey {
@@ -254,6 +324,7 @@ mod tests {
             capacity: 100_00000000,
             occupied_capacity: 61_00000000,
             data_size: 0,
+            data_hash: [0x44; 32],
             lock_script_hash_id: InternId::new(0),
             lock_code_hash_id: InternId::new(1),
             lock_hash_type: 1,
@@ -275,6 +346,31 @@ mod tests {
         }
     }
 
+    fn sample_plain_cell_facts() -> CellFacts {
+        CellFacts {
+            outpoint: sample_outpoint(),
+            created_at_block: 14_000_000,
+            created_by_block_dao_ar: 10_000_000_000,
+            capacity: 100_00000000,
+            lock_script_hash_id: InternId::new(0),
+            lock_code_hash_id: InternId::new(1),
+            lock_hash_type: 1,
+            lock_args_id: InternId::new(2),
+            type_script_hash_id: None,
+            type_code_hash_id: None,
+            type_hash_type: None,
+            type_args_id: None,
+            occupied_capacity: 61_00000000,
+            data_size: 0,
+            data: Vec::new(),
+            data_hash: Some([0x44; 32]),
+            udt_amount: None,
+            semantic_tag: CellSemanticTag::Plain,
+            dao_state: None,
+            protocol_facts: None,
+        }
+    }
+
     #[test]
     fn live_cell_owner_starts_empty() {
         let owner = LiveCellOwner::default();
@@ -284,17 +380,39 @@ mod tests {
     #[test]
     fn live_cell_base_slot_stays_compact() {
         assert!(
-            std::mem::size_of::<LiveCellSlot>() <= 88,
+            std::mem::size_of::<LiveCellSlot>() <= 120,
             "LiveCellSlot grew to {} bytes",
             std::mem::size_of::<LiveCellSlot>()
         );
     }
 
     #[test]
+    fn ordinary_cell_data_hash_does_not_allocate_sparse_extras() {
+        let cell = sample_plain_cell_facts();
+
+        assert_eq!(
+            LiveCellExtras::from_cell_facts(&cell, None),
+            None,
+            "every CKB cell has a data hash; it belongs in the authoritative live slot, not the sparse side map"
+        );
+    }
+
+    #[test]
+    fn live_cell_without_canonical_data_hash_fails_with_outpoint_context() {
+        let mut cell = sample_plain_cell_facts();
+        cell.data_hash = None;
+
+        let error = LiveCellSlot::from_cell_facts(&cell).unwrap_err();
+        assert!(error.to_string().contains("canonical data hash"));
+        assert!(error
+            .to_string()
+            .contains(&hex::encode(cell.outpoint.tx_hash)));
+    }
+
+    #[test]
     fn sparse_live_cell_extras_survive_resolution() {
         let mut owner = LiveCellOwner::default();
         let extras = LiveCellExtras {
-            data_hash: Some([0x44; 32]),
             udt_amount: Some(123),
             dao_state: Some(DaoCellState::Deposit),
             dao_compensation_ars: Some(DaoCompensationArs {

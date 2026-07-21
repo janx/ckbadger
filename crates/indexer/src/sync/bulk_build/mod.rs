@@ -259,7 +259,9 @@ impl BulkBuildEngine {
                 &token_info_cache,
             )?;
             let build_elapsed = build_started.elapsed();
+            let memory_accounting_started = Instant::now();
             last_owner_memory = runtime.memory_breakdown_bytes();
+            let memory_accounting_elapsed = memory_accounting_started.elapsed();
             memory_guard.checkpoint("after_batch_build", current_block, &last_owner_memory)?;
 
             // Read the most recent flush_ms from the worker (non-blocking).
@@ -359,6 +361,8 @@ impl BulkBuildEngine {
             sample.history_ms = build_timings.history_ms;
             sample.address_reduce_ms = build_timings.address_reduce_ms;
             sample.activity_stats_ms = build_timings.activity_stats_ms;
+            sample.interner_gc_ms = build_timings.interner_gc_ms;
+            sample.memory_accounting_ms = memory_accounting_elapsed.as_secs_f64() * 1000.0;
             sample.facts_par_iter_ms = build_timings.facts_breakdown.par_iter_ms;
             sample.facts_merge_ms = build_timings.facts_breakdown.merge_ms;
             sample.facts_serial_equivalent_ms = build_timings.facts_breakdown.serial_equivalent_ms;
@@ -459,6 +463,9 @@ impl BulkBuildEngine {
                 history_ms = format!("{:.1}", build_timings.history_ms),
                 address_reduce_ms = format!("{:.1}", build_timings.address_reduce_ms),
                 activity_stats_ms = format!("{:.1}", build_timings.activity_stats_ms),
+                interner_gc_ms = format!("{:.1}", build_timings.interner_gc_ms),
+                memory_accounting_ms =
+                    format!("{:.1}", memory_accounting_elapsed.as_secs_f64() * 1000.0),
                 prev_flush_ms = format!("{:.1}", prev_flush_ms),
                 "Bulk build materialized batch"
             );
@@ -513,9 +520,18 @@ impl BulkBuildEngine {
                 let total_mb: u64 = last_owner_memory.values().sum::<u64>() / (1024 * 1024);
                 let live_cells = runtime.sequencer.live_count();
                 let interner_entries = runtime.interner.len();
+                let interner_slots = runtime.interner.slot_len();
+                let interner_free_slots = runtime.interner.free_len();
+                let written_lock_scripts = runtime.interner.lock_script_written_count();
                 info!(
                     total_memory_mb = total_mb,
-                    live_cells, interner_entries, batch_count, "Bulk build memory snapshot"
+                    live_cells,
+                    interner_entries,
+                    interner_slots,
+                    interner_free_slots,
+                    written_lock_scripts,
+                    batch_count,
+                    "Bulk build memory snapshot"
                 );
             }
         }
@@ -702,6 +718,7 @@ struct BatchBuildTimings {
     history_ms: f64,
     address_reduce_ms: f64,
     activity_stats_ms: f64,
+    interner_gc_ms: f64,
 }
 
 /// Rows produced by `apply_blocks` that need to be flushed to RocksDB.
@@ -1861,6 +1878,7 @@ impl ChainStatsAccumulator {
 
 struct BulkBuildRuntimeState {
     interner: interner::IdentityInterner,
+    interner_liveness: interner::IdentityLiveness,
     sequencer: sequencer::BulkSequencer,
     owners: CoreOwners,
     activity_stats: ActivityStatsAccumulator,
@@ -1868,17 +1886,13 @@ struct BulkBuildRuntimeState {
     hodl_tracker: crate::db::writer::hodl_wave::HodlWaveTracker,
     cell_dist_tracker: crate::db::writer::cell_distribution::CellDistributionTracker,
     hodl_live_cells_by_lock: FxHashMap<crate::sync::types::InternId, i32>,
-    /// Cross-batch dedup set for CF_LOCK_SCRIPTS rows. Lock script mappings
-    /// (lock_hash -> code_hash + hash_type + args) are immutable, so once
-    /// written they never need to be rewritten. This set persists across
-    /// batches to eliminate ~97% of duplicate CF_LOCK_SCRIPTS writes.
-    written_lock_script_ids: FxHashSet<crate::sync::types::InternId>,
 }
 
 impl Default for BulkBuildRuntimeState {
     fn default() -> Self {
         Self {
             interner: interner::IdentityInterner::with_capacity(8192),
+            interner_liveness: interner::IdentityLiveness::default(),
             sequencer: sequencer::BulkSequencer::default(),
             owners: CoreOwners::default(),
             activity_stats: ActivityStatsAccumulator::default(),
@@ -1886,7 +1900,6 @@ impl Default for BulkBuildRuntimeState {
             hodl_tracker: crate::db::writer::hodl_wave::HodlWaveTracker::new(),
             cell_dist_tracker: crate::db::writer::cell_distribution::CellDistributionTracker::new(),
             hodl_live_cells_by_lock: FxHashMap::default(),
-            written_lock_script_ids: FxHashSet::default(),
         }
     }
 }
@@ -1897,6 +1910,10 @@ impl BulkBuildRuntimeState {
         breakdown.insert("live_cells".to_string(), self.sequencer.live_cells_bytes());
         breakdown.insert("interner".to_string(), self.interner.estimated_bytes());
         breakdown.insert(
+            "interner_liveness".to_string(),
+            self.interner_liveness.estimated_bytes(),
+        );
+        breakdown.insert(
             "activity_stats".to_string(),
             self.activity_stats.estimated_bytes(),
         );
@@ -1906,17 +1923,12 @@ impl BulkBuildRuntimeState {
         );
         breakdown.insert(
             "hodl_live_cells_by_lock".to_string(),
-            crate::sync::bulk_build::accounting::hash_map_bytes(
-                &self.hodl_live_cells_by_lock,
-                |lock_hash_id, live_count| {
-                    std::mem::size_of_val(lock_hash_id) as u64
-                        + std::mem::size_of_val(live_count) as u64
-                },
-            ),
-        );
-        breakdown.insert(
-            "written_lock_script_ids".to_string(),
-            accounting::hash_set_serialized_bytes(&self.written_lock_script_ids),
+            std::mem::size_of_val(&self.hodl_live_cells_by_lock) as u64
+                + self.hodl_live_cells_by_lock.capacity() as u64
+                    * std::mem::size_of::<(crate::sync::types::InternId, i32)>() as u64
+                + self.hodl_live_cells_by_lock.len() as u64
+                    * (std::mem::size_of::<crate::sync::types::InternId>()
+                        + std::mem::size_of::<i32>()) as u64,
         );
         breakdown
     }
@@ -1947,7 +1959,11 @@ impl BulkBuildRuntimeState {
         let frozen = self.interner.snapshot_for_reads();
 
         let resolve_started = Instant::now();
-        let resolved = self.sequencer.resolve(&arena)?;
+        self.interner_liveness
+            .ensure_slots(self.interner.slot_len());
+        let resolved = self
+            .sequencer
+            .resolve_with_liveness(&arena, &mut self.interner_liveness)?;
         let resolve_elapsed = resolve_started.elapsed();
 
         let tx_count = u64::try_from(arena.txs.len()).map_err(|_| {
@@ -1979,13 +1995,14 @@ impl BulkBuildRuntimeState {
 
         // Destructure self to split borrows for rayon::join overlap.
         let BulkBuildRuntimeState {
+            interner,
+            interner_liveness,
             owners,
             cell_dist_tracker,
             hodl_tracker,
             hodl_live_cells_by_lock,
             activity_stats,
             chain_stats,
-            written_lock_script_ids,
             ..
         } = self;
         let ctx = owners::ReducerContext::new(&frozen);
@@ -2009,9 +2026,9 @@ impl BulkBuildRuntimeState {
                     &arena,
                     &resolved,
                     &frozen,
+                    interner,
                     is_mainnet,
                     token_info_cache,
-                    written_lock_script_ids,
                 )?;
                 let history_elapsed = history_started.elapsed();
 
@@ -2208,17 +2225,7 @@ impl BulkBuildRuntimeState {
             sealed_rows,
         };
 
-        let timings = BatchBuildTimings {
-            facts_ms: facts_elapsed.as_secs_f64() * 1000.0,
-            facts_breakdown,
-            resolve_ms: resolve_elapsed.as_secs_f64() * 1000.0,
-            reduce_ms: reduce_elapsed.as_secs_f64() * 1000.0,
-            history_ms: history_elapsed.as_secs_f64() * 1000.0,
-            address_reduce_ms: address_elapsed.as_secs_f64() * 1000.0,
-            activity_stats_ms: activity_stats_elapsed.as_secs_f64() * 1000.0,
-        };
-
-        Ok((BatchExecutionStats {
+        let batch_stats = BatchExecutionStats {
             last_block_number: Some(last_block.number),
             last_block_hash: Some(last_block.hash.to_vec()),
             block_count: u64::try_from(arena.blocks.len()).map_err(|_| {
@@ -2230,7 +2237,43 @@ impl BulkBuildRuntimeState {
             tx_count,
             cells_created,
             cells_consumed: consumed_cells,
-        }, timings, pending))
+        };
+
+        // Identity bytes are needed through history/reducer construction only. Release the
+        // frozen view and all batch-local ID holders before reclaiming identities whose live-cell
+        // reference count reached zero. Reclaim also invalidates the matching lock-script write
+        // marker so a reused ID can never suppress a different script row.
+        drop(resolved);
+        drop(frozen);
+        drop(arena);
+        let interner_gc_started = Instant::now();
+        let reclaim_candidates = interner_liveness.drain_zero_candidates();
+        let reclaim_candidate_count = reclaim_candidates.len();
+        let reclaim_stats = interner.reclaim_zero_ref_identities(&reclaim_candidates)?;
+        let interner_gc_elapsed = interner_gc_started.elapsed();
+        tracing::debug!(
+            candidates = reclaim_candidate_count,
+            reclaimed_identities = reclaim_stats.identities,
+            reclaimed_payload_bytes = reclaim_stats.payload_bytes,
+            invalidated_lock_script_markers = reclaim_stats.invalidated_lock_script_markers,
+            active_identities = interner.len(),
+            free_identity_slots = interner.free_len(),
+            interner_gc_ms = format!("{:.1}", interner_gc_elapsed.as_secs_f64() * 1000.0),
+            "Bulk build reclaimed unused interned identities"
+        );
+
+        let timings = BatchBuildTimings {
+            facts_ms: facts_elapsed.as_secs_f64() * 1000.0,
+            facts_breakdown,
+            resolve_ms: resolve_elapsed.as_secs_f64() * 1000.0,
+            reduce_ms: reduce_elapsed.as_secs_f64() * 1000.0,
+            history_ms: history_elapsed.as_secs_f64() * 1000.0,
+            address_reduce_ms: address_elapsed.as_secs_f64() * 1000.0,
+            activity_stats_ms: activity_stats_elapsed.as_secs_f64() * 1000.0,
+            interner_gc_ms: interner_gc_elapsed.as_secs_f64() * 1000.0,
+        };
+
+        Ok((batch_stats, timings, pending))
     }
 
     /// Apply blocks from hex-based RPC fixtures (used by test helpers and integration tests).
@@ -2256,7 +2299,11 @@ impl BulkBuildRuntimeState {
         let facts_elapsed = facts_started.elapsed();
         let frozen = self.interner.snapshot_for_reads();
         let resolve_started = Instant::now();
-        let resolved = self.sequencer.resolve(&arena)?;
+        self.interner_liveness
+            .ensure_slots(self.interner.slot_len());
+        let resolved = self
+            .sequencer
+            .resolve_with_liveness(&arena, &mut self.interner_liveness)?;
         let resolve_elapsed = resolve_started.elapsed();
 
         let tx_count = u64::try_from(arena.txs.len()).map_err(|_| {
@@ -2284,13 +2331,14 @@ impl BulkBuildRuntimeState {
             .last()
             .ok_or_else(|| anyhow!("bulk build arena missing blocks for non-empty batch"))?;
         let BulkBuildRuntimeState {
+            interner,
+            interner_liveness,
             owners,
             cell_dist_tracker,
             hodl_tracker,
             hodl_live_cells_by_lock,
             activity_stats,
             chain_stats,
-            written_lock_script_ids,
             ..
         } = self;
         let ctx = owners::ReducerContext::new(&frozen);
@@ -2311,9 +2359,9 @@ impl BulkBuildRuntimeState {
                     &arena,
                     &resolved,
                     &frozen,
+                    interner,
                     is_mainnet,
                     token_info_cache,
-                    written_lock_script_ids,
                 )?;
                 let history_elapsed = history_started.elapsed();
                 let activity_stats_started = Instant::now();
@@ -2387,20 +2435,45 @@ impl BulkBuildRuntimeState {
         sealed_rows.extend(cell_dist_sealed_rows);
         sealed_rows.extend(activity_sealed_rows);
 
+        let batch_stats = BatchExecutionStats {
+            last_block_number: Some(last_block.number),
+            last_block_hash: Some(last_block.hash.to_vec()),
+            block_count: u64::try_from(arena.blocks.len()).map_err(|_| {
+                anyhow!(
+                    "bulk build block count exceeds u64 range while applying hex block batch: blocks={}",
+                    arena.blocks.len()
+                )
+            })?,
+            tx_count,
+            cells_created,
+            cells_consumed: consumed_cells,
+        };
+        let pending = PendingFlush {
+            history_rows: history.rows,
+            sealed_rows,
+        };
+
+        drop(resolved);
+        drop(frozen);
+        drop(arena);
+        let interner_gc_started = Instant::now();
+        let reclaim_candidates = interner_liveness.drain_zero_candidates();
+        let reclaim_candidate_count = reclaim_candidates.len();
+        let reclaim_stats = interner.reclaim_zero_ref_identities(&reclaim_candidates)?;
+        let interner_gc_elapsed = interner_gc_started.elapsed();
+        tracing::debug!(
+            candidates = reclaim_candidate_count,
+            reclaimed_identities = reclaim_stats.identities,
+            reclaimed_payload_bytes = reclaim_stats.payload_bytes,
+            invalidated_lock_script_markers = reclaim_stats.invalidated_lock_script_markers,
+            active_identities = interner.len(),
+            free_identity_slots = interner.free_len(),
+            interner_gc_ms = format!("{:.1}", interner_gc_elapsed.as_secs_f64() * 1000.0),
+            "Bulk build reclaimed unused interned identities"
+        );
+
         Ok((
-            BatchExecutionStats {
-                last_block_number: Some(last_block.number),
-                last_block_hash: Some(last_block.hash.to_vec()),
-                block_count: u64::try_from(arena.blocks.len()).map_err(|_| {
-                    anyhow!(
-                        "bulk build block count exceeds u64 range while applying hex block batch: blocks={}",
-                        arena.blocks.len()
-                    )
-                })?,
-                tx_count,
-                cells_created,
-                cells_consumed: consumed_cells,
-            },
+            batch_stats,
             BatchBuildTimings {
                 facts_ms: facts_elapsed.as_secs_f64() * 1000.0,
                 facts_breakdown,
@@ -2409,11 +2482,9 @@ impl BulkBuildRuntimeState {
                 history_ms: history_elapsed.as_secs_f64() * 1000.0,
                 address_reduce_ms: address_elapsed.as_secs_f64() * 1000.0,
                 activity_stats_ms: activity_stats_elapsed.as_secs_f64() * 1000.0,
+                interner_gc_ms: interner_gc_elapsed.as_secs_f64() * 1000.0,
             },
-            PendingFlush {
-                history_rows: history.rows,
-                sealed_rows,
-            },
+            pending,
         ))
     }
 
@@ -3132,9 +3203,9 @@ fn build_history_batches(
     arena: &facts::FactsArena,
     resolved: &[facts::ResolvedTxFacts<'_>],
     interner: &interner::FrozenIdentityView,
+    identity_interner: &interner::IdentityInterner,
     is_mainnet: bool,
     token_info_cache: &FxHashMap<Vec<u8>, (Option<String>, Option<u8>)>,
-    written_lock_script_ids: &mut FxHashSet<crate::sync::types::InternId>,
 ) -> Result<HistoryBuildResult> {
     if arena.txs.len() != resolved.len() {
         bail!(
@@ -3175,11 +3246,11 @@ fn build_history_batches(
         let block_rows = result?;
         all_rows.extend(block_rows.rows);
 
-        // Cross-batch dedup: only write lock script rows whose InternId has
-        // not been seen in any previous batch. The set persists across batches
-        // via BulkBuildRuntimeState, eliminating ~97% of duplicate writes.
+        // Cross-batch dedup: the interner keeps one exact write bit beside each
+        // reusable InternId slot. Reclaim clears the bit before the ID can be
+        // reused, so a new identity can never inherit stale dedup state.
         for (id, row) in block_rows.lock_script_rows {
-            if written_lock_script_ids.insert(id) {
+            if identity_interner.mark_lock_script_written(id)? {
                 all_rows.push(row);
             }
         }
@@ -3837,10 +3908,10 @@ fn build_history_rows_for_block(
     // Cell payloads (CF_CELLS) + data_hash index (CF_CELL_BY_DATA_HASH)
     // + lock script mapping (CF_LOCK_SCRIPTS) for this block's cells.
     //
-    // Lock script rows are collected separately (with their InternId) so
-    // the serial merge phase can perform cross-batch dedup via a persistent
-    // FxHashSet<InternId> in BulkBuildRuntimeState. Per-block dedup still
-    // happens here via `seen_lock_ids` to avoid redundant serialization.
+    // Lock script rows are collected separately (with their InternId) so the
+    // serial merge phase can perform exact cross-batch dedup via the interner's
+    // dense per-slot write markers. Per-block dedup still happens here via
+    // `seen_lock_ids` to avoid redundant serialization.
     let mut seen_lock_ids = rustc_hash::FxHashSet::default();
     let mut lock_script_rows = Vec::new();
     for tx in block_txs {
@@ -5748,9 +5819,9 @@ mod tests {
             &arena,
             &resolved,
             &frozen,
+            &interner,
             true,
             &FxHashMap::default(),
-            &mut FxHashSet::default(),
         )
         .expect("history batches");
 
@@ -5823,9 +5894,9 @@ mod tests {
             &arena,
             &resolved,
             &frozen,
+            &interner,
             true,
             &FxHashMap::default(),
-            &mut FxHashSet::default(),
         )
         .expect("history batches");
         let prepared =
@@ -5899,9 +5970,9 @@ mod tests {
             &arena,
             &resolved,
             &frozen,
+            &interner,
             true,
             &FxHashMap::default(),
-            &mut FxHashSet::default(),
         )
         .expect("history batches");
         // Convert rows to WriteBatch and write to stores (no-WAL) to populate memtables.
@@ -6008,9 +6079,9 @@ mod tests {
             &arena,
             &resolved,
             &frozen,
+            &interner,
             true,
             &FxHashMap::default(),
-            &mut FxHashSet::default(),
         )
         .expect("history batches");
         let prepared =
@@ -6087,9 +6158,9 @@ mod tests {
             &arena,
             &resolved,
             &frozen,
+            &interner,
             true,
             &FxHashMap::default(),
-            &mut FxHashSet::default(),
         )
         .expect("history batches");
         let prepared =
@@ -6191,9 +6262,9 @@ mod tests {
             &arena,
             &resolved,
             &frozen,
+            &interner,
             true,
             &FxHashMap::default(),
-            &mut FxHashSet::default(),
         )
         .expect("history batches");
         let sealed_rows =
@@ -6285,9 +6356,9 @@ mod tests {
             &arena,
             &resolved,
             &frozen,
+            &interner,
             true,
             &FxHashMap::default(),
-            &mut FxHashSet::default(),
         )
         .expect("history batches");
         let prepared =
@@ -7858,16 +7929,14 @@ mod tests {
         let domain_store = CkbadgerStore::open_domain(&domain_path).expect("open domain");
         let append_store = CkbadgerStore::open_append_only(&append_path).expect("open append");
 
-        let mut written_ids = FxHashSet::default();
-
         // First call — should emit lock script rows.
         let result1 = build_history_batches(
             &arena,
             &resolved,
             &frozen,
+            &interner,
             true,
             &FxHashMap::default(),
-            &mut written_ids,
         )
         .expect("first build");
 
@@ -7889,19 +7958,19 @@ mod tests {
             lock_count_after_first > 0,
             "first call should emit lock script rows"
         );
-        let set_size_after_first = written_ids.len();
-        assert_eq!(set_size_after_first, lock_count_after_first);
+        let marker_count_after_first = interner.lock_script_written_count();
+        assert_eq!(marker_count_after_first, lock_count_after_first);
 
-        // Second call with same arena/resolved/frozen and same set —
+        // Second call with the same arena/resolved/frozen and interner markers —
         // should emit zero NEW lock script rows since all lock_hash_ids are
-        // already in written_ids.
+        // already marked written.
         let result2 = build_history_batches(
             &arena,
             &resolved,
             &frozen,
+            &interner,
             true,
             &FxHashMap::default(),
-            &mut written_ids,
         )
         .expect("second build");
 
@@ -7925,9 +7994,9 @@ mod tests {
             "second call should not add new lock script entries"
         );
         assert_eq!(
-            written_ids.len(),
-            set_size_after_first,
-            "set should not grow"
+            interner.lock_script_written_count(),
+            marker_count_after_first,
+            "marker count should not grow"
         );
         let _ = std::fs::remove_dir_all(&root);
     }

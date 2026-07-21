@@ -61,6 +61,8 @@ pub struct BatchSample {
     pub history_ms: f64,
     pub address_reduce_ms: f64,
     pub activity_stats_ms: f64,
+    pub interner_gc_ms: f64,
+    pub memory_accounting_ms: f64,
     pub flush_ms: f64,
     pub prepare_ms: f64,
     pub flush_wait_ms: f64,
@@ -137,6 +139,8 @@ impl BatchSample {
             history_ms: 0.0,
             activity_stats_ms: 0.0,
             address_reduce_ms: 0.0,
+            interner_gc_ms: 0.0,
+            memory_accounting_ms: 0.0,
             flush_ms: 0.0,
             prepare_ms: 0.0,
             flush_wait_ms: 0.0,
@@ -1108,6 +1112,8 @@ impl BulkSyncPerfRun {
         let reduce = sum_ms(|s| s.reduce_ms);
         let addr_reduce = sum_ms(|s| s.address_reduce_ms);
         let activity_stats = sum_ms(|s| s.activity_stats_ms);
+        let interner_gc = sum_ms(|s| s.interner_gc_ms);
+        let memory_accounting = sum_ms(|s| s.memory_accounting_ms);
         let history = sum_ms(|s| s.history_ms);
         let flush = sum_ms(|s| s.flush_ms);
 
@@ -1138,6 +1144,12 @@ impl BulkSyncPerfRun {
         }
         if activity_stats > 0.01 {
             phases.push(("activity_stats", activity_stats));
+        }
+        if interner_gc > 0.01 {
+            phases.push(("interner_gc", interner_gc));
+        }
+        if memory_accounting > 0.01 {
+            phases.push(("memory_accounting", memory_accounting));
         }
         if history > 0.01 {
             phases.push(("history", history));
@@ -2998,6 +3010,8 @@ mod tests {
         sample.facts_ms = 120.0;
         sample.resolve_ms = 30.0;
         sample.reduce_ms = 200.0;
+        sample.interner_gc_ms = 25.0;
+        sample.memory_accounting_ms = 0.5;
         sample.flush_ms = 80.0;
         sample.live_cell_count = 5000;
         sample.cumulative_history_rows = 100;
@@ -3011,6 +3025,8 @@ mod tests {
         assert!(samples.contains("\"facts_ms\":120.0"));
         assert!(samples.contains("\"resolve_ms\":30.0"));
         assert!(samples.contains("\"reduce_ms\":200.0"));
+        assert!(samples.contains("\"interner_gc_ms\":25.0"));
+        assert!(samples.contains("\"memory_accounting_ms\":0.5"));
         assert!(samples.contains("\"flush_ms\":80.0"));
         assert!(samples.contains("\"live_cell_count\":5000"));
         assert!(samples.contains("\"cumulative_history_rows\":100"));
@@ -3054,6 +3070,8 @@ mod tests {
         assert_eq!(sample.facts_ms, 0.0);
         assert_eq!(sample.resolve_ms, 0.0);
         assert_eq!(sample.reduce_ms, 0.0);
+        assert_eq!(sample.interner_gc_ms, 0.0);
+        assert_eq!(sample.memory_accounting_ms, 0.0);
         assert_eq!(sample.flush_ms, 0.0);
         assert_eq!(sample.live_cell_count, 0);
         assert_eq!(sample.cumulative_history_rows, 0);
@@ -3073,6 +3091,8 @@ mod tests {
         sample.facts_ms = 150.0;
         sample.resolve_ms = 50.0;
         sample.reduce_ms = 400.0;
+        sample.interner_gc_ms = 25.0;
+        sample.memory_accounting_ms = 15.0;
         sample.history_ms = 100.0;
         sample.flush_ms = 500.0;
         run.record_batch_sample(sample).unwrap();
@@ -3082,6 +3102,8 @@ mod tests {
         assert!(report.contains("## Wall Clock Breakdown"));
         assert!(report.contains("| fetch |"));
         assert!(report.contains("| facts+resolve |"));
+        assert!(report.contains("| interner_gc |"));
+        assert!(report.contains("| memory_accounting |"));
         assert!(report.contains("| reduce |"));
         assert!(report.contains("| history |"));
         assert!(report.contains("| flush |"));
