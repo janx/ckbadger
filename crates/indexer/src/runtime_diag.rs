@@ -6,6 +6,7 @@ use std::path::Path;
 use std::sync::Mutex;
 
 const CGROUP_ROOT: &str = "/sys/fs/cgroup";
+const PROC_SELF_STATUS: &str = "/proc/self/status";
 
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct CgroupMemorySnapshot {
@@ -14,6 +15,26 @@ pub struct CgroupMemorySnapshot {
     pub memory_max_raw: Option<String>,
     pub oom_events: Option<u64>,
     pub oom_kill_events: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+pub struct ProcessMemorySnapshot {
+    pub rss_bytes: u64,
+    pub rss_anon_bytes: u64,
+    pub swap_bytes: u64,
+    pub high_water_rss_bytes: u64,
+}
+
+impl ProcessMemorySnapshot {
+    pub fn committed_bytes(self) -> anyhow::Result<u64> {
+        self.rss_bytes.checked_add(self.swap_bytes).ok_or_else(|| {
+            anyhow::anyhow!(
+                "process committed memory overflow: rss_bytes={} swap_bytes={}",
+                self.rss_bytes,
+                self.swap_bytes
+            )
+        })
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -73,6 +94,59 @@ pub fn generate_incident_id(run_id: &str, sequence: u64) -> String {
 
 pub fn read_cgroup_memory_snapshot() -> CgroupMemorySnapshot {
     read_cgroup_memory_snapshot_from(Path::new(CGROUP_ROOT))
+}
+
+pub fn read_process_memory_snapshot() -> anyhow::Result<ProcessMemorySnapshot> {
+    let content = fs::read_to_string(PROC_SELF_STATUS).map_err(|err| {
+        anyhow::anyhow!(
+            "failed to read process memory status {}: {}",
+            PROC_SELF_STATUS,
+            err
+        )
+    })?;
+    parse_process_memory_status(&content)
+}
+
+fn parse_process_memory_status(content: &str) -> anyhow::Result<ProcessMemorySnapshot> {
+    let read_field = |name: &str| -> anyhow::Result<u64> {
+        let line = content
+            .lines()
+            .find(|line| line.starts_with(name))
+            .ok_or_else(|| anyhow::anyhow!("process memory status missing field {}", name))?;
+        let (_, raw) = line
+            .split_once(':')
+            .ok_or_else(|| anyhow::anyhow!("malformed process memory field: {}", line))?;
+        let mut parts = raw.split_whitespace();
+        let kib = parts
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("process memory field has no value: {}", line))?
+            .parse::<u64>()
+            .map_err(|err| anyhow::anyhow!("invalid process memory field {}: {}", line, err))?;
+        let unit = parts
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("process memory field has no unit: {}", line))?;
+        if unit != "kB" {
+            return Err(anyhow::anyhow!(
+                "unsupported process memory field unit: field={} unit={}",
+                name,
+                unit
+            ));
+        }
+        kib.checked_mul(1024).ok_or_else(|| {
+            anyhow::anyhow!(
+                "process memory field byte conversion overflow: field={} kib={}",
+                name,
+                kib
+            )
+        })
+    };
+
+    Ok(ProcessMemorySnapshot {
+        rss_bytes: read_field("VmRSS")?,
+        rss_anon_bytes: read_field("RssAnon")?,
+        swap_bytes: read_field("VmSwap")?,
+        high_water_rss_bytes: read_field("VmHWM")?,
+    })
 }
 
 fn read_cgroup_memory_snapshot_from(root: &Path) -> CgroupMemorySnapshot {
@@ -178,5 +252,21 @@ mod tests {
         assert_eq!(snapshot.memory_max_raw.as_deref(), Some("max"));
         assert_eq!(snapshot.oom_events, Some(7));
         assert_eq!(snapshot.oom_kill_events, Some(2));
+    }
+
+    #[test]
+    fn test_parse_process_memory_status_uses_rss_plus_swap_as_committed() {
+        let status = r#"Name:\tckbadger
+VmHWM:   4096 kB
+VmRSS:   3072 kB
+RssAnon: 2048 kB
+VmSwap:  1024 kB
+"#;
+        let snapshot = parse_process_memory_status(status).unwrap();
+        assert_eq!(snapshot.rss_bytes, 3 * 1024 * 1024);
+        assert_eq!(snapshot.rss_anon_bytes, 2 * 1024 * 1024);
+        assert_eq!(snapshot.swap_bytes, 1024 * 1024);
+        assert_eq!(snapshot.high_water_rss_bytes, 4 * 1024 * 1024);
+        assert_eq!(snapshot.committed_bytes().unwrap(), 4 * 1024 * 1024);
     }
 }

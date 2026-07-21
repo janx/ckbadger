@@ -58,7 +58,7 @@ For any non-trivial task, use this structure in the final summary or PR descript
 - **Indexer owns all chain-store RocksDB writes**: any operation that creates/updates/deletes persistent domain- or append-only-store state must be executed by `ckbadger-indexer`. The one exception is the separate **network store**, whose sole writer is the opt-in `ckbadger-crawler` service (see Network store responsibility below).
 - **API is read-only for RocksDB**: `ckbadger-api` must only read from store (secondary/open_secondary path) and must not write persistent state.
 - If API needs missing derived data, API must trigger indexer to compute and write it, then wait/poll for result instead of writing DB directly.
-- **Domain store responsibility**: domain store (`[store].domain_data_path`, 60 CFs) holds all mutable canonical/query state including activities, addr_txs, live/consumed cell markers, and all indexes. May perform create/update/delete as required by chain progression and reorg handling, but only via indexer.
+- **Domain store responsibility**: domain store (`[store].domain_data_path`, 59 CFs) holds all mutable canonical/query state including activities, addr_txs, live/consumed cell markers, and all indexes. May perform create/update/delete as required by chain progression and reorg handling, but only via indexer.
 - **Append-only store responsibility**: append-only store (`[store].append_only_data_path`, 1 CF: `CF_CELLS`) holds only immutable cell payloads, content-addressed by outpoint. Write-once, never updated or deleted.
 - **Append-only correction policy**: if cell payload data in the append-only store is wrong, fix indexer logic and rebuild from genesis; do not patch cell data with in-place update/delete.
 - **Cross-store cell reads**: live/consumed markers live in domain store; cell payloads live in append-only store. Reading a full cell requires both the domain and append-only stores.
@@ -66,7 +66,7 @@ For any non-trivial task, use this structure in the final summary or PR descript
 
 ## Store Boundary Check Rules (MANDATORY)
 
-- `CF_CELLS` is the only append-only CF. The 60 domain CFs are the canonical mutable chain view; the 2 network CFs (`CF_NET_NODES`, `CF_NET_STATS`) belong to the separate network store (mutable, TTL-retained, non-chain).
+- `CF_CELLS` is the only append-only CF. The 59 domain CFs are the canonical mutable chain view; the 2 network CFs (`CF_NET_NODES`, `CF_NET_STATS`) belong to the separate network store (mutable, TTL-retained, non-chain).
 - Every storage PR must explicitly state which logical store each new/changed write path targets (`domain`, `append-only`, or `network`).
 - Any write path to the append-only store (`CF_CELLS`) must be reviewed as append-only semantics: new-key append only, no update, no delete, no overwrite.
 - Do not add helper APIs that allow generic mutation on append-only store (for example update-by-key or delete-by-key operations).
@@ -152,7 +152,7 @@ crates/
   indexer/        # Blockchain sync daemon library (three-stage pipeline)
     src/sync/bulk_build/ # Bulk-build engine (in-memory reducers, FactsArena, LiveCellOwner)
     src/verify/   #   Data integrity verification suite (55 checks)
-  ckbadger-store/ # Embedded RocksDB storage engine (three store classes: 60 domain + 1 append-only + 2 network CFs)
+  ckbadger-store/ # Embedded RocksDB storage engine (three store classes: 59 domain + 1 append-only + 2 network CFs)
   dob-decoder/    # CKB-VM DOB decoder (DNA extraction from Spore NFTs)
   common/         # Shared types (block, cell, tx, script, error)
   ckb-store-reader/ # Read-only CKB RocksDB reader (optional direct read mode)
@@ -163,7 +163,7 @@ frontend/         # Vite + React SPA
 docs/ARCHITECTURE_MAP.md     # Module ownership and entry points
 docs/POSTMORTEM.md           # Historical bugs - READ BEFORE CKB/DAO WORK
 docs/INDEXER_PIPELINE.md     # Pipeline architecture and progress tracking
-docs/STORE_SCHEMA.md         # Column families reference (60 domain + 1 append-only + 2 network)
+docs/STORE_SCHEMA.md         # Column families reference (59 domain + 1 append-only + 2 network)
 docs/TESTING.md               # Data integrity verification details
 ```
 
@@ -186,7 +186,7 @@ Sync progress and memory stats are stored in RocksDB (`get_sync_tip()`/`get_sync
 
 ## ckbadger-store (Embedded Storage Engine)
 
-Three logical RocksDB store classes: domain (`[store].domain_data_path`, default `data/domain`, 60 CFs), append-only (`[store].append_only_data_path`, default `data/append-only`, 1 CF: `CF_CELLS`), and network (`[store].network_data_path`, default `data/network`, 2 CFs: `CF_NET_NODES`, `CF_NET_STATS`). For the two chain stores the indexer opens read-write and the API opens secondary (read-only); the append-only store holds only immutable cell payloads keyed by outpoint, while all other chain state (activities, indexes, stats, etc.) lives in the domain store. The network store is written solely by the opt-in `ckbadger-crawler` service (configured via the `[crawler]` section, default `enabled = false`; API opens it secondary) and holds non-chain p2p-crawler observations — it is the only store EXEMPT from rebuild-from-genesis. See `docs/STORE_SCHEMA.md` for full column family reference.
+Three logical RocksDB store classes: domain (`[store].domain_data_path`, default `data/domain`, 59 CFs), append-only (`[store].append_only_data_path`, default `data/append-only`, 1 CF: `CF_CELLS`), and network (`[store].network_data_path`, default `data/network`, 2 CFs: `CF_NET_NODES`, `CF_NET_STATS`). For the two chain stores the indexer opens read-write and the API opens secondary (read-only); the append-only store holds only immutable cell payloads keyed by outpoint, while all other chain state (activities, indexes, stats, etc.) lives in the domain store. The network store is written solely by the opt-in `ckbadger-crawler` service (configured via the `[crawler]` section, default `enabled = false`; API opens it secondary) and holds non-chain p2p-crawler observations — it is the only store EXEMPT from rebuild-from-genesis. See `docs/STORE_SCHEMA.md` for full column family reference.
 
 Memory: ~22GB peak (>=32GB RAM), ~8GB peak (<32GB RAM).
 

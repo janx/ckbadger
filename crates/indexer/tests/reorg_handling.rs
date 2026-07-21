@@ -745,11 +745,9 @@ fn test_rollback_deletes_fiber_channels_opened_after_fork_point() {
 
     batch.put_fiber_channel(&channel_id_a, &channel_a);
     batch.put_addr_fiber_channel(&participant_a, &channel_id_a);
-    batch.put_fiber_channel_by_funding_args(&channel_a.funding_lock_args, &channel_id_a);
 
     batch.put_fiber_channel(&channel_id_b, &channel_b);
     batch.put_addr_fiber_channel(&participant_b, &channel_id_b);
-    batch.put_fiber_channel_by_funding_args(&channel_b.funding_lock_args, &channel_id_b);
     batch.commit().unwrap();
 
     // Sanity: both channels exist

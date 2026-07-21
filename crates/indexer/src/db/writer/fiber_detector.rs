@@ -1,7 +1,7 @@
 //! Fiber Network protocol detector: identifies payment channel lifecycle events
 //! by analyzing funding-lock and commitment-lock transitions.
 
-use ckbadger_store::types::ProtocolAction;
+use ckbadger_store::{keys, types::ProtocolAction};
 
 use crate::parser::fiber::{is_commitment_lock, is_funding_lock, parse_funding_lock_args};
 
@@ -51,6 +51,8 @@ struct FiberCellSummary {
     funding_input_args: Option<Vec<u8>>,
     /// Capacity of the first funding-lock input (for close/force_close metadata).
     funding_input_capacity: Option<i64>,
+    /// Consumed funding outpoint, which is the canonical channel identity.
+    funding_input_outpoint: Option<(Vec<u8>, u32)>,
     /// lock_args from the first commitment-lock input (for settlement metadata).
     commitment_input_args: Option<Vec<u8>>,
     /// Capacity of the first commitment-lock input (for settlement metadata).
@@ -90,6 +92,8 @@ impl FiberDetector {
                     if summary.funding_input_args.is_none() {
                         summary.funding_input_args = Some(input.lock_args.to_vec());
                         summary.funding_input_capacity = Some(input.capacity);
+                        summary.funding_input_outpoint =
+                            Some((input.previous_tx_hash.to_vec(), input.previous_output_index));
                     }
                 }
                 FiberLockType::CommitmentLock => {
@@ -175,13 +179,9 @@ impl FiberDetector {
                             output_index
                         )
                     })?;
-                    // Encode outpoint as hex: tx_hash(32B) + output_index as LE u32(4B)
-                    let mut outpoint_bytes = Vec::with_capacity(36);
-                    outpoint_bytes.extend_from_slice(tx_hash);
-                    outpoint_bytes.extend_from_slice(&output_index_u32.to_le_bytes());
                     meta.insert(
                         "channelOutpoint".to_string(),
-                        serde_json::json!(format!("0x{}", hex::encode(&outpoint_bytes))),
+                        serde_json::json!(encode_channel_outpoint(tx_hash, output_index_u32)?),
                     );
                     meta.insert(
                         "capacity".to_string(),
@@ -200,6 +200,13 @@ impl FiberDetector {
             FiberEvent::ChannelClose => {
                 let mut meta = serde_json::Map::new();
                 meta.insert("event".to_string(), serde_json::json!("channel_close"));
+
+                if let Some((ref tx_hash, output_index)) = summary.funding_input_outpoint {
+                    meta.insert(
+                        "channelOutpoint".to_string(),
+                        serde_json::json!(encode_channel_outpoint(tx_hash, output_index)?),
+                    );
+                }
 
                 if let (Some(ref args), Some(capacity)) =
                     (&summary.funding_input_args, summary.funding_input_capacity)
@@ -221,6 +228,13 @@ impl FiberDetector {
             FiberEvent::ForceClose => {
                 let mut meta = serde_json::Map::new();
                 meta.insert("event".to_string(), serde_json::json!("force_close"));
+
+                if let Some((ref tx_hash, output_index)) = summary.funding_input_outpoint {
+                    meta.insert(
+                        "channelOutpoint".to_string(),
+                        serde_json::json!(encode_channel_outpoint(tx_hash, output_index)?),
+                    );
+                }
 
                 if let (Some(ref args), Some(capacity)) =
                     (&summary.funding_input_args, summary.funding_input_capacity)
@@ -304,6 +318,19 @@ impl FiberDetector {
     }
 }
 
+fn encode_channel_outpoint(tx_hash: &[u8], output_index: u32) -> anyhow::Result<String> {
+    if tx_hash.len() != 32 {
+        anyhow::bail!(
+            "Fiber channel outpoint tx hash must be 32 bytes, got {}",
+            tx_hash.len()
+        );
+    }
+    Ok(format!(
+        "0x{}",
+        hex::encode(keys::encode_fiber_outpoint(tx_hash, output_index))
+    ))
+}
+
 impl ProtocolDetector for FiberDetector {
     fn might_apply_batch(
         &self,
@@ -380,6 +407,8 @@ mod tests {
     use ckbadger_store::types::TAG_PROTOCOL;
 
     struct OwnedInput {
+        previous_tx_hash: Vec<u8>,
+        previous_output_index: u32,
         lock_script_hash: Vec<u8>,
         lock_code_hash: Vec<u8>,
         lock_args: Vec<u8>,
@@ -392,6 +421,8 @@ mod tests {
     impl OwnedInput {
         fn view(&self) -> crate::db::writer::activities::InputCellView<'_> {
             crate::db::writer::activities::InputCellView {
+                previous_tx_hash: &self.previous_tx_hash,
+                previous_output_index: self.previous_output_index,
                 lock_script_hash: &self.lock_script_hash,
                 lock_code_hash: &self.lock_code_hash,
                 lock_hash_type: 1,
@@ -420,6 +451,8 @@ mod tests {
         type_args: Option<Vec<u8>>,
     ) -> OwnedInput {
         OwnedInput {
+            previous_tx_hash: vec![lock_hash_byte; 32],
+            previous_output_index: 0,
             lock_script_hash: vec![lock_hash_byte; 32],
             lock_code_hash,
             lock_args,
@@ -632,6 +665,10 @@ mod tests {
             .expect("should have fiber channel_close action");
         let meta = close_action.metadata_value().unwrap();
         assert_eq!(meta["event"], "channel_close");
+        assert_eq!(
+            meta["channelOutpoint"],
+            encode_channel_outpoint(&[funding_owner; 32], 0).unwrap()
+        );
         assert_eq!(meta["capacity"], "14500000000");
         assert_eq!(
             meta["fundingLockArgs"],
@@ -718,6 +755,10 @@ mod tests {
             .expect("should have fiber force_close action");
         let meta = force_action.metadata_value().unwrap();
         assert_eq!(meta["event"], "force_close");
+        assert_eq!(
+            meta["channelOutpoint"],
+            encode_channel_outpoint(&[funding_owner; 32], 0).unwrap()
+        );
         assert_eq!(meta["capacity"], "14500000000");
         assert_eq!(
             meta["fundingLockArgs"],

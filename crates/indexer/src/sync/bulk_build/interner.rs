@@ -7,7 +7,7 @@ use crate::sync::types::InternId;
 /// Thread-safe identity interner for concurrent use during facts building.
 #[derive(Debug)]
 pub(crate) struct IdentityInterner {
-    by_value: DashMap<Vec<u8>, InternId>,
+    by_value: DashMap<Arc<[u8]>, InternId>,
     /// Wrapped in `Arc` so `snapshot_for_reads()` is O(1) (single atomic
     /// ref-count bump) instead of O(n) (cloning millions of Arc pointers).
     /// `intern_bytes()` uses `Arc::make_mut` for COW semantics: when no
@@ -44,7 +44,7 @@ impl IdentityInterner {
     pub(crate) fn intern_bytes(&self, bytes: Vec<u8>) -> InternId {
         self.intern_call_count.fetch_add(1, Ordering::Relaxed);
         // Fast path: lock-free DashMap read
-        if let Some(id) = self.by_value.get(&bytes) {
+        if let Some(id) = self.by_value.get(bytes.as_slice()) {
             return *id;
         }
         // Counts Mutex acquisitions, not new-identity insertions. The double-check inside the
@@ -53,13 +53,14 @@ impl IdentityInterner {
         self.intern_slow_path_count.fetch_add(1, Ordering::Relaxed);
         // Slow path: acquire values lock, double-check, insert
         let mut values = self.values.lock().unwrap();
-        if let Some(id) = self.by_value.get(&bytes) {
+        if let Some(id) = self.by_value.get(bytes.as_slice()) {
             return *id;
         }
         let vec = Arc::make_mut(&mut values);
         let id = InternId::new(vec.len());
-        vec.push(Arc::from(bytes.as_slice()));
-        self.by_value.insert(bytes, id);
+        let shared: Arc<[u8]> = Arc::from(bytes);
+        vec.push(Arc::clone(&shared));
+        self.by_value.insert(shared, id);
         id
     }
 
@@ -94,9 +95,31 @@ impl IdentityInterner {
 
     pub(crate) fn estimated_bytes(&self) -> u64 {
         let values = self.values.lock().unwrap();
-        let map_overhead = self.by_value.len() as u64 * 80;
-        let values_bytes: u64 = values.iter().map(|v| v.len() as u64 + 24).sum();
+        // The DashMap key and the ID table share one Arc payload. Count the
+        // payload once, plus one Arc handle in each container.
+        let map_overhead = self.by_value.len() as u64
+            * (64 + std::mem::size_of::<Arc<[u8]>>() + std::mem::size_of::<InternId>()) as u64;
+        let values_bytes: u64 = values
+            .iter()
+            .map(|v| v.len() as u64 + std::mem::size_of::<Arc<[u8]>>() as u64)
+            .sum();
         std::mem::size_of::<Self>() as u64 + map_overhead + values_bytes
+    }
+
+    #[cfg(test)]
+    fn storage_pointers_for_test(&self, bytes: &[u8], id: InternId) -> (*const u8, *const u8) {
+        let map_ptr = self
+            .by_value
+            .get(bytes)
+            .expect("test identity must exist in lookup map")
+            .key()
+            .as_ptr();
+        let values = self.values.lock().unwrap();
+        let table_ptr = values
+            .get(id.as_usize())
+            .expect("test identity ID must exist in value table")
+            .as_ptr();
+        (map_ptr, table_ptr)
     }
 }
 
@@ -138,6 +161,19 @@ mod tests {
         let second = interner.intern_bytes(vec![1, 2, 3]);
 
         assert_eq!(first, second);
+    }
+
+    #[test]
+    fn interner_map_and_id_table_share_one_identity_payload_allocation() {
+        let interner = IdentityInterner::default();
+        let bytes = vec![0xAB; 32];
+        let id = interner.intern_bytes(bytes.clone());
+
+        let (map_ptr, table_ptr) = interner.storage_pointers_for_test(&bytes, id);
+        assert_eq!(
+            map_ptr, table_ptr,
+            "the lookup key and ID table must share the same Arc<[u8]> payload"
+        );
     }
 
     #[test]

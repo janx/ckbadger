@@ -124,7 +124,7 @@ fn raise_fd_limit() -> Result<u64> {
 
 /// Fail fast if `fd_limit` is too low to run the indexer.
 ///
-/// The indexer opens many RocksDB SST files during bulk sync (60 column
+/// The indexer opens many RocksDB SST files during bulk sync (59 column
 /// families × multiple SST levels).  Below [`FD_LIMIT_MIN`] the open will
 /// fail mid-sync, leaving RocksDB in an incomplete state.
 fn check_fd_limit_for_indexer(fd_limit: u64) -> Result<()> {
@@ -374,6 +374,7 @@ fn build_indexer_service_config(
         network: config.ckb.network.clone(),
         poll_interval_ms: config.indexer.poll_interval_ms,
         bulk_sync_threshold: config.indexer.bulk_sync_threshold,
+        bulk_memory_budget_gb: config.indexer.bulk_memory_budget_gb,
         store_runtime_config: store_runtime_config(&config.store, workdir)?,
         decoder_cache_path: store_paths.decoder_cache.to_string_lossy().to_string(),
         dob_decode_dir: work.dob_decode_dir.to_string_lossy().to_string(),

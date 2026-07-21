@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -48,6 +48,7 @@ pub(crate) mod facts;
 pub(crate) mod interner;
 pub(crate) mod live_cells;
 pub(crate) mod materialize;
+pub(crate) mod memory_guard;
 pub(crate) mod owners;
 pub(crate) mod prefetch;
 pub(crate) mod sampler;
@@ -59,7 +60,6 @@ use crate::sync::bottleneck::{self, BatchSignals, BottleneckController};
 struct PreparedFinalizeArtifacts {
     activity_sealed_rows: Vec<materialize::MaterializedRow>,
     chain_sealed_rows: Vec<materialize::MaterializedRow>,
-    final_snapshot_rows: Vec<materialize::MaterializedRow>,
 }
 
 #[derive(Default)]
@@ -94,14 +94,19 @@ impl BulkBuildEngine {
         })?;
         indexer.reconcile_hodl_tracker_with_tip(handoff_tip)?;
         indexer.reconcile_cell_dist_tracker_with_tip(handoff_tip)?;
+        persist_bulk_sync_completion_status(
+            indexer.writer.store().as_ref(),
+            indexer.progress.target(),
+        )?;
+        indexer.finalize_bulk_sync_perf_completed();
         info!(
             run_id = %indexer.run_id,
             current_block = indexer.progress.current(),
             target_block = indexer.progress.target(),
             threshold = indexer.config.bulk_sync_threshold,
-            "Bulk build stage finalized; handing off to pipeline for near-tip/live sync"
+            "Bulk build stage finalized; exiting cleanly so near-tip sync starts with a reclaimed heap"
         );
-        indexer.run_pipeline().await
+        Ok(())
     }
 
     async fn run_bulk_stage_until_pipeline_handoff(indexer: &Indexer) -> Result<()> {
@@ -122,6 +127,16 @@ impl BulkBuildEngine {
         );
         let token_info_cache = preload_token_info_cache(indexer.writer.store().as_ref())?;
         let mem_profile = indexer.writer.store().memory_profile();
+        let memory_guard = memory_guard::BulkMemoryGuard::new(
+            indexer.config.bulk_memory_budget_gb,
+            mem_profile.system_ram_bytes,
+        )?;
+        info!(
+            run_id = %indexer.run_id,
+            process_memory_budget_bytes = memory_guard.limit_bytes(),
+            configured_process_memory_budget_gb = ?indexer.config.bulk_memory_budget_gb,
+            "Bulk build whole-process memory guard enabled"
+        );
         let prefetch_depth =
             bottleneck::prefetch_channel_depth(mem_profile.system_ram_bytes) as usize;
         let flush_depth = bottleneck::flush_channel_depth(mem_profile.system_ram_bytes) as usize;
@@ -162,11 +177,13 @@ impl BulkBuildEngine {
         // a channel. A dedicated worker converts rows to WriteBatch via
         // prepare_flush and commits to RocksDB. Build only blocks when the
         // channel is full, eliminating the flush bubble when flush_ms > build_ms.
+        let flush_queue_budget_bytes = (memory_guard.limit_bytes() / 8).max(64 * 1024 * 1024);
         let flush_channel = materialize::FlushChannelHandle::new(
             flush_depth,
+            flush_queue_budget_bytes,
             indexer.writer.store().clone(),
             indexer.append_only_store.clone(),
-        );
+        )?;
         // Initial 0.0 is semantically correct (no flush yet) but always
         // overwritten by flush_channel.last_flush_ms() before first read.
         #[allow(unused_assignments)]
@@ -175,6 +192,7 @@ impl BulkBuildEngine {
         let mut cumulative_sealed_rows: usize = 0;
         let mut _flush_send_count: usize = 0;
         let mut last_bottleneck: Option<String> = None;
+        let mut last_owner_memory = runtime.memory_breakdown_bytes();
 
         loop {
             ckb_store.refresh()?;
@@ -212,13 +230,21 @@ impl BulkBuildEngine {
             }
             let prefetch_recv_elapsed = recv_started.elapsed();
 
+            let process_memory =
+                memory_guard.checkpoint("before_batch", current_block, &last_owner_memory)?;
+            let safe_max_batch_bytes = memory_guard.safe_batch_input_bytes(
+                process_memory,
+                controller.max_batch_bytes(),
+                current_block,
+                &last_owner_memory,
+            )?;
+
             // Enter the batch span for the synchronous build + record section.
             // Dropped explicitly before the next .await (flush_channel.send).
             let _batch_guard = batch_span.enter();
 
             // Drain by cell count with byte safety cap.
-            let drained =
-                buffer.drain_by_cells(controller.target_cells(), controller.max_batch_bytes());
+            let drained = buffer.drain_by_cells(controller.target_cells(), safe_max_batch_bytes);
             let batch_block_count = drained.len() as u64;
             let batch_cells: u64 = drained.iter().map(|b| b.cell_count).sum();
             let batch_bytes: u64 = drained.iter().map(|b| b.block_bytes as u64).sum();
@@ -233,6 +259,8 @@ impl BulkBuildEngine {
                 &token_info_cache,
             )?;
             let build_elapsed = build_started.elapsed();
+            last_owner_memory = runtime.memory_breakdown_bytes();
+            memory_guard.checkpoint("after_batch_build", current_block, &last_owner_memory)?;
 
             // Read the most recent flush_ms from the worker (non-blocking).
             prev_flush_ms = flush_channel.last_flush_ms();
@@ -344,7 +372,7 @@ impl BulkBuildEngine {
             sample.flush_channel_pending = flush_channel_pending;
             sample.prefetch_recv_ms = prefetch_recv_elapsed.as_secs_f64() * 1000.0;
             sample.prefetch_depth = prefetch_depth as u64;
-            sample.owner_memory_bytes = runtime.memory_breakdown_bytes();
+            sample.owner_memory_bytes = last_owner_memory.clone();
             sample.live_cell_count = runtime.sequencer.live_count() as u64;
             // Cumulative row counts: tracks rows sent to flush channel.
             sample.cumulative_history_rows = cumulative_history_rows as u64;
@@ -482,8 +510,7 @@ impl BulkBuildEngine {
 
             // Periodic memory summary every 10 batches
             if batch_count.is_multiple_of(10) {
-                let mem = runtime.memory_breakdown_bytes();
-                let total_mb: u64 = mem.values().sum::<u64>() / (1024 * 1024);
+                let total_mb: u64 = last_owner_memory.values().sum::<u64>() / (1024 * 1024);
                 let live_cells = runtime.sequencer.live_count();
                 let interner_entries = runtime.interner.len();
                 info!(
@@ -497,6 +524,11 @@ impl BulkBuildEngine {
         // The progress monitor (entry.rs, 10s polling) reads these atomics and
         // publishes to RocksDB so the TUI can display a finalize checklist.
         let finalize_started = Instant::now();
+        memory_guard.checkpoint(
+            "before_finalize",
+            indexer.progress.current(),
+            &last_owner_memory,
+        )?;
 
         // Drop the buffer handle (and its receiver) to signal prefetch to stop.
         drop(buffer);
@@ -549,6 +581,8 @@ impl BulkBuildEngine {
 
         let BulkBuildRuntimeState {
             owners,
+            sequencer,
+            interner,
             hodl_tracker,
             cell_dist_tracker,
             ..
@@ -560,6 +594,8 @@ impl BulkBuildEngine {
                 append_only_arc.as_ref(),
                 prepared_finalize,
                 owners,
+                sequencer,
+                interner,
                 hodl_tracker,
                 cell_dist_tracker,
                 &perf_stats,
@@ -811,6 +847,8 @@ fn materialize_finalize_phases(
     append_only_store: &CkbadgerStore,
     prepared: PreparedFinalizeArtifacts,
     owners: CoreOwners,
+    sequencer: sequencer::BulkSequencer,
+    interner: interner::IdentityInterner,
     hodl_tracker: crate::db::writer::hodl_wave::HodlWaveTracker,
     cell_dist_tracker: crate::db::writer::cell_distribution::CellDistributionTracker,
     perf_stats: &crate::sync::diagnostics::BulkBuildPerfStats,
@@ -839,61 +877,21 @@ fn materialize_finalize_phases(
         let _guard =
             tracing::info_span!("bulk_finalize", phase = 4, label = "final_snapshot").entered();
         perf_stats.record_finalize_step(4, finalize_started.elapsed());
-        materializer.materialize_final_snapshot(&prepared.final_snapshot_rows)?;
+        let frozen = interner.snapshot_for_reads();
+        materializer.materialize_final_snapshot_bounded(|sink| {
+            emit_final_snapshot_rows(&sequencer, &frozen, |row| sink.push(row))
+        })?;
     }
 
-    // Steps 5-6: build owner rows in parallel, write sequentially
+    // Steps 5-6: emit each owner sequentially through byte-bounded batches.
+    // Building every owner's full row vector in parallel duplicated the whole
+    // reducer state at the exact point where bulk sync already had peak RSS.
     {
         let _guard =
             tracing::info_span!("bulk_finalize", phase = 5, label = "owners_build").entered();
         perf_stats.record_finalize_step(5, finalize_started.elapsed());
-
-        // Build rows in parallel — each owner is independent
-        let (addr_result, fiber_result, dao_result, object_result, script_result, token_result) =
-            std::thread::scope(|s| {
-                let h_addr = s.spawn(|| owners.address.build_final_rows());
-                let h_script = s.spawn(|| owners.script.build_final_rows(domain_store));
-                let h_token = s.spawn(|| owners.token.build_final_rows(domain_store));
-                let h_object = s.spawn(|| owners.object.build_final_rows());
-
-                // dao + fiber are small, run inline on the scope's thread
-                let dao_result = owners.dao.build_final_rows();
-                let fiber_result = owners.fiber.build_final_rows();
-
-                (
-                    h_addr.join().expect("address build_final_rows panicked"),
-                    fiber_result,
-                    dao_result,
-                    h_object.join().expect("object build_final_rows panicked"),
-                    h_script.join().expect("script build_final_rows panicked"),
-                    h_token.join().expect("token build_final_rows panicked"),
-                )
-            });
-
-        let addr_rows = addr_result?;
-        let fiber_rows = fiber_result?;
-        let dao_rows = dao_result?;
-        let object_rows = object_result?;
-        let script_rows = script_result?;
-        let token_rows = token_result?;
-
-        // Write all rows sequentially through Materializer
         perf_stats.record_finalize_step(6, finalize_started.elapsed());
-        for rows in [
-            &addr_rows,
-            &script_rows,
-            &token_rows,
-            &dao_rows,
-            &fiber_rows,
-            &object_rows,
-        ] {
-            if !rows.sealed_rows.is_empty() {
-                materializer.stream_sealed_aggregate_rows(&rows.sealed_rows)?;
-            }
-            if !rows.snapshot_rows.is_empty() {
-                materializer.materialize_final_snapshot(&rows.snapshot_rows)?;
-            }
-        }
+        owners.materialize_all(&mut materializer)?;
     }
 
     // Step 11: metadata (HODL + cell distribution tracker state)
@@ -947,7 +945,7 @@ impl CoreOwners {
         &mut self,
         tx: &facts::ResolvedTxFacts<'_>,
         ctx: &owners::ReducerContext<'_>,
-    ) -> Result<FxHashMap<Vec<u8>, owners::address::AddressTxDelta>> {
+    ) -> Result<FxHashMap<[u8; 32], owners::address::AddressTxDelta>> {
         let address_deltas = self.address.apply_tx_with_deltas(tx, ctx)?;
         self.script.apply_tx(tx, ctx)?;
         self.token.apply_tx(tx, ctx)?;
@@ -957,20 +955,38 @@ impl CoreOwners {
         Ok(address_deltas)
     }
 
-    fn materialize_all(&mut self, materializer: &mut materialize::Materializer<'_>) -> Result<()> {
-        self.address.flush_sealed(materializer)?;
-        self.script.flush_sealed(materializer)?;
-        self.token.flush_sealed(materializer)?;
-        self.dao.flush_sealed(materializer)?;
-        self.fiber.flush_sealed(materializer)?;
-        self.object.flush_sealed(materializer)?;
+    fn materialize_all(self, materializer: &mut materialize::Materializer<'_>) -> Result<()> {
+        let Self {
+            mut address,
+            mut script,
+            mut token,
+            mut dao,
+            mut fiber,
+            mut object,
+        } = self;
 
-        self.address.materialize_final(materializer)?;
-        self.script.materialize_final(materializer)?;
-        self.token.materialize_final(materializer)?;
-        self.dao.materialize_final(materializer)?;
-        self.fiber.materialize_final(materializer)?;
-        self.object.materialize_final(materializer)?;
+        address.flush_sealed(materializer)?;
+        address.materialize_final(materializer)?;
+        drop(address);
+
+        script.flush_sealed(materializer)?;
+        script.materialize_final(materializer)?;
+        drop(script);
+
+        token.flush_sealed(materializer)?;
+        token.materialize_final(materializer)?;
+        drop(token);
+
+        dao.flush_sealed(materializer)?;
+        dao.materialize_final(materializer)?;
+        drop(dao);
+
+        fiber.flush_sealed(materializer)?;
+        fiber.materialize_final(materializer)?;
+        drop(fiber);
+
+        object.flush_sealed(materializer)?;
+        object.materialize_final(materializer)?;
         Ok(())
     }
 }
@@ -981,6 +997,9 @@ struct ActivityStatsAccumulator {
     daily_addrs: FxHashMap<String, FxHashSet<[u8; 32]>>,
     hourly_stats: FxHashMap<String, DailyActivityStats>,
     hourly_addrs: FxHashMap<String, FxHashSet<[u8; 32]>>,
+    mtp_timestamps_ms: VecDeque<i64>,
+    sealed_through_ms: Option<i64>,
+    last_block_number: Option<i64>,
 }
 
 impl ActivityStatsAccumulator {
@@ -1011,7 +1030,151 @@ impl ActivityStatsAccumulator {
     /// Chrono cache: all txs in the same block share one timestamp, so we
     /// cache the formatted date/hour strings and only reformat on timestamp
     /// change (~47K format calls per batch instead of ~123K).
-    fn apply_tx_actions(&mut self, tx_actions_list: &[TxActions]) -> Result<()> {
+    fn apply_batch(
+        &mut self,
+        blocks: &[facts::BlockFacts],
+        tx_actions_list: &[TxActions],
+    ) -> Result<Vec<materialize::MaterializedRow>> {
+        if blocks.is_empty() {
+            if tx_actions_list.is_empty() {
+                return Ok(Vec::new());
+            }
+            bail!(
+                "activity accumulator received actions without blocks: actions={}",
+                tx_actions_list.len()
+            );
+        }
+
+        let mut expected_number = self
+            .last_block_number
+            .map(|number| {
+                number.checked_add(1).ok_or_else(|| {
+                    anyhow!(
+                        "activity accumulator block number overflow after block={}",
+                        number
+                    )
+                })
+            })
+            .transpose()?;
+        let mut block_timestamps = FxHashMap::default();
+        for block in blocks {
+            if block.timestamp_ms < 0 {
+                bail!(
+                    "activity accumulator received negative block timestamp: block={} timestamp_ms={}",
+                    block.number,
+                    block.timestamp_ms
+                );
+            }
+            if let Some(expected) = expected_number {
+                if block.number != expected {
+                    bail!(
+                        "activity accumulator block discontinuity: expected={} actual={} previous={:?}",
+                        expected,
+                        block.number,
+                        self.last_block_number
+                    );
+                }
+            }
+            if block_timestamps
+                .insert(block.number, block.timestamp_ms)
+                .is_some()
+            {
+                bail!(
+                    "activity accumulator received duplicate block number: block={}",
+                    block.number
+                );
+            }
+            expected_number = Some(block.number.checked_add(1).ok_or_else(|| {
+                anyhow!(
+                    "activity accumulator block number overflow at block={}",
+                    block.number
+                )
+            })?);
+        }
+
+        // A bucket already below the previous batch's MTP can never receive a
+        // valid future CKB block. Treat such input as a chain/order invariant
+        // violation instead of silently recreating an already-written row.
+        if let Some(watermark) = self.sealed_through_ms {
+            for actions in tx_actions_list {
+                for (kind, end_ms) in [
+                    (
+                        "hourly",
+                        activity_bucket_end_ms(actions.timestamp, ACTIVITY_HOUR_MS)?,
+                    ),
+                    (
+                        "daily",
+                        activity_bucket_end_ms(actions.timestamp, ACTIVITY_DAY_MS)?,
+                    ),
+                ] {
+                    if end_ms <= watermark {
+                        bail!(
+                            "already sealed activity bucket received a late action: kind={} block={} tx_index={} timestamp_ms={} bucket_end_ms={} mtp_watermark_ms={}",
+                            kind,
+                            actions.block_number,
+                            actions.tx_index,
+                            actions.timestamp,
+                            end_ms,
+                            watermark
+                        );
+                    }
+                }
+            }
+        }
+
+        for actions in tx_actions_list {
+            let expected_timestamp = block_timestamps.get(&actions.block_number).ok_or_else(|| {
+                anyhow!(
+                    "activity action references block outside current batch: block={} tx_index={} batch_first={} batch_last={}",
+                    actions.block_number,
+                    actions.tx_index,
+                    blocks.first().expect("non-empty checked").number,
+                    blocks.last().expect("non-empty checked").number
+                )
+            })?;
+            if actions.timestamp != *expected_timestamp {
+                bail!(
+                    "activity action timestamp differs from owning block: block={} tx_index={} action_timestamp_ms={} block_timestamp_ms={}",
+                    actions.block_number,
+                    actions.tx_index,
+                    actions.timestamp,
+                    expected_timestamp
+                );
+            }
+        }
+
+        self.accumulate_tx_actions(tx_actions_list)?;
+
+        let mut next_watermark = self.sealed_through_ms;
+        for block in blocks {
+            self.mtp_timestamps_ms.push_back(block.timestamp_ms);
+            if self.mtp_timestamps_ms.len() > CKB_MEDIAN_TIME_BLOCK_COUNT {
+                self.mtp_timestamps_ms.pop_front();
+            }
+            let timestamps = self.mtp_timestamps_ms.make_contiguous();
+            let median = ckb_median_time_ms(timestamps)?;
+            if let Some(previous) = next_watermark {
+                if median < previous {
+                    bail!(
+                        "CKB median-time watermark regressed: block={} previous_mtp_ms={} current_mtp_ms={} window={:?}",
+                        block.number,
+                        previous,
+                        median,
+                        timestamps
+                    );
+                }
+            }
+            next_watermark = Some(median);
+            self.last_block_number = Some(block.number);
+        }
+
+        let watermark = next_watermark.expect("non-empty block batch has a median");
+        let rows = self.drain_sealed_rows(watermark)?;
+        self.sealed_through_ms = Some(watermark);
+        Ok(rows)
+    }
+
+    fn accumulate_tx_actions(&mut self, tx_actions_list: &[TxActions]) -> Result<()> {
         let mut cached_ts = i64::MIN;
         let mut cached_date = String::new();
         let mut cached_hour = String::new();
@@ -1055,6 +1218,30 @@ impl ActivityStatsAccumulator {
         }
 
         Ok(())
+    }
+
+    #[cfg(test)]
+    fn apply_tx_actions(&mut self, tx_actions_list: &[TxActions]) -> Result<()> {
+        self.accumulate_tx_actions(tx_actions_list)
+    }
+
+    fn drain_sealed_rows(
+        &mut self,
+        watermark_ms: i64,
+    ) -> Result<Vec<materialize::MaterializedRow>> {
+        let mut rows = drain_activity_bucket_rows(
+            &mut self.hourly_stats,
+            &mut self.hourly_addrs,
+            watermark_ms,
+            true,
+        )?;
+        rows.extend(drain_activity_bucket_rows(
+            &mut self.daily_stats,
+            &mut self.daily_addrs,
+            watermark_ms,
+            false,
+        )?);
+        Ok(rows)
     }
 
     fn build_rows(&self) -> Result<Vec<materialize::MaterializedRow>> {
@@ -1124,6 +1311,171 @@ impl ActivityStatsAccumulator {
 
         Ok(rows)
     }
+}
+
+const CKB_MEDIAN_TIME_BLOCK_COUNT: usize = 37;
+const ACTIVITY_HOUR_MS: i64 = 60 * 60 * 1_000;
+const ACTIVITY_DAY_MS: i64 = 24 * ACTIVITY_HOUR_MS;
+const CKB_UTC8_OFFSET_MS: i64 = ckbadger_common::CKB_UTC8_OFFSET as i64 * 1_000;
+
+fn ckb_median_time_ms(timestamps: &[i64]) -> Result<i64> {
+    if timestamps.is_empty() {
+        bail!("cannot calculate CKB median time from an empty timestamp window");
+    }
+    if timestamps.len() > CKB_MEDIAN_TIME_BLOCK_COUNT {
+        bail!(
+            "CKB median-time window exceeds consensus limit: len={} max={}",
+            timestamps.len(),
+            CKB_MEDIAN_TIME_BLOCK_COUNT
+        );
+    }
+    // Consensus fixes the window at at most 37 headers, so keep the working
+    // set on the stack. This preserves the exact upper-median rule without a
+    // heap allocation for every block in a full-chain replay.
+    let mut ordered = [0i64; CKB_MEDIAN_TIME_BLOCK_COUNT];
+    ordered[..timestamps.len()].copy_from_slice(timestamps);
+    let middle = timestamps.len() / 2;
+    let (_, median, _) = ordered[..timestamps.len()].select_nth_unstable(middle);
+    Ok(*median)
+}
+
+fn activity_bucket_end_ms(timestamp_ms: i64, bucket_ms: i64) -> Result<i64> {
+    let shifted = timestamp_ms
+        .checked_add(CKB_UTC8_OFFSET_MS)
+        .ok_or_else(|| {
+            anyhow!(
+                "activity bucket timestamp overflow while applying UTC+8 offset: timestamp_ms={}",
+                timestamp_ms
+            )
+        })?;
+    let next_bucket = shifted
+        .div_euclid(bucket_ms)
+        .checked_add(1)
+        .ok_or_else(|| {
+            anyhow!(
+                "activity bucket index overflow: timestamp_ms={}",
+                timestamp_ms
+            )
+        })?;
+    next_bucket
+        .checked_mul(bucket_ms)
+        .and_then(|end| end.checked_sub(CKB_UTC8_OFFSET_MS))
+        .ok_or_else(|| {
+            anyhow!(
+                "activity bucket end overflow: timestamp_ms={} bucket_ms={}",
+                timestamp_ms,
+                bucket_ms
+            )
+        })
+}
+
+fn activity_bucket_end_from_key(bucket: &str, hourly: bool) -> Result<i64> {
+    let local_start_ms = if hourly {
+        if bucket.len() != 10 {
+            bail!(
+                "invalid hourly activity bucket length: bucket={} len={} expected=10",
+                bucket,
+                bucket.len()
+            );
+        }
+        let date = chrono::NaiveDate::parse_from_str(&bucket[..8], "%Y%m%d")
+            .map_err(|err| anyhow!("invalid hourly activity bucket date {}: {}", bucket, err))?;
+        let hour = bucket[8..]
+            .parse::<u32>()
+            .map_err(|err| anyhow!("invalid hourly activity bucket hour {}: {}", bucket, err))?;
+        date.and_hms_opt(hour, 0, 0)
+            .ok_or_else(|| anyhow!("invalid hour in hourly activity bucket {}", bucket))?
+            .and_utc()
+            .timestamp_millis()
+    } else {
+        chrono::NaiveDate::parse_from_str(bucket, "%Y%m%d")
+            .map_err(|err| anyhow!("invalid daily activity bucket {}: {}", bucket, err))?
+            .and_hms_opt(0, 0, 0)
+            .ok_or_else(|| anyhow!("invalid midnight for daily activity bucket {}", bucket))?
+            .and_utc()
+            .timestamp_millis()
+    };
+    local_start_ms
+        .checked_add(if hourly {
+            ACTIVITY_HOUR_MS
+        } else {
+            ACTIVITY_DAY_MS
+        })
+        .and_then(|end| end.checked_sub(CKB_UTC8_OFFSET_MS))
+        .ok_or_else(|| anyhow!("activity bucket end overflow for key={}", bucket))
+}
+
+fn drain_activity_bucket_rows(
+    stats_by_bucket: &mut FxHashMap<String, DailyActivityStats>,
+    addrs_by_bucket: &mut FxHashMap<String, FxHashSet<[u8; 32]>>,
+    watermark_ms: i64,
+    hourly: bool,
+) -> Result<Vec<materialize::MaterializedRow>> {
+    for bucket in addrs_by_bucket.keys() {
+        if !stats_by_bucket.contains_key(bucket) {
+            bail!(
+                "activity address set has no matching stats bucket: kind={} bucket={}",
+                if hourly { "hourly" } else { "daily" },
+                bucket
+            );
+        }
+    }
+
+    let mut sealed_buckets = stats_by_bucket
+        .keys()
+        .filter_map(
+            |bucket| match activity_bucket_end_from_key(bucket, hourly) {
+                Ok(end_ms) if end_ms <= watermark_ms => Some(Ok(bucket.clone())),
+                Ok(_) => None,
+                Err(err) => Some(Err(err)),
+            },
+        )
+        .collect::<Result<Vec<_>>>()?;
+    sealed_buckets.sort();
+
+    let mut rows = Vec::with_capacity(sealed_buckets.len() * 2);
+    for bucket in sealed_buckets {
+        let mut stats = stats_by_bucket.remove(&bucket).ok_or_else(|| {
+            anyhow!(
+                "sealed activity stats bucket disappeared during drain: kind={} bucket={}",
+                if hourly { "hourly" } else { "daily" },
+                bucket
+            )
+        })?;
+        let addrs = addrs_by_bucket.remove(&bucket);
+        stats.unique_address_count = addrs.as_ref().map_or(Ok(0), |set| {
+            checked_unique_address_count(set.len(), &bucket)
+        })?;
+        let stats_prefix = if hourly {
+            keys::stats_prefix::ACTIVITY_HOURLY
+        } else {
+            keys::stats_prefix::ACTIVITY_DAILY
+        };
+        rows.push(materialize::MaterializedRow::new(
+            CF_STATS_CHAIN,
+            keys::encode_stats_key(stats_prefix, bucket.as_bytes()),
+            bincode::serialize(&stats)?,
+        ));
+        if let Some(addrs) = addrs {
+            let mut sorted = addrs.into_iter().collect::<Vec<_>>();
+            sorted.sort_unstable();
+            let mut flat = Vec::with_capacity(sorted.len() * 32);
+            for hash in sorted {
+                flat.extend_from_slice(&hash);
+            }
+            let addr_prefix = if hourly {
+                keys::stats_prefix::ACTIVITY_HOURLY_ADDR_SET
+            } else {
+                keys::stats_prefix::ACTIVITY_DAILY_ADDR_SET
+            };
+            rows.push(materialize::MaterializedRow::new(
+                CF_STATS_CHAIN,
+                keys::encode_stats_key(addr_prefix, bucket.as_bytes()),
+                flat,
+            ));
+        }
+    }
+    Ok(rows)
 }
 
 fn checked_unique_address_count(len: usize, bucket: &str) -> Result<u32> {
@@ -1646,7 +1998,12 @@ impl BulkBuildRuntimeState {
         // Each branch captures disjoint &mut fields. Shared &arena/&resolved/&frozen are immutable.
         let (left_result, (mid_result, right_result)) = rayon::join(
             // LEFT: history materialization → activity stats accumulation
-            || -> Result<(HistoryBuildResult, std::time::Duration, std::time::Duration)> {
+            || -> Result<(
+                HistoryBuildResult,
+                std::time::Duration,
+                std::time::Duration,
+                Vec<materialize::MaterializedRow>,
+            )> {
                 let history_started = Instant::now();
                 let history = build_history_batches(
                     &arena,
@@ -1660,10 +2017,16 @@ impl BulkBuildRuntimeState {
 
                 // activity_stats depends only on history.tx_actions_list, not on any reducer state.
                 let activity_stats_started = Instant::now();
-                activity_stats.apply_tx_actions(&history.tx_actions_list)?;
+                let activity_sealed_rows =
+                    activity_stats.apply_batch(&arena.blocks, &history.tx_actions_list)?;
                 let activity_stats_elapsed = activity_stats_started.elapsed();
 
-                Ok((history, history_elapsed, activity_stats_elapsed))
+                Ok((
+                    history,
+                    history_elapsed,
+                    activity_stats_elapsed,
+                    activity_sealed_rows,
+                ))
             },
             || {
                 rayon::join(
@@ -1822,7 +2185,7 @@ impl BulkBuildRuntimeState {
                 )
             },
         );
-        let (history, history_elapsed, activity_stats_elapsed) = left_result?;
+        let (history, history_elapsed, activity_stats_elapsed, activity_sealed_rows) = left_result?;
         mid_result?;
         let (hodl_sealed_rows, cell_dist_sealed_rows, address_elapsed) = right_result?;
 
@@ -1838,6 +2201,7 @@ impl BulkBuildRuntimeState {
         // Collect sealed rows (pure data, no store dependency).
         let mut sealed_rows = hodl_sealed_rows;
         sealed_rows.extend(cell_dist_sealed_rows);
+        sealed_rows.extend(activity_sealed_rows);
 
         let pending = PendingFlush {
             history_rows: history.rows,
@@ -1936,7 +2300,12 @@ impl BulkBuildRuntimeState {
         //   MIDDLE: chain_stats
         //   RIGHT:  hodl → rayon::join(address+cell_dist, 5 independent reducers)
         let (left_result, (mid_result, right_result)) = rayon::join(
-            || -> Result<(HistoryBuildResult, std::time::Duration, std::time::Duration)> {
+            || -> Result<(
+                HistoryBuildResult,
+                std::time::Duration,
+                std::time::Duration,
+                Vec<materialize::MaterializedRow>,
+            )> {
                 let history_started = Instant::now();
                 let history = build_history_batches(
                     &arena,
@@ -1948,9 +2317,15 @@ impl BulkBuildRuntimeState {
                 )?;
                 let history_elapsed = history_started.elapsed();
                 let activity_stats_started = Instant::now();
-                activity_stats.apply_tx_actions(&history.tx_actions_list)?;
+                let activity_sealed_rows =
+                    activity_stats.apply_batch(&arena.blocks, &history.tx_actions_list)?;
                 let activity_stats_elapsed = activity_stats_started.elapsed();
-                Ok((history, history_elapsed, activity_stats_elapsed))
+                Ok((
+                    history,
+                    history_elapsed,
+                    activity_stats_elapsed,
+                    activity_sealed_rows,
+                ))
             },
             || {
                 rayon::join(
@@ -1996,7 +2371,7 @@ impl BulkBuildRuntimeState {
             )
             },
         );
-        let (history, history_elapsed, activity_stats_elapsed) = left_result?;
+        let (history, history_elapsed, activity_stats_elapsed, activity_sealed_rows) = left_result?;
         mid_result?;
         let (hodl_sealed_rows, cell_dist_sealed_rows, address_elapsed) = right_result?;
         owners
@@ -2010,6 +2385,7 @@ impl BulkBuildRuntimeState {
         // Collect sealed rows (pure data, no store dependency).
         let mut sealed_rows = hodl_sealed_rows;
         sealed_rows.extend(cell_dist_sealed_rows);
+        sealed_rows.extend(activity_sealed_rows);
 
         Ok((
             BatchExecutionStats {
@@ -2061,6 +2437,8 @@ impl BulkBuildRuntimeState {
         let prepared_finalize = self.prepare_finalize_artifacts(virtual_occupied)?;
         let BulkBuildRuntimeState {
             owners,
+            sequencer,
+            interner,
             hodl_tracker,
             cell_dist_tracker,
             ..
@@ -2068,9 +2446,11 @@ impl BulkBuildRuntimeState {
 
         materializer.stream_sealed_aggregate_rows(&prepared_finalize.activity_sealed_rows)?;
         materializer.stream_sealed_aggregate_rows(&prepared_finalize.chain_sealed_rows)?;
-        materializer.materialize_final_snapshot(&prepared_finalize.final_snapshot_rows)?;
+        let frozen = interner.snapshot_for_reads();
+        materializer.materialize_final_snapshot_bounded(|sink| {
+            emit_final_snapshot_rows(&sequencer, &frozen, |row| sink.push(row))
+        })?;
 
-        let mut owners = owners;
         owners.materialize_all(materializer)?;
 
         let mut meta_batch = ckbadger_store::batch::StoreBatch::new(domain_store);
@@ -2086,11 +2466,9 @@ impl BulkBuildRuntimeState {
         &self,
         virtual_occupied: i128,
     ) -> Result<PreparedFinalizeArtifacts> {
-        let frozen = self.interner.snapshot_for_reads();
         Ok(PreparedFinalizeArtifacts {
             activity_sealed_rows: self.activity_stats.build_rows()?,
             chain_sealed_rows: self.chain_stats.build_rows(virtual_occupied)?,
-            final_snapshot_rows: build_final_snapshot_rows(&self.sequencer, &frozen)?,
         })
     }
 }
@@ -2197,8 +2575,8 @@ fn update_hodl_holder_count(
 
 fn apply_cell_dist_cohort_deltas(
     tracker: &mut crate::db::writer::cell_distribution::CellDistributionTracker,
-    balances: &FxHashMap<Vec<u8>, AddressBalance>,
-    deltas: &FxHashMap<Vec<u8>, owners::address::AddressTxDelta>,
+    balances: &FxHashMap<[u8; 32], owners::address::CompactAddressBalance>,
+    deltas: &FxHashMap<[u8; 32], owners::address::AddressTxDelta>,
     tx: &facts::ResolvedTxFacts<'_>,
 ) -> Result<()> {
     for (lock_hash, delta) in deltas {
@@ -2245,6 +2623,39 @@ struct HistoryBuildResult {
 pub(crate) struct PendingFlush {
     pub(crate) history_rows: Vec<materialize::MaterializedRow>,
     pub(crate) sealed_rows: Vec<materialize::MaterializedRow>,
+}
+
+impl PendingFlush {
+    pub(crate) fn allocated_bytes(&self) -> Result<usize> {
+        self.history_rows
+            .iter()
+            .chain(&self.sealed_rows)
+            .try_fold(
+                self.history_rows
+                    .capacity()
+                    .checked_mul(std::mem::size_of::<materialize::MaterializedRow>())
+                    .and_then(|bytes| {
+                        self.sealed_rows
+                            .capacity()
+                            .checked_mul(std::mem::size_of::<materialize::MaterializedRow>())
+                            .and_then(|sealed| bytes.checked_add(sealed))
+                    })
+                    .ok_or_else(|| anyhow!("pending flush row-vector capacity overflow"))?,
+                |total, row| {
+                    total
+                        .checked_add(row.key.capacity())
+                        .and_then(|bytes| bytes.checked_add(row.value.capacity()))
+                        .ok_or_else(|| {
+                            anyhow!(
+                                "pending flush allocated byte count overflow: cf={} key_capacity={} value_capacity={}",
+                                row.cf_name,
+                                row.key.capacity(),
+                                row.value.capacity()
+                            )
+                        })
+                },
+            )
+    }
 }
 
 struct BlockHistoryRows {
@@ -2882,6 +3293,8 @@ fn build_tx_actions_list_for_bulk(
                         _ => (false, None),
                     };
                     Ok(crate::db::writer::activities::InputCellView {
+                        previous_tx_hash: &input.outpoint.tx_hash,
+                        previous_output_index: input.outpoint.index,
                         lock_script_hash: interner.resolve_bytes(input.lock_script_hash_id),
                         lock_code_hash: interner.resolve_bytes(input.lock_code_hash_id),
                         lock_hash_type: input.lock_hash_type,
@@ -3944,65 +4357,80 @@ fn udt_standard_for_semantic_tag(semantic_tag: facts::CellSemanticTag) -> Option
     }
 }
 
-fn build_final_snapshot_rows(
+fn emit_final_snapshot_rows<F>(
     sequencer: &sequencer::BulkSequencer,
     interner: &interner::FrozenIdentityView,
-) -> Result<Vec<materialize::MaterializedRow>> {
-    let mut rows = Vec::with_capacity(sequencer.live_count() * 5);
-
-    for slot in sequencer.live_slots() {
-        let outpoint_index = live_slot_outpoint_index_i16(slot)?;
-        rows.push(materialize::MaterializedRow::new(
+    mut emit: F,
+) -> Result<()>
+where
+    F: FnMut(materialize::MaterializedRow) -> Result<()>,
+{
+    for (outpoint, slot) in sequencer.live_slots() {
+        let outpoint_index = live_slot_outpoint_index_i16(outpoint)?;
+        emit(materialize::MaterializedRow::new(
             CF_LIVE_CELLS,
-            keys::encode_outpoint(&slot.outpoint.tx_hash, outpoint_index).to_vec(),
+            keys::encode_outpoint(&outpoint.tx_hash, outpoint_index).to_vec(),
             slot.created_at_block.to_le_bytes().to_vec(),
-        ));
-        rows.push(materialize::MaterializedRow::new(
+        ))?;
+        emit(materialize::MaterializedRow::new(
             CF_CELL_BY_LOCK,
             keys::encode_cell_index_key(
                 interner.resolve_bytes(slot.lock_script_hash_id),
                 slot.created_at_block,
-                &slot.outpoint.tx_hash,
+                &outpoint.tx_hash,
                 outpoint_index,
             ),
             Vec::new(),
-        ));
-        rows.push(materialize::MaterializedRow::new(
+        ))?;
+        emit(materialize::MaterializedRow::new(
             CF_CELL_BY_LOCK_CODE,
             keys::encode_cell_index_key(
                 interner.resolve_bytes(slot.lock_code_hash_id),
                 slot.created_at_block,
-                &slot.outpoint.tx_hash,
+                &outpoint.tx_hash,
                 outpoint_index,
             ),
             Vec::new(),
-        ));
+        ))?;
         if let Some(type_script_hash_id) = slot.type_script_hash_id {
-            rows.push(materialize::MaterializedRow::new(
+            emit(materialize::MaterializedRow::new(
                 CF_CELL_BY_TYPE,
                 keys::encode_cell_index_key(
                     interner.resolve_bytes(type_script_hash_id),
                     slot.created_at_block,
-                    &slot.outpoint.tx_hash,
+                    &outpoint.tx_hash,
                     outpoint_index,
                 ),
                 Vec::new(),
-            ));
+            ))?;
         }
         if let Some(type_code_hash_id) = slot.type_code_hash_id {
-            rows.push(materialize::MaterializedRow::new(
+            emit(materialize::MaterializedRow::new(
                 CF_CELL_BY_TYPE_CODE,
                 keys::encode_cell_index_key(
                     interner.resolve_bytes(type_code_hash_id),
                     slot.created_at_block,
-                    &slot.outpoint.tx_hash,
+                    &outpoint.tx_hash,
                     outpoint_index,
                 ),
                 Vec::new(),
-            ));
+            ))?;
         }
     }
 
+    Ok(())
+}
+
+#[cfg(test)]
+fn build_final_snapshot_rows(
+    sequencer: &sequencer::BulkSequencer,
+    interner: &interner::FrozenIdentityView,
+) -> Result<Vec<materialize::MaterializedRow>> {
+    let mut rows = Vec::new();
+    emit_final_snapshot_rows(sequencer, interner, |row| {
+        rows.push(row);
+        Ok(())
+    })?;
     Ok(rows)
 }
 
@@ -4150,12 +4578,12 @@ fn cell_outpoint_index_i16(cell: &facts::CellFacts) -> Result<i16> {
     })
 }
 
-fn live_slot_outpoint_index_i16(slot: &live_cells::LiveCellSlot) -> Result<i16> {
-    i16::try_from(slot.outpoint.index).map_err(|_| {
+fn live_slot_outpoint_index_i16(outpoint: &facts::OutPointKey) -> Result<i16> {
+    i16::try_from(outpoint.index).map_err(|_| {
         anyhow!(
             "bulk build live outpoint index exceeds i16 while materializing live cells: tx=0x{} output_index={}",
-            hex::encode(slot.outpoint.tx_hash),
-            slot.outpoint.index
+            hex::encode(outpoint.tx_hash),
+            outpoint.index
         )
     })
 }
@@ -6656,7 +7084,7 @@ mod tests {
             .unwrap();
         assert_eq!(prepared.activity_sealed_rows, direct_activity_rows);
         assert_eq!(prepared.chain_sealed_rows, direct_chain_rows);
-        assert_eq!(prepared.final_snapshot_rows, direct_snapshot_rows);
+        assert!(!direct_snapshot_rows.is_empty());
     }
 
     #[test]
@@ -6730,6 +7158,125 @@ mod tests {
         assert_eq!(daily.coinbase_count, 1);
         assert_eq!(daily.transfer_count, 0);
         assert!(!acc.daily_addrs.contains_key(&date_key) || acc.daily_addrs[&date_key].is_empty());
+    }
+
+    #[test]
+    fn ckb_median_time_uses_the_upper_value_for_an_even_window() {
+        assert_eq!(ckb_median_time_ms(&[10, 20]).unwrap(), 20);
+        assert_eq!(ckb_median_time_ms(&[30, 10, 20]).unwrap(), 20);
+    }
+
+    #[test]
+    fn activity_stats_seal_only_buckets_older_than_ckb_mtp() {
+        let action = TxActions {
+            tx_hash: vec![0x11; 32],
+            block_hash: vec![0x22; 32],
+            block_number: 0,
+            tx_index: 0,
+            timestamp: 0,
+            is_cellbase: false,
+            protocol_actions: vec![],
+            type_calls: vec![],
+            lock_calls: vec![],
+            participants: vec![ckbadger_store::types::ParticipantDelta {
+                lock_hash: vec![0x33; 32],
+                ckb_delta: 1,
+                used_delta: 0,
+                item_deltas: vec![],
+                tags: 0,
+            }],
+        };
+        let block = |number, timestamp_ms| facts::BlockFacts {
+            number,
+            timestamp_ms,
+            ..Default::default()
+        };
+
+        let mut acc = ActivityStatsAccumulator::default();
+        assert!(acc
+            .apply_batch(&[block(0, 0)], std::slice::from_ref(&action))
+            .unwrap()
+            .is_empty());
+
+        // [0, 2h, 3h] has MTP=2h. The action's UTC+8 08:00 hourly
+        // bucket ended at 1h, while its daily bucket is still open.
+        let sealed = acc
+            .apply_batch(&[block(1, 7_200_000), block(2, 10_800_000)], &[])
+            .unwrap();
+        assert_eq!(sealed.len(), 2, "hourly stats + hourly address set");
+        let hour_key = ckbadger_common::block_datetime_from_ms(0)
+            .format("%Y%m%d%H")
+            .to_string();
+        let day_key = ckbadger_common::block_date_from_ms(0)
+            .format("%Y%m%d")
+            .to_string();
+        assert!(!acc.hourly_stats.contains_key(&hour_key));
+        assert!(!acc.hourly_addrs.contains_key(&hour_key));
+        assert!(acc.daily_stats.contains_key(&day_key));
+
+        let err = acc
+            .apply_batch(&[block(3, 14_400_000)], &[action])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("already sealed activity bucket"), "{err}");
+        assert!(err.contains("block=0"), "{err}");
+    }
+
+    #[test]
+    fn incremental_activity_sealing_matches_one_shot_materialization_exactly() {
+        let action = TxActions {
+            tx_hash: vec![0x41; 32],
+            block_hash: vec![0x42; 32],
+            block_number: 0,
+            tx_index: 0,
+            timestamp: 0,
+            is_cellbase: false,
+            protocol_actions: vec![],
+            type_calls: vec![],
+            lock_calls: vec![],
+            participants: vec![ckbadger_store::types::ParticipantDelta {
+                lock_hash: vec![0x43; 32],
+                ckb_delta: 123,
+                used_delta: 45,
+                item_deltas: vec![],
+                tags: 0,
+            }],
+        };
+        let block = |number, timestamp_ms| facts::BlockFacts {
+            number,
+            timestamp_ms,
+            ..Default::default()
+        };
+
+        let mut one_shot = ActivityStatsAccumulator::default();
+        one_shot
+            .apply_tx_actions(std::slice::from_ref(&action))
+            .unwrap();
+        let mut expected = one_shot.build_rows().unwrap();
+
+        let mut incremental = ActivityStatsAccumulator::default();
+        let mut actual = incremental
+            .apply_batch(&[block(0, 0)], std::slice::from_ref(&action))
+            .unwrap();
+        actual.extend(
+            incremental
+                .apply_batch(&[block(1, 7_200_000), block(2, 10_800_000)], &[])
+                .unwrap(),
+        );
+        actual.extend(incremental.build_rows().unwrap());
+
+        let sort_rows = |rows: &mut Vec<materialize::MaterializedRow>| {
+            rows.sort_by(|a, b| {
+                (a.cf_name, a.key.as_slice(), a.value.as_slice()).cmp(&(
+                    b.cf_name,
+                    b.key.as_slice(),
+                    b.value.as_slice(),
+                ))
+            });
+        };
+        sort_rows(&mut expected);
+        sort_rows(&mut actual);
+        assert_eq!(actual, expected);
     }
 
     // -----------------------------------------------------------------------

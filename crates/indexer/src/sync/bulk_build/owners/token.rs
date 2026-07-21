@@ -215,22 +215,24 @@ impl BulkReducer for TokenOwner {
     }
 
     fn flush_sealed(&mut self, materializer: &mut Materializer<'_>) -> Result<()> {
-        let rows = self.build_sealed_rows()?;
-        if rows.is_empty() {
-            return Ok(());
-        }
-        materializer.stream_sealed_aggregate_rows(&rows)
+        materializer.stream_sealed_aggregate_rows_bounded(|sink| {
+            self.emit_sealed_rows(|row| sink.push(row))
+        })
     }
 
     fn materialize_final(&self, materializer: &mut Materializer<'_>) -> Result<()> {
-        let rows = self.build_snapshot_rows(materializer.domain_store())?;
-        materializer.materialize_final_snapshot(&rows)
+        let domain_store = materializer.domain_store();
+        materializer.materialize_final_snapshot_bounded(|sink| {
+            self.emit_snapshot_rows(domain_store, |row| sink.push(row))
+        })
     }
 }
 
 impl TokenOwner {
-    fn build_sealed_rows(&self) -> Result<Vec<MaterializedRow>> {
-        let mut rows = Vec::new();
+    pub(crate) fn emit_sealed_rows<F>(&self, mut emit: F) -> Result<()>
+    where
+        F: FnMut(MaterializedRow) -> Result<()>,
+    {
         let mut type_hashes: Vec<&Vec<u8>> = self.tokens.keys().collect();
         type_hashes.sort();
 
@@ -239,20 +241,20 @@ impl TokenOwner {
                 .tokens
                 .get(type_hash)
                 .expect("sorted token type hash must exist");
-            rows.push(MaterializedRow::new(
+            emit(MaterializedRow::new(
                 CF_STATS_TOKEN,
                 keys::encode_token_transfers_key(type_hash),
                 token.transfers_count.to_le_bytes().to_vec(),
-            ));
+            ))?;
 
             let mut hour_buckets = token.hourly_transfers.iter().collect::<Vec<_>>();
             hour_buckets.sort_by_key(|(hour_bucket, _)| *hour_bucket);
             for (hour_bucket, count) in hour_buckets {
-                rows.push(MaterializedRow::new(
+                emit(MaterializedRow::new(
                     CF_STATS_TOKEN,
                     keys::encode_token_hourly_key(type_hash, *hour_bucket),
                     count.to_le_bytes().to_vec(),
-                ));
+                ))?;
             }
 
             let mut daily_dates = token.daily_deltas.iter().collect::<Vec<_>>();
@@ -261,18 +263,35 @@ impl TokenOwner {
                 if delta.owned_capacity_delta == 0 && delta.owned_knowledge_delta == 0 {
                     continue;
                 }
-                rows.push(MaterializedRow::new(
+                emit(MaterializedRow::new(
                     CF_STATS_TOKEN,
                     keys::encode_token_daily_key(type_hash, *date).to_vec(),
                     bincode::serialize(delta)?,
-                ));
+                ))?;
             }
         }
 
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn build_sealed_rows(&self) -> Result<Vec<MaterializedRow>> {
+        let mut rows = Vec::new();
+        self.emit_sealed_rows(|row| {
+            rows.push(row);
+            Ok(())
+        })?;
         Ok(rows)
     }
 
-    fn build_snapshot_rows(&self, domain_store: &CkbadgerStore) -> Result<Vec<MaterializedRow>> {
+    pub(crate) fn emit_snapshot_rows<F>(
+        &self,
+        domain_store: &CkbadgerStore,
+        mut emit: F,
+    ) -> Result<()>
+    where
+        F: FnMut(MaterializedRow) -> Result<()>,
+    {
         let all_type_hashes: Vec<Vec<u8>> = self.tokens.keys().cloned().collect();
         let existing_tokens: FxHashMap<Vec<u8>, TokenInfo> = domain_store
             .get_tokens_batch(&all_type_hashes)?
@@ -280,7 +299,6 @@ impl TokenOwner {
             .filter_map(|(k, v)| v.map(|info| (k, info)))
             .collect();
 
-        let mut rows = Vec::new();
         let mut type_hashes: Vec<&Vec<u8>> = self.tokens.keys().collect();
         type_hashes.sort();
 
@@ -331,41 +349,48 @@ impl TokenOwner {
                 }
             }
 
-            rows.push(MaterializedRow::new(
+            emit(MaterializedRow::new(
                 CF_TOKENS,
                 type_hash.clone(),
                 bincode::serialize(&info)?,
-            ));
+            ))?;
 
-            let mut holders: Vec<(&Vec<u8>, &TokenBalance)> = token
-                .holders
-                .iter()
-                .filter(|(_, balance)| !balance.is_zero())
-                .collect();
-            holders.sort_by(|(lock_a, _), (lock_b, _)| lock_a.cmp(lock_b));
-
-            for (lock_hash, balance) in holders {
-                rows.push(MaterializedRow::new(
+            for (lock_hash, balance) in token.holders.iter() {
+                if balance.is_zero() {
+                    continue;
+                }
+                emit(MaterializedRow::new(
                     CF_TOKEN_HOLDERS,
                     keys::encode_token_holder_key(type_hash, lock_hash).to_vec(),
                     balance.to_be_bytes().to_vec(),
-                ));
-                rows.push(MaterializedRow::new(
+                ))?;
+                emit(MaterializedRow::new(
                     CF_TOKEN_HOLDERS_BY_BALANCE,
                     keys::encode_token_holder_balance_key(type_hash, balance, lock_hash).to_vec(),
                     Vec::new(),
-                ));
-                rows.push(MaterializedRow::new(
+                ))?;
+                emit(MaterializedRow::new(
                     CF_ADDR_TOKENS_BY_BALANCE,
                     keys::encode_addr_token_balance_key(lock_hash, balance, type_hash).to_vec(),
                     Vec::new(),
-                ));
+                ))?;
             }
         }
 
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn build_snapshot_rows(&self, domain_store: &CkbadgerStore) -> Result<Vec<MaterializedRow>> {
+        let mut rows = Vec::new();
+        self.emit_snapshot_rows(domain_store, |row| {
+            rows.push(row);
+            Ok(())
+        })?;
         Ok(rows)
     }
 
+    #[cfg(test)]
     pub(crate) fn build_final_rows(
         &self,
         domain_store: &CkbadgerStore,

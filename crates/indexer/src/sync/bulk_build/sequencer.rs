@@ -5,7 +5,7 @@ use anyhow::{anyhow, Result};
 use super::facts::{
     DaoCellState, DaoCompensationArs, FactsArena, ResolvedInputFacts, ResolvedTxFacts,
 };
-use super::live_cells::{ConsumeContext, LiveCellOwner, LiveCellSlot};
+use super::live_cells::{ConsumeContext, LiveCellExtras, LiveCellOwner, LiveCellSlot};
 
 #[derive(Debug, Default)]
 pub(crate) struct BulkSequencer {
@@ -66,8 +66,9 @@ impl BulkSequencer {
             )?;
             for (output_pos, cell) in outputs.iter().enumerate() {
                 self.live_cells.insert_created(
-                    LiveCellSlot::from_cell_facts(cell)
-                        .with_dao_compensation_ars(request_output_ars[output_pos]),
+                    cell.outpoint,
+                    LiveCellSlot::from_cell_facts(cell),
+                    LiveCellExtras::from_cell_facts(cell, request_output_ars[output_pos]),
                     cell.protocol_facts.clone(),
                 )?;
             }
@@ -92,7 +93,9 @@ impl BulkSequencer {
         self.live_cells.live_count()
     }
 
-    pub(crate) fn live_slots(&self) -> impl Iterator<Item = &super::live_cells::LiveCellSlot> {
+    pub(crate) fn live_slots(
+        &self,
+    ) -> impl Iterator<Item = (&super::facts::OutPointKey, &super::live_cells::LiveCellSlot)> {
         self.live_cells.live_slots()
     }
 

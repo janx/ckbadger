@@ -428,7 +428,6 @@ pub const CF_IDENTITY_COLLECTION_ACTIVITIES: &str = "identity_collection_activit
 pub const CF_PENDING_PROPOSALS: &str = "pending_proposals";
 pub const CF_FIBER_CHANNELS: &str = "fiber_channels";
 pub const CF_FIBER_CHANNEL_BY_COMMITMENT: &str = "fiber_channel_by_commitment";
-pub const CF_FIBER_CHANNEL_BY_FUNDING_ARGS: &str = "fiber_channel_by_funding_args";
 pub const CF_ADDR_FIBER_CHANNELS: &str = "addr_fiber_channels";
 pub const CF_DOB_DECODED: &str = "dob_decoded";
 pub const CF_LOCK_SCRIPTS: &str = "lock_scripts";
@@ -514,7 +513,6 @@ const CF_WRITE_POLICY_FINAL_SNAPSHOT: &[&str] = &[
     CF_IDENTITY_AGG,
     CF_FIBER_CHANNELS,
     CF_FIBER_CHANNEL_BY_COMMITMENT,
-    CF_FIBER_CHANNEL_BY_FUNDING_ARGS,
     CF_ADDR_FIBER_CHANNELS,
     // Network crawler CFs use the normal mutable (final-snapshot) write policy,
     // never append-only. They live in the separate network store.
@@ -618,7 +616,6 @@ pub const ALL_CFS: &[&str] = &[
     CF_PENDING_PROPOSALS,
     CF_FIBER_CHANNELS,
     CF_FIBER_CHANNEL_BY_COMMITMENT,
-    CF_FIBER_CHANNEL_BY_FUNDING_ARGS,
     CF_ADDR_FIBER_CHANNELS,
     CF_DOB_DECODED,
     CF_LOCK_SCRIPTS,
@@ -683,7 +680,6 @@ pub const DOMAIN_CFS: &[&str] = &[
     CF_PENDING_PROPOSALS,
     CF_FIBER_CHANNELS,
     CF_FIBER_CHANNEL_BY_COMMITMENT,
-    CF_FIBER_CHANNEL_BY_FUNDING_ARGS,
     CF_ADDR_FIBER_CHANNELS,
     CF_DOB_DECODED,
     CF_LOCK_SCRIPTS,
@@ -1568,9 +1564,6 @@ impl CkbadgerStore {
     pub fn cf_fiber_channel_by_commitment(&self) -> &ColumnFamily {
         self.cf(CF_FIBER_CHANNEL_BY_COMMITMENT)
     }
-    pub fn cf_fiber_channel_by_funding_args(&self) -> &ColumnFamily {
-        self.cf(CF_FIBER_CHANNEL_BY_FUNDING_ARGS)
-    }
     pub fn cf_addr_fiber_channels(&self) -> &ColumnFamily {
         self.cf(CF_ADDR_FIBER_CHANNELS)
     }
@@ -2408,7 +2401,7 @@ impl CkbadgerStore {
     ///
     /// `num_running_flushes` is DB-wide; the per-CF counters are summed
     /// over all CFs in this store. With atomic_flush enabled, flushes
-    /// fan out across all 60 CFs simultaneously, so summing is
+    /// fan out across all 59 CFs simultaneously, so summing is
     /// representative of total flush pressure.
     pub fn flush_stats(&self) -> FlushStats {
         let num_running_flushes = self
@@ -2476,6 +2469,12 @@ mod tests {
         for cf_name in ALL_CFS {
             let _ = store.cf(cf_name);
         }
+    }
+
+    #[test]
+    fn test_domain_schema_has_no_ambiguous_fiber_funding_args_index() {
+        assert_eq!(DOMAIN_CFS.len(), 59);
+        assert!(!DOMAIN_CFS.contains(&"fiber_channel_by_funding_args"));
     }
 
     #[test]

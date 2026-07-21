@@ -469,8 +469,9 @@ impl BulkReducer for DaoOwner {
     }
 
     fn materialize_final(&self, materializer: &mut Materializer<'_>) -> Result<()> {
-        let rows = self.build_snapshot_rows()?;
-        materializer.materialize_final_snapshot(&rows)
+        materializer.materialize_final_snapshot_bounded(|sink| {
+            self.emit_snapshot_rows(|row| sink.push(row))
+        })
     }
 }
 
@@ -678,30 +679,23 @@ impl DaoOwner {
         Ok(rows)
     }
 
-    fn build_snapshot_rows(&self) -> Result<Vec<MaterializedRow>> {
-        let mut rows = Vec::new();
-        let mut outpoints = self.deposits.keys().copied().collect::<Vec<_>>();
-        outpoints.sort_by_key(|outpoint| {
-            keys::encode_outpoint(&outpoint.tx_hash, outpoint.index as i16)
-        });
-
-        for outpoint in outpoints {
-            let entry = self
-                .deposits
-                .get(&outpoint)
-                .expect("sorted DAO outpoint must exist");
-            let outpoint_key = encode_outpoint_key(outpoint)?;
-            rows.push(MaterializedRow::new(
+    pub(crate) fn emit_snapshot_rows<F>(&self, mut emit: F) -> Result<()>
+    where
+        F: FnMut(MaterializedRow) -> Result<()>,
+    {
+        for (outpoint, entry) in &self.deposits {
+            let outpoint_key = encode_outpoint_key(*outpoint)?;
+            emit(MaterializedRow::new(
                 CF_DAO_DEPOSITS,
                 outpoint_key.to_vec(),
                 bincode::serialize(entry)?,
-            ));
-            rows.push(MaterializedRow::new(
+            ))?;
+            emit(MaterializedRow::new(
                 CF_DAO_BY_BLOCK,
                 keys::encode_dao_by_block_key(entry.deposit_block_number, &outpoint_key).to_vec(),
                 Vec::new(),
-            ));
-            rows.push(MaterializedRow::new(
+            ))?;
+            emit(MaterializedRow::new(
                 CF_DAO_BY_LOCK_BLOCK,
                 keys::encode_dao_by_lock_block_key(
                     &entry.lock_script_hash,
@@ -710,8 +704,8 @@ impl DaoOwner {
                 )
                 .to_vec(),
                 Vec::new(),
-            ));
-            rows.push(MaterializedRow::new(
+            ))?;
+            emit(MaterializedRow::new(
                 CF_DAO_BY_STATUS_BLOCK,
                 keys::encode_dao_by_status_block_key(
                     entry.status,
@@ -720,14 +714,14 @@ impl DaoOwner {
                 )
                 .to_vec(),
                 Vec::new(),
-            ));
+            ))?;
 
             if entry.status >= 1 {
                 let request_tx_hash = entry.withdraw_request_tx.as_ref().ok_or_else(|| {
                     anyhow!(
                         "DAO status {} missing withdraw_request_tx during materialization: outpoint={}",
                         entry.status,
-                        format_outpoint(&outpoint)
+                        format_outpoint(outpoint)
                     )
                 })?;
                 let request_output_index =
@@ -735,20 +729,31 @@ impl DaoOwner {
                         anyhow!(
                             "DAO status {} missing withdraw_request_output_index during materialization: outpoint={}",
                             entry.status,
-                            format_outpoint(&outpoint)
+                            format_outpoint(outpoint)
                         )
                     })?;
-                rows.push(MaterializedRow::new(
+                emit(MaterializedRow::new(
                     CF_DAO_BY_WITHDRAW_TX,
                     keys::encode_outpoint(request_tx_hash, request_output_index).to_vec(),
                     outpoint_key.to_vec(),
-                ));
+                ))?;
             }
         }
 
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn build_snapshot_rows(&self) -> Result<Vec<MaterializedRow>> {
+        let mut rows = Vec::new();
+        self.emit_snapshot_rows(|row| {
+            rows.push(row);
+            Ok(())
+        })?;
         Ok(rows)
     }
 
+    #[cfg(test)]
     pub(crate) fn build_final_rows(&self) -> Result<super::super::materialize::OwnerFinalRows> {
         Ok(super::super::materialize::OwnerFinalRows {
             sealed_rows: self.build_sealed_rows()?,

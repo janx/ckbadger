@@ -65,11 +65,9 @@ pub(crate) struct ObjectOwner {
 
 impl BulkReducer for ObjectOwner {
     fn flush_sealed(&mut self, materializer: &mut Materializer<'_>) -> Result<()> {
-        let sealed_rows = self.build_sealed_rows();
-        if !sealed_rows.is_empty() {
-            materializer.stream_sealed_aggregate_rows(&sealed_rows)?;
-        }
-        Ok(())
+        materializer.stream_sealed_aggregate_rows_bounded(|sink| {
+            self.emit_sealed_rows(|row| sink.push(row))
+        })
     }
 
     fn apply_tx(&mut self, tx: &ResolvedTxFacts<'_>, ctx: &ReducerContext<'_>) -> Result<()> {
@@ -162,232 +160,266 @@ impl BulkReducer for ObjectOwner {
     }
 
     fn materialize_final(&self, materializer: &mut Materializer<'_>) -> Result<()> {
-        let final_rows = self.build_snapshot_rows()?;
-        materializer.materialize_final_snapshot(&final_rows)
+        materializer.materialize_final_snapshot_bounded(|sink| {
+            self.emit_snapshot_rows(|row| sink.push(row))
+        })
     }
 }
 
 impl ObjectOwner {
-    fn build_sealed_rows(&self) -> Vec<MaterializedRow> {
-        let mut sealed_rows: Vec<MaterializedRow> = self
-            .stats_spore_rows
-            .iter()
-            .map(|(key, value)| MaterializedRow::new(CF_STATS_SPORE, key.clone(), value.clone()))
-            .collect();
-        sealed_rows.extend(self.spore_hourly_transfers.iter().map(|(key, count)| {
-            MaterializedRow::new(CF_STATS_SPORE, key.clone(), count.to_le_bytes().to_vec())
-        }));
-        sealed_rows.extend(
-            self.mnft_class_outpoints.iter().map(|(key, value)| {
-                MaterializedRow::new(CF_STATS_MNFT, key.clone(), value.clone())
-            }),
-        );
-        sealed_rows.extend(
-            self.mnft_token_outpoints.iter().map(|(key, value)| {
-                MaterializedRow::new(CF_STATS_MNFT, key.clone(), value.clone())
-            }),
-        );
-        sealed_rows.extend(self.mnft_type_indexes.iter().map(|(type_hash, index)| {
-            MaterializedRow::new(
+    pub(crate) fn emit_sealed_rows<F>(&self, mut emit: F) -> Result<()>
+    where
+        F: FnMut(MaterializedRow) -> Result<()>,
+    {
+        for (key, value) in &self.stats_spore_rows {
+            emit(MaterializedRow::new(
+                CF_STATS_SPORE,
+                key.clone(),
+                value.clone(),
+            ))?;
+        }
+        for (key, count) in &self.spore_hourly_transfers {
+            emit(MaterializedRow::new(
+                CF_STATS_SPORE,
+                key.clone(),
+                count.to_le_bytes().to_vec(),
+            ))?;
+        }
+        for (key, value) in &self.mnft_class_outpoints {
+            emit(MaterializedRow::new(
+                CF_STATS_MNFT,
+                key.clone(),
+                value.clone(),
+            ))?;
+        }
+        for (key, value) in &self.mnft_token_outpoints {
+            emit(MaterializedRow::new(
+                CF_STATS_MNFT,
+                key.clone(),
+                value.clone(),
+            ))?;
+        }
+        for (type_hash, index) in &self.mnft_type_indexes {
+            emit(MaterializedRow::new(
                 CF_STATS_MNFT,
                 keys::encode_object_type_index_key(type_hash).to_vec(),
-                bincode::serialize(index).expect("object type index serialization must succeed"),
-            )
-        }));
-        sealed_rows.extend(self.mnft_hourly_transfers.iter().map(|(key, count)| {
-            MaterializedRow::new(CF_STATS_MNFT, key.clone(), count.to_le_bytes().to_vec())
-        }));
-        sealed_rows.extend(
-            self.dotbit_outpoints.iter().map(|(key, value)| {
-                MaterializedRow::new(CF_STATS_MNFT, key.clone(), value.clone())
-            }),
-        );
-        sealed_rows.extend(
-            self.dotbit_outpoints_by_account
-                .iter()
-                .map(|key| MaterializedRow::new(CF_STATS_MNFT, key.clone(), Vec::new())),
-        );
-        sealed_rows.extend(self.dotbit_hourly_transfers.iter().map(|(key, count)| {
-            MaterializedRow::new(CF_STATS_MNFT, key.clone(), count.to_le_bytes().to_vec())
-        }));
-        sealed_rows.extend(
-            self.object_daily_deltas
-                .iter()
-                .filter(|(_, (cap, know))| *cap != 0 || *know != 0)
-                .map(|((collection_id, date), (cap_delta, know_delta))| {
-                    MaterializedRow::new(
-                        CF_STATS_MNFT,
-                        keys::encode_object_daily_key(collection_id, *date).to_vec(),
-                        bincode::serialize(&MnftDailyDelta {
-                            owned_capacity_delta: *cap_delta,
-                            owned_knowledge_delta: *know_delta,
-                        })
-                        .expect("serialize MnftDailyDelta"),
-                    )
-                }),
-        );
-        sealed_rows.extend(
-            self.spore_daily_deltas
-                .iter()
-                .filter(|(_, (cap, know))| *cap != 0 || *know != 0)
-                .map(|((spore_id, date), (cap_delta, know_delta))| {
-                    MaterializedRow::new(
-                        CF_STATS_SPORE,
-                        keys::encode_spore_daily_key(spore_id, *date).to_vec(),
-                        bincode::serialize(&SporeDailyDelta {
-                            owned_capacity_delta: *cap_delta,
-                            owned_knowledge_delta: *know_delta,
-                        })
-                        .expect("serialize SporeDailyDelta"),
-                    )
-                }),
-        );
-        sealed_rows.extend(
-            self.cluster_daily_deltas
-                .iter()
-                .filter(|(_, (cap, know))| *cap != 0 || *know != 0)
-                .map(|((cluster_id, date), (cap_delta, know_delta))| {
-                    MaterializedRow::new(
-                        CF_STATS_SPORE,
-                        keys::encode_cluster_daily_key(cluster_id, *date).to_vec(),
-                        bincode::serialize(&ClusterDailyDelta {
-                            owned_capacity_delta: *cap_delta,
-                            owned_knowledge_delta: *know_delta,
-                        })
-                        .expect("serialize ClusterDailyDelta"),
-                    )
-                }),
-        );
-        sealed_rows.extend(
-            self.mnft_owner_counts
-                .iter()
-                .filter(|(_, count)| **count > 0)
-                .map(|((class_id, lock_hash), count)| {
-                    MaterializedRow::new(
-                        CF_STATS_MNFT,
-                        keys::encode_object_collection_owner_key(class_id, lock_hash).to_vec(),
-                        count.to_le_bytes().to_vec(),
-                    )
-                }),
-        );
-        sealed_rows
+                bincode::serialize(index)?,
+            ))?;
+        }
+        for (key, count) in &self.mnft_hourly_transfers {
+            emit(MaterializedRow::new(
+                CF_STATS_MNFT,
+                key.clone(),
+                count.to_le_bytes().to_vec(),
+            ))?;
+        }
+        for (key, value) in &self.dotbit_outpoints {
+            emit(MaterializedRow::new(
+                CF_STATS_MNFT,
+                key.clone(),
+                value.clone(),
+            ))?;
+        }
+        for key in &self.dotbit_outpoints_by_account {
+            emit(MaterializedRow::new(CF_STATS_MNFT, key.clone(), Vec::new()))?;
+        }
+        for (key, count) in &self.dotbit_hourly_transfers {
+            emit(MaterializedRow::new(
+                CF_STATS_MNFT,
+                key.clone(),
+                count.to_le_bytes().to_vec(),
+            ))?;
+        }
+        for ((collection_id, date), (cap_delta, know_delta)) in &self.object_daily_deltas {
+            if *cap_delta == 0 && *know_delta == 0 {
+                continue;
+            }
+            emit(MaterializedRow::new(
+                CF_STATS_MNFT,
+                keys::encode_object_daily_key(collection_id, *date).to_vec(),
+                bincode::serialize(&MnftDailyDelta {
+                    owned_capacity_delta: *cap_delta,
+                    owned_knowledge_delta: *know_delta,
+                })?,
+            ))?;
+        }
+        for ((spore_id, date), (cap_delta, know_delta)) in &self.spore_daily_deltas {
+            if *cap_delta == 0 && *know_delta == 0 {
+                continue;
+            }
+            emit(MaterializedRow::new(
+                CF_STATS_SPORE,
+                keys::encode_spore_daily_key(spore_id, *date).to_vec(),
+                bincode::serialize(&SporeDailyDelta {
+                    owned_capacity_delta: *cap_delta,
+                    owned_knowledge_delta: *know_delta,
+                })?,
+            ))?;
+        }
+        for ((cluster_id, date), (cap_delta, know_delta)) in &self.cluster_daily_deltas {
+            if *cap_delta == 0 && *know_delta == 0 {
+                continue;
+            }
+            emit(MaterializedRow::new(
+                CF_STATS_SPORE,
+                keys::encode_cluster_daily_key(cluster_id, *date).to_vec(),
+                bincode::serialize(&ClusterDailyDelta {
+                    owned_capacity_delta: *cap_delta,
+                    owned_knowledge_delta: *know_delta,
+                })?,
+            ))?;
+        }
+        for ((class_id, lock_hash), count) in &self.mnft_owner_counts {
+            if *count <= 0 {
+                continue;
+            }
+            emit(MaterializedRow::new(
+                CF_STATS_MNFT,
+                keys::encode_object_collection_owner_key(class_id, lock_hash).to_vec(),
+                count.to_le_bytes().to_vec(),
+            ))?;
+        }
+        Ok(())
     }
 
-    fn build_snapshot_rows(&self) -> Result<Vec<MaterializedRow>> {
-        let mut final_rows = Vec::new();
+    #[cfg(test)]
+    fn build_sealed_rows(&self) -> Result<Vec<MaterializedRow>> {
+        let mut rows = Vec::new();
+        self.emit_sealed_rows(|row| {
+            rows.push(row);
+            Ok(())
+        })?;
+        Ok(rows)
+    }
+
+    pub(crate) fn emit_snapshot_rows<F>(&self, mut emit: F) -> Result<()>
+    where
+        F: FnMut(MaterializedRow) -> Result<()>,
+    {
         for (id, entry) in &self.spore_entries {
-            final_rows.push(MaterializedRow::new(
+            emit(MaterializedRow::new(
                 CF_SPORE_DATA,
                 id.clone(),
                 bincode::serialize(entry)?,
-            ));
+            ))?;
         }
         for key in &self.spore_by_cluster {
-            final_rows.push(MaterializedRow::new(
+            emit(MaterializedRow::new(
                 CF_SPORE_BY_CLUSTER,
                 key.clone(),
                 Vec::new(),
-            ));
+            ))?;
         }
         for (id, entry) in &self.mnft_entries {
-            final_rows.push(MaterializedRow::new(
+            emit(MaterializedRow::new(
                 CF_MNFT_DATA,
                 id.clone(),
                 bincode::serialize(entry)?,
-            ));
+            ))?;
         }
         for key in &self.mnft_by_collection {
-            final_rows.push(MaterializedRow::new(
+            emit(MaterializedRow::new(
                 CF_MNFT_BY_COLLECTION,
                 key.clone(),
                 Vec::new(),
-            ));
+            ))?;
         }
         for (id, entry) in &self.identities {
-            final_rows.push(MaterializedRow::new(
+            emit(MaterializedRow::new(
                 CF_IDENTITY_DATA,
                 id.clone(),
                 bincode::serialize(entry)?,
-            ));
+            ))?;
         }
         for key in &self.identity_by_collection {
-            final_rows.push(MaterializedRow::new(
+            emit(MaterializedRow::new(
                 CF_IDENTITY_BY_COLLECTION,
                 key.clone(),
                 Vec::new(),
-            ));
+            ))?;
         }
         if let Some(agg) = &self.did_agg {
-            final_rows.push(MaterializedRow::new(
+            emit(MaterializedRow::new(
                 CF_IDENTITY_AGG,
                 DID_CKB_SENTINEL_COLLECTION.to_vec(),
                 bincode::serialize(agg)?,
-            ));
+            ))?;
         }
         if let Some(agg) = &self.dotbit_agg {
-            final_rows.push(MaterializedRow::new(
+            emit(MaterializedRow::new(
                 CF_IDENTITY_AGG,
                 DOTBIT_SENTINEL_COLLECTION.to_vec(),
                 bincode::serialize(agg)?,
-            ));
+            ))?;
         }
         if let Some(agg) = &self.bit_cell_agg {
-            final_rows.push(MaterializedRow::new(
+            emit(MaterializedRow::new(
                 CF_IDENTITY_AGG,
                 BIT_CELL_SENTINEL_COLLECTION.to_vec(),
                 bincode::serialize(agg)?,
-            ));
+            ))?;
         }
         for (cluster_id, agg) in &self.cluster_aggs {
-            final_rows.push(MaterializedRow::new(
+            emit(MaterializedRow::new(
                 CF_CLUSTER_AGG,
                 cluster_id.clone(),
                 bincode::serialize(agg)?,
-            ));
+            ))?;
         }
         for (class_id, agg) in &self.object_collection_aggs {
-            final_rows.push(MaterializedRow::new(
+            emit(MaterializedRow::new(
                 CF_MNFT_COLLECTION_AGG,
                 class_id.clone(),
                 bincode::serialize(agg)?,
-            ));
+            ))?;
         }
         for (lock_hash, count) in &self.did_owner_counts {
             if *count <= 0 {
                 continue;
             }
-            final_rows.push(MaterializedRow::new(
+            emit(MaterializedRow::new(
                 CF_STATS_IDENTITY,
                 keys::encode_identity_owner_key(&DID_CKB_SENTINEL_COLLECTION, lock_hash).to_vec(),
                 count.to_le_bytes().to_vec(),
-            ));
+            ))?;
         }
         for (lock_hash, count) in &self.dotbit_owner_counts {
             if *count <= 0 {
                 continue;
             }
-            final_rows.push(MaterializedRow::new(
+            emit(MaterializedRow::new(
                 CF_STATS_IDENTITY,
                 keys::encode_identity_owner_key(&DOTBIT_SENTINEL_COLLECTION, lock_hash).to_vec(),
                 count.to_le_bytes().to_vec(),
-            ));
+            ))?;
         }
         for (lock_hash, count) in &self.bit_cell_owner_counts {
             if *count <= 0 {
                 continue;
             }
-            final_rows.push(MaterializedRow::new(
+            emit(MaterializedRow::new(
                 CF_STATS_IDENTITY,
                 keys::encode_identity_owner_key(&BIT_CELL_SENTINEL_COLLECTION, lock_hash).to_vec(),
                 count.to_le_bytes().to_vec(),
-            ));
+            ))?;
         }
-        Ok(final_rows)
+        Ok(())
     }
 
+    #[cfg(test)]
+    fn build_snapshot_rows(&self) -> Result<Vec<MaterializedRow>> {
+        let mut rows = Vec::new();
+        self.emit_snapshot_rows(|row| {
+            rows.push(row);
+            Ok(())
+        })?;
+        Ok(rows)
+    }
+
+    #[cfg(test)]
     pub(crate) fn build_final_rows(&self) -> Result<super::super::materialize::OwnerFinalRows> {
         Ok(super::super::materialize::OwnerFinalRows {
-            sealed_rows: self.build_sealed_rows(),
+            sealed_rows: self.build_sealed_rows()?,
             snapshot_rows: self.build_snapshot_rows()?,
         })
     }

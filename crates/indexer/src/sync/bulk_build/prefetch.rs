@@ -42,6 +42,32 @@ pub(crate) fn cell_count_for_raw(raw: &RawCkbBlock) -> u64 {
         .sum()
 }
 
+/// Split a fetched range using the measured molecule sizes. The fetch range is
+/// chosen from a density EMA and may overshoot badly when chain density shifts;
+/// only this post-fetch split makes channel depth a real byte bound.
+fn split_buffered_by_actual_bytes(
+    blocks: Vec<BufferedBlock>,
+    max_chunk_bytes: usize,
+) -> Vec<Vec<BufferedBlock>> {
+    let mut chunks = Vec::new();
+    let mut current = Vec::new();
+    let mut current_bytes = 0usize;
+
+    for block in blocks {
+        if !current.is_empty() && current_bytes.saturating_add(block.block_bytes) > max_chunk_bytes
+        {
+            chunks.push(std::mem::take(&mut current));
+            current_bytes = 0;
+        }
+        current_bytes = current_bytes.saturating_add(block.block_bytes);
+        current.push(block);
+    }
+    if !current.is_empty() {
+        chunks.push(current);
+    }
+    chunks
+}
+
 #[derive(Debug)]
 pub(crate) enum PrefetchExitReason {
     Completed,
@@ -101,7 +127,7 @@ impl PrefetchChannelHandle {
         let mut position = start_block;
         let mut density_ema: f64 = INITIAL_DENSITY_EMA;
 
-        while position <= handoff_target {
+        'prefetch: while position <= handoff_target {
             // Backpressure is provided by the bounded channel — when the
             // channel is full, `blocking_send` below naturally blocks until
             // the build loop consumes a chunk.
@@ -119,7 +145,7 @@ impl PrefetchChannelHandle {
             let fetch_result =
                 Indexer::fetch_blocks_direct_binary(&ckb_store, position, end, fetch_threads);
 
-            let to_send = match fetch_result {
+            match fetch_result {
                 Ok(blocks) => {
                     let block_count = blocks.len() as u64;
                     stats.total_fetches += 1;
@@ -143,19 +169,21 @@ impl PrefetchChannelHandle {
                         density_ema = density_ema * (1.0 - DENSITY_EMA_ALPHA)
                             + actual_density * DENSITY_EMA_ALPHA;
                     }
-                    Ok(buffered)
+                    for chunk in
+                        split_buffered_by_actual_bytes(buffered, CHUNK_BYTES_TARGET as usize)
+                    {
+                        if result_tx.blocking_send(Ok(chunk)).is_err() {
+                            stats.exit_reason = PrefetchExitReason::ReceiverDropped;
+                            break 'prefetch;
+                        }
+                    }
                 }
-                Err(e) => Err(e),
-            };
-            let is_err = to_send.is_err();
-
-            if result_tx.blocking_send(to_send).is_err() {
-                stats.exit_reason = PrefetchExitReason::ReceiverDropped;
-                break;
-            }
-
-            if is_err {
-                break;
+                Err(e) => {
+                    if result_tx.blocking_send(Err(e)).is_err() {
+                        stats.exit_reason = PrefetchExitReason::ReceiverDropped;
+                    }
+                    break;
+                }
             }
 
             position = end.saturating_add(1);
@@ -205,6 +233,27 @@ mod tests {
             bytes > 0,
             "molecule total_size should be non-zero for a default block, got {bytes}"
         );
+    }
+
+    #[test]
+    fn prefetch_chunks_are_split_by_actual_bytes_not_density_estimate() {
+        let make = |block_bytes| BufferedBlock {
+            raw: make_dummy_raw_block(),
+            block_bytes,
+            cell_count: 1,
+        };
+        let chunks = split_buffered_by_actual_bytes(
+            vec![make(30_000_000), make(30_000_000), make(10_000_000)],
+            CHUNK_BYTES_TARGET as usize,
+        );
+        let sizes = chunks
+            .iter()
+            .map(|chunk| chunk.iter().map(|block| block.block_bytes).sum::<usize>())
+            .collect::<Vec<_>>();
+        assert_eq!(sizes, vec![30_000_000, 40_000_000]);
+        assert!(sizes
+            .iter()
+            .all(|bytes| *bytes <= CHUNK_BYTES_TARGET as usize));
     }
 
     #[tokio::test]

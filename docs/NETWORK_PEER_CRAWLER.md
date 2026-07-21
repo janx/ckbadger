@@ -78,7 +78,7 @@ CKB p2p network ──dial / Identify / Discovery / Ping──▶ ckbadger-crawl
 The third store is a controlled exception and MUST be documented in the same commit in both
 `CLAUDE.md` and `README.md` store-boundary sections:
 
-- **Domain store** (60 CFs) and **append-only store** (1 CF `CF_CELLS`) — unchanged; still bound
+- **Domain store** (59 CFs) and **append-only store** (1 CF `CF_CELLS`) — unchanged; still bound
   by "rebuild from genesis".
 - **Network store** (new, 2 CFs) — **third logical class: network-layer observations. Non-chain,
   non-deterministic, not rebuildable from genesis, TTL-retained.** The only store explicitly

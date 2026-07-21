@@ -29,6 +29,7 @@ pub struct IndexerServiceConfig {
     pub network: String,
     pub poll_interval_ms: u64,
     pub bulk_sync_threshold: u64,
+    pub bulk_memory_budget_gb: Option<u64>,
     pub store_runtime_config: StoreRuntimeConfig,
     pub decoder_cache_path: String,
     pub dob_decode_dir: String,
@@ -46,6 +47,7 @@ impl From<IndexerServiceConfig> for Config {
             poll_interval_ms: svc.poll_interval_ms,
             start_block: None,
             bulk_sync_threshold: svc.bulk_sync_threshold,
+            bulk_memory_budget_gb: svc.bulk_memory_budget_gb,
             fast_sync_mode: true,
             ckb_db_path: svc.ckb_db_path,
             metadata_path: svc.metadata_path,
@@ -1509,6 +1511,7 @@ mod tests {
             network: "mainnet".to_string(),
             poll_interval_ms: 500,
             bulk_sync_threshold: 100,
+            bulk_memory_budget_gb: Some(20),
             store_runtime_config: StoreRuntimeConfig {
                 memory_budget_gb: Some(24),
                 direct_io_reads: false,
@@ -1531,6 +1534,7 @@ mod tests {
         assert_eq!(config.network, "mainnet");
         assert_eq!(config.poll_interval_ms, 500);
         assert_eq!(config.bulk_sync_threshold, 100);
+        assert_eq!(config.bulk_memory_budget_gb, Some(20));
         assert!(config.fast_sync_mode);
         assert!(!config.force_startup_cleanup);
         assert!(config.start_block.is_none());

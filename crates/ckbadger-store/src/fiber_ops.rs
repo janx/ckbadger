@@ -22,14 +22,6 @@ impl CkbadgerStore {
         }
     }
 
-    /// Look up a channel_id by funding lock args (pubkey_hash).
-    pub fn get_fiber_channel_id_by_funding_args(
-        &self,
-        funding_lock_args: &[u8],
-    ) -> anyhow::Result<Option<Vec<u8>>> {
-        self.get_cf(self.cf_fiber_channel_by_funding_args(), funding_lock_args)
-    }
-
     /// Look up a channel_id by commitment lock outpoint hash.
     pub fn get_fiber_channel_id_by_commitment(
         &self,
@@ -328,6 +320,84 @@ mod tests {
         assert!(store.get_fiber_channel(&channel_id).unwrap().is_none());
         let results = store.list_addr_fiber_channels(&lock_hash, 10).unwrap();
         assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_store_batch_fiber_channel_view_reads_own_writes_and_deletes() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+
+        let tx_hash = [0x10; 32];
+        let channel_id = crate::keys::encode_fiber_channel_id(&tx_hash, 0);
+        let mut channel = make_channel(&tx_hash, 0, FiberChannelState::Open, 100_00000000);
+
+        let mut batch = StoreBatch::new(&store);
+        assert!(batch.get_fiber_channel(&channel_id).unwrap().is_none());
+
+        batch.put_fiber_channel(&channel_id, &channel);
+        assert_eq!(
+            batch.get_fiber_channel(&channel_id).unwrap().unwrap().state,
+            FiberChannelState::Open
+        );
+
+        channel.state = FiberChannelState::CooperativelyClosed;
+        batch.put_fiber_channel(&channel_id, &channel);
+        assert_eq!(
+            batch.get_fiber_channel(&channel_id).unwrap().unwrap().state,
+            FiberChannelState::CooperativelyClosed
+        );
+
+        batch.delete_fiber_channel(&channel_id);
+        assert!(batch.get_fiber_channel(&channel_id).unwrap().is_none());
+        batch.commit().unwrap();
+        assert!(store.get_fiber_channel(&channel_id).unwrap().is_none());
+    }
+
+    #[test]
+    fn test_store_batch_commitment_view_reads_own_rotation() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+
+        let channel_id = [0xEE; 32];
+        let old_hash = [0xD1; 32];
+        let new_hash = [0xD2; 32];
+        let mut batch = StoreBatch::new(&store);
+
+        batch.put_fiber_channel_by_commitment(&old_hash, &channel_id);
+        assert_eq!(
+            batch
+                .get_fiber_channel_id_by_commitment(&old_hash)
+                .unwrap()
+                .unwrap(),
+            channel_id
+        );
+
+        batch.delete_fiber_channel_by_commitment(&old_hash);
+        batch.put_fiber_channel_by_commitment(&new_hash, &channel_id);
+        assert!(batch
+            .get_fiber_channel_id_by_commitment(&old_hash)
+            .unwrap()
+            .is_none());
+        assert_eq!(
+            batch
+                .get_fiber_channel_id_by_commitment(&new_hash)
+                .unwrap()
+                .unwrap(),
+            channel_id
+        );
+
+        batch.commit().unwrap();
+        assert!(store
+            .get_fiber_channel_id_by_commitment(&old_hash)
+            .unwrap()
+            .is_none());
+        assert_eq!(
+            store
+                .get_fiber_channel_id_by_commitment(&new_hash)
+                .unwrap()
+                .unwrap(),
+            channel_id
+        );
     }
 
     #[test]

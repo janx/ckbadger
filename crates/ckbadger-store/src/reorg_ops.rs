@@ -2536,14 +2536,6 @@ impl CkbadgerStore {
                         batch.delete_cf(self.cf_addr_fiber_channels(), &addr_key);
                     }
 
-                    // Delete funding_args index
-                    if !channel.funding_lock_args.is_empty() {
-                        batch.delete_cf(
-                            self.cf_fiber_channel_by_funding_args(),
-                            &channel.funding_lock_args,
-                        );
-                    }
-
                     // Delete commitment index if present
                     // We don't have easy access to the commitment hash used as key,
                     // so we handle this in the full CF sweep below.

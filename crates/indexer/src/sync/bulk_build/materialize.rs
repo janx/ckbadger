@@ -40,9 +40,133 @@ impl MaterializedRow {
 /// `sealed_rows` are daily/hourly aggregates (SealedAggregate policy).
 /// `snapshot_rows` are current-state data (FinalSnapshot policy).
 #[derive(Debug, Default, PartialEq, Eq)]
+#[cfg(test)]
 pub(crate) struct OwnerFinalRows {
     pub(crate) sealed_rows: Vec<MaterializedRow>,
     pub(crate) snapshot_rows: Vec<MaterializedRow>,
+}
+
+/// Finalize writes are intentionally chunked by bytes rather than row count:
+/// live-cell index keys and serialized domain values have very different
+/// sizes. Keeping this well below the bulk batch budget prevents materializing
+/// the final snapshot from becoming a second, unbounded copy of reducer state.
+const DEFAULT_FINALIZE_BATCH_BYTES: usize = 32 * 1024 * 1024;
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct BoundedWriteStats {
+    pub(crate) rows: usize,
+    pub(crate) flushes: usize,
+    pub(crate) peak_batch_bytes: usize,
+}
+
+pub(crate) struct BoundedRowSink<'a> {
+    domain_store: &'a CkbadgerStore,
+    batch: StoreBatch<'a>,
+    expected_policy: CfWritePolicy,
+    counter_kind: CounterKind,
+    max_batch_bytes: usize,
+    stats: BoundedWriteStats,
+}
+
+impl<'a> BoundedRowSink<'a> {
+    fn new(
+        domain_store: &'a CkbadgerStore,
+        expected_policy: CfWritePolicy,
+        counter_kind: CounterKind,
+        max_batch_bytes: usize,
+    ) -> Result<Self> {
+        if max_batch_bytes == 0 {
+            return Err(anyhow!("bounded materializer batch limit must be positive"));
+        }
+        Ok(Self {
+            domain_store,
+            batch: StoreBatch::new(domain_store),
+            expected_policy,
+            counter_kind,
+            max_batch_bytes,
+            stats: BoundedWriteStats::default(),
+        })
+    }
+
+    pub(crate) fn push(&mut self, row: MaterializedRow) -> Result<()> {
+        self.push_parts(row.cf_name, &row.key, &row.value)
+    }
+
+    fn push_borrowed(&mut self, row: &MaterializedRow) -> Result<()> {
+        self.push_parts(row.cf_name, &row.key, &row.value)
+    }
+
+    fn push_parts(&mut self, cf_name: &'static str, key: &[u8], value: &[u8]) -> Result<()> {
+        if is_append_only_cf_name(cf_name) {
+            if matches!(self.counter_kind, CounterKind::FinalSnapshot) {
+                return Err(anyhow!(
+                    "final snapshot cannot target append-only cf: {}",
+                    cf_name
+                ));
+            }
+            return Err(anyhow!(
+                "bounded finalize materialization cannot target append-only cf: {}",
+                cf_name
+            ));
+        }
+        let actual_policy = cf_write_policy(cf_name);
+        if actual_policy != self.expected_policy {
+            return Err(anyhow!(
+                "materializer write-policy mismatch: cf={} expected={:?} actual={:?}",
+                cf_name,
+                self.expected_policy,
+                actual_policy
+            ));
+        }
+
+        // Flush before copying the next row when its payload cannot fit. The
+        // RocksDB batch may exceed the limit only by one row's encoding
+        // overhead (or when one row itself is larger than the configured cap).
+        let next_payload_bytes = key
+            .len()
+            .checked_add(value.len())
+            .and_then(|bytes| bytes.checked_add(cf_name.len()))
+            .ok_or_else(|| {
+                anyhow!(
+                    "bounded materializer row byte size overflow: cf={} key_bytes={} value_bytes={}",
+                    cf_name,
+                    key.len(),
+                    value.len()
+                )
+            })?;
+        if !self.batch.is_empty()
+            && self
+                .batch
+                .size_in_bytes()
+                .saturating_add(next_payload_bytes)
+                > self.max_batch_bytes
+        {
+            self.flush()?;
+        }
+
+        self.batch.put_raw_cf_by_name(cf_name, key, value)?;
+        self.stats.rows += 1;
+        self.stats.peak_batch_bytes = self.stats.peak_batch_bytes.max(self.batch.size_in_bytes());
+        if self.batch.size_in_bytes() >= self.max_batch_bytes {
+            self.flush()?;
+        }
+        Ok(())
+    }
+
+    fn flush(&mut self) -> Result<()> {
+        if self.batch.is_empty() {
+            return Ok(());
+        }
+        let batch = std::mem::replace(&mut self.batch, StoreBatch::new(self.domain_store));
+        batch.commit_no_wal()?;
+        self.stats.flushes += 1;
+        Ok(())
+    }
+
+    fn finish(mut self) -> Result<BoundedWriteStats> {
+        self.flush()?;
+        Ok(self.stats)
+    }
 }
 
 pub(crate) struct Materializer<'a> {
@@ -80,6 +204,49 @@ impl<'a> Materializer<'a> {
             rows,
             CfWritePolicy::FinalSnapshot,
             CounterKind::FinalSnapshot,
+        )
+    }
+
+    pub(crate) fn stream_sealed_aggregate_rows_bounded<F>(&mut self, emit: F) -> Result<()>
+    where
+        F: FnOnce(&mut BoundedRowSink<'_>) -> Result<()>,
+    {
+        self.write_bounded(
+            CfWritePolicy::SealedAggregate,
+            CounterKind::SealedAggregate,
+            DEFAULT_FINALIZE_BATCH_BYTES,
+            emit,
+        )
+        .map(|_| ())
+    }
+
+    pub(crate) fn materialize_final_snapshot_bounded<F>(&mut self, emit: F) -> Result<()>
+    where
+        F: FnOnce(&mut BoundedRowSink<'_>) -> Result<()>,
+    {
+        self.write_bounded(
+            CfWritePolicy::FinalSnapshot,
+            CounterKind::FinalSnapshot,
+            DEFAULT_FINALIZE_BATCH_BYTES,
+            emit,
+        )
+        .map(|_| ())
+    }
+
+    #[cfg(test)]
+    fn materialize_final_snapshot_bounded_for_test<F>(
+        &mut self,
+        max_batch_bytes: usize,
+        emit: F,
+    ) -> Result<BoundedWriteStats>
+    where
+        F: FnOnce(&mut BoundedRowSink<'_>) -> Result<()>,
+    {
+        self.write_bounded(
+            CfWritePolicy::FinalSnapshot,
+            CounterKind::FinalSnapshot,
+            max_batch_bytes,
+            emit,
         )
     }
 
@@ -127,64 +294,94 @@ impl<'a> Materializer<'a> {
         if rows.is_empty() {
             return Ok(());
         }
-
-        let mut domain_batch = StoreBatch::new(self.domain_store);
-        let mut append_batch = StoreBatch::new(self.append_only_store);
-
-        for row in rows {
-            if matches!(counter_kind, CounterKind::FinalSnapshot)
-                && is_append_only_cf_name(row.cf_name)
-            {
-                return Err(anyhow!(
-                    "final snapshot cannot target append-only cf: {}",
-                    row.cf_name
-                ));
+        // Per-batch history contains CF_CELLS and therefore still uses the
+        // dual-store path. Finalize classes are domain-only and use the
+        // byte-bounded sink.
+        if matches!(counter_kind, CounterKind::History) {
+            let mut domain_batch = StoreBatch::new(self.domain_store);
+            let mut append_batch = StoreBatch::new(self.append_only_store);
+            for row in rows {
+                let actual_policy = cf_write_policy(row.cf_name);
+                if actual_policy != expected_policy {
+                    return Err(anyhow!(
+                        "materializer write-policy mismatch: cf={} expected={:?} actual={:?}",
+                        row.cf_name,
+                        expected_policy,
+                        actual_policy
+                    ));
+                }
+                if is_append_only_cf_name(row.cf_name) {
+                    append_batch.put_raw_cf_by_name(row.cf_name, &row.key, &row.value)?;
+                } else {
+                    domain_batch.put_raw_cf_by_name(row.cf_name, &row.key, &row.value)?;
+                }
             }
-
-            let actual_policy = cf_write_policy(row.cf_name);
-            if actual_policy != expected_policy {
-                return Err(anyhow!(
-                    "materializer write-policy mismatch: cf={} expected={:?} actual={:?}",
-                    row.cf_name,
-                    expected_policy,
-                    actual_policy
-                ));
+            if !append_batch.is_empty() {
+                append_batch.commit_no_wal()?;
             }
-
-            if is_append_only_cf_name(row.cf_name) {
-                append_batch.put_raw_cf_by_name(row.cf_name, &row.key, &row.value)?;
-            } else {
-                domain_batch.put_raw_cf_by_name(row.cf_name, &row.key, &row.value)?;
+            if !domain_batch.is_empty() {
+                domain_batch.commit_no_wal()?;
             }
+            self.report.streamed_history_rows += rows.len();
+            self.report.history_flushes += 1;
+            return Ok(());
         }
 
-        if !append_batch.is_empty() {
-            append_batch.commit_no_wal()?;
-        }
-        if !domain_batch.is_empty() {
-            domain_batch.commit_no_wal()?;
-        }
+        self.write_bounded(
+            expected_policy,
+            counter_kind,
+            DEFAULT_FINALIZE_BATCH_BYTES,
+            |sink| {
+                for row in rows {
+                    sink.push_borrowed(row)?;
+                }
+                Ok(())
+            },
+        )?;
+        Ok(())
+    }
 
+    fn write_bounded<F>(
+        &mut self,
+        expected_policy: CfWritePolicy,
+        counter_kind: CounterKind,
+        max_batch_bytes: usize,
+        emit: F,
+    ) -> Result<BoundedWriteStats>
+    where
+        F: FnOnce(&mut BoundedRowSink<'_>) -> Result<()>,
+    {
+        let mut sink = BoundedRowSink::new(
+            self.domain_store,
+            expected_policy,
+            counter_kind,
+            max_batch_bytes,
+        )?;
+        emit(&mut sink)?;
+        let stats = sink.finish()?;
+        self.record_bounded_stats(counter_kind, stats);
+        Ok(stats)
+    }
+
+    fn record_bounded_stats(&mut self, counter_kind: CounterKind, stats: BoundedWriteStats) {
         match counter_kind {
             CounterKind::History => {
-                self.report.streamed_history_rows += rows.len();
-                self.report.history_flushes += 1;
+                self.report.streamed_history_rows += stats.rows;
+                self.report.history_flushes += stats.flushes;
             }
             CounterKind::SealedAggregate => {
-                self.report.sealed_aggregate_rows += rows.len();
-                self.report.sealed_aggregate_flushes += 1;
+                self.report.sealed_aggregate_rows += stats.rows;
+                self.report.sealed_aggregate_flushes += stats.flushes;
             }
             CounterKind::FinalSnapshot => {
-                self.report.final_snapshot_rows += rows.len();
-                self.report.final_snapshot_flushes += 1;
+                self.report.final_snapshot_rows += stats.rows;
+                self.report.final_snapshot_flushes += stats.flushes;
             }
         }
-
-        Ok(())
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CounterKind {
     History,
     SealedAggregate,
@@ -408,9 +605,18 @@ pub(crate) struct FlushChannelStats {
 }
 
 pub(crate) struct FlushChannelHandle {
-    tx: tokio::sync::mpsc::Sender<super::PendingFlush>,
+    tx: tokio::sync::mpsc::Sender<QueuedFlush>,
     worker_handle: tokio::task::JoinHandle<Result<FlushChannelStats>>,
     flush_ms_rx: tokio::sync::watch::Receiver<f64>,
+    byte_budget: Arc<tokio::sync::Semaphore>,
+    byte_budget_units: u32,
+}
+
+const FLUSH_QUEUE_BUDGET_UNIT_BYTES: usize = 1024 * 1024;
+
+struct QueuedFlush {
+    pending: super::PendingFlush,
+    _byte_permit: tokio::sync::OwnedSemaphorePermit,
 }
 
 pub(crate) struct FlushDrainHandle {
@@ -428,23 +634,48 @@ impl FlushDrainHandle {
 impl FlushChannelHandle {
     pub(crate) fn new(
         depth: usize,
+        byte_budget_bytes: u64,
         domain_store: Arc<CkbadgerStore>,
         append_only_store: Arc<CkbadgerStore>,
-    ) -> Self {
-        let (tx, rx) = tokio::sync::mpsc::channel::<super::PendingFlush>(depth);
+    ) -> Result<Self> {
+        if depth == 0 {
+            return Err(anyhow!("flush channel depth must be positive"));
+        }
+        if byte_budget_bytes == 0 {
+            return Err(anyhow!("flush queue byte budget must be positive"));
+        }
+        let budget_bytes = usize::try_from(byte_budget_bytes).map_err(|_| {
+            anyhow!(
+                "flush queue byte budget exceeds usize: byte_budget_bytes={}",
+                byte_budget_bytes
+            )
+        })?;
+        let budget_units = budget_bytes.saturating_add(FLUSH_QUEUE_BUDGET_UNIT_BYTES - 1)
+            / FLUSH_QUEUE_BUDGET_UNIT_BYTES;
+        let byte_budget_units = u32::try_from(budget_units).map_err(|_| {
+            anyhow!(
+                "flush queue byte budget exceeds semaphore range: byte_budget_bytes={} units={}",
+                byte_budget_bytes,
+                budget_units
+            )
+        })?;
+        let byte_budget = Arc::new(tokio::sync::Semaphore::new(budget_units));
+        let (tx, rx) = tokio::sync::mpsc::channel::<QueuedFlush>(depth);
         let (flush_ms_tx, flush_ms_rx) = tokio::sync::watch::channel(0.0_f64);
         let worker_handle = tokio::task::spawn_blocking(move || {
             Self::flush_worker(rx, domain_store, append_only_store, flush_ms_tx)
         });
-        Self {
+        Ok(Self {
             tx,
             worker_handle,
             flush_ms_rx,
-        }
+            byte_budget,
+            byte_budget_units,
+        })
     }
 
     fn flush_worker(
-        mut rx: tokio::sync::mpsc::Receiver<super::PendingFlush>,
+        mut rx: tokio::sync::mpsc::Receiver<QueuedFlush>,
         domain_store: Arc<CkbadgerStore>,
         append_only_store: Arc<CkbadgerStore>,
         flush_ms_tx: tokio::sync::watch::Sender<f64>,
@@ -452,7 +683,11 @@ impl FlushChannelHandle {
         // Flush loop: receives PendingFlush (pure row data), converts to
         // WriteBatch via prepare_flush, then commits to RocksDB.
         let mut stats = FlushChannelStats::default();
-        while let Some(pending) = rx.blocking_recv() {
+        while let Some(queued) = rx.blocking_recv() {
+            let QueuedFlush {
+                pending,
+                _byte_permit,
+            } = queued;
             let flush_started = std::time::Instant::now();
 
             let history_count = pending.history_rows.len();
@@ -501,8 +736,33 @@ impl FlushChannelHandle {
     }
 
     pub(crate) async fn send(&self, pending: super::PendingFlush) -> Result<()> {
+        let message_bytes = pending.allocated_bytes()?;
+        let message_units = message_bytes.saturating_add(FLUSH_QUEUE_BUDGET_UNIT_BYTES - 1)
+            / FLUSH_QUEUE_BUDGET_UNIT_BYTES;
+        let message_units = u32::try_from(message_units.max(1)).map_err(|_| {
+            anyhow!(
+                "flush message exceeds semaphore range: message_bytes={}",
+                message_bytes
+            )
+        })?;
+        if message_units > self.byte_budget_units {
+            return Err(anyhow!(
+                "flush queue byte budget is smaller than one message: message_bytes={} message_units={} budget_bytes={} budget_units={}",
+                message_bytes,
+                message_units,
+                u64::from(self.byte_budget_units) * FLUSH_QUEUE_BUDGET_UNIT_BYTES as u64,
+                self.byte_budget_units
+            ));
+        }
+        let permit = Arc::clone(&self.byte_budget)
+            .acquire_many_owned(message_units)
+            .await
+            .map_err(|_| anyhow!("flush queue byte budget closed unexpectedly"))?;
         self.tx
-            .send(pending)
+            .send(QueuedFlush {
+                pending,
+                _byte_permit: permit,
+            })
             .await
             .map_err(|_| anyhow!("flush channel worker has terminated unexpectedly"))
     }
@@ -558,6 +818,56 @@ mod tests {
             .to_string()
             .contains("final snapshot cannot target append-only"));
 
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn bounded_final_snapshot_sink_flushes_before_rows_can_accumulate() {
+        let root = super::super::unique_temp_test_dir("bounded-final-snapshot");
+        std::fs::create_dir_all(&root).unwrap();
+        let domain_path = root.join("domain");
+        let append_path = root.join("append-only");
+        std::fs::create_dir_all(&domain_path).unwrap();
+        std::fs::create_dir_all(&append_path).unwrap();
+
+        let domain_store = CkbadgerStore::open_domain(&domain_path).unwrap();
+        let append_store = CkbadgerStore::open_append_only(&append_path).unwrap();
+        let mut materializer = Materializer::new(&domain_store, &append_store);
+        let byte_limit = 512;
+
+        let stats = materializer
+            .materialize_final_snapshot_bounded_for_test(byte_limit, |sink| {
+                for i in 0u32..100 {
+                    sink.push(MaterializedRow::new(
+                        CF_LIVE_CELLS,
+                        i.to_be_bytes().to_vec(),
+                        vec![0xA5; 64],
+                    ))?;
+                }
+                Ok(())
+            })
+            .unwrap();
+
+        assert_eq!(stats.rows, 100);
+        assert!(stats.flushes > 1);
+        assert!(
+            stats.peak_batch_bytes <= byte_limit + 128,
+            "peak={} limit={}",
+            stats.peak_batch_bytes,
+            byte_limit
+        );
+        for i in 0u32..100 {
+            assert_eq!(
+                domain_store
+                    .get_cf(domain_store.cf_live_cells(), &i.to_be_bytes())
+                    .unwrap(),
+                Some(vec![0xA5; 64])
+            );
+        }
+
+        let report = materializer.finish();
+        assert_eq!(report.final_snapshot_rows, 100);
+        assert_eq!(report.final_snapshot_flushes, stats.flushes);
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -709,7 +1019,13 @@ mod tests {
         let domain_store = Arc::new(CkbadgerStore::open_domain(&domain_path).unwrap());
         let append_store = Arc::new(CkbadgerStore::open_append_only(&append_path).unwrap());
 
-        let handle = FlushChannelHandle::new(4, domain_store.clone(), append_store.clone());
+        let handle = FlushChannelHandle::new(
+            4,
+            16 * 1024 * 1024,
+            domain_store.clone(),
+            append_store.clone(),
+        )
+        .unwrap();
 
         let mut outpoint_keys = Vec::new();
         let mut header_keys = Vec::new();
@@ -811,7 +1127,13 @@ mod tests {
         let append_store = Arc::new(CkbadgerStore::open_append_only(&append_path).unwrap());
 
         // Deliberately small channel depth to exercise backpressure.
-        let handle = FlushChannelHandle::new(2, domain_store.clone(), append_store.clone());
+        let handle = FlushChannelHandle::new(
+            2,
+            16 * 1024 * 1024,
+            domain_store.clone(),
+            append_store.clone(),
+        )
+        .unwrap();
 
         let cell_info = LiveCellInfo {
             capacity: 100_00000000,
@@ -848,6 +1170,34 @@ mod tests {
         assert!(stats.flush_count <= 10);
         assert_eq!(stats.total_history_rows, 10);
 
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn flush_channel_rejects_one_message_larger_than_its_byte_budget() {
+        let root = super::super::unique_temp_test_dir("flush-channel-byte-budget");
+        std::fs::create_dir_all(&root).unwrap();
+        let domain_path = root.join("domain");
+        let append_path = root.join("append-only");
+        std::fs::create_dir_all(&domain_path).unwrap();
+        std::fs::create_dir_all(&append_path).unwrap();
+
+        let domain_store = Arc::new(CkbadgerStore::open_domain(&domain_path).unwrap());
+        let append_store = Arc::new(CkbadgerStore::open_append_only(&append_path).unwrap());
+        let handle = FlushChannelHandle::new(4, 1024 * 1024, domain_store, append_store).unwrap();
+        let pending = super::super::PendingFlush {
+            history_rows: vec![MaterializedRow::new(
+                CF_BLOCK_HEADERS,
+                b"oversized".to_vec(),
+                vec![0x55; 2 * 1024 * 1024],
+            )],
+            sealed_rows: Vec::new(),
+        };
+
+        let error = handle.send(pending).await.unwrap_err().to_string();
+        assert!(error.contains("flush queue byte budget"), "{error}");
+        assert!(error.contains("message_bytes="), "{error}");
+        handle.close_and_wait().await.unwrap();
         let _ = std::fs::remove_dir_all(&root);
     }
 

@@ -24,6 +24,13 @@ pub struct StoreBatch<'a> {
     batch: WriteBatch,
     append_ops: Vec<AppendBatchOp>,
     pending_dao_deposits: HashMap<Vec<u8>, DaoDepositCacheEntry>,
+    /// Transaction-local Fiber channel view. `None` represents a staged delete.
+    /// Reads must consult this view before committed RocksDB so lifecycle
+    /// transitions in one atomic batch observe earlier writes.
+    pending_fiber_channels: HashMap<Vec<u8>, Option<FiberChannel>>,
+    /// Transaction-local commitment-hash index with the same shadowing rules as
+    /// `pending_fiber_channels`.
+    pending_fiber_channel_by_commitment: HashMap<Vec<u8>, Option<Vec<u8>>>,
 }
 
 impl<'a> StoreBatch<'a> {
@@ -33,6 +40,8 @@ impl<'a> StoreBatch<'a> {
             batch: WriteBatch::default(),
             append_ops: Vec::new(),
             pending_dao_deposits: HashMap::new(),
+            pending_fiber_channels: HashMap::new(),
+            pending_fiber_channel_by_commitment: HashMap::new(),
         }
     }
 
@@ -140,6 +149,13 @@ impl<'a> StoreBatch<'a> {
         // Merge pending DAO deposits (other's entries win on conflict,
         // preserving last-write-wins within a batch merge sequence).
         self.pending_dao_deposits.extend(other.pending_dao_deposits);
+
+        // Preserve the same last-write-wins order for transaction-local Fiber
+        // state when domain batches are merged before the atomic commit.
+        self.pending_fiber_channels
+            .extend(other.pending_fiber_channels);
+        self.pending_fiber_channel_by_commitment
+            .extend(other.pending_fiber_channel_by_commitment);
     }
 
     fn commit_inner(self, no_wal: bool) -> anyhow::Result<()> {
@@ -1251,9 +1267,41 @@ impl<'a> StoreBatch<'a> {
 
     // ---- Fiber Channels ----
 
+    /// Read a Fiber channel through this batch's transactional view.
+    ///
+    /// Staged writes and deletes shadow committed RocksDB state, giving every
+    /// lifecycle handler one read-your-writes path for the lifetime of the
+    /// batch. Committed reads are not cached because only staged mutations may
+    /// participate in `StoreBatch::merge_from` last-write-wins ordering.
+    pub fn get_fiber_channel(&mut self, channel_id: &[u8]) -> anyhow::Result<Option<FiberChannel>> {
+        if let Some(channel) = self.pending_fiber_channels.get(channel_id) {
+            return Ok(channel.clone());
+        }
+
+        self.store.get_fiber_channel(channel_id)
+    }
+
     pub fn put_fiber_channel(&mut self, channel_id: &[u8], channel: &FiberChannel) {
         let value = bincode::serialize(channel).expect("serialize FiberChannel");
         self.put_cf(self.store.cf_fiber_channels(), channel_id, &value);
+        self.pending_fiber_channels
+            .insert(channel_id.to_vec(), Some(channel.clone()));
+    }
+
+    /// Read the commitment index through this batch's transactional view.
+    pub fn get_fiber_channel_id_by_commitment(
+        &mut self,
+        commitment_hash: &[u8],
+    ) -> anyhow::Result<Option<Vec<u8>>> {
+        if let Some(channel_id) = self
+            .pending_fiber_channel_by_commitment
+            .get(commitment_hash)
+        {
+            return Ok(channel_id.clone());
+        }
+
+        self.store
+            .get_fiber_channel_id_by_commitment(commitment_hash)
     }
 
     pub fn put_fiber_channel_by_commitment(&mut self, commitment_hash: &[u8], channel_id: &[u8]) {
@@ -1262,6 +1310,8 @@ impl<'a> StoreBatch<'a> {
             commitment_hash,
             channel_id,
         );
+        self.pending_fiber_channel_by_commitment
+            .insert(commitment_hash.to_vec(), Some(channel_id.to_vec()));
     }
 
     pub fn put_addr_fiber_channel(&mut self, lock_hash: &[u8], channel_id: &[u8]) {
@@ -1271,29 +1321,14 @@ impl<'a> StoreBatch<'a> {
 
     pub fn delete_fiber_channel(&mut self, channel_id: &[u8]) {
         self.delete_cf(self.store.cf_fiber_channels(), channel_id);
-    }
-
-    pub fn put_fiber_channel_by_funding_args(
-        &mut self,
-        funding_lock_args: &[u8],
-        channel_id: &[u8],
-    ) {
-        self.put_cf(
-            self.store.cf_fiber_channel_by_funding_args(),
-            funding_lock_args,
-            channel_id,
-        );
+        self.pending_fiber_channels
+            .insert(channel_id.to_vec(), None);
     }
 
     pub fn delete_fiber_channel_by_commitment(&mut self, commitment_hash: &[u8]) {
         self.delete_cf(self.store.cf_fiber_channel_by_commitment(), commitment_hash);
-    }
-
-    pub fn delete_fiber_channel_by_funding_args(&mut self, funding_lock_args: &[u8]) {
-        self.delete_cf(
-            self.store.cf_fiber_channel_by_funding_args(),
-            funding_lock_args,
-        );
+        self.pending_fiber_channel_by_commitment
+            .insert(commitment_hash.to_vec(), None);
     }
 
     pub fn delete_addr_fiber_channel(&mut self, lock_hash: &[u8], channel_id: &[u8]) {

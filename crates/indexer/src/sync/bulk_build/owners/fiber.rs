@@ -2,7 +2,6 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{anyhow, bail, Result};
 use ckbadger_store::keys;
-use ckbadger_store::store::CF_FIBER_CHANNEL_BY_FUNDING_ARGS;
 use ckbadger_store::types::{FiberChannel, FiberChannelState};
 use ckbadger_store::{CF_ADDR_FIBER_CHANNELS, CF_FIBER_CHANNELS, CF_FIBER_CHANNEL_BY_COMMITMENT};
 
@@ -10,57 +9,60 @@ use super::{BulkReducer, ReducerContext};
 use crate::parser::fiber::{
     is_commitment_lock, is_funding_lock, parse_commitment_lock_args, parse_funding_lock_args,
 };
-use crate::sync::bulk_build::facts::{CellFacts, ResolvedInputFacts, ResolvedTxFacts};
+use crate::sync::bulk_build::facts::{CellFacts, OutPointKey, ResolvedInputFacts, ResolvedTxFacts};
 use crate::sync::bulk_build::materialize::{MaterializedRow, Materializer};
 
 #[derive(Debug, Default)]
 pub(crate) struct FiberOwner {
     channels: BTreeMap<Vec<u8>, FiberChannel>,
-    channel_by_funding_args: BTreeMap<Vec<u8>, Vec<u8>>,
     channel_by_commitment: BTreeMap<Vec<u8>, Vec<u8>>,
 }
 
 impl FiberOwner {
-    fn build_snapshot_rows(&self) -> Result<Vec<MaterializedRow>> {
-        let mut rows = Vec::new();
-
+    pub(crate) fn emit_snapshot_rows<F>(&self, mut emit: F) -> Result<()>
+    where
+        F: FnMut(MaterializedRow) -> Result<()>,
+    {
         for (channel_id, channel) in &self.channels {
-            rows.push(MaterializedRow::new(
+            emit(MaterializedRow::new(
                 CF_FIBER_CHANNELS,
                 channel_id.clone(),
                 bincode::serialize(channel)?,
-            ));
-        }
-
-        for (funding_args, channel_id) in &self.channel_by_funding_args {
-            rows.push(MaterializedRow::new(
-                CF_FIBER_CHANNEL_BY_FUNDING_ARGS,
-                funding_args.clone(),
-                channel_id.clone(),
-            ));
+            ))?;
         }
 
         for (commitment_hash, channel_id) in &self.channel_by_commitment {
-            rows.push(MaterializedRow::new(
+            emit(MaterializedRow::new(
                 CF_FIBER_CHANNEL_BY_COMMITMENT,
                 commitment_hash.clone(),
                 channel_id.clone(),
-            ));
+            ))?;
         }
 
         for (channel_id, channel) in &self.channels {
             for participant in &channel.participants {
-                rows.push(MaterializedRow::new(
+                emit(MaterializedRow::new(
                     CF_ADDR_FIBER_CHANNELS,
                     keys::encode_addr_fiber_channel_key(participant, channel_id),
                     Vec::new(),
-                ));
+                ))?;
             }
         }
 
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn build_snapshot_rows(&self) -> Result<Vec<MaterializedRow>> {
+        let mut rows = Vec::new();
+        self.emit_snapshot_rows(|row| {
+            rows.push(row);
+            Ok(())
+        })?;
         Ok(rows)
     }
 
+    #[cfg(test)]
     pub(crate) fn build_final_rows(&self) -> Result<super::super::materialize::OwnerFinalRows> {
         Ok(super::super::materialize::OwnerFinalRows {
             sealed_rows: Vec::new(),
@@ -86,17 +88,15 @@ impl BulkReducer for FiberOwner {
     }
 
     fn materialize_final(&self, materializer: &mut Materializer<'_>) -> Result<()> {
-        let rows = self.build_snapshot_rows()?;
-        materializer.materialize_final_snapshot(&rows)
+        materializer.materialize_final_snapshot_bounded(|sink| {
+            self.emit_snapshot_rows(|row| sink.push(row))
+        })
     }
 }
 
 impl FiberOwner {
     pub(crate) fn estimated_bytes(&self) -> u64 {
         crate::sync::bulk_build::accounting::btree_map_serialized_bytes(&self.channels)
-            + crate::sync::bulk_build::accounting::btree_map_serialized_bytes(
-                &self.channel_by_funding_args,
-            )
             + crate::sync::bulk_build::accounting::btree_map_serialized_bytes(
                 &self.channel_by_commitment,
             )
@@ -153,21 +153,6 @@ impl FiberOwner {
                 hex::encode(&channel_id)
             );
         }
-        if let Some(existing) = self
-            .channel_by_funding_args
-            .get(funding_lock_args.as_slice())
-        {
-            bail!(
-                "duplicate fiber funding lock args in bulk reducer: block={} tx=0x{} tx_index={} funding_lock_args=0x{} existing_channel_id=0x{} new_channel_id=0x{}",
-                tx.block_number,
-                hex::encode(tx.tx_hash),
-                tx.tx_index,
-                hex::encode(&funding_lock_args),
-                hex::encode(existing),
-                hex::encode(&channel_id)
-            );
-        }
-
         let channel = FiberChannel {
             funding_tx_hash: tx.tx_hash.to_vec(),
             funding_output_index: output_index,
@@ -190,8 +175,6 @@ impl FiberOwner {
             funding_lock_args: funding_lock_args.clone(),
         };
 
-        self.channel_by_funding_args
-            .insert(funding_lock_args, channel_id.clone());
         self.channels.insert(channel_id, channel);
         Ok(())
     }
@@ -201,43 +184,37 @@ impl FiberOwner {
         tx: &ResolvedTxFacts<'_>,
         summary: &FiberTxSummary,
     ) -> Result<()> {
-        let funding_lock_args = summary
-            .funding_input_pubkey_hash
-            .as_deref()
-            .ok_or_else(|| {
-                anyhow!(
-                    "fiber channel_close missing parsed funding input args in bulk reducer: block={} tx=0x{} tx_index={}",
-                    tx.block_number,
-                    hex::encode(tx.tx_hash),
-                    tx.tx_index
-                )
-            })?;
-        let channel = self.channel_by_funding_args.get(funding_lock_args).ok_or_else(|| {
+        let funding_outpoint = summary.funding_input_outpoint.ok_or_else(|| {
             anyhow!(
-                "fiber channel_close missing channel by funding args in bulk reducer: block={} tx=0x{} tx_index={} funding_lock_args=0x{}",
+                "fiber channel_close missing funding input outpoint in bulk reducer: block={} tx=0x{} tx_index={}",
                 tx.block_number,
                 hex::encode(tx.tx_hash),
-                tx.tx_index,
-                hex::encode(funding_lock_args)
+                tx.tx_index
             )
         })?;
-        let channel = self.channels.get_mut(channel.as_slice()).ok_or_else(|| {
+        let channel_id =
+            keys::encode_fiber_channel_id(&funding_outpoint.tx_hash, funding_outpoint.index);
+        let channel = self.channels.get_mut(channel_id.as_slice()).ok_or_else(|| {
             anyhow!(
-                "fiber channel_close missing channel state in bulk reducer: block={} tx=0x{} tx_index={} funding_lock_args=0x{}",
+                "fiber channel_close missing channel state in bulk reducer: block={} tx=0x{} tx_index={} funding_outpoint=0x{}:{} channel_id=0x{}",
                 tx.block_number,
                 hex::encode(tx.tx_hash),
                 tx.tx_index,
-                hex::encode(funding_lock_args)
+                hex::encode(funding_outpoint.tx_hash),
+                funding_outpoint.index,
+                hex::encode(&channel_id)
             )
         })?;
         if channel.state != FiberChannelState::Open {
             bail!(
-                "fiber channel_close expected open channel in bulk reducer: block={} tx=0x{} tx_index={} state={:?} funding_lock_args=0x{}",
+                "fiber channel_close expected open channel in bulk reducer: block={} tx=0x{} tx_index={} state={:?} funding_outpoint=0x{}:{} channel_id=0x{}",
                 tx.block_number,
                 hex::encode(tx.tx_hash),
                 tx.tx_index,
                 channel.state,
-                hex::encode(funding_lock_args)
+                hex::encode(funding_outpoint.tx_hash),
+                funding_outpoint.index,
+                hex::encode(&channel_id)
             );
         }
 
@@ -253,17 +230,14 @@ impl FiberOwner {
         tx: &ResolvedTxFacts<'_>,
         summary: &FiberTxSummary,
     ) -> Result<()> {
-        let funding_lock_args = summary
-            .funding_input_pubkey_hash
-            .as_deref()
-            .ok_or_else(|| {
-                anyhow!(
-                    "fiber force_close missing parsed funding input args in bulk reducer: block={} tx=0x{} tx_index={}",
-                    tx.block_number,
-                    hex::encode(tx.tx_hash),
-                    tx.tx_index
-                )
-            })?;
+        let funding_outpoint = summary.funding_input_outpoint.ok_or_else(|| {
+            anyhow!(
+                "fiber force_close missing funding input outpoint in bulk reducer: block={} tx=0x{} tx_index={}",
+                tx.block_number,
+                hex::encode(tx.tx_hash),
+                tx.tx_index
+            )
+        })?;
         let commitment_args = summary.commitment_output_args.as_deref().ok_or_else(|| {
             anyhow!(
                 "fiber force_close missing commitment output args in bulk reducer: block={} tx=0x{} tx_index={}",
@@ -272,16 +246,8 @@ impl FiberOwner {
                 tx.tx_index
             )
         })?;
-        let channel_id = self.channel_by_funding_args.get(funding_lock_args).ok_or_else(|| {
-            anyhow!(
-                "fiber force_close missing channel by funding args in bulk reducer: block={} tx=0x{} tx_index={} funding_lock_args=0x{}",
-                tx.block_number,
-                hex::encode(tx.tx_hash),
-                tx.tx_index,
-                hex::encode(funding_lock_args)
-            )
-        })?;
-        let channel_id = channel_id.clone();
+        let channel_id =
+            keys::encode_fiber_channel_id(&funding_outpoint.tx_hash, funding_outpoint.index);
         let commitment_hash = blake2b_hash(commitment_args);
         if let Some(existing) = self.channel_by_commitment.get(commitment_hash.as_slice()) {
             if existing != &channel_id {
@@ -298,21 +264,25 @@ impl FiberOwner {
         }
         let channel = self.channels.get_mut(channel_id.as_slice()).ok_or_else(|| {
             anyhow!(
-                "fiber force_close missing channel state in bulk reducer: block={} tx=0x{} tx_index={} funding_lock_args=0x{}",
+                "fiber force_close missing channel state in bulk reducer: block={} tx=0x{} tx_index={} funding_outpoint=0x{}:{} channel_id=0x{}",
                 tx.block_number,
                 hex::encode(tx.tx_hash),
                 tx.tx_index,
-                hex::encode(funding_lock_args)
+                hex::encode(funding_outpoint.tx_hash),
+                funding_outpoint.index,
+                hex::encode(&channel_id)
             )
         })?;
         if channel.state != FiberChannelState::Open {
             bail!(
-                "fiber force_close expected open channel in bulk reducer: block={} tx=0x{} tx_index={} state={:?} funding_lock_args=0x{}",
+                "fiber force_close expected open channel in bulk reducer: block={} tx=0x{} tx_index={} state={:?} funding_outpoint=0x{}:{} channel_id=0x{}",
                 tx.block_number,
                 hex::encode(tx.tx_hash),
                 tx.tx_index,
                 channel.state,
-                hex::encode(funding_lock_args)
+                hex::encode(funding_outpoint.tx_hash),
+                funding_outpoint.index,
+                hex::encode(&channel_id)
             );
         }
 
@@ -470,7 +440,7 @@ struct FiberTxSummary {
     has_funding_output: bool,
     has_commitment_input: bool,
     has_commitment_output: bool,
-    funding_input_pubkey_hash: Option<Vec<u8>>,
+    funding_input_outpoint: Option<OutPointKey>,
     funding_output_pubkey_hash: Option<Vec<u8>>,
     funding_output_capacity: Option<u64>,
     funding_output_index: Option<u32>,
@@ -521,19 +491,8 @@ impl FiberTxSummary {
         let lock_args = ctx.resolve_identity(input.lock_args_id);
         if is_funding_lock(lock_code_hash) {
             self.has_funding_input = true;
-            if self.funding_input_pubkey_hash.is_none() {
-                let parsed = parse_funding_lock_args(lock_args).ok_or_else(|| {
-                    anyhow!(
-                        "fiber funding input args invalid in bulk reducer: block={} tx=0x{} tx_index={} outpoint=0x{}:{} args_len={}",
-                        tx.block_number,
-                        hex::encode(tx.tx_hash),
-                        tx.tx_index,
-                        hex::encode(input.outpoint.tx_hash),
-                        input.outpoint.index,
-                        lock_args.len()
-                    )
-                })?;
-                self.funding_input_pubkey_hash = Some(parsed.pubkey_hash);
+            if self.funding_input_outpoint.is_none() {
+                self.funding_input_outpoint = Some(input.outpoint);
             }
             return Ok(());
         }
@@ -712,7 +671,7 @@ mod tests {
     }
 
     #[test]
-    fn channel_open_stores_state_and_indexes() {
+    fn channel_open_stores_state() {
         let mut owner = FiberOwner::default();
         let funding_args = vec![0xbb; 20];
         let tx_hash = [0xaa; 32];
@@ -741,18 +700,75 @@ mod tests {
         };
 
         owner.channels.insert(channel_id.clone(), channel);
-        owner
-            .channel_by_funding_args
-            .insert(funding_args.clone(), channel_id.clone());
 
         assert_eq!(owner.channels.len(), 1);
         assert_eq!(
             owner.channels[channel_id.as_slice()].state,
             FiberChannelState::Open
         );
+    }
+
+    #[test]
+    fn reused_funding_args_close_by_consumed_outpoint() {
+        fn tx(tx_hash: [u8; 32], block_number: i64) -> ResolvedTxFacts<'static> {
+            ResolvedTxFacts {
+                tx_hash,
+                block_number,
+                block_hash: [0x99; 32],
+                timestamp_ms: block_number * 1_000,
+                block_dao_ar: 0,
+                tx_index: 1,
+                dotbit_action: None,
+                resolved_inputs: Vec::new(),
+                cells: std::borrow::Cow::Borrowed(&[]),
+            }
+        }
+
+        fn open_summary(funding_args: Vec<u8>) -> FiberTxSummary {
+            FiberTxSummary {
+                funding_output_pubkey_hash: Some(funding_args),
+                funding_output_capacity: Some(500_00000000),
+                funding_output_index: Some(0),
+                participants: BTreeSet::from([vec![0xAA; 32]]),
+                ..Default::default()
+            }
+        }
+
+        let mut owner = FiberOwner::default();
+        let first_funding_tx_hash = [0x10; 32];
+        let second_funding_tx_hash = [0x11; 32];
+        let reused_funding_args = vec![0xCC; 20];
+
+        owner
+            .handle_channel_open(
+                &tx(first_funding_tx_hash, 100),
+                &open_summary(reused_funding_args.clone()),
+            )
+            .unwrap();
+        owner
+            .handle_channel_open(
+                &tx(second_funding_tx_hash, 101),
+                &open_summary(reused_funding_args),
+            )
+            .unwrap();
+
+        let close_summary = FiberTxSummary {
+            funding_input_outpoint: Some(OutPointKey::new(first_funding_tx_hash, 0)),
+            ..Default::default()
+        };
+        owner
+            .handle_channel_close(&tx([0x20; 32], 102), &close_summary)
+            .unwrap();
+
+        let first_channel_id = keys::encode_fiber_channel_id(&first_funding_tx_hash, 0);
+        let second_channel_id = keys::encode_fiber_channel_id(&second_funding_tx_hash, 0);
         assert_eq!(
-            owner.channel_by_funding_args[funding_args.as_slice()],
-            channel_id
+            owner.channels[first_channel_id.as_slice()].state,
+            FiberChannelState::CooperativelyClosed
+        );
+        assert_eq!(
+            owner.channels[second_channel_id.as_slice()].state,
+            FiberChannelState::Open
         );
     }
 
@@ -821,9 +837,6 @@ mod tests {
             funding_lock_args: funding_args.clone(),
         };
         owner.channels.insert(channel_id.clone(), channel);
-        owner
-            .channel_by_funding_args
-            .insert(funding_args, channel_id.clone());
         owner
             .channel_by_commitment
             .insert(old_hash.clone(), channel_id.clone());
@@ -899,9 +912,6 @@ mod tests {
             funding_lock_args: funding_args.clone(),
         };
         owner.channels.insert(channel_id.clone(), channel);
-        owner
-            .channel_by_funding_args
-            .insert(funding_args, channel_id.clone());
         owner
             .channel_by_commitment
             .insert(hash_v1.clone(), channel_id.clone());

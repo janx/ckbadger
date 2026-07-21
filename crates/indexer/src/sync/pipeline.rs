@@ -65,6 +65,20 @@ struct ParserBatchPerfSample {
     precompute_ms: f64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BatchWriteFailurePolicy {
+    FailFastPreCommitInvariant,
+    CleanupAndRetry,
+}
+
+fn classify_batch_write_failure(error: &anyhow::Error) -> BatchWriteFailurePolicy {
+    if error.downcast_ref::<PreCommitInvariantError>().is_some() {
+        BatchWriteFailurePolicy::FailFastPreCommitInvariant
+    } else {
+        BatchWriteFailurePolicy::CleanupAndRetry
+    }
+}
+
 pub(crate) fn classify_bulk_cell_semantic_tag(cell: &ParsedCell) -> CellSemanticTag {
     let Some(type_code_hash) = cell.type_code_hash.as_deref() else {
         return CellSemanticTag::Plain;
@@ -2554,8 +2568,17 @@ impl Indexer {
                     {
                         Ok(metrics) => metrics,
                         Err(e) => {
+                            let failure_policy = classify_batch_write_failure(&e);
+                            let incident_reason = match failure_policy {
+                                BatchWriteFailurePolicy::FailFastPreCommitInvariant => {
+                                    "pipeline_precommit_invariant_failed"
+                                }
+                                BatchWriteFailurePolicy::CleanupAndRetry => {
+                                    "pipeline_batch_write_failed"
+                                }
+                            };
                             let incident_id = self.report_incident(
-                                "pipeline_batch_write_failed",
+                                incident_reason,
                                 format!(
                                     "start_block={} end_block={} chain_tip={} error={:?}",
                                     start_block, end_block, chain_tip, e
@@ -2570,6 +2593,15 @@ impl Indexer {
                                 error = ?e,
                                 "Sync error while writing parsed batch"
                             );
+                            if failure_policy == BatchWriteFailurePolicy::FailFastPreCommitInvariant
+                            {
+                                return Err(e).with_context(|| {
+                                    format!(
+                                        "live sync fail-fast for deterministic pre-commit invariant in range {}-{} (chain_tip={}): no domain batch was committed; rollback cleanup and retry are disabled",
+                                        start_block, end_block, chain_tip
+                                    )
+                                });
+                            }
                             let bulk_sync_mode = is_effective_bulk_sync_batch(
                                 chain_tip,
                                 end_block,
@@ -3055,6 +3087,27 @@ mod tests {
         BlockResponseWithCycles, BlockView, CellInput, CellOutput, HeaderView, OutPoint, Script,
         TransactionView,
     };
+
+    #[test]
+    fn test_precommit_invariant_failure_policy_is_fail_fast() {
+        let error = anyhow::Error::new(PreCommitInvariantError::new(
+            "fiber lifecycle",
+            anyhow!("missing staged channel"),
+        ));
+        assert_eq!(
+            classify_batch_write_failure(&error),
+            BatchWriteFailurePolicy::FailFastPreCommitInvariant
+        );
+    }
+
+    #[test]
+    fn test_unclassified_batch_write_failure_retains_cleanup_policy() {
+        let error = anyhow!("atomic domain commit failed");
+        assert_eq!(
+            classify_batch_write_failure(&error),
+            BatchWriteFailurePolicy::CleanupAndRetry
+        );
+    }
 
     fn create_lock_script() -> Script {
         Script {

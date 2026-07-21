@@ -37,6 +37,19 @@ Bulk sync is the high-throughput index building path used with a fresh store.
    If bulk sync encounters abnormal state or invariant violations, fail fast and rebuild from genesis.  
    Do not add complex in-place repair flows for bulk mode.
 
+9. **Memory must be bounded by retained bytes**
+   Prefetch and flush queues must apply backpressure using retained payload bytes, not only item
+   counts or estimated block density. Final-snapshot materialization must stream through bounded
+   write batches instead of constructing a second full copy of reducer state. If the process
+   cannot continue within its whole-process memory budget, fail with RSS, swap, block, and owner
+   context before the kernel OOM killer intervenes.
+
+10. **Bulk-to-live handoff uses a fresh process**
+    After all bulk rows and completion metadata are durably finalized, the indexer exits
+    successfully. The supervisor immediately starts a new indexer process, which selects the
+    normal near-tip pipeline from the persisted tip. The bulk reducer heap must not be retained
+    into live sync.
+
 ## Design Implications
 
 - Keep bulk sync logic simple and write-throughput oriented.
@@ -57,9 +70,19 @@ architecture details.
 - **LiveCellOwner** is the authoritative in-memory live-cell set. All input resolution uses it
   directly — no DB reads for correctness-critical data.
 - **IdentityInterner** deduplicates lock/type/data hashes into `u32` IDs, keeping per-cell memory
-  compact.
+  compact; lookup and ID tables share each interned byte payload.
+- **AddressOwner** keeps fixed-size lock/transaction hashes in memory and converts to the stable
+  store representation only while emitting final rows.
 - **Owner reducers** (address, script, token, DAO, object, fiber) consume resolved tx facts and
   maintain their domain state in memory until materialization.
 - CF writes are classified by policy: Class A (append-only event rows streamed immediately),
   Class B (final snapshot written once after convergence), Class C (sealed aggregates flushed
   when time bucket closes), Class D (disabled during bulk sync).
+- Activity Class C buckets seal only when their exact UTC+8 bucket end is at or below CKB median
+  time past (37 headers including the current header, upper median). This bounds unique-address
+  sets without allowing a later valid block to modify an already-written bucket.
+- Class B owners and live-cell indexes emit sequentially through domain-store batches capped at
+  32 MiB. `CF_CELLS` remains on the separate append-only history path and is never targeted by
+  finalize materialization.
+- The whole-process guard uses `VmRSS + VmSwap`. `[indexer].bulk_memory_budget_gb` overrides the
+  automatic per-network RAM share; a zero budget is invalid.

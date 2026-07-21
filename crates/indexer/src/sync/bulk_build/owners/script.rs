@@ -346,6 +346,7 @@ impl ScriptOwner {
         Ok(all_rows)
     }
 
+    #[cfg(test)]
     pub(crate) fn build_final_rows(
         &self,
         domain_store: &CkbadgerStore,

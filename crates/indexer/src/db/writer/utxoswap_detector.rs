@@ -149,6 +149,8 @@ mod tests {
     impl OwnedInput {
         fn view(&self) -> crate::db::writer::activities::InputCellView<'_> {
             crate::db::writer::activities::InputCellView {
+                previous_tx_hash: &[0u8; 32],
+                previous_output_index: 0,
                 lock_script_hash: &self.lock_script_hash,
                 lock_code_hash: &self.lock_code_hash,
                 lock_hash_type: 1,

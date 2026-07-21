@@ -47,6 +47,23 @@ use super::types::{
 };
 use super::undo::*;
 
+/// Marks an invariant failure that occurred while constructing the atomic
+/// domain batch, before either store commit can run. Retrying or rolling back
+/// cannot change this deterministic result.
+#[derive(Debug, thiserror::Error)]
+#[error("pre-commit invariant failed in {component}: {source}")]
+pub(crate) struct PreCommitInvariantError {
+    component: &'static str,
+    #[source]
+    source: anyhow::Error,
+}
+
+impl PreCommitInvariantError {
+    pub(crate) fn new(component: &'static str, source: anyhow::Error) -> Self {
+        Self { component, source }
+    }
+}
+
 pub(super) fn collect_missing_input_outpoints<T>(
     all_input_outpoints: &[(Vec<u8>, i16)],
     input_cell_info: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
@@ -154,7 +171,7 @@ struct ActivityInputIndexes<'a> {
 }
 
 fn build_activity_input_views<'a>(
-    tx_data: &TxData,
+    tx_data: &'a TxData,
     block_number: i64,
     indexes: ActivityInputIndexes<'a>,
 ) -> Result<Vec<crate::db::writer::activities::InputCellView<'a>>> {
@@ -212,6 +229,19 @@ fn build_activity_input_views<'a>(
                 .unwrap_or(&[]);
 
             Ok(crate::db::writer::activities::InputCellView {
+                previous_tx_hash: input.previous_tx_hash.as_slice(),
+                previous_output_index: u32::try_from(input.previous_output_index).map_err(
+                    |_| {
+                        anyhow!(
+                            "negative input previous output index while building activities: block={}, tx_hash=0x{}, tx_index={}, input_index={}, previous_output_index={}",
+                            block_number,
+                            hex::encode(tx_data.hash),
+                            tx_data.tx_index,
+                            input_index,
+                            input.previous_output_index
+                        )
+                    },
+                )?,
                 lock_script_hash: &info.lock_script_hash,
                 lock_code_hash: &info.lock_code_hash,
                 lock_hash_type: info.lock_hash_type,
@@ -2881,9 +2911,9 @@ impl Indexer {
                     // Process Fiber channel lifecycle events
                     crate::db::writer::fiber::process_fiber_channel_events(
                         &mut activity_batch,
-                        self.writer.store(),
                         tx_actions,
-                    )?;
+                    )
+                    .map_err(|source| PreCommitInvariantError::new("fiber lifecycle", source))?;
                 }
             }
         }

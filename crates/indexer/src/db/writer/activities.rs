@@ -146,6 +146,8 @@ impl CodeHashes {
 /// Input cell info needed for activity building.
 #[derive(Clone, Copy)]
 pub struct InputCellView<'a> {
+    pub previous_tx_hash: &'a [u8],
+    pub previous_output_index: u32,
     pub lock_script_hash: &'a [u8],
     pub lock_code_hash: &'a [u8],
     pub lock_hash_type: i16,
@@ -1061,6 +1063,8 @@ mod tests {
     impl OwnedInput {
         fn view(&self) -> InputCellView<'_> {
             InputCellView {
+                previous_tx_hash: &[0u8; 32],
+                previous_output_index: 0,
                 lock_script_hash: &self.lock_script_hash,
                 lock_code_hash: &self.lock_code_hash,
                 lock_hash_type: 1,
@@ -2309,6 +2313,8 @@ mod tests {
 
         // Build a TxView with plain lock code_hash on input and output (no protocol scripts)
         let input = InputCellView {
+            previous_tx_hash: &[0u8; 32],
+            previous_output_index: 0,
             lock_script_hash: &input_lock_hash,
             lock_code_hash: &plain_lock,
             lock_hash_type: 1,

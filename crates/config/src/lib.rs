@@ -76,6 +76,10 @@ pub struct FrontendConfig {
 pub struct IndexerConfig {
     pub bulk_sync_threshold: u64,
     pub poll_interval_ms: u64,
+    /// Whole-process bulk-sync budget. This is distinct from the RocksDB-only
+    /// `[store].memory_budget_gb`; `None` uses the per-network RAM share.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bulk_memory_budget_gb: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -179,6 +183,7 @@ impl Default for IndexerConfig {
         Self {
             bulk_sync_threshold: 1000,
             poll_interval_ms: 1000,
+            bulk_memory_budget_gb: None,
         }
     }
 }
@@ -380,6 +385,7 @@ port = 8100
 [indexer]
 bulk_sync_threshold = 1000
 poll_interval_ms = 1000
+# bulk_memory_budget_gb = 32     # Optional whole-indexer bulk-sync hard limit
 
 [store]
 domain_data_path = "data/domain"
@@ -588,6 +594,7 @@ mod tests {
 
         assert_eq!(cfg.indexer.bulk_sync_threshold, 1000);
         assert_eq!(cfg.indexer.poll_interval_ms, 1000);
+        assert_eq!(cfg.indexer.bulk_memory_budget_gb, None);
 
         assert_eq!(cfg.store.domain_data_path, "data/domain");
         assert_eq!(cfg.store.append_only_data_path, "data/append-only");
@@ -664,6 +671,7 @@ port = 3000
 [indexer]
 bulk_sync_threshold = 500
 poll_interval_ms = 2000
+bulk_memory_budget_gb = 36
 
 [store]
 domain_data_path = "/data/domain"
@@ -687,6 +695,7 @@ level = "debug"
         assert_eq!(cfg.frontend.port, 3000);
         assert_eq!(cfg.indexer.bulk_sync_threshold, 500);
         assert_eq!(cfg.indexer.poll_interval_ms, 2000);
+        assert_eq!(cfg.indexer.bulk_memory_budget_gb, Some(36));
         assert_eq!(cfg.store.domain_data_path, "/data/domain");
         assert_eq!(cfg.store.append_only_data_path, "/data/append");
         assert_eq!(cfg.store.memory_budget_gb, Some(48));

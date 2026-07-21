@@ -91,6 +91,14 @@ impl ChildSpec {
     }
 }
 
+/// Bulk build deliberately exits the indexer after finalization so the OS can
+/// reclaim its large reducer heap before near-tip pipeline sync starts. Only a
+/// successful indexer exit is that planned handoff; every other exit keeps the
+/// normal crash backoff semantics.
+fn is_planned_clean_handoff(spec: &ChildSpec, exit_success: bool) -> bool {
+    spec.service == "indexer" && exit_success
+}
+
 // ---------------------------------------------------------------------------
 // Graceful shutdown
 // ---------------------------------------------------------------------------
@@ -626,6 +634,33 @@ async fn monitor_children_multi(
 
             if let Some(status) = exited {
                 let label = &specs[i].label;
+
+                if is_planned_clean_handoff(&specs[i], status.success()) {
+                    info!(
+                        child = %label,
+                        exit_status = %status,
+                        "indexer exited cleanly; starting fresh process for sync-path handoff"
+                    );
+                    match spawn_child(exe, &specs[i], log_dir) {
+                        Ok(new_child) => {
+                            info!(
+                                child = %label,
+                                pid = new_child.pid(),
+                                "indexer clean-process handoff completed"
+                            );
+                            locked.children[i] = new_child;
+                        }
+                        Err(e) => {
+                            error!(
+                                child = %label,
+                                error = %e,
+                                "failed to start indexer handoff process"
+                            );
+                        }
+                    }
+                    continue;
+                }
+
                 let uptime = locked.children[i].started_at.elapsed();
                 let mut restart_count = locked.children[i].restart_count;
 
@@ -826,6 +861,24 @@ mod tests {
 
         let b6 = std::cmp::min(BASE_BACKOFF * 2u32.pow(6), MAX_BACKOFF);
         assert_eq!(b6, MAX_BACKOFF); // capped at 60
+    }
+
+    #[test]
+    fn successful_indexer_exit_is_a_planned_process_handoff() {
+        let indexer = ChildSpec {
+            label: "testnet/indexer".to_string(),
+            service: "indexer".to_string(),
+            workdir: "/tmp/testnet".to_string(),
+        };
+        let api = ChildSpec {
+            label: "testnet/api".to_string(),
+            service: "api".to_string(),
+            workdir: "/tmp/testnet".to_string(),
+        };
+
+        assert!(is_planned_clean_handoff(&indexer, true));
+        assert!(!is_planned_clean_handoff(&indexer, false));
+        assert!(!is_planned_clean_handoff(&api, true));
     }
 
     // Compile-time checks for supervisor constants

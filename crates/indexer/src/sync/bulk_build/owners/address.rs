@@ -20,28 +20,56 @@ pub(crate) struct AddressTxDelta {
     pub(crate) used_capacity_delta: i128,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct CompactAddressBalance {
+    pub(crate) balance: i128,
+    pub(crate) used_capacity: i128,
+    pub(crate) live_cells_count: i32,
+    pub(crate) total_cells_count: i64,
+    pub(crate) txs_count: i64,
+    pub(crate) first_seen_block: i64,
+    first_seen_tx: [u8; 32],
+    pub(crate) last_activity_block: i64,
+    last_activity_tx: [u8; 32],
+}
+
+impl CompactAddressBalance {
+    fn to_stored(self) -> AddressBalance {
+        AddressBalance {
+            balance: self.balance,
+            used_capacity: self.used_capacity,
+            live_cells_count: self.live_cells_count,
+            total_cells_count: self.total_cells_count,
+            txs_count: self.txs_count,
+            first_seen_block: self.first_seen_block,
+            first_seen_tx: self.first_seen_tx.to_vec(),
+            last_activity_block: self.last_activity_block,
+            last_activity_tx: self.last_activity_tx.to_vec(),
+        }
+    }
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct AddressOwner {
-    balances: FxHashMap<Vec<u8>, AddressBalance>,
+    balances: FxHashMap<[u8; 32], CompactAddressBalance>,
 }
 
 impl AddressOwner {
-    pub(crate) fn balances(&self) -> &FxHashMap<Vec<u8>, AddressBalance> {
+    pub(crate) fn balances(&self) -> &FxHashMap<[u8; 32], CompactAddressBalance> {
         &self.balances
     }
 
     pub(crate) fn estimated_bytes(&self) -> u64 {
-        crate::sync::bulk_build::accounting::hash_map_bytes(&self.balances, |lock_hash, balance| {
-            crate::sync::bulk_build::accounting::bytes_vec_bytes(lock_hash)
-                + crate::sync::bulk_build::accounting::serialized_bytes(balance)
-        })
+        std::mem::size_of::<Self>() as u64
+            + self.balances.capacity() as u64
+                * std::mem::size_of::<([u8; 32], CompactAddressBalance)>() as u64
     }
 
     pub(crate) fn apply_tx_with_deltas(
         &mut self,
         tx: &ResolvedTxFacts<'_>,
         ctx: &ReducerContext<'_>,
-    ) -> Result<FxHashMap<Vec<u8>, AddressTxDelta>> {
+    ) -> Result<FxHashMap<[u8; 32], AddressTxDelta>> {
         let deltas = collect_tx_deltas(tx, ctx)?;
         self.apply_tx_deltas(tx, &deltas)?;
         Ok(deltas)
@@ -50,13 +78,12 @@ impl AddressOwner {
     fn apply_tx_deltas(
         &mut self,
         tx: &ResolvedTxFacts<'_>,
-        deltas: &FxHashMap<Vec<u8>, AddressTxDelta>,
+        deltas: &FxHashMap<[u8; 32], AddressTxDelta>,
     ) -> Result<()> {
         for (lock_hash, delta) in deltas {
-            let existing = self.balances.get(lock_hash).cloned();
-
-            let updated = match existing {
-                Some(mut balance) => {
+            match self.balances.entry(*lock_hash) {
+                std::collections::hash_map::Entry::Occupied(mut entry) => {
+                    let balance = entry.get_mut();
                     balance.balance = checked_add_i128(
                         balance.balance,
                         delta.balance_delta,
@@ -88,10 +115,9 @@ impl AddressOwner {
                     balance.txs_count =
                         checked_add_i64(balance.txs_count, 1, "address txs_count", lock_hash, tx)?;
                     balance.last_activity_block = tx.block_number;
-                    balance.last_activity_tx = tx.tx_hash.to_vec();
-                    balance
+                    balance.last_activity_tx = tx.tx_hash;
                 }
-                None => {
+                std::collections::hash_map::Entry::Vacant(entry) => {
                     if delta.balance_delta < 0
                         || delta.used_capacity_delta < 0
                         || delta.cells_consumed > 0
@@ -109,21 +135,19 @@ impl AddressOwner {
                         );
                     }
 
-                    AddressBalance {
+                    entry.insert(CompactAddressBalance {
                         balance: delta.balance_delta,
                         used_capacity: delta.used_capacity_delta,
                         live_cells_count: delta.cells_created,
                         total_cells_count: i64::from(delta.cells_created),
                         txs_count: 1,
                         first_seen_block: tx.block_number,
-                        first_seen_tx: tx.tx_hash.to_vec(),
+                        first_seen_tx: tx.tx_hash,
                         last_activity_block: tx.block_number,
-                        last_activity_tx: tx.tx_hash.to_vec(),
-                    }
+                        last_activity_tx: tx.tx_hash,
+                    });
                 }
-            };
-
-            self.balances.insert(lock_hash.clone(), updated);
+            }
         }
 
         Ok(())
@@ -131,26 +155,32 @@ impl AddressOwner {
 }
 
 impl AddressOwner {
-    fn build_snapshot_rows(&self) -> Result<Vec<MaterializedRow>> {
-        let mut lock_hashes: Vec<&Vec<u8>> = self.balances.keys().collect();
-        lock_hashes.sort();
-
-        lock_hashes
-            .into_iter()
-            .map(|lock_hash| {
-                let balance = self
-                    .balances
-                    .get(lock_hash)
-                    .expect("sorted lock hash must exist in address owner");
-                Ok(MaterializedRow::new(
-                    CF_ADDR_BALANCE,
-                    lock_hash.clone(),
-                    bincode::serialize(balance)?,
-                ))
-            })
-            .collect::<Result<Vec<_>>>()
+    pub(crate) fn emit_snapshot_rows<F>(&self, mut emit: F) -> Result<()>
+    where
+        F: FnMut(MaterializedRow) -> Result<()>,
+    {
+        for (lock_hash, balance) in &self.balances {
+            let stored = balance.to_stored();
+            emit(MaterializedRow::new(
+                CF_ADDR_BALANCE,
+                lock_hash.to_vec(),
+                bincode::serialize(&stored)?,
+            ))?;
+        }
+        Ok(())
     }
 
+    #[cfg(test)]
+    fn build_snapshot_rows(&self) -> Result<Vec<MaterializedRow>> {
+        let mut rows = Vec::new();
+        self.emit_snapshot_rows(|row| {
+            rows.push(row);
+            Ok(())
+        })?;
+        Ok(rows)
+    }
+
+    #[cfg(test)]
     pub(crate) fn build_final_rows(&self) -> Result<super::super::materialize::OwnerFinalRows> {
         Ok(super::super::materialize::OwnerFinalRows {
             sealed_rows: Vec::new(),
@@ -165,17 +195,18 @@ impl BulkReducer for AddressOwner {
     }
 
     fn materialize_final(&self, materializer: &mut Materializer<'_>) -> Result<()> {
-        let rows = self.build_snapshot_rows()?;
-        materializer.materialize_final_snapshot(&rows)
+        materializer.materialize_final_snapshot_bounded(|sink| {
+            self.emit_snapshot_rows(|row| sink.push(row))
+        })
     }
 }
 
 fn apply_input_deltas(
     input: &ResolvedInputFacts,
     ctx: &ReducerContext<'_>,
-    deltas: &mut FxHashMap<Vec<u8>, AddressTxDelta>,
+    deltas: &mut FxHashMap<[u8; 32], AddressTxDelta>,
 ) -> Result<()> {
-    let lock_hash = ctx.resolve_identity(input.lock_script_hash_id).to_vec();
+    let lock_hash = resolve_lock_hash(ctx, input.lock_script_hash_id, input.outpoint, "input")?;
     let delta = deltas.entry(lock_hash).or_default();
     delta.balance_delta -= i128::from(input.capacity);
     delta.cells_consumed += 1;
@@ -186,9 +217,9 @@ fn apply_input_deltas(
 fn apply_output_deltas(
     cell: &CellFacts,
     ctx: &ReducerContext<'_>,
-    deltas: &mut FxHashMap<Vec<u8>, AddressTxDelta>,
+    deltas: &mut FxHashMap<[u8; 32], AddressTxDelta>,
 ) -> Result<()> {
-    let lock_hash = ctx.resolve_identity(cell.lock_script_hash_id).to_vec();
+    let lock_hash = resolve_lock_hash(ctx, cell.lock_script_hash_id, cell.outpoint, "output")?;
     let delta = deltas.entry(lock_hash).or_default();
     delta.balance_delta += i128::from(cell.capacity);
     delta.cells_created += 1;
@@ -199,7 +230,7 @@ fn apply_output_deltas(
 fn collect_tx_deltas(
     tx: &ResolvedTxFacts<'_>,
     ctx: &ReducerContext<'_>,
-) -> Result<FxHashMap<Vec<u8>, AddressTxDelta>> {
+) -> Result<FxHashMap<[u8; 32], AddressTxDelta>> {
     let mut deltas = FxHashMap::default();
 
     for input in &tx.resolved_inputs {
@@ -211,6 +242,25 @@ fn collect_tx_deltas(
     }
 
     Ok(deltas)
+}
+
+fn resolve_lock_hash(
+    ctx: &ReducerContext<'_>,
+    id: crate::sync::types::InternId,
+    outpoint: crate::sync::bulk_build::facts::OutPointKey,
+    direction: &str,
+) -> Result<[u8; 32]> {
+    let bytes = ctx.resolve_identity(id);
+    bytes.try_into().map_err(|_| {
+        anyhow!(
+            "address reducer lock hash length invariant violated: direction={} outpoint=0x{}:{} intern_id={:?} expected=32 actual={}",
+            direction,
+            hex::encode(outpoint.tx_hash),
+            outpoint.index,
+            id,
+            bytes.len()
+        )
+    })
 }
 
 fn checked_add_i128(
@@ -371,6 +421,29 @@ mod tests {
     use crate::sync::types::InternId;
 
     #[test]
+    fn compact_address_balance_has_no_heap_backed_tx_hash_fields() {
+        assert!(
+            std::mem::size_of::<CompactAddressBalance>() <= 144,
+            "CompactAddressBalance grew to {} bytes",
+            std::mem::size_of::<CompactAddressBalance>()
+        );
+        let compact = CompactAddressBalance {
+            balance: 1,
+            used_capacity: 2,
+            live_cells_count: 3,
+            total_cells_count: 4,
+            txs_count: 5,
+            first_seen_block: 6,
+            first_seen_tx: [0xAA; 32],
+            last_activity_block: 7,
+            last_activity_tx: [0xBB; 32],
+        };
+        let stored = compact.to_stored();
+        assert_eq!(stored.first_seen_tx, vec![0xAA; 32]);
+        assert_eq!(stored.last_activity_tx, vec![0xBB; 32]);
+    }
+
+    #[test]
     fn address_owner_reduces_same_block_create_then_consume() {
         let interner = IdentityInterner::default();
         let lock_a = interner.intern_bytes(vec![0xaa; 32]);
@@ -493,14 +566,14 @@ mod tests {
         owner.apply_tx(&tx0, &ctx).expect("apply tx0");
         owner.apply_tx(&tx1, &ctx).expect("apply tx1");
 
-        let balance_a = owner.balances().get(&vec![0xaa; 32]).expect("lock A");
+        let balance_a = owner.balances().get(&[0xaa; 32]).expect("lock A");
         assert_eq!(balance_a.balance, 100_00000000);
         assert_eq!(balance_a.used_capacity, 61_00000000);
         assert_eq!(balance_a.live_cells_count, 1);
         assert_eq!(balance_a.total_cells_count, 2);
         assert_eq!(balance_a.txs_count, 2);
 
-        let balance_b = owner.balances().get(&vec![0xbb; 32]).expect("lock B");
+        let balance_b = owner.balances().get(&[0xbb; 32]).expect("lock B");
         assert_eq!(balance_b.balance, 100_00000000);
         assert_eq!(balance_b.used_capacity, 61_00000000);
         assert_eq!(balance_b.live_cells_count, 1);
