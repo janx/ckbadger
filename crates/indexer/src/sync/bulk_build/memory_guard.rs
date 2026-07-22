@@ -39,10 +39,10 @@ impl BulkMemoryGuard {
         self,
         phase: &str,
         block_number: u64,
-        owner_bytes: &HashMap<String, u64>,
+        retained_component_bytes: &HashMap<String, u64>,
     ) -> Result<ProcessMemorySnapshot> {
         let snapshot = read_process_memory_snapshot()?;
-        self.check_snapshot(snapshot, phase, block_number, owner_bytes)?;
+        self.check_snapshot(snapshot, phase, block_number, retained_component_bytes)?;
         Ok(snapshot)
     }
 
@@ -51,22 +51,27 @@ impl BulkMemoryGuard {
         snapshot: ProcessMemorySnapshot,
         configured_max_batch_bytes: u64,
         block_number: u64,
-        owner_bytes: &HashMap<String, u64>,
+        retained_component_bytes: &HashMap<String, u64>,
     ) -> Result<u64> {
-        self.check_snapshot(snapshot, "before_batch", block_number, owner_bytes)?;
+        self.check_snapshot(
+            snapshot,
+            "before_batch",
+            block_number,
+            retained_component_bytes,
+        )?;
         let committed = snapshot.committed_bytes()?;
         let headroom = self.limit_bytes - committed;
         let safe_input = headroom / BUILD_TRANSIENT_MULTIPLIER;
         if safe_input < MIN_SAFE_BATCH_INPUT_BYTES {
             bail!(
-                "bulk process memory headroom cannot safely build another batch: block={} committed_bytes={} limit_bytes={} headroom_bytes={} required_min_input_bytes={} transient_multiplier={} owners={}",
+                "bulk process memory headroom cannot safely build another batch: block={} committed_bytes={} limit_bytes={} headroom_bytes={} required_min_input_bytes={} transient_multiplier={} retained_components={}",
                 block_number,
                 committed,
                 self.limit_bytes,
                 headroom,
                 MIN_SAFE_BATCH_INPUT_BYTES,
                 BUILD_TRANSIENT_MULTIPLIER,
-                format_owner_bytes(owner_bytes)
+                format_retained_components(retained_component_bytes)
             );
         }
         Ok(configured_max_batch_bytes.min(safe_input))
@@ -77,12 +82,12 @@ impl BulkMemoryGuard {
         snapshot: ProcessMemorySnapshot,
         phase: &str,
         block_number: u64,
-        owner_bytes: &HashMap<String, u64>,
+        retained_component_bytes: &HashMap<String, u64>,
     ) -> Result<()> {
         let committed = snapshot.committed_bytes()?;
         if committed > self.limit_bytes {
             bail!(
-                "bulk process memory budget exceeded: phase={} block={} committed_bytes={} limit_bytes={} rss_bytes={} rss_anon_bytes={} swap_bytes={} high_water_rss_bytes={} owners={}",
+                "bulk process memory budget exceeded: phase={} block={} committed_bytes={} limit_bytes={} rss_bytes={} rss_anon_bytes={} swap_bytes={} high_water_rss_bytes={} retained_components={}",
                 phase,
                 block_number,
                 committed,
@@ -91,15 +96,15 @@ impl BulkMemoryGuard {
                 snapshot.rss_anon_bytes,
                 snapshot.swap_bytes,
                 snapshot.high_water_rss_bytes,
-                format_owner_bytes(owner_bytes)
+                format_retained_components(retained_component_bytes)
             );
         }
         Ok(())
     }
 }
 
-fn format_owner_bytes(owner_bytes: &HashMap<String, u64>) -> String {
-    let mut entries = owner_bytes.iter().collect::<Vec<_>>();
+fn format_retained_components(retained_component_bytes: &HashMap<String, u64>) -> String {
+    let mut entries = retained_component_bytes.iter().collect::<Vec<_>>();
     entries.sort_by(|a, b| a.0.cmp(b.0));
     entries
         .into_iter()

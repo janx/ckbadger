@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, bail, Result};
 use ckbadger_store::keys;
 use ckbadger_store::types::{encode_live_cell_marker, CachedBlockHeader, LiveCellInfo};
 use ckbadger_store::{
@@ -33,6 +33,228 @@ impl MaterializedRow {
             key,
             value,
         }
+    }
+}
+
+/// Compact descriptor for one Class-A history row.
+///
+/// Keys and values are stored back-to-back in [`EncodedHistoryChunk::payload`].
+/// Keeping only lengths here avoids two heap allocations and two `Vec` headers
+/// per row while preserving exact row order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct EncodedHistoryRow {
+    cf_name: &'static str,
+    key_len: u32,
+    value_len: u32,
+}
+
+/// Per-block, contiguous Class-A history payload produced by Rayon workers.
+///
+/// A chunk owns exactly two growable allocations regardless of row count: the
+/// descriptor vector and its byte payload. The flush worker consumes whole
+/// chunks so their memory is released incrementally while `WriteBatch` grows.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct EncodedHistoryChunk {
+    rows: Vec<EncodedHistoryRow>,
+    payload: Vec<u8>,
+}
+
+impl EncodedHistoryChunk {
+    pub(crate) fn with_capacity(row_capacity: usize, payload_capacity: usize) -> Self {
+        Self {
+            rows: Vec::with_capacity(row_capacity),
+            payload: Vec::with_capacity(payload_capacity),
+        }
+    }
+
+    pub(crate) fn row_count(&self) -> usize {
+        self.rows.len()
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.rows.is_empty()
+    }
+
+    pub(crate) fn allocated_bytes(&self) -> Result<usize> {
+        self.rows
+            .capacity()
+            .checked_mul(std::mem::size_of::<EncodedHistoryRow>())
+            .and_then(|bytes| bytes.checked_add(self.payload.capacity()))
+            .ok_or_else(|| anyhow!("encoded history chunk allocated byte count overflow"))
+    }
+
+    pub(crate) fn push_raw(
+        &mut self,
+        cf_name: &'static str,
+        key: &[u8],
+        value: &[u8],
+    ) -> Result<()> {
+        let (key_len, value_len) = self.reserve_row(cf_name, key.len(), value.len())?;
+        self.payload.extend_from_slice(key);
+        self.payload.extend_from_slice(value);
+        self.rows.push(EncodedHistoryRow {
+            cf_name,
+            key_len,
+            value_len,
+        });
+        Ok(())
+    }
+
+    pub(crate) fn push_serialized<T: serde::Serialize>(
+        &mut self,
+        cf_name: &'static str,
+        key: &[u8],
+        value: &T,
+    ) -> Result<()> {
+        let serialized_size = bincode::serialized_size(value)
+            .map_err(|e| anyhow!("bincode size estimation failed for cf={cf_name}: {e}"))?;
+        let value_len = usize::try_from(serialized_size).map_err(|_| {
+            anyhow!(
+                "serialized history value exceeds usize: cf={} value_bytes={}",
+                cf_name,
+                serialized_size
+            )
+        })?;
+        let (key_len_u32, value_len_u32) = self.reserve_row(cf_name, key.len(), value_len)?;
+        let payload_start = self.payload.len();
+        self.payload.extend_from_slice(key);
+        if let Err(error) = bincode::serialize_into(&mut self.payload, value) {
+            self.payload.truncate(payload_start);
+            return Err(anyhow!(
+                "bincode history serialization failed: cf={} key_bytes={} value_bytes={} error={}",
+                cf_name,
+                key.len(),
+                value_len,
+                error
+            ));
+        }
+        let actual_value_len = self
+            .payload
+            .len()
+            .checked_sub(payload_start)
+            .and_then(|bytes| bytes.checked_sub(key.len()))
+            .ok_or_else(|| anyhow!("encoded history payload length invariant violated"))?;
+        if actual_value_len != value_len {
+            self.payload.truncate(payload_start);
+            bail!(
+                "bincode history size invariant violated: cf={} estimated_value_bytes={} actual_value_bytes={}",
+                cf_name,
+                value_len,
+                actual_value_len
+            );
+        }
+        self.rows.push(EncodedHistoryRow {
+            cf_name,
+            key_len: key_len_u32,
+            value_len: value_len_u32,
+        });
+        Ok(())
+    }
+
+    pub(crate) fn push_materialized(&mut self, row: MaterializedRow) -> Result<()> {
+        self.push_raw(row.cf_name, &row.key, &row.value)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_materialized_rows(rows: Vec<MaterializedRow>) -> Result<Self> {
+        let mut encoded = Self::with_capacity(rows.len(), 0);
+        for row in rows {
+            encoded.push_materialized(row)?;
+        }
+        Ok(encoded)
+    }
+
+    pub(crate) fn consume<F>(self, mut consume_row: F) -> Result<()>
+    where
+        F: FnMut(&'static str, &[u8], &[u8]) -> Result<()>,
+    {
+        let Self { rows, payload } = self;
+        let mut cursor = 0usize;
+        for row in rows {
+            let key_end = cursor
+                .checked_add(row.key_len as usize)
+                .ok_or_else(|| anyhow!("encoded history key offset overflow"))?;
+            let value_end = key_end
+                .checked_add(row.value_len as usize)
+                .ok_or_else(|| anyhow!("encoded history value offset overflow"))?;
+            if value_end > payload.len() {
+                bail!(
+                    "encoded history descriptor exceeds payload: cf={} cursor={} key_bytes={} value_bytes={} payload_bytes={}",
+                    row.cf_name,
+                    cursor,
+                    row.key_len,
+                    row.value_len,
+                    payload.len()
+                );
+            }
+            consume_row(
+                row.cf_name,
+                &payload[cursor..key_end],
+                &payload[key_end..value_end],
+            )?;
+            cursor = value_end;
+        }
+        if cursor != payload.len() {
+            bail!(
+                "encoded history payload has unreferenced bytes: consumed_bytes={} payload_bytes={}",
+                cursor,
+                payload.len()
+            );
+        }
+        Ok(())
+    }
+
+    fn reserve_row(
+        &mut self,
+        cf_name: &'static str,
+        key_len: usize,
+        value_len: usize,
+    ) -> Result<(u32, u32)> {
+        let key_len_u32 = u32::try_from(key_len).map_err(|_| {
+            anyhow!(
+                "history key exceeds per-row encoding limit: cf={} key_bytes={}",
+                cf_name,
+                key_len
+            )
+        })?;
+        let value_len_u32 = u32::try_from(value_len).map_err(|_| {
+            anyhow!(
+                "history value exceeds per-row encoding limit: cf={} value_bytes={}",
+                cf_name,
+                value_len
+            )
+        })?;
+        let payload_additional = key_len.checked_add(value_len).ok_or_else(|| {
+            anyhow!(
+                "history row payload byte count overflow: cf={} key_bytes={} value_bytes={}",
+                cf_name,
+                key_len,
+                value_len
+            )
+        })?;
+        self.rows.try_reserve(1).map_err(|e| {
+            anyhow!(
+                "failed to reserve encoded history descriptor: cf={} rows={} error={}",
+                cf_name,
+                self.rows.len(),
+                e
+            )
+        })?;
+        self.payload.try_reserve(payload_additional).map_err(|e| {
+            anyhow!(
+                "failed to reserve encoded history payload: cf={} current_bytes={} additional_bytes={} error={}",
+                cf_name,
+                self.payload.len(),
+                payload_additional,
+                e
+            )
+        })?;
+        Ok((key_len_u32, value_len_u32))
+    }
+
+    #[cfg(test)]
+    fn allocation_count(&self) -> usize {
+        usize::from(self.rows.capacity() > 0) + usize::from(self.payload.capacity() > 0)
     }
 }
 
@@ -540,8 +762,8 @@ pub(crate) fn run_sample_bulk_materialization_for_test() -> Result<Materializati
     Ok(report)
 }
 
-/// A WriteBatch pair ready for sequential commit.  Built by `prepare_flush`
-/// from MaterializedRows produced by `build_history_rows_for_block`.
+/// A WriteBatch pair ready for commit. Built by `prepare_flush` from encoded
+/// per-block history chunks and bounded sealed aggregate rows.
 pub(crate) struct PreparedBatch {
     pub(crate) append_batch: rocksdb::WriteBatch,
     pub(crate) domain_batch: rocksdb::WriteBatch,
@@ -551,12 +773,12 @@ pub(crate) struct PreparedBatch {
     pub(crate) sealed_count: usize,
 }
 
-/// Build two WriteBatch objects directly from MaterializedRows.
+/// Build two WriteBatch objects directly from encoded history chunks.
 ///
 /// Bypasses StoreBatch / AppendBatchOp intermediate layers:
 /// - No per-row `cf_write_policy` string comparison (caller guarantees correctness).
 /// - No AppendBatchOp clone + HashMap dedup (keys are unique by construction in bulk build).
-/// - Single pass over each row vector.
+/// - Single pass over each contiguous per-block payload.
 ///
 /// The returned WriteBatch objects are ready for `store.write_batch_no_wal_bulk()`.
 ///
@@ -565,23 +787,32 @@ pub(crate) struct PreparedBatch {
 pub(crate) fn prepare_flush(
     domain_store: &CkbadgerStore,
     append_only_store: &CkbadgerStore,
-    history_rows: Vec<MaterializedRow>,
+    history_chunks: Vec<EncodedHistoryChunk>,
     sealed_rows: Vec<MaterializedRow>,
 ) -> Result<PreparedBatch> {
     // Single pass: route each row to its target WriteBatch by CF name.
     let mut append_batch = rocksdb::WriteBatch::default();
     let mut domain_batch = rocksdb::WriteBatch::default();
 
-    for row in &history_rows {
-        if is_append_only_cf_name(row.cf_name) {
-            let cf = append_only_store.cf(row.cf_name);
-            append_batch.put_cf(cf, &row.key, &row.value);
-        } else {
-            let cf = domain_store.cf(row.cf_name);
-            domain_batch.put_cf(cf, &row.key, &row.value);
-        }
+    let history_count = history_chunks.iter().try_fold(0usize, |total, chunk| {
+        total
+            .checked_add(chunk.row_count())
+            .ok_or_else(|| anyhow!("prepared history row count overflow"))
+    })?;
+    for chunk in history_chunks {
+        chunk.consume(|cf_name, key, value| {
+            if is_append_only_cf_name(cf_name) {
+                let cf = append_only_store.cf(cf_name);
+                append_batch.put_cf(cf, key, value);
+            } else {
+                let cf = domain_store.cf(cf_name);
+                domain_batch.put_cf(cf, key, value);
+            }
+            Ok(())
+        })?;
     }
-    for row in &sealed_rows {
+    let sealed_count = sealed_rows.len();
+    for row in sealed_rows {
         let cf = domain_store.cf(row.cf_name);
         domain_batch.put_cf(cf, &row.key, &row.value);
     }
@@ -589,8 +820,8 @@ pub(crate) fn prepare_flush(
     Ok(PreparedBatch {
         append_batch,
         domain_batch,
-        history_count: history_rows.len(),
-        sealed_count: sealed_rows.len(),
+        history_count,
+        sealed_count,
     })
 }
 
@@ -613,6 +844,33 @@ pub(crate) struct FlushChannelHandle {
 }
 
 const FLUSH_QUEUE_BUDGET_UNIT_BYTES: usize = 1024 * 1024;
+
+fn flush_reserved_bytes(byte_budget_units: u32, available_permits: usize) -> Result<u64> {
+    let budget_units = usize::try_from(byte_budget_units).map_err(|_| {
+        anyhow!(
+            "flush byte-budget units exceed usize: budget_units={}",
+            byte_budget_units
+        )
+    })?;
+    let reserved_units = budget_units.checked_sub(available_permits).ok_or_else(|| {
+        anyhow!(
+            "flush available permits exceed budget: available_permits={} budget_units={}",
+            available_permits,
+            budget_units
+        )
+    })?;
+    let reserved_units = u64::try_from(reserved_units)
+        .map_err(|_| anyhow!("flush reserved permit units exceed u64: units={reserved_units}"))?;
+    reserved_units
+        .checked_mul(FLUSH_QUEUE_BUDGET_UNIT_BYTES as u64)
+        .ok_or_else(|| {
+            anyhow!(
+                "flush reserved byte count overflow: reserved_units={} unit_bytes={}",
+                reserved_units,
+                FLUSH_QUEUE_BUDGET_UNIT_BYTES
+            )
+        })
+}
 
 struct QueuedFlush {
     pending: super::PendingFlush,
@@ -650,7 +908,14 @@ impl FlushChannelHandle {
                 byte_budget_bytes
             )
         })?;
-        let budget_units = budget_bytes.saturating_add(FLUSH_QUEUE_BUDGET_UNIT_BYTES - 1)
+        let budget_units = budget_bytes
+            .checked_add(FLUSH_QUEUE_BUDGET_UNIT_BYTES - 1)
+            .ok_or_else(|| {
+                anyhow!(
+                    "flush queue byte budget rounding overflow: byte_budget_bytes={}",
+                    byte_budget_bytes
+                )
+            })?
             / FLUSH_QUEUE_BUDGET_UNIT_BYTES;
         let byte_budget_units = u32::try_from(budget_units).map_err(|_| {
             anyhow!(
@@ -690,13 +955,13 @@ impl FlushChannelHandle {
             } = queued;
             let flush_started = std::time::Instant::now();
 
-            let history_count = pending.history_rows.len();
+            let history_count = pending.history_row_count();
             let sealed_count = pending.sealed_rows.len();
 
             let prepared = prepare_flush(
                 &domain_store,
                 &append_only_store,
-                pending.history_rows,
+                pending.history_chunks,
                 pending.sealed_rows,
             )?;
 
@@ -735,9 +1000,25 @@ impl FlushChannelHandle {
         Ok(stats)
     }
 
+    #[cfg(test)]
     pub(crate) async fn send(&self, pending: super::PendingFlush) -> Result<()> {
         let message_bytes = pending.allocated_bytes()?;
-        let message_units = message_bytes.saturating_add(FLUSH_QUEUE_BUDGET_UNIT_BYTES - 1)
+        self.send_with_allocated_bytes(pending, message_bytes).await
+    }
+
+    pub(crate) async fn send_with_allocated_bytes(
+        &self,
+        pending: super::PendingFlush,
+        message_bytes: usize,
+    ) -> Result<()> {
+        let message_units = message_bytes
+            .checked_add(FLUSH_QUEUE_BUDGET_UNIT_BYTES - 1)
+            .ok_or_else(|| {
+                anyhow!(
+                    "flush message byte rounding overflow: message_bytes={}",
+                    message_bytes
+                )
+            })?
             / FLUSH_QUEUE_BUDGET_UNIT_BYTES;
         let message_units = u32::try_from(message_units.max(1)).map_err(|_| {
             anyhow!(
@@ -787,11 +1068,66 @@ impl FlushChannelHandle {
     pub(crate) fn pending(&self) -> usize {
         self.tx.max_capacity() - self.tx.capacity()
     }
+
+    /// Byte permits retained by queued or currently flushing batches.
+    ///
+    /// Values are rounded up to the semaphore's 1 MiB accounting unit, so
+    /// this is a conservative reservation rather than a sampled RSS value.
+    pub(crate) fn reserved_bytes(&self) -> Result<u64> {
+        flush_reserved_bytes(self.byte_budget_units, self.byte_budget.available_permits())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn flush_reserved_bytes_are_derived_from_semaphore_permits() {
+        assert_eq!(
+            flush_reserved_bytes(4, 1).unwrap(),
+            3 * FLUSH_QUEUE_BUDGET_UNIT_BYTES as u64
+        );
+        let error = flush_reserved_bytes(4, 5).unwrap_err().to_string();
+        assert!(error.contains("available permits exceed budget"), "{error}");
+    }
+
+    #[test]
+    fn encoded_history_chunk_packs_rows_into_one_payload() {
+        assert_eq!(
+            std::mem::size_of::<EncodedHistoryRow>(),
+            24,
+            "encoded history descriptor layout changed"
+        );
+        let mut chunk = EncodedHistoryChunk::with_capacity(2, 32);
+        chunk
+            .push_raw(CF_BLOCK_HEADERS, b"header-key", b"header-value")
+            .expect("push header");
+        chunk
+            .push_serialized(ckbadger_store::CF_BLOCK_HASH_INDEX, b"hash-key", &42_i64)
+            .expect("push serialized value");
+
+        assert_eq!(chunk.row_count(), 2);
+        assert_eq!(chunk.allocation_count(), 2);
+        let mut decoded = Vec::new();
+        chunk
+            .consume(|cf_name, key, value| {
+                decoded.push((cf_name, key.to_vec(), value.to_vec()));
+                Ok(())
+            })
+            .expect("consume encoded rows");
+        assert_eq!(
+            decoded[0],
+            (
+                CF_BLOCK_HEADERS,
+                b"header-key".to_vec(),
+                b"header-value".to_vec()
+            )
+        );
+        assert_eq!(decoded[1].0, ckbadger_store::CF_BLOCK_HASH_INDEX);
+        assert_eq!(decoded[1].1, b"hash-key".to_vec());
+        assert_eq!(bincode::deserialize::<i64>(&decoded[1].2).unwrap(), 42);
+    }
 
     #[test]
     fn materializer_rejects_append_only_rows_in_final_snapshot() {
@@ -1065,7 +1401,7 @@ mod tests {
             };
 
             let pending = super::super::PendingFlush {
-                history_rows: vec![
+                history_chunks: vec![EncodedHistoryChunk::from_materialized_rows(vec![
                     MaterializedRow::new(
                         CF_CELLS,
                         outpoint_key.to_vec(),
@@ -1076,7 +1412,8 @@ mod tests {
                         header_key.to_vec(),
                         bincode::serialize(&block_header).unwrap(),
                     ),
-                ],
+                ])
+                .unwrap()],
                 sealed_rows: Vec::new(),
             };
             handle.send(pending).await.unwrap();
@@ -1155,11 +1492,10 @@ mod tests {
         for i in 0u8..10 {
             let outpoint_key = keys::encode_outpoint(&[i; 32], 0);
             let pending = super::super::PendingFlush {
-                history_rows: vec![MaterializedRow::new(
-                    CF_CELLS,
-                    outpoint_key.to_vec(),
-                    cell_bytes.clone(),
-                )],
+                history_chunks: vec![EncodedHistoryChunk::from_materialized_rows(vec![
+                    MaterializedRow::new(CF_CELLS, outpoint_key.to_vec(), cell_bytes.clone()),
+                ])
+                .unwrap()],
                 sealed_rows: Vec::new(),
             };
             handle.send(pending).await.unwrap();
@@ -1186,11 +1522,14 @@ mod tests {
         let append_store = Arc::new(CkbadgerStore::open_append_only(&append_path).unwrap());
         let handle = FlushChannelHandle::new(4, 1024 * 1024, domain_store, append_store).unwrap();
         let pending = super::super::PendingFlush {
-            history_rows: vec![MaterializedRow::new(
-                CF_BLOCK_HEADERS,
-                b"oversized".to_vec(),
-                vec![0x55; 2 * 1024 * 1024],
-            )],
+            history_chunks: vec![EncodedHistoryChunk::from_materialized_rows(vec![
+                MaterializedRow::new(
+                    CF_BLOCK_HEADERS,
+                    b"oversized".to_vec(),
+                    vec![0x55; 2 * 1024 * 1024],
+                ),
+            ])
+            .unwrap()],
             sealed_rows: Vec::new(),
         };
 
@@ -1286,8 +1625,11 @@ mod tests {
             b"stats-value".to_vec(),
         )];
 
+        let history_chunks =
+            vec![EncodedHistoryChunk::from_materialized_rows(history_rows)
+                .expect("encode history rows")];
         let prepared =
-            prepare_flush(&domain_store, &append_store, history_rows, sealed_rows).unwrap();
+            prepare_flush(&domain_store, &append_store, history_chunks, sealed_rows).unwrap();
 
         assert_eq!(prepared.history_count, 2);
         assert_eq!(prepared.sealed_count, 1);

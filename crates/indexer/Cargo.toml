@@ -39,6 +39,7 @@ futures = { workspace = true }
 dashmap = "6.1"
 rayon = { workspace = true }
 rustc-hash = { workspace = true }
+hashbrown = { workspace = true }
 async-trait = { workspace = true }
 uuid = { workspace = true }
 

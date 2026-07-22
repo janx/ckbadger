@@ -58,6 +58,7 @@ futures = "0.3"
 lru = "0.12"
 rayon = "1.10"
 rustc-hash = "2.1"
+hashbrown = "0.14.5"
 
 # Configuration
 config = "0.14"

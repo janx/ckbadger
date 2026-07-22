@@ -171,8 +171,11 @@ impl BulkBuildEngine {
             initial_handoff,
             threads_rx,
         );
-        let chunk_rx = prefetch.take_receiver();
-        let mut buffer = block_buffer::BlockBufferHandle::new(chunk_rx);
+        let (chunk_rx, remote_prefetch_block_bytes) = prefetch.take_receiver();
+        let mut buffer = block_buffer::BlockBufferHandle::new_with_remote_bytes(
+            chunk_rx,
+            remote_prefetch_block_bytes,
+        );
         // Bounded flush channel: the build loop sends PendingFlush into
         // a channel. A dedicated worker converts rows to WriteBatch via
         // prepare_flush and commits to RocksDB. Build only blocks when the
@@ -230,13 +233,21 @@ impl BulkBuildEngine {
             }
             let prefetch_recv_elapsed = recv_started.elapsed();
 
+            let before_batch_prefetch_bytes = buffer.retained_block_bytes()?;
+            let before_batch_flush_bytes = flush_channel.reserved_bytes()?;
+            let before_batch_memory = retained_memory_breakdown(
+                &last_owner_memory,
+                before_batch_prefetch_bytes,
+                before_batch_flush_bytes,
+                None,
+            )?;
             let process_memory =
-                memory_guard.checkpoint("before_batch", current_block, &last_owner_memory)?;
+                memory_guard.checkpoint("before_batch", current_block, &before_batch_memory)?;
             let safe_max_batch_bytes = memory_guard.safe_batch_input_bytes(
                 process_memory,
                 controller.max_batch_bytes(),
                 current_block,
-                &last_owner_memory,
+                &before_batch_memory,
             )?;
 
             // Enter the batch span for the synchronous build + record section.
@@ -261,8 +272,15 @@ impl BulkBuildEngine {
             let build_elapsed = build_started.elapsed();
             let memory_accounting_started = Instant::now();
             last_owner_memory = runtime.memory_breakdown_bytes();
+            let pending_flush_bytes = pending_flush.allocated_bytes()?;
+            let after_build_memory = retained_memory_breakdown(
+                &last_owner_memory,
+                buffer.retained_block_bytes()?,
+                flush_channel.reserved_bytes()?,
+                Some(pending_flush_bytes),
+            )?;
             let memory_accounting_elapsed = memory_accounting_started.elapsed();
-            memory_guard.checkpoint("after_batch_build", current_block, &last_owner_memory)?;
+            memory_guard.checkpoint("after_batch_build", current_block, &after_build_memory)?;
 
             // Read the most recent flush_ms from the worker (non-blocking).
             prev_flush_ms = flush_channel.last_flush_ms();
@@ -270,7 +288,7 @@ impl BulkBuildEngine {
 
             // Capture row counts before send() moves the data.
             let pending_flush_row_count = (
-                pending_flush.history_rows.len(),
+                pending_flush.history_row_count(),
                 pending_flush.sealed_rows.len(),
             );
 
@@ -280,9 +298,13 @@ impl BulkBuildEngine {
             // Send to flush channel.  Blocks when channel is full (natural
             // backpressure).  Channel depth is memory-budget-derived.
             let flush_wait_started = Instant::now();
-            flush_channel.send(pending_flush).await?;
+            flush_channel
+                .send_with_allocated_bytes(pending_flush, pending_flush_bytes)
+                .await?;
             let flush_wait_elapsed = flush_wait_started.elapsed();
             let flush_channel_pending = flush_channel.pending() as u64;
+            let prefetch_retained_block_bytes = buffer.retained_block_bytes()?;
+            let flush_reserved_bytes = flush_channel.reserved_bytes()?;
 
             cumulative_history_rows += pending_flush_row_count.0;
             cumulative_sealed_rows += pending_flush_row_count.1;
@@ -374,9 +396,17 @@ impl BulkBuildEngine {
             sample.flush_wait_ms = flush_wait_elapsed.as_secs_f64() * 1000.0;
             sample.flush_channel_depth = flush_depth as u64;
             sample.flush_channel_pending = flush_channel_pending;
+            sample.flush_reserved_bytes = flush_reserved_bytes;
             sample.prefetch_recv_ms = prefetch_recv_elapsed.as_secs_f64() * 1000.0;
             sample.prefetch_depth = prefetch_depth as u64;
+            sample.prefetch_retained_block_bytes = prefetch_retained_block_bytes;
             sample.owner_memory_bytes = last_owner_memory.clone();
+            let accounted_retained_bytes = checked_retained_memory_total(
+                &last_owner_memory,
+                prefetch_retained_block_bytes,
+                flush_reserved_bytes,
+            )?;
+            sample.accounted_retained_bytes = accounted_retained_bytes;
             sample.live_cell_count = runtime.sequencer.live_count() as u64;
             // Cumulative row counts: tracks rows sent to flush channel.
             sample.cumulative_history_rows = cumulative_history_rows as u64;
@@ -392,7 +422,7 @@ impl BulkBuildEngine {
 
             // Publish bulk-build metrics to shared atomics for progress monitor -> TUI.
             // Must happen before record_bulk_sync_perf_batch_sample moves sample.
-            let owner_mem_total: u64 = sample.owner_memory_bytes.values().sum();
+            let owner_mem_total = checked_memory_map_total(&sample.owner_memory_bytes)?;
             indexer.bulk_build_perf.record_batch_bytes(batch_bytes);
             indexer.bulk_build_perf.record_disk_telemetry(
                 disk_state.as_deref(),
@@ -466,6 +496,9 @@ impl BulkBuildEngine {
                 interner_gc_ms = format!("{:.1}", build_timings.interner_gc_ms),
                 memory_accounting_ms =
                     format!("{:.1}", memory_accounting_elapsed.as_secs_f64() * 1000.0),
+                prefetch_retained_block_bytes,
+                flush_reserved_bytes,
+                accounted_retained_bytes,
                 prev_flush_ms = format!("{:.1}", prev_flush_ms),
                 "Bulk build materialized batch"
             );
@@ -517,7 +550,7 @@ impl BulkBuildEngine {
 
             // Periodic memory summary every 10 batches
             if batch_count.is_multiple_of(10) {
-                let total_mb: u64 = last_owner_memory.values().sum::<u64>() / (1024 * 1024);
+                let total_mb = checked_memory_map_total(&last_owner_memory)? / (1024 * 1024);
                 let live_cells = runtime.sequencer.live_count();
                 let interner_entries = runtime.interner.len();
                 let interner_slots = runtime.interner.slot_len();
@@ -540,10 +573,16 @@ impl BulkBuildEngine {
         // The progress monitor (entry.rs, 10s polling) reads these atomics and
         // publishes to RocksDB so the TUI can display a finalize checklist.
         let finalize_started = Instant::now();
+        let before_finalize_memory = retained_memory_breakdown(
+            &last_owner_memory,
+            buffer.retained_block_bytes()?,
+            flush_channel.reserved_bytes()?,
+            None,
+        )?;
         memory_guard.checkpoint(
             "before_finalize",
             indexer.progress.current(),
-            &last_owner_memory,
+            &before_finalize_memory,
         )?;
 
         // Drop the buffer handle (and its receiver) to signal prefetch to stop.
@@ -1944,7 +1983,7 @@ impl BulkBuildRuntimeState {
                 BatchExecutionStats::default(),
                 BatchBuildTimings::default(),
                 PendingFlush {
-                    history_rows: Vec::new(),
+                    history_chunks: Vec::new(),
                     sealed_rows: Vec::new(),
                 },
             ));
@@ -2101,7 +2140,7 @@ impl BulkBuildRuntimeState {
                                             address.apply_tx_with_deltas(tx, &ctx)?;
                                         apply_cell_dist_cohort_deltas(
                                             cell_dist_tracker,
-                                            address.balances(),
+                                            address,
                                             &address_deltas,
                                             tx,
                                         )?;
@@ -2221,7 +2260,7 @@ impl BulkBuildRuntimeState {
         sealed_rows.extend(activity_sealed_rows);
 
         let pending = PendingFlush {
-            history_rows: history.rows,
+            history_chunks: history.rows,
             sealed_rows,
         };
 
@@ -2288,7 +2327,7 @@ impl BulkBuildRuntimeState {
                 BatchExecutionStats::default(),
                 BatchBuildTimings::default(),
                 PendingFlush {
-                    history_rows: Vec::new(),
+                    history_chunks: Vec::new(),
                     sealed_rows: Vec::new(),
                 },
             ));
@@ -2392,7 +2431,7 @@ impl BulkBuildRuntimeState {
                                     for input in &tx.resolved_inputs { cell_dist_tracker.cell_consumed(input.occupied_capacity)?; }
                                     for cell in tx.cells.iter() { cell_dist_tracker.cell_created(cell.occupied_capacity); }
                                     let address_deltas = address.apply_tx_with_deltas(tx, &ctx)?;
-                                    apply_cell_dist_cohort_deltas(cell_dist_tracker, address.balances(), &address_deltas, tx)?;
+                                    apply_cell_dist_cohort_deltas(cell_dist_tracker, address, &address_deltas, tx)?;
                                 }
                                 if let Some((snapshot_date, snapshot)) = cell_dist_tracker.maybe_snapshot(block_date) {
                                     let date_str = snapshot_date.format("%Y%m%d").to_string();
@@ -2449,7 +2488,7 @@ impl BulkBuildRuntimeState {
             cells_consumed: consumed_cells,
         };
         let pending = PendingFlush {
-            history_rows: history.rows,
+            history_chunks: history.rows,
             sealed_rows,
         };
 
@@ -2646,12 +2685,12 @@ fn update_hodl_holder_count(
 
 fn apply_cell_dist_cohort_deltas(
     tracker: &mut crate::db::writer::cell_distribution::CellDistributionTracker,
-    balances: &FxHashMap<[u8; 32], owners::address::CompactAddressBalance>,
+    addresses: &owners::address::AddressOwner,
     deltas: &FxHashMap<[u8; 32], owners::address::AddressTxDelta>,
     tx: &facts::ResolvedTxFacts<'_>,
 ) -> Result<()> {
     for (lock_hash, delta) in deltas {
-        let balance = balances.get(lock_hash).ok_or_else(|| {
+        let balance = addresses.get(lock_hash).ok_or_else(|| {
             anyhow!(
                 "missing address balance after applying tx deltas for cell distribution tracker: lock_hash=0x{}, block={}, tx=0x{}, tx_index={}",
                 hex::encode(lock_hash),
@@ -2683,7 +2722,7 @@ fn apply_cell_dist_cohort_deltas(
 }
 
 struct HistoryBuildResult {
-    rows: Vec<materialize::MaterializedRow>,
+    rows: Vec<materialize::EncodedHistoryChunk>,
     object_activity_count_deltas: FxHashMap<Vec<u8>, i64>,
     identity_activity_count_deltas: FxHashMap<Vec<u8>, i64>,
     tx_actions_list: Vec<ckbadger_store::types::TxActions>,
@@ -2692,45 +2731,121 @@ struct HistoryBuildResult {
 /// Pure-data payload sent to the flush channel. Contains materialized rows
 /// that the flush worker converts to WriteBatch via `prepare_flush`.
 pub(crate) struct PendingFlush {
-    pub(crate) history_rows: Vec<materialize::MaterializedRow>,
+    pub(crate) history_chunks: Vec<materialize::EncodedHistoryChunk>,
     pub(crate) sealed_rows: Vec<materialize::MaterializedRow>,
 }
 
 impl PendingFlush {
-    pub(crate) fn allocated_bytes(&self) -> Result<usize> {
-        self.history_rows
+    pub(crate) fn history_row_count(&self) -> usize {
+        self.history_chunks
             .iter()
-            .chain(&self.sealed_rows)
-            .try_fold(
-                self.history_rows
-                    .capacity()
-                    .checked_mul(std::mem::size_of::<materialize::MaterializedRow>())
-                    .and_then(|bytes| {
-                        self.sealed_rows
-                            .capacity()
-                            .checked_mul(std::mem::size_of::<materialize::MaterializedRow>())
-                            .and_then(|sealed| bytes.checked_add(sealed))
-                    })
-                    .ok_or_else(|| anyhow!("pending flush row-vector capacity overflow"))?,
-                |total, row| {
+            .map(materialize::EncodedHistoryChunk::row_count)
+            .try_fold(0usize, |total, rows| total.checked_add(rows))
+            .unwrap_or_else(|| panic!("pending flush history row count overflow"))
+    }
+
+    pub(crate) fn allocated_bytes(&self) -> Result<usize> {
+        let chunk_directory_bytes = self
+            .history_chunks
+            .capacity()
+            .checked_mul(std::mem::size_of::<materialize::EncodedHistoryChunk>())
+            .ok_or_else(|| anyhow!("pending flush history chunk-directory capacity overflow"))?;
+        let history_bytes =
+            self.history_chunks
+                .iter()
+                .try_fold(chunk_directory_bytes, |total, chunk| {
                     total
-                        .checked_add(row.key.capacity())
-                        .and_then(|bytes| bytes.checked_add(row.value.capacity()))
-                        .ok_or_else(|| {
-                            anyhow!(
-                                "pending flush allocated byte count overflow: cf={} key_capacity={} value_capacity={}",
-                                row.cf_name,
-                                row.key.capacity(),
-                                row.value.capacity()
-                            )
-                        })
-                },
-            )
+                        .checked_add(chunk.allocated_bytes()?)
+                        .ok_or_else(|| anyhow!("pending flush encoded history byte count overflow"))
+                })?;
+        self.sealed_rows.iter().try_fold(
+            self.sealed_rows
+                .capacity()
+                .checked_mul(std::mem::size_of::<materialize::MaterializedRow>())
+                .and_then(|bytes| bytes.checked_add(history_bytes))
+                .ok_or_else(|| anyhow!("pending flush sealed row-vector capacity overflow"))?,
+            |total, row| {
+                total
+                    .checked_add(row.key.capacity())
+                    .and_then(|bytes| bytes.checked_add(row.value.capacity()))
+                    .ok_or_else(|| {
+                        anyhow!(
+                            "pending flush allocated byte count overflow: cf={} key_capacity={} value_capacity={}",
+                            row.cf_name,
+                            row.key.capacity(),
+                            row.value.capacity()
+                        )
+                    })
+            },
+        )
     }
 }
 
+fn checked_memory_map_total(memory: &HashMap<String, u64>) -> Result<u64> {
+    memory.iter().try_fold(0u64, |total, (component, bytes)| {
+        total.checked_add(*bytes).ok_or_else(|| {
+            anyhow!(
+                "retained memory byte count overflow: component={} component_bytes={} accumulated_bytes={}",
+                component,
+                bytes,
+                total
+            )
+        })
+    })
+}
+
+fn checked_retained_memory_total(
+    owner_memory: &HashMap<String, u64>,
+    prefetch_block_bytes: u64,
+    flush_reserved_bytes: u64,
+) -> Result<u64> {
+    checked_memory_map_total(owner_memory)?
+        .checked_add(prefetch_block_bytes)
+        .and_then(|bytes| bytes.checked_add(flush_reserved_bytes))
+        .ok_or_else(|| {
+            anyhow!(
+                "accounted retained memory byte count overflow: prefetch_block_bytes={} flush_reserved_bytes={}",
+                prefetch_block_bytes,
+                flush_reserved_bytes
+            )
+        })
+}
+
+fn retained_memory_breakdown(
+    owner_memory: &HashMap<String, u64>,
+    prefetch_block_bytes: u64,
+    flush_reserved_bytes: u64,
+    pending_flush_bytes: Option<usize>,
+) -> Result<HashMap<String, u64>> {
+    let mut retained = owner_memory.clone();
+    for (component, bytes) in [
+        ("pipeline.prefetch_blocks", prefetch_block_bytes),
+        ("pipeline.flush_reserved", flush_reserved_bytes),
+    ] {
+        if retained.insert(component.to_string(), bytes).is_some() {
+            bail!("retained memory component name collision: component={component}");
+        }
+    }
+    if let Some(pending_flush_bytes) = pending_flush_bytes {
+        let pending_flush_bytes = u64::try_from(pending_flush_bytes).map_err(|_| {
+            anyhow!(
+                "pending flush allocated byte count exceeds u64: bytes={}",
+                pending_flush_bytes
+            )
+        })?;
+        if retained
+            .insert("pipeline.pending_flush".to_string(), pending_flush_bytes)
+            .is_some()
+        {
+            bail!("retained memory component name collision: component=pipeline.pending_flush");
+        }
+    }
+    checked_memory_map_total(&retained)?;
+    Ok(retained)
+}
+
 struct BlockHistoryRows {
-    rows: Vec<materialize::MaterializedRow>,
+    rows: materialize::EncodedHistoryChunk,
     lock_script_rows: Vec<(crate::sync::types::InternId, materialize::MaterializedRow)>,
     object_activity_count_deltas: FxHashMap<Vec<u8>, i64>,
     identity_activity_count_deltas: FxHashMap<Vec<u8>, i64>,
@@ -2911,12 +3026,12 @@ where
                 true,
                 &FxHashMap::default(),
             )?;
-            let history_count = pending.history_rows.len();
+            let history_count = pending.history_row_count();
             let sealed_count = pending.sealed_rows.len();
             let prepared = materialize::prepare_flush(
                 domain_store.as_ref(),
                 append_store.as_ref(),
-                pending.history_rows,
+                pending.history_chunks,
                 pending.sealed_rows,
             )?;
             materializer.add_external_counts(history_count, sealed_count, 1);
@@ -3044,12 +3159,12 @@ fn materialize_bulk_artifacts_from_block_batches_for_test_impl(
         for batch in block_batches {
             let (batch_stats, _timings, pending) =
                 runtime.apply_blocks_hex(batch, true, &FxHashMap::default())?;
-            let history_count = pending.history_rows.len();
+            let history_count = pending.history_row_count();
             let sealed_count = pending.sealed_rows.len();
             let prepared = materialize::prepare_flush(
                 domain_store.as_ref(),
                 append_store.as_ref(),
-                pending.history_rows,
+                pending.history_chunks,
                 pending.sealed_rows,
             )?;
             materializer.add_external_counts(history_count, sealed_count, 1);
@@ -3236,23 +3351,26 @@ fn build_history_batches(
         })
         .collect();
 
-    // Merge via Vec::extend (fast pointer moves, no WriteBatch left-fold).
-    let estimated_rows = arena.txs.len().saturating_mul(6);
-    let mut all_rows: Vec<materialize::MaterializedRow> = Vec::with_capacity(estimated_rows);
+    // Preserve one contiguous payload per block. Moving chunk owners is O(blocks)
+    // and never copies the encoded row bytes.
+    let mut all_rows = Vec::with_capacity(block_results.len());
     let mut all_object_deltas: FxHashMap<Vec<u8>, i64> = FxHashMap::default();
     let mut all_identity_deltas: FxHashMap<Vec<u8>, i64> = FxHashMap::default();
     let mut all_tx_actions: Vec<ckbadger_store::types::TxActions> = Vec::new();
     for result in block_results {
-        let block_rows = result?;
-        all_rows.extend(block_rows.rows);
+        let mut block_rows = result?;
 
         // Cross-batch dedup: the interner keeps one exact write bit beside each
         // reusable InternId slot. Reclaim clears the bit before the ID can be
         // reused, so a new identity can never inherit stale dedup state.
         for (id, row) in block_rows.lock_script_rows {
             if identity_interner.mark_lock_script_written(id)? {
-                all_rows.push(row);
+                block_rows.rows.push_materialized(row)?;
             }
+        }
+
+        if !block_rows.rows.is_empty() {
+            all_rows.push(block_rows.rows);
         }
 
         all_tx_actions.extend(block_rows.tx_actions_list);
@@ -3438,7 +3556,14 @@ fn build_history_rows_for_block(
     detectors: &[Box<dyn crate::db::writer::activities::ProtocolDetector>],
     _token_info_cache: &FxHashMap<Vec<u8>, (Option<String>, Option<u8>)>,
 ) -> Result<BlockHistoryRows> {
-    let mut rows = Vec::with_capacity(block_txs.len().saturating_mul(6));
+    let row_capacity = block_txs.len().checked_mul(6).ok_or_else(|| {
+        anyhow!(
+            "bulk history initial row capacity overflow: block={} txs={}",
+            block.number,
+            block_txs.len()
+        )
+    })?;
+    let mut rows = materialize::EncodedHistoryChunk::with_capacity(row_capacity, 0);
     let mut object_activity_count_deltas: FxHashMap<Vec<u8>, i64> = FxHashMap::default();
     let mut identity_activity_count_deltas: FxHashMap<Vec<u8>, i64> = FxHashMap::default();
 
@@ -3455,16 +3580,16 @@ fn build_history_rows_for_block(
         uncles_count: block.uncles_count,
         cycles: None,
     };
-    rows.push(materialize::MaterializedRow::new(
+    rows.push_serialized(
         CF_BLOCK_HEADERS,
-        keys::encode_block_num(block.number).to_vec(),
-        bincode_serialize_presized(&header)?,
-    ));
-    rows.push(materialize::MaterializedRow::new(
+        &keys::encode_block_num(block.number),
+        &header,
+    )?;
+    rows.push_raw(
         CF_BLOCK_HASH_INDEX,
-        block.hash.to_vec(),
-        block.number.to_le_bytes().to_vec(),
-    ));
+        &block.hash,
+        &block.number.to_le_bytes(),
+    )?;
 
     if block_txs.len() != block_resolved.len() {
         bail!(
@@ -3541,16 +3666,8 @@ fn build_history_rows_for_block(
             &keys::encode_block_num(tx.block_number),
             &keys::encode_tx_idx(tx.tx_index),
         ]);
-        rows.push(materialize::MaterializedRow::new(
-            CF_TX_INDEX,
-            tx_location.clone(),
-            bincode_serialize_presized(&entry)?,
-        ));
-        rows.push(materialize::MaterializedRow::new(
-            CF_TX_HASH_MAP,
-            tx.hash.to_vec(),
-            tx_location,
-        ));
+        rows.push_serialized(CF_TX_INDEX, &tx_location, &entry)?;
+        rows.push_raw(CF_TX_HASH_MAP, &tx.hash, &tx_location)?;
 
         // Compute per-address capacity change (output_cap - input_cap for each lock).
         let mut per_addr: FxHashMap<crate::sync::types::InternId, (i64, i64, bool, bool)> =
@@ -3600,12 +3717,9 @@ fn build_history_rows_for_block(
             })?;
             let value =
                 ckbadger_store::types::AddrTxValue::new(capacity_change, has_in, has_out, tags);
-            let encoded_value = bincode_serialize_presized(&value)?;
-            rows.push(materialize::MaterializedRow::new(
-                CF_ADDR_TXS,
-                keys::encode_addr_tx_key(lock_hash_bytes, tx.block_number, tx.tx_index, &tx.hash),
-                encoded_value,
-            ));
+            let addr_tx_key =
+                keys::encode_addr_tx_key(lock_hash_bytes, tx.block_number, tx.tx_index, &tx.hash);
+            rows.push_serialized(CF_ADDR_TXS, &addr_tx_key, &value)?;
         }
 
         if tx.is_cellbase {
@@ -3613,19 +3727,19 @@ fn build_history_rows_for_block(
         }
 
         for input in &resolved_tx.resolved_inputs {
-            rows.push(materialize::MaterializedRow::new(
+            let consumed_key = keys::encode_outpoint(
+                &input.outpoint.tx_hash,
+                resolved_input_outpoint_index_i16(input)?,
+            );
+            rows.push_serialized(
                 CF_CONSUMED_CELLS,
-                keys::encode_outpoint(
-                    &input.outpoint.tx_hash,
-                    resolved_input_outpoint_index_i16(input)?,
-                )
-                .to_vec(),
-                bincode_serialize_presized(&ConsumedCellMeta {
+                &consumed_key,
+                &ConsumedCellMeta {
                     created_at_block: input.created_at_block,
                     consumed_at_block: tx.block_number,
                     consumed_by_tx: Some(tx.hash.to_vec()),
-                })?,
-            ));
+                },
+            )?;
         }
     }
 
@@ -3658,15 +3772,12 @@ fn build_history_rows_for_block(
                     is_burn: transfer.is_burn,
                     timestamp: tx.timestamp_ms,
                 };
-                rows.push(materialize::MaterializedRow::new(
-                    CF_TOKEN_TRANSFERS,
-                    keys::encode_token_transfer_key(
-                        &transfer.type_script_hash,
-                        tx.block_number,
-                        *idx,
-                    ),
-                    bincode_serialize_presized(&record)?,
-                ));
+                let transfer_key = keys::encode_token_transfer_key(
+                    &transfer.type_script_hash,
+                    tx.block_number,
+                    *idx,
+                );
+                rows.push_serialized(CF_TOKEN_TRANSFERS, &transfer_key, &record)?;
                 *idx = idx.checked_add(1).ok_or_else(|| {
                     anyhow!(
                         "token transfer index overflow in bulk build history rows: type_hash=0x{} block={}",
@@ -3684,15 +3795,12 @@ fn build_history_rows_for_block(
     // Activity stats accumulation uses the returned in-memory list, not CF_TX_ACTIONS.
     for tx_actions in &tx_actions_list {
         if !tx_actions.is_cellbase {
-            rows.push(materialize::MaterializedRow::new(
-                CF_TX_ACTIONS,
-                keys::encode_tx_actions_key(
-                    tx_actions.block_number,
-                    tx_actions.tx_index,
-                    &tx_actions.tx_hash,
-                ),
-                bincode_serialize_presized(tx_actions)?,
-            ));
+            let tx_actions_key = keys::encode_tx_actions_key(
+                tx_actions.block_number,
+                tx_actions.tx_index,
+                &tx_actions.tx_hash,
+            );
+            rows.push_serialized(CF_TX_ACTIONS, &tx_actions_key, tx_actions)?;
         }
     }
 
@@ -3831,18 +3939,14 @@ fn build_history_rows_for_block(
                 &tx.block_hash,
                 tx.timestamp_ms,
             ) {
-                rows.push(materialize::MaterializedRow::new(
-                    CF_IDENTITY_COLLECTION_ACTIVITIES,
-                    keys::encode_object_collection_activity_key(
-                        &DOTBIT_SENTINEL_COLLECTION,
-                        tx.block_number,
-                        tx.tx_index,
-                        &tx.block_hash,
-                        &tx.tx_hash,
-                    )
-                    .to_vec(),
-                    bincode_serialize_presized(&entry)?,
-                ));
+                let activity_key = keys::encode_object_collection_activity_key(
+                    &DOTBIT_SENTINEL_COLLECTION,
+                    tx.block_number,
+                    tx.tx_index,
+                    &tx.block_hash,
+                    &tx.tx_hash,
+                );
+                rows.push_serialized(CF_IDENTITY_COLLECTION_ACTIVITIES, &activity_key, &entry)?;
                 let delta = identity_activity_count_deltas
                     .entry(DOTBIT_SENTINEL_COLLECTION.to_vec())
                     .or_insert(0);
@@ -3866,18 +3970,18 @@ fn build_history_rows_for_block(
                     hex::encode(&resolved_entry.collection_id)
                 )
             })?;
-            rows.push(materialize::MaterializedRow::new(
+            let activity_key = keys::encode_object_collection_activity_key(
+                &resolved_entry.collection_id,
+                resolved_entry.block_number,
+                resolved_entry.tx_idx,
+                &resolved_entry.entry.block_hash,
+                &resolved_entry.entry.tx_hash,
+            );
+            rows.push_serialized(
                 CF_OBJECT_COLLECTION_ACTIVITIES,
-                keys::encode_object_collection_activity_key(
-                    &resolved_entry.collection_id,
-                    resolved_entry.block_number,
-                    resolved_entry.tx_idx,
-                    &resolved_entry.entry.block_hash,
-                    &resolved_entry.entry.tx_hash,
-                )
-                .to_vec(),
-                bincode_serialize_presized(&resolved_entry.entry)?,
-            ));
+                &activity_key,
+                &resolved_entry.entry,
+            )?;
         }
 
         for resolved_entry in identity_activity_acc.into_resolved_entries() {
@@ -3890,18 +3994,18 @@ fn build_history_rows_for_block(
                     hex::encode(&resolved_entry.collection_id)
                 )
             })?;
-            rows.push(materialize::MaterializedRow::new(
+            let activity_key = keys::encode_object_collection_activity_key(
+                &resolved_entry.collection_id,
+                resolved_entry.block_number,
+                resolved_entry.tx_idx,
+                &resolved_entry.entry.block_hash,
+                &resolved_entry.entry.tx_hash,
+            );
+            rows.push_serialized(
                 CF_IDENTITY_COLLECTION_ACTIVITIES,
-                keys::encode_object_collection_activity_key(
-                    &resolved_entry.collection_id,
-                    resolved_entry.block_number,
-                    resolved_entry.tx_idx,
-                    &resolved_entry.entry.block_hash,
-                    &resolved_entry.entry.tx_hash,
-                )
-                .to_vec(),
-                bincode_serialize_presized(&resolved_entry.entry)?,
-            ));
+                &activity_key,
+                &resolved_entry.entry,
+            )?;
         }
     }
 
@@ -3918,11 +4022,8 @@ fn build_history_rows_for_block(
         for cell in &arena_cells[tx.output_range.clone()] {
             let outpoint_key =
                 keys::encode_outpoint(&cell.outpoint.tx_hash, cell_outpoint_index_i16(cell)?);
-            rows.push(materialize::MaterializedRow::new(
-                CF_CELLS,
-                outpoint_key.to_vec(),
-                bincode_serialize_presized(&cell_facts_to_live_cell_info(cell, interner))?,
-            ));
+            let live_cell_info = cell_facts_to_live_cell_info(cell, interner);
+            rows.push_serialized(CF_CELLS, &outpoint_key, &live_cell_info)?;
 
             // Lock script mapping — dedup within block, cross-batch dedup in merge.
             if seen_lock_ids.insert(cell.lock_script_hash_id) {
@@ -3943,16 +4044,13 @@ fn build_history_rows_for_block(
             }
 
             if let Some(data_hash) = &cell.data_hash {
-                rows.push(materialize::MaterializedRow::new(
-                    CF_CELL_BY_DATA_HASH,
-                    keys::encode_cell_index_key(
-                        data_hash,
-                        cell.created_at_block,
-                        &cell.outpoint.tx_hash,
-                        cell_outpoint_index_i16(cell)?,
-                    ),
-                    vec![],
-                ));
+                let data_hash_key = keys::encode_cell_index_key(
+                    data_hash,
+                    cell.created_at_block,
+                    &cell.outpoint.tx_hash,
+                    cell_outpoint_index_i16(cell)?,
+                );
+                rows.push_raw(CF_CELL_BY_DATA_HASH, &data_hash_key, &[])?;
             }
         }
     }

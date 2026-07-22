@@ -1,4 +1,5 @@
 use anyhow::{anyhow, Result};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use super::binary_facts::RawCkbBlock;
@@ -48,24 +49,31 @@ pub(crate) fn cell_count_for_raw(raw: &RawCkbBlock) -> u64 {
 fn split_buffered_by_actual_bytes(
     blocks: Vec<BufferedBlock>,
     max_chunk_bytes: usize,
-) -> Vec<Vec<BufferedBlock>> {
+) -> Result<Vec<Vec<BufferedBlock>>> {
     let mut chunks = Vec::new();
     let mut current = Vec::new();
     let mut current_bytes = 0usize;
 
     for block in blocks {
-        if !current.is_empty() && current_bytes.saturating_add(block.block_bytes) > max_chunk_bytes
-        {
+        let next_bytes = current_bytes.checked_add(block.block_bytes).ok_or_else(|| {
+            anyhow!(
+                "prefetch chunk byte count overflow while splitting: accumulated_bytes={} block_bytes={}",
+                current_bytes,
+                block.block_bytes
+            )
+        })?;
+        if !current.is_empty() && next_bytes > max_chunk_bytes {
             chunks.push(std::mem::take(&mut current));
-            current_bytes = 0;
+            current_bytes = block.block_bytes;
+        } else {
+            current_bytes = next_bytes;
         }
-        current_bytes = current_bytes.saturating_add(block.block_bytes);
         current.push(block);
     }
     if !current.is_empty() {
         chunks.push(current);
     }
-    chunks
+    Ok(chunks)
 }
 
 #[derive(Debug)]
@@ -84,6 +92,7 @@ pub(crate) struct PrefetchWorkerStats {
 pub(crate) struct PrefetchChannelHandle {
     result_rx: Option<tokio::sync::mpsc::Receiver<Result<Vec<BufferedBlock>>>>,
     worker_handle: tokio::task::JoinHandle<Result<PrefetchWorkerStats>>,
+    retained_block_bytes: Arc<AtomicU64>,
 }
 
 impl PrefetchChannelHandle {
@@ -95,7 +104,9 @@ impl PrefetchChannelHandle {
         threads_rx: tokio::sync::watch::Receiver<u32>,
     ) -> Self {
         let (result_tx, result_rx) = tokio::sync::mpsc::channel(channel_depth);
+        let retained_block_bytes = Arc::new(AtomicU64::new(0));
 
+        let worker_retained_block_bytes = Arc::clone(&retained_block_bytes);
         let worker_handle = tokio::task::spawn_blocking(move || {
             Self::prefetch_worker(
                 result_tx,
@@ -103,12 +114,14 @@ impl PrefetchChannelHandle {
                 ckb_store,
                 start_block,
                 handoff_target,
+                worker_retained_block_bytes,
             )
         });
 
         Self {
             result_rx: Some(result_rx),
             worker_handle,
+            retained_block_bytes,
         }
     }
 
@@ -118,6 +131,7 @@ impl PrefetchChannelHandle {
         ckb_store: Arc<CkbChainReader>,
         start_block: u64,
         handoff_target: u64,
+        retained_block_bytes: Arc<AtomicU64>,
     ) -> Result<PrefetchWorkerStats> {
         let mut stats = PrefetchWorkerStats {
             total_fetches: 0,
@@ -163,16 +177,48 @@ impl PrefetchChannelHandle {
                         })
                         .collect();
                     // Update density EMA from actual chunk data.
+                    let chunk_bytes = buffered.iter().try_fold(0usize, |total, block| {
+                        total.checked_add(block.block_bytes).ok_or_else(|| {
+                            anyhow!(
+                                "prefetch fetch byte count overflow: start_block={} end_block={} accumulated_bytes={} block_bytes={}",
+                                position,
+                                end,
+                                total,
+                                block.block_bytes
+                            )
+                        })
+                    })?;
                     if !buffered.is_empty() {
-                        let chunk_bytes: usize = buffered.iter().map(|b| b.block_bytes).sum();
                         let actual_density = chunk_bytes as f64 / buffered.len() as f64;
                         density_ema = density_ema * (1.0 - DENSITY_EMA_ALPHA)
                             + actual_density * DENSITY_EMA_ALPHA;
                     }
-                    for chunk in
-                        split_buffered_by_actual_bytes(buffered, CHUNK_BYTES_TARGET as usize)
-                    {
+                    let chunks =
+                        split_buffered_by_actual_bytes(buffered, CHUNK_BYTES_TARGET as usize)?;
+                    let chunk_bytes = u64::try_from(chunk_bytes).map_err(|_| {
+                        anyhow!(
+                            "prefetch fetch byte count exceeds u64: start_block={} end_block={} bytes={}",
+                            position,
+                            end,
+                            chunk_bytes
+                        )
+                    })?;
+                    retained_block_bytes
+                        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                            current.checked_add(chunk_bytes)
+                        })
+                        .map_err(|current| {
+                            anyhow!(
+                                "remote prefetch block byte accounting overflow: retained_bytes={} fetched_bytes={} start_block={} end_block={}",
+                                current,
+                                chunk_bytes,
+                                position,
+                                end
+                            )
+                        })?;
+                    for chunk in chunks {
                         if result_tx.blocking_send(Ok(chunk)).is_err() {
+                            retained_block_bytes.store(0, Ordering::Relaxed);
                             stats.exit_reason = PrefetchExitReason::ReceiverDropped;
                             break 'prefetch;
                         }
@@ -198,10 +244,16 @@ impl PrefetchChannelHandle {
     /// already been taken.
     pub(crate) fn take_receiver(
         &mut self,
-    ) -> tokio::sync::mpsc::Receiver<Result<Vec<BufferedBlock>>> {
-        self.result_rx
-            .take()
-            .expect("take_receiver called more than once")
+    ) -> (
+        tokio::sync::mpsc::Receiver<Result<Vec<BufferedBlock>>>,
+        Arc<AtomicU64>,
+    ) {
+        (
+            self.result_rx
+                .take()
+                .expect("take_receiver called more than once"),
+            Arc::clone(&self.retained_block_bytes),
+        )
     }
 
     pub(crate) async fn close_and_wait(mut self) -> Result<PrefetchWorkerStats> {
@@ -245,7 +297,8 @@ mod tests {
         let chunks = split_buffered_by_actual_bytes(
             vec![make(30_000_000), make(30_000_000), make(10_000_000)],
             CHUNK_BYTES_TARGET as usize,
-        );
+        )
+        .unwrap();
         let sizes = chunks
             .iter()
             .map(|chunk| chunk.iter().map(|block| block.block_bytes).sum::<usize>())
@@ -272,6 +325,7 @@ mod tests {
         let handle = PrefetchChannelHandle {
             result_rx: Some(result_rx),
             worker_handle,
+            retained_block_bytes: Arc::new(AtomicU64::new(0)),
         };
 
         let stats = handle.close_and_wait().await.unwrap();
@@ -295,6 +349,7 @@ mod tests {
         let mut handle = PrefetchChannelHandle {
             result_rx: Some(result_rx),
             worker_handle,
+            retained_block_bytes: Arc::new(AtomicU64::new(100)),
         };
 
         // Send a chunk so we can verify the receiver is the right one
@@ -305,10 +360,11 @@ mod tests {
         }];
         result_tx.send(Ok(chunk)).await.unwrap();
 
-        let mut rx = handle.take_receiver();
+        let (mut rx, retained_block_bytes) = handle.take_receiver();
         let received = rx.recv().await.unwrap().unwrap();
         assert_eq!(received.len(), 1);
         assert_eq!(received[0].block_bytes, 100);
+        assert_eq!(retained_block_bytes.load(Ordering::Relaxed), 100);
     }
 
     #[test]
@@ -358,6 +414,7 @@ mod tests {
         let mut handle = PrefetchChannelHandle {
             result_rx: Some(result_rx),
             worker_handle,
+            retained_block_bytes: Arc::new(AtomicU64::new(0)),
         };
 
         let _rx1 = handle.take_receiver();

@@ -1,8 +1,10 @@
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 
 use anyhow::{anyhow, bail, Result};
 use ckbadger_store::{AddressBalance, CkbadgerStore, CF_ADDR_BALANCE};
-use rustc_hash::FxHashMap;
+use hashbrown::HashTable;
+use rustc_hash::{FxHashMap, FxHasher};
 
 use super::{BulkReducer, ReducerContext};
 use crate::rpc::BlockResponseWithCycles;
@@ -20,24 +22,25 @@ pub(crate) struct AddressTxDelta {
     pub(crate) used_capacity_delta: i128,
 }
 
+#[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct CompactAddressBalance {
-    pub(crate) balance: i128,
-    pub(crate) used_capacity: i128,
-    pub(crate) live_cells_count: i32,
+    first_seen_tx: [u8; 32],
+    last_activity_tx: [u8; 32],
+    pub(crate) balance: u64,
+    pub(crate) used_capacity: u64,
     pub(crate) total_cells_count: i64,
     pub(crate) txs_count: i64,
     pub(crate) first_seen_block: i64,
-    first_seen_tx: [u8; 32],
     pub(crate) last_activity_block: i64,
-    last_activity_tx: [u8; 32],
+    pub(crate) live_cells_count: i32,
 }
 
 impl CompactAddressBalance {
     fn to_stored(self) -> AddressBalance {
         AddressBalance {
-            balance: self.balance,
-            used_capacity: self.used_capacity,
+            balance: i128::from(self.balance),
+            used_capacity: i128::from(self.used_capacity),
             live_cells_count: self.live_cells_count,
             total_cells_count: self.total_cells_count,
             txs_count: self.txs_count,
@@ -47,22 +50,187 @@ impl CompactAddressBalance {
             last_activity_tx: self.last_activity_tx.to_vec(),
         }
     }
+
+    #[cfg(test)]
+    fn for_test(seed: u64) -> Self {
+        Self {
+            first_seen_tx: [seed as u8; 32],
+            last_activity_tx: [seed as u8; 32],
+            balance: seed,
+            used_capacity: seed,
+            total_cells_count: seed as i64,
+            txs_count: 1,
+            first_seen_block: seed as i64,
+            last_activity_block: seed as i64,
+            live_cells_count: 1,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct AddressId(u32);
+
+impl AddressId {
+    fn as_usize(self) -> usize {
+        self.0 as usize
+    }
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct AddressEntry {
+    lock_hash: [u8; 32],
+    balance: CompactAddressBalance,
+}
+
+const ADDRESS_ENTRY_CHUNK_LEN: usize = 64 * 1024;
+
+#[derive(Debug, Default)]
+struct AddressEntries {
+    chunks: Vec<Vec<AddressEntry>>,
+    len: usize,
+}
+
+impl AddressEntries {
+    fn len(&self) -> usize {
+        self.len
+    }
+
+    fn get(&self, id: AddressId) -> Option<&AddressEntry> {
+        let index = id.as_usize();
+        self.chunks
+            .get(index / ADDRESS_ENTRY_CHUNK_LEN)
+            .and_then(|chunk| chunk.get(index % ADDRESS_ENTRY_CHUNK_LEN))
+    }
+
+    fn get_mut(&mut self, id: AddressId) -> Option<&mut AddressEntry> {
+        let index = id.as_usize();
+        self.chunks
+            .get_mut(index / ADDRESS_ENTRY_CHUNK_LEN)
+            .and_then(|chunk| chunk.get_mut(index % ADDRESS_ENTRY_CHUNK_LEN))
+    }
+
+    fn push(&mut self, entry: AddressEntry) -> Result<AddressId> {
+        let raw_id = u32::try_from(self.len).map_err(|_| {
+            anyhow!(
+                "bulk address ID space exhausted: address_count={} max={}",
+                self.len,
+                u32::MAX
+            )
+        })?;
+        let needs_chunk = self
+            .chunks
+            .last()
+            .map(|chunk| chunk.len() == ADDRESS_ENTRY_CHUNK_LEN)
+            .unwrap_or(true);
+        if needs_chunk {
+            self.chunks.try_reserve(1).map_err(|e| {
+                anyhow!(
+                    "failed to reserve bulk address chunk directory: address_count={} chunks={} error={}",
+                    self.len,
+                    self.chunks.len(),
+                    e
+                )
+            })?;
+            let mut chunk = Vec::new();
+            chunk.try_reserve_exact(ADDRESS_ENTRY_CHUNK_LEN).map_err(|e| {
+                anyhow!(
+                    "failed to reserve bulk address entry chunk: address_count={} chunk_entries={} entry_bytes={} error={}",
+                    self.len,
+                    ADDRESS_ENTRY_CHUNK_LEN,
+                    std::mem::size_of::<AddressEntry>(),
+                    e
+                )
+            })?;
+            self.chunks.push(chunk);
+        }
+        self.chunks
+            .last_mut()
+            .expect("address entry chunk exists after allocation")
+            .push(entry);
+        self.len = self
+            .len
+            .checked_add(1)
+            .ok_or_else(|| anyhow!("bulk address count overflow after ID allocation"))?;
+        Ok(AddressId(raw_id))
+    }
+
+    fn iter(&self) -> impl Iterator<Item = &AddressEntry> {
+        self.chunks.iter().flat_map(|chunk| chunk.iter())
+    }
+
+    fn allocated_bytes(&self) -> Result<u64> {
+        let directory_bytes = self
+            .chunks
+            .capacity()
+            .checked_mul(std::mem::size_of::<Vec<AddressEntry>>())
+            .ok_or_else(|| anyhow!("bulk address chunk-directory byte count overflow"))?;
+        let entry_bytes = self.chunks.iter().try_fold(0usize, |total, chunk| {
+            chunk
+                .capacity()
+                .checked_mul(std::mem::size_of::<AddressEntry>())
+                .and_then(|bytes| total.checked_add(bytes))
+                .ok_or_else(|| anyhow!("bulk address entry byte count overflow"))
+        })?;
+        let total_bytes = directory_bytes
+            .checked_add(entry_bytes)
+            .ok_or_else(|| anyhow!("bulk address allocated byte count overflow"))?;
+        u64::try_from(total_bytes).map_err(|_| anyhow!("bulk address allocated bytes exceed u64"))
+    }
+
+    #[cfg(test)]
+    fn push_for_test(
+        &mut self,
+        lock_hash: [u8; 32],
+        balance: CompactAddressBalance,
+    ) -> Result<AddressId> {
+        self.push(AddressEntry { lock_hash, balance })
+    }
+
+    #[cfg(test)]
+    fn chunk_count(&self) -> usize {
+        self.chunks.len()
+    }
 }
 
 #[derive(Debug, Default)]
 pub(crate) struct AddressOwner {
-    balances: FxHashMap<[u8; 32], CompactAddressBalance>,
+    index: HashTable<AddressId>,
+    entries: AddressEntries,
 }
 
 impl AddressOwner {
-    pub(crate) fn balances(&self) -> &FxHashMap<[u8; 32], CompactAddressBalance> {
-        &self.balances
+    pub(crate) fn get(&self, lock_hash: &[u8; 32]) -> Option<&CompactAddressBalance> {
+        let hash = hash_lock_hash(lock_hash);
+        let id = self.index.find(hash, |id| {
+            let entry = self.entries.get(*id).unwrap_or_else(|| {
+                panic!(
+                    "bulk address lookup index points outside entry store: address_id={} address_count={}",
+                    id.0,
+                    self.entries.len()
+                )
+            });
+            entry.lock_hash == *lock_hash
+        })?;
+        self.entries.get(*id).map(|entry| &entry.balance)
     }
 
     pub(crate) fn estimated_bytes(&self) -> u64 {
-        std::mem::size_of::<Self>() as u64
-            + self.balances.capacity() as u64
-                * std::mem::size_of::<([u8; 32], CompactAddressBalance)>() as u64
+        let owned_bytes = self
+            .entries
+            .allocated_bytes()
+            .unwrap_or_else(|e| panic!("bulk address entry memory accounting failed: {e}"));
+        let index_bytes = estimated_hash_table_allocation_bytes::<AddressId>(self.index.capacity())
+            .unwrap_or_else(|e| panic!("bulk address index memory accounting failed: {e}"));
+        (std::mem::size_of::<Self>() as u64)
+            .checked_add(owned_bytes)
+            .and_then(|bytes| bytes.checked_add(index_bytes))
+            .unwrap_or_else(|| {
+                panic!(
+                    "bulk address total memory accounting overflow: entries_bytes={} index_bytes={}",
+                    owned_bytes, index_bytes
+                )
+            })
     }
 
     pub(crate) fn apply_tx_with_deltas(
@@ -81,17 +249,44 @@ impl AddressOwner {
         deltas: &FxHashMap<[u8; 32], AddressTxDelta>,
     ) -> Result<()> {
         for (lock_hash, delta) in deltas {
-            match self.balances.entry(*lock_hash) {
-                std::collections::hash_map::Entry::Occupied(mut entry) => {
-                    let balance = entry.get_mut();
-                    balance.balance = checked_add_i128(
+            let hash = hash_lock_hash(lock_hash);
+            let existing_id = self
+                .index
+                .find(hash, |id| {
+                    let entry = self.entries.get(*id).unwrap_or_else(|| {
+                        panic!(
+                            "bulk address update index points outside entry store: address_id={} address_count={}",
+                            id.0,
+                            self.entries.len()
+                        )
+                    });
+                    entry.lock_hash == *lock_hash
+                })
+                .copied();
+            match existing_id {
+                Some(id) => {
+                    let address_count = self.entries.len();
+                    let balance = &mut self
+                        .entries
+                        .get_mut(id)
+                        .ok_or_else(|| {
+                            anyhow!(
+                                "bulk address index points outside entry store: address_id={} address_count={} block={} tx=0x{}",
+                                id.0,
+                                address_count,
+                                tx.block_number,
+                                hex::encode(tx.tx_hash)
+                            )
+                        })?
+                        .balance;
+                    balance.balance = checked_add_u64(
                         balance.balance,
                         delta.balance_delta,
                         "address balance",
                         lock_hash,
                         tx,
                     )?;
-                    balance.used_capacity = checked_add_i128(
+                    balance.used_capacity = checked_add_u64(
                         balance.used_capacity,
                         delta.used_capacity_delta,
                         "address used capacity",
@@ -117,7 +312,7 @@ impl AddressOwner {
                     balance.last_activity_block = tx.block_number;
                     balance.last_activity_tx = tx.tx_hash;
                 }
-                std::collections::hash_map::Entry::Vacant(entry) => {
+                None => {
                     if delta.balance_delta < 0
                         || delta.used_capacity_delta < 0
                         || delta.cells_consumed > 0
@@ -135,16 +330,71 @@ impl AddressOwner {
                         );
                     }
 
-                    entry.insert(CompactAddressBalance {
-                        balance: delta.balance_delta,
-                        used_capacity: delta.used_capacity_delta,
-                        live_cells_count: delta.cells_created,
-                        total_cells_count: i64::from(delta.cells_created),
-                        txs_count: 1,
-                        first_seen_block: tx.block_number,
-                        first_seen_tx: tx.tx_hash,
-                        last_activity_block: tx.block_number,
-                        last_activity_tx: tx.tx_hash,
+                    let balance = u64::try_from(delta.balance_delta).map_err(|_| {
+                        anyhow!(
+                            "new address balance exceeds u64: lock_hash=0x{} balance={} block={} tx=0x{}",
+                            hex::encode(lock_hash),
+                            delta.balance_delta,
+                            tx.block_number,
+                            hex::encode(tx.tx_hash)
+                        )
+                    })?;
+                    let used_capacity =
+                        u64::try_from(delta.used_capacity_delta).map_err(|_| {
+                            anyhow!(
+                                "new address used capacity exceeds u64: lock_hash=0x{} used_capacity={} block={} tx=0x{}",
+                                hex::encode(lock_hash),
+                                delta.used_capacity_delta,
+                                tx.block_number,
+                                hex::encode(tx.tx_hash)
+                            )
+                        })?;
+                    let entries = &self.entries;
+                    self.index
+                        .try_reserve(1, |id| {
+                            let entry = entries.get(*id).unwrap_or_else(|| {
+                                panic!(
+                                    "bulk address index rehash ID outside entry store: address_id={} address_count={}",
+                                    id.0,
+                                    entries.len()
+                                )
+                            });
+                            hash_lock_hash(&entry.lock_hash)
+                        })
+                        .map_err(|e| {
+                            anyhow!(
+                                "failed to grow bulk address ID index: address_count={} index_capacity={} block={} tx=0x{} error={:?}",
+                                self.entries.len(),
+                                self.index.capacity(),
+                                tx.block_number,
+                                hex::encode(tx.tx_hash),
+                                e
+                            )
+                        })?;
+                    let id = self.entries.push(AddressEntry {
+                        lock_hash: *lock_hash,
+                        balance: CompactAddressBalance {
+                            balance,
+                            used_capacity,
+                            live_cells_count: delta.cells_created,
+                            total_cells_count: i64::from(delta.cells_created),
+                            txs_count: 1,
+                            first_seen_block: tx.block_number,
+                            first_seen_tx: tx.tx_hash,
+                            last_activity_block: tx.block_number,
+                            last_activity_tx: tx.tx_hash,
+                        },
+                    })?;
+                    let entries = &self.entries;
+                    self.index.insert_unique(hash, id, |existing_id| {
+                        let entry = entries.get(*existing_id).unwrap_or_else(|| {
+                            panic!(
+                                "bulk address index insert ID outside entry store: address_id={} address_count={}",
+                                existing_id.0,
+                                entries.len()
+                            )
+                        });
+                        hash_lock_hash(&entry.lock_hash)
                     });
                 }
             }
@@ -154,16 +404,50 @@ impl AddressOwner {
     }
 }
 
+fn hash_lock_hash(lock_hash: &[u8; 32]) -> u64 {
+    let mut hasher = FxHasher::default();
+    lock_hash.hash(&mut hasher);
+    hasher.finish()
+}
+
+fn estimated_hash_table_allocation_bytes<T>(capacity: usize) -> Result<u64> {
+    if capacity == 0 {
+        return Ok(0);
+    }
+    let bucket_count = if capacity < 8 {
+        capacity
+            .checked_add(1)
+            .ok_or_else(|| anyhow!("bulk address hash-table bucket count overflow"))?
+    } else {
+        capacity
+            .checked_mul(8)
+            .and_then(|value| value.checked_div(7))
+            .ok_or_else(|| anyhow!("bulk address hash-table bucket count overflow"))?
+    };
+    let payload = bucket_count
+        .checked_mul(std::mem::size_of::<T>())
+        .ok_or_else(|| anyhow!("bulk address hash-table payload byte count overflow"))?;
+    // SwissTable stores one control byte per bucket plus one SIMD group cloned at the end.
+    // Add alignment slack conservatively so retained-byte accounting never under-reports.
+    let allocation = payload
+        .checked_add(bucket_count)
+        .and_then(|bytes| bytes.checked_add(16))
+        .and_then(|bytes| bytes.checked_add(std::mem::align_of::<T>() - 1))
+        .ok_or_else(|| anyhow!("bulk address hash-table allocation byte count overflow"))?;
+    u64::try_from(allocation)
+        .map_err(|_| anyhow!("bulk address hash-table allocation bytes exceed u64"))
+}
+
 impl AddressOwner {
     pub(crate) fn emit_snapshot_rows<F>(&self, mut emit: F) -> Result<()>
     where
         F: FnMut(MaterializedRow) -> Result<()>,
     {
-        for (lock_hash, balance) in &self.balances {
-            let stored = balance.to_stored();
+        for entry in self.entries.iter() {
+            let stored = entry.balance.to_stored();
             emit(MaterializedRow::new(
                 CF_ADDR_BALANCE,
-                lock_hash.to_vec(),
+                entry.lock_hash.to_vec(),
                 bincode::serialize(&stored)?,
             ))?;
         }
@@ -263,19 +547,20 @@ fn resolve_lock_hash(
     })
 }
 
-fn checked_add_i128(
-    current: i128,
+fn checked_add_u64(
+    current: u64,
     delta: i128,
     metric: &str,
     lock_hash: &[u8],
     tx: &ResolvedTxFacts<'_>,
-) -> Result<i128> {
-    let next = current.checked_add(delta).ok_or_else(|| {
+) -> Result<u64> {
+    let current_i128 = i128::from(current);
+    let next = current_i128.checked_add(delta).ok_or_else(|| {
         anyhow!(
             "{} overflow: lock_hash=0x{}, current={}, delta={}, block={}, tx=0x{}, tx_index={}",
             metric,
             hex::encode(lock_hash),
-            current,
+            current_i128,
             delta,
             tx.block_number,
             hex::encode(tx.tx_hash),
@@ -287,7 +572,7 @@ fn checked_add_i128(
             "{} underflow: lock_hash=0x{}, current={}, delta={}, next={}, block={}, tx=0x{}, tx_index={}",
             metric,
             hex::encode(lock_hash),
-            current,
+            current_i128,
             delta,
             next,
             tx.block_number,
@@ -295,7 +580,19 @@ fn checked_add_i128(
             tx.tx_index
         );
     }
-    Ok(next)
+    u64::try_from(next).map_err(|_| {
+        anyhow!(
+            "{} exceeds u64: lock_hash=0x{}, current={}, delta={}, next={}, block={}, tx=0x{}, tx_index={}",
+            metric,
+            hex::encode(lock_hash),
+            current,
+            delta,
+            next,
+            tx.block_number,
+            hex::encode(tx.tx_hash),
+            tx.tx_index
+        )
+    })
 }
 
 fn checked_add_i64(
@@ -421,11 +718,54 @@ mod tests {
     use crate::sync::types::InternId;
 
     #[test]
+    fn address_index_keeps_only_compact_ids_in_hash_buckets() {
+        assert_eq!(
+            std::mem::size_of::<AddressId>(),
+            4,
+            "address hash buckets must contain only a compact ID"
+        );
+        assert_eq!(
+            std::mem::size_of::<AddressEntry>(),
+            152,
+            "address entry layout changed; re-evaluate bulk retained memory"
+        );
+    }
+
+    #[test]
+    fn address_entries_grow_by_bounded_chunks_without_reallocating_old_entries() {
+        let mut entries = AddressEntries::default();
+        let first = entries
+            .push_for_test([0x11; 32], CompactAddressBalance::for_test(1))
+            .expect("push first");
+        let first_ptr = entries.get(first).expect("first entry") as *const AddressEntry;
+
+        for seed in 1..ADDRESS_ENTRY_CHUNK_LEN {
+            entries
+                .push_for_test(
+                    [seed as u8; 32],
+                    CompactAddressBalance::for_test(seed as u64),
+                )
+                .expect("fill first address chunk");
+        }
+        entries
+            .push_for_test([0x33; 32], CompactAddressBalance::for_test(3))
+            .expect("push into a new chunk");
+
+        assert_eq!(entries.len(), ADDRESS_ENTRY_CHUNK_LEN + 1);
+        assert_eq!(entries.chunk_count(), 2);
+        assert_eq!(
+            entries.get(first).expect("first entry after growth") as *const AddressEntry,
+            first_ptr,
+            "growing the entry store must not move prior address state"
+        );
+    }
+
+    #[test]
     fn compact_address_balance_has_no_heap_backed_tx_hash_fields() {
-        assert!(
-            std::mem::size_of::<CompactAddressBalance>() <= 144,
-            "CompactAddressBalance grew to {} bytes",
-            std::mem::size_of::<CompactAddressBalance>()
+        assert_eq!(
+            std::mem::size_of::<CompactAddressBalance>(),
+            120,
+            "CompactAddressBalance layout changed; re-evaluate bulk retained memory"
         );
         let compact = CompactAddressBalance {
             balance: 1,
@@ -566,14 +906,14 @@ mod tests {
         owner.apply_tx(&tx0, &ctx).expect("apply tx0");
         owner.apply_tx(&tx1, &ctx).expect("apply tx1");
 
-        let balance_a = owner.balances().get(&[0xaa; 32]).expect("lock A");
+        let balance_a = owner.get(&[0xaa; 32]).expect("lock A");
         assert_eq!(balance_a.balance, 100_00000000);
         assert_eq!(balance_a.used_capacity, 61_00000000);
         assert_eq!(balance_a.live_cells_count, 1);
         assert_eq!(balance_a.total_cells_count, 2);
         assert_eq!(balance_a.txs_count, 2);
 
-        let balance_b = owner.balances().get(&[0xbb; 32]).expect("lock B");
+        let balance_b = owner.get(&[0xbb; 32]).expect("lock B");
         assert_eq!(balance_b.balance, 100_00000000);
         assert_eq!(balance_b.used_capacity, 61_00000000);
         assert_eq!(balance_b.live_cells_count, 1);

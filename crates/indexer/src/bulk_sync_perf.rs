@@ -68,8 +68,10 @@ pub struct BatchSample {
     pub flush_wait_ms: f64,
     pub flush_channel_depth: u64,
     pub flush_channel_pending: u64,
+    pub flush_reserved_bytes: u64,
     pub prefetch_recv_ms: f64,
     pub prefetch_depth: u64,
+    pub prefetch_retained_block_bytes: u64,
     pub facts_par_iter_ms: f64,
     pub facts_merge_ms: f64,
     pub facts_serial_equivalent_ms: f64,
@@ -94,6 +96,7 @@ pub struct BatchSample {
     pub disk_in_flight: Option<u64>,
     pub disk_state: Option<String>,
     pub owner_memory_bytes: HashMap<String, u64>,
+    pub accounted_retained_bytes: u64,
     pub live_cell_count: u64,
     pub cumulative_history_rows: u64,
     pub cumulative_sealed_rows: u64,
@@ -146,8 +149,10 @@ impl BatchSample {
             flush_wait_ms: 0.0,
             flush_channel_depth: 0,
             flush_channel_pending: 0,
+            flush_reserved_bytes: 0,
             prefetch_recv_ms: 0.0,
             prefetch_depth: 0,
+            prefetch_retained_block_bytes: 0,
             facts_par_iter_ms: 0.0,
             facts_merge_ms: 0.0,
             facts_serial_equivalent_ms: 0.0,
@@ -172,6 +177,7 @@ impl BatchSample {
             disk_in_flight: None,
             disk_state: None,
             owner_memory_bytes: HashMap::new(),
+            accounted_retained_bytes: 0,
             live_cell_count: 0,
             cumulative_history_rows: 0,
             cumulative_sealed_rows: 0,
@@ -2269,6 +2275,23 @@ mod tests {
         assert!(!samples.contains("\"nft_output_scan_ms\""));
         assert!(!samples.contains("\"nft_input_scan_ms\""));
         assert!(samples.contains("\"build_ms\""));
+    }
+
+    #[test]
+    fn test_batch_samples_keep_pipeline_retained_byte_accounting() {
+        let dir = TempDir::new().unwrap();
+        let mut run =
+            BulkSyncPerfRun::start_for_test(dir.path(), "run-1", TEST_BUILD_VERSION).unwrap();
+        let mut sample = test_batch_sample(10, 1.0, 40.0, 100, 4, 1);
+        sample.prefetch_retained_block_bytes = 11;
+        sample.flush_reserved_bytes = 22;
+        sample.accounted_retained_bytes = 33;
+        run.record_batch_sample(sample).unwrap();
+
+        let samples = std::fs::read_to_string(dir.path().join("run-1/samples.jsonl")).unwrap();
+        assert!(samples.contains("\"prefetch_retained_block_bytes\":11"));
+        assert!(samples.contains("\"flush_reserved_bytes\":22"));
+        assert!(samples.contains("\"accounted_retained_bytes\":33"));
     }
 
     #[test]
