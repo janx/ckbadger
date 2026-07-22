@@ -33,6 +33,20 @@ const TOP_ASSET_LIMIT: usize = 10;
 const TOP_HOLDER_LIMIT: usize = 10;
 const IDENTITY_HOLDER_SPOT_CHECK_LIMIT: usize = 10;
 const ADDRESS_TOKENS_LIMIT: usize = 100;
+const ADDRESS_BALANCE_CANDIDATE_LIMIT: usize = 500;
+const ADDRESS_BALANCE_ACTIVE_DAYS: usize = 365;
+const ADDRESS_BALANCE_SAMPLE_MAX: usize = 10;
+const ADDRESS_BALANCE_CELL_PAGE_LIMIT: usize = 100;
+/// The address-balance check is a sampling check, not an exhaustive scan.
+/// Every selected address is still checked exactly, but candidate selection
+/// rejects whale addresses so the total HTTP expansion has a fixed bound.
+const ADDRESS_BALANCE_MAX_LIVE_CELLS_PER_SAMPLE: usize = 1_000;
+const ADDRESS_BALANCE_MAX_TOTAL_LIVE_CELLS: usize = 5_000;
+/// `cell_by_lock` contains historical outputs and filters consumed cells while
+/// scanning. Bound address activity as well as returned live cells so a nearly
+/// empty but extremely hot address is not an accidentally exhaustive query.
+const ADDRESS_BALANCE_MAX_TXS_PER_SAMPLE: i64 = 10_000;
+const ADDRESS_BALANCE_MAX_TOTAL_TXS: i64 = 50_000;
 // Safety cap for paginating /addresses/{addr}/tokens when searching for a
 // specific top-holder's token. 1000 pages x 100 = 100k tokens; exceeding this
 // is almost certainly a data bug, so hitting the cap is reported as a finding.
@@ -91,10 +105,12 @@ struct DaoStatisticsResponse {
     burnt: String,
 }
 
-#[derive(serde::Deserialize)]
+#[derive(Clone, Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct TopAddressResponse {
+struct AddressCandidateResponse {
     lock_script_hash: String,
+    live_cells_count: i64,
+    transactions_count: i64,
 }
 
 #[derive(serde::Deserialize)]
@@ -171,6 +187,7 @@ struct AssetListApiRecord {
 #[serde(rename_all = "camelCase")]
 struct AddressBalanceApiRecord {
     balance: String,
+    live_cells_count: i64,
 }
 
 #[derive(serde::Deserialize)]
@@ -289,6 +306,156 @@ fn normalize_hex_key(raw: &str) -> String {
         .or_else(|| trimmed.strip_prefix("0X"))
         .unwrap_or(trimmed)
         .to_ascii_lowercase()
+}
+
+fn address_balance_sample_bucket(live_cells_count: usize) -> usize {
+    match live_cells_count {
+        0..=1 => 0,
+        2..=10 => 1,
+        11..=100 => 2,
+        _ => 3,
+    }
+}
+
+/// Select a reproducible, cardinality-diverse set of addresses while placing
+/// a hard bound on the work performed by the sampling-tier balance check.
+///
+/// Candidate data is deduplicated by lock hash before sampling. No cells are
+/// sampled within an address: once selected, all of that address's live cells
+/// are checked exactly.
+fn select_address_balance_samples(
+    candidates: Vec<AddressCandidateResponse>,
+    requested: usize,
+    seed: u64,
+) -> anyhow::Result<Vec<AddressCandidateResponse>> {
+    if requested == 0 {
+        return Ok(Vec::new());
+    }
+
+    let mut seen = std::collections::HashMap::<String, (i64, i64)>::new();
+    let mut buckets: [Vec<AddressCandidateResponse>; 4] = std::array::from_fn(|_| Vec::new());
+
+    for candidate in candidates {
+        let normalized_hash = normalize_hex_key(&candidate.lock_script_hash);
+        let decoded_hash = hex::decode(&normalized_hash).map_err(|e| {
+            anyhow::anyhow!(
+                "invalid address candidate lock hash '{}': {}",
+                candidate.lock_script_hash,
+                e
+            )
+        })?;
+        if decoded_hash.len() != 32 {
+            anyhow::bail!(
+                "invalid address candidate lock hash length: lock_hash={}, bytes={}",
+                candidate.lock_script_hash,
+                decoded_hash.len()
+            );
+        }
+        if candidate.live_cells_count < 0 {
+            anyhow::bail!(
+                "negative address candidate liveCellsCount: lock_hash={}, live_cells_count={}",
+                candidate.lock_script_hash,
+                candidate.live_cells_count
+            );
+        }
+        if candidate.transactions_count < 0 {
+            anyhow::bail!(
+                "negative address candidate transactionsCount: lock_hash={}, transactions_count={}",
+                candidate.lock_script_hash,
+                candidate.transactions_count
+            );
+        }
+
+        let metrics = (candidate.live_cells_count, candidate.transactions_count);
+        if let Some(previous) = seen.get(&normalized_hash) {
+            if *previous != metrics {
+                anyhow::bail!(
+                    "conflicting duplicate address candidate: lock_hash={}, first_live_cells={}, first_transactions={}, duplicate_live_cells={}, duplicate_transactions={}",
+                    candidate.lock_script_hash,
+                    previous.0,
+                    previous.1,
+                    candidate.live_cells_count,
+                    candidate.transactions_count
+                );
+            }
+            continue;
+        }
+        seen.insert(normalized_hash, metrics);
+
+        let live_cells_count = usize::try_from(candidate.live_cells_count).map_err(|e| {
+            anyhow::anyhow!(
+                "address candidate liveCellsCount does not fit usize: lock_hash={}, live_cells_count={}, error={}",
+                candidate.lock_script_hash,
+                candidate.live_cells_count,
+                e
+            )
+        })?;
+        if live_cells_count > ADDRESS_BALANCE_MAX_LIVE_CELLS_PER_SAMPLE
+            || candidate.transactions_count > ADDRESS_BALANCE_MAX_TXS_PER_SAMPLE
+        {
+            continue;
+        }
+
+        buckets[address_balance_sample_bucket(live_cells_count)].push(candidate);
+    }
+
+    let mut sampler = LcgSampler::new(seed.wrapping_add(0xA44D_5233_5A11_9EED));
+    for bucket in &mut buckets {
+        sampler.shuffle(bucket);
+    }
+
+    let requested = requested.min(ADDRESS_BALANCE_SAMPLE_MAX);
+    let mut selected = Vec::with_capacity(requested);
+    let mut positions = [0usize; 4];
+    let mut selected_live_cells = 0usize;
+    let mut selected_transactions = 0i64;
+
+    while selected.len() < requested {
+        let mut selected_in_round = false;
+        for bucket_index in 0..buckets.len() {
+            while let Some(candidate) = buckets[bucket_index].get(positions[bucket_index]) {
+                positions[bucket_index] += 1;
+                let live_cells_count = usize::try_from(candidate.live_cells_count).map_err(|e| {
+                    anyhow::anyhow!(
+                        "selected liveCellsCount does not fit usize: lock_hash={}, live_cells_count={}, error={}",
+                        candidate.lock_script_hash,
+                        candidate.live_cells_count,
+                        e
+                    )
+                })?;
+                let next_live_cells = selected_live_cells
+                    .checked_add(live_cells_count)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("address balance sample live-cell budget overflow")
+                    })?;
+                let next_transactions = selected_transactions
+                    .checked_add(candidate.transactions_count)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("address balance sample transaction budget overflow")
+                    })?;
+                if next_live_cells > ADDRESS_BALANCE_MAX_TOTAL_LIVE_CELLS
+                    || next_transactions > ADDRESS_BALANCE_MAX_TOTAL_TXS
+                {
+                    continue;
+                }
+
+                selected_live_cells = next_live_cells;
+                selected_transactions = next_transactions;
+                selected.push(candidate.clone());
+                selected_in_round = true;
+                break;
+            }
+
+            if selected.len() >= requested {
+                break;
+            }
+        }
+        if !selected_in_round {
+            break;
+        }
+    }
+
+    Ok(selected)
 }
 
 /// Parse an exact aggregate token balance. Holder balances may sum many u128 cells.
@@ -1116,7 +1283,7 @@ impl Check for BlockParentChain {
     }
 }
 
-/// S3: GET /addresses/top → for N addresses, paginate live cells and sum capacities == balance.
+/// S3: Select bounded address samples, then sum every live-cell capacity for each sample.
 pub struct AddressBalanceSpotCheck;
 
 impl Check for AddressBalanceSpotCheck {
@@ -1124,23 +1291,43 @@ impl Check for AddressBalanceSpotCheck {
         "address_balance_spot_check"
     }
     fn description(&self) -> &'static str {
-        "Top address balances match sum of live cells"
+        "Bounded address samples match their exact live-cell balances"
     }
     fn tier(&self) -> CheckTier {
         CheckTier::Sampling
     }
-    fn estimated_total(&self, _ctx: &CheckContext) -> Option<u64> {
-        // We check up to 10 addresses (API returns top N)
-        Some(10)
+    fn estimated_total(&self, ctx: &CheckContext) -> Option<u64> {
+        Some(ctx.sample_count.min(ADDRESS_BALANCE_SAMPLE_MAX) as u64)
     }
     fn run(&self, ctx: &CheckContext, progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
-        let top_addresses: Vec<TopAddressResponse> = api_get(ctx, "addresses/top")?;
+        let requested = ctx.sample_count.min(ADDRESS_BALANCE_SAMPLE_MAX);
+        if requested == 0 {
+            return Ok(CheckResult::pass_with_detail(0, "sample-count is zero"));
+        }
 
-        let n = top_addresses.len().min(10);
+        let candidates: Vec<AddressCandidateResponse> = api_get(
+            ctx,
+            &format!(
+                "addresses/active?limit={}&days={}",
+                ADDRESS_BALANCE_CANDIDATE_LIMIT, ADDRESS_BALANCE_ACTIVE_DAYS
+            ),
+        )?;
+        let candidate_count = candidates.len();
+        let sampled_addresses = select_address_balance_samples(candidates, requested, ctx.seed)?;
+        if sampled_addresses.is_empty() {
+            anyhow::bail!(
+                "no bounded address-balance samples available: candidates={}, max_live_cells_per_address={}, max_transactions_per_address={}",
+                candidate_count,
+                ADDRESS_BALANCE_MAX_LIVE_CELLS_PER_SAMPLE,
+                ADDRESS_BALANCE_MAX_TXS_PER_SAMPLE
+            );
+        }
+
         let mut findings = vec![];
         let mut checked = 0u64;
+        let mut cells_scanned = 0usize;
 
-        for addr in top_addresses.iter().take(n) {
+        for addr in &sampled_addresses {
             let address_balance: AddressBalanceApiRecord =
                 api_get(ctx, &format!("addresses/{}", addr.lock_script_hash))?;
             let stored_balance: i128 = address_balance.balance.parse().map_err(|e| {
@@ -1152,18 +1339,60 @@ impl Check for AddressBalanceSpotCheck {
                 )
             })?;
 
+            if address_balance.live_cells_count < 0 {
+                anyhow::bail!(
+                    "negative liveCellsCount for sampled address: lock_hash={}, live_cells_count={}",
+                    addr.lock_script_hash,
+                    address_balance.live_cells_count
+                );
+            }
+            let stored_live_cells =
+                usize::try_from(address_balance.live_cells_count).map_err(|e| {
+                    anyhow::anyhow!(
+                        "sampled address liveCellsCount does not fit usize: lock_hash={}, live_cells_count={}, error={}",
+                        addr.lock_script_hash,
+                        address_balance.live_cells_count,
+                        e
+                    )
+                })?;
+            let next_declared_total =
+                cells_scanned
+                    .checked_add(stored_live_cells)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("address balance sampled live-cell count overflow")
+                    })?;
+            if stored_live_cells > ADDRESS_BALANCE_MAX_LIVE_CELLS_PER_SAMPLE
+                || next_declared_total > ADDRESS_BALANCE_MAX_TOTAL_LIVE_CELLS
+            {
+                findings.push(Finding {
+                    entity: format!("lock_hash: {}", &addr.lock_script_hash[..18]),
+                    details: vec![format!(
+                        "sample grew beyond verification budget before expansion: candidate_live_cells={}, current_live_cells={}, per_address_limit={}, total_limit={}",
+                        addr.live_cells_count,
+                        stored_live_cells,
+                        ADDRESS_BALANCE_MAX_LIVE_CELLS_PER_SAMPLE,
+                        ADDRESS_BALANCE_MAX_TOTAL_LIVE_CELLS,
+                    )],
+                });
+                checked += 1;
+                progress.inc(1);
+                continue;
+            }
+
             // Paginate through all live cells for this lock_script_hash
             let mut computed_balance: i128 = 0;
+            let mut computed_count = 0usize;
             let mut cursor: Option<String> = None;
+            let mut scan_complete = true;
             loop {
                 let path = match &cursor {
                     Some(c) => format!(
-                        "cells/live?lock_script_hash={}&limit=100&cursor={}",
-                        addr.lock_script_hash, c
+                        "cells/live?lock_script_hash={}&limit={}&cursor={}",
+                        addr.lock_script_hash, ADDRESS_BALANCE_CELL_PAGE_LIMIT, c
                     ),
                     None => format!(
-                        "cells/live?lock_script_hash={}&limit=100",
-                        addr.lock_script_hash
+                        "cells/live?lock_script_hash={}&limit={}",
+                        addr.lock_script_hash, ADDRESS_BALANCE_CELL_PAGE_LIMIT
                     ),
                 };
                 let resp: CellListResponse = api_get(ctx, &path)?;
@@ -1176,24 +1405,93 @@ impl Check for AddressBalanceSpotCheck {
                             e
                         )
                     })?;
-                    computed_balance += cap;
+                    computed_balance = computed_balance.checked_add(cap).ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "computed address balance overflow: lock_hash={}, current={}, capacity={}",
+                            addr.lock_script_hash,
+                            computed_balance,
+                            cap
+                        )
+                    })?;
                 }
+                computed_count = computed_count.checked_add(resp.data.len()).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "computed live-cell count overflow: lock_hash={}",
+                        addr.lock_script_hash
+                    )
+                })?;
+                let total_cells_after_page =
+                    cells_scanned.checked_add(computed_count).ok_or_else(|| {
+                        anyhow::anyhow!("address balance total scanned-cell count overflow")
+                    })?;
+
                 cursor = resp.next_cursor;
+                if computed_count > ADDRESS_BALANCE_MAX_LIVE_CELLS_PER_SAMPLE
+                    || total_cells_after_page > ADDRESS_BALANCE_MAX_TOTAL_LIVE_CELLS
+                {
+                    findings.push(Finding {
+                        entity: format!("lock_hash: {}", &addr.lock_script_hash[..18]),
+                        details: vec![format!(
+                            "live-cell endpoint exceeded verification budget: stored_live_cells={}, scanned_at_least={}, per_address_limit={}, total_limit={}",
+                            stored_live_cells,
+                            computed_count,
+                            ADDRESS_BALANCE_MAX_LIVE_CELLS_PER_SAMPLE,
+                            ADDRESS_BALANCE_MAX_TOTAL_LIVE_CELLS,
+                        )],
+                    });
+                    scan_complete = false;
+                    break;
+                }
+                if cursor.is_some() && computed_count >= stored_live_cells {
+                    findings.push(Finding {
+                        entity: format!("lock_hash: {}", &addr.lock_script_hash[..18]),
+                        details: vec![format!(
+                            "live cells: stored={}, endpoint has more than {}",
+                            stored_live_cells, computed_count
+                        )],
+                    });
+                    scan_complete = false;
+                    break;
+                }
                 if cursor.is_none() {
                     break;
                 }
             }
 
-            if stored_balance != computed_balance {
-                findings.push(Finding {
-                    entity: format!("lock_hash: {}", &addr.lock_script_hash[..18]),
-                    details: vec![format!(
+            cells_scanned = cells_scanned.checked_add(computed_count).ok_or_else(|| {
+                anyhow::anyhow!("address balance total scanned-cell count overflow")
+            })?;
+
+            if scan_complete {
+                let mut details = vec![];
+                if stored_balance != computed_balance {
+                    let delta = computed_balance
+                        .checked_sub(stored_balance)
+                        .ok_or_else(|| {
+                            anyhow::anyhow!(
+                            "address balance delta overflow: lock_hash={}, computed={}, stored={}",
+                            addr.lock_script_hash,
+                            computed_balance,
+                            stored_balance
+                        )
+                        })?;
+                    details.push(format!(
                         "balance: stored={}, computed from cells={} (Δ {})",
-                        stored_balance,
-                        computed_balance,
-                        computed_balance - stored_balance,
-                    )],
-                });
+                        stored_balance, computed_balance, delta,
+                    ));
+                }
+                if stored_live_cells != computed_count {
+                    details.push(format!(
+                        "live cells: stored={}, actual={}",
+                        stored_live_cells, computed_count
+                    ));
+                }
+                if !details.is_empty() {
+                    findings.push(Finding {
+                        entity: format!("lock_hash: {}", &addr.lock_script_hash[..18]),
+                        details,
+                    });
+                }
             }
 
             checked += 1;
@@ -1201,7 +1499,14 @@ impl Check for AddressBalanceSpotCheck {
         }
 
         if findings.is_empty() {
-            Ok(CheckResult::pass(checked))
+            Ok(CheckResult::pass_with_detail(
+                checked,
+                format!(
+                    "{} addresses verified from {} live cells",
+                    checked,
+                    format_number(cells_scanned as u64)
+                ),
+            ))
         } else {
             Ok(CheckResult::fail(checked, findings))
         }
@@ -2543,7 +2848,7 @@ impl Check for TokenActivityTransferBidirectional {
         Some(ctx.sample_count as u64)
     }
     fn run(&self, ctx: &CheckContext, progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
-        let top_addresses: Vec<TopAddressResponse> = api_get(ctx, "addresses/top")?;
+        let top_addresses: Vec<AddressCandidateResponse> = api_get(ctx, "addresses/top")?;
         if top_addresses.is_empty() || ctx.sample_count == 0 {
             return Ok(CheckResult::pass_with_detail(
                 0,
@@ -3537,7 +3842,7 @@ mod tests {
         atomic::{AtomicUsize, Ordering},
         Arc,
     };
-    use wiremock::matchers::{method, path};
+    use wiremock::matchers::{method, path, query_param};
     use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
 
     fn test_ctx() -> CheckContext {
@@ -3788,6 +4093,270 @@ mod tests {
                 .unwrap_or_else(|| json!({ "data": [], "nextCursor": null }));
             ResponseTemplate::new(200).set_body_json(body)
         }
+    }
+
+    fn address_balance_candidate(hash_byte: u8, live_cells_count: i64) -> serde_json::Value {
+        json!({
+            "lockScriptHash": format!("0x{}", format!("{:02x}", hash_byte).repeat(32)),
+            "balance": "100",
+            "liveCellsCount": live_cells_count,
+            "transactionsCount": 1,
+            "lastActivityBlock": 1,
+        })
+    }
+
+    fn address_balance_candidate_record(
+        hash_byte: u8,
+        live_cells_count: i64,
+        transactions_count: i64,
+    ) -> AddressCandidateResponse {
+        AddressCandidateResponse {
+            lock_script_hash: format!("0x{}", format!("{:02x}", hash_byte).repeat(32)),
+            live_cells_count,
+            transactions_count,
+        }
+    }
+
+    #[test]
+    fn test_select_address_balance_samples_is_deterministic_and_bounded() {
+        let candidates = vec![
+            address_balance_candidate_record(0x01, 9_714_014, 9_738_668),
+            address_balance_candidate_record(0x02, 1, 1),
+            address_balance_candidate_record(0x03, 5, 20),
+            address_balance_candidate_record(0x04, 50, 100),
+            address_balance_candidate_record(0x05, 500, 1_000),
+            address_balance_candidate_record(0x06, 900, 2_000),
+            address_balance_candidate_record(0x07, 2, 20_000),
+            address_balance_candidate_record(0x08, 10, 30),
+            address_balance_candidate_record(0x09, 100, 200),
+            address_balance_candidate_record(0x0a, 1_000, 3_000),
+        ];
+
+        let first = select_address_balance_samples(candidates.clone(), 10, 42).unwrap();
+        let second = select_address_balance_samples(candidates, 10, 42).unwrap();
+        let first_hashes: Vec<&str> = first
+            .iter()
+            .map(|candidate| candidate.lock_script_hash.as_str())
+            .collect();
+        let second_hashes: Vec<&str> = second
+            .iter()
+            .map(|candidate| candidate.lock_script_hash.as_str())
+            .collect();
+
+        assert_eq!(first_hashes, second_hashes);
+        assert!(!first_hashes
+            .iter()
+            .any(|hash| hash.contains(&"01".repeat(32))));
+        assert!(!first_hashes
+            .iter()
+            .any(|hash| hash.contains(&"07".repeat(32))));
+        assert!(first.iter().all(|candidate| {
+            candidate.live_cells_count <= ADDRESS_BALANCE_MAX_LIVE_CELLS_PER_SAMPLE as i64
+                && candidate.transactions_count <= ADDRESS_BALANCE_MAX_TXS_PER_SAMPLE
+        }));
+        assert!(
+            first
+                .iter()
+                .map(|candidate| candidate.live_cells_count as usize)
+                .sum::<usize>()
+                <= ADDRESS_BALANCE_MAX_TOTAL_LIVE_CELLS
+        );
+        assert!(
+            first
+                .iter()
+                .map(|candidate| candidate.transactions_count)
+                .sum::<i64>()
+                <= ADDRESS_BALANCE_MAX_TOTAL_TXS
+        );
+    }
+
+    /// Regression: the sampling-tier address check must not expand a whale
+    /// address into millions of `/cells/live` records. Candidate discovery may
+    /// see the address, but the bounded sampler must select the small address.
+    #[test]
+    fn test_address_balance_spot_check_skips_unbounded_whale_address() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let server = runtime.block_on(MockServer::start());
+        let whale_hash = format!("0x{}", "11".repeat(32));
+        let small_hash = format!("0x{}", "22".repeat(32));
+        let whale_cell_calls = Arc::new(AtomicUsize::new(0));
+        let small_cell_calls = Arc::new(AtomicUsize::new(0));
+
+        runtime.block_on(async {
+            let candidates = json!([
+                address_balance_candidate(0x11, 9_714_014),
+                address_balance_candidate(0x22, 1),
+            ]);
+            Mock::given(method("GET"))
+                .and(path("/api/v1/addresses/top"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(candidates.clone()))
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/api/v1/addresses/active"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(candidates))
+                .mount(&server)
+                .await;
+
+            for (hash, live_cells_count) in [(&whale_hash, 9_714_014), (&small_hash, 1)] {
+                Mock::given(method("GET"))
+                    .and(path(format!("/api/v1/addresses/{}", hash)))
+                    .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                        "balance": "100",
+                        "liveCellsCount": live_cells_count,
+                    })))
+                    .mount(&server)
+                    .await;
+            }
+
+            Mock::given(method("GET"))
+                .and(path("/api/v1/cells/live"))
+                .and(query_param("lock_script_hash", whale_hash.clone()))
+                .respond_with(SequentialPagesResponder {
+                    calls: whale_cell_calls.clone(),
+                    pages: vec![json!({
+                        "data": [{ "capacity": "100" }],
+                        "nextCursor": null,
+                    })],
+                })
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/api/v1/cells/live"))
+                .and(query_param("lock_script_hash", small_hash.clone()))
+                .respond_with(SequentialPagesResponder {
+                    calls: small_cell_calls.clone(),
+                    pages: vec![json!({
+                        "data": [{ "capacity": "100" }],
+                        "nextCursor": null,
+                    })],
+                })
+                .mount(&server)
+                .await;
+        });
+
+        let mut ctx = mock_ctx(&server);
+        ctx.sample_count = 10;
+        let result = AddressBalanceSpotCheck
+            .run(&ctx, &ProgressReporter::new(None))
+            .expect("address balance check should run");
+
+        assert!(result.passed, "unexpected findings: {:?}", result.findings);
+        assert_eq!(result.items_checked, 1);
+        assert_eq!(whale_cell_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(small_cell_calls.load(Ordering::SeqCst), 1);
+    }
+
+    /// Regression: the original check compared only capacity. A stale
+    /// `live_cells_count` therefore passed whenever the remaining cells happened
+    /// to sum to the stored balance.
+    #[test]
+    fn test_address_balance_spot_check_detects_live_cell_count_mismatch() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let server = runtime.block_on(MockServer::start());
+        let address_hash = format!("0x{}", "33".repeat(32));
+
+        runtime.block_on(async {
+            let candidates = json!([address_balance_candidate(0x33, 2)]);
+            Mock::given(method("GET"))
+                .and(path("/api/v1/addresses/top"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(candidates.clone()))
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/api/v1/addresses/active"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(candidates))
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path(format!("/api/v1/addresses/{}", address_hash)))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "balance": "100",
+                    "liveCellsCount": 2,
+                })))
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/api/v1/cells/live"))
+                .and(query_param("lock_script_hash", address_hash))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "data": [{ "capacity": "100" }],
+                    "nextCursor": null,
+                })))
+                .mount(&server)
+                .await;
+        });
+
+        let result = AddressBalanceSpotCheck
+            .run(&mock_ctx(&server), &ProgressReporter::new(None))
+            .expect("address balance check should run");
+
+        assert!(!result.passed);
+        assert!(result.findings[0]
+            .details
+            .iter()
+            .any(|detail| detail.contains("live cells: stored=2, actual=1")));
+    }
+
+    /// The resource bound must not trust a corrupt, under-reported count. Once
+    /// the endpoint proves there are more cells than declared, the check stops
+    /// immediately and reports the invariant violation.
+    #[test]
+    fn test_address_balance_spot_check_stops_when_actual_cells_exceed_declared_count() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let server = runtime.block_on(MockServer::start());
+        let address_hash = format!("0x{}", "44".repeat(32));
+        let cell_calls = Arc::new(AtomicUsize::new(0));
+
+        runtime.block_on(async {
+            let candidates = json!([address_balance_candidate(0x44, 1)]);
+            Mock::given(method("GET"))
+                .and(path("/api/v1/addresses/active"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(candidates))
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path(format!("/api/v1/addresses/{}", address_hash)))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "balance": "100",
+                    "liveCellsCount": 1,
+                })))
+                .mount(&server)
+                .await;
+
+            let first_page_cells: Vec<_> = (0..ADDRESS_BALANCE_CELL_PAGE_LIMIT)
+                .map(|_| json!({ "capacity": "1" }))
+                .collect();
+            Mock::given(method("GET"))
+                .and(path("/api/v1/cells/live"))
+                .and(query_param("lock_script_hash", address_hash))
+                .respond_with(SequentialPagesResponder {
+                    calls: cell_calls.clone(),
+                    pages: vec![
+                        json!({
+                            "data": first_page_cells,
+                            "nextCursor": "more_cells_exist",
+                        }),
+                        json!({
+                            "data": [{ "capacity": "1" }],
+                            "nextCursor": null,
+                        }),
+                    ],
+                })
+                .mount(&server)
+                .await;
+        });
+
+        let result = AddressBalanceSpotCheck
+            .run(&mock_ctx(&server), &ProgressReporter::new(None))
+            .expect("address balance check should run");
+
+        assert!(!result.passed);
+        assert_eq!(cell_calls.load(Ordering::SeqCst), 1);
+        assert!(result.findings[0]
+            .details
+            .iter()
+            .any(|detail| detail.contains("stored=1, endpoint has more than 100")));
     }
 
     fn decoy_address_tokens_page(count: usize) -> Vec<serde_json::Value> {

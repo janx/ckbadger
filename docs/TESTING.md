@@ -23,6 +23,10 @@ ckbadger verify --list-checks             # List all checks
 ckbadger verify --checks genesis_block,dao_statistics_sane  # Specific checks
 ```
 
+When `-C` points at an orchestrator root, `verify` runs every `[[network]]` in
+declaration order. Point `-C` at a network subdirectory (for example,
+`ckbadger -C work/testnet verify`) to verify only that network.
+
 ### Check Tiers
 
 | Tier                  | Checks | Runtime | What it validates                                                                                                                                                                                                                               |
@@ -32,6 +36,22 @@ ckbadger verify --checks genesis_block,dao_statistics_sane  # Specific checks
 | **Explorer** (X1-X26) | 26     | minutes | Compare last 30 days against official CKB explorer API (tx count, DAO deposit, hash rate, difficulty, knowledge size, uncle rate, cell counts, supply, circulation, mining reward, treasury)                                                    |
 
 `--depth fast` runs Fast tier only. `--depth sampling` runs all three tiers (Fast + Sampling + Explorer). Explorer checks can be skipped with `--no-explorer`.
+
+`address_balance_spot_check` is deliberately bounded. It deterministically
+selects at most 10 recently active addresses across live-cell-count bands, then
+checks every live cell of each selected address exactly. Candidates with more
+than 1,000 live cells or 10,000 transactions are excluded; the complete sample
+is capped at 5,000 live cells and 50,000 transactions. For each selected
+address, both of these invariants must hold:
+
+```text
+stored balance          == sum(capacity of all live cells)
+stored liveCellsCount   == number of live cells returned
+```
+
+If the live-cell endpoint returns more cells than its stored count declares,
+the check fails at the first proving page instead of expanding into an
+unbounded scan.
 
 > **Scope:** `verify` covers only chain-derived data (the domain + append-only stores). The **network store** (`net_nodes` / `net_stats`, written by the opt-in `ckbadger-crawler`) is **outside** all 55 checks — it holds observational, non-chain p2p-crawler data that is non-deterministic and not subject to chain-integrity invariants, so none of these checks apply to it.
 
@@ -57,7 +77,10 @@ OPTIONS:
 
 ### Explorer Response Cache
 
-Explorer checks cache HTTP responses to `.verify-cache/`. Fresh cache (< 5 min) is reused. Stale cache is re-fetched; on HTTP failure, stale data is used with a warning.
+Explorer checks cache HTTP responses in each network workdir's `.verify-cache/`,
+so co-resident networks never share explorer data. Fresh cache (< 5 min) is
+reused. Stale cache is re-fetched; on HTTP failure, stale data is used with a
+warning.
 
 ### Adding a Check
 

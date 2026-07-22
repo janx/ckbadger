@@ -934,6 +934,16 @@ async fn cmd_status_orchestrator(root: &Path) -> Result<()> {
 // verify command
 // ---------------------------------------------------------------------------
 
+#[derive(Debug)]
+struct VerifyTarget {
+    network: String,
+    workdir: PathBuf,
+    api_url: String,
+    rpc_url: String,
+    explorer_url: String,
+    cache_dir: PathBuf,
+}
+
 /// Explorer API base for verify, network-aware, failing fast on unknown nets.
 fn verify_explorer_url(network: &str) -> Result<String> {
     ckbadger_common::network::explorer_api_url(network)
@@ -941,9 +951,56 @@ fn verify_explorer_url(network: &str) -> Result<String> {
         .ok_or_else(|| anyhow::anyhow!("no explorer API URL for network '{network}'"))
 }
 
+fn build_verify_target(
+    network: &str,
+    workdir: PathBuf,
+    config: &CkbadgerConfig,
+) -> Result<VerifyTarget> {
+    Ok(VerifyTarget {
+        network: network.to_string(),
+        api_url: format!("http://{}:{}/api/v1", config.api.host, config.api.port),
+        rpc_url: config.ckb.rpc_url.clone(),
+        explorer_url: verify_explorer_url(network)?,
+        cache_dir: workdir.join(".verify-cache"),
+        workdir,
+    })
+}
+
+/// Resolve and validate every network before starting any potentially long-running
+/// verification. A plain workdir produces one target; an orchestrator root produces
+/// one target per `[[network]]`, in declaration order.
+fn resolve_verify_targets(workdir: &Path) -> Result<Vec<VerifyTarget>> {
+    if !is_orchestrator(workdir) {
+        let config = load_config(workdir)?;
+        return Ok(vec![build_verify_target(
+            &config.ckb.network,
+            workdir.to_path_buf(),
+            &config,
+        )?]);
+    }
+
+    let orchestrator = load_orchestrator_config(workdir)?;
+    let mut targets = Vec::with_capacity(orchestrator.networks.len());
+    for entry in &orchestrator.networks {
+        let network_dir = network_workdir(workdir, entry);
+        let config = load_config(&network_dir).with_context(|| {
+            format!(
+                "verify: reading config for network '{}' at {}",
+                entry.name,
+                network_dir.display()
+            )
+        })?;
+        let network = validate_network_entry(entry, &config.ckb.network)?;
+        targets.push(build_verify_target(network, network_dir, &config)?);
+    }
+    Ok(targets)
+}
+
 #[cfg(test)]
 mod verify_url_tests {
     use super::*;
+    use tempfile::TempDir;
+
     #[test]
     fn explorer_url_is_network_aware() {
         assert_eq!(
@@ -955,6 +1012,68 @@ mod verify_url_tests {
             "https://testnet-api.explorer.nervos.org"
         );
         assert!(verify_explorer_url("devnet").is_err());
+    }
+
+    #[test]
+    fn orchestrator_targets_each_declared_network_in_order() {
+        let root = TempDir::new().unwrap();
+        std::fs::write(
+            root.path().join("ckbadger.toml"),
+            "[[network]]\nname = \"mainnet\"\n\n[[network]]\nname = \"testnet\"\ndir = \"chains/test\"\n",
+        )
+        .unwrap();
+
+        let mainnet = root.path().join("mainnet");
+        let testnet = root.path().join("chains/test");
+        std::fs::create_dir_all(&mainnet).unwrap();
+        std::fs::create_dir_all(&testnet).unwrap();
+        std::fs::write(
+            mainnet.join("config.toml"),
+            default_config_toml("mainnet", 8101),
+        )
+        .unwrap();
+        std::fs::write(
+            testnet.join("config.toml"),
+            default_config_toml("testnet", 8102),
+        )
+        .unwrap();
+
+        let targets = resolve_verify_targets(root.path()).unwrap();
+
+        assert_eq!(targets.len(), 2);
+        assert_eq!(targets[0].network, "mainnet");
+        assert_eq!(targets[0].workdir, mainnet);
+        assert_eq!(targets[0].api_url, "http://127.0.0.1:8101/api/v1");
+        assert_eq!(targets[0].cache_dir, mainnet.join(".verify-cache"));
+        assert_eq!(targets[1].network, "testnet");
+        assert_eq!(targets[1].workdir, testnet);
+        assert_eq!(targets[1].api_url, "http://127.0.0.1:8102/api/v1");
+        assert_eq!(targets[1].cache_dir, testnet.join(".verify-cache"));
+    }
+
+    #[test]
+    fn orchestrator_rejects_child_network_mismatch_before_verify() {
+        let root = TempDir::new().unwrap();
+        std::fs::write(
+            root.path().join("ckbadger.toml"),
+            "[[network]]\nname = \"mainnet\"\n",
+        )
+        .unwrap();
+        let mainnet = root.path().join("mainnet");
+        std::fs::create_dir_all(&mainnet).unwrap();
+        std::fs::write(
+            mainnet.join("config.toml"),
+            default_config_toml("testnet", 8102),
+        )
+        .unwrap();
+
+        let error = resolve_verify_targets(root.path()).unwrap_err().to_string();
+        assert!(
+            error.contains("network mismatch"),
+            "unexpected error: {error}"
+        );
+        assert!(error.contains("mainnet"), "unexpected error: {error}");
+        assert!(error.contains("testnet"), "unexpected error: {error}");
     }
 }
 
@@ -1099,32 +1218,46 @@ mod tui_config_tests {
 }
 
 async fn cmd_verify(workdir: &Path, args: &VerifyArgs) -> Result<()> {
-    let config = load_config(workdir)?;
-
     let depth = match args.depth.to_lowercase().as_str() {
         "fast" => indexer_verify::checks::CheckTier::Fast,
         "sampling" => indexer_verify::checks::CheckTier::Sampling,
         _ => bail!("Invalid depth: {}. Use fast or sampling", args.depth),
     };
 
-    let verify_args = indexer_verify::VerifyArgs {
-        api_url: format!("http://{}:{}/api/v1", config.api.host, config.api.port),
-        rpc_url: Some(config.ckb.rpc_url.clone()),
-        explorer_url: verify_explorer_url(&config.ckb.network)?,
-        no_explorer: false,
-        depth,
-        sample_count: 1000,
-        seed: 42,
-        tolerance: 0.001,
-        format: indexer_verify::OutputFormat::Text,
-        checks: None,
-        list_checks: args.list_checks,
-        cache_dir: None,
-    };
+    let targets = resolve_verify_targets(workdir)?;
+    let show_network = targets.len() > 1;
 
-    tokio::task::spawn_blocking(move || indexer_verify::run(verify_args))
-        .await
-        .expect("verify task panicked")?;
+    for (index, target) in targets.into_iter().enumerate() {
+        // The check registry is identical for every network, so list it once after
+        // all target configs have been validated.
+        if args.list_checks && index > 0 {
+            break;
+        }
+        if show_network && !args.list_checks {
+            println!("[{}] {}", target.network, target.workdir.display());
+        }
+
+        let network = target.network.clone();
+        let verify_args = indexer_verify::VerifyArgs {
+            api_url: target.api_url,
+            rpc_url: Some(target.rpc_url),
+            explorer_url: target.explorer_url,
+            no_explorer: false,
+            depth,
+            sample_count: 1000,
+            seed: 42,
+            tolerance: 0.001,
+            format: indexer_verify::OutputFormat::Text,
+            checks: None,
+            list_checks: args.list_checks,
+            cache_dir: Some(target.cache_dir.to_string_lossy().into_owned()),
+        };
+
+        tokio::task::spawn_blocking(move || indexer_verify::run(verify_args))
+            .await
+            .with_context(|| format!("verify task failed for network '{network}'"))?
+            .with_context(|| format!("verification failed for network '{network}'"))?;
+    }
 
     Ok(())
 }
@@ -1728,6 +1861,25 @@ mod tests {
         let cfg = load_config(&root.join("testnet")).unwrap();
         assert_eq!(cfg.ckb.network, "testnet");
         assert_eq!(cfg.api.port, 8102);
+    }
+
+    // -- verify command --
+
+    #[tokio::test]
+    async fn test_verify_accepts_orchestrator_root() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().to_path_buf();
+        cmd_init(&root, &InitArgs { with_testnet: true }).unwrap();
+
+        cmd_verify(
+            &root,
+            &VerifyArgs {
+                depth: "sampling".to_string(),
+                list_checks: true,
+            },
+        )
+        .await
+        .unwrap();
     }
 
     // -- orchestrator binding fail-fast --
