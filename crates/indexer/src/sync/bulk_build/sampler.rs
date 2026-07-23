@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use ckbadger_store::CkbadgerStore;
 
+use crate::runtime_diag::{aggregate_chain_store_memory, ChainStoreMemorySnapshot};
 use crate::sys_info;
 
 #[derive(Clone, Debug)]
@@ -27,6 +28,7 @@ pub(crate) struct SamplerSnapshot {
     #[allow(dead_code)]
     pub disk_in_flight: Option<u64>,
     pub disk_state: Option<String>,
+    pub store_memory: ChainStoreMemorySnapshot,
 }
 
 impl Default for SamplerSnapshot {
@@ -48,6 +50,7 @@ impl Default for SamplerSnapshot {
             disk_avg_queue_depth: None,
             disk_in_flight: None,
             disk_state: Some("unavailable".to_string()),
+            store_memory: ChainStoreMemorySnapshot::default(),
         }
     }
 }
@@ -59,8 +62,23 @@ pub(crate) struct BackgroundSampler {
 }
 
 impl BackgroundSampler {
-    pub(crate) fn new(store: Arc<CkbadgerStore>, interval: Duration, disk_device: String) -> Self {
-        let (tx, rx) = tokio::sync::watch::channel(SamplerSnapshot::default());
+    pub(crate) fn new(
+        domain_store: Arc<CkbadgerStore>,
+        append_only_store: Arc<CkbadgerStore>,
+        interval: Duration,
+        disk_device: String,
+    ) -> Self {
+        let initial_store_memory = aggregate_chain_store_memory(
+            &domain_store.memory_stats(),
+            &append_only_store.memory_stats(),
+        )
+        .unwrap_or_else(|err| {
+            panic!("failed to aggregate initial chain store memory snapshot: {err}")
+        });
+        let (tx, rx) = tokio::sync::watch::channel(SamplerSnapshot {
+            store_memory: initial_store_memory,
+            ..SamplerSnapshot::default()
+        });
         let shutdown = Arc::new(AtomicBool::new(false));
         let shutdown_flag = Arc::clone(&shutdown);
 
@@ -69,13 +87,19 @@ impl BackgroundSampler {
             .spawn(move || {
                 let mut disk_tracker = sys_info::DiskStatsTracker::new(disk_device);
                 while !shutdown_flag.load(Ordering::Relaxed) {
-                    std::thread::sleep(interval);
-                    let stats = store.memory_stats();
+                    let domain_stats = domain_store.memory_stats();
+                    let append_only_stats = append_only_store.memory_stats();
+                    let store_memory =
+                        aggregate_chain_store_memory(&domain_stats, &append_only_stats)
+                            .unwrap_or_else(|err| {
+                                panic!("failed to aggregate chain store memory snapshot: {err}")
+                            });
                     let env = sys_info::read_batch_environment(&mut disk_tracker);
                     let snapshot = SamplerSnapshot {
-                        compaction_pending_mb: stats.compaction_pending_bytes / (1024 * 1024),
-                        l0_files: stats.l0_files_count,
-                        imm_memtables: stats.immutable_memtables,
+                        compaction_pending_mb: store_memory.total_compaction_pending_bytes
+                            / (1024 * 1024),
+                        l0_files: store_memory.l0_files_count,
+                        imm_memtables: store_memory.immutable_memtables,
                         load_avg_1m: env.load_avg_1m,
                         mem_available_mb: env.mem_available_mb,
                         disk_read_mb: env.disk_read_mb,
@@ -89,10 +113,12 @@ impl BackgroundSampler {
                         disk_avg_queue_depth: env.disk_avg_queue_depth,
                         disk_in_flight: env.disk_in_flight,
                         disk_state: env.disk_state,
+                        store_memory,
                     };
                     if tx.send(snapshot).is_err() {
                         break;
                     }
+                    std::thread::sleep(interval);
                 }
             })
             .expect("failed to spawn background sampler thread");
@@ -144,6 +170,7 @@ mod tests {
         assert_eq!(snap.disk_avg_queue_depth, None);
         assert_eq!(snap.disk_in_flight, None);
         assert_eq!(snap.disk_state.as_deref(), Some("unavailable"));
+        assert_eq!(snap.store_memory, ChainStoreMemorySnapshot::default());
     }
 
     #[test]

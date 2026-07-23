@@ -456,6 +456,18 @@ pub struct MemoryStatsData {
     pub rocksdb_table_readers_bytes: u64,
     /// Total RocksDB memory usage
     pub rocksdb_total_bytes: u64,
+    /// Domain-store share of RocksDB memtable memory
+    #[serde(default)]
+    pub rocksdb_domain_memtable_bytes: u64,
+    /// Append-only-store share of RocksDB memtable memory
+    #[serde(default)]
+    pub rocksdb_append_only_memtable_bytes: u64,
+    /// Domain-store share of RocksDB table-reader memory
+    #[serde(default)]
+    pub rocksdb_domain_table_readers_bytes: u64,
+    /// Append-only-store share of RocksDB table-reader memory
+    #[serde(default)]
+    pub rocksdb_append_only_table_readers_bytes: u64,
 
     /// Number of block headers cached
     pub block_headers_count: u64,
@@ -468,6 +480,12 @@ pub struct MemoryStatsData {
     /// Estimated bytes pending compaction
     #[serde(default)]
     pub compaction_pending_bytes: u64,
+    /// Domain-store bytes pending compaction
+    #[serde(default)]
+    pub domain_compaction_pending_bytes: u64,
+    /// Append-only-store bytes pending compaction
+    #[serde(default)]
+    pub append_only_compaction_pending_bytes: u64,
     /// Number of currently running compactions
     #[serde(default)]
     pub num_running_compactions: u64,
@@ -665,10 +683,16 @@ mod tests {
             rocksdb_block_cache_bytes: 512_000_000,
             rocksdb_table_readers_bytes: 100_000_000,
             rocksdb_total_bytes: 1_612_000_000,
+            rocksdb_domain_memtable_bytes: 600_000_000,
+            rocksdb_append_only_memtable_bytes: 400_000_000,
+            rocksdb_domain_table_readers_bytes: 60_000_000,
+            rocksdb_append_only_table_readers_bytes: 40_000_000,
             block_headers_count: 6_000_000,
             bulk_sync_cell_cache_enabled: true,
             bulk_sync_mode: true,
             compaction_pending_bytes: 500_000,
+            domain_compaction_pending_bytes: 300_000,
+            append_only_compaction_pending_bytes: 200_000,
             num_running_compactions: 2,
             sst_files_size: 10_000_000_000,
             l0_files_count: 15,
@@ -696,6 +720,9 @@ mod tests {
         assert_eq!(parsed.bulk_sync_mode, stats.bulk_sync_mode);
         assert_eq!(parsed.sst_files_size, stats.sst_files_size);
         assert_eq!(parsed.consumed_cells_bytes_source, "live");
+        assert_eq!(parsed.rocksdb_domain_memtable_bytes, 600_000_000);
+        assert_eq!(parsed.rocksdb_append_only_memtable_bytes, 400_000_000);
+        assert_eq!(parsed.append_only_compaction_pending_bytes, 200_000);
         assert_eq!(parsed.top_cf_sizes.len(), 2);
         assert_eq!(parsed.total_transactions, 50_000_000);
     }

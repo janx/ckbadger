@@ -491,8 +491,19 @@ pub async fn run_indexer_sync(mut config: Config) -> Result<()> {
             info!(
                 run_id = %indexer_for_progress.run_id(),
                 memtable_mb = memory_stats.rocksdb_memtable_bytes / (1024 * 1024),
+                domain_memtable_mb =
+                    memory_stats.rocksdb_domain_memtable_bytes / (1024 * 1024),
+                append_only_memtable_mb =
+                    memory_stats.rocksdb_append_only_memtable_bytes / (1024 * 1024),
                 block_cache_mb = memory_stats.rocksdb_block_cache_bytes / (1024 * 1024),
+                table_readers_mb = memory_stats.rocksdb_table_readers_bytes / (1024 * 1024),
+                wbm_usage_mb = memory_stats.wbm_usage_bytes / (1024 * 1024),
+                wbm_budget_mb = memory_stats.wbm_budget_bytes / (1024 * 1024),
                 compaction_pending_mb = memory_stats.compaction_pending_bytes / (1024 * 1024),
+                domain_compaction_pending_mb =
+                    memory_stats.domain_compaction_pending_bytes / (1024 * 1024),
+                append_only_compaction_pending_mb =
+                    memory_stats.append_only_compaction_pending_bytes / (1024 * 1024),
                 running_compactions = memory_stats.num_running_compactions,
                 l0_files = memory_stats.l0_files_count,
                 l0_max = memory_stats.l0_files_max,

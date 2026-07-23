@@ -4,6 +4,14 @@ mod supervisor;
 #[cfg(test)]
 mod build_version_format;
 
+// Match CKB's allocator configuration. The unprefixed malloc symbols make the
+// same allocator own Rust allocations and RocksDB's C++ allocations, so large
+// bulk-build WriteBatch buffers can be purged instead of remaining stranded in
+// the system allocator's arenas.
+#[cfg(all(not(target_env = "msvc"), not(target_os = "macos")))]
+#[global_allocator]
+static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
@@ -2625,6 +2633,15 @@ data_dir = "data"
             msg.contains("launchctl") || msg.contains("systemd"),
             "error should include fix instructions: {msg}"
         );
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn test_cli_process_exposes_jemalloc_stats() {
+        let snapshot = ckbadger_indexer::runtime_diag::read_process_memory_snapshot().unwrap();
+        assert!(snapshot.jemalloc_stats_available);
+        assert!(snapshot.jemalloc_allocated_bytes > 0);
+        assert!(snapshot.jemalloc_resident_bytes > 0);
     }
 }
 

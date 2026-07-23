@@ -84,6 +84,30 @@ pub struct BatchSample {
     pub timestamp_utc: String,
     pub load_avg_1m: f64,
     pub mem_available_mb: u64,
+    pub process_committed_bytes: u64,
+    pub process_rss_bytes: u64,
+    pub process_rss_anon_bytes: u64,
+    pub process_rss_file_bytes: u64,
+    pub process_rss_shmem_bytes: u64,
+    pub process_swap_bytes: u64,
+    pub process_high_water_rss_bytes: u64,
+    pub jemalloc_stats_available: bool,
+    pub jemalloc_allocated_bytes: u64,
+    pub jemalloc_active_bytes: u64,
+    pub jemalloc_resident_bytes: u64,
+    pub jemalloc_mapped_bytes: u64,
+    pub jemalloc_retained_bytes: u64,
+    pub jemalloc_metadata_bytes: u64,
+    pub rocksdb_domain_memtable_bytes: u64,
+    pub rocksdb_append_only_memtable_bytes: u64,
+    pub rocksdb_shared_block_cache_bytes: u64,
+    pub rocksdb_domain_table_readers_bytes: u64,
+    pub rocksdb_append_only_table_readers_bytes: u64,
+    pub rocksdb_total_memory_bytes: u64,
+    pub rocksdb_domain_compaction_pending_bytes: u64,
+    pub rocksdb_append_only_compaction_pending_bytes: u64,
+    pub rocksdb_shared_wbm_usage_bytes: u64,
+    pub rocksdb_shared_wbm_budget_bytes: u64,
     pub disk_read_mb: f64,
     pub disk_write_mb: f64,
     pub disk_read_mb_s: Option<f64>,
@@ -165,6 +189,30 @@ impl BatchSample {
             timestamp_utc,
             load_avg_1m,
             mem_available_mb,
+            process_committed_bytes: 0,
+            process_rss_bytes: 0,
+            process_rss_anon_bytes: 0,
+            process_rss_file_bytes: 0,
+            process_rss_shmem_bytes: 0,
+            process_swap_bytes: 0,
+            process_high_water_rss_bytes: 0,
+            jemalloc_stats_available: false,
+            jemalloc_allocated_bytes: 0,
+            jemalloc_active_bytes: 0,
+            jemalloc_resident_bytes: 0,
+            jemalloc_mapped_bytes: 0,
+            jemalloc_retained_bytes: 0,
+            jemalloc_metadata_bytes: 0,
+            rocksdb_domain_memtable_bytes: 0,
+            rocksdb_append_only_memtable_bytes: 0,
+            rocksdb_shared_block_cache_bytes: 0,
+            rocksdb_domain_table_readers_bytes: 0,
+            rocksdb_append_only_table_readers_bytes: 0,
+            rocksdb_total_memory_bytes: 0,
+            rocksdb_domain_compaction_pending_bytes: 0,
+            rocksdb_append_only_compaction_pending_bytes: 0,
+            rocksdb_shared_wbm_usage_bytes: 0,
+            rocksdb_shared_wbm_budget_bytes: 0,
             disk_read_mb,
             disk_write_mb,
             disk_read_mb_s: None,
@@ -2292,6 +2340,37 @@ mod tests {
         assert!(samples.contains("\"prefetch_retained_block_bytes\":11"));
         assert!(samples.contains("\"flush_reserved_bytes\":22"));
         assert!(samples.contains("\"accounted_retained_bytes\":33"));
+    }
+
+    #[test]
+    fn test_batch_samples_persist_process_allocator_and_store_memory_attribution() {
+        let dir = TempDir::new().unwrap();
+        let mut run =
+            BulkSyncPerfRun::start_for_test(dir.path(), "run-1", TEST_BUILD_VERSION).unwrap();
+        let mut sample = test_batch_sample(10, 1.0, 40.0, 100, 4, 1);
+        sample.process_committed_bytes = 11;
+        sample.process_rss_bytes = 12;
+        sample.process_swap_bytes = 13;
+        sample.jemalloc_stats_available = true;
+        sample.jemalloc_allocated_bytes = 14;
+        sample.jemalloc_resident_bytes = 15;
+        sample.rocksdb_domain_memtable_bytes = 16;
+        sample.rocksdb_append_only_memtable_bytes = 17;
+        sample.rocksdb_shared_block_cache_bytes = 18;
+        sample.rocksdb_shared_wbm_usage_bytes = 19;
+        run.record_batch_sample(sample).unwrap();
+
+        let samples = std::fs::read_to_string(dir.path().join("run-1/samples.jsonl")).unwrap();
+        assert!(samples.contains("\"process_committed_bytes\":11"));
+        assert!(samples.contains("\"process_rss_bytes\":12"));
+        assert!(samples.contains("\"process_swap_bytes\":13"));
+        assert!(samples.contains("\"jemalloc_stats_available\":true"));
+        assert!(samples.contains("\"jemalloc_allocated_bytes\":14"));
+        assert!(samples.contains("\"jemalloc_resident_bytes\":15"));
+        assert!(samples.contains("\"rocksdb_domain_memtable_bytes\":16"));
+        assert!(samples.contains("\"rocksdb_append_only_memtable_bytes\":17"));
+        assert!(samples.contains("\"rocksdb_shared_block_cache_bytes\":18"));
+        assert!(samples.contains("\"rocksdb_shared_wbm_usage_bytes\":19"));
     }
 
     #[test]

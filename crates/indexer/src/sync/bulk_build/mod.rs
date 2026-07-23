@@ -122,6 +122,7 @@ impl BulkBuildEngine {
         let disk_device = crate::sys_info::detect_disk_device(&indexer.config.domain_data_path);
         let sampler = sampler::BackgroundSampler::new(
             indexer.writer.store().clone(),
+            indexer.append_only_store.clone(),
             std::time::Duration::from_millis(200),
             disk_device,
         );
@@ -241,13 +242,19 @@ impl BulkBuildEngine {
                 before_batch_flush_bytes,
                 None,
             )?;
-            let process_memory =
-                memory_guard.checkpoint("before_batch", current_block, &before_batch_memory)?;
+            let before_batch_store_memory = sampler.latest().store_memory;
+            let process_memory = memory_guard.checkpoint(
+                "before_batch",
+                current_block,
+                &before_batch_memory,
+                &before_batch_store_memory,
+            )?;
             let safe_max_batch_bytes = memory_guard.safe_batch_input_bytes(
                 process_memory,
                 controller.max_batch_bytes(),
                 current_block,
                 &before_batch_memory,
+                &before_batch_store_memory,
             )?;
 
             // Enter the batch span for the synchronous build + record section.
@@ -280,7 +287,13 @@ impl BulkBuildEngine {
                 Some(pending_flush_bytes),
             )?;
             let memory_accounting_elapsed = memory_accounting_started.elapsed();
-            memory_guard.checkpoint("after_batch_build", current_block, &after_build_memory)?;
+            let after_build_store_memory = sampler.latest().store_memory;
+            memory_guard.checkpoint(
+                "after_batch_build",
+                current_block,
+                &after_build_memory,
+                &after_build_store_memory,
+            )?;
 
             // Read the most recent flush_ms from the worker (non-blocking).
             prev_flush_ms = flush_channel.last_flush_ms();
@@ -362,6 +375,35 @@ impl BulkBuildEngine {
             sample.disk_avg_queue_depth = snap.disk_avg_queue_depth;
             sample.disk_in_flight = snap.disk_in_flight;
             sample.disk_state = disk_state.clone();
+            sample.process_committed_bytes = process_memory.committed_bytes()?;
+            sample.process_rss_bytes = process_memory.rss_bytes;
+            sample.process_rss_anon_bytes = process_memory.rss_anon_bytes;
+            sample.process_rss_file_bytes = process_memory.rss_file_bytes;
+            sample.process_rss_shmem_bytes = process_memory.rss_shmem_bytes;
+            sample.process_swap_bytes = process_memory.swap_bytes;
+            sample.process_high_water_rss_bytes = process_memory.high_water_rss_bytes;
+            sample.jemalloc_stats_available = process_memory.jemalloc_stats_available;
+            sample.jemalloc_allocated_bytes = process_memory.jemalloc_allocated_bytes;
+            sample.jemalloc_active_bytes = process_memory.jemalloc_active_bytes;
+            sample.jemalloc_resident_bytes = process_memory.jemalloc_resident_bytes;
+            sample.jemalloc_mapped_bytes = process_memory.jemalloc_mapped_bytes;
+            sample.jemalloc_retained_bytes = process_memory.jemalloc_retained_bytes;
+            sample.jemalloc_metadata_bytes = process_memory.jemalloc_metadata_bytes;
+            sample.rocksdb_domain_memtable_bytes = snap.store_memory.domain_memtable_bytes;
+            sample.rocksdb_append_only_memtable_bytes =
+                snap.store_memory.append_only_memtable_bytes;
+            sample.rocksdb_shared_block_cache_bytes = snap.store_memory.shared_block_cache_bytes;
+            sample.rocksdb_domain_table_readers_bytes =
+                snap.store_memory.domain_table_readers_bytes;
+            sample.rocksdb_append_only_table_readers_bytes =
+                snap.store_memory.append_only_table_readers_bytes;
+            sample.rocksdb_total_memory_bytes = snap.store_memory.total_memory_bytes;
+            sample.rocksdb_domain_compaction_pending_bytes =
+                snap.store_memory.domain_compaction_pending_bytes;
+            sample.rocksdb_append_only_compaction_pending_bytes =
+                snap.store_memory.append_only_compaction_pending_bytes;
+            sample.rocksdb_shared_wbm_usage_bytes = snap.store_memory.shared_wbm_usage_bytes;
+            sample.rocksdb_shared_wbm_budget_bytes = snap.store_memory.shared_wbm_budget_bytes;
             sample.txs = batch_stats.tx_count;
             sample.cells = u64::try_from(batch_stats.cells_created).map_err(|_| {
                 anyhow!(
@@ -583,6 +625,7 @@ impl BulkBuildEngine {
             "before_finalize",
             indexer.progress.current(),
             &before_finalize_memory,
+            &sampler.latest().store_memory,
         )?;
 
         // Drop the buffer handle (and its receiver) to signal prefetch to stop.

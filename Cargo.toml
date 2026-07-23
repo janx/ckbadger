@@ -95,6 +95,10 @@ tentacle-secio = "=0.6.2"
 
 # System
 libc = "0.2"
+jemalloc-ctl = { package = "tikv-jemalloc-ctl", version = "0.5.0" }
+tikv-jemallocator = { version = "0.5.0", features = [
+    "unprefixed_malloc_on_supported_platforms",
+] }
 
 # Embedded KV store
 rocksdb = "0.24"
