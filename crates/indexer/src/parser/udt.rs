@@ -1,8 +1,29 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
+use std::sync::OnceLock;
 
 use crate::rpc::{parse_hex_to_bytes, CellOutput, TransactionView};
 
 use super::script::ScriptParser;
+
+mod bundled_udt {
+    pub const EXTRA_UDT_CODE_HASHES: &[u8] = include_bytes!(concat!(
+        env!("OUT_DIR"),
+        "/bundled_udt_script_code_hashes.json"
+    ));
+}
+
+static XUDT_COMPATIBLE_CODE_HASHES: OnceLock<HashSet<Vec<u8>>> = OnceLock::new();
+
+fn xudt_compatible_code_hashes() -> &'static HashSet<Vec<u8>> {
+    XUDT_COMPATIBLE_CODE_HASHES.get_or_init(|| {
+        let encoded: Vec<String> = serde_json::from_slice(bundled_udt::EXTRA_UDT_CODE_HASHES)
+            .expect("bundled UDT script code hashes JSON is invalid — build.rs bug");
+        encoded
+            .into_iter()
+            .map(|code_hash| parse_hex_to_bytes(&code_hash))
+            .collect()
+    })
+}
 
 pub const SUDT_CODE_HASH: &str =
     "0x5e7a36a77e68eecc013dfa2fe6a23f3b6c344b04005808694ae6dd45eea4cfd5";
@@ -83,6 +104,7 @@ impl UdtParser {
         match PROTOCOL_REGISTRY.get(code_hash) {
             Some(ProtocolScript::Sudt) => Some(UdtStandard::Sudt),
             Some(ProtocolScript::Xudt) => Some(UdtStandard::Xudt),
+            _ if xudt_compatible_code_hashes().contains(code_hash) => Some(UdtStandard::Xudt),
             _ => None,
         }
     }
@@ -416,6 +438,20 @@ mod tests {
     }
 
     #[test]
+    fn test_is_udt_code_hash_bytes_bundled_xudt_compatible() {
+        for code_hash in [
+            "0xcc9dc33ef234e14bc788c43a4848556a5fb16401a04662fc55db9bb201987037",
+            "0x1142755a044bf2ee358cba9f2da187ce928c91cd4dc8692ded0337efa677d21a",
+        ] {
+            let code_hash = parse_hex_to_bytes(code_hash);
+            assert_eq!(
+                UdtParser::is_udt_code_hash_bytes(&code_hash, 1),
+                Some(UdtStandard::Xudt)
+            );
+        }
+    }
+
+    #[test]
     fn test_parse_amount_valid() {
         let data = 1000u128.to_le_bytes();
         let result = UdtParser::parse_amount(&data);
@@ -574,7 +610,7 @@ mod tests {
             capacity: "0x174876e800".to_string(),
             lock: create_lock_script(),
             type_: Some(Script {
-                code_hash: "0xbfa35a9c38a676682b65ade8f02be164d48632281477e36f8dc2f41f79e56bfc"
+                code_hash: "0x4242424242424242424242424242424242424242424242424242424242424242"
                     .to_string(),
                 hash_type: "type".to_string(),
                 args: "0xd591ebdc69626647e056e13345fd830c8b876bb06aa07ba610479eb77153ea9f"
@@ -582,7 +618,7 @@ mod tests {
             }),
         };
 
-        // Unknown code hash should not be parsed as UDT without a standard hint.
+        // A genuinely unknown code hash should not parse without a metadata hint.
         assert!(UdtParser::parse_udt_cell(&output, "0x01000000000000000000000000000000").is_none());
 
         let parsed = UdtParser::parse_udt_cell_with_standard_hint(
@@ -602,7 +638,7 @@ mod tests {
             capacity: "0x174876e800".to_string(),
             lock: create_lock_script(),
             type_: Some(Script {
-                code_hash: "0xbfa35a9c38a676682b65ade8f02be164d48632281477e36f8dc2f41f79e56bfc"
+                code_hash: "0x4343434343434343434343434343434343434343434343434343434343434343"
                     .to_string(),
                 hash_type: "type".to_string(),
                 args: "0xd591ebdc69626647e056e13345fd830c8b876bb06aa07ba610479eb77153ea9f"

@@ -2,6 +2,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 
 use anyhow::{anyhow, bail, Result};
 use chrono::NaiveDate;
+use ckbadger_common::dao::dao_total_free_capacity;
 use ckbadger_store::keys;
 use ckbadger_store::types::{DaoDailySnapshot, DaoDepositCacheEntry};
 use ckbadger_store::{
@@ -46,15 +47,19 @@ pub(crate) struct DaoOwner {
     /// Running protocol-level deposited total, updated per-block for accurate
     /// secondary issuance split.
     running_protocol_deposited: i128,
+    /// Interest-bearing portion of `running_protocol_deposited`, excluding the
+    /// mandatory occupied capacity of every live DAO cell.
+    running_protocol_deposit_free: i128,
     /// Protocol delta accumulated within the current block (reset per block).
     current_block_protocol_delta: i128,
+    current_block_protocol_free_delta: i128,
     active_deposit_counts_by_lock: FxHashMap<Vec<u8>, i64>,
     /// Tracks all lock_hashes that have ever created a DAO deposit (never removed).
     ever_deposited: HashSet<Vec<u8>>,
     /// Per-day unique addresses that made deposits (including repeat depositors).
     daily_depositing_addresses: FxHashMap<NaiveDate, HashSet<Vec<u8>>>,
     claimed_compensation_by_block: FxHashMap<i64, i128>,
-    prev_dao_cs: Option<(i128, i128)>,
+    prev_dao_csu: Option<(i128, i128, i128)>,
     /// Per-date end-of-day block number and AR, for exact unmade_dao_interests
     /// computation during materialization.
     daily_end_of_day: FxHashMap<NaiveDate, (i64, u64)>,
@@ -340,7 +345,27 @@ impl BulkReducer for DaoOwner {
                         -(entry.capacity as i128),
                         "dao daily protocol delta (phase-2 withdrawal)",
                     )?;
-                    self.current_block_protocol_delta -= entry.capacity as i128;
+                    self.current_block_protocol_delta = self
+                        .current_block_protocol_delta
+                        .checked_sub(entry.capacity as i128)
+                        .ok_or_else(|| {
+                            anyhow!(
+                                "DAO block protocol capacity delta underflow: block={}, tx=0x{}",
+                                tx.block_number,
+                                hex::encode(tx.tx_hash)
+                            )
+                        })?;
+                    let free_capacity = dao_total_free_capacity(entry.capacity as i128, 1)?;
+                    self.current_block_protocol_free_delta = self
+                        .current_block_protocol_free_delta
+                        .checked_sub(free_capacity)
+                        .ok_or_else(|| {
+                            anyhow!(
+                                "DAO block protocol free-capacity delta underflow: block={}, tx=0x{}",
+                                tx.block_number,
+                                hex::encode(tx.tx_hash)
+                            )
+                        })?;
                     // Active delta and depositor count already subtracted at
                     // phase-1 withdraw request — no double-counting at
                     // phase-2 completion.  Only the compensations above,
@@ -422,7 +447,27 @@ impl BulkReducer for DaoOwner {
                 output.capacity as i128,
                 "dao daily protocol delta",
             )?;
-            self.current_block_protocol_delta += output.capacity as i128;
+            self.current_block_protocol_delta = self
+                .current_block_protocol_delta
+                .checked_add(output.capacity as i128)
+                .ok_or_else(|| {
+                    anyhow!(
+                        "DAO block protocol capacity delta overflow: block={}, tx=0x{}",
+                        tx.block_number,
+                        hex::encode(tx.tx_hash)
+                    )
+                })?;
+            let free_capacity = dao_total_free_capacity(output.capacity as i128, 1)?;
+            self.current_block_protocol_free_delta = self
+                .current_block_protocol_free_delta
+                .checked_add(free_capacity)
+                .ok_or_else(|| {
+                    anyhow!(
+                        "DAO block protocol free-capacity delta overflow: block={}, tx=0x{}",
+                        tx.block_number,
+                        hex::encode(tx.tx_hash)
+                    )
+                })?;
             Self::bump_daily_i128(
                 &mut self.daily_gross_deposit_delta,
                 tx_date,
@@ -822,7 +867,7 @@ impl DaoOwner {
         // block's transactions, updating current_block_protocol_delta).
         // The running value reflects state BEFORE this block's txs because we
         // only commit the block delta AFTER the split.
-        let deposited_for_split = self.running_protocol_deposited;
+        let deposited_for_split = self.running_protocol_deposit_free;
 
         let mut stats = BatchStats::default();
         accumulate_secondary_issuance_deltas_from_csu(
@@ -834,7 +879,7 @@ impl DaoOwner {
             u,
             claimed_compensation_in_block,
             deposited_for_split,
-            &mut self.prev_dao_cs,
+            &mut self.prev_dao_csu,
         )?;
         if let Some(delta) = stats.daily_secondary_non_miner_delta.get(&block_date) {
             Self::bump_daily_i128(
@@ -870,8 +915,34 @@ impl DaoOwner {
         }
 
         // Commit this block's protocol delta to the running total.
-        self.running_protocol_deposited += self.current_block_protocol_delta;
+        self.running_protocol_deposited = self
+            .running_protocol_deposited
+            .checked_add(self.current_block_protocol_delta)
+            .ok_or_else(|| {
+                anyhow!(
+                    "running DAO protocol capacity overflow after block {}",
+                    block.number
+                )
+            })?;
         self.current_block_protocol_delta = 0;
+        self.running_protocol_deposit_free = self
+            .running_protocol_deposit_free
+            .checked_add(self.current_block_protocol_free_delta)
+            .ok_or_else(|| {
+                anyhow!(
+                    "running DAO protocol free capacity overflow after block {}",
+                    block.number
+                )
+            })?;
+        self.current_block_protocol_free_delta = 0;
+        if self.running_protocol_deposited < 0 || self.running_protocol_deposit_free < 0 {
+            bail!(
+                "negative running DAO protocol capacity after block {}: total={}, free={}",
+                block.number,
+                self.running_protocol_deposited,
+                self.running_protocol_deposit_free
+            );
+        }
 
         Ok(())
     }
@@ -1572,6 +1643,11 @@ mod tests {
             .into(),
         };
         owner.apply_tx(&tx0, &ctx).expect("apply deposit");
+        assert_eq!(owner.current_block_protocol_delta, 200_00000000);
+        assert_eq!(
+            owner.current_block_protocol_free_delta, 98_00000000,
+            "secondary issuance must use capacity minus the 102 CKB DAO occupied capacity"
+        );
 
         let tx1 = ResolvedTxFacts {
             tx_hash: [0x32; 32],

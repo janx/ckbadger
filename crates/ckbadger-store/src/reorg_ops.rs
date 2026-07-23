@@ -2168,6 +2168,10 @@ impl CkbadgerStore {
 
             let mut stats_removed = 0u64;
             let mut stats_repaired = 0u64;
+            // Recompute only snapshots that actually existed before rollback.
+            // Unrelated rollback fixtures and partially initialized stores may
+            // have block headers but no DAO aggregate state to repair.
+            let mut dao_snapshot_dates_to_recompute: HashSet<String> = HashSet::new();
             let mut stage = RollbackStageProgress::new("delete_stats_from_cutoff");
             let stats_cfs = [
                 self.cf_stats_chain(),
@@ -2196,6 +2200,23 @@ impl CkbadgerStore {
                     )? {
                         stage.tick(stats_removed + stats_repaired);
                         continue;
+                    }
+                    if key[0] == keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT {
+                        let suffix = &key[1..];
+                        if suffix.len() < 8 {
+                            anyhow::bail!(
+                                "invalid DAO daily snapshot key during rollback: key=0x{}",
+                                bytes_to_hex(&key)
+                            );
+                        }
+                        let snapshot_date = std::str::from_utf8(&suffix[..8]).map_err(|error| {
+                            anyhow::anyhow!(
+                                "invalid DAO daily snapshot date during rollback: key=0x{}, error={}",
+                                bytes_to_hex(&key),
+                                error
+                            )
+                        })?;
+                        dao_snapshot_dates_to_recompute.insert(snapshot_date.to_string());
                     }
                     // For daily/hourly main stats on the cutoff date in a partial-day
                     // rollback, subtract the rolled-back deltas instead of deleting.
@@ -2254,6 +2275,11 @@ impl CkbadgerStore {
             let mut ticks = 0u64;
             let mut d = recompute_start;
             while d <= cutoff_naive {
+                let snapshot_date = d.format("%Y%m%d").to_string();
+                if !dao_snapshot_dates_to_recompute.contains(&snapshot_date) {
+                    d += chrono::Duration::days(1);
+                    continue;
+                }
                 // recompute_dao_daily_snapshot_for_date takes &mut StoreBatch,
                 // while rollback_to_block accumulates into a raw WriteBatch.
                 // Build a temporary StoreBatch, run the recompute, then extract

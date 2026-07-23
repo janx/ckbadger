@@ -5,6 +5,7 @@ use crate::store::CkbadgerStore;
 use crate::types::*;
 
 use crate::bytes_to_hex;
+use ckbadger_common::dao::{dao_total_free_capacity, split_secondary_issuance_delta};
 
 impl CkbadgerStore {
     // ---- Daily stats ----
@@ -1016,7 +1017,6 @@ impl CkbadgerStore {
             mut running_cum_treasury,
             mut running_total_depositors,
             mut running_cumulative_depositors,
-            mut prev_s,
         ) = match prev_snap.as_ref() {
             Some(p) => (
                 p.total_deposited,
@@ -1029,11 +1029,34 @@ impl CkbadgerStore {
                 p.cum_treasury,
                 p.depositors_count,
                 p.cumulative_depositors,
-                p.secondary_pool,
             ),
             None => (
-                0i128, 0i128, 0i64, 0i64, 0i128, 0i128, 0i128, 0i128, 0i64, 0i64, 0i128,
+                0i128, 0i128, 0i64, 0i64, 0i128, 0i128, 0i128, 0i128, 0i64, 0i64,
             ),
+        };
+
+        // RFC-0023 defines block N's issuance distribution from the DAO state
+        // at the end of block N-1. Read that header directly instead of using
+        // the previous daily snapshot as an approximate boundary value.
+        let mut prev_dao_csu = if day_start_block > 0 {
+            let previous_block = day_start_block - 1;
+            let header = self.get_block_header(previous_block)?.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "missing previous block header during DAO snapshot recompute: target_date={}, previous_block={}",
+                    date,
+                    previous_block
+                )
+            })?;
+            Some(extract_dao_csu(&header.dao).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "invalid previous DAO field during snapshot recompute: target_date={}, previous_block={}, dao_len={}",
+                    date,
+                    previous_block,
+                    header.dao.len()
+                )
+            })?)
+        } else {
+            None
         };
 
         // 4. Scan dao_deposits CF once. Group entries by (deposit_block_number,
@@ -1107,6 +1130,22 @@ impl CkbadgerStore {
             last_header_c = c;
             last_header_s = s;
             last_header_u = u;
+
+            // RFC-0023 uses the state at the end of block N-1. Capture the
+            // interest-bearing DAO free capacity before applying block N's
+            // deposits and withdrawals below.
+            let protocol_cell_count_for_split = running_new_deposits
+                .checked_sub(running_withdrawals)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "DAO protocol cell count overflow during recompute: block_num={}, deposits={}, withdrawals={}",
+                        block_num,
+                        running_new_deposits,
+                        running_withdrawals
+                    )
+                })?;
+            let deposited_free_for_split =
+                dao_total_free_capacity(running_protocol_deposited, protocol_cell_count_for_split)?;
 
             // 5a. Deposits created in this block.
             if let Some(deposits) = by_deposit_block.get(&block_num) {
@@ -1214,49 +1253,54 @@ impl CkbadgerStore {
                 }
             }
 
-            // 5d. Secondary issuance delta for this block.
-            let s_delta = s.checked_sub(prev_s).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "secondary_pool s_delta overflow during recompute: block_num={}",
-                    block_num
-                )
-            })?;
-            let non_miner_delta = s_delta
-                .checked_add(claimed_compensation_in_block)
-                .ok_or_else(|| {
+            // 5d. Secondary issuance delta for this block. C/U and deposited
+            // free capacity all describe the end of block N-1.
+            if let Some((prev_c, prev_s, prev_u)) = prev_dao_csu {
+                let s_delta = s.checked_sub(prev_s).ok_or_else(|| {
                     anyhow::anyhow!(
-                        "non_miner_delta overflow during recompute: block_num={}",
-                        block_num
+                        "secondary_pool s_delta overflow during recompute: block_num={}, current_s={}, previous_s={}",
+                        block_num,
+                        s,
+                        prev_s
                     )
                 })?;
-            if non_miner_delta > 0 {
-                let (miner, dao_share, treasury) = split_secondary_issuance_for_recompute(
-                    c,
-                    u,
-                    running_protocol_deposited,
-                    non_miner_delta,
-                )?;
-                running_cum_miner = running_cum_miner.checked_add(miner).ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "cum_miner_secondary overflow during recompute: block_num={}",
-                        block_num
-                    )
-                })?;
-                running_cum_dao = running_cum_dao.checked_add(dao_share).ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "cum_dao_compensation overflow during recompute: block_num={}",
-                        block_num
-                    )
-                })?;
-                running_cum_treasury =
-                    running_cum_treasury.checked_add(treasury).ok_or_else(|| {
+                let non_miner_delta = s_delta
+                    .checked_add(claimed_compensation_in_block)
+                    .ok_or_else(|| {
                         anyhow::anyhow!(
-                            "cum_treasury overflow during recompute: block_num={}",
+                            "non_miner_delta overflow during recompute: block_num={}",
                             block_num
                         )
                     })?;
+                if non_miner_delta != 0 {
+                    let (miner, dao_share, treasury) = split_secondary_issuance_delta(
+                        prev_c,
+                        prev_u,
+                        deposited_free_for_split,
+                        non_miner_delta,
+                    )?;
+                    running_cum_miner = running_cum_miner.checked_add(miner).ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "cum_miner_secondary overflow during recompute: block_num={}",
+                            block_num
+                        )
+                    })?;
+                    running_cum_dao = running_cum_dao.checked_add(dao_share).ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "cum_dao_compensation overflow during recompute: block_num={}",
+                            block_num
+                        )
+                    })?;
+                    running_cum_treasury =
+                        running_cum_treasury.checked_add(treasury).ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "cum_treasury overflow during recompute: block_num={}",
+                                block_num
+                            )
+                        })?;
+                }
             }
-            prev_s = s;
+            prev_dao_csu = Some((c, s, u));
         }
 
         // 6. End-of-day unmade DAO interests: uses the last block's AR over all
@@ -1343,49 +1387,6 @@ fn extract_dao_ar(dao: &[u8]) -> Option<u64> {
         return None;
     }
     Some(u64::from_le_bytes(dao[8..16].try_into().ok()?))
-}
-
-/// Split a positive `non_miner_secondary` amount into (miner, dao, treasury).
-/// Mirrors `crates/indexer/src/sync/dao_helpers.rs::split_secondary_issuance`
-/// but lives here to avoid a cross-crate dep from store → indexer.
-fn split_secondary_issuance_for_recompute(
-    total_issuance: i128,
-    occupied_capacity: i128,
-    total_deposited: i128,
-    non_miner_secondary: i128,
-) -> anyhow::Result<(i128, i128, i128)> {
-    if non_miner_secondary <= 0 {
-        return Ok((0, 0, 0));
-    }
-    if total_issuance < 0 || occupied_capacity < 0 || total_deposited < 0 {
-        anyhow::bail!(
-            "negative input in secondary issuance split during recompute: total_issuance={}, occupied_capacity={}, total_deposited={}",
-            total_issuance, occupied_capacity, total_deposited
-        );
-    }
-    if total_issuance <= occupied_capacity {
-        anyhow::bail!(
-            "invalid DAO C/U relationship during recompute: total_issuance={}, occupied_capacity={}",
-            total_issuance, occupied_capacity
-        );
-    }
-    let denom = total_issuance - occupied_capacity;
-    if total_deposited > denom {
-        anyhow::bail!(
-            "dao deposited exceeds liquid supply during recompute: total_deposited={}, liquid_supply={}",
-            total_deposited, denom
-        );
-    }
-    let miner = non_miner_secondary * occupied_capacity / denom;
-    let dao = non_miner_secondary * total_deposited / denom;
-    let treasury = non_miner_secondary - dao;
-    if miner < 0 || dao < 0 || treasury < 0 {
-        anyhow::bail!(
-            "secondary issuance split produced negative component during recompute: miner={}, dao={}, treasury={}",
-            miner, dao, treasury
-        );
-    }
-    Ok((miner, dao, treasury))
 }
 
 #[cfg(test)]
@@ -1852,13 +1853,10 @@ mod tests {
     #[test]
     fn test_dao_snapshot_negative_s_delta_protocol_upgrade() {
         // CKB's on-chain S field can decrease at protocol upgrade boundaries.
-        // For user-facing cumulative charts, negative deltas are ignored to
-        // keep miner/dao/treasury monotonic and avoid artificial drops.
+        // Negative deltas reduce treasury so the exact S-field changes telescope.
         let c: i128 = 4_000_000_000_000_000_000; // 40B CKB
         let u: i128 = 400_000_000_000_000_000; // 4B CKB
         let deposited: i128 = 50_000_000_000_000;
-        let denom = (c - u).max(1);
-
         // S values: day 1 = +100, day 2 = -30 (upgrade drop), day 3 = +100
         let s0: i128 = 10_000_000_000_000;
         let s1: i128 = 10_100_000_000_000; // +100 CKB
@@ -1873,24 +1871,20 @@ mod tests {
 
         for &s in &s_values {
             let s_delta = s - prev_s;
-            if s_delta > 0 {
-                let miner = s_delta * u / denom;
-                let dao = s_delta * deposited / denom;
-                let treasury = s_delta - dao;
-                cum_miner += miner;
-                cum_dao += dao;
-                cum_treasury += treasury;
-            }
+            let (miner, dao, treasury) =
+                split_secondary_issuance_delta(c, u, deposited, s_delta).unwrap();
+            cum_miner += miner;
+            cum_dao += dao;
+            cum_treasury += treasury;
             prev_s = s;
         }
 
-        let positive_s_change = (s1 - s0) + (s3 - s2); // only positive deltas
+        let total_s_change = s3 - s0;
         let cum_non_miner = cum_dao + cum_treasury;
 
-        // Non-miner tracks only positive S growth.
         assert_eq!(
-            cum_non_miner, positive_s_change,
-            "cum_dao + cum_treasury must equal sum(positive s_delta)"
+            cum_non_miner, total_s_change,
+            "cum_dao + cum_treasury must telescope to the net S-field change"
         );
 
         // Miner and dao must be non-negative (monotonic).
@@ -1900,8 +1894,8 @@ mod tests {
 
     #[test]
     fn test_dao_snapshot_negative_s_delta_batch_boundary() {
-        // Regression test: negative S deltas are ignored even across batch
-        // boundaries, while positive deltas still accumulate normally.
+        // Regression: a batch boundary after an S drop must not count the
+        // subsequent rebound as new issuance a second time.
         let c: i128 = 4_000_000_000_000_000_000;
         let u: i128 = 400_000_000_000_000_000;
         let deposited: i128 = 50_000_000_000_000;
@@ -1914,15 +1908,14 @@ mod tests {
         let s_delta_batch_n = s_batch_end - s_prev_day; // -20
         assert!(s_delta_batch_n < 0);
 
-        let (miner_n, dao_n, treas_n) = (0i128, 0i128, 0i128);
+        let (miner_n, dao_n, treas_n) =
+            split_secondary_issuance_delta(c, u, deposited, s_delta_batch_n).unwrap();
 
         // Batch N+1 processes rest of day: s_delta = s_day_end - s_batch_end > 0
         let s_delta_batch_n1 = s_day_end - s_batch_end; // +100
         assert!(s_delta_batch_n1 > 0);
-        let denom = (c - u).max(1);
-        let miner_n1 = s_delta_batch_n1 * u / denom;
-        let dao_n1 = s_delta_batch_n1 * deposited / denom;
-        let treas_n1 = s_delta_batch_n1 - dao_n1;
+        let (miner_n1, dao_n1, treas_n1) =
+            split_secondary_issuance_delta(c, u, deposited, s_delta_batch_n1).unwrap();
 
         // Total for the day
         let total_miner = miner_n + miner_n1;
@@ -1930,12 +1923,11 @@ mod tests {
         let total_treas = treas_n + treas_n1;
         let total_non_miner = total_dao + total_treas;
 
-        // Negative segment is ignored; only positive segment contributes.
-        let actual_positive_change = s_delta_batch_n1; // +100
+        let actual_day_s_change = s_day_end - s_prev_day;
         assert_eq!(
-            total_non_miner, actual_positive_change,
-            "batch-split non-miner must equal positive segment: got {} expected {}",
-            total_non_miner, actual_positive_change
+            total_non_miner, actual_day_s_change,
+            "batch-split non-miner must equal full-day S change: got {} expected {}",
+            total_non_miner, actual_day_s_change
         );
 
         // Miner should only account for the positive portion

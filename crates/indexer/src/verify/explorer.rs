@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use console::style;
 
 use super::checks::*;
-use super::report::{format_number, format_number_i128};
+use super::report::format_number;
 
 // ---------------------------------------------------------------------------
 // Lightweight types for our API chart responses
@@ -561,11 +561,13 @@ fn parse_ckb_to_shannon(ckb: &str) -> Option<i128> {
         // Pad right to 8 digits (shannon_to_ckb uses {:08} format, then trims trailing zeros)
         let padded = format!("{:0<8}", decimal_str);
         let decimal_part: i128 = padded[..8].parse().ok()?;
-        Some(integer_part * SHANNON_PER_CKB + decimal_part)
+        integer_part
+            .checked_mul(SHANNON_PER_CKB)?
+            .checked_add(decimal_part)
     } else {
         // No decimal point — whole CKB value
         let integer_part: i128 = ckb.parse().ok()?;
-        Some(integer_part * SHANNON_PER_CKB)
+        integer_part.checked_mul(SHANNON_PER_CKB)
     }
 }
 
@@ -629,100 +631,89 @@ fn last_30_days() -> Vec<String> {
 }
 
 // ---------------------------------------------------------------------------
-// Common explorer check runner to reduce boilerplate
+// Common explorer check runners
 // ---------------------------------------------------------------------------
 
-fn compute_baseline_offset_f64(
-    our_data: &HashMap<String, String>,
-    explorer_data: &HashMap<String, String>,
-    dates: &[String],
-    value_transform: &impl Fn(&str, &str) -> Option<(f64, f64)>,
-) -> Option<f64> {
-    for date in dates {
-        if let (Some(our_val), Some(explorer_val)) = (our_data.get(date), explorer_data.get(date)) {
-            if let Some((ours, theirs)) = value_transform(our_val, explorer_val) {
-                return Some(ours - theirs);
-            }
-        }
-    }
-    None
-}
-
-fn compute_baseline_offset_i128(
-    our_data: &HashMap<String, String>,
-    explorer_data: &HashMap<String, String>,
-    dates: &[String],
-    parse_our: impl Fn(&str) -> Option<i128>,
-    parse_theirs: impl Fn(&str) -> Option<i128>,
-) -> Option<i128> {
-    for date in dates {
-        if let (Some(our_val), Some(explorer_val)) = (our_data.get(date), explorer_data.get(date)) {
-            let ours = parse_our(our_val)?;
-            let theirs = parse_theirs(explorer_val)?;
-            return Some(ours - theirs);
-        }
-    }
-    None
-}
-
-/// Run an exact i128 explorer comparison after baseline alignment.
+/// Compare exact changes between consecutive cumulative observations.
 ///
-/// Cumulative metrics can carry a fixed historical offset between data sources
-/// (for example, legacy snapshot baselines). We align to the first overlapping
-/// date, then enforce exact match on the remaining relative series.
-fn run_exact_i128_explorer_check_with_offset(
+/// This intentionally validates the transition written for each day rather
+/// than aligning away a historical baseline. It is used where the official
+/// testnet explorer has a known old projection gap but both systems observe
+/// the same current canonical chain transitions.
+fn run_exact_i128_explorer_daily_delta_check(
     our_data: &HashMap<String, String>,
     explorer_data: &HashMap<String, String>,
     progress: &ProgressReporter,
     label: &str,
-    parse_our: impl Fn(&str) -> Option<i128>,
+    value_transform: impl Fn(&str, &str) -> Option<(i128, i128)>,
 ) -> CheckResult {
     let dates = last_30_days();
-    let baseline_offset =
-        compute_baseline_offset_i128(our_data, explorer_data, &dates, &parse_our, |v| {
-            v.parse::<i128>().ok()
-        })
-        .unwrap_or(0);
+    let mut observations = Vec::new();
+    let mut findings = Vec::new();
 
-    let mut findings = vec![];
-    let mut checked = 0u64;
     for date in &dates {
         if let (Some(our_val), Some(explorer_val)) = (our_data.get(date), explorer_data.get(date)) {
-            if let (Some(ours_raw), Ok(theirs)) = (parse_our(our_val), explorer_val.parse::<i128>())
-            {
-                let ours = ours_raw - baseline_offset;
-                if ours != theirs {
-                    findings.push(Finding {
-                        entity: date.to_string(),
-                        details: vec![format!(
-                            "{}: ours={}, explorer={} (Δ {:+}, baseline_offset={:+})",
-                            label,
-                            format_number_i128(ours),
-                            format_number_i128(theirs),
-                            ours - theirs,
-                            baseline_offset,
-                        )],
-                    });
-                }
-                checked += 1;
+            match value_transform(our_val, explorer_val) {
+                Some((ours, theirs)) => observations.push((date.clone(), ours, theirs)),
+                None => findings.push(Finding {
+                    entity: date.clone(),
+                    details: vec![format!(
+                        "{}: invalid value pair ours='{}', explorer='{}'",
+                        label, our_val, explorer_val
+                    )],
+                }),
             }
         }
         progress.inc(1);
     }
 
-    if checked == 0 {
-        return CheckResult {
-            passed: false,
-            items_checked: 0,
-            items_failed: 0,
-            detail: Some("no overlapping dates found between local and explorer data".to_string()),
-            findings: vec![Finding {
-                entity: "overlap".to_string(),
-                details: vec![
-                    "no overlapping dates found between local and explorer data".to_string()
-                ],
-            }],
+    observations.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut checked = 0u64;
+    for pair in observations.windows(2) {
+        let (previous_date, previous_ours, previous_theirs) = &pair[0];
+        let (date, ours, theirs) = &pair[1];
+        checked += 1;
+        let Some(our_delta) = ours.checked_sub(*previous_ours) else {
+            findings.push(Finding {
+                entity: date.clone(),
+                details: vec![format!(
+                    "{} change {}→{}: local i128 subtraction overflow (current={}, previous={})",
+                    label, previous_date, date, ours, previous_ours
+                )],
+            });
+            continue;
         };
+        let Some(explorer_delta) = theirs.checked_sub(*previous_theirs) else {
+            findings.push(Finding {
+                entity: date.clone(),
+                details: vec![format!(
+                    "{} change {}→{}: explorer i128 subtraction overflow (current={}, previous={})",
+                    label, previous_date, date, theirs, previous_theirs
+                )],
+            });
+            continue;
+        };
+        if our_delta != explorer_delta {
+            let delta_difference = our_delta
+                .checked_sub(explorer_delta)
+                .map_or_else(|| "overflow".to_string(), |value| format!("{value:+}"));
+            findings.push(Finding {
+                entity: date.clone(),
+                details: vec![format!(
+                    "{} change {}→{}: ours={:+}, explorer={:+} (Δ {})",
+                    label, previous_date, date, our_delta, explorer_delta, delta_difference
+                )],
+            });
+        }
+    }
+
+    if checked == 0 {
+        findings.push(Finding {
+            entity: "overlap".to_string(),
+            details: vec![
+                "fewer than two parseable overlapping dates for daily-delta comparison".to_string(),
+            ],
+        });
     }
 
     if findings.is_empty() {
@@ -742,62 +733,14 @@ fn run_tolerance_explorer_check(
     tolerance: f64,
     value_transform: impl Fn(&str, &str) -> Option<(f64, f64)>,
 ) -> CheckResult {
-    run_tolerance_explorer_check_internal(
-        our_data,
-        explorer_data,
-        progress,
-        label,
-        tolerance,
-        false,
-        value_transform,
-    )
-}
-
-/// Run a tolerance-based explorer comparison with baseline alignment.
-fn run_tolerance_explorer_check_with_offset(
-    our_data: &HashMap<String, String>,
-    explorer_data: &HashMap<String, String>,
-    progress: &ProgressReporter,
-    label: &str,
-    tolerance: f64,
-    value_transform: impl Fn(&str, &str) -> Option<(f64, f64)>,
-) -> CheckResult {
-    run_tolerance_explorer_check_internal(
-        our_data,
-        explorer_data,
-        progress,
-        label,
-        tolerance,
-        true,
-        value_transform,
-    )
-}
-
-fn run_tolerance_explorer_check_internal(
-    our_data: &HashMap<String, String>,
-    explorer_data: &HashMap<String, String>,
-    progress: &ProgressReporter,
-    label: &str,
-    tolerance: f64,
-    align_baseline: bool,
-    value_transform: impl Fn(&str, &str) -> Option<(f64, f64)>,
-) -> CheckResult {
     let dates = last_30_days();
-    let baseline_offset = if align_baseline {
-        compute_baseline_offset_f64(our_data, explorer_data, &dates, &value_transform)
-            .unwrap_or(0.0)
-    } else {
-        0.0
-    };
     let mut findings = vec![];
     let mut checked = 0u64;
 
     for date in &dates {
         if let (Some(our_val), Some(explorer_val)) = (our_data.get(date), explorer_data.get(date)) {
             if let Some((ours, theirs)) = value_transform(our_val, explorer_val) {
-                let aligned_ours = ours - baseline_offset;
-                if let Some(f) =
-                    compare_tolerance_f64_values(aligned_ours, theirs, date, label, tolerance)
+                if let Some(f) = compare_tolerance_f64_values(ours, theirs, date, label, tolerance)
                 {
                     findings.push(f);
                 }
@@ -914,7 +857,7 @@ impl Check for ExplorerTxCount {
     }
 }
 
-/// X2: Compare /dao/charts/total-deposit vs explorer total_dao_deposit.
+/// X2: Compare exact daily total-deposit changes against explorer.
 pub struct ExplorerTotalDeposit;
 
 impl Check for ExplorerTotalDeposit {
@@ -922,7 +865,7 @@ impl Check for ExplorerTotalDeposit {
         "explorer_total_deposit"
     }
     fn description(&self) -> &'static str {
-        "Daily total_dao_deposit vs explorer"
+        "Daily total_dao_deposit change vs explorer"
     }
     fn tier(&self) -> CheckTier {
         CheckTier::Sampling
@@ -938,8 +881,10 @@ impl Check for ExplorerTotalDeposit {
         let our_data = fetch_our_chart(ctx, "dao/charts/total-deposit")?;
 
         // Our snapshot total_deposited subtracts at phase-1 (withdraw
-        // request), matching the CKB explorer convention.  Convert our
-        // CKB-denominated chart values to shannons for direct comparison.
+        // request), matching the CKB explorer convention. Convert our
+        // CKB-denominated chart values to shannons before checking exact
+        // consecutive transitions; old testnet history has a fixed baseline
+        // gap, but new deposits/withdrawals must still match exactly.
         let our_shannons: HashMap<String, String> = our_data
             .into_iter()
             .filter_map(|(date, val)| {
@@ -948,12 +893,12 @@ impl Check for ExplorerTotalDeposit {
             })
             .collect();
 
-        Ok(run_exact_i128_explorer_check_with_offset(
+        Ok(run_exact_i128_explorer_daily_delta_check(
             &our_shannons,
             &explorer_data,
             progress,
             "total_dao_deposit",
-            |v| v.parse::<i128>().ok(),
+            |ours, theirs| Some((ours.parse::<i128>().ok()?, theirs.parse::<i128>().ok()?)),
         ))
     }
 }
@@ -1056,7 +1001,7 @@ impl Check for ExplorerDifficulty {
     }
 }
 
-/// X5: Compare /charts/knowledge-size vs explorer occupied_capacity.
+/// X5: Compare the exact daily change in DAO-U knowledge size against explorer.
 pub struct ExplorerKnowledgeSize;
 
 impl Check for ExplorerKnowledgeSize {
@@ -1064,7 +1009,7 @@ impl Check for ExplorerKnowledgeSize {
         "explorer_knowledge_size"
     }
     fn description(&self) -> &'static str {
-        "Daily knowledge_size vs explorer occupied_capacity"
+        "Daily knowledge_size change vs explorer occupied_capacity change"
     }
     fn tier(&self) -> CheckTier {
         CheckTier::Sampling
@@ -1078,40 +1023,13 @@ impl Check for ExplorerKnowledgeSize {
     fn run(&self, ctx: &CheckContext, progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
         let explorer_data = fetch_explorer_daily(ctx, "occupied_capacity", "occupied_capacity")?;
         let our_data = fetch_our_chart(ctx, "charts/knowledge-size")?;
-        let dates = last_30_days();
-        let mut findings = vec![];
-        let mut checked = 0u64;
-
-        // Tolerance comparison: CKB Explorer uses UTC+8 (Beijing time) for daily
-        // boundaries while we use UTC, so the "last block of the day" differs by
-        // ~8 hours. For point-in-time values like occupied_capacity this means
-        // the DAO U field is read at a different block height. Observed deviation
-        // is typically <0.2%.
-        for date in &dates {
-            if let (Some(our_val), Some(explorer_val)) =
-                (our_data.get(date), explorer_data.get(date))
-            {
-                // Our API returns CKB units (via shannon_to_ckb_string), but the
-                // explorer returns raw shannons.  Convert our value back to shannons
-                // so the comparison is apples-to-apples.
-                let ours: f64 = parse_ckb_to_shannon(our_val)
-                    .map(|s| s as f64)
-                    .unwrap_or_else(|| our_val.parse().unwrap_or(0.0));
-                if let Some(f) =
-                    compare_tolerance_f64(ours, explorer_val, date, "knowledge_size", 0.002)
-                {
-                    findings.push(f);
-                }
-                checked += 1;
-            }
-            progress.inc(1);
-        }
-
-        if findings.is_empty() {
-            Ok(CheckResult::pass(checked))
-        } else {
-            Ok(CheckResult::fail(checked, findings))
-        }
+        Ok(run_exact_i128_explorer_daily_delta_check(
+            &our_data,
+            &explorer_data,
+            progress,
+            "knowledge_size",
+            |ours, theirs| Some((parse_ckb_to_shannon(ours)?, theirs.parse::<i128>().ok()?)),
+        ))
     }
 }
 
@@ -1152,7 +1070,7 @@ impl Check for ExplorerUncleRate {
     }
 }
 
-/// X7: Compare /charts/cell-count (liveCells) vs explorer live_cells_count (tolerance-based).
+/// X7: Compare exact daily live-cell count changes against explorer.
 pub struct ExplorerLiveCellCount;
 
 impl Check for ExplorerLiveCellCount {
@@ -1160,7 +1078,7 @@ impl Check for ExplorerLiveCellCount {
         "explorer_live_cell_count"
     }
     fn description(&self) -> &'static str {
-        "Daily live_cells_count vs explorer"
+        "Daily live_cells_count change vs explorer"
     }
     fn tier(&self) -> CheckTier {
         CheckTier::Sampling
@@ -1174,22 +1092,17 @@ impl Check for ExplorerLiveCellCount {
     fn run(&self, ctx: &CheckContext, progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
         let explorer_data = fetch_explorer_daily(ctx, "live_cells_count", "live_cells_count")?;
         let our_data = fetch_our_stacked_chart(ctx, "charts/cell-count", "liveCells")?;
-        Ok(run_tolerance_explorer_check(
+        Ok(run_exact_i128_explorer_daily_delta_check(
             &our_data,
             &explorer_data,
             progress,
             "live_cells_count",
-            0.002,
-            |ours, theirs| {
-                let o: f64 = ours.parse().ok()?;
-                let t: f64 = theirs.parse().ok()?;
-                Some((o, t))
-            },
+            |ours, theirs| Some((ours.parse::<i128>().ok()?, theirs.parse::<i128>().ok()?)),
         ))
     }
 }
 
-/// X8: Compare /charts/cell-count (deadCells) vs explorer dead_cells_count (tolerance-based).
+/// X8: Compare exact daily consumed-cell count changes against explorer.
 pub struct ExplorerDeadCellCount;
 
 impl Check for ExplorerDeadCellCount {
@@ -1197,7 +1110,7 @@ impl Check for ExplorerDeadCellCount {
         "explorer_dead_cell_count"
     }
     fn description(&self) -> &'static str {
-        "Daily dead_cells_count vs explorer"
+        "Daily dead_cells_count change vs explorer"
     }
     fn tier(&self) -> CheckTier {
         CheckTier::Sampling
@@ -1211,17 +1124,12 @@ impl Check for ExplorerDeadCellCount {
     fn run(&self, ctx: &CheckContext, progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
         let explorer_data = fetch_explorer_daily(ctx, "dead_cells_count", "dead_cells_count")?;
         let our_data = fetch_our_stacked_chart(ctx, "charts/cell-count", "deadCells")?;
-        Ok(run_tolerance_explorer_check(
+        Ok(run_exact_i128_explorer_daily_delta_check(
             &our_data,
             &explorer_data,
             progress,
             "dead_cells_count",
-            0.002,
-            |ours, theirs| {
-                let o: f64 = ours.parse().ok()?;
-                let t: f64 = theirs.parse().ok()?;
-                Some((o, t))
-            },
+            |ours, theirs| Some((ours.parse::<i128>().ok()?, theirs.parse::<i128>().ok()?)),
         ))
     }
 }
@@ -1328,7 +1236,7 @@ impl Check for ExplorerCirculatingSupply {
         // Explorer's circulating_supply includes DAO-locked CKB, so sum both series.
         let our_data =
             fetch_our_stacked_chart_sum(ctx, "charts/total-supply", &["circulating", "nervosdao"])?;
-        Ok(run_tolerance_explorer_check_with_offset(
+        Ok(run_tolerance_explorer_check(
             &our_data,
             &explorer_data,
             progress,
@@ -1405,7 +1313,7 @@ impl Check for ExplorerDepositCompensation {
         let explorer_data =
             fetch_explorer_daily(ctx, "deposit_compensation", "deposit_compensation")?;
         let our_data = fetch_our_stacked_chart(ctx, "charts/secondary-issuance", "compensation")?;
-        Ok(run_tolerance_explorer_check_with_offset(
+        Ok(run_tolerance_explorer_check(
             &our_data,
             &explorer_data,
             progress,
@@ -1481,7 +1389,7 @@ impl Check for ExplorerTreasuryAmount {
     fn run(&self, ctx: &CheckContext, progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
         let explorer_data = fetch_explorer_daily(ctx, "treasury_amount", "treasury_amount")?;
         let our_data = fetch_our_stacked_chart(ctx, "charts/secondary-issuance", "burnt")?;
-        Ok(run_tolerance_explorer_check_with_offset(
+        Ok(run_tolerance_explorer_check(
             &our_data,
             &explorer_data,
             progress,
@@ -2104,6 +2012,11 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_ckb_to_shannon_rejects_overflow() {
+        assert_eq!(parse_ckb_to_shannon(&i128::MAX.to_string()), None);
+    }
+
+    #[test]
     fn test_normalize_date_slash_format() {
         assert_eq!(normalize_date("2024/01/15"), "2024-01-15");
     }
@@ -2139,31 +2052,7 @@ mod tests {
     }
 
     #[test]
-    fn test_compute_baseline_offset_i128_uses_first_matching_date() {
-        let dates = last_30_days();
-        let d1 = dates[0].clone();
-        let d2 = dates[1].clone();
-
-        let mut ours = HashMap::new();
-        ours.insert(d1.clone(), "110".to_string());
-        ours.insert(d2.clone(), "105".to_string());
-
-        let mut explorer = HashMap::new();
-        explorer.insert(d1, "100".to_string());
-        explorer.insert(d2, "95".to_string());
-
-        let offset = compute_baseline_offset_i128(
-            &ours,
-            &explorer,
-            &dates,
-            |v| v.parse::<i128>().ok(),
-            |v| v.parse::<i128>().ok(),
-        );
-        assert_eq!(offset, Some(10));
-    }
-
-    #[test]
-    fn test_run_exact_i128_with_offset_allows_constant_shift() {
+    fn test_exact_daily_delta_allows_historical_constant_shift() {
         let dates = last_30_days();
         let d1 = dates[0].clone();
         let d2 = dates[1].clone();
@@ -2177,44 +2066,73 @@ mod tests {
         explorer.insert(d2, "95".to_string());
 
         let progress = ProgressReporter::new(None);
-        let result = run_exact_i128_explorer_check_with_offset(
+        let result = run_exact_i128_explorer_daily_delta_check(
             &ours,
             &explorer,
             &progress,
             "test_metric",
-            |v| v.parse::<i128>().ok(),
+            |our, explorer| Some((our.parse::<i128>().ok()?, explorer.parse::<i128>().ok()?)),
         );
 
         assert!(result.passed);
-        assert_eq!(result.items_checked, 2);
+        assert_eq!(result.items_checked, 1);
     }
 
     #[test]
-    fn test_run_tolerance_with_offset_allows_constant_shift() {
+    fn test_exact_daily_delta_detects_transition_mismatch() {
         let dates = last_30_days();
         let d1 = dates[0].clone();
         let d2 = dates[1].clone();
 
         let mut ours = HashMap::new();
-        ours.insert(d1.clone(), "110".to_string());
-        ours.insert(d2.clone(), "120".to_string());
+        ours.insert(d1.clone(), "111".to_string());
+        ours.insert(d2.clone(), "105".to_string());
 
         let mut explorer = HashMap::new();
         explorer.insert(d1, "100".to_string());
-        explorer.insert(d2, "110".to_string());
+        explorer.insert(d2, "95".to_string());
 
         let progress = ProgressReporter::new(None);
-        let result = run_tolerance_explorer_check_with_offset(
+        let result = run_exact_i128_explorer_daily_delta_check(
             &ours,
             &explorer,
             &progress,
             "test_metric",
-            0.0001,
-            |our, exp| Some((our.parse::<f64>().ok()?, exp.parse::<f64>().ok()?)),
+            |our, explorer| Some((our.parse::<i128>().ok()?, explorer.parse::<i128>().ok()?)),
         );
 
-        assert!(result.passed);
-        assert_eq!(result.items_checked, 2);
+        assert!(!result.passed);
+        assert_eq!(result.items_checked, 1);
+        assert_eq!(result.items_failed, 1);
+    }
+
+    #[test]
+    fn test_exact_daily_delta_reports_subtraction_overflow() {
+        let dates = last_30_days();
+        let d1 = dates[0].clone();
+        let d2 = dates[1].clone();
+
+        let mut ours = HashMap::new();
+        ours.insert(d1.clone(), i128::MAX.to_string());
+        ours.insert(d2.clone(), i128::MIN.to_string());
+
+        let mut explorer = HashMap::new();
+        explorer.insert(d1, "0".to_string());
+        explorer.insert(d2, "0".to_string());
+
+        let progress = ProgressReporter::new(None);
+        let result = run_exact_i128_explorer_daily_delta_check(
+            &ours,
+            &explorer,
+            &progress,
+            "test_metric",
+            |our, explorer| Some((our.parse::<i128>().ok()?, explorer.parse::<i128>().ok()?)),
+        );
+
+        assert!(!result.passed);
+        assert_eq!(result.items_checked, 1);
+        assert_eq!(result.items_failed, 1);
+        assert!(result.findings[0].details[0].contains("subtraction overflow"));
     }
 
     #[test]

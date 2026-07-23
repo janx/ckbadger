@@ -182,45 +182,52 @@ CKB's secondary issuance (~1.344 billion CKB/year) is distributed among three re
 
 ### 3.1 Distribution Formula
 
-For each block's secondary issuance:
+For block `N`, using chain state at the end of block `N-1`:
 
 ```
-1. miner_secondary = from RPC get_block_economic_state().miner_reward.secondary
-2. non_miner_secondary = secondary_issuance - miner_secondary
-3. free_capacity = total_issuance - occupied_capacity - dao_deposits
-4. dao_compensation = non_miner_secondary * dao_deposits / (dao_deposits + free_capacity)
-5. burnt = non_miner_secondary - dao_compensation
+1. non_miner_delta = (S_N - S_(N-1)) + claimed_compensation_N
+2. denominator = C_(N-1) - U_(N-1)
+3. dao_free_capacity = sum(capacity - DAO_OCCUPIED_CAPACITY) for DAO cells live at N-1
+4. liquid_capacity = denominator - dao_free_capacity
+5. miner_secondary = non_miner_delta * U_(N-1) / denominator
+6. dao_compensation = non_miner_delta * dao_free_capacity / denominator
+7. treasury = non_miner_delta - dao_compensation
 ```
+
+At a protocol boundary where `non_miner_delta` is negative, the correction is
+applied entirely to treasury. Miner and DAO compensation stay monotonic, while
+`DAO + treasury` still telescopes to the exact on-chain S-field change.
 
 ### 3.2 Distribution Ratios
 
 The distribution depends on how CKB is allocated across the network:
 
-| Recipient            | Formula                                              | Typical % |
-| -------------------- | ---------------------------------------------------- | --------- |
-| **Mining Reward**    | `occupied_capacity / total_issuance`                 | ~10-12%   |
-| **DAO Compensation** | `non_miner * dao_deposits / (dao_deposits + liquid)` | ~15-20%   |
-| **Burnt**            | `non_miner * liquid / (dao_deposits + liquid)`       | ~70-75%   |
+| Recipient            | Formula                                   | Typical % |
+| -------------------- | ----------------------------------------- | --------- |
+| **Mining Reward**    | `non_miner * U / (C - U)`                 | ~10-12%   |
+| **DAO Compensation** | `non_miner * dao_free_capacity / (C - U)` | ~15-20%   |
+| **Treasury / Burnt** | `non_miner * liquid_capacity / (C - U)`   | ~70-75%   |
 
 Where:
 
-- `liquid = total_issuance - occupied_capacity - dao_deposits` (CKB not locked in DAO or used for storage)
+- `dao_free_capacity` excludes each DAO cell's 102 CKB occupied capacity; that occupied portion is already represented by `U`
+- `liquid_capacity = C - U - dao_free_capacity` (CKB neither interest-bearing in DAO nor used for storage)
 
 **Key insight**: Most secondary issuance is burnt because most CKB remains liquid (not locked in DAO).
 
 ### 3.3 Data Sources
 
-- `secondary_issuance`: RPC `get_block_economic_state().issuance.secondary`
-- `miner_secondary`: RPC `get_block_economic_state().miner_reward.secondary`
-- `total_issuance`: DAO field bytes 0-7 (C)
-- `occupied_capacity`: DAO field bytes 24-31 (U)
-- `dao_deposits`: Sum of active deposits **at that block** (not current deposits!)
+- `S`: DAO field bytes 16-23 (cumulative non-miner secondary issuance less claimed compensation)
+- `C`: DAO field bytes 0-7 (total issuance)
+- `U`: DAO field bytes 24-31 (occupied capacity)
+- `claimed_compensation`: exact compensation of phase-2 withdrawals in block `N`
+- `dao_free_capacity`: interest-bearing free capacity of deposits active at the end of block `N-1`
 
-**CRITICAL**: When calculating historical secondary issuance breakdown, `dao_deposits` must be queried for that specific block number. Using current deposits will produce incorrect historical values. The indexer maintains point-in-time deposit tracking in RocksDB's `dao_deposits` column family.
+**CRITICAL**: When calculating historical secondary issuance breakdown, deposit free capacity must be computed for that specific block number. Using current deposits, or using full DAO cell capacity without subtracting occupied capacity, overstates historical DAO compensation. The indexer maintains point-in-time deposit tracking in RocksDB's `dao_deposits` column family.
 
-**Update frequency**: Per processed block when close to tip; skipped while secondary-issuance bulk mode is active (`blocks_remaining > 1000`).
+**Update frequency**: Exactly once per processed block in both bulk-build and live-sync paths.
 
-**Implementation**: `crates/indexer/src/sync/indexer.rs::update_secondary_issuance()`
+**Implementation**: Shared arithmetic in `crates/common/src/dao.rs::split_secondary_issuance_delta()`; chain-state accumulation in `crates/indexer/src/sync/dao_helpers.rs`.
 
 ## 4. Storage Schema (RocksDB)
 
@@ -237,11 +244,11 @@ DAO-related state is split across several CFs:
 
 ## 5. Update Triggers
 
-| Statistic                    | Trigger                                                  | Function                                                  |
-| ---------------------------- | -------------------------------------------------------- | --------------------------------------------------------- |
-| Secondary issuance breakdown | For each processed block when `blocks_remaining <= 1000` | `update_secondary_issuance()`                             |
-| Reorg cutoff-date repair     | After partial-day rollback                                | `CkbadgerStore::recompute_dao_daily_snapshot_for_date()` + `repair_cutoff_date_stats` |
-| Daily snapshots              | Daily                                                    | `update_dao_daily_snapshot()`                             |
+| Statistic                    | Trigger                                                  | Function                                                                              |
+| ---------------------------- | -------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| Secondary issuance breakdown | For each processed block when `blocks_remaining <= 1000` | `update_secondary_issuance()`                                                         |
+| Reorg cutoff-date repair     | After partial-day rollback                               | `CkbadgerStore::recompute_dao_daily_snapshot_for_date()` + `repair_cutoff_date_stats` |
+| Daily snapshots              | Daily                                                    | `update_dao_daily_snapshot()`                                                         |
 
 > **Note:** Estimated APC served by DAO APIs is derived from the latest `DaoDailySnapshot` + protocol constants, not from a periodically persisted `estimated_apc` field.
 

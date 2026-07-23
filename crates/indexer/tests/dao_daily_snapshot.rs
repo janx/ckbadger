@@ -88,7 +88,7 @@ fn test_partial_day_rollback_recomputes_dao_snapshot() {
                 1_100_000_000_000_000_000, // C
                 10_050_000_000_000_000,    // AR
                 5_000_000,                 // S
-                110_000_000_000_000_000,   // U
+                330_000_000_000_000_000,   // U (different ratio from block 99)
             ),
             transactions_count: 2,
             uncles_count: 0,
@@ -254,12 +254,16 @@ fn test_partial_day_rollback_recomputes_dao_snapshot() {
         "total_issuance must match block 100 DAO field C"
     );
     assert_eq!(
-        repaired.occupied_capacity, 110_000_000_000_000_000,
+        repaired.occupied_capacity, 330_000_000_000_000_000,
         "occupied_capacity must match block 100 DAO field U"
     );
     assert_eq!(
         repaired.secondary_pool, 5_000_000,
         "secondary_pool must match block 100 DAO field S"
+    );
+    assert_eq!(
+        repaired.cum_miner_secondary, 555_555,
+        "block 100 miner split must use block 99 C/U, not block 100 C/U"
     );
 }
 
@@ -268,7 +272,7 @@ fn test_partial_day_rollback_recomputes_dao_snapshot() {
 /// range). Pre-reorg, the entry has status=1 (phase-1 requested).
 /// After rollback to block 100, the entry should be normalized back to status=0
 /// by repair_and_rebuild_dao_indexes. The recomputed 2026-04-08 snapshot should
-/// show the deposit as still active (total_deposited = 100 CKB, 0 withdrawals).
+/// show the deposit as still active (total_deposited = 200 CKB, 0 withdrawals).
 #[test]
 fn test_rollback_of_phase1_withdraw_keeps_deposit_active() {
     let store = setup_store();
@@ -279,6 +283,28 @@ fn test_rollback_of_phase1_withdraw_keeps_deposit_active() {
     let day_0408_late_ms: i64 = 1_775_577_600_000 + 60_000;
 
     let mut batch = StoreBatch::new(&store);
+
+    // Block 98: exact N-1 DAO state for the first block of the target date.
+    batch.put_block_header(
+        98,
+        &CachedBlockHeader {
+            hash: vec![0x62; 32],
+            parent_hash: vec![0x61; 32],
+            timestamp: day_0408_start_ms - 11_000,
+            epoch_number: 1,
+            epoch_index: 1799,
+            epoch_length: 1800,
+            dao: dao_field(
+                1_000_000_000_000_000_000,
+                10_000_000_000_000_000,
+                0,
+                100_000_000_000_000_000,
+            ),
+            transactions_count: 1,
+            uncles_count: 0,
+            cycles: None,
+        },
+    );
 
     // Block 99: earlier in 2026-04-08, the deposit-creating block.
     batch.put_block_header(
@@ -379,7 +405,7 @@ fn test_rollback_of_phase1_withdraw_keeps_deposit_active() {
         new_deposits: 1,
         withdrawals: 0, // phase-1 doesn't count as completed withdrawal
         compensation: 0,
-        cumulative_deposit_amount: 100_00000000,
+        cumulative_deposit_amount: 200_00000000,
         total_issuance: 1_200_000_000_000_000_000,
         secondary_pool: 10_000_000,
         occupied_capacity: 120_000_000_000_000_000,
@@ -390,7 +416,7 @@ fn test_rollback_of_phase1_withdraw_keeps_deposit_active() {
         unclaimed_compensation: 0,
         cumulative_depositors: 1,
         daily_depositor_addresses: 1,
-        protocol_deposited: Some(100_00000000),
+        protocol_deposited: Some(200_00000000),
     };
     batch.put_stats(&s_key, &bincode::serialize(&pre_snap).unwrap());
 
@@ -398,7 +424,7 @@ fn test_rollback_of_phase1_withdraw_keeps_deposit_active() {
     let tx_hash: Vec<u8> = vec![0xA0; 32];
     let outpoint = outpoint_bytes(&tx_hash, 0);
     let entry = DaoDepositCacheEntry {
-        capacity: 100_00000000,
+        capacity: 200_00000000,
         deposit_block_number: 99,
         deposit_timestamp: day_0408_start_ms,
         lock_script_hash: vec![0xB0; 32],
@@ -434,7 +460,7 @@ fn test_rollback_of_phase1_withdraw_keeps_deposit_active() {
     let repaired: DaoDailySnapshot = bincode::deserialize(&raw).unwrap();
 
     assert_eq!(
-        repaired.total_deposited, 100_00000000,
+        repaired.total_deposited, 200_00000000,
         "deposit should be active again after rolling back its phase-1 withdraw request, got {}",
         repaired.total_deposited
     );
@@ -446,7 +472,7 @@ fn test_rollback_of_phase1_withdraw_keeps_deposit_active() {
     assert_eq!(repaired.depositors_count, 1, "one active depositor");
     assert_eq!(
         repaired.protocol_deposited,
-        Some(100_00000000),
+        Some(200_00000000),
         "protocol_deposited includes the now-active deposit"
     );
 }

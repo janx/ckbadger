@@ -2972,13 +2972,13 @@ impl Indexer {
             } else {
                 None
             };
-        let mut prev_dao_cs: Option<(i128, i128)> =
+        let mut prev_dao_csu: Option<(i128, i128, i128)> =
             if let Some(first_block) = all_parsed_blocks.first() {
                 if first_block.number > 0 {
                     self.writer
                         .store()
                         .get_block_header(first_block.number - 1)?
-                        .and_then(|h| extract_dao_csu(&h.dao).map(|(c, s, _)| (c, s)))
+                        .and_then(|h| extract_dao_csu(&h.dao))
                 } else {
                     None
                 }
@@ -3077,12 +3077,14 @@ impl Indexer {
             }
         }
 
-        // Maintain per-block running protocol deposited for accurate secondary
-        // issuance split.  Initialized from the latest snapshot; updated after
-        // each block's DAO transactions are processed.
-        let mut running_protocol_deposited_for_split = {
+        // Maintain the pre-block, interest-bearing DAO free capacity used by
+        // RFC-0023's secondary-issuance split. Full cell capacity remains in
+        // `protocol_deposited` for user-facing locked-capacity statistics.
+        let mut running_protocol_deposit_free_for_split = {
             let snap = load_latest_dao_daily_snapshot(self.writer.store())?;
-            snap.map(|s| s.protocol_deposited.unwrap_or(s.total_deposited))
+            snap.as_ref()
+                .map(crate::sync::dao_helpers::snapshot_protocol_deposit_free_capacity)
+                .transpose()?
                 .unwrap_or(0)
         };
 
@@ -3099,13 +3101,33 @@ impl Indexer {
                 .get(&block_date)
                 .copied()
                 .unwrap_or(0);
+            let pre_block_new_deposits_delta = batch_stats
+                .dao_daily_new_deposits_delta
+                .get(&block_date)
+                .copied()
+                .unwrap_or(0);
+            let pre_block_withdrawals_delta = batch_stats
+                .dao_daily_withdrawals_delta
+                .get(&block_date)
+                .copied()
+                .unwrap_or(0);
+            let pre_block_protocol_cell_delta = pre_block_new_deposits_delta
+                .checked_sub(pre_block_withdrawals_delta)
+                .ok_or_else(|| {
+                    anyhow!(
+                        "DAO protocol cell delta overflow before block {}: deposits={}, withdrawals={}",
+                        parsed.number,
+                        pre_block_new_deposits_delta,
+                        pre_block_withdrawals_delta
+                    )
+                })?;
             accumulate_secondary_issuance_deltas(
                 &mut batch_stats,
                 parsed,
                 block_date,
                 claimed_compensation_in_block,
-                running_protocol_deposited_for_split,
-                &mut prev_dao_cs,
+                running_protocol_deposit_free_for_split,
+                &mut prev_dao_csu,
             )?;
             block_tx_idx += tx_count_for_block;
 
@@ -3329,8 +3351,64 @@ impl Indexer {
                 .get(&block_date)
                 .copied()
                 .unwrap_or(0);
-            running_protocol_deposited_for_split +=
-                post_block_protocol_delta - pre_block_protocol_delta;
+            let post_block_new_deposits_delta = batch_stats
+                .dao_daily_new_deposits_delta
+                .get(&block_date)
+                .copied()
+                .unwrap_or(0);
+            let post_block_withdrawals_delta = batch_stats
+                .dao_daily_withdrawals_delta
+                .get(&block_date)
+                .copied()
+                .unwrap_or(0);
+            let post_block_protocol_cell_delta = post_block_new_deposits_delta
+                .checked_sub(post_block_withdrawals_delta)
+                .ok_or_else(|| {
+                    anyhow!(
+                        "DAO protocol cell delta overflow after block {}: deposits={}, withdrawals={}",
+                        parsed.number,
+                        post_block_new_deposits_delta,
+                        post_block_withdrawals_delta
+                    )
+                })?;
+            let block_protocol_capacity_delta = post_block_protocol_delta
+                .checked_sub(pre_block_protocol_delta)
+                .ok_or_else(|| {
+                    anyhow!(
+                        "DAO protocol capacity delta overflow for block {}: before={}, after={}",
+                        parsed.number,
+                        pre_block_protocol_delta,
+                        post_block_protocol_delta
+                    )
+                })?;
+            let block_protocol_cell_delta = post_block_protocol_cell_delta
+                .checked_sub(pre_block_protocol_cell_delta)
+                .ok_or_else(|| {
+                    anyhow!(
+                        "DAO protocol cell delta overflow for block {}: before={}, after={}",
+                        parsed.number,
+                        pre_block_protocol_cell_delta,
+                        post_block_protocol_cell_delta
+                    )
+                })?;
+            running_protocol_deposit_free_for_split = running_protocol_deposit_free_for_split
+                .checked_add(ckbadger_common::dao::dao_free_capacity_delta(
+                    block_protocol_capacity_delta,
+                    block_protocol_cell_delta,
+                )?)
+                .ok_or_else(|| {
+                    anyhow!(
+                        "running DAO protocol free capacity overflow after block {}",
+                        parsed.number
+                    )
+                })?;
+            if running_protocol_deposit_free_for_split < 0 {
+                bail!(
+                    "negative running DAO protocol free capacity after block {}: {}",
+                    parsed.number,
+                    running_protocol_deposit_free_for_split
+                );
+            }
 
             batch_stats.dao_snapshot_dates.insert(block_date);
             batch_stats

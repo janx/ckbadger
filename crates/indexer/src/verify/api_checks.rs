@@ -1583,6 +1583,8 @@ impl Check for ChartCellCountConsistency {
         let chart: ChartWrapper<StackedChartDataPoint> = api_get(ctx, "charts/cell-count")?;
         let mut findings = vec![];
         let mut prev_date = String::new();
+        let mut prev_dead: Option<i128> = None;
+        let mut prev_total: Option<i128> = None;
 
         for point in &chart.data {
             // Check dates are ordered
@@ -1608,7 +1610,68 @@ impl Check for ChartCellCountConsistency {
                         has_live, has_dead
                     )],
                 });
+                continue;
             }
+
+            let live = point
+                .values
+                .get("liveCells")
+                .and_then(|value| value.parse::<i128>().ok());
+            let dead = point
+                .values
+                .get("deadCells")
+                .and_then(|value| value.parse::<i128>().ok());
+            let (Some(live), Some(dead)) = (live, dead) else {
+                findings.push(Finding {
+                    entity: point.date.clone(),
+                    details: vec!["liveCells/deadCells must be exact integers".to_string()],
+                });
+                continue;
+            };
+            if live < 0 || dead < 0 {
+                findings.push(Finding {
+                    entity: point.date.clone(),
+                    details: vec![format!(
+                        "negative cell count: liveCells={}, deadCells={}",
+                        live, dead
+                    )],
+                });
+                continue;
+            }
+            let Some(total) = live.checked_add(dead) else {
+                findings.push(Finding {
+                    entity: point.date.clone(),
+                    details: vec![format!(
+                        "cell count overflow: liveCells={}, deadCells={}",
+                        live, dead
+                    )],
+                });
+                continue;
+            };
+            if let Some(previous) = prev_dead {
+                if dead < previous {
+                    findings.push(Finding {
+                        entity: point.date.clone(),
+                        details: vec![format!(
+                            "cumulative deadCells decreased: previous={}, current={}",
+                            previous, dead
+                        )],
+                    });
+                }
+            }
+            if let Some(previous) = prev_total {
+                if total < previous {
+                    findings.push(Finding {
+                        entity: point.date.clone(),
+                        details: vec![format!(
+                            "cumulative outputs (live+dead) decreased: previous={}, current={}",
+                            previous, total
+                        )],
+                    });
+                }
+            }
+            prev_dead = Some(dead);
+            prev_total = Some(total);
         }
 
         let checked = chart.data.len() as u64;
@@ -1935,7 +1998,7 @@ impl Check for ChartEpochTimeLengthSane {
     }
 }
 
-/// S10: GET /charts/average-block-time → positive values in expected range.
+/// S10: GET /charts/average-block-time → finite positive values.
 pub struct ChartAverageBlockTimeSane;
 
 impl Check for ChartAverageBlockTimeSane {
@@ -1973,11 +2036,11 @@ impl Check for ChartAverageBlockTimeSane {
             prev_date = point.date.clone();
 
             match point.value.parse::<f64>() {
-                Ok(seconds) if seconds > 0.0 && seconds <= 120.0 => {}
+                Ok(seconds) if seconds.is_finite() && seconds > 0.0 => {}
                 Ok(seconds) => findings.push(Finding {
                     entity: point.date.clone(),
                     details: vec![format!(
-                        "average block time out of expected range (0,120]: {}s",
+                        "average block time must be finite and > 0: {}s",
                         seconds
                     )],
                 }),
@@ -3898,6 +3961,80 @@ mod tests {
             .count();
         assert_eq!(fast_count, 7);
         assert_eq!(sampling_count, 23);
+    }
+
+    #[test]
+    fn average_block_time_accepts_historical_testnet_stall() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let server = runtime.block_on(MockServer::start());
+        runtime.block_on(async {
+            Mock::given(method("GET"))
+                .and(path("/api/v1/charts/average-block-time"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "data": [{ "date": "20200522", "value": "311.43" }]
+                })))
+                .mount(&server)
+                .await;
+        });
+
+        let result = ChartAverageBlockTimeSane
+            .run(&mock_ctx(&server), &ProgressReporter::new(None))
+            .unwrap();
+        assert!(result.passed, "findings: {:?}", result.findings);
+    }
+
+    #[test]
+    fn cell_count_consistency_allows_live_decline_when_chain_totals_grow() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let server = runtime.block_on(MockServer::start());
+        runtime.block_on(async {
+            Mock::given(method("GET"))
+                .and(path("/api/v1/charts/cell-count"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "data": [
+                        { "date": "20260720", "values": { "liveCells": "100", "deadCells": "50" } },
+                        { "date": "20260721", "values": { "liveCells": "90", "deadCells": "70" } }
+                    ]
+                })))
+                .mount(&server)
+                .await;
+        });
+
+        let result = ChartCellCountConsistency
+            .run(&mock_ctx(&server), &ProgressReporter::new(None))
+            .unwrap();
+        assert!(result.passed, "findings: {:?}", result.findings);
+    }
+
+    #[test]
+    fn cell_count_consistency_rejects_cumulative_regression() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let server = runtime.block_on(MockServer::start());
+        runtime.block_on(async {
+            Mock::given(method("GET"))
+                .and(path("/api/v1/charts/cell-count"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "data": [
+                        { "date": "20260720", "values": { "liveCells": "100", "deadCells": "50" } },
+                        { "date": "20260721", "values": { "liveCells": "90", "deadCells": "49" } }
+                    ]
+                })))
+                .mount(&server)
+                .await;
+        });
+
+        let result = ChartCellCountConsistency
+            .run(&mock_ctx(&server), &ProgressReporter::new(None))
+            .unwrap();
+        assert!(!result.passed);
+        assert!(result.findings.iter().any(|finding| finding
+            .details
+            .iter()
+            .any(|detail| detail.contains("cumulative deadCells decreased"))));
+        assert!(result.findings.iter().any(|finding| finding
+            .details
+            .iter()
+            .any(|detail| detail.contains("cumulative outputs (live+dead) decreased"))));
     }
 
     fn mock_ctx(server: &MockServer) -> CheckContext {

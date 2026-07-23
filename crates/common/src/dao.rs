@@ -6,6 +6,59 @@ pub const SHANNON: u64 = 100_000_000;
 /// Every DAO deposit cell has this minimum storage cost.
 pub const DAO_OCCUPIED_CAPACITY: u64 = 102_00000000;
 
+/// Return the interest-bearing free capacity of `cell_count` DAO cells.
+///
+/// DAO compensation accrues only to `capacity - occupied_capacity`; passing
+/// full deposit capacity into the secondary-issuance split overstates DAO
+/// compensation, especially on networks with many small deposits.
+pub fn dao_total_free_capacity(total_capacity: i128, cell_count: i64) -> anyhow::Result<i128> {
+    if total_capacity < 0 || cell_count < 0 {
+        bail!(
+            "negative DAO aggregate while computing free capacity: total_capacity={}, cell_count={}",
+            total_capacity,
+            cell_count
+        );
+    }
+    let occupied = i128::from(cell_count)
+        .checked_mul(i128::from(DAO_OCCUPIED_CAPACITY))
+        .ok_or_else(|| anyhow!("DAO occupied capacity multiplication overflow"))?;
+    if total_capacity < occupied {
+        bail!(
+            "DAO aggregate capacity below occupied capacity: total_capacity={}, cell_count={}, occupied={}",
+            total_capacity,
+            cell_count,
+            occupied
+        );
+    }
+    total_capacity.checked_sub(occupied).ok_or_else(|| {
+        anyhow!(
+            "DAO free capacity subtraction overflow: total_capacity={}, cell_count={}, occupied={}",
+            total_capacity,
+            cell_count,
+            occupied
+        )
+    })
+}
+
+/// Convert a signed change in DAO cell capacity/count into the matching signed
+/// change in interest-bearing free capacity.
+pub fn dao_free_capacity_delta(
+    capacity_delta: i128,
+    cell_count_delta: i64,
+) -> anyhow::Result<i128> {
+    let occupied_delta = i128::from(cell_count_delta)
+        .checked_mul(i128::from(DAO_OCCUPIED_CAPACITY))
+        .ok_or_else(|| anyhow!("DAO occupied capacity delta multiplication overflow"))?;
+    capacity_delta.checked_sub(occupied_delta).ok_or_else(|| {
+        anyhow!(
+            "DAO free capacity delta overflow: capacity_delta={}, cell_count_delta={}, occupied_delta={}",
+            capacity_delta,
+            cell_count_delta,
+            occupied_delta
+        )
+    })
+}
+
 /// Calculate DAO compensation from accumulated rate values.
 ///
 /// Formula (per RFC-0023): `free_capacity * ar_withdraw / ar_deposit - free_capacity`
@@ -24,17 +77,8 @@ pub fn calculate_dao_compensation_from_ar(
         );
     }
 
-    let capacity_u128 = u128::try_from(capacity)
-        .map_err(|_| anyhow!("DAO capacity is negative: capacity={}", capacity))?;
-    let occupied = DAO_OCCUPIED_CAPACITY as u128;
-    if capacity_u128 < occupied {
-        bail!(
-            "DAO capacity below occupied capacity: capacity={}, occupied={}",
-            capacity,
-            DAO_OCCUPIED_CAPACITY
-        );
-    }
-    let free_capacity = capacity_u128 - occupied;
+    let free_capacity = u128::try_from(dao_total_free_capacity(i128::from(capacity), 1)?)
+        .map_err(|_| anyhow!("DAO free capacity is negative: capacity={}", capacity))?;
     let gross = free_capacity
         .checked_mul(ar_withdraw as u128)
         .ok_or_else(|| anyhow!("DAO compensation multiply overflow"))?
@@ -49,6 +93,79 @@ pub fn calculate_dao_compensation_from_ar(
     })?;
     i64::try_from(compensation_u128)
         .map_err(|_| anyhow!("DAO compensation exceeds i64: {}", compensation_u128))
+}
+
+/// Split an exact per-block change in the DAO header's non-miner secondary
+/// pool into `(miner, dao, treasury)` components.
+///
+/// A negative delta is an on-chain protocol correction, not negative issuance.
+/// It is assigned entirely to treasury so miner and DAO compensation remain
+/// monotonic while `dao + treasury` still telescopes to the exact S-field
+/// change across an upgrade boundary.
+pub fn split_secondary_issuance_delta(
+    total_issuance: i128,
+    occupied_capacity: i128,
+    total_deposited_free_capacity: i128,
+    non_miner_secondary_delta: i128,
+) -> anyhow::Result<(i128, i128, i128)> {
+    if total_issuance < 0 || occupied_capacity < 0 || total_deposited_free_capacity < 0 {
+        bail!(
+            "negative input in secondary issuance split: total_issuance={}, occupied_capacity={}, total_deposited={}, non_miner_secondary_delta={}",
+            total_issuance,
+            occupied_capacity,
+            total_deposited_free_capacity,
+            non_miner_secondary_delta
+        );
+    }
+    if total_issuance <= occupied_capacity {
+        bail!(
+            "invalid DAO C/U relationship: total_issuance={}, occupied_capacity={}, non_miner_secondary_delta={}",
+            total_issuance,
+            occupied_capacity,
+            non_miner_secondary_delta
+        );
+    }
+
+    let liquid_supply = total_issuance - occupied_capacity;
+    if total_deposited_free_capacity > liquid_supply {
+        bail!(
+            "dao deposited exceeds liquid supply: total_deposited={}, liquid_supply={}, total_issuance={}, occupied_capacity={}",
+            total_deposited_free_capacity,
+            liquid_supply,
+            total_issuance,
+            occupied_capacity
+        );
+    }
+
+    if non_miner_secondary_delta < 0 {
+        return Ok((0, 0, non_miner_secondary_delta));
+    }
+    if non_miner_secondary_delta == 0 {
+        return Ok((0, 0, 0));
+    }
+
+    let miner = non_miner_secondary_delta
+        .checked_mul(occupied_capacity)
+        .ok_or_else(|| anyhow!("secondary issuance miner multiplication overflow"))?
+        / liquid_supply;
+    let dao = non_miner_secondary_delta
+        .checked_mul(total_deposited_free_capacity)
+        .ok_or_else(|| anyhow!("secondary issuance DAO multiplication overflow"))?
+        / liquid_supply;
+    let treasury = non_miner_secondary_delta
+        .checked_sub(dao)
+        .ok_or_else(|| anyhow!("secondary issuance treasury subtraction overflow"))?;
+
+    if miner < 0 || dao < 0 || treasury < 0 {
+        bail!(
+            "secondary issuance split produced negative component: miner={}, dao={}, treasury={}, non_miner_secondary_delta={}",
+            miner,
+            dao,
+            treasury,
+            non_miner_secondary_delta
+        );
+    }
+    Ok((miner, dao, treasury))
 }
 
 /// Extract the S field (secondary pool) from a 32-byte DAO header as u64.
@@ -203,6 +320,50 @@ mod tests {
     /// shannons — 33.6B CKB + 145238488200 shannons of genesis rounding, NOT
     /// the 33.6B approximation previously hardcoded here.
     const MAINNET_GENESIS_ISSUANCE: i128 = 3_360_000_145_238_488_200;
+
+    #[test]
+    fn secondary_issuance_negative_s_delta_is_absorbed_by_treasury() {
+        assert_eq!(
+            split_secondary_issuance_delta(1_000, 100, 200, -30).unwrap(),
+            (0, 0, -30)
+        );
+    }
+
+    #[test]
+    fn dao_free_capacity_excludes_occupied_capacity_per_cell() {
+        assert_eq!(
+            dao_total_free_capacity(1_000 * i128::from(SHANNON), 2).unwrap(),
+            796 * i128::from(SHANNON)
+        );
+    }
+
+    #[test]
+    fn dao_free_capacity_delta_handles_withdrawal() {
+        assert_eq!(
+            dao_free_capacity_delta(-500 * i128::from(SHANNON), -1).unwrap(),
+            -398 * i128::from(SHANNON)
+        );
+    }
+
+    #[test]
+    fn dao_free_capacity_rejects_capacity_below_occupied() {
+        let error = dao_total_free_capacity(100 * i128::from(SHANNON), 1).unwrap_err();
+        assert!(error.to_string().contains("below occupied capacity"));
+    }
+
+    #[test]
+    fn secondary_issuance_split_is_exact_for_positive_delta() {
+        assert_eq!(
+            split_secondary_issuance_delta(1_000, 100, 200, 90).unwrap(),
+            (10, 20, 70)
+        );
+    }
+
+    #[test]
+    fn secondary_issuance_split_rejects_invalid_chain_state() {
+        let err = split_secondary_issuance_delta(1_000, 900, 200, 10).unwrap_err();
+        assert!(err.to_string().contains("exceeds liquid supply"));
+    }
 
     #[test]
     fn test_apc_at_genesis() {

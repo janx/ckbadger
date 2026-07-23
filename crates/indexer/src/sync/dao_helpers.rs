@@ -10,6 +10,7 @@ use std::collections::{HashMap, HashSet};
 
 use anyhow::{anyhow, bail, Result};
 use chrono::NaiveDate;
+use ckbadger_common::dao::{dao_total_free_capacity, split_secondary_issuance_delta};
 
 use ckbadger_store::types::{AddressBalance, PositionedCellInfo};
 
@@ -288,87 +289,15 @@ pub(crate) fn dao_csu_for_snapshot_date(
 }
 
 // ---------------------------------------------------------------------------
-// Secondary issuance split
-// ---------------------------------------------------------------------------
-
-pub(crate) fn split_secondary_issuance(
-    total_issuance: i128,
-    occupied_capacity: i128,
-    total_deposited: i128,
-    non_miner_secondary: i128,
-) -> Result<(i128, i128, i128)> {
-    if non_miner_secondary <= 0 {
-        return Ok((0, 0, 0));
-    }
-
-    if total_issuance < 0 || occupied_capacity < 0 || total_deposited < 0 {
-        bail!(
-            "negative input in secondary issuance split: total_issuance={}, occupied_capacity={}, total_deposited={}, non_miner_secondary={}",
-            total_issuance,
-            occupied_capacity,
-            total_deposited,
-            non_miner_secondary
-        );
-    }
-
-    if total_issuance <= occupied_capacity {
-        bail!(
-            "invalid DAO C/U relationship: total_issuance={}, occupied_capacity={}, non_miner_secondary={}",
-            total_issuance,
-            occupied_capacity,
-            non_miner_secondary
-        );
-    }
-
-    let denom = total_issuance - occupied_capacity;
-    if total_deposited > denom {
-        bail!(
-            "dao deposited exceeds liquid supply: total_deposited={}, liquid_supply={}, total_issuance={}, occupied_capacity={}",
-            total_deposited,
-            denom,
-            total_issuance,
-            occupied_capacity
-        );
-    }
-
-    let miner = non_miner_secondary * occupied_capacity / denom;
-    let dao = non_miner_secondary * total_deposited / denom;
-    let treasury = non_miner_secondary - dao;
-
-    if miner < 0 || dao < 0 || treasury < 0 {
-        bail!(
-            "secondary issuance split produced negative component: miner={}, dao={}, treasury={}, non_miner_secondary={}",
-            miner,
-            dao,
-            treasury,
-            non_miner_secondary
-        );
-    }
-
-    Ok((miner, dao, treasury))
-}
-
-// ---------------------------------------------------------------------------
 // Non-miner secondary delta resolution
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
 pub(crate) fn resolve_non_miner_secondary_delta_for_snapshot(
-    date: NaiveDate,
+    _date: NaiveDate,
     daily_non_miner_delta: Option<i128>,
 ) -> Result<i128> {
-    if let Some(delta) = daily_non_miner_delta {
-        if delta < 0 {
-            bail!(
-                "negative daily non-miner secondary issuance delta while building DAO daily snapshot: date={}, delta={}",
-                date,
-                delta
-            );
-        }
-        return Ok(delta);
-    }
-
-    Ok(0)
+    Ok(daily_non_miner_delta.unwrap_or(0))
 }
 
 // ---------------------------------------------------------------------------
@@ -589,8 +518,8 @@ pub(crate) fn accumulate_secondary_issuance_deltas_from_csu(
     s: i128,
     u: i128,
     claimed_compensation_in_block: i128,
-    running_deposited: i128,
-    prev_dao_cs: &mut Option<(i128, i128)>,
+    running_deposited_free: i128,
+    prev_dao_csu: &mut Option<(i128, i128, i128)>,
 ) -> Result<()> {
     if claimed_compensation_in_block < 0 {
         bail!(
@@ -601,9 +530,16 @@ pub(crate) fn accumulate_secondary_issuance_deltas_from_csu(
         );
     }
 
-    if let Some((prev_c, prev_s)) = *prev_dao_cs {
-        let _c_delta = c - prev_c;
-        let s_delta = s - prev_s;
+    if let Some((prev_c, prev_s, prev_u)) = *prev_dao_csu {
+        let s_delta = s.checked_sub(prev_s).ok_or_else(|| {
+            anyhow!(
+                "secondary issuance S-field delta overflow: block={}, date={}, current_s={}, previous_s={}",
+                block_number,
+                block_date,
+                s,
+                prev_s
+            )
+        })?;
         let non_miner_delta = s_delta
             .checked_add(claimed_compensation_in_block)
             .ok_or_else(|| {
@@ -615,35 +551,43 @@ pub(crate) fn accumulate_secondary_issuance_deltas_from_csu(
                     claimed_compensation_in_block
                 )
             })?;
-        // CKB's on-chain S field can physically decrease at protocol upgrade
-        // boundaries (see POSTMORTEM DAO-018). Skip negative deltas — only
-        // accumulate positive non-miner secondary issuance growth.
-        if non_miner_delta > 0 {
+        if non_miner_delta != 0 {
             *stats
                 .daily_secondary_non_miner_delta
                 .entry(block_date)
                 .or_default() += non_miner_delta;
-            // Per-block split using the deposited amount at this block.
-            // This is exact (matching CKB protocol) rather than the previous
-            // daily-aggregated split which used end-of-day deposited.
-            let (miner, dao, treasury) =
-                split_secondary_issuance(c, u, running_deposited, non_miner_delta)?;
-            *stats
-                .daily_secondary_miner_delta
-                .entry(block_date)
-                .or_default() += miner;
-            *stats
-                .daily_secondary_dao_delta
-                .entry(block_date)
-                .or_default() += dao;
-            *stats
-                .daily_secondary_treasury_delta
-                .entry(block_date)
-                .or_default() += treasury;
+            // Per-block exact split. Negative S-field protocol corrections are
+            // retained in treasury so the cumulative sum telescopes instead of
+            // counting the subsequent rebound twice (POSTMORTEM DAO-018). RFC-0023
+            // defines block N from C/U at the end of N-1 (POSTMORTEM DAO-016).
+            let (miner, dao, treasury) = split_secondary_issuance_delta(
+                prev_c,
+                prev_u,
+                running_deposited_free,
+                non_miner_delta,
+            )?;
+            if miner != 0 {
+                *stats
+                    .daily_secondary_miner_delta
+                    .entry(block_date)
+                    .or_default() += miner;
+            }
+            if dao != 0 {
+                *stats
+                    .daily_secondary_dao_delta
+                    .entry(block_date)
+                    .or_default() += dao;
+            }
+            if treasury != 0 {
+                *stats
+                    .daily_secondary_treasury_delta
+                    .entry(block_date)
+                    .or_default() += treasury;
+            }
         }
     }
 
-    *prev_dao_cs = Some((c, s));
+    *prev_dao_csu = Some((c, s, u));
     Ok(())
 }
 
@@ -652,8 +596,8 @@ pub(crate) fn accumulate_secondary_issuance_deltas(
     parsed: &crate::parser::block::ParsedBlock,
     block_date: NaiveDate,
     claimed_compensation_in_block: i128,
-    running_deposited: i128,
-    prev_dao_cs: &mut Option<(i128, i128)>,
+    running_deposited_free: i128,
+    prev_dao_csu: &mut Option<(i128, i128, i128)>,
 ) -> Result<()> {
     let (c, s, u) = extract_dao_csu(&parsed.dao).ok_or_else(|| {
         anyhow!(
@@ -672,9 +616,38 @@ pub(crate) fn accumulate_secondary_issuance_deltas(
         s,
         u,
         claimed_compensation_in_block,
-        running_deposited,
-        prev_dao_cs,
+        running_deposited_free,
+        prev_dao_csu,
     )
+}
+
+pub(crate) fn snapshot_protocol_deposit_free_capacity(
+    snapshot: &ckbadger_store::types::DaoDailySnapshot,
+) -> Result<i128> {
+    let live_protocol_cells = snapshot
+        .new_deposits
+        .checked_sub(snapshot.withdrawals)
+        .ok_or_else(|| {
+            anyhow!(
+                "DAO protocol cell count overflow for snapshot {}: deposits={}, withdrawals={}",
+                snapshot.date,
+                snapshot.new_deposits,
+                snapshot.withdrawals
+            )
+        })?;
+    dao_total_free_capacity(
+        snapshot
+            .protocol_deposited
+            .unwrap_or(snapshot.total_deposited),
+        live_protocol_cells,
+    )
+    .map_err(|error| {
+        anyhow!(
+            "invalid DAO protocol free capacity for snapshot {}: {}",
+            snapshot.date,
+            error
+        )
+    })
 }
 
 fn bump_unique_active_depositors(
@@ -1124,13 +1097,13 @@ mod tests {
 
     #[test]
     fn test_split_secondary_issuance_errors_on_negative_inputs() {
-        let err = split_secondary_issuance(1000, 100, -1, 10).unwrap_err();
+        let err = split_secondary_issuance_delta(1000, 100, -1, 10).unwrap_err();
         assert!(err.to_string().contains("negative input"));
     }
 
     #[test]
     fn test_split_secondary_issuance_errors_when_deposited_exceeds_liquid_supply() {
-        let err = split_secondary_issuance(1000, 900, 200, 10).unwrap_err();
+        let err = split_secondary_issuance_delta(1000, 900, 200, 10).unwrap_err();
         assert!(err.to_string().contains("exceeds liquid supply"));
     }
 
@@ -1144,12 +1117,12 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_non_miner_secondary_delta_for_snapshot_errors_on_negative_precomputed_delta() {
+    fn test_resolve_non_miner_secondary_delta_for_snapshot_keeps_negative_protocol_correction() {
         let date = chrono::NaiveDate::from_ymd_opt(2026, 2, 18).unwrap();
-        let err = resolve_non_miner_secondary_delta_for_snapshot(date, Some(-1)).unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("negative daily non-miner secondary issuance delta"));
+        assert_eq!(
+            resolve_non_miner_secondary_delta_for_snapshot(date, Some(-1)).unwrap(),
+            -1
+        );
     }
 
     #[test]
@@ -1179,14 +1152,14 @@ mod tests {
     #[test]
     fn test_accumulate_secondary_issuance_deltas_tracks_exact_miner_and_non_miner() {
         let mut stats = BatchStats::default();
-        let prev_c = 10_000_000_000_000_i128;
+        let prev_c = 10_000_i128;
         let prev_s = 5_000_i128;
-        let c = prev_c + 1_000;
+        let prev_u = 2_000_i128;
+        let c = 20_000_i128;
         let s = prev_s + 600;
-        let u = 2_000_i128;
-        let denom = c - u;
-        let expected_miner = 600 * u / denom;
-        let mut prev = Some((prev_c, prev_s));
+        let u = 8_000_i128;
+        let expected_miner = 600 * prev_u / (prev_c - prev_u);
+        let mut prev = Some((prev_c, prev_s, prev_u));
         let block = dummy_parsed_block(build_dao_field(c as u64, s as u64, u as u64), 0, 1000);
         let date = ckbadger_common::block_date(block.timestamp);
 
@@ -1203,15 +1176,17 @@ mod tests {
     fn test_accumulate_secondary_issuance_deltas_adds_claimed_compensation_back_to_negative_s_delta(
     ) {
         let mut stats = BatchStats::default();
-        let mut prev = Some((20_000_000_000_000_i128, 8_000_i128));
-        let c = 20_000_000_000_500_i128;
+        let prev_c = 10_000_i128;
+        let prev_u = 2_000_i128;
+        let mut prev = Some((prev_c, 8_000_i128, prev_u));
+        let c = 20_000_i128;
         let s = 7_900_i128;
-        let u = 1_000_i128;
+        let u = 8_000_i128;
         let claimed_compensation = 150_i128;
         let block = dummy_parsed_block(build_dao_field(c as u64, s as u64, u as u64), 0, 1000);
         let date = ckbadger_common::block_date(block.timestamp);
         let expected_non_miner = 50_i128;
-        let expected_miner = expected_non_miner * u / (c - u);
+        let expected_miner = expected_non_miner * prev_u / (prev_c - prev_u);
 
         accumulate_secondary_issuance_deltas(
             &mut stats,
@@ -1232,15 +1207,15 @@ mod tests {
         );
         assert_eq!(
             prev,
-            Some((c, s)),
-            "previous DAO C/S baseline must still advance to the latest block"
+            Some((c, s, u)),
+            "previous DAO C/S/U baseline must still advance to the latest block"
         );
     }
 
     #[test]
     fn test_accumulate_secondary_issuance_deltas_same_day_drop_then_growth_tracks_exact_total() {
         let mut stats = BatchStats::default();
-        let mut prev = Some((30_000_000_000_000_i128, 10_000_i128));
+        let mut prev = Some((30_000_000_000_000_i128, 10_000_i128, 100_i128));
         let date = chrono::NaiveDate::from_ymd_opt(2026, 2, 18).unwrap();
 
         let block_drop =
@@ -1271,7 +1246,7 @@ mod tests {
     #[test]
     fn test_accumulate_secondary_issuance_deltas_errors_on_invalid_dao_field() {
         let mut stats = BatchStats::default();
-        let mut prev = Some((30_000_000_000_000_i128, 10_000_i128));
+        let mut prev = Some((30_000_000_000_000_i128, 10_000_i128, 0_i128));
         let date = chrono::NaiveDate::from_ymd_opt(2026, 2, 18).unwrap();
         // ParsedBlock.dao is now [u8; 32], so extract_dao_csu always succeeds on it.
         // Test the underlying helper directly with a short slice to cover the error path.
@@ -1285,11 +1260,12 @@ mod tests {
     }
 
     #[test]
-    fn test_accumulate_secondary_issuance_deltas_protocol_upgrade_s_drop_skipped() {
+    fn test_accumulate_secondary_issuance_deltas_protocol_upgrade_s_drop_hits_treasury() {
         // CKB's S field can physically decrease at protocol upgrade boundaries.
-        // Verify we skip (not crash) when non_miner_delta < 0.
+        // The negative correction must be retained in treasury so the cumulative
+        // non-miner sum telescopes instead of counting the rebound twice.
         let mut stats = BatchStats::default();
-        let mut prev = Some((20_000_000_000_000_i128, 10_000_i128));
+        let mut prev = Some((20_000_000_000_000_i128, 10_000_i128, 100_i128));
         let date = chrono::NaiveDate::from_ymd_opt(2026, 2, 18).unwrap();
 
         // S drops from 10_000 to 9_000 — simulates protocol upgrade boundary.
@@ -1300,11 +1276,18 @@ mod tests {
             result.is_ok(),
             "negative S delta should not crash: {result:?}"
         );
-        // Negative delta should NOT be accumulated.
-        assert_eq!(stats.daily_secondary_non_miner_delta.get(&date), None);
+        assert_eq!(
+            stats.daily_secondary_non_miner_delta.get(&date),
+            Some(&-1_000)
+        );
         assert_eq!(stats.daily_secondary_miner_delta.get(&date), None);
-        // prev_dao_cs must still advance to the current block's values.
-        assert_eq!(prev, Some((20_000_000_000_500, 9_000)));
+        assert_eq!(stats.daily_secondary_dao_delta.get(&date), None);
+        assert_eq!(
+            stats.daily_secondary_treasury_delta.get(&date),
+            Some(&-1_000)
+        );
+        // prev_dao_csu must still advance to the current block's values.
+        assert_eq!(prev, Some((20_000_000_000_500, 9_000, 100)));
     }
 
     // -- accumulate_dao_snapshot_deltas_for_txs -----------------------------

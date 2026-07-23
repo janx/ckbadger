@@ -14,7 +14,7 @@ use crate::parser::dao::{DaoParser, DaoState};
 use crate::parser::dotbit::DotbitWitnessBundle;
 use crate::parser::registry::{ProtocolScript, PROTOCOL_REGISTRY};
 use crate::parser::script::ScriptParser;
-use crate::parser::udt::UdtParser;
+use crate::parser::udt::{UdtParser, UdtStandard};
 use crate::sync::dao_helpers::occupied_capacity_shannons_i64;
 
 use super::facts::{BlockFacts, CellFacts, CellSemanticTag, DaoCellState, OutPointKey, TxFacts};
@@ -587,21 +587,20 @@ fn parse_binary_dotbit_witnesses(witnesses: &ckb_types::packed::BytesVec) -> Dot
 /// Classify a cell's semantic tag from its type-script `code_hash` bytes and
 /// `hash_type`, keyed on the network-agnostic `PROTOCOL_REGISTRY`.
 ///
-/// The registry maps a `code_hash` to a protocol identity regardless of network,
-/// so testnet deployments classify identically to their mainnet counterparts in
-/// bulk sync (the previous mainnet-only static lookup table silently dropped
-/// testnet cells to `Plain`). The `hash_type` guards below mirror the historical
-/// UDT rules; every other protocol classifies on `code_hash` alone. An
-/// unregistered `code_hash`, a non-cell protocol (locks, fiber, stable++, …), or
-/// a UDT `hash_type` that fails its guard falls through to `Plain`.
+/// UDT classification delegates to `UdtParser`, the single source for standard
+/// and bundled xUDT-compatible deployments. Every other protocol classifies on
+/// `code_hash` through the registry.
 fn code_hash_to_semantic_tag(code_hash: &[u8], hash_type: i16) -> CellSemanticTag {
+    if let Some(standard) = UdtParser::is_udt_code_hash_bytes(code_hash, hash_type) {
+        return match standard {
+            UdtStandard::Sudt => CellSemanticTag::Sudt,
+            UdtStandard::Xudt => CellSemanticTag::Xudt,
+        };
+    }
+
     match PROTOCOL_REGISTRY.get(code_hash) {
         // DAO does not enforce hash_type — matches historical behavior.
         Some(ProtocolScript::Dao) => CellSemanticTag::Dao,
-        Some(ProtocolScript::Sudt) if hash_type == 1 => CellSemanticTag::Sudt,
-        // xUDT: mainnet code_hash is data1 (hash_type 2), testnet is type (hash_type 1);
-        // each code_hash is unambiguous, so accept its on-chain hash_type.
-        Some(ProtocolScript::Xudt) if hash_type == 1 || hash_type == 2 => CellSemanticTag::Xudt,
         Some(ProtocolScript::DotbitAccount) => CellSemanticTag::Dotbit,
         Some(ProtocolScript::BitCell) => CellSemanticTag::BitCell,
         Some(
@@ -609,7 +608,7 @@ fn code_hash_to_semantic_tag(code_hash: &[u8], hash_type: i16) -> CellSemanticTa
         ) => CellSemanticTag::Mnft,
         Some(ProtocolScript::SporeNft | ProtocolScript::SporeDid) => CellSemanticTag::Spore,
         Some(ProtocolScript::Cluster) => CellSemanticTag::Cluster,
-        // Unregistered code_hash, a non-cell protocol, or a UDT hash_type-guard miss.
+        // Unregistered code_hash or a non-cell protocol.
         _ => CellSemanticTag::Plain,
     }
 }
@@ -1057,10 +1056,8 @@ mod tests {
     #[test]
     fn classify_from_code_hash_sudt() {
         let hash = crate::rpc::parse_hex_to_bytes(crate::parser::udt::SUDT_CODE_HASH);
-        // hash_type 1 → Sudt
         assert_eq!(code_hash_to_semantic_tag(&hash, 1), CellSemanticTag::Sudt);
-        // hash_type 0 → Plain (guard miss)
-        assert_eq!(code_hash_to_semantic_tag(&hash, 0), CellSemanticTag::Plain);
+        assert_eq!(code_hash_to_semantic_tag(&hash, 0), CellSemanticTag::Sudt);
     }
 
     #[test]
@@ -1071,14 +1068,31 @@ mod tests {
         // Registry migration trusts each xUDT code_hash's on-chain hash_type, so
         // hash_type 1 on the data1 code_hash is also accepted (was Plain before).
         assert_eq!(code_hash_to_semantic_tag(&hash, 1), CellSemanticTag::Xudt);
-        // hash_type 0 → Plain (guard miss)
-        assert_eq!(code_hash_to_semantic_tag(&hash, 0), CellSemanticTag::Plain);
+        assert_eq!(code_hash_to_semantic_tag(&hash, 0), CellSemanticTag::Xudt);
     }
 
     #[test]
     fn classify_from_code_hash_xudt_type() {
         let hash = crate::rpc::parse_hex_to_bytes(crate::parser::udt::XUDT_CODE_HASH_TYPE);
         assert_eq!(code_hash_to_semantic_tag(&hash, 1), CellSemanticTag::Xudt);
+    }
+
+    #[test]
+    fn classify_testnet_xudt_compatible_assets_as_xudt() {
+        // These deployments back the USDI and RUSD verification failures. They
+        // use the xUDT amount encoding but have application-specific type-script
+        // code hashes declared as UDTs in the bundled script metadata.
+        for code_hash in [
+            "0xcc9dc33ef234e14bc788c43a4848556a5fb16401a04662fc55db9bb201987037",
+            "0x1142755a044bf2ee358cba9f2da187ce928c91cd4dc8692ded0337efa677d21a",
+        ] {
+            let hash = crate::rpc::parse_hex_to_bytes(code_hash);
+            assert_eq!(
+                code_hash_to_semantic_tag(&hash, 1),
+                CellSemanticTag::Xudt,
+                "xUDT-compatible deployment {code_hash} must reach the bulk token owner"
+            );
+        }
     }
 
     #[test]

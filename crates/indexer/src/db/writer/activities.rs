@@ -15,13 +15,6 @@ use ckbadger_store::types::{
 
 use crate::parser::{bit_cell::BitCellParser, dotbit::DotbitParser, udt::UdtParser};
 
-mod bundled_udt {
-    pub const EXTRA_UDT_CODE_HASHES: &[u8] = include_bytes!(concat!(
-        env!("OUT_DIR"),
-        "/bundled_udt_script_code_hashes.json"
-    ));
-}
-
 static CODE_HASHES: OnceLock<CodeHashes> = OnceLock::new();
 
 fn code_hashes() -> &'static CodeHashes {
@@ -62,11 +55,12 @@ impl CodeHashes {
         // protocol identities and must not share lifecycle calculations. Every
         // other registry protocol — mNFT issuer/class, all locks, and the
         // fiber/stablepp/utxoswap scripts — is skipped via the `_` arm.
-        // Stable++/ccBTC-style xUDT-compatible assets are added below.
+        // UDTs use UdtParser's shared classifier below so activity, live sync,
+        // and bulk sync cannot disagree about xUDT-compatible deployments.
         let mut type_lookup: HashMap<Vec<u8>, AssetKind> = HashMap::new();
         for (code_hash, protocol) in PROTOCOL_REGISTRY.iter() {
             let kind = match protocol {
-                ProtocolScript::Sudt | ProtocolScript::Xudt => AssetKind::Udt,
+                ProtocolScript::Sudt | ProtocolScript::Xudt => continue,
                 ProtocolScript::Dao => AssetKind::Dao,
                 ProtocolScript::SporeDid => AssetKind::SporeDid,
                 ProtocolScript::SporeNft => AssetKind::Spore,
@@ -77,14 +71,6 @@ impl CodeHashes {
                 _ => continue,
             };
             type_lookup.insert(code_hash.clone(), kind);
-        }
-
-        // Extend with xudt_compatible scripts from bundled script labels (decoderType "udt").
-        let extra: Vec<String> = serde_json::from_slice(bundled_udt::EXTRA_UDT_CODE_HASHES)
-            .expect("bundled UDT script code hashes JSON is invalid — build.rs bug");
-        for hex_str in &extra {
-            let bytes = parse_hex_to_bytes(hex_str);
-            type_lookup.entry(bytes).or_insert(AssetKind::Udt);
         }
 
         // Standard lock code_hashes (access-control only, no protocol semantics)
@@ -135,7 +121,10 @@ impl CodeHashes {
     }
 
     fn classify(&self, code_hash: &[u8]) -> Option<AssetKind> {
-        self.type_lookup.get(code_hash).copied()
+        self.type_lookup
+            .get(code_hash)
+            .copied()
+            .or_else(|| UdtParser::is_udt_code_hash_bytes(code_hash, 0).map(|_| AssetKind::Udt))
     }
 
     fn is_standard_lock(&self, code_hash: &[u8]) -> bool {

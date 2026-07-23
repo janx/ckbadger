@@ -1176,4 +1176,49 @@ re-sync from genesis.
 
 ---
 
-_Last updated: 2026-04-10_
+### DAO-022: Testnet DAO compensation diverges from protocol free-capacity accounting
+
+**Date**: 2026-07-23
+
+**Symptom**: Testnet verification reported cumulative DAO compensation up to
+14.23% above the official explorer, with smaller daily-series drift around the
+same aggregate.
+
+**Root cause**:
+
+1. The secondary-issuance split used each DAO cell's full capacity. RFC-0023
+   compensation accrues only to free capacity, so the mandatory 102 CKB
+   occupied capacity of every live DAO cell was incorrectly treated as
+   interest-bearing.
+2. The split paired the pre-block deposit state with block N's C/U values.
+   Protocol block N uses C/U at the end of block N-1, so all three inputs did
+   not describe the same point in chain history.
+3. Negative S-field corrections at protocol boundaries were skipped while the
+   baseline advanced. The following rebound was then counted again, breaking
+   exact telescoping across the boundary (a regression of DAO-018).
+
+**Fix**:
+
+- Added one shared exact split in `ckbadger-common` and routed live sync, bulk
+  build, and reorg snapshot recomputation through it.
+- Track protocol DAO free capacity as `capacity - 102 CKB` per live DAO cell,
+  while retaining full capacity for user-facing locked-capacity statistics.
+- Carry the complete previous `(C, S, U)` header state and use previous C/U
+  with the pre-block free-capacity state.
+- Preserve negative S corrections entirely in treasury so miner and DAO
+  compensation remain monotonic while `DAO + treasury` telescopes exactly.
+
+**Tests Added/Updated**:
+
+- Shared free-capacity, signed-delta, positive-split, and negative-S tests.
+- Live/bulk DAO lifecycle coverage for the 102 CKB occupied-capacity exclusion.
+- Regression coverage proving block N uses block N-1 C/U, including reorg
+  snapshot recomputation.
+
+**Re-sync required**: Yes. Historical DAO snapshots were written by the wrong
+calculation path; fix the writer, purge the chain stores, and re-sync from
+genesis rather than backfilling or patching persisted aggregates.
+
+---
+
+_Last updated: 2026-07-23_
