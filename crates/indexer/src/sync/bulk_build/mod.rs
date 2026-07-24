@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
@@ -30,13 +30,14 @@ use ckbadger_store::{
 };
 use rayon::prelude::*;
 use rocksdb::IteratorMode;
-use tracing::info;
+use tracing::{info, warn};
 
 use super::indexer::{
     finalize_bulk_stage_handoff_state, persist_bulk_sync_completion_status,
     take_bulk_sync_completion_transition, Indexer,
 };
 use crate::bulk_sync_perf::BatchSample;
+use crate::lifecycle::RebuildRequiredError;
 use crate::parser::{ParsedUdtCell, UdtParser, UdtStandard};
 use crate::rpc::BlockResponseWithCycles;
 use crate::sync::bulk_build::owners::BulkReducer;
@@ -86,6 +87,7 @@ impl BulkBuildEngine {
             "Bulk build engine route selected; materializing bulk stage before pipeline handoff"
         );
         Self::run_bulk_stage_until_pipeline_handoff(indexer).await?;
+        fail_if_bulk_engine_cancelled(indexer, "after_bulk_stage")?;
         let handoff_tip = i64::try_from(indexer.progress.current()).map_err(|_| {
             anyhow!(
                 "bulk build handoff tip exceeds i64 range: current_block={}",
@@ -94,10 +96,15 @@ impl BulkBuildEngine {
         })?;
         indexer.reconcile_hodl_tracker_with_tip(handoff_tip)?;
         indexer.reconcile_cell_dist_tracker_with_tip(handoff_tip)?;
+        fail_if_bulk_engine_cancelled(indexer, "after_tracker_reconcile")?;
         persist_bulk_sync_completion_status(
             indexer.writer.store().as_ref(),
             indexer.progress.target(),
         )?;
+        fail_if_bulk_engine_cancelled(indexer, "after_completion_status")?;
+        // Clearing the marker is the durable completion commit point. Keep it
+        // until every fallible domain-store finalization step has succeeded.
+        indexer.writer.store().clear_bulk_build_session_marker()?;
         indexer.finalize_bulk_sync_perf_completed();
         info!(
             run_id = %indexer.run_id,
@@ -182,11 +189,12 @@ impl BulkBuildEngine {
         // prepare_flush and commits to RocksDB. Build only blocks when the
         // channel is full, eliminating the flush bubble when flush_ms > build_ms.
         let flush_queue_budget_bytes = (memory_guard.limit_bytes() / 8).max(64 * 1024 * 1024);
-        let flush_channel = materialize::FlushChannelHandle::new(
+        let flush_channel = materialize::FlushChannelHandle::new_with_shutdown(
             flush_depth,
             flush_queue_budget_bytes,
             indexer.writer.store().clone(),
             indexer.append_only_store.clone(),
+            indexer.shutdown_flag(),
         )?;
         // Initial 0.0 is semantically correct (no flush yet) but always
         // overwritten by flush_channel.last_flush_ms() before first read.
@@ -198,7 +206,10 @@ impl BulkBuildEngine {
         let mut last_bottleneck: Option<String> = None;
         let mut last_owner_memory = runtime.memory_breakdown_bytes();
 
-        loop {
+        let interrupted_stage = 'bulk_loop: loop {
+            if indexer.is_shutdown_requested() {
+                break 'bulk_loop Some("before_batch");
+            }
             ckb_store.refresh()?;
             let chain_tip = ckb_store.tip_number().ok_or_else(|| {
                 anyhow!("failed to get chain tip from CKB RocksDB during bulk build")
@@ -208,7 +219,7 @@ impl BulkBuildEngine {
             let current_block = indexer.progress.current();
             let blocks_remaining = chain_tip.saturating_sub(current_block);
             if blocks_remaining <= indexer.config.bulk_sync_threshold {
-                break;
+                break 'bulk_loop None;
             }
 
             let batch_span = tracing::info_span!(
@@ -222,17 +233,27 @@ impl BulkBuildEngine {
             // buffer with one chunk first (if empty) to get real cell density,
             // then pulls enough chunks for target_cells.
             let recv_started = Instant::now();
-            match buffer.fill_to_cell_budget(controller.target_cells()).await {
+            let fill_result = tokio::select! {
+                biased;
+                _ = indexer.shutdown_cancelled() => {
+                    break 'bulk_loop Some("prefetch_wait");
+                }
+                result = buffer.fill_to_cell_budget(controller.target_cells()) => result,
+            };
+            match fill_result {
                 Ok(true) => {}
                 Ok(false) => {
                     info!("block buffer exhausted, ending bulk build loop");
-                    break;
+                    break 'bulk_loop None;
                 }
                 Err(e) => {
                     return Err(e.context("prefetch error during bulk build"));
                 }
             }
             let prefetch_recv_elapsed = recv_started.elapsed();
+            if indexer.is_shutdown_requested() {
+                break 'bulk_loop Some("after_prefetch");
+            }
 
             let before_batch_prefetch_bytes = buffer.retained_block_bytes()?;
             let before_batch_flush_bytes = flush_channel.reserved_bytes()?;
@@ -277,6 +298,9 @@ impl BulkBuildEngine {
                 &token_info_cache,
             )?;
             let build_elapsed = build_started.elapsed();
+            if indexer.is_shutdown_requested() {
+                break 'bulk_loop Some("after_batch_build");
+            }
             let memory_accounting_started = Instant::now();
             last_owner_memory = runtime.memory_breakdown_bytes();
             let pending_flush_bytes = pending_flush.allocated_bytes()?;
@@ -311,9 +335,15 @@ impl BulkBuildEngine {
             // Send to flush channel.  Blocks when channel is full (natural
             // backpressure).  Channel depth is memory-budget-derived.
             let flush_wait_started = Instant::now();
-            flush_channel
-                .send_with_allocated_bytes(pending_flush, pending_flush_bytes)
-                .await?;
+            let flush_send_result = tokio::select! {
+                biased;
+                _ = indexer.shutdown_cancelled() => {
+                    break 'bulk_loop Some("flush_backpressure");
+                }
+                result = flush_channel
+                    .send_with_allocated_bytes(pending_flush, pending_flush_bytes) => result,
+            };
+            flush_send_result?;
             let flush_wait_elapsed = flush_wait_started.elapsed();
             let flush_channel_pending = flush_channel.pending() as u64;
             let prefetch_retained_block_bytes = buffer.retained_block_bytes()?;
@@ -609,6 +639,39 @@ impl BulkBuildEngine {
                     "Bulk build memory snapshot"
                 );
             }
+        };
+
+        let interrupted_stage = interrupted_stage
+            .or_else(|| indexer.is_shutdown_requested().then_some("before_finalize"));
+        if let Some(stage) = interrupted_stage {
+            drop(buffer);
+            let flush_drain = flush_channel.begin_shutdown();
+            let (prefetch_result, flush_result) =
+                tokio::join!(prefetch.close_and_wait(), flush_drain.wait());
+            sampler.shutdown();
+
+            let mut cleanup_errors = Vec::new();
+            if let Err(error) = prefetch_result {
+                cleanup_errors.push(format!("prefetch: {error:#}"));
+            }
+            if let Err(error) = flush_result {
+                cleanup_errors.push(format!("flush: {error:#}"));
+            }
+            if !cleanup_errors.is_empty() {
+                warn!(
+                    run_id = %indexer.run_id,
+                    stage,
+                    cleanup_errors = ?cleanup_errors,
+                    "Bulk shutdown worker cleanup reported errors"
+                );
+            }
+            return Err(RebuildRequiredError::interrupted_bulk_session(
+                &indexer.run_id,
+                indexer.progress.current(),
+                stage,
+                &cleanup_errors,
+            )
+            .into());
         }
 
         // ── Finalize: decomposed into 13 sub-phases with progress reporting ──
@@ -676,6 +739,7 @@ impl BulkBuildEngine {
         let append_only_arc = Arc::clone(&indexer.append_only_store);
         let perf_stats = indexer.bulk_build_perf.clone();
         let finalize_started_copy = finalize_started;
+        let materialize_shutdown = indexer.shutdown_flag();
 
         let BulkBuildRuntimeState {
             owners,
@@ -698,11 +762,32 @@ impl BulkBuildEngine {
                 cell_dist_tracker,
                 &perf_stats,
                 finalize_started_copy,
+                materialize_shutdown.as_ref(),
             )
         });
 
         let (drain_result, materialize_result) =
             tokio::join!(flush_drain.wait(), materialize_handle,);
+
+        if indexer.is_shutdown_requested() {
+            let mut cleanup_errors = Vec::new();
+            if let Err(error) = &drain_result {
+                cleanup_errors.push(format!("flush: {error:#}"));
+            }
+            match &materialize_result {
+                Err(error) => cleanup_errors.push(format!("materialize join: {error}")),
+                Ok(Err(error)) => cleanup_errors.push(format!("materialize: {error:#}")),
+                Ok(Ok(_)) => {}
+            }
+            sampler.shutdown();
+            return Err(RebuildRequiredError::interrupted_bulk_session(
+                &indexer.run_id,
+                indexer.progress.current(),
+                "finalize_materialization",
+                &cleanup_errors,
+            )
+            .into());
+        }
 
         let flush_stats = drain_result?;
         let materialize_report = materialize_result
@@ -725,6 +810,16 @@ impl BulkBuildEngine {
 
         // Phase 11: memtable flush
         {
+            if indexer.is_shutdown_requested() {
+                sampler.shutdown();
+                return Err(RebuildRequiredError::interrupted_bulk_session(
+                    &indexer.run_id,
+                    indexer.progress.current(),
+                    "before_memtable_flush",
+                    &[],
+                )
+                .into());
+            }
             let _guard = tracing::info_span!("bulk_finalize", phase = 12, label = "memtable_flush")
                 .entered();
             indexer
@@ -738,13 +833,22 @@ impl BulkBuildEngine {
 
         // Phase 12: sync status + cleanup
         {
+            if indexer.is_shutdown_requested() {
+                sampler.shutdown();
+                return Err(RebuildRequiredError::interrupted_bulk_session(
+                    &indexer.run_id,
+                    indexer.progress.current(),
+                    "after_memtable_flush",
+                    &[],
+                )
+                .into());
+            }
             let _guard =
                 tracing::info_span!("bulk_finalize", phase = 13, label = "sync_cleanup").entered();
             indexer
                 .bulk_build_perf
                 .record_finalize_step(13, finalize_started.elapsed());
             sync_totals.finalize_success(indexer.writer.store().as_ref(), false)?;
-            indexer.writer.store().clear_bulk_build_session_marker()?;
             indexer.writer.refresh_latest_dao_statistics()?;
         }
 
@@ -952,11 +1056,17 @@ fn materialize_finalize_phases(
     cell_dist_tracker: crate::db::writer::cell_distribution::CellDistributionTracker,
     perf_stats: &crate::sync::diagnostics::BulkBuildPerfStats,
     finalize_started: Instant,
+    shutdown_requested: &AtomicBool,
 ) -> Result<materialize::MaterializationReport> {
-    let mut materializer = materialize::Materializer::new(domain_store, append_only_store);
+    let mut materializer = materialize::Materializer::new_cancellable(
+        domain_store,
+        append_only_store,
+        shutdown_requested,
+    );
 
     // Step 2: activity stats (sealed aggregates)
     {
+        fail_if_bulk_finalize_cancelled(shutdown_requested, "activity_stats")?;
         let _guard =
             tracing::info_span!("bulk_finalize", phase = 2, label = "activity_stats").entered();
         perf_stats.record_finalize_step(2, finalize_started.elapsed());
@@ -965,6 +1075,7 @@ fn materialize_finalize_phases(
 
     // Step 3: chain stats (sealed aggregates)
     {
+        fail_if_bulk_finalize_cancelled(shutdown_requested, "chain_stats")?;
         let _guard =
             tracing::info_span!("bulk_finalize", phase = 3, label = "chain_stats").entered();
         perf_stats.record_finalize_step(3, finalize_started.elapsed());
@@ -973,6 +1084,7 @@ fn materialize_finalize_phases(
 
     // Step 4: final snapshot (live cell markers + index CFs)
     {
+        fail_if_bulk_finalize_cancelled(shutdown_requested, "final_snapshot")?;
         let _guard =
             tracing::info_span!("bulk_finalize", phase = 4, label = "final_snapshot").entered();
         perf_stats.record_finalize_step(4, finalize_started.elapsed());
@@ -986,6 +1098,7 @@ fn materialize_finalize_phases(
     // Building every owner's full row vector in parallel duplicated the whole
     // reducer state at the exact point where bulk sync already had peak RSS.
     {
+        fail_if_bulk_finalize_cancelled(shutdown_requested, "owners")?;
         let _guard =
             tracing::info_span!("bulk_finalize", phase = 5, label = "owners_build").entered();
         perf_stats.record_finalize_step(5, finalize_started.elapsed());
@@ -995,6 +1108,7 @@ fn materialize_finalize_phases(
 
     // Step 11: metadata (HODL + cell distribution tracker state)
     {
+        fail_if_bulk_finalize_cancelled(shutdown_requested, "metadata")?;
         let _guard = tracing::info_span!("bulk_finalize", phase = 11, label = "metadata").entered();
         perf_stats.record_finalize_step(11, finalize_started.elapsed());
         let mut meta_batch = ckbadger_store::batch::StoreBatch::new(domain_store);
@@ -1006,6 +1120,26 @@ fn materialize_finalize_phases(
     }
 
     Ok(materializer.finish())
+}
+
+fn fail_if_bulk_finalize_cancelled(shutdown_requested: &AtomicBool, stage: &str) -> Result<()> {
+    if shutdown_requested.load(Ordering::SeqCst) {
+        bail!("bulk finalize interrupted by shutdown request at stage={stage}");
+    }
+    Ok(())
+}
+
+fn fail_if_bulk_engine_cancelled(indexer: &Indexer, stage: &str) -> Result<()> {
+    if indexer.is_shutdown_requested() {
+        return Err(RebuildRequiredError::interrupted_bulk_session(
+            &indexer.run_id,
+            indexer.progress.current(),
+            stage,
+            &[],
+        )
+        .into());
+    }
+    Ok(())
 }
 
 #[derive(Default)]

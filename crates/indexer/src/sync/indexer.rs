@@ -17,6 +17,8 @@ use crate::config::Config;
 use crate::db::writer::cell_distribution::CellDistributionTracker;
 use crate::db::writer::hodl_wave::HodlWaveTracker;
 use crate::db::{BatchWriter, Repository};
+#[cfg(test)]
+use crate::lifecycle::fail_fast_if_bulk_build_session_incomplete;
 use ckb_store_reader::CkbChainReader;
 
 use crate::rpc::CkbRpcClient;
@@ -31,6 +33,7 @@ use super::bulk_build::BulkBuildEngine;
 use super::diagnostics::*;
 use super::dob_decode_worker::DobDecodeWorker;
 use super::helpers::*;
+use super::shutdown::ShutdownSignal;
 use super::sync_mode::*;
 use super::types::{CachedCellInfo, CachedUdtCellInfo};
 use super::SyncProgress;
@@ -298,26 +301,6 @@ fn startup_header_gap_fail_fast_message(
     )
 }
 
-fn incomplete_bulk_build_session_fail_fast_message(
-    marker: &ckbadger_store::types::BulkBuildSessionMarker,
-) -> String {
-    format!(
-        "startup fail-fast: detected incomplete bulk build session (run_id={}, started_at={}, start_block={}). \
-         bulk sync is single-shot rebuild only; delete RocksDB and re-sync from genesis",
-        marker.run_id, marker.started_at, marker.start_block
-    )
-}
-
-fn fail_fast_if_bulk_build_session_incomplete(store: &CkbadgerStore) -> Result<()> {
-    if let Some(marker) = store.get_bulk_build_session_marker()? {
-        bail!(
-            "{}",
-            incomplete_bulk_build_session_fail_fast_message(&marker)
-        );
-    }
-    Ok(())
-}
-
 pub(crate) fn finalize_bulk_stage_handoff_state(
     bulk_sync_allowed: &AtomicBool,
     was_bulk_sync_active: &AtomicBool,
@@ -392,7 +375,7 @@ pub struct Indexer {
     pub(crate) repeated_warning_tracker: RepeatedWarningTracker,
     pub(crate) incident_dir: PathBuf,
     pub(crate) bulk_sync_perf_run: std::sync::Mutex<Option<BulkSyncPerfRun>>,
-    pub(crate) shutdown_requested: Arc<AtomicBool>,
+    pub(crate) shutdown: ShutdownSignal,
     pub(crate) ckb_store: Option<Arc<CkbChainReader>>,
     pub(crate) hodl_tracker: std::sync::Mutex<HodlWaveTracker>,
     pub(crate) cell_dist_tracker: std::sync::Mutex<CellDistributionTracker>,
@@ -499,7 +482,7 @@ impl Indexer {
             repeated_warning_tracker: RepeatedWarningTracker::default(),
             incident_dir,
             bulk_sync_perf_run: std::sync::Mutex::new(None),
-            shutdown_requested: Arc::new(AtomicBool::new(false)),
+            shutdown: ShutdownSignal::default(),
             ckb_store,
             hodl_tracker: std::sync::Mutex::new(hodl_tracker),
             cell_dist_tracker: std::sync::Mutex::new(cell_dist_tracker),
@@ -523,7 +506,19 @@ impl Indexer {
     }
 
     pub fn shutdown_flag(&self) -> Arc<AtomicBool> {
-        Arc::clone(&self.shutdown_requested)
+        self.shutdown.flag()
+    }
+
+    pub fn request_shutdown(&self) {
+        self.shutdown.request();
+    }
+
+    pub(crate) fn is_shutdown_requested(&self) -> bool {
+        self.shutdown.is_requested()
+    }
+
+    pub(crate) async fn shutdown_cancelled(&self) {
+        self.shutdown.cancelled().await;
     }
 
     pub fn is_bulk_sync_active(&self) -> bool {
@@ -1082,8 +1077,6 @@ impl Indexer {
             );
         }
 
-        fail_fast_if_bulk_build_session_incomplete(self.writer.store().as_ref())?;
-
         ensure_bulk_sync_fresh_start(
             bulk_sync_mode,
             start_block,
@@ -1278,7 +1271,7 @@ impl Indexer {
             let dob_store = Arc::clone(self.writer.store());
             let dob_append_only = Arc::clone(&self.append_only_store);
             let dob_rpc_url = self.config.ckb_rpc_url.clone();
-            let dob_shutdown = Arc::clone(&self.shutdown_requested);
+            let dob_shutdown = self.shutdown.flag();
             let dob_progress = Arc::clone(&self.progress);
             let dob_threshold = self.config.bulk_sync_threshold;
             let dob_cache_path = self.config.decoder_cache_path.clone();
@@ -1413,6 +1406,10 @@ mod tests {
         assert!(msg.contains("incomplete bulk build session"));
         assert!(msg.contains("run-bulk-1"));
         assert!(msg.contains("delete RocksDB and re-sync from genesis"));
+        assert!(
+            crate::lifecycle::is_rebuild_required(&err),
+            "incomplete bulk state must be classified as a permanent rebuild requirement"
+        );
     }
 
     #[test]
@@ -1420,6 +1417,24 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         fail_fast_if_bulk_build_session_incomplete(&store).unwrap();
+    }
+
+    #[tokio::test]
+    async fn shutdown_signal_wakes_a_blocked_bulk_waiter() {
+        let signal = ShutdownSignal::default();
+        let waiter_signal = signal.clone();
+        let waiter = tokio::spawn(async move {
+            waiter_signal.cancelled().await;
+        });
+
+        tokio::task::yield_now().await;
+        signal.request();
+
+        tokio::time::timeout(Duration::from_secs(1), waiter)
+            .await
+            .expect("shutdown waiter did not wake")
+            .expect("shutdown waiter task panicked");
+        assert!(signal.is_requested());
     }
 
     #[test]

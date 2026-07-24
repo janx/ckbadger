@@ -1,5 +1,4 @@
 use anyhow::{Context, Result};
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tracing::{info, warn};
@@ -10,6 +9,9 @@ use ckbadger_store::{types::SyncStatus, CkbadgerStore, RuntimeStatus, StoreRunti
 use crate::cycles_worker::spawn_cycles_worker;
 use crate::db::Repository;
 use crate::label_import::run_label_import as label_import_run;
+use crate::lifecycle::{
+    fail_fast_if_bulk_build_session_incomplete, is_rebuild_required, REBUILD_REQUIRED_EXIT_CODE,
+};
 use crate::network_guard::{establish_db_network_identity, verify_genesis_hash};
 use crate::rpc::CkbRpcClient;
 use crate::runtime_diag::{generate_run_id, read_cgroup_memory_snapshot};
@@ -149,6 +151,11 @@ pub async fn run_indexer_sync(mut config: Config) -> Result<()> {
         &config.domain_data_path,
         config.store_runtime_config,
     )?);
+
+    // A partial bulk artifact is never a supported startup state. Check it
+    // before network tagging, sync-status repair, runtime markers, or labels
+    // can mutate the domain store.
+    fail_fast_if_bulk_build_session_incomplete(store.as_ref())?;
 
     // This is the first domain-store mutation on startup. Existing tagged DBs
     // must match; old untagged DBs must prove their chain through persisted
@@ -735,9 +742,7 @@ pub async fn run_indexer_sync(mut config: Config) -> Result<()> {
                     reason,
                     "Received shutdown signal, requesting graceful shutdown..."
                 );
-                indexer_for_shutdown
-                    .shutdown_flag()
-                    .store(true, Ordering::SeqCst);
+                indexer_for_shutdown.request_shutdown();
             }
             Err(e) => {
                 tracing::error!("Failed to listen for shutdown signal: {}", e);
@@ -754,7 +759,14 @@ pub async fn run_indexer_sync(mut config: Config) -> Result<()> {
         Err(e) => {
             tracing::error!("Indexer terminated with error: {}", e);
             indexer.finalize_bulk_sync_perf_failed();
-            indexer.mark_runtime_shutdown("run_error", 1);
+            if is_rebuild_required(e) {
+                indexer.mark_runtime_shutdown(
+                    "rebuild_required",
+                    i32::from(REBUILD_REQUIRED_EXIT_CODE),
+                );
+            } else {
+                indexer.mark_runtime_shutdown("run_error", 1);
+            }
         }
     }
     run_result

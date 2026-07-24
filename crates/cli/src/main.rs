@@ -14,6 +14,7 @@ static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
+use std::process::ExitCode;
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
@@ -268,7 +269,25 @@ enum InternalService {
 // ---------------------------------------------------------------------------
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() -> ExitCode {
+    match run_cli().await {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("Error: {error:#}");
+            ExitCode::from(exit_code_for_error(&error))
+        }
+    }
+}
+
+fn exit_code_for_error(error: &anyhow::Error) -> u8 {
+    if ckbadger_indexer::lifecycle::is_rebuild_required(error) {
+        ckbadger_indexer::lifecycle::REBUILD_REQUIRED_EXIT_CODE
+    } else {
+        1
+    }
+}
+
+async fn run_cli() -> Result<()> {
     let cli = Cli::parse();
 
     let workdir = cli
@@ -1752,6 +1771,19 @@ mod tests {
         let help = cmd.render_help().to_string();
 
         assert!(help.contains("A local-first and agent-friendly CKB explorer"));
+    }
+
+    #[test]
+    fn rebuild_required_error_maps_to_dedicated_process_exit_code() {
+        let error = anyhow::Error::new(ckbadger_indexer::lifecycle::RebuildRequiredError::new(
+            "test rebuild",
+        ))
+        .context("indexer startup failed");
+
+        assert_eq!(
+            exit_code_for_error(&error),
+            ckbadger_indexer::lifecycle::REBUILD_REQUIRED_EXIT_CODE
+        );
     }
 
     #[test]

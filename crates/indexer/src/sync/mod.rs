@@ -14,6 +14,7 @@ mod nft_helpers;
 mod pipeline;
 mod progress;
 mod reorg;
+mod shutdown;
 mod sync_mode;
 pub(crate) mod token_helpers;
 pub mod types;

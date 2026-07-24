@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Result};
@@ -283,6 +284,7 @@ pub(crate) struct BoundedWriteStats {
 
 pub(crate) struct BoundedRowSink<'a> {
     domain_store: &'a CkbadgerStore,
+    shutdown_requested: Option<&'a AtomicBool>,
     batch: StoreBatch<'a>,
     expected_policy: CfWritePolicy,
     counter_kind: CounterKind,
@@ -296,12 +298,14 @@ impl<'a> BoundedRowSink<'a> {
         expected_policy: CfWritePolicy,
         counter_kind: CounterKind,
         max_batch_bytes: usize,
+        shutdown_requested: Option<&'a AtomicBool>,
     ) -> Result<Self> {
         if max_batch_bytes == 0 {
             return Err(anyhow!("bounded materializer batch limit must be positive"));
         }
         Ok(Self {
             domain_store,
+            shutdown_requested,
             batch: StoreBatch::new(domain_store),
             expected_policy,
             counter_kind,
@@ -319,6 +323,7 @@ impl<'a> BoundedRowSink<'a> {
     }
 
     fn push_parts(&mut self, cf_name: &'static str, key: &[u8], value: &[u8]) -> Result<()> {
+        self.ensure_not_cancelled()?;
         if is_append_only_cf_name(cf_name) {
             if matches!(self.counter_kind, CounterKind::FinalSnapshot) {
                 return Err(anyhow!(
@@ -379,6 +384,7 @@ impl<'a> BoundedRowSink<'a> {
         if self.batch.is_empty() {
             return Ok(());
         }
+        self.ensure_not_cancelled()?;
         let batch = std::mem::replace(&mut self.batch, StoreBatch::new(self.domain_store));
         batch.commit_no_wal()?;
         self.stats.flushes += 1;
@@ -389,11 +395,22 @@ impl<'a> BoundedRowSink<'a> {
         self.flush()?;
         Ok(self.stats)
     }
+
+    fn ensure_not_cancelled(&self) -> Result<()> {
+        if self
+            .shutdown_requested
+            .is_some_and(|flag| flag.load(Ordering::SeqCst))
+        {
+            bail!("bulk finalize interrupted by shutdown request");
+        }
+        Ok(())
+    }
 }
 
 pub(crate) struct Materializer<'a> {
     domain_store: &'a CkbadgerStore,
     append_only_store: &'a CkbadgerStore,
+    shutdown_requested: Option<&'a AtomicBool>,
     report: MaterializationReport,
 }
 
@@ -405,6 +422,20 @@ impl<'a> Materializer<'a> {
         Self {
             domain_store,
             append_only_store,
+            shutdown_requested: None,
+            report: MaterializationReport::default(),
+        }
+    }
+
+    pub(crate) fn new_cancellable(
+        domain_store: &'a CkbadgerStore,
+        append_only_store: &'a CkbadgerStore,
+        shutdown_requested: &'a AtomicBool,
+    ) -> Self {
+        Self {
+            domain_store,
+            append_only_store,
+            shutdown_requested: Some(shutdown_requested),
             report: MaterializationReport::default(),
         }
     }
@@ -516,6 +547,7 @@ impl<'a> Materializer<'a> {
         if rows.is_empty() {
             return Ok(());
         }
+        self.ensure_not_cancelled()?;
         // Per-batch history contains CF_CELLS and therefore still uses the
         // dual-store path. Finalize classes are domain-only and use the
         // byte-bounded sink.
@@ -523,6 +555,7 @@ impl<'a> Materializer<'a> {
             let mut domain_batch = StoreBatch::new(self.domain_store);
             let mut append_batch = StoreBatch::new(self.append_only_store);
             for row in rows {
+                self.ensure_not_cancelled()?;
                 let actual_policy = cf_write_policy(row.cf_name);
                 if actual_policy != expected_policy {
                     return Err(anyhow!(
@@ -578,6 +611,7 @@ impl<'a> Materializer<'a> {
             expected_policy,
             counter_kind,
             max_batch_bytes,
+            self.shutdown_requested,
         )?;
         emit(&mut sink)?;
         let stats = sink.finish()?;
@@ -600,6 +634,16 @@ impl<'a> Materializer<'a> {
                 self.report.final_snapshot_flushes += stats.flushes;
             }
         }
+    }
+
+    fn ensure_not_cancelled(&self) -> Result<()> {
+        if self
+            .shutdown_requested
+            .is_some_and(|flag| flag.load(Ordering::SeqCst))
+        {
+            bail!("bulk finalize interrupted by shutdown request");
+        }
+        Ok(())
     }
 }
 
@@ -890,11 +934,28 @@ impl FlushDrainHandle {
 }
 
 impl FlushChannelHandle {
+    #[cfg(test)]
     pub(crate) fn new(
         depth: usize,
         byte_budget_bytes: u64,
         domain_store: Arc<CkbadgerStore>,
         append_only_store: Arc<CkbadgerStore>,
+    ) -> Result<Self> {
+        Self::new_with_shutdown(
+            depth,
+            byte_budget_bytes,
+            domain_store,
+            append_only_store,
+            Arc::new(AtomicBool::new(false)),
+        )
+    }
+
+    pub(crate) fn new_with_shutdown(
+        depth: usize,
+        byte_budget_bytes: u64,
+        domain_store: Arc<CkbadgerStore>,
+        append_only_store: Arc<CkbadgerStore>,
+        shutdown_requested: Arc<AtomicBool>,
     ) -> Result<Self> {
         if depth == 0 {
             return Err(anyhow!("flush channel depth must be positive"));
@@ -928,7 +989,13 @@ impl FlushChannelHandle {
         let (tx, rx) = tokio::sync::mpsc::channel::<QueuedFlush>(depth);
         let (flush_ms_tx, flush_ms_rx) = tokio::sync::watch::channel(0.0_f64);
         let worker_handle = tokio::task::spawn_blocking(move || {
-            Self::flush_worker(rx, domain_store, append_only_store, flush_ms_tx)
+            Self::flush_worker(
+                rx,
+                domain_store,
+                append_only_store,
+                flush_ms_tx,
+                shutdown_requested,
+            )
         });
         Ok(Self {
             tx,
@@ -944,11 +1011,15 @@ impl FlushChannelHandle {
         domain_store: Arc<CkbadgerStore>,
         append_only_store: Arc<CkbadgerStore>,
         flush_ms_tx: tokio::sync::watch::Sender<f64>,
+        shutdown_requested: Arc<AtomicBool>,
     ) -> Result<FlushChannelStats> {
         // Flush loop: receives PendingFlush (pure row data), converts to
         // WriteBatch via prepare_flush, then commits to RocksDB.
         let mut stats = FlushChannelStats::default();
         while let Some(queued) = rx.blocking_recv() {
+            if shutdown_requested.load(Ordering::SeqCst) {
+                break;
+            }
             let QueuedFlush {
                 pending,
                 _byte_permit,
@@ -964,6 +1035,9 @@ impl FlushChannelHandle {
                 pending.history_chunks,
                 pending.sealed_rows,
             )?;
+            if shutdown_requested.load(Ordering::SeqCst) {
+                break;
+            }
 
             let prepare_ms = flush_started.elapsed().as_secs_f64() * 1000.0;
             let commit_started = std::time::Instant::now();
@@ -1208,6 +1282,59 @@ mod tests {
     }
 
     #[test]
+    fn cancelled_finalize_discards_the_uncommitted_domain_batch() {
+        let root = super::super::unique_temp_test_dir("cancelled-final-snapshot");
+        std::fs::create_dir_all(&root).unwrap();
+        let domain_path = root.join("domain");
+        let append_path = root.join("append-only");
+        std::fs::create_dir_all(&domain_path).unwrap();
+        std::fs::create_dir_all(&append_path).unwrap();
+
+        let domain_store = CkbadgerStore::open_domain(&domain_path).unwrap();
+        let append_store = CkbadgerStore::open_append_only(&append_path).unwrap();
+        let shutdown_requested = AtomicBool::new(false);
+        let mut materializer =
+            Materializer::new_cancellable(&domain_store, &append_store, &shutdown_requested);
+        let first_key = b"first-live-cell".to_vec();
+        let second_key = b"second-live-cell".to_vec();
+
+        let error = materializer
+            .materialize_final_snapshot_bounded_for_test(1024 * 1024, |sink| {
+                sink.push(MaterializedRow::new(
+                    CF_LIVE_CELLS,
+                    first_key.clone(),
+                    b"first".to_vec(),
+                ))?;
+                shutdown_requested.store(true, Ordering::SeqCst);
+                sink.push(MaterializedRow::new(
+                    CF_LIVE_CELLS,
+                    second_key.clone(),
+                    b"second".to_vec(),
+                ))
+            })
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("interrupted by shutdown request"), "{error}");
+        assert!(
+            domain_store
+                .get_cf(domain_store.cf_live_cells(), &first_key)
+                .unwrap()
+                .is_none(),
+            "rows buffered before cancellation must not be committed"
+        );
+        assert!(
+            domain_store
+                .get_cf(domain_store.cf_live_cells(), &second_key)
+                .unwrap()
+                .is_none(),
+            "rows observed after cancellation must not be committed"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn flush_rows_to_stores_writes_history_and_sealed_rows() {
         let root = super::super::unique_temp_test_dir("bulk-build-flush-rows");
         std::fs::create_dir_all(&root).unwrap();
@@ -1447,6 +1574,60 @@ mod tests {
                 "block header not found"
             );
         }
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn cancelled_flush_channel_drops_queued_rows_without_touching_either_store() {
+        let root = super::super::unique_temp_test_dir("flush-channel-cancelled");
+        std::fs::create_dir_all(&root).unwrap();
+        let domain_path = root.join("domain");
+        let append_path = root.join("append-only");
+        std::fs::create_dir_all(&domain_path).unwrap();
+        std::fs::create_dir_all(&append_path).unwrap();
+
+        let domain_store = Arc::new(CkbadgerStore::open_domain(&domain_path).unwrap());
+        let append_store = Arc::new(CkbadgerStore::open_append_only(&append_path).unwrap());
+        let shutdown_requested = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let handle = FlushChannelHandle::new_with_shutdown(
+            2,
+            16 * 1024 * 1024,
+            domain_store.clone(),
+            append_store.clone(),
+            shutdown_requested,
+        )
+        .unwrap();
+
+        let outpoint_key = keys::encode_outpoint(&[0x41; 32], 0);
+        let header_key = keys::encode_block_num(41);
+        let pending = super::super::PendingFlush {
+            history_chunks: vec![EncodedHistoryChunk::from_materialized_rows(vec![
+                MaterializedRow::new(CF_CELLS, outpoint_key.to_vec(), b"cell".to_vec()),
+                MaterializedRow::new(CF_BLOCK_HEADERS, header_key.to_vec(), b"header".to_vec()),
+            ])
+            .unwrap()],
+            sealed_rows: Vec::new(),
+        };
+        handle.send(pending).await.unwrap();
+
+        let stats = handle.close_and_wait().await.unwrap();
+        assert_eq!(stats.total_history_rows, 0);
+        assert_eq!(stats.flush_count, 0);
+        assert!(
+            append_store
+                .get_cf(append_store.cf_cells(), &outpoint_key)
+                .unwrap()
+                .is_none(),
+            "cancelled bulk flush must not append CF_CELLS rows"
+        );
+        assert!(
+            domain_store
+                .get_cf(domain_store.cf_block_headers(), &header_key)
+                .unwrap()
+                .is_none(),
+            "cancelled bulk flush must not write domain rows"
+        );
 
         let _ = std::fs::remove_dir_all(&root);
     }

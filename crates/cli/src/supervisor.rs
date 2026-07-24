@@ -46,6 +46,11 @@ const HEALTH_CHECK_INTERVAL: Duration = Duration::from_secs(2);
 /// Time to wait for a child to exit after SIGTERM before sending SIGKILL.
 const GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// Indexer shutdown may need to finish one in-flight RocksDB batch and join
+/// blocking prefetch/flush workers. This is only a safety ceiling; cooperative
+/// cancellation should normally finish much sooner.
+const INDEXER_GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(120);
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -56,6 +61,7 @@ struct ManagedChild {
     child: Child,
     restart_count: u32,
     started_at: Instant,
+    restart_blocked: bool,
 }
 
 impl ManagedChild {
@@ -91,12 +97,38 @@ impl ChildSpec {
     }
 }
 
-/// Bulk build deliberately exits the indexer after finalization so the OS can
-/// reclaim its large reducer heap before near-tip pipeline sync starts. Only a
-/// successful indexer exit is that planned handoff; every other exit keeps the
-/// normal crash backoff semantics.
-fn is_planned_clean_handoff(spec: &ChildSpec, exit_success: bool) -> bool {
-    spec.service == "indexer" && exit_success
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ChildExitAction {
+    CleanHandoff,
+    BlockRebuildRequired,
+    Restart,
+}
+
+fn classify_child_exit(
+    spec: &ChildSpec,
+    exit_success: bool,
+    exit_code: Option<i32>,
+) -> ChildExitAction {
+    if spec.service == "indexer" && exit_success {
+        return ChildExitAction::CleanHandoff;
+    }
+    if spec.service == "indexer"
+        && exit_code
+            == Some(i32::from(
+                ckbadger_indexer::lifecycle::REBUILD_REQUIRED_EXIT_CODE,
+            ))
+    {
+        return ChildExitAction::BlockRebuildRequired;
+    }
+    ChildExitAction::Restart
+}
+
+fn graceful_shutdown_timeout(name: &str) -> Duration {
+    if name == "indexer" || name.ends_with("/indexer") {
+        INDEXER_GRACEFUL_SHUTDOWN_TIMEOUT
+    } else {
+        GRACEFUL_SHUTDOWN_TIMEOUT
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -129,7 +161,8 @@ async fn stop_child_gracefully(name: &str, child: &mut Child) {
         return;
     }
 
-    match tokio::time::timeout(GRACEFUL_SHUTDOWN_TIMEOUT, child.wait()).await {
+    let shutdown_timeout = graceful_shutdown_timeout(name);
+    match tokio::time::timeout(shutdown_timeout, child.wait()).await {
         Ok(Ok(status)) => {
             info!(service = %name, pid, ?status, "service stopped gracefully");
         }
@@ -139,7 +172,7 @@ async fn stop_child_gracefully(name: &str, child: &mut Child) {
             let _ = child.wait().await;
         }
         Err(_) => {
-            warn!(service = %name, pid, timeout_secs = GRACEFUL_SHUTDOWN_TIMEOUT.as_secs(),
+            warn!(service = %name, pid, timeout_secs = shutdown_timeout.as_secs(),
                 "service did not exit after SIGTERM, sending SIGKILL");
             let _ = child.kill().await;
             let _ = child.wait().await;
@@ -586,6 +619,7 @@ fn spawn_child(exe: &PathBuf, spec: &ChildSpec, log_dir: &Path) -> Result<Manage
         child,
         restart_count: 0,
         started_at: Instant::now(),
+        restart_blocked: false,
     })
 }
 
@@ -618,6 +652,9 @@ async fn monitor_children_multi(
         #[allow(clippy::needless_range_loop)]
         // Indexed access needed: lock is dropped/reacquired mid-loop
         for i in 0..locked.children.len() {
+            if locked.children[i].restart_blocked {
+                continue;
+            }
             // Check if child has exited
             let exited = match locked.children[i].child.try_wait() {
                 Ok(Some(status)) => Some(status),
@@ -635,30 +672,43 @@ async fn monitor_children_multi(
             if let Some(status) = exited {
                 let label = &specs[i].label;
 
-                if is_planned_clean_handoff(&specs[i], status.success()) {
-                    info!(
-                        child = %label,
-                        exit_status = %status,
-                        "indexer exited cleanly; starting fresh process for sync-path handoff"
-                    );
-                    match spawn_child(exe, &specs[i], log_dir) {
-                        Ok(new_child) => {
-                            info!(
-                                child = %label,
-                                pid = new_child.pid(),
-                                "indexer clean-process handoff completed"
-                            );
-                            locked.children[i] = new_child;
+                match classify_child_exit(&specs[i], status.success(), status.code()) {
+                    ChildExitAction::CleanHandoff => {
+                        info!(
+                            child = %label,
+                            exit_status = %status,
+                            "indexer exited cleanly; starting fresh process for sync-path handoff"
+                        );
+                        match spawn_child(exe, &specs[i], log_dir) {
+                            Ok(new_child) => {
+                                info!(
+                                    child = %label,
+                                    pid = new_child.pid(),
+                                    "indexer clean-process handoff completed"
+                                );
+                                locked.children[i] = new_child;
+                            }
+                            Err(e) => {
+                                error!(
+                                    child = %label,
+                                    error = %e,
+                                    "failed to start indexer handoff process"
+                                );
+                            }
                         }
-                        Err(e) => {
-                            error!(
-                                child = %label,
-                                error = %e,
-                                "failed to start indexer handoff process"
-                            );
-                        }
+                        continue;
                     }
-                    continue;
+                    ChildExitAction::BlockRebuildRequired => {
+                        error!(
+                            child = %label,
+                            exit_status = %status,
+                            workdir = %specs[i].workdir,
+                            "indexer requires an explicit RocksDB purge and genesis rebuild; automatic restart is blocked"
+                        );
+                        locked.children[i].restart_blocked = true;
+                        continue;
+                    }
+                    ChildExitAction::Restart => {}
                 }
 
                 let uptime = locked.children[i].started_at.elapsed();
@@ -683,6 +733,7 @@ async fn monitor_children_multi(
                         restarts = restart_count,
                         "service exceeded max restart attempts, giving up"
                     );
+                    locked.children[i].restart_blocked = true;
                     continue;
                 }
 
@@ -763,9 +814,13 @@ impl IpcHandler for SupervisorIpcHandler {
                         .children
                         .iter()
                         .map(|c| {
-                            let status = match c.child.id() {
-                                Some(_) => ServiceStatus::Running,
-                                None => ServiceStatus::Stopped,
+                            let status = if c.restart_blocked {
+                                ServiceStatus::Blocked
+                            } else {
+                                match c.child.id() {
+                                    Some(_) => ServiceStatus::Running,
+                                    None => ServiceStatus::Stopped,
+                                }
                             };
                             ServiceInfo {
                                 name: c.name.clone(),
@@ -876,9 +931,63 @@ mod tests {
             workdir: "/tmp/testnet".to_string(),
         };
 
-        assert!(is_planned_clean_handoff(&indexer, true));
-        assert!(!is_planned_clean_handoff(&indexer, false));
-        assert!(!is_planned_clean_handoff(&api, true));
+        assert_eq!(
+            classify_child_exit(&indexer, true, Some(0)),
+            ChildExitAction::CleanHandoff
+        );
+        assert_eq!(
+            classify_child_exit(&indexer, false, Some(1)),
+            ChildExitAction::Restart
+        );
+        assert_eq!(
+            classify_child_exit(&api, true, Some(0)),
+            ChildExitAction::Restart
+        );
+    }
+
+    #[test]
+    fn rebuild_required_indexer_exit_is_blocked_instead_of_restarted() {
+        let indexer = ChildSpec {
+            label: "testnet/indexer".to_string(),
+            service: "indexer".to_string(),
+            workdir: "/tmp/testnet".to_string(),
+        };
+        let api = ChildSpec {
+            label: "testnet/api".to_string(),
+            service: "api".to_string(),
+            workdir: "/tmp/testnet".to_string(),
+        };
+        let rebuild_code = i32::from(ckbadger_indexer::lifecycle::REBUILD_REQUIRED_EXIT_CODE);
+
+        assert_eq!(
+            classify_child_exit(&indexer, false, Some(rebuild_code)),
+            ChildExitAction::BlockRebuildRequired
+        );
+        assert_eq!(
+            classify_child_exit(&indexer, false, Some(1)),
+            ChildExitAction::Restart
+        );
+        assert_eq!(
+            classify_child_exit(&indexer, true, Some(0)),
+            ChildExitAction::CleanHandoff
+        );
+        assert_eq!(
+            classify_child_exit(&api, false, Some(rebuild_code)),
+            ChildExitAction::Restart,
+            "rebuild-required is an indexer-specific lifecycle state"
+        );
+    }
+
+    #[test]
+    fn indexer_gets_extended_cooperative_shutdown_timeout() {
+        assert_eq!(
+            graceful_shutdown_timeout("testnet/indexer"),
+            INDEXER_GRACEFUL_SHUTDOWN_TIMEOUT
+        );
+        assert_eq!(
+            graceful_shutdown_timeout("testnet/api"),
+            GRACEFUL_SHUTDOWN_TIMEOUT
+        );
     }
 
     // Compile-time checks for supervisor constants

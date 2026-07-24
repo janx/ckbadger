@@ -2188,7 +2188,7 @@ impl Indexer {
         let mut disk_tracker = crate::sys_info::DiskStatsTracker::new(disk_device);
 
         loop {
-            if self.shutdown_requested.load(Ordering::SeqCst) {
+            if self.is_shutdown_requested() {
                 info!(run_id = %self.run_id, "Shutdown requested, aborting pipeline");
                 fetcher.abort();
                 parser.abort();
