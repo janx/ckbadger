@@ -648,10 +648,9 @@ async fn test_network_stats_includes_hero_metrics_from_dao_snapshot() {
 
     // knowledge_size = occupied_capacity
     assert_eq!(json["knowledgeSize"], "1000000000000000000");
-    // circulating_supply = total_issuance - (baseline.burnt + cum_treasury) - total_deposited
-    let expected_circulating: i128 = 3_500_000_000_000_000_000
-        - (840_000_000_000_000_000 + 2_000_000_000_000_000)
-        - 50_000_000_000_000_000;
+    // circulating_supply = DAO C - genesis burnt - DAO S (all unissued secondary).
+    let expected_circulating: i128 =
+        3_500_000_000_000_000_000 - 840_000_000_000_000_000 - 10_000_000_000_000_000;
     assert_eq!(json["circulatingSupply"], expected_circulating.to_string());
     // dao_locked = total_deposited
     assert_eq!(json["daoLocked"], "50000000000000000");
@@ -692,6 +691,7 @@ async fn test_network_stats_circulating_supply_uses_seeded_genesis_baseline() {
     let seeded_burnt: i128 = 123_000_000_000_000;
     let total_issuance: i128 = 3_500_000_000_000_000_000;
     let cum_treasury: i128 = 2_000_000_000_000_000;
+    let secondary_pool: i128 = 10_000_000_000_000_000;
     let total_deposited: i128 = 50_000_000_000_000_000;
 
     let snapshot = DaoDailySnapshot {
@@ -703,7 +703,7 @@ async fn test_network_stats_circulating_supply_uses_seeded_genesis_baseline() {
         compensation: 100_000_000_000_000,
         cumulative_deposit_amount: 60_000_000_000_000_000,
         total_issuance,
-        secondary_pool: 10_000_000_000_000_000,
+        secondary_pool,
         occupied_capacity: 1_000_000_000_000_000_000,
         cum_miner_secondary: 5_000_000_000_000_000,
         cum_dao_compensation: 3_000_000_000_000_000,
@@ -744,8 +744,7 @@ async fn test_network_stats_circulating_supply_uses_seeded_genesis_baseline() {
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
-    let expected_circulating: i128 =
-        total_issuance - (seeded_burnt + cum_treasury) - total_deposited;
+    let expected_circulating: i128 = total_issuance - seeded_burnt - secondary_pool;
     assert_eq!(json["circulatingSupply"], expected_circulating.to_string());
 }
 

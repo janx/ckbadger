@@ -152,6 +152,7 @@ fn test_dao_deposit_creation() {
     let outpoint_key = ckbadger_store::keys::encode_outpoint(&[0xaa; 32], 0);
     let entry = DaoDepositCacheEntry {
         capacity: 100_000_000_000,
+        occupied_capacity: 102_00000000,
         deposit_block_number: 5000,
         deposit_timestamp: 0,
         lock_script_hash: vec![0x11; 32],
@@ -191,6 +192,7 @@ fn test_dao_withdraw_request() {
     let outpoint_key = ckbadger_store::keys::encode_outpoint(&[0xbb; 32], 0);
     let entry = DaoDepositCacheEntry {
         capacity: 200_000_000_000,
+        occupied_capacity: 102_00000000,
         deposit_block_number: 6000,
         deposit_timestamp: 0,
         lock_script_hash: vec![0x22; 32],
@@ -214,6 +216,7 @@ fn test_dao_withdraw_request() {
     // Then, update to withdraw-requested
     let updated_entry = DaoDepositCacheEntry {
         capacity: 200_000_000_000,
+        occupied_capacity: 102_00000000,
         deposit_block_number: 6000,
         deposit_timestamp: 0,
         lock_script_hash: vec![0x22; 32],
@@ -249,6 +252,7 @@ fn test_dao_put_twice_in_same_batch_keeps_secondary_indexes_consistent() {
     let outpoint_key = ckbadger_store::keys::encode_outpoint(&[0xbc; 32], 0);
     let first_entry = DaoDepositCacheEntry {
         capacity: 210_000_000_000,
+        occupied_capacity: 102_00000000,
         deposit_block_number: 6000,
         deposit_timestamp: 0,
         lock_script_hash: vec![0x31; 32],
@@ -265,6 +269,7 @@ fn test_dao_put_twice_in_same_batch_keeps_secondary_indexes_consistent() {
     };
     let second_entry = DaoDepositCacheEntry {
         capacity: 210_000_000_000,
+        occupied_capacity: 102_00000000,
         deposit_block_number: 6001,
         deposit_timestamp: 0,
         lock_script_hash: vec![0x32; 32],
@@ -320,6 +325,7 @@ fn test_dao_withdrawal_completion() {
     let outpoint_key = ckbadger_store::keys::encode_outpoint(&[0xdd; 32], 0);
     let entry = DaoDepositCacheEntry {
         capacity: 300_000_000_000,
+        occupied_capacity: 102_00000000,
         deposit_block_number: 8000,
         deposit_timestamp: 0,
         lock_script_hash: vec![0x33; 32],
@@ -373,6 +379,7 @@ fn test_list_dao_deposits() {
     for (key, status, capacity) in &entries {
         let entry = DaoDepositCacheEntry {
             capacity: *capacity,
+            occupied_capacity: 102_00000000,
             deposit_block_number: 1000,
             deposit_timestamp: 0,
             lock_script_hash: vec![0x44; 32],
@@ -410,6 +417,7 @@ fn test_list_active_dao_deposits() {
     // Active deposit (status=0)
     let active_entry = DaoDepositCacheEntry {
         capacity: 500_000_000_000,
+        occupied_capacity: 102_00000000,
         deposit_block_number: 2000,
         deposit_timestamp: 0,
         lock_script_hash: vec![0x55; 32],
@@ -428,6 +436,7 @@ fn test_list_active_dao_deposits() {
     // Withdraw-requested deposit (status=1)
     let requested_entry = DaoDepositCacheEntry {
         capacity: 600_000_000_000,
+        occupied_capacity: 102_00000000,
         deposit_block_number: 2500,
         deposit_timestamp: 0,
         lock_script_hash: vec![0x66; 32],
@@ -446,6 +455,7 @@ fn test_list_active_dao_deposits() {
     // Withdrawn deposit (status=2)
     let withdrawn_entry = DaoDepositCacheEntry {
         capacity: 700_000_000_000,
+        occupied_capacity: 102_00000000,
         deposit_block_number: 3000,
         deposit_timestamp: 0,
         lock_script_hash: vec![0x88; 32],
@@ -496,7 +506,11 @@ fn bulk_build_dao_owner_materializes_final_deposit_status_and_indexes_without_db
     assert_eq!(entry.withdraw_request_tx, Some(vec![0xa2; 32]));
     assert_eq!(entry.withdraw_request_output_index, Some(0));
     assert_eq!(entry.withdraw_request_block, Some(101));
-    assert_eq!(entry.withdraw_request_ar, None);
+    assert_eq!(
+        entry.withdraw_request_ar,
+        Some(12_000),
+        "completed bulk entries retain request AR for phase-2 rollback"
+    );
     assert_eq!(entry.withdraw_block, Some(102));
     assert_eq!(entry.withdraw_tx, Some(vec![0xa3; 32]));
     assert_eq!(entry.withdraw_to_output_index, Some(0));

@@ -263,6 +263,11 @@ pub struct AddressBalance {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct DaoDepositCacheEntry {
     pub capacity: i64,
+    /// Exact occupied capacity of the original deposit cell.
+    ///
+    /// DAO compensation accrues only on `capacity - occupied_capacity`; this
+    /// varies with the lock script and must not be replaced by a fixed minimum.
+    pub occupied_capacity: i64,
     pub deposit_block_number: i64,
     #[serde(default)]
     pub deposit_timestamp: i64,
@@ -279,6 +284,20 @@ pub struct DaoDepositCacheEntry {
     #[serde(default)]
     pub withdraw_to_output_index: Option<i16>,
     pub compensation: Option<i64>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct DaoCompensationBreakdown {
+    pub claimed: i128,
+    pub unclaimed: i128,
+    /// Compensation still accruing on status-0 deposits at the observation AR.
+    pub active_unmade: i128,
+}
+
+impl DaoCompensationBreakdown {
+    pub fn total(self) -> Option<i128> {
+        self.claimed.checked_add(self.unclaimed)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

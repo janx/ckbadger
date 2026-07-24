@@ -1219,6 +1219,167 @@ same aggregate.
 calculation path; fix the writer, purge the chain stores, and re-sync from
 genesis rather than backfilling or patching persisted aggregates.
 
+**Follow-up**: DAO-025 records why this proportional aggregate split remained
+insufficient even after its free-capacity correction.
+
 ---
 
-_Last updated: 2026-07-23_
+### DAO-023: Circulating supply included unissued DAO interest
+
+**Date**: 2026-07-24
+
+**Symptom**: Mainnet `explorer_circulating_supply` failed by about 1.69%
+(roughly 833.1M CKB), while the burnt-supply comparison still passed.
+`explorer_knowledge_size` also reported a one-day 232 CKB transition mismatch.
+
+**Root cause**:
+
+1. API circulation paths subtracted genesis burn and treasury
+   (`S - unmade_dao_interests`) from DAO `C`. This left
+   `unmade_dao_interests` in circulation even though RFC-0023 defines all of
+   `S` as unissued secondary issuance.
+2. The same supply formula was duplicated across statistics, DAO ratio, and
+   chart handlers, including a fallback to `cum_treasury`.
+3. The knowledge-size verifier compared ckbadger's DAO-U-derived
+   `knowledge_size` with the explorer's independently indexed
+   `occupied_capacity`. The latter carried a historical live-cell projection
+   correction. The explorer's own DAO-U-derived `knowledge_size` matched
+   ckbadger exactly.
+
+**Fix**:
+
+- Added one fail-fast API supply calculation:
+  `circulating = C - genesis_burnt - S`,
+  `treasury = S - unmade_dao_interests`, and
+  `liquid = circulating - active_dao_principal`.
+- Routed the total-supply chart, network hero metric, circulation-ratio chart,
+  knowledge utilization, and treasury chart through that calculation.
+- Removed the legacy `cum_treasury` fallback.
+- Changed X5 to compare against explorer `knowledge_size`, preserving exact
+  daily DAO-U transition validation.
+
+**Tests Added/Updated**:
+
+- Verifier HTTP regression proving X5 requests `knowledge_size`.
+- Shared supply arithmetic and invariant tests.
+- DAO, statistics, and network-response circulation regressions.
+
+**Re-sync required**: No. The persisted DAO `C`, `S`, and unmade-interest
+snapshots are correct; this was an API read-path and verifier-source bug.
+
+---
+
+### DAO-024: Explorer circulation check compared different policy scopes
+
+**Date**: 2026-07-24
+
+**Symptom**: After DAO-023 corrected the protocol supply formula,
+`explorer_circulating_supply` still failed for all 30 days by about 0.2094%,
+or 103,000,770 CKB. The new API values proved that the larger 833.1M CKB error
+was fixed.
+
+**Root cause**:
+
+1. ckbadger circulation is chain-native: `C - genesis_burnt - S`.
+2. The official explorer additionally subtracts policy-classified capacity:
+   historical vesting allocations and the live balance of its labelled Bug
+   Bounty address. After the vesting schedules ended, the latter accounted for
+   the complete residual difference.
+3. X11 directly compared these different definitions. Its 0.2% tolerance had
+   previously hidden the semantic mismatch until the Bug Bounty balance crossed
+   that relative threshold.
+
+**Fix**:
+
+- X11 now fetches the explorer's separately published `locked_capacity` and
+  exactly adds it back to `circulating_supply` before comparison.
+- Kept the ckbadger API on its CKB-native calculation instead of importing an
+  off-chain address label into the supply definition.
+- Limited normalization to X11's requested 30-day window. Explorer has old
+  BigDecimal rows with sub-shannon fractions outside that window.
+- Added an exact decimal parser that accepts integer-valued forms such as
+  `4918812917022796752.0` but rejects non-zero sub-shannon fractions.
+- Replaced floating-point/filtering stacked-series summation with checked exact
+  shannon arithmetic, and made the 0.2% decision an exact `i128` ratio check.
+- Did not widen the verification tolerance.
+
+**Tests Added**:
+
+- HTTP regression proving X11 requests both explorer series, ignores unrelated
+  legacy fractional rows, accepts current integer-valued decimal rows, and
+  restores policy locked capacity before comparison.
+
+**Re-sync required**: No. This was a verifier semantic-normalization bug; no
+stored chain or derived data changed.
+
+---
+
+### DAO-025: Aggregate secondary split was not exact DAO compensation
+
+**Date**: 2026-07-24
+
+**Symptom**: After DAO-022's free-capacity correction and a rebuild, testnet
+daily `deposit_compensation` remained about 13.96% above the official explorer;
+the latest NervosDAO check was about 14.03% high.
+
+**Root cause**:
+
+1. Historical `cum_dao_compensation` was still reconstructed by multiplying
+   each block's aggregate secondary-pool delta by aggregate DAO principal.
+   That is not equivalent to RFC-0023's per-deposit AR calculation. Deposits
+   have different AR start values and integer flooring, and phase-1 requests
+   freeze at their request AR.
+2. DAO-022 subtracted a fixed 102 CKB occupied capacity per deposit. That value
+   describes a standard secp256k1 DAO cell, not every possible lock script.
+   Compensation must use the original cell's exact occupied capacity.
+3. The testnet explorer's daily `deposit_compensation` series has a historical
+   constant baseline gap. Full chain replay showed that recent daily changes
+   match the exact lifecycle result, while absolute levels retain the old gap.
+4. The explorer NervosDAO response mixes a daily-statistics
+   `deposit_compensation` field with live `claimed_compensation` and
+   `unclaimed_compensation` fields. Its live components sum to the comparable
+   current value.
+
+**Fix**:
+
+- Persist the original DAO deposit cell's exact occupied capacity in the
+  domain-store lifecycle entry.
+- Make exact per-deposit lifecycle accounting the single compensation path:
+  active deposits use the observation AR, phase-1 deposits use the frozen
+  request AR, and completed deposits contribute their stored claimed amount.
+- Retain request AR after phase-2 and validate stored claimed compensation
+  against the exact request-AR calculation, so a rollback to phase-1 remains
+  computable and corrupted lifecycle entries fail immediately.
+- Materialize bulk daily snapshots through an event-ordered timeline that
+  advances deposits, requests, and completions exactly. Live latest statistics
+  and reorg repair use the same lifecycle arithmetic.
+- Restrict aggregate `C/S/U` arithmetic to miner secondary issuance. Treasury
+  remains the direct `S - active_unmade` derivation.
+- Compare testnet daily compensation changes with the existing 0.2% tolerance,
+  preserving the explorer's constant historical offset without hiding bad
+  transitions.
+- Compare the latest value with explorer
+  `claimed_compensation + unclaimed_compensation`, using checked exact integer
+  arithmetic.
+
+**Tests Added/Updated**:
+
+- Actual occupied-capacity compensation regression.
+- Active → frozen phase-1 → claimed phase-2 lifecycle regressions in store and
+  bulk materialization.
+- Phase-2 rollback regression proving request AR survives and frozen
+  compensation is reproduced exactly.
+- Bulk event-timeline historical reconstruction regression.
+- Exact rational daily-delta verifier tests for constant baseline and bad
+  transition cases.
+- Latest Explorer live-component sum regression.
+- DAO rollback and API fixtures updated for the new persisted schema.
+
+**Re-sync required**: Yes. `DaoDepositCacheEntry` now contains exact occupied
+capacity, and historical DAO daily snapshots were written by the invalid
+aggregate calculation. Purge the chain stores and sync from genesis; do not
+backfill or patch the old aggregates.
+
+---
+
+_Last updated: 2026-07-24_

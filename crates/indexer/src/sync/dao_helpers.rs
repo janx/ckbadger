@@ -10,7 +10,7 @@ use std::collections::{HashMap, HashSet};
 
 use anyhow::{anyhow, bail, Result};
 use chrono::NaiveDate;
-use ckbadger_common::dao::{dao_total_free_capacity, split_secondary_issuance_delta};
+use ckbadger_common::dao::calculate_secondary_miner_delta;
 
 use ckbadger_store::types::{AddressBalance, PositionedCellInfo};
 
@@ -53,12 +53,7 @@ pub(crate) struct BatchStats {
     pub(crate) dao_daily_depositing_addresses: HashMap<NaiveDate, HashSet<Vec<u8>>>,
     /// Block numbers per date (for counting daily depositors from store).
     pub(crate) dao_block_numbers_by_date: HashMap<NaiveDate, Vec<i64>>,
-    pub(crate) daily_secondary_non_miner_delta: HashMap<NaiveDate, i128>,
     pub(crate) daily_secondary_miner_delta: HashMap<NaiveDate, i128>,
-    /// Per-block accumulated dao compensation share of secondary issuance.
-    pub(crate) daily_secondary_dao_delta: HashMap<NaiveDate, i128>,
-    /// Per-block accumulated treasury (burnt) share of secondary issuance.
-    pub(crate) daily_secondary_treasury_delta: HashMap<NaiveDate, i128>,
     /// Set to true after the DAO delta computation code path runs, even if no
     /// DAO transactions were found.  This distinguishes "genuinely zero deltas"
     /// from "deltas never computed" (e.g. stale DB from an older indexer).
@@ -222,15 +217,11 @@ pub(crate) fn occupied_capacity_shannons_i128(
     type_args_len: Option<usize>,
     data_size: i32,
 ) -> i128 {
-    if data_size < 0 {
-        panic!(
-            "negative cell data_size while computing occupied capacity: {}",
-            data_size
-        );
-    }
-    let lock_script_size = 33_i128 + lock_args_len as i128;
-    let type_script_size = type_args_len.map(|len| 33_i128 + len as i128).unwrap_or(0);
-    (8_i128 + lock_script_size + type_script_size + i128::from(data_size)) * 100_000_000_i128
+    i128::from(occupied_capacity_shannons_i64(
+        lock_args_len,
+        type_args_len,
+        data_size,
+    ))
 }
 
 pub(crate) fn occupied_capacity_shannons_i64(
@@ -238,15 +229,21 @@ pub(crate) fn occupied_capacity_shannons_i64(
     type_args_len: Option<usize>,
     data_size: i32,
 ) -> i64 {
-    i64::try_from(occupied_capacity_shannons_i128(
+    let data_size = usize::try_from(data_size).unwrap_or_else(|_| {
+        panic!(
+            "negative cell data_size while computing occupied capacity: {}",
+            data_size
+        )
+    });
+    ckbadger_common::dao::occupied_capacity_shannons(
+        data_size,
         lock_args_len,
         type_args_len,
-        data_size,
-    ))
-    .unwrap_or_else(|_| {
+    )
+    .unwrap_or_else(|error| {
         panic!(
-            "occupied capacity exceeds i64: lock_args_len={}, type_args_len={:?}, data_size={}",
-            lock_args_len, type_args_len, data_size
+            "failed to compute occupied capacity: lock_args_len={}, type_args_len={:?}, data_size={}, error={}",
+            lock_args_len, type_args_len, data_size, error
         )
     })
 }
@@ -518,7 +515,6 @@ pub(crate) fn accumulate_secondary_issuance_deltas_from_csu(
     s: i128,
     u: i128,
     claimed_compensation_in_block: i128,
-    running_deposited_free: i128,
     prev_dao_csu: &mut Option<(i128, i128, i128)>,
 ) -> Result<()> {
     if claimed_compensation_in_block < 0 {
@@ -550,39 +546,17 @@ pub(crate) fn accumulate_secondary_issuance_deltas_from_csu(
                     s_delta,
                     claimed_compensation_in_block
                 )
-            })?;
+        })?;
         if non_miner_delta != 0 {
-            *stats
-                .daily_secondary_non_miner_delta
-                .entry(block_date)
-                .or_default() += non_miner_delta;
-            // Per-block exact split. Negative S-field protocol corrections are
-            // retained in treasury so the cumulative sum telescopes instead of
-            // counting the subsequent rebound twice (POSTMORTEM DAO-018). RFC-0023
-            // defines block N from C/U at the end of N-1 (POSTMORTEM DAO-016).
-            let (miner, dao, treasury) = split_secondary_issuance_delta(
-                prev_c,
-                prev_u,
-                running_deposited_free,
-                non_miner_delta,
-            )?;
+            // RFC-0023 defines block N's miner portion from C/U at the end of
+            // N-1. Deposit compensation has a separate, exact per-deposit AR
+            // lifecycle and is never reconstructed from this aggregate delta.
+            let miner = calculate_secondary_miner_delta(prev_c, prev_u, non_miner_delta)?;
             if miner != 0 {
                 *stats
                     .daily_secondary_miner_delta
                     .entry(block_date)
                     .or_default() += miner;
-            }
-            if dao != 0 {
-                *stats
-                    .daily_secondary_dao_delta
-                    .entry(block_date)
-                    .or_default() += dao;
-            }
-            if treasury != 0 {
-                *stats
-                    .daily_secondary_treasury_delta
-                    .entry(block_date)
-                    .or_default() += treasury;
             }
         }
     }
@@ -596,7 +570,6 @@ pub(crate) fn accumulate_secondary_issuance_deltas(
     parsed: &crate::parser::block::ParsedBlock,
     block_date: NaiveDate,
     claimed_compensation_in_block: i128,
-    running_deposited_free: i128,
     prev_dao_csu: &mut Option<(i128, i128, i128)>,
 ) -> Result<()> {
     let (c, s, u) = extract_dao_csu(&parsed.dao).ok_or_else(|| {
@@ -616,38 +589,8 @@ pub(crate) fn accumulate_secondary_issuance_deltas(
         s,
         u,
         claimed_compensation_in_block,
-        running_deposited_free,
         prev_dao_csu,
     )
-}
-
-pub(crate) fn snapshot_protocol_deposit_free_capacity(
-    snapshot: &ckbadger_store::types::DaoDailySnapshot,
-) -> Result<i128> {
-    let live_protocol_cells = snapshot
-        .new_deposits
-        .checked_sub(snapshot.withdrawals)
-        .ok_or_else(|| {
-            anyhow!(
-                "DAO protocol cell count overflow for snapshot {}: deposits={}, withdrawals={}",
-                snapshot.date,
-                snapshot.new_deposits,
-                snapshot.withdrawals
-            )
-        })?;
-    dao_total_free_capacity(
-        snapshot
-            .protocol_deposited
-            .unwrap_or(snapshot.total_deposited),
-        live_protocol_cells,
-    )
-    .map_err(|error| {
-        anyhow!(
-            "invalid DAO protocol free capacity for snapshot {}: {}",
-            snapshot.date,
-            error
-        )
-    })
 }
 
 fn bump_unique_active_depositors(
@@ -1093,20 +1036,6 @@ mod tests {
         assert_eq!(parsed, ar as i64);
     }
 
-    // -- split_secondary_issuance -------------------------------------------
-
-    #[test]
-    fn test_split_secondary_issuance_errors_on_negative_inputs() {
-        let err = split_secondary_issuance_delta(1000, 100, -1, 10).unwrap_err();
-        assert!(err.to_string().contains("negative input"));
-    }
-
-    #[test]
-    fn test_split_secondary_issuance_errors_when_deposited_exceeds_liquid_supply() {
-        let err = split_secondary_issuance_delta(1000, 900, 200, 10).unwrap_err();
-        assert!(err.to_string().contains("exceeds liquid supply"));
-    }
-
     // -- resolve_non_miner_secondary_delta_for_snapshot ---------------------
 
     #[test]
@@ -1150,7 +1079,7 @@ mod tests {
     // -- accumulate_secondary_issuance_deltas -------------------------------
 
     #[test]
-    fn test_accumulate_secondary_issuance_deltas_tracks_exact_miner_and_non_miner() {
+    fn test_accumulate_secondary_issuance_deltas_tracks_exact_miner() {
         let mut stats = BatchStats::default();
         let prev_c = 10_000_i128;
         let prev_s = 5_000_i128;
@@ -1163,9 +1092,8 @@ mod tests {
         let block = dummy_parsed_block(build_dao_field(c as u64, s as u64, u as u64), 0, 1000);
         let date = ckbadger_common::block_date(block.timestamp);
 
-        accumulate_secondary_issuance_deltas(&mut stats, &block, date, 0, 0, &mut prev).unwrap();
+        accumulate_secondary_issuance_deltas(&mut stats, &block, date, 0, &mut prev).unwrap();
 
-        assert_eq!(stats.daily_secondary_non_miner_delta.get(&date), Some(&600));
         assert_eq!(
             stats.daily_secondary_miner_delta.get(&date),
             Some(&expected_miner)
@@ -1193,14 +1121,9 @@ mod tests {
             &block,
             date,
             claimed_compensation,
-            0,
             &mut prev,
         )
         .unwrap();
-        assert_eq!(
-            stats.daily_secondary_non_miner_delta.get(&date),
-            Some(&expected_non_miner)
-        );
         assert_eq!(
             stats.daily_secondary_miner_delta.get(&date),
             Some(&expected_miner)
@@ -1220,19 +1143,14 @@ mod tests {
 
         let block_drop =
             dummy_parsed_block(build_dao_field(30_000_000_000_500, 9_950, 100), 0, 1000);
-        accumulate_secondary_issuance_deltas(&mut stats, &block_drop, date, 120, 0, &mut prev)
+        accumulate_secondary_issuance_deltas(&mut stats, &block_drop, date, 120, &mut prev)
             .unwrap();
 
         let block_growth =
             dummy_parsed_block(build_dao_field(30_000_000_001_000, 10_020, 100), 1, 2000);
-        accumulate_secondary_issuance_deltas(&mut stats, &block_growth, date, 0, 0, &mut prev)
+        accumulate_secondary_issuance_deltas(&mut stats, &block_growth, date, 0, &mut prev)
             .unwrap();
 
-        assert_eq!(
-            stats.daily_secondary_non_miner_delta.get(&date),
-            Some(&140),
-            "daily delta should include both block-level non-miner issuance contributions"
-        );
         assert!(
             stats
                 .daily_secondary_miner_delta
@@ -1254,13 +1172,12 @@ mod tests {
 
         // Verify the happy path doesn't error with a valid progressing DAO field.
         let block = dummy_parsed_block(build_dao_field(30_000_000_000_100, 10_000, 0), 0, 1000);
-        let result =
-            accumulate_secondary_issuance_deltas(&mut stats, &block, date, 0, 0, &mut prev);
+        let result = accumulate_secondary_issuance_deltas(&mut stats, &block, date, 0, &mut prev);
         assert!(result.is_ok());
     }
 
     #[test]
-    fn test_accumulate_secondary_issuance_deltas_protocol_upgrade_s_drop_hits_treasury() {
+    fn test_accumulate_secondary_issuance_deltas_protocol_upgrade_s_drop_skips_miner() {
         // CKB's S field can physically decrease at protocol upgrade boundaries.
         // The negative correction must be retained in treasury so the cumulative
         // non-miner sum telescopes instead of counting the rebound twice.
@@ -1270,22 +1187,12 @@ mod tests {
 
         // S drops from 10_000 to 9_000 — simulates protocol upgrade boundary.
         let block = dummy_parsed_block(build_dao_field(20_000_000_000_500, 9_000, 100), 0, 1000);
-        let result =
-            accumulate_secondary_issuance_deltas(&mut stats, &block, date, 0, 0, &mut prev);
+        let result = accumulate_secondary_issuance_deltas(&mut stats, &block, date, 0, &mut prev);
         assert!(
             result.is_ok(),
             "negative S delta should not crash: {result:?}"
         );
-        assert_eq!(
-            stats.daily_secondary_non_miner_delta.get(&date),
-            Some(&-1_000)
-        );
         assert_eq!(stats.daily_secondary_miner_delta.get(&date), None);
-        assert_eq!(stats.daily_secondary_dao_delta.get(&date), None);
-        assert_eq!(
-            stats.daily_secondary_treasury_delta.get(&date),
-            Some(&-1_000)
-        );
         // prev_dao_csu must still advance to the current block's values.
         assert_eq!(prev, Some((20_000_000_000_500, 9_000, 100)));
     }
@@ -1310,7 +1217,7 @@ mod tests {
                 previous_output_index: 0,
                 since: 0,
             }],
-            vec![dummy_dao_cell(9_900_000_000, false)],
+            vec![dummy_dao_cell(20_000_000_000, false)],
             vec![],
             vec!["0x0100000000000000".to_string()],
         );
@@ -1321,7 +1228,7 @@ mod tests {
             DaoConsumedRow {
                 tx_hash: vec![],
                 output_index: 0,
-                capacity_str: "10000000000".to_string(),
+                capacity_str: "20000000000".to_string(),
                 deposit_block: 0,
                 status: 0,
                 lock_script_hash: vec![0xAA; 32],
@@ -1334,7 +1241,7 @@ mod tests {
         let mut batch_cell_infos: HashMap<(Vec<u8>, i16), PositionedCellInfo> = HashMap::new();
         batch_cell_infos.insert(
             (vec![0x11; 32], 0),
-            dummy_positioned_info(10_000_000_000, 0, lock_hash.clone()),
+            dummy_positioned_info(20_000_000_000, 0, lock_hash.clone()),
         );
         let mut active_deposit_counts_by_lock: HashMap<Vec<u8>, i64> = HashMap::new();
         // Lock 0xAA has one active deposit so the phase-1 decrement can succeed.
@@ -1370,7 +1277,7 @@ mod tests {
         // Phase-1 subtracts capacity from daily_active_delta.
         assert_eq!(
             daily_active_delta.get(&block_date),
-            Some(&-10_000_000_000),
+            Some(&-20_000_000_000),
             "phase-1 must subtract capacity from daily_active_delta"
         );
         assert!(daily_gross_deposit_delta.is_empty());
@@ -1709,8 +1616,8 @@ mod tests {
             false,
             vec![],
             vec![
-                dummy_dao_cell_with_lock(100_00000000, true, lock_hash.clone()),
                 dummy_dao_cell_with_lock(200_00000000, true, lock_hash.clone()),
+                dummy_dao_cell_with_lock(300_00000000, true, lock_hash.clone()),
             ],
             vec![],
             vec![],
@@ -1725,7 +1632,7 @@ mod tests {
                 previous_output_index: 0,
                 since: 0,
             }],
-            vec![dummy_dao_cell(9_900_000_000, false)],
+            vec![dummy_dao_cell(200_00000000, false)],
             vec![],
             vec!["0x0100000000000000".to_string()],
         );
@@ -1751,7 +1658,7 @@ mod tests {
             DaoConsumedRow {
                 tx_hash: vec![],
                 output_index: 0,
-                capacity_str: "10000000000".to_string(),
+                capacity_str: "20000000000".to_string(),
                 deposit_block: 0,
                 status: 1,
                 lock_script_hash: lock_hash.clone(),
@@ -1770,11 +1677,11 @@ mod tests {
         let mut batch_cell_infos: HashMap<(Vec<u8>, i16), PositionedCellInfo> = HashMap::new();
         batch_cell_infos.insert(
             (deposit_tx_hash.to_vec(), 0),
-            dummy_positioned_info(100_00000000, 100, lock_hash.clone()),
+            dummy_positioned_info(200_00000000, 100, lock_hash.clone()),
         );
         batch_cell_infos.insert(
             (deposit_tx_hash.to_vec(), 1),
-            dummy_positioned_info(200_00000000, 100, lock_hash.clone()),
+            dummy_positioned_info(300_00000000, 100, lock_hash.clone()),
         );
 
         // After deposit: 2 active deposits, 1 unique depositor.
@@ -1810,7 +1717,7 @@ mod tests {
             DaoConsumedRow {
                 tx_hash: vec![],
                 output_index: 0,
-                capacity_str: "10000000000".to_string(),
+                capacity_str: "20000000000".to_string(),
                 deposit_block: 0,
                 status: 0,
                 lock_script_hash: lock_hash.clone(),

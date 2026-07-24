@@ -48,11 +48,30 @@ The API returns `cellType: "genesis_special_burn"` and `virtualOccupiedCapacity:
 
 ### Supply Terminology
 
-| Term             | Definition                                       | At Genesis |
-| ---------------- | ------------------------------------------------ | ---------- |
-| `total_issuance` | dao field C - all issued CKB including burnt     | 33.6B      |
-| `circulating`    | total_issuance - genesis_burnt - secondary_burnt | 25.2B      |
-| `liquid`         | circulating - locked_in_dao                      | varies     |
+RFC-0023 calls DAO field `C` total issuance, but field `S` is the portion of
+secondary issuance that is still unissued. Therefore user-facing circulation
+must subtract the complete `S` pool, not only its treasury portion.
+
+| Term                          | Definition                                             | At Genesis |
+| ----------------------------- | ------------------------------------------------------ | ---------- |
+| `total_issuance`              | DAO field `C` (genesis + primary + secondary schedule) | 33.6B      |
+| `unissued_secondary`          | DAO field `S` (unmade DAO interest + treasury)         | ~0         |
+| `secondary_treasury`          | `S - unmade_dao_interests`                             | ~0         |
+| `protocol_circulating`        | `C - genesis_burnt - S`                                | ~25.2B     |
+| `liquid`                      | `protocol_circulating - locked_in_dao`                 | varies     |
+| `explorer_policy_locked`      | Explorer-labelled vesting and Bug Bounty balances      | varies     |
+| `explorer_circulating_supply` | `protocol_circulating - explorer_policy_locked`        | varies     |
+
+ckbadger exposes `protocol_circulating`, derived only from consensus DAO fields
+and the chain-derived genesis burn. The official explorer applies an additional
+off-chain policy classification: historical vesting allocations plus the live
+balance of its labelled Bug Bounty address. Its separately published
+`locked_capacity` is the exact amount needed to normalize that external metric:
+
+```
+protocol_circulating =
+    explorer_circulating_supply + explorer_locked_capacity
+```
 
 ### Issuance Schedule
 
@@ -102,7 +121,7 @@ So if `I_i` exceeds the block's net inflow to `S`, the delta is negative even th
 
 ```rust
 const SHANNON: u64 = 100_000_000;                    // 1 CKB = 10^8 shannons
-const DAO_OCCUPIED_CAPACITY: u64 = 102 * SHANNON;   // 102 CKB minimum for DAO cell
+const DAO_OCCUPIED_CAPACITY: u64 = 102 * SHANNON;   // standard secp256k1 DAO cell
 const BLOCKS_PER_YEAR: i64 = 3_942_000;             // 365.25 * 24 * 60 * 60 / 8 seconds
 const GENESIS_BURNT: u64 = 8_400_000_000 * SHANNON; // 8.4B CKB burnt at genesis
 const SECONDARY_ISSUANCE_PER_YEAR: u64 = 1_344_000_000 * SHANNON; // 1.344B CKB/year
@@ -113,7 +132,7 @@ const SECONDARY_ISSUANCE_PER_YEAR: u64 = 1_344_000_000 * SHANNON; // 1.344B CKB/
 For a single DAO deposit, compensation is calculated using AR growth:
 
 ```
-free_capacity = capacity - DAO_OCCUPIED_CAPACITY
+free_capacity = capacity - occupied_capacity
 compensation = free_capacity * (AR_withdraw / AR_deposit) - free_capacity
              = free_capacity * (AR_withdraw - AR_deposit) / AR_deposit
 ```
@@ -121,10 +140,40 @@ compensation = free_capacity * (AR_withdraw / AR_deposit) - free_capacity
 Where:
 
 - `capacity`: Total CKB locked in the deposit (in shannons)
+- `occupied_capacity`: Exact occupied capacity of that deposit cell, derived
+  from its capacity field, lock script, type script, and data
 - `AR_deposit`: AR value at deposit block
-- `AR_withdraw`: AR value at withdrawal block
+- `AR_withdraw`: AR value at the phase-1 withdraw-request block
 
-**Implementation**: `crates/api/src/routes/dao.rs::calculate_compensation()`
+The familiar 102 CKB value applies to a standard secp256k1 DAO cell. It is not
+a protocol-wide constant for cells using different lock scripts. The indexer
+therefore persists the original deposit cell's exact occupied capacity.
+
+### Lifecycle aggregation
+
+At observation block `B`, each deposit contributes through exactly one state:
+
+| State at `B`             | Compensation AR                       | Aggregate bucket |
+| ------------------------ | ------------------------------------- | ---------------- |
+| Active deposit           | AR at block `B`                       | `active_unmade`  |
+| Withdraw request pending | AR at request block                   | frozen unclaimed |
+| Withdraw completed       | request AR (stored amount must match) | claimed          |
+
+```
+unclaimed_compensation = active_unmade + frozen_phase1_compensation
+deposit_compensation = claimed_compensation + unclaimed_compensation
+```
+
+Phase-1 cells remain protocol-locked, but their compensation stops accruing at
+the request AR. Phase-2 moves the same amount from unclaimed to claimed; it
+does not change cumulative deposit compensation. Completed entries retain the
+request AR so rollback to phase-1 can reproduce and validate the frozen amount.
+
+**Implementation**:
+
+- Arithmetic: `crates/common/src/dao.rs::calculate_dao_compensation_from_ar()`
+- Historical lifecycle: `crates/ckbadger-store/src/dao_ops.rs::dao_compensation_for_entry_at()`
+- Bulk daily timeline: `crates/indexer/src/sync/bulk_build/owners/dao.rs`
 
 ## 2. Estimated APC (Annual Percentage Compensation)
 
@@ -176,58 +225,72 @@ APC decreases over time because cumulative `total_issuance` grows while secondar
 - Core calculation: `crates/common/src/dao.rs::calculate_estimated_apc()`
 - API wrapper: `crates/api/src/routes/dao.rs::estimated_apc_from_store()`
 
-## 3. Secondary Issuance Distribution
+## 3. Secondary Issuance Components
 
-CKB's secondary issuance (~1.344 billion CKB/year) is distributed among three recipients:
+CKB's secondary issuance is reflected through DAO header fields and individual
+deposit AR growth. These are related protocol quantities, but they are not
+interchangeable calculation paths.
 
-### 3.1 Distribution Formula
+### 3.1 Miner secondary issuance
 
-For block `N`, using chain state at the end of block `N-1`:
+For block `N`, using header state at the end of block `N-1`:
 
 ```
-1. non_miner_delta = (S_N - S_(N-1)) + claimed_compensation_N
-2. denominator = C_(N-1) - U_(N-1)
-3. dao_free_capacity = sum(capacity - DAO_OCCUPIED_CAPACITY) for DAO cells live at N-1
-4. liquid_capacity = denominator - dao_free_capacity
-5. miner_secondary = non_miner_delta * U_(N-1) / denominator
-6. dao_compensation = non_miner_delta * dao_free_capacity / denominator
-7. treasury = non_miner_delta - dao_compensation
+non_miner_delta =
+    (S_N - S_(N-1)) + claimed_compensation_in_block_N
+
+miner_secondary_delta =
+    non_miner_delta * U_(N-1) / (C_(N-1) - U_(N-1))
 ```
 
-At a protocol boundary where `non_miner_delta` is negative, the correction is
-applied entirely to treasury. Miner and DAO compensation stay monotonic, while
-`DAO + treasury` still telescopes to the exact on-chain S-field change.
+If `non_miner_delta` is a negative protocol correction, miner reward does not
+decrease. Cumulative miner secondary issuance is the exact sum of the
+non-negative per-block miner deltas.
 
-### 3.2 Distribution Ratios
+### 3.2 DAO compensation
 
-The distribution depends on how CKB is allocated across the network:
+DAO compensation is **not** reconstructed by multiplying the aggregate
+secondary-pool delta by aggregate DAO principal. That proportional shortcut is
+not equivalent to the protocol because deposits have different AR start
+points, per-deposit integer flooring, exact occupied capacities, and phase-1
+freeze times.
 
-| Recipient            | Formula                                   | Typical % |
-| -------------------- | ----------------------------------------- | --------- |
-| **Mining Reward**    | `non_miner * U / (C - U)`                 | ~10-12%   |
-| **DAO Compensation** | `non_miner * dao_free_capacity / (C - U)` | ~15-20%   |
-| **Treasury / Burnt** | `non_miner * liquid_capacity / (C - U)`   | ~70-75%   |
+The only DAO compensation path is the lifecycle calculation in section 1:
 
-Where:
+```
+deposit_compensation = sum(exact per-deposit claimed or unclaimed compensation)
+```
 
-- `dao_free_capacity` excludes each DAO cell's 102 CKB occupied capacity; that occupied portion is already represented by `U`
-- `liquid_capacity = C - U - dao_free_capacity` (CKB neither interest-bearing in DAO nor used for storage)
+Bulk materialization advances deposit, request, and completion events in block
+order. For each daily boundary it evaluates only the deposits still accruing
+at that day's AR, while frozen and claimed totals advance through lifecycle
+events.
 
-**Key insight**: Most secondary issuance is burnt because most CKB remains liquid (not locked in DAO).
+### 3.3 Treasury
 
-### 3.3 Data Sources
+The explorer-compatible treasury series is derived directly from the on-chain
+secondary pool and active unmade interest:
 
-- `S`: DAO field bytes 16-23 (cumulative non-miner secondary issuance less claimed compensation)
-- `C`: DAO field bytes 0-7 (total issuance)
-- `U`: DAO field bytes 24-31 (occupied capacity)
-- `claimed_compensation`: exact compensation of phase-2 withdrawals in block `N`
-- `dao_free_capacity`: interest-bearing free capacity of deposits active at the end of block `N-1`
+```
+treasury = S - active_unmade
+```
 
-**CRITICAL**: When calculating historical secondary issuance breakdown, deposit free capacity must be computed for that specific block number. Using current deposits, or using full DAO cell capacity without subtracting occupied capacity, overstates historical DAO compensation. The indexer maintains point-in-time deposit tracking in RocksDB's `dao_deposits` column family.
+This formula deliberately uses only still-accruing status-0 compensation.
+Phase-1 compensation is frozen and remains in `unclaimed_compensation`, but is
+not part of `active_unmade`.
 
-**Update frequency**: Exactly once per processed block in both bulk-build and live-sync paths.
+### 3.4 Data sources and implementation
 
-**Implementation**: Shared arithmetic in `crates/common/src/dao.rs::split_secondary_issuance_delta()`; chain-state accumulation in `crates/indexer/src/sync/dao_helpers.rs`.
+- `C`, `S`, `U`, and `AR`: exact DAO fields from every block header
+- `claimed_compensation_in_block`: exact phase-2 lifecycle transition
+- Per-deposit capacity, exact occupied capacity, deposit AR, request AR, and
+  lifecycle block numbers: domain-store `dao_deposits`
+- Miner arithmetic:
+  `crates/common/src/dao.rs::calculate_secondary_miner_delta()`
+- Per-block miner accumulation:
+  `crates/indexer/src/sync/dao_helpers.rs`
+- Exact bulk compensation timeline:
+  `crates/indexer/src/sync/bulk_build/owners/dao.rs`
 
 ## 4. Storage Schema (RocksDB)
 
@@ -235,7 +298,7 @@ DAO-related state is split across several CFs:
 
 | CF / Data                     | Key                                                     | Value                  | Purpose                                                                                                                                          |
 | ----------------------------- | ------------------------------------------------------- | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `dao_deposits`                | `tx_hash + output_index`                                | `DaoDepositCacheEntry` | Deposit lifecycle (active / withdraw requested / completed)                                                                                      |
+| `dao_deposits`                | `tx_hash + output_index`                                | `DaoDepositCacheEntry` | Deposit lifecycle plus original capacity, exact occupied capacity, deposit/request ARs, and validated claimed compensation                       |
 | `dao_by_withdraw_tx`          | `withdraw_outpoint` (34B)                               | `deposit_outpoint_key` | Fast lookup on withdraw completion (keyed by withdraw request outpoint)                                                                          |
 | `dao_by_block`                | `block_desc (8B BE) + outpoint (34B)`                   | empty                  | Newest-first global DAO deposit index                                                                                                            |
 | `dao_by_lock_block`           | `lock_hash (32B) + block_desc (8B BE) + outpoint (34B)` | empty                  | Newest-first DAO deposit index scoped by lock hash                                                                                               |
@@ -244,11 +307,12 @@ DAO-related state is split across several CFs:
 
 ## 5. Update Triggers
 
-| Statistic                    | Trigger                                                  | Function                                                                              |
-| ---------------------------- | -------------------------------------------------------- | ------------------------------------------------------------------------------------- |
-| Secondary issuance breakdown | For each processed block when `blocks_remaining <= 1000` | `update_secondary_issuance()`                                                         |
-| Reorg cutoff-date repair     | After partial-day rollback                               | `CkbadgerStore::recompute_dao_daily_snapshot_for_date()` + `repair_cutoff_date_stats` |
-| Daily snapshots              | Daily                                                    | `update_dao_daily_snapshot()`                                                         |
+| Statistic                       | Trigger                            | Function / owner                                                                      |
+| ------------------------------- | ---------------------------------- | ------------------------------------------------------------------------------------- |
+| Miner secondary issuance        | Every processed block              | `accumulate_secondary_issuance_deltas_from_csu()`                                     |
+| Bulk daily deposit compensation | Bulk final materialization         | `DaoCompensationTimeline`                                                             |
+| Latest deposit compensation     | After each live domain-store batch | `BatchWriter::refresh_latest_dao_statistics()`                                        |
+| Reorg cutoff-date repair        | After partial-day rollback         | `CkbadgerStore::recompute_dao_daily_snapshot_for_date()` + `repair_cutoff_date_stats` |
 
 > **Note:** Estimated APC served by DAO APIs is derived from the latest `DaoDailySnapshot` + protocol constants, not from a periodically persisted `estimated_apc` field.
 
@@ -259,18 +323,23 @@ DAO-related state is split across several CFs:
 Shows stacked area of CKB distribution:
 
 ```
-total_issuance = dao field C (includes genesis burnt)
-total_burnt = GENESIS_BURNT + secondary_burnt
-circulating = total_issuance - total_burnt
-liquid = circulating - locked_in_dao
+total_issuance = DAO field C
+unissued_secondary = DAO field S
+secondary_treasury = S - unmade_dao_interests
+total_burnt = GENESIS_BURNT + secondary_treasury
+protocol_circulating = total_issuance - GENESIS_BURNT - unissued_secondary
+liquid = protocol_circulating - locked_in_dao
 ```
 
-| Layer                | Calculation              | At Genesis |
-| -------------------- | ------------------------ | ---------- |
-| Circulating (liquid) | `circulating - locked`   | ~25.2B     |
-| Locked in DAO        | `dao_deposits`           | ~0         |
-| Burnt                | `8.4B + secondary_burnt` | 8.4B       |
-| **Total**            | Sum of above             | 33.6B      |
+| Layer                | Calculation                            | At Genesis |
+| -------------------- | -------------------------------------- | ---------- |
+| Circulating (liquid) | `protocol_circulating - locked_in_dao` | ~25.2B     |
+| Locked in DAO        | active DAO deposit principal           | ~0         |
+| Burnt                | `GENESIS_BURNT + secondary_treasury`   | 8.4B       |
+
+Outstanding `unmade_dao_interests` are not circulating yet and are not
+treasury/burnt. Consequently the three displayed layers sum to
+`C - unmade_dao_interests`.
 
 **Implementation**: `crates/api/src/routes/statistics.rs::get_total_supply_chart()`
 
@@ -284,11 +353,12 @@ liquid = circulating - locked_in_dao
 Shows percentage of **circulating** CKB locked in DAO:
 
 ```
-circulating = total_issuance - GENESIS_BURNT - secondary_burnt
-ratio = dao_deposits / circulating * 100
+protocol_circulating = C - GENESIS_BURNT - S
+ratio = dao_deposits / protocol_circulating * 100
 ```
 
-**Note**: Uses real circulating supply (excluding burnt), not `total_issuance`.
+**Note**: Uses realized circulating supply, excluding both the genesis burn and
+the complete unissued secondary pool.
 
 **Implementation**: `crates/api/src/routes/dao.rs::get_circulation_ratio_chart()`
 
@@ -325,9 +395,25 @@ Where `GENESIS_CIRCULATING = 25.2B` (not 33.6B).
 
 **Wrong**: Using `total_issuance` (33.6B at genesis) as circulating supply
 
-**Correct**: `circulating = total_issuance - genesis_burnt - secondary_burnt` (25.2B at genesis)
+**Wrong**: Subtracting only treasury/burnt secondary issuance. That leaves
+unmade DAO interest in circulation before it has been claimed.
 
-The dao field's `total_issuance` (C) includes the 8.4B genesis burnt. For user-facing "circulating supply", subtract all burnt CKB.
+**Correct**: `protocol_circulating = C - genesis_burnt - S` (~25.2B at genesis)
+
+DAO field `C` includes the 8.4B genesis burn and the scheduled secondary
+issuance accumulated in `S`. RFC-0023 defines `S` as unissued, so both must be
+removed from user-facing circulating supply.
+
+### Comparing protocol circulation directly with explorer circulation
+
+**Wrong**: Comparing ckbadger `C - genesis_burnt - S` directly with the
+official explorer's `circulating_supply`, then widening the tolerance to hide a
+stable offset.
+
+**Correct**: Compare with
+`explorer circulating_supply + explorer locked_capacity`. The explorer
+subtracts policy-labelled balances that are not excluded by CKB consensus; its
+`locked_capacity` series publishes that exact adjustment.
 
 ### Using 33.6B as Genesis Supply for APC
 

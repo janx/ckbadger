@@ -20,6 +20,7 @@ fn build_dao_cache_entry(
 ) -> DaoDepositCacheEntry {
     DaoDepositCacheEntry {
         capacity: deposit.capacity,
+        occupied_capacity: deposit.occupied_capacity,
         deposit_block_number: block_number,
         deposit_timestamp,
         lock_script_hash: deposit.lock_script_hash.clone(),
@@ -580,8 +581,12 @@ impl BatchWriter {
                                 req_dao.len()
                             )
                         })?;
-                        let compensation =
-                            calculate_dao_compensation_from_ar(capacity, ar_deposit, ar_withdraw)?;
+                        let compensation = calculate_dao_compensation_from_ar(
+                            capacity,
+                            entry.occupied_capacity,
+                            ar_deposit,
+                            ar_withdraw,
+                        )?;
                         let withdraw_to_output_index =
                             ctx.withdraw_to_output_index_for_lock(&entry.lock_script_hash);
                         entry.status = 2;
@@ -670,6 +675,7 @@ mod tests {
             output_index: 7,
             lock_script_hash: vec![0x22; 32],
             capacity: 123_456,
+            occupied_capacity: 45_678,
         };
         let entry = build_dao_cache_entry(&deposit, 42, 9876, 0);
 
@@ -692,6 +698,7 @@ mod tests {
     fn test_dao_cache_entry_to_row_maps_fields() {
         let entry = DaoDepositCacheEntry {
             capacity: 999,
+            occupied_capacity: 111,
             deposit_block_number: 77,
             deposit_timestamp: 0,
             lock_script_hash: vec![0x33; 32],
@@ -831,19 +838,22 @@ mod tests {
 
     #[test]
     fn test_calculate_dao_compensation_from_ar_errors_on_capacity_below_occupied() {
-        let err = calculate_dao_compensation_from_ar(100_00000000, 100, 110).unwrap_err();
-        assert!(err.to_string().contains("below occupied"));
+        let err =
+            calculate_dao_compensation_from_ar(100_00000000, 102_00000000, 100, 110).unwrap_err();
+        assert!(err.to_string().contains("below occupied capacity"));
     }
 
     #[test]
     fn test_calculate_dao_compensation_from_ar_errors_on_ar_underflow() {
-        let err = calculate_dao_compensation_from_ar(200_00000000, 100, 90).unwrap_err();
+        let err =
+            calculate_dao_compensation_from_ar(200_00000000, 102_00000000, 100, 90).unwrap_err();
         assert!(err.to_string().contains("underflow"));
     }
 
     #[test]
     fn test_calculate_dao_compensation_from_ar_errors_on_zero_deposit_ar() {
-        let err = calculate_dao_compensation_from_ar(200_00000000, 0, 100).unwrap_err();
+        let err =
+            calculate_dao_compensation_from_ar(200_00000000, 102_00000000, 0, 100).unwrap_err();
         assert!(err.to_string().contains("zero deposit AR"));
     }
 
@@ -868,6 +878,7 @@ mod tests {
             outpoint_key,
             DaoDepositCacheEntry {
                 capacity: deposit_capacity,
+                occupied_capacity: 0,
                 deposit_block_number: deposit_block,
                 deposit_timestamp: 0,
                 lock_script_hash: vec![0xBB; 32],
@@ -934,6 +945,7 @@ mod tests {
             outpoint_key,
             DaoDepositCacheEntry {
                 capacity: 100_00000000,
+                occupied_capacity: 102_00000000,
                 deposit_block_number: 100,
                 deposit_timestamp: 0,
                 lock_script_hash: vec![0xBB; 32],
@@ -1001,6 +1013,7 @@ mod tests {
 
         let pending_entry = DaoDepositCacheEntry {
             capacity: deposit_capacity,
+            occupied_capacity: 102_00000000,
             deposit_block_number: deposit_block,
             deposit_timestamp: 0,
             lock_script_hash: vec![0xBB; 32],
@@ -1133,6 +1146,7 @@ mod tests {
             outpoint_key,
             DaoDepositCacheEntry {
                 capacity: 500_00000000,
+                occupied_capacity: 102_00000000,
                 deposit_block_number: 100,
                 deposit_timestamp: 0,
                 lock_script_hash: vec![0xBB; 32],
@@ -1204,6 +1218,7 @@ mod tests {
             outpoint_key,
             DaoDepositCacheEntry {
                 capacity,
+                occupied_capacity: 102_00000000,
                 deposit_block_number: 100,
                 deposit_timestamp: 0,
                 lock_script_hash: vec![0xBB; 32],
@@ -1287,6 +1302,7 @@ mod tests {
             outpoint,
             DaoDepositCacheEntry {
                 capacity,
+                occupied_capacity: 102_00000000,
                 deposit_block_number: 100,
                 deposit_timestamp: 0,
                 lock_script_hash: vec![0xBB; 32],
@@ -1378,6 +1394,7 @@ mod tests {
             outpoint,
             DaoDepositCacheEntry {
                 capacity,
+                occupied_capacity: 102_00000000,
                 deposit_block_number: 5668752,
                 deposit_timestamp: 0,
                 lock_script_hash: vec![0x33; 32],
@@ -1480,6 +1497,7 @@ mod tests {
             outpoint_key,
             DaoDepositCacheEntry {
                 capacity: deposit_capacity,
+                occupied_capacity: 102_00000000,
                 deposit_block_number: deposit_block,
                 deposit_timestamp: 0,
                 lock_script_hash: lock_hash.clone(),
@@ -1567,6 +1585,7 @@ mod tests {
             outpoint_key,
             DaoDepositCacheEntry {
                 capacity: deposit_capacity,
+                occupied_capacity: 102_00000000,
                 deposit_block_number: deposit_block,
                 deposit_timestamp: 0,
                 lock_script_hash: lock_hash.clone(),
@@ -1638,6 +1657,7 @@ mod tests {
                 output_index: i32::from(i16::MAX) + 1,
                 lock_script_hash: vec![0xCD; 32],
                 capacity: 123,
+                occupied_capacity: 0,
             },
             42_i64,
             chrono::Utc::now(),

@@ -16,7 +16,7 @@ use crate::response::{
     chart_response_has_data, default_limit, ok, ApiError, ApiResult, ApiRouteError, ChartDataPoint,
     ChartResponse, CursorPaginatedResponse,
 };
-use crate::utils::{script_to_address, shannon_to_ckb, shannon_to_ckb_signed};
+use crate::utils::{dao_supply, script_to_address, shannon_to_ckb, shannon_to_ckb_signed};
 use crate::AppState;
 use tracing::instrument;
 
@@ -134,21 +134,6 @@ fn depositor_series_value(
     })
 }
 
-fn dao_deposit_ar_as_u64(
-    entry: &ckbadger_store::types::DaoDepositCacheEntry,
-    context: &str,
-) -> anyhow::Result<u64> {
-    u64::try_from(entry.deposit_ar).map_err(|_| {
-        anyhow::anyhow!(
-            "invalid negative DAO deposit AR while computing {}: deposit_block={}, lock_script_hash=0x{}, deposit_ar={}",
-            context,
-            entry.deposit_block_number,
-            hex::encode(&entry.lock_script_hash),
-            entry.deposit_ar
-        )
-    })
-}
-
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DaoDepositResponse {
@@ -205,9 +190,9 @@ struct DaoStatisticsAccumulator {
     total_compensation_paid: i128,
     total_ms_held: f64,
     active_filtered_count: usize,
-    total_unclaimed: u128,
+    total_unclaimed: i128,
     /// AR-based compensation for status-0 deposits only (explorer-compatible treasury).
-    unmade_active_compensation: u128,
+    unmade_active_compensation: i128,
     /// Capacity-weighted deposit-days for status-0 deposits.
     weighted_deposit_days_status0: f64,
     /// Capacity-weighted deposit-days for status-1 deposits (frozen at phase-1 time).
@@ -227,59 +212,59 @@ fn accumulate_dao_statistics_entry(
 ) -> anyhow::Result<()> {
     match entry.status {
         0 => {
-            acc.total_deposited += entry.capacity as i128;
+            acc.total_deposited = acc
+                .total_deposited
+                .checked_add(i128::from(entry.capacity))
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "DAO total deposited overflow at deposit block {}",
+                        entry.deposit_block_number
+                    )
+                })?;
             acc.unique_depositors.insert(entry.lock_script_hash.clone());
-            acc.active_count += 1;
+            acc.active_count = acc.active_count.checked_add(1).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "DAO active deposit count overflow at deposit block {}",
+                    entry.deposit_block_number
+                )
+            })?;
 
             if entry.deposit_block_number <= latest_block_number {
                 let held_ms = tip_timestamp - entry.deposit_timestamp;
                 acc.total_ms_held += held_ms as f64;
                 acc.active_filtered_count += 1;
 
-                let ar_deposit = dao_deposit_ar_as_u64(entry, "statistics")?;
-                if ar_deposit > 0 && latest_ar > ar_deposit {
-                    let compensation =
-                        calculate_dao_compensation_from_ar(entry.capacity, ar_deposit, latest_ar)?;
-                    acc.total_unclaimed += compensation as u128;
-                    acc.unmade_active_compensation += compensation as u128;
-                }
-
                 let days_held = held_ms as f64 / 86_400_000.0;
                 acc.weighted_deposit_days_status0 += entry.capacity as f64 * days_held;
-                acc.avg_total_capacity += entry.capacity as i128;
+                acc.avg_total_capacity = acc
+                    .avg_total_capacity
+                    .checked_add(i128::from(entry.capacity))
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "DAO average capacity overflow at deposit block {}",
+                            entry.deposit_block_number
+                        )
+                    })?;
             }
         }
         1 => {
-            acc.pending_withdrawal_capacity += entry.capacity as i128;
-            acc.active_count += 1;
+            acc.pending_withdrawal_capacity = acc
+                .pending_withdrawal_capacity
+                .checked_add(i128::from(entry.capacity))
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "DAO pending withdrawal capacity overflow at deposit block {}",
+                        entry.deposit_block_number
+                    )
+                })?;
+            acc.active_count = acc.active_count.checked_add(1).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "DAO active deposit count overflow at deposit block {}",
+                    entry.deposit_block_number
+                )
+            })?;
 
-            // Compensation accrues for status=1 deposits (still locked in DAO).
-            // Per RFC-0023, compensation is locked at withdraw_request_ar.
             if entry.deposit_block_number <= latest_block_number {
-                let ar_deposit = dao_deposit_ar_as_u64(entry, "statistics")?;
-                let withdraw_ar = entry.withdraw_request_ar.ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "status=1 deposit missing withdraw_request_ar: deposit_block={}, lock_hash=0x{}",
-                        entry.deposit_block_number,
-                        hex::encode(&entry.lock_script_hash)
-                    )
-                })?;
-                let effective_ar = u64::try_from(withdraw_ar).map_err(|_| {
-                    anyhow::anyhow!(
-                        "status=1 deposit withdraw_request_ar exceeds u64: deposit_block={}, ar={}",
-                        entry.deposit_block_number,
-                        withdraw_ar
-                    )
-                })?;
-                if ar_deposit > 0 && effective_ar > ar_deposit {
-                    let compensation = calculate_dao_compensation_from_ar(
-                        entry.capacity,
-                        ar_deposit,
-                        effective_ar,
-                    )?;
-                    acc.total_unclaimed += compensation as u128;
-                }
-
                 // Collect status-1 deposit info for capacity-weighted average.
                 if let Some(request_block) = entry.withdraw_request_block {
                     acc.status1_for_avg.push((
@@ -290,11 +275,7 @@ fn accumulate_dao_statistics_entry(
                 }
             }
         }
-        2 => {
-            if let Some(comp) = entry.compensation {
-                acc.total_compensation_paid += comp as i128;
-            }
-        }
+        2 => {}
         _ => {
             anyhow::bail!(
                 "unknown DAO deposit status {} for deposit_block={}",
@@ -303,6 +284,36 @@ fn accumulate_dao_statistics_entry(
             );
         }
     }
+
+    let contribution =
+        ckbadger_store::dao_compensation_for_entry_at(entry, latest_block_number, latest_ar)?;
+    acc.total_compensation_paid = acc
+        .total_compensation_paid
+        .checked_add(contribution.claimed)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "DAO claimed compensation overflow at observation block {}",
+                latest_block_number
+            )
+        })?;
+    acc.total_unclaimed = acc
+        .total_unclaimed
+        .checked_add(contribution.unclaimed)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "DAO unclaimed compensation overflow at observation block {}",
+                latest_block_number
+            )
+        })?;
+    acc.unmade_active_compensation = acc
+        .unmade_active_compensation
+        .checked_add(contribution.active_unmade)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "DAO active unmade compensation overflow at observation block {}",
+                latest_block_number
+            )
+        })?;
 
     Ok(())
 }
@@ -619,35 +630,6 @@ fn estimated_apc_from_store(
     }
 }
 
-fn snapshot_circulating_supply(
-    snapshot: &ckbadger_store::DaoDailySnapshot,
-    burnt: i128,
-) -> Result<Option<i128>, ApiRouteError> {
-    let total_issuance = snapshot.total_issuance;
-    if total_issuance <= 0 {
-        return Ok(None);
-    }
-    let explorer_treasury = if snapshot.unmade_dao_interests > 0 {
-        snapshot.secondary_pool - snapshot.unmade_dao_interests
-    } else {
-        snapshot.cum_treasury
-    };
-    if explorer_treasury < 0 {
-        return Err(ApiError::internal(format!(
-            "negative treasury in dao_daily_snapshots for {}: {}",
-            snapshot.date, explorer_treasury
-        )));
-    }
-    let circulating = total_issuance - burnt - explorer_treasury;
-    if circulating < 0 {
-        return Err(ApiError::internal(format!(
-            "negative circulating supply for {}: total_issuance={}, burnt={}, treasury={}",
-            snapshot.date, total_issuance, burnt, explorer_treasury
-        )));
-    }
-    Ok(Some(circulating))
-}
-
 #[derive(Default)]
 struct DaoDeltas {
     deposit_change: Option<String>,
@@ -744,59 +726,80 @@ async fn get_address_dao_summary(
     let mut completed_count = 0i32;
     let mut total_locked: i128 = 0;
     let mut total_comp_earned: i128 = 0;
-    let mut total_unclaimed: u128 = 0;
+    let mut total_unclaimed: i128 = 0;
     state
         .store
         .scan_dao_deposits_by_lock(&hash, |_, entry| {
             match entry.status {
-                0 => active_count += 1,
-                1 => pending_count += 1,
-                2 => completed_count += 1,
-                _ => {}
-            }
-
-            if entry.status == 0 || entry.status == 1 {
-                total_locked += entry.capacity as i128;
-            }
-            if entry.status == 2 {
-                if let Some(comp) = entry.compensation {
-                    total_comp_earned += comp as i128;
-                }
-            }
-
-            if (entry.status == 0 || entry.status == 1)
-                && entry.deposit_block_number <= latest_block_number
-            {
-                let ar_deposit = dao_deposit_ar_as_u64(entry, "summary")?;
-                // Per RFC-0023, status=1 compensation is locked at withdraw_request_ar;
-                // status=0 continues to accrue at tip_ar.
-                let effective_ar = if entry.status == 1 {
-                    let withdraw_ar = entry.withdraw_request_ar.ok_or_else(|| {
+                0 => {
+                    active_count = active_count.checked_add(1).ok_or_else(|| {
                         anyhow::anyhow!(
-                            "status=1 deposit missing withdraw_request_ar: deposit_block={}, lock_hash=0x{}",
-                            entry.deposit_block_number,
-                            hex::encode(&entry.lock_script_hash)
+                            "DAO active deposit count overflow for lock_hash=0x{}",
+                            hex::encode(&hash)
                         )
                     })?;
-                    u64::try_from(withdraw_ar).map_err(|_| {
-                        anyhow::anyhow!(
-                            "status=1 deposit withdraw_request_ar exceeds u64: deposit_block={}, ar={}",
-                            entry.deposit_block_number,
-                            withdraw_ar
-                        )
-                    })?
-                } else {
-                    latest_ar
-                };
-                if ar_deposit > 0 && effective_ar > ar_deposit {
-                    let compensation = calculate_dao_compensation_from_ar(
-                        entry.capacity,
-                        ar_deposit,
-                        effective_ar,
-                    )?;
-                    total_unclaimed += compensation as u128;
+                    total_locked = total_locked
+                        .checked_add(i128::from(entry.capacity))
+                        .ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "DAO locked capacity overflow for lock_hash=0x{}",
+                                hex::encode(&hash)
+                            )
+                        })?;
                 }
+                1 => {
+                    pending_count = pending_count.checked_add(1).ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "DAO pending withdrawal count overflow for lock_hash=0x{}",
+                            hex::encode(&hash)
+                        )
+                    })?;
+                    total_locked = total_locked
+                        .checked_add(i128::from(entry.capacity))
+                        .ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "DAO locked capacity overflow for lock_hash=0x{}",
+                                hex::encode(&hash)
+                            )
+                        })?;
+                }
+                2 => {
+                    completed_count = completed_count.checked_add(1).ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "DAO completed withdrawal count overflow for lock_hash=0x{}",
+                            hex::encode(&hash)
+                        )
+                    })?;
+                }
+                status => anyhow::bail!(
+                    "unknown DAO deposit status {} for deposit_block={}, lock_hash=0x{}",
+                    status,
+                    entry.deposit_block_number,
+                    hex::encode(&hash)
+                ),
             }
+
+            let contribution = ckbadger_store::dao_compensation_for_entry_at(
+                entry,
+                latest_block_number,
+                latest_ar,
+            )?;
+            total_comp_earned = total_comp_earned
+                .checked_add(contribution.claimed)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "DAO claimed compensation overflow for lock_hash=0x{}",
+                        hex::encode(&hash)
+                    )
+                })?;
+            total_unclaimed = total_unclaimed
+                .checked_add(contribution.unclaimed)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "DAO unclaimed compensation overflow for lock_hash=0x{}",
+                        hex::encode(&hash)
+                    )
+                })?;
             Ok(())
         })
         .map_err(|e| ApiError::internal(e.to_string()))?;
@@ -909,35 +912,38 @@ async fn get_statistics(State(state): State<Arc<AppState>>) -> ApiResult<DaoStat
 
     let total_deposited_str = acc.total_deposited.to_string();
     let total_comp_str = acc.total_compensation_paid.to_string();
-    let (mining_reward, deposit_compensation, burnt) = if let Some(s) = latest_snapshot.as_ref() {
-        if s.cum_miner_secondary < 0 {
-            return Err(ApiError::internal(format!(
-                "negative cum_miner_secondary in dao_daily_snapshots for {}: {}",
-                s.date, s.cum_miner_secondary
-            )));
-        }
-        if s.cum_dao_compensation < 0 {
-            return Err(ApiError::internal(format!(
-                "negative cum_dao_compensation in dao_daily_snapshots for {}: {}",
-                s.date, s.cum_dao_compensation
-            )));
-        }
-        // Use tip S-field and live unmade computation for explorer-compatible treasury.
-        let treasury_from_s = tip_s as i128 - acc.unmade_active_compensation as i128;
-        if treasury_from_s < 0 {
-            return Err(ApiError::internal(format!(
-                "negative treasury_from_s in dao statistics: tip_s={}, unmade_active_compensation={}",
-                tip_s, acc.unmade_active_compensation
-            )));
-        }
-        (
-            s.cum_miner_secondary.to_string(),
-            s.cum_dao_compensation.to_string(),
-            treasury_from_s.to_string(),
-        )
-    } else {
-        ("0".to_string(), "0".to_string(), "0".to_string())
-    };
+    let exact_deposit_compensation = acc
+        .total_compensation_paid
+        .checked_add(acc.total_unclaimed)
+        .ok_or_else(|| {
+            ApiError::internal(format!(
+                "DAO total compensation overflow at block {}: claimed={}, unclaimed={}",
+                latest_block_number, acc.total_compensation_paid, acc.total_unclaimed
+            ))
+        })?;
+    let snapshot = latest_snapshot.as_ref().ok_or_else(|| {
+        ApiError::internal(format!(
+            "missing DAO daily snapshot at sync tip block {}",
+            latest_block_number
+        ))
+    })?;
+    if snapshot.cum_miner_secondary < 0 {
+        return Err(ApiError::internal(format!(
+            "negative cum_miner_secondary in dao_daily_snapshots for {}: {}",
+            snapshot.date, snapshot.cum_miner_secondary
+        )));
+    }
+    // Use tip S-field and live unmade computation for explorer-compatible treasury.
+    let treasury_from_s = tip_s as i128 - acc.unmade_active_compensation;
+    if treasury_from_s < 0 {
+        return Err(ApiError::internal(format!(
+            "negative treasury_from_s in dao statistics: tip_s={}, unmade_active_compensation={}",
+            tip_s, acc.unmade_active_compensation
+        )));
+    }
+    let mining_reward = snapshot.cum_miner_secondary.to_string();
+    let deposit_compensation = exact_deposit_compensation.to_string();
+    let burnt = treasury_from_s.to_string();
 
     let deltas = compute_dao_24h_deltas(&state);
 
@@ -1098,9 +1104,14 @@ async fn calculate_compensation(
 
     let capacity_i64 = i64::try_from(capacity)
         .map_err(|_| ApiError::bad_request("Capacity exceeds valid range"))?;
-    let compensation_i64 =
-        calculate_dao_compensation_from_ar(capacity_i64, ar_deposit, ar_withdraw)
-            .map_err(|e| ApiError::bad_request(e.to_string()))?;
+    let compensation_i64 = calculate_dao_compensation_from_ar(
+        capacity_i64,
+        i64::try_from(ckbadger_common::dao::DAO_OCCUPIED_CAPACITY)
+            .map_err(|_| ApiError::internal("DAO occupied capacity exceeds i64"))?,
+        ar_deposit,
+        ar_withdraw,
+    )
+    .map_err(|e| ApiError::bad_request(e.to_string()))?;
     let compensation = compensation_i64 as u128;
     let free = capacity - ckbadger_common::dao::DAO_OCCUPIED_CAPACITY as u128;
 
@@ -1337,12 +1348,14 @@ async fn get_circulation_ratio_chart(
     let burnt = state.genesis_baseline()?.burnt;
     let mut data = Vec::with_capacity(snapshots.len());
     for s in &snapshots {
-        let Some(circulating) = snapshot_circulating_supply(s, burnt)? else {
+        let Some(supply) = dao_supply(s, burnt).map_err(|e| ApiError::internal(e.to_string()))?
+        else {
             return Err(ApiError::internal(format!(
                 "missing DAO snapshot total_issuance for {}. delete RocksDB and re-sync from genesis",
                 s.date
             )));
         };
+        let circulating = supply.circulating;
         if circulating <= 0 {
             continue;
         }
@@ -1382,7 +1395,11 @@ mod tests {
     use ckbadger_store::types::DaoDepositCacheEntry;
     use std::time::Duration;
 
-    fn snapshot(total_issuance: i128, cum_treasury: i128) -> ckbadger_store::DaoDailySnapshot {
+    fn snapshot(
+        total_issuance: i128,
+        secondary_pool: i128,
+        unmade_dao_interests: i128,
+    ) -> ckbadger_store::DaoDailySnapshot {
         ckbadger_store::DaoDailySnapshot {
             date: "2026-02-18".to_string(),
             total_deposited: 0,
@@ -1392,30 +1409,30 @@ mod tests {
             compensation: 0,
             cumulative_deposit_amount: 0,
             total_issuance,
-            secondary_pool: 0,
+            secondary_pool,
             occupied_capacity: 0,
             cum_miner_secondary: 0,
             cum_dao_compensation: 0,
-            cum_treasury,
+            cum_treasury: 999,
             unclaimed_compensation: 0,
             cumulative_depositors: 0,
             daily_depositor_addresses: 0,
             protocol_deposited: None,
-            unmade_dao_interests: 0,
+            unmade_dao_interests,
         }
     }
 
     #[test]
-    fn test_snapshot_circulating_supply_uses_cum_treasury() {
+    fn test_circulation_ratio_supply_subtracts_full_unissued_secondary_pool() {
         // Genesis burnt (8.4B CKB) is now supplied from the derived baseline.
         let burnt = 840_000_000_000_000_000i128;
         let total_issuance = 1_000_000_000_000_000_000i128;
-        let cum_treasury = 20_000_000_000_000_000i128;
-        let s = snapshot(total_issuance, cum_treasury);
-        let expected = total_issuance - burnt - cum_treasury;
+        let secondary_pool = 20_000_000_000_000_000i128;
+        let s = snapshot(total_issuance, secondary_pool, 5_000_000_000_000_000);
+        let expected = total_issuance - burnt - secondary_pool;
         assert_eq!(
-            snapshot_circulating_supply(&s, burnt).unwrap(),
-            Some(expected)
+            dao_supply(&s, burnt).unwrap().unwrap().circulating,
+            expected
         );
     }
 
@@ -1440,17 +1457,17 @@ mod tests {
             ckbadger_store::DaoDailySnapshot {
                 date: "2026-02-17".to_string(),
                 cumulative_depositors: 10,
-                ..snapshot(1, 0)
+                ..snapshot(1, 0, 0)
             },
             ckbadger_store::DaoDailySnapshot {
                 date: "2026-02-18".to_string(),
                 cumulative_depositors: 12,
-                ..snapshot(1, 0)
+                ..snapshot(1, 0, 0)
             },
             ckbadger_store::DaoDailySnapshot {
                 date: "2026-02-19".to_string(),
                 cumulative_depositors: 13,
-                ..snapshot(1, 0)
+                ..snapshot(1, 0, 0)
             },
         ];
         let series = build_total_depositors_series(&snapshots).unwrap();
@@ -1509,58 +1526,11 @@ mod tests {
     }
 
     #[test]
-    fn test_dao_deposit_ar_as_u64_rejects_negative_values() {
-        let entry = DaoDepositCacheEntry {
-            capacity: 200_00000000,
-            deposit_block_number: 123,
-            deposit_timestamp: 0,
-            lock_script_hash: vec![0xAB; 32],
-            deposit_ar: -1,
-            status: 0,
-            withdraw_request_tx: None,
-            withdraw_request_output_index: None,
-            withdraw_request_block: None,
-            withdraw_request_ar: None,
-            withdraw_block: None,
-            withdraw_tx: None,
-            withdraw_to_output_index: None,
-            compensation: None,
-        };
-
-        let err = dao_deposit_ar_as_u64(&entry, "summary").unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("invalid negative DAO deposit AR while computing summary"));
-        assert!(err.to_string().contains("deposit_block=123"));
-    }
-
-    #[test]
-    fn test_dao_deposit_ar_as_u64_accepts_non_negative_values() {
-        let entry = DaoDepositCacheEntry {
-            capacity: 200_00000000,
-            deposit_block_number: 456,
-            deposit_timestamp: 0,
-            lock_script_hash: vec![0xCD; 32],
-            deposit_ar: 42,
-            status: 0,
-            withdraw_request_tx: None,
-            withdraw_request_output_index: None,
-            withdraw_request_block: None,
-            withdraw_request_ar: None,
-            withdraw_block: None,
-            withdraw_tx: None,
-            withdraw_to_output_index: None,
-            compensation: None,
-        };
-
-        assert_eq!(dao_deposit_ar_as_u64(&entry, "statistics").unwrap(), 42);
-    }
-
-    #[test]
     fn test_accumulate_dao_statistics_entry_tracks_active_and_completed() {
         let mut acc = DaoStatisticsAccumulator::default();
         let active = DaoDepositCacheEntry {
             capacity: (DAO_OCCUPIED_CAPACITY + 1_000) as i64,
+            occupied_capacity: DAO_OCCUPIED_CAPACITY as i64,
             deposit_block_number: 90,
             deposit_timestamp: 0,
             lock_script_hash: vec![0xAB; 32],
@@ -1576,19 +1546,20 @@ mod tests {
             compensation: None,
         };
         let completed = DaoDepositCacheEntry {
-            capacity: 0,
+            capacity: 1_500,
+            occupied_capacity: 500,
             deposit_block_number: 80,
             deposit_timestamp: 0,
             lock_script_hash: vec![0xCD; 32],
             deposit_ar: 100,
             status: 2,
-            withdraw_request_tx: None,
-            withdraw_request_output_index: None,
-            withdraw_request_block: None,
-            withdraw_request_ar: None,
-            withdraw_block: None,
-            withdraw_tx: None,
-            withdraw_to_output_index: None,
+            withdraw_request_tx: Some(vec![0x11; 32]),
+            withdraw_request_output_index: Some(0),
+            withdraw_request_block: Some(90),
+            withdraw_request_ar: Some(150),
+            withdraw_block: Some(95),
+            withdraw_tx: Some(vec![0x22; 32]),
+            withdraw_to_output_index: Some(0),
             compensation: Some(500),
         };
 
@@ -1623,6 +1594,7 @@ mod tests {
         let mut acc = DaoStatisticsAccumulator::default();
         let active = DaoDepositCacheEntry {
             capacity: (DAO_OCCUPIED_CAPACITY + 1_000) as i64,
+            occupied_capacity: DAO_OCCUPIED_CAPACITY as i64,
             deposit_block_number: 90,
             deposit_timestamp: 8 * 86_400_000,
             lock_script_hash: vec![0xAB; 32],
@@ -1639,6 +1611,7 @@ mod tests {
         };
         let pending = DaoDepositCacheEntry {
             capacity: (DAO_OCCUPIED_CAPACITY + 2_000) as i64,
+            occupied_capacity: DAO_OCCUPIED_CAPACITY as i64,
             deposit_block_number: 80,
             deposit_timestamp: 5 * 86_400_000,
             lock_script_hash: vec![0xCD; 32],

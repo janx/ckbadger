@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use console::style;
 
 use super::checks::*;
-use super::report::format_number;
+use super::report::{format_number, format_number_i128};
 
 // ---------------------------------------------------------------------------
 // Lightweight types for our API chart responses
@@ -213,6 +213,79 @@ fn fetch_explorer_daily(
     }
 }
 
+/// Restore the policy-classified locked capacity that the official explorer
+/// subtracts from its `circulating_supply`.
+///
+/// ckbadger's chain-native circulation is `C - S - genesis_burnt`. The official
+/// explorer additionally subtracts vesting allocations and the balance of a
+/// labelled bug-bounty address. Adding its separately published
+/// `locked_capacity` series makes the two metrics semantically equivalent
+/// without importing that off-chain classification into ckbadger's API.
+fn parse_integral_explorer_shannons(value: &str, field: &str, date: &str) -> anyhow::Result<i128> {
+    let (integer, fractional) = value.split_once('.').unwrap_or((value, ""));
+    if fractional.bytes().any(|byte| byte != b'0') {
+        anyhow::bail!(
+            "non-integral explorer {} for {}: value='{}' contains sub-shannon precision",
+            field,
+            date,
+            value
+        );
+    }
+    let parsed = integer.parse::<i128>().map_err(|e| {
+        anyhow::anyhow!(
+            "invalid explorer {} for {}: value='{}', error={}",
+            field,
+            date,
+            value,
+            e
+        )
+    })?;
+    if parsed < 0 {
+        anyhow::bail!(
+            "negative explorer {} for {}: value='{}'",
+            field,
+            date,
+            value
+        );
+    }
+    Ok(parsed)
+}
+
+fn restore_explorer_policy_locked_capacity(
+    circulating: &HashMap<String, String>,
+    locked_capacity: &HashMap<String, String>,
+    dates: &[String],
+) -> anyhow::Result<HashMap<String, String>> {
+    let mut restored = HashMap::with_capacity(dates.len());
+    for date in dates {
+        let Some(circulating_value) = circulating.get(date) else {
+            continue;
+        };
+        let circulating_shannons =
+            parse_integral_explorer_shannons(circulating_value, "circulating_supply", date)?;
+        let locked_value = locked_capacity.get(date).ok_or_else(|| {
+            anyhow::anyhow!(
+                "missing explorer locked_capacity for circulating_supply date {}",
+                date
+            )
+        })?;
+        let locked_shannons =
+            parse_integral_explorer_shannons(locked_value, "locked_capacity", date)?;
+        let protocol_circulating = circulating_shannons
+            .checked_add(locked_shannons)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "explorer protocol circulation overflow for {}: circulating_supply={}, locked_capacity={}",
+                    date,
+                    circulating_shannons,
+                    locked_shannons
+                )
+            })?;
+        restored.insert(date.clone(), protocol_circulating.to_string());
+    }
+    Ok(restored)
+}
+
 /// Fetch a single explorer statistic value from `/api/v1/statistics/{name}`.
 /// Perform the actual HTTP fetch from the explorer API.
 fn fetch_from_explorer_api(
@@ -334,8 +407,9 @@ fn fetch_our_stacked_chart(
     Ok(map)
 }
 
-/// Fetch our stacked area chart data and sum multiple series keys as a date→value map.
-fn fetch_our_stacked_chart_sum(
+/// Fetch our stacked area chart and exactly sum CKB-denominated series into
+/// shannons as a date→value map.
+fn fetch_our_stacked_chart_sum_shannons(
     ctx: &CheckContext,
     chart_path: &str,
     series_keys: &[&str],
@@ -343,12 +417,38 @@ fn fetch_our_stacked_chart_sum(
     let wrapper: StackedAreaChartResponse = api_get(ctx, chart_path)?;
     let mut map = HashMap::new();
     for point in wrapper.data {
-        let sum: f64 = series_keys
-            .iter()
-            .filter_map(|k| point.values.get(*k))
-            .filter_map(|v| v.parse::<f64>().ok())
-            .sum();
-        map.insert(normalize_date(&point.date), format!("{sum:.0}"));
+        let date = normalize_date(&point.date);
+        let mut sum = 0i128;
+        for series_key in series_keys {
+            let value = point.values.get(*series_key).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "missing '{}' series in {} for {}",
+                    series_key,
+                    chart_path,
+                    date
+                )
+            })?;
+            let shannons = parse_ckb_to_shannon(value).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "invalid CKB value in '{}' series of {} for {}: '{}'",
+                    series_key,
+                    chart_path,
+                    date,
+                    value
+                )
+            })?;
+            sum = sum.checked_add(shannons).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "stacked chart sum overflow in {} for {} while adding '{}': current={}, value={}",
+                    chart_path,
+                    date,
+                    series_key,
+                    sum,
+                    shannons
+                )
+            })?;
+        }
+        map.insert(date, sum.to_string());
     }
     Ok(map)
 }
@@ -723,6 +823,88 @@ fn run_exact_i128_explorer_daily_delta_check(
     }
 }
 
+/// Compare consecutive cumulative observations with an exact rational
+/// relative tolerance. This preserves a historical constant offset while
+/// still validating every recent canonical-chain transition.
+fn run_i128_relative_tolerance_explorer_daily_delta_check(
+    our_data: &HashMap<String, String>,
+    explorer_data: &HashMap<String, String>,
+    progress: &ProgressReporter,
+    label: &str,
+    tolerance_numerator: i128,
+    tolerance_denominator: i128,
+    value_transform: impl Fn(&str, &str) -> Option<(i128, i128)>,
+) -> CheckResult {
+    let dates = last_30_days();
+    let mut observations = Vec::new();
+    let mut findings = Vec::new();
+
+    for date in &dates {
+        if let (Some(our_val), Some(explorer_val)) = (our_data.get(date), explorer_data.get(date)) {
+            match value_transform(our_val, explorer_val) {
+                Some((ours, theirs)) => observations.push((date.clone(), ours, theirs)),
+                None => findings.push(Finding {
+                    entity: date.clone(),
+                    details: vec![format!(
+                        "{}: invalid value pair ours='{}', explorer='{}'",
+                        label, our_val, explorer_val
+                    )],
+                }),
+            }
+        }
+        progress.inc(1);
+    }
+
+    observations.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut checked = 0u64;
+    for pair in observations.windows(2) {
+        let (previous_date, previous_ours, previous_theirs) = &pair[0];
+        let (date, ours, theirs) = &pair[1];
+        checked += 1;
+
+        let (Some(our_delta), Some(explorer_delta)) = (
+            ours.checked_sub(*previous_ours),
+            theirs.checked_sub(*previous_theirs),
+        ) else {
+            findings.push(Finding {
+                entity: date.clone(),
+                details: vec![format!(
+                    "{} change {}→{}: i128 subtraction overflow",
+                    label, previous_date, date
+                )],
+            });
+            continue;
+        };
+
+        let transition_label = format!("{} change {}→{}", label, previous_date, date);
+        if let Some(finding) = compare_nonnegative_i128_relative_tolerance(
+            our_delta,
+            explorer_delta,
+            date,
+            &transition_label,
+            tolerance_numerator,
+            tolerance_denominator,
+        ) {
+            findings.push(finding);
+        }
+    }
+
+    if checked == 0 {
+        findings.push(Finding {
+            entity: "overlap".to_string(),
+            details: vec![
+                "fewer than two parseable overlapping dates for daily-delta comparison".to_string(),
+            ],
+        });
+    }
+
+    if findings.is_empty() {
+        CheckResult::pass(checked)
+    } else {
+        CheckResult::fail(checked, findings)
+    }
+}
+
 /// Run a tolerance-based explorer comparison over the last 30 days.
 /// `value_transform` converts (our_value_str, explorer_value_str) → (our_f64, explorer_f64).
 fn run_tolerance_explorer_check(
@@ -769,6 +951,179 @@ fn run_tolerance_explorer_check(
         CheckResult::pass(checked)
     } else {
         CheckResult::fail(checked, findings)
+    }
+}
+
+/// Run an exact non-negative i128 comparison with a rational relative
+/// tolerance. A `tolerance_numerator / tolerance_denominator` bound avoids
+/// converting deterministic chain values to floating point.
+fn run_i128_relative_tolerance_explorer_check(
+    our_data: &HashMap<String, String>,
+    explorer_data: &HashMap<String, String>,
+    progress: &ProgressReporter,
+    label: &str,
+    tolerance_numerator: i128,
+    tolerance_denominator: i128,
+) -> CheckResult {
+    let dates = last_30_days();
+    let mut findings = Vec::new();
+    let mut checked = 0u64;
+
+    for date in &dates {
+        let (Some(our_value), Some(explorer_value)) = (our_data.get(date), explorer_data.get(date))
+        else {
+            progress.inc(1);
+            continue;
+        };
+        checked += 1;
+
+        let parsed = our_value
+            .parse::<i128>()
+            .ok()
+            .zip(explorer_value.parse::<i128>().ok());
+        let Some((ours, theirs)) = parsed else {
+            findings.push(Finding {
+                entity: date.clone(),
+                details: vec![format!(
+                    "{}: invalid exact value pair ours='{}', explorer='{}'",
+                    label, our_value, explorer_value
+                )],
+            });
+            progress.inc(1);
+            continue;
+        };
+
+        if ours < 0 || theirs < 0 {
+            findings.push(Finding {
+                entity: date.clone(),
+                details: vec![format!(
+                    "{}: negative exact value pair ours={}, explorer={}",
+                    label, ours, theirs
+                )],
+            });
+            progress.inc(1);
+            continue;
+        }
+
+        let difference = if ours >= theirs {
+            ours.checked_sub(theirs)
+        } else {
+            theirs.checked_sub(ours)
+        };
+        let exceeds_tolerance = difference.and_then(|delta| {
+            delta
+                .checked_mul(tolerance_denominator)
+                .zip(theirs.checked_mul(tolerance_numerator))
+                .map(|(scaled_delta, scaled_tolerance)| scaled_delta > scaled_tolerance)
+        });
+
+        match (difference, exceeds_tolerance) {
+            (Some(delta), Some(true)) => findings.push(Finding {
+                entity: date.clone(),
+                details: vec![format!(
+                    "{}: ours={}, explorer={} (abs_delta={}, exact tolerance: {}/{})",
+                    label,
+                    format_number_i128(ours),
+                    format_number_i128(theirs),
+                    format_number_i128(delta),
+                    tolerance_numerator,
+                    tolerance_denominator,
+                )],
+            }),
+            (Some(_), Some(false)) => {}
+            _ => findings.push(Finding {
+                entity: date.clone(),
+                details: vec![format!(
+                    "{}: i128 overflow while comparing ours={} and explorer={} at tolerance {}/{}",
+                    label, ours, theirs, tolerance_numerator, tolerance_denominator
+                )],
+            }),
+        }
+        progress.inc(1);
+    }
+
+    if checked == 0 {
+        return CheckResult {
+            passed: false,
+            items_checked: 0,
+            items_failed: 0,
+            detail: Some("no overlapping dates found between local and explorer data".to_string()),
+            findings: vec![Finding {
+                entity: "overlap".to_string(),
+                details: vec![
+                    "no overlapping dates found between local and explorer data".to_string()
+                ],
+            }],
+        };
+    }
+
+    if findings.is_empty() {
+        CheckResult::pass(checked)
+    } else {
+        CheckResult::fail(checked, findings)
+    }
+}
+
+fn compare_nonnegative_i128_relative_tolerance(
+    ours: i128,
+    theirs: i128,
+    entity: &str,
+    label: &str,
+    tolerance_numerator: i128,
+    tolerance_denominator: i128,
+) -> Option<Finding> {
+    if ours < 0 || theirs < 0 {
+        return Some(Finding {
+            entity: entity.to_string(),
+            details: vec![format!(
+                "{}: negative exact value pair ours={}, explorer={}",
+                label, ours, theirs
+            )],
+        });
+    }
+    if tolerance_numerator < 0 || tolerance_denominator <= 0 {
+        return Some(Finding {
+            entity: entity.to_string(),
+            details: vec![format!(
+                "{}: invalid exact tolerance {}/{}",
+                label, tolerance_numerator, tolerance_denominator
+            )],
+        });
+    }
+
+    let difference = if ours >= theirs {
+        ours.checked_sub(theirs)
+    } else {
+        theirs.checked_sub(ours)
+    };
+    let comparison = difference.and_then(|delta| {
+        delta
+            .checked_mul(tolerance_denominator)
+            .zip(theirs.checked_mul(tolerance_numerator))
+            .map(|(scaled_delta, scaled_tolerance)| (delta, scaled_delta > scaled_tolerance))
+    });
+
+    match comparison {
+        Some((delta, true)) => Some(Finding {
+            entity: entity.to_string(),
+            details: vec![format!(
+                "{}: ours={}, explorer={} (abs_delta={}, exact tolerance: {}/{})",
+                label,
+                format_number_i128(ours),
+                format_number_i128(theirs),
+                format_number_i128(delta),
+                tolerance_numerator,
+                tolerance_denominator,
+            )],
+        }),
+        Some((_, false)) => None,
+        None => Some(Finding {
+            entity: entity.to_string(),
+            details: vec![format!(
+                "{}: i128 overflow while comparing ours={} and explorer={} at tolerance {}/{}",
+                label, ours, theirs, tolerance_numerator, tolerance_denominator
+            )],
+        }),
     }
 }
 
@@ -1009,7 +1364,7 @@ impl Check for ExplorerKnowledgeSize {
         "explorer_knowledge_size"
     }
     fn description(&self) -> &'static str {
-        "Daily knowledge_size change vs explorer occupied_capacity change"
+        "Daily knowledge_size change vs explorer knowledge_size change"
     }
     fn tier(&self) -> CheckTier {
         CheckTier::Sampling
@@ -1021,7 +1376,10 @@ impl Check for ExplorerKnowledgeSize {
         Some(30)
     }
     fn run(&self, ctx: &CheckContext, progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
-        let explorer_data = fetch_explorer_daily(ctx, "occupied_capacity", "occupied_capacity")?;
+        // Explorer's `occupied_capacity` is independently summed from its live-cell
+        // index and can carry projection corrections. Its `knowledge_size` is the
+        // matching DAO-U calculation (`U - genesis virtual occupied capacity`).
+        let explorer_data = fetch_explorer_daily(ctx, "knowledge_size", "knowledge_size")?;
         let our_data = fetch_our_chart(ctx, "charts/knowledge-size")?;
         Ok(run_exact_i128_explorer_daily_delta_check(
             &our_data,
@@ -1211,8 +1569,13 @@ impl Check for ExplorerCirculationRatio {
     }
 }
 
-/// X11: Compare /charts/total-supply (circulating + nervosdao) vs explorer circulating_supply (tolerance-based).
-/// Explorer's circulating_supply includes DAO-locked CKB. Our API returns CKB, explorer returns shannons.
+/// X11: Compare ckbadger's chain-native circulation with the explorer's
+/// `circulating_supply + locked_capacity`.
+///
+/// Explorer circulation includes DAO-locked CKB but excludes additional
+/// policy-classified balances. ckbadger keeps DAO principal in circulation and
+/// does not import those off-chain classifications, so both explorer series are
+/// required to compare equivalent metrics.
 pub struct ExplorerCirculatingSupply;
 
 impl Check for ExplorerCirculatingSupply {
@@ -1220,7 +1583,7 @@ impl Check for ExplorerCirculatingSupply {
         "explorer_circulating_supply"
     }
     fn description(&self) -> &'static str {
-        "Daily circulating_supply vs explorer"
+        "Daily protocol circulating supply vs explorer circulation + policy-locked capacity"
     }
     fn tier(&self) -> CheckTier {
         CheckTier::Sampling
@@ -1232,21 +1595,27 @@ impl Check for ExplorerCirculatingSupply {
         Some(30)
     }
     fn run(&self, ctx: &CheckContext, progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
-        let explorer_data = fetch_explorer_daily(ctx, "circulating_supply", "circulating_supply")?;
-        // Explorer's circulating_supply includes DAO-locked CKB, so sum both series.
-        let our_data =
-            fetch_our_stacked_chart_sum(ctx, "charts/total-supply", &["circulating", "nervosdao"])?;
-        Ok(run_tolerance_explorer_check(
+        let explorer_circulating =
+            fetch_explorer_daily(ctx, "circulating_supply", "circulating_supply")?;
+        let explorer_locked = fetch_explorer_daily(ctx, "locked_capacity", "locked_capacity")?;
+        let dates = last_30_days();
+        let explorer_data = restore_explorer_policy_locked_capacity(
+            &explorer_circulating,
+            &explorer_locked,
+            &dates,
+        )?;
+        let our_data = fetch_our_stacked_chart_sum_shannons(
+            ctx,
+            "charts/total-supply",
+            &["circulating", "nervosdao"],
+        )?;
+        Ok(run_i128_relative_tolerance_explorer_check(
             &our_data,
             &explorer_data,
             progress,
-            "circulating_supply",
-            0.002,
-            |ours, theirs| {
-                let o = parse_ckb_to_shannon(ours)? as f64;
-                let t: f64 = theirs.parse().ok()?;
-                Some((o, t))
-            },
+            "protocol_circulating_supply",
+            1,
+            500,
         ))
     }
 }
@@ -1289,8 +1658,10 @@ impl Check for ExplorerBurnt {
     }
 }
 
-/// X13: Compare /charts/secondary-issuance (compensation) vs explorer deposit_compensation (tolerance-based).
-/// Our API returns CKB, explorer returns shannons.
+/// X13: Compare daily changes in /charts/secondary-issuance (compensation)
+/// against explorer deposit_compensation. The official testnet explorer has a
+/// historical constant baseline gap, so absolute levels are not comparable;
+/// recent chain transitions remain comparable.
 pub struct ExplorerDepositCompensation;
 
 impl Check for ExplorerDepositCompensation {
@@ -1298,7 +1669,7 @@ impl Check for ExplorerDepositCompensation {
         "explorer_deposit_compensation"
     }
     fn description(&self) -> &'static str {
-        "Daily deposit_compensation vs explorer"
+        "Daily deposit_compensation change vs explorer"
     }
     fn tier(&self) -> CheckTier {
         CheckTier::Sampling
@@ -1313,15 +1684,18 @@ impl Check for ExplorerDepositCompensation {
         let explorer_data =
             fetch_explorer_daily(ctx, "deposit_compensation", "deposit_compensation")?;
         let our_data = fetch_our_stacked_chart(ctx, "charts/secondary-issuance", "compensation")?;
-        Ok(run_tolerance_explorer_check(
+        Ok(run_i128_relative_tolerance_explorer_daily_delta_check(
             &our_data,
             &explorer_data,
             progress,
             "deposit_compensation",
-            0.002,
+            2,
+            1_000,
             |ours, theirs| {
-                let o = parse_ckb_to_shannon(ours)? as f64;
-                let t: f64 = theirs.parse().ok()?;
+                let o = parse_ckb_to_shannon(ours)?;
+                let t =
+                    parse_integral_explorer_shannons(theirs, "deposit_compensation", "daily delta")
+                        .ok()?;
                 Some((o, t))
             },
         ))
@@ -1564,6 +1938,60 @@ fn run_nervos_dao_shannon_check(
     }
 }
 
+fn run_nervos_dao_shannon_sum_check(
+    our_value: &str,
+    explorer_left: &str,
+    explorer_right: &str,
+    label: &str,
+    tolerance_numerator: i128,
+    tolerance_denominator: i128,
+) -> CheckResult {
+    let parsed = our_value
+        .parse::<i128>()
+        .ok()
+        .zip(parse_integral_explorer_shannons(explorer_left, "claimed_compensation", "latest").ok())
+        .zip(
+            parse_integral_explorer_shannons(explorer_right, "unclaimed_compensation", "latest")
+                .ok(),
+        );
+    let Some(((ours, left), right)) = parsed else {
+        return CheckResult::fail(
+            1,
+            vec![Finding {
+                entity: "latest".to_string(),
+                details: vec![format!(
+                    "{}: invalid exact values ours='{}', explorer_left='{}', explorer_right='{}'",
+                    label, our_value, explorer_left, explorer_right
+                )],
+            }],
+        );
+    };
+    let Some(theirs) = left.checked_add(right) else {
+        return CheckResult::fail(
+            1,
+            vec![Finding {
+                entity: "latest".to_string(),
+                details: vec![format!(
+                    "{}: explorer component addition overflow: left={}, right={}",
+                    label, left, right
+                )],
+            }],
+        );
+    };
+
+    match compare_nonnegative_i128_relative_tolerance(
+        ours,
+        theirs,
+        "latest",
+        label,
+        tolerance_numerator,
+        tolerance_denominator,
+    ) {
+        Some(finding) => CheckResult::fail(1, vec![finding]),
+        None => CheckResult::pass(1),
+    }
+}
+
 /// X17: Compare total_deposit from /dao/statistics vs explorer nervos_dao.
 pub struct NervosDaoTotalDeposit;
 
@@ -1775,7 +2203,10 @@ impl Check for NervosDaoMiningReward {
     }
 }
 
-/// X23: Compare deposit_compensation from /dao/statistics vs explorer nervos_dao.
+/// X23: Compare deposit_compensation from /dao/statistics with explorer's live
+/// claimed + unclaimed components. Explorer's standalone deposit_compensation
+/// attribute comes from its latest daily-statistics row and can lag this live
+/// response's component fields.
 pub struct NervosDaoDepositCompensation;
 
 impl Check for NervosDaoDepositCompensation {
@@ -1783,7 +2214,7 @@ impl Check for NervosDaoDepositCompensation {
         "nervos_dao_deposit_compensation"
     }
     fn description(&self) -> &'static str {
-        "NervosDAO deposit_compensation vs explorer"
+        "NervosDAO deposit_compensation vs explorer claimed + unclaimed"
     }
     fn tier(&self) -> CheckTier {
         CheckTier::Sampling
@@ -1797,11 +2228,13 @@ impl Check for NervosDaoDepositCompensation {
     fn run(&self, ctx: &CheckContext, _progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
         let explorer = fetch_explorer_nervos_dao(ctx)?;
         let ours: OurDaoStatisticsResponse = api_get(ctx, "dao/statistics")?;
-        Ok(run_nervos_dao_shannon_check(
+        Ok(run_nervos_dao_shannon_sum_check(
             &ours.deposit_compensation,
-            &explorer.deposit_compensation,
+            &explorer.claimed_compensation,
+            &explorer.unclaimed_compensation,
             "deposit_compensation",
-            0.005,
+            5,
+            1_000,
         ))
     }
 }
@@ -1964,6 +2397,178 @@ pub fn explorer_checks() -> Vec<Box<dyn Check>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    fn explorer_test_context(server: &MockServer) -> CheckContext {
+        CheckContext {
+            api_url: format!("{}/api/v1", server.uri()),
+            rpc_url: None,
+            explorer_url: Some(server.uri()),
+            http: reqwest::blocking::Client::new(),
+            sample_count: 10,
+            seed: 42,
+            tolerance: 0.001,
+            cache_dir: None,
+        }
+    }
+
+    fn explorer_timestamp_for_date(date: &str) -> i64 {
+        let date = chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").unwrap();
+        let utc8 = chrono::FixedOffset::east_opt(ckbadger_common::CKB_UTC8_OFFSET).unwrap();
+        date.and_hms_opt(0, 0, 0)
+            .unwrap()
+            .and_local_timezone(utc8)
+            .single()
+            .unwrap()
+            .timestamp()
+    }
+
+    #[test]
+    fn knowledge_size_check_uses_explorer_dao_u_metric() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let server = runtime.block_on(MockServer::start());
+        let dates = last_30_days();
+        let older = dates[1].clone();
+        let newer = dates[0].clone();
+
+        runtime.block_on(async {
+            Mock::given(method("GET"))
+                .and(path("/api/v1/charts/knowledge-size"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "data": [
+                        { "date": older, "value": "100" },
+                        { "date": newer, "value": "101" }
+                    ]
+                })))
+                .mount(&server)
+                .await;
+
+            Mock::given(method("GET"))
+                .and(path("/api/v1/daily_statistics/knowledge_size"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "data": [
+                        {
+                            "attributes": {
+                                "created_at_unixtimestamp": explorer_timestamp_for_date(&dates[1]).to_string(),
+                                "knowledge_size": "10000000000"
+                            }
+                        },
+                        {
+                            "attributes": {
+                                "created_at_unixtimestamp": explorer_timestamp_for_date(&dates[0]).to_string(),
+                                "knowledge_size": "10100000000"
+                            }
+                        }
+                    ]
+                })))
+                .expect(1)
+                .mount(&server)
+                .await;
+        });
+
+        let result = ExplorerKnowledgeSize
+            .run(
+                &explorer_test_context(&server),
+                &ProgressReporter::new(None),
+            )
+            .unwrap();
+        assert!(result.passed, "findings: {:?}", result.findings);
+    }
+
+    #[test]
+    fn circulating_supply_check_restores_explorer_policy_locked_capacity() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let server = runtime.block_on(MockServer::start());
+        let dates = last_30_days();
+        let older = dates[1].clone();
+        let newer = dates[0].clone();
+
+        runtime.block_on(async {
+            Mock::given(method("GET"))
+                .and(path("/api/v1/charts/total-supply"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "data": [
+                        {
+                            "date": older,
+                            "values": { "circulating": "800", "nervosdao": "200" }
+                        },
+                        {
+                            "date": newer,
+                            "values": { "circulating": "801", "nervosdao": "200" }
+                        }
+                    ]
+                })))
+                .expect(1)
+                .mount(&server)
+                .await;
+
+            Mock::given(method("GET"))
+                .and(path("/api/v1/daily_statistics/circulating_supply"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "data": [
+                        {
+                            "attributes": {
+                                "created_at_unixtimestamp": explorer_timestamp_for_date("2020-02-15").to_string(),
+                                "circulating_supply": "1334922372156364856.9999999999999999999888"
+                            }
+                        },
+                        {
+                            "attributes": {
+                                "created_at_unixtimestamp": explorer_timestamp_for_date(&dates[1]).to_string(),
+                                "circulating_supply": "90000000000.0"
+                            }
+                        },
+                        {
+                            "attributes": {
+                                "created_at_unixtimestamp": explorer_timestamp_for_date(&dates[0]).to_string(),
+                                "circulating_supply": "90100000000.0"
+                            }
+                        }
+                    ]
+                })))
+                .expect(1)
+                .mount(&server)
+                .await;
+
+            Mock::given(method("GET"))
+                .and(path("/api/v1/daily_statistics/locked_capacity"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "data": [
+                        {
+                            "attributes": {
+                                "created_at_unixtimestamp": explorer_timestamp_for_date("2020-02-15").to_string(),
+                                "locked_capacity": "1292364077100000000"
+                            }
+                        },
+                        {
+                            "attributes": {
+                                "created_at_unixtimestamp": explorer_timestamp_for_date(&dates[1]).to_string(),
+                                "locked_capacity": "10000000000"
+                            }
+                        },
+                        {
+                            "attributes": {
+                                "created_at_unixtimestamp": explorer_timestamp_for_date(&dates[0]).to_string(),
+                                "locked_capacity": "10000000000"
+                            }
+                        }
+                    ]
+                })))
+                .expect(1)
+                .mount(&server)
+                .await;
+        });
+
+        let result = ExplorerCirculatingSupply
+            .run(
+                &explorer_test_context(&server),
+                &ProgressReporter::new(None),
+            )
+            .unwrap();
+        assert!(result.passed, "findings: {:?}", result.findings);
+    }
 
     #[test]
     fn test_parse_ckb_to_shannon_with_decimal() {
@@ -2133,6 +2738,76 @@ mod tests {
         assert_eq!(result.items_checked, 1);
         assert_eq!(result.items_failed, 1);
         assert!(result.findings[0].details[0].contains("subtraction overflow"));
+    }
+
+    #[test]
+    fn test_relative_daily_delta_allows_historical_shift_with_matching_transitions() {
+        let mut dates = last_30_days()[..2].to_vec();
+        dates.sort();
+
+        let mut ours = HashMap::new();
+        ours.insert(dates[0].clone(), "110000".to_string());
+        ours.insert(dates[1].clone(), "111002".to_string());
+
+        let mut explorer = HashMap::new();
+        explorer.insert(dates[0].clone(), "100000".to_string());
+        explorer.insert(dates[1].clone(), "101000".to_string());
+
+        let progress = ProgressReporter::new(None);
+        let result = run_i128_relative_tolerance_explorer_daily_delta_check(
+            &ours,
+            &explorer,
+            &progress,
+            "deposit_compensation",
+            2,
+            1_000,
+            |our, explorer| Some((our.parse().ok()?, explorer.parse().ok()?)),
+        );
+
+        assert!(result.passed);
+        assert_eq!(result.items_checked, 1);
+    }
+
+    #[test]
+    fn test_relative_daily_delta_detects_transition_outside_tolerance() {
+        let mut dates = last_30_days()[..2].to_vec();
+        dates.sort();
+
+        let mut ours = HashMap::new();
+        ours.insert(dates[0].clone(), "110000".to_string());
+        ours.insert(dates[1].clone(), "111003".to_string());
+
+        let mut explorer = HashMap::new();
+        explorer.insert(dates[0].clone(), "100000".to_string());
+        explorer.insert(dates[1].clone(), "101000".to_string());
+
+        let progress = ProgressReporter::new(None);
+        let result = run_i128_relative_tolerance_explorer_daily_delta_check(
+            &ours,
+            &explorer,
+            &progress,
+            "deposit_compensation",
+            2,
+            1_000,
+            |our, explorer| Some((our.parse().ok()?, explorer.parse().ok()?)),
+        );
+
+        assert!(!result.passed);
+        assert_eq!(result.items_failed, 1);
+    }
+
+    #[test]
+    fn test_nervos_dao_deposit_compensation_uses_live_component_sum() {
+        let result = run_nervos_dao_shannon_sum_check(
+            "3712283694547971",
+            "100959477384632.0",
+            "3611324217163339.000",
+            "deposit_compensation",
+            5,
+            1_000,
+        );
+
+        assert!(result.passed);
     }
 
     #[test]

@@ -18,7 +18,7 @@ use crate::response::{
     chart_response_has_data, ok, ApiError, ApiResult, ApiRouteError, ChartDataPoint, ChartResponse,
     SyncStatusResponse as SyncStatus,
 };
-use crate::utils::{apply_owned_capacity_delta, format_duration};
+use crate::utils::{apply_owned_capacity_delta, dao_supply, dao_treasury, format_duration};
 use crate::warmup::CACHE_KEY_SCRIPTS_ALL;
 use crate::AppState;
 use tracing::instrument;
@@ -1187,7 +1187,7 @@ async fn get_knowledge_size_chart(State(state): State<Arc<AppState>>) -> ApiResu
         .map_err(|e| ApiError::internal(e.to_string()))?
         .map_err(|e| ApiError::internal(e.to_string()))?;
     let genesis_burnt = state.genesis_baseline()?.burnt;
-    let circulating_by_date = build_circulating_supply_by_date_map(&snapshots, genesis_burnt)?;
+    let liquid_by_date = build_liquid_supply_by_date_map(&snapshots, genesis_burnt)?;
 
     // Exclude the current incomplete day to prevent cache divergence with composition chart.
     let today_key = current_ckb_date_key();
@@ -1200,7 +1200,7 @@ async fn get_knowledge_size_chart(State(state): State<Arc<AppState>>) -> ApiResu
                 date: snapshot_date.clone(),
                 value: shannon_to_ckb_string(ks),
                 value2: Some(
-                    circulating_by_date
+                    liquid_by_date
                         .get(&snapshot_date)
                         .map(|circulating| {
                             if *circulating > 0 {
@@ -1304,32 +1304,19 @@ pub(crate) fn shannon_to_ckb_string(value: i128) -> String {
     }
 }
 
-fn build_circulating_supply_by_date_map(
+fn build_liquid_supply_by_date_map(
     snapshots: &[ckbadger_store::DaoDailySnapshot],
     genesis_burnt: i128,
 ) -> Result<HashMap<String, i128>, ApiRouteError> {
     let mut by_date = HashMap::with_capacity(snapshots.len());
 
     for snapshot in snapshots {
-        let Some(total_supply) = snapshot_total_issuance(snapshot) else {
+        let Some(supply) =
+            dao_supply(snapshot, genesis_burnt).map_err(|e| ApiError::internal(e.to_string()))?
+        else {
             continue;
         };
-        let explorer_treasury = snapshot_explorer_treasury(snapshot)?;
-        if snapshot.total_deposited < 0 {
-            return Err(ApiError::internal(format!(
-                "negative total_deposited in dao_daily_snapshots for {}: {}",
-                snapshot.date, snapshot.total_deposited
-            )));
-        }
-        let burnt = genesis_burnt + explorer_treasury;
-        let circulating = total_supply - burnt - snapshot.total_deposited;
-        if circulating < 0 {
-            return Err(ApiError::internal(format!(
-                "negative circulating supply at {}: total={}, burnt={}, dao_locked={}",
-                snapshot.date, total_supply, burnt, snapshot.total_deposited
-            )));
-        }
-        by_date.insert(snapshot.date.clone(), circulating);
+        by_date.insert(snapshot.date.clone(), supply.liquid);
     }
 
     Ok(by_date)
@@ -2351,10 +2338,10 @@ async fn fetch_network_stats_from_db(
         .map(|s| s.occupied_capacity.to_string());
     let circulating_supply = match dao_snapshot.as_ref() {
         Some(s) => {
-            let total_supply = s.total_issuance;
-            let explorer_treasury = snapshot_explorer_treasury(s)?;
-            let burnt = state.genesis_baseline()?.burnt + explorer_treasury;
-            Some((total_supply - burnt - s.total_deposited).to_string())
+            let genesis_burnt = state.genesis_baseline()?.burnt;
+            dao_supply(s, genesis_burnt)
+                .map_err(|e| ApiError::internal(e.to_string()))?
+                .map(|supply| supply.circulating.to_string())
         }
         None => None,
     };
@@ -2616,10 +2603,6 @@ fn calculate_daily_hash_rate(difficulty: u64, block_count: i32) -> f64 {
     }
 }
 
-fn snapshot_total_issuance(snapshot: &ckbadger_store::DaoDailySnapshot) -> Option<i128> {
-    (snapshot.total_issuance > 0).then_some(snapshot.total_issuance)
-}
-
 fn snapshot_secondary_cumulative(
     snapshot: &ckbadger_store::DaoDailySnapshot,
 ) -> Result<(i128, i128, i128), ApiRouteError> {
@@ -2648,26 +2631,6 @@ fn snapshot_secondary_cumulative(
     ))
 }
 
-/// Compute explorer-compatible treasury from a daily snapshot.
-/// Formula: `secondary_pool - unmade_dao_interests`.
-/// Falls back to `cum_treasury` when `unmade_dao_interests == 0` (pre-resync data).
-fn snapshot_explorer_treasury(
-    snapshot: &ckbadger_store::DaoDailySnapshot,
-) -> Result<i128, ApiRouteError> {
-    if snapshot.unmade_dao_interests > 0 {
-        let treasury = snapshot.secondary_pool - snapshot.unmade_dao_interests;
-        if treasury < 0 {
-            return Err(ApiError::internal(format!(
-                "negative S-field treasury for {}: secondary_pool={}, unmade_dao_interests={}",
-                snapshot.date, snapshot.secondary_pool, snapshot.unmade_dao_interests
-            )));
-        }
-        Ok(treasury)
-    } else {
-        Ok(snapshot.cum_treasury)
-    }
-}
-
 async fn get_total_supply_chart(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<StackedAreaChartResponse> {
@@ -2685,42 +2648,28 @@ async fn get_total_supply_chart(
     let genesis_burnt = state.genesis_baseline()?.burnt;
     let mut data = Vec::with_capacity(snapshots.len());
     for snapshot in &snapshots {
-        let Some(total_supply) = snapshot_total_issuance(snapshot) else {
+        let Some(supply) =
+            dao_supply(snapshot, genesis_burnt).map_err(|e| ApiError::internal(e.to_string()))?
+        else {
             return Err(ApiError::internal(format!(
                 "missing total_issuance in dao_daily_snapshots for {}. delete RocksDB and re-sync from genesis",
                 snapshot.date
             )));
         };
-        let explorer_treasury = snapshot_explorer_treasury(snapshot)?;
-        let burnt = genesis_burnt + explorer_treasury;
-
-        // Nervos DAO locked = active deposits (can be unlocked, but currently locked)
-        if snapshot.total_deposited < 0 {
-            return Err(ApiError::internal(format!(
-                "negative total_deposited in dao_daily_snapshots for {}: {}",
-                snapshot.date, snapshot.total_deposited
-            )));
-        }
-        let nervos_dao = snapshot.total_deposited;
-        // Circulating = total_supply - burnt - nervos_dao_locked
-        let circulating = total_supply - burnt - nervos_dao;
-        if circulating < 0 {
-            return Err(ApiError::internal(format!(
-                "negative circulating supply in total-supply chart for {}: total={}, burnt={}, dao_locked={}",
-                snapshot.date, total_supply, burnt, nervos_dao
-            )));
-        }
 
         let mut values = std::collections::HashMap::new();
         values.insert(
             "circulating".to_string(),
-            (circulating / SHANNONS_PER_CKB).to_string(),
+            (supply.liquid / SHANNONS_PER_CKB).to_string(),
         );
         values.insert(
             "nervosdao".to_string(),
-            (nervos_dao / SHANNONS_PER_CKB).to_string(),
+            (supply.dao_locked / SHANNONS_PER_CKB).to_string(),
         );
-        values.insert("burnt".to_string(), (burnt / SHANNONS_PER_CKB).to_string());
+        values.insert(
+            "burnt".to_string(),
+            (supply.burnt / SHANNONS_PER_CKB).to_string(),
+        );
         data.push(StackedAreaDataPoint {
             date: snapshot.date.clone(),
             values,
@@ -2829,8 +2778,8 @@ async fn get_secondary_issuance_chart(
     let mut data = Vec::new();
     for snapshot in &snapshots {
         let (cum_miner, cum_dao, _) = snapshot_secondary_cumulative(snapshot)?;
-        let explorer_treasury = snapshot_explorer_treasury(snapshot)?;
-        if cum_miner <= 0 && cum_dao <= 0 && explorer_treasury <= 0 {
+        let treasury = dao_treasury(snapshot).map_err(|e| ApiError::internal(e.to_string()))?;
+        if cum_miner <= 0 && cum_dao <= 0 && treasury <= 0 {
             continue;
         }
 
@@ -2845,7 +2794,7 @@ async fn get_secondary_issuance_chart(
         );
         values.insert(
             "burnt".to_string(),
-            (explorer_treasury / SHANNONS_PER_CKB).to_string(),
+            (treasury / SHANNONS_PER_CKB).to_string(),
         );
         data.push(StackedAreaDataPoint {
             date: snapshot.date.clone(),
@@ -3517,18 +3466,6 @@ mod tests {
     }
 
     #[test]
-    fn test_snapshot_total_issuance_uses_indexer_value() {
-        let s = snapshot("2026-02-17", 100, 999, 0, 0);
-        assert_eq!(snapshot_total_issuance(&s), Some(999));
-    }
-
-    #[test]
-    fn test_snapshot_total_issuance_rejects_missing_value() {
-        let s = snapshot("2026-02-17", 100, 0, 0, 0);
-        assert_eq!(snapshot_total_issuance(&s), None);
-    }
-
-    #[test]
     fn test_snapshot_secondary_cumulative_returns_values() {
         let mut s = snapshot("2026-02-17", 100, 999, 0, 0);
         s.cum_miner_secondary = 7;
@@ -3677,22 +3614,23 @@ mod tests {
     }
 
     #[test]
-    fn test_build_circulating_supply_by_date_map_uses_total_minus_burnt_and_dao() {
+    fn test_build_liquid_supply_by_date_map_subtracts_unissued_secondary_and_dao() {
         // Genesis burnt is now threaded in from the derived baseline (8.4B CKB).
         let genesis_burnt = 840_000_000_000_000_000i128;
         let total = genesis_burnt + 1_000_000;
-        let mut s = snapshot("2026-02-17", 100, total, 0, 0);
-        s.cum_treasury = 30;
-        let map = build_circulating_supply_by_date_map(&[s], genesis_burnt).unwrap();
-        assert_eq!(map.get("2026-02-17"), Some(&(1_000_000 - 30 - 100)));
+        let mut s = snapshot("2026-02-17", 100, total, 130, 0);
+        s.unmade_dao_interests = 30;
+        s.cum_treasury = 100;
+        let map = build_liquid_supply_by_date_map(&[s], genesis_burnt).unwrap();
+        assert_eq!(map.get("2026-02-17"), Some(&(1_000_000 - 130 - 100)));
     }
 
     #[test]
-    fn test_build_circulating_supply_by_date_map_errors_on_negative_dao_locked() {
+    fn test_build_liquid_supply_by_date_map_errors_on_negative_dao_locked() {
         let genesis_burnt = 840_000_000_000_000_000i128;
         let total = genesis_burnt + 1_000_000;
         let s = snapshot("2026-02-17", -1, total, 0, 0);
-        let err = build_circulating_supply_by_date_map(&[s], genesis_burnt).unwrap_err();
+        let err = build_liquid_supply_by_date_map(&[s], genesis_burnt).unwrap_err();
         assert!(err.1 .0.message.contains("negative total_deposited"));
     }
 

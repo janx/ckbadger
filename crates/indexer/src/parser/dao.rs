@@ -25,6 +25,7 @@ pub struct ParsedDaoDeposit {
     pub output_index: i32,
     pub lock_script_hash: Vec<u8>,
     pub capacity: i64,
+    pub occupied_capacity: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -146,6 +147,18 @@ impl DaoParser {
                     output_index: checked_usize_to_i32(idx, "deposit output index")?,
                     lock_script_hash: cell.lock_script_hash.clone(),
                     capacity: cell.capacity,
+                    occupied_capacity: ckbadger_common::dao::occupied_capacity_shannons(
+                        usize::try_from(cell.data_size).map_err(|_| {
+                            anyhow::anyhow!(
+                                "negative DAO cell data size: tx_hash=0x{}, output_index={}, data_size={}",
+                                hex::encode(tx_hash),
+                                idx,
+                                cell.data_size
+                            )
+                        })?,
+                        cell.lock_args.len(),
+                        cell.type_args.as_ref().map(Vec::len),
+                    )?,
                 }))
             })
             .filter_map(|r| r.transpose())
@@ -337,7 +350,8 @@ mod tests {
         let ar_withdraw: u64 = 10_100_000_000_000_000;
 
         let compensation =
-            calculate_dao_compensation_from_ar(capacity, ar_deposit, ar_withdraw).unwrap();
+            calculate_dao_compensation_from_ar(capacity, 102_00000000, ar_deposit, ar_withdraw)
+                .unwrap();
 
         let free_capacity = (capacity as u128) - 102_00000000u128;
         let expected = (free_capacity * ar_withdraw as u128 / ar_deposit as u128) - free_capacity;
@@ -348,7 +362,7 @@ mod tests {
     fn test_calculate_compensation_zero_ar_deposit() {
         use ckbadger_common::dao::calculate_dao_compensation_from_ar;
         // ar_deposit == 0 is invalid chain data (AR starts at 10^16), returns Err
-        let result = calculate_dao_compensation_from_ar(200_00000000, 0, 100);
+        let result = calculate_dao_compensation_from_ar(200_00000000, 102_00000000, 0, 100);
         assert!(result.is_err());
     }
 
@@ -356,14 +370,15 @@ mod tests {
     fn test_calculate_compensation_no_growth() {
         use ckbadger_common::dao::calculate_dao_compensation_from_ar;
         let ar = 10_000_000_000_000_000u64;
-        let compensation = calculate_dao_compensation_from_ar(200_00000000, ar, ar).unwrap();
+        let compensation =
+            calculate_dao_compensation_from_ar(200_00000000, 102_00000000, ar, ar).unwrap();
         assert_eq!(compensation, 0);
     }
 
     #[test]
     fn test_calculate_compensation_returns_err_when_capacity_below_occupied() {
         use ckbadger_common::dao::calculate_dao_compensation_from_ar;
-        let result = calculate_dao_compensation_from_ar(100, 10, 11);
+        let result = calculate_dao_compensation_from_ar(100, 102_00000000, 10, 11);
         assert!(result.is_err());
     }
 
@@ -373,10 +388,12 @@ mod tests {
 
         let dao_hash = parse_hex_to_bytes(DAO_CODE_HASH);
         let cells = vec![ParsedCell {
-            capacity: 100_00000000,
+            capacity: 300_00000000,
             lock_code_hash: vec![0; 32],
             lock_hash_type: 1,
-            lock_args: vec![],
+            // Non-standard lock args make this DAO cell occupy 142 CKB,
+            // proving the parser does not substitute the 102 CKB default.
+            lock_args: vec![0; 60],
             lock_script_hash: vec![1; 32],
             type_code_hash: Some(dao_hash.clone()),
             type_hash_type: Some(1),
@@ -389,7 +406,8 @@ mod tests {
 
         let deposits = DaoParser::parse_deposits_from_cells(&[0; 32], &cells).unwrap();
         assert_eq!(deposits.len(), 1);
-        assert_eq!(deposits[0].capacity, 100_00000000);
+        assert_eq!(deposits[0].capacity, 300_00000000);
+        assert_eq!(deposits[0].occupied_capacity, 142_00000000);
     }
 
     #[test]
@@ -555,6 +573,7 @@ mod proptest_tests {
 
             let compensation = calculate_dao_compensation_from_ar(
                 capacity,
+                102_00000000,
                 ar_deposit,
                 ar_withdraw
             ).unwrap();
@@ -573,6 +592,7 @@ mod proptest_tests {
 
             let compensation = calculate_dao_compensation_from_ar(
                 capacity,
+                102_00000000,
                 ar_deposit,
                 ar_withdraw
             ).unwrap();

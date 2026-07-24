@@ -21,15 +21,7 @@ pub fn compute_occupied_capacity_shannons(
     lock_args_len: usize,
     type_args_len: Option<usize>,
 ) -> Result<i64> {
-    let lock_script_size = 33_i128 + lock_args_len as i128;
-    let type_script_size = match type_args_len {
-        Some(len) => 33_i128 + len as i128,
-        None => 0,
-    };
-    let occupied = (8_i128 + lock_script_size + type_script_size + data_size as i128)
-        .checked_mul(100_000_000_i128)
-        .ok_or_else(|| anyhow!("occupied capacity overflow"))?;
-    i64::try_from(occupied).map_err(|_| anyhow!("occupied capacity exceeds i64: {}", occupied))
+    ckbadger_common::dao::occupied_capacity_shannons(data_size, lock_args_len, type_args_len)
 }
 
 fn expected_occupied_capacity_for_cell(

@@ -3512,7 +3512,10 @@ fn build_tx_actions_list_for_bulk(
                         ) => (
                             true,
                             Some(crate::db::writer::dao::calculate_dao_compensation_from_ar(
-                                input.capacity, deposit_ar, withdraw_request_ar,
+                                input.capacity,
+                                input.occupied_capacity,
+                                deposit_ar,
+                                withdraw_request_ar,
                             )?),
                         ),
                         (Some(facts::DaoCellState::WithdrawRequest { .. }), None) => {
@@ -4692,6 +4695,7 @@ fn resolved_tx_fee(tx: &facts::TxFacts, resolved_tx: &facts::ResolvedTxFacts<'_>
                     }),
                 ) => crate::db::writer::dao::calculate_dao_compensation_from_ar(
                     input.capacity,
+                    input.occupied_capacity,
                     *deposit_ar,
                     *withdraw_request_ar,
                 )
@@ -8311,6 +8315,7 @@ mod tests {
 
         let compensation = ckbadger_common::dao::calculate_dao_compensation_from_ar(
             input_capacity,
+            102_00000000,
             deposit_ar,
             withdraw_ar,
         )

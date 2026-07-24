@@ -82,8 +82,6 @@ pub struct DaoSnapshotInput {
     pub protocol_deposited: Option<i128>,
 }
 
-use ckbadger_common::dao::calculate_dao_compensation_from_ar;
-
 impl BatchWriter {
     pub fn update_hourly_statistics(
         &self,
@@ -910,100 +908,64 @@ impl BatchWriter {
         let mut pending_withdrawal_capacity: i128 = 0;
         let mut unique_depositors: HashSet<Vec<u8>> = HashSet::new();
         let mut active_deposits = 0i32;
-        let mut total_compensation_paid: i128 = 0;
-        let mut unclaimed_compensation: i128 = 0;
         let mut depositor_map: HashMap<Vec<u8>, (i128, i32, f64)> = HashMap::new();
-        let mut unmade_active_compensation: u128 = 0;
         let mut weighted_deposit_days: f64 = 0.0;
         let mut avg_total_capacity: i128 = 0;
         let mut status1_for_avg: Vec<(i64, i64, i64)> = Vec::new();
 
         for scan_status in [0i16, 1] {
-            self.store.scan_dao_deposits_by_status(scan_status, |_, entry| {
-                active_deposits += 1;
+            self.store
+                .scan_dao_deposits_by_status(scan_status, |_, entry| {
+                    active_deposits += 1;
 
-                // Status-specific accounting
-                if entry.status == 1 {
-                    pending_withdrawal_capacity += entry.capacity as i128;
-                    if let Some(request_block) = entry.withdraw_request_block {
-                        status1_for_avg.push((
-                            entry.capacity,
-                            entry.deposit_timestamp,
-                            request_block,
-                        ));
+                    // Status-specific accounting
+                    if entry.status == 1 {
+                        pending_withdrawal_capacity += entry.capacity as i128;
+                        if let Some(request_block) = entry.withdraw_request_block {
+                            status1_for_avg.push((
+                                entry.capacity,
+                                entry.deposit_timestamp,
+                                request_block,
+                            ));
+                        }
+                    } else {
+                        // Only status=0 deposits count toward total_deposited,
+                        // unique_depositors, depositor_map, and avg deposit time —
+                        // matching CKB explorer convention which subtracts from
+                        // total_deposit at phase-1 withdrawal.
+                        total_deposited += entry.capacity as i128;
+                        unique_depositors.insert(entry.lock_script_hash.clone());
+
+                        let dm = depositor_map
+                            .entry(entry.lock_script_hash.clone())
+                            .or_insert((0, 0, 0.0));
+                        dm.0 += entry.capacity as i128;
+                        dm.1 += 1;
+                        dm.2 += (tip_timestamp - entry.deposit_timestamp) as f64;
+
+                        let held_ms = tip_timestamp - entry.deposit_timestamp;
+                        let days_held = held_ms as f64 / 86_400_000.0;
+                        weighted_deposit_days += entry.capacity as f64 * days_held;
+                        avg_total_capacity += entry.capacity as i128;
                     }
-                } else {
-                    // Only status=0 deposits count toward total_deposited,
-                    // unique_depositors, depositor_map, and avg deposit time —
-                    // matching CKB explorer convention which subtracts from
-                    // total_deposit at phase-1 withdrawal.
-                    total_deposited += entry.capacity as i128;
-                    unique_depositors.insert(entry.lock_script_hash.clone());
 
-                    let dm = depositor_map
-                        .entry(entry.lock_script_hash.clone())
-                        .or_insert((0, 0, 0.0));
-                    dm.0 += entry.capacity as i128;
-                    dm.1 += 1;
-                    dm.2 += (tip_timestamp - entry.deposit_timestamp) as f64;
-
-                    let held_ms = tip_timestamp - entry.deposit_timestamp;
-                    let days_held = held_ms as f64 / 86_400_000.0;
-                    weighted_deposit_days += entry.capacity as f64 * days_held;
-                    avg_total_capacity += entry.capacity as i128;
-                }
-
-                // Compensation accrues for both status=0 and status=1 deposits
-                // (both are still locked in the DAO contract).
-                let ar_deposit = u64::try_from(entry.deposit_ar).map_err(|_| {
-                    anyhow!(
-                        "invalid negative DAO deposit AR while refreshing latest dao statistics: deposit_block={}, lock_script_hash=0x{}, deposit_ar={}",
-                        entry.deposit_block_number,
-                        hex::encode(&entry.lock_script_hash),
-                        entry.deposit_ar
-                    )
+                    Ok(())
                 })?;
-                // Per RFC-0023, status=1 compensation is locked at withdraw_request_ar;
-                // status=0 continues to accrue at tip_ar.
-                let effective_ar = if entry.status == 1 {
-                    let ar_i64 = entry.withdraw_request_ar.ok_or_else(|| {
-                        anyhow!(
-                            "status=1 deposit missing withdraw_request_ar: deposit_block={}, lock_hash=0x{}",
-                            entry.deposit_block_number,
-                            hex::encode(&entry.lock_script_hash)
-                        )
-                    })?;
-                    u64::try_from(ar_i64).map_err(|_| {
-                        anyhow!(
-                            "status=1 deposit withdraw_request_ar exceeds u64: deposit_block={}, ar={}",
-                            entry.deposit_block_number,
-                            ar_i64
-                        )
-                    })?
-                } else {
-                    tip_ar
-                };
-                if ar_deposit > 0 && effective_ar > ar_deposit {
-                    let compensation = calculate_dao_compensation_from_ar(
-                        entry.capacity,
-                        ar_deposit,
-                        effective_ar,
-                    )?;
-                    unclaimed_compensation += compensation as i128;
-                    if entry.status == 0 {
-                        unmade_active_compensation += compensation as u128;
-                    }
-                }
-
-                Ok(())
-            })?;
         }
 
-        self.store.scan_dao_deposits_by_status(2, |_, entry| {
-            if let Some(comp) = entry.compensation {
-                total_compensation_paid += comp as i128;
-            }
-            Ok(())
+        let compensation = self
+            .store
+            .compute_dao_compensation_breakdown_at(tip_block_number, tip_ar)?;
+        let total_compensation_paid = compensation.claimed;
+        let unclaimed_compensation = compensation.unclaimed;
+        let unmade_active_compensation = compensation.active_unmade;
+        let deposit_compensation_total = compensation.total().ok_or_else(|| {
+            anyhow!(
+                "DAO total compensation overflow at tip block {}: claimed={}, unclaimed={}",
+                tip_block_number,
+                compensation.claimed,
+                compensation.unclaimed
+            )
         })?;
 
         // Resolve status-1 deposit timestamps from block headers for capacity-weighted average.
@@ -1017,41 +979,40 @@ impl BatchWriter {
             }
         }
 
-        let latest_snapshot = self.store.get_latest_dao_daily_snapshot()?;
+        let latest_snapshot = match self.store.get_latest_dao_daily_snapshot()? {
+            Some(snapshot) => snapshot,
+            None if tip_block_number == 0 => {
+                // Startup cleanup can leave only the canonical genesis header.
+                // No post-genesis DAO snapshot exists yet; the first forward
+                // batch creates it before this refresh is required.
+                return Ok(());
+            }
+            None => {
+                bail!(
+                    "missing DAO daily snapshot while refreshing latest statistics: tip_block={}",
+                    tip_block_number
+                );
+            }
+        };
         let estimated_apc =
             estimated_apc_from_header(&header, self.genesis_total_issuance()?).unwrap_or_default();
-        let (mining_reward, deposit_compensation, burnt) = if let Some(s) = latest_snapshot.as_ref()
-        {
-            if s.cum_miner_secondary < 0 {
-                bail!(
-                    "negative cum_miner_secondary in dao_daily_snapshots while refreshing latest dao statistics for {}: {}",
-                    s.date,
-                    s.cum_miner_secondary
-                );
-            }
-            if s.cum_dao_compensation < 0 {
-                bail!(
-                    "negative cum_dao_compensation in dao_daily_snapshots while refreshing latest dao statistics for {}: {}",
-                    s.date,
-                    s.cum_dao_compensation
-                );
-            }
-            // Use tip S-field and live unmade computation for explorer-compatible treasury.
-            let treasury_from_s = tip_s as i128 - unmade_active_compensation as i128;
-            if treasury_from_s < 0 {
-                bail!(
-                    "negative treasury_from_s in latest dao statistics: tip_s={}, unmade_active_compensation={}, block={}",
-                    tip_s, unmade_active_compensation, tip_block_number
-                );
-            }
-            (
-                s.cum_miner_secondary,
-                s.cum_dao_compensation,
-                treasury_from_s,
-            )
-        } else {
-            (0, 0, 0)
-        };
+        if latest_snapshot.cum_miner_secondary < 0 {
+            bail!(
+                "negative cum_miner_secondary in dao_daily_snapshots while refreshing latest dao statistics for {}: {}",
+                latest_snapshot.date,
+                latest_snapshot.cum_miner_secondary
+            );
+        }
+        // Use tip S-field and live unmade computation for explorer-compatible treasury.
+        let burnt = tip_s as i128 - unmade_active_compensation;
+        if burnt < 0 {
+            bail!(
+                "negative treasury_from_s in latest dao statistics: tip_s={}, unmade_active_compensation={}, block={}",
+                tip_s, unmade_active_compensation, tip_block_number
+            );
+        }
+        let mining_reward = latest_snapshot.cum_miner_secondary;
+        let deposit_compensation = deposit_compensation_total;
 
         let avg_days = if avg_total_capacity > 0 {
             weighted_deposit_days / avg_total_capacity as f64
@@ -1113,22 +1074,21 @@ impl BatchWriter {
             dao_batch.put_stats(&top_key, &top_value);
         }
 
-        // Update today's dao daily snapshot with the latest unclaimed compensation
-        // and unmade_dao_interests.  The snapshot's unmade_dao_interests was computed
-        // by scanning the store BEFORE the batch commit, so it lags by one batch.
-        // Patching it here (post-commit) ensures the chart's treasury computation
-        // (secondary_pool - unmade_dao_interests) matches the stats endpoint's
-        // live computation (tip_s - unmade_active_compensation).
-        if let Some(mut today_snapshot) = self.store.get_latest_dao_daily_snapshot()? {
-            today_snapshot.unclaimed_compensation = unclaimed_compensation;
-            today_snapshot.unmade_dao_interests = unmade_active_compensation as i128;
-            today_snapshot.secondary_pool = tip_s as i128;
-            let date_key = today_snapshot.date.replace('-', "");
-            let snap_key =
-                keys::encode_stats_key(keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT, date_key.as_bytes());
-            let snap_value = bincode::serialize(&today_snapshot)?;
-            dao_batch.put_stats(&snap_key, &snap_value);
-        }
+        // Patch the current snapshot from the canonical post-commit lifecycle
+        // state. Snapshot construction runs before the domain batch commits, so
+        // these exact AR-based values would otherwise lag by one live batch.
+        let mut today_snapshot = latest_snapshot;
+        today_snapshot.compensation = total_compensation_paid;
+        today_snapshot.cum_dao_compensation = deposit_compensation_total;
+        today_snapshot.unclaimed_compensation = unclaimed_compensation;
+        today_snapshot.unmade_dao_interests = unmade_active_compensation;
+        today_snapshot.secondary_pool = tip_s as i128;
+        today_snapshot.cum_treasury = burnt;
+        let date_key = today_snapshot.date.replace('-', "");
+        let snap_key =
+            keys::encode_stats_key(keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT, date_key.as_bytes());
+        let snap_value = bincode::serialize(&today_snapshot)?;
+        dao_batch.put_stats(&snap_key, &snap_value);
 
         dao_batch.commit()?;
 
@@ -1252,6 +1212,7 @@ mod tests {
                 &outpoint_a,
                 &DaoDepositCacheEntry {
                     capacity: 100,
+                    occupied_capacity: 0,
                     deposit_block_number: 10,
                     deposit_timestamp: 0,
                     lock_script_hash: vec![0xAA; 32],
@@ -1276,6 +1237,7 @@ mod tests {
                 &outpoint_b,
                 &DaoDepositCacheEntry {
                     capacity: 200,
+                    occupied_capacity: 0,
                     deposit_block_number: 15,
                     deposit_timestamp: 0,
                     lock_script_hash: vec![0xBB; 32],
@@ -1359,6 +1321,7 @@ mod tests {
             &keys::encode_outpoint(&[0xAA; 32], 0),
             &DaoDepositCacheEntry {
                 capacity: 200_00000000,
+                occupied_capacity: 102_00000000,
                 deposit_block_number: 10,
                 deposit_timestamp: 1_700_000_000_000, // same as tip => 0 days held
                 lock_script_hash: vec![0x01; 32],
@@ -1378,19 +1341,20 @@ mod tests {
             &keys::encode_outpoint(&[0xBB; 32], 0),
             &DaoDepositCacheEntry {
                 capacity: 300_00000000,
-                deposit_block_number: 9,
+                occupied_capacity: 102_00000000,
+                deposit_block_number: 5,
                 deposit_timestamp: 1_699_999_000_000,
                 lock_script_hash: vec![0x02; 32],
                 deposit_ar: 1,
                 status: 2,
                 withdraw_request_tx: Some(vec![0x03; 32]),
                 withdraw_request_output_index: Some(0),
-                withdraw_request_block: Some(10),
+                withdraw_request_block: Some(8),
                 withdraw_request_ar: Some(2),
-                withdraw_block: Some(10),
+                withdraw_block: Some(9),
                 withdraw_tx: Some(vec![0x04; 32]),
                 withdraw_to_output_index: Some(0),
-                compensation: Some(123_00000000),
+                compensation: Some(198_00000000),
             },
         );
 
@@ -1427,17 +1391,19 @@ mod tests {
         assert_eq!(latest.total_deposited, 200_00000000);
         assert_eq!(latest.total_depositors, 1);
         assert_eq!(latest.active_deposits, 1);
-        assert_eq!(latest.total_compensation_paid, 123_00000000);
+        assert_eq!(latest.total_compensation_paid, 198_00000000);
         assert_eq!(latest.unclaimed_compensation, 98_00000000);
         assert_eq!(latest.average_deposit_days, "0 days");
         assert!(!latest.estimated_apc.is_empty());
         assert_eq!(latest.mining_reward, 10_00000000);
-        assert_eq!(latest.deposit_compensation, 20_00000000);
+        assert_eq!(latest.deposit_compensation, 296_00000000);
         assert_eq!(latest.burnt, 32_00000000);
 
         // Verify snapshot's unmade_dao_interests and secondary_pool were patched
         // to the live tip values, ensuring chart and stats agree.
         let patched_snapshot = store.get_latest_dao_daily_snapshot().unwrap().unwrap();
+        assert_eq!(patched_snapshot.compensation, 198_00000000);
+        assert_eq!(patched_snapshot.cum_dao_compensation, 296_00000000);
         assert_eq!(patched_snapshot.unmade_dao_interests, 98_00000000);
         assert_eq!(patched_snapshot.secondary_pool, 130_00000000); // tip_s
     }
@@ -1496,6 +1462,7 @@ mod tests {
             &keys::encode_outpoint(&[0xAA; 32], 0),
             &DaoDepositCacheEntry {
                 capacity: 200_00000000,
+                occupied_capacity: 102_00000000,
                 deposit_block_number: 50,
                 deposit_timestamp: tip_timestamp - two_days_ms,
                 lock_script_hash: vec![0x01; 32],
@@ -1520,6 +1487,7 @@ mod tests {
             &keys::encode_outpoint(&[0xBB; 32], 0),
             &DaoDepositCacheEntry {
                 capacity: 300_00000000,
+                occupied_capacity: 102_00000000,
                 deposit_block_number: 20,
                 deposit_timestamp: tip_timestamp - five_days_ms,
                 lock_script_hash: vec![0x02; 32],
@@ -1536,11 +1504,13 @@ mod tests {
             },
         );
 
-        // A completed deposit (status=2) for total_compensation_paid
+        // A completed deposit (status=2) for total_compensation_paid:
+        // free=48 CKB, request/deposit AR=2, so exact compensation=48 CKB.
         seed.put_dao_deposit(
             &keys::encode_outpoint(&[0xCC; 32], 0),
             &DaoDepositCacheEntry {
                 capacity: 150_00000000,
+                occupied_capacity: 102_00000000,
                 deposit_block_number: 5,
                 deposit_timestamp: tip_timestamp - 10 * 86_400_000,
                 lock_script_hash: vec![0x03; 32],
@@ -1553,7 +1523,7 @@ mod tests {
                 withdraw_block: Some(40),
                 withdraw_tx: Some(vec![0x05; 32]),
                 withdraw_to_output_index: Some(0),
-                compensation: Some(50_00000000),
+                compensation: Some(48_00000000),
             },
         );
 
@@ -1594,10 +1564,11 @@ mod tests {
         // 1 unique depositor (only status=0 lock hash 0x01)
         assert_eq!(latest.total_depositors, 1);
         // compensation_paid from the status=2 deposit
-        assert_eq!(latest.total_compensation_paid, 50_00000000);
+        assert_eq!(latest.total_compensation_paid, 48_00000000);
         // unclaimed_compensation: status=0 (tip_ar=4) + status=1 (withdraw_request_ar=3)
         // = 98_00000000 + 99_00000000 = 197_00000000
         assert_eq!(latest.unclaimed_compensation, 197_00000000);
+        assert_eq!(latest.deposit_compensation, 245_00000000);
         // pending_withdrawal_capacity = status=1: 300_00000000
         assert_eq!(latest.pending_withdrawal_capacity, 300_00000000);
         // Capacity-weighted average: status-0 (200 CKB * 2 days) + status-1 (300 CKB * 4 days frozen)

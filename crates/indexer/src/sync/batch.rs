@@ -392,6 +392,7 @@ fn pre_compute_dao_compensations(
     let mut entries_with_request_block: Vec<(
         &(Vec<u8>, i16), // withdraw outpoint key (for result map)
         i64,             // capacity
+        i64,             // occupied capacity
         i64,             // deposit_block
         i64,             // withdraw_request_block
     )> = Vec::new();
@@ -411,7 +412,7 @@ fn pre_compute_dao_compensations(
 
         // Look up the deposit entry to get withdraw_request_block
         let outpoint_key = keys::encode_outpoint(orig_tx_hash, orig_output_index);
-        let request_block = if let Some(value) =
+        let (request_block, occupied_capacity) = if let Some(value) =
             store.get_cf(store.cf_dao_deposits(), &outpoint_key)?
         {
             let entry: ckbadger_store::types::DaoDepositCacheEntry =
@@ -424,7 +425,7 @@ fn pre_compute_dao_compensations(
                     )
                 })?;
             match entry.withdraw_request_block {
-                Some(b) => b,
+                Some(b) => (b, entry.occupied_capacity),
                 None => bail!(
                     "withdraw_request_block missing for status=1 deposit in compensation pre-compute: outpoint=0x{}:{}",
                     hex::encode(orig_tx_hash),
@@ -441,7 +442,13 @@ fn pre_compute_dao_compensations(
 
         blocks_needed.insert(deposit_block);
         blocks_needed.insert(request_block);
-        entries_with_request_block.push((withdraw_key, capacity, deposit_block, request_block));
+        entries_with_request_block.push((
+            withdraw_key,
+            capacity,
+            occupied_capacity,
+            deposit_block,
+            request_block,
+        ));
     }
 
     // Batch-fetch DAO header fields for all needed blocks
@@ -450,7 +457,9 @@ fn pre_compute_dao_compensations(
 
     // Compute compensations
     let mut compensations = HashMap::new();
-    for (withdraw_key, capacity, deposit_block, request_block) in entries_with_request_block {
+    for (withdraw_key, capacity, occupied_capacity, deposit_block, request_block) in
+        entries_with_request_block
+    {
         let deposit_dao = dao_fields.get(&deposit_block).ok_or_else(|| {
             anyhow!(
                 "DAO field missing for deposit block in compensation pre-compute: block={}, outpoint=0x{}:{}",
@@ -483,8 +492,13 @@ fn pre_compute_dao_compensations(
                 withdraw_key.1,
             )
         })?;
-        let compensation = calculate_dao_compensation_from_ar(capacity, ar_deposit, ar_withdraw)
-            .map_err(|e| {
+        let compensation = calculate_dao_compensation_from_ar(
+            capacity,
+            occupied_capacity,
+            ar_deposit,
+            ar_withdraw,
+        )
+        .map_err(|e| {
                 anyhow!(
                     "DAO compensation calculation failed in pre-compute: outpoint=0x{}:{}, capacity={}, ar_deposit={}, ar_withdraw={}, error={}",
                     hex::encode(&withdraw_key.0),
@@ -1839,6 +1853,7 @@ impl Indexer {
                     outpoint_key,
                     ckbadger_store::types::DaoDepositCacheEntry {
                         capacity: deposit.capacity,
+                        occupied_capacity: deposit.occupied_capacity,
                         deposit_block_number: *block_number,
                         deposit_timestamp: ts.timestamp_millis(),
                         lock_script_hash: deposit.lock_script_hash.clone(),
@@ -3077,17 +3092,6 @@ impl Indexer {
             }
         }
 
-        // Maintain the pre-block, interest-bearing DAO free capacity used by
-        // RFC-0023's secondary-issuance split. Full cell capacity remains in
-        // `protocol_deposited` for user-facing locked-capacity statistics.
-        let mut running_protocol_deposit_free_for_split = {
-            let snap = load_latest_dao_daily_snapshot(self.writer.store())?;
-            snap.as_ref()
-                .map(crate::sync::dao_helpers::snapshot_protocol_deposit_free_capacity)
-                .transpose()?
-                .unwrap_or(0)
-        };
-
         let mut block_tx_idx = 0usize;
         for parsed in all_parsed_blocks {
             let block_date = ckbadger_common::block_date(parsed.timestamp);
@@ -3095,38 +3099,11 @@ impl Indexer {
             let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
             let claimed_compensation_in_block =
                 tx_slice_claimed_dao_compensation(tx_slice, &dao_compensations)?;
-            // Save pre-block protocol delta for this date to compute per-block change.
-            let pre_block_protocol_delta = batch_stats
-                .dao_daily_protocol_delta
-                .get(&block_date)
-                .copied()
-                .unwrap_or(0);
-            let pre_block_new_deposits_delta = batch_stats
-                .dao_daily_new_deposits_delta
-                .get(&block_date)
-                .copied()
-                .unwrap_or(0);
-            let pre_block_withdrawals_delta = batch_stats
-                .dao_daily_withdrawals_delta
-                .get(&block_date)
-                .copied()
-                .unwrap_or(0);
-            let pre_block_protocol_cell_delta = pre_block_new_deposits_delta
-                .checked_sub(pre_block_withdrawals_delta)
-                .ok_or_else(|| {
-                    anyhow!(
-                        "DAO protocol cell delta overflow before block {}: deposits={}, withdrawals={}",
-                        parsed.number,
-                        pre_block_new_deposits_delta,
-                        pre_block_withdrawals_delta
-                    )
-                })?;
             accumulate_secondary_issuance_deltas(
                 &mut batch_stats,
                 parsed,
                 block_date,
                 claimed_compensation_in_block,
-                running_protocol_deposit_free_for_split,
                 &mut prev_dao_csu,
             )?;
             block_tx_idx += tx_count_for_block;
@@ -3344,71 +3321,6 @@ impl Indexer {
                 &mut batch_stats.dao_daily_cumulative_depositors_delta,
                 &mut batch_stats.dao_daily_depositing_addresses,
             )?;
-
-            // Update per-block running protocol deposited after this block's DAO txs.
-            let post_block_protocol_delta = batch_stats
-                .dao_daily_protocol_delta
-                .get(&block_date)
-                .copied()
-                .unwrap_or(0);
-            let post_block_new_deposits_delta = batch_stats
-                .dao_daily_new_deposits_delta
-                .get(&block_date)
-                .copied()
-                .unwrap_or(0);
-            let post_block_withdrawals_delta = batch_stats
-                .dao_daily_withdrawals_delta
-                .get(&block_date)
-                .copied()
-                .unwrap_or(0);
-            let post_block_protocol_cell_delta = post_block_new_deposits_delta
-                .checked_sub(post_block_withdrawals_delta)
-                .ok_or_else(|| {
-                    anyhow!(
-                        "DAO protocol cell delta overflow after block {}: deposits={}, withdrawals={}",
-                        parsed.number,
-                        post_block_new_deposits_delta,
-                        post_block_withdrawals_delta
-                    )
-                })?;
-            let block_protocol_capacity_delta = post_block_protocol_delta
-                .checked_sub(pre_block_protocol_delta)
-                .ok_or_else(|| {
-                    anyhow!(
-                        "DAO protocol capacity delta overflow for block {}: before={}, after={}",
-                        parsed.number,
-                        pre_block_protocol_delta,
-                        post_block_protocol_delta
-                    )
-                })?;
-            let block_protocol_cell_delta = post_block_protocol_cell_delta
-                .checked_sub(pre_block_protocol_cell_delta)
-                .ok_or_else(|| {
-                    anyhow!(
-                        "DAO protocol cell delta overflow for block {}: before={}, after={}",
-                        parsed.number,
-                        pre_block_protocol_cell_delta,
-                        post_block_protocol_cell_delta
-                    )
-                })?;
-            running_protocol_deposit_free_for_split = running_protocol_deposit_free_for_split
-                .checked_add(ckbadger_common::dao::dao_free_capacity_delta(
-                    block_protocol_capacity_delta,
-                    block_protocol_cell_delta,
-                )?)
-                .ok_or_else(|| {
-                    anyhow!(
-                        "running DAO protocol free capacity overflow after block {}",
-                        parsed.number
-                    )
-                })?;
-            if running_protocol_deposit_free_for_split < 0 {
-                bail!(
-                    "negative running DAO protocol free capacity after block {}: {}",
-                    parsed.number,
-                    running_protocol_deposit_free_for_split
-                );
-            }
 
             batch_stats.dao_snapshot_dates.insert(block_date);
             batch_stats
@@ -3775,11 +3687,11 @@ impl Indexer {
                     .as_ref()
                     .map(|s| s.cum_miner_secondary)
                     .unwrap_or(0);
-                let mut running_cum_dao = latest_snapshot
+                let staged_cum_dao = latest_snapshot
                     .as_ref()
                     .map(|s| s.cum_dao_compensation)
                     .unwrap_or(0);
-                let mut running_cum_treasury = latest_snapshot
+                let staged_cum_treasury = latest_snapshot
                     .as_ref()
                     .map(|s| s.cum_treasury)
                     .unwrap_or(0);
@@ -3820,27 +3732,12 @@ impl Indexer {
                     let (total_issuance, secondary_pool, occupied_capacity) =
                         dao_csu_for_snapshot_date(stats, *date)?;
 
-                    // Use per-block accumulated dao/treasury deltas (computed during
-                    // block processing with exact per-block deposited values) instead
-                    // of re-splitting at daily granularity with end-of-day deposited.
                     let daily_miner = stats
                         .daily_secondary_miner_delta
                         .get(date)
                         .copied()
                         .unwrap_or(0);
-                    let daily_dao_share = stats
-                        .daily_secondary_dao_delta
-                        .get(date)
-                        .copied()
-                        .unwrap_or(0);
-                    let daily_treasury_share = stats
-                        .daily_secondary_treasury_delta
-                        .get(date)
-                        .copied()
-                        .unwrap_or(0);
                     running_cum_miner += daily_miner;
-                    running_cum_dao += daily_dao_share;
-                    running_cum_treasury += daily_treasury_share;
                     running_total_depositors = derive_running_depositors(
                         running_total_depositors,
                         stats
@@ -3850,7 +3747,6 @@ impl Indexer {
                             .unwrap_or(0),
                         *date,
                     )?;
-                    let running_total_compensation = running_cum_dao;
                     running_cumulative_depositors += stats
                         .dao_daily_cumulative_depositors_delta
                         .get(date)
@@ -3901,39 +3797,50 @@ impl Indexer {
                         depositors.len() as i64
                     };
 
-                    // Compute unmade DAO interests from all status-0 deposits
-                    // using the AR from the day's last block DAO header.
-                    let unmade_dao_interests = if let Some(dao_bytes) =
-                        stats.daily_dao_fields.get(date)
-                    {
-                        if dao_bytes.len() >= 16 {
-                            let ar_bytes: [u8; 8] = dao_bytes[8..16].try_into().unwrap_or([0u8; 8]);
-                            let ar = u64::from_le_bytes(ar_bytes);
-                            if ar > 0 {
-                                self.writer.store().compute_unmade_dao_interests(ar)?
-                            } else {
-                                0
-                            }
-                        } else {
-                            0
-                        }
-                    } else {
-                        0
-                    };
+                    // Stage unmade interests through the canonical lifecycle
+                    // calculation. The post-commit refresh includes lifecycle
+                    // mutations from this batch and replaces this pre-commit
+                    // value before readers are notified.
+                    let dao_bytes = stats
+                        .daily_dao_fields
+                        .get(date)
+                        .ok_or_else(|| anyhow!("missing DAO field for snapshot date {}", date))?;
+                    let ar = DaoParser::extract_ar_from_dao_field(dao_bytes).ok_or_else(|| {
+                        anyhow!(
+                            "invalid DAO AR field for snapshot date {}: dao_len={}",
+                            date,
+                            dao_bytes.len()
+                        )
+                    })?;
+                    let end_block = stats
+                        .dao_block_numbers_by_date
+                        .get(date)
+                        .and_then(|blocks| blocks.iter().max())
+                        .copied()
+                        .ok_or_else(|| {
+                            anyhow!("missing DAO end block for snapshot date {}", date)
+                        })?;
+                    let unmade_dao_interests = self
+                        .writer
+                        .store()
+                        .compute_unmade_dao_interests(end_block, ar)?;
 
                     let dao_snapshot = crate::db::writer::DaoSnapshotInput {
                         total_deposited: running_total_deposited,
                         depositors_count: running_total_depositors,
                         total_deposit_count: running_total_deposit_count,
                         total_withdrawal_count: running_total_withdrawal_count,
-                        total_compensation: running_total_compensation,
+                        // The exact lifecycle totals require the DAO entries
+                        // committed in this batch. refresh_latest_dao_statistics
+                        // replaces these staged values immediately post-commit.
+                        total_compensation: staged_cum_dao,
                         cumulative_deposit_amount: running_cumulative_deposit_amount,
                         total_issuance,
                         secondary_pool,
                         occupied_capacity,
                         cum_miner_secondary: running_cum_miner,
-                        cum_dao_compensation: running_cum_dao,
-                        cum_treasury: running_cum_treasury,
+                        cum_dao_compensation: staged_cum_dao,
+                        cum_treasury: staged_cum_treasury,
                         unmade_dao_interests,
                         unclaimed_compensation: 0,
                         cumulative_depositors: running_cumulative_depositors,

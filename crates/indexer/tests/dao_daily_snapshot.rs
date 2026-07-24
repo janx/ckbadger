@@ -174,6 +174,7 @@ fn test_partial_day_rollback_recomputes_dao_snapshot() {
 
     let entry_100 = DaoDepositCacheEntry {
         capacity: 100_00000000,
+        occupied_capacity: 100_00000000,
         deposit_block_number: 100,
         deposit_timestamp: day_0408_t1_ms,
         lock_script_hash: vec![0xB0; 32],
@@ -190,6 +191,7 @@ fn test_partial_day_rollback_recomputes_dao_snapshot() {
     };
     let entry_101 = DaoDepositCacheEntry {
         capacity: 100_00000000,
+        occupied_capacity: 100_00000000,
         deposit_block_number: 101,
         deposit_timestamp: day_0408_t2_ms,
         lock_script_hash: vec![0xB1; 32], // distinct lock hash
@@ -425,6 +427,9 @@ fn test_rollback_of_phase1_withdraw_keeps_deposit_active() {
     let outpoint = outpoint_bytes(&tx_hash, 0);
     let entry = DaoDepositCacheEntry {
         capacity: 200_00000000,
+        // This synthetic rollback fixture isolates lifecycle counts; using
+        // zero free capacity keeps compensation out of the assertion surface.
+        occupied_capacity: 200_00000000,
         deposit_block_number: 99,
         deposit_timestamp: day_0408_start_ms,
         lock_script_hash: vec![0xB0; 32],
@@ -610,6 +615,7 @@ fn test_cross_day_rollback_rebuilds_cutoff_date_snapshot() {
     // Two DAO deposit entries on blocks 101 and 102.
     let entry_101 = DaoDepositCacheEntry {
         capacity: 100_00000000,
+        occupied_capacity: 100_00000000,
         deposit_block_number: 101,
         deposit_timestamp: day_0408_t1_ms,
         lock_script_hash: vec![0xB0; 32],
@@ -626,6 +632,7 @@ fn test_cross_day_rollback_rebuilds_cutoff_date_snapshot() {
     };
     let entry_102 = DaoDepositCacheEntry {
         capacity: 100_00000000,
+        occupied_capacity: 100_00000000,
         deposit_block_number: 102,
         deposit_timestamp: day_0408_t2_ms,
         lock_script_hash: vec![0xB1; 32],
@@ -853,6 +860,7 @@ fn test_rollback_preserves_cumulative_depositors_with_repeat_lock() {
     // Use 200 CKB (>= DAO_OCCUPIED_CAPACITY of 102 CKB) to satisfy validation.
     let entry_99 = DaoDepositCacheEntry {
         capacity: 200_00000000,
+        occupied_capacity: 200_00000000,
         deposit_block_number: 99,
         deposit_timestamp: day_0407_late_ms,
         lock_script_hash: vec![0xB0; 32],
@@ -869,6 +877,7 @@ fn test_rollback_preserves_cumulative_depositors_with_repeat_lock() {
     };
     let entry_101 = DaoDepositCacheEntry {
         capacity: 200_00000000,
+        occupied_capacity: 200_00000000,
         deposit_block_number: 101,
         deposit_timestamp: day_0408_t2_ms,
         lock_script_hash: vec![0xB0; 32], // SAME lock

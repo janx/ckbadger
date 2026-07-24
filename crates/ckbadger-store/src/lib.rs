@@ -64,6 +64,7 @@ pub fn bytes_to_hex(bytes: &[u8]) -> String {
 }
 
 pub use batch::{merge_write_batches, StoreBatch};
+pub use dao_ops::dao_compensation_for_entry_at;
 pub use network_types::*;
 pub use reorg_ops::RollbackResult;
 pub use store::{

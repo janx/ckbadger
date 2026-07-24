@@ -112,6 +112,34 @@ async fn test_dao_stats_ignores_stale_precomputed_latest_stats() {
             cycles: None,
         },
     );
+    let snapshot_key = ckbadger_store::keys::encode_stats_key(
+        ckbadger_store::keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT,
+        b"20231115",
+    );
+    batch.put_stats(
+        &snapshot_key,
+        &bincode::serialize(&DaoDailySnapshot {
+            date: "2023-11-15".to_string(),
+            total_deposited: 0,
+            depositors_count: 0,
+            new_deposits: 0,
+            withdrawals: 0,
+            compensation: 0,
+            cumulative_deposit_amount: 0,
+            total_issuance: 1,
+            secondary_pool: 0,
+            occupied_capacity: 0,
+            cum_miner_secondary: 0,
+            cum_dao_compensation: 0,
+            cum_treasury: 0,
+            unclaimed_compensation: 0,
+            unmade_dao_interests: 0,
+            cumulative_depositors: 0,
+            daily_depositor_addresses: 0,
+            protocol_deposited: Some(0),
+        })
+        .unwrap(),
+    );
     batch.commit().unwrap();
 
     store
@@ -179,10 +207,39 @@ async fn test_dao_stats_cached_response_is_stable_within_ttl() {
             cycles: None,
         },
     );
+    let snapshot_key = ckbadger_store::keys::encode_stats_key(
+        ckbadger_store::keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT,
+        b"20231115",
+    );
+    batch.put_stats(
+        &snapshot_key,
+        &bincode::serialize(&DaoDailySnapshot {
+            date: "2023-11-15".to_string(),
+            total_deposited: 200_00000000,
+            depositors_count: 1,
+            new_deposits: 1,
+            withdrawals: 0,
+            compensation: 0,
+            cumulative_deposit_amount: 200_00000000,
+            total_issuance: 1,
+            secondary_pool: 0,
+            occupied_capacity: 0,
+            cum_miner_secondary: 0,
+            cum_dao_compensation: 0,
+            cum_treasury: 0,
+            unclaimed_compensation: 0,
+            unmade_dao_interests: 0,
+            cumulative_depositors: 1,
+            daily_depositor_addresses: 1,
+            protocol_deposited: Some(200_00000000),
+        })
+        .unwrap(),
+    );
     batch.put_dao_deposit(
         &ckbadger_store::keys::encode_outpoint(&[0x11; 32], 0),
         &DaoDepositCacheEntry {
             capacity: 200_00000000,
+            occupied_capacity: 102_00000000,
             deposit_block_number: 10,
             deposit_timestamp: 0,
             lock_script_hash: vec![0x01; 32],
@@ -216,6 +273,7 @@ async fn test_dao_stats_cached_response_is_stable_within_ttl() {
         &ckbadger_store::keys::encode_outpoint(&[0x22; 32], 0),
         &DaoDepositCacheEntry {
             capacity: 300_00000000,
+            occupied_capacity: 102_00000000,
             deposit_block_number: 10,
             deposit_timestamp: 0,
             lock_script_hash: vec![0x02; 32],
@@ -329,6 +387,7 @@ async fn test_dao_deposits_cursor_pagination_descending() {
             &ckbadger_store::keys::encode_outpoint(&tx_hash, output_index),
             &DaoDepositCacheEntry {
                 capacity: 100_00000000,
+                occupied_capacity: 50_00000000,
                 deposit_block_number: block_number,
                 deposit_timestamp: 0,
                 lock_script_hash: vec![0x22; 32],
@@ -400,6 +459,7 @@ async fn test_dao_deposits_cursor_pagination_keeps_same_block_rows() {
             &ckbadger_store::keys::encode_outpoint(&tx_hash, output_index),
             &DaoDepositCacheEntry {
                 capacity: 100_00000000,
+                occupied_capacity: 50_00000000,
                 deposit_block_number: block_number,
                 deposit_timestamp: 0,
                 lock_script_hash: vec![0x33; 32],
@@ -467,6 +527,7 @@ async fn test_dao_deposits_status_filter_uses_descending_order() {
             &ckbadger_store::keys::encode_outpoint(&tx_hash, 0),
             &DaoDepositCacheEntry {
                 capacity: 100_00000000,
+                occupied_capacity: 50_00000000,
                 deposit_block_number: block_number,
                 deposit_timestamp: 0,
                 lock_script_hash: lock_hash,
@@ -516,6 +577,7 @@ async fn test_dao_deposits_status_cursor_mismatch_returns_bad_request() {
             &ckbadger_store::keys::encode_outpoint(&tx_hash, 0),
             &DaoDepositCacheEntry {
                 capacity: 100_00000000,
+                occupied_capacity: 50_00000000,
                 deposit_block_number: block_number,
                 deposit_timestamp: 0,
                 lock_script_hash: lock_hash,
@@ -580,6 +642,7 @@ async fn test_dao_deposits_by_lock_hash_cursor_pagination() {
             &ckbadger_store::keys::encode_outpoint(&tx_hash, 0),
             &DaoDepositCacheEntry {
                 capacity: 100_00000000,
+                occupied_capacity: 50_00000000,
                 deposit_block_number: block_number,
                 deposit_timestamp: 0,
                 lock_script_hash: lock_hash,
@@ -651,6 +714,7 @@ async fn test_dao_deposits_by_lock_hash_cursor_mismatch_returns_bad_request() {
             &ckbadger_store::keys::encode_outpoint(&tx_hash, 0),
             &DaoDepositCacheEntry {
                 capacity: 100_00000000,
+                occupied_capacity: 50_00000000,
                 deposit_block_number: block_number,
                 deposit_timestamp: 0,
                 lock_script_hash: lock_hash,

@@ -1168,9 +1168,10 @@ fn normalize_dao_entry_for_rollback(
             if entry.withdraw_request_tx.is_none()
                 || entry.withdraw_request_output_index.is_none()
                 || entry.withdraw_request_block.is_none()
+                || entry.withdraw_request_ar.is_none()
             {
                 anyhow::bail!(
-                    "inconsistent DAO entry after rollback normalization: status=1 missing request fields, deposit_block={}",
+                    "inconsistent DAO entry after rollback normalization: status=1 missing request fields or AR, deposit_block={}",
                     entry.deposit_block_number
                 );
             }
@@ -1186,9 +1187,10 @@ fn normalize_dao_entry_for_rollback(
             if entry.withdraw_request_tx.is_none()
                 || entry.withdraw_request_output_index.is_none()
                 || entry.withdraw_request_block.is_none()
+                || entry.withdraw_request_ar.is_none()
             {
                 anyhow::bail!(
-                    "inconsistent DAO entry after rollback normalization: status=2 missing request fields, deposit_block={}",
+                    "inconsistent DAO entry after rollback normalization: status=2 missing request fields or AR, deposit_block={}",
                     entry.deposit_block_number
                 );
             }
@@ -3791,6 +3793,39 @@ mod tests {
         TxActions, TxIndexEntry, UndoInputOutPoint, UndoLogEntry, UndoTxContext,
     };
 
+    #[test]
+    fn dao_completion_rollback_retains_request_ar_for_frozen_compensation() {
+        let mut entry = DaoDepositCacheEntry {
+            capacity: 300_00000000,
+            occupied_capacity: 142_00000000,
+            deposit_block_number: 10,
+            deposit_timestamp: 0,
+            lock_script_hash: vec![0x11; 32],
+            deposit_ar: 10_000,
+            status: 2,
+            withdraw_request_tx: Some(vec![0x22; 32]),
+            withdraw_request_output_index: Some(0),
+            withdraw_request_block: Some(20),
+            withdraw_request_ar: Some(11_000),
+            withdraw_block: Some(30),
+            withdraw_tx: Some(vec![0x33; 32]),
+            withdraw_to_output_index: Some(0),
+            compensation: Some(15_80000000),
+        };
+
+        assert!(normalize_dao_entry_for_rollback(&mut entry, 25).unwrap());
+        assert_eq!(entry.status, 1);
+        assert_eq!(entry.withdraw_request_ar, Some(11_000));
+        assert!(entry.withdraw_block.is_none());
+        assert!(entry.compensation.is_none());
+
+        let compensation =
+            crate::dao_ops::dao_compensation_for_entry_at(&entry, 25, 99_999).unwrap();
+        assert_eq!(compensation.claimed, 0);
+        assert_eq!(compensation.unclaimed, 15_80000000);
+        assert_eq!(compensation.active_unmade, 0);
+    }
+
     fn put_canonical_tx(batch: &mut StoreBatch<'_>, block_num: i64, tx_idx: i32, tx_hash: &[u8]) {
         batch.put_tx_hash_map(tx_hash, block_num, tx_idx);
         batch.put_tx_index(
@@ -6036,6 +6071,7 @@ mod tests {
             &outpoint_a,
             &DaoDepositCacheEntry {
                 capacity: 100,
+                occupied_capacity: 0,
                 deposit_block_number: 1,
                 deposit_timestamp: 0,
                 lock_script_hash: vec![0xA1; 32],
@@ -6059,6 +6095,7 @@ mod tests {
             &outpoint_b,
             &DaoDepositCacheEntry {
                 capacity: 200,
+                occupied_capacity: 0,
                 deposit_block_number: 1,
                 deposit_timestamp: 0,
                 lock_script_hash: vec![0xB1; 32],
@@ -6081,6 +6118,7 @@ mod tests {
             &outpoint_c,
             &DaoDepositCacheEntry {
                 capacity: 300,
+                occupied_capacity: 0,
                 deposit_block_number: 2,
                 deposit_timestamp: 0,
                 lock_script_hash: vec![0xC1; 32],
@@ -6198,6 +6236,7 @@ mod tests {
             &deposit_outpoint,
             &DaoDepositCacheEntry {
                 capacity: 123,
+                occupied_capacity: 0,
                 deposit_block_number: 2,
                 deposit_timestamp: 0,
                 lock_script_hash: vec![0x11; 32],
