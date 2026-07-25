@@ -110,7 +110,7 @@ describe('Header', () => {
     expect(screen.getAllByRole('link', { name: 'DAO' })).toHaveLength(1);
   });
 
-  it('places the network dropdown immediately before the DAO link in the navbar', () => {
+  it('separates the network context selector from navbar links', () => {
     usePathnameMock.mockReturnValue('/');
     window.__CKBADGER_RUNTIME_CONFIG__ = {
       networks: [{ name: 'mainnet' }, { name: 'testnet' }],
@@ -123,7 +123,11 @@ describe('Header', () => {
     const networkTrigger = screen.getByRole('button', { name: 'Select network' });
     const inventoryTrigger = screen.getByRole('button', { name: 'Inventory' });
 
-    expect(networkTrigger.className).toBe(inventoryTrigger.className);
+    expect(networkTrigger.className).not.toBe(inventoryTrigger.className);
+    expect(networkTrigger.className).toContain('py-1.5');
+    expect(networkTrigger.className).not.toContain('min-h-11');
+    expect(switcher).toHaveAttribute('data-control', 'network-context');
+    expect(switcher.className).toContain('md:border-r');
     expect(switcher.nextElementSibling).toBe(daoLink);
   });
 

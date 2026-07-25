@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { NetworkSwitcher } from '@/components/layout/network-switcher';
 
 // Capture router.push; drive pathname + active network per-test via refs.
@@ -38,23 +38,30 @@ describe('NetworkSwitcher', () => {
     delete window.__CKBADGER_RUNTIME_CONFIG__;
   });
 
-  it('renders the active network as a navbar dropdown trigger', () => {
+  it('renders the active network as a distinct chain-context selector', () => {
     render(<NetworkSwitcher />);
 
     const trigger = screen.getByRole('button', { name: 'Select network' });
-    const mainnet = screen.getByRole('button', { name: 'Switch to mainnet' });
-    const testnet = screen.getByRole('button', { name: 'Switch to testnet' });
+    const menu = screen.getByRole('menu', { name: 'CKB network' });
+    const mainnet = within(menu).getByRole('menuitemradio', { name: 'Switch to mainnet' });
+    const testnet = within(menu).getByRole('menuitemradio', { name: 'Switch to testnet' });
 
     expect(trigger).toHaveTextContent('mainnet');
+    expect(trigger).not.toHaveTextContent('CKB network');
+    expect(trigger.className).toContain('py-1.5');
+    expect(trigger.className).not.toContain('min-h-11');
     expect(trigger).toHaveAttribute('aria-haspopup', 'menu');
+    expect(screen.getByText('CKB network')).toBeInTheDocument();
     expect(mainnet).toHaveAttribute('aria-current', 'page');
+    expect(mainnet).toHaveAttribute('aria-checked', 'true');
     expect(testnet).not.toHaveAttribute('aria-current');
+    expect(testnet).toHaveAttribute('aria-checked', 'false');
   });
 
   it('navigates to the same page under the chosen network prefix on selection', () => {
     render(<NetworkSwitcher />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Switch to testnet' }));
+    fireEvent.click(screen.getByRole('menuitemradio', { name: 'Switch to testnet' }));
 
     expect(pushMock).toHaveBeenCalledTimes(1);
     expect(pushMock).toHaveBeenCalledWith('/testnet/dao');
@@ -64,7 +71,7 @@ describe('NetworkSwitcher', () => {
     pathnameRef.current = '/';
     render(<NetworkSwitcher />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Switch to testnet' }));
+    fireEvent.click(screen.getByRole('menuitemradio', { name: 'Switch to testnet' }));
 
     expect(pushMock).toHaveBeenCalledWith('/testnet');
   });
