@@ -266,6 +266,13 @@ order. For each daily boundary it evaluates only the deposits still accruing
 at that day's AR, while frozen and claimed totals advance through lifecycle
 events.
 
+Live batches stage daily snapshots in the atomic domain write, then perform the
+same exact lifecycle calculation after the deposit mutations are committed. If
+a batch crosses a UTC+8 day boundary, the post-commit materialization finalizes
+every completed date at its own last block and AR before refreshing the current
+tip date. A completed day must never retain the pre-commit value carried from
+the preceding batch.
+
 ### 3.3 Treasury
 
 The explorer-compatible treasury series is derived directly from the on-chain
@@ -291,6 +298,8 @@ not part of `active_unmade`.
   `crates/indexer/src/sync/dao_helpers.rs`
 - Exact bulk compensation timeline:
   `crates/indexer/src/sync/bulk_build/owners/dao.rs`
+- Exact live post-commit materialization:
+  `crates/indexer/src/db/writer/statistics.rs`
 
 ## 4. Storage Schema (RocksDB)
 
@@ -311,7 +320,7 @@ DAO-related state is split across several CFs:
 | ------------------------------- | ---------------------------------- | ------------------------------------------------------------------------------------- |
 | Miner secondary issuance        | Every processed block              | `accumulate_secondary_issuance_deltas_from_csu()`                                     |
 | Bulk daily deposit compensation | Bulk final materialization         | `DaoCompensationTimeline`                                                             |
-| Latest deposit compensation     | After each live domain-store batch | `BatchWriter::refresh_latest_dao_statistics()`                                        |
+| Live daily deposit compensation | After each live domain-store batch | `BatchWriter::refresh_dao_statistics_after_batch()`                                   |
 | Reorg cutoff-date repair        | After partial-day rollback         | `CkbadgerStore::recompute_dao_daily_snapshot_for_date()` + `repair_cutoff_date_stats` |
 
 > **Note:** Estimated APC served by DAO APIs is derived from the latest `DaoDailySnapshot` + protocol constants, not from a periodically persisted `estimated_apc` field.

@@ -82,6 +82,31 @@ pub struct DaoSnapshotInput {
     pub protocol_deposited: Option<i128>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct DaoSnapshotBoundary {
+    pub(crate) date: NaiveDate,
+    pub(crate) end_block: i64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ExactDaoSnapshotCompensation {
+    breakdown: DaoCompensationBreakdown,
+    total: i128,
+    treasury: i128,
+    secondary_pool: i128,
+}
+
+impl ExactDaoSnapshotCompensation {
+    fn apply_to(self, snapshot: &mut DaoDailySnapshot) {
+        snapshot.compensation = self.breakdown.claimed;
+        snapshot.cum_dao_compensation = self.total;
+        snapshot.unclaimed_compensation = self.breakdown.unclaimed;
+        snapshot.unmade_dao_interests = self.breakdown.active_unmade;
+        snapshot.secondary_pool = self.secondary_pool;
+        snapshot.cum_treasury = self.treasury;
+    }
+}
+
 impl BatchWriter {
     pub fn update_hourly_statistics(
         &self,
@@ -883,7 +908,187 @@ impl BatchWriter {
         Ok(best.map(|(_, epoch_number, ts)| (epoch_number, ts)))
     }
 
+    fn exact_dao_snapshot_compensation(
+        &self,
+        observation_block: i64,
+        observation_ar: u64,
+        secondary_pool: i128,
+    ) -> Result<ExactDaoSnapshotCompensation> {
+        let breakdown = self
+            .store
+            .compute_dao_compensation_breakdown_at(observation_block, observation_ar)?;
+        let total = breakdown.total().ok_or_else(|| {
+            anyhow!(
+                "DAO total compensation overflow at observation block {}: claimed={}, unclaimed={}",
+                observation_block,
+                breakdown.claimed,
+                breakdown.unclaimed
+            )
+        })?;
+        let treasury = secondary_pool
+            .checked_sub(breakdown.active_unmade)
+            .ok_or_else(|| {
+                anyhow!(
+                    "DAO treasury subtraction overflow at observation block {}: secondary_pool={}, active_unmade={}",
+                    observation_block,
+                    secondary_pool,
+                    breakdown.active_unmade
+                )
+            })?;
+        if treasury < 0 {
+            bail!(
+                "active DAO interests exceed secondary pool at observation block {}: secondary_pool={}, active_unmade={}",
+                observation_block,
+                secondary_pool,
+                breakdown.active_unmade
+            );
+        }
+
+        Ok(ExactDaoSnapshotCompensation {
+            breakdown,
+            total,
+            treasury,
+            secondary_pool,
+        })
+    }
+
+    fn stage_completed_dao_snapshot(
+        &self,
+        boundary: DaoSnapshotBoundary,
+        tip_block_number: i64,
+        tip_date: NaiveDate,
+        batch: &mut StoreBatch,
+    ) -> Result<()> {
+        if boundary.date >= tip_date {
+            bail!(
+                "completed DAO snapshot boundary is not before tip date: boundary_date={}, tip_date={}, boundary_block={}, tip_block={}",
+                boundary.date,
+                tip_date,
+                boundary.end_block,
+                tip_block_number
+            );
+        }
+        if boundary.end_block < 0 || boundary.end_block >= tip_block_number {
+            bail!(
+                "invalid completed DAO snapshot boundary block: date={}, boundary_block={}, tip_block={}",
+                boundary.date,
+                boundary.end_block,
+                tip_block_number
+            );
+        }
+
+        let boundary_header = self
+            .store
+            .get_block_header(boundary.end_block)?
+            .ok_or_else(|| {
+                anyhow!(
+                    "missing completed DAO snapshot boundary header: date={}, block={}",
+                    boundary.date,
+                    boundary.end_block
+                )
+            })?;
+        let header_date = ckbadger_common::block_date_from_ms(boundary_header.timestamp);
+        if header_date != boundary.date {
+            bail!(
+                "completed DAO snapshot boundary date mismatch: expected_date={}, header_date={}, block={}, timestamp={}",
+                boundary.date,
+                header_date,
+                boundary.end_block,
+                boundary_header.timestamp
+            );
+        }
+
+        let next_block = boundary.end_block.checked_add(1).ok_or_else(|| {
+            anyhow!(
+                "completed DAO snapshot boundary block overflow: date={}, block={}",
+                boundary.date,
+                boundary.end_block
+            )
+        })?;
+        let next_header = self.store.get_block_header(next_block)?.ok_or_else(|| {
+            anyhow!(
+                "missing block after completed DAO snapshot boundary: date={}, boundary_block={}, next_block={}",
+                boundary.date,
+                boundary.end_block,
+                next_block
+            )
+        })?;
+        let next_date = ckbadger_common::block_date_from_ms(next_header.timestamp);
+        if next_date <= boundary.date {
+            bail!(
+                "DAO snapshot boundary is not the final block of its date: date={}, boundary_block={}, next_block={}, next_date={}",
+                boundary.date,
+                boundary.end_block,
+                next_block,
+                next_date
+            );
+        }
+
+        let boundary_ar = extract_ar_from_dao_field(&boundary_header.dao).ok_or_else(|| {
+            anyhow!(
+                "invalid DAO AR field at completed snapshot boundary: date={}, block={}, dao_len={}",
+                boundary.date,
+                boundary.end_block,
+                boundary_header.dao.len()
+            )
+        })?;
+        let boundary_s = extract_s_from_dao(&boundary_header.dao).ok_or_else(|| {
+            anyhow!(
+                "invalid DAO S field at completed snapshot boundary: date={}, block={}, dao_len={}",
+                boundary.date,
+                boundary.end_block,
+                boundary_header.dao.len()
+            )
+        })?;
+        let exact = self.exact_dao_snapshot_compensation(
+            boundary.end_block,
+            boundary_ar,
+            i128::from(boundary_s),
+        )?;
+
+        let date_key = boundary.date.format("%Y%m%d").to_string();
+        let mut snapshot = self
+            .store
+            .get_dao_daily_snapshot(&date_key)?
+            .ok_or_else(|| {
+                anyhow!(
+                    "missing completed DAO daily snapshot after batch commit: date={}, block={}",
+                    boundary.date,
+                    boundary.end_block
+                )
+            })?;
+        let expected_date = boundary.date.format("%Y-%m-%d").to_string();
+        if snapshot.date != expected_date {
+            bail!(
+                "completed DAO snapshot value date mismatch: key_date={}, value_date={}, block={}",
+                expected_date,
+                snapshot.date,
+                boundary.end_block
+            );
+        }
+        exact.apply_to(&mut snapshot);
+
+        let snapshot_key =
+            keys::encode_stats_key(keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT, date_key.as_bytes());
+        batch.put_stats(&snapshot_key, &bincode::serialize(&snapshot)?);
+        Ok(())
+    }
+
+    pub(crate) fn refresh_dao_statistics_after_batch(
+        &self,
+        completed_day_boundaries: &[DaoSnapshotBoundary],
+    ) -> Result<()> {
+        self.refresh_dao_statistics(completed_day_boundaries)
+    }
+
     pub fn refresh_latest_dao_statistics(&self) -> Result<()> {
+        self.refresh_dao_statistics(&[])
+    }
+
+    fn refresh_dao_statistics(
+        &self,
+        completed_day_boundaries: &[DaoSnapshotBoundary],
+    ) -> Result<()> {
         let Some((tip_block_number, header)) = self.store.get_sync_tip_block()? else {
             return Ok(());
         };
@@ -896,6 +1101,7 @@ impl BatchWriter {
             )
         })?;
         let tip_timestamp = header.timestamp;
+        let tip_date = ckbadger_common::block_date_from_ms(tip_timestamp);
         let tip_s = extract_s_from_dao(&header.dao).ok_or_else(|| {
             anyhow!(
                 "invalid DAO S field in sync tip block while refreshing latest dao statistics: block_number={}, dao_len={}",
@@ -953,20 +1159,11 @@ impl BatchWriter {
                 })?;
         }
 
-        let compensation = self
-            .store
-            .compute_dao_compensation_breakdown_at(tip_block_number, tip_ar)?;
-        let total_compensation_paid = compensation.claimed;
-        let unclaimed_compensation = compensation.unclaimed;
-        let unmade_active_compensation = compensation.active_unmade;
-        let deposit_compensation_total = compensation.total().ok_or_else(|| {
-            anyhow!(
-                "DAO total compensation overflow at tip block {}: claimed={}, unclaimed={}",
-                tip_block_number,
-                compensation.claimed,
-                compensation.unclaimed
-            )
-        })?;
+        let exact_tip =
+            self.exact_dao_snapshot_compensation(tip_block_number, tip_ar, i128::from(tip_s))?;
+        let total_compensation_paid = exact_tip.breakdown.claimed;
+        let unclaimed_compensation = exact_tip.breakdown.unclaimed;
+        let deposit_compensation_total = exact_tip.total;
 
         // Resolve status-1 deposit timestamps from block headers for capacity-weighted average.
         for &(capacity, deposit_ts, request_block) in &status1_for_avg {
@@ -1003,14 +1200,7 @@ impl BatchWriter {
                 latest_snapshot.cum_miner_secondary
             );
         }
-        // Use tip S-field and live unmade computation for explorer-compatible treasury.
-        let burnt = tip_s as i128 - unmade_active_compensation;
-        if burnt < 0 {
-            bail!(
-                "negative treasury_from_s in latest dao statistics: tip_s={}, unmade_active_compensation={}, block={}",
-                tip_s, unmade_active_compensation, tip_block_number
-            );
-        }
+        let burnt = exact_tip.treasury;
         let mining_reward = latest_snapshot.cum_miner_secondary;
         let deposit_compensation = deposit_compensation_total;
 
@@ -1037,6 +1227,24 @@ impl BatchWriter {
 
         // Batch all DAO stats writes atomically
         let mut dao_batch = StoreBatch::new(&self.store);
+
+        let mut previous_boundary_date = None;
+        for boundary in completed_day_boundaries {
+            if previous_boundary_date.is_some_and(|previous| boundary.date <= previous) {
+                bail!(
+                    "completed DAO snapshot boundaries must be strictly chronological: previous={:?}, current={}",
+                    previous_boundary_date,
+                    boundary.date
+                );
+            }
+            self.stage_completed_dao_snapshot(
+                *boundary,
+                tip_block_number,
+                tip_date,
+                &mut dao_batch,
+            )?;
+            previous_boundary_date = Some(boundary.date);
+        }
 
         let key = keys::encode_stats_key(keys::STATS_PREFIX_DAO_LATEST_STATS, b"latest");
         let value = bincode::serialize(&latest)?;
@@ -1078,12 +1286,7 @@ impl BatchWriter {
         // state. Snapshot construction runs before the domain batch commits, so
         // these exact AR-based values would otherwise lag by one live batch.
         let mut today_snapshot = latest_snapshot;
-        today_snapshot.compensation = total_compensation_paid;
-        today_snapshot.cum_dao_compensation = deposit_compensation_total;
-        today_snapshot.unclaimed_compensation = unclaimed_compensation;
-        today_snapshot.unmade_dao_interests = unmade_active_compensation;
-        today_snapshot.secondary_pool = tip_s as i128;
-        today_snapshot.cum_treasury = burnt;
+        exact_tip.apply_to(&mut today_snapshot);
         let date_key = today_snapshot.date.replace('-', "");
         let snap_key =
             keys::encode_stats_key(keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT, date_key.as_bytes());
@@ -1406,6 +1609,119 @@ mod tests {
         assert_eq!(patched_snapshot.cum_dao_compensation, 296_00000000);
         assert_eq!(patched_snapshot.unmade_dao_interests, 98_00000000);
         assert_eq!(patched_snapshot.secondary_pool, 130_00000000); // tip_s
+    }
+
+    #[test]
+    fn test_cross_day_refresh_finalizes_previous_snapshot_exactly() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        seed_test_genesis_baseline(&store);
+        let writer = BatchWriter::new(store.clone(), store.clone());
+
+        let previous_date = NaiveDate::from_ymd_opt(2026, 7, 24).unwrap();
+        let tip_date = previous_date + Duration::days(1);
+        let previous_timestamp = DateTime::parse_from_rfc3339("2026-07-24T15:59:59Z")
+            .unwrap()
+            .timestamp_millis();
+        let tip_timestamp = DateTime::parse_from_rfc3339("2026-07-24T16:00:08Z")
+            .unwrap()
+            .timestamp_millis();
+
+        let dao_field = |ar: u64, secondary_pool: u64| {
+            let mut dao = vec![0u8; 32];
+            dao[8..16].copy_from_slice(&ar.to_le_bytes());
+            dao[16..24].copy_from_slice(&secondary_pool.to_le_bytes());
+            dao
+        };
+        let header = |number: i64, timestamp: i64, dao: Vec<u8>| CachedBlockHeader {
+            hash: vec![u8::try_from(number).unwrap(); 32],
+            parent_hash: vec![0u8; 32],
+            timestamp,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao,
+            transactions_count: 1,
+            uncles_count: 0,
+            cycles: None,
+        };
+        let snapshot = |date: NaiveDate| DaoDailySnapshot {
+            date: date.format("%Y-%m-%d").to_string(),
+            total_deposited: 202_00000000,
+            depositors_count: 1,
+            new_deposits: 1,
+            withdrawals: 0,
+            compensation: 0,
+            cumulative_deposit_amount: 202_00000000,
+            total_issuance: 9_000_000_000i128 * 100_000_000i128,
+            secondary_pool: 0,
+            occupied_capacity: 0,
+            cum_miner_secondary: 0,
+            cum_dao_compensation: 0,
+            cum_treasury: 0,
+            unclaimed_compensation: 0,
+            unmade_dao_interests: 0,
+            cumulative_depositors: 1,
+            daily_depositor_addresses: 0,
+            protocol_deposited: Some(202_00000000),
+        };
+
+        let mut seed = StoreBatch::new(&store);
+        seed.put_block_header(
+            10,
+            &header(10, previous_timestamp, dao_field(200, 300_00000000)),
+        );
+        seed.put_block_header(11, &header(11, tip_timestamp, dao_field(300, 500_00000000)));
+        seed.put_dao_deposit(
+            &keys::encode_outpoint(&[0xAA; 32], 0),
+            &DaoDepositCacheEntry {
+                capacity: 202_00000000,
+                occupied_capacity: 102_00000000,
+                deposit_block_number: 1,
+                deposit_timestamp: previous_timestamp - 86_400_000,
+                lock_script_hash: vec![0x01; 32],
+                deposit_ar: 100,
+                status: 0,
+                withdraw_request_tx: None,
+                withdraw_request_output_index: None,
+                withdraw_request_block: None,
+                withdraw_request_ar: None,
+                withdraw_block: None,
+                withdraw_tx: None,
+                withdraw_to_output_index: None,
+                compensation: None,
+            },
+        );
+        for date in [previous_date, tip_date] {
+            let key = keys::encode_stats_key(
+                keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT,
+                date.format("%Y%m%d").to_string().as_bytes(),
+            );
+            seed.put_stats(&key, &bincode::serialize(&snapshot(date)).unwrap());
+        }
+        seed.commit().unwrap();
+
+        writer
+            .refresh_dao_statistics_after_batch(&[DaoSnapshotBoundary {
+                date: previous_date,
+                end_block: 10,
+            }])
+            .unwrap();
+
+        let previous = store.get_dao_daily_snapshot("20260724").unwrap().unwrap();
+        assert_eq!(
+            previous.cum_dao_compensation, 100_00000000,
+            "the completed day must be recomputed at its own end block and AR"
+        );
+        assert_eq!(previous.unclaimed_compensation, 100_00000000);
+        assert_eq!(previous.unmade_dao_interests, 100_00000000);
+        assert_eq!(previous.cum_treasury, 200_00000000);
+
+        let latest = store.get_dao_daily_snapshot("20260725").unwrap().unwrap();
+        assert_eq!(
+            latest.cum_dao_compensation, 200_00000000,
+            "the current day must still be refreshed at the live tip"
+        );
     }
 
     #[test]

@@ -1382,4 +1382,49 @@ backfill or patch the old aggregates.
 
 ---
 
-_Last updated: 2026-07-24_
+### DAO-026: Cross-day live batch left completed compensation snapshot stale
+
+**Date**: 2026-07-25
+
+**Symptom**: Mainnet `explorer_deposit_compensation` failed only for the most
+recent completed day. The 2026-07-23→2026-07-24 change was short by about
+7,836.9 CKB. Reading the domain store showed a persisted July 24 cumulative
+value of `155184037017868168`; exact lifecycle recomputation at that day's last
+block produced `155184820689222572`.
+
+**Root cause**:
+
+1. Live snapshot construction shares the atomic domain batch with DAO lifecycle
+   mutations, so compensation fields are intentionally staged from the
+   pre-commit lifecycle state.
+2. After the domain batch committed, `refresh_latest_dao_statistics` replaced
+   the staged fields only in the lexicographically latest daily snapshot.
+3. When one live batch crossed the UTC+8 day boundary, the batch wrote both the
+   just-completed date and the new current date. The post-commit refresh fixed
+   only the new date, permanently leaving the completed date at the preceding
+   batch's cumulative compensation.
+
+**Fix**:
+
+- Carry every completed date and its last block from the live batch into the
+  post-commit DAO refresh.
+- Validate each boundary against the canonical block header and the first block
+  of the following date, then run the one exact per-deposit lifecycle
+  calculation at that boundary's AR.
+- Materialize completed-date and live-tip compensation fields together in one
+  domain-store DAO statistics batch.
+- Keep bulk materialization and append-only storage unchanged.
+
+**Tests Added**:
+
+- Cross-day regression proving the completed snapshot is evaluated at its own
+  final block/AR while the current snapshot is evaluated at the live tip.
+- Boundary-selection and missing-end-block fail-fast tests.
+
+**Re-sync required**: Yes. A completed daily snapshot already written by the
+old live path remains incorrect. Fix the indexer, purge the chain stores, and
+sync from genesis; do not add a repair/backfill workflow.
+
+---
+
+_Last updated: 2026-07-25_

@@ -21,6 +21,7 @@ use ckbadger_store::CkbadgerStore;
 
 use crate::db::writer::dotbit::resolve_dotbit_tx_activity;
 use crate::db::writer::object_activity_acc::ObjectCollectionActivityAccumulator;
+use crate::db::writer::DaoSnapshotBoundary;
 use crate::db::{BatchWriter, DaoWithdrawalContext};
 use crate::parser::{
     BitCellParser, BlockParser, CellParser, DaoParser, DotbitParser, MnftParser, ScriptParser,
@@ -969,6 +970,27 @@ pub(super) fn load_latest_dao_daily_snapshot(
     store
         .get_latest_dao_daily_snapshot()
         .context("failed to get latest dao daily snapshot while building cumulative snapshot")
+}
+
+fn completed_dao_snapshot_boundaries(stats: &BatchStats) -> Result<Vec<DaoSnapshotBoundary>> {
+    let mut dates = stats.dao_snapshot_dates.iter().copied().collect::<Vec<_>>();
+    dates.sort_unstable();
+    dates.pop();
+
+    dates
+        .into_iter()
+        .map(|date| {
+            let end_block = stats
+                .dao_block_numbers_by_date
+                .get(&date)
+                .and_then(|blocks| blocks.iter().max())
+                .copied()
+                .ok_or_else(|| {
+                    anyhow!("missing end block for completed DAO snapshot date {}", date)
+                })?;
+            Ok(DaoSnapshotBoundary { date, end_block })
+        })
+        .collect()
 }
 
 fn collect_committed_proposal_ids(txs: &[TxData]) -> Vec<String> {
@@ -3497,7 +3519,9 @@ impl Indexer {
         if let Some((block_number, ref block_hash)) = batch_stats.last_block {
             let ema_rate = self.progress.ema_blocks_per_second();
             let ema_rate_opt = if ema_rate > 0.0 { Some(ema_rate) } else { None };
-            self.writer.refresh_latest_dao_statistics()?;
+            let completed_dao_boundaries = completed_dao_snapshot_boundaries(&batch_stats)?;
+            self.writer
+                .refresh_dao_statistics_after_batch(&completed_dao_boundaries)?;
             if let Some(cache) = self.writer.cache_invalidator() {
                 let hash_hex = format!("0x{}", hex::encode(block_hash));
                 cache
@@ -3831,8 +3855,9 @@ impl Indexer {
                         total_deposit_count: running_total_deposit_count,
                         total_withdrawal_count: running_total_withdrawal_count,
                         // The exact lifecycle totals require the DAO entries
-                        // committed in this batch. refresh_latest_dao_statistics
-                        // replaces these staged values immediately post-commit.
+                        // committed in this batch. The post-commit DAO refresh
+                        // replaces these staged values for every finalized
+                        // boundary and the live tip.
                         total_compensation: staged_cum_dao,
                         cumulative_deposit_amount: running_cumulative_deposit_amount,
                         total_issuance,
@@ -4614,6 +4639,50 @@ mod tests {
         assert!(err.to_string().contains(
             "failed to get latest dao daily snapshot while building cumulative snapshot"
         ));
+    }
+
+    #[test]
+    fn test_completed_dao_snapshot_boundaries_selects_prior_dates() {
+        let first = chrono::NaiveDate::from_ymd_opt(2026, 7, 23).unwrap();
+        let second = first + chrono::Duration::days(1);
+        let latest = second + chrono::Duration::days(1);
+        let mut stats = BatchStats::default();
+        stats.dao_snapshot_dates.extend([latest, first, second]);
+        stats
+            .dao_block_numbers_by_date
+            .insert(first, vec![100, 101]);
+        stats
+            .dao_block_numbers_by_date
+            .insert(second, vec![102, 103]);
+        stats.dao_block_numbers_by_date.insert(latest, vec![104]);
+
+        assert_eq!(
+            completed_dao_snapshot_boundaries(&stats).unwrap(),
+            vec![
+                DaoSnapshotBoundary {
+                    date: first,
+                    end_block: 101,
+                },
+                DaoSnapshotBoundary {
+                    date: second,
+                    end_block: 103,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn test_completed_dao_snapshot_boundaries_require_end_block() {
+        let completed = chrono::NaiveDate::from_ymd_opt(2026, 7, 24).unwrap();
+        let latest = completed + chrono::Duration::days(1);
+        let mut stats = BatchStats::default();
+        stats.dao_snapshot_dates.extend([completed, latest]);
+        stats.dao_block_numbers_by_date.insert(latest, vec![104]);
+
+        let error = completed_dao_snapshot_boundaries(&stats).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("missing end block for completed DAO snapshot date 2026-07-24"));
     }
 
     #[test]
