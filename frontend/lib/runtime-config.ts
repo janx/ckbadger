@@ -29,6 +29,23 @@ function runtimeConfigFromWindow(): CkbadgerRuntimeConfig | undefined {
   return window.__CKBADGER_RUNTIME_CONFIG__;
 }
 
+/**
+ * Seed the same multi-network contract that the shared frontend server emits
+ * when the SPA is run directly through Vite. The real server config always wins.
+ */
+export function installDevelopmentRuntimeConfig(target: Window = window): void {
+  if (target.__CKBADGER_RUNTIME_CONFIG__) {
+    return;
+  }
+
+  target.__CKBADGER_RUNTIME_CONFIG__ = {
+    networks: [{ name: 'mainnet' }, { name: 'testnet' }],
+    defaultNetwork: 'mainnet',
+    apiBasePattern: '/api/{network}/v1',
+    wsUrlPattern: '/ws/{network}',
+  };
+}
+
 function trimTrailingSlash(value: string): string {
   return value.replace(/\/+$/, '');
 }

@@ -38,22 +38,20 @@ describe('NetworkSwitcher', () => {
     delete window.__CKBADGER_RUNTIME_CONFIG__;
   });
 
-  it('renders one button per live network and marks the active one', () => {
+  it('renders the active network as a navbar dropdown trigger', () => {
     render(<NetworkSwitcher />);
 
+    const trigger = screen.getByRole('button', { name: 'Select network' });
     const mainnet = screen.getByRole('button', { name: 'Switch to mainnet' });
     const testnet = screen.getByRole('button', { name: 'Switch to testnet' });
 
-    expect(mainnet).toBeInTheDocument();
-    expect(testnet).toBeInTheDocument();
-    // Active network carries the distinguishing marker + active style.
+    expect(trigger).toHaveTextContent('mainnet');
+    expect(trigger).toHaveAttribute('aria-haspopup', 'menu');
     expect(mainnet).toHaveAttribute('aria-current', 'page');
     expect(testnet).not.toHaveAttribute('aria-current');
-    expect(mainnet.className).toContain('text-jade');
-    expect(testnet.className).not.toContain('text-jade');
   });
 
-  it('navigates to the same page under the chosen network prefix on click', () => {
+  it('navigates to the same page under the chosen network prefix on selection', () => {
     render(<NetworkSwitcher />);
 
     fireEvent.click(screen.getByRole('button', { name: 'Switch to testnet' }));

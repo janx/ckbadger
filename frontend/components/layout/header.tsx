@@ -7,8 +7,19 @@ import { CommandPalette } from '@/components/command-palette';
 import { SearchBar } from '@/components/search-bar';
 import { Logo } from '@/components/layout/logo';
 import { NetworkSwitcher } from '@/components/layout/network-switcher';
+import {
+  NAVBAR_DROPDOWN_ITEM_ACTIVE_CLASS,
+  NAVBAR_DROPDOWN_ITEM_CLASS,
+  NAVBAR_DROPDOWN_ITEM_DEFAULT_CLASS,
+  NAVBAR_DROPDOWN_PANEL_CLASS,
+  NAVBAR_DROPDOWN_POPOVER_CLASS,
+  NAVBAR_DROPDOWN_TRIGGER_ACTIVE_CLASS,
+  NAVBAR_DROPDOWN_TRIGGER_CLASS,
+  NAVBAR_DROPDOWN_TRIGGER_DEFAULT_CLASS,
+} from '@/components/layout/navbar-dropdown-styles';
 import { GlobalStatsBar } from '@/components/stats-bar';
 import { useHomeScrollStore } from '@/hooks/useHomeScrollStore';
+import { cn } from '@/lib/utils';
 
 interface NavLink {
   href: string;
@@ -79,16 +90,18 @@ export function Header() {
         />
 
         <nav className="relative z-10 hidden shrink-0 items-center gap-0.5 md:flex">
+          <NetworkSwitcher />
           {navItems.map((item) =>
             isDropdown(item) ? (
               <div key={item.label} className="group relative">
                 <button
                   type="button"
-                  className={`flex items-center gap-1 rounded-md border px-2 py-1.5 font-mono text-xs uppercase tracking-[0.12em] transition ${
+                  className={cn(
+                    NAVBAR_DROPDOWN_TRIGGER_CLASS,
                     isDropdownActive(item)
-                      ? 'border-jade/40 bg-jade/8 text-jade'
-                      : 'text-text hover:text-jade hover:border-jade/20 border-transparent'
-                  }`}
+                      ? NAVBAR_DROPDOWN_TRIGGER_ACTIVE_CLASS
+                      : NAVBAR_DROPDOWN_TRIGGER_DEFAULT_CLASS
+                  )}
                 >
                   {item.label}
                   <svg
@@ -105,17 +118,18 @@ export function Header() {
                     />
                   </svg>
                 </button>
-                <div className="invisible absolute left-0 top-full pt-1 opacity-0 transition-all group-focus-within:visible group-focus-within:opacity-100 group-hover:visible group-hover:opacity-100">
-                  <div className="border-base-border bg-base-surface min-w-[10rem] rounded-md border py-1 shadow-lg">
+                <div className={NAVBAR_DROPDOWN_POPOVER_CLASS}>
+                  <div className={NAVBAR_DROPDOWN_PANEL_CLASS}>
                     {item.children.map((child) => (
                       <Link
                         key={child.href}
                         href={child.href}
-                        className={`block px-4 py-2 font-mono text-xs uppercase tracking-[0.12em] transition-colors ${
+                        className={cn(
+                          NAVBAR_DROPDOWN_ITEM_CLASS,
                           isLinkActive(child.href)
-                            ? 'text-jade bg-jade/8'
-                            : 'text-text hover:text-jade hover:bg-base-elevated/50'
-                        }`}
+                            ? NAVBAR_DROPDOWN_ITEM_ACTIVE_CLASS
+                            : NAVBAR_DROPDOWN_ITEM_DEFAULT_CLASS
+                        )}
                       >
                         {child.label}
                       </Link>
@@ -174,7 +188,6 @@ export function Header() {
         </div>
 
         <div className="flex min-w-0 flex-1 items-center justify-end gap-3">
-          <NetworkSwitcher />
           <div className="w-full max-w-[clamp(18rem,36vw,36rem)]">
             <SearchBar variant="compact" />
           </div>
@@ -211,6 +224,7 @@ export function Header() {
               >
                 Home
               </Link>
+              <NetworkSwitcher className="mb-1 w-full" onSwitch={() => setIsMenuOpen(false)} />
               {navItems.map((item) =>
                 isDropdown(item) ? (
                   <div key={item.label} className="flex flex-col">

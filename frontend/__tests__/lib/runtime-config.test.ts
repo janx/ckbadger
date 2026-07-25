@@ -4,6 +4,7 @@ import {
   DEFAULT_CKB_NETWORK,
   DEFAULT_CKB_RPC_URL,
   DEFAULT_WS_URL,
+  installDevelopmentRuntimeConfig,
   resolveApiBase,
   resolveApiBasePattern,
   resolveBuildVersion,
@@ -69,6 +70,30 @@ describe('runtime network resolvers', () => {
     expect(resolveDefaultNetwork()).toBe('mainnet');
     expect(resolveApiBasePattern()).toBe('/api/{network}/v1');
     expect(resolveWsUrlPattern()).toBe('/ws/{network}');
+  });
+
+  it('installs mainnet and testnet defaults for the Vite development entrypoint', () => {
+    delete window.__CKBADGER_RUNTIME_CONFIG__;
+
+    installDevelopmentRuntimeConfig();
+
+    expect(resolveNetworks()).toEqual(['mainnet', 'testnet']);
+    expect(resolveDefaultNetwork()).toBe('mainnet');
+    expect(resolveApiBasePattern()).toBe('/api/{network}/v1');
+    expect(resolveWsUrlPattern()).toBe('/ws/{network}');
+  });
+
+  it('does not overwrite runtime config supplied by the frontend server', () => {
+    const runtimeConfig = {
+      networks: [{ name: 'testnet' }],
+      defaultNetwork: 'testnet',
+    };
+    window.__CKBADGER_RUNTIME_CONFIG__ = runtimeConfig;
+
+    installDevelopmentRuntimeConfig();
+
+    expect(window.__CKBADGER_RUNTIME_CONFIG__).toBe(runtimeConfig);
+    expect(resolveNetworks()).toEqual(['testnet']);
   });
 
   it('defaultNetwork falls back to the first configured network when unset', () => {

@@ -110,7 +110,7 @@ describe('Header', () => {
     expect(screen.getAllByRole('link', { name: 'DAO' })).toHaveLength(1);
   });
 
-  it('mounts the network switcher when multiple networks are live', () => {
+  it('places the network dropdown immediately before the DAO link in the navbar', () => {
     usePathnameMock.mockReturnValue('/');
     window.__CKBADGER_RUNTIME_CONFIG__ = {
       networks: [{ name: 'mainnet' }, { name: 'testnet' }],
@@ -118,8 +118,13 @@ describe('Header', () => {
     };
     render(<Header />);
 
-    expect(screen.getByTestId('network-switcher')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Switch to testnet' })).toBeInTheDocument();
+    const switcher = screen.getByTestId('network-switcher');
+    const daoLink = screen.getAllByRole('link', { name: 'DAO' })[0];
+    const networkTrigger = screen.getByRole('button', { name: 'Select network' });
+    const inventoryTrigger = screen.getByRole('button', { name: 'Inventory' });
+
+    expect(networkTrigger.className).toBe(inventoryTrigger.className);
+    expect(switcher.nextElementSibling).toBe(daoLink);
   });
 
   it('hides the network switcher for single-network deployments', () => {
