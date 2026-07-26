@@ -423,7 +423,11 @@ fn build_capabilities_json(origin: &str) -> String {
         "origin": origin,
         "site": {
             "name": "ckbadger",
-            "apiBase": "/api/v1"
+            "pageBasePattern": "/{network}",
+            "apiBasePattern": "/api/{network}/v1",
+            "directApiBase": "/api/v1",
+            "wsUrlPattern": "/ws/{network}",
+            "directWsUrl": "/ws"
         },
         "formatNegotiation": {
             "priority": ["query.format", "path.suffix", "accept.header"],
@@ -470,7 +474,7 @@ fn build_capabilities_json(origin: &str) -> String {
                 "/charts", "/charts/{slug}",
                 "/classes/{classId}", "/clusters/{clusterId}",
                 "/dao", "/dao/charts",
-                "/forks", "/forks/{id}", "/hardforks",
+                "/forks", "/forks/{id}", "/hardforks", "/network",
                 "/identities/{collectionId}",
                 "/identities/dotbit/{identityId}", "/identities/did/{identityId}",
                 "/objects", "/objects/{sporeId}", "/objects/mnft/{objectId}",
@@ -927,8 +931,21 @@ mod tests {
 
         assert_eq!(json["origin"], "http://localhost:8100");
         assert_eq!(json["site"]["name"], "ckbadger");
-        assert_eq!(json["site"]["apiBase"], "/api/v1");
+        assert_eq!(json["site"]["pageBasePattern"], "/{network}");
+        assert_eq!(json["site"]["apiBasePattern"], "/api/{network}/v1");
+        assert_eq!(json["site"]["directApiBase"], "/api/v1");
+        assert_eq!(json["site"]["wsUrlPattern"], "/ws/{network}");
+        assert_eq!(json["site"]["directWsUrl"], "/ws");
+        assert!(json["site"].get("apiBase").is_none());
         assert!(json["routes"]["markdown"].as_array().unwrap().len() > 20);
+        assert!(
+            json["routes"]["markdown"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|route| route == "/network"),
+            "Rust capabilities route matrix must advertise the network page"
+        );
         assert!(!json["routes"]["raw"].as_array().unwrap().is_empty());
         assert_eq!(
             json["formatNegotiation"]["raw"]["accept"],

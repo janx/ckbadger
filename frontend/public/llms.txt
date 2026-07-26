@@ -1,41 +1,50 @@
 # ckbadger
 
- ckbadger is a CKB blockchain explorer.
+ckbadger is a CKB blockchain explorer.
 
 Primary markdown rule:
 
-- Append `.md` to any page URL to get a markdown representation.
+- Explorer pages are scoped by network: `/{network}/...`.
+- Append `.md` to a network-scoped page URL to get a markdown representation.
 - Markdown frontmatter includes `buildVersion`.
-- Example: `/blocks/123.md`, `/tx/0x....md`, `/charts/hash-rate.md`.
+- Example: `/mainnet/blocks/123.md`, `/testnet/tx/0x....md`,
+  `/mainnet/charts/hash-rate.md`.
 
 Machine-friendly endpoints:
 
-- API base: `/api/v1`
-- Markdown pages: `/{page}.md`
-- Raw pages: `/{page}.raw`
+- Shared API base: `/api/{network}/v1`
+- Direct per-network API base: `/api/v1` on that API's configured port
+- Markdown pages: `/{network}/{page}.md`
+- Raw pages: `/{network}/{page}.raw`
   - Optional profile: `?profile=default|debugger`
-  - Example: `/tx/0x....raw?profile=debugger`
-  - Example: `/identities/dotbit/{identityId}.raw`
-  - Example: `/identities/did/{identityId}.raw`
-  - Example: `/objects/mnft/{objectId}.raw`
+  - Example: `/mainnet/tx/0x....raw?profile=debugger`
+  - Example: `/mainnet/identities/dotbit/{identityId}.raw`
+  - Example: `/testnet/identities/did/{identityId}.raw`
+  - Example: `/mainnet/objects/mnft/{objectId}.raw`
   - `profile=debugger` returns `mockTransaction` for `ckb-debugger --tx-file`
   - `/tx/{hash}.raw` also includes `data.txWitness` (witness analyses + inference)
   - Raw response `meta` includes `buildVersion`
   - Raw response headers: `x-ckbadger-format`, `x-ckbadger-profile`, `x-ckbadger-schema`
 - Capability descriptor: `/capabilities` (JSON)
 
-Core page groups:
+Core page groups below are relative to `/{network}`:
 
+- `/activities`
 - `/blocks`, `/blocks/{id}`
 - `/transactions`, `/tx/{hash}`
 - `/address/{addr}`, `/cell/{txHash-outputIndex}`
 - `/tokens`, `/tokens/{typeHash}`
 - `/inventory/tokens`, `/inventory/objects`, `/inventory/identities`
-- `/objects/{sporeId}`, `/identities/dotbit/{identityId}`, `/identities/did/{identityId}`, `/objects/mnft/{objectId}`
+- `/objects`, `/objects/{sporeId}`, `/objects/mnft/{objectId}`
+- `/clusters/{clusterId}`, `/classes/{classId}`
+- `/identities/{collectionId}`, `/identities/dotbit/{identityId}`,
+  `/identities/did/{identityId}`
 - `/scripts`, `/scripts/{name}`, `/script/{codeHash}`
 - `/dao`, `/dao/charts`
+- `/fiber/channels`, `/fiber/channels/{channelId}`
 - `/charts`, `/charts/{slug}`
 - `/forks`, `/forks/{id}`
 - `/hardforks`
+- `/network`
 
 For a fuller capability map see: `/llms-full.txt`

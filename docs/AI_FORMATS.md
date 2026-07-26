@@ -6,6 +6,9 @@ Frontend pages support two machine-oriented formats alongside the default HTML:
 - `raw` — structured payloads for tooling/automation
 - Both carry `buildVersion` in structured metadata (`.md` frontmatter, `.raw` meta)
 
+Explorer page URLs are network-scoped: `/{network}/...` (for example `/mainnet/blocks`). Route
+patterns in capabilities/discovery documents may be written relative to that network prefix.
+
 ## Format Negotiation
 
 Priority order (strict):
@@ -16,13 +19,13 @@ Priority order (strict):
 
 ### Markdown Output
 
-1. URL suffix `.md` (e.g. `/blocks/123.md`)
+1. URL suffix `.md` (e.g. `/mainnet/blocks/123.md`)
 2. Query parameter `?format=md`
 3. Header `Accept: text/markdown`
 
 ### Raw Output
 
-1. URL suffix `.raw` (e.g. `/blocks/123.raw`)
+1. URL suffix `.raw` (e.g. `/mainnet/blocks/123.raw`)
 2. Query parameter `?format=raw`
 3. Header `Accept: application/vnd.ckbadger.raw+json`
 
@@ -38,22 +41,32 @@ Priority order (strict):
 - `frontend/public/llms-full.txt` — full discovery doc
 - `http://localhost:8100/capabilities` — machine-readable format/profile/route matrix
 
+`/capabilities.site` advertises `pageBasePattern`, shared `apiBasePattern`/`wsUrlPattern`, and the
+direct per-network `directApiBase`/`directWsUrl`. Its page route matrices are relative to
+`pageBasePattern`.
+
 ## Examples
 
 ```bash
+NETWORK=mainnet
+
 # Markdown
-curl http://localhost:8100/blocks.md
-curl "http://localhost:8100/blocks?format=md&limit=20"
-curl -H "Accept: text/markdown" http://localhost:8100/charts/hash-rate
+curl "http://localhost:8100/${NETWORK}/blocks.md"
+curl "http://localhost:8100/${NETWORK}/blocks?format=md&limit=20"
+curl -H "Accept: text/markdown" "http://localhost:8100/${NETWORK}/charts/hash-rate"
 
 # Raw (default profile)
-curl http://localhost:8100/blocks/123.raw
-curl "http://localhost:8100/cell/0x...txhash...-0?format=raw"
-curl -H "Accept: application/vnd.ckbadger.raw+json" http://localhost:8100/tx/0x...hash...
+curl "http://localhost:8100/${NETWORK}/blocks/123.raw"
+curl "http://localhost:8100/${NETWORK}/cell/0x...txhash...-0?format=raw"
+curl -H "Accept: application/vnd.ckbadger.raw+json" \
+  "http://localhost:8100/${NETWORK}/tx/0x...hash..."
 
 # Raw debugger profile (tx only)
-curl "http://localhost:8100/tx/0x...hash....raw?profile=debugger" \
+curl "http://localhost:8100/${NETWORK}/tx/0x...hash....raw?profile=debugger" \
   | jq '.data.txDebugger.mockTransaction'
+
+# Structured API through the shared network-aware proxy
+curl "http://localhost:8100/api/${NETWORK}/v1/statistics/network"
 
 # Capabilities
 curl http://localhost:8100/capabilities
@@ -63,7 +76,8 @@ curl http://localhost:8100/capabilities
 
 ```bash
 TX_HASH=0x...replace_with_real_tx_hash...
-curl "http://localhost:8100/tx/${TX_HASH}.raw?profile=debugger" \
+NETWORK=mainnet
+curl "http://localhost:8100/${NETWORK}/tx/${TX_HASH}.raw?profile=debugger" \
   | jq '.data.txDebugger.mockTransaction' > /tmp/mock_tx.json
 
 ckb-debugger \
@@ -83,20 +97,22 @@ ckb-debugger \
 
 ```bash
 # Full matrix: script-group-type (lock/type) x cell-type (input/output) x all indices
-scripts/run_tx_debugger_matrix.sh 0x...tx_hash...
+scripts/run_tx_debugger_matrix.sh 0x...tx_hash... http://localhost:8100/mainnet
 
 # Focused iteration
 SCRIPT_GROUP_TYPES="lock" CELL_TYPES="input" \
-  scripts/run_tx_debugger_matrix.sh 0x...tx_hash...
+  scripts/run_tx_debugger_matrix.sh 0x...tx_hash... http://localhost:8100/mainnet
 
 # Keep running after a failing combination
-CONTINUE_ON_ERROR=1 scripts/run_tx_debugger_matrix.sh 0x...tx_hash...
+CONTINUE_ON_ERROR=1 \
+  scripts/run_tx_debugger_matrix.sh 0x...tx_hash... http://localhost:8100/mainnet
 ```
 
 ## Implementation Boundary
 
 - Markdown/raw output is handled in frontend only (Vite SPA middleware)
-- API JSON endpoints under `/api/v1` are not rewritten to markdown/raw
+- Direct API JSON under `/api/v1` and shared-proxy JSON under `/api/{network}/v1` are not
+  rewritten to markdown/raw
 - Static files are not rewritten
 - Raw responses include `x-ckbadger-format`, `x-ckbadger-profile`, and `x-ckbadger-schema`
 

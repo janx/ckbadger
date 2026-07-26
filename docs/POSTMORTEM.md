@@ -646,23 +646,23 @@ Test by wiping database and re-syncing from genesis.
 
 ## Quick Reference: Common Pitfalls
 
-| Area        | Pitfall                             | Prevention                                               |
-| ----------- | ----------------------------------- | -------------------------------------------------------- |
-| CKB Scripts | Confusing code_hash vs script_hash  | code_hash = script type, script_hash = instance identity |
-| CKB Scripts | Hardcoded hashes                    | Verify against chain, reference RFC-0024                 |
-| DAO         | Multi-phase tracking                | Map full lifecycle before implementing                   |
-| DAO         | Compensation formula                | Follow RFC-0023 exactly, use free_capacity               |
-| DAO         | DAO field parsing                   | 32 bytes, 4 x u64 LE, check byte offsets                 |
-| DAO         | APC calculation                     | Estimated = issuance/supply; Nominal = AR growth         |
-| DAO         | Point-in-time aggregations          | Filter out withdrawn deposits for historical snapshots   |
-| DAO         | Phase 2 withdrawal lookup           | Match by `withdraw_request_tx`, not `tx_hash`            |
-| Supply      | Using total_issuance as circulating | Subtract 8.4B genesis burnt + secondary burnt            |
-| Supply      | Confusing issuance vs circulating   | Read `docs/DAO_CALCULATIONS.md` supply model             |
-| Indexer     | Fields not in batch sync            | Ensure both real-time AND batch sync populate all fields |
-| Frontend    | Percentage double-multiply          | Establish API contract: ratio (0-1) or percent (0-100)   |
-| Docker      | Missing files                       | Verify all runtime deps are COPY'd                       |
-| Docker      | Network isolation                   | Use host network or proper bridging                      |
-| Charts      | Incomplete data                     | Exclude current incomplete period                        |
+| Area        | Pitfall                             | Prevention                                                                                  |
+| ----------- | ----------------------------------- | ------------------------------------------------------------------------------------------- |
+| CKB Scripts | Confusing code_hash vs script_hash  | code_hash = script type, script_hash = instance identity                                    |
+| CKB Scripts | Hardcoded hashes                    | Verify against chain, reference RFC-0024                                                    |
+| DAO         | Multi-phase tracking                | Map full lifecycle before implementing                                                      |
+| DAO         | Compensation formula                | Follow RFC-0023 exactly, use free_capacity                                                  |
+| DAO         | DAO field parsing                   | 32 bytes, 4 x u64 LE, check byte offsets                                                    |
+| DAO         | APC calculation                     | Keep estimated and nominal models distinct; both use the persisted network genesis baseline |
+| DAO         | Point-in-time aggregations          | Filter out withdrawn deposits for historical snapshots                                      |
+| DAO         | Phase 2 withdrawal lookup           | Resolve the request outpoint through `dao_by_withdraw_tx`                                   |
+| Supply      | Using total_issuance as circulating | Use exact `C - GenesisBaseline.burnt - S`                                                   |
+| Supply      | Confusing issuance vs circulating   | Read `docs/DAO_CALCULATIONS.md` supply model                                                |
+| Indexer     | Fields not in batch sync            | Ensure both real-time AND batch sync populate all fields                                    |
+| Frontend    | Percentage double-multiply          | Establish API contract: ratio (0-1) or percent (0-100)                                      |
+| Docker      | Missing files                       | Verify all runtime deps are COPY'd                                                          |
+| Docker      | Network isolation                   | Use host network or proper bridging                                                         |
+| Charts      | Incomplete data                     | Exclude current incomplete period                                                           |
 
 ---
 
@@ -671,26 +671,34 @@ Test by wiping database and re-syncing from genesis.
 ```rust
 // DAO
 const DAO_CODE_HASH: &str = "0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e";
-const DAO_OCCUPIED_CAPACITY: u64 = 102_00000000; // 102 CKB in shannons
-
-// Supply model (in shannons)
-const GENESIS_BURNT: u64 = 8_400_000_000_00000000;          // 8.4B CKB burnt at genesis
 const SECONDARY_ISSUANCE_PER_YEAR: u64 = 1_344_000_000_00000000; // 1.344B CKB/year
 
 // DAO field extraction (32 bytes total)
 fn extract_total_issuance(dao: &[u8]) -> u64 { u64::from_le_bytes(dao[0..8]) }
 fn extract_ar(dao: &[u8]) -> u64 { u64::from_le_bytes(dao[8..16]) }
 
-// Compensation formula
-let free = capacity - DAO_OCCUPIED_CAPACITY;
+// Compensation formula: 102 CKB is only the standard secp DAO-cell case.
+// Persist and use the deposit cell's exact occupied capacity.
+let free = capacity - exact_occupied_capacity;
 let compensation = free * ar_withdraw / ar_deposit - free;
 
-// Circulating supply (NOT same as total_issuance!)
-let circulating = total_issuance - GENESIS_BURNT - secondary_burnt;
+// GenesisBaseline is derived from block 0 and persisted per network.
+let baseline = store.get_genesis_baseline()?.expect("required invariant");
 
-// APC formulas
-let estimated_apc = (SECONDARY_ISSUANCE_PER_YEAR as f64 / total_issuance as f64) * 100.0;
-let nominal_apc = ((ar_current as f64 / ar_past as f64).powf(1.0 / years) - 1.0) * 100.0;
+// Protocol circulating supply (NOT the same as total_issuance).
+let circulating = total_issuance - baseline.burnt - secondary_pool_s;
+
+// Estimated APC: explorer-compatible continuous-compounding model,
+// seeded with baseline.total_issuance.
+let estimated_apc = calculate_estimated_apc(
+    epoch_number,
+    epoch_index,
+    epoch_length,
+    baseline.total_issuance,
+);
+
+// Nominal chart: separate theoretical supply curve, seeded with exact genesis circulation.
+let nominal_genesis_supply = baseline.total_issuance - baseline.burnt;
 ```
 
 ---

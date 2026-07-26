@@ -37,6 +37,8 @@ describe('NetworkClientPage', () => {
     // How to enable it.
     expect(screen.getByText('How to enable')).toBeInTheDocument();
     expect(screen.getByText(/enabled = true/)).toBeInTheDocument();
+    expect(screen.getByText(/this network's config\.toml/i)).toBeInTheDocument();
+    expect(screen.queryByText(/ckbadger\.toml/i)).not.toBeInTheDocument();
   });
 
   it('shows a waiting message when enabled but the first round has not finished', async () => {

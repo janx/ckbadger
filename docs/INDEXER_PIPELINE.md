@@ -19,7 +19,8 @@ The CKB indexer uses a three-stage pipeline architecture to maximize sync throug
 1. **Decouple I/O from computation** - Block fetching doesn't block parsing; parsing doesn't block DB writes
 2. **Maximize parallelism** - Each stage can work on different batches simultaneously
 3. **Maintain consistency** - Pipeline produces deterministic, correct database state
-4. **Handle failures gracefully** - Stale batches are drained on errors; periodic db_tip resync prevents drift
+4. **Use mode-specific failure handling** - Near-tip batches can drain and retry; fresh-store
+   bulk build fails fast and must restart from empty chain stores
 
 ## Pipeline Stages
 
@@ -127,11 +128,12 @@ Block N arrives
 
 ## Configuration
 
-| Parameter             | Default | Description                                              |
-| --------------------- | ------- | -------------------------------------------------------- |
-| `bulk_sync_threshold` | `1000`  | Blocks behind tip to treat sync as bulk mode             |
-| `poll_interval_ms`    | `1000`  | Live sync new-block poll interval (ms)                   |
-| `ckb.workdir`         | -       | CKB node config directory; ckbadger derives RocksDB path |
+| Parameter               | Default | Description                                                           |
+| ----------------------- | ------- | --------------------------------------------------------------------- |
+| `bulk_sync_threshold`   | `1000`  | Blocks behind tip where bulk-to-near-tip handoff occurs               |
+| `poll_interval_ms`      | `1000`  | Live sync new-block poll interval (ms)                                |
+| `bulk_memory_budget_gb` | auto    | Optional whole-indexer bulk-sync hard limit                           |
+| `ckb.workdir`           | -       | Required CKB node config directory; ckbadger derives its RocksDB path |
 
 Pipeline channel capacity (16) and batch span are hardcoded constants.
 Live batch span is density-adaptive: `40,000 txs / tx_per_block_ema`, clamped to [1, 5000] blocks.
@@ -146,19 +148,36 @@ append_only_data_path = "data/append-only"
 [ckb]
 rpc_url = "http://127.0.0.1:8114"
 workdir = "/var/lib/ckb"
+
+[indexer]
+bulk_sync_threshold = 1000
+poll_interval_ms = 1000
+# bulk_memory_budget_gb = 32
 ```
 
-`bulk_sync_threshold` and `poll_interval_ms` are configured in `ckbadger.toml`.
+These values are configured in each network's `config.toml`. The top-level
+`ckbadger.toml` contains only the `[[network]]` list and shared frontend/log settings.
 
-### CLI Arguments
+### Starting One Indexer
 
 ```bash
-cargo run -p ckbadger-indexer -- \
-  --pipeline-buffer 16 \
-  --batch-size 10000 \
-  --parallel-fetch-size 64 \
-  --bulk-sync-threshold 72
+ckbadger -C <orchestrator-root>/<network> run --only indexer
 ```
+
+`ckbadger-indexer` is a library, not a standalone binary. Pipeline capacity and adaptive batch
+controls are internal implementation details rather than public CLI flags.
+
+### Multi-Network Scheduling
+
+At an orchestrator root, APIs, enabled crawlers, and the shared frontend start immediately.
+Indexers start in `[[network]]` order. The supervisor waits until the active indexer has crossed
+the bulk threshold before admitting the next one, so only one co-resident network performs the
+memory-intensive fresh-store bulk build at a time. Indexers already in the near-tip pipeline keep
+running independently.
+
+Absent an explicit `[store].memory_budget_gb`, detected host RAM is divided by the number of
+networks listed by the governing orchestrator. `[indexer].bulk_memory_budget_gb` overrides the
+whole-process guard for that network and must be greater than zero when set.
 
 ## Error Handling
 
@@ -403,7 +422,9 @@ for the full design rationale.
 - **Class C** (sealed aggregates): flushed once the time bucket/epoch closes — `stats_chain`,
   `stats_dao`, `stats_hodl`, `stats_script`, `stats_token`, `stats_spore`, `stats_mnft`
 - **Class D** (bulk-disabled): `reorg_undo_log_by_block`, `pending_proposals`, `dob_decoded` — not
-  written during bulk sync; `sync_meta` holds only build metadata and final completion state
+  written during bulk sync. `sync_meta` still owns network identity, the genesis baseline,
+  build-session state, progress/runtime records, and final completion metadata; it does not become
+  a fallback store for skipped domain aggregates.
 
 ### Bulk-Build Stats Coverage
 
@@ -527,14 +548,14 @@ crates/indexer/src/sync/
     materialize.rs   # Byte-bounded domain finalization + dual-store history writes
     sampler.rs       # BackgroundSampler — periodic RocksDB + system stats sampling
     prefetch.rs      # PrefetchChannelHandle — bounded block prefetching
-  owners/
-    mod.rs         # ReducerContext, parallel reducer dispatch
-    address.rs     # AddressOwner — balances, cell counts, addr_stats
-    dao.rs         # DaoOwner — deposit lifecycle, DAO indexes
-    token.rs       # TokenOwner — UDT metadata, holders, transfers
-    script.rs      # ScriptOwner — script usage, daily deltas
-    object.rs      # ObjectOwner — spore/mNFT/object/identity/cluster state
-    fiber.rs       # FiberOwner — fiber channel registry
+    owners/
+      mod.rs         # ReducerContext, parallel reducer dispatch
+      address.rs     # AddressOwner — balances, cell counts, addr_stats
+      dao.rs         # DaoOwner — deposit lifecycle, DAO indexes
+      token.rs       # TokenOwner — UDT metadata, holders, transfers
+      script.rs      # ScriptOwner — script usage, daily deltas
+      object.rs      # ObjectOwner — spore/mNFT/object/identity/cluster state
+      fiber.rs       # FiberOwner — fiber channel registry
 ```
 
 ## Crash Recovery
@@ -614,4 +635,4 @@ Sync progress and status are stored directly in RocksDB (no external dependencie
 
 ---
 
-_Last updated: 2026-03-23_
+_Last updated: 2026-07-26_

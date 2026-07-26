@@ -97,9 +97,10 @@ Replaces the old `AssetChange` tagged enum with a uniform structure for all item
 ```rust
 // crates/ckbadger-store/src/types.rs
 pub struct ItemDelta {
-    pub item_id: Vec<u8>,  // type_script_hash (token) or object/identity ID
-    pub kind: u8,          // ITEM_KIND_TOKEN=0, ITEM_KIND_OBJECT=1, ITEM_KIND_IDENTITY=2
-    pub delta: i128,       // Signed amount: tokens use precise amounts; objects/identities use +1/-1
+    pub item_id: Vec<u8>, // type_script_hash (token) or object/identity ID
+    pub kind: u8,         // ITEM_KIND_TOKEN=0, ITEM_KIND_OBJECT=1, ITEM_KIND_IDENTITY=2
+    pub magnitude: u128,  // Absolute amount; always >= 1 when persisted
+    pub negative: bool,   // true means a negative delta
 }
 ```
 
@@ -114,6 +115,9 @@ pub struct ItemDelta {
 **Key design decisions:**
 
 - **Uniform structure**: All item types share the same struct. No tagged enum variants — the `kind` field discriminates. This is extensible to future asset types without structural changes.
+- **Exact signed-magnitude storage**: Token amounts use their full `u128` range. Storing
+  `magnitude: u128` plus `negative` avoids narrowing a valid UDT amount into `i128`.
+  Zero deltas are not persisted; object and identity deltas use magnitude `1`.
 - **No action enum**: Mint/transfer/burn classification is derived from the pattern of deltas across participants (see `docs/prompts/ACTIVITY_DESIGN.md`), not stored explicitly.
 - **No DAO variants**: DAO operations are captured at Layer 3 (protocol_actions), not Layer 2 (item_deltas). A DAO cell is CKB in a different state, not a separate portfolio item.
 
@@ -166,11 +170,15 @@ Protocol actions capture high-level protocol behaviors detected from cross-layer
 ```rust
 // crates/ckbadger-store/src/types.rs
 pub struct ProtocolAction {
-    pub protocol: String,       // e.g., "rgbpp", "dao"
-    pub action: String,         // e.g., "leap_to_ckb", "deposit", "withdraw_complete"
-    pub metadata: serde_json::Value,  // Protocol-specific details
+    pub protocol: String,          // e.g., "rgbpp", "dao"
+    pub action: String,            // e.g., "leap_to_ckb", "deposit", "withdraw_complete"
+    pub metadata: ProtocolMetadata, // Canonical JSON text in storage
 }
 ```
+
+`ProtocolMetadata` stores canonical JSON text because `serde_json::Value` cannot be deserialized
+through bincode's non-self-describing format. The API parses it back into JSON and fails the
+request if persisted metadata is invalid.
 
 **DAO is now a protocol action**: DAO deposit, withdraw request, and withdraw complete are all captured as `ProtocolAction { protocol: "dao", action: "deposit"|"withdraw_request"|"withdraw_complete", ... }` at Layer 3. They are NOT recorded as item deltas at Layer 2 (a DAO cell is CKB in a different state, not a portfolio item).
 
@@ -192,7 +200,7 @@ pub struct DailyActivityStats {
     pub unique_address_count: u32,        // Distinct lock_hashes
     pub total_ckb_moved: u128,            // Sum of |ckb_delta| across all participants
     pub script_counts: HashMap<String, u32>,  // Per-code_hash counts
-    pub protocol_action_counts: HashMap<String, u32>,  // Per-protocol action counts
+    pub protocol_action_counts: HashMap<String, u32>,  // "protocol:action" counts
 }
 ```
 
@@ -237,9 +245,12 @@ pub fn build_tx_actions_for_block_no_detectors(
 
 ### Code Hash Classification
 
-`CodeHashes` is a struct initialized eagerly via `OnceLock`. Contains two maps:
+`CodeHashes` is an activity-specific lookup initialized via `OnceLock`. Its asset-bearing
+`type_lookup` is derived from the shared `ProtocolRegistry`; it is not an independent protocol
+hash source. The registry is built from bundled `docs/metadata/scripts/*.toml` entries and unions
+mainnet plus testnet deployments, failing fast if one `code_hash` maps to two protocols.
 
-- `type_scripts: HashMap<Vec<u8>, AssetKind>` — Maps type_code_hash bytes to asset kind
+- `type_lookup: HashMap<Vec<u8>, AssetKind>` — Maps type `code_hash` bytes to asset kind
 - `standard_locks: HashSet<Vec<u8>>` — 16 well-known lock script code_hashes to exclude from lock call detection
 
 ```rust
@@ -255,20 +266,11 @@ enum AssetKind {
 }
 ```
 
-**Bundled protocol-registry entries:**
-
-| Asset Kind | Code Hash Source                   | Count |
-| ---------- | ---------------------------------- | ----- |
-| Udt        | SUDT, XUDT data1, XUDT type        | 3     |
-| Dao        | DAO_CODE_HASH                      | 1     |
-| SporeDid   | None (reserved legacy path)        | 0     |
-| Spore      | mainnet v2, testnet v1, testnet v2 | 3     |
-| Cluster    | mainnet v2, testnet v1, testnet v2 | 3     |
-| MnftToken  | MNFT_TOKEN_CODE_HASH               | 1     |
-| Dotbit     | bit-account, mainnet + testnet     | 2     |
-| BitCell    | bit-cell, mainnet + testnet        | 2     |
-
-**Bundled entries (dynamic):** build.rs extracts additional code_hashes from scripts with `decoderType: "udt"` in the token-labels data. These are `xudt_compatible` scripts (Stable++ Asset, ccBTC Asset, wCKB Asset, USDI Asset) that share the xUDT cell data layout. Loaded via `include_bytes!` at compile time, parsed as JSON, and inserted as `AssetKind::Udt` with `entry().or_insert()` (hardcoded entries take precedence).
+The derived lookup maps registry identities for DAO, Spore/Cluster, mNFT token, .bit AccountCell,
+and .bit Cell into `AssetKind`. sUDT/xUDT classification uses the shared `UdtParser` path, which
+also consumes build-time bundled, non-deprecated script deployments whose metadata category is
+`udt`. Protocol metadata remains the source; hardcoded parser constants exist only as regression
+fixtures proving the registry still covers known deployments.
 
 ### Standard Lock Exclusion
 
@@ -315,8 +317,10 @@ The builder uses an `OwnerAccum` accumulator struct per lock_hash:
    - ckb_delta = Σ output_capacity - Σ input_capacity
    - used_delta = Σ output_occupied - Σ input_occupied
    - Derive item_deltas from accumulated data:
-     • UDT: delta = output_amount - input_amount per type_script_hash (kind=TOKEN)
-     • Object/Identity: set comparison (input IDs vs output IDs → +1/-1) (kind=OBJECT/IDENTITY)
+     • UDT: compare output_amount and input_amount per type_script_hash, storing the exact
+       absolute difference plus its sign (kind=TOKEN)
+     • Object/Identity: set comparison (input IDs vs output IDs → magnitude 1 + sign)
+       (kind=OBJECT/IDENTITY)
    - Compute tags bitmask from item_deltas, protocol_actions, type_calls, lock_calls
 
 6. Wrap into single TxActions record with TX-level + per-participant data
@@ -345,15 +349,17 @@ The builder uses an `OwnerAccum` accumulator struct per lock_hash:
 
 **`emit_object_changes()`**: Set comparison for Object assets.
 
-- ID in outputs only → delta = +1
+- ID in outputs only → `magnitude=1, negative=false`
 - ID in both inputs and outputs → delta = 0 (not recorded)
-- ID in inputs only → delta = -1
+- ID in inputs only → `magnitude=1, negative=true`
 
 **`emit_identity_changes()`**: Same logic for Identity assets.
 
 ### UDT Amount Parsing
 
-For inputs, the builder uses `InputCellView.udt_amount` (pre-fetched during sync from the append-only cell store) or falls back to parsing cell data. For outputs, amounts are parsed directly from `ParsedCell.data` via `UdtParser::parse_amount()` (first 16 bytes as little-endian u128).
+For inputs, the builder consumes `InputCellView.udt_amount`, pre-computed while resolving the input
+cell from the append-only store. For outputs, amounts are parsed directly from `ParsedCell.data`
+via `UdtParser::parse_amount()` (first 16 bytes as little-endian u128).
 
 ---
 
@@ -365,13 +371,13 @@ All activity storage is in the **domain store** (mutable, supports delete on rol
 
 ### Column Families
 
-| CF                                  | Key Size  | Value                           | Purpose                                             |
-| ----------------------------------- | --------- | ------------------------------- | --------------------------------------------------- |
-| `CF_TX_ACTIONS`                     | 44 bytes  | `TxActions` (bincode)           | Per-tx actions record                               |
-| `CF_ADDR_TXS`                       | 76 bytes  | empty                           | Address → tx index                                  |
-| `CF_OBJECT_COLLECTION_ACTIVITIES`   | 108 bytes | `ObjectCollectionActivityEntry` | Spore/mNFT collection feeds                         |
-| `CF_IDENTITY_COLLECTION_ACTIVITIES` | 108 bytes | `ObjectCollectionActivityEntry` | .bit AccountCell/.bit Cell/did:ckb collection feeds |
-| `CF_STATS_CHAIN` (prefixed)         | variable  | `DailyActivityStats` (bincode)  | Hourly/daily aggregation                            |
+| CF                                  | Key Size  | Value                           | Purpose                                                          |
+| ----------------------------------- | --------- | ------------------------------- | ---------------------------------------------------------------- |
+| `CF_TX_ACTIONS`                     | 44 bytes  | `TxActions` (bincode)           | Per-tx actions record                                            |
+| `CF_ADDR_TXS`                       | 76 bytes  | `AddrTxValue` (bincode)         | Address → tx thin index with capacity change, tx flags, and tags |
+| `CF_OBJECT_COLLECTION_ACTIVITIES`   | 108 bytes | `ObjectCollectionActivityEntry` | Spore/mNFT collection feeds                                      |
+| `CF_IDENTITY_COLLECTION_ACTIVITIES` | 108 bytes | `ObjectCollectionActivityEntry` | .bit AccountCell/.bit Cell/did:ckb collection feeds              |
+| `CF_STATS_CHAIN` (prefixed)         | variable  | `DailyActivityStats` (bincode)  | Hourly/daily aggregation                                         |
 
 **Note**: `CF_TX_ACTIONS` uses the RocksDB string `"activities"` (same physical column family name as the old `CF_ACTIVITIES`). The Rust constant was renamed for clarity.
 
@@ -437,7 +443,14 @@ All values use `bincode::serialize()` — compact binary, fast to serialize/dese
 ```rust
 // batch.rs
 StoreBatch::put_tx_actions(&mut self, actions: &TxActions)
-StoreBatch::put_addr_tx(&mut self, lock_hash: &[u8], block_num: i64, tx_idx: i32, tx_hash: &[u8])
+StoreBatch::put_addr_tx(
+    &mut self,
+    lock_hash: &[u8],
+    block_num: i64,
+    tx_idx: i32,
+    tx_hash: &[u8],
+    value: &AddrTxValue,
+)
 ```
 
 ### Activity Filter Matching
@@ -451,7 +464,9 @@ pub fn matches_activity_filter(
 ) -> bool
 ```
 
-Filter matching uses the **per-participant tags bitmask** for O(1) classification. The function finds the participant matching `lock_hash` and checks their tags:
+The address index first rejects non-matching rows from `AddrTxValue.tags`, avoiding unnecessary
+`CF_TX_ACTIONS` reads. Surviving rows are validated against the matching participant's tags and,
+for `protocol:<name>`, the transaction's protocol actions:
 
 | Filter               | Condition                                                                     |
 | -------------------- | ----------------------------------------------------------------------------- |
@@ -479,11 +494,23 @@ Query parameters:
 
 - `limit` (default: 20)
 - `cursor` — format: `"block_num:tx_idx"`, e.g., `"1234567:3"`
-- `filter` — one of: `all`, `ckb`, `token`, `nft`, `dao`, `type_call`, `lock_call`
+- `filter` — one of: `all`, `ckb`, `token`, `object`, `identity`, `dao`, `type_call`,
+  `lock_call`, `protocol:<name>`
 
-Response: `CursorPaginatedResponse<ActivityResponse>` with `items`, `next_cursor`, `has_more`.
+Response: `CursorPaginatedResponse<ActivityResponse>` with `data`, optional `total`, `limit`,
+`nextCursor`, and `hasMore`.
 
-**`GET /activities/latest`** — Global latest activities feed (homepage).
+**`GET /activities`** — Cursor-paginated global activity feed.
+
+Query parameters:
+
+- `limit` (default: 20, max: 100)
+- `cursor` — format: `"block_num:tx_idx"`
+- `filter` — one of: `all`, `ckb`, `token`, `object`, `identity`, `dao`, `script`, `protocol`
+
+Response: `CursorPaginatedResponse<GlobalActivityResponse>`.
+
+**`GET /activities/latest`** — Small global latest-activities feed (homepage).
 
 Query parameters:
 
@@ -588,7 +615,9 @@ pub struct ProtocolActionResponse {
 
 The API validates that each activity entry matches the canonical chain position. This is necessary because during reorgs, activity entries from orphaned blocks may linger until rollback completes.
 
-Each entry is checked: `entry.block_number == canonical_block_num && entry.tx_index == canonical_tx_idx && entry.block_hash == canonical_block_hash`. Non-matching entries are silently dropped.
+Each entry is checked against `TX_HASH_MAP` and `TX_INDEX`: its transaction hash must still resolve
+to the stored `(block_number, tx_index)`, and that canonical position must still exist in
+`TX_INDEX`. Non-matching entries are dropped.
 
 The `list_canonical_activities_page()` function implements a loop that scans entries in chunks, filters orphans, and continues scanning until `limit` canonical entries are found or the address runs out of entries.
 
@@ -768,17 +797,18 @@ Compact uppercase pill showing protocol name or lock script name. Used inline on
 
 ### Bulk Sync Path
 
-**File**: `crates/indexer/src/sync/batch.rs`
+**Files**: `crates/indexer/src/sync/bulk_build/mod.rs`,
+`crates/indexer/src/sync/bulk_build/materialize.rs`
 
-During bulk sync, activities are written in a dedicated parallel thread:
+During fresh-store bulk build:
 
-1. Build `TxView` from parsed block data + prefetched input cells
-2. Call `build_tx_actions_for_block()` with protocol detectors
-3. For each `TxActions`, accumulate daily/hourly stats, then `activity_batch.put_tx_actions()`
-4. Write `addr_tx` entries for each participant in the main domain batch
-5. Commit activity batch with `commit_phase_no_wal()` (WAL disabled for bulk)
-
-Bulk sync skips the undo journal (per BULK_SYNC.md rules 5-7). Activities go directly to `StoreBatch::put_tx_actions()` and `StoreBatch::put_addr_tx()`.
+1. Resolve input facts from `LiveCellOwner` and construct `TxView` values.
+2. Call the same `build_tx_actions_for_block()` function and protocol detectors as live sync.
+3. Emit non-cellbase `TxActions`, collection activity rows, and thin `addr_tx` indexes as Class A
+   history rows.
+4. Accumulate activity buckets in transaction order and seal them only at the CKB
+   median-time-past watermark.
+5. Stream encoded rows through bounded domain batches; bulk mode does not create an undo journal.
 
 ### Live Sync Path
 
@@ -844,21 +874,26 @@ Stats classification iterates over each participant's tags bitmask and item_delt
 7. **Transfer** — if no tags besides possible TAG_LOCK_CALL (pure CKB)
 8. **Unknown** — fallback (should be 0)
 
-**Note**: Token, object, identity, and script_call get boolean flags — a participant with 3 token changes is counted once in `token_count`.
+**Note**: Token, object, identity, and script-call flags are transaction-level booleans. A
+transaction with three token changes is counted once in `token_count`.
 
 ### Additional Metrics
 
 - **`total_ckb_moved`**: Sum of `|ckb_delta|` across all non-cellbase participants (u128)
 - **`unique_address_count`**: Distinct lock_hashes per day/hour (computed from HashSet of `[u8; 32]`)
 - **`script_counts`**: Per-code_hash activity counts (hex string keys → u32 counts)
-- **`protocol_action_counts`**: Per-protocol action counts (e.g., `"rgbpp" => 5`, `"dao" => 12`)
+- **`protocol_action_counts`**: Per-action counts keyed as `protocol:action` (for example,
+  `"rgbpp:leap_to_ckb" => 5`, `"dao:deposit" => 12`)
 
 ### Storage
 
 - **Daily**: Key prefix `0x1D` + `YYYYMMDD` in `CF_STATS_CHAIN`
 - **Hourly**: Key prefix `0x1E` + `YYYYMMDDHH` in `CF_STATS_CHAIN`
 
-Stats are accumulated in memory during batch processing, then merged with existing values using `update_daily_activity_stats()` / `update_hourly_activity_stats()`. The merge reads existing stats, adds the accumulated values, and writes back — this is necessary because a single day/hour may span multiple batches.
+Live-sync stats are accumulated in memory and merged into existing buckets with
+`update_daily_activity_stats()` / `update_hourly_activity_stats()` because a day or hour can span
+multiple batches. Fresh-store bulk build instead seals completed buckets at its
+median-time-past watermark and writes each sealed aggregate once.
 
 ### API Endpoints
 
@@ -877,7 +912,9 @@ Active detectors:
 - **FiberDetector** — Fiber Network channel lifecycle (open/close/force_close/settlement)
 - **StableppDetector** — Stable++ CDP vault lifecycle (open_vault/borrow/repay/close_vault/liquidation/redemption)
 
-**DAO protocol actions** (deposit, withdraw_request, withdraw_complete) are emitted directly by the activity builder during the build phase, not by a separate `ProtocolDetector` implementation. DAO detection uses the existing `AssetKind::Dao` classification from `CodeHashes`.
+**DAO protocol actions** (deposit, withdraw_request, withdraw_complete) are emitted directly by
+the activity builder during the build phase, not by a separate `ProtocolDetector`
+implementation. `AssetKind::Dao` is derived from the shared `ProtocolRegistry`.
 
 The `docs/script-name-overrides.json` `protocols` field retains code_hash groupings as reference metadata but is no longer used at runtime for protocol identification.
 
@@ -893,13 +930,14 @@ The `docs/script-name-overrides.json` `protocols` field retains code_hash groupi
 
 ### Activity Builder
 
-| File                                                | Content                                                                                                                 |
-| --------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| `crates/indexer/src/db/writer/activities.rs`        | build_tx_actions_for_block(), CodeHashes, classify_input/output, emit_object/identity_changes, DAO protocol action emit |
-| `crates/indexer/src/db/writer/rgbpp_detector.rs`    | RgbppDetector: ProtocolDetector impl (leap_to_ckb, leap_to_btc, transfer, btc_time_locked, receive)                     |
-| `crates/indexer/src/db/writer/fiber_detector.rs`    | FiberDetector: ProtocolDetector impl (open, close, force_close, settlement)                                             |
-| `crates/indexer/src/db/writer/stablepp_detector.rs` | StableppDetector: ProtocolDetector impl (open_vault, borrow, repay, close_vault, adjust, liquidation, redemption)       |
-| `crates/indexer/src/build.rs`                       | Compile-time extraction of xudt_compatible code_hashes                                                                  |
+| File                                                | Content                                                                                                                              |
+| --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `crates/indexer/src/db/writer/activities.rs`        | build_tx_actions_for_block(), registry-derived CodeHashes, classify_input/output, emit object/identity changes, DAO protocol actions |
+| `crates/indexer/src/db/writer/rgbpp_detector.rs`    | RgbppDetector: ProtocolDetector impl (leap_to_ckb, leap_to_btc, transfer, btc_time_locked, receive)                                  |
+| `crates/indexer/src/db/writer/fiber_detector.rs`    | FiberDetector: ProtocolDetector impl (open, close, force_close, settlement)                                                          |
+| `crates/indexer/src/db/writer/stablepp_detector.rs` | StableppDetector: ProtocolDetector impl (open_vault, borrow, repay, close_vault, adjust, liquidation, redemption)                    |
+| `crates/indexer/src/parser/registry.rs`             | Fail-fast ProtocolRegistry built from bundled mainnet/testnet script metadata                                                        |
+| `crates/indexer/src/build.rs`                       | Bundles token/script metadata and additional non-deprecated UDT-category deployments                                                 |
 
 ### Storage
 
@@ -933,10 +971,11 @@ The `docs/script-name-overrides.json` `protocols` field retains code_hash groupi
 
 ### Pipeline Integration
 
-| File                               | Content                                  |
-| ---------------------------------- | ---------------------------------------- |
-| `crates/indexer/src/sync/batch.rs` | Bulk sync and live sync activity writing |
-| `crates/indexer/src/sync/undo.rs`  | put_tx_actions/put_addr_tx undo wrappers |
+| File                                  | Content                                                        |
+| ------------------------------------- | -------------------------------------------------------------- |
+| `crates/indexer/src/sync/bulk_build/` | Fresh-store activity construction, rows, and sealed aggregates |
+| `crates/indexer/src/sync/batch.rs`    | Live-sync activity writing                                     |
+| `crates/indexer/src/sync/undo.rs`     | put_tx_actions/put_addr_tx live-write wrappers                 |
 
 ### Documentation
 

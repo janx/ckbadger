@@ -6,6 +6,11 @@ describe('buildAiCapabilities', () => {
 
     expect(capabilities.origin).toBe('http://localhost:3000');
     expect(capabilities.site.name).toBe('ckbadger');
+    expect(capabilities.site.pageBasePattern).toBe('/{network}');
+    expect(capabilities.site.apiBasePattern).toBe('/api/{network}/v1');
+    expect(capabilities.site.directApiBase).toBe('/api/v1');
+    expect(capabilities.site.wsUrlPattern).toBe('/ws/{network}');
+    expect(capabilities.site.directWsUrl).toBe('/ws');
     expect(capabilities.formatNegotiation.supportedFormats).toEqual(['html', 'md', 'raw']);
     expect(capabilities.formatNegotiation.priority).toEqual([
       'query.format',
@@ -23,7 +28,9 @@ describe('buildAiCapabilities', () => {
   it('declares tx debugger profile in raw route matrix', () => {
     const capabilities = buildAiCapabilities();
 
+    expect(capabilities.site).not.toHaveProperty('apiBase');
     expect(capabilities.routes.markdown).toContain('/activities');
+    expect(capabilities.routes.markdown).toContain('/network');
     expect(capabilities.routes.markdown).toContain('/identities/dotbit/{identityId}');
     expect(capabilities.routes.markdown).toContain('/identities/did/{identityId}');
     expect(capabilities.routes.markdown).toContain('/objects/mnft/{objectId}');

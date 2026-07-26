@@ -50,11 +50,20 @@ Bulk sync is the high-throughput index building path used with a fresh store.
     normal near-tip pipeline from the persisted tip. The bulk reducer heap must not be retained
     into live sync.
 
+11. **Only one co-resident network may bulk-sync at a time**
+    In orchestrator mode, indexers are admitted in `[[network]]` declaration order. APIs,
+    enabled crawlers, and the shared frontend may start immediately, and indexers already past
+    the bulk threshold may continue near-tip/live sync, but the supervisor must not run two
+    fresh-store bulk-build engines concurrently. This is a resource invariant, not a fallback:
+    failure of one network stops sequenced admission instead of silently skipping to another.
+
 ## Design Implications
 
 - Keep bulk sync logic simple and write-throughput oriented.
 - Reorg-specific correction logic belongs to bounded reorg handling paths, not bulk rebuild paths.
 - Avoid adding bulk-mode logic that assumes resuming from half-built state.
+- Size automatic RocksDB and bulk budgets from the network's co-resident RAM share; explicit
+  per-network overrides remain explicit and are never divided again.
 
 ## Implementation
 

@@ -211,7 +211,7 @@ struct InitArgs {
 
 #[derive(clap::Args)]
 struct RunArgs {
-    /// Start only specific services (comma-separated: indexer,api,frontend)
+    /// Start only specific services in single-network mode (comma-separated: indexer,api,frontend-server,crawler)
     #[arg(long)]
     only: Option<String>,
 }
@@ -1771,6 +1771,18 @@ mod tests {
         let help = cmd.render_help().to_string();
 
         assert!(help.contains("A local-first and agent-friendly CKB explorer"));
+    }
+
+    #[test]
+    fn test_run_help_names_the_single_network_only_services() {
+        let mut cmd = Cli::command();
+        let run = cmd
+            .find_subcommand_mut("run")
+            .expect("run subcommand must exist");
+        let help = run.render_help().to_string();
+
+        assert!(help.contains("single-network mode"));
+        assert!(help.contains("indexer,api,frontend-server,crawler"));
     }
 
     #[test]

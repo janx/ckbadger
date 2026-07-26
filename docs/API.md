@@ -2,7 +2,7 @@
 
 This is an auto-generated skeleton of every endpoint exposed by `ckbadger-api`,
 derived from the `routes()` functions in `crates/api/src/routes/*.rs` and the
-nesting in `crates/api/src/lib.rs:384` (`.nest("/api/v1", routes::api_routes())`).
+nesting in `crates/api/src/lib.rs:453` (`.nest("/api/v1", routes::api_routes())`).
 
 **Source of truth.** The Rust code is authoritative. Each handler's `Query<T>`,
 `Path<T>`, and `Json<T>` types — together with the `Serialize` response struct
@@ -11,7 +11,12 @@ details that aren't reproduced here.
 
 ## Conventions
 
-- **Base path.** All endpoints in this document are nested under `/api/v1`.
+- **Canonical backend path.** All inventory paths below are nested under `/api/v1` on a direct
+  per-network API port, for example `http://127.0.0.1:8101/api/v1`.
+- **Shared-frontend path.** In orchestrator mode, use
+  `/api/{network}/v1` on the shared frontend origin, for example
+  `http://127.0.0.1:8100/api/testnet/v1`. The proxy removes `{network}` before forwarding to the
+  selected backend. WebSockets similarly use direct `/ws` or shared `/ws/{network}`.
 - **Path syntax.** Axum 0.8: path params use `{id}` form.
 - **Casing.** Response structs use `#[serde(rename_all = "camelCase")]`. Query
   params decode from snake_case (`lock_script_hash`, `type_script_hash`, etc.).
@@ -19,24 +24,24 @@ details that aren't reproduced here.
   `ApiError::{not_found, bad_request, internal, warmup_pending}` map to
   appropriate HTTP statuses.
 - **Pagination.** Listing endpoints return
-  `CursorPaginatedResponse<T> = { data: Vec<T>, total, limit, nextCursor? }`.
+  `CursorPaginatedResponse<T> = { data: Vec<T>, total?, limit, hasMore, nextCursor }`.
   The cursor is opaque; pass the previous response's `nextCursor` back as
   `?cursor=`. Address-cell cursors encode `script_hash + block_num + tx_hash +
-output_index`; activity cursors encode `block_num:tx_idx:seq`.
+output_index`; activity cursors encode `block_num:tx_idx`.
 - **Address inputs.** Any `lock_script_hash` parameter accepts either a CKB
   address (auto-decoded) or a 0x-prefixed lock hash. `type_script_hash` accepts
   only the 0x-prefixed 32-byte hash.
 - **Non-JSON responses.** A few spore endpoints return raw binary or SVG; they
   are flagged in the inventory below.
-- **WebSocket.** Real-time subscriptions live under `crates/api/src/ws/` and
-  are not part of this REST inventory.
+- **WebSocket.** Real-time subscriptions live under `crates/api/src/ws/` and are not part of this
+  REST inventory.
 - **Page-level routes.** `/llms.txt`, `/llms-full.txt`, `/capabilities`, and
-  `.md`/`.raw` page suffixes are served by the frontend layer (see
-  `frontend/public/llms.txt`), not by `/api/v1`.
+  network-scoped `.md`/`.raw` page suffixes are served by the frontend layer (see
+  `frontend/public/llms.txt`), not by either API base path.
 
 ## Modules
 
-`api_routes()` (`crates/api/src/routes/mod.rs:25`) merges 17 modules.
+`api_routes()` (`crates/api/src/routes/mod.rs:26`) merges 18 modules.
 `tx_lookup.rs` is a helper imported by `transactions.rs` and is not mounted.
 
 ---
@@ -101,16 +106,18 @@ output_index`; activity cursors encode `block_num:tx_idx:seq`.
 
 ### identities (crates/api/src/routes/identities.rs)
 
-| Method | Path                                                              | Handler                               | Purpose                                                          |
-| ------ | ----------------------------------------------------------------- | ------------------------------------- | ---------------------------------------------------------------- |
-| GET    | `/api/v1/assets/identities/dotbit/items/{identity_id}`            | `get_dotbit_item_detail`              | Get .bit account item detail (expired_at, registered_at, status) |
-| GET    | `/api/v1/assets/identities/dotbit/items/{identity_id}/activities` | `list_dotbit_item_activities`         | List .bit item activities (cursor, optional `action`)            |
-| GET    | `/api/v1/assets/identities/did/items/{identity_id}`               | `get_did_ckb_item_detail`             | Get did:ckb item detail                                          |
-| GET    | `/api/v1/assets/identities/did/items/{identity_id}/activities`    | `list_did_ckb_item_activities`        | List did:ckb item activities (cursor, optional `action`)         |
-| GET    | `/api/v1/assets/identities/{collection_id}`                       | `get_identity_collection`             | Get identity collection aggregate (dotbit/did:ckb only)          |
-| GET    | `/api/v1/assets/identities/{collection_id}/holders`               | `list_identity_collection_holders`    | List ranked holders of an identity collection                    |
-| GET    | `/api/v1/assets/identities/{collection_id}/activities`            | `list_identity_collection_activities` | List identity collection activities (cursor, optional `action`)  |
-| GET    | `/api/v1/assets/identities/{collection_id}/items`                 | `list_identity_collection_items`      | List identity items in a collection (search/status/cursor)       |
+| Method | Path                                                                | Handler                               | Purpose                                                          |
+| ------ | ------------------------------------------------------------------- | ------------------------------------- | ---------------------------------------------------------------- |
+| GET    | `/api/v1/assets/identities/dotbit/items/{identity_id}`              | `get_dotbit_item_detail`              | Get .bit AccountCell item detail                                 |
+| GET    | `/api/v1/assets/identities/dotbit/items/{identity_id}/activities`   | `list_dotbit_item_activities`         | List .bit AccountCell activities                                 |
+| GET    | `/api/v1/assets/identities/did/items/{identity_id}`                 | `get_did_ckb_item_detail`             | Get did:ckb item detail                                          |
+| GET    | `/api/v1/assets/identities/did/items/{identity_id}/activities`      | `list_did_ckb_item_activities`        | List did:ckb item activities                                     |
+| GET    | `/api/v1/assets/identities/bit-cell/items/{identity_id}`            | `get_bit_cell_item_detail`            | Get independent .bit Cell identity detail                        |
+| GET    | `/api/v1/assets/identities/bit-cell/items/{identity_id}/activities` | `list_bit_cell_item_activities`       | List .bit Cell identity activities                               |
+| GET    | `/api/v1/assets/identities/{collection_id}`                         | `get_identity_collection`             | Get .bit AccountCell, .bit Cell, or did:ckb collection aggregate |
+| GET    | `/api/v1/assets/identities/{collection_id}/holders`                 | `list_identity_collection_holders`    | List ranked holders of an identity collection                    |
+| GET    | `/api/v1/assets/identities/{collection_id}/activities`              | `list_identity_collection_activities` | List identity collection activities (cursor, optional `action`)  |
+| GET    | `/api/v1/assets/identities/{collection_id}/items`                   | `list_identity_collection_items`      | List identity items in a collection (search/status/cursor)       |
 
 **Params**
 
@@ -466,6 +473,42 @@ output_index`; activity cursors encode `block_num:tx_idx:seq`.
 
 ---
 
+### network (crates/api/src/routes/network.rs)
+
+These endpoints read the optional, non-chain network store written by `ckbadger-crawler`.
+
+| Method | Path                              | Handler         | Purpose                                                      |
+| ------ | --------------------------------- | --------------- | ------------------------------------------------------------ |
+| GET    | `/api/v1/network/summary`         | `summary`       | Crawler enabled/data state and latest completed round        |
+| GET    | `/api/v1/network/distributions`   | `distributions` | Reachability, client, country, ASN, and protocol histograms  |
+| GET    | `/api/v1/network/history`         | `history`       | Hour/day time series for node counts and distribution shares |
+| GET    | `/api/v1/network/nodes`           | `nodes`         | Filterable cursor-paginated discovered-node list             |
+| GET    | `/api/v1/network/nodes/{peer_id}` | `node_by_id`    | Full detail for one hex-encoded peer ID                      |
+
+**Params**
+
+- `HistoryQuery` — required `metric` (`totalNodes`, `reachableNodes`, `versionShare`,
+  `countryShare`) and `granularity` (`hour`, `day`), plus optional inclusive Unix-second `from`
+  and `to`
+- `NodesQuery` — optional `cursor`, `limit` (default 50, maximum 500), `reachable`, `country`,
+  and exact `version`
+- `Path(peer_id): Path<String>` — raw peer ID encoded as hexadecimal
+
+**Responses**
+
+- `NetworkSummary` — `enabled`, `hasData`, optional `lastRound`
+- `NetworkDistributions` — total/reachable counts plus sorted label/count buckets
+- `NetworkHistory` — requested metric/granularity and ascending points; daily data excludes the
+  incomplete current day
+- `NetworkNodesPage` — `items` and optional `nextCursor`
+- `NodeDetailResponse` — addresses, version, flags, protocols, observation times, reachability,
+  geo/ASN, RTT, and known-peer count
+
+When the crawler/store is disabled, summary and aggregate/list endpoints return an honest
+disabled or empty state. A point lookup still returns not found.
+
+---
+
 ### scripts (crates/api/src/routes/scripts.rs)
 
 | Method | Path                                             | Handler                                          | Purpose                                                                                             |
@@ -521,6 +564,6 @@ output_index`; activity cursors encode `block_num:tx_idx:seq`.
 
 ---
 
-**Total endpoints: 103** across 17 modules. Confirm against
+**Total endpoints: 127** across 18 modules. Confirm against
 `crates/api/src/routes/*.rs` for any field-level question; this skeleton is
 intentionally name-and-purpose only.

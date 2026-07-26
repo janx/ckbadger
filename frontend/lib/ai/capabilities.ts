@@ -17,7 +17,11 @@ const RAW_ROUTE_PROFILES: Record<string, readonly string[]> = {
 export interface AiCapabilities {
   site: {
     name: 'ckbadger';
-    apiBase: '/api/v1';
+    pageBasePattern: '/{network}';
+    apiBasePattern: '/api/{network}/v1';
+    directApiBase: '/api/v1';
+    wsUrlPattern: '/ws/{network}';
+    directWsUrl: '/ws';
   };
   formatNegotiation: {
     priority: ['query.format', 'path.suffix', 'accept.header'];
@@ -97,7 +101,11 @@ export function buildAiCapabilities(origin?: string): AiCapabilities & { origin?
     ...(origin ? { origin } : {}),
     site: {
       name: 'ckbadger',
-      apiBase: '/api/v1',
+      pageBasePattern: '/{network}',
+      apiBasePattern: '/api/{network}/v1',
+      directApiBase: '/api/v1',
+      wsUrlPattern: '/ws/{network}',
+      directWsUrl: '/ws',
     },
     formatNegotiation: {
       priority: ['query.format', 'path.suffix', 'accept.header'],

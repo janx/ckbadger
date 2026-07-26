@@ -2,13 +2,14 @@
 
 ckbadger has three testing systems, each answering a different question:
 
-| System     | Question                                     | Runs against    |
-| ---------- | -------------------------------------------- | --------------- |
-| **verify** | Is the indexed data correct?                 | API (read-only) |
-| **bench**  | How fast is each endpoint?                   | API + frontend  |
-| **stress** | How much load can it handle before breaking? | API + frontend  |
+| System     | Question                                     | Runs against                    |
+| ---------- | -------------------------------------------- | ------------------------------- |
+| **verify** | Is the indexed data correct?                 | API backed by a completed index |
+| **bench**  | How fast is each endpoint?                   | API + frontend                  |
+| **stress** | How much load can it handle before breaking? | API + frontend                  |
 
-All three require a running ckbadger instance (indexer + API + frontend). None modify the database.
+`verify` needs the target network's API backed by a completed index; the indexer need not remain
+running. `bench` and `stress` also exercise the frontend. None modify the database.
 
 ## Verify
 
@@ -17,10 +18,9 @@ Data integrity verification. Calls the API and optionally the official CKB explo
 ### Quick Start
 
 ```bash
-ckbadger verify --depth fast              # 6 checks, seconds
-ckbadger verify --depth sampling          # 55 checks, minutes
+ckbadger verify --depth fast              # 7 checks, seconds
+ckbadger verify --depth sampling          # 56 checks, minutes
 ckbadger verify --list-checks             # List all checks
-ckbadger verify --checks genesis_block,dao_statistics_sane  # Specific checks
 ```
 
 When `-C` points at an orchestrator root, `verify` runs every `[[network]]` in
@@ -31,11 +31,14 @@ declaration order. Point `-C` at a network subdirectory (for example,
 
 | Tier                  | Checks | Runtime | What it validates                                                                                                                                                                                                                               |
 | --------------------- | ------ | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Fast** (F1-F6)      | 6      | seconds | API reachable, sync complete, genesis block, tip block, deep fork clear, DAO statistics sane                                                                                                                                                    |
+| **Fast** (F1-F7)      | 7      | seconds | API reachable, sync complete, genesis block, tip block, deep fork clear, DAO statistics sane, genesis-baseline burnt invariant                                                                                                                  |
 | **Sampling** (S1-S23) | 23     | minutes | Block hash roundtrip, parent chain, address balance, chart validations (tx count, cells, supply, block time, epoch, HODL wave, knowledge composition, APC, inflation), supply invariants, RPC compare, tokens, spores, NFTs, holder consistency |
 | **Explorer** (X1-X26) | 26     | minutes | Compare last 30 days against official CKB explorer API (tx count, DAO deposit, hash rate, difficulty, knowledge size, uncle rate, cell counts, supply, circulation, mining reward, treasury)                                                    |
 
-`--depth fast` runs Fast tier only. `--depth sampling` runs all three tiers (Fast + Sampling + Explorer). Explorer checks can be skipped with `--no-explorer`.
+`--depth fast` runs Fast tier only. `--depth sampling` runs all three tiers (Fast + Sampling +
+Explorer). The public `ckbadger verify` command resolves each network's API, RPC, official
+explorer, cache directory, and deterministic sampling settings from its work directory; it does
+not expose per-run URL or check-selection overrides.
 
 `address_balance_spot_check` is deliberately bounded. It deterministically
 selects at most 10 recently active addresses across live-cell-count bands, then
@@ -53,7 +56,11 @@ If the live-cell endpoint returns more cells than its stored count declares,
 the check fails at the first proving page instead of expanding into an
 unbounded scan.
 
-> **Scope:** `verify` covers only chain-derived data (the domain + append-only stores). The **network store** (`net_nodes` / `net_stats`, written by the opt-in `ckbadger-crawler`) is **outside** all 55 checks — it holds observational, non-chain p2p-crawler data that is non-deterministic and not subject to chain-integrity invariants, so none of these checks apply to it.
+> **Scope:** `verify` covers only chain-derived data (the domain + append-only stores). The
+> **network store** (`net_nodes` / `net_stats`, written by the opt-in `ckbadger-crawler`) is
+> **outside** all 56 checks — it holds observational, non-chain p2p-crawler data that is
+> non-deterministic and not subject to chain-integrity invariants, so none of these checks apply
+> to it.
 
 ### CLI Reference
 
@@ -63,24 +70,13 @@ ckbadger verify [OPTIONS]
 OPTIONS:
   --depth <DEPTH>          fast or sampling [default: fast]
   --list-checks            List all checks and exit
-  --checks <NAME,...>      Run specific checks by name
-  --api-url <URL>          API base URL [default: http://localhost:3001/api/v1]
-  --rpc-url <URL>          CKB RPC URL (enables RPC spot-checks)
-  --explorer-url <URL>     Official explorer API [default: https://mainnet-api.explorer.nervos.org]
-  --no-explorer            Skip explorer comparison checks
-  --sample-count <N>       Samples for sampling tier [default: 1000]
-  --seed <N>               Deterministic seed for reproducibility [default: 42]
-  --tolerance <F>          Max deviation from explorer [default: 0.001]
-  --format <FORMAT>        Output format: text or json [default: text]
-  --cache-dir <DIR>        Explorer response cache [default: .verify-cache]
 ```
 
 ### Explorer Response Cache
 
-Explorer checks cache HTTP responses in each network workdir's `.verify-cache/`,
-so co-resident networks never share explorer data. Fresh cache (< 5 min) is
-reused. Stale cache is re-fetched; on HTTP failure, stale data is used with a
-warning.
+Explorer checks cache HTTP responses in each network workdir's `.verify-cache/`, so co-resident
+networks never share explorer data. Fresh cache (< 5 min) is reused. Stale cache is re-fetched; on
+HTTP failure, stale data is used with a warning.
 
 ### Adding a Check
 
@@ -91,14 +87,15 @@ warning.
 
 ### File Locations
 
-| What                | Where                                     |
-| ------------------- | ----------------------------------------- |
-| CLI args & runner   | `crates/indexer/src/verify/mod.rs`        |
-| Check trait & types | `crates/indexer/src/verify/checks.rs`     |
-| API checks (F+S)    | `crates/indexer/src/verify/api_checks.rs` |
-| Explorer checks (X) | `crates/indexer/src/verify/explorer.rs`   |
-| Report rendering    | `crates/indexer/src/verify/report.rs`     |
-| LCG sampler         | `crates/indexer/src/verify/sampling.rs`   |
+| What                       | Where                                     |
+| -------------------------- | ----------------------------------------- |
+| Public CLI/target resolver | `crates/cli/src/main.rs`                  |
+| Verification engine        | `crates/indexer/src/verify/mod.rs`        |
+| Check trait & types        | `crates/indexer/src/verify/checks.rs`     |
+| API checks (F+S)           | `crates/indexer/src/verify/api_checks.rs` |
+| Explorer checks (X)        | `crates/indexer/src/verify/explorer.rs`   |
+| Report rendering           | `crates/indexer/src/verify/report.rs`     |
+| LCG sampler                | `crates/indexer/src/verify/sampling.rs`   |
 
 ---
 
@@ -125,7 +122,10 @@ make bench-baseline                                 # Save baseline for regressi
 
 ### Endpoint Classification
 
-131 endpoints across 18 modules, each classified by:
+131 registered benchmark cases across 18 benchmark modules, each classified by:
+
+Some REST routes appear more than once with different discovered high-volume parameters, so this
+is intentionally not the 127-route HTTP inventory count in `docs/API.md`.
 
 - **Risk Tier**: Low, Medium, High -- reflects expected query cost
 - **Read Pattern**: KeyLookup, BatchLookup, PrefixScan, RangeScan, FullCfScan, CrossStore, RpcDependent, Cached, Aggregation

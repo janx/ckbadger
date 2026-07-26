@@ -26,7 +26,7 @@ The indexer opens the two chain stores (domain + append-only) read-write and the
 | `tx_index`                       | block_number + tx_index                                           | tx_hash                                                              | Transaction ordering index                                                                                                                                                             |
 | `tx_hash_map`                    | tx_hash (32B)                                                     | block_number + tx_index                                              | Reverse lookup: tx_hash -> position                                                                                                                                                    |
 | `addr_balance`                   | lock_script_hash (32B)                                            | AddressBalance                                                       | Address balance and cell counts                                                                                                                                                        |
-| `addr_txs`                       | lock_hash + block + tx_index                                      | empty                                                                | Address transaction history index                                                                                                                                                      |
+| `addr_txs`                       | lock_hash + block + tx_index + tx_hash                            | AddrTxValue                                                          | Address transaction thin index with capacity change, tx flags, and participant activity tags                                                                                           |
 | `dao_deposits`                   | tx_hash + output_index (34B)                                      | DaoDepositCacheEntry                                                 | DAO lifecycle plus original capacity, exact occupied capacity, deposit/request ARs, and claimed compensation                                                                           |
 | `dao_by_withdraw_tx`             | withdraw_outpoint (34B)                                           | deposit outpoint                                                     | Reverse lookup: withdraw outpoint -> deposit                                                                                                                                           |
 | `dao_by_block`                   | block_desc (8B BE) + outpoint (34B)                               | empty                                                                | DAO index ordered by deposit block DESC                                                                                                                                                |
@@ -43,12 +43,12 @@ The indexer opens the two chain stores (domain + append-only) read-write and the
 | `mnft_by_collection`             | collection_id + object_id                                         | empty                                                                | mNFT index by collection                                                                                                                                                               |
 | `identity_data`                  | identity_id (20B AccountCell; 32B .bit Cell/did:ckb)              | IdentityEntry                                                        | Identity metadata with separate standards and lifecycles for .bit AccountCell, .bit Cell, and did:ckb                                                                                  |
 | `mnft_collection_agg`            | collection_id                                                     | MnftCollectionAggregate                                              | mNFT collection aggregate stats                                                                                                                                                        |
-| `object_collection_activities`   | collection_id + block + tx                                        | ActivityRecord                                                       | Pre-computed Object collection activity feed                                                                                                                                           |
+| `object_collection_activities`   | collection_id + block + tx                                        | ObjectCollectionActivityEntry                                        | Pre-computed object collection activity feed                                                                                                                                           |
 | `identity_by_collection`         | collection_id + identity_id                                       | empty                                                                | Identity index by collection                                                                                                                                                           |
 | `identity_agg`                   | collection_id (sentinel 32B)                                      | IdentityCollectionAgg                                                | Per-standard identity aggregates; .bit AccountCell and .bit Cell use different sentinels                                                                                               |
-| `identity_collection_activities` | collection_id + block + tx                                        | ActivityRecord                                                       | Pre-computed Identity collection activity feed (domain)                                                                                                                                |
+| `identity_collection_activities` | collection_id + block + tx                                        | ObjectCollectionActivityEntry                                        | Pre-computed identity collection activity feed (domain)                                                                                                                                |
 | `stats_identity`                 | collection_id + lock_hash                                         | i64 (owner count)                                                    | Per-owner identity counts by collection                                                                                                                                                |
-| `activities`                     | block_num_desc + tx_idx_desc + tx_hash (44B)                      | TxActivityBundle                                                     | Per-tx activity bundle (all owner deltas, includes protocol_actions per owner)                                                                                                         |
+| `activities`                     | block_num_desc + tx_idx_desc + tx_hash (44B)                      | TxActions                                                            | One canonical per-tx activity record; TX-level protocol/type/lock actions stored once plus sorted participant deltas                                                                   |
 | `pending_proposals`              | proposal_id (10B hex string)                                      | CachedProposal (JSON)                                                | Ephemeral pending proposal cache (live sync only)                                                                                                                                      |
 | `fiber_channels`                 | channel_id (32B blake2b of funding outpoint)                      | FiberChannel                                                         | Fiber Network channel registry; funding lock args are descriptive and are not unique                                                                                                   |
 | `fiber_channel_by_commitment`    | commitment_hash                                                   | channel_id (32B)                                                     | Fiber channel index by commitment                                                                                                                                                      |
@@ -69,7 +69,7 @@ The indexer opens the two chain stores (domain + append-only) read-write and the
 | `script_reference_info`          | reference_hash + hash_type (33B)                                  | ScriptReferenceInfo                                                  | Script reference aggregate stats (cell/capacity counts per lock/type)                                                                                                                  |
 | `script_reference_to_version`    | reference_hash + hash_type (33B)                                  | version_hash                                                         | Script reference to version mapping                                                                                                                                                    |
 | `script_family_by_name`          | family_name (string)                                              | family_id                                                            | Reverse lookup: family name -> family ID                                                                                                                                               |
-| `sync_meta`                      | fixed keys                                                        | SyncStatus/ReorgEvent                                                | Sync progress, deep-fork, reorg metadata                                                                                                                                               |
+| `sync_meta`                      | fixed keys                                                        | Typed records / JSON monitoring bytes                                | Tip/status/runtime/progress/memory, reorg/deep-fork state, bulk session marker, background tasks, network identity, and genesis economic baseline                                      |
 | `dob_decoded`                    | spore_id (32B)                                                    | DecodeOutcome (Decoded(DobDecodedEntry) \| Failed(DobDecodeFailure)) | Cached CKB-VM DOB decode outcome (bulk-disabled, populated after sync catches up to tip). Failed is written only for deterministic failures; transient RPC failures are not persisted. |
 | `lock_scripts`                   | lock_hash (32B)                                                   | LockScriptEntry                                                      | Lock script components by hash (survives cell consumption for address resolution)                                                                                                      |
 | `net_nodes` **(network store)**  | peer_id (raw bytes)                                               | NodeRecord                                                           | Per-peer crawler observation (own_addrs, client_version, flags, protocols, first/last_seen, last_reachable_at, reachable, geo, asn, last_rtt_ms, sampled known_peers)                  |
@@ -99,6 +99,23 @@ model that future script schema refactors should follow.
 - `dao_by_block`: key = `i64::MAX - deposit_block` (big-endian) + deposit outpoint, supports global DAO deposit pagination in newest-first order.
 - `dao_by_lock_block`: key = `lock_script_hash(32B)` + block_desc + outpoint, supports per-address DAO deposit pagination.
 - `dao_by_status_block`: key = `status(i16 BE)` + block_desc + outpoint, supports status-filtered DAO queries (`deposited/withdrawing/withdrawn`).
+
+### `sync_meta` Fixed Keys
+
+`sync_meta` belongs to the **domain store** and is written only by the indexer. Its fixed-key
+namespace includes:
+
+- canonical progress/state: `tip_block`, `sync_status`, `runtime_status`, `sync_progress`,
+  `memory_stats`, and `background_tasks`
+- rollback state: `rollback_cleanup_in_progress`, latest/history reorg records, and `deep_fork`
+- bulk-build state: batch/session-in-progress markers
+- materialization trackers: HODL and cell-distribution trackers
+- chain identity: `network_identity`, persisted at first sync and validated on later starts
+- exact economics: `genesis_baseline` (`GenesisBaseline { total_issuance, burnt,
+virtual_occupied }`), derived from block 0 and used by supply, APC, and knowledge-size paths
+
+Missing or conflicting identity/baseline state is an invariant failure. API readers must not
+invent a replacement value or write this CF.
 
 ### Bulk-Build Sealed Aggregate Note
 
@@ -149,22 +166,35 @@ Key = raw `peer_id` bytes → `NodeRecord` (per-peer crawler view: `own_addrs`, 
 
 ## Memory Considerations
 
-| Machine RAM | Expected Usage |
-| ----------- | -------------- |
-| >= 32GB     | ~22GB peak     |
-| < 32GB      | ~8GB peak      |
+Memory sizing is per network rather than a fixed host-wide peak:
+
+- `[store].memory_budget_gb`, when set, is an explicit per-network RocksDB budget and is never
+  divided again.
+- Without an override, ckbadger divides detected host RAM by the governing orchestrator's
+  co-resident network count. A standalone single-network work directory has count 1.
+- The domain and append-only RocksDB instances inside one process share one block cache and one
+  WriteBufferManager. Store-local memtables/table readers are summed, while shared resources are
+  counted once.
+- `[indexer].bulk_memory_budget_gb` optionally caps whole-process `VmRSS + VmSwap` during bulk
+  build; otherwise the per-network RAM share is used.
 
 ## Config Keys
 
-| Parameter                       | Default            | Description                                                                    |
-| ------------------------------- | ------------------ | ------------------------------------------------------------------------------ |
-| `[store].domain_data_path`      | `data/domain`      | Domain RocksDB data directory                                                  |
-| `[store].append_only_data_path` | `data/append-only` | Append-only RocksDB data directory                                             |
-| `[store].network_data_path`     | `data/network`     | Network-crawler RocksDB data directory (opt-in; written by `ckbadger-crawler`) |
+| Parameter                         | Default            | Description                                                                    |
+| --------------------------------- | ------------------ | ------------------------------------------------------------------------------ |
+| `[store].domain_data_path`        | `data/domain`      | Domain RocksDB data directory                                                  |
+| `[store].append_only_data_path`   | `data/append-only` | Append-only RocksDB data directory                                             |
+| `[store].network_data_path`       | `data/network`     | Network-crawler RocksDB data directory (opt-in; written by `ckbadger-crawler`) |
+| `[store].memory_budget_gb`        | auto               | Explicit per-network RocksDB RAM budget; otherwise divide detected host RAM    |
+| `[indexer].bulk_memory_budget_gb` | auto               | Optional whole-indexer bulk-sync memory cap                                    |
 
-```bash
+```toml
 [store]
 domain_data_path = "/ssd/ckbadger-store"
 append_only_data_path = "/ssd/ckbadger-store-append-only"
 network_data_path = "/ssd/ckbadger-store-network"
+# memory_budget_gb = 32
+
+[indexer]
+# bulk_memory_budget_gb = 32
 ```

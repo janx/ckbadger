@@ -151,7 +151,7 @@ crates/
   api/            # Axum REST/WebSocket server library (port 8101)
   indexer/        # Blockchain sync daemon library (three-stage pipeline)
     src/sync/bulk_build/ # Bulk-build engine (in-memory reducers, FactsArena, LiveCellOwner)
-    src/verify/   #   Data integrity verification suite (55 checks)
+    src/verify/   #   Data integrity verification suite (56 checks)
   ckbadger-store/ # Embedded RocksDB storage engine (three store classes: 59 domain + 1 append-only + 2 network CFs)
   dob-decoder/    # CKB-VM DOB decoder (DNA extraction from Spore NFTs)
   common/         # Shared types (block, cell, tx, script, error)
@@ -171,12 +171,17 @@ docs/TESTING.md               # Data integrity verification details
 
 Three-stage pipeline: **Fetcher** (RPC I/O) -> **Parser** (CPU + DB prefetch) -> **Writer** (DB I/O). See `docs/INDEXER_PIPELINE.md` for architecture details and progress tracking.
 
-| Parameter             | Default | Description                             |
-| --------------------- | ------- | --------------------------------------- |
-| `bulk_sync_threshold` | `1000`  | Blocks behind tip to treat as bulk sync |
-| `poll_interval_ms`    | `1000`  | Live sync new-block poll interval (ms)  |
+| Parameter               | Default | Description                             |
+| ----------------------- | ------- | --------------------------------------- |
+| `bulk_sync_threshold`   | `1000`  | Blocks behind tip to treat as bulk sync |
+| `poll_interval_ms`      | `1000`  | Live sync new-block poll interval (ms)  |
+| `bulk_memory_budget_gb` | auto    | Optional whole-indexer bulk memory cap  |
 
 Bulk-build mode uses a `BottleneckController` (`crates/indexer/src/sync/bottleneck.rs`) with two independent dimensions: (1) batch sizing via build-time band + build/IO overlap — primary objective is build time in [2s, 5s]; below band → grow, above band → shrink; IO wait (recv + flush) is excluded from the band check because shrinking batch size cannot reduce IO-bound time; in-band the controller grows while build > IO (IO headroom exists), holds when IO ≥ build (physical limit); (2) I/O resources governed by waste classification (recv wait vs flush wait) adjusting `fetch_threads` and `bg_jobs`. Drain uses `drain_by_cells(target_cells, max_batch_bytes)` with cell count as primary budget and RAM-derived bytes as safety cap. Prefetch fill estimate uses actual cell density from the buffer (`cell_density()`) instead of hardcoded assumptions. Channel depths (prefetch + flush) are derived from system RAM.
+
+In orchestrator mode, APIs/crawlers/frontend start immediately, while indexers enter fresh-store
+bulk sync sequentially in `[[network]]` order. Only one network bulk-syncs at a time; an indexer
+past the bulk threshold no longer blocks the next network.
 
 Sync progress and memory stats are stored in RocksDB (`get_sync_tip()`/`get_sync_status()`/`get_sync_progress()`/`get_memory_stats()`).
 
@@ -188,11 +193,15 @@ Sync progress and memory stats are stored in RocksDB (`get_sync_tip()`/`get_sync
 
 Three logical RocksDB store classes: domain (`[store].domain_data_path`, default `data/domain`, 59 CFs), append-only (`[store].append_only_data_path`, default `data/append-only`, 1 CF: `CF_CELLS`), and network (`[store].network_data_path`, default `data/network`, 2 CFs: `CF_NET_NODES`, `CF_NET_STATS`). For the two chain stores the indexer opens read-write and the API opens secondary (read-only); the append-only store holds only immutable cell payloads keyed by outpoint, while all other chain state (activities, indexes, stats, etc.) lives in the domain store. The network store is written solely by the opt-in `ckbadger-crawler` service (configured via the `[crawler]` section, default `enabled = false`; API opens it secondary) and holds non-chain p2p-crawler observations — it is the only store EXEMPT from rebuild-from-genesis. See `docs/STORE_SCHEMA.md` for full column family reference.
 
-Memory: ~22GB peak (>=32GB RAM), ~8GB peak (<32GB RAM).
+Memory is budgeted per network. `[store].memory_budget_gb` is an explicit per-network override;
+otherwise detected host RAM is divided by the number of co-resident orchestrator networks. The
+domain and append-only stores in one process share one RocksDB block cache and
+WriteBufferManager. `[indexer].bulk_memory_budget_gb` optionally sets the whole-indexer bulk-sync
+hard limit; otherwise bulk sync uses the same per-network RAM share.
 
 ## Data Integrity Verification
 
-55 checks across 3 tiers: Fast (6, seconds), Sampling (23, minutes), Explorer (26, minutes). See `docs/TESTING.md` for full details.
+56 checks across 3 tiers: Fast (7, seconds), Sampling (23, minutes), Explorer (26, minutes). See `docs/TESTING.md` for full details.
 
 ```bash
 ckbadger verify --depth fast              # Quick sanity
@@ -260,19 +269,27 @@ ckbadger verify --list-checks             # List all checks
 
 ### Common Knowledge (CKB Core Concept)
 
-**Common Knowledge Size** = Total occupied capacity of all live cells (NOT just cell data bytes). A cell's occupied capacity includes: capacity field (8B) + lock script (33B + args) + type script (33B + args) + data bytes. Source: DAO header `U` field (`dao[24..32]`).
+**Common Knowledge Size** = Total real occupied capacity of all live cells (NOT just cell data
+bytes). A cell's occupied capacity includes: capacity field (8B) + lock script (33B + args) +
+type script (33B + args) + data bytes. It is derived from DAO header `U` (`dao[24..32]`) minus the
+network's genesis-derived `GenesisBaseline.virtual_occupied`.
 
 ```rust
 // DAO field structure (32 bytes, little-endian u64s):
 // [0..8]   C = total issuance
 // [8..16]  AR = accumulated rate
-// [16..24] S = cumulative non-miner secondary issuance (depositor + treasury)
-// [24..32] U = total occupied capacity  <-- Common Knowledge Size
+// [16..24] S = complete unissued secondary pool (DAO interest + treasury)
+// [24..32] U = protocol occupied capacity (includes genesis virtual occupied)
 ```
 
 **Do NOT confuse**: `cell.data.len()` (data only) vs `occupied_capacity` (full storage cost) vs `U` field (protocol-level cumulative).
 
-**Key domain knowledge** (`docs/DAO_CALCULATIONS.md`): Genesis issued 33.6B, only 25.2B circulating (8.4B burnt). `total_issuance` (dao field) != `circulating` (subtract burnt). APC = `secondary_issuance_per_year / circulating_supply * 100`.
+**Key domain knowledge** (`docs/DAO_CALCULATIONS.md`): mainnet's familiar rounded genesis
+figures are 33.6B issued, 8.4B burnt, and 25.2B circulating, but code must derive the exact
+per-network `GenesisBaseline` from block 0. Protocol circulation is `C - baseline.burnt - S`.
+Estimated APC uses the explorer-compatible continuous-compounding model seeded by
+`baseline.total_issuance`; the separate nominal APC chart uses
+`baseline.total_issuance - baseline.burnt`.
 
 ### Numerical Precision (MANDATORY)
 
@@ -297,13 +314,17 @@ DaoParser::is_dao_code_hash(&code_hash)
 
 ```rust
 const DAO_CODE_HASH: &str = "0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e";
-const DAO_OCCUPIED_CAPACITY: u64 = 102_00000000; // 102 CKB
-// Compensation: free_capacity * ar_withdraw / ar_deposit - free_capacity
+// 102 CKB is only the standard secp DAO-cell occupied capacity.
+// Persist and use each deposit cell's exact occupied capacity.
+// Compensation: free_capacity * ar_withdraw / ar_deposit - free_capacity,
+// where free_capacity = capacity - exact_occupied_capacity.
 ```
 
-1. **Deposit**: Creates DAO cell -> `dao_deposits(tx_hash=deposit_tx)`
-2. **Withdraw Request**: Consumes deposit -> set `withdraw_request_tx`
-3. **Withdraw Completion**: Lookup by `withdraw_request_tx` (NOT request cell's tx_hash)
+1. **Deposit**: Creates DAO cell → key `dao_deposits` by deposit outpoint.
+2. **Withdraw Request**: Consumes the deposit and creates a request outpoint; persist that outpoint
+   and its AR.
+3. **Withdraw Completion**: Resolve through `dao_by_withdraw_tx` keyed by the request outpoint, not
+   by treating the completion transaction hash as the original deposit key.
 
 ## Gotchas
 
