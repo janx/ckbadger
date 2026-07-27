@@ -2137,4 +2137,152 @@ mod tests {
         assert_eq!(decoded_block_hash, block_hash.to_vec());
         assert_eq!(decoded_tx_hash, tx_hash.to_vec());
     }
+
+    // -- ranked balance key codecs -----------------------------------------
+
+    /// Balances that exercise every interesting width: zero, one, the u128
+    /// ceiling, and values only representable in the widened U256 domain.
+    fn ranked_balance_ladder() -> Vec<TokenBalance> {
+        vec![
+            TokenBalance::zero(),
+            TokenBalance::from(1u128),
+            TokenBalance::from(u128::MAX - 1),
+            TokenBalance::from(u128::MAX),
+            // u128::MAX + 1 — the first value that no longer fits in u128.
+            "340282366920938463463374607431768211456"
+                .parse::<TokenBalance>()
+                .expect("u128::MAX + 1 parses as TokenBalance"),
+            // 2^255, near the top of the 32-byte domain.
+            "57896044618658097711785492504343953926634992332820282019728792003956564819968"
+                .parse::<TokenBalance>()
+                .expect("2^255 parses as TokenBalance"),
+        ]
+    }
+
+    #[test]
+    fn test_token_holder_balance_key_roundtrip_across_full_balance_domain() {
+        let type_hash = [0x11u8; 32];
+        let lock_hash = [0x22u8; 32];
+        for balance in ranked_balance_ladder() {
+            let key = encode_token_holder_balance_key(&type_hash, &balance, &lock_hash);
+            assert_eq!(key.len(), TOKEN_HOLDER_BALANCE_KEY_SIZE);
+            let (decoded_type, decoded_balance, decoded_lock) =
+                decode_token_holder_balance_key(&key);
+            assert_eq!(decoded_type, type_hash.to_vec());
+            assert_eq!(decoded_lock, lock_hash.to_vec());
+            assert_eq!(
+                decoded_balance, balance,
+                "token holder balance must round-trip exactly for {}",
+                balance
+            );
+        }
+    }
+
+    #[test]
+    fn test_addr_token_balance_key_roundtrip_across_full_balance_domain() {
+        let lock_hash = [0x33u8; 32];
+        let type_hash = [0x44u8; 32];
+        for balance in ranked_balance_ladder() {
+            let key = encode_addr_token_balance_key(&lock_hash, &balance, &type_hash);
+            assert_eq!(key.len(), ADDR_TOKEN_BALANCE_KEY_SIZE);
+            let (decoded_lock, decoded_balance, decoded_type) =
+                decode_addr_token_balance_key(&key);
+            assert_eq!(decoded_lock, lock_hash.to_vec());
+            assert_eq!(decoded_type, type_hash.to_vec());
+            assert_eq!(
+                decoded_balance, balance,
+                "addr token balance must round-trip exactly for {}",
+                balance
+            );
+        }
+    }
+
+    #[test]
+    fn test_token_holder_balance_keys_sort_strictly_descending_by_balance() {
+        let type_hash = [0x55u8; 32];
+        let lock_hash = [0x66u8; 32];
+        let ladder = ranked_balance_ladder();
+        // ladder is ascending by balance; ranked keys must be the reverse.
+        let mut previous_key: Option<Vec<u8>> = None;
+        for balance in ladder.iter().rev() {
+            let key = encode_token_holder_balance_key(&type_hash, balance, &lock_hash).to_vec();
+            if let Some(previous) = &previous_key {
+                assert!(
+                    previous.as_slice() < key.as_slice(),
+                    "descending balance encoding must be strictly increasing lexicographically as balance falls: balance={}",
+                    balance
+                );
+            }
+            previous_key = Some(key);
+        }
+    }
+
+    #[test]
+    fn test_addr_token_balance_keys_sort_strictly_descending_by_balance() {
+        let lock_hash = [0x77u8; 32];
+        let type_hash = [0x88u8; 32];
+        let ladder = ranked_balance_ladder();
+        let mut previous_key: Option<Vec<u8>> = None;
+        for balance in ladder.iter().rev() {
+            let key = encode_addr_token_balance_key(&lock_hash, balance, &type_hash).to_vec();
+            if let Some(previous) = &previous_key {
+                assert!(
+                    previous.as_slice() < key.as_slice(),
+                    "descending balance encoding must be strictly increasing lexicographically as balance falls: balance={}",
+                    balance
+                );
+            }
+            previous_key = Some(key);
+        }
+    }
+
+    /// A mixed ordering: the ranked CF is scanned per prefix, so within one
+    /// prefix the balance segment must dominate the trailing hash segment.
+    #[test]
+    fn test_ranked_balance_dominates_trailing_hash_in_key_order() {
+        let type_hash = [0x99u8; 32];
+        let big = TokenBalance::from(u128::MAX);
+        let small = TokenBalance::from(1u128);
+
+        // Large balance with the lexicographically largest lock hash must still
+        // sort before a small balance with the smallest lock hash.
+        let big_with_max_lock = encode_token_holder_balance_key(&type_hash, &big, &[0xFF; 32]);
+        let small_with_min_lock = encode_token_holder_balance_key(&type_hash, &small, &[0x00; 32]);
+        assert!(
+            big_with_max_lock.as_slice() < small_with_min_lock.as_slice(),
+            "balance segment must outrank the trailing lock hash"
+        );
+
+        // Equal balances fall back to ascending lock hash order.
+        let same_balance_low = encode_token_holder_balance_key(&type_hash, &big, &[0x01; 32]);
+        let same_balance_high = encode_token_holder_balance_key(&type_hash, &big, &[0x02; 32]);
+        assert!(same_balance_low.as_slice() < same_balance_high.as_slice());
+
+        // Different prefixes never interleave regardless of balance.
+        let other_type = [0x9Au8; 32];
+        let other_type_big = encode_token_holder_balance_key(&other_type, &big, &[0x00; 32]);
+        assert!(small_with_min_lock.as_slice() < other_type_big.as_slice());
+    }
+
+    #[test]
+    fn test_seek_after_keys_follow_their_base_key_but_precede_the_next_balance() {
+        let type_hash = [0xA1u8; 32];
+        let lock_hash = [0xA2u8; 32];
+        let balance = TokenBalance::from(u128::MAX);
+        let next_lower = TokenBalance::from(u128::MAX - 1);
+
+        let base = encode_token_holder_balance_key(&type_hash, &balance, &lock_hash);
+        let seek_after = encode_token_holder_balance_seek_after_key(&type_hash, &balance, &lock_hash);
+        let next = encode_token_holder_balance_key(&type_hash, &next_lower, &[0x00; 32]);
+
+        assert!(base.as_slice() < seek_after.as_slice());
+        assert!(seek_after.as_slice() < next.as_slice());
+
+        let addr_base = encode_addr_token_balance_key(&lock_hash, &balance, &type_hash);
+        let addr_seek_after =
+            encode_addr_token_balance_seek_after_key(&lock_hash, &balance, &type_hash);
+        let addr_next = encode_addr_token_balance_key(&lock_hash, &next_lower, &[0x00; 32]);
+        assert!(addr_base.as_slice() < addr_seek_after.as_slice());
+        assert!(addr_seek_after.as_slice() < addr_next.as_slice());
+    }
 }
