@@ -5,7 +5,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use ckbadger_config::{CkbadgerConfig, CrawlerConfig};
-use ckbadger_store::CkbadgerStore;
+use ckbadger_store::{CkbadgerStore, StoreRuntimeConfig};
 
 use crate::ckb_prober::CkbProber;
 use crate::engine::{run_round, RoundConfig};
@@ -29,14 +29,26 @@ pub fn select_geoip(cfg: &CrawlerConfig) -> anyhow::Result<Box<dyn GeoIp>> {
 /// running, a failed round is a *recorded observation* (logged via
 /// `tracing::error!`), never fatal — the loop keeps going. When `run_once` is
 /// set the loop returns after a single round (used by `crawl --once`).
-pub async fn run_crawler(work_dir: &Path, run_once: bool) -> anyhow::Result<()> {
+///
+/// `store_runtime_config` is this network's RAM share, computed by the CLI (the
+/// crawler crate has no access to the orchestrator config). The network store is
+/// this process's ONLY store open, so without it each of N co-resident crawlers
+/// would size its cache/WriteBufferManager from undivided host RAM.
+pub async fn run_crawler(
+    work_dir: &Path,
+    run_once: bool,
+    store_runtime_config: StoreRuntimeConfig,
+) -> anyhow::Result<()> {
     let cfg: CkbadgerConfig = ckbadger_config::load_config(work_dir)?;
     if !cfg.crawler.enabled && !run_once {
         tracing::info!("crawler disabled ([crawler].enabled=false); exiting");
         return Ok(());
     }
 
-    let store = CkbadgerStore::open_network(work_dir.join(&cfg.store.network_data_path))?;
+    let store = CkbadgerStore::open_network_with_runtime(
+        work_dir.join(&cfg.store.network_data_path),
+        store_runtime_config,
+    )?;
     let geoip = select_geoip(&cfg.crawler)?;
     let prober = CkbProber::new(&cfg.ckb.network, &cfg.crawler)?; // fail-fast on no bootnodes
 

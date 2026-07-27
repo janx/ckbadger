@@ -335,7 +335,13 @@ async fn run_cli() -> Result<()> {
         }
         Command::Crawl(args) => {
             init_tracing_from_config(&workdir);
-            ckbadger_crawler::entry::run_crawler(&workdir, args.once).await
+            let config = load_config(&workdir)?;
+            ckbadger_crawler::entry::run_crawler(
+                &workdir,
+                args.once,
+                store_runtime_config(&config.store, &workdir)?,
+            )
+            .await
         }
         Command::LabelImport(_) => {
             init_tracing_from_config(&workdir);
@@ -726,7 +732,12 @@ async fn cmd_internal(workdir: &Path, args: &InternalArgs) -> Result<()> {
             };
             run_frontend_server(frontend_config).await
         }
-        InternalService::Crawler => ckbadger_crawler::entry::run_crawler(workdir, false).await,
+        InternalService::Crawler => {
+            // The crawler's network store is its only store open; give it this
+            // network's RAM share so N co-resident crawlers do not each budget
+            // from undivided host RAM.
+            ckbadger_crawler::entry::run_crawler(workdir, false, store_runtime_config).await
+        }
     }
 }
 

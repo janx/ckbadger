@@ -1120,21 +1120,53 @@ impl CkbadgerStore {
         )
     }
 
-    /// Open the standalone network crawler store (read-write, primary).
+    /// Open the standalone network crawler store (read-write, primary) with the
+    /// default (single-network, undivided) runtime config.
+    ///
+    /// Prefer [`Self::open_network_with_runtime`] anywhere a per-network config
+    /// exists: RocksDB budgets are per-PROCESS and the shared cache /
+    /// WriteBufferManager are pinned by whichever open lands first, so a
+    /// `default()` open in a real deployment provisions from UNDIVIDED host RAM.
     pub fn open_network<P: AsRef<Path>>(path: P) -> anyhow::Result<Self> {
-        Self::open_with_class(path, StoreClass::Network, StoreRuntimeConfig::default())
+        Self::open_network_with_runtime(path, StoreRuntimeConfig::default())
     }
 
-    /// Open the network crawler store as a read-only secondary.
+    /// Open the standalone network crawler store (read-write, primary) with an
+    /// explicit runtime config — the crawler's only store open, so this is what
+    /// keeps N co-resident crawlers from budgeting N x the host's RAM.
+    pub fn open_network_with_runtime<P: AsRef<Path>>(
+        path: P,
+        runtime_config: StoreRuntimeConfig,
+    ) -> anyhow::Result<Self> {
+        Self::open_with_class(path, StoreClass::Network, runtime_config)
+    }
+
+    /// Open the network crawler store as a read-only secondary with the default
+    /// (single-network, undivided) runtime config. See [`Self::open_network`] for
+    /// why [`Self::open_network_secondary_with_runtime`] is preferred.
     pub fn open_network_secondary<P: AsRef<Path>>(
         primary_path: P,
         secondary_path: P,
+    ) -> anyhow::Result<Self> {
+        Self::open_network_secondary_with_runtime(
+            primary_path,
+            secondary_path,
+            StoreRuntimeConfig::default(),
+        )
+    }
+
+    /// Open the network crawler store as a read-only secondary with an explicit
+    /// runtime config.
+    pub fn open_network_secondary_with_runtime<P: AsRef<Path>>(
+        primary_path: P,
+        secondary_path: P,
+        runtime_config: StoreRuntimeConfig,
     ) -> anyhow::Result<Self> {
         Self::open_secondary_with_class(
             primary_path,
             secondary_path,
             StoreClass::Network,
-            StoreRuntimeConfig::default(),
+            runtime_config,
         )
     }
 
@@ -3415,6 +3447,58 @@ mod tests {
         assert!(store.cf_handle_exists(CF_NET_NODES));
         assert!(store.cf_handle_exists(CF_NET_STATS));
         assert!(!store.is_secondary());
+    }
+
+    #[test]
+    fn network_store_open_divides_ram_by_the_forwarded_network_count() {
+        // Guards the wiring, not the arithmetic (the `effective_ram_*` and
+        // `detect_system_resources` tests own that). `open_network` used to
+        // hardcode `StoreRuntimeConfig::default()`, and the crawler's ONLY store
+        // open goes through it — so N co-resident crawlers each provisioned
+        // cache/WBM caps from UNDIVIDED host RAM, an N x over-commit. That single
+        // forwarded argument is all that stands between this fix and being inert.
+        //
+        // Host-independent: both opens detect the same RAM R in this process, and
+        // (R / 1) / 2 == R / 2 exactly for u64. The per-store MemoryProfile is
+        // computed from the runtime config (unlike the process-wide SHARED_BUDGET,
+        // which the first open in the process pins), so it is deterministic here.
+        let one_dir = tempfile::tempdir().unwrap();
+        let two_dir = tempfile::tempdir().unwrap();
+
+        let one = CkbadgerStore::open_network_with_runtime(
+            one_dir.path(),
+            StoreRuntimeConfig {
+                network_count: NonZeroUsize::MIN,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let two = CkbadgerStore::open_network_with_runtime(
+            two_dir.path(),
+            StoreRuntimeConfig {
+                network_count: NonZeroUsize::new(2).unwrap(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(two.runtime_config().network_count.get(), 2);
+        assert_eq!(
+            two.memory_profile().wbm_normal_bytes,
+            one.memory_profile().wbm_normal_bytes / 2,
+            "the network store's budget must be the network's RAM share, not the host's"
+        );
+    }
+
+    #[test]
+    fn open_network_keeps_its_default_runtime_config_for_test_callers() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_network(dir.path()).unwrap();
+        assert_eq!(
+            store.runtime_config().network_count,
+            NonZeroUsize::MIN,
+            "the thin wrapper must stay the single-network default"
+        );
     }
 
     #[test]
