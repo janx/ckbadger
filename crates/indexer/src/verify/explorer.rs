@@ -734,17 +734,35 @@ fn last_30_days() -> Vec<String> {
 // Common explorer check runners
 // ---------------------------------------------------------------------------
 
-/// Compare exact changes between consecutive cumulative observations.
+/// Exact rational tolerance (0.2%) for the anchored absolute comparison.
 ///
-/// This intentionally validates the transition written for each day rather
-/// than aligning away a historical baseline. It is used where the official
-/// testnet explorer has a known old projection gap but both systems observe
-/// the same current canonical chain transitions.
+/// Wide enough for the official testnet explorer's known historical projection
+/// gap, narrow enough to catch a wrong per-network baseline. Kept as a rational
+/// numerator/denominator so the comparison stays exact i128 arithmetic — never
+/// f64.
+const ABSOLUTE_ANCHOR_TOLERANCE: (i128, i128) = (1, 500);
+
+/// Compare exact changes between consecutive cumulative observations, and
+/// optionally anchor the absolute level at the latest overlapping date.
+///
+/// The delta comparison intentionally validates the transition written for each
+/// day rather than aligning away a historical baseline. It is used where the
+/// official testnet explorer has a known old projection gap but both systems
+/// observe the same current canonical chain transitions.
+///
+/// Deltas alone are blind to a CONSTANT offset: a wrong per-network
+/// `GenesisBaseline.virtual_occupied`, for instance, cancels out of every
+/// difference. Callers that must also detect that pass
+/// `absolute_anchor_tolerance` — one absolute comparison at the newest
+/// overlapping date, under an exact rational relative tolerance. Callers with a
+/// legitimately offset baseline (X2's documented testnet total-deposit gap) pass
+/// `None` and keep pure delta semantics.
 fn run_exact_i128_explorer_daily_delta_check(
     our_data: &HashMap<String, String>,
     explorer_data: &HashMap<String, String>,
     progress: &ProgressReporter,
     label: &str,
+    absolute_anchor_tolerance: Option<(i128, i128)>,
     value_transform: impl Fn(&str, &str) -> Option<(i128, i128)>,
 ) -> CheckResult {
     let dates = last_30_days();
@@ -814,6 +832,24 @@ fn run_exact_i128_explorer_daily_delta_check(
                 "fewer than two parseable overlapping dates for daily-delta comparison".to_string(),
             ],
         });
+    }
+
+    // Anchor the absolute level once, at the newest overlapping date, so a
+    // constant offset that every delta cancels cannot hide.
+    if let (Some((numerator, denominator)), Some((date, ours, theirs))) =
+        (absolute_anchor_tolerance, observations.last())
+    {
+        checked += 1;
+        if let Some(finding) = compare_nonnegative_i128_relative_tolerance(
+            *ours,
+            *theirs,
+            date,
+            &format!("{label} absolute anchor at {date}"),
+            numerator,
+            denominator,
+        ) {
+            findings.push(finding);
+        }
     }
 
     if findings.is_empty() {
@@ -1253,6 +1289,9 @@ impl Check for ExplorerTotalDeposit {
             &explorer_data,
             progress,
             "total_dao_deposit",
+            // X2 keeps pure delta semantics: old testnet history carries a
+            // documented fixed baseline gap in total_dao_deposit.
+            None,
             |ours, theirs| Some((ours.parse::<i128>().ok()?, theirs.parse::<i128>().ok()?)),
         ))
     }
@@ -1386,6 +1425,7 @@ impl Check for ExplorerKnowledgeSize {
             &explorer_data,
             progress,
             "knowledge_size",
+            Some(ABSOLUTE_ANCHOR_TOLERANCE),
             |ours, theirs| Some((parse_ckb_to_shannon(ours)?, theirs.parse::<i128>().ok()?)),
         ))
     }
@@ -1455,6 +1495,7 @@ impl Check for ExplorerLiveCellCount {
             &explorer_data,
             progress,
             "live_cells_count",
+            Some(ABSOLUTE_ANCHOR_TOLERANCE),
             |ours, theirs| Some((ours.parse::<i128>().ok()?, theirs.parse::<i128>().ok()?)),
         ))
     }
@@ -1487,6 +1528,7 @@ impl Check for ExplorerDeadCellCount {
             &explorer_data,
             progress,
             "dead_cells_count",
+            Some(ABSOLUTE_ANCHOR_TOLERANCE),
             |ours, theirs| Some((ours.parse::<i128>().ok()?, theirs.parse::<i128>().ok()?)),
         ))
     }
@@ -2477,6 +2519,65 @@ mod tests {
         assert!(result.passed, "findings: {:?}", result.findings);
     }
 
+    /// X5 with a constant ~10% offset: every per-day delta matches exactly
+    /// (+1 CKB on both sides), which is precisely what a wrong per-network
+    /// `GenesisBaseline.virtual_occupied` looks like. The anchored absolute
+    /// comparison must catch it.
+    #[test]
+    fn knowledge_size_check_detects_constant_baseline_offset() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let server = runtime.block_on(MockServer::start());
+        let dates = last_30_days();
+        let older = dates[1].clone();
+        let newer = dates[0].clone();
+
+        runtime.block_on(async {
+            Mock::given(method("GET"))
+                .and(path("/api/v1/charts/knowledge-size"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "data": [
+                        { "date": older, "value": "100" },
+                        { "date": newer, "value": "101" }
+                    ]
+                })))
+                .mount(&server)
+                .await;
+
+            Mock::given(method("GET"))
+                .and(path("/api/v1/daily_statistics/knowledge_size"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "data": [
+                        {
+                            "attributes": {
+                                "created_at_unixtimestamp": explorer_timestamp_for_date(&dates[1]).to_string(),
+                                "knowledge_size": "9000000000"
+                            }
+                        },
+                        {
+                            "attributes": {
+                                "created_at_unixtimestamp": explorer_timestamp_for_date(&dates[0]).to_string(),
+                                "knowledge_size": "9100000000"
+                            }
+                        }
+                    ]
+                })))
+                .expect(1)
+                .mount(&server)
+                .await;
+        });
+
+        let result = ExplorerKnowledgeSize
+            .run(
+                &explorer_test_context(&server),
+                &ProgressReporter::new(None),
+            )
+            .unwrap();
+        assert!(
+            !result.passed,
+            "a constant baseline offset must fail the absolute anchor"
+        );
+    }
+
     #[test]
     fn circulating_supply_check_restores_explorer_policy_locked_capacity() {
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
@@ -2676,11 +2777,80 @@ mod tests {
             &explorer,
             &progress,
             "test_metric",
+            None,
             |our, explorer| Some((our.parse::<i128>().ok()?, explorer.parse::<i128>().ok()?)),
         );
 
         assert!(result.passed);
         assert_eq!(result.items_checked, 1);
+    }
+
+    /// A CONSTANT offset cancels out of every per-day delta, so the delta check
+    /// alone cannot see it — a wrong per-network `GenesisBaseline.virtual_occupied`
+    /// is exactly that shape. The anchored absolute comparison at the latest
+    /// overlapping date restores the detection.
+    #[test]
+    fn test_anchored_daily_delta_detects_constant_offset() {
+        let dates = last_30_days();
+        let d1 = dates[0].clone();
+        let d2 = dates[1].clone();
+
+        let mut ours = HashMap::new();
+        ours.insert(d1.clone(), "110".to_string());
+        ours.insert(d2.clone(), "105".to_string());
+
+        let mut explorer = HashMap::new();
+        explorer.insert(d1, "100".to_string());
+        explorer.insert(d2, "95".to_string());
+
+        let progress = ProgressReporter::new(None);
+        let result = run_exact_i128_explorer_daily_delta_check(
+            &ours,
+            &explorer,
+            &progress,
+            "test_metric",
+            Some(ABSOLUTE_ANCHOR_TOLERANCE),
+            |our, explorer| Some((our.parse::<i128>().ok()?, explorer.parse::<i128>().ok()?)),
+        );
+
+        assert!(!result.passed, "constant offset must fail the anchor");
+        assert!(
+            result
+                .findings
+                .iter()
+                .any(|f| f.details[0].contains("anchor")),
+            "findings: {:?}",
+            result.findings
+        );
+    }
+
+    /// The anchor must not fire on the explorer's known historical projection
+    /// gap, which stays inside the 0.2% rational tolerance.
+    #[test]
+    fn test_anchored_daily_delta_allows_offset_within_tolerance() {
+        let dates = last_30_days();
+        let d1 = dates[0].clone();
+        let d2 = dates[1].clone();
+
+        let mut ours = HashMap::new();
+        ours.insert(d1.clone(), "10005".to_string());
+        ours.insert(d2.clone(), "10000".to_string());
+
+        let mut explorer = HashMap::new();
+        explorer.insert(d1, "10015".to_string());
+        explorer.insert(d2, "10010".to_string());
+
+        let progress = ProgressReporter::new(None);
+        let result = run_exact_i128_explorer_daily_delta_check(
+            &ours,
+            &explorer,
+            &progress,
+            "test_metric",
+            Some(ABSOLUTE_ANCHOR_TOLERANCE),
+            |our, explorer| Some((our.parse::<i128>().ok()?, explorer.parse::<i128>().ok()?)),
+        );
+
+        assert!(result.passed, "findings: {:?}", result.findings);
     }
 
     #[test]
@@ -2703,6 +2873,7 @@ mod tests {
             &explorer,
             &progress,
             "test_metric",
+            None,
             |our, explorer| Some((our.parse::<i128>().ok()?, explorer.parse::<i128>().ok()?)),
         );
 
@@ -2731,6 +2902,7 @@ mod tests {
             &explorer,
             &progress,
             "test_metric",
+            None,
             |our, explorer| Some((our.parse::<i128>().ok()?, explorer.parse::<i128>().ok()?)),
         );
 
