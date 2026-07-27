@@ -1,6 +1,17 @@
 import { buildAiCapabilities } from '@/lib/ai/capabilities';
 
 describe('buildAiCapabilities', () => {
+  beforeEach(() => {
+    window.__CKBADGER_RUNTIME_CONFIG__ = {
+      networks: [{ name: 'mainnet' }, { name: 'testnet' }],
+      defaultNetwork: 'mainnet',
+    };
+  });
+
+  afterEach(() => {
+    delete window.__CKBADGER_RUNTIME_CONFIG__;
+  });
+
   it('returns expected format negotiation contract', () => {
     const capabilities = buildAiCapabilities('http://localhost:3000');
 
@@ -8,9 +19,13 @@ describe('buildAiCapabilities', () => {
     expect(capabilities.site.name).toBe('ckbadger');
     expect(capabilities.site.pageBasePattern).toBe('/{network}');
     expect(capabilities.site.apiBasePattern).toBe('/api/{network}/v1');
-    expect(capabilities.site.directApiBase).toBe('/api/v1');
     expect(capabilities.site.wsUrlPattern).toBe('/ws/{network}');
-    expect(capabilities.site.directWsUrl).toBe('/ws');
+    // Every API/WS path is per-network: the un-prefixed `/api/v1` and `/ws` this
+    // document used to advertise hit the SPA fallback, not the API.
+    expect(capabilities.site).not.toHaveProperty('directApiBase');
+    expect(capabilities.site).not.toHaveProperty('directWsUrl');
+    expect(capabilities.site.networks).toEqual(['mainnet', 'testnet']);
+    expect(capabilities.site.defaultNetwork).toBe('mainnet');
     expect(capabilities.formatNegotiation.supportedFormats).toEqual(['html', 'md', 'raw']);
     expect(capabilities.formatNegotiation.priority).toEqual([
       'query.format',
@@ -23,6 +38,22 @@ describe('buildAiCapabilities', () => {
     expect(capabilities.responseHeaders.raw.schemaHeader).toBe('x-ckbadger-schema');
     expect(capabilities.responseMetadata.markdown.frontmatterFields).toContain('buildVersion');
     expect(capabilities.responseMetadata.raw.metaFields).toContain('buildVersion');
+  });
+
+  it('derives the per-network patterns and network list from the runtime config', () => {
+    window.__CKBADGER_RUNTIME_CONFIG__ = {
+      networks: [{ name: 'devnet' }],
+      defaultNetwork: 'devnet',
+      apiBasePattern: '/proxy/api/{network}/v1',
+      wsUrlPattern: '/proxy/ws/{network}',
+    };
+
+    const capabilities = buildAiCapabilities();
+
+    expect(capabilities.site.apiBasePattern).toBe('/proxy/api/{network}/v1');
+    expect(capabilities.site.wsUrlPattern).toBe('/proxy/ws/{network}');
+    expect(capabilities.site.networks).toEqual(['devnet']);
+    expect(capabilities.site.defaultNetwork).toBe('devnet');
   });
 
   it('declares tx debugger profile in raw route matrix', () => {

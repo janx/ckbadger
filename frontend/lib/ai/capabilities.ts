@@ -1,5 +1,11 @@
 import { MARKDOWN_ROUTE_PATTERNS } from '@/lib/ai/markdown-route';
 import { RAW_ROUTE_PATTERNS } from '@/lib/ai/raw-route';
+import {
+  resolveApiBasePattern,
+  resolveDefaultNetwork,
+  resolveNetworks,
+  resolveWsUrlPattern,
+} from '@/lib/runtime-config';
 
 const RAW_MEDIA_TYPE = 'application/vnd.ckbadger.raw+json';
 const MARKDOWN_MEDIA_TYPE = 'text/markdown';
@@ -18,10 +24,13 @@ export interface AiCapabilities {
   site: {
     name: 'ckbadger';
     pageBasePattern: '/{network}';
-    apiBasePattern: '/api/{network}/v1';
-    directApiBase: '/api/v1';
-    wsUrlPattern: '/ws/{network}';
-    directWsUrl: '/ws';
+    /** Per-network API base, e.g. `/api/{network}/v1`. There is NO un-prefixed API path. */
+    apiBasePattern: string;
+    /** Per-network WebSocket URL, e.g. `/ws/{network}`. There is NO un-prefixed WS path. */
+    wsUrlPattern: string;
+    /** Networks this deployment serves — substitute one for `{network}` above. */
+    networks: readonly string[];
+    defaultNetwork: string;
   };
   formatNegotiation: {
     priority: ['query.format', 'path.suffix', 'accept.header'];
@@ -102,10 +111,10 @@ export function buildAiCapabilities(origin?: string): AiCapabilities & { origin?
     site: {
       name: 'ckbadger',
       pageBasePattern: '/{network}',
-      apiBasePattern: '/api/{network}/v1',
-      directApiBase: '/api/v1',
-      wsUrlPattern: '/ws/{network}',
-      directWsUrl: '/ws',
+      apiBasePattern: resolveApiBasePattern(),
+      wsUrlPattern: resolveWsUrlPattern(),
+      networks: resolveNetworks(),
+      defaultNetwork: resolveDefaultNetwork(),
     },
     formatNegotiation: {
       priority: ['query.format', 'path.suffix', 'accept.header'],
