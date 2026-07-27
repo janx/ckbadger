@@ -10,6 +10,46 @@ use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::keys;
 use ckbadger_store::types::{FiberChannel, FiberChannelState, TxActions};
 
+/// Result of applying one Fiber protocol action to the channel store.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FiberEventOutcome {
+    /// The event was applied to CF_FIBER_CHANNELS.
+    Applied,
+    /// The event referenced a channel this indexer holds no record for.
+    ///
+    /// Fiber is permissionless, so ordinary chain shapes reach this state
+    /// without any indexer bug:
+    ///
+    /// - a tx that only CREATES a commitment-lock output classifies to `None`
+    ///   (see `fiber_detector::classify_event`), so no
+    ///   `CF_FIBER_CHANNEL_BY_COMMITMENT` mapping is written; the later spend of
+    ///   that cell arrives as a `settlement` for an unknown commitment;
+    /// - a splice (funding input AND funding output) classifies as
+    ///   `channel_close`, so the NEW funding cell never gets a channel record and
+    ///   its later spend arrives as a close for an unknown funding outpoint.
+    ///
+    /// Chain data is untrusted input: these are skipped with a warning, never
+    /// escalated into a sync halt.
+    SkippedUnknownChannel,
+}
+
+/// Per-transaction tally of Fiber event outcomes.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct FiberEventSummary {
+    pub applied: usize,
+    pub skipped_unknown_channel: usize,
+    pub skipped_unknown_action: usize,
+}
+
+impl FiberEventSummary {
+    fn record(&mut self, outcome: FiberEventOutcome) {
+        match outcome {
+            FiberEventOutcome::Applied => self.applied += 1,
+            FiberEventOutcome::SkippedUnknownChannel => self.skipped_unknown_channel += 1,
+        }
+    }
+}
+
 /// Process Fiber channel lifecycle events from a TxActions.
 ///
 /// Scans TX-level `protocol_actions` for `protocol == "fiber"`,
@@ -20,6 +60,17 @@ pub fn process_fiber_channel_events(
     batch: &mut StoreBatch<'_>,
     tx_actions: &TxActions,
 ) -> Result<()> {
+    apply_fiber_channel_events(batch, tx_actions).map(|_| ())
+}
+
+/// Same as [`process_fiber_channel_events`], returning the outcome tally so the
+/// skip paths are observable (and assertable) rather than silently ignored.
+pub(crate) fn apply_fiber_channel_events(
+    batch: &mut StoreBatch<'_>,
+    tx_actions: &TxActions,
+) -> Result<FiberEventSummary> {
+    let mut summary = FiberEventSummary::default();
+
     for action in &tx_actions.protocol_actions {
         if action.protocol != "fiber" {
             continue;
@@ -42,22 +93,20 @@ pub fn process_fiber_channel_events(
             .unwrap_or(&[]);
 
         match action.action.as_str() {
-            "channel_open" => {
-                handle_channel_open(batch, tx_actions, first_participant_lock_hash, &metadata)?;
-            }
-            "channel_close" => {
-                handle_channel_close(batch, tx_actions, &metadata)?;
-            }
-            "force_close" => {
-                handle_force_close(batch, tx_actions, &metadata)?;
-            }
-            "settlement" => {
-                handle_settlement(batch, tx_actions, &metadata)?;
-            }
+            "channel_open" => summary.record(handle_channel_open(
+                batch,
+                tx_actions,
+                first_participant_lock_hash,
+                &metadata,
+            )?),
+            "channel_close" => summary.record(handle_channel_close(batch, tx_actions, &metadata)?),
+            "force_close" => summary.record(handle_force_close(batch, tx_actions, &metadata)?),
+            "settlement" => summary.record(handle_settlement(batch, tx_actions, &metadata)?),
             "commitment_revocation" => {
-                handle_commitment_revocation(batch, tx_actions, &metadata)?;
+                summary.record(handle_commitment_revocation(batch, tx_actions, &metadata)?)
             }
             other => {
+                summary.skipped_unknown_action += 1;
                 warn!(
                     action = other,
                     tx_hash = %hex::encode(&tx_actions.tx_hash),
@@ -66,7 +115,28 @@ pub fn process_fiber_channel_events(
             }
         }
     }
-    Ok(())
+
+    Ok(summary)
+}
+
+/// Log an event that names a channel the indexer never recorded.
+fn warn_unknown_channel(
+    tx_actions: &TxActions,
+    action: &str,
+    lookup_key: &str,
+    lookup_value: String,
+) -> FiberEventOutcome {
+    warn!(
+        skip_reason = "unknown_channel",
+        action,
+        tx_hash = %hex::encode(&tx_actions.tx_hash),
+        block_number = tx_actions.block_number,
+        block_hash = %hex::encode(&tx_actions.block_hash),
+        lookup_key,
+        lookup_value = %lookup_value,
+        "fiber event references a channel with no indexed open, skipping"
+    );
+    FiberEventOutcome::SkippedUnknownChannel
 }
 
 /// Handle `channel_open`: create a new FiberChannel with state Open.
@@ -75,7 +145,7 @@ fn handle_channel_open(
     tx_actions: &TxActions,
     first_participant_lock_hash: &[u8],
     metadata: &serde_json::Value,
-) -> Result<()> {
+) -> Result<FiberEventOutcome> {
     let (funding_tx_hash, funding_output_index) =
         parse_channel_outpoint(metadata, "channel_open", &tx_actions.tx_hash)?;
 
@@ -166,7 +236,7 @@ fn handle_channel_open(
         batch.put_addr_fiber_channel(participant, &channel_id);
     }
 
-    Ok(())
+    Ok(FiberEventOutcome::Applied)
 }
 
 /// Handle `channel_close`: cooperative close (funding lock consumed, no commitment output).
@@ -174,19 +244,22 @@ fn handle_channel_close(
     batch: &mut StoreBatch<'_>,
     tx_actions: &TxActions,
     metadata: &serde_json::Value,
-) -> Result<()> {
+) -> Result<FiberEventOutcome> {
     let (funding_tx_hash, funding_output_index) =
         parse_channel_outpoint(metadata, "channel_close", &tx_actions.tx_hash)?;
     let channel_id = keys::encode_fiber_channel_id(&funding_tx_hash, funding_output_index);
-    let mut channel = batch.get_fiber_channel(&channel_id)?.ok_or_else(|| {
-        anyhow::anyhow!(
-            "fiber channel_close missing channel: tx=0x{} funding_outpoint=0x{}:{} channel_id=0x{}",
-            hex::encode(&tx_actions.tx_hash),
-            hex::encode(&funding_tx_hash),
-            funding_output_index,
-            hex::encode(&channel_id)
-        )
-    })?;
+    let Some(mut channel) = batch.get_fiber_channel(&channel_id)? else {
+        return Ok(warn_unknown_channel(
+            tx_actions,
+            "channel_close",
+            "funding_outpoint",
+            format!(
+                "0x{}:{}",
+                hex::encode(&funding_tx_hash),
+                funding_output_index
+            ),
+        ));
+    };
     if channel.state != FiberChannelState::Open {
         anyhow::bail!(
             "fiber channel_close expected open channel: tx=0x{} funding_outpoint=0x{}:{} channel_id=0x{} state={:?}",
@@ -205,7 +278,7 @@ fn handle_channel_close(
 
     batch.put_fiber_channel(&channel_id, &channel);
 
-    Ok(())
+    Ok(FiberEventOutcome::Applied)
 }
 
 /// Handle `force_close`: funding lock consumed + commitment lock output.
@@ -213,19 +286,22 @@ fn handle_force_close(
     batch: &mut StoreBatch<'_>,
     tx_actions: &TxActions,
     metadata: &serde_json::Value,
-) -> Result<()> {
+) -> Result<FiberEventOutcome> {
     let (funding_tx_hash, funding_output_index) =
         parse_channel_outpoint(metadata, "force_close", &tx_actions.tx_hash)?;
     let channel_id = keys::encode_fiber_channel_id(&funding_tx_hash, funding_output_index);
-    let mut channel = batch.get_fiber_channel(&channel_id)?.ok_or_else(|| {
-        anyhow::anyhow!(
-            "fiber force_close missing channel: tx=0x{} funding_outpoint=0x{}:{} channel_id=0x{}",
-            hex::encode(&tx_actions.tx_hash),
-            hex::encode(&funding_tx_hash),
-            funding_output_index,
-            hex::encode(&channel_id)
-        )
-    })?;
+    let Some(mut channel) = batch.get_fiber_channel(&channel_id)? else {
+        return Ok(warn_unknown_channel(
+            tx_actions,
+            "force_close",
+            "funding_outpoint",
+            format!(
+                "0x{}:{}",
+                hex::encode(&funding_tx_hash),
+                funding_output_index
+            ),
+        ));
+    };
     if channel.state != FiberChannelState::Open {
         anyhow::bail!(
             "fiber force_close expected open channel: tx=0x{} funding_outpoint=0x{}:{} channel_id=0x{} state={:?}",
@@ -274,7 +350,7 @@ fn handle_force_close(
 
     batch.put_fiber_channel(&channel_id, &channel);
 
-    Ok(())
+    Ok(FiberEventOutcome::Applied)
 }
 
 /// Handle `settlement`: commitment lock consumed.
@@ -282,7 +358,7 @@ fn handle_settlement(
     batch: &mut StoreBatch<'_>,
     tx_actions: &TxActions,
     metadata: &serde_json::Value,
-) -> Result<()> {
+) -> Result<FiberEventOutcome> {
     let commitment_args_hex = match metadata.get("commitmentLockArgs").and_then(|v| v.as_str()) {
         Some(s) => s,
         None => {
@@ -302,17 +378,21 @@ fn handle_settlement(
     })?;
     let commitment_hash = blake2b_hash(&commitment_args);
 
-    let channel_id = batch
-        .get_fiber_channel_id_by_commitment(&commitment_hash)?
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "fiber settlement missing channel by commitment: tx=0x{} commitment_hash=0x{} commitment_lock_args={}",
-                hex::encode(&tx_actions.tx_hash),
-                hex::encode(&commitment_hash),
-                commitment_args_hex
-            )
-        })?;
+    let Some(channel_id) = batch.get_fiber_channel_id_by_commitment(&commitment_hash)? else {
+        return Ok(warn_unknown_channel(
+            tx_actions,
+            "settlement",
+            "commitment_hash",
+            format!(
+                "0x{} (commitment_lock_args={commitment_args_hex})",
+                hex::encode(&commitment_hash)
+            ),
+        ));
+    };
 
+    // The commitment index and the channel record are written together, so a
+    // resolved channel_id with no channel behind it is an indexer invariant
+    // violation, not a chain shape.
     let mut channel = batch.get_fiber_channel(&channel_id)?.ok_or_else(|| {
         anyhow::anyhow!(
             "fiber settlement missing channel state: tx=0x{} channel_id=0x{} commitment_hash=0x{}",
@@ -338,7 +418,7 @@ fn handle_settlement(
 
     batch.put_fiber_channel(&channel_id, &channel);
 
-    Ok(())
+    Ok(FiberEventOutcome::Applied)
 }
 
 /// Handle `commitment_revocation`: commitment-lock input consumed + new commitment-lock output.
@@ -347,7 +427,7 @@ fn handle_commitment_revocation(
     batch: &mut StoreBatch<'_>,
     tx_actions: &TxActions,
     metadata: &serde_json::Value,
-) -> Result<()> {
+) -> Result<FiberEventOutcome> {
     let old_args_hex = match metadata
         .get("oldCommitmentLockArgs")
         .and_then(|v| v.as_str())
@@ -391,17 +471,19 @@ fn handle_commitment_revocation(
     let old_hash = blake2b_hash(&old_args);
     let new_hash = blake2b_hash(&new_args);
 
-    let channel_id = batch
-        .get_fiber_channel_id_by_commitment(&old_hash)?
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "fiber commitment_revocation missing channel by commitment: tx=0x{} commitment_hash=0x{} old_commitment_lock_args={}",
-                hex::encode(&tx_actions.tx_hash),
-                hex::encode(&old_hash),
-                old_args_hex
-            )
-        })?;
+    let Some(channel_id) = batch.get_fiber_channel_id_by_commitment(&old_hash)? else {
+        return Ok(warn_unknown_channel(
+            tx_actions,
+            "commitment_revocation",
+            "commitment_hash",
+            format!(
+                "0x{} (old_commitment_lock_args={old_args_hex})",
+                hex::encode(&old_hash)
+            ),
+        ));
+    };
 
+    // As in settlement: the index resolved, so the channel record must exist.
     let mut channel = batch.get_fiber_channel(&channel_id)?.ok_or_else(|| {
         anyhow::anyhow!(
             "fiber commitment_revocation missing channel state: tx=0x{} channel_id=0x{} commitment_hash=0x{}",
@@ -439,7 +521,7 @@ fn handle_commitment_revocation(
     batch.put_fiber_channel_by_commitment(&new_hash, &channel_id);
     batch.put_fiber_channel(&channel_id, &channel);
 
-    Ok(())
+    Ok(FiberEventOutcome::Applied)
 }
 
 fn parse_channel_outpoint(
@@ -1064,8 +1146,16 @@ mod tests {
         assert!(channels.is_empty());
     }
 
+    /// Deliberate behaviour change (was `test_channel_close_missing_channel_fails_fast`).
+    ///
+    /// A close whose funding outpoint has no channel record is an ordinary
+    /// permissionless-chain shape, not an indexer invariant violation: the
+    /// detector classifies a splice (funding input + funding output) as
+    /// `channel_close`, so the new funding cell never gets a channel record and
+    /// its later spend lands here. Chain data is untrusted input — halting sync
+    /// on it contradicts the malformed-sUDT skip-with-warning policy.
     #[test]
-    fn test_channel_close_missing_channel_fails_fast() {
+    fn test_channel_close_missing_channel_is_skipped() {
         let dir = TempDir::new().unwrap();
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();
 
@@ -1085,8 +1175,150 @@ mod tests {
         );
 
         let mut batch = StoreBatch::new(&store);
-        let error = process_fiber_channel_events(&mut batch, &actions).unwrap_err();
-        assert!(error.to_string().contains("channel_close missing channel"));
+        let summary = apply_fiber_channel_events(&mut batch, &actions).unwrap();
+        batch.commit().unwrap();
+
+        assert_eq!(summary.applied, 0);
+        assert_eq!(summary.skipped_unknown_channel, 1);
+        assert!(store
+            .list_fiber_channels(10, None, None)
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn test_force_close_missing_channel_is_skipped() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+
+        let metadata = serde_json::json!({
+            "event": "force_close",
+            "channelOutpoint": channel_outpoint_hex(&[0x12; 32], 0),
+            "capacity": "50000000000",
+            "fundingLockArgs": "0xcccccccccccccccccccccccccccccccccccccccc",
+            "commitmentLockArgs": "0xdddddddddddddddddddddddddddddddddddddddd",
+        });
+        let actions = make_tx_actions_with_fiber_action(
+            &[0x42; 32],
+            5002,
+            1_700_000_020,
+            &[0xAA; 32],
+            "force_close",
+            metadata,
+        );
+
+        let mut batch = StoreBatch::new(&store);
+        let summary = apply_fiber_channel_events(&mut batch, &actions).unwrap();
+        batch.commit().unwrap();
+
+        assert_eq!(summary.applied, 0);
+        assert_eq!(summary.skipped_unknown_channel, 1);
+        assert!(store
+            .list_fiber_channels(10, None, None)
+            .unwrap()
+            .is_empty());
+    }
+
+    /// Reachable shape (a): a tx that only CREATES a commitment-lock output
+    /// classifies to `None`, so no `CF_FIBER_CHANNEL_BY_COMMITMENT` mapping is
+    /// ever written; the later spend of that cell arrives here as a settlement
+    /// for a commitment the indexer never saw.
+    #[test]
+    fn test_settlement_missing_channel_by_commitment_is_skipped() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+
+        let metadata = serde_json::json!({
+            "event": "settlement",
+            "capacity": "50000000000",
+            "commitmentLockArgs": "0xdddddddddddddddddddddddddddddddddddddddd",
+        });
+        let actions = make_tx_actions_with_fiber_action(
+            &[0x43; 32],
+            5003,
+            1_700_000_030,
+            &[0xAA; 32],
+            "settlement",
+            metadata,
+        );
+
+        let mut batch = StoreBatch::new(&store);
+        let summary = apply_fiber_channel_events(&mut batch, &actions).unwrap();
+        batch.commit().unwrap();
+
+        assert_eq!(summary.applied, 0);
+        assert_eq!(summary.skipped_unknown_channel, 1);
+        assert!(store
+            .list_fiber_channels(10, None, None)
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn test_commitment_revocation_missing_channel_by_commitment_is_skipped() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+
+        let metadata = serde_json::json!({
+            "event": "commitment_revocation",
+            "oldCommitmentLockArgs": "0xdddddddddddddddddddddddddddddddddddddddd",
+            "newCommitmentLockArgs": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        });
+        let actions = make_tx_actions_with_fiber_action(
+            &[0x44; 32],
+            5004,
+            1_700_000_040,
+            &[0xAA; 32],
+            "commitment_revocation",
+            metadata,
+        );
+
+        let mut batch = StoreBatch::new(&store);
+        let summary = apply_fiber_channel_events(&mut batch, &actions).unwrap();
+        batch.commit().unwrap();
+
+        assert_eq!(summary.applied, 0);
+        assert_eq!(summary.skipped_unknown_channel, 1);
+        assert!(store
+            .list_fiber_channels(10, None, None)
+            .unwrap()
+            .is_empty());
+    }
+
+    /// The skip policy covers unknown channels only. A second `channel_open` on
+    /// one funding outpoint cannot happen on-chain (a live cell is consumed
+    /// once), so it stays a hard failure: it means replay or reorg mishandling.
+    #[test]
+    fn test_duplicate_channel_open_still_fails_fast() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+
+        let funding_tx_hash = [0x13; 32];
+        let metadata = make_channel_open_metadata(&funding_tx_hash, 0, 500_00000000, &[0xCC; 20]);
+        let actions = make_tx_actions_with_fiber_action(
+            &[0x45; 32],
+            5005,
+            1_700_000_050,
+            &[0xAA; 32],
+            "channel_open",
+            metadata.clone(),
+        );
+
+        let mut batch = StoreBatch::new(&store);
+        process_fiber_channel_events(&mut batch, &actions).unwrap();
+        batch.commit().unwrap();
+
+        let replay = make_tx_actions_with_fiber_action(
+            &[0x46; 32],
+            5006,
+            1_700_000_060,
+            &[0xAA; 32],
+            "channel_open",
+            metadata,
+        );
+        let mut batch = StoreBatch::new(&store);
+        let error = process_fiber_channel_events(&mut batch, &replay).unwrap_err();
+        assert!(error.to_string().contains("duplicate fiber channel_open"));
     }
 
     #[test]

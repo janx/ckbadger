@@ -852,6 +852,144 @@ mod tests {
             .any(|p| p.lock_hash == vec![commitment_owner; 32]));
     }
 
+    /// Splice shape: one tx CONSUMES a funding-lock cell and CREATES a new one.
+    /// This is a real Fiber operation, not malformed data.
+    ///
+    /// `classify_event` checks `has_funding_input && !has_commitment_output`
+    /// before anything else, so a splice classifies as a plain `channel_close`
+    /// on the OLD funding outpoint and nothing is ever recorded for the NEW
+    /// funding cell. Full splice support (emitting Close + Open from one tx) is
+    /// future work; this test pins today's classification so the follow-on
+    /// behaviour is explicit rather than accidental.
+    ///
+    /// The consequence the writer must tolerate: when that new funding cell is
+    /// later spent, the close names a channel with no indexed open. That must be
+    /// SKIPPED, not fatal — otherwise an ordinary permissionless chain shape
+    /// halts sync.
+    #[test]
+    fn test_splice_classifies_as_close_and_new_funding_spend_is_skipped() {
+        use crate::db::writer::fiber::apply_fiber_channel_events;
+        use ckbadger_store::batch::StoreBatch;
+        use ckbadger_store::CkbadgerStore;
+
+        let funding_code_hash = parse_hex_to_bytes(FUNDING_LOCK_CODE_HASH_MAINNET);
+        let standard_lock = vec![0x11; 32];
+        let old_funding_owner: u8 = 0xF0;
+        let new_funding_owner: u8 = 0xF2;
+        let participant: u8 = 0xAA;
+        let funding_args = vec![0xBB; 20];
+
+        // Funding-lock input (old channel) + funding-lock output (new channel),
+        // plus the participant topping the channel up — a splice.
+        let inputs = vec![
+            make_input_with_lock(
+                old_funding_owner,
+                funding_code_hash.clone(),
+                funding_args.clone(),
+                145_00000000,
+                None,
+                None,
+            ),
+            make_input_with_lock(
+                participant,
+                standard_lock.clone(),
+                vec![0x22; 20],
+                100_00000000,
+                None,
+                None,
+            ),
+        ];
+        let outputs = vec![
+            make_output_with_lock(
+                new_funding_owner,
+                funding_code_hash,
+                funding_args,
+                200_00000000,
+                None,
+                None,
+            ),
+            make_output_with_lock(
+                participant,
+                standard_lock,
+                vec![0x22; 20],
+                45_00000000,
+                None,
+                None,
+            ),
+        ];
+
+        let splice_tx_hash = [0x47; 32];
+        let tx = TxView {
+            tx_hash: &splice_tx_hash,
+            block_hash: &[0xC7; 32],
+            tx_index: 1,
+            block_number: 5007,
+            timestamp: 1_700_200_070,
+            is_cellbase: false,
+            inputs: inputs.iter().map(|i| i.view()).collect(),
+            outputs: outputs.iter().map(|o| o.view()).collect(),
+        };
+
+        let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(FiberDetector::new(true))];
+        let actions_list = build_tx_actions_for_block(&[tx], &detectors).unwrap();
+        assert_eq!(actions_list.len(), 1);
+        let actions = &actions_list[0];
+
+        // Current classification: a single channel_close on the OLD outpoint.
+        let fiber_actions: Vec<_> = actions
+            .protocol_actions
+            .iter()
+            .filter(|a| a.protocol == "fiber")
+            .collect();
+        assert_eq!(fiber_actions.len(), 1);
+        assert_eq!(fiber_actions[0].action, "channel_close");
+        assert_eq!(
+            fiber_actions[0].metadata_value().unwrap()["channelOutpoint"],
+            encode_channel_outpoint(&[old_funding_owner; 32], 0).unwrap()
+        );
+        // No channel_open is emitted for the new funding cell.
+        assert!(!fiber_actions.iter().any(|a| a.action == "channel_open"));
+
+        // The new funding cell therefore has no channel record. Spending it
+        // later yields a close for an unknown channel: skipped, not fatal.
+        let dir = tempfile::TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+
+        let spend_metadata = serde_json::json!({
+            "event": "channel_close",
+            "channelOutpoint": encode_channel_outpoint(&splice_tx_hash, 0).unwrap(),
+            "capacity": "14500000000",
+            "fundingLockArgs": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        });
+        let spend_actions = ckbadger_store::types::TxActions {
+            tx_hash: vec![0x48; 32],
+            block_hash: vec![0xC8; 32],
+            block_number: 5008,
+            tx_index: 1,
+            timestamp: 1_700_200_080,
+            is_cellbase: false,
+            protocol_actions: vec![ProtocolAction::new(
+                "fiber",
+                "channel_close",
+                spend_metadata,
+            )],
+            type_calls: vec![],
+            lock_calls: vec![],
+            participants: vec![],
+        };
+
+        let mut batch = StoreBatch::new(&store);
+        let summary = apply_fiber_channel_events(&mut batch, &spend_actions).unwrap();
+        batch.commit().unwrap();
+
+        assert_eq!(summary.applied, 0);
+        assert_eq!(summary.skipped_unknown_channel, 1);
+        assert!(store
+            .list_fiber_channels(10, None, None)
+            .unwrap()
+            .is_empty());
+    }
+
     #[test]
     fn test_no_fiber_action_for_standard_locks_only() {
         // No fiber locks in tx -> no fiber protocol actions
