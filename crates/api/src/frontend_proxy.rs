@@ -233,11 +233,11 @@ pub async fn proxy_api(
             "upstream_timeout",
             format!("upstream network '{network}' timed out: {e}"),
         ),
-        Err(e) => (
+        Err(e) => proxy_error(
             StatusCode::BAD_GATEWAY,
+            "upstream_unreachable",
             format!("upstream network '{network}' unreachable: {e}"),
-        )
-            .into_response(),
+        ),
     }
 }
 
@@ -367,14 +367,14 @@ fn proxy_error(status: StatusCode, code: &'static str, message: String) -> Respo
 fn unknown_network(network: &str, state: &ProxyState) -> Response {
     let mut known: Vec<&str> = state.ports.keys().map(String::as_str).collect();
     known.sort_unstable();
-    (
+    proxy_error(
         StatusCode::NOT_FOUND,
+        "unknown_network",
         format!(
             "unknown network '{network}'; known networks: [{}]",
             known.join(", ")
         ),
     )
-        .into_response()
 }
 
 /// Convert an axum client frame into the tungstenite frame sent upstream.
@@ -633,15 +633,19 @@ mod tests {
 
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
         let body = resp.into_body().collect().await.unwrap().to_bytes();
-        let text = String::from_utf8(body.to_vec()).unwrap();
+        // Machine-readable: the SPA json-parses failed responses and discards
+        // anything else, so the helpful text has to live inside the contract.
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["error"], "unknown_network");
+        let message = json["message"].as_str().unwrap();
         // Actionable: names the missing network AND lists the known ones.
         assert!(
-            text.contains("devnet"),
-            "should name the bad network: {text}"
+            message.contains("devnet"),
+            "should name the bad network: {message}"
         );
         assert!(
-            text.contains("testnet"),
-            "should list known networks: {text}"
+            message.contains("testnet"),
+            "should list known networks: {message}"
         );
     }
 
@@ -807,11 +811,13 @@ mod tests {
 
         assert_eq!(resp.status(), StatusCode::BAD_GATEWAY);
         let body = resp.into_body().collect().await.unwrap().to_bytes();
-        let text = String::from_utf8(body.to_vec()).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["error"], "upstream_unreachable");
+        let message = json["message"].as_str().unwrap();
         // Actionable: names the unreachable network and the failure mode.
         assert!(
-            text.contains("testnet") && text.contains("unreachable"),
-            "502 body should explain the unreachable upstream: {text}"
+            message.contains("testnet") && message.contains("unreachable"),
+            "502 body should explain the unreachable upstream: {message}"
         );
     }
 
@@ -890,10 +896,11 @@ mod tests {
             tokio_tungstenite::tungstenite::Error::Http(resp) => {
                 assert_eq!(resp.status(), StatusCode::NOT_FOUND);
                 let body = resp.body().as_ref().expect("404 handshake body present");
-                let text = String::from_utf8_lossy(body);
+                let json: serde_json::Value = serde_json::from_slice(body).unwrap();
+                assert_eq!(json["error"], "unknown_network");
                 assert!(
-                    text.contains("devnet"),
-                    "should name the bad network: {text}"
+                    json["message"].as_str().unwrap().contains("devnet"),
+                    "should name the bad network: {json}"
                 );
             }
             other => panic!("expected an HTTP 404 handshake rejection, got {other:?}"),
