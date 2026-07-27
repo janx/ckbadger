@@ -2,6 +2,13 @@ import { QueryClient } from '@tanstack/react-query';
 import { isWarmupPendingError, isNetworkInitializingError } from '@/lib/api';
 
 export const WARMUP_PENDING_RETRY_DELAY_MS = 2000;
+/**
+ * Ceiling for the network-initializing backoff. The retry itself stays
+ * indefinite (the banner depends on it), but a network can sit initializing for
+ * HOURS while other networks bulk-sync — polling every mounted query at the flat
+ * warmup rate for that long is pure waste.
+ */
+export const NETWORK_INITIALIZING_MAX_RETRY_DELAY_MS = 30_000;
 const DEFAULT_WARMUP_RETRY_LIMIT = 120;
 export const WARMUP_PENDING_BANNER_TEXT = 'Data is being prepared. Retrying automatically...';
 export const NETWORK_INITIALIZING_BANNER_TEXT =
@@ -49,7 +56,13 @@ export function createAppQueryClient(options: CreateAppQueryClientOptions = {}):
           return shouldRetryNonWarmup(failureCount, options.nonWarmupRetry);
         },
         retryDelay: (attemptIndex, error) => {
-          if (isNetworkInitializingError(error) || isWarmupPendingError(error)) {
+          if (isNetworkInitializingError(error)) {
+            return Math.min(
+              warmupRetryDelayMs * 2 ** attemptIndex,
+              NETWORK_INITIALIZING_MAX_RETRY_DELAY_MS
+            );
+          }
+          if (isWarmupPendingError(error)) {
             return warmupRetryDelayMs;
           }
           return Math.min(1000 * (attemptIndex + 1), 3000);
