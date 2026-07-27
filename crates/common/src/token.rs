@@ -41,6 +41,22 @@ impl TokenBalance {
         self.0.checked_sub(&rhs.0).map(Self)
     }
 
+    /// Narrow back to the on-chain cell width.
+    ///
+    /// Returns `None` when the aggregate has grown past a single cell's `u128`
+    /// domain. Callers that must hand the value to a `u128` boundary use this to
+    /// detect the overflow explicitly instead of wrapping or saturating.
+    pub fn to_u128(&self) -> Option<u128> {
+        let bytes = self.to_be_bytes();
+        let (high, low) = bytes.split_at(Self::ENCODED_LEN - 16);
+        if high.iter().any(|byte| *byte != 0) {
+            return None;
+        }
+        Some(u128::from_be_bytes(
+            low.try_into().expect("low half is exactly 16 bytes"),
+        ))
+    }
+
     /// Stable RocksDB representation: fixed-width unsigned big-endian.
     pub fn to_be_bytes(&self) -> [u8; Self::ENCODED_LEN] {
         let mut bytes = [0u8; Self::ENCODED_LEN];
@@ -135,6 +151,17 @@ mod tests {
                 actual: 16
             }
         );
+    }
+
+    #[test]
+    fn to_u128_narrows_only_within_the_cell_width() {
+        assert_eq!(TokenBalance::zero().to_u128(), Some(0));
+        assert_eq!(TokenBalance::from(u128::MAX).to_u128(), Some(u128::MAX));
+
+        let above = TokenBalance::from(u128::MAX)
+            .checked_add(&TokenBalance::from(1))
+            .unwrap();
+        assert_eq!(above.to_u128(), None);
     }
 
     #[test]
