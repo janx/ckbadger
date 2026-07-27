@@ -1283,6 +1283,172 @@ impl Check for BlockParentChain {
     }
 }
 
+/// One address sample checked against the live-cell endpoint.
+struct AddressSampleOutcome {
+    /// Live cells actually paginated through for this attempt.
+    cells_scanned: usize,
+    /// Empty when stored state and the live-cell endpoint agree.
+    details: Vec<String>,
+}
+
+/// Read one sampled address's stored state and reconcile it against every live
+/// cell the endpoint reports for that lock hash.
+///
+/// Returns the disagreement rather than a `Finding`, so the caller can decide
+/// whether it is a real bug or an artefact of the tip moving mid-check.
+fn verify_address_balance_sample(
+    ctx: &CheckContext,
+    addr: &AddressCandidateResponse,
+    cells_scanned_before: usize,
+) -> anyhow::Result<AddressSampleOutcome> {
+    let address_balance: AddressBalanceApiRecord =
+        api_get(ctx, &format!("addresses/{}", addr.lock_script_hash))?;
+    let stored_balance: i128 = address_balance.balance.parse().map_err(|e| {
+        anyhow::anyhow!(
+            "failed to parse balance '{}' for lock_hash {}: {}",
+            address_balance.balance,
+            addr.lock_script_hash,
+            e
+        )
+    })?;
+
+    if address_balance.live_cells_count < 0 {
+        anyhow::bail!(
+            "negative liveCellsCount for sampled address: lock_hash={}, live_cells_count={}",
+            addr.lock_script_hash,
+            address_balance.live_cells_count
+        );
+    }
+    let stored_live_cells = usize::try_from(address_balance.live_cells_count).map_err(|e| {
+        anyhow::anyhow!(
+            "sampled address liveCellsCount does not fit usize: lock_hash={}, live_cells_count={}, error={}",
+            addr.lock_script_hash,
+            address_balance.live_cells_count,
+            e
+        )
+    })?;
+    let next_declared_total = cells_scanned_before
+        .checked_add(stored_live_cells)
+        .ok_or_else(|| anyhow::anyhow!("address balance sampled live-cell count overflow"))?;
+    if stored_live_cells > ADDRESS_BALANCE_MAX_LIVE_CELLS_PER_SAMPLE
+        || next_declared_total > ADDRESS_BALANCE_MAX_TOTAL_LIVE_CELLS
+    {
+        return Ok(AddressSampleOutcome {
+            cells_scanned: 0,
+            details: vec![format!(
+                "sample grew beyond verification budget before expansion: candidate_live_cells={}, current_live_cells={}, per_address_limit={}, total_limit={}",
+                addr.live_cells_count,
+                stored_live_cells,
+                ADDRESS_BALANCE_MAX_LIVE_CELLS_PER_SAMPLE,
+                ADDRESS_BALANCE_MAX_TOTAL_LIVE_CELLS,
+            )],
+        });
+    }
+
+    // Paginate through all live cells for this lock_script_hash
+    let mut computed_balance: i128 = 0;
+    let mut computed_count = 0usize;
+    let mut cursor: Option<String> = None;
+    let mut scan_complete = true;
+    let mut details = vec![];
+    loop {
+        let path = match &cursor {
+            Some(c) => format!(
+                "cells/live?lock_script_hash={}&limit={}&cursor={}",
+                addr.lock_script_hash, ADDRESS_BALANCE_CELL_PAGE_LIMIT, c
+            ),
+            None => format!(
+                "cells/live?lock_script_hash={}&limit={}",
+                addr.lock_script_hash, ADDRESS_BALANCE_CELL_PAGE_LIMIT
+            ),
+        };
+        let resp: CellListResponse = api_get(ctx, &path)?;
+        for cell in &resp.data {
+            let cap: i128 = cell.capacity.parse().map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to parse cell capacity '{}' for lock_hash {}: {}",
+                    cell.capacity,
+                    addr.lock_script_hash,
+                    e
+                )
+            })?;
+            computed_balance = computed_balance.checked_add(cap).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "computed address balance overflow: lock_hash={}, current={}, capacity={}",
+                    addr.lock_script_hash,
+                    computed_balance,
+                    cap
+                )
+            })?;
+        }
+        computed_count = computed_count.checked_add(resp.data.len()).ok_or_else(|| {
+            anyhow::anyhow!(
+                "computed live-cell count overflow: lock_hash={}",
+                addr.lock_script_hash
+            )
+        })?;
+        let total_cells_after_page = cells_scanned_before
+            .checked_add(computed_count)
+            .ok_or_else(|| anyhow::anyhow!("address balance total scanned-cell count overflow"))?;
+
+        cursor = resp.next_cursor;
+        if computed_count > ADDRESS_BALANCE_MAX_LIVE_CELLS_PER_SAMPLE
+            || total_cells_after_page > ADDRESS_BALANCE_MAX_TOTAL_LIVE_CELLS
+        {
+            details.push(format!(
+                "live-cell endpoint exceeded verification budget: stored_live_cells={}, scanned_at_least={}, per_address_limit={}, total_limit={}",
+                stored_live_cells,
+                computed_count,
+                ADDRESS_BALANCE_MAX_LIVE_CELLS_PER_SAMPLE,
+                ADDRESS_BALANCE_MAX_TOTAL_LIVE_CELLS,
+            ));
+            scan_complete = false;
+            break;
+        }
+        if cursor.is_some() && computed_count >= stored_live_cells {
+            details.push(format!(
+                "live cells: stored={}, endpoint has more than {}",
+                stored_live_cells, computed_count
+            ));
+            scan_complete = false;
+            break;
+        }
+        if cursor.is_none() {
+            break;
+        }
+    }
+
+    if scan_complete {
+        if stored_balance != computed_balance {
+            let delta = computed_balance
+                .checked_sub(stored_balance)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "address balance delta overflow: lock_hash={}, computed={}, stored={}",
+                        addr.lock_script_hash,
+                        computed_balance,
+                        stored_balance
+                    )
+                })?;
+            details.push(format!(
+                "balance: stored={}, computed from cells={} (Δ {})",
+                stored_balance, computed_balance, delta,
+            ));
+        }
+        if stored_live_cells != computed_count {
+            details.push(format!(
+                "live cells: stored={}, actual={}",
+                stored_live_cells, computed_count
+            ));
+        }
+    }
+
+    Ok(AddressSampleOutcome {
+        cells_scanned: computed_count,
+        details,
+    })
+}
+
 /// S3: Select bounded address samples, then sum every live-cell capacity for each sample.
 pub struct AddressBalanceSpotCheck;
 
@@ -1323,174 +1489,53 @@ impl Check for AddressBalanceSpotCheck {
             );
         }
 
+        // The three reads below (candidates, address detail, paginated live
+        // cells) are independent and race a live-syncing tip. Bracket the check
+        // so a mismatch can be classified as a real bug or as a straddled block.
+        let tip_before = sampling_tip_from_stats(&fetch_network_stats(ctx)?);
+
         let mut findings = vec![];
+        let mut skipped: Vec<String> = vec![];
         let mut checked = 0u64;
         let mut cells_scanned = 0usize;
+        let mut tip_after = tip_before;
 
         for addr in &sampled_addresses {
-            let address_balance: AddressBalanceApiRecord =
-                api_get(ctx, &format!("addresses/{}", addr.lock_script_hash))?;
-            let stored_balance: i128 = address_balance.balance.parse().map_err(|e| {
-                anyhow::anyhow!(
-                    "failed to parse balance '{}' for lock_hash {}: {}",
-                    address_balance.balance,
-                    addr.lock_script_hash,
-                    e
-                )
-            })?;
-
-            if address_balance.live_cells_count < 0 {
-                anyhow::bail!(
-                    "negative liveCellsCount for sampled address: lock_hash={}, live_cells_count={}",
-                    addr.lock_script_hash,
-                    address_balance.live_cells_count
-                );
-            }
-            let stored_live_cells =
-                usize::try_from(address_balance.live_cells_count).map_err(|e| {
-                    anyhow::anyhow!(
-                        "sampled address liveCellsCount does not fit usize: lock_hash={}, live_cells_count={}, error={}",
-                        addr.lock_script_hash,
-                        address_balance.live_cells_count,
-                        e
-                    )
+            let outcome = verify_address_balance_sample(ctx, addr, cells_scanned)?;
+            cells_scanned = cells_scanned
+                .checked_add(outcome.cells_scanned)
+                .ok_or_else(|| {
+                    anyhow::anyhow!("address balance total scanned-cell count overflow")
                 })?;
-            let next_declared_total =
-                cells_scanned
-                    .checked_add(stored_live_cells)
-                    .ok_or_else(|| {
-                        anyhow::anyhow!("address balance sampled live-cell count overflow")
-                    })?;
-            if stored_live_cells > ADDRESS_BALANCE_MAX_LIVE_CELLS_PER_SAMPLE
-                || next_declared_total > ADDRESS_BALANCE_MAX_TOTAL_LIVE_CELLS
-            {
-                findings.push(Finding {
-                    entity: format!("lock_hash: {}", &addr.lock_script_hash[..18]),
-                    details: vec![format!(
-                        "sample grew beyond verification budget before expansion: candidate_live_cells={}, current_live_cells={}, per_address_limit={}, total_limit={}",
-                        addr.live_cells_count,
-                        stored_live_cells,
-                        ADDRESS_BALANCE_MAX_LIVE_CELLS_PER_SAMPLE,
-                        ADDRESS_BALANCE_MAX_TOTAL_LIVE_CELLS,
-                    )],
-                });
-                checked += 1;
-                progress.inc(1);
-                continue;
-            }
 
-            // Paginate through all live cells for this lock_script_hash
-            let mut computed_balance: i128 = 0;
-            let mut computed_count = 0usize;
-            let mut cursor: Option<String> = None;
-            let mut scan_complete = true;
-            loop {
-                let path = match &cursor {
-                    Some(c) => format!(
-                        "cells/live?lock_script_hash={}&limit={}&cursor={}",
-                        addr.lock_script_hash, ADDRESS_BALANCE_CELL_PAGE_LIMIT, c
-                    ),
-                    None => format!(
-                        "cells/live?lock_script_hash={}&limit={}",
-                        addr.lock_script_hash, ADDRESS_BALANCE_CELL_PAGE_LIMIT
-                    ),
-                };
-                let resp: CellListResponse = api_get(ctx, &path)?;
-                for cell in &resp.data {
-                    let cap: i128 = cell.capacity.parse().map_err(|e| {
-                        anyhow::anyhow!(
-                            "failed to parse cell capacity '{}' for lock_hash {}: {}",
-                            cell.capacity,
-                            addr.lock_script_hash,
-                            e
-                        )
-                    })?;
-                    computed_balance = computed_balance.checked_add(cap).ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "computed address balance overflow: lock_hash={}, current={}, capacity={}",
-                            addr.lock_script_hash,
-                            computed_balance,
-                            cap
-                        )
-                    })?;
-                }
-                computed_count = computed_count.checked_add(resp.data.len()).ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "computed live-cell count overflow: lock_hash={}",
-                        addr.lock_script_hash
-                    )
-                })?;
-                let total_cells_after_page =
-                    cells_scanned.checked_add(computed_count).ok_or_else(|| {
-                        anyhow::anyhow!("address balance total scanned-cell count overflow")
-                    })?;
-
-                cursor = resp.next_cursor;
-                if computed_count > ADDRESS_BALANCE_MAX_LIVE_CELLS_PER_SAMPLE
-                    || total_cells_after_page > ADDRESS_BALANCE_MAX_TOTAL_LIVE_CELLS
-                {
-                    findings.push(Finding {
-                        entity: format!("lock_hash: {}", &addr.lock_script_hash[..18]),
-                        details: vec![format!(
-                            "live-cell endpoint exceeded verification budget: stored_live_cells={}, scanned_at_least={}, per_address_limit={}, total_limit={}",
-                            stored_live_cells,
-                            computed_count,
-                            ADDRESS_BALANCE_MAX_LIVE_CELLS_PER_SAMPLE,
-                            ADDRESS_BALANCE_MAX_TOTAL_LIVE_CELLS,
-                        )],
-                    });
-                    scan_complete = false;
-                    break;
-                }
-                if cursor.is_some() && computed_count >= stored_live_cells {
-                    findings.push(Finding {
-                        entity: format!("lock_hash: {}", &addr.lock_script_hash[..18]),
-                        details: vec![format!(
-                            "live cells: stored={}, endpoint has more than {}",
-                            stored_live_cells, computed_count
-                        )],
-                    });
-                    scan_complete = false;
-                    break;
-                }
-                if cursor.is_none() {
-                    break;
-                }
-            }
-
-            cells_scanned = cells_scanned.checked_add(computed_count).ok_or_else(|| {
-                anyhow::anyhow!("address balance total scanned-cell count overflow")
-            })?;
-
-            if scan_complete {
-                let mut details = vec![];
-                if stored_balance != computed_balance {
-                    let delta = computed_balance
-                        .checked_sub(stored_balance)
+            if !outcome.details.is_empty() {
+                // Re-read exactly once. If the second read agrees, the first one
+                // straddled a block — not a bug.
+                let retry = verify_address_balance_sample(ctx, addr, cells_scanned)?;
+                cells_scanned =
+                    cells_scanned
+                        .checked_add(retry.cells_scanned)
                         .ok_or_else(|| {
-                            anyhow::anyhow!(
-                            "address balance delta overflow: lock_hash={}, computed={}, stored={}",
-                            addr.lock_script_hash,
-                            computed_balance,
-                            stored_balance
-                        )
+                            anyhow::anyhow!("address balance total scanned-cell count overflow")
                         })?;
-                    details.push(format!(
-                        "balance: stored={}, computed from cells={} (Δ {})",
-                        stored_balance, computed_balance, delta,
-                    ));
-                }
-                if stored_live_cells != computed_count {
-                    details.push(format!(
-                        "live cells: stored={}, actual={}",
-                        stored_live_cells, computed_count
-                    ));
-                }
-                if !details.is_empty() {
-                    findings.push(Finding {
-                        entity: format!("lock_hash: {}", &addr.lock_script_hash[..18]),
-                        details,
-                    });
+
+                if !retry.details.is_empty() {
+                    tip_after = sampling_tip_from_stats(&fetch_network_stats(ctx)?);
+                    if tip_after > tip_before {
+                        // The chain moved under the check. A stored-vs-actual
+                        // difference is expected here and proves nothing.
+                        skipped.push(format!(
+                            "lock_hash {}: {}",
+                            &addr.lock_script_hash[..18],
+                            retry.details.join("; ")
+                        ));
+                    } else {
+                        // Tip held still across both reads: the difference is real.
+                        findings.push(Finding {
+                            entity: format!("lock_hash: {}", &addr.lock_script_hash[..18]),
+                            details: retry.details,
+                        });
+                    }
                 }
             }
 
@@ -1498,17 +1543,31 @@ impl Check for AddressBalanceSpotCheck {
             progress.inc(1);
         }
 
-        if findings.is_empty() {
-            Ok(CheckResult::pass_with_detail(
-                checked,
-                format!(
-                    "{} addresses verified from {} live cells",
-                    checked,
-                    format_number(cells_scanned as u64)
-                ),
-            ))
+        let skip_note = if skipped.is_empty() {
+            String::new()
         } else {
-            Ok(CheckResult::fail(checked, findings))
+            format!(
+                ", {} skipped (tip advanced {}→{} during the check): {}",
+                skipped.len(),
+                tip_before,
+                tip_after,
+                skipped.join(" | ")
+            )
+        };
+        let detail = format!(
+            "{} addresses verified from {} live cells{}",
+            checked,
+            format_number(cells_scanned as u64),
+            skip_note
+        );
+
+        if findings.is_empty() {
+            Ok(CheckResult::pass_with_detail(checked, detail))
+        } else {
+            Ok(CheckResult {
+                detail: Some(detail),
+                ..CheckResult::fail(checked, findings)
+            })
         }
     }
 }
@@ -1998,7 +2057,17 @@ impl Check for ChartEpochTimeLengthSane {
     }
 }
 
-/// S10: GET /charts/average-block-time → finite positive values.
+/// Upper sanity bound for a daily average block time, in seconds.
+///
+/// CKB targets ~8s. Real chains stall far above that: testnet's 2020-05-22 daily
+/// average is 311.43s (pinned by
+/// `average_block_time_accepts_historical_testnet_stall`), so the bound must
+/// leave generous headroom above it. 1800s (30 min) does, while still catching
+/// the regression the bound exists for — a milliseconds value reported as
+/// seconds, which lands three orders of magnitude too high.
+const MAX_AVERAGE_BLOCK_TIME_SECONDS: f64 = 1800.0;
+
+/// S10: GET /charts/average-block-time → positive values within a sane bound.
 pub struct ChartAverageBlockTimeSane;
 
 impl Check for ChartAverageBlockTimeSane {
@@ -2036,12 +2105,15 @@ impl Check for ChartAverageBlockTimeSane {
             prev_date = point.date.clone();
 
             match point.value.parse::<f64>() {
-                Ok(seconds) if seconds.is_finite() && seconds > 0.0 => {}
+                Ok(seconds)
+                    if seconds.is_finite()
+                        && seconds > 0.0
+                        && seconds <= MAX_AVERAGE_BLOCK_TIME_SECONDS => {}
                 Ok(seconds) => findings.push(Finding {
                     entity: point.date.clone(),
                     details: vec![format!(
-                        "average block time must be finite and > 0: {}s",
-                        seconds
+                        "average block time must be finite and in (0, {}]s: {}s",
+                        MAX_AVERAGE_BLOCK_TIME_SECONDS, seconds
                     )],
                 }),
                 Err(_) => findings.push(Finding {
@@ -3983,6 +4055,151 @@ mod tests {
         assert!(result.passed, "findings: {:?}", result.findings);
     }
 
+    /// S3 reads three independent endpoints (active-address candidates →
+    /// address detail → paginated live cells). Against a live-syncing tip those
+    /// reads can straddle a block, so a mismatch is not automatically a bug.
+    ///
+    /// Mount S3's endpoints with a persistent stored/actual mismatch. `tips`
+    /// supplies the network-stats tip for the before and after reads.
+    fn network_stats_body(tip: i64) -> serde_json::Value {
+        json!({
+            "latestBlock": tip,
+            "syncStatus": { "isSyncing": true, "syncedBlock": tip, "tipBlock": tip },
+            "deepForkStatus": { "detected": false }
+        })
+    }
+
+    /// S3 brackets itself with the node tip to tell a real mismatch apart from a
+    /// straddled block, so its tests must serve `statistics/network`.
+    fn mount_static_network_tip(runtime: &tokio::runtime::Runtime, server: &MockServer, tip: i64) {
+        runtime.block_on(async {
+            Mock::given(method("GET"))
+                .and(path("/api/v1/statistics/network"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(network_stats_body(tip)))
+                .mount(server)
+                .await;
+        });
+    }
+
+    fn mount_address_balance_race_fixture(
+        runtime: &tokio::runtime::Runtime,
+        server: &MockServer,
+        tip_before: i64,
+        tip_after: i64,
+    ) {
+        let lock_hash = format!("0x{}", "aa".repeat(32));
+        runtime.block_on(async {
+            Mock::given(method("GET"))
+                .and(path("/api/v1/statistics/network"))
+                .respond_with(
+                    ResponseTemplate::new(200).set_body_json(network_stats_body(tip_before)),
+                )
+                .up_to_n_times(1)
+                .with_priority(1)
+                .mount(server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/api/v1/statistics/network"))
+                .respond_with(
+                    ResponseTemplate::new(200).set_body_json(network_stats_body(tip_after)),
+                )
+                .with_priority(2)
+                .mount(server)
+                .await;
+
+            Mock::given(method("GET"))
+                .and(path("/api/v1/addresses/active"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!([{
+                    "lockScriptHash": lock_hash,
+                    "liveCellsCount": 2,
+                    "transactionsCount": 5
+                }])))
+                .mount(server)
+                .await;
+
+            // Stored state claims 2 live cells / 300 shannons...
+            Mock::given(method("GET"))
+                .and(path(format!("/api/v1/addresses/{lock_hash}")))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "balance": "300",
+                    "liveCellsCount": 2
+                })))
+                .mount(server)
+                .await;
+
+            // ...while the live-cell endpoint returns only one 100-shannon cell.
+            Mock::given(method("GET"))
+                .and(path("/api/v1/cells/live"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "data": [{ "capacity": "100" }],
+                    "nextCursor": null
+                })))
+                .mount(server)
+                .await;
+        });
+    }
+
+    #[test]
+    fn address_balance_mismatch_with_static_tip_is_a_hard_failure() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let server = runtime.block_on(MockServer::start());
+        mount_address_balance_race_fixture(&runtime, &server, 5_000, 5_000);
+
+        let result = AddressBalanceSpotCheck
+            .run(&mock_ctx(&server), &ProgressReporter::new(None))
+            .unwrap();
+
+        assert!(
+            !result.passed,
+            "a persistent mismatch at a static tip is a real bug"
+        );
+        assert!(result.items_failed > 0);
+    }
+
+    #[test]
+    fn address_balance_mismatch_while_tip_advances_is_skipped() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let server = runtime.block_on(MockServer::start());
+        mount_address_balance_race_fixture(&runtime, &server, 5_000, 5_004);
+
+        let result = AddressBalanceSpotCheck
+            .run(&mock_ctx(&server), &ProgressReporter::new(None))
+            .unwrap();
+
+        assert!(
+            result.passed,
+            "a mismatch against a moving tip must not be reported as a failure: {:?}",
+            result.findings
+        );
+        let detail = result.detail.unwrap_or_default();
+        assert!(
+            detail.contains("skipped"),
+            "the skip must be noted, not silent: {detail}"
+        );
+    }
+
+    /// The upper bound exists to catch unit regressions (milliseconds reported
+    /// as seconds). Without it the check accepted any finite positive number.
+    #[test]
+    fn average_block_time_rejects_milliseconds_as_seconds() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let server = runtime.block_on(MockServer::start());
+        runtime.block_on(async {
+            Mock::given(method("GET"))
+                .and(path("/api/v1/charts/average-block-time"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "data": [{ "date": "20260720", "value": "8000" }]
+                })))
+                .mount(&server)
+                .await;
+        });
+
+        let result = ChartAverageBlockTimeSane
+            .run(&mock_ctx(&server), &ProgressReporter::new(None))
+            .unwrap();
+        assert!(!result.passed, "8000s per block must fail the sanity bound");
+    }
+
     #[test]
     fn cell_count_consistency_allows_live_decline_when_chain_totals_grow() {
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
@@ -4232,6 +4449,21 @@ mod tests {
         }
     }
 
+    /// Serves one page for every call, counting them. Unlike
+    /// `SequentialPagesResponder` this is stateless across calls, so a re-scan
+    /// sees the same page a real endpoint would return.
+    struct RepeatingPageResponder {
+        calls: Arc<AtomicUsize>,
+        page: serde_json::Value,
+    }
+
+    impl Respond for RepeatingPageResponder {
+        fn respond(&self, _: &Request) -> ResponseTemplate {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            ResponseTemplate::new(200).set_body_json(self.page.clone())
+        }
+    }
+
     fn address_balance_candidate(hash_byte: u8, live_cells_count: i64) -> serde_json::Value {
         json!({
             "lockScriptHash": format!("0x{}", format!("{:02x}", hash_byte).repeat(32)),
@@ -4372,6 +4604,7 @@ mod tests {
                 .await;
         });
 
+        mount_static_network_tip(&runtime, &server, 5_000);
         let mut ctx = mock_ctx(&server);
         ctx.sample_count = 10;
         let result = AddressBalanceSpotCheck
@@ -4424,6 +4657,7 @@ mod tests {
                 .await;
         });
 
+        mount_static_network_tip(&runtime, &server, 5_000);
         let result = AddressBalanceSpotCheck
             .run(&mock_ctx(&server), &ProgressReporter::new(None))
             .expect("address balance check should run");
@@ -4444,6 +4678,7 @@ mod tests {
         let server = runtime.block_on(MockServer::start());
         let address_hash = format!("0x{}", "44".repeat(32));
         let cell_calls = Arc::new(AtomicUsize::new(0));
+        let second_page_calls = Arc::new(AtomicUsize::new(0));
 
         runtime.block_on(async {
             let candidates = json!([address_balance_candidate(0x44, 1)]);
@@ -4464,36 +4699,55 @@ mod tests {
             let first_page_cells: Vec<_> = (0..ADDRESS_BALANCE_CELL_PAGE_LIMIT)
                 .map(|_| json!({ "capacity": "1" }))
                 .collect();
+            // Cursor-driven pages, like the real endpoint: every fresh scan
+            // starts at page 1, so a re-read sees the same first page.
+            Mock::given(method("GET"))
+                .and(path("/api/v1/cells/live"))
+                .and(query_param("lock_script_hash", address_hash.clone()))
+                .and(query_param("cursor", "more_cells_exist"))
+                .respond_with(RepeatingPageResponder {
+                    calls: second_page_calls.clone(),
+                    page: json!({
+                        "data": [{ "capacity": "1" }],
+                        "nextCursor": null,
+                    }),
+                })
+                .with_priority(1)
+                .mount(&server)
+                .await;
             Mock::given(method("GET"))
                 .and(path("/api/v1/cells/live"))
                 .and(query_param("lock_script_hash", address_hash))
-                .respond_with(SequentialPagesResponder {
+                .respond_with(RepeatingPageResponder {
                     calls: cell_calls.clone(),
-                    pages: vec![
-                        json!({
-                            "data": first_page_cells,
-                            "nextCursor": "more_cells_exist",
-                        }),
-                        json!({
-                            "data": [{ "capacity": "1" }],
-                            "nextCursor": null,
-                        }),
-                    ],
+                    page: json!({
+                        "data": first_page_cells,
+                        "nextCursor": "more_cells_exist",
+                    }),
                 })
+                .with_priority(2)
                 .mount(&server)
                 .await;
         });
 
+        mount_static_network_tip(&runtime, &server, 5_000);
         let result = AddressBalanceSpotCheck
             .run(&mock_ctx(&server), &ProgressReporter::new(None))
             .expect("address balance check should run");
 
         assert!(!result.passed);
-        assert_eq!(cell_calls.load(Ordering::SeqCst), 1);
-        assert!(result.findings[0]
-            .details
-            .iter()
-            .any(|detail| detail.contains("stored=1, endpoint has more than 100")));
+        // Two attempts (the mismatch triggers exactly one tip-aware re-read),
+        // each stopping after its FIRST page: the second page is never fetched.
+        assert_eq!(cell_calls.load(Ordering::SeqCst), 2);
+        assert_eq!(second_page_calls.load(Ordering::SeqCst), 0);
+        assert!(
+            result.findings[0]
+                .details
+                .iter()
+                .any(|detail| detail.contains("stored=1, endpoint has more than 100")),
+            "findings: {:?}",
+            result.findings
+        );
     }
 
     fn decoy_address_tokens_page(count: usize) -> Vec<serde_json::Value> {
