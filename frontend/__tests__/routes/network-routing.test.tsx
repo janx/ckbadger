@@ -28,6 +28,8 @@ function AppHarness() {
   return (
     <>
       <div data-testid="pathname">{location.pathname}</div>
+      <div data-testid="search">{location.search}</div>
+      <div data-testid="hash">{location.hash}</div>
       {element}
     </>
   );
@@ -57,6 +59,21 @@ describe('network routing', () => {
 
     expect(await screen.findByText('home page')).toBeInTheDocument();
     expect(screen.getByTestId('pathname')).toHaveTextContent('/mainnet');
+  });
+
+  it('keeps the query string and hash when redirecting the root path', async () => {
+    render(
+      <MemoryRouter initialEntries={['/?tab=blocks#top']}>
+        <AppHarness />
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByText('home page')).toBeInTheDocument();
+    expect(screen.getByTestId('pathname')).toHaveTextContent('/mainnet');
+    // NetworkGuard preserves search+hash on its redirect; the root redirect must
+    // not drop deep-link state either.
+    expect(screen.getByTestId('search')).toHaveTextContent('?tab=blocks');
+    expect(screen.getByTestId('hash')).toHaveTextContent('#top');
   });
 
   it('prepends the default network to an old un-prefixed deep link (DECISION 2)', async () => {

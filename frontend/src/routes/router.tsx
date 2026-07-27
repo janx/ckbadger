@@ -27,9 +27,11 @@ function AppFrame() {
   );
 }
 
-/** `/` → `/<default-network>`. */
+/** `/` → `/<default-network>`, keeping any deep-link search/hash (as NetworkGuard does). */
 function RootNetworkRedirect() {
-  return <Navigate to={`/${resolveDefaultNetwork()}`} replace />;
+  const location = useLocation();
+
+  return <Navigate to={`/${resolveDefaultNetwork()}${location.search}${location.hash}`} replace />;
 }
 
 /**
