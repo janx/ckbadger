@@ -5,6 +5,7 @@
 //! on crash with exponential backoff. Starts an IPC server on
 //! `run/indexer.sock` for status queries and shutdown requests.
 
+use crate::sequencer::SpawnOutcome;
 use anyhow::{Context, Result};
 use ckbadger_config::{CkbadgerConfig, WorkDir};
 use ckbadger_ipc::{IpcHandler, IpcRequest, IpcResponse, IpcServer, ServiceInfo, ServiceStatus};
@@ -258,6 +259,114 @@ struct SequencerPlan {
 /// How often the sequencer re-reads the previous network's store for bulk status.
 const SEQUENCER_POLL_INTERVAL: Duration = Duration::from_secs(5);
 
+/// Consecutive sequencer read failures on an EXISTING store before the log
+/// escalates from `warn` to `error`. At [`SEQUENCER_POLL_INTERVAL`] this is
+/// roughly one minute of an unreadable store — well past any single busy-primary
+/// catch-up blip.
+const SEQUENCER_READ_FAILURE_ESCALATE: u32 = 12;
+
+/// Consecutive failures that make the condition PERSISTENT (~2 minutes): a
+/// corrupt or undecodable record rather than transient RocksDB contention. Logged
+/// loudly, naming the store path — but still never fatal to other networks.
+const SEQUENCER_READ_FAILURE_PERSISTENT: u32 = 24;
+
+/// How many times the sequencer retries a failed `spawn_child` before parking.
+const SPAWN_RETRY_ATTEMPTS: u32 = 5;
+
+/// How loudly a consecutive run of sequencer read failures should be reported.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReadFailureLevel {
+    /// A blip: the primary was mid-write, or the secondary is momentarily behind.
+    Transient,
+    /// Sustained (~1 min): something is wrong, but still not other networks' problem.
+    Sustained,
+    /// Persistent (~2 min): almost certainly corrupt/undecodable state.
+    Persistent,
+}
+
+/// Consecutive-failure accounting for one gating network's status reads.
+///
+/// Pure and clock-free so the escalation ladder is exhaustively testable. A read
+/// failure on an EXISTING store is "no signal this round", never fatal: the
+/// sequencer keeps polling and keeps waiting (BULK_SYNC rule 11 forbids skipping
+/// ahead, and one network's transient RocksDB failure must never tear down the
+/// networks that are healthy).
+#[derive(Debug, Default)]
+struct ReadFailureTracker {
+    consecutive: u32,
+}
+
+impl ReadFailureTracker {
+    /// Record a failed read; returns how loudly THIS failure should be logged.
+    fn record_failure(&mut self) -> ReadFailureLevel {
+        self.consecutive = self.consecutive.saturating_add(1);
+        if self.consecutive >= SEQUENCER_READ_FAILURE_PERSISTENT {
+            ReadFailureLevel::Persistent
+        } else if self.consecutive >= SEQUENCER_READ_FAILURE_ESCALATE {
+            ReadFailureLevel::Sustained
+        } else {
+            ReadFailureLevel::Transient
+        }
+    }
+
+    /// Record a read that produced a signal (or a genuine store-missing state).
+    /// Returns the failure streak it just ended, so recovery can be logged once.
+    fn record_success(&mut self) -> u32 {
+        std::mem::take(&mut self.consecutive)
+    }
+
+    fn consecutive(&self) -> u32 {
+        self.consecutive
+    }
+}
+
+/// Backoff before spawn retry `attempt` (0-based), doubling from [`BASE_BACKOFF`].
+fn spawn_retry_backoff(attempt: u32) -> Duration {
+    std::cmp::min(BASE_BACKOFF * 2u32.saturating_pow(attempt), MAX_BACKOFF)
+}
+
+/// Run `attempt` until it succeeds or [`SPAWN_RETRY_ATTEMPTS`] have been used,
+/// sleeping [`spawn_retry_backoff`] between tries.
+///
+/// A spawn failure is usually transient host pressure (EMFILE while the first
+/// network's bulk sync holds thousands of RocksDB fds, a momentarily unwritable
+/// log dir). Returning the first error straight to the sequencer used to shut the
+/// WHOLE orchestrator down; retrying absorbs the blip instead.
+async fn spawn_with_retry<T, F, B>(label: &str, backoff_for: B, mut attempt: F) -> Result<T>
+where
+    F: FnMut() -> Result<T>,
+    B: Fn(u32) -> Duration,
+{
+    let mut last_error = None;
+    for n in 0..SPAWN_RETRY_ATTEMPTS {
+        match attempt() {
+            Ok(value) => {
+                if n > 0 {
+                    info!(child = %label, attempts = n + 1, "spawn succeeded after retry");
+                }
+                return Ok(value);
+            }
+            Err(error) => {
+                let is_last = n + 1 >= SPAWN_RETRY_ATTEMPTS;
+                let backoff = backoff_for(n);
+                warn!(
+                    child = %label,
+                    attempt = n + 1,
+                    max_attempts = SPAWN_RETRY_ATTEMPTS,
+                    error = %error,
+                    retry_in_secs = if is_last { 0 } else { backoff.as_secs() },
+                    "failed to spawn child"
+                );
+                last_error = Some(error);
+                if !is_last {
+                    tokio::time::sleep(backoff).await;
+                }
+            }
+        }
+    }
+    Err(last_error.expect("every loop iteration records an error before falling through"))
+}
+
 /// One gating network's bulk-status source: a LAZILY-opened, LONG-LIVED domain
 /// store secondary, mirroring how the API and TUI hold theirs.
 ///
@@ -270,6 +379,8 @@ const SEQUENCER_POLL_INTERVAL: Duration = Duration::from_secs(5);
 /// Every method here is BLOCKING (RocksDB open/catch-up/read). Callers on the
 /// async supervisor runtime must go through `spawn_blocking`.
 struct BulkStatusReader {
+    /// The gating network's child label, used for log context.
+    label: String,
     domain_data_path: PathBuf,
     secondary_path: PathBuf,
     bulk_sync_threshold: u64,
@@ -277,11 +388,13 @@ struct BulkStatusReader {
     /// [`SequencedIndexer::store_runtime_config`].
     runtime_config: StoreRuntimeConfig,
     store: Option<CkbadgerStore>,
+    failures: ReadFailureTracker,
 }
 
 impl BulkStatusReader {
     fn new(idx: &SequencedIndexer) -> Self {
         Self {
+            label: idx.spec.label.clone(),
             secondary_path: secondary_store_path(
                 &idx.domain_data_path,
                 SecondaryStoreOwner::Supervisor,
@@ -290,13 +403,76 @@ impl BulkStatusReader {
             bulk_sync_threshold: idx.bulk_sync_threshold,
             runtime_config: idx.store_runtime_config,
             store: None,
+            failures: ReadFailureTracker::default(),
+        }
+    }
+
+    /// One tolerant poll: `Some(true|false)` on a successful read, `None` when
+    /// this round carries NO SIGNAL — either the store does not exist yet, or the
+    /// read failed transiently.
+    ///
+    /// A failed read against a busy primary is exactly what the API
+    /// (`crates/api/src/lib.rs`) and the TUI (`crates/tui/src/db.rs`) already
+    /// treat as retryable. Propagating it instead used to shut down every
+    /// network's indexer, API and the shared frontend — mainnet mid-bulk
+    /// included. The failure is logged with an escalating consecutive-failure
+    /// counter and the gate simply keeps waiting.
+    fn poll(&mut self) -> Option<bool> {
+        match self.read() {
+            Ok(signal) => {
+                let recovered_from = self.failures.record_success();
+                if recovered_from > 0 {
+                    info!(
+                        child = %self.label,
+                        after_failures = recovered_from,
+                        "sequencer status read recovered"
+                    );
+                }
+                signal
+            }
+            Err(error) => {
+                let level = self.failures.record_failure();
+                let consecutive = self.failures.consecutive();
+                // Drop the handle so the next poll reopens the secondary from
+                // scratch (the TUI does the same); a wedged handle must not
+                // outlive the failure that exposed it.
+                self.store = None;
+                match level {
+                    ReadFailureLevel::Transient => warn!(
+                        child = %self.label,
+                        store = %self.domain_data_path.display(),
+                        consecutive,
+                        error = %format!("{error:#}"),
+                        "sequencer status read failed; treating as no signal this round"
+                    ),
+                    ReadFailureLevel::Sustained => error!(
+                        child = %self.label,
+                        store = %self.domain_data_path.display(),
+                        consecutive,
+                        error = %format!("{error:#}"),
+                        "sequencer status read has been failing for ~1 minute; the next network \
+                         stays deferred until this store is readable again"
+                    ),
+                    ReadFailureLevel::Persistent => error!(
+                        child = %self.label,
+                        store = %self.domain_data_path.display(),
+                        consecutive,
+                        error = %format!("{error:#}"),
+                        "sequencer status read is PERSISTENTLY failing; this store is very likely \
+                         corrupt or holds an undecodable sync-progress record. Inspect it and \
+                         purge/re-sync that network; other networks keep running untouched"
+                    ),
+                }
+                None
+            }
         }
     }
 
     /// Read the gating network's bulk status. A missing RocksDB `CURRENT` is the
     /// sole not-ready state (`Ok(None)`); once the store exists, every
-    /// open/refresh/read/decode failure is an error.
-    fn poll(&mut self) -> Result<Option<bool>> {
+    /// open/refresh/read/decode failure is an error. [`Self::poll`] is the
+    /// tolerant wrapper the sequencer actually uses.
+    fn read(&mut self) -> Result<Option<bool>> {
         if self.store.is_none() {
             if !self.domain_data_path.join("CURRENT").is_file() {
                 return Ok(None);
@@ -364,6 +540,10 @@ type BulkStatusReaders = Arc<std::sync::Mutex<Vec<BulkStatusReader>>>;
 
 /// Poll one gating network's bulk status off the async runtime.
 ///
+/// The tri-state is the reader's: `Some(true|false)` on a read, `None` for "no
+/// signal this round". The `Result` covers only a panicked blocking task — a
+/// programming bug, not a runtime condition — so store failures can no longer
+/// reach [`wait_for_sequencer_failure`].
 async fn read_past_bulk(readers: &BulkStatusReaders, prev: usize) -> Result<Option<bool>> {
     let readers = readers.clone();
     tokio::task::spawn_blocking(move || {
@@ -373,9 +553,19 @@ async fn read_past_bulk(readers: &BulkStatusReaders, prev: usize) -> Result<Opti
             .poll()
     })
     .await
-    .context("sequencer bulk-status read task failed")?
+    .context("sequencer bulk-status read task failed")
 }
 
+/// Last-resort backstop: shut the orchestrator down if the sequencer task itself
+/// fails.
+///
+/// It deliberately no longer fires for RUNTIME conditions. A store
+/// open/refresh/read/decode failure is absorbed by [`BulkStatusReader::poll`] and
+/// a spawn failure by [`SpawnOutcome::Parked`] — either used to tear down every
+/// network, including a mainnet indexer hours into bulk sync, plus all APIs and
+/// the shared frontend. What can still reach here is a broken invariant inside
+/// the supervisor itself (child-order violation, out-of-bounds spec index) or a
+/// panicked blocking task: programming bugs, where failing fast is correct.
 async fn wait_for_sequencer_failure(
     handle: Option<&mut tokio::task::JoinHandle<Result<()>>>,
 ) -> anyhow::Error {
@@ -553,7 +743,7 @@ async fn run_supervisor_inner_with_sequencer(
                         {
                             let locked = state.lock().await;
                             if locked.shutdown_requested {
-                                return Ok(());
+                                return Ok(SpawnOutcome::Started);
                             }
                             if locked.children.len() != expected_index {
                                 anyhow::bail!(
@@ -565,16 +755,35 @@ async fn run_supervisor_inner_with_sequencer(
                             }
                         }
 
-                        let mut child = spawn_child(&exe, &spec, &log_dir).with_context(|| {
-                            format!("failed to spawn sequenced indexer '{}'", spec.label)
-                        })?;
+                        // A spawn failure is host pressure (EMFILE while the
+                        // previous network's bulk sync holds thousands of fds), not
+                        // a reason to shut every network down. Retry, then park.
+                        let spawned = spawn_with_retry(&spec.label, spawn_retry_backoff, || {
+                            spawn_child(&exe, &spec, &log_dir)
+                        })
+                        .await;
+                        let mut child = match spawned {
+                            Ok(child) => child,
+                            Err(error) => {
+                                error!(
+                                    child = %spec.label,
+                                    attempts = SPAWN_RETRY_ATTEMPTS,
+                                    error = %format!("{error:#}"),
+                                    "could not start sequenced indexer after retrying; the \
+                                     sequencer stays parked on this network (it will not skip \
+                                     ahead and will not stop the running networks) and retries \
+                                     on the next poll"
+                                );
+                                return Ok(SpawnOutcome::Parked);
+                            }
+                        };
                         let mut locked = state.lock().await;
                         if locked.shutdown_requested {
                             // Shutdown fired between the past-bulk check and here, so the
                             // stop-all loop may not see this child. Stop it explicitly.
                             drop(locked);
                             stop_child_gracefully(&spec.label, &mut child.child).await;
-                            return Ok(());
+                            return Ok(SpawnOutcome::Started);
                         }
                         if locked.children.len() != expected_index {
                             let actual = locked.children.len();
@@ -589,7 +798,7 @@ async fn run_supervisor_inner_with_sequencer(
                         }
                         info!(child = %spec.label, pid = child.pid(), "started service (sequenced)");
                         locked.children.push(child);
-                        Ok(())
+                        Ok(SpawnOutcome::Started)
                     }
                 },
                 poll,
@@ -992,7 +1201,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let idx = test_sequenced_indexer(dir.path().join("domain"));
         let mut reader = BulkStatusReader::new(&idx);
-        assert_eq!(reader.poll().unwrap(), None);
+        assert_eq!(reader.read().unwrap(), None);
         assert!(
             reader.store.is_none(),
             "no secondary may be opened before the primary's CURRENT exists"
@@ -1008,11 +1217,126 @@ mod tests {
         store.put_sync_progress(b"not-json").unwrap();
         let idx = test_sequenced_indexer(domain);
 
-        let err = BulkStatusReader::new(&idx).poll().unwrap_err().to_string();
+        let err = BulkStatusReader::new(&idx).read().unwrap_err().to_string();
         assert!(err.contains("invalid sync progress"));
         assert!(err.contains("domain"));
     }
 
+    #[test]
+    fn read_failures_on_an_existing_store_are_no_signal_not_a_teardown() {
+        // The whole blast radius of the old behaviour lived on this line: a read
+        // failure became an `Err`, which shut down every network's indexer/API and
+        // the shared frontend. It must now be "no signal this round" and be
+        // COUNTED, so the escalation ladder can get loud without going fatal.
+        let dir = TempDir::new().unwrap();
+        let domain = dir.path().join("domain");
+        let primary =
+            CkbadgerStore::open_domain_with_runtime(&domain, StoreRuntimeConfig::default())
+                .unwrap();
+        primary.put_sync_progress(b"not-json").unwrap();
+        let idx = test_sequenced_indexer(domain);
+        let mut reader = BulkStatusReader::new(&idx);
+
+        assert_eq!(reader.poll(), None, "undecodable progress yields no signal");
+        assert_eq!(reader.failures.consecutive(), 1);
+        assert_eq!(reader.poll(), None);
+        assert_eq!(reader.failures.consecutive(), 2);
+
+        // ...and once the record is valid again, the gate advances normally and
+        // the streak resets.
+        primary.put_sync_progress(&progress_json(10, 10)).unwrap();
+        assert_eq!(reader.poll(), Some(true));
+        assert_eq!(reader.failures.consecutive(), 0);
+    }
+
+    #[test]
+    fn a_missing_store_is_not_counted_as_a_read_failure() {
+        // "Store not created yet" is the normal pre-spawn state of every deferred
+        // network; conflating it with a failure would light the escalation ladder
+        // on every healthy startup.
+        let dir = TempDir::new().unwrap();
+        let idx = test_sequenced_indexer(dir.path().join("domain"));
+        let mut reader = BulkStatusReader::new(&idx);
+
+        for _ in 0..5 {
+            assert_eq!(reader.poll(), None);
+        }
+        assert_eq!(reader.failures.consecutive(), 0);
+    }
+
+    #[test]
+    fn read_failure_escalation_ladder_is_warn_then_error_then_persistent() {
+        let mut tracker = ReadFailureTracker::default();
+        for _ in 1..SEQUENCER_READ_FAILURE_ESCALATE {
+            assert_eq!(tracker.record_failure(), ReadFailureLevel::Transient);
+        }
+        assert_eq!(tracker.record_failure(), ReadFailureLevel::Sustained);
+        for _ in (SEQUENCER_READ_FAILURE_ESCALATE + 1)..SEQUENCER_READ_FAILURE_PERSISTENT {
+            assert_eq!(tracker.record_failure(), ReadFailureLevel::Sustained);
+        }
+        assert_eq!(tracker.record_failure(), ReadFailureLevel::Persistent);
+        assert_eq!(
+            tracker.record_failure(),
+            ReadFailureLevel::Persistent,
+            "persistent is terminal, never resets on its own"
+        );
+
+        // A single good read clears the streak, so an hour-long healthy stretch
+        // after a blip does not inherit its escalation.
+        assert_eq!(tracker.record_success(), SEQUENCER_READ_FAILURE_PERSISTENT + 1);
+        assert_eq!(tracker.consecutive(), 0);
+        assert_eq!(tracker.record_failure(), ReadFailureLevel::Transient);
+    }
+
+    #[tokio::test]
+    async fn spawn_retry_absorbs_transient_failures() {
+        let attempts = std::cell::Cell::new(0u32);
+        // Zero backoff keeps the test instant; `spawn_retry_backoff` is pinned
+        // separately below.
+        let value = spawn_with_retry("testnet/indexer", |_| Duration::ZERO, || {
+            attempts.set(attempts.get() + 1);
+            if attempts.get() < 3 {
+                Err(anyhow::anyhow!("EMFILE"))
+            } else {
+                Ok("started")
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(value, "started");
+        assert_eq!(attempts.get(), 3);
+    }
+
+    #[tokio::test]
+    async fn spawn_retry_gives_up_after_the_capped_attempts() {
+        let attempts = std::cell::Cell::new(0u32);
+        let err = spawn_with_retry("testnet/indexer", |_| Duration::ZERO, || {
+            attempts.set(attempts.get() + 1);
+            Err::<(), _>(anyhow::anyhow!("EMFILE"))
+        })
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("EMFILE"));
+        assert_eq!(
+            attempts.get(),
+            SPAWN_RETRY_ATTEMPTS,
+            "retries are capped; the caller then parks instead of tearing down"
+        );
+    }
+
+    #[test]
+    fn spawn_retry_backoff_doubles_and_caps() {
+        assert_eq!(spawn_retry_backoff(0), Duration::from_secs(1));
+        assert_eq!(spawn_retry_backoff(1), Duration::from_secs(2));
+        assert_eq!(spawn_retry_backoff(3), Duration::from_secs(8));
+        assert_eq!(spawn_retry_backoff(30), MAX_BACKOFF);
+    }
+
+    // The escalation ladder must be ordered, and both rungs must be reachable
+    // within a sane wait: at a 5s poll these are ~1min and ~2min.
+    const _: () = assert!(SEQUENCER_READ_FAILURE_PERSISTENT > SEQUENCER_READ_FAILURE_ESCALATE);
+    const _: () = assert!(SEQUENCER_READ_FAILURE_ESCALATE > 0);
+    const _: () = assert!(SPAWN_RETRY_ATTEMPTS > 0);
 
     #[test]
     fn sequencer_secondary_is_opened_once_and_only_refreshed_afterwards() {
@@ -1024,7 +1348,7 @@ mod tests {
         let idx = test_sequenced_indexer(domain.clone());
         let mut reader = BulkStatusReader::new(&idx);
 
-        assert_eq!(reader.poll().unwrap(), None, "store not created yet");
+        assert_eq!(reader.read().unwrap(), None, "store not created yet");
         assert!(reader.store.is_none());
 
         let primary =
@@ -1032,9 +1356,9 @@ mod tests {
                 .unwrap();
         primary.put_sync_progress(&progress_json(9, 10)).unwrap();
 
-        assert_eq!(reader.poll().unwrap(), Some(true));
+        assert_eq!(reader.read().unwrap(), Some(true));
         let opened = reader.store.as_ref().expect("secondary opened") as *const CkbadgerStore;
-        assert_eq!(reader.poll().unwrap(), Some(true));
+        assert_eq!(reader.read().unwrap(), Some(true));
         assert_eq!(
             reader.store.as_ref().unwrap() as *const CkbadgerStore,
             opened,
@@ -1061,7 +1385,7 @@ mod tests {
         };
         let idx = test_sequenced_indexer_with_runtime(domain, runtime);
         let mut reader = BulkStatusReader::new(&idx);
-        reader.poll().unwrap();
+        reader.read().unwrap();
 
         let opened = reader.store.as_ref().expect("secondary opened").runtime_config();
         assert_eq!(opened.memory_budget_gb, Some(7));
