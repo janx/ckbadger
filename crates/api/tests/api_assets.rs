@@ -1404,6 +1404,159 @@ async fn test_assets_nft_collection_items_dotbit_human_readable_and_pagination()
     assert_eq!(json["outputIndex"], nft_a_output_index);
 }
 
+/// The `.bit Cell` item activities route had no coverage at all, so nothing
+/// pinned that it resolves the identity, enforces the standard, or orders and
+/// filters the lifecycle actions the way its dotbit/did siblings do.
+#[tokio::test]
+async fn test_assets_bit_cell_item_activities() {
+    let store = test_store();
+    let identity_id =
+        hex::decode("81d34cd1dfc27716073d1018a63712926d8e3ab36345847129d0cc4135d1ffd4").unwrap();
+    let account_id = hex::decode("81d34cd1dfc27716073d1018a63712926d8e3ab3").unwrap();
+    let mint_tx = vec![0xc1; 32];
+    let transfer_tx = vec![0xc2; 32];
+
+    {
+        let mut batch = StoreBatch::new(store.as_ref());
+        batch.put_identity(
+            &identity_id,
+            &IdentityEntry {
+                standard: IdentityStandard::BitCell,
+                owner_lock_hash: Some(vec![0x31; 32]),
+                name: Some("20240507.bit".to_string()),
+                is_live: true,
+                created_at_block: 100,
+                created_at_tx: mint_tx.clone(),
+                extra: IdentityExtra::BitCell {
+                    account_id,
+                    expired_at: 1_778_140_699,
+                },
+            },
+        );
+        batch.commit().unwrap();
+    }
+
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_spore_outpoint(&mint_tx, 0, &identity_id);
+    batch.put_spore_outpoint(&transfer_tx, 0, &identity_id);
+    batch.put_consumed_cell_with_consumer(
+        &mint_tx,
+        0,
+        &LiveCellInfo {
+            capacity: 200_00000000,
+            lock_script_hash: vec![0x31; 32],
+            lock_code_hash: vec![0x41; 32],
+            lock_hash_type: 1,
+            lock_args: vec![0x51; 20],
+            type_script_hash: Some(vec![0x61; 32]),
+            type_code_hash: Some(vec![0x71; 32]),
+            type_hash_type: Some(1),
+            type_args: Some(identity_id.clone()),
+            data_size: 72,
+            occupied_capacity: 158_00000000,
+            udt_amount: None,
+            data_hash: None,
+        },
+        100,
+        200,
+        Some(&transfer_tx),
+    );
+    batch.put_tx_hash_map(&mint_tx, 100, 0);
+    batch.put_tx_index(
+        100,
+        0,
+        &TxIndexEntry {
+            is_cellbase: false,
+            timestamp: 1_700_000_100,
+            inputs_count: 0,
+            outputs_count: 1,
+            fee: 0,
+            tx_size: 180,
+            cycles: None,
+            semantic_tags: 0,
+        },
+    );
+    batch.put_tx_hash_map(&transfer_tx, 200, 0);
+    batch.put_tx_index(
+        200,
+        0,
+        &TxIndexEntry {
+            is_cellbase: false,
+            timestamp: 1_700_000_200,
+            inputs_count: 1,
+            outputs_count: 1,
+            fee: 0,
+            tx_size: 200,
+            cycles: None,
+            semantic_tags: 0,
+        },
+    );
+    batch.commit().unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    // Newest lifecycle action first, each carrying its own block.
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/assets/identities/bit-cell/items/0x{}/activities?limit=20",
+            hex::encode(&identity_id)
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["data"].as_array().unwrap().len(), 2);
+    assert_eq!(json["data"][0]["blockNumber"], 200);
+    assert_eq!(json["data"][0]["actions"][0], "transfer");
+    assert_eq!(
+        json["data"][0]["txHash"],
+        format!("0x{}", hex::encode(&transfer_tx))
+    );
+    assert_eq!(json["data"][1]["blockNumber"], 100);
+    assert_eq!(json["data"][1]["actions"][0], "mint");
+    assert_eq!(
+        json["data"][1]["txHash"],
+        format!("0x{}", hex::encode(&mint_tx))
+    );
+
+    // The action filter narrows to a single lifecycle step.
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/assets/identities/bit-cell/items/0x{}/activities?limit=20&action=mint",
+            hex::encode(&identity_id)
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["data"].as_array().unwrap().len(), 1);
+    assert_eq!(json["data"][0]["actions"][0], "mint");
+    assert_eq!(json["data"][0]["blockNumber"], 100);
+
+    // An unknown identity is a 404, not an empty page.
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/assets/identities/bit-cell/items/0x{}/activities",
+            hex::encode([0xEEu8; 32])
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["error"], "not_found");
+    assert!(json["message"]
+        .as_str()
+        .unwrap()
+        .contains(".bit Cell identity not found"));
+}
+
 #[tokio::test]
 async fn test_assets_bit_cell_collection_and_detail_keep_independent_identity() {
     let store = test_store();
