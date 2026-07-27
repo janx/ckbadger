@@ -3802,10 +3802,8 @@ mod tests {
     /// from materialized DAO aggregate state.
     #[cfg(test)]
     fn seed_dao_daily_snapshot(store: &CkbadgerStore, date_key: &str, snapshot: &DaoDailySnapshot) {
-        let key = keys::encode_stats_key(
-            keys::stats_prefix::DAO_DAILY_SNAPSHOT,
-            date_key.as_bytes(),
-        );
+        let key =
+            keys::encode_stats_key(keys::stats_prefix::DAO_DAILY_SNAPSHOT, date_key.as_bytes());
         store
             .put_cf(
                 store.cf_stats_dao(),
@@ -7810,7 +7808,11 @@ mod tests {
         let mut batch = StoreBatch::new(&store);
         // Block 0 is the previous day's tail — the C/S/U baseline for block 1.
         for (block, ts, ar) in [
-            (0i64, cross_day_utc8_ms(prev_date, 23, 50), CROSS_DAY_AR_DEPOSIT),
+            (
+                0i64,
+                cross_day_utc8_ms(prev_date, 23, 50),
+                CROSS_DAY_AR_DEPOSIT,
+            ),
             (1, cross_day_utc8_ms(fork_date, 0, 10), CROSS_DAY_AR_DEPOSIT),
             (2, cross_day_utc8_ms(fork_date, 12, 0), CROSS_DAY_AR_DEPOSIT),
             // Block 3 is the fork point and the final surviving block of the

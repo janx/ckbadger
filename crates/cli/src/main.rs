@@ -1976,7 +1976,13 @@ mod tests {
         // configured while only mainnet exists.
         let dir = TempDir::new().unwrap();
         let root = dir.path().to_path_buf();
-        cmd_init(&root, &InitArgs { with_testnet: false }).unwrap();
+        cmd_init(
+            &root,
+            &InitArgs {
+                with_testnet: false,
+            },
+        )
+        .unwrap();
 
         let err = cmd_init(&root, &InitArgs { with_testnet: true })
             .unwrap_err()
@@ -2007,9 +2013,20 @@ mod tests {
     fn test_plain_init_stays_idempotent_on_an_existing_root() {
         let dir = TempDir::new().unwrap();
         let root = dir.path().to_path_buf();
-        cmd_init(&root, &InitArgs { with_testnet: false }).unwrap();
-        cmd_init(&root, &InitArgs { with_testnet: false })
-            .expect("plain init must remain idempotent");
+        cmd_init(
+            &root,
+            &InitArgs {
+                with_testnet: false,
+            },
+        )
+        .unwrap();
+        cmd_init(
+            &root,
+            &InitArgs {
+                with_testnet: false,
+            },
+        )
+        .expect("plain init must remain idempotent");
         assert!(!orchestrator_has_testnet(&root).unwrap());
     }
 

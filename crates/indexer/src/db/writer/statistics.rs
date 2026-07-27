@@ -971,12 +971,14 @@ impl BatchWriter {
         staged_entries: &HashMap<Vec<u8>, DaoDepositCacheEntry>,
         staged_completions: &HashMap<Vec<u8>, (i64, Vec<u8>)>,
     ) -> Result<ExactDaoSnapshotCompensation> {
-        let breakdown = self.store.compute_dao_compensation_breakdown_at_with_staged(
-            observation_block,
-            observation_ar,
-            staged_entries,
-            staged_completions,
-        )?;
+        let breakdown = self
+            .store
+            .compute_dao_compensation_breakdown_at_with_staged(
+                observation_block,
+                observation_ar,
+                staged_entries,
+                staged_completions,
+            )?;
         let total = breakdown.total().ok_or_else(|| {
             anyhow!(
                 "DAO total compensation overflow at observation block {}: claimed={}, unclaimed={}",
@@ -1868,8 +1870,7 @@ mod tests {
             )
             .unwrap_err();
         assert!(
-            format!("{error:#}")
-                .contains("staged DAO completion refers to an uncommitted deposit"),
+            format!("{error:#}").contains("staged DAO completion refers to an uncommitted deposit"),
             "unexpected error: {error:#}"
         );
     }

@@ -2185,8 +2185,7 @@ mod tests {
         for balance in ranked_balance_ladder() {
             let key = encode_addr_token_balance_key(&lock_hash, &balance, &type_hash);
             assert_eq!(key.len(), ADDR_TOKEN_BALANCE_KEY_SIZE);
-            let (decoded_lock, decoded_balance, decoded_type) =
-                decode_addr_token_balance_key(&key);
+            let (decoded_lock, decoded_balance, decoded_type) = decode_addr_token_balance_key(&key);
             assert_eq!(decoded_lock, lock_hash.to_vec());
             assert_eq!(decoded_type, type_hash.to_vec());
             assert_eq!(
@@ -2272,7 +2271,8 @@ mod tests {
         let next_lower = TokenBalance::from(u128::MAX - 1);
 
         let base = encode_token_holder_balance_key(&type_hash, &balance, &lock_hash);
-        let seek_after = encode_token_holder_balance_seek_after_key(&type_hash, &balance, &lock_hash);
+        let seek_after =
+            encode_token_holder_balance_seek_after_key(&type_hash, &balance, &lock_hash);
         let next = encode_token_holder_balance_key(&type_hash, &next_lower, &[0x00; 32]);
 
         assert!(base.as_slice() < seek_after.as_slice());

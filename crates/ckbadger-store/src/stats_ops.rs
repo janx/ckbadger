@@ -2219,15 +2219,27 @@ mod dao_daily_snapshot_recompute_tests {
         let mut batch = crate::batch::StoreBatch::new(&store);
         batch.put_block_header(
             0,
-            &header_with_dao(0, utc8_ms(date, 0, 10), dao_field(TEST_C, ar_deposit, s, TEST_U)),
+            &header_with_dao(
+                0,
+                utc8_ms(date, 0, 10),
+                dao_field(TEST_C, ar_deposit, s, TEST_U),
+            ),
         );
         batch.put_block_header(
             1,
-            &header_with_dao(1, utc8_ms(date, 12, 0), dao_field(TEST_C, ar_deposit, s, TEST_U)),
+            &header_with_dao(
+                1,
+                utc8_ms(date, 12, 0),
+                dao_field(TEST_C, ar_deposit, s, TEST_U),
+            ),
         );
         batch.put_block_header(
             2,
-            &header_with_dao(2, utc8_ms(date, 23, 50), dao_field(TEST_C, ar_end, s, TEST_U)),
+            &header_with_dao(
+                2,
+                utc8_ms(date, 23, 50),
+                dao_field(TEST_C, ar_end, s, TEST_U),
+            ),
         );
         let capacity = 100_000_000_000i64;
         let occupied = 10_200_000_000i64;
@@ -2317,7 +2329,11 @@ mod dao_daily_snapshot_recompute_tests {
         );
         batch.put_block_header(
             2,
-            &header_with_dao(2, utc8_ms(date, 12, 0), dao_field(TEST_C, ar_end, s2, TEST_U)),
+            &header_with_dao(
+                2,
+                utc8_ms(date, 12, 0),
+                dao_field(TEST_C, ar_end, s2, TEST_U),
+            ),
         );
         let capacity = 100_000_000_000i64;
         let occupied = 10_200_000_000i64;
