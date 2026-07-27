@@ -2,7 +2,7 @@
 
 import { type MouseEvent, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { useNavigate } from 'react-router-dom';
+import { useRouter } from '@/src/navigation';
 import { api, type ActivitySummary24h } from '@/lib/api';
 import {
   TerminalPanel,
@@ -142,20 +142,23 @@ function PieSection<T extends { label: string; value: number; color?: string }>(
   getItemHref?: (item: T, index: number) => string | null | undefined;
   testIdPrefix?: string;
 }) {
-  const navigate = useNavigate();
+  // Network-aware router: raw `useNavigate` would push un-prefixed hrefs, which
+  // the route guard resolves against the DEFAULT network — dropping the user out
+  // of the network they are browsing.
+  const router = useRouter();
   const total = data.reduce((s, x) => s + x.value, 0);
   const isSectionClickable = Boolean(sectionHref);
 
   function handleSectionClick() {
     if (!sectionHref) return;
-    navigate(sectionHref);
+    router.push(sectionHref);
   }
 
   function handleItemClick(event: MouseEvent<Element>, item: T, index: number) {
     const href = getItemHref?.(item, index);
     if (!href) return;
     event.stopPropagation();
-    navigate(href);
+    router.push(href);
   }
 
   return (

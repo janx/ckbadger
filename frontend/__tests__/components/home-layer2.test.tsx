@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { render, screen, waitFor } from '../utils/test-utils';
 import { KnowledgeSizeTrend, NetworkHealth } from '@/components/home-layer2';
 import { ActivityCard } from '@/components/activity-card';
-import { api, type ChartResponse, type NetworkStats } from '@/lib/api';
+import { api, type ActivitySummary24h, type ChartResponse, type NetworkStats } from '@/lib/api';
 
 vi.mock('@/lib/api', () => ({
   api: {
@@ -16,6 +16,10 @@ vi.mock('@/lib/api', () => ({
   isWarmupPendingError: vi.fn(() => false),
   isNetworkInitializingError: vi.fn(() => false),
 }));
+
+// The shared test setup replaces `@/src/navigation` with a no-op router; the
+// ActivityCard tests below assert its real (network-prefixing) navigation.
+vi.mock('@/src/navigation', async () => await vi.importActual('@/src/navigation'));
 
 function mockChartResponse(overrides: Partial<ChartResponse> = {}): ChartResponse {
   return {
@@ -65,6 +69,28 @@ function mockNetworkStats(): NetworkStats {
     knowledgeSize: '19500000000.00',
     circulatingSupply: '25200000000.00',
     daoLocked: '11200000000.00',
+  };
+}
+
+function mockActivitySummary(): ActivitySummary24h {
+  return {
+    transferCount: 100,
+    daoDepositCount: 10,
+    daoWithdrawRequestCount: 5,
+    daoWithdrawCompleteCount: 3,
+    tokenCount: 20,
+    objectCount: 8,
+    identityCount: 2,
+    scriptCallCount: 15,
+    unknownCount: 0,
+    coinbaseCount: 50,
+    uniqueAddressCount: 200,
+    totalCkbMoved: '500000000000',
+    hoursCovered: 24,
+    scriptCounts: [
+      { codeHash: '0xaaa', name: 'secp256k1', count: 500 },
+      { codeHash: '0xbbb', name: 'dao', count: 200 },
+    ],
   };
 }
 
@@ -314,6 +340,60 @@ describe('ActivityCard script usage', () => {
     await waitFor(() => {
       expect(screen.getByTestId('pathname')).toHaveTextContent('/scripts/secp256k1');
     });
+  });
+
+  it('keeps section navigation on the active network', async () => {
+    const user = userEvent.setup();
+    window.__CKBADGER_RUNTIME_CONFIG__ = {
+      networks: [{ name: 'mainnet' }, { name: 'testnet' }],
+      defaultNetwork: 'mainnet',
+    };
+    vi.mocked(api.getActivitySummary24h).mockResolvedValue(mockActivitySummary());
+
+    try {
+      render(
+        <MemoryRouter initialEntries={['/testnet/']}>
+          <NavigationHarness />
+        </MemoryRouter>
+      );
+
+      await user.click(await screen.findByTestId('activity-types-section'));
+
+      await waitFor(() => {
+        // A bare `/charts/...` would be resolved against the DEFAULT network by
+        // the route guard, dropping the user off the network they are browsing.
+        expect(screen.getByTestId('pathname').textContent).toBe(
+          '/testnet/charts/activity-type-breakdown'
+        );
+      });
+    } finally {
+      delete window.__CKBADGER_RUNTIME_CONFIG__;
+    }
+  });
+
+  it('keeps script-detail navigation on the active network', async () => {
+    const user = userEvent.setup();
+    window.__CKBADGER_RUNTIME_CONFIG__ = {
+      networks: [{ name: 'mainnet' }, { name: 'testnet' }],
+      defaultNetwork: 'mainnet',
+    };
+    vi.mocked(api.getActivitySummary24h).mockResolvedValue(mockActivitySummary());
+
+    try {
+      render(
+        <MemoryRouter initialEntries={['/testnet/']}>
+          <NavigationHarness />
+        </MemoryRouter>
+      );
+
+      await user.click(await screen.findByTestId('script-usage-legend-item-0'));
+
+      await waitFor(() => {
+        expect(screen.getByTestId('pathname').textContent).toBe('/testnet/scripts/secp256k1');
+      });
+    } finally {
+      delete window.__CKBADGER_RUNTIME_CONFIG__;
+    }
   });
 
   it('navigates to most utilized scripts when clicking script section chrome', async () => {

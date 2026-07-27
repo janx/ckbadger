@@ -3,6 +3,7 @@
 import { useMemo, useRef, useState, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import Link from '@/components/ui/link';
+import { useRouter } from '@/src/navigation';
 import { cn } from '@/lib/utils';
 
 export type TxCategory = 'normal' | 'cellbase' | 'dao';
@@ -158,6 +159,10 @@ function TxBox({ item, boxSize, x, y, type, isCommitted }: TxBoxProps) {
   const [showTooltip, setShowTooltip] = useState(false);
   const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 });
   const boxRef = useRef<HTMLDivElement>(null);
+  // Network-aware SPA navigation: a raw `window.location.href = '/tx/…'` both
+  // reloads the app and drops the `/<network>` prefix, so the guard would
+  // resolve the tx against the DEFAULT network.
+  const router = useRouter();
 
   const updateTooltipPos = useCallback(() => {
     if (boxRef.current) {
@@ -179,7 +184,7 @@ function TxBox({ item, boxSize, x, y, type, isCommitted }: TxBoxProps) {
     if (isCommitted) {
       e.preventDefault();
       e.stopPropagation();
-      window.location.href = `/tx/${item.id}`;
+      router.push(`/tx/${item.id}`);
     }
   };
 
@@ -187,6 +192,7 @@ function TxBox({ item, boxSize, x, y, type, isCommitted }: TxBoxProps) {
     <>
       <div
         ref={boxRef}
+        data-testid={`tx-box-${item.id}`}
         className={cn(
           'absolute cursor-pointer rounded-[2px] border border-black/30 transition-colors duration-100',
           CATEGORY_COLORS[item.category][type]

@@ -1,8 +1,14 @@
-import { describe, it, expect, beforeAll } from 'vitest';
-import { screen } from '@testing-library/react';
+import { describe, it, expect, afterEach, beforeAll, beforeEach, vi } from 'vitest';
+import { screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { MemoryRouter, useLocation } from 'react-router-dom';
 import { render } from '../utils/test-utils';
 import { PackedContainer, TxItem } from '@/components/chain-wave/packed-container';
 import { EpochProgress } from '@/components/chain-wave/epoch-progress';
+
+// The shared test setup replaces `@/src/navigation` with a no-op router; the
+// navigation test below asserts the real network-prefixing behaviour.
+vi.mock('@/src/navigation', async () => await vi.importActual('@/src/navigation'));
 
 // Mock ResizeObserver for PackedContainer tests
 beforeAll(() => {
@@ -62,6 +68,62 @@ describe('PackedContainer (proposals type)', () => {
 
     expect(screen.getByText('2')).toBeInTheDocument();
     expect(screen.queryByText('No proposed txs')).not.toBeInTheDocument();
+  });
+});
+
+describe('PackedContainer (tip type) transaction navigation', () => {
+  beforeEach(() => {
+    // jsdom reports every element as zero-width, so the packer would lay out no
+    // boxes at all; give the container a width so a clickable box is rendered.
+    Object.defineProperty(HTMLElement.prototype, 'clientWidth', {
+      configurable: true,
+      get: () => 400,
+    });
+    window.__CKBADGER_RUNTIME_CONFIG__ = {
+      networks: [{ name: 'mainnet' }, { name: 'testnet' }],
+      defaultNetwork: 'mainnet',
+    };
+  });
+
+  afterEach(() => {
+    Reflect.deleteProperty(HTMLElement.prototype, 'clientWidth');
+    delete window.__CKBADGER_RUNTIME_CONFIG__;
+  });
+
+  function TipHarness() {
+    const location = useLocation();
+
+    return (
+      <>
+        <div data-testid="pathname">{location.pathname}</div>
+        <PackedContainer
+          title="Tip"
+          type="tip"
+          items={[createProposalItem('0xabc123')]}
+          totalCount={1}
+          blockNumber={987}
+          globalMaxSize={10000}
+        />
+      </>
+    );
+  }
+
+  it('navigates to the transaction under the active network prefix', async () => {
+    const user = userEvent.setup();
+
+    render(
+      <MemoryRouter initialEntries={['/testnet/']}>
+        <TipHarness />
+      </MemoryRouter>
+    );
+
+    await user.click(await screen.findByTestId('tx-box-0xabc123'));
+
+    await waitFor(() => {
+      // A bare `/tx/0xabc123` would be resolved against the DEFAULT network by
+      // the route guard, 404-ing a testnet-only transaction.
+      expect(screen.getByTestId('pathname').textContent).toBe('/testnet/tx/0xabc123');
+    });
   });
 });
 
