@@ -286,18 +286,6 @@ pub(crate) fn dao_csu_for_snapshot_date(
 }
 
 // ---------------------------------------------------------------------------
-// Non-miner secondary delta resolution
-// ---------------------------------------------------------------------------
-
-#[cfg(test)]
-pub(crate) fn resolve_non_miner_secondary_delta_for_snapshot(
-    _date: NaiveDate,
-    daily_non_miner_delta: Option<i128>,
-) -> Result<i128> {
-    Ok(daily_non_miner_delta.unwrap_or(0))
-}
-
-// ---------------------------------------------------------------------------
 // Checked tx fee
 // ---------------------------------------------------------------------------
 
@@ -1034,31 +1022,6 @@ mod tests {
         dao[8..16].copy_from_slice(&ar.to_le_bytes());
         let parsed = extract_ar_i64_from_dao(&dao, 42).unwrap();
         assert_eq!(parsed, ar as i64);
-    }
-
-    // -- resolve_non_miner_secondary_delta_for_snapshot ---------------------
-
-    #[test]
-    fn test_resolve_non_miner_secondary_delta_for_snapshot_prefers_precomputed_delta() {
-        let date = chrono::NaiveDate::from_ymd_opt(2026, 2, 18).unwrap();
-        let resolved = resolve_non_miner_secondary_delta_for_snapshot(date, Some(123)).unwrap();
-        assert_eq!(resolved, 123);
-    }
-
-    #[test]
-    fn test_resolve_non_miner_secondary_delta_for_snapshot_keeps_negative_protocol_correction() {
-        let date = chrono::NaiveDate::from_ymd_opt(2026, 2, 18).unwrap();
-        assert_eq!(
-            resolve_non_miner_secondary_delta_for_snapshot(date, Some(-1)).unwrap(),
-            -1
-        );
-    }
-
-    #[test]
-    fn test_resolve_non_miner_secondary_delta_for_snapshot_defaults_missing_delta_to_zero() {
-        let date = chrono::NaiveDate::from_ymd_opt(2026, 2, 18).unwrap();
-        let delta = resolve_non_miner_secondary_delta_for_snapshot(date, None).unwrap();
-        assert_eq!(delta, 0);
     }
 
     // -- derive_running_depositors ------------------------------------------
