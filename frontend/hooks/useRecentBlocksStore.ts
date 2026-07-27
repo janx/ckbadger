@@ -15,6 +15,7 @@ interface RecentBlocksState {
   setBlocks: (blocks: RecentBlockItem[]) => void;
   addBlock: (block: RecentBlockItem) => void;
   pruneOldBlocks: (referenceTime: number) => void;
+  reset: () => void;
 }
 
 export const useRecentBlocksStore = create<RecentBlocksState>((set, get) => ({
@@ -22,6 +23,10 @@ export const useRecentBlocksStore = create<RecentBlocksState>((set, get) => ({
   initialized: false,
 
   setBlocks: (blocks) => set({ blocks, initialized: true }),
+
+  // Drops the cached 24h series AND the `initialized` latch, so the next network
+  // re-fetches instead of inheriting the previous one's blocks.
+  reset: () => set({ blocks: [], initialized: false }),
 
   addBlock: (block) => {
     const { blocks } = get();

@@ -56,6 +56,21 @@ describe('useRecentBlocksStore', () => {
     });
   });
 
+  describe('reset', () => {
+    it('clears the series and the initialized latch', () => {
+      const { setBlocks, reset } = useRecentBlocksStore.getState();
+      setBlocks([{ timestamp: 1000, transactionsCount: 5 }]);
+
+      reset();
+
+      const state = useRecentBlocksStore.getState();
+      expect(state.blocks).toEqual([]);
+      // Without clearing the latch the hook would never re-fetch the new
+      // network's series.
+      expect(state.initialized).toBe(false);
+    });
+  });
+
   describe('pruneOldBlocks', () => {
     it('removes blocks older than 24 hours from reference time', () => {
       const { setBlocks, pruneOldBlocks } = useRecentBlocksStore.getState();
