@@ -290,6 +290,11 @@ pub fn build_frontend_router(config: FrontendServiceConfig) -> Result<Router> {
     ));
     let proxy_router = crate::frontend_proxy::proxy_router(proxy_state);
 
+    // The capabilities document describes THIS origin, so it needs the concrete
+    // networks the proxy above routes to.
+    let capability_networks: Vec<String> = config.networks.iter().map(|n| n.name.clone()).collect();
+    let capability_default_network = config.default_network.clone();
+
     if let Some(frontend_dir) = config.frontend_dir {
         let index_path = frontend_dir.join("index.html");
         if !index_path.is_file() {
@@ -317,7 +322,16 @@ pub fn build_frontend_router(config: FrontendServiceConfig) -> Result<Router> {
                     move || frontend_runtime_config_handler(runtime_config.clone())
                 }),
             )
-            .route("/capabilities", get(frontend_capabilities_handler))
+            .route(
+                "/capabilities",
+                get(move |headers| {
+                    frontend_capabilities_handler(
+                        headers,
+                        capability_networks.clone(),
+                        capability_default_network.clone(),
+                    )
+                }),
+            )
             .merge(proxy_router)
             .fallback({
                 let state = state.clone();
@@ -335,7 +349,16 @@ pub fn build_frontend_router(config: FrontendServiceConfig) -> Result<Router> {
                     move || frontend_runtime_config_handler(runtime_config.clone())
                 }),
             )
-            .route("/capabilities", get(frontend_capabilities_handler))
+            .route(
+                "/capabilities",
+                get(move |headers| {
+                    frontend_capabilities_handler(
+                        headers,
+                        capability_networks.clone(),
+                        capability_default_network.clone(),
+                    )
+                }),
+            )
             .merge(proxy_router)
             .fallback(embedded_frontend::embedded_frontend_handler));
     }
@@ -393,13 +416,17 @@ async fn frontend_runtime_config_handler(config: FrontendRuntimeConfig) -> Respo
         .into_response()
 }
 
-async fn frontend_capabilities_handler(headers: HeaderMap) -> Response {
+async fn frontend_capabilities_handler(
+    headers: HeaderMap,
+    networks: Vec<String>,
+    default_network: String,
+) -> Response {
     let origin = headers
         .get(header::HOST)
         .and_then(|v| v.to_str().ok())
         .map(|host| format!("http://{}", host))
         .unwrap_or_default();
-    let body = build_capabilities_json(&origin);
+    let body = build_capabilities_json(&origin, &networks, &default_network);
     (
         StatusCode::OK,
         [
@@ -418,16 +445,23 @@ async fn frontend_capabilities_handler(headers: HeaderMap) -> Response {
 ///
 /// This is the Rust equivalent of `frontend/lib/ai/capabilities.ts` `buildAiCapabilities()`.
 /// The route patterns are kept in sync manually — they change infrequently.
-fn build_capabilities_json(origin: &str) -> String {
+///
+/// Every path here must be a real route on the origin serving the document. This
+/// origin is the shared frontend server, where only the network-prefixed
+/// patterns exist: `/api/v1` and `/ws` match no route, fall through to the SPA
+/// fallback and answer `200 text/html`, so advertising them would hand any agent
+/// that trusts this document a path that "succeeds" with a web page. The
+/// concrete `networks` list is what makes the `{network}` placeholder usable.
+fn build_capabilities_json(origin: &str, networks: &[String], default_network: &str) -> String {
     serde_json::json!({
         "origin": origin,
         "site": {
             "name": "ckbadger",
             "pageBasePattern": "/{network}",
             "apiBasePattern": "/api/{network}/v1",
-            "directApiBase": "/api/v1",
             "wsUrlPattern": "/ws/{network}",
-            "directWsUrl": "/ws"
+            "networks": networks,
+            "defaultNetwork": default_network
         },
         "formatNegotiation": {
             "priority": ["query.format", "path.suffix", "accept.header"],
@@ -902,10 +936,16 @@ mod tests {
             build_version: "0.1.0+testbuild".to_string(),
             frontend_dir: Some(dir.path().to_path_buf()),
             default_network: "mainnet".to_string(),
-            networks: vec![FrontendNetwork {
-                name: "mainnet".to_string(),
-                api_port: 8101,
-            }],
+            networks: vec![
+                FrontendNetwork {
+                    name: "mainnet".to_string(),
+                    api_port: 8101,
+                },
+                FrontendNetwork {
+                    name: "testnet".to_string(),
+                    api_port: 8102,
+                },
+            ],
         })
         .unwrap();
 
@@ -933,9 +973,20 @@ mod tests {
         assert_eq!(json["site"]["name"], "ckbadger");
         assert_eq!(json["site"]["pageBasePattern"], "/{network}");
         assert_eq!(json["site"]["apiBasePattern"], "/api/{network}/v1");
-        assert_eq!(json["site"]["directApiBase"], "/api/v1");
         assert_eq!(json["site"]["wsUrlPattern"], "/ws/{network}");
-        assert_eq!(json["site"]["directWsUrl"], "/ws");
+        // The `{network}` placeholder is only usable with the list of networks
+        // this origin actually serves.
+        assert_eq!(
+            json["site"]["networks"],
+            serde_json::json!(["mainnet", "testnet"])
+        );
+        assert_eq!(json["site"]["defaultNetwork"], "mainnet");
+        // The single-network paths are NOT routes on this origin: they miss the
+        // proxy and fall through to the SPA, which answers 200 text/html.
+        // Advertising them in a machine-readable document poisons any agent that
+        // trusts it, so they must be absent.
+        assert!(json["site"].get("directApiBase").is_none());
+        assert!(json["site"].get("directWsUrl").is_none());
         assert!(json["site"].get("apiBase").is_none());
         assert!(json["routes"]["markdown"].as_array().unwrap().len() > 20);
         assert!(
