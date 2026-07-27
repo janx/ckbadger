@@ -281,13 +281,13 @@ pub fn build_frontend_router(config: FrontendServiceConfig) -> Result<Router> {
     // so it can be merged into either serving branch ahead of the SPA fallback.
     // Only one branch runs (each `return`s), so moving it into the first branch
     // that executes and again in the next is sound — the earlier move diverges.
-    let proxy_state = Arc::new(crate::frontend_proxy::ProxyState {
-        ports: config
+    let proxy_state = Arc::new(crate::frontend_proxy::ProxyState::new(
+        config
             .networks
             .iter()
             .map(|n| (n.name.clone(), n.api_port))
             .collect(),
-    });
+    ));
     let proxy_router = crate::frontend_proxy::proxy_router(proxy_state);
 
     if let Some(frontend_dir) = config.frontend_dir {

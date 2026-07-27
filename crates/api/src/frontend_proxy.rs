@@ -43,12 +43,29 @@ use crate::response::ApiError;
 /// ends up outside this prefix has escaped the advertised contract.
 const UPSTREAM_API_PREFIX: &str = "/api/v1/";
 
-/// Per-network backend routing table: network name → local `ckbadger-api` port.
+/// Per-network backend routing table: network name → local `ckbadger-api` port,
+/// plus the HTTP client used to reach those backends.
 pub struct ProxyState {
-    pub ports: HashMap<String, u16>,
+    ports: HashMap<String, u16>,
+    client: reqwest::Client,
 }
 
 impl ProxyState {
+    /// Routing table wired to the process-wide proxy HTTP client (production).
+    pub fn new(ports: HashMap<String, u16>) -> Self {
+        Self {
+            ports,
+            client: crate::utils::http::proxy_http_client().clone(),
+        }
+    }
+
+    /// Same routing table with a caller-supplied client. Exists so tests can
+    /// exercise the timeout paths on a budget measured in milliseconds instead
+    /// of the production minute-scale one.
+    pub fn with_client(ports: HashMap<String, u16>, client: reqwest::Client) -> Self {
+        Self { ports, client }
+    }
+
     fn upstream_port(&self, network: &str) -> Option<u16> {
         self.ports.get(network).copied()
     }
@@ -179,9 +196,8 @@ pub async fn proxy_api(
         );
     }
 
-    let client = crate::utils::http::shared_http_client();
     let reqwest_body = reqwest::Body::wrap_stream(body.into_data_stream());
-    let mut builder = client.request(parts.method, url).body(reqwest_body);
+    let mut builder = state.client.request(parts.method, url).body(reqwest_body);
     for (name, value) in parts.headers.iter() {
         if is_hop_by_hop(name.as_str()) || is_client_forwarding_header(name.as_str()) {
             continue;
@@ -206,6 +222,14 @@ pub async fn proxy_api(
             resp.body(Body::from_stream(upstream.bytes_stream()))
                 .expect("proxied response builder with validated status/headers")
         }
+        // A stalled upstream is a different failure from an absent one: the
+        // backend is up, it just stopped talking. Report it as such so the cause
+        // is visible in the browser and in logs.
+        Err(e) if e.is_timeout() => proxy_error(
+            StatusCode::GATEWAY_TIMEOUT,
+            "upstream_timeout",
+            format!("upstream network '{network}' timed out: {e}"),
+        ),
         Err(e) => (
             StatusCode::BAD_GATEWAY,
             format!("upstream network '{network}' unreachable: {e}"),
@@ -367,6 +391,16 @@ mod tests {
                     format!("{forwarded}|{real}")
                 }),
             )
+            // Never answers: stands in for an upstream that accepted the
+            // connection and then wedged (the case a connect-only failure check
+            // cannot see).
+            .route(
+                "/api/v1/hang",
+                get(|| async {
+                    tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+                    "unreachable"
+                }),
+            )
             .route("/ws", get(mock_upstream_ws))
             // Catch-all echo of the *raw* path the upstream actually received, so
             // tests can assert byte-for-byte what the proxy spliced into the
@@ -400,9 +434,24 @@ mod tests {
     }
 
     fn testnet_proxy(port: u16) -> Router {
-        proxy_router(Arc::new(ProxyState {
-            ports: HashMap::from([("testnet".to_string(), port)]),
-        }))
+        proxy_router(Arc::new(ProxyState::new(HashMap::from([(
+            "testnet".to_string(),
+            port,
+        )]))))
+    }
+
+    /// Same routing table, but with an HTTP client whose read budget is measured
+    /// in milliseconds so a stalled-upstream test bounds its own wait.
+    fn testnet_proxy_with_short_timeouts(port: u16) -> Router {
+        let client = reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(5))
+            .read_timeout(std::time::Duration::from_millis(200))
+            .build()
+            .expect("test proxy client");
+        proxy_router(Arc::new(ProxyState::with_client(
+            HashMap::from([("testnet".to_string(), port)]),
+            client,
+        )))
     }
 
     fn with_peer(mut request: Request, peer: &str) -> Request {
@@ -644,6 +693,62 @@ mod tests {
         assert!(
             text.contains("testnet") && text.contains("unreachable"),
             "502 body should explain the unreachable upstream: {text}"
+        );
+    }
+
+    #[tokio::test]
+    async fn upstream_read_timeout_bounds_a_response_head_that_never_arrives() {
+        // Pins the property the proxy client's timeout policy is chosen for: an
+        // upstream that accepts the connection and then goes silent is cut loose
+        // by the read timeout even though no response byte ever arrives. The
+        // outer guard is 25x the read budget, so a regression fails instead of
+        // hanging the suite.
+        let port = spawn_mock_upstream().await;
+        let client = reqwest::Client::builder()
+            .read_timeout(std::time::Duration::from_millis(200))
+            .build()
+            .expect("test client");
+
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            client
+                .get(format!("http://127.0.0.1:{port}/api/v1/hang"))
+                .send(),
+        )
+        .await
+        .expect("read timeout must fire well before the outer guard");
+
+        let err = result.expect_err("a stalled upstream must not resolve");
+        assert!(err.is_timeout(), "expected a timeout error, got {err}");
+    }
+
+    #[tokio::test]
+    async fn proxy_stalled_upstream_returns_504() {
+        // An upstream that accepts the connection and then never answers must be
+        // cut loose with a distinct 504, not held open forever nor reported as
+        // "unreachable" (which it demonstrably is not).
+        let port = spawn_mock_upstream().await;
+        let resp = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            testnet_proxy_with_short_timeouts(port).oneshot(with_peer(
+                Request::builder()
+                    .uri("/api/testnet/v1/hang")
+                    .body(Body::empty())
+                    .unwrap(),
+                "203.0.113.8:4008",
+            )),
+        )
+        .await
+        .expect("the proxy must bound a stalled upstream, not hang on it")
+        .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::GATEWAY_TIMEOUT);
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["error"], "upstream_timeout");
+        assert!(
+            json["message"].as_str().unwrap().contains("testnet"),
+            "504 body should name the stalled network: {json}"
         );
     }
 
