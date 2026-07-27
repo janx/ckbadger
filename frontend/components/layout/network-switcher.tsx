@@ -1,6 +1,6 @@
 'use client';
 
-import { useRouter, usePathname } from '@/src/navigation';
+import { useRouter, usePathname, useSearchAndHash } from '@/src/navigation';
 import { NAVBAR_DROPDOWN_TRIGGER_CLASS } from '@/components/layout/navbar-dropdown-styles';
 import { useActiveNetwork } from '@/hooks/useActiveNetwork';
 import { resolveNetworks } from '@/lib/runtime-config';
@@ -35,12 +35,16 @@ function NetworkSwitcherControl({ networks, className, onSwitch }: NetworkSwitch
   // `pathname` is canonical / un-prefixed — Task 6's `usePathname` strips the
   // active `:network` segment, so we rebuild the target with the chosen network.
   const pathname = usePathname();
+  // `usePathname` carries no search/hash; keep them so a switch preserves the
+  // user's filters and anchor, exactly as NetworkGuard does when it prefixes a path.
+  const searchAndHash = useSearchAndHash();
   const router = useRouter();
 
   // Explicitly network-prefixed target. `useRouter.push` no-ops its auto-prefix
   // because the first segment is already a known network — so no double-prefix.
   const switchTo = (net: string) => {
-    router.push(pathname === '/' ? `/${net}` : `/${net}${pathname}`);
+    const basePath = pathname === '/' ? `/${net}` : `/${net}${pathname}`;
+    router.push(`${basePath}${searchAndHash}`);
     onSwitch?.();
   };
 

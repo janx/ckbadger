@@ -20,6 +20,10 @@ function getWindowSearch(): string {
   return typeof window === 'undefined' ? '' : window.location.search;
 }
 
+function getWindowHash(): string {
+  return typeof window === 'undefined' ? '' : window.location.hash;
+}
+
 export function usePathname(): string {
   const locationContext = useContext(UNSAFE_LocationContext);
   const raw = locationContext?.location.pathname ?? getWindowPathname();
@@ -27,6 +31,19 @@ export function usePathname(): string {
   // seeing the canonical (un-prefixed) path (e.g. `/testnet/dao` -> `/dao`).
   const seg = raw.replace(/^\/+/, '').split('/')[0] ?? '';
   return isKnownNetwork(seg) ? raw.slice(seg.length + 1) || '/' : raw;
+}
+
+/**
+ * Raw `?search` + `#hash` of the current location as one appendable suffix.
+ *
+ * `usePathname` intentionally returns only the (un-prefixed) path, so callers
+ * rebuilding a URL need this to avoid dropping the user's query and anchor.
+ */
+export function useSearchAndHash(): string {
+  const locationContext = useContext(UNSAFE_LocationContext);
+  const search = locationContext?.location.search ?? getWindowSearch();
+  const hash = locationContext?.location.hash ?? getWindowHash();
+  return `${search}${hash}`;
 }
 
 export function useSearchParams(): URLSearchParams {

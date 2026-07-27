@@ -2,9 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { NetworkSwitcher } from '@/components/layout/network-switcher';
 
-// Capture router.push; drive pathname + active network per-test via refs.
+// Capture router.push; drive pathname, search+hash and active network per-test via refs.
 const pushMock = vi.hoisted(() => vi.fn());
 const pathnameRef = vi.hoisted(() => ({ current: '/dao' }));
+const searchAndHashRef = vi.hoisted(() => ({ current: '' }));
 const activeRef = vi.hoisted(() => ({ current: 'mainnet' }));
 
 vi.mock('@/src/navigation', () => ({
@@ -17,6 +18,7 @@ vi.mock('@/src/navigation', () => ({
     prefetch: vi.fn(),
   }),
   usePathname: () => pathnameRef.current,
+  useSearchAndHash: () => searchAndHashRef.current,
 }));
 
 vi.mock('@/hooks/useActiveNetwork', () => ({
@@ -27,6 +29,7 @@ describe('NetworkSwitcher', () => {
   beforeEach(() => {
     pushMock.mockReset();
     pathnameRef.current = '/dao';
+    searchAndHashRef.current = '';
     activeRef.current = 'mainnet';
     window.__CKBADGER_RUNTIME_CONFIG__ = {
       networks: [{ name: 'mainnet' }, { name: 'testnet' }],
@@ -74,6 +77,19 @@ describe('NetworkSwitcher', () => {
     fireEvent.click(screen.getByRole('menuitemradio', { name: 'Switch to testnet' }));
 
     expect(pushMock).toHaveBeenCalledWith('/testnet');
+  });
+
+  it('preserves the query string and hash when switching networks', () => {
+    // Browsing /mainnet/activities?type=dao#row-7
+    pathnameRef.current = '/activities';
+    searchAndHashRef.current = '?type=dao#row-7';
+    render(<NetworkSwitcher />);
+
+    fireEvent.click(screen.getByRole('menuitemradio', { name: 'Switch to testnet' }));
+
+    // NetworkGuard preserves search+hash when it prefixes a path; the switcher
+    // must not silently drop the user's filters and anchor.
+    expect(pushMock).toHaveBeenCalledWith('/testnet/activities?type=dao#row-7');
   });
 
   it('renders nothing when only one network is live', () => {
