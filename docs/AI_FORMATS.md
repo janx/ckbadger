@@ -41,9 +41,10 @@ Priority order (strict):
 - `frontend/public/llms-full.txt` — full discovery doc
 - `http://localhost:8100/capabilities` — machine-readable format/profile/route matrix
 
-`/capabilities.site` advertises `pageBasePattern`, shared `apiBasePattern`/`wsUrlPattern`, and the
-direct per-network `directApiBase`/`directWsUrl`. Its page route matrices are relative to
-`pageBasePattern`.
+`/capabilities.site` advertises `pageBasePattern`, the shared `apiBasePattern`/`wsUrlPattern`
+(`{network}` placeholder), and the concrete `networks` list plus `defaultNetwork` that make the
+placeholder actionable. It no longer lists direct single-network paths — they are not routes on
+the origin that serves the document. Its page route matrices are relative to `pageBasePattern`.
 
 ## Examples
 
