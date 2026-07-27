@@ -128,7 +128,11 @@ pub async fn run_api(config: ApiServiceConfig) -> Result<()> {
                 config.network_data_path,
                 sec.display()
             );
-            match CkbadgerStore::open_network_secondary(primary, sec.as_path()) {
+            match CkbadgerStore::open_network_secondary_with_runtime(
+                primary,
+                sec.as_path(),
+                config.store_runtime_config,
+            ) {
                 Ok(s) => Some(Arc::new(s)),
                 Err(e) => {
                     tracing::warn!("network store present but failed to open secondary: {e}");
