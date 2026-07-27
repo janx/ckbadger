@@ -23,14 +23,16 @@ pub(crate) fn is_past_bulk(bulk_completed: bool, lag: Option<i128>, threshold: u
 /// bulk, then `spawn(i)`. Generic over the status reader and spawn action so the
 /// gating logic is testable without real stores/processes.
 ///
-/// `past_bulk(prev)` returns `Ok(Some(true|false))` on a successful read,
-/// `Ok(None)` only while the store has not been created, and `Err` for an
-/// existing store that cannot be read or decoded.
+/// `past_bulk(prev)` returns `Ok(Some(true|false))` on a successful read and
+/// `Ok(None)` when this round carries no signal (the store has not been created
+/// yet). It is `async` because the real supervisor callback hands the blocking
+/// RocksDB secondary open/refresh/read to `spawn_blocking` — a sequencer poll
+/// must never block a runtime worker for the duration of a RocksDB catch-up.
 ///
 /// `spawn(i)` is `async`: the real supervisor callback appends to the shared
 /// `SupervisorState` behind a `tokio::sync::Mutex`, which must be awaited (a
 /// `blocking_lock` in this async context would panic), so the gate is async.
-pub(crate) async fn sequence_indexers<R, S, Fut>(
+pub(crate) async fn sequence_indexers<R, RFut, S, SFut>(
     count: usize,
     mut past_bulk: R,
     mut spawn: S,
@@ -38,16 +40,17 @@ pub(crate) async fn sequence_indexers<R, S, Fut>(
     mut shutdown: watch::Receiver<bool>,
 ) -> Result<()>
 where
-    R: FnMut(usize) -> Result<Option<bool>>,
-    S: FnMut(usize) -> Fut,
-    Fut: std::future::Future<Output = Result<()>>,
+    R: FnMut(usize) -> RFut,
+    RFut: std::future::Future<Output = Result<Option<bool>>>,
+    S: FnMut(usize) -> SFut,
+    SFut: std::future::Future<Output = Result<()>>,
 {
     for i in 1..count {
         loop {
             if *shutdown.borrow() {
                 return Ok(());
             }
-            if past_bulk(i - 1)? == Some(true) {
+            if past_bulk(i - 1).await? == Some(true) {
                 spawn(i).await?;
                 break;
             }
@@ -106,9 +109,12 @@ mod tests {
             3,
             // false, true, false, true -> each network waits one poll before advancing
             |_prev| {
-                let mut c = calls.borrow_mut();
-                *c += 1;
-                Ok(Some((*c).is_multiple_of(2)))
+                let calls = &calls;
+                async move {
+                    let mut c = calls.borrow_mut();
+                    *c += 1;
+                    Ok(Some((*c).is_multiple_of(2)))
+                }
             },
             |i| {
                 let spawned = &spawned;
@@ -137,8 +143,11 @@ mod tests {
         sequence_indexers(
             1,
             |_prev| {
-                *calls.borrow_mut() += 1;
-                Ok(Some(true))
+                let calls = &calls;
+                async move {
+                    *calls.borrow_mut() += 1;
+                    Ok(Some(true))
+                }
             },
             |i| {
                 let spawned = &spawned;
@@ -163,7 +172,7 @@ mod tests {
         let spawned = RefCell::new(Vec::<usize>::new());
         sequence_indexers(
             3,
-            |_prev| Ok(Some(false)),
+            |_prev| async { Ok(Some(false)) },
             |i| {
                 let spawned = &spawned;
                 async move {
@@ -185,7 +194,7 @@ mod tests {
         let spawned = RefCell::new(Vec::<usize>::new());
         let err = sequence_indexers(
             2,
-            |_prev| Err(anyhow::anyhow!("corrupt sync progress")),
+            |_prev| async { Err(anyhow::anyhow!("corrupt sync progress")) },
             |i| {
                 let spawned = &spawned;
                 async move {
@@ -209,7 +218,7 @@ mod tests {
         let attempted = RefCell::new(Vec::<usize>::new());
         let err = sequence_indexers(
             3,
-            |_prev| Ok(Some(true)),
+            |_prev| async { Ok(Some(true)) },
             |i| {
                 let attempted = &attempted;
                 async move {

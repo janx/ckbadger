@@ -237,6 +237,13 @@ pub struct SequencedIndexer {
     /// Resolved domain store path — opened secondary to read the network's bulk status.
     pub domain_data_path: PathBuf,
     pub bulk_sync_threshold: u64,
+    /// This network's REAL store runtime config (its co-resident RAM share and
+    /// explicit `[store].memory_budget_gb`). RocksDB budgets are per-process and
+    /// the supervisor's process-wide `SHARED_BUDGET` is pinned by whichever open
+    /// happens first, so a `StoreRuntimeConfig::default()` here would size the
+    /// supervisor's cache/WriteBufferManager from UNDIVIDED host RAM and discard
+    /// the operator's explicit override.
+    pub store_runtime_config: StoreRuntimeConfig,
 }
 
 /// Deferred-indexer plan handed to the supervisor's sequencer task.
@@ -251,61 +258,122 @@ struct SequencerPlan {
 /// How often the sequencer re-reads the previous network's store for bulk status.
 const SEQUENCER_POLL_INTERVAL: Duration = Duration::from_secs(5);
 
-/// Read a network's domain store secondary and decide whether it is past bulk.
-/// A missing RocksDB `CURRENT` is the sole not-ready state. Once the store
-/// exists, every open/read/decode failure is a fatal sequencer error.
-fn read_past_bulk(idx: &SequencedIndexer) -> Result<Option<bool>> {
-    if !idx.domain_data_path.join("CURRENT").is_file() {
-        return Ok(None);
-    }
-    let secondary = secondary_store_path(&idx.domain_data_path, SecondaryStoreOwner::Supervisor);
-    let store = CkbadgerStore::open_domain_secondary_with_runtime(
-        &idx.domain_data_path,
-        &secondary,
-        StoreRuntimeConfig::default(),
-    )
-    .with_context(|| {
-        format!(
-            "failed to open existing domain store {} for sequencer status",
-            idx.domain_data_path.display()
-        )
-    })?;
-    store.refresh().with_context(|| {
-        format!(
-            "failed to refresh sequencer secondary for {}",
-            idx.domain_data_path.display()
-        )
-    })?;
-    let status = store.get_sync_status().with_context(|| {
-        format!(
-            "failed to read sync status from {}",
-            idx.domain_data_path.display()
-        )
-    })?;
-    let bulk_completed = status.bulk_sync_completed_at.is_some();
-    let lag = match store.get_sync_progress().with_context(|| {
-        format!(
-            "failed to read sync progress from {}",
-            idx.domain_data_path.display()
-        )
-    })? {
-        None => None,
-        Some(bytes) => {
-            let progress: ckbadger_common::SyncProgressData = serde_json::from_slice(&bytes)
-                .with_context(|| {
-                    format!(
-                        "invalid sync progress in {}",
-                        idx.domain_data_path.display()
-                    )
-                })?;
-            Some(i128::from(progress.target_block) - i128::from(progress.current_block))
+/// One gating network's bulk-status source: a LAZILY-opened, LONG-LIVED domain
+/// store secondary, mirroring how the API and TUI hold theirs.
+///
+/// Opening (and dropping) a full 59-CF secondary on every 5 s poll — for the
+/// hours a mainnet bulk sync takes — is pure waste and repeatedly re-enters
+/// RocksDB's open path against a busy primary. Instead the secondary is opened
+/// once, when the primary's `CURRENT` marker first appears, and then only
+/// `refresh()`-ed per poll.
+///
+/// Every method here is BLOCKING (RocksDB open/catch-up/read). Callers on the
+/// async supervisor runtime must go through `spawn_blocking`.
+struct BulkStatusReader {
+    domain_data_path: PathBuf,
+    secondary_path: PathBuf,
+    bulk_sync_threshold: u64,
+    /// The gating network's real per-network budget — see
+    /// [`SequencedIndexer::store_runtime_config`].
+    runtime_config: StoreRuntimeConfig,
+    store: Option<CkbadgerStore>,
+}
+
+impl BulkStatusReader {
+    fn new(idx: &SequencedIndexer) -> Self {
+        Self {
+            secondary_path: secondary_store_path(
+                &idx.domain_data_path,
+                SecondaryStoreOwner::Supervisor,
+            ),
+            domain_data_path: idx.domain_data_path.clone(),
+            bulk_sync_threshold: idx.bulk_sync_threshold,
+            runtime_config: idx.store_runtime_config,
+            store: None,
         }
-    };
-    Ok(Some(crate::sequencer::is_past_bulk(
-        bulk_completed,
-        lag,
-        idx.bulk_sync_threshold,
-    )))
+    }
+
+    /// Read the gating network's bulk status. A missing RocksDB `CURRENT` is the
+    /// sole not-ready state (`Ok(None)`); once the store exists, every
+    /// open/refresh/read/decode failure is an error.
+    fn poll(&mut self) -> Result<Option<bool>> {
+        if self.store.is_none() {
+            if !self.domain_data_path.join("CURRENT").is_file() {
+                return Ok(None);
+            }
+            let store = CkbadgerStore::open_domain_secondary_with_runtime(
+                &self.domain_data_path,
+                &self.secondary_path,
+                self.runtime_config,
+            )
+            .with_context(|| {
+                format!(
+                    "failed to open existing domain store {} for sequencer status",
+                    self.domain_data_path.display()
+                )
+            })?;
+            self.store = Some(store);
+        }
+        let store = self
+            .store
+            .as_ref()
+            .expect("sequencer secondary opened directly above");
+
+        store.refresh().with_context(|| {
+            format!(
+                "failed to refresh sequencer secondary for {}",
+                self.domain_data_path.display()
+            )
+        })?;
+        let status = store.get_sync_status().with_context(|| {
+            format!(
+                "failed to read sync status from {}",
+                self.domain_data_path.display()
+            )
+        })?;
+        let bulk_completed = status.bulk_sync_completed_at.is_some();
+        let lag = match store.get_sync_progress().with_context(|| {
+            format!(
+                "failed to read sync progress from {}",
+                self.domain_data_path.display()
+            )
+        })? {
+            None => None,
+            Some(bytes) => {
+                let progress: ckbadger_common::SyncProgressData = serde_json::from_slice(&bytes)
+                    .with_context(|| {
+                        format!(
+                            "invalid sync progress in {}",
+                            self.domain_data_path.display()
+                        )
+                    })?;
+                Some(i128::from(progress.target_block) - i128::from(progress.current_block))
+            }
+        };
+        Ok(Some(crate::sequencer::is_past_bulk(
+            bulk_completed,
+            lag,
+            self.bulk_sync_threshold,
+        )))
+    }
+}
+
+/// Shared, mutable set of per-network bulk-status readers. `std::sync::Mutex`
+/// (not tokio's) because it is only ever locked inside `spawn_blocking`.
+type BulkStatusReaders = Arc<std::sync::Mutex<Vec<BulkStatusReader>>>;
+
+/// Poll one gating network's bulk status off the async runtime.
+///
+async fn read_past_bulk(readers: &BulkStatusReaders, prev: usize) -> Result<Option<bool>> {
+    let readers = readers.clone();
+    tokio::task::spawn_blocking(move || {
+        readers
+            .lock()
+            .expect("sequencer bulk-status reader lock poisoned")[prev]
+            .poll()
+    })
+    .await
+    .context("sequencer bulk-status read task failed")?
 }
 
 async fn wait_for_sequencer_failure(
@@ -456,9 +524,18 @@ async fn run_supervisor_inner_with_sequencer(
                 indexers,
                 poll,
             } = plan;
+            let count = indexers.len();
+            // One long-lived secondary per gating network, each sized by ITS OWN
+            // per-network runtime config (see `BulkStatusReader`).
+            let readers: BulkStatusReaders = Arc::new(std::sync::Mutex::new(
+                indexers.iter().map(BulkStatusReader::new).collect(),
+            ));
             crate::sequencer::sequence_indexers(
-                indexers.len(),
-                |prev| read_past_bulk(&indexers[prev]),
+                count,
+                |prev| {
+                    let readers = readers.clone();
+                    async move { read_past_bulk(&readers, prev).await }
+                },
                 |i| {
                     // Spawn indexers[i] == specs[first_indexer_idx + i]; append to
                     // children so the monitor picks it up (index stays aligned).
@@ -862,7 +939,42 @@ mod tests {
         assert!(enabled_services(&cfg).contains(&"indexer"));
     }
 
+    /// Minimal valid `SyncProgressData` JSON at the given lag (camelCase, as the
+    /// indexer writes it).
+    fn progress_json(current_block: u64, target_block: u64) -> Vec<u8> {
+        serde_json::to_vec(&ckbadger_common::SyncProgressData {
+            current_block,
+            target_block,
+            last_batch_blocks: None,
+            blocks_per_second: 0.0,
+            ema_blocks_per_second: 0.0,
+            txs_per_second: None,
+            ema_txs_per_second: None,
+            eta_seconds: None,
+            eta_formatted: String::new(),
+            progress_percentage: 0.0,
+            updated_at: 0,
+            startup_phase: None,
+            is_direct_db_read: false,
+            db_write_ms: None,
+            db_commit_ms: None,
+            rpc_fetch_ms: None,
+            pipeline: None,
+            pipeline_reset_epoch: None,
+            pipeline_reset_reason: None,
+            bulk_build: None,
+        })
+        .expect("SyncProgressData serializes")
+    }
+
     fn test_sequenced_indexer(path: PathBuf) -> SequencedIndexer {
+        test_sequenced_indexer_with_runtime(path, StoreRuntimeConfig::default())
+    }
+
+    fn test_sequenced_indexer_with_runtime(
+        path: PathBuf,
+        store_runtime_config: StoreRuntimeConfig,
+    ) -> SequencedIndexer {
         SequencedIndexer {
             spec: ChildSpec {
                 label: "testnet/indexer".to_string(),
@@ -871,6 +983,7 @@ mod tests {
             },
             domain_data_path: path,
             bulk_sync_threshold: 1_000,
+            store_runtime_config,
         }
     }
 
@@ -878,7 +991,12 @@ mod tests {
     fn sequencer_waits_only_while_domain_store_is_absent() {
         let dir = TempDir::new().unwrap();
         let idx = test_sequenced_indexer(dir.path().join("domain"));
-        assert_eq!(read_past_bulk(&idx).unwrap(), None);
+        let mut reader = BulkStatusReader::new(&idx);
+        assert_eq!(reader.poll().unwrap(), None);
+        assert!(
+            reader.store.is_none(),
+            "no secondary may be opened before the primary's CURRENT exists"
+        );
     }
 
     #[test]
@@ -890,9 +1008,64 @@ mod tests {
         store.put_sync_progress(b"not-json").unwrap();
         let idx = test_sequenced_indexer(domain);
 
-        let err = read_past_bulk(&idx).unwrap_err().to_string();
+        let err = BulkStatusReader::new(&idx).poll().unwrap_err().to_string();
         assert!(err.contains("invalid sync progress"));
         assert!(err.contains("domain"));
+    }
+
+
+    #[test]
+    fn sequencer_secondary_is_opened_once_and_only_refreshed_afterwards() {
+        // The old reader opened and dropped a full 59-CF secondary on EVERY 5s
+        // poll, for the hours a mainnet bulk sync runs. Pin the long-lived shape:
+        // one handle, created on first sight of CURRENT and reused thereafter.
+        let dir = TempDir::new().unwrap();
+        let domain = dir.path().join("domain");
+        let idx = test_sequenced_indexer(domain.clone());
+        let mut reader = BulkStatusReader::new(&idx);
+
+        assert_eq!(reader.poll().unwrap(), None, "store not created yet");
+        assert!(reader.store.is_none());
+
+        let primary =
+            CkbadgerStore::open_domain_with_runtime(&domain, StoreRuntimeConfig::default())
+                .unwrap();
+        primary.put_sync_progress(&progress_json(9, 10)).unwrap();
+
+        assert_eq!(reader.poll().unwrap(), Some(true));
+        let opened = reader.store.as_ref().expect("secondary opened") as *const CkbadgerStore;
+        assert_eq!(reader.poll().unwrap(), Some(true));
+        assert_eq!(
+            reader.store.as_ref().unwrap() as *const CkbadgerStore,
+            opened,
+            "the secondary handle must be reused across polls, never reopened"
+        );
+    }
+
+    #[test]
+    fn sequencer_secondary_is_opened_with_the_networks_own_runtime_config() {
+        // Guards the wiring, not the arithmetic: `StoreRuntimeConfig::default()`
+        // here pins this process's shared RocksDB budget to UNDIVIDED host RAM and
+        // silently drops an explicit `[store].memory_budget_gb`. The forwarded
+        // config is all that stands between this fix and being inert.
+        let dir = TempDir::new().unwrap();
+        let domain = dir.path().join("domain");
+        let _primary =
+            CkbadgerStore::open_domain_with_runtime(&domain, StoreRuntimeConfig::default())
+                .unwrap();
+
+        let runtime = StoreRuntimeConfig {
+            memory_budget_gb: Some(7),
+            network_count: std::num::NonZeroUsize::new(3).unwrap(),
+            ..StoreRuntimeConfig::default()
+        };
+        let idx = test_sequenced_indexer_with_runtime(domain, runtime);
+        let mut reader = BulkStatusReader::new(&idx);
+        reader.poll().unwrap();
+
+        let opened = reader.store.as_ref().expect("secondary opened").runtime_config();
+        assert_eq!(opened.memory_budget_gb, Some(7));
+        assert_eq!(opened.network_count.get(), 3);
     }
 
     #[tokio::test]

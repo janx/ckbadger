@@ -517,6 +517,10 @@ async fn cmd_run_orchestrator(root: &Path, args: &RunArgs) -> Result<()> {
             },
             domain_data_path: store_paths.domain_data,
             bulk_sync_threshold: cfg.indexer.bulk_sync_threshold,
+            // The sequencer opens this network's domain store secondary in the
+            // supervisor process; it must use the network's own RAM share, not
+            // the undivided host default.
+            store_runtime_config: store_runtime_config(&cfg.store, &sub)?,
         });
         println!(
             "network '{}' -> {} (api :{})",
