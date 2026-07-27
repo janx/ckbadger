@@ -2883,28 +2883,40 @@ impl CkbadgerStore {
                 .get_token_holder_balance(type_hash, lock_hash)?
                 .unwrap_or_else(TokenBalance::zero);
             // Compute the net change before applying it so self-transfers do not create
-            // a transient overflow. A true underflow remains an invariant violation.
+            // a transient overflow. A true overflow/underflow remains an invariant
+            // violation; each direction reports its own failure so the message names
+            // the arithmetic that actually failed.
             let new_balance = if added >= removed {
                 let net = added
                     .checked_sub(removed)
                     .expect("ordered TokenBalance subtraction");
-                current.checked_add(&net)
+                current.checked_add(&net).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "token holder balance overflow during rollback: type_hash=0x{}, lock_hash=0x{}, current={}, added={}, removed={}, net_added={}",
+                        bytes_to_hex(type_hash),
+                        bytes_to_hex(lock_hash),
+                        current,
+                        added,
+                        removed,
+                        net
+                    )
+                })?
             } else {
                 let net = removed
                     .checked_sub(added)
                     .expect("ordered TokenBalance subtraction");
-                current.checked_sub(&net)
-            }
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "token holder balance underflow during rollback: type_hash=0x{}, lock_hash=0x{}, current={}, added={}, removed={}",
-                    bytes_to_hex(type_hash),
-                    bytes_to_hex(lock_hash),
-                    current,
-                    added,
-                    removed
-                )
-            })?;
+                current.checked_sub(&net).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "token holder balance underflow during rollback: type_hash=0x{}, lock_hash=0x{}, current={}, added={}, removed={}, net_removed={}",
+                        bytes_to_hex(type_hash),
+                        bytes_to_hex(lock_hash),
+                        current,
+                        added,
+                        removed,
+                        net
+                    )
+                })?
+            };
             if !current.is_zero() {
                 batch.delete_cf(
                     self.cf_token_holders_by_balance(),
