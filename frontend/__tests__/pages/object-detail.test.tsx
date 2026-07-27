@@ -656,13 +656,20 @@ describe('SporeDetailPage', () => {
       { timeout: 3000 }
     );
 
-    // mNFT item should link to its detail page
-    const link = screen
-      .getAllByRole('link')
-      .find(
-        (el) =>
-          el.getAttribute('href') === '/mainnet/objects/mnft/0x1111' && el.textContent === '0x1111'
-      );
-    expect(link).toBeDefined();
+    // The items grid is fed by a SEPARATE query from the collection header, so
+    // it can still be pending when the header renders — poll for the link.
+    await waitFor(
+      () => {
+        const link = screen
+          .getAllByRole('link')
+          .find(
+            (el) =>
+              el.getAttribute('href') === '/mainnet/objects/mnft/0x1111' &&
+              el.textContent === '0x1111'
+          );
+        expect(link).toBeDefined();
+      },
+      { timeout: 3000 }
+    );
   });
 });
