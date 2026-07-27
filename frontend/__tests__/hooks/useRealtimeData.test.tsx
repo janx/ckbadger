@@ -27,11 +27,17 @@ class MockWebSocket {
   close() {
     this.closed = true;
     this.readyState = MockWebSocket.CLOSED;
-    this.onclose?.();
+    // Browsers deliver `close` ASYNCHRONOUSLY: the handler runs on a later task,
+    // long after close() returned. Firing it synchronously would hide teardown
+    // races (a late onclose resurrecting the switched-away network's socket).
+    setTimeout(() => this.onclose?.(), 0);
   }
 }
 
 let instances: MockWebSocket[] = [];
+
+// Mirrors RECONNECT_INTERVAL in @/hooks/useRealtimeStore.
+const RECONNECT_INTERVAL_MS = 3000;
 
 function Harness() {
   useRealtimeData();
@@ -43,11 +49,11 @@ function Harness() {
   );
 }
 
-function renderHarness() {
+function renderHarness(initialPath = '/mainnet/') {
   const queryClient = new QueryClient();
   return render(
     <QueryClientProvider client={queryClient}>
-      <MemoryRouter initialEntries={['/mainnet/']}>
+      <MemoryRouter initialEntries={[initialPath]}>
         <Routes>
           <Route path="/:network/*" element={<Harness />} />
         </Routes>
@@ -86,6 +92,39 @@ describe('useRealtimeData network scoping', () => {
     expect(instances.length).toBeGreaterThanOrEqual(2);
     expect(latest.url).toMatch(/\/ws\/testnet$/);
     expect(instances[0].closed).toBe(true);
+  });
+
+  it('never reconnects to the switched-away network when the old socket closes late', async () => {
+    vi.useFakeTimers();
+    try {
+      // NetworkQueryScope keys its subtree by the active network, so a switch
+      // unmounts the old network's subtree (disconnect) before mounting the new
+      // one (connect).
+      const mainnetView = renderHarness('/mainnet/');
+      expect(instances).toHaveLength(1);
+      expect(instances[0].url).toMatch(/\/ws\/mainnet$/);
+
+      const openedBeforeSwitch = instances.length;
+
+      mainnetView.unmount();
+      renderHarness('/testnet/');
+
+      // The mainnet socket's close event lands only now — after the testnet
+      // socket already exists — and any reconnect it schedules fires later still.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(RECONNECT_INTERVAL_MS * 2);
+      });
+
+      const openedAfterSwitch = instances.slice(openedBeforeSwitch).map((ws) => ws.url);
+      expect(openedAfterSwitch.length).toBeGreaterThan(0);
+      // Every socket opened after the switch must target testnet: a late mainnet
+      // reconnect would stream the wrong network's blocks into the new cache.
+      expect(openedAfterSwitch.filter((url) => /\/ws\/mainnet$/.test(url))).toEqual([]);
+      // Exactly one live socket remains — no orphaned socket still feeding handlers.
+      expect(instances.filter((ws) => !ws.closed)).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('resets stale realtime store data on network switch', async () => {

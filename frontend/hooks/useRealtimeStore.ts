@@ -149,8 +149,16 @@ function disconnectWebSocket() {
     reconnectTimeout = null;
   }
   reconnectAttempts = MAX_RECONNECT_ATTEMPTS;
-  wsInstance?.close();
-  wsInstance = null;
+  if (wsInstance) {
+    // `close()` delivers `onclose` asynchronously, so a still-attached handler
+    // would run AFTER a new socket exists: it would null `wsInstance` (orphaning
+    // the new socket while its handlers keep feeding `messageHandlers`) and
+    // schedule a reconnect to the closure-captured old network. Detach first.
+    wsInstance.onclose = null;
+    wsInstance.onerror = null;
+    wsInstance.close();
+    wsInstance = null;
+  }
   wsNetwork = null;
 }
 
