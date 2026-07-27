@@ -2170,10 +2170,6 @@ impl CkbadgerStore {
 
             let mut stats_removed = 0u64;
             let mut stats_repaired = 0u64;
-            // Recompute only snapshots that actually existed before rollback.
-            // Unrelated rollback fixtures and partially initialized stores may
-            // have block headers but no DAO aggregate state to repair.
-            let mut dao_snapshot_dates_to_recompute: HashSet<String> = HashSet::new();
             let mut stage = RollbackStageProgress::new("delete_stats_from_cutoff");
             let stats_cfs = [
                 self.cf_stats_chain(),
@@ -2211,14 +2207,13 @@ impl CkbadgerStore {
                                 bytes_to_hex(&key)
                             );
                         }
-                        let snapshot_date = std::str::from_utf8(&suffix[..8]).map_err(|error| {
+                        std::str::from_utf8(&suffix[..8]).map_err(|error| {
                             anyhow::anyhow!(
                                 "invalid DAO daily snapshot date during rollback: key=0x{}, error={}",
                                 bytes_to_hex(&key),
                                 error
                             )
                         })?;
-                        dao_snapshot_dates_to_recompute.insert(snapshot_date.to_string());
                     }
                     // For daily/hourly main stats on the cutoff date in a partial-day
                     // rollback, subtract the rolled-back deltas instead of deleting.
@@ -2260,10 +2255,29 @@ impl CkbadgerStore {
             // and secondary_pool / total_issuance / occupied_capacity re-read
             // from the last surviving block's DAO header.
             //
-            // Runs for both partial-day and cross-day rollbacks:
-            // - Partial-day: recomputes just the cutoff date up to rollback_to
-            // - Cross-day: recomputes every date from fork_point_date through
-            //   cutoff_date (inclusive), each bounded by its end-of-day block.
+            // A date in [fork_point_date, cutoff_date] is recomputed when both
+            // hold:
+            //   1. at least one rolled-back block carried that date, so the
+            //      date's block set actually changed, and
+            //   2. a DAO daily snapshot already exists for it, so there is
+            //      materialized DAO aggregate state to repair.
+            //
+            // (1) is what makes the fork-point date reachable. Its snapshot is
+            // never deleted by the date-scoped cutoff sweep, yet it goes stale
+            // whenever a rolled-back block's timestamp crossed the day boundary
+            // backwards — CKB block timestamps are only median-time-past-bounded,
+            // so a block after the cutoff block may carry an earlier date. The
+            // previous condition keyed off "the snapshot key was selected for
+            // deletion", which is only ever true for date >= cutoff, so the
+            // fork-point date was silently skipped and left permanently stale.
+            //
+            // (2) keeps fixture and partially initialized stores — block headers
+            // without DAO aggregate state — out of the recompute, which needs the
+            // full block prehistory of the day and fails fast without it.
+            let rolled_back_dates: HashSet<&str> = block_date_map
+                .values()
+                .map(|(date_str, _)| date_str.as_str())
+                .collect();
             let cutoff_naive = chrono::NaiveDate::parse_from_str(cutoff, "%Y%m%d")
                 .map_err(|e| anyhow::anyhow!("invalid cutoff_date {}: {}", cutoff, e))?;
             let recompute_start = if let Some(fpd) = fork_point_date.as_deref() {
@@ -2278,7 +2292,9 @@ impl CkbadgerStore {
             let mut d = recompute_start;
             while d <= cutoff_naive {
                 let snapshot_date = d.format("%Y%m%d").to_string();
-                if !dao_snapshot_dates_to_recompute.contains(&snapshot_date) {
+                if !rolled_back_dates.contains(snapshot_date.as_str())
+                    || self.get_dao_daily_snapshot(&snapshot_date)?.is_none()
+                {
                     d += chrono::Duration::days(1);
                     continue;
                 }
@@ -2287,34 +2303,11 @@ impl CkbadgerStore {
                 // Build a temporary StoreBatch, run the recompute, then extract
                 // the inner WriteBatch and merge its serialized operations into
                 // the main batch so all rollback writes commit atomically.
+                // Recompute ops are appended after the cutoff-sweep deletes, so
+                // the rebuilt snapshot wins for dates whose key was deleted.
                 let mut recompute_batch = crate::batch::StoreBatch::new(self);
                 self.recompute_dao_daily_snapshot_for_date(d, rollback_to, &mut recompute_batch)?;
-                let recompute_wb = recompute_batch.into_write_batch();
-                if !recompute_wb.is_empty() {
-                    // Merge via RocksDB WriteBatch wire format:
-                    // [0..8] sequence (u64 LE), [8..12] entry count (u32 LE), [12..] ops.
-                    let main_data = batch.data();
-                    let extra_data = recompute_wb.data();
-                    let main_count = u32::from_le_bytes(
-                        main_data[8..12]
-                            .try_into()
-                            .expect("WriteBatch header >= 12 bytes"),
-                    );
-                    let extra_count = u32::from_le_bytes(
-                        extra_data[8..12]
-                            .try_into()
-                            .expect("WriteBatch header >= 12 bytes"),
-                    );
-                    let total_count = main_count.checked_add(extra_count).expect(
-                        "WriteBatch operation count overflow during DAO snapshot recompute merge",
-                    );
-                    let mut merged = Vec::with_capacity(main_data.len() + extra_data.len() - 12);
-                    merged.extend_from_slice(&main_data[..8]); // sequence from main
-                    merged.extend_from_slice(&total_count.to_le_bytes()); // combined count
-                    merged.extend_from_slice(&main_data[12..]); // ops from main
-                    merged.extend_from_slice(&extra_data[12..]); // ops from recompute
-                    batch = WriteBatch::from_data(&merged);
-                }
+                crate::batch::merge_write_batches(&mut batch, recompute_batch.into_write_batch());
                 ticks += 1;
                 dao_recompute_stage.tick(ticks);
                 d += chrono::Duration::days(1);
@@ -3787,11 +3780,28 @@ mod tests {
     use crate::store::CkbadgerStore;
     use crate::types::{
         AddressBalance, AssetAction, CachedBlockHeader, CellDistributionTrackerState,
-        CompositionTier, DaoDepositCacheEntry, HodlTrackerState, LiveCellInfo,
+        CompositionTier, DaoDailySnapshot, DaoDepositCacheEntry, HodlTrackerState, LiveCellInfo,
         MnftCollectionAggregate, ObjectCollectionActivityEntry, ObjectEntry, ObjectExtra,
         ObjectStandard, ParticipantDelta, ScriptInfo, SporeMediaProfile, SyncStatus, TokenInfo,
         TxActions, TxIndexEntry, UndoInputOutPoint, UndoLogEntry, UndoTxContext,
     };
+
+    /// Persist a DAO daily snapshot directly, so a rollback fixture can start
+    /// from materialized DAO aggregate state.
+    #[cfg(test)]
+    fn seed_dao_daily_snapshot(store: &CkbadgerStore, date_key: &str, snapshot: &DaoDailySnapshot) {
+        let key = keys::encode_stats_key(
+            keys::stats_prefix::DAO_DAILY_SNAPSHOT,
+            date_key.as_bytes(),
+        );
+        store
+            .put_cf(
+                store.cf_stats_dao(),
+                &key,
+                &bincode::serialize(snapshot).unwrap(),
+            )
+            .unwrap();
+    }
 
     #[test]
     fn dao_completion_rollback_retains_request_ar_for_frozen_compensation() {
@@ -7702,6 +7712,284 @@ mod tests {
             1,
             "total_uncles must be decremented from 2 → 1 when the rolled-back block had 1 uncle (currently {})",
             repaired.total_uncles
+        );
+    }
+
+    // ---- cross-day DAO daily snapshot recompute ------------------------------
+
+    /// 32-byte DAO header field: C | AR | S | U as little-endian u64s.
+    fn cross_day_dao_field(c: u64, ar: u64, s: u64, u: u64) -> Vec<u8> {
+        let mut dao = vec![0u8; 32];
+        dao[0..8].copy_from_slice(&c.to_le_bytes());
+        dao[8..16].copy_from_slice(&ar.to_le_bytes());
+        dao[16..24].copy_from_slice(&s.to_le_bytes());
+        dao[24..32].copy_from_slice(&u.to_le_bytes());
+        dao
+    }
+
+    /// UTC millis for a UTC+8 wall-clock time on `date`.
+    fn cross_day_utc8_ms(date: chrono::NaiveDate, hour: u32, minute: u32) -> i64 {
+        use chrono::{FixedOffset, TimeZone};
+        FixedOffset::east_opt(ckbadger_common::CKB_UTC8_OFFSET)
+            .unwrap()
+            .from_local_datetime(&date.and_hms_opt(hour, minute, 0).unwrap())
+            .single()
+            .unwrap()
+            .timestamp_millis()
+    }
+
+    fn cross_day_header(block: i64, timestamp: i64, dao: Vec<u8>) -> CachedBlockHeader {
+        CachedBlockHeader {
+            hash: vec![block as u8; 32],
+            parent_hash: vec![block.saturating_sub(1) as u8; 32],
+            timestamp,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1800,
+            dao,
+            transactions_count: 1,
+            uncles_count: 0,
+            cycles: None,
+        }
+    }
+
+    /// A DAO daily snapshot whose every field is deliberately wrong, so any
+    /// assertion that passes proves the row was actually recomputed.
+    fn stale_dao_daily_snapshot(date: &str) -> DaoDailySnapshot {
+        DaoDailySnapshot {
+            date: date.to_string(),
+            total_deposited: 111,
+            depositors_count: 222,
+            new_deposits: 333,
+            withdrawals: 444,
+            compensation: 555,
+            cumulative_deposit_amount: 666,
+            total_issuance: 777,
+            secondary_pool: 888,
+            occupied_capacity: 999,
+            cum_miner_secondary: 1010,
+            cum_dao_compensation: 1111,
+            cum_treasury: 1212,
+            unmade_dao_interests: 1313,
+            unclaimed_compensation: 1414,
+            cumulative_depositors: 1515,
+            daily_depositor_addresses: 1616,
+            protocol_deposited: Some(1717),
+        }
+    }
+
+    const CROSS_DAY_C: u64 = 100_000_000_000_000;
+    const CROSS_DAY_U: u64 = 20_000_000_000;
+    const CROSS_DAY_S: u64 = 50_000_000_000;
+    const CROSS_DAY_AR_DEPOSIT: u64 = 10_000_000_000_000_000;
+    const CROSS_DAY_AR_END: u64 = 10_100_000_000_000_000;
+    const CROSS_DAY_CAPACITY: i64 = 100_000_000_000;
+    const CROSS_DAY_OCCUPIED: i64 = 10_200_000_000;
+
+    #[test]
+    fn test_cross_day_rollback_recomputes_fork_point_date_dao_snapshot() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+
+        let prev_date = chrono::NaiveDate::from_ymd_opt(2026, 3, 9).unwrap();
+        let fork_date = chrono::NaiveDate::from_ymd_opt(2026, 3, 10).unwrap();
+        let cutoff_date = chrono::NaiveDate::from_ymd_opt(2026, 3, 11).unwrap();
+
+        let mut batch = StoreBatch::new(&store);
+        // Block 0 is the previous day's tail — the C/S/U baseline for block 1.
+        for (block, ts, ar) in [
+            (0i64, cross_day_utc8_ms(prev_date, 23, 50), CROSS_DAY_AR_DEPOSIT),
+            (1, cross_day_utc8_ms(fork_date, 0, 10), CROSS_DAY_AR_DEPOSIT),
+            (2, cross_day_utc8_ms(fork_date, 12, 0), CROSS_DAY_AR_DEPOSIT),
+            // Block 3 is the fork point and the final surviving block of the
+            // fork-point date.
+            (3, cross_day_utc8_ms(fork_date, 23, 50), CROSS_DAY_AR_END),
+            // Block 4 is the first rolled-back block and sets the cutoff date.
+            (4, cross_day_utc8_ms(cutoff_date, 0, 5), CROSS_DAY_AR_END),
+            // Block 5 is rolled back too, but its timestamp crosses the day
+            // boundary backwards onto the fork-point date. CKB block timestamps
+            // are only median-time-past-bounded, so this is legal — and it is
+            // what leaves the fork-point date's snapshot stale.
+            (5, cross_day_utc8_ms(fork_date, 23, 58), CROSS_DAY_AR_END),
+        ] {
+            batch.put_block_header(
+                block,
+                &cross_day_header(
+                    block,
+                    ts,
+                    cross_day_dao_field(CROSS_DAY_C, ar, CROSS_DAY_S, CROSS_DAY_U),
+                ),
+            );
+        }
+        batch.put_dao_deposit(
+            &keys::encode_outpoint(&[0xAA; 32], 0),
+            &DaoDepositCacheEntry {
+                capacity: CROSS_DAY_CAPACITY,
+                occupied_capacity: CROSS_DAY_OCCUPIED,
+                deposit_block_number: 2,
+                deposit_timestamp: 0,
+                lock_script_hash: vec![0xA1; 32],
+                deposit_ar: CROSS_DAY_AR_DEPOSIT as i64,
+                status: 0,
+                withdraw_request_tx: None,
+                withdraw_request_output_index: None,
+                withdraw_request_block: None,
+                withdraw_request_ar: None,
+                withdraw_block: None,
+                withdraw_tx: None,
+                withdraw_to_output_index: None,
+                compensation: None,
+            },
+        );
+        batch.commit().unwrap();
+        seed_sync_status(&store, 5, &[5u8; 32], 0, 0, 0);
+
+        // Both the fork-point date and the cutoff date have materialized DAO
+        // aggregate state before the rollback.
+        seed_dao_daily_snapshot(&store, "20260310", &stale_dao_daily_snapshot("2026-03-10"));
+        seed_dao_daily_snapshot(&store, "20260311", &stale_dao_daily_snapshot("2026-03-11"));
+
+        // Cross-day rollback: fork point is on 2026-03-10, cutoff on 2026-03-11.
+        store.rollback_to_block(3).unwrap();
+
+        let expected_unclaimed = i128::from(
+            ckbadger_common::dao::calculate_dao_compensation_from_ar(
+                CROSS_DAY_CAPACITY,
+                CROSS_DAY_OCCUPIED,
+                CROSS_DAY_AR_DEPOSIT,
+                CROSS_DAY_AR_END,
+            )
+            .unwrap(),
+        );
+
+        let recomputed = store
+            .get_dao_daily_snapshot("20260310")
+            .unwrap()
+            .expect("fork-point date snapshot must survive a cross-day rollback");
+        assert_eq!(
+            recomputed.cum_dao_compensation, expected_unclaimed,
+            "fork-point date snapshot must be recomputed, not left at its stale cumulative value"
+        );
+        assert_eq!(recomputed.unclaimed_compensation, expected_unclaimed);
+        assert_eq!(recomputed.unmade_dao_interests, expected_unclaimed);
+        assert_eq!(
+            recomputed.cum_treasury,
+            i128::from(CROSS_DAY_S) - expected_unclaimed
+        );
+        assert_eq!(recomputed.total_deposited, i128::from(CROSS_DAY_CAPACITY));
+        assert_eq!(
+            recomputed.protocol_deposited,
+            Some(i128::from(CROSS_DAY_CAPACITY))
+        );
+        assert_eq!(recomputed.new_deposits, 1);
+        assert_eq!(recomputed.withdrawals, 0);
+        assert_eq!(recomputed.depositors_count, 1);
+        assert_eq!(recomputed.cumulative_depositors, 1);
+        assert_eq!(recomputed.daily_depositor_addresses, 1);
+        assert_eq!(recomputed.total_issuance, i128::from(CROSS_DAY_C));
+        assert_eq!(recomputed.secondary_pool, i128::from(CROSS_DAY_S));
+        assert_eq!(recomputed.occupied_capacity, i128::from(CROSS_DAY_U));
+        assert_eq!(recomputed.compensation, 0);
+        // S is flat across this fixture, so no miner secondary is attributed.
+        assert_eq!(recomputed.cum_miner_secondary, 0);
+
+        // The cutoff date has no surviving blocks, so its snapshot is dropped.
+        assert!(
+            store.get_dao_daily_snapshot("20260311").unwrap().is_none(),
+            "cutoff-date snapshot must be deleted when no block on that date survives"
+        );
+    }
+
+    /// Fixture layout shared by the skip tests: no block 0, so any DAO snapshot
+    /// recompute of the fork-point date would fail fast on the missing previous
+    /// block header. `last_block_date` decides whether the final rolled-back
+    /// block lands back on the fork-point date.
+    fn seed_truncated_cross_day_fixture(
+        store: &CkbadgerStore,
+        fork_date: chrono::NaiveDate,
+        cutoff_date: chrono::NaiveDate,
+        last_block_on_fork_date: bool,
+    ) {
+        let last_block_ts = if last_block_on_fork_date {
+            cross_day_utc8_ms(fork_date, 23, 58)
+        } else {
+            cross_day_utc8_ms(cutoff_date, 0, 20)
+        };
+        let mut batch = StoreBatch::new(store);
+        for (block, ts) in [
+            (1i64, cross_day_utc8_ms(fork_date, 0, 10)),
+            (2, cross_day_utc8_ms(fork_date, 12, 0)),
+            (3, cross_day_utc8_ms(fork_date, 23, 50)),
+            (4, cross_day_utc8_ms(cutoff_date, 0, 5)),
+            (5, last_block_ts),
+        ] {
+            batch.put_block_header(
+                block,
+                &cross_day_header(
+                    block,
+                    ts,
+                    cross_day_dao_field(
+                        CROSS_DAY_C,
+                        CROSS_DAY_AR_DEPOSIT,
+                        CROSS_DAY_S,
+                        CROSS_DAY_U,
+                    ),
+                ),
+            );
+        }
+        batch.commit().unwrap();
+        seed_sync_status(store, 5, &[5u8; 32], 0, 0, 0);
+    }
+
+    #[test]
+    fn test_cross_day_rollback_skips_dates_without_a_materialized_dao_snapshot() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+
+        let fork_date = chrono::NaiveDate::from_ymd_opt(2026, 3, 10).unwrap();
+        let cutoff_date = chrono::NaiveDate::from_ymd_opt(2026, 3, 11).unwrap();
+        // Block 5 rolls back onto the fork-point date, so that date IS touched
+        // by the rollback — but the store holds no DAO aggregate state for it.
+        seed_truncated_cross_day_fixture(&store, fork_date, cutoff_date, true);
+
+        store.rollback_to_block(3).expect(
+            "rollback must skip dates with no materialized DAO snapshot instead of failing on \
+             the missing previous block header",
+        );
+
+        assert!(
+            store.get_dao_daily_snapshot("20260310").unwrap().is_none(),
+            "a date with no pre-existing DAO snapshot must not gain one from rollback"
+        );
+        assert!(store.get_dao_daily_snapshot("20260311").unwrap().is_none());
+    }
+
+    #[test]
+    fn test_cross_day_rollback_skips_dates_with_no_rolled_back_blocks() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+
+        let fork_date = chrono::NaiveDate::from_ymd_opt(2026, 3, 10).unwrap();
+        let cutoff_date = chrono::NaiveDate::from_ymd_opt(2026, 3, 11).unwrap();
+        // Every rolled-back block stays on the cutoff date, so the fork-point
+        // date's block set is unchanged and its snapshot is still correct.
+        seed_truncated_cross_day_fixture(&store, fork_date, cutoff_date, false);
+        seed_dao_daily_snapshot(&store, "20260310", &stale_dao_daily_snapshot("2026-03-10"));
+
+        store.rollback_to_block(3).expect(
+            "an unaffected date must not be recomputed, so a store without its block prehistory \
+             must still roll back cleanly",
+        );
+
+        let untouched = store
+            .get_dao_daily_snapshot("20260310")
+            .unwrap()
+            .expect("an unaffected date keeps its snapshot");
+        let expected = stale_dao_daily_snapshot("2026-03-10");
+        assert_eq!(
+            bincode::serialize(&untouched).unwrap(),
+            bincode::serialize(&expected).unwrap(),
+            "a date no rolled-back block touched must be left exactly as written"
         );
     }
 }

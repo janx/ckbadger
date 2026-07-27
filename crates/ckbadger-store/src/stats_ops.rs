@@ -2133,3 +2133,282 @@ mod cell_distribution_tests {
         assert_eq!(retrieved.last_snapshot_date, Some("20240102".to_string()));
     }
 }
+
+#[cfg(test)]
+mod dao_daily_snapshot_recompute_tests {
+    use super::*;
+    use crate::CkbadgerStore;
+
+    /// Build a 32-byte DAO header field: C | AR | S | U, little-endian u64s.
+    fn dao_field(c: u64, ar: u64, s: u64, u: u64) -> Vec<u8> {
+        let mut dao = vec![0u8; 32];
+        dao[0..8].copy_from_slice(&c.to_le_bytes());
+        dao[8..16].copy_from_slice(&ar.to_le_bytes());
+        dao[16..24].copy_from_slice(&s.to_le_bytes());
+        dao[24..32].copy_from_slice(&u.to_le_bytes());
+        dao
+    }
+
+    /// UTC millis for a UTC+8 wall-clock time on `date`.
+    fn utc8_ms(date: chrono::NaiveDate, hour: u32, minute: u32) -> i64 {
+        use chrono::{FixedOffset, TimeZone};
+        FixedOffset::east_opt(ckbadger_common::CKB_UTC8_OFFSET)
+            .unwrap()
+            .from_local_datetime(&date.and_hms_opt(hour, minute, 0).unwrap())
+            .single()
+            .unwrap()
+            .timestamp_millis()
+    }
+
+    fn header_with_dao(block: i64, timestamp: i64, dao: Vec<u8>) -> CachedBlockHeader {
+        CachedBlockHeader {
+            hash: vec![block as u8; 32],
+            parent_hash: vec![block.saturating_sub(1) as u8; 32],
+            timestamp,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1800,
+            dao,
+            transactions_count: 1,
+            uncles_count: 0,
+            cycles: None,
+        }
+    }
+
+    fn active_dao_deposit(
+        capacity: i64,
+        occupied_capacity: i64,
+        deposit_block_number: i64,
+        deposit_ar: i64,
+        lock_script_hash: Vec<u8>,
+    ) -> DaoDepositCacheEntry {
+        DaoDepositCacheEntry {
+            capacity,
+            occupied_capacity,
+            deposit_block_number,
+            deposit_timestamp: 0,
+            lock_script_hash,
+            deposit_ar,
+            status: 0,
+            withdraw_request_tx: None,
+            withdraw_request_output_index: None,
+            withdraw_request_block: None,
+            withdraw_request_ar: None,
+            withdraw_block: None,
+            withdraw_tx: None,
+            withdraw_to_output_index: None,
+            compensation: None,
+        }
+    }
+
+    const TEST_C: u64 = 100_000_000_000_000;
+    const TEST_U: u64 = 20_000_000_000;
+
+    #[test]
+    fn test_recompute_dao_daily_snapshot_for_date_handles_day_start_block_zero() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path().to_str().unwrap()).unwrap();
+
+        let date = chrono::NaiveDate::from_ymd_opt(2026, 3, 10).unwrap();
+        let ar_deposit: u64 = 10_000_000_000_000_000;
+        let ar_end: u64 = 10_100_000_000_000_000;
+        let s: u64 = 50_000_000_000;
+
+        // The whole day starts at block 0, so there is no previous block header
+        // and no C/U baseline for the miner split.
+        let mut batch = crate::batch::StoreBatch::new(&store);
+        batch.put_block_header(
+            0,
+            &header_with_dao(0, utc8_ms(date, 0, 10), dao_field(TEST_C, ar_deposit, s, TEST_U)),
+        );
+        batch.put_block_header(
+            1,
+            &header_with_dao(1, utc8_ms(date, 12, 0), dao_field(TEST_C, ar_deposit, s, TEST_U)),
+        );
+        batch.put_block_header(
+            2,
+            &header_with_dao(2, utc8_ms(date, 23, 50), dao_field(TEST_C, ar_end, s, TEST_U)),
+        );
+        let capacity = 100_000_000_000i64;
+        let occupied = 10_200_000_000i64;
+        batch.put_dao_deposit(
+            &keys::encode_outpoint(&[0xAA; 32], 0),
+            &active_dao_deposit(capacity, occupied, 1, ar_deposit as i64, vec![0xA1; 32]),
+        );
+        batch.commit().unwrap();
+        store
+            .set_sync_status(&SyncStatus {
+                tip_block_number: 2,
+                tip_block_hash: vec![2u8; 32],
+                ..Default::default()
+            })
+            .unwrap();
+
+        let mut recompute = crate::batch::StoreBatch::new(&store);
+        store
+            .recompute_dao_daily_snapshot_for_date(date, 2, &mut recompute)
+            .unwrap();
+        recompute.commit().unwrap();
+
+        let snapshot = store.get_dao_daily_snapshot("20260310").unwrap().unwrap();
+        let expected_unclaimed = i128::from(
+            ckbadger_common::dao::calculate_dao_compensation_from_ar(
+                capacity, occupied, ar_deposit, ar_end,
+            )
+            .unwrap(),
+        );
+
+        assert_eq!(snapshot.date, "2026-03-10");
+        assert_eq!(snapshot.total_deposited, i128::from(capacity));
+        assert_eq!(snapshot.protocol_deposited, Some(i128::from(capacity)));
+        assert_eq!(snapshot.new_deposits, 1);
+        assert_eq!(snapshot.withdrawals, 0);
+        assert_eq!(snapshot.depositors_count, 1);
+        assert_eq!(snapshot.cumulative_depositors, 1);
+        assert_eq!(snapshot.daily_depositor_addresses, 1);
+        assert_eq!(snapshot.total_issuance, i128::from(TEST_C));
+        assert_eq!(snapshot.secondary_pool, i128::from(s));
+        assert_eq!(snapshot.occupied_capacity, i128::from(TEST_U));
+        // No previous block header exists, so no C/U baseline and therefore no
+        // miner secondary is attributed for this day.
+        assert_eq!(snapshot.cum_miner_secondary, 0);
+        assert_eq!(snapshot.compensation, 0);
+        assert_eq!(snapshot.unclaimed_compensation, expected_unclaimed);
+        assert_eq!(snapshot.unmade_dao_interests, expected_unclaimed);
+        assert_eq!(snapshot.cum_dao_compensation, expected_unclaimed);
+        assert_eq!(
+            snapshot.cum_treasury,
+            i128::from(s) - expected_unclaimed,
+            "treasury must be the end-of-day S minus active unmade interests"
+        );
+    }
+
+    #[test]
+    fn test_recompute_dao_daily_snapshot_for_date_uses_previous_block_csu_for_miner_split() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path().to_str().unwrap()).unwrap();
+
+        let prev_date = chrono::NaiveDate::from_ymd_opt(2026, 3, 9).unwrap();
+        let date = chrono::NaiveDate::from_ymd_opt(2026, 3, 10).unwrap();
+        let ar_deposit: u64 = 10_000_000_000_000_000;
+        let ar_end: u64 = 10_100_000_000_000_000;
+        let s0: u64 = 50_000_000_000;
+        let s1: u64 = s0 + 3_000_000;
+        let s2: u64 = s1 + 5_000_000;
+
+        let mut batch = crate::batch::StoreBatch::new(&store);
+        // Block 0 lives on the previous date: it is the C/S/U baseline used by
+        // block 1, not part of this day's walk.
+        batch.put_block_header(
+            0,
+            &header_with_dao(
+                0,
+                utc8_ms(prev_date, 23, 50),
+                dao_field(TEST_C, ar_deposit, s0, TEST_U),
+            ),
+        );
+        batch.put_block_header(
+            1,
+            &header_with_dao(
+                1,
+                utc8_ms(date, 0, 10),
+                dao_field(TEST_C, ar_deposit, s1, TEST_U),
+            ),
+        );
+        batch.put_block_header(
+            2,
+            &header_with_dao(2, utc8_ms(date, 12, 0), dao_field(TEST_C, ar_end, s2, TEST_U)),
+        );
+        let capacity = 100_000_000_000i64;
+        let occupied = 10_200_000_000i64;
+        batch.put_dao_deposit(
+            &keys::encode_outpoint(&[0xBB; 32], 0),
+            &active_dao_deposit(capacity, occupied, 1, ar_deposit as i64, vec![0xB1; 32]),
+        );
+        batch.commit().unwrap();
+        store
+            .set_sync_status(&SyncStatus {
+                tip_block_number: 2,
+                tip_block_hash: vec![2u8; 32],
+                ..Default::default()
+            })
+            .unwrap();
+
+        let mut recompute = crate::batch::StoreBatch::new(&store);
+        store
+            .recompute_dao_daily_snapshot_for_date(date, 2, &mut recompute)
+            .unwrap();
+        recompute.commit().unwrap();
+
+        let snapshot = store.get_dao_daily_snapshot("20260310").unwrap().unwrap();
+
+        // Block 1 uses block 0's C/U with S(1) - S(0); block 2 uses block 1's.
+        let miner_block1 = calculate_secondary_miner_delta(
+            i128::from(TEST_C),
+            i128::from(TEST_U),
+            i128::from(s1 - s0),
+        )
+        .unwrap();
+        let miner_block2 = calculate_secondary_miner_delta(
+            i128::from(TEST_C),
+            i128::from(TEST_U),
+            i128::from(s2 - s1),
+        )
+        .unwrap();
+        assert!(miner_block1 > 0 && miner_block2 > 0);
+        assert_eq!(snapshot.cum_miner_secondary, miner_block1 + miner_block2);
+        assert_eq!(snapshot.secondary_pool, i128::from(s2));
+        assert_eq!(snapshot.total_deposited, i128::from(capacity));
+
+        let expected_unclaimed = i128::from(
+            ckbadger_common::dao::calculate_dao_compensation_from_ar(
+                capacity, occupied, ar_deposit, ar_end,
+            )
+            .unwrap(),
+        );
+        assert_eq!(snapshot.unclaimed_compensation, expected_unclaimed);
+        assert_eq!(snapshot.cum_dao_compensation, expected_unclaimed);
+        assert_eq!(snapshot.cum_treasury, i128::from(s2) - expected_unclaimed);
+    }
+
+    #[test]
+    fn test_recompute_dao_daily_snapshot_for_date_fails_when_previous_block_header_is_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path().to_str().unwrap()).unwrap();
+
+        let date = chrono::NaiveDate::from_ymd_opt(2026, 3, 10).unwrap();
+        let ar: u64 = 10_000_000_000_000_000;
+        let s: u64 = 50_000_000_000;
+
+        // No block 0: the day starts at block 1 and its C/S/U baseline is
+        // unavailable. This is the fail-fast the rollback caller must not hit.
+        let mut batch = crate::batch::StoreBatch::new(&store);
+        batch.put_block_header(
+            1,
+            &header_with_dao(1, utc8_ms(date, 0, 10), dao_field(TEST_C, ar, s, TEST_U)),
+        );
+        batch.put_block_header(
+            2,
+            &header_with_dao(2, utc8_ms(date, 12, 0), dao_field(TEST_C, ar, s, TEST_U)),
+        );
+        batch.commit().unwrap();
+        store
+            .set_sync_status(&SyncStatus {
+                tip_block_number: 2,
+                tip_block_hash: vec![2u8; 32],
+                ..Default::default()
+            })
+            .unwrap();
+
+        let mut recompute = crate::batch::StoreBatch::new(&store);
+        let error = store
+            .recompute_dao_daily_snapshot_for_date(date, 2, &mut recompute)
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("missing previous block header during DAO snapshot recompute"),
+            "unexpected error: {error}"
+        );
+    }
+}
