@@ -537,9 +537,10 @@ async fn cmd_run_orchestrator(root: &Path, args: &RunArgs) -> Result<()> {
     }
 
     // Fail fast on host-global collisions workdir isolation can't catch:
-    // duplicate TCP ports (second API restart-loops) and duplicate workdirs
-    // (RocksDB LOCK / DB-identity confusion). Must run BEFORE any child spawns.
-    check_orchestrator_bindings(&nets)?;
+    // duplicate TCP ports (second API restart-loops), an API port colliding with
+    // the shared frontend proxy's port, and duplicate workdirs (RocksDB LOCK /
+    // DB-identity confusion). Must run BEFORE any child spawns.
+    check_orchestrator_bindings(&nets, orch.frontend.port)?;
 
     // One shared frontend proxy for all networks (the child re-reads the
     // orchestrator config; label "frontend" -> run/logs/frontend.log).
@@ -554,14 +555,27 @@ async fn cmd_run_orchestrator(root: &Path, args: &RunArgs) -> Result<()> {
 
 /// Fail-fast validation of orchestrator network bindings before spawning.
 /// `nets` = (network_name, api_port, resolved_workdir) per [[network]].
+/// `frontend_port` is the shared frontend proxy's `[frontend].port`.
 ///
 /// Workdir isolation covers sockets/logs/data but NOT host-global TCP ports,
 /// so two networks sharing an `[api].port` would make the second API fail to
 /// bind and restart-loop into a degraded state. Two entries resolving to the
-/// same workdir would collide on the RocksDB LOCK / DB identity. Reject both
-/// up front instead of degrading at runtime.
-fn check_orchestrator_bindings(nets: &[(String, u16, PathBuf)]) -> Result<()> {
+/// same workdir would collide on the RocksDB LOCK / DB identity. The single
+/// shared frontend binds a host-global port too, and it competes with every
+/// `[api].port` in exactly the same way — whichever of the two loses the race
+/// restart-loops, which is worse than an API/API clash because the frontend is
+/// the whole deployment's entry point. Reject all three up front instead of
+/// degrading at runtime.
+fn check_orchestrator_bindings(nets: &[(String, u16, PathBuf)], frontend_port: u16) -> Result<()> {
     for i in 0..nets.len() {
+        if nets[i].1 == frontend_port {
+            bail!(
+                "network '{}' uses API port {}, which is also the shared [frontend].port — \
+                 the frontend proxy and that API cannot both bind it; give one a distinct port",
+                nets[i].0,
+                nets[i].1
+            );
+        }
         for j in (i + 1)..nets.len() {
             if nets[i].1 == nets[j].1 {
                 bail!(
@@ -2020,13 +2034,16 @@ mod tests {
 
     // -- orchestrator binding fail-fast --
 
+    /// The scaffolded default frontend port, distinct from every default API port.
+    const TEST_FRONTEND_PORT: u16 = 3000;
+
     #[test]
     fn test_check_orchestrator_bindings_distinct_ports_and_dirs_ok() {
         let nets = vec![
             ("mainnet".to_string(), 8101, PathBuf::from("/root/mainnet")),
             ("testnet".to_string(), 8102, PathBuf::from("/root/testnet")),
         ];
-        assert!(check_orchestrator_bindings(&nets).is_ok());
+        assert!(check_orchestrator_bindings(&nets, TEST_FRONTEND_PORT).is_ok());
     }
 
     #[test]
@@ -2035,10 +2052,45 @@ mod tests {
             ("mainnet".to_string(), 8101, PathBuf::from("/root/mainnet")),
             ("testnet".to_string(), 8101, PathBuf::from("/root/testnet")),
         ];
-        let err = check_orchestrator_bindings(&nets).unwrap_err().to_string();
+        let err = check_orchestrator_bindings(&nets, TEST_FRONTEND_PORT)
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("mainnet"), "error names first network: {err}");
         assert!(err.contains("testnet"), "error names second network: {err}");
         assert!(err.contains("8101"), "error names the port: {err}");
+    }
+
+    #[test]
+    fn test_check_orchestrator_bindings_frontend_port_collision_errors() {
+        // The shared frontend binds a host-global port just like every API, but
+        // the check only compared api-vs-api: a frontend/API clash reached
+        // runtime, where whichever lost the bind race restart-looped — and the
+        // frontend is the whole deployment's entry point.
+        let nets = vec![
+            ("mainnet".to_string(), 8101, PathBuf::from("/root/mainnet")),
+            ("testnet".to_string(), 3000, PathBuf::from("/root/testnet")),
+        ];
+        let err = check_orchestrator_bindings(&nets, TEST_FRONTEND_PORT)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("testnet"), "error names the network: {err}");
+        assert!(err.contains("3000"), "error names the port: {err}");
+        assert!(
+            err.contains("frontend"),
+            "error names the frontend as the other claimant: {err}"
+        );
+    }
+
+    #[test]
+    fn test_check_orchestrator_bindings_frontend_collides_with_the_first_network_too() {
+        // Guards the loop bound: the frontend must be compared against EVERY api
+        // port, not only the ones after the first.
+        let nets = vec![("mainnet".to_string(), 8101, PathBuf::from("/root/mainnet"))];
+        let err = check_orchestrator_bindings(&nets, 8101)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("mainnet"), "got: {err}");
+        assert!(err.contains("frontend"), "got: {err}");
     }
 
     #[test]
@@ -2047,7 +2099,9 @@ mod tests {
             ("mainnet".to_string(), 8101, PathBuf::from("/root/shared")),
             ("testnet".to_string(), 8102, PathBuf::from("/root/shared")),
         ];
-        let err = check_orchestrator_bindings(&nets).unwrap_err().to_string();
+        let err = check_orchestrator_bindings(&nets, TEST_FRONTEND_PORT)
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("mainnet"), "error names first network: {err}");
         assert!(err.contains("testnet"), "error names second network: {err}");
         assert!(
