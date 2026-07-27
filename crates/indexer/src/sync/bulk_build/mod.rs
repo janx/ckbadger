@@ -101,7 +101,10 @@ impl BulkBuildEngine {
             indexer.writer.store().as_ref(),
             indexer.progress.target(),
         )?;
-        fail_if_bulk_engine_cancelled(indexer, "after_completion_status")?;
+        // No cancellation check here: once completion status is persisted, the
+        // build is durable and clearing the marker is all that remains. Failing
+        // on a shutdown request in that window would demand a full rebuild for
+        // nothing.
         // Clearing the marker is the durable completion commit point. Keep it
         // until every fallible domain-store finalization step has succeeded.
         indexer.writer.store().clear_bulk_build_session_marker()?;
