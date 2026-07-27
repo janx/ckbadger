@@ -29,10 +29,19 @@ use axum::extract::{ConnectInfo, Path, Request, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get};
-use axum::Router;
+use axum::{Json, Router};
 use futures::{SinkExt, StreamExt};
+
 use tokio_tungstenite::tungstenite::protocol::CloseFrame as TgCloseFrame;
 use tokio_tungstenite::tungstenite::Message as TgMessage;
+
+use crate::response::ApiError;
+
+/// The upstream path prefix every proxied API request must stay inside.
+///
+/// `/api/{network}/v1/{*rest}` maps onto `/api/v1/{rest}`, so a request that
+/// ends up outside this prefix has escaped the advertised contract.
+const UPSTREAM_API_PREFIX: &str = "/api/v1/";
 
 /// Per-network backend routing table: network name → local `ckbadger-api` port.
 pub struct ProxyState {
@@ -83,6 +92,24 @@ fn is_client_forwarding_header(name: &str) -> bool {
     name.eq_ignore_ascii_case("x-forwarded-for") || name.eq_ignore_ascii_case("x-real-ip")
 }
 
+/// Slice the still-percent-encoded `{*rest}` tail out of the raw request path.
+///
+/// axum's `Path` extractor percent-decodes its captures. That is correct for a
+/// routing key like `{network}`, but lossy for a path that is immediately
+/// re-serialized into an upstream URL: `..%2F` would decode to `../` (which the
+/// URL parser then normalizes *out* of the `/api/v1` prefix) and an encoded
+/// `%2F` inside a parameter would reach the upstream as a real separator,
+/// resolving to a different endpoint than a direct API call. The raw path is the
+/// authoritative wire form, so the tail is taken from it verbatim.
+///
+/// Returns `None` when the path is not the `/api/{network}/v1/…` shape the route
+/// pattern guarantees.
+fn raw_rest_path(path: &str) -> Option<&str> {
+    let after_api = path.strip_prefix("/api/")?;
+    let (_network, tail) = after_api.split_once('/')?;
+    tail.strip_prefix("v1/")
+}
+
 /// Forward `/api/{network}/v1/{*rest}` (with query string) to the network's API
 /// server at `http://127.0.0.1:{port}/api/v1/{rest}`.
 ///
@@ -91,7 +118,10 @@ fn is_client_forwarding_header(name: &str) -> bool {
 /// [`Body::from_stream`], so neither is fully buffered in the proxy.
 pub async fn proxy_api(
     State(state): State<Arc<ProxyState>>,
-    Path((network, rest)): Path<(String, String)>,
+    // Only `{network}` is read from the decoded extractor: it is a routing key,
+    // so percent-decoding is exactly right there. The `{*rest}` tail is re-read
+    // RAW from the URI below and must stay encoded end to end.
+    Path((network, _decoded_rest)): Path<(String, String)>,
     req: Request,
 ) -> Response {
     let Some(port) = state.upstream_port(&network) else {
@@ -100,23 +130,58 @@ pub async fn proxy_api(
 
     let (parts, body) = req.into_parts();
     let Some(peer) = parts.extensions.get::<ConnectInfo<SocketAddr>>() else {
-        return (
+        return proxy_error(
             StatusCode::INTERNAL_SERVER_ERROR,
-            "proxy client address unavailable",
-        )
-            .into_response();
+            "internal_error",
+            "proxy client address unavailable".to_string(),
+        );
     };
     let client_ip = peer.0.ip().to_string();
+    let Some(rest) = raw_rest_path(parts.uri.path()) else {
+        return proxy_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            format!(
+                "proxy route matched but path '{}' is not /api/{{network}}/v1/…",
+                parts.uri.path()
+            ),
+        );
+    };
     let query = parts
         .uri
         .query()
         .map(|q| format!("?{q}"))
         .unwrap_or_default();
-    let url = format!("http://127.0.0.1:{port}/api/v1/{rest}{query}");
+    let Ok(url) = reqwest::Url::parse(&format!(
+        "http://127.0.0.1:{port}{UPSTREAM_API_PREFIX}{rest}{query}"
+    )) else {
+        return proxy_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_path",
+            format!(
+                "request path is not a valid upstream URL under {UPSTREAM_API_PREFIX}: {}",
+                parts.uri
+            ),
+        );
+    };
+    // A literal `../` tail is normalized away while the URL is parsed. Anything
+    // that lands outside the prefix would silently reach an unrelated upstream
+    // route, so refuse it instead of forwarding a request the mapping never
+    // promised to serve.
+    if !url.path().starts_with(UPSTREAM_API_PREFIX) {
+        return proxy_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_path",
+            format!(
+                "request path escapes the {UPSTREAM_API_PREFIX} prefix: {}",
+                parts.uri.path()
+            ),
+        );
+    }
 
     let client = crate::utils::http::shared_http_client();
     let reqwest_body = reqwest::Body::wrap_stream(body.into_data_stream());
-    let mut builder = client.request(parts.method, &url).body(reqwest_body);
+    let mut builder = client.request(parts.method, url).body(reqwest_body);
     for (name, value) in parts.headers.iter() {
         if is_hop_by_hop(name.as_str()) || is_client_forwarding_header(name.as_str()) {
             continue;
@@ -202,6 +267,15 @@ async fn relay_ws(mut client: WebSocket, port: u16) {
         _ = client_to_upstream => {}
         _ = upstream_to_client => {}
     }
+}
+
+/// Emit a proxy-level failure using the API's `{error, message}` JSON contract.
+///
+/// The SPA json-parses every failed response and discards anything that is not
+/// JSON, so a plain-text body would collapse an actionable message into a bare
+/// "API error: <status>" in the UI.
+fn proxy_error(status: StatusCode, code: &'static str, message: String) -> Response {
+    (status, Json(ApiError::new(code, message))).into_response()
 }
 
 /// Actionable `404` for a network absent from the routing table. Lists the known
@@ -293,7 +367,11 @@ mod tests {
                     format!("{forwarded}|{real}")
                 }),
             )
-            .route("/ws", get(mock_upstream_ws));
+            .route("/ws", get(mock_upstream_ws))
+            // Catch-all echo of the *raw* path the upstream actually received, so
+            // tests can assert byte-for-byte what the proxy spliced into the
+            // upstream URL (percent-encoding included).
+            .fallback(|uri: Uri| async move { format!("path={}", uri.path()) });
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
@@ -419,6 +497,103 @@ mod tests {
             String::from_utf8(body.to_vec()).unwrap(),
             "limit=5&cursor=abc%20def"
         );
+    }
+
+    #[tokio::test]
+    async fn proxy_keeps_encoded_path_segments_encoded_upstream() {
+        // `%2F` inside a path parameter is data, not a separator: it must reach
+        // upstream still encoded, otherwise the proxied route resolves to a
+        // different (usually missing) endpoint than a direct API call would.
+        let port = spawn_mock_upstream().await;
+        let resp = testnet_proxy(port)
+            .oneshot(with_peer(
+                Request::builder()
+                    .uri("/api/testnet/v1/cell/a%2Fb")
+                    .body(Body::empty())
+                    .unwrap(),
+                "203.0.113.5:4005",
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        assert_eq!(
+            String::from_utf8(body.to_vec()).unwrap(),
+            "path=/api/v1/cell/a%2Fb"
+        );
+    }
+
+    #[tokio::test]
+    async fn proxy_encoded_traversal_stays_under_api_v1() {
+        // `..%2F` must NOT decode into `../` — decoding then re-parsing lets the
+        // URL normalizer walk out of the `/api/v1` prefix and hit unrelated
+        // upstream routes (here: `/ws`).
+        let port = spawn_mock_upstream().await;
+        let resp = testnet_proxy(port)
+            .oneshot(with_peer(
+                Request::builder()
+                    .uri("/api/testnet/v1/..%2F..%2Fws")
+                    .body(Body::empty())
+                    .unwrap(),
+                "203.0.113.6:4006",
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let text = String::from_utf8(body.to_vec()).unwrap();
+        assert_eq!(
+            text, "path=/api/v1/..%2F..%2Fws",
+            "encoded traversal must stay one opaque segment under /api/v1"
+        );
+    }
+
+    #[tokio::test]
+    async fn proxy_rejects_literal_traversal_out_of_api_v1() {
+        // A literal `../` tail normalizes out of the prefix while the URL is
+        // built; that violates the advertised mapping, so fail fast instead of
+        // silently forwarding to an unrelated upstream path.
+        let port = spawn_mock_upstream().await;
+        let resp = testnet_proxy(port)
+            .oneshot(with_peer(
+                Request::builder()
+                    .uri("/api/testnet/v1/../../ws")
+                    .body(Body::empty())
+                    .unwrap(),
+                "203.0.113.7:4007",
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["error"], "invalid_path");
+        assert!(
+            json["message"].as_str().unwrap().contains("/api/v1"),
+            "message should name the prefix that was escaped: {json}"
+        );
+    }
+
+    #[test]
+    fn raw_rest_path_keeps_original_encoding() {
+        assert_eq!(
+            raw_rest_path("/api/testnet/v1/cell/a%2Fb"),
+            Some("cell/a%2Fb")
+        );
+        assert_eq!(
+            raw_rest_path("/api/mainnet/v1/blocks/42"),
+            Some("blocks/42")
+        );
+        // An encoded network segment still slices the tail correctly.
+        assert_eq!(raw_rest_path("/api/test%2Dnet/v1/ping"), Some("ping"));
+        // Empty tail is legal (`/api/{network}/v1/`).
+        assert_eq!(raw_rest_path("/api/testnet/v1/"), Some(""));
+        // Shapes the route pattern can never produce.
+        assert_eq!(raw_rest_path("/api/testnet/v2/ping"), None);
+        assert_eq!(raw_rest_path("/ws/testnet"), None);
     }
 
     #[tokio::test]
