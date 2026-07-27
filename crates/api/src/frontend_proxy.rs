@@ -18,7 +18,7 @@
 //! fast with an actionable `404` rather than silently misrouting.
 
 use std::collections::HashMap;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 
 use axum::body::Body;
@@ -26,14 +26,17 @@ use axum::extract::ws::{
     CloseFrame as AxCloseFrame, Message as AxMessage, WebSocket, WebSocketUpgrade,
 };
 use axum::extract::{ConnectInfo, Path, Request, State};
-use axum::http::StatusCode;
+use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get};
 use axum::{Json, Router};
 use futures::{SinkExt, StreamExt};
-
+use tokio::net::TcpStream;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_tungstenite::tungstenite::handshake::client::Response as TgHandshakeResponse;
 use tokio_tungstenite::tungstenite::protocol::CloseFrame as TgCloseFrame;
-use tokio_tungstenite::tungstenite::Message as TgMessage;
+use tokio_tungstenite::tungstenite::{Error as TgError, Message as TgMessage};
+use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
 use crate::response::ApiError;
 
@@ -239,34 +242,91 @@ pub async fn proxy_api(
 }
 
 /// Relay `/ws/{network}` to the network's API server at `ws://127.0.0.1:{port}/ws`.
+///
+/// The upstream socket is opened *before* the client's own upgrade is completed.
+/// An upstream that refuses the handshake — the pre-sync `503 initializing`
+/// router, the WS connection cap, a backend that is not there — is then answered
+/// as a real HTTP status on the client's upgrade request, instead of being
+/// flattened into a post-upgrade `Close(1011, "upstream unreachable")` that
+/// asserts one cause for every failure and hides the machine-readable code the
+/// SPA keys its initializing UX on.
 pub async fn proxy_ws(
     State(state): State<Arc<ProxyState>>,
     Path(network): Path<String>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     ws: WebSocketUpgrade,
 ) -> Response {
     let Some(port) = state.upstream_port(&network) else {
         return unknown_network(&network, &state);
     };
-    ws.on_upgrade(move |client| relay_ws(client, port))
+
+    match connect_upstream_ws(port, peer.ip()).await {
+        Ok(upstream) => ws.on_upgrade(move |client| relay_ws(client, upstream)),
+        Err(TgError::Http(rejection)) => upstream_handshake_rejection(&network, rejection),
+        Err(e) => proxy_error(
+            StatusCode::BAD_GATEWAY,
+            "upstream_unreachable",
+            format!("upstream network '{network}' websocket unreachable: {e}"),
+        ),
+    }
+}
+
+/// The upstream socket type produced by [`tokio_tungstenite::connect_async`].
+type UpstreamWs = WebSocketStream<MaybeTlsStream<TcpStream>>;
+
+/// Open the upstream WebSocket, forwarding the client's identity.
+///
+/// Without these headers the upgrade reaches the API from the loopback proxy
+/// peer, and `extract_client_ip` treats a loopback peer with no forwarded
+/// address as local — so the rate limiter skips it and every proxied socket is
+/// effectively un-limited. The HTTP path already forwards them; this mirrors it.
+async fn connect_upstream_ws(port: u16, client_ip: IpAddr) -> Result<UpstreamWs, TgError> {
+    let mut request = format!("ws://127.0.0.1:{port}/ws").into_client_request()?;
+    let client_ip = HeaderValue::from_str(&client_ip.to_string())
+        .expect("an IP address is always a valid header value");
+    request
+        .headers_mut()
+        .insert("x-forwarded-for", client_ip.clone());
+    request.headers_mut().insert("x-real-ip", client_ip);
+
+    let (upstream, _response) = tokio_tungstenite::connect_async(request).await?;
+    Ok(upstream)
+}
+
+/// Re-emit an upstream handshake rejection on the client's own upgrade request.
+///
+/// The upstream body is forwarded verbatim whenever it has one: the API's
+/// pre-sync router answers `{"error":"initializing", …}` and the WS connection
+/// cap answers its own message, so propagating beats guessing which flavour of
+/// rejection this was. An empty body becomes the proxy's own `{error, message}`
+/// payload so a client never has to interpret a bodyless 5xx.
+fn upstream_handshake_rejection(network: &str, rejection: TgHandshakeResponse) -> Response {
+    let status = rejection.status();
+    let content_type = rejection.headers().get(header::CONTENT_TYPE).cloned();
+
+    match rejection.into_body() {
+        Some(body) if !body.is_empty() => {
+            let mut response = Response::builder().status(status);
+            if let Some(content_type) = content_type {
+                response = response.header(header::CONTENT_TYPE, content_type);
+            }
+            // Infallible: the status and header value both came from a response
+            // tungstenite already parsed.
+            response
+                .body(Body::from(body))
+                .expect("upstream handshake rejection with validated status/headers")
+        }
+        _ => proxy_error(
+            status,
+            "upstream_rejected",
+            format!("upstream network '{network}' rejected the websocket handshake with {status}"),
+        ),
+    }
 }
 
 /// Pump frames in both directions between the browser client and the upstream API
 /// WebSocket until either side closes or errors.
-async fn relay_ws(mut client: WebSocket, port: u16) {
-    let url = format!("ws://127.0.0.1:{port}/ws");
-    let Ok((upstream, _)) = tokio_tungstenite::connect_async(&url).await else {
-        // Upstream is unreachable: tell the browser why with an explicit Close
-        // frame (1011 = server terminating due to an internal error) instead of
-        // silently dropping the socket, which surfaces as a bare 1006 in the
-        // browser. Ignore the send error — the client may already be gone.
-        let _ = client
-            .send(AxMessage::Close(Some(AxCloseFrame {
-                code: 1011,
-                reason: "upstream unreachable".into(),
-            })))
-            .await;
-        return;
-    };
+async fn relay_ws(client: WebSocket, upstream: UpstreamWs) {
     let (mut up_tx, mut up_rx) = upstream.split();
     let (mut cl_tx, mut cl_rx) = client.split();
 
@@ -415,13 +475,32 @@ mod tests {
         port
     }
 
-    /// Upstream WS echo handler: replies to each text frame with `echo:<text>`.
-    async fn mock_upstream_ws(ws: WebSocketUpgrade) -> Response {
-        ws.on_upgrade(|mut socket| async move {
+    /// Upstream WS echo handler: replies to each text frame with `echo:<text>`,
+    /// except `whoami`, which reports the client-identity headers the upgrade
+    /// request carried (`missing` when absent).
+    async fn mock_upstream_ws(ws: WebSocketUpgrade, headers: HeaderMap) -> Response {
+        let header_value = |name: &str| {
+            headers
+                .get(name)
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or("missing")
+                .to_owned()
+        };
+        let identity = format!(
+            "xff:{}|{}",
+            header_value("x-forwarded-for"),
+            header_value("x-real-ip")
+        );
+
+        ws.on_upgrade(move |mut socket| async move {
             while let Some(Ok(msg)) = socket.recv().await {
                 match msg {
                     AxMessage::Text(t) => {
-                        let reply = format!("echo:{}", t.as_str());
+                        let reply = if t.as_str() == "whoami" {
+                            identity.clone()
+                        } else {
+                            format!("echo:{}", t.as_str())
+                        };
                         if socket.send(AxMessage::Text(reply.into())).await.is_err() {
                             break;
                         }
@@ -431,6 +510,46 @@ mod tests {
                 }
             }
         })
+    }
+
+    /// Mock upstream that rejects every request the way the API's pre-sync router
+    /// does: 503 with the `{"error":"initializing", …}` body the SPA keys its
+    /// initializing UX on.
+    async fn spawn_presync_upstream() -> u16 {
+        let app = Router::new().fallback(|| async {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(serde_json::json!({
+                    "error": "initializing",
+                    "network": "testnet",
+                    "message": "This network has not started syncing yet",
+                })),
+            )
+        });
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        port
+    }
+
+    /// Serve a proxy router on an ephemeral port *with* connect info, exactly as
+    /// `run_frontend_server` does, so client-address handling behaves as in
+    /// production.
+    async fn serve_proxy(router: Router) -> u16 {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            axum::serve(
+                listener,
+                router.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .await
+            .unwrap();
+        });
+        port
     }
 
     fn testnet_proxy(port: u16) -> Router {
@@ -760,12 +879,7 @@ mod tests {
         // a 400 first). Drive it with a real WS client; the proxy rejects the
         // handshake with a 404 whose body names the unknown network.
         let upstream_port = spawn_mock_upstream().await;
-        let proxy = testnet_proxy(upstream_port);
-        let proxy_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let proxy_port = proxy_listener.local_addr().unwrap().port();
-        tokio::spawn(async move {
-            axum::serve(proxy_listener, proxy).await.unwrap();
-        });
+        let proxy_port = serve_proxy(testnet_proxy(upstream_port)).await;
 
         let err =
             tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{proxy_port}/ws/devnet"))
@@ -792,12 +906,7 @@ mod tests {
         let upstream_port = spawn_mock_upstream().await;
 
         // Serve the proxy on a real port so a real WS client can upgrade against it.
-        let proxy = testnet_proxy(upstream_port);
-        let proxy_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let proxy_port = proxy_listener.local_addr().unwrap().port();
-        tokio::spawn(async move {
-            axum::serve(proxy_listener, proxy).await.unwrap();
-        });
+        let proxy_port = serve_proxy(testnet_proxy(upstream_port)).await;
 
         let (mut ws, _resp) =
             tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{proxy_port}/ws/testnet"))
@@ -807,6 +916,82 @@ mod tests {
         ws.send(TgMessage::Text("hi".to_owned())).await.unwrap();
         let reply = ws.next().await.expect("a reply frame").unwrap();
         assert_eq!(reply, TgMessage::Text("echo:hi".to_owned()));
+    }
+
+    #[tokio::test]
+    async fn ws_relay_forwards_client_identity_to_upstream() {
+        // Without forwarded identity the upgrade reaches the API as a loopback
+        // peer, which `extract_client_ip` treats as local and the rate limiter
+        // therefore skips — every proxied socket would be un-limited.
+        let upstream_port = spawn_mock_upstream().await;
+        let proxy_port = serve_proxy(testnet_proxy(upstream_port)).await;
+
+        let (mut ws, _resp) =
+            tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{proxy_port}/ws/testnet"))
+                .await
+                .expect("client should connect through the proxy");
+
+        ws.send(TgMessage::Text("whoami".to_owned())).await.unwrap();
+        let reply = ws.next().await.expect("a reply frame").unwrap();
+        // The client's socket peer is loopback in-test; what matters is that the
+        // upstream is told the client's address at all, on both headers, exactly
+        // as the HTTP path already does.
+        assert_eq!(reply, TgMessage::Text("xff:127.0.0.1|127.0.0.1".to_owned()));
+    }
+
+    #[tokio::test]
+    async fn ws_upstream_503_reaches_the_client_as_a_real_503() {
+        // A pre-sync upstream rejects the upgrade with 503 + the `initializing`
+        // payload. Collapsing that into a post-upgrade Close(1011) would tell the
+        // client the proxy failed and hide the code the SPA keys its UX on, so
+        // the rejection must arrive as an HTTP status on the upgrade itself.
+        let upstream_port = spawn_presync_upstream().await;
+        let proxy_port = serve_proxy(testnet_proxy(upstream_port)).await;
+
+        let err =
+            tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{proxy_port}/ws/testnet"))
+                .await
+                .expect_err("a pre-sync upstream must reject the handshake, not upgrade it");
+
+        match err {
+            tokio_tungstenite::tungstenite::Error::Http(resp) => {
+                assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+                let body = resp.body().as_ref().expect("503 handshake body present");
+                let json: serde_json::Value = serde_json::from_slice(body).unwrap();
+                assert_eq!(json["error"], "initializing");
+                assert_eq!(json["network"], "testnet");
+            }
+            other => panic!("expected an HTTP 503 handshake rejection, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn ws_unreachable_upstream_rejects_the_handshake_with_502() {
+        // Nothing listening upstream: the client must learn that from its own
+        // upgrade request rather than from a 101 followed immediately by a close.
+        let dead_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let dead_port = dead_listener.local_addr().unwrap().port();
+        drop(dead_listener);
+        let proxy_port = serve_proxy(testnet_proxy(dead_port)).await;
+
+        let err =
+            tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{proxy_port}/ws/testnet"))
+                .await
+                .expect_err("an absent upstream must reject the handshake");
+
+        match err {
+            tokio_tungstenite::tungstenite::Error::Http(resp) => {
+                assert_eq!(resp.status(), StatusCode::BAD_GATEWAY);
+                let body = resp.body().as_ref().expect("502 handshake body present");
+                let json: serde_json::Value = serde_json::from_slice(body).unwrap();
+                assert_eq!(json["error"], "upstream_unreachable");
+                assert!(
+                    json["message"].as_str().unwrap().contains("testnet"),
+                    "502 body should name the unreachable network: {json}"
+                );
+            }
+            other => panic!("expected an HTTP 502 handshake rejection, got {other:?}"),
+        }
     }
 
     #[test]
