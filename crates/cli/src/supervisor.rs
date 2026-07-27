@@ -62,6 +62,12 @@ struct ManagedChild {
     child: Child,
     restart_count: u32,
     started_at: Instant,
+    /// Timestamps of recent clean bulk-to-live handoffs, pruned to
+    /// [`HANDOFF_RATE_WINDOW`]. Carried across respawns so an exit-0 loop is
+    /// detectable by RATE even though each handoff resets `restart_count` and
+    /// `started_at`. Same shape as main's `restart_history` (3344ad5d) so the two
+    /// windows merge cleanly on rebase.
+    handoff_history: Vec<Instant>,
     /// `Some(reason)` once the supervisor has stopped restarting this child.
     /// A single source of truth: the flag and its explanation cannot drift, and
     /// the sequencer can name WHY a gating indexer is holding the queue.
@@ -279,6 +285,24 @@ const SEQUENCER_READ_FAILURE_PERSISTENT: u32 = 24;
 
 /// How many times the sequencer retries a failed `spawn_child` before parking.
 const SPAWN_RETRY_ATTEMPTS: u32 = 5;
+
+/// Sliding window for the clean-handoff rate limit.
+const HANDOFF_RATE_WINDOW: Duration = Duration::from_secs(600);
+
+/// More than this many bulk-to-live handoffs within [`HANDOFF_RATE_WINDOW`] is
+/// pathological. A legitimate handoff (BULK_SYNC rule 10) happens ONCE per bulk
+/// completion, so a handful inside ten minutes can only mean the indexer is
+/// exiting 0 immediately on startup. Kept below [`MAX_RESTART_ATTEMPTS`] because
+/// a clean handoff is a much rarer event than a crash restart.
+const MAX_HANDOFFS_IN_WINDOW: usize = 5;
+
+/// Decide whether a clean handoff may proceed, given the handoff timestamps
+/// already recorded inside [`HANDOFF_RATE_WINDOW`].
+///
+/// Pure so the limit is exhaustively testable, mirroring `classify_child_exit`.
+fn handoff_allowed(handoffs_in_window: usize) -> bool {
+    handoffs_in_window < MAX_HANDOFFS_IN_WINDOW
+}
 
 /// How loudly a consecutive run of sequencer read failures should be reported.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -958,6 +982,7 @@ fn spawn_child(exe: &PathBuf, spec: &ChildSpec, log_dir: &Path) -> Result<Manage
         child,
         restart_count: 0,
         started_at: Instant::now(),
+        handoff_history: Vec::new(),
         blocked: None,
     })
 }
@@ -1013,13 +1038,49 @@ async fn monitor_children_multi(
 
                 match classify_child_exit(&specs[i], status.success(), status.code()) {
                     ChildExitAction::CleanHandoff => {
+                        // A clean handoff bypasses restart_count/backoff entirely
+                        // by design (BULK_SYNC rule 10 wants it immediate), which
+                        // also made it invisible to MAX_RESTART_ATTEMPTS: any
+                        // early-exit-0 bug became an unbounded respawn loop at the
+                        // health-check cadence. Rate-limit it on its own window.
+                        let now = Instant::now();
+                        locked.children[i]
+                            .handoff_history
+                            .retain(|t| now.duration_since(*t) < HANDOFF_RATE_WINDOW);
+                        let handoffs_in_window = locked.children[i].handoff_history.len();
+
+                        if !handoff_allowed(handoffs_in_window) {
+                            error!(
+                                child = %label,
+                                exit_status = %status,
+                                handoffs_in_window,
+                                window_secs = HANDOFF_RATE_WINDOW.as_secs(),
+                                "indexer is exiting cleanly in a loop; a bulk-to-live handoff \
+                                 happens once per bulk completion, so this is an early-exit bug. \
+                                 Automatic handoff is blocked — investigate the indexer logs"
+                            );
+                            locked.children[i].blocked = Some(format!(
+                                "clean-handoff loop: {handoffs_in_window} exit-0 handoffs within \
+                                 {}s",
+                                HANDOFF_RATE_WINDOW.as_secs()
+                            ));
+                            continue;
+                        }
+
                         info!(
                             child = %label,
                             exit_status = %status,
+                            handoffs_in_window,
                             "indexer exited cleanly; starting fresh process for sync-path handoff"
                         );
+                        // Carry the pruned history across the respawn and record
+                        // this handoff, so the window spans process lifetimes.
+                        let mut carried = std::mem::take(&mut locked.children[i].handoff_history);
+                        carried.push(now);
+
                         match spawn_child(exe, &specs[i], log_dir) {
-                            Ok(new_child) => {
+                            Ok(mut new_child) => {
+                                new_child.handoff_history = carried;
                                 info!(
                                     child = %label,
                                     pid = new_child.pid(),
@@ -1028,11 +1089,19 @@ async fn monitor_children_multi(
                                 locked.children[i] = new_child;
                             }
                             Err(e) => {
+                                // Previously this only logged and left a dead slot
+                                // behind silently: the child had already exited, so
+                                // nothing would ever retry it and the network was
+                                // gone with no `Blocked` status anywhere.
                                 error!(
                                     child = %label,
                                     error = %e,
-                                    "failed to start indexer handoff process"
+                                    "failed to start indexer handoff process; this network has no \
+                                     running indexer and needs operator action"
                                 );
+                                locked.children[i].handoff_history = carried;
+                                locked.children[i].blocked =
+                                    Some(format!("handoff respawn failed: {e}"));
                             }
                         }
                         continue;
@@ -1412,6 +1481,19 @@ mod tests {
     const _: () = assert!(SEQUENCER_READ_FAILURE_ESCALATE > 0);
     const _: () = assert!(SPAWN_RETRY_ATTEMPTS > 0);
 
+    // A clean handoff is a once-per-bulk-completion event, so its limit must sit
+    // BELOW the crash-restart cap: an exit-0 loop is pathological far sooner than
+    // a crash loop, and it never reaches MAX_RESTART_ATTEMPTS on its own.
+    const _: () = assert!(MAX_HANDOFFS_IN_WINDOW > 0);
+    const _: () = assert!(MAX_HANDOFFS_IN_WINDOW < MAX_RESTART_ATTEMPTS as usize);
+    // The window must be long enough that a fast respawn loop trips it: the
+    // health check runs every HEALTH_CHECK_INTERVAL, so a loop produces
+    // MAX_HANDOFFS_IN_WINDOW handoffs in seconds, well inside the window.
+    const _: () = assert!(
+        HANDOFF_RATE_WINDOW.as_secs()
+            > HEALTH_CHECK_INTERVAL.as_secs() * MAX_HANDOFFS_IN_WINDOW as u64
+    );
+
     #[test]
     fn sequencer_secondary_is_opened_once_and_only_refreshed_afterwards() {
         // The old reader opened and dropped a full 59-CF secondary on EVERY 5s
@@ -1555,6 +1637,49 @@ mod tests {
             ChildExitAction::Restart,
             "rebuild-required is an indexer-specific lifecycle state"
         );
+    }
+
+    #[test]
+    fn clean_handoffs_are_allowed_up_to_the_window_limit_then_blocked() {
+        // Regression for the unbounded exit-0 loop: `CleanHandoff` respawned with
+        // no count, no backoff and no cap, so an indexer that exits 0 immediately
+        // respawned every HEALTH_CHECK_INTERVAL forever, invisible to
+        // MAX_RESTART_ATTEMPTS (which exit-0 short-circuits before any counting).
+        for already in 0..MAX_HANDOFFS_IN_WINDOW {
+            assert!(
+                handoff_allowed(already),
+                "a legitimate bulk->live handoff must never be blocked"
+            );
+        }
+        assert!(!handoff_allowed(MAX_HANDOFFS_IN_WINDOW));
+        assert!(!handoff_allowed(MAX_HANDOFFS_IN_WINDOW + 100));
+    }
+
+    #[tokio::test]
+    async fn handoff_history_prunes_to_the_rate_window() {
+        // Only handoffs INSIDE the window count, so a network that legitimately
+        // completes bulk once a day never accumulates toward the limit.
+        let dir = TempDir::new().unwrap();
+        let exe = std::env::current_exe().unwrap();
+        let spec = ChildSpec {
+            label: "mainnet/indexer".to_string(),
+            service: "indexer".to_string(),
+            workdir: dir.path().to_string_lossy().to_string(),
+        };
+        let mut child = spawn_child(&exe, &spec, &dir.path().join("run/logs")).unwrap();
+
+        let now = Instant::now();
+        let stale = now - HANDOFF_RATE_WINDOW - Duration::from_secs(1);
+        child.handoff_history = vec![stale, stale, now];
+        child
+            .handoff_history
+            .retain(|t| now.duration_since(*t) < HANDOFF_RATE_WINDOW);
+
+        assert_eq!(child.handoff_history.len(), 1, "stale handoffs pruned");
+        assert!(handoff_allowed(child.handoff_history.len()));
+
+        let _ = child.child.kill().await;
+        let _ = child.child.wait().await;
     }
 
     #[test]
