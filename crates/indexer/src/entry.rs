@@ -10,7 +10,8 @@ use crate::cycles_worker::spawn_cycles_worker;
 use crate::db::Repository;
 use crate::label_import::run_label_import as label_import_run;
 use crate::lifecycle::{
-    fail_fast_if_bulk_build_session_incomplete, is_rebuild_required, REBUILD_REQUIRED_EXIT_CODE,
+    annotate_rebuild_required, fail_fast_if_bulk_build_session_incomplete, is_rebuild_required,
+    StoreLocation, REBUILD_REQUIRED_EXIT_CODE,
 };
 use crate::network_guard::{establish_db_network_identity, verify_genesis_hash};
 use crate::rpc::CkbRpcClient;
@@ -125,6 +126,11 @@ async fn run_startup_label_import(store: Arc<CkbadgerStore>, config: &Config) ->
 pub async fn run_indexer_sync(mut config: Config) -> Result<()> {
     config.validate()?;
 
+    // Every rebuild-required error raised below is annotated with this, so the
+    // operator is told WHICH network's stores to delete. Under the multi-network
+    // orchestrator a bare "delete RocksDB" is ambiguous.
+    let store_location = store_location_from_config(&config);
+
     info!("Connecting to CKB node: {}", config.ckb_rpc_url);
 
     // Resolve the node's chain before opening or mutating either chain store.
@@ -155,7 +161,8 @@ pub async fn run_indexer_sync(mut config: Config) -> Result<()> {
     // A partial bulk artifact is never a supported startup state. Check it
     // before network tagging, sync-status repair, runtime markers, or labels
     // can mutate the domain store.
-    fail_fast_if_bulk_build_session_incomplete(store.as_ref())?;
+    fail_fast_if_bulk_build_session_incomplete(store.as_ref())
+        .map_err(|error| annotate_rebuild_required(error, &store_location))?;
 
     // This is the first domain-store mutation on startup. Existing tagged DBs
     // must match; old untagged DBs must prove their chain through persisted
@@ -769,7 +776,16 @@ pub async fn run_indexer_sync(mut config: Config) -> Result<()> {
             }
         }
     }
-    run_result
+    run_result.map_err(|error| annotate_rebuild_required(error, &store_location))
+}
+
+/// Identity of the chain stores this indexer process owns.
+fn store_location_from_config(config: &Config) -> StoreLocation {
+    StoreLocation::new(
+        config.network.as_str(),
+        config.domain_data_path.as_str(),
+        config.append_only_data_path.as_str(),
+    )
 }
 
 /// Run label import from a service config.
@@ -1100,6 +1116,61 @@ async fn wait_for_shutdown_signal() -> std::io::Result<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn testnet_config() -> Config {
+        serde_json::from_str(
+            r#"{
+                "domain_data_path": "/srv/ckbadger/testnet/domain",
+                "append_only_data_path": "/srv/ckbadger/testnet/append-only",
+                "build_version": "test",
+                "ckb_rpc_url": "http://127.0.0.1:8114",
+                "ckb_db_path": "/srv/ckb/testnet/data/db",
+                "network": "testnet"
+            }"#,
+        )
+        .expect("test config must deserialize")
+    }
+
+    #[test]
+    fn store_location_names_the_network_and_both_chain_stores() {
+        let location = store_location_from_config(&testnet_config()).to_string();
+
+        assert!(location.contains("network=testnet"), "{location}");
+        assert!(
+            location.contains("domain_store=/srv/ckbadger/testnet/domain"),
+            "{location}"
+        );
+        assert!(
+            location.contains("append_only_store=/srv/ckbadger/testnet/append-only"),
+            "{location}"
+        );
+    }
+
+    /// A rebuild-required error leaving `run_indexer_sync` must tell the operator
+    /// WHICH network's stores to delete — bare "delete RocksDB" is ambiguous once
+    /// the orchestrator runs several indexers side by side.
+    #[test]
+    fn annotated_rebuild_required_error_names_the_network_and_stores() {
+        let location = store_location_from_config(&testnet_config());
+        let error = anyhow::Error::new(crate::lifecycle::RebuildRequiredError::new(
+            "startup fail-fast: detected incomplete bulk build session",
+        ));
+
+        let annotated = annotate_rebuild_required(error, &location);
+
+        assert!(is_rebuild_required(&annotated));
+        let rendered = format!("{annotated:#}");
+        assert!(rendered.contains("network=testnet"), "{rendered}");
+        assert!(
+            rendered.contains("domain_store=/srv/ckbadger/testnet/domain"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("append_only_store=/srv/ckbadger/testnet/append-only"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("re-sync from genesis"), "{rendered}");
+    }
 
     #[test]
     fn test_queue_fill_pct() {
