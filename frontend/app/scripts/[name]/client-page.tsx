@@ -28,7 +28,7 @@ import {
   normalizeScriptRefHashType,
   type ScriptRefHashType,
 } from '@/lib/script-ref';
-import { formatCkbCompact } from '@/lib/utils';
+import { formatCapacity, formatCkbCompact } from '@/lib/utils';
 import type { KnownScript, ScriptFamilyDetail, ScriptLookupInfo } from '@/lib/api';
 
 interface SelectedVersion {
@@ -2049,7 +2049,9 @@ export default function ScriptDetailPage({
                             {cell.cellType === 'genesis_special_burn' ? (
                               <span
                                 className="border-base-border cursor-help border-b border-dashed"
-                                title="Virtual common knowledge size: 5.04B CKB"
+                                title={`Virtual common knowledge size: ${formatCapacity(
+                                  cell.virtualCommonKnowledgeSize || '0'
+                                )}`}
                               >
                                 <Capacity value={cell.virtualCommonKnowledgeSize || '0'} />
                               </span>

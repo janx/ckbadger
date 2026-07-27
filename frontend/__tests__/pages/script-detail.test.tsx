@@ -3,6 +3,7 @@ import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { render } from '../utils/test-utils';
 import ScriptDetailPage from '@/app/scripts/[name]/client-page';
 import { api } from '@/lib/api';
+import { formatCapacity } from '@/lib/utils';
 
 vi.mock('@/lib/api', () => ({
   api: {
@@ -729,5 +730,37 @@ describe('ScriptDetailPage', () => {
     const versionRow = screen.getByTestId(`version-row-${sharedVersionCodeHash}`);
     expect(within(versionRow).getByText(/^0$/)).toBeInTheDocument();
     expect(screen.getByText('No deployments found for this version')).toBeInTheDocument();
+  });
+
+  it('derives the genesis special burn tooltip from the API value', async () => {
+    vi.mocked(api.getCellsByScriptRef).mockResolvedValue({
+      data: [
+        {
+          txHash: '0x7777777777777777777777777777777777777777777777777777777777777777',
+          outputIndex: 0,
+          capacity: '840000000000000000',
+          lockScriptHash: '0xburn',
+          dataSize: 0,
+          createdAtBlock: 0,
+          cellType: 'genesis_special_burn',
+          virtualCommonKnowledgeSize: '504000000000000000',
+        },
+      ],
+      total: 1,
+      limit: 50,
+      hasMore: false,
+      nextCursor: null,
+    });
+
+    render(<ScriptDetailPage name="SECP256K1_BLAKE160" />);
+
+    // The tooltip copy comes from the API value, so it stays truthful on every
+    // network instead of quoting mainnet's genesis figure.
+    expect(
+      await screen.findByTitle(
+        `Virtual common knowledge size: ${formatCapacity('504000000000000000')}`
+      )
+    ).toBeInTheDocument();
+    expect(screen.queryByTitle(/5\.04B/)).toBeNull();
   });
 });
