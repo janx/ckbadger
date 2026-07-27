@@ -6,6 +6,13 @@ use std::time::Duration;
 
 use anyhow::Result;
 use tokio::sync::watch;
+use tracing::{error, info};
+
+/// How often the gate restates that it is still waiting. A deferred network can
+/// legitimately wait many hours for a mainnet bulk sync, so this must be quiet
+/// enough to live in a log file and loud enough that "nothing is happening" is
+/// never indistinguishable from "the supervisor forgot".
+const WAIT_LOG_INTERVAL: Duration = Duration::from_secs(60);
 
 /// Whether a watched network is out of bulk sync (safe to start the next indexer).
 ///
@@ -16,6 +23,30 @@ use tokio::sync::watch;
 /// reads as past-bulk without masking anything.
 pub(crate) fn is_past_bulk(bulk_completed: bool, lag: Option<i128>, threshold: u64) -> bool {
     bulk_completed || matches!(lag, Some(l) if l <= i128::from(threshold))
+}
+
+/// Everything the gate knows about the gating (previous) network this round.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct GateStatus {
+    /// `Some(true|false)` on a read; `None` when the round carried no signal
+    /// (store not created yet, or an unreadable round). `None` never advances.
+    pub past_bulk: Option<bool>,
+    /// `target_block − current_block`, when a progress record was read.
+    pub lag: Option<i128>,
+    /// The gating network's `SyncStatus.bulk_sync_completed_at.is_some()`.
+    pub bulk_completed: bool,
+    /// `Some(reason)` while the supervisor has the gating indexer restart-blocked.
+    /// A blocked gate never advances and is never torn down — it is reported.
+    pub blocked: Option<String>,
+}
+
+/// Number of polls between "still waiting" logs at `poll` cadence, at least 1 so
+/// a poll interval longer than [`WAIT_LOG_INTERVAL`] still logs every round.
+pub(crate) fn wait_log_every(poll: Duration) -> u32 {
+    let poll_ms = poll.as_millis().max(1);
+    u32::try_from(WAIT_LOG_INTERVAL.as_millis() / poll_ms)
+        .unwrap_or(u32::MAX)
+        .max(1)
 }
 
 /// What a spawn attempt did, from the gate's point of view.
@@ -30,16 +61,19 @@ pub(crate) enum SpawnOutcome {
     Parked,
 }
 
-/// Start deferred indexers one at a time. `indexers[0]` is assumed already spawned
-/// by the caller. For each `i` in `1..count`, poll until `indexers[i-1]` is past
-/// bulk, then `spawn(i)`. Generic over the status reader and spawn action so the
-/// gating logic is testable without real stores/processes.
+/// Start deferred indexers one at a time. `names[0]`'s indexer is assumed already
+/// spawned by the caller. For each `i` in `1..names.len()`, poll until `names[i-1]`
+/// is past bulk, then `spawn(i)`. Generic over the observer and spawn action so
+/// the gating logic is testable without real stores/processes.
 ///
-/// `past_bulk(prev)` returns `Ok(Some(true|false))` on a successful read and
-/// `Ok(None)` when this round carries no signal (the store has not been created
-/// yet). It is `async` because the real supervisor callback hands the blocking
-/// RocksDB secondary open/refresh/read to `spawn_blocking` — a sequencer poll
-/// must never block a runtime worker for the duration of a RocksDB catch-up.
+/// `names` are the sequenced indexers' child labels, in `[[network]]` order, and
+/// exist so every decision the gate makes says WHICH network it is about.
+///
+/// `observe(prev)` reports the gating network's [`GateStatus`]. It is `async`
+/// because the real supervisor callback hands the blocking RocksDB secondary
+/// open/refresh/read to `spawn_blocking` — a sequencer poll must never block a
+/// runtime worker for the duration of a RocksDB catch-up — and because reading
+/// the gating child's health takes the `SupervisorState` `tokio::sync::Mutex`.
 ///
 /// `spawn(i)` is `async`: the real supervisor callback appends to the shared
 /// `SupervisorState` behind a `tokio::sync::Mutex`, which must be awaited (a
@@ -47,32 +81,87 @@ pub(crate) enum SpawnOutcome {
 /// reports [`SpawnOutcome::Parked`] rather than `Err` when a child could not be
 /// started, so a spawn failure stalls exactly one network instead of shutting the
 /// whole orchestrator down.
-pub(crate) async fn sequence_indexers<R, RFut, S, SFut>(
-    count: usize,
-    mut past_bulk: R,
+///
+/// Waiting is never silent, and a blocked gate never causes a skip or a teardown
+/// (BULK_SYNC rule 11): the loop announces each wait, restates it once per
+/// [`WAIT_LOG_INTERVAL`], and logs an ERROR on each transition into a blocked
+/// gating indexer — then keeps waiting.
+pub(crate) async fn sequence_indexers<O, OFut, S, SFut>(
+    names: &[String],
+    mut observe: O,
     mut spawn: S,
     poll: Duration,
     mut shutdown: watch::Receiver<bool>,
 ) -> Result<()>
 where
-    R: FnMut(usize) -> RFut,
-    RFut: std::future::Future<Output = Result<Option<bool>>>,
+    O: FnMut(usize) -> OFut,
+    OFut: std::future::Future<Output = Result<GateStatus>>,
     S: FnMut(usize) -> SFut,
     SFut: std::future::Future<Output = Result<SpawnOutcome>>,
 {
-    for i in 1..count {
+    let log_every = wait_log_every(poll);
+    for i in 1..names.len() {
+        let gating = names[i - 1].as_str();
+        let deferred = names[i].as_str();
+        let mut ticks: u32 = 0;
+        // Logged on each TRANSITION into/out of blocked, not per tick: a gate can
+        // stay blocked for hours and must not drown the log.
+        let mut blocked_logged = false;
         loop {
             if *shutdown.borrow() {
                 return Ok(());
             }
-            if past_bulk(i - 1).await? == Some(true) {
+            let status = observe(i - 1).await?;
+
+            match &status.blocked {
+                Some(reason) if !blocked_logged => {
+                    error!(
+                        gating = %gating,
+                        deferred = %deferred,
+                        reason = %reason,
+                        "network '{gating}' indexer is blocked; network '{deferred}' will not \
+                         start until it is resolved. The sequencer keeps waiting — it never skips \
+                         ahead and never stops the running networks"
+                    );
+                    blocked_logged = true;
+                }
+                None if blocked_logged => {
+                    info!(
+                        gating = %gating,
+                        deferred = %deferred,
+                        "gating indexer is no longer blocked; resuming the wait for it to pass bulk"
+                    );
+                    blocked_logged = false;
+                }
+                _ => {}
+            }
+
+            if status.past_bulk == Some(true) {
+                info!(
+                    gating = %gating,
+                    deferred = %deferred,
+                    lag = ?status.lag,
+                    bulk_completed = status.bulk_completed,
+                    "gating network passed bulk sync; starting the next indexer"
+                );
                 // Parked: stay on this network. Fall through to the poll sleep so
                 // the gate keeps observing (and keeps retrying) instead of
                 // advancing past an indexer that never started.
                 if spawn(i).await? == SpawnOutcome::Started {
                     break;
                 }
+            } else if ticks.is_multiple_of(log_every) {
+                info!(
+                    gating = %gating,
+                    deferred = %deferred,
+                    lag = ?status.lag,
+                    bulk_completed = status.bulk_completed,
+                    has_signal = status.past_bulk.is_some(),
+                    "waiting for gating network to pass bulk sync before starting the next indexer"
+                );
             }
+            ticks = ticks.wrapping_add(1);
+
             tokio::select! {
                 _ = tokio::time::sleep(poll) => {}
                 _ = shutdown.changed() => {
@@ -90,6 +179,18 @@ where
 mod tests {
     use super::*;
     use std::cell::RefCell;
+
+    fn names(n: usize) -> Vec<String> {
+        (0..n).map(|i| format!("net{i}/indexer")).collect()
+    }
+
+    /// A gate that is readable and not blocked.
+    fn signal(past_bulk: Option<bool>) -> GateStatus {
+        GateStatus {
+            past_bulk,
+            ..GateStatus::default()
+        }
+    }
 
     #[test]
     fn past_bulk_completed_flag_wins() {
@@ -125,14 +226,14 @@ mod tests {
         let calls = RefCell::new(0usize);
         let spawned = RefCell::new(Vec::<usize>::new());
         sequence_indexers(
-            3,
+            &names(3),
             // false, true, false, true -> each network waits one poll before advancing
             |_prev| {
                 let calls = &calls;
                 async move {
                     let mut c = calls.borrow_mut();
                     *c += 1;
-                    Ok(Some((*c).is_multiple_of(2)))
+                    Ok(signal(Some((*c).is_multiple_of(2))))
                 }
             },
             |i| {
@@ -160,12 +261,12 @@ mod tests {
         let calls = RefCell::new(0usize);
         let spawned = RefCell::new(Vec::<usize>::new());
         sequence_indexers(
-            1,
+            &names(1),
             |_prev| {
                 let calls = &calls;
                 async move {
                     *calls.borrow_mut() += 1;
-                    Ok(Some(true))
+                    Ok(signal(Some(true)))
                 }
             },
             |i| {
@@ -190,8 +291,8 @@ mod tests {
         tx.send(true).unwrap();
         let spawned = RefCell::new(Vec::<usize>::new());
         sequence_indexers(
-            3,
-            |_prev| async { Ok(Some(false)) },
+            &names(3),
+            |_prev| async { Ok(signal(Some(false))) },
             |i| {
                 let spawned = &spawned;
                 async move {
@@ -215,8 +316,8 @@ mod tests {
         let (_tx, rx) = watch::channel(false);
         let spawned = RefCell::new(Vec::<usize>::new());
         let err = sequence_indexers(
-            2,
-            |_prev| async { Err(anyhow::anyhow!("status read task panicked")) },
+            &names(2),
+            |_prev| async { Err::<GateStatus, _>(anyhow::anyhow!("status read task panicked")) },
             |i| {
                 let spawned = &spawned;
                 async move {
@@ -245,14 +346,14 @@ mod tests {
         let polls = RefCell::new(0usize);
         let spawned = RefCell::new(Vec::<usize>::new());
         sequence_indexers(
-            2,
+            &names(2),
             |_prev| {
                 let polls = &polls;
                 async move {
                     let mut n = polls.borrow_mut();
                     *n += 1;
                     // 5 unreadable rounds, then a real past-bulk signal.
-                    Ok(if *n > 5 { Some(true) } else { None })
+                    Ok(signal(if *n > 5 { Some(true) } else { None }))
                 }
             },
             |i| {
@@ -279,8 +380,8 @@ mod tests {
         let (_tx, rx) = watch::channel(false);
         let attempts = RefCell::new(Vec::<usize>::new());
         sequence_indexers(
-            3,
-            |_prev| async { Ok(Some(true)) },
+            &names(3),
+            |_prev| async { Ok(signal(Some(true))) },
             |i| {
                 let attempts = &attempts;
                 async move {
@@ -315,8 +416,8 @@ mod tests {
         let attempts = RefCell::new(0usize);
         let stop = tx.clone();
         sequence_indexers(
-            2,
-            |_prev| async { Ok(Some(true)) },
+            &names(2),
+            |_prev| async { Ok(signal(Some(true))) },
             |_i| {
                 let attempts = &attempts;
                 let stop = &stop;
@@ -344,8 +445,8 @@ mod tests {
         let (_tx, rx) = watch::channel(false);
         let attempted = RefCell::new(Vec::<usize>::new());
         let err = sequence_indexers(
-            3,
-            |_prev| async { Ok(Some(true)) },
+            &names(3),
+            |_prev| async { Ok(signal(Some(true))) },
             |i| {
                 let attempted = &attempted;
                 async move {
@@ -361,5 +462,109 @@ mod tests {
 
         assert!(err.to_string().contains("spawn 1 failed"));
         assert_eq!(*attempted.borrow(), vec![1]);
+    }
+
+    #[test]
+    fn wait_log_cadence_is_derived_from_the_poll_interval() {
+        assert_eq!(wait_log_every(Duration::from_secs(5)), 12); // 60s / 5s
+        assert_eq!(wait_log_every(Duration::from_secs(60)), 1);
+        // A poll slower than the log interval still logs every round rather than
+        // dividing to zero and panicking on `% 0`.
+        assert_eq!(wait_log_every(Duration::from_secs(3600)), 1);
+        // A zero poll is floored to 1ms rather than dividing by zero.
+        assert_eq!(wait_log_every(Duration::ZERO), 60_000);
+    }
+
+    #[tokio::test]
+    async fn a_blocked_gating_indexer_keeps_the_gate_waiting_and_never_skips_ahead() {
+        // The MAJOR defect: a blocked/dead gating indexer left the next network
+        // unspawned forever with zero diagnostics. The gate must observe the
+        // block, keep polling, and still never start the deferred network.
+        let (tx, rx) = watch::channel(false);
+        let observed = RefCell::new(0usize);
+        let spawned = RefCell::new(Vec::<usize>::new());
+        let stop = tx.clone();
+        sequence_indexers(
+            &names(2),
+            |_prev| {
+                let observed = &observed;
+                let stop = &stop;
+                async move {
+                    *observed.borrow_mut() += 1;
+                    if *observed.borrow() >= 5 {
+                        stop.send(true).unwrap();
+                    }
+                    Ok(GateStatus {
+                        past_bulk: Some(false),
+                        blocked: Some("rebuild required (exit 78)".to_string()),
+                        ..GateStatus::default()
+                    })
+                }
+            },
+            |i| {
+                let spawned = &spawned;
+                async move {
+                    spawned.borrow_mut().push(i);
+                    Ok(SpawnOutcome::Started)
+                }
+            },
+            Duration::from_millis(1),
+            rx,
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            spawned.borrow().is_empty(),
+            "a blocked gate must never let the next network start"
+        );
+        assert_eq!(*observed.borrow(), 5, "kept polling the blocked gate");
+    }
+
+    #[tokio::test]
+    async fn a_gate_that_unblocks_then_passes_bulk_still_advances() {
+        // Blocking is reported, not terminal: once the operator resolves it, the
+        // gate resumes and the deferred network starts normally.
+        let (_tx, rx) = watch::channel(false);
+        let round = RefCell::new(0usize);
+        let spawned = RefCell::new(Vec::<usize>::new());
+        sequence_indexers(
+            &names(2),
+            |_prev| {
+                let round = &round;
+                async move {
+                    let mut n = round.borrow_mut();
+                    *n += 1;
+                    Ok(match *n {
+                        1..=2 => GateStatus {
+                            past_bulk: Some(false),
+                            blocked: Some("exceeded max restart attempts".to_string()),
+                            ..GateStatus::default()
+                        },
+                        3 => signal(Some(false)),
+                        _ => GateStatus {
+                            past_bulk: Some(true),
+                            lag: Some(12),
+                            bulk_completed: true,
+                            blocked: None,
+                        },
+                    })
+                }
+            },
+            |i| {
+                let spawned = &spawned;
+                async move {
+                    spawned.borrow_mut().push(i);
+                    Ok(SpawnOutcome::Started)
+                }
+            },
+            Duration::from_millis(1),
+            rx,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(*spawned.borrow(), vec![1]);
+        assert_eq!(*round.borrow(), 4);
     }
 }

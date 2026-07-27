@@ -5,7 +5,7 @@
 //! on crash with exponential backoff. Starts an IPC server on
 //! `run/indexer.sock` for status queries and shutdown requests.
 
-use crate::sequencer::SpawnOutcome;
+use crate::sequencer::{GateStatus, SpawnOutcome};
 use anyhow::{Context, Result};
 use ckbadger_config::{CkbadgerConfig, WorkDir};
 use ckbadger_ipc::{IpcHandler, IpcRequest, IpcResponse, IpcServer, ServiceInfo, ServiceStatus};
@@ -62,12 +62,19 @@ struct ManagedChild {
     child: Child,
     restart_count: u32,
     started_at: Instant,
-    restart_blocked: bool,
+    /// `Some(reason)` once the supervisor has stopped restarting this child.
+    /// A single source of truth: the flag and its explanation cannot drift, and
+    /// the sequencer can name WHY a gating indexer is holding the queue.
+    blocked: Option<String>,
 }
 
 impl ManagedChild {
     fn uptime_secs(&self) -> u64 {
         self.started_at.elapsed().as_secs()
+    }
+
+    fn is_blocked(&self) -> bool {
+        self.blocked.is_some()
     }
 
     fn pid(&self) -> u32 {
@@ -367,6 +374,16 @@ where
     Err(last_error.expect("every loop iteration records an error before falling through"))
 }
 
+/// One tolerant poll of a gating network's store. `past_bulk == None` is
+/// "no signal this round" and never advances the gate; `lag`/`bulk_completed`
+/// are carried purely so the sequencer's wait logs can say WHY it is waiting.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct BulkStatusSample {
+    past_bulk: Option<bool>,
+    lag: Option<i128>,
+    bulk_completed: bool,
+}
+
 /// One gating network's bulk-status source: a LAZILY-opened, LONG-LIVED domain
 /// store secondary, mirroring how the API and TUI hold theirs.
 ///
@@ -407,9 +424,9 @@ impl BulkStatusReader {
         }
     }
 
-    /// One tolerant poll: `Some(true|false)` on a successful read, `None` when
-    /// this round carries NO SIGNAL — either the store does not exist yet, or the
-    /// read failed transiently.
+    /// One tolerant poll. `past_bulk` is `Some(true|false)` on a successful read
+    /// and `None` when this round carries NO SIGNAL — either the store does not
+    /// exist yet, or the read failed transiently.
     ///
     /// A failed read against a busy primary is exactly what the API
     /// (`crates/api/src/lib.rs`) and the TUI (`crates/tui/src/db.rs`) already
@@ -417,9 +434,9 @@ impl BulkStatusReader {
     /// network's indexer, API and the shared frontend — mainnet mid-bulk
     /// included. The failure is logged with an escalating consecutive-failure
     /// counter and the gate simply keeps waiting.
-    fn poll(&mut self) -> Option<bool> {
+    fn poll(&mut self) -> BulkStatusSample {
         match self.read() {
-            Ok(signal) => {
+            Ok(sample) => {
                 let recovered_from = self.failures.record_success();
                 if recovered_from > 0 {
                     info!(
@@ -428,7 +445,7 @@ impl BulkStatusReader {
                         "sequencer status read recovered"
                     );
                 }
-                signal
+                sample
             }
             Err(error) => {
                 let level = self.failures.record_failure();
@@ -463,19 +480,19 @@ impl BulkStatusReader {
                          purge/re-sync that network; other networks keep running untouched"
                     ),
                 }
-                None
+                BulkStatusSample::default()
             }
         }
     }
 
     /// Read the gating network's bulk status. A missing RocksDB `CURRENT` is the
-    /// sole not-ready state (`Ok(None)`); once the store exists, every
+    /// sole not-ready state (an all-`None` sample); once the store exists, every
     /// open/refresh/read/decode failure is an error. [`Self::poll`] is the
     /// tolerant wrapper the sequencer actually uses.
-    fn read(&mut self) -> Result<Option<bool>> {
+    fn read(&mut self) -> Result<BulkStatusSample> {
         if self.store.is_none() {
             if !self.domain_data_path.join("CURRENT").is_file() {
-                return Ok(None);
+                return Ok(BulkStatusSample::default());
             }
             let store = CkbadgerStore::open_domain_secondary_with_runtime(
                 &self.domain_data_path,
@@ -526,11 +543,15 @@ impl BulkStatusReader {
                 Some(i128::from(progress.target_block) - i128::from(progress.current_block))
             }
         };
-        Ok(Some(crate::sequencer::is_past_bulk(
-            bulk_completed,
+        Ok(BulkStatusSample {
+            past_bulk: Some(crate::sequencer::is_past_bulk(
+                bulk_completed,
+                lag,
+                self.bulk_sync_threshold,
+            )),
             lag,
-            self.bulk_sync_threshold,
-        )))
+            bulk_completed,
+        })
     }
 }
 
@@ -538,22 +559,48 @@ impl BulkStatusReader {
 /// (not tokio's) because it is only ever locked inside `spawn_blocking`.
 type BulkStatusReaders = Arc<std::sync::Mutex<Vec<BulkStatusReader>>>;
 
-/// Poll one gating network's bulk status off the async runtime.
+/// Observe one gating network for the sequencer: its bulk status (read off the
+/// async runtime) plus whether the supervisor has its indexer restart-blocked.
 ///
 /// The tri-state is the reader's: `Some(true|false)` on a read, `None` for "no
 /// signal this round". The `Result` covers only a panicked blocking task — a
 /// programming bug, not a runtime condition — so store failures can no longer
 /// reach [`wait_for_sequencer_failure`].
-async fn read_past_bulk(readers: &BulkStatusReaders, prev: usize) -> Result<Option<bool>> {
-    let readers = readers.clone();
-    tokio::task::spawn_blocking(move || {
-        readers
+///
+/// `gate_child_index` is the gating indexer's slot in `SupervisorState.children`.
+/// Without this, a gating indexer that had been blocked (exit-78 rebuild-required,
+/// or past `MAX_RESTART_ATTEMPTS`) left the next network deferred forever with no
+/// diagnostic anywhere.
+async fn observe_gate(
+    readers: &BulkStatusReaders,
+    state: &Arc<Mutex<SupervisorState>>,
+    prev: usize,
+    gate_child_index: usize,
+) -> Result<GateStatus> {
+    let owned = readers.clone();
+    let sample = tokio::task::spawn_blocking(move || {
+        owned
             .lock()
             .expect("sequencer bulk-status reader lock poisoned")[prev]
             .poll()
     })
     .await
-    .context("sequencer bulk-status read task failed")
+    .context("sequencer bulk-status read task failed")?;
+
+    let blocked = {
+        let locked = state.lock().await;
+        locked
+            .children
+            .get(gate_child_index)
+            .and_then(|child| child.blocked.clone())
+    };
+
+    Ok(GateStatus {
+        past_bulk: sample.past_bulk,
+        lag: sample.lag,
+        bulk_completed: sample.bulk_completed,
+        blocked,
+    })
 }
 
 /// Last-resort backstop: shut the orchestrator down if the sequencer task itself
@@ -714,17 +761,23 @@ async fn run_supervisor_inner_with_sequencer(
                 indexers,
                 poll,
             } = plan;
-            let count = indexers.len();
+            // Child labels in [[network]] order, so every gate decision names the
+            // network it is about.
+            let names: Vec<String> = indexers.iter().map(|i| i.spec.label.clone()).collect();
             // One long-lived secondary per gating network, each sized by ITS OWN
             // per-network runtime config (see `BulkStatusReader`).
             let readers: BulkStatusReaders = Arc::new(std::sync::Mutex::new(
                 indexers.iter().map(BulkStatusReader::new).collect(),
             ));
+            let gate_state = state.clone();
             crate::sequencer::sequence_indexers(
-                count,
+                &names,
                 |prev| {
                     let readers = readers.clone();
-                    async move { read_past_bulk(&readers, prev).await }
+                    let gate_state = gate_state.clone();
+                    async move {
+                        observe_gate(&readers, &gate_state, prev, first_indexer_idx + prev).await
+                    }
                 },
                 |i| {
                     // Spawn indexers[i] == specs[first_indexer_idx + i]; append to
@@ -905,7 +958,7 @@ fn spawn_child(exe: &PathBuf, spec: &ChildSpec, log_dir: &Path) -> Result<Manage
         child,
         restart_count: 0,
         started_at: Instant::now(),
-        restart_blocked: false,
+        blocked: None,
     })
 }
 
@@ -938,7 +991,7 @@ async fn monitor_children_multi(
         #[allow(clippy::needless_range_loop)]
         // Indexed access needed: lock is dropped/reacquired mid-loop
         for i in 0..locked.children.len() {
-            if locked.children[i].restart_blocked {
+            if locked.children[i].is_blocked() {
                 continue;
             }
             // Check if child has exited
@@ -991,7 +1044,11 @@ async fn monitor_children_multi(
                             workdir = %specs[i].workdir,
                             "indexer requires an explicit RocksDB purge and genesis rebuild; automatic restart is blocked"
                         );
-                        locked.children[i].restart_blocked = true;
+                        locked.children[i].blocked = Some(format!(
+                            "indexer requires an explicit RocksDB purge and genesis rebuild \
+                             (exit {})",
+                            ckbadger_indexer::lifecycle::REBUILD_REQUIRED_EXIT_CODE
+                        ));
                         continue;
                     }
                     ChildExitAction::Restart => {}
@@ -1019,7 +1076,9 @@ async fn monitor_children_multi(
                         restarts = restart_count,
                         "service exceeded max restart attempts, giving up"
                     );
-                    locked.children[i].restart_blocked = true;
+                    locked.children[i].blocked = Some(format!(
+                        "exceeded max restart attempts ({MAX_RESTART_ATTEMPTS})"
+                    ));
                     continue;
                 }
 
@@ -1100,7 +1159,7 @@ impl IpcHandler for SupervisorIpcHandler {
                         .children
                         .iter()
                         .map(|c| {
-                            let status = if c.restart_blocked {
+                            let status = if c.is_blocked() {
                                 ServiceStatus::Blocked
                             } else {
                                 match c.child.id() {
@@ -1201,7 +1260,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let idx = test_sequenced_indexer(dir.path().join("domain"));
         let mut reader = BulkStatusReader::new(&idx);
-        assert_eq!(reader.read().unwrap(), None);
+        assert_eq!(reader.read().unwrap().past_bulk, None);
         assert!(
             reader.store.is_none(),
             "no secondary may be opened before the primary's CURRENT exists"
@@ -1237,15 +1296,19 @@ mod tests {
         let idx = test_sequenced_indexer(domain);
         let mut reader = BulkStatusReader::new(&idx);
 
-        assert_eq!(reader.poll(), None, "undecodable progress yields no signal");
+        assert_eq!(
+            reader.poll().past_bulk,
+            None,
+            "undecodable progress yields no signal"
+        );
         assert_eq!(reader.failures.consecutive(), 1);
-        assert_eq!(reader.poll(), None);
+        assert_eq!(reader.poll().past_bulk, None);
         assert_eq!(reader.failures.consecutive(), 2);
 
         // ...and once the record is valid again, the gate advances normally and
         // the streak resets.
         primary.put_sync_progress(&progress_json(10, 10)).unwrap();
-        assert_eq!(reader.poll(), Some(true));
+        assert_eq!(reader.poll().past_bulk, Some(true));
         assert_eq!(reader.failures.consecutive(), 0);
     }
 
@@ -1259,7 +1322,7 @@ mod tests {
         let mut reader = BulkStatusReader::new(&idx);
 
         for _ in 0..5 {
-            assert_eq!(reader.poll(), None);
+            assert_eq!(reader.poll().past_bulk, None);
         }
         assert_eq!(reader.failures.consecutive(), 0);
     }
@@ -1283,7 +1346,10 @@ mod tests {
 
         // A single good read clears the streak, so an hour-long healthy stretch
         // after a blip does not inherit its escalation.
-        assert_eq!(tracker.record_success(), SEQUENCER_READ_FAILURE_PERSISTENT + 1);
+        assert_eq!(
+            tracker.record_success(),
+            SEQUENCER_READ_FAILURE_PERSISTENT + 1
+        );
         assert_eq!(tracker.consecutive(), 0);
         assert_eq!(tracker.record_failure(), ReadFailureLevel::Transient);
     }
@@ -1293,14 +1359,18 @@ mod tests {
         let attempts = std::cell::Cell::new(0u32);
         // Zero backoff keeps the test instant; `spawn_retry_backoff` is pinned
         // separately below.
-        let value = spawn_with_retry("testnet/indexer", |_| Duration::ZERO, || {
-            attempts.set(attempts.get() + 1);
-            if attempts.get() < 3 {
-                Err(anyhow::anyhow!("EMFILE"))
-            } else {
-                Ok("started")
-            }
-        })
+        let value = spawn_with_retry(
+            "testnet/indexer",
+            |_| Duration::ZERO,
+            || {
+                attempts.set(attempts.get() + 1);
+                if attempts.get() < 3 {
+                    Err(anyhow::anyhow!("EMFILE"))
+                } else {
+                    Ok("started")
+                }
+            },
+        )
         .await
         .unwrap();
         assert_eq!(value, "started");
@@ -1310,10 +1380,14 @@ mod tests {
     #[tokio::test]
     async fn spawn_retry_gives_up_after_the_capped_attempts() {
         let attempts = std::cell::Cell::new(0u32);
-        let err = spawn_with_retry("testnet/indexer", |_| Duration::ZERO, || {
-            attempts.set(attempts.get() + 1);
-            Err::<(), _>(anyhow::anyhow!("EMFILE"))
-        })
+        let err = spawn_with_retry(
+            "testnet/indexer",
+            |_| Duration::ZERO,
+            || {
+                attempts.set(attempts.get() + 1);
+                Err::<(), _>(anyhow::anyhow!("EMFILE"))
+            },
+        )
         .await
         .unwrap_err();
         assert!(err.to_string().contains("EMFILE"));
@@ -1348,7 +1422,11 @@ mod tests {
         let idx = test_sequenced_indexer(domain.clone());
         let mut reader = BulkStatusReader::new(&idx);
 
-        assert_eq!(reader.read().unwrap(), None, "store not created yet");
+        assert_eq!(
+            reader.read().unwrap().past_bulk,
+            None,
+            "store not created yet"
+        );
         assert!(reader.store.is_none());
 
         let primary =
@@ -1356,9 +1434,9 @@ mod tests {
                 .unwrap();
         primary.put_sync_progress(&progress_json(9, 10)).unwrap();
 
-        assert_eq!(reader.read().unwrap(), Some(true));
+        assert_eq!(reader.read().unwrap().past_bulk, Some(true));
         let opened = reader.store.as_ref().expect("secondary opened") as *const CkbadgerStore;
-        assert_eq!(reader.read().unwrap(), Some(true));
+        assert_eq!(reader.read().unwrap().past_bulk, Some(true));
         assert_eq!(
             reader.store.as_ref().unwrap() as *const CkbadgerStore,
             opened,
@@ -1387,7 +1465,11 @@ mod tests {
         let mut reader = BulkStatusReader::new(&idx);
         reader.read().unwrap();
 
-        let opened = reader.store.as_ref().expect("secondary opened").runtime_config();
+        let opened = reader
+            .store
+            .as_ref()
+            .expect("secondary opened")
+            .runtime_config();
         assert_eq!(opened.memory_budget_gb, Some(7));
         assert_eq!(opened.network_count.get(), 3);
     }
@@ -1490,6 +1572,53 @@ mod tests {
     // Compile-time checks for supervisor constants
     const _: () = assert!(MAX_RESTART_ATTEMPTS > 0);
     const _: () = assert!(HEALTH_CHECK_INTERVAL.as_secs() > 0);
+
+    #[tokio::test]
+    async fn observe_gate_reports_the_blocked_gating_indexer_with_its_reason() {
+        // The MAJOR defect this closes: a blocked gating indexer (exit-78
+        // rebuild-required, or past MAX_RESTART_ATTEMPTS) left the next network
+        // deferred forever with no diagnostic anywhere. The gate must now SEE the
+        // block, and see WHY, while still reporting "no signal" so it keeps
+        // waiting rather than skipping ahead.
+        let dir = TempDir::new().unwrap();
+        let idx = test_sequenced_indexer(dir.path().join("domain"));
+        let readers: BulkStatusReaders =
+            Arc::new(std::sync::Mutex::new(vec![BulkStatusReader::new(&idx)]));
+
+        let exe = std::env::current_exe().unwrap();
+        let log_dir = dir.path().join("run/logs");
+        let spec = ChildSpec {
+            label: "mainnet/indexer".to_string(),
+            service: "indexer".to_string(),
+            workdir: dir.path().to_string_lossy().to_string(),
+        };
+        let mut child = spawn_child(&exe, &spec, &log_dir).unwrap();
+        child.blocked = Some("exceeded max restart attempts (10)".to_string());
+        assert!(child.is_blocked());
+        let state = Arc::new(Mutex::new(SupervisorState {
+            children: vec![child],
+            shutdown_requested: false,
+        }));
+
+        let status = observe_gate(&readers, &state, 0, 0).await.unwrap();
+        assert_eq!(
+            status.past_bulk, None,
+            "blocked gate still yields no signal"
+        );
+        assert_eq!(
+            status.blocked.as_deref(),
+            Some("exceeded max restart attempts (10)")
+        );
+
+        // Unblocking is visible on the very next observation.
+        state.lock().await.children[0].blocked = None;
+        let status = observe_gate(&readers, &state, 0, 0).await.unwrap();
+        assert_eq!(status.blocked, None);
+
+        let mut locked = state.lock().await;
+        let _ = locked.children[0].child.kill().await;
+        let _ = locked.children[0].child.wait().await;
+    }
 
     #[tokio::test]
     async fn test_supervisor_ipc_handler_ping() {
