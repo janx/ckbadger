@@ -177,6 +177,15 @@ pub struct TuiDb {
     domain_data_path: PathBuf,
     append_only_data_path: PathBuf,
     store_runtime_config: StoreRuntimeConfig,
+    /// Latest store-lifecycle event observed DURING the event loop (secondary
+    /// reopened, refresh failed), for the UI to render.
+    ///
+    /// These used to be `eprintln!`s. Once the TUI has entered the alternate
+    /// screen, anything written to stderr lands on top of the rendered frame and
+    /// corrupts it — and the refresh-failure ones repeated on every ~1s tick.
+    /// Construction-time messages still print, because they happen before raw
+    /// mode is entered.
+    store_notice: RwLock<Option<String>>,
 }
 
 pub struct TuiPathConfig<'a> {
@@ -301,6 +310,7 @@ impl TuiDb {
             domain_data_path: PathBuf::from(path_config.domain_data_path),
             append_only_data_path: PathBuf::from(path_config.append_only_data_path),
             store_runtime_config,
+            store_notice: RwLock::new(None),
         }
     }
 
@@ -309,6 +319,22 @@ impl TuiDb {
             .read()
             .expect("TUI store handle lock poisoned")
             .clone()
+    }
+
+    /// The latest store-lifecycle notice, for the UI to render. `None` once
+    /// nothing noteworthy has happened since the last state change.
+    pub fn store_notice(&self) -> Option<String> {
+        self.store_notice
+            .read()
+            .expect("TUI store notice lock poisoned")
+            .clone()
+    }
+
+    fn set_store_notice(&self, notice: Option<String>) {
+        *self
+            .store_notice
+            .write()
+            .expect("TUI store notice lock poisoned") = notice;
     }
 
     /// Refresh the secondary store to catch up with the primary. If the TUI
@@ -349,10 +375,12 @@ impl TuiDb {
                 self.domain_data_path.display()
             )
         })?;
-        eprintln!(
-            "TUI: opened newly-created domain store (secondary) at {}",
+        // State, not stderr: this runs inside a refresh tick, long after
+        // EnterAlternateScreen.
+        self.set_store_notice(Some(format!(
+            "opened newly-created domain store (secondary) at {}",
             self.domain_data_path.display()
-        );
+        )));
         *slot = Some(Arc::new(store));
         Ok(())
     }
@@ -503,7 +531,7 @@ impl TuiDb {
 
     pub async fn get_memory_stats(&self) -> Option<MemoryStatsData> {
         if let Err(error) = self.refresh_store() {
-            eprintln!("TUI: store refresh failed: {error:#}");
+            self.set_store_notice(Some(format!("store refresh failed: {error:#}")));
             return None;
         }
         self.get_memory_stats_without_refresh()
@@ -511,7 +539,7 @@ impl TuiDb {
 
     pub async fn get_runtime_diag(&self) -> Option<RuntimeDiagData> {
         if let Err(error) = self.refresh_store() {
-            eprintln!("TUI: store refresh failed: {error:#}");
+            self.set_store_notice(Some(format!("store refresh failed: {error:#}")));
             return None;
         }
         self.get_runtime_diag_without_refresh()
@@ -526,6 +554,10 @@ impl TuiDb {
         Option<BackgroundTasksData>,
     ) {
         if let Err(error) = self.refresh_store() {
+            // The error is also returned, which the Overview renders as this
+            // network's `error:` row; the notice keeps the most recent message
+            // available for detail views.
+            self.set_store_notice(Some(format!("store refresh failed: {error:#}")));
             return (Err(error), None, None, None);
         }
         let bg_tasks = self
@@ -1125,6 +1157,74 @@ mod tests {
         assert_eq!(sync.elapsed_time.as_deref(), Some("1m 30s"));
 
         cleanup_tui_temp_stores(&domain_path, &append_path);
+    }
+
+    #[tokio::test]
+    async fn store_notice_starts_empty_and_records_a_late_secondary_open() {
+        // The reopen notice used to be an `eprintln!` fired from inside a refresh
+        // tick — i.e. after EnterAlternateScreen — which paints over the rendered
+        // frame. It is now state the UI can render.
+        let test_id = format!(
+            "{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let domain_path = std::env::temp_dir().join(format!("ckbadger-tui-{test_id}-domain"));
+        let append_path = std::env::temp_dir().join(format!("ckbadger-tui-{test_id}-append"));
+
+        // No store on disk yet: the TUI starts with no handle and no notice.
+        let db = TuiDb::new(
+            "http://127.0.0.1:3001/api/v1",
+            domain_path.to_str().unwrap(),
+            append_path.to_str().unwrap(),
+        )
+        .await;
+        assert_eq!(db.store_notice(), None, "nothing noteworthy has happened");
+
+        // A refresh with no primary is a no-op, not a notice.
+        db.refresh_store().unwrap();
+        assert_eq!(db.store_notice(), None);
+
+        // The indexer creates the store; the next refresh opens the secondary
+        // and records WHY the UI's state changed.
+        let _primary = CkbadgerStore::open_domain(&domain_path).unwrap();
+        db.refresh_store().unwrap();
+        let notice = db.store_notice().expect("late open is recorded");
+        assert!(
+            notice.contains("opened newly-created domain store"),
+            "{notice}"
+        );
+        assert!(notice.contains(domain_path.to_str().unwrap()), "{notice}");
+
+        cleanup_tui_temp_stores(&domain_path, &append_path);
+    }
+
+    #[tokio::test]
+    async fn store_refresh_failure_is_recorded_as_state_not_written_to_the_screen() {
+        // The failure-path notices repeated on every ~1s refresh tick; as
+        // `eprintln!`s they corrupted the frame once per second.
+        let db = TuiDb::new(
+            "http://127.0.0.1:3001/api/v1",
+            "/nonexistent-ckbadger-tui/domain",
+            "/nonexistent-ckbadger-tui/append",
+        )
+        .await;
+        assert_eq!(db.store_notice(), None);
+
+        // No store and no `CURRENT`: refresh succeeds as a no-op, so a healthy
+        // pre-start TUI never accumulates a scary notice.
+        assert!(db.get_memory_stats().await.is_none());
+        assert_eq!(db.store_notice(), None);
+
+        // A genuine refresh failure is recorded verbatim for the UI.
+        db.set_store_notice(Some("store refresh failed: boom".to_string()));
+        assert_eq!(
+            db.store_notice().as_deref(),
+            Some("store refresh failed: boom")
+        );
     }
 
     #[tokio::test]
