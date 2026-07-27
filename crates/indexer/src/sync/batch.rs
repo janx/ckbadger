@@ -5,7 +5,7 @@ use std::sync::atomic::Ordering;
 use std::time::Instant;
 
 use anyhow::{anyhow, bail, Context, Result};
-use chrono::{DateTime, Timelike, Utc};
+use chrono::{DateTime, NaiveDate, Timelike, Utc};
 use ckb_types::utilities::compact_to_difficulty as ckb_compact_to_difficulty;
 use dashmap::DashMap;
 use rayon::prelude::*;
@@ -1567,6 +1567,10 @@ impl Indexer {
         let t_write = Instant::now();
         let mut write_commit_ms = 0.0_f64;
         let mut batch_stats;
+        // Post-batch DAO lifecycle view of everything this batch stages, used to
+        // materialize completed-day snapshots exactly before the atomic commit.
+        let staged_dao_entries: HashMap<Vec<u8>, ckbadger_store::types::DaoDepositCacheEntry>;
+        let mut staged_dao_completions: HashMap<Vec<u8>, (i64, Vec<u8>)> = HashMap::new();
         let mut daily_activity_accum: HashMap<String, DailyActivityStats> = HashMap::new();
         let mut daily_activity_addrs: HashMap<String, HashSet<[u8; 32]>> = HashMap::new();
         let mut hourly_activity_accum: HashMap<String, DailyActivityStats> = HashMap::new();
@@ -1840,7 +1844,10 @@ impl Indexer {
             // batch that may also be consumed within the same batch.
             let mut same_batch_dao_deposits: crate::sync::dao_helpers::DaoConsumedMap =
                 HashMap::new();
-            // Also build pending entries map for process_dao_withdrawals_batch
+            // Post-batch DAO entries for deposits this batch creates or moves to
+            // phase 1. `process_dao_withdrawals_batch` keeps this in sync with
+            // what it stages into `data_batch`, so it doubles as the read-your-
+            // writes overlay for pre-commit daily snapshot materialization.
             let mut pending_dao_entries: HashMap<
                 [u8; 34],
                 ckbadger_store::types::DaoDepositCacheEntry,
@@ -2002,7 +2009,31 @@ impl Indexer {
                         &batch_dao_fields,
                     )?;
                 }
+
+                // Phase-2 completions are staged into `data_batch` but not into
+                // `pending_dao_entries`, so record them separately as
+                // (deposit outpoint -> completion block + tx). The store derives
+                // the completed entry — and therefore the claimed compensation —
+                // from the committed phase-1 entry through its own single
+                // frozen-request-AR path, so nothing is recomputed here.
+                for ctx in &withdrawal_contexts {
+                    for row in &ctx.consumed_deposits {
+                        if row.status != 1 {
+                            continue;
+                        }
+                        let outpoint_key = keys::encode_outpoint(&row.tx_hash, row.output_index);
+                        staged_dao_completions.insert(
+                            outpoint_key.to_vec(),
+                            (ctx.block_number, ctx.consuming_tx_hash.clone()),
+                        );
+                    }
+                }
             }
+
+            staged_dao_entries = pending_dao_entries
+                .into_iter()
+                .map(|(outpoint_key, entry)| (outpoint_key.to_vec(), entry))
+                .collect();
         }
 
         // Group B: UDT processing
@@ -3361,7 +3392,12 @@ impl Indexer {
             self.writer
                 .insert_blocks_batch(&block_refs, &mut core_batch)?;
             let mut stats_batch = StoreBatch::new(self.writer.store());
-            self.write_batch_stats_to_batch(&batch_stats, &mut stats_batch)?;
+            self.write_batch_stats_to_batch(
+                &batch_stats,
+                &staged_dao_entries,
+                &staged_dao_completions,
+                &mut stats_batch,
+            )?;
             // Write accumulated daily activity stats
             let empty_addr_set = HashSet::new();
             for (date, stats) in &daily_activity_accum {
@@ -3519,9 +3555,10 @@ impl Indexer {
         if let Some((block_number, ref block_hash)) = batch_stats.last_block {
             let ema_rate = self.progress.ema_blocks_per_second();
             let ema_rate_opt = if ema_rate > 0.0 { Some(ema_rate) } else { None };
-            let completed_dao_boundaries = completed_dao_snapshot_boundaries(&batch_stats)?;
-            self.writer
-                .refresh_dao_statistics_after_batch(&completed_dao_boundaries)?;
+            // Completed days were materialized exact inside the atomic commit
+            // above. This only re-derives the tip-scoped DAO singletons and the
+            // still-incomplete tip day.
+            self.writer.refresh_latest_dao_statistics()?;
             if let Some(cache) = self.writer.cache_invalidator() {
                 let hash_hex = format!("0x{}", hex::encode(block_hash));
                 cache
@@ -3576,7 +3613,13 @@ impl Indexer {
         })
     }
 
-    fn write_batch_stats_to_batch(&self, stats: &BatchStats, batch: &mut StoreBatch) -> Result<()> {
+    fn write_batch_stats_to_batch(
+        &self,
+        stats: &BatchStats,
+        staged_dao_entries: &HashMap<Vec<u8>, ckbadger_store::types::DaoDepositCacheEntry>,
+        staged_dao_completions: &HashMap<Vec<u8>, (i64, Vec<u8>)>,
+        batch: &mut StoreBatch,
+    ) -> Result<()> {
         // Epoch statistics
         for (epoch_number, accum) in &stats.epoch_stats {
             self.writer.upsert_epoch_statistics_batch(
@@ -3711,14 +3754,24 @@ impl Indexer {
                     .as_ref()
                     .map(|s| s.cum_miner_secondary)
                     .unwrap_or(0);
-                let staged_cum_dao = latest_snapshot
+                // Carried forward for the still-incomplete tip day only; every
+                // completed day below replaces these with its own exact
+                // end-of-day lifecycle values before this batch commits.
+                let mut staged_cum_dao = latest_snapshot
                     .as_ref()
                     .map(|s| s.cum_dao_compensation)
                     .unwrap_or(0);
-                let staged_cum_treasury = latest_snapshot
+                let mut staged_cum_treasury = latest_snapshot
                     .as_ref()
                     .map(|s| s.cum_treasury)
                     .unwrap_or(0);
+                // Every date this batch wrote except the last is complete: no
+                // later block can land on it.
+                let completed_boundaries: HashMap<NaiveDate, i64> =
+                    completed_dao_snapshot_boundaries(stats)?
+                        .into_iter()
+                        .map(|boundary| (boundary.date, boundary.end_block))
+                        .collect();
                 let mut running_total_depositors = latest_snapshot
                     .as_ref()
                     .map(|s| s.depositors_count)
@@ -3821,10 +3874,6 @@ impl Indexer {
                         depositors.len() as i64
                     };
 
-                    // Stage unmade interests through the canonical lifecycle
-                    // calculation. The post-commit refresh includes lifecycle
-                    // mutations from this batch and replaces this pre-commit
-                    // value before readers are notified.
                     let dao_bytes = stats
                         .daily_dao_fields
                         .get(date)
@@ -3844,20 +3893,26 @@ impl Indexer {
                         .ok_or_else(|| {
                             anyhow!("missing DAO end block for snapshot date {}", date)
                         })?;
-                    let unmade_dao_interests = self
-                        .writer
-                        .store()
-                        .compute_unmade_dao_interests(end_block, ar)?;
+                    let completed_end_block = completed_boundaries.get(date).copied();
+                    let unmade_dao_interests = if completed_end_block.is_some() {
+                        // Replaced below by the exact end-of-day lifecycle value,
+                        // which already includes this batch's staged deposits.
+                        0
+                    } else {
+                        self.writer
+                            .store()
+                            .compute_unmade_dao_interests(end_block, ar)?
+                    };
 
-                    let dao_snapshot = crate::db::writer::DaoSnapshotInput {
+                    let mut dao_snapshot = crate::db::writer::DaoSnapshotInput {
                         total_deposited: running_total_deposited,
                         depositors_count: running_total_depositors,
                         total_deposit_count: running_total_deposit_count,
                         total_withdrawal_count: running_total_withdrawal_count,
-                        // The exact lifecycle totals require the DAO entries
-                        // committed in this batch. The post-commit DAO refresh
-                        // replaces these staged values for every finalized
-                        // boundary and the live tip.
+                        // Carried forward from the previous snapshot. This is
+                        // only ever persisted for the still-incomplete tip day,
+                        // which the post-commit `refresh_latest_dao_statistics`
+                        // re-evaluates at the committed tip.
                         total_compensation: staged_cum_dao,
                         cumulative_deposit_amount: running_cumulative_deposit_amount,
                         total_issuance,
@@ -3872,6 +3927,40 @@ impl Indexer {
                         daily_depositor_addresses,
                         protocol_deposited: Some(running_protocol_deposited),
                     };
+
+                    // A completed day never changes again, so it must not be
+                    // persisted with carried-forward placeholders and corrected
+                    // afterwards: a crash in that window froze the day at the
+                    // preceding batch's cumulative values (DAO-026). Evaluate it
+                    // here — at its own final block and AR, against this batch's
+                    // staged DAO lifecycle — and let the same atomic commit
+                    // carry both the values and the sync tip that certifies them.
+                    if let Some(boundary_end_block) = completed_end_block {
+                        if boundary_end_block != end_block {
+                            bail!(
+                                "completed DAO snapshot boundary disagrees with the batch end block: date={}, boundary_block={}, end_block={}",
+                                date,
+                                boundary_end_block,
+                                end_block
+                            );
+                        }
+                        self.writer.apply_exact_completed_dao_snapshot(
+                            DaoSnapshotBoundary {
+                                date: *date,
+                                end_block,
+                            },
+                            ar,
+                            secondary_pool,
+                            staged_dao_entries,
+                            staged_dao_completions,
+                            &mut dao_snapshot,
+                        )?;
+                        // Thread the exact end-of-day totals forward so a later
+                        // day in this same batch continues from them.
+                        staged_cum_dao = dao_snapshot.cum_dao_compensation;
+                        staged_cum_treasury = dao_snapshot.cum_treasury;
+                    }
+
                     self.writer
                         .update_dao_daily_snapshot(*date, &dao_snapshot, batch)?;
                 }

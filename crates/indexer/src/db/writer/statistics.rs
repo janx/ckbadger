@@ -1,4 +1,4 @@
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use chrono::{DateTime, Duration, NaiveDate, Utc};
 use rocksdb::{Direction, IteratorMode};
 use std::collections::{HashMap, HashSet};
@@ -82,12 +82,19 @@ pub struct DaoSnapshotInput {
     pub protocol_deposited: Option<i128>,
 }
 
+/// Boundary of a calendar day that a batch has fully written: the date and the
+/// final block on it. Completed days are evaluated at this block's AR.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct DaoSnapshotBoundary {
     pub(crate) date: NaiveDate,
     pub(crate) end_block: i64,
 }
 
+/// Exact per-deposit DAO lifecycle result at one observation point.
+///
+/// The same value materializes a completed day's snapshot (evaluated at that
+/// day's final block and AR, inside the atomic batch that writes the day) and
+/// the live tip's snapshot (evaluated at the sync tip after that commit).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ExactDaoSnapshotCompensation {
     breakdown: DaoCompensationBreakdown,
@@ -104,6 +111,15 @@ impl ExactDaoSnapshotCompensation {
         snapshot.unmade_dao_interests = self.breakdown.active_unmade;
         snapshot.secondary_pool = self.secondary_pool;
         snapshot.cum_treasury = self.treasury;
+    }
+
+    fn apply_to_input(self, input: &mut DaoSnapshotInput) {
+        input.total_compensation = self.breakdown.claimed;
+        input.cum_dao_compensation = self.total;
+        input.unclaimed_compensation = self.breakdown.unclaimed;
+        input.unmade_dao_interests = self.breakdown.active_unmade;
+        input.secondary_pool = self.secondary_pool;
+        input.cum_treasury = self.treasury;
     }
 }
 
@@ -908,15 +924,59 @@ impl BatchWriter {
         Ok(best.map(|(_, epoch_number, ts)| (epoch_number, ts)))
     }
 
-    fn exact_dao_snapshot_compensation(
+    /// Materialize a completed day's exact DAO lifecycle values into the
+    /// snapshot input, before the batch that writes that day commits.
+    ///
+    /// `staged_entries` / `staged_completions` are the batch's own uncommitted
+    /// DAO mutations, so the day is evaluated against exactly the lifecycle
+    /// state this commit is about to persist. That removes the window in which
+    /// a completed day's row existed with carried-forward placeholder
+    /// cumulative values (DAO-026) and makes the completion marker — the sync
+    /// tip — land in the same write as the values it certifies (IDX-001).
+    pub(crate) fn apply_exact_completed_dao_snapshot(
+        &self,
+        boundary: DaoSnapshotBoundary,
+        end_ar: u64,
+        secondary_pool: i128,
+        staged_entries: &HashMap<Vec<u8>, DaoDepositCacheEntry>,
+        staged_completions: &HashMap<Vec<u8>, (i64, Vec<u8>)>,
+        input: &mut DaoSnapshotInput,
+    ) -> Result<()> {
+        let exact = self
+            .exact_dao_snapshot_compensation_with_staged(
+                boundary.end_block,
+                end_ar,
+                secondary_pool,
+                staged_entries,
+                staged_completions,
+            )
+            .with_context(|| {
+                format!(
+                    "failed to materialize exact DAO snapshot for completed date {} at block {}",
+                    boundary.date, boundary.end_block
+                )
+            })?;
+        exact.apply_to_input(input);
+        Ok(())
+    }
+
+    /// Exact DAO lifecycle values at `observation_block`, observing deposit
+    /// mutations staged in an uncommitted batch. Post-commit callers pass empty
+    /// overlays.
+    fn exact_dao_snapshot_compensation_with_staged(
         &self,
         observation_block: i64,
         observation_ar: u64,
         secondary_pool: i128,
+        staged_entries: &HashMap<Vec<u8>, DaoDepositCacheEntry>,
+        staged_completions: &HashMap<Vec<u8>, (i64, Vec<u8>)>,
     ) -> Result<ExactDaoSnapshotCompensation> {
-        let breakdown = self
-            .store
-            .compute_dao_compensation_breakdown_at(observation_block, observation_ar)?;
+        let breakdown = self.store.compute_dao_compensation_breakdown_at_with_staged(
+            observation_block,
+            observation_ar,
+            staged_entries,
+            staged_completions,
+        )?;
         let total = breakdown.total().ok_or_else(|| {
             anyhow!(
                 "DAO total compensation overflow at observation block {}: claimed={}, unclaimed={}",
@@ -952,143 +1012,19 @@ impl BatchWriter {
         })
     }
 
-    fn stage_completed_dao_snapshot(
-        &self,
-        boundary: DaoSnapshotBoundary,
-        tip_block_number: i64,
-        tip_date: NaiveDate,
-        batch: &mut StoreBatch,
-    ) -> Result<()> {
-        if boundary.date >= tip_date {
-            bail!(
-                "completed DAO snapshot boundary is not before tip date: boundary_date={}, tip_date={}, boundary_block={}, tip_block={}",
-                boundary.date,
-                tip_date,
-                boundary.end_block,
-                tip_block_number
-            );
-        }
-        if boundary.end_block < 0 || boundary.end_block >= tip_block_number {
-            bail!(
-                "invalid completed DAO snapshot boundary block: date={}, boundary_block={}, tip_block={}",
-                boundary.date,
-                boundary.end_block,
-                tip_block_number
-            );
-        }
-
-        let boundary_header = self
-            .store
-            .get_block_header(boundary.end_block)?
-            .ok_or_else(|| {
-                anyhow!(
-                    "missing completed DAO snapshot boundary header: date={}, block={}",
-                    boundary.date,
-                    boundary.end_block
-                )
-            })?;
-        let header_date = ckbadger_common::block_date_from_ms(boundary_header.timestamp);
-        if header_date != boundary.date {
-            bail!(
-                "completed DAO snapshot boundary date mismatch: expected_date={}, header_date={}, block={}, timestamp={}",
-                boundary.date,
-                header_date,
-                boundary.end_block,
-                boundary_header.timestamp
-            );
-        }
-
-        let next_block = boundary.end_block.checked_add(1).ok_or_else(|| {
-            anyhow!(
-                "completed DAO snapshot boundary block overflow: date={}, block={}",
-                boundary.date,
-                boundary.end_block
-            )
-        })?;
-        let next_header = self.store.get_block_header(next_block)?.ok_or_else(|| {
-            anyhow!(
-                "missing block after completed DAO snapshot boundary: date={}, boundary_block={}, next_block={}",
-                boundary.date,
-                boundary.end_block,
-                next_block
-            )
-        })?;
-        let next_date = ckbadger_common::block_date_from_ms(next_header.timestamp);
-        if next_date <= boundary.date {
-            bail!(
-                "DAO snapshot boundary is not the final block of its date: date={}, boundary_block={}, next_block={}, next_date={}",
-                boundary.date,
-                boundary.end_block,
-                next_block,
-                next_date
-            );
-        }
-
-        let boundary_ar = extract_ar_from_dao_field(&boundary_header.dao).ok_or_else(|| {
-            anyhow!(
-                "invalid DAO AR field at completed snapshot boundary: date={}, block={}, dao_len={}",
-                boundary.date,
-                boundary.end_block,
-                boundary_header.dao.len()
-            )
-        })?;
-        let boundary_s = extract_s_from_dao(&boundary_header.dao).ok_or_else(|| {
-            anyhow!(
-                "invalid DAO S field at completed snapshot boundary: date={}, block={}, dao_len={}",
-                boundary.date,
-                boundary.end_block,
-                boundary_header.dao.len()
-            )
-        })?;
-        let exact = self.exact_dao_snapshot_compensation(
-            boundary.end_block,
-            boundary_ar,
-            i128::from(boundary_s),
-        )?;
-
-        let date_key = boundary.date.format("%Y%m%d").to_string();
-        let mut snapshot = self
-            .store
-            .get_dao_daily_snapshot(&date_key)?
-            .ok_or_else(|| {
-                anyhow!(
-                    "missing completed DAO daily snapshot after batch commit: date={}, block={}",
-                    boundary.date,
-                    boundary.end_block
-                )
-            })?;
-        let expected_date = boundary.date.format("%Y-%m-%d").to_string();
-        if snapshot.date != expected_date {
-            bail!(
-                "completed DAO snapshot value date mismatch: key_date={}, value_date={}, block={}",
-                expected_date,
-                snapshot.date,
-                boundary.end_block
-            );
-        }
-        exact.apply_to(&mut snapshot);
-
-        let snapshot_key =
-            keys::encode_stats_key(keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT, date_key.as_bytes());
-        batch.put_stats(&snapshot_key, &bincode::serialize(&snapshot)?);
-        Ok(())
-    }
-
-    pub(crate) fn refresh_dao_statistics_after_batch(
-        &self,
-        completed_day_boundaries: &[DaoSnapshotBoundary],
-    ) -> Result<()> {
-        self.refresh_dao_statistics(completed_day_boundaries)
-    }
-
+    /// Re-derive the DAO singleton statistics and patch the live tip's daily
+    /// snapshot from the committed lifecycle state.
+    ///
+    /// Completed days are NOT touched here: they are materialized exact inside
+    /// the atomic batch that writes them (see
+    /// `exact_dao_snapshot_compensation_with_staged`). This pass only owns the
+    /// incomplete tip day, which every subsequent batch rewrites anyway, plus
+    /// the tip-scoped `DaoLatestStatistics` / `DaoTopDepositors` singletons.
     pub fn refresh_latest_dao_statistics(&self) -> Result<()> {
-        self.refresh_dao_statistics(&[])
+        self.refresh_dao_statistics()
     }
 
-    fn refresh_dao_statistics(
-        &self,
-        completed_day_boundaries: &[DaoSnapshotBoundary],
-    ) -> Result<()> {
+    fn refresh_dao_statistics(&self) -> Result<()> {
         let Some((tip_block_number, header)) = self.store.get_sync_tip_block()? else {
             return Ok(());
         };
@@ -1101,7 +1037,6 @@ impl BatchWriter {
             )
         })?;
         let tip_timestamp = header.timestamp;
-        let tip_date = ckbadger_common::block_date_from_ms(tip_timestamp);
         let tip_s = extract_s_from_dao(&header.dao).ok_or_else(|| {
             anyhow!(
                 "invalid DAO S field in sync tip block while refreshing latest dao statistics: block_number={}, dao_len={}",
@@ -1159,8 +1094,13 @@ impl BatchWriter {
                 })?;
         }
 
-        let exact_tip =
-            self.exact_dao_snapshot_compensation(tip_block_number, tip_ar, i128::from(tip_s))?;
+        let exact_tip = self.exact_dao_snapshot_compensation_with_staged(
+            tip_block_number,
+            tip_ar,
+            i128::from(tip_s),
+            &HashMap::new(),
+            &HashMap::new(),
+        )?;
         let total_compensation_paid = exact_tip.breakdown.claimed;
         let unclaimed_compensation = exact_tip.breakdown.unclaimed;
         let deposit_compensation_total = exact_tip.total;
@@ -1228,24 +1168,6 @@ impl BatchWriter {
         // Batch all DAO stats writes atomically
         let mut dao_batch = StoreBatch::new(&self.store);
 
-        let mut previous_boundary_date = None;
-        for boundary in completed_day_boundaries {
-            if previous_boundary_date.is_some_and(|previous| boundary.date <= previous) {
-                bail!(
-                    "completed DAO snapshot boundaries must be strictly chronological: previous={:?}, current={}",
-                    previous_boundary_date,
-                    boundary.date
-                );
-            }
-            self.stage_completed_dao_snapshot(
-                *boundary,
-                tip_block_number,
-                tip_date,
-                &mut dao_batch,
-            )?;
-            previous_boundary_date = Some(boundary.date);
-        }
-
         let key = keys::encode_stats_key(keys::STATS_PREFIX_DAO_LATEST_STATS, b"latest");
         let value = bincode::serialize(&latest)?;
         dao_batch.put_stats(&key, &value);
@@ -1282,9 +1204,10 @@ impl BatchWriter {
             dao_batch.put_stats(&top_key, &top_value);
         }
 
-        // Patch the current snapshot from the canonical post-commit lifecycle
-        // state. Snapshot construction runs before the domain batch commits, so
-        // these exact AR-based values would otherwise lag by one live batch.
+        // Re-evaluate the incomplete tip day at the committed sync tip. The tip
+        // day is still accumulating, so every subsequent batch rewrites it; when
+        // it finally completes, the batch that crosses the day boundary writes
+        // its exact end-of-day values atomically and this pass never revisits it.
         let mut today_snapshot = latest_snapshot;
         exact_tip.apply_to(&mut today_snapshot);
         let date_key = today_snapshot.date.replace('-', "");
@@ -1701,27 +1624,277 @@ mod tests {
         }
         seed.commit().unwrap();
 
+        // One atomic batch, exactly as the live cross-day path builds it: the
+        // completed day is materialized from the exact lifecycle before the
+        // commit, the tip day keeps its carried-forward placeholders.
+        let mut batch = StoreBatch::new(&store);
+        let mut completed_input = placeholder_snapshot_input();
         writer
-            .refresh_dao_statistics_after_batch(&[DaoSnapshotBoundary {
-                date: previous_date,
-                end_block: 10,
-            }])
+            .apply_exact_completed_dao_snapshot(
+                DaoSnapshotBoundary {
+                    date: previous_date,
+                    end_block: 10,
+                },
+                200,
+                300_00000000,
+                &HashMap::new(),
+                &HashMap::new(),
+                &mut completed_input,
+            )
             .unwrap();
+        writer
+            .update_dao_daily_snapshot(previous_date, &completed_input, &mut batch)
+            .unwrap();
+        writer
+            .update_dao_daily_snapshot(tip_date, &placeholder_snapshot_input(), &mut batch)
+            .unwrap();
+        batch.commit().unwrap();
 
+        // No separate refresh step has run: the completed day must already be
+        // exact the instant its row exists.
         let previous = store.get_dao_daily_snapshot("20260724").unwrap().unwrap();
         assert_eq!(
             previous.cum_dao_compensation, 100_00000000,
-            "the completed day must be recomputed at its own end block and AR"
+            "the completed day must be exact in the same commit that writes it"
         );
         assert_eq!(previous.unclaimed_compensation, 100_00000000);
         assert_eq!(previous.unmade_dao_interests, 100_00000000);
         assert_eq!(previous.cum_treasury, 200_00000000);
+        assert_eq!(previous.secondary_pool, 300_00000000);
+
+        writer.refresh_latest_dao_statistics().unwrap();
 
         let latest = store.get_dao_daily_snapshot("20260725").unwrap().unwrap();
         assert_eq!(
             latest.cum_dao_compensation, 200_00000000,
             "the current day must still be refreshed at the live tip"
         );
+
+        let previous_after_refresh = store.get_dao_daily_snapshot("20260724").unwrap().unwrap();
+        assert_eq!(
+            bincode::serialize(&previous_after_refresh).unwrap(),
+            bincode::serialize(&previous).unwrap(),
+            "the tip refresh must not revisit a completed day"
+        );
+    }
+
+    #[test]
+    fn test_completed_dao_snapshot_observes_deposits_staged_in_the_same_batch() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        seed_test_genesis_baseline(&store);
+        let writer = BatchWriter::new(store.clone(), store.clone());
+
+        let completed_date = NaiveDate::from_ymd_opt(2026, 7, 24).unwrap();
+
+        // A deposit created by the very batch that closes this day is not in the
+        // committed store yet, so a pre-commit store scan alone would miss it.
+        let staged_deposit = DaoDepositCacheEntry {
+            capacity: 202_00000000,
+            occupied_capacity: 102_00000000,
+            deposit_block_number: 7,
+            deposit_timestamp: 0,
+            lock_script_hash: vec![0x01; 32],
+            deposit_ar: 100,
+            status: 0,
+            withdraw_request_tx: None,
+            withdraw_request_output_index: None,
+            withdraw_request_block: None,
+            withdraw_request_ar: None,
+            withdraw_block: None,
+            withdraw_tx: None,
+            withdraw_to_output_index: None,
+            compensation: None,
+        };
+        let mut staged_entries = HashMap::new();
+        staged_entries.insert(
+            keys::encode_outpoint(&[0xAA; 32], 0).to_vec(),
+            staged_deposit,
+        );
+
+        let mut without_overlay = placeholder_snapshot_input();
+        writer
+            .apply_exact_completed_dao_snapshot(
+                DaoSnapshotBoundary {
+                    date: completed_date,
+                    end_block: 10,
+                },
+                200,
+                300_00000000,
+                &HashMap::new(),
+                &HashMap::new(),
+                &mut without_overlay,
+            )
+            .unwrap();
+        assert_eq!(
+            without_overlay.cum_dao_compensation, 0,
+            "sanity: the committed store holds no DAO deposits in this fixture"
+        );
+
+        let mut with_overlay = placeholder_snapshot_input();
+        writer
+            .apply_exact_completed_dao_snapshot(
+                DaoSnapshotBoundary {
+                    date: completed_date,
+                    end_block: 10,
+                },
+                200,
+                300_00000000,
+                &staged_entries,
+                &HashMap::new(),
+                &mut with_overlay,
+            )
+            .unwrap();
+
+        // free = 202 - 102 = 100 CKB; compensation = 100 * 200/100 - 100 = 100 CKB.
+        assert_eq!(with_overlay.cum_dao_compensation, 100_00000000);
+        assert_eq!(with_overlay.unclaimed_compensation, 100_00000000);
+        assert_eq!(with_overlay.unmade_dao_interests, 100_00000000);
+        assert_eq!(with_overlay.cum_treasury, 200_00000000);
+        assert_eq!(with_overlay.total_compensation, 0);
+    }
+
+    #[test]
+    fn test_completed_dao_snapshot_claims_completions_staged_in_the_same_batch() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        seed_test_genesis_baseline(&store);
+        let writer = BatchWriter::new(store.clone(), store.clone());
+
+        let completed_date = NaiveDate::from_ymd_opt(2026, 7, 24).unwrap();
+        let deposit_outpoint = keys::encode_outpoint(&[0xBB; 32], 0);
+
+        // Committed phase-1 deposit: frozen at request AR 200.
+        // free = 202 - 102 = 100 CKB; frozen = 100 * 200/100 - 100 = 100 CKB.
+        let mut seed = StoreBatch::new(&store);
+        seed.put_dao_deposit(
+            &deposit_outpoint,
+            &DaoDepositCacheEntry {
+                capacity: 202_00000000,
+                occupied_capacity: 102_00000000,
+                deposit_block_number: 1,
+                deposit_timestamp: 0,
+                lock_script_hash: vec![0x02; 32],
+                deposit_ar: 100,
+                status: 1,
+                withdraw_request_tx: Some(vec![0x03; 32]),
+                withdraw_request_output_index: Some(0),
+                withdraw_request_block: Some(5),
+                withdraw_request_ar: Some(200),
+                withdraw_block: None,
+                withdraw_tx: None,
+                withdraw_to_output_index: None,
+                compensation: None,
+            },
+        );
+        seed.commit().unwrap();
+
+        // Without the staged completion the frozen value is still unclaimed.
+        let mut pending = placeholder_snapshot_input();
+        writer
+            .apply_exact_completed_dao_snapshot(
+                DaoSnapshotBoundary {
+                    date: completed_date,
+                    end_block: 10,
+                },
+                400,
+                300_00000000,
+                &HashMap::new(),
+                &HashMap::new(),
+                &mut pending,
+            )
+            .unwrap();
+        assert_eq!(pending.unclaimed_compensation, 100_00000000);
+        assert_eq!(pending.total_compensation, 0);
+        assert_eq!(pending.cum_dao_compensation, 100_00000000);
+
+        // The same batch stages the phase-2 completion at block 8, so by the end
+        // of this day the frozen value is claimed, not unclaimed.
+        let mut staged_completions = HashMap::new();
+        staged_completions.insert(deposit_outpoint.to_vec(), (8i64, vec![0x04; 32]));
+
+        let mut claimed = placeholder_snapshot_input();
+        writer
+            .apply_exact_completed_dao_snapshot(
+                DaoSnapshotBoundary {
+                    date: completed_date,
+                    end_block: 10,
+                },
+                400,
+                300_00000000,
+                &HashMap::new(),
+                &staged_completions,
+                &mut claimed,
+            )
+            .unwrap();
+        assert_eq!(
+            claimed.total_compensation, 100_00000000,
+            "a completion staged in this batch must be claimed by the day it closes"
+        );
+        assert_eq!(claimed.unclaimed_compensation, 0);
+        assert_eq!(claimed.unmade_dao_interests, 0);
+        assert_eq!(
+            claimed.cum_dao_compensation, 100_00000000,
+            "the cumulative total is unchanged by the claimed/unclaimed split"
+        );
+        assert_eq!(claimed.cum_treasury, 300_00000000);
+    }
+
+    #[test]
+    fn test_completed_dao_snapshot_fails_fast_on_a_completion_without_a_committed_deposit() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        seed_test_genesis_baseline(&store);
+        let writer = BatchWriter::new(store.clone(), store.clone());
+
+        let mut staged_completions = HashMap::new();
+        staged_completions.insert(
+            keys::encode_outpoint(&[0xCC; 32], 0).to_vec(),
+            (8i64, vec![0x04; 32]),
+        );
+
+        let mut input = placeholder_snapshot_input();
+        let error = writer
+            .apply_exact_completed_dao_snapshot(
+                DaoSnapshotBoundary {
+                    date: NaiveDate::from_ymd_opt(2026, 7, 24).unwrap(),
+                    end_block: 10,
+                },
+                200,
+                300_00000000,
+                &HashMap::new(),
+                &staged_completions,
+                &mut input,
+            )
+            .unwrap_err();
+        assert!(
+            format!("{error:#}")
+                .contains("staged DAO completion refers to an uncommitted deposit"),
+            "unexpected error: {error:#}"
+        );
+    }
+
+    /// The carried-forward values a batch stages before any exact evaluation.
+    fn placeholder_snapshot_input() -> DaoSnapshotInput {
+        DaoSnapshotInput {
+            total_deposited: 202_00000000,
+            depositors_count: 1,
+            total_deposit_count: 1,
+            total_withdrawal_count: 0,
+            total_compensation: 0,
+            cumulative_deposit_amount: 202_00000000,
+            total_issuance: 9_000_000_000i128 * 100_000_000i128,
+            secondary_pool: 0,
+            occupied_capacity: 0,
+            cum_miner_secondary: 0,
+            cum_dao_compensation: 0,
+            cum_treasury: 0,
+            unmade_dao_interests: 0,
+            unclaimed_compensation: 0,
+            cumulative_depositors: 1,
+            daily_depositor_addresses: 0,
+            protocol_deposited: Some(202_00000000),
+        }
     }
 
     #[test]
