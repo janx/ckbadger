@@ -1328,12 +1328,37 @@ async fn cmd_label_import(workdir: &Path) -> Result<()> {
 // init command
 // ---------------------------------------------------------------------------
 
+/// Whether an existing orchestrator root already declares a testnet network.
+fn orchestrator_has_testnet(root: &Path) -> Result<bool> {
+    Ok(load_orchestrator_config(root)?
+        .networks
+        .iter()
+        .any(|n| n.name == "testnet"))
+}
+
 /// Scaffold an orchestrator work directory: a top-level `ckbadger.toml`
 /// (`[[network]]` array) plus one standard single-network workdir subdir per
 /// network (each with its own `config.toml` and data/log dirs).
+///
+/// Plain `init` on an existing root is idempotent and prints so. `--with-testnet`
+/// is an explicit request that a testnet network EXIST, so on an existing root
+/// that has no testnet entry it fails fast rather than exiting 0 having done
+/// nothing — silently discarding the flag is the shape that leaves an operator
+/// running one network while believing they configured two.
 fn cmd_init(root: &Path, args: &InitArgs) -> Result<()> {
     let orch_path = root.join("ckbadger.toml");
     if orch_path.exists() {
+        if args.with_testnet && !orchestrator_has_testnet(root)? {
+            bail!(
+                "--with-testnet was requested but {} already exists without a testnet \
+                 [[network]] entry.\n\
+                 `init` does not scaffold into an existing orchestrator root, so nothing was \
+                 changed. To add testnet: append a `[[network]]` entry named \"testnet\" to that \
+                 file and create <root>/testnet/config.toml (with a distinct [api].port), or \
+                 re-run `init --with-testnet` against a fresh root.",
+                orch_path.display()
+            );
+        }
         println!("Already initialized: {}", orch_path.display());
         return Ok(());
     }
@@ -1928,6 +1953,50 @@ mod tests {
         let cfg = load_config(&root.join("testnet")).unwrap();
         assert_eq!(cfg.ckb.network, "testnet");
         assert_eq!(cfg.api.port, 8102);
+    }
+
+    #[test]
+    fn test_init_with_testnet_on_a_mainnet_only_root_fails_fast() {
+        // `--with-testnet` used to print "Already initialized" and exit 0,
+        // discarding the explicit flag: the operator believes two networks are
+        // configured while only mainnet exists.
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().to_path_buf();
+        cmd_init(&root, &InitArgs { with_testnet: false }).unwrap();
+
+        let err = cmd_init(&root, &InitArgs { with_testnet: true })
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("--with-testnet"), "got: {err}");
+        assert!(err.contains("testnet"), "got: {err}");
+        assert!(
+            err.contains("ckbadger.toml"),
+            "the error must name the existing root: {err}"
+        );
+        // Nothing was scaffolded into the existing root.
+        assert!(!root.join("testnet").exists());
+        let orch = load_orchestrator_config(&root).unwrap();
+        assert_eq!(orch.networks.len(), 1);
+    }
+
+    #[test]
+    fn test_init_with_testnet_is_idempotent_once_testnet_exists() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().to_path_buf();
+        cmd_init(&root, &InitArgs { with_testnet: true }).unwrap();
+        // The flag's request is already satisfied, so re-running is a no-op.
+        cmd_init(&root, &InitArgs { with_testnet: true }).unwrap();
+        assert!(orchestrator_has_testnet(&root).unwrap());
+    }
+
+    #[test]
+    fn test_plain_init_stays_idempotent_on_an_existing_root() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().to_path_buf();
+        cmd_init(&root, &InitArgs { with_testnet: false }).unwrap();
+        cmd_init(&root, &InitArgs { with_testnet: false })
+            .expect("plain init must remain idempotent");
+        assert!(!orchestrator_has_testnet(&root).unwrap());
     }
 
     // -- verify command --
