@@ -599,21 +599,18 @@ async fn get_deposits_by_address(
 }
 
 /// Compute estimated APC from tip block epoch info using the CKB Explorer model.
-fn estimated_apc_from_store(
-    store: &ckbadger_store::CkbadgerStore,
-) -> Result<String, ApiRouteError> {
-    let tip = store
+///
+/// Takes the whole state (not just the store) so the genesis baseline comes from
+/// `AppState::genesis_baseline()` — the single read path for it, including its
+/// "still initializing" reporting — instead of a second, divergent copy here.
+fn estimated_apc_from_state(state: &AppState) -> Result<String, ApiRouteError> {
+    let tip = state
+        .store
         .get_sync_tip_block()
         .map_err(|e: anyhow::Error| ApiError::internal(e.to_string()))?;
     match tip {
         Some((_, header)) if header.epoch_length > 0 => {
-            let genesis_issuance = store
-                .get_genesis_baseline()
-                .map_err(|e: anyhow::Error| ApiError::internal(e.to_string()))?
-                .ok_or_else(|| {
-                    ApiError::internal("genesis baseline not yet derived (indexer still starting?)")
-                })?
-                .total_issuance;
+            let genesis_issuance = state.genesis_baseline()?.total_issuance;
             let apc = calculate_estimated_apc(
                 header.epoch_number,
                 header.epoch_index,
@@ -819,7 +816,7 @@ async fn get_address_dao_summary(
             estimated_apc: "".to_string(),
         }
     } else {
-        let estimated_apc = estimated_apc_from_store(&state.store)?;
+        let estimated_apc = estimated_apc_from_state(&state)?;
 
         let total_locked_str = total_locked.to_string();
         let total_comp_str = total_comp_earned.to_string();
@@ -901,7 +898,7 @@ async fn get_statistics(State(state): State<Arc<AppState>>) -> ApiResult<DaoStat
     };
     let avg_days_str = format_days(avg_days);
 
-    let estimated_apc = estimated_apc_from_store(&state.store)?;
+    let estimated_apc = estimated_apc_from_state(&state)?;
 
     let store = state.store.clone();
     let latest_snapshot =
@@ -921,8 +918,11 @@ async fn get_statistics(State(state): State<Arc<AppState>>) -> ApiResult<DaoStat
                 latest_block_number, acc.total_compensation_paid, acc.total_unclaimed
             ))
         })?;
+    // No snapshot yet means the indexer has not closed the first day — a startup
+    // window that resolves itself, so report it as `initializing` rather than as
+    // a fault. (A snapshot that exists but is malformed stays a 500 below.)
     let snapshot = latest_snapshot.as_ref().ok_or_else(|| {
-        ApiError::internal(format!(
+        ApiError::initializing(format!(
             "missing DAO daily snapshot at sync tip block {}",
             latest_block_number
         ))

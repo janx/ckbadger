@@ -33,6 +33,21 @@ impl ApiError {
         )
     }
 
+    /// A state that only exists while the indexer is still starting up, and that
+    /// resolves on its own as sync progresses (e.g. the genesis baseline or the
+    /// first daily snapshot has not been written yet).
+    ///
+    /// Must stay 503 + `initializing`: that pair is the contract the pre-sync
+    /// router serves and the one the SPA's `isNetworkInitializingError` keys its
+    /// retry-with-banner UX on. A 500 here reads as a server fault and gets the
+    /// error screen instead.
+    pub fn initializing(message: impl Into<String>) -> (StatusCode, Json<Self>) {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(Self::new("initializing", message)),
+        )
+    }
+
     pub fn warmup_pending(message: impl Into<String>) -> (StatusCode, Json<Self>) {
         (
             StatusCode::SERVICE_UNAVAILABLE,

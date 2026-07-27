@@ -171,12 +171,18 @@ impl AppState {
     /// derived once at block 0 and persisted by the indexer. Read-only from the
     /// secondary domain store. Fails fast if the indexer has not derived it yet
     /// rather than silently substituting a hardcoded constant.
+    ///
+    /// "Not written yet" is a normal startup window — the API's store-exists gate
+    /// opens as soon as the indexer creates the stores, before it fetches block 0
+    /// and writes the baseline — so it reports 503 `initializing`, which the SPA
+    /// retries behind its initializing banner. A failed *read* stays a 500: that
+    /// one is genuinely broken.
     pub fn genesis_baseline(&self) -> Result<ckbadger_store::GenesisBaseline, ApiRouteError> {
         self.store
             .get_genesis_baseline()
             .map_err(|e| ApiError::internal(format!("read genesis baseline: {e}")))?
             .ok_or_else(|| {
-                ApiError::internal("genesis baseline not yet derived (indexer still starting?)")
+                ApiError::initializing("genesis baseline not yet derived (indexer still starting?)")
             })
     }
 }

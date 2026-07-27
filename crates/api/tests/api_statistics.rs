@@ -748,10 +748,12 @@ async fn test_network_stats_circulating_supply_uses_seeded_genesis_baseline() {
     assert_eq!(json["circulatingSupply"], expected_circulating.to_string());
 }
 
-/// The circulating-supply hero metric must fail fast (500) when the genesis
-/// baseline has not been derived yet but a DAO snapshot already exists.
+/// The circulating-supply hero metric must still refuse to invent a number when
+/// the genesis baseline has not been derived yet, but "the indexer has not
+/// written block 0 yet" is a startup state, not a server fault: it reports 503
+/// `initializing` (the contract the SPA's initializing UX keys on), never a 500.
 #[tokio::test]
-async fn test_network_stats_fails_fast_when_baseline_missing() {
+async fn test_network_stats_reports_initializing_when_baseline_missing() {
     let core_store = test_store();
     let append_only_store = test_append_only_store();
 
@@ -814,7 +816,17 @@ async fn test_network_stats_fails_fast_when_baseline_missing() {
         .body(Body::empty())
         .unwrap();
     let response = app.clone().oneshot(request).await.unwrap();
-    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["error"], "initializing");
+    assert!(
+        json["message"]
+            .as_str()
+            .unwrap()
+            .contains("genesis baseline"),
+        "message should name the missing state: {json}"
+    );
 }
 
 #[tokio::test]

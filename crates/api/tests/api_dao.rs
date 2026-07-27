@@ -184,6 +184,62 @@ async fn test_dao_stats_ignores_stale_precomputed_latest_stats() {
     assert_eq!(json["totalDepositors"], 0);
 }
 
+/// While the indexer is still working through the first day there is no DAO
+/// daily snapshot at the sync tip yet. That is a startup state, not a broken
+/// one: it must report 503 `initializing` so the SPA retries behind its
+/// initializing banner instead of showing a 500 that reads as a server fault.
+#[tokio::test]
+async fn test_dao_stats_reports_initializing_when_tip_snapshot_missing() {
+    let store = test_store();
+    seed_genesis_baseline(&store);
+
+    let mut dao = vec![0u8; 32];
+    dao[8..16].copy_from_slice(&1u64.to_le_bytes());
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_block_header(
+        10,
+        &CachedBlockHeader {
+            hash: vec![0xCC; 32],
+            parent_hash: vec![0u8; 32],
+            timestamp: 1_700_000_000_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao,
+            transactions_count: 1,
+            uncles_count: 0,
+            cycles: None,
+        },
+    );
+    batch.commit().unwrap();
+
+    store
+        .update_sync_status(|s| {
+            s.tip_block_number = 10;
+        })
+        .unwrap();
+
+    // Deliberately no dao_daily_snapshots row: the first day is still syncing.
+    let app = create_router(test_config(store)).await;
+    let request = Request::builder()
+        .uri("/api/v1/dao/statistics")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["error"], "initializing");
+    assert!(
+        json["message"]
+            .as_str()
+            .unwrap()
+            .contains("missing DAO daily snapshot"),
+        "message should name the missing state and the tip: {json}"
+    );
+}
+
 #[tokio::test]
 async fn test_dao_stats_cached_response_is_stable_within_ttl() {
     let store = test_store();
