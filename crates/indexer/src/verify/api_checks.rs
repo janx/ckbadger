@@ -92,6 +92,16 @@ struct BlockResponse {
     hash: String,
     parent_hash: String,
     transactions_count: i32,
+    #[serde(default)]
+    proposals_count: i32,
+    #[serde(default)]
+    uncles_count: i32,
+    #[serde(default)]
+    compact_target: String,
+    #[serde(default)]
+    difficulty: String,
+    #[serde(default)]
+    miner_address: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -2914,28 +2924,12 @@ impl Check for RpcBlockSpotCheck {
             // Fetch from our API
             let our_block: BlockResponse = api_get(ctx, &format!("blocks/{}", block_num))?;
 
-            // Fetch from CKB RPC
-            let rpc_hash = rpc_get_block_hash(ctx, rpc_url, *block_num)?;
+            // One RPC fetch covers every compared field.
+            let rpc_block = rpc_get_block(ctx, rpc_url, *block_num)?;
 
             let mut details = vec![];
-            if let Some(ref rpc_h) = rpc_hash {
-                if our_block.hash != *rpc_h {
-                    details.push(format!(
-                        "hash mismatch: ours={}, rpc={}",
-                        &our_block.hash[..18],
-                        &rpc_h[..rpc_h.len().min(18)],
-                    ));
-                }
-            }
-
-            let rpc_tx_count = rpc_get_block_tx_count(ctx, rpc_url, *block_num)?;
-            if let Some(rpc_tc) = rpc_tx_count {
-                if our_block.transactions_count != rpc_tc {
-                    details.push(format!(
-                        "tx_count: ours={}, rpc={}",
-                        our_block.transactions_count, rpc_tc,
-                    ));
-                }
+            if let Some(rpc_block) = rpc_block {
+                compare_block_vs_rpc(ctx, &our_block, &rpc_block, *block_num, &mut details);
             }
 
             if !details.is_empty() {
@@ -3888,43 +3882,136 @@ fn rpc_call(
     Ok(resp.result)
 }
 
-fn rpc_get_block_hash(
+fn rpc_get_block(
     ctx: &CheckContext,
     rpc_url: &str,
     block_num: u64,
-) -> anyhow::Result<Option<String>> {
+) -> anyhow::Result<Option<serde_json::Value>> {
     let hex_num = format!("0x{:x}", block_num);
-    let result = rpc_call(
+    rpc_call(
         ctx,
         rpc_url,
         "get_block_by_number",
         vec![serde_json::Value::String(hex_num)],
-    )?;
-    Ok(result.and_then(|v| {
-        v.get("header")
-            .and_then(|h| h.get("hash"))
-            .and_then(|h| h.as_str())
-            .map(|s| s.to_string())
-    }))
+    )
 }
 
-fn rpc_get_block_tx_count(
+/// Compare a block response against the node's `get_block_by_number` JSON:
+/// hash, tx/proposal/uncle counts, compact_target, exact difficulty, and the
+/// miner address rendered from the cellbase witness lock. Fields the RPC JSON
+/// does not carry are skipped (mock servers may return partial blocks).
+fn compare_block_vs_rpc(
     ctx: &CheckContext,
-    rpc_url: &str,
+    ours: &BlockResponse,
+    rpc_block: &serde_json::Value,
     block_num: u64,
-) -> anyhow::Result<Option<i32>> {
-    let hex_num = format!("0x{:x}", block_num);
-    let result = rpc_call(
-        ctx,
-        rpc_url,
-        "get_block_by_number",
-        vec![serde_json::Value::String(hex_num)],
-    )?;
-    Ok(result.and_then(|v| {
-        v.get("transactions")
-            .and_then(|t| t.as_array())
-            .map(|arr| arr.len() as i32)
-    }))
+    details: &mut Vec<String>,
+) {
+    if let Some(rpc_hash) = rpc_block
+        .get("header")
+        .and_then(|h| h.get("hash"))
+        .and_then(|h| h.as_str())
+    {
+        if ours.hash != rpc_hash {
+            details.push(format!(
+                "hash mismatch: ours={}, rpc={}",
+                &ours.hash[..ours.hash.len().min(18)],
+                &rpc_hash[..rpc_hash.len().min(18)],
+            ));
+        }
+    }
+
+    if let Some(txs) = rpc_block.get("transactions").and_then(|t| t.as_array()) {
+        let rpc_tc = txs.len() as i32;
+        if ours.transactions_count != rpc_tc {
+            details.push(format!(
+                "tx_count: ours={}, rpc={}",
+                ours.transactions_count, rpc_tc,
+            ));
+        }
+    }
+
+    if let Some(proposals) = rpc_block.get("proposals").and_then(|p| p.as_array()) {
+        let rpc_pc = proposals.len() as i32;
+        if ours.proposals_count != rpc_pc {
+            details.push(format!(
+                "proposals_count: ours={}, rpc={}",
+                ours.proposals_count, rpc_pc,
+            ));
+        }
+    }
+
+    if let Some(uncles) = rpc_block.get("uncles").and_then(|u| u.as_array()) {
+        let rpc_uc = uncles.len() as i32;
+        if ours.uncles_count != rpc_uc {
+            details.push(format!(
+                "uncles_count: ours={}, rpc={}",
+                ours.uncles_count, rpc_uc,
+            ));
+        }
+    }
+
+    if let Some(rpc_compact_hex) = rpc_block
+        .get("header")
+        .and_then(|h| h.get("compact_target"))
+        .and_then(|c| c.as_str())
+    {
+        if let Ok(rpc_compact) = u32::from_str_radix(rpc_compact_hex.trim_start_matches("0x"), 16) {
+            let ours_compact = ours.compact_target.trim_start_matches("0x").to_string();
+            if u32::from_str_radix(&ours_compact, 16) != Ok(rpc_compact) {
+                details.push(format!(
+                    "compact_target: ours={}, rpc={}",
+                    ours.compact_target, rpc_compact_hex,
+                ));
+            }
+            let rpc_difficulty =
+                ckb_types::utilities::compact_to_difficulty(rpc_compact).to_string();
+            if ours.difficulty != rpc_difficulty {
+                details.push(format!(
+                    "difficulty: ours={}, rpc={}",
+                    ours.difficulty, rpc_difficulty,
+                ));
+            }
+        }
+    }
+
+    // Miner address: rendered from the cellbase witness lock (the block's own
+    // miner per RFC-0022). Skipped when the API omits it (direct-read mode
+    // disabled) and for the unmined genesis block.
+    if block_num > 0 {
+        if let Some(ours_miner) = ours.miner_address.as_deref() {
+            let rpc_witness = rpc_block
+                .get("transactions")
+                .and_then(|t| t.as_array())
+                .and_then(|txs| txs.first())
+                .and_then(|cellbase| cellbase.get("witnesses"))
+                .and_then(|w| w.as_array())
+                .and_then(|w| w.first())
+                .and_then(|w| w.as_str());
+            if let Some(witness_hex) = rpc_witness {
+                if let Some(expected) = miner_address_from_witness(witness_hex, ctx.network) {
+                    if ours_miner != expected {
+                        details.push(format!(
+                            "miner_address: ours={}, rpc_witness={}",
+                            ours_miner, expected,
+                        ));
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Render the miner address from a cellbase first-witness hex string.
+fn miner_address_from_witness(witness_hex: &str, network: &str) -> Option<String> {
+    use ckb_types::prelude::*;
+    let bytes = hex::decode(witness_hex.trim_start_matches("0x")).ok()?;
+    let reader = ckb_types::packed::CellbaseWitnessReader::from_slice(&bytes).ok()?;
+    let lock = reader.to_entity().lock();
+    let code_hash = lock.code_hash().raw_data().to_vec();
+    let hash_type = i16::from(lock.hash_type().as_bytes()[0]);
+    let args = lock.args().raw_data().to_vec();
+    ckbadger_common::script_to_address(&code_hash, hash_type, &args, network).ok()
 }
 
 // ============================================
@@ -3992,6 +4079,59 @@ mod tests {
             tolerance: 0.001,
             cache_dir: None,
         }
+    }
+
+    /// Vector: mainnet block 12,000,000 cellbase witness. The rendered miner
+    /// address must equal the true miner (args 0x8211f1b9…) — the exact
+    /// address the official explorer reports for that block.
+    #[test]
+    fn test_miner_address_from_witness_mainnet_vector() {
+        let witness = "0x7a0000000c00000055000000490000001000000030000000310000009bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce801140000008211f1b938a107cd53b6302cc752a6fc3965638d210000000000000020302e3131332e3020283832383731613320323032342d30312d303929";
+        let addr = miner_address_from_witness(witness, "mainnet").unwrap();
+        assert_eq!(
+            addr,
+            "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqvzz8cmjw9pqlx48d3s9nr49fhu89jk8rgycece5"
+        );
+    }
+
+    #[test]
+    fn test_compare_block_vs_rpc_flags_field_mismatches() {
+        let ctx = test_ctx();
+        let ours = BlockResponse {
+            number: 42,
+            hash: "0xaa".to_string(),
+            parent_hash: "0x".to_string(),
+            transactions_count: 1,
+            proposals_count: 0,
+            uncles_count: 0,
+            compact_target: "0x190df964".to_string(),
+            difficulty: "1320058941807520729".to_string(),
+            miner_address: None,
+        };
+        let rpc_block = serde_json::json!({
+            "header": {"hash": "0xaa", "compact_target": "0x190df964"},
+            "transactions": [{"witnesses": []}],
+            "proposals": ["0x1234567890abcdef1234"],
+            "uncles": [],
+        });
+        let mut details = vec![];
+        compare_block_vs_rpc(&ctx, &ours, &rpc_block, 42, &mut details);
+        assert_eq!(
+            details,
+            vec!["proposals_count: ours=0, rpc=1".to_string()],
+            "only the proposals mismatch should be flagged"
+        );
+
+        // Matching values produce no findings.
+        let rpc_clean = serde_json::json!({
+            "header": {"hash": "0xaa", "compact_target": "0x190df964"},
+            "transactions": [{"witnesses": []}],
+            "proposals": [],
+            "uncles": [],
+        });
+        let mut clean = vec![];
+        compare_block_vs_rpc(&ctx, &ours, &rpc_clean, 42, &mut clean);
+        assert!(clean.is_empty(), "unexpected findings: {clean:?}");
     }
 
     #[test]
