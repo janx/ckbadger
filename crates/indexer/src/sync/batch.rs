@@ -3291,15 +3291,14 @@ impl Indexer {
                 entry.1 += 1;
                 entry.2 += parsed.uncles_count;
             }
-            if let Some(first_tx) = tx_slice.first() {
-                if first_tx.is_cellbase {
-                    if let Some(first_cell) = first_tx.cells.first() {
-                        let key = (block_date, first_cell.lock_script_hash.clone());
-                        let entry = batch_stats.miner_stats.entry(key).or_insert((0, 0));
-                        entry.0 += 1;
-                        entry.1 = parsed.number;
-                    }
-                }
+            // Miner attribution uses the cellbase WITNESS lock (the block's
+            // own miner, RFC-0022) — the cellbase output lock instead pays the
+            // reward of the block 11 confirmations back.
+            if let Some(miner_lock_hash) = parsed.miner_lock_hash.as_ref() {
+                let key = (block_date, miner_lock_hash.clone());
+                let entry = batch_stats.miner_stats.entry(key).or_insert((0, 0));
+                entry.0 += 1;
+                entry.1 = parsed.number;
             }
             {
                 let entry = batch_stats

@@ -2863,6 +2863,7 @@ mod tests {
     };
     use crate::sync::bulk_build::unique_temp_test_dir;
     use crate::sync::types::InternId;
+    use crate::sync::TEST_CELLBASE_WITNESS;
 
     macro_rules! cell_facts {
         ($($body:tt)*) => {
@@ -3036,7 +3037,7 @@ mod tests {
                     hex::encode(create_mnft_token_data(&[1, 2, 3, 4, 5, 6, 7, 8], 1, 0))
                 ),
             ],
-            witnesses: vec!["0x".to_string()],
+            witnesses: vec![TEST_CELLBASE_WITNESS.to_string()],
         };
 
         let transfer_tx = TransactionView {
@@ -3060,7 +3061,9 @@ mod tests {
                 "0x{}",
                 hex::encode(create_mnft_token_data(&[1, 2, 3, 4, 5, 6, 7, 8], 1, 0))
             )],
-            witnesses: vec!["0x".to_string()],
+            // First tx of its fixture block: block parsing requires a valid
+            // CellbaseWitness in transactions[0].witnesses[0].
+            witnesses: vec![TEST_CELLBASE_WITNESS.to_string()],
         };
 
         let consume_tx = TransactionView {
@@ -3077,7 +3080,8 @@ mod tests {
             }],
             outputs: vec![],
             outputs_data: vec![],
-            witnesses: vec!["0x".to_string()],
+            // First tx of its fixture block (see transfer_tx note).
+            witnesses: vec![TEST_CELLBASE_WITNESS.to_string()],
         };
 
         vec![

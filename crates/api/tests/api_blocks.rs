@@ -49,6 +49,9 @@ async fn test_get_block_includes_hardfork_activation() {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         },
     );
@@ -113,6 +116,9 @@ async fn test_blocks_list_includes_hardfork_activation() {
             dao: vec![0; 32],
             transactions_count: 2,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         },
     );
@@ -128,6 +134,9 @@ async fn test_blocks_list_includes_hardfork_activation() {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         },
     );

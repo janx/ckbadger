@@ -42,7 +42,55 @@ fn make_header(block_num: i64) -> CachedBlockHeader {
         dao: vec![0u8; 32],
         transactions_count: 2,
         uncles_count: 0,
+        proposals_count: 0,
+        compact_target: 0,
+        miner_lock_hash: None,
         cycles: None,
+    }
+}
+
+/// Seed epoch stats rows consistent with `make_header` semantics for blocks
+/// `from..=to`. Real write paths persist epoch rows atomically with their
+/// blocks; rollback fails fast if a mid-epoch row is missing, so fixtures
+/// must uphold the same invariant.
+fn seed_epoch_rows<I: IntoIterator<Item = i64>>(store: &CkbadgerStore, blocks: I) {
+    use std::collections::BTreeMap;
+    let mut by_epoch: BTreeMap<i64, (i64, i64)> = BTreeMap::new();
+    for b in blocks {
+        let e = by_epoch.entry(b / 1800).or_insert((b, b));
+        e.0 = e.0.min(b);
+        e.1 = e.1.max(b);
+    }
+    for (epoch, (start, end)) in by_epoch {
+        let existing = store.get_epoch_stats(epoch).unwrap();
+        let (start_block, start_ts) = match &existing {
+            Some(row) => (row.start_block.min(start), row.start_timestamp),
+            None => (
+                start,
+                chrono::DateTime::from_timestamp_millis(1_000_000 + start * 1000).unwrap(),
+            ),
+        };
+        let end_block = existing
+            .as_ref()
+            .and_then(|row| row.end_block)
+            .unwrap_or(end)
+            .max(end);
+        let blocks_count = (end_block - start_block + 1) as i32;
+        store
+            .put_epoch_stats(
+                epoch,
+                &ckbadger_store::types::EpochStats {
+                    epoch_number: epoch,
+                    start_block,
+                    end_block: Some(end_block),
+                    blocks_count,
+                    length: 1800,
+                    start_timestamp: start_ts,
+                    end_timestamp: None,
+                    transactions_count: blocks_count * 2,
+                },
+            )
+            .unwrap();
     }
 }
 
@@ -123,6 +171,7 @@ fn insert_full_block(
     }
     domain_batch.put_cell_by_lock(lock_hash, block_num, &tx_hash, 0);
     domain_batch.commit().unwrap();
+    seed_epoch_rows(domain_store, [block_num]);
 }
 
 /// Write the derived CF records (addr_balance + script_info) that forward sync
@@ -438,6 +487,7 @@ fn test_rollback_deletes_activities_for_rolled_back_blocks() {
         domain_batch.put_block_header(block, &make_header(block));
     }
     domain_batch.commit().unwrap();
+    seed_epoch_rows(&domain, (1..=5i64).map(|i| i * 100));
 
     // Verify all 5 exist
     let before = domain.list_activities(&lock_hash, 100, None, None).unwrap();
@@ -713,6 +763,7 @@ fn test_rollback_deletes_fiber_channels_opened_after_fork_point() {
     for b in 1..=6i64 {
         batch.put_block_header(b, &make_header(b));
     }
+    seed_epoch_rows(&domain, 1..=6i64);
 
     let participant_a = vec![0xA0; 32];
     let participant_b = vec![0xB0; 32];
@@ -803,6 +854,7 @@ fn test_rollback_resets_fiber_channel_closed_after_fork_point_to_open() {
     for b in 1..=6i64 {
         batch.put_block_header(b, &make_header(b));
     }
+    seed_epoch_rows(&domain, 1..=6i64);
 
     // Channel opened at block 2, cooperatively closed at block 5
     let funding_tx = vec![0x03; 32];
@@ -973,6 +1025,7 @@ fn test_rollback_deletes_multi_participant_activities() {
         batch.put_block_header(b, &make_header(b));
     }
     batch.commit().unwrap();
+    seed_epoch_rows(&domain, 1..=5i64);
 
     // Create activities: block 2 has single-participant, blocks 3 and 4 have
     // multi-participant activities (both lock_a and lock_b).

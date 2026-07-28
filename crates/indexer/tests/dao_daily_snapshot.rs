@@ -36,6 +36,33 @@ fn outpoint_bytes(tx_hash: &[u8], output_index: i16) -> Vec<u8> {
     k
 }
 
+/// Seed epoch stats rows matching this file's fixture layout (block 99 in
+/// epoch 1; blocks 100+ in epoch 2). Real write paths persist epoch rows
+/// atomically with their blocks; rollback fails fast when the boundary
+/// epoch row is missing.
+fn seed_epoch_rows_for_dao_fixture(store: &CkbadgerStore) {
+    for (epoch, start_block, end_block) in [(1i64, 1i64, 99i64), (2, 100, 101)] {
+        store
+            .put_epoch_stats(
+                epoch,
+                &ckbadger_store::types::EpochStats {
+                    epoch_number: epoch,
+                    start_block,
+                    end_block: Some(end_block),
+                    blocks_count: (end_block - start_block + 1) as i32,
+                    length: 1800,
+                    start_timestamp: chrono::DateTime::from_timestamp_millis(
+                        1_775_577_600_000 - 1000,
+                    )
+                    .unwrap(),
+                    end_timestamp: None,
+                    transactions_count: 1000,
+                },
+            )
+            .unwrap();
+    }
+}
+
 /// Partial-day rollback: blocks 100 and 101 are both on 2026-04-08.
 /// Each creates one DAO deposit from a distinct lock.
 /// Rollback to block 100 (drops block 101).
@@ -70,6 +97,9 @@ fn test_partial_day_rollback_recomputes_dao_snapshot() {
             ),
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         },
     );
@@ -92,6 +122,9 @@ fn test_partial_day_rollback_recomputes_dao_snapshot() {
             ),
             transactions_count: 2,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         },
     );
@@ -114,6 +147,9 @@ fn test_partial_day_rollback_recomputes_dao_snapshot() {
             ),
             transactions_count: 2,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         },
     );
@@ -219,6 +255,7 @@ fn test_partial_day_rollback_recomputes_dao_snapshot() {
         .unwrap();
 
     // ACT: partial-day rollback to block 100 (drops block 101 only).
+    seed_epoch_rows_for_dao_fixture(&store);
     store.rollback_to_block(100).unwrap();
 
     // ASSERT: snapshot for 2026-04-08 should now reflect block 100's deposit
@@ -304,6 +341,9 @@ fn test_rollback_of_phase1_withdraw_keeps_deposit_active() {
             ),
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         },
     );
@@ -326,6 +366,9 @@ fn test_rollback_of_phase1_withdraw_keeps_deposit_active() {
             ),
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         },
     );
@@ -347,6 +390,9 @@ fn test_rollback_of_phase1_withdraw_keeps_deposit_active() {
             ),
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         },
     );
@@ -368,6 +414,9 @@ fn test_rollback_of_phase1_withdraw_keeps_deposit_active() {
             ),
             transactions_count: 2,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         },
     );
@@ -455,6 +504,7 @@ fn test_rollback_of_phase1_withdraw_keeps_deposit_active() {
         .unwrap();
 
     // ACT: rollback to block 100 — phase-1 at block 101 is undone.
+    seed_epoch_rows_for_dao_fixture(&store);
     store.rollback_to_block(100).unwrap();
 
     // ASSERT: after recompute, the deposit should be active again.
@@ -517,6 +567,9 @@ fn test_cross_day_rollback_rebuilds_cutoff_date_snapshot() {
             ),
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         },
     );
@@ -538,6 +591,9 @@ fn test_cross_day_rollback_rebuilds_cutoff_date_snapshot() {
             ),
             transactions_count: 2,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         },
     );
@@ -559,6 +615,9 @@ fn test_cross_day_rollback_rebuilds_cutoff_date_snapshot() {
             ),
             transactions_count: 2,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         },
     );
@@ -659,6 +718,7 @@ fn test_cross_day_rollback_rebuilds_cutoff_date_snapshot() {
         .unwrap();
 
     // ACT: rollback to block 100 — drops ALL of 2026-04-08.
+    seed_epoch_rows_for_dao_fixture(&store);
     store.rollback_to_block(100).unwrap();
 
     // ASSERT: after recompute, the 2026-04-08 snapshot should show zero
@@ -736,6 +796,9 @@ fn test_rollback_preserves_cumulative_depositors_with_repeat_lock() {
             ),
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         },
     );
@@ -757,6 +820,9 @@ fn test_rollback_preserves_cumulative_depositors_with_repeat_lock() {
             ),
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         },
     );
@@ -778,6 +844,9 @@ fn test_rollback_preserves_cumulative_depositors_with_repeat_lock() {
             ),
             transactions_count: 2,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         },
     );
@@ -905,6 +974,7 @@ fn test_rollback_preserves_cumulative_depositors_with_repeat_lock() {
 
     // ACT: rollback to block 100 — drops block 101 only.
     // fork_point_date = cutoff_date = 2026-04-08, so only 2026-04-08 is recomputed.
+    seed_epoch_rows_for_dao_fixture(&store);
     store.rollback_to_block(100).unwrap();
 
     // ASSERT: 2026-04-07 snapshot is NOT recomputed (fork_point is on 2026-04-08).

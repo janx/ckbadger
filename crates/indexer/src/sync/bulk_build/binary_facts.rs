@@ -125,6 +125,52 @@ pub(crate) fn parse_block_to_facts(
             raw.block.uncle_hashes().len()
         )
     })?;
+    let proposals_len = raw.block.data().proposals().len();
+    let proposals_count = i32::try_from(proposals_len).map_err(|_| {
+        anyhow!(
+            "binary facts proposals count exceeds i32 range: block={} proposals={}",
+            block_number,
+            proposals_len
+        )
+    })?;
+
+    // Miner attribution: the cellbase witness lock is the block's own miner
+    // (RFC-0022). Genesis is not mined; every other block must carry a valid
+    // CellbaseWitness in its cellbase first witness.
+    let miner_lock_hash: Option<[u8; 32]> = if block_number == 0 {
+        None
+    } else {
+        let cellbase = raw.block.transactions().first().cloned().ok_or_else(|| {
+            anyhow!(
+                "binary facts block {} has no cellbase transaction",
+                block_number
+            )
+        })?;
+        let witness = cellbase.witnesses().get(0).ok_or_else(|| {
+            anyhow!(
+                "binary facts block {} cellbase has no witness",
+                block_number
+            )
+        })?;
+        let witness_bytes = witness.raw_data();
+        let reader = ckb_types::packed::CellbaseWitnessReader::from_slice(&witness_bytes)
+            .map_err(|e| {
+                anyhow!(
+                    "binary facts block {} cellbase witness is not a valid CellbaseWitness molecule: {}",
+                    block_number,
+                    e
+                )
+            })?;
+        let hash: [u8; 32] = reader
+            .to_entity()
+            .lock()
+            .calc_script_hash()
+            .raw_data()
+            .as_ref()
+            .try_into()
+            .expect("script hash is 32 bytes");
+        Some(hash)
+    };
 
     let block_dao_ar = DaoParser::extract_ar_from_dao_field(&dao).ok_or_else(|| {
         anyhow!(
@@ -464,6 +510,8 @@ pub(crate) fn parse_block_to_facts(
         dao,
         compact_target,
         uncles_count,
+        proposals_count,
+        miner_lock_hash,
         transactions_count,
         // Placeholder tx_range; remapped in the merge phase.
         tx_range: 0..local_txs.len(),

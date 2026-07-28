@@ -478,21 +478,18 @@ impl BatchWriter {
             s.transactions_count += transactions_count;
             s
         } else {
-            let blocks_count = (end_block - start_block + 1) as i32;
-            EpochStats {
+            // A mid-epoch batch (is_new=false) requires an existing row: epoch
+            // rows are written atomically with their blocks, and reorg
+            // rollback truncates (never deletes) the boundary epoch row.
+            // Fabricating a row here would stamp the batch start as the epoch
+            // start, corrupting epoch timing (see F1 postmortem: reorg replay
+            // used to do exactly that).
+            anyhow::bail!(
+                "epoch stats row missing for mid-epoch batch: epoch={}, blocks={}..={} (epoch row must exist before non-initial blocks; re-sync required if store predates epoch rows)",
                 epoch_number,
                 start_block,
-                end_block: Some(end_block),
-                blocks_count,
-                length: epoch_length,
-                start_timestamp,
-                end_timestamp: if blocks_count >= epoch_length {
-                    Some(end_timestamp)
-                } else {
-                    None
-                },
-                transactions_count,
-            }
+                end_block
+            );
         };
 
         let value = bincode::serialize(&stats)?;
@@ -1442,6 +1439,9 @@ mod tests {
                 dao,
                 transactions_count: 1,
                 uncles_count: 0,
+                proposals_count: 0,
+                compact_target: 0,
+                miner_lock_hash: None,
                 cycles: None,
             },
         );
@@ -1568,6 +1568,9 @@ mod tests {
             dao,
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
         let snapshot = |date: NaiveDate| DaoDailySnapshot {
@@ -1923,6 +1926,9 @@ mod tests {
                 dao,
                 transactions_count: 1,
                 uncles_count: 0,
+                proposals_count: 0,
+                compact_target: 0,
+                miner_lock_hash: None,
                 cycles: None,
             },
         );
@@ -1940,6 +1946,9 @@ mod tests {
                 dao: vec![0u8; 32],
                 transactions_count: 1,
                 uncles_count: 0,
+                proposals_count: 0,
+                compact_target: 0,
+                miner_lock_hash: None,
                 cycles: None,
             },
         );
@@ -2155,6 +2164,9 @@ mod tests {
                 dao: vec![0; 32],
                 transactions_count: 1,
                 uncles_count: 0,
+                proposals_count: 0,
+                compact_target: 0,
+                miner_lock_hash: None,
                 cycles: None,
             },
         );
@@ -2534,6 +2546,37 @@ mod epoch_stats_tests {
         assert!(
             stats.end_timestamp.is_some(),
             "complete epoch must have end_timestamp after update"
+        );
+    }
+
+    /// Regression (F1): a mid-epoch batch whose epoch row is missing is an
+    /// invariant violation. The writer used to silently fabricate a row whose
+    /// start_block/start_timestamp pointed at the batch start (e.g. a reorg
+    /// replay start), corrupting epoch timing data. It must fail fast instead.
+    #[test]
+    fn mid_epoch_upsert_without_existing_row_fails_fast() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone(), store.clone());
+
+        let mut batch = StoreBatch::new(&store);
+        let err = writer
+            .upsert_epoch_statistics_batch(
+                10,
+                150,
+                160,
+                1800,
+                ts(1_700_000_000),
+                ts(1_700_000_100),
+                10,
+                false,
+                &mut batch,
+            )
+            .expect_err("mid-epoch upsert with no existing row must error");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("epoch") && msg.contains("10"),
+            "error must identify the epoch: {msg}"
         );
     }
 }

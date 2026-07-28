@@ -6,6 +6,7 @@ use axum::{
     Router,
 };
 use ckb_store_reader::CkbChainReader;
+use ckb_types::utilities::compact_to_difficulty;
 use ckbadger_common::hardforks_for_network;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -224,25 +225,18 @@ fn cached_header_to_block_response(
     extra: BlockExtra,
 ) -> BlockResponse {
     let parent_hash = format!("0x{}", hex::encode(&header.parent_hash));
-    let (nonce, transactions_root, version, compact_target, difficulty) = match header_info {
-        Some(ref info) => {
-            // We don't have compact_target in BlockHeaderInfo, default to "0x0"
-            (
-                format!("0x{}", hex::encode(info.nonce.to_le_bytes())),
-                format!("0x{}", hex::encode(info.transactions_root)),
-                info.version as i32,
-                "0x0".to_string(),
-                "0".to_string(),
-            )
-        }
-        None => (
-            "0x0".to_string(),
-            "0x".to_string(),
-            0,
-            "0x0".to_string(),
-            "0".to_string(),
+    let (nonce, transactions_root, version) = match header_info {
+        Some(ref info) => (
+            format!("0x{}", hex::encode(info.nonce.to_le_bytes())),
+            format!("0x{}", hex::encode(info.transactions_root)),
+            info.version as i32,
         ),
+        None => ("0x0".to_string(), "0x".to_string(), 0),
     };
+    // Difficulty is derived from the header's stored compact_target — the
+    // single source of truth for per-block PoW difficulty.
+    let compact_target = format!("{:#x}", header.compact_target);
+    let difficulty = compact_to_difficulty(header.compact_target).to_string();
 
     // Format timestamp from millis to RFC3339
     let timestamp = chrono::DateTime::from_timestamp_millis(header.timestamp)
@@ -255,8 +249,8 @@ fn cached_header_to_block_response(
         parent_hash,
         timestamp,
         transactions_count: header.transactions_count,
-        proposals_count: 0, // Not stored in CachedBlockHeader; unavailable without RPC
-        uncles_count: 0,    // Not stored in CachedBlockHeader; unavailable without RPC
+        proposals_count: header.proposals_count,
+        uncles_count: header.uncles_count,
         epoch: format!("{}/{}", header.epoch_index, header.epoch_length),
         epoch_number: header.epoch_number,
         epoch_index: header.epoch_index,
@@ -375,9 +369,13 @@ async fn get_block(
                 s.get_miner_message(&hash)
             });
 
-            // Get miner address from cellbase output (tx_index=0, output_index=0)
-            let miner_address =
-                get_miner_address_from_store(&ckb_store, &header.hash, &state.ckb_network);
+            // The block's own miner, from the cellbase witness lock.
+            let miner_address = get_miner_address_from_store(
+                &ckb_store,
+                block_num,
+                &header.hash,
+                &state.ckb_network,
+            );
 
             let reward_info = get_mining_reward(
                 &state.ckb_rpc_url,
@@ -427,12 +425,21 @@ async fn get_block(
     }
 }
 
-/// Get miner address from the cellbase transaction output in CKB's RocksDB.
+/// Get the block's own miner address from its cellbase witness in CKB's
+/// RocksDB. Per RFC-0022 the first cellbase witness is a `CellbaseWitness`
+/// molecule whose `lock` identifies the block's miner. (The cellbase OUTPUT
+/// lock instead pays the finalized reward of the block 11 confirmations back —
+/// using it here mis-attributed every block to the N-11 miner.)
 fn get_miner_address_from_store(
     ckb_store: &Option<Arc<CkbChainReader>>,
+    block_num: i64,
     block_hash: &[u8],
     network: &str,
 ) -> Option<String> {
+    // The genesis block is not mined; its witness carries the zero script.
+    if block_num == 0 {
+        return None;
+    }
     let store = ckb_store.as_ref()?;
     if block_hash.len() != 32 {
         return None;
@@ -440,11 +447,7 @@ fn get_miner_address_from_store(
     let mut hash = [0u8; 32];
     hash.copy_from_slice(block_hash);
 
-    let block = store.get_block(&hash)?;
-    let txs = block.transactions();
-    let cellbase = txs.first()?;
-    let output = cellbase.output(0)?;
-    let lock = output.lock();
+    let (lock, _message) = store.get_cellbase_witness(&hash)?;
 
     let code_hash: Vec<u8> = lock.code_hash().raw_data().to_vec();
     let hash_type_byte = lock.hash_type().as_bytes()[0];
@@ -455,7 +458,7 @@ fn get_miner_address_from_store(
         4 => 4,
         _ => {
             tracing::error!(
-                "unknown hash_type byte {} in miner lock script for block 0x{}",
+                "unknown hash_type byte {} in miner witness lock script for block 0x{}",
                 hash_type_byte,
                 hex::encode(block_hash)
             );
@@ -827,6 +830,45 @@ async fn get_block_proposals(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Regression: block responses must expose the header's real compact_target,
+    /// exact difficulty, and proposals/uncles counts (previously hardcoded to 0).
+    /// Vector: mainnet block 12,000,000 — compact_target 0x190df964, explorer
+    /// difficulty 1320058941807520729.
+    #[test]
+    fn test_block_response_uses_real_header_fields() {
+        let header = ckbadger_store::CachedBlockHeader {
+            hash: vec![0x22; 32],
+            parent_hash: vec![0x11; 32],
+            timestamp: 1_705_733_626_764,
+            epoch_number: 9128,
+            epoch_index: 909,
+            epoch_length: 1691,
+            dao: vec![0; 32],
+            transactions_count: 1,
+            uncles_count: 2,
+            proposals_count: 3,
+            compact_target: 0x190d_f964,
+            miner_lock_hash: None,
+            cycles: None,
+        };
+        let resp = cached_header_to_block_response(
+            12_000_000,
+            header,
+            None,
+            BlockExtra {
+                miner_address: None,
+                miner_message: None,
+                mining_reward: None,
+                mining_reward_tx_hash: None,
+                hardfork_activation: None,
+            },
+        );
+        assert_eq!(resp.compact_target, "0x190df964");
+        assert_eq!(resp.difficulty, "1320058941807520729");
+        assert_eq!(resp.proposals_count, 3);
+        assert_eq!(resp.uncles_count, 2);
+    }
 
     /// Convert compact target to difficulty string (in human-readable format like "1.49 EH")
     fn compact_target_to_difficulty(compact: u32) -> String {

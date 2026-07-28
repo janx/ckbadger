@@ -1167,6 +1167,9 @@ async fn test_get_script_returns_versions_sorted_by_deployed_at() {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         },
     );
@@ -1182,6 +1185,9 @@ async fn test_get_script_returns_versions_sorted_by_deployed_at() {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         },
     );
@@ -1197,6 +1203,9 @@ async fn test_get_script_returns_versions_sorted_by_deployed_at() {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         },
     );
@@ -1763,6 +1772,9 @@ async fn test_script_capacity_chart_aggregates_deployments() {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         },
     );
@@ -1851,6 +1863,9 @@ async fn test_script_capacity_chart_by_code_hash_with_kind_filter() {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         },
     );
@@ -1909,6 +1924,9 @@ async fn test_script_capacity_chart_by_code_hash_extends_to_latest_complete_ckb_
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         },
     );

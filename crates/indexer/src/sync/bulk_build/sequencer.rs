@@ -281,6 +281,8 @@ mod tests {
                 dao: [0x00; 32],
                 compact_target: 0x1a08a97e,
                 uncles_count: 0,
+                proposals_count: 0,
+                miner_lock_hash: None,
                 transactions_count: 2,
                 tx_range: 0..2,
             }],

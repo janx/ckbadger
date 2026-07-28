@@ -6,6 +6,7 @@ use axum::{
     Router,
 };
 use chrono::{DateTime, Utc};
+use ckb_types::utilities::compact_to_difficulty as ckb_compact_to_difficulty;
 use ckbadger_common::sync::{format_duration_smart, BackgroundTaskEntry, SyncProgressData};
 use ckbadger_indexer::parser::registry::{ProtocolScript, PROTOCOL_REGISTRY};
 use ckbadger_store::types::{DailyAddressCohort, DailyCellDistribution};
@@ -370,6 +371,35 @@ async fn get_recent_blocks(State(state): State<Arc<AppState>>) -> ApiResult<Rece
         .await;
 
     ok(response)
+}
+
+/// Number of block gaps in the network-stats average-block-time window
+/// (~100 minutes of chain time at the 10s target).
+const NETWORK_STATS_BLOCK_TIME_WINDOW: usize = 600;
+
+/// Sum committed transactions over the trailing 24 hours of hourly buckets:
+/// buckets whose start falls in `(reference - 24h, reference]`, newest 24.
+/// Returns `(count, window_seconds)` where the window spans from the oldest
+/// included bucket's start to the reference timestamp — the exact span the
+/// count covers, for rate normalization. `(0, 0.0)` when no buckets qualify.
+fn rolling_24h_tx_window(
+    hourly: &[(String, ckbadger_store::HourlyStats)],
+    reference_ts_ms: i64,
+) -> (i64, f64) {
+    let cutoff_ms = reference_ts_ms - 24 * 3600 * 1000;
+    let mut recent: Vec<&ckbadger_store::HourlyStats> = hourly
+        .iter()
+        .map(|(_, h)| h)
+        .filter(|h| h.hour * 1000 > cutoff_ms && h.hour * 1000 <= reference_ts_ms)
+        .collect();
+    recent.sort_by(|a, b| b.hour.cmp(&a.hour));
+    recent.truncate(24);
+    let count = recent.iter().map(|h| h.transactions_count as i64).sum();
+    let window_secs = recent
+        .last()
+        .map(|oldest| (reference_ts_ms as f64 / 1000.0) - oldest.hour as f64)
+        .unwrap_or(0.0);
+    (count, window_secs)
 }
 
 fn format_hash_rate(hash_rate: f64) -> String {
@@ -2030,7 +2060,14 @@ async fn fetch_network_stats_from_db(
         .get_sync_tip_block()
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    let (latest_block, epoch_number, epoch_index, epoch_length, latest_timestamp) = match latest {
+    let (
+        latest_block,
+        epoch_number,
+        epoch_index,
+        epoch_length,
+        latest_timestamp,
+        tip_compact_target,
+    ) = match latest {
         Some((block_num, header)) => {
             let ts = DateTime::from_timestamp_millis(header.timestamp).unwrap_or_else(Utc::now);
             (
@@ -2039,45 +2076,44 @@ async fn fetch_network_stats_from_db(
                 header.epoch_index,
                 header.epoch_length,
                 ts,
+                header.compact_target,
             )
         }
-        None => (0i64, 0i64, 0i32, 1800i32, Utc::now()),
+        None => (0i64, 0i64, 0i32, 1800i32, Utc::now(), 0u32),
     };
 
-    // Get compact_target from the latest block header's DAO or from block header directly
-    // The CachedBlockHeader doesn't store compact_target, so we compute difficulty
-    // from the latest DailyBlockStats instead. For now use the latest daily block stats.
-    let today = ckbadger_common::block_date(latest_timestamp);
-    let today_str = today.format("%Y%m%d").to_string();
-    let yesterday = today - chrono::Duration::days(1);
-    let yesterday_str = yesterday.format("%Y%m%d").to_string();
-
-    // Fetch epoch stats for avg block time
-    let epoch_stats = store
-        .get_epoch_stats(epoch_number)
+    // Recent-window average block time with millisecond precision.
+    // NETWORK_STATS_BLOCK_TIME_WINDOW gaps (~100 minutes of chain time) is
+    // recent enough to track the live network yet wide enough to smooth
+    // single-interval noise. `None` until the store holds at least 2 blocks.
+    let window_headers = store
+        .list_blocks_desc(Some(latest_block), NETWORK_STATS_BLOCK_TIME_WINDOW + 1)
         .map_err(|e| ApiError::internal(e.to_string()))?;
+    let avg_block_time_secs: Option<f64> = if window_headers.len() >= 2 {
+        let newest_ms = window_headers.first().expect("len >= 2").1.timestamp;
+        let oldest_ms = window_headers.last().expect("len >= 2").1.timestamp;
+        let gaps = (window_headers.len() - 1) as f64;
+        let span_ms = newest_ms - oldest_ms;
+        if span_ms <= 0 {
+            return Err(ApiError::internal(format!(
+                "non-increasing block timestamps across avg-block-time window: tip_block={}, newest_ts_ms={}, oldest_ts_ms={}",
+                latest_block, newest_ms, oldest_ms
+            )));
+        }
+        Some(span_ms as f64 / gaps / 1000.0)
+    } else {
+        None
+    };
 
-    // Get recent block for avg block time
-    let recent_blocks = store
-        .list_blocks_desc(Some(latest_block), 2)
+    // Rolling last-24-hours committed transaction count, from the same exact
+    // hourly buckets the tx-stats endpoint reports (window edges quantized to
+    // bucket starts). Replaces the old today+yesterday calendar-day sum that
+    // labeled up to 48 hours of transactions as "per day".
+    let hourly_stats = store
+        .list_hourly_stats_with_keys()
         .map_err(|e| ApiError::internal(e.to_string()))?;
-
-    // Get 24h tx count from daily stats
-    let today_stats = store
-        .get_daily_stats(&today_str)
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-    let yesterday_stats = store
-        .get_daily_stats(&yesterday_str)
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-
-    let tx_count_24h: i64 = today_stats
-        .as_ref()
-        .map(|s| s.transactions_count as i64)
-        .unwrap_or(0)
-        + yesterday_stats
-            .as_ref()
-            .map(|s| s.transactions_count as i64)
-            .unwrap_or(0);
+    let (tx_count_24h, tx_window_secs) =
+        rolling_24h_tx_window(&hourly_stats, latest_timestamp.timestamp_millis());
 
     // Fetch tip block from CKB node
     let tip_block_result = fetch_tip_block_from_ckb(&state.ckb_rpc_url).await;
@@ -2098,65 +2134,30 @@ async fn fetch_network_stats_from_db(
         ))
     })?;
 
-    // Calculate epoch avg block time
-    let epoch_avg_time = epoch_stats
-        .and_then(|es| {
-            if es.blocks_count > 1 {
-                if let Some(end) = es.end_timestamp {
-                    let duration =
-                        end.signed_duration_since(es.start_timestamp).num_seconds() as f64;
-                    Some(duration / (es.blocks_count - 1) as f64)
-                } else {
-                    // Epoch in progress
-                    let duration = latest_timestamp
-                        .signed_duration_since(es.start_timestamp)
-                        .num_seconds() as f64;
-                    if epoch_index == 0 {
-                        Some(duration) // first block of epoch, use raw duration
-                    } else {
-                        Some(duration / epoch_index as f64)
-                    }
-                }
-            } else {
-                None
-            }
-        })
-        .unwrap_or(10.0);
-
-    // Calculate recent avg block time from last 2 blocks
-    let avg_time = if recent_blocks.len() == 2 {
-        let ts0 = DateTime::from_timestamp_millis(recent_blocks[1].1.timestamp).unwrap_or_default();
-        let ts1 = DateTime::from_timestamp_millis(recent_blocks[0].1.timestamp).unwrap_or_default();
-        let duration = ts0.signed_duration_since(ts1).num_seconds() as f64;
-        if duration <= 0.0 {
-            10.0 // fallback to CKB target block time when timestamps are equal or misordered
-        } else {
-            duration
-        }
+    // Current-epoch PoW difficulty from the tip header's compact_target —
+    // node/explorer semantics, NOT a daily average. Zero only while the store
+    // is empty (no tip header yet).
+    let difficulty: u64 = if tip_compact_target == 0 {
+        0
     } else {
-        10.0
+        let difficulty_u256 = ckb_compact_to_difficulty(tip_compact_target);
+        difficulty_u256.to_string().parse().map_err(|_| {
+            ApiError::internal(format!(
+                "difficulty exceeds u64 range: tip_block={}, compact_target={:#x}, difficulty={}",
+                latest_block, tip_compact_target, difficulty_u256
+            ))
+        })?
     };
-
-    // Get compact_target from daily block stats for difficulty/hash rate
-    let daily_block_stats = match store
-        .get_daily_block_stats(&today_str)
-        .map_err(|e| ApiError::internal(e.to_string()))?
-    {
-        Some(stats) => Some(stats),
-        None => store
-            .get_daily_block_stats(&yesterday_str)
-            .map_err(|e| ApiError::internal(e.to_string()))?,
-    };
-
-    let avg_difficulty = daily_block_stats
-        .as_ref()
-        .map(|s| s.avg_difficulty)
-        .unwrap_or(0.0);
 
     let remaining_blocks = epoch_length - epoch_index;
-    let estimated_epoch_seconds = (remaining_blocks as f64 * epoch_avg_time) as i64;
+    let estimated_epoch_seconds =
+        (remaining_blocks as f64 * avg_block_time_secs.unwrap_or(0.0)) as i64;
 
-    let tps = tx_count_24h as f64 / 86400.0;
+    let tps = if tx_window_secs > 0.0 {
+        tx_count_24h as f64 / tx_window_secs
+    } else {
+        0.0
+    };
     let tx_per_minute = tps * 60.0;
 
     // Get sync status from store (single source of truth)
@@ -2318,15 +2319,13 @@ async fn fetch_network_stats_from_db(
         fork_point: deep_fork_fork_point,
     };
 
-    let difficulty = avg_difficulty as u64;
-    // Use epoch average block time for stable hash rate estimate.
-    // Individual block intervals are too noisy; the epoch window (~4h)
-    // matches CKB's difficulty adjustment granularity.
-    // Divide by milliseconds to match CKB Explorer convention.
-    let hash_rate = if epoch_avg_time > 0.0 {
-        avg_difficulty / (epoch_avg_time * 1000.0)
-    } else {
-        0.0
+    // For Eaglesong PoW, difficulty ≈ expected hashes per block, so the
+    // network hash rate in true H/s is difficulty / avg block seconds.
+    // (The old code divided by milliseconds — the explorer's internal storage
+    // convention — while still formatting as H/s, understating by 1000×.)
+    let hash_rate = match avg_block_time_secs {
+        Some(avg_secs) if avg_secs > 0.0 => difficulty as f64 / avg_secs,
+        _ => 0.0,
     };
 
     // Hero metrics from latest DAO daily snapshot
@@ -2349,7 +2348,8 @@ async fn fetch_network_stats_from_db(
 
     Ok(NetworkStats {
         latest_block,
-        avg_block_time: format!("{:.2}s", avg_time),
+        // "0.00s" only while the store holds fewer than 2 blocks.
+        avg_block_time: format!("{:.2}s", avg_block_time_secs.unwrap_or(0.0)),
         hash_rate: format_hash_rate(hash_rate),
         difficulty: format_difficulty(difficulty),
         epoch: format!("{}({}/{})", epoch_number, epoch_index, epoch_length),
@@ -3436,6 +3436,46 @@ mod tests {
     use ckbadger_store::types::CachedBlockHeader;
     use ckbadger_store::CkbadgerStore;
 
+    fn hourly_bucket(hour: i64, txs: i32) -> (String, ckbadger_store::HourlyStats) {
+        (
+            format!("{hour}"),
+            ckbadger_store::HourlyStats {
+                hour,
+                blocks_count: 1,
+                transactions_count: txs,
+                cells_created: 0,
+                cells_consumed: 0,
+                capacity_transferred: 0,
+            },
+        )
+    }
+
+    /// Regression (F6): the rolling 24h window counts only buckets whose start
+    /// falls within the trailing 24 hours and normalizes tps over the actual
+    /// covered span — never today+yesterday calendar days.
+    #[test]
+    fn test_rolling_24h_tx_window_bounds_and_span() {
+        let reference_ms = 1_800_000_000_000i64; // arbitrary fixed instant
+        let reference_s = reference_ms / 1000;
+        let hour = 3600;
+        let buckets = vec![
+            hourly_bucket(reference_s - hour, 10),      // inside
+            hourly_bucket(reference_s - 5 * hour, 20),  // inside
+            hourly_bucket(reference_s - 23 * hour, 30), // inside (oldest kept)
+            hourly_bucket(reference_s - 25 * hour, 40), // outside — excluded
+        ];
+        let (count, window_secs) = rolling_24h_tx_window(&buckets, reference_ms);
+        assert_eq!(count, 60);
+        assert_eq!(window_secs, (23 * hour) as f64);
+    }
+
+    #[test]
+    fn test_rolling_24h_tx_window_empty() {
+        let (count, window_secs) = rolling_24h_tx_window(&[], 1_800_000_000_000);
+        assert_eq!(count, 0);
+        assert_eq!(window_secs, 0.0);
+    }
+
     fn snapshot(
         date: &str,
         total_deposited: i128,
@@ -3766,6 +3806,9 @@ mod tests {
                     dao: vec![0; 32],
                     transactions_count: 1,
                     uncles_count: 0,
+                    proposals_count: 0,
+                    compact_target: 0,
+                    miner_lock_hash: None,
                     cycles: None,
                 },
             );
@@ -3816,6 +3859,9 @@ mod tests {
                     dao: vec![0; 32],
                     transactions_count: 1,
                     uncles_count: 0,
+                    proposals_count: 0,
+                    compact_target: 0,
+                    miner_lock_hash: None,
                     cycles: None,
                 },
             );
@@ -3856,6 +3902,9 @@ mod tests {
                     dao: vec![0; 32],
                     transactions_count: 1,
                     uncles_count: 0,
+                    proposals_count: 0,
+                    compact_target: 0,
+                    miner_lock_hash: None,
                     cycles: None,
                 },
             );

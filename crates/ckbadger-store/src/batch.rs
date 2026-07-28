@@ -1506,6 +1506,9 @@ mod tests {
             dao: vec![0u8; 32],
             transactions_count: 5,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
         batch.put_block_header(0, &header);
@@ -2296,6 +2299,9 @@ mod tests {
             dao: vec![0u8; 32],
             transactions_count: 2,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
         a.put_block_header(42, &header);

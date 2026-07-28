@@ -223,9 +223,15 @@ impl CkbChainReader {
         self.get_block_header_info(&hash)
     }
 
-    /// Get the miner message (first 4 bytes of first witness of cellbase tx).
-    /// This extracts the "miner message" that miners embed in the cellbase witness.
-    pub fn get_miner_message(&self, hash: &[u8; 32]) -> Option<Vec<u8>> {
+    /// Get the parsed cellbase witness of a block: the miner's declared lock
+    /// script and the free-form miner message.
+    ///
+    /// Per RFC-0022, the first witness of a cellbase transaction is a
+    /// `CellbaseWitness` molecule (`lock: Script, message: Bytes`) — NOT a
+    /// `WitnessArgs`. The lock identifies the block's own miner (the cellbase
+    /// OUTPUT lock instead pays the reward of the block 11 confirmations
+    /// back).
+    pub fn get_cellbase_witness(&self, hash: &[u8; 32]) -> Option<(packed::Script, Vec<u8>)> {
         // Read just the cellbase transaction (index 0) from block body
         let cf = self.db.cf_handle(COLUMN_BLOCK_BODY)?;
         let mut key = Vec::with_capacity(36);
@@ -238,21 +244,13 @@ impl CkbChainReader {
             return None;
         }
         let first_witness = witnesses.get(0)?;
-        let data = first_witness.raw_data();
-        if data.len() < 4 {
-            return None;
-        }
-        // CKB cellbase witness: first 4 bytes are length prefix, then WitnessArgs molecule
-        // The miner message is typically embedded in the input_type field of WitnessArgs.
-        // For simplicity, we parse the WitnessArgs and extract input_type.
-        if let Ok(witness_args) = packed::WitnessArgsReader::from_slice(data) {
-            witness_args
-                .input_type()
-                .to_opt()
-                .map(|bytes| bytes.raw_data().to_vec())
-        } else {
-            None
-        }
+        let witness_bytes = first_witness.raw_data();
+        parse_cellbase_witness(witness_bytes)
+    }
+
+    /// Get the miner message embedded in the cellbase witness.
+    pub fn get_miner_message(&self, hash: &[u8; 32]) -> Option<Vec<u8>> {
+        self.get_cellbase_witness(hash).map(|(_, message)| message)
     }
 
     /// Get a full block by hash, returned as ckb_types::core::BlockView.
@@ -755,6 +753,18 @@ impl Drop for SecondaryDir {
     }
 }
 
+/// Parse a raw cellbase first-witness as the `CellbaseWitness` molecule
+/// (RFC-0022: `lock: Script, message: Bytes`), returning the miner's declared
+/// lock script and the miner message. Returns `None` when the bytes are not a
+/// valid `CellbaseWitness` (it is NOT a `WitnessArgs` — parsing it as one was
+/// the historical bug that made miner messages come back empty).
+pub fn parse_cellbase_witness(data: &[u8]) -> Option<(packed::Script, Vec<u8>)> {
+    let reader = packed::CellbaseWitnessReader::from_slice(data).ok()?;
+    let witness = reader.to_entity();
+    let message = witness.message().raw_data().to_vec();
+    Some((witness.lock(), message))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -772,6 +782,60 @@ mod tests {
     #[test]
     fn test_meta_tip_header_key() {
         assert_eq!(META_TIP_HEADER_KEY, b"TIP_HEADER");
+    }
+
+    /// Regression (F5/F8): the cellbase first witness is a CellbaseWitness
+    /// molecule, not WitnessArgs. Vector: mainnet block 12,000,000. The lock
+    /// inside the witness is the block's TRUE miner (args 0x8211f1b9…), which
+    /// differs from the cellbase output lock (that one pays block 11,999,989's
+    /// miner). The message carries the miner's client version string.
+    #[test]
+    fn test_parse_cellbase_witness_mainnet_block_12m() {
+        let witness = hex::decode(
+            "7a0000000c00000055000000490000001000000030000000310000009bd7e06f3ecf4be0f2f\
+             cd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce801140000008211f1b938a107cd53b6\
+             302cc752a6fc3965638d210000000000000020302e3131332e3020283832383731613320323\
+             032342d30312d303929",
+        )
+        .unwrap();
+
+        let (lock, message) =
+            parse_cellbase_witness(&witness).expect("mainnet cellbase witness must parse");
+        assert_eq!(
+            hex::encode(lock.code_hash().raw_data()),
+            "9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+        );
+        assert_eq!(lock.hash_type().as_bytes()[0], 1); // type
+        assert_eq!(
+            hex::encode(lock.args().raw_data()),
+            "8211f1b938a107cd53b6302cc752a6fc3965638d",
+        );
+        assert!(
+            String::from_utf8_lossy(&message).contains("0.113.0"),
+            "message must contain the miner client version",
+        );
+
+        // The historical bug: parsing the same bytes as WitnessArgs must fail —
+        // it silently produced None for every block.
+        assert!(packed::WitnessArgsReader::from_slice(&witness).is_err());
+    }
+
+    /// Genesis cellbase witness parses as CellbaseWitness with an all-zero
+    /// lock script (the genesis block has no miner; callers special-case it).
+    #[test]
+    fn test_parse_cellbase_witness_genesis() {
+        let mut genesis_hex = String::from("450000000c00000041000000350000001000000030000000");
+        genesis_hex.push_str("31000000");
+        genesis_hex.push_str(&"00".repeat(41)); // code_hash(32) + hash_type(1) + args len(4) + message len(4)
+        let witness = hex::decode(&genesis_hex).unwrap();
+        assert_eq!(witness.len(), 69);
+        let (lock, message) = parse_cellbase_witness(&witness).expect("genesis witness parses");
+        assert_eq!(
+            lock.code_hash().raw_data().to_vec(),
+            vec![0u8; 32],
+            "genesis witness lock is the zero script"
+        );
+        assert!(message.is_empty());
     }
 
     #[test]

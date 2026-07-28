@@ -1,5 +1,6 @@
 use anyhow::Result;
 use chrono::{DateTime, TimeZone, Utc};
+use ckb_types::prelude::*;
 
 use crate::rpc::{parse_hex_to_bytes, BlockView, HeaderView};
 
@@ -22,6 +23,11 @@ pub struct ParsedBlock {
     pub proposals_hash: Vec<u8>,
     pub transactions_root: Vec<u8>,
     pub proposals: Vec<Vec<u8>>,
+    /// Script hash of the block's own miner, from the cellbase witness lock
+    /// (RFC-0022 `CellbaseWitness.lock`). `None` only for the genesis block,
+    /// which is not mined. NOT the cellbase output lock — that one pays the
+    /// reward of the block 11 confirmations back.
+    pub miner_lock_hash: Option<Vec<u8>>,
 }
 
 pub struct BlockParser;
@@ -37,8 +43,11 @@ impl BlockParser {
             .map(|p| parse_hex_to_bytes(p))
             .collect();
 
+        let number = Self::parse_hex_i64(&header.number)?;
+        let miner_lock_hash = Self::parse_miner_lock_hash(block, number)?;
+
         Ok(ParsedBlock {
-            number: Self::parse_hex_i64(&header.number)?,
+            number,
             hash: parse_hex_to_bytes(&header.hash),
             parent_hash: parse_hex_to_bytes(&header.parent_hash),
             timestamp: Self::parse_timestamp(&header.timestamp)?,
@@ -68,7 +77,39 @@ impl BlockParser {
             proposals_hash: parse_hex_to_bytes(&header.proposals_hash),
             transactions_root: parse_hex_to_bytes(&header.transactions_root),
             proposals,
+            miner_lock_hash,
         })
+    }
+
+    /// Extract the block's miner lock script hash from the cellbase witness
+    /// (RFC-0022 `CellbaseWitness.lock`). Every mined block MUST carry a valid
+    /// CellbaseWitness in its cellbase first witness — the protocol reads the
+    /// reward target lock from it 11 blocks later — so a parse failure on a
+    /// non-genesis block is an invariant violation, not a soft miss.
+    fn parse_miner_lock_hash(block: &BlockView, number: i64) -> Result<Option<Vec<u8>>> {
+        if number == 0 {
+            // The genesis block is not mined (its witness holds a zero script).
+            return Ok(None);
+        }
+        let cellbase = block
+            .transactions
+            .first()
+            .ok_or_else(|| anyhow::anyhow!("block {} has no cellbase transaction", number))?;
+        let witness_hex = cellbase
+            .witnesses
+            .first()
+            .ok_or_else(|| anyhow::anyhow!("block {} cellbase has no witness", number))?;
+        let witness_bytes = parse_hex_to_bytes(witness_hex);
+        let reader =
+            ckb_types::packed::CellbaseWitnessReader::from_slice(&witness_bytes).map_err(|e| {
+                anyhow::anyhow!(
+                    "block {} cellbase witness is not a valid CellbaseWitness molecule: {}",
+                    number,
+                    e
+                )
+            })?;
+        let lock = reader.to_entity().lock();
+        Ok(Some(lock.calc_script_hash().raw_data().to_vec()))
     }
 
     pub fn parse_header(header: &HeaderView) -> Result<ParsedBlock> {
@@ -93,6 +134,9 @@ impl BlockParser {
             proposals_hash: parse_hex_to_bytes(&header.proposals_hash),
             transactions_root: parse_hex_to_bytes(&header.transactions_root),
             proposals: Vec::new(),
+            // Header-only parses carry no witnesses; miner attribution is
+            // available only from full-block parses.
+            miner_lock_hash: None,
         })
     }
 
@@ -187,6 +231,11 @@ mod tests {
     use super::*;
     use crate::rpc::{BlockView, CellInput, CellOutput, HeaderView, OutPoint, Script};
 
+    /// Real cellbase first witness of mainnet block 12,000,000: a
+    /// CellbaseWitness molecule with the miner's secp lock
+    /// (args 0x8211f1b9…) and a "0.113.0 (…)" client-version message.
+    const MAINNET_12M_CELLBASE_WITNESS: &str = "0x7a0000000c00000055000000490000001000000030000000310000009bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce801140000008211f1b938a107cd53b6302cc752a6fc3965638d210000000000000020302e3131332e3020283832383731613320323032342d30312d303929";
+
     fn create_test_header() -> HeaderView {
         HeaderView {
             version: "0x0".to_string(),
@@ -239,11 +288,60 @@ mod tests {
                     type_: None,
                 }],
                 outputs_data: vec!["0x".to_string()],
-                witnesses: vec!["0x".to_string()],
+                witnesses: vec![MAINNET_12M_CELLBASE_WITNESS.to_string()],
             }],
             proposals: vec!["0x12345678901234567890".to_string()],
             uncles: vec![],
         }
+    }
+
+    /// Regression (F5): the miner is identified by the cellbase WITNESS lock
+    /// (the block's own miner), never the cellbase output lock (which pays the
+    /// miner of the block 11 confirmations back).
+    #[test]
+    fn test_parse_miner_lock_hash_uses_cellbase_witness_lock() {
+        let block = create_test_block();
+        let parsed = BlockParser::parse(&block).unwrap();
+
+        let expected_lock = ckb_types::packed::Script::new_builder()
+            .code_hash(
+                ckb_types::packed::Byte32::from_slice(
+                    &hex::decode(
+                        "9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+                    )
+                    .unwrap(),
+                )
+                .unwrap(),
+            )
+            .hash_type(ckb_types::core::ScriptHashType::Type.into())
+            .args(
+                hex::decode("8211f1b938a107cd53b6302cc752a6fc3965638d")
+                    .unwrap()
+                    .pack(),
+            )
+            .build();
+        let expected_hash = expected_lock.calc_script_hash().raw_data().to_vec();
+
+        assert_eq!(parsed.miner_lock_hash, Some(expected_hash));
+    }
+
+    #[test]
+    fn test_parse_miner_lock_hash_genesis_is_none() {
+        let mut block = create_test_block();
+        block.header.number = "0x0".to_string();
+        let parsed = BlockParser::parse(&block).unwrap();
+        assert_eq!(parsed.miner_lock_hash, None);
+    }
+
+    #[test]
+    fn test_parse_fails_on_invalid_cellbase_witness() {
+        let mut block = create_test_block();
+        block.transactions[0].witnesses = vec!["0x".to_string()];
+        let err = match BlockParser::parse(&block) {
+            Ok(_) => panic!("invalid cellbase witness must error"),
+            Err(e) => e,
+        };
+        assert!(err.to_string().contains("CellbaseWitness"), "{err}");
     }
 
     #[test]

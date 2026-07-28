@@ -278,6 +278,9 @@ pub fn insert_committed_transaction(store: &Arc<CkbadgerStore>, tx_hash: &[u8]) 
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         },
     );

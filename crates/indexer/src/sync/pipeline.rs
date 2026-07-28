@@ -552,6 +552,20 @@ fn parse_single_block(
             )
         })?,
         uncles_count: parsed_block.uncles_count,
+        proposals_count: parsed_block.proposals_count,
+        miner_lock_hash: parsed_block
+            .miner_lock_hash
+            .as_deref()
+            .map(|h| {
+                h.try_into().map_err(|_| {
+                    anyhow!(
+                        "miner lock hash length mismatch: block={} len={}",
+                        parsed_block.number,
+                        h.len()
+                    )
+                })
+            })
+            .transpose()?,
         transactions_count: parsed_block.transactions_count,
         // Placeholder tx_range; remapped in the merge phase.
         tx_range: 0..local_txs.len(),
@@ -3087,6 +3101,7 @@ mod tests {
         BlockResponseWithCycles, BlockView, CellInput, CellOutput, HeaderView, OutPoint, Script,
         TransactionView,
     };
+    use crate::sync::TEST_CELLBASE_WITNESS;
 
     #[test]
     fn test_precommit_invariant_failure_policy_is_fail_fast() {
@@ -3334,7 +3349,7 @@ mod tests {
                 type_: None,
             }],
             outputs_data: vec!["0x".to_string()],
-            witnesses: vec!["0x".to_string()],
+            witnesses: vec![TEST_CELLBASE_WITNESS.to_string()],
         };
         let tx1 = TransactionView {
             hash: format!("0x{}", "bb".repeat(32)),
@@ -3460,7 +3475,7 @@ mod tests {
                                 "cluster description"
                             ))
                         )],
-                        witnesses: vec!["0x".to_string()],
+                        witnesses: vec![TEST_CELLBASE_WITNESS.to_string()],
                     },
                     TransactionView {
                         hash: format!("0x{}", "a2".repeat(32)),
@@ -3669,7 +3684,7 @@ mod tests {
                         }],
                         outputs: vec![],
                         outputs_data: vec![],
-                        witnesses: vec![],
+                        witnesses: vec![TEST_CELLBASE_WITNESS.to_string()],
                     },
                     // tx1: regular tx
                     TransactionView {
@@ -3792,7 +3807,7 @@ mod tests {
                     }],
                     // Only 10 bytes of data — far below the 52-byte minimum
                     outputs_data: vec![format!("0x{}", hex::encode([0xffu8; 10]))],
-                    witnesses: vec!["0x".to_string()],
+                    witnesses: vec![TEST_CELLBASE_WITNESS.to_string()],
                 }],
                 proposals: vec![],
             },

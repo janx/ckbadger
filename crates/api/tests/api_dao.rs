@@ -42,6 +42,9 @@ async fn test_dao_stats_uses_precomputed_latest_stats_when_tip_matches() {
             dao,
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         },
     );
@@ -109,6 +112,9 @@ async fn test_dao_stats_ignores_stale_precomputed_latest_stats() {
             dao,
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         },
     );
@@ -208,6 +214,9 @@ async fn test_dao_stats_reports_initializing_when_tip_snapshot_missing() {
             dao,
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         },
     );
@@ -260,6 +269,9 @@ async fn test_dao_stats_cached_response_is_stable_within_ttl() {
             dao,
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         },
     );

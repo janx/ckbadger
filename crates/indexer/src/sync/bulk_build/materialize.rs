@@ -768,6 +768,9 @@ pub(crate) fn run_sample_bulk_materialization_for_test() -> Result<Materializati
             dao: vec![0x00; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0x1a08a97e,
+            miner_lock_hash: None,
             cycles: None,
         };
 
@@ -1372,6 +1375,9 @@ mod tests {
             dao: vec![0x00; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
 
@@ -1524,6 +1530,9 @@ mod tests {
                 dao: vec![0x00; 32],
                 transactions_count: 1,
                 uncles_count: 0,
+                proposals_count: 0,
+                compact_target: 0,
+                miner_lock_hash: None,
                 cycles: None,
             };
 
@@ -1784,6 +1793,9 @@ mod tests {
             dao: vec![0x00; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
 

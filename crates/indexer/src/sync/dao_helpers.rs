@@ -668,6 +668,7 @@ mod tests {
             transactions_count: 0,
             proposals_count: 0,
             uncles_count: 0,
+            miner_lock_hash: None,
             epoch_number,
             epoch_index: 0,
             epoch_length,

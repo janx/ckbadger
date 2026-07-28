@@ -31,6 +31,9 @@ pub(crate) struct BlockFacts {
     pub(crate) dao: [u8; 32],
     pub(crate) compact_target: u32,
     pub(crate) uncles_count: i32,
+    pub(crate) proposals_count: i32,
+    /// Miner lock script hash from the cellbase witness (`None` for genesis).
+    pub(crate) miner_lock_hash: Option<[u8; 32]>,
     pub(crate) transactions_count: i32,
     pub(crate) tx_range: Range<usize>,
 }

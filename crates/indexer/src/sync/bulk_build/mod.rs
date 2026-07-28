@@ -3761,6 +3761,9 @@ fn build_history_rows_for_block(
         dao: block.dao.to_vec(),
         transactions_count: block.transactions_count,
         uncles_count: block.uncles_count,
+        proposals_count: block.proposals_count,
+        compact_target: block.compact_target,
+        miner_lock_hash: block.miner_lock_hash.map(|h| h.to_vec()),
         cycles: None,
     };
     rows.push_serialized(
@@ -5572,6 +5575,7 @@ mod tests {
         OutPointKey, ResolvedInputFacts, ResolvedTxFacts,
     };
     use crate::sync::types::InternId;
+    use crate::sync::TEST_CELLBASE_WITNESS;
     use ckbadger_store::store::CF_TOKEN_TRANSFERS;
     use ckbadger_store::types::{
         AssetAction, FiberChannelState, ObjectCollectionActivityEntry, TokenInfo,
@@ -5661,7 +5665,7 @@ mod tests {
                 type_: None,
             }],
             outputs_data: vec!["0x".to_string()],
-            witnesses: vec!["0x".to_string()],
+            witnesses: vec![TEST_CELLBASE_WITNESS.to_string()],
         };
 
         let split_tx = TransactionView {
@@ -5824,7 +5828,7 @@ mod tests {
                 type_: Some(sudt_type.clone()),
             }],
             outputs_data: vec![u128_data_hex(200)],
-            witnesses: vec!["0x".to_string()],
+            witnesses: vec![TEST_CELLBASE_WITNESS.to_string()],
         };
 
         let split_tx = TransactionView {
@@ -5887,7 +5891,7 @@ mod tests {
                 type_: None,
             }],
             outputs_data: vec!["0x".to_string()],
-            witnesses: vec!["0x".to_string()],
+            witnesses: vec![TEST_CELLBASE_WITNESS.to_string()],
         };
 
         let open_tx = TransactionView {
@@ -5980,7 +5984,7 @@ mod tests {
                 ),
                 "0x000000003c00000010000000240000002c000000a7d4860aaf1dc83daedf75d6022811d2c2ae250b1b46fc69000000000c00000032303234303530372e626974".to_string(),
             ],
-            witnesses: vec!["0x".to_string()],
+            witnesses: vec![TEST_CELLBASE_WITNESS.to_string()],
         };
 
         let dummy_cellbase = TransactionView {
@@ -6001,7 +6005,7 @@ mod tests {
                 type_: None,
             }],
             outputs_data: vec!["0x".to_string()],
-            witnesses: vec!["0x".to_string()],
+            witnesses: vec![TEST_CELLBASE_WITNESS.to_string()],
         };
 
         let transfer_and_burn_tx = TransactionView {
@@ -7199,7 +7203,7 @@ mod tests {
                 type_: None,
             }],
             outputs_data: vec!["0x".to_string()],
-            witnesses: vec!["0x".to_string()],
+            witnesses: vec![TEST_CELLBASE_WITNESS.to_string()],
         };
         let genesis_block = BlockResponseWithCycles {
             block: BlockView {
@@ -7230,7 +7234,7 @@ mod tests {
                 type_: None,
             }],
             outputs_data: vec!["0x".to_string()],
-            witnesses: vec!["0x".to_string()],
+            witnesses: vec![TEST_CELLBASE_WITNESS.to_string()],
         };
         let spend_tx = TransactionView {
             hash: format!("0x{}", "dd".repeat(32)),
@@ -7374,6 +7378,9 @@ mod tests {
             dao: vec![0x00; 32],
             transactions_count: 42,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
         let standard = bincode::serialize(&header).unwrap();
@@ -7410,6 +7417,9 @@ mod tests {
             dao: vec![],
             transactions_count: 0,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
         let standard = bincode::serialize(&header).unwrap();
@@ -7660,6 +7670,8 @@ mod tests {
                     dao: [0x00; 32],
                     compact_target: 0x1a08a97e,
                     uncles_count: 0,
+                    proposals_count: 0,
+                    miner_lock_hash: None,
                     transactions_count: 1,
                     tx_range: 0..1,
                 },
@@ -7674,6 +7686,8 @@ mod tests {
                     dao: [0x00; 32],
                     compact_target: 0x1a08a97e,
                     uncles_count: 1,
+                    proposals_count: 0,
+                    miner_lock_hash: None,
                     transactions_count: 2,
                     tx_range: 1..3,
                 },

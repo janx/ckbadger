@@ -21,6 +21,11 @@ use ckbadger_store::PositionedCellInfo;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+/// Real mainnet cellbase first witness (block 12,000,000): block parsing
+/// requires every non-genesis cellbase to carry a valid RFC-0022
+/// `CellbaseWitness`.
+const TEST_CELLBASE_WITNESS: &str = "0x7a0000000c00000055000000490000001000000030000000310000009bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce801140000008211f1b938a107cd53b6302cc752a6fc3965638d210000000000000020302e3131332e3020283832383731613320323032342d30312d303929";
+
 fn make_cell(capacity: i64, data_size: i32, lock_hash_byte: u8) -> ParsedCell {
     ParsedCell {
         capacity,
@@ -101,7 +106,7 @@ fn facts_fixture_block() -> BlockResponseWithCycles {
             type_: None,
         }],
         outputs_data: vec!["0x".to_string()],
-        witnesses: vec!["0x".to_string()],
+        witnesses: vec![TEST_CELLBASE_WITNESS.to_string()],
     };
 
     let tx1 = TransactionView {

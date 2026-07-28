@@ -664,6 +664,9 @@ mod tests {
             dao,
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         }
     }

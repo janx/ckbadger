@@ -215,6 +215,20 @@ pub struct CachedBlockHeader {
     /// `DailyBlockStats.total_uncles` for rolled-back blocks.
     #[serde(default)]
     pub uncles_count: i32,
+    /// Number of proposal short ids in this block.
+    #[serde(default)]
+    pub proposals_count: i32,
+    /// PoW compact target of this block's header. Source of truth for
+    /// per-block difficulty (`compact_to_difficulty`).
+    #[serde(default)]
+    pub compact_target: u32,
+    /// Script hash of the block's own miner, from the cellbase witness lock
+    /// (RFC-0022 `CellbaseWitness.lock`). `None` only for the genesis block.
+    /// Source of truth for miner attribution (daily miner stats + reorg
+    /// rollback deltas). NOT the cellbase output lock (that pays the reward
+    /// of the block 11 confirmations back).
+    #[serde(default)]
+    pub miner_lock_hash: Option<Vec<u8>>,
     /// Total cycles consumed by all transactions in this block.
     /// Written only by lazy cycles evaluation, not during bulk/live sync.
     #[serde(default)]

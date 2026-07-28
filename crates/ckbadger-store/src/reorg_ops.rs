@@ -407,6 +407,7 @@ fn should_delete_stats_for_replay(
     cutoff_yyyymmddhh: &[u8],
     cutoff_hour: i64,
     cutoff_epoch: i64,
+    delete_cutoff_epoch: bool,
 ) -> anyhow::Result<bool> {
     if key.is_empty() {
         return Ok(false);
@@ -515,6 +516,14 @@ fn should_delete_stats_for_replay(
             Ok(hour_bucket >= cutoff_hour)
         }
         // epoch-scoped: prefix(1B) + epoch_number(8B BE i64)
+        //
+        // Epochs that BEGIN inside the replayed range are deleted (replay
+        // rebuilds them wholesale from their first block). The boundary epoch
+        // — the one containing replay_start when replay does not begin at its
+        // first block — must be preserved: replay never revisits its earlier
+        // blocks, so deletion would let the writer recreate it with a
+        // fabricated mid-epoch start. It is truncated to the fork point by
+        // `repair_boundary_epoch_stats` instead.
         keys::STATS_PREFIX_EPOCH => {
             if suffix.len() < 8 {
                 return Ok(false);
@@ -522,7 +531,7 @@ fn should_delete_stats_for_replay(
             let epoch = i64::from_be_bytes(suffix[..8].try_into().map_err(|_| {
                 anyhow::anyhow!("invalid epoch stats suffix length: {}", suffix.len())
             })?);
-            Ok(epoch >= cutoff_epoch)
+            Ok(epoch > cutoff_epoch || (epoch == cutoff_epoch && delete_cutoff_epoch))
         }
         // BLOCK_TIME_DIST and EPOCH_TIME_DIST are cumulative histograms
         // spanning the entire chain. A shallow reorg (≤36 blocks) has
@@ -1325,6 +1334,13 @@ impl CkbadgerStore {
         let mut block_date_map: HashMap<i64, (String, String)> = HashMap::new();
         // Per-date rolled-back uncle count, populated during block header deletion loop.
         let mut stats_date_uncles: HashMap<String, i32> = HashMap::new();
+        // Per-epoch rolled-back transaction count, used to truncate the
+        // boundary epoch stats row (the epoch containing replay_start).
+        let mut epoch_tx_removed: HashMap<i64, i64> = HashMap::new();
+        // Per-(date, miner) rolled-back block count for cutoff-date miner
+        // stats repair. Sourced from the header's cellbase-witness miner —
+        // the same attribution the forward write path uses.
+        let mut miner_rollback_deltas: HashMap<(String, Vec<u8>), i32> = HashMap::new();
 
         // 1. Delete block headers > rollback_to
         let mut stage = RollbackStageProgress::new("delete_block_headers");
@@ -1370,7 +1386,22 @@ impl CkbadgerStore {
                         block_num
                     )
                 })?;
+            if let Some(miner) = header.miner_lock_hash.as_ref() {
+                *miner_rollback_deltas
+                    .entry((date_str.clone(), miner.clone()))
+                    .or_insert(0) += 1;
+            }
             block_date_map.insert(block_num, (date_str, hour_str));
+            let epoch_txs = epoch_tx_removed.entry(header.epoch_number).or_insert(0);
+            *epoch_txs = epoch_txs
+                .checked_add(i64::from(header.transactions_count))
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "epoch transactions_count overflow during rollback delta accumulation: block_num={}, epoch={}",
+                        block_num,
+                        header.epoch_number
+                    )
+                })?;
 
             batch.delete_cf(self.cf_block_headers(), &key);
             batch.delete_cf(self.cf_block_hash_index(), &header.hash);
@@ -2097,11 +2128,17 @@ impl CkbadgerStore {
             // Detect partial-day rollback: fork_point and first rolled-back block
             // share the same calendar date.
             let is_partial_day = fork_point_date.as_deref().is_some_and(|fpd| fpd == cutoff);
+            // Replay starting at an epoch's first block rebuilds that epoch
+            // wholesale, so its row may be deleted. Otherwise the boundary
+            // epoch row is preserved and truncated below.
+            let delete_cutoff_epoch = replay_start_header
+                .as_ref()
+                .is_some_and(|h| h.epoch_index == 0);
 
-            // Pre-scan tx_actions for activity + miner rollback deltas (partial-day only).
+            // Pre-scan tx_actions for activity rollback deltas (partial-day only).
+            // Miner deltas were already accumulated from headers in stage 1.
             let mut activity_date_deltas: HashMap<String, DailyActivityStats> = HashMap::new();
             let mut activity_hour_deltas: HashMap<String, DailyActivityStats> = HashMap::new();
-            let mut miner_deltas: HashMap<(String, Vec<u8>), i32> = HashMap::new();
             if is_partial_day {
                 let mut stage = RollbackStageProgress::new("prescan_tx_actions_for_deltas");
                 let mut scanned = 0u64;
@@ -2141,17 +2178,6 @@ impl CkbadgerStore {
                         .or_default()
                         .accumulate_from_tx_actions(&tx_actions);
 
-                    // Miner identification: cellbase first participant's lock hash
-                    if tx_actions.is_cellbase {
-                        if let Some(p) = tx_actions.participants.first() {
-                            if p.lock_hash.len() == 32 {
-                                *miner_deltas
-                                    .entry((date_str, p.lock_hash.clone()))
-                                    .or_insert(0) += 1;
-                            }
-                        }
-                    }
-
                     scanned += 1;
                     stage.tick(scanned);
                 }
@@ -2165,7 +2191,7 @@ impl CkbadgerStore {
                 date_capacity: stats_date_capacity_deltas,
                 activity_date: activity_date_deltas,
                 activity_hour: activity_hour_deltas,
-                miner: miner_deltas,
+                miner: miner_rollback_deltas,
             };
 
             let mut stats_removed = 0u64;
@@ -2195,6 +2221,7 @@ impl CkbadgerStore {
                         cutoff_hour_str.as_bytes(),
                         cutoff_hour,
                         cutoff_epoch,
+                        delete_cutoff_epoch,
                     )? {
                         stage.tick(stats_removed + stats_repaired);
                         continue;
@@ -2243,6 +2270,90 @@ impl CkbadgerStore {
                 info!(
                     stats_repaired,
                     stats_removed, "rollback: cutoff-day stats repaired via delta subtraction"
+                );
+            }
+
+            // 7a. Truncate the boundary epoch stats row (the epoch containing
+            // replay_start) to the fork point. Replay only re-processes blocks
+            // > rollback_to, so this row must keep its true start_block /
+            // start_timestamp while its end/counts are rolled back.
+            if !delete_cutoff_epoch {
+                let boundary_header = replay_start_header.as_ref().ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "replay_start header missing while cutoff stats exist: replay_start={}",
+                        replay_start
+                    )
+                })?;
+                let boundary_epoch = boundary_header.epoch_number;
+                let key =
+                    keys::encode_stats_key(keys::STATS_PREFIX_EPOCH, &boundary_epoch.to_be_bytes());
+                let cf = self.cf_for_stats_key(&key)?;
+                let existing = self.get_cf(cf, &key)?.ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "boundary epoch stats row missing during rollback: epoch={}, replay_start={}, rollback_to={}",
+                        boundary_epoch,
+                        replay_start,
+                        rollback_to
+                    )
+                })?;
+                let mut row: EpochStats = bincode::deserialize(&existing).map_err(|e| {
+                    anyhow::anyhow!(
+                        "failed to deserialize boundary epoch stats during rollback: epoch={}, error={}",
+                        boundary_epoch,
+                        e
+                    )
+                })?;
+                if row.start_block > rollback_to {
+                    anyhow::bail!(
+                        "boundary epoch stats start_block after fork point: epoch={}, start_block={}, rollback_to={} (corrupt epoch row; re-sync required)",
+                        boundary_epoch,
+                        row.start_block,
+                        rollback_to
+                    );
+                }
+                let removed_txs = epoch_tx_removed.get(&boundary_epoch).copied().unwrap_or(0);
+                let removed_txs = i32::try_from(removed_txs).map_err(|_| {
+                    anyhow::anyhow!(
+                        "rolled-back epoch tx count exceeds i32 range: epoch={}, removed={}",
+                        boundary_epoch,
+                        removed_txs
+                    )
+                })?;
+                row.transactions_count =
+                    row.transactions_count.checked_sub(removed_txs).filter(|c| *c >= 0).ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "boundary epoch tx count underflow during rollback: epoch={}, had={}, removing={} (corrupt epoch row; re-sync required)",
+                            boundary_epoch,
+                            row.transactions_count,
+                            removed_txs
+                        )
+                    })?;
+                row.end_block = Some(rollback_to);
+                row.blocks_count =
+                    i32::try_from(rollback_to - row.start_block + 1).map_err(|_| {
+                        anyhow::anyhow!(
+                            "boundary epoch blocks_count exceeds i32 range: epoch={}, start_block={}, rollback_to={}",
+                            boundary_epoch,
+                            row.start_block,
+                            rollback_to
+                        )
+                    })?;
+                // The epoch continues into the replayed range, so it cannot be
+                // complete at the fork point.
+                row.end_timestamp = None;
+                let value = bincode::serialize(&row).map_err(|e| {
+                    anyhow::anyhow!(
+                        "failed to serialize truncated boundary epoch stats: epoch={}, error={}",
+                        boundary_epoch,
+                        e
+                    )
+                })?;
+                batch.put_cf(cf, &key, &value);
+                info!(
+                    boundary_epoch,
+                    end_block = rollback_to,
+                    blocks_count = row.blocks_count,
+                    "rollback: boundary epoch stats truncated to fork point"
                 );
             }
 
@@ -3910,10 +4021,10 @@ mod tests {
         let cutoff = b"20260210";
         let cutoff_hh = b"2026021000";
         let key = crate::keys::encode_stats_key(crate::keys::STATS_PREFIX_DAILY, b"20260211");
-        assert!(should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, 0).unwrap());
+        assert!(should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, 0, false).unwrap());
 
         let key_old = crate::keys::encode_stats_key(crate::keys::STATS_PREFIX_DAILY, b"20260209");
-        assert!(!should_delete_stats_for_replay(&key_old, cutoff, cutoff_hh, 0, 0).unwrap());
+        assert!(!should_delete_stats_for_replay(&key_old, cutoff, cutoff_hh, 0, 0, false).unwrap());
     }
 
     #[test]
@@ -3921,11 +4032,11 @@ mod tests {
         let cutoff = b"20260210";
         let cutoff_hh = b"2026021000";
         let hourly = crate::keys::encode_stats_key(crate::keys::STATS_PREFIX_HOURLY, b"2026021001");
-        assert!(should_delete_stats_for_replay(&hourly, cutoff, cutoff_hh, 0, 0).unwrap());
+        assert!(should_delete_stats_for_replay(&hourly, cutoff, cutoff_hh, 0, 0, false).unwrap());
 
         let miner_suffix = [b"20260210".as_slice(), &[0xAA; 32]].concat();
         let miner = crate::keys::encode_stats_key(crate::keys::STATS_PREFIX_MINER, &miner_suffix);
-        assert!(should_delete_stats_for_replay(&miner, cutoff, cutoff_hh, 0, 0).unwrap());
+        assert!(should_delete_stats_for_replay(&miner, cutoff, cutoff_hh, 0, 0, false).unwrap());
     }
 
     #[test]
@@ -3935,10 +4046,10 @@ mod tests {
         let code_hash = [0xAA; 32];
 
         let new_key = crate::keys::encode_script_daily_key(&code_hash, false, 20260211);
-        assert!(should_delete_stats_for_replay(&new_key, cutoff, cutoff_hh, 0, 0).unwrap());
+        assert!(should_delete_stats_for_replay(&new_key, cutoff, cutoff_hh, 0, 0, false).unwrap());
 
         let old_key = crate::keys::encode_script_daily_key(&code_hash, true, 20260209);
-        assert!(!should_delete_stats_for_replay(&old_key, cutoff, cutoff_hh, 0, 0).unwrap());
+        assert!(!should_delete_stats_for_replay(&old_key, cutoff, cutoff_hh, 0, 0, false).unwrap());
     }
 
     #[test]
@@ -3948,10 +4059,10 @@ mod tests {
         let type_hash = [0xBB; 32];
 
         let new_key = crate::keys::encode_token_daily_key(&type_hash, 20260211);
-        assert!(should_delete_stats_for_replay(&new_key, cutoff, cutoff_hh, 0, 0).unwrap());
+        assert!(should_delete_stats_for_replay(&new_key, cutoff, cutoff_hh, 0, 0, false).unwrap());
 
         let old_key = crate::keys::encode_token_daily_key(&type_hash, 20260209);
-        assert!(!should_delete_stats_for_replay(&old_key, cutoff, cutoff_hh, 0, 0).unwrap());
+        assert!(!should_delete_stats_for_replay(&old_key, cutoff, cutoff_hh, 0, 0, false).unwrap());
     }
 
     #[test]
@@ -3961,10 +4072,10 @@ mod tests {
         let cluster_id = [0xCC; 32];
 
         let new_key = crate::keys::encode_cluster_daily_key(&cluster_id, 20260211);
-        assert!(should_delete_stats_for_replay(&new_key, cutoff, cutoff_hh, 0, 0).unwrap());
+        assert!(should_delete_stats_for_replay(&new_key, cutoff, cutoff_hh, 0, 0, false).unwrap());
 
         let old_key = crate::keys::encode_cluster_daily_key(&cluster_id, 20260209);
-        assert!(!should_delete_stats_for_replay(&old_key, cutoff, cutoff_hh, 0, 0).unwrap());
+        assert!(!should_delete_stats_for_replay(&old_key, cutoff, cutoff_hh, 0, 0, false).unwrap());
     }
 
     #[test]
@@ -3974,10 +4085,10 @@ mod tests {
         let spore_id = [0xDD; 32];
 
         let new_key = crate::keys::encode_spore_daily_key(&spore_id, 20260211);
-        assert!(should_delete_stats_for_replay(&new_key, cutoff, cutoff_hh, 0, 0).unwrap());
+        assert!(should_delete_stats_for_replay(&new_key, cutoff, cutoff_hh, 0, 0, false).unwrap());
 
         let old_key = crate::keys::encode_spore_daily_key(&spore_id, 20260209);
-        assert!(!should_delete_stats_for_replay(&old_key, cutoff, cutoff_hh, 0, 0).unwrap());
+        assert!(!should_delete_stats_for_replay(&old_key, cutoff, cutoff_hh, 0, 0, false).unwrap());
     }
 
     #[test]
@@ -3987,10 +4098,10 @@ mod tests {
         let collection_id = [0xEE; 24];
 
         let new_key = crate::keys::encode_object_daily_key(&collection_id, 20260211);
-        assert!(should_delete_stats_for_replay(&new_key, cutoff, cutoff_hh, 0, 0).unwrap());
+        assert!(should_delete_stats_for_replay(&new_key, cutoff, cutoff_hh, 0, 0, false).unwrap());
 
         let old_key = crate::keys::encode_object_daily_key(&collection_id, 20260209);
-        assert!(!should_delete_stats_for_replay(&old_key, cutoff, cutoff_hh, 0, 0).unwrap());
+        assert!(!should_delete_stats_for_replay(&old_key, cutoff, cutoff_hh, 0, 0, false).unwrap());
     }
 
     #[test]
@@ -3999,20 +4110,34 @@ mod tests {
         let cutoff_hh = b"2026021000";
         let cutoff_epoch: i64 = 100;
 
-        // Epoch at cutoff → delete
+        // Boundary epoch, replay starts mid-epoch → keep (truncated separately)
         let key =
             crate::keys::encode_stats_key(crate::keys::STATS_PREFIX_EPOCH, &100_i64.to_be_bytes());
-        assert!(should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, cutoff_epoch).unwrap());
+        assert!(
+            !should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, cutoff_epoch, false)
+                .unwrap()
+        );
 
-        // Epoch after cutoff → delete
+        // Boundary epoch, replay starts at its first block → delete (full rebuild)
+        assert!(
+            should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, cutoff_epoch, true).unwrap()
+        );
+
+        // Epoch after cutoff → delete regardless
         let key =
             crate::keys::encode_stats_key(crate::keys::STATS_PREFIX_EPOCH, &101_i64.to_be_bytes());
-        assert!(should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, cutoff_epoch).unwrap());
+        assert!(
+            should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, cutoff_epoch, false)
+                .unwrap()
+        );
 
         // Epoch before cutoff → keep
         let key =
             crate::keys::encode_stats_key(crate::keys::STATS_PREFIX_EPOCH, &99_i64.to_be_bytes());
-        assert!(!should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, cutoff_epoch).unwrap());
+        assert!(
+            !should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, cutoff_epoch, false)
+                .unwrap()
+        );
     }
 
     #[test]
@@ -4028,32 +4153,32 @@ mod tests {
         let type_script_hash = [0xDD; 32];
 
         let key = crate::keys::encode_spore_outpoint_key(&tx_hash, output_index);
-        assert!(!should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, 0).unwrap());
+        assert!(!should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, 0, false).unwrap());
 
         let key = crate::keys::encode_spore_outpoint_by_id_key(&spore_id, &tx_hash, output_index);
-        assert!(!should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, 0).unwrap());
+        assert!(!should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, 0, false).unwrap());
 
         let key = crate::keys::encode_spore_type_index_key(&type_script_hash);
-        assert!(!should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, 0).unwrap());
+        assert!(!should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, 0, false).unwrap());
 
         let key = crate::keys::encode_mnft_class_outpoint_key(&tx_hash, output_index);
-        assert!(!should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, 0).unwrap());
+        assert!(!should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, 0, false).unwrap());
 
         let key = crate::keys::encode_mnft_token_outpoint_key(&tx_hash, output_index);
-        assert!(!should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, 0).unwrap());
+        assert!(!should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, 0, false).unwrap());
 
         let key = crate::keys::encode_dotbit_account_outpoint_key(&tx_hash, output_index);
-        assert!(!should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, 0).unwrap());
+        assert!(!should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, 0, false).unwrap());
 
         let key = crate::keys::encode_dotbit_outpoint_by_account_id_key(
             &account_id,
             &tx_hash,
             output_index,
         );
-        assert!(!should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, 0).unwrap());
+        assert!(!should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, 0, false).unwrap());
 
         let key = crate::keys::encode_object_type_index_key(&type_script_hash);
-        assert!(!should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, 0).unwrap());
+        assert!(!should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, 0, false).unwrap());
     }
 
     #[test]
@@ -4068,27 +4193,42 @@ mod tests {
 
         // TOKEN_HOURLY at cutoff_hour → deleted
         let key = crate::keys::encode_token_hourly_key(&type_hash, cutoff_hour);
-        assert!(should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hour, 0).unwrap());
+        assert!(
+            should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hour, 0, false).unwrap()
+        );
 
         // TOKEN_HOURLY before cutoff → preserved
         let key = crate::keys::encode_token_hourly_key(&type_hash, cutoff_hour - 1);
-        assert!(!should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hour, 0).unwrap());
+        assert!(
+            !should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hour, 0, false)
+                .unwrap()
+        );
 
         // SPORE_HOURLY at cutoff_hour → deleted
         let key = crate::keys::encode_spore_hourly_key(&cluster_id, cutoff_hour);
-        assert!(should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hour, 0).unwrap());
+        assert!(
+            should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hour, 0, false).unwrap()
+        );
 
         // SPORE_HOURLY before cutoff → preserved
         let key = crate::keys::encode_spore_hourly_key(&cluster_id, cutoff_hour - 1);
-        assert!(!should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hour, 0).unwrap());
+        assert!(
+            !should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hour, 0, false)
+                .unwrap()
+        );
 
         // OBJECT_HOURLY at cutoff_hour → deleted
         let key = crate::keys::encode_object_hourly_key(&collection_id, cutoff_hour);
-        assert!(should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hour, 0).unwrap());
+        assert!(
+            should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hour, 0, false).unwrap()
+        );
 
         // OBJECT_HOURLY before cutoff → preserved
         let key = crate::keys::encode_object_hourly_key(&collection_id, cutoff_hour - 1);
-        assert!(!should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hour, 0).unwrap());
+        assert!(
+            !should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hour, 0, false)
+                .unwrap()
+        );
     }
 
     #[test]
@@ -4097,7 +4237,7 @@ mod tests {
         let cutoff_hh = b"invalid-cutoff";
         let code_hash = [0xAA; 32];
         let key = crate::keys::encode_script_daily_key(&code_hash, false, 20260211);
-        let err = should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, 0).unwrap_err();
+        let err = should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, 0, false).unwrap_err();
         assert!(err.to_string().contains("invalid cutoff date"));
     }
 
@@ -4118,6 +4258,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
 
@@ -4151,6 +4294,296 @@ mod tests {
         assert_eq!(result.blocks_removed, 0);
     }
 
+    fn seed_epoch_row(store: &CkbadgerStore, stats: &EpochStats) {
+        let key =
+            keys::encode_stats_key(keys::STATS_PREFIX_EPOCH, &stats.epoch_number.to_be_bytes());
+        let cf = store.cf_for_stats_key(&key).unwrap();
+        store
+            .put_cf(cf, &key, &bincode::serialize(stats).unwrap())
+            .unwrap();
+    }
+
+    fn read_epoch_row(store: &CkbadgerStore, epoch: i64) -> Option<EpochStats> {
+        let key = keys::encode_stats_key(keys::STATS_PREFIX_EPOCH, &epoch.to_be_bytes());
+        let cf = store.cf_for_stats_key(&key).unwrap();
+        store
+            .get_cf(cf, &key)
+            .unwrap()
+            .map(|v| bincode::deserialize(&v).unwrap())
+    }
+
+    /// Regression (F1): a mid-epoch rollback must TRUNCATE the boundary epoch
+    /// stats row (preserving its true start_block/start_timestamp) instead of
+    /// deleting it. Replay only re-processes blocks > rollback_to, so a
+    /// deleted row used to be recreated with a fabricated start at the fork
+    /// point, corrupting epoch avg block time, hash rate, and epoch ETA after
+    /// every shallow reorg. Epochs that begin inside the replayed range are
+    /// still deleted (replay rebuilds them from their first block).
+    #[test]
+    fn test_rollback_truncates_boundary_epoch_row_and_deletes_later_epochs() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+
+        let ts = |n: i64| 1_700_000_000_000 + n * 10_000;
+        {
+            let mut batch = StoreBatch::new(&store);
+            for n in 100..=150i64 {
+                batch.put_block_header(
+                    n,
+                    &CachedBlockHeader {
+                        hash: {
+                            let mut h = vec![0u8; 32];
+                            h[0] = n as u8;
+                            h
+                        },
+                        parent_hash: vec![0u8; 32],
+                        timestamp: ts(n),
+                        epoch_number: 5,
+                        epoch_index: (n - 100) as i32,
+                        epoch_length: 1800,
+                        dao: vec![0; 32],
+                        transactions_count: 2,
+                        uncles_count: 0,
+                        proposals_count: 0,
+                        compact_target: 0x1a08a97e,
+                        miner_lock_hash: None,
+                        cycles: None,
+                    },
+                );
+            }
+            batch.commit().unwrap();
+        }
+        let epoch_start_ts = chrono::DateTime::from_timestamp_millis(ts(100)).unwrap();
+        seed_epoch_row(
+            &store,
+            &EpochStats {
+                epoch_number: 5,
+                start_block: 100,
+                end_block: Some(150),
+                blocks_count: 51,
+                length: 1800,
+                start_timestamp: epoch_start_ts,
+                end_timestamp: None,
+                transactions_count: 102,
+            },
+        );
+        // An epoch that starts strictly inside the replayed range must still
+        // be deleted so replay can rebuild it from its first block.
+        seed_epoch_row(
+            &store,
+            &EpochStats {
+                epoch_number: 6,
+                start_block: 145,
+                end_block: Some(150),
+                blocks_count: 6,
+                length: 1800,
+                start_timestamp: chrono::DateTime::from_timestamp_millis(ts(145)).unwrap(),
+                end_timestamp: None,
+                transactions_count: 12,
+            },
+        );
+        seed_sync_status(&store, 150, &[150u8; 32], 102, 0, 0);
+
+        store.rollback_to_block(120).unwrap();
+
+        let boundary = read_epoch_row(&store, 5).expect("boundary epoch row must survive rollback");
+        assert_eq!(boundary.start_block, 100, "start_block must be preserved");
+        assert_eq!(
+            boundary.start_timestamp, epoch_start_ts,
+            "start_timestamp must be preserved"
+        );
+        assert_eq!(boundary.end_block, Some(120));
+        assert_eq!(boundary.blocks_count, 21);
+        // 30 rolled-back blocks (121..=150) × 2 txs each subtracted.
+        assert_eq!(boundary.transactions_count, 102 - 60);
+        assert_eq!(boundary.end_timestamp, None);
+
+        assert!(
+            read_epoch_row(&store, 6).is_none(),
+            "epochs starting inside the replayed range must be deleted"
+        );
+    }
+
+    /// Regression (F5): partial-day rollback subtracts miner-stat deltas using
+    /// the header's cellbase-witness miner (`miner_lock_hash`), matching the
+    /// forward write path's attribution. (The old code inferred the miner from
+    /// the cellbase tx's first participant — the cellbase OUTPUT lock, i.e.
+    /// the N-11 block's miner.)
+    #[test]
+    fn test_partial_day_rollback_subtracts_miner_stats_by_witness_miner() {
+        // 2026-04-08 in UTC+8 (see block_date semantics).
+        let day_start_ms: i64 = 1775577600000;
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+
+        let miner_a = vec![0xA1; 32];
+        let miner_b = vec![0xB2; 32];
+        {
+            let mut batch = StoreBatch::new(&store);
+            for n in 1..=4i64 {
+                let miner = if n <= 2 { &miner_a } else { &miner_b };
+                batch.put_block_header(
+                    n,
+                    &CachedBlockHeader {
+                        hash: {
+                            let mut h = vec![0u8; 32];
+                            h[0] = n as u8;
+                            h
+                        },
+                        parent_hash: vec![0u8; 32],
+                        timestamp: day_start_ms + n * 1000,
+                        epoch_number: 1,
+                        epoch_index: n as i32,
+                        epoch_length: 1800,
+                        dao: vec![0; 32],
+                        transactions_count: 1,
+                        uncles_count: 0,
+                        proposals_count: 0,
+                        compact_target: 0,
+                        miner_lock_hash: Some(miner.clone()),
+                        cycles: None,
+                    },
+                );
+            }
+            batch.commit().unwrap();
+        }
+        seed_epoch_row(
+            &store,
+            &EpochStats {
+                epoch_number: 1,
+                start_block: 1,
+                end_block: Some(4),
+                blocks_count: 4,
+                length: 1800,
+                start_timestamp: chrono::DateTime::from_timestamp_millis(day_start_ms + 1000)
+                    .unwrap(),
+                end_timestamp: None,
+                transactions_count: 4,
+            },
+        );
+        let date = "20260408";
+        store
+            .put_miner_stats(
+                date,
+                &miner_a,
+                &MinerStats {
+                    miner_lock_hash: miner_a.clone(),
+                    blocks_count: 2,
+                    last_block_number: 2,
+                },
+            )
+            .unwrap();
+        store
+            .put_miner_stats(
+                date,
+                &miner_b,
+                &MinerStats {
+                    miner_lock_hash: miner_b.clone(),
+                    blocks_count: 2,
+                    last_block_number: 4,
+                },
+            )
+            .unwrap();
+        seed_sync_status(&store, 4, &[4u8; 32], 4, 0, 0);
+
+        // Roll back blocks 3 and 4 — both mined by miner_b.
+        store.rollback_to_block(2).unwrap();
+
+        let read_miner = |miner: &[u8]| -> Option<MinerStats> {
+            let suffix = [date.as_bytes(), miner].concat();
+            let key = keys::encode_stats_key(keys::stats_prefix::MINER, &suffix);
+            store
+                .get_cf(store.cf_stats_chain(), &key)
+                .unwrap()
+                .map(|v| bincode::deserialize(&v).unwrap())
+        };
+        assert!(
+            read_miner(&miner_b).is_none(),
+            "miner_b lost all rolled-back blocks; its daily row must be deleted"
+        );
+        let kept = read_miner(&miner_a).expect("miner_a row must survive");
+        assert_eq!(kept.blocks_count, 2, "miner_a blocks were before the fork");
+    }
+
+    /// A rollback landing exactly on an epoch boundary (replay starts at the
+    /// epoch's first block) must delete that epoch's row: replay rebuilds it
+    /// wholesale via the writer's is_new path.
+    #[test]
+    fn test_rollback_at_epoch_boundary_deletes_epoch_row() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+
+        let ts = |n: i64| 1_700_000_000_000 + n * 10_000;
+        {
+            let mut batch = StoreBatch::new(&store);
+            for n in 100..=150i64 {
+                let (epoch_number, epoch_index) = if n < 130 { (5, n - 100) } else { (6, n - 130) };
+                batch.put_block_header(
+                    n,
+                    &CachedBlockHeader {
+                        hash: {
+                            let mut h = vec![0u8; 32];
+                            h[0] = n as u8;
+                            h
+                        },
+                        parent_hash: vec![0u8; 32],
+                        timestamp: ts(n),
+                        epoch_number,
+                        epoch_index: epoch_index as i32,
+                        epoch_length: 30,
+                        dao: vec![0; 32],
+                        transactions_count: 2,
+                        uncles_count: 0,
+                        proposals_count: 0,
+                        compact_target: 0x1a08a97e,
+                        miner_lock_hash: None,
+                        cycles: None,
+                    },
+                );
+            }
+            batch.commit().unwrap();
+        }
+        seed_epoch_row(
+            &store,
+            &EpochStats {
+                epoch_number: 5,
+                start_block: 100,
+                end_block: Some(129),
+                blocks_count: 30,
+                length: 30,
+                start_timestamp: chrono::DateTime::from_timestamp_millis(ts(100)).unwrap(),
+                end_timestamp: Some(chrono::DateTime::from_timestamp_millis(ts(129)).unwrap()),
+                transactions_count: 60,
+            },
+        );
+        seed_epoch_row(
+            &store,
+            &EpochStats {
+                epoch_number: 6,
+                start_block: 130,
+                end_block: Some(150),
+                blocks_count: 21,
+                length: 30,
+                start_timestamp: chrono::DateTime::from_timestamp_millis(ts(130)).unwrap(),
+                end_timestamp: None,
+                transactions_count: 42,
+            },
+        );
+        seed_sync_status(&store, 150, &[150u8; 32], 102, 0, 0);
+
+        // Fork exactly before epoch 6's first block: replay starts at 130
+        // (epoch_index 0), so epoch 6's row is rebuilt from scratch.
+        store.rollback_to_block(129).unwrap();
+
+        assert!(
+            read_epoch_row(&store, 6).is_none(),
+            "epoch starting at replay_start must be deleted for full rebuild"
+        );
+        let prev = read_epoch_row(&store, 5).expect("completed prior epoch must be untouched");
+        assert!(prev.end_timestamp.is_some());
+        assert_eq!(prev.transactions_count, 60);
+    }
+
     #[test]
     fn test_rollback_to_block_deletes_tx_actions_above_target() {
         let dir = tempfile::tempdir().unwrap();
@@ -4169,6 +4602,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
         let header2 = CachedBlockHeader {
@@ -4181,6 +4617,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
 
@@ -4237,6 +4676,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
         let header2 = CachedBlockHeader {
@@ -4249,6 +4691,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 2,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
 
@@ -4345,6 +4790,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
         let header1 = CachedBlockHeader {
@@ -4357,6 +4805,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
 
@@ -4452,6 +4903,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
         let header1 = CachedBlockHeader {
@@ -4464,6 +4918,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
 
@@ -4548,6 +5005,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
         let header2 = CachedBlockHeader {
@@ -4560,6 +5020,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
         let cell = LiveCellInfo {
@@ -4631,6 +5094,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
         let header2 = CachedBlockHeader {
@@ -4643,6 +5109,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
 
@@ -4770,6 +5239,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
         let header2 = CachedBlockHeader {
@@ -4782,6 +5254,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
 
@@ -4920,6 +5395,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
         let header2 = CachedBlockHeader {
@@ -4932,6 +5410,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
 
@@ -5105,6 +5586,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
         let header2 = CachedBlockHeader {
@@ -5117,6 +5601,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
 
@@ -5298,6 +5785,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
         let header2 = CachedBlockHeader {
@@ -5310,6 +5800,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
 
@@ -5480,6 +5973,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
         let header2 = CachedBlockHeader {
@@ -5492,6 +5988,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 2,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
 
@@ -5667,6 +6166,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
         let header2 = CachedBlockHeader {
@@ -5679,6 +6181,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
 
@@ -5726,6 +6231,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
         let header2 = CachedBlockHeader {
@@ -5738,6 +6246,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
 
@@ -5799,6 +6310,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
         let header2 = CachedBlockHeader {
@@ -5811,6 +6325,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
 
@@ -5905,6 +6422,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
         let header2 = CachedBlockHeader {
@@ -5917,6 +6437,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
         let keep_cell = LiveCellInfo {
@@ -6042,6 +6565,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
         let header2 = CachedBlockHeader {
@@ -6054,6 +6580,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
         let header3 = CachedBlockHeader {
@@ -6066,6 +6595,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
 
@@ -6230,6 +6762,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
         let header2 = CachedBlockHeader {
@@ -6242,6 +6777,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
 
@@ -6331,6 +6869,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
 
@@ -6360,6 +6901,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
         let header2 = CachedBlockHeader {
@@ -6372,6 +6916,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
         let tx_hash = vec![0x21; 32];
@@ -6449,6 +6996,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
         let header2 = CachedBlockHeader {
@@ -6461,6 +7011,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
 
@@ -6651,6 +7204,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 0,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
 
@@ -6722,6 +7278,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
         let header2 = CachedBlockHeader {
@@ -6734,6 +7293,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
         let mut batch = StoreBatch::new(&store);
@@ -7039,6 +7601,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
         let header2 = CachedBlockHeader {
@@ -7051,6 +7616,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
         let mut batch = StoreBatch::new(&store);
@@ -7246,6 +7814,9 @@ mod tests {
                     dao: vec![0; 32],
                     transactions_count: 0,
                     uncles_count: 0,
+                    proposals_count: 0,
+                    compact_target: 0,
+                    miner_lock_hash: None,
                     cycles: None,
                 },
             );
@@ -7301,6 +7872,9 @@ mod tests {
                     dao: vec![0; 32],
                     transactions_count: 3,
                     uncles_count: 0,
+                    proposals_count: 0,
+                    compact_target: 0,
+                    miner_lock_hash: None,
                     cycles: None,
                 },
             );
@@ -7396,19 +7970,25 @@ mod tests {
 
         // Hour 14 on same date — canonical, should NOT be deleted
         let key_before = keys::encode_stats_key(keys::STATS_PREFIX_HOURLY, b"2026021014");
-        assert!(!should_delete_stats_for_replay(&key_before, cutoff, cutoff_hh, 0, 0).unwrap());
+        assert!(
+            !should_delete_stats_for_replay(&key_before, cutoff, cutoff_hh, 0, 0, false).unwrap()
+        );
 
         // Hour 15 (cutoff hour) — should be deleted (repair handles it)
         let key_at = keys::encode_stats_key(keys::STATS_PREFIX_HOURLY, b"2026021015");
-        assert!(should_delete_stats_for_replay(&key_at, cutoff, cutoff_hh, 0, 0).unwrap());
+        assert!(should_delete_stats_for_replay(&key_at, cutoff, cutoff_hh, 0, 0, false).unwrap());
 
         // Hour 16 — after cutoff, should be deleted
         let key_after = keys::encode_stats_key(keys::STATS_PREFIX_HOURLY, b"2026021016");
-        assert!(should_delete_stats_for_replay(&key_after, cutoff, cutoff_hh, 0, 0).unwrap());
+        assert!(
+            should_delete_stats_for_replay(&key_after, cutoff, cutoff_hh, 0, 0, false).unwrap()
+        );
 
         // Previous day — should NOT be deleted
         let key_prev_day = keys::encode_stats_key(keys::STATS_PREFIX_HOURLY, b"2026020923");
-        assert!(!should_delete_stats_for_replay(&key_prev_day, cutoff, cutoff_hh, 0, 0).unwrap());
+        assert!(
+            !should_delete_stats_for_replay(&key_prev_day, cutoff, cutoff_hh, 0, 0, false).unwrap()
+        );
     }
 
     #[test]
@@ -7418,15 +7998,15 @@ mod tests {
 
         // Hour 14 — canonical, NOT deleted
         let key = keys::encode_stats_key(keys::STATS_PREFIX_ACTIVITY_HOURLY, b"2026021014");
-        assert!(!should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, 0).unwrap());
+        assert!(!should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, 0, false).unwrap());
 
         // Hour 15 (cutoff) — deleted
         let key = keys::encode_stats_key(keys::STATS_PREFIX_ACTIVITY_HOURLY, b"2026021015");
-        assert!(should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, 0).unwrap());
+        assert!(should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, 0, false).unwrap());
 
         // Hour 16 — deleted
         let key = keys::encode_stats_key(keys::STATS_PREFIX_ACTIVITY_HOURLY, b"2026021016");
-        assert!(should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, 0).unwrap());
+        assert!(should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, 0, false).unwrap());
     }
 
     #[test]
@@ -7436,26 +8016,26 @@ mod tests {
 
         // Daily ADDR_SET on cutoff date — preserved (strict >)
         let key = keys::encode_stats_key(keys::STATS_PREFIX_ACTIVITY_DAILY_ADDR_SET, b"20260210");
-        assert!(!should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, 0).unwrap());
+        assert!(!should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, 0, false).unwrap());
 
         // Daily ADDR_SET day after — deleted
         let key = keys::encode_stats_key(keys::STATS_PREFIX_ACTIVITY_DAILY_ADDR_SET, b"20260211");
-        assert!(should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, 0).unwrap());
+        assert!(should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, 0, false).unwrap());
 
         // Hourly ADDR_SET at cutoff hour — preserved (strict >)
         let key =
             keys::encode_stats_key(keys::STATS_PREFIX_ACTIVITY_HOURLY_ADDR_SET, b"2026021015");
-        assert!(!should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, 0).unwrap());
+        assert!(!should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, 0, false).unwrap());
 
         // Hourly ADDR_SET hour before cutoff — preserved
         let key =
             keys::encode_stats_key(keys::STATS_PREFIX_ACTIVITY_HOURLY_ADDR_SET, b"2026021014");
-        assert!(!should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, 0).unwrap());
+        assert!(!should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, 0, false).unwrap());
 
         // Hourly ADDR_SET hour after cutoff — deleted
         let key =
             keys::encode_stats_key(keys::STATS_PREFIX_ACTIVITY_HOURLY_ADDR_SET, b"2026021016");
-        assert!(should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, 0).unwrap());
+        assert!(should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, 0, false).unwrap());
     }
 
     #[test]
@@ -7647,6 +8227,9 @@ mod tests {
                 dao: vec![0u8; 32],
                 transactions_count: 1,
                 uncles_count: 0,
+                proposals_count: 0,
+                compact_target: 0,
+                miner_lock_hash: None,
                 cycles: None,
             },
             CachedBlockHeader {
@@ -7659,6 +8242,9 @@ mod tests {
                 dao: vec![0u8; 32],
                 transactions_count: 1,
                 uncles_count: 1, // this block has an uncle
+                proposals_count: 0,
+                compact_target: 0,
+                miner_lock_hash: None,
                 cycles: None,
             },
             CachedBlockHeader {
@@ -7671,6 +8257,9 @@ mod tests {
                 dao: vec![0u8; 32],
                 transactions_count: 1,
                 uncles_count: 0,
+                proposals_count: 0,
+                compact_target: 0,
+                miner_lock_hash: None,
                 cycles: None,
             },
             CachedBlockHeader {
@@ -7683,6 +8272,9 @@ mod tests {
                 dao: vec![0u8; 32],
                 transactions_count: 1,
                 uncles_count: 1, // this block (to be rolled back) has an uncle
+                proposals_count: 0,
+                compact_target: 0,
+                miner_lock_hash: None,
                 cycles: None,
             },
         ];
@@ -7702,6 +8294,23 @@ mod tests {
             block_time_count: 4,
         };
         store.put_daily_block_stats("20260408", &pre_reorg).unwrap();
+
+        // Epoch row must exist for a mid-epoch rollback (written atomically
+        // with block headers on real write paths).
+        seed_epoch_row(
+            &store,
+            &EpochStats {
+                epoch_number: 1,
+                start_block: 1,
+                end_block: Some(4),
+                blocks_count: 4,
+                length: 1800,
+                start_timestamp: chrono::DateTime::from_timestamp_millis(day_start_ms + 1000)
+                    .unwrap(),
+                end_timestamp: None,
+                transactions_count: 4,
+            },
+        );
 
         // Rollback block 4 — the one with 1 uncle.
         // rollback_to=3 means block 4 is removed.
@@ -7759,6 +8368,9 @@ mod tests {
             dao,
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         }
     }

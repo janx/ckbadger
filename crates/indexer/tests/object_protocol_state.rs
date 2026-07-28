@@ -15,6 +15,11 @@ use ckbadger_store::types::{
     DOTBIT_SENTINEL_COLLECTION,
 };
 
+/// Real mainnet cellbase first witness (block 12,000,000): block parsing
+/// requires every non-genesis cellbase to carry a valid RFC-0022
+/// `CellbaseWitness`.
+const TEST_CELLBASE_WITNESS: &str = "0x7a0000000c00000055000000490000001000000030000000310000009bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce801140000008211f1b938a107cd53b6302cc752a6fc3965638d210000000000000020302e3131332e3020283832383731613320323032342d30312d303929";
+
 fn fixture_lock_script(args_hex: &str) -> Script {
     Script {
         code_hash: "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8".to_string(),
@@ -302,7 +307,7 @@ fn bulk_build_object_fixture() -> Vec<BlockResponseWithCycles> {
             ),
             "0x000000003c00000010000000240000002c000000a7d4860aaf1dc83daedf75d6022811d2c2ae250b1b46fc69000000000c00000032303234303530372e626974".to_string(),
         ],
-        witnesses: vec!["0x".to_string()],
+        witnesses: vec![TEST_CELLBASE_WITNESS.to_string()],
     };
 
     let dummy_cellbase = TransactionView {
@@ -323,7 +328,7 @@ fn bulk_build_object_fixture() -> Vec<BlockResponseWithCycles> {
             type_: None,
         }],
         outputs_data: vec!["0x".to_string()],
-        witnesses: vec!["0x".to_string()],
+        witnesses: vec![TEST_CELLBASE_WITNESS.to_string()],
     };
 
     let transfer_and_burn_tx = TransactionView {
@@ -413,7 +418,7 @@ fn bulk_build_cluster_update_fixture() -> Vec<BlockResponseWithCycles> {
                 "{\"dob\":{\"ver\":1}}"
             ))
         )],
-        witnesses: vec!["0x".to_string()],
+        witnesses: vec![TEST_CELLBASE_WITNESS.to_string()],
     };
 
     let update_tx = TransactionView {
@@ -440,7 +445,7 @@ fn bulk_build_cluster_update_fixture() -> Vec<BlockResponseWithCycles> {
                 "{\"dob\":{\"ver\":2}}"
             ))
         )],
-        witnesses: vec!["0x".to_string()],
+        witnesses: vec![TEST_CELLBASE_WITNESS.to_string()],
     };
 
     vec![
@@ -526,7 +531,7 @@ fn bulk_build_mnft_object_fixture() -> Vec<BlockResponseWithCycles> {
                 hex::encode(create_mnft_token_data(&[1, 2, 3, 4, 5, 6, 7, 8], 1, 0))
             ),
         ],
-        witnesses: vec!["0x".to_string()],
+        witnesses: vec![TEST_CELLBASE_WITNESS.to_string()],
     };
 
     let transfer_tx = TransactionView {
@@ -550,7 +555,7 @@ fn bulk_build_mnft_object_fixture() -> Vec<BlockResponseWithCycles> {
             "0x{}",
             hex::encode(create_mnft_token_data(&[1, 2, 3, 4, 5, 6, 7, 8], 1, 0))
         )],
-        witnesses: vec!["0x".to_string()],
+        witnesses: vec![TEST_CELLBASE_WITNESS.to_string()],
     };
 
     let consume_tx = TransactionView {
@@ -567,7 +572,7 @@ fn bulk_build_mnft_object_fixture() -> Vec<BlockResponseWithCycles> {
         }],
         outputs: vec![],
         outputs_data: vec![],
-        witnesses: vec!["0x".to_string()],
+        witnesses: vec![TEST_CELLBASE_WITNESS.to_string()],
     };
 
     vec![
@@ -635,10 +640,12 @@ fn failed_testnet_transaction_fixture_with_account_and_bit_cell() -> Vec<BlockRe
             "0x7e66fb709ae616f18452d6dc08221bb9fba7b270bdc7615e80b41597ca9bbde281d34cd1dfc27716073d1018a63712926d8e3ab3828195525add4b66d20445678f6dd6ef5ba877151b46fc690000000032303234303530372e626974".to_string(),
             "0x000000003c00000010000000240000002c000000a7d4860aaf1dc83daedf75d6022811d2c2ae250b1b46fc69000000000c00000032303234303530372e626974".to_string(),
         ],
-        witnesses: vec![encode_dotbit_account_cell_witness(
-            &account_id,
-            "20240507.bit",
-        )],
+        // witnesses[0] must be a valid CellbaseWitness (block parsing derives
+        // the miner from it); the das action witness is position-independent.
+        witnesses: vec![
+            TEST_CELLBASE_WITNESS.to_string(),
+            encode_dotbit_account_cell_witness(&account_id, "20240507.bit"),
+        ],
     };
 
     vec![BlockResponseWithCycles {

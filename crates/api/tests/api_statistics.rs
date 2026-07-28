@@ -75,6 +75,9 @@ async fn test_hardforks_endpoint_marks_activated_and_fills_activation_block() {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         },
     );
@@ -257,6 +260,9 @@ async fn test_tx_stats_reads_from_derived_store() {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         },
     );
@@ -379,103 +385,68 @@ async fn test_epoch_time_charts_read_from_derived_store() {
 
 #[tokio::test]
 async fn test_network_stats_reads_derived_statistics() {
+    // Regression (F2/F3/F6/F7):
+    //  - difficulty = current-epoch difficulty from the tip compact_target
+    //    (mainnet vector 0x190df964 → 1,320,058,941,807,520,729 = "1.32 E"),
+    //    not a daily average;
+    //  - avgBlockTime = windowed average with ms precision (two 8s gaps →
+    //    "8.00s"), not a hardcoded 10.00s;
+    //  - hashRate = difficulty / avg seconds in true H/s ("165.01 PH/s"),
+    //    not the 1000×-understated per-millisecond figure;
+    //  - transactionsPerDay = rolling last-24h hourly-bucket sum, not
+    //    today+yesterday calendar days.
     let core_store = test_store();
     let append_only_store = test_append_only_store();
 
     let now = chrono::Utc::now();
     let now_ms = now.timestamp_millis();
-    let today = ckbadger_common::block_date(now);
-    let yesterday = today - chrono::Duration::days(1);
-    let today_str = today.format("%Y%m%d").to_string();
-    let yesterday_str = yesterday.format("%Y%m%d").to_string();
 
     let mut core_batch = StoreBatch::new(core_store.as_ref());
-    core_batch.put_block_header(
-        200,
-        &CachedBlockHeader {
-            hash: vec![0x22; 32],
-            parent_hash: vec![0u8; 32],
-            timestamp: now_ms,
-            epoch_number: 42,
-            epoch_index: 10,
-            epoch_length: 1800,
-            dao: vec![0; 32],
-            transactions_count: 1,
-            uncles_count: 0,
-            cycles: None,
-        },
-    );
+    for (i, block_num) in (198i64..=200).enumerate() {
+        core_batch.put_block_header(
+            block_num,
+            &CachedBlockHeader {
+                hash: vec![0x20 + i as u8; 32],
+                parent_hash: vec![0u8; 32],
+                timestamp: now_ms - (200 - block_num) * 8_000,
+                epoch_number: 42,
+                epoch_index: 10,
+                epoch_length: 1800,
+                dao: vec![0; 32],
+                transactions_count: 1,
+                uncles_count: 0,
+                proposals_count: 0,
+                compact_target: 0x190d_f964,
+                miner_lock_hash: None,
+                cycles: None,
+            },
+        );
+    }
     core_batch.commit().unwrap();
 
-    core_store
-        .put_epoch_stats(
-            42,
-            &EpochStats {
-                epoch_number: 42,
-                start_block: 1,
-                end_block: None,
-                blocks_count: 11,
-                length: 1800,
-                start_timestamp: now - chrono::Duration::seconds(110),
-                end_timestamp: None,
-                transactions_count: 0,
-            },
-        )
-        .unwrap();
-    core_store
-        .put_daily_stats(
-            &today_str,
-            &DailyStats {
-                blocks_count: 1,
-                transactions_count: 120,
-                cells_created: 0,
-                cells_consumed: 0,
-                capacity_transferred: 0,
-                used_capacity_created: 0,
-                used_capacity_consumed: 0,
-                total_live_cells: 0,
-                total_dead_cells: 0,
-                total_all_cells: 0,
-                total_data_size: 0,
-                knowledge_size: None,
-                block_time_sum_ms: 0,
-                block_time_count: 0,
-            },
-        )
-        .unwrap();
-    core_store
-        .put_daily_stats(
-            &yesterday_str,
-            &DailyStats {
-                blocks_count: 1,
-                transactions_count: 80,
-                cells_created: 0,
-                cells_consumed: 0,
-                capacity_transferred: 0,
-                used_capacity_created: 0,
-                used_capacity_consumed: 0,
-                total_live_cells: 0,
-                total_dead_cells: 0,
-                total_all_cells: 0,
-                total_data_size: 0,
-                knowledge_size: None,
-                block_time_sum_ms: 0,
-                block_time_count: 0,
-            },
-        )
-        .unwrap();
-    core_store
-        .put_daily_block_stats(
-            &today_str,
-            &DailyBlockStats {
-                avg_difficulty: 1_000_000.0,
-                block_count: 100,
-                total_uncles: 5,
-                block_time_sum_ms: 100 * 10_000,
-                block_time_count: 100,
-            },
-        )
-        .unwrap();
+    // Two hourly buckets inside the trailing 24h window: 120 + 80 = 200.
+    // One stale bucket outside the window that must NOT be counted.
+    let hour_secs = 3600;
+    let now_hour = (now_ms / 1000) / hour_secs * hour_secs;
+    for (offset_hours, txs) in [(0i64, 120), (1, 80), (30, 999)] {
+        let bucket_start = now_hour - offset_hours * hour_secs;
+        core_store
+            .put_hourly_stats(
+                &chrono::DateTime::from_timestamp(bucket_start, 0)
+                    .unwrap()
+                    .format("%Y%m%d%H")
+                    .to_string(),
+                &HourlyStats {
+                    hour: bucket_start,
+                    blocks_count: 1,
+                    transactions_count: txs,
+                    cells_created: 0,
+                    cells_consumed: 0,
+                    capacity_transferred: 0,
+                },
+            )
+            .unwrap();
+    }
 
     let config = test_config_with_append_only(core_store, append_only_store);
     let app = create_router(config).await;
@@ -490,6 +461,10 @@ async fn test_network_stats_reads_derived_statistics() {
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["transactionsPerDay"], "200");
+    assert_eq!(json["difficulty"], "1.32 E");
+    assert_eq!(json["avgBlockTime"], "8.00s");
+    // 1,320,058,941,807,520,729 hashes-per-block / 8s = 165.01 PH/s.
+    assert_eq!(json["hashRate"], "165.01 PH/s");
 }
 
 #[tokio::test]
@@ -518,6 +493,9 @@ async fn test_network_stats_includes_hero_metrics_from_dao_snapshot() {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         },
     );
@@ -681,6 +659,9 @@ async fn test_network_stats_circulating_supply_uses_seeded_genesis_baseline() {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         },
     );
@@ -773,6 +754,9 @@ async fn test_network_stats_reports_initializing_when_baseline_missing() {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         },
     );

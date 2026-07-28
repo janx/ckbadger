@@ -15,6 +15,11 @@ use ckbadger_store::keys;
 use ckbadger_store::types::{ConsumedCellMeta, BIT_CELL_SENTINEL_COLLECTION};
 use ckbadger_store::SyncStatus;
 
+/// Real mainnet cellbase first witness (block 12,000,000): block parsing
+/// requires every non-genesis cellbase to carry a valid RFC-0022
+/// `CellbaseWitness`.
+const TEST_CELLBASE_WITNESS: &str = "0x7a0000000c00000055000000490000001000000030000000310000009bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce801140000008211f1b938a107cd53b6302cc752a6fc3965638d210000000000000020302e3131332e3020283832383731613320323032342d30312d303929";
+
 fn fixture_lock_script() -> Script {
     Script {
         code_hash: "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8".to_string(),
@@ -124,7 +129,7 @@ fn bulk_build_dao_activity_fixture() -> Vec<BlockResponseWithCycles> {
             type_: Some(dao_type.clone()),
         }],
         outputs_data: vec![format!("0x{}", "00".repeat(8))],
-        witnesses: vec!["0x".to_string()],
+        witnesses: vec![TEST_CELLBASE_WITNESS.to_string()],
     };
 
     let request_tx = TransactionView {
@@ -145,7 +150,7 @@ fn bulk_build_dao_activity_fixture() -> Vec<BlockResponseWithCycles> {
             type_: Some(dao_type),
         }],
         outputs_data: vec![format!("0x{}", hex::encode(100u64.to_le_bytes()))],
-        witnesses: vec!["0x".to_string()],
+        witnesses: vec![TEST_CELLBASE_WITNESS.to_string()],
     };
 
     let completion_tx = TransactionView {
@@ -166,7 +171,7 @@ fn bulk_build_dao_activity_fixture() -> Vec<BlockResponseWithCycles> {
             type_: None,
         }],
         outputs_data: vec!["0x".to_string()],
-        witnesses: vec!["0x".to_string()],
+        witnesses: vec![TEST_CELLBASE_WITNESS.to_string()],
     };
 
     vec![
@@ -219,7 +224,7 @@ fn same_block_create_then_consume_fixture() -> BlockResponseWithCycles {
             type_: None,
         }],
         outputs_data: vec!["0x".to_string()],
-        witnesses: vec!["0x".to_string()],
+        witnesses: vec![TEST_CELLBASE_WITNESS.to_string()],
     };
 
     let consume_tx = TransactionView {
@@ -392,7 +397,7 @@ fn object_activity_fixture() -> Vec<BlockResponseWithCycles> {
             ),
             "0x000000003c00000010000000240000002c000000a7d4860aaf1dc83daedf75d6022811d2c2ae250b1b46fc69000000000c00000032303234303530372e626974".to_string(),
         ],
-        witnesses: vec!["0x".to_string()],
+        witnesses: vec![TEST_CELLBASE_WITNESS.to_string()],
     };
 
     let dummy_cellbase = TransactionView {
@@ -417,7 +422,7 @@ fn object_activity_fixture() -> Vec<BlockResponseWithCycles> {
             type_: None,
         }],
         outputs_data: vec!["0x".to_string()],
-        witnesses: vec!["0x".to_string()],
+        witnesses: vec![TEST_CELLBASE_WITNESS.to_string()],
     };
 
     let transfer_and_burn_tx = TransactionView {
@@ -502,7 +507,7 @@ fn same_block_typed_data_create_then_consume_fixture() -> BlockResponseWithCycle
             type_: Some(fixture_type_script()),
         }],
         outputs_data: vec!["0xdeadbeef".to_string()],
-        witnesses: vec!["0x".to_string()],
+        witnesses: vec![TEST_CELLBASE_WITNESS.to_string()],
     };
 
     let consume_tx = TransactionView {
@@ -556,7 +561,7 @@ fn hodl_tracker_fixture() -> Vec<BlockResponseWithCycles> {
             type_: None,
         }],
         outputs_data: vec!["0x".to_string()],
-        witnesses: vec!["0x".to_string()],
+        witnesses: vec![TEST_CELLBASE_WITNESS.to_string()],
     };
 
     let transfer_tx = TransactionView {
@@ -584,7 +589,7 @@ fn hodl_tracker_fixture() -> Vec<BlockResponseWithCycles> {
             },
         ],
         outputs_data: vec!["0x".to_string(), "0x".to_string()],
-        witnesses: vec!["0x".to_string()],
+        witnesses: vec![TEST_CELLBASE_WITNESS.to_string()],
     };
 
     vec![
@@ -628,7 +633,7 @@ fn cell_distribution_snapshot_fixture() -> Vec<BlockResponseWithCycles> {
             type_: None,
         }],
         outputs_data: vec!["0x".to_string()],
-        witnesses: vec!["0x".to_string()],
+        witnesses: vec![TEST_CELLBASE_WITNESS.to_string()],
     };
 
     let split_tx = TransactionView {
@@ -656,7 +661,7 @@ fn cell_distribution_snapshot_fixture() -> Vec<BlockResponseWithCycles> {
             },
         ],
         outputs_data: vec!["0x".to_string(), "0x".to_string()],
-        witnesses: vec!["0x".to_string()],
+        witnesses: vec![TEST_CELLBASE_WITNESS.to_string()],
     };
 
     let next_day_noop_tx = TransactionView {
@@ -677,7 +682,7 @@ fn cell_distribution_snapshot_fixture() -> Vec<BlockResponseWithCycles> {
             type_: None,
         }],
         outputs_data: vec!["0x".to_string()],
-        witnesses: vec!["0x".to_string()],
+        witnesses: vec![TEST_CELLBASE_WITNESS.to_string()],
     };
 
     vec![
@@ -713,11 +718,30 @@ fn cell_distribution_snapshot_fixture() -> Vec<BlockResponseWithCycles> {
 
 fn hodl_wave_snapshot_fixture() -> Vec<BlockResponseWithCycles> {
     let mut blocks = hodl_tracker_fixture();
+    // Every real block carries a cellbase (blocks 1..=11 on mainnet have one
+    // with zero outputs); an outputless cellbase marks the day boundary
+    // without touching any balances.
+    let boundary_cellbase = TransactionView {
+        hash: format!("0x{}", "f7".repeat(32)),
+        version: "0x0".to_string(),
+        cell_deps: vec![],
+        header_deps: vec![],
+        inputs: vec![CellInput {
+            since: "0x0".to_string(),
+            previous_output: OutPoint {
+                tx_hash: format!("0x{}", "00".repeat(32)),
+                index: "0xffffffff".to_string(),
+            },
+        }],
+        outputs: vec![],
+        outputs_data: vec![],
+        witnesses: vec![TEST_CELLBASE_WITNESS.to_string()],
+    };
     blocks.push(BlockResponseWithCycles {
         block: BlockView {
             header: fixture_header_with_timestamp(14_002_002, 0x93, 1_705_363_200_000),
             uncles: vec![],
-            transactions: vec![],
+            transactions: vec![boundary_cellbase],
             proposals: vec![],
         },
         cycles: None,
@@ -744,7 +768,7 @@ fn bulk_stage_handoff_fixture() -> Vec<BlockResponseWithCycles> {
             type_: None,
         }],
         outputs_data: vec!["0x".to_string()],
-        witnesses: vec!["0x".to_string()],
+        witnesses: vec![TEST_CELLBASE_WITNESS.to_string()],
     };
 
     let split_tx = TransactionView {
@@ -772,7 +796,7 @@ fn bulk_stage_handoff_fixture() -> Vec<BlockResponseWithCycles> {
             },
         ],
         outputs_data: vec!["0x".to_string(), "0x".to_string()],
-        witnesses: vec!["0x".to_string()],
+        witnesses: vec![TEST_CELLBASE_WITNESS.to_string()],
     };
 
     let merge_tx = TransactionView {
@@ -793,7 +817,7 @@ fn bulk_stage_handoff_fixture() -> Vec<BlockResponseWithCycles> {
             type_: None,
         }],
         outputs_data: vec!["0x".to_string()],
-        witnesses: vec!["0x".to_string()],
+        witnesses: vec![TEST_CELLBASE_WITNESS.to_string()],
     };
 
     vec![

@@ -34,6 +34,9 @@ async fn test_search_hash_without_0x_returns_ambiguous_block_and_transaction() {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         },
     );
