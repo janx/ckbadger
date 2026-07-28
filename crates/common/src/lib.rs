@@ -1,3 +1,4 @@
+pub mod address;
 pub mod burn_policy;
 pub mod cycles;
 pub mod cycles_task;
@@ -12,6 +13,7 @@ pub mod sync;
 pub mod token;
 pub mod types;
 
+pub use address::script_to_address;
 pub use error::{Error, Result};
 pub use hardfork::*;
 pub use hex::{parse_capacity, parse_hex_to_bytes, parse_hex_to_hash, parse_hex_u32};

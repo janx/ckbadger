@@ -1,4 +1,3 @@
-use bech32::{Bech32m, Hrp};
 use ckb_hash::new_blake2b;
 
 /// Compute lock script hash from a CKB address.
@@ -96,41 +95,7 @@ pub fn is_ckb_address(s: &str) -> bool {
     s.starts_with("ckb1") || s.starts_with("ckt1")
 }
 
-pub fn script_to_address(
-    code_hash: &[u8],
-    hash_type: i16,
-    args: &[u8],
-    network: &str,
-) -> Result<String, String> {
-    if code_hash.len() != 32 {
-        return Err(format!(
-            "Invalid code_hash length: expected 32, got {}",
-            code_hash.len()
-        ));
-    }
-
-    let hrp = match network {
-        "mainnet" => Hrp::parse("ckb").expect("'ckb' is a valid HRP"),
-        _ => Hrp::parse("ckt").expect("'ckt' is a valid HRP"),
-    };
-
-    let hash_type_byte = match hash_type {
-        0 => 0x00,
-        1 => 0x01,
-        2 => 0x02,
-        4 => 0x04,
-        _ => return Err(format!("Unknown hash_type: {}", hash_type)),
-    };
-
-    // RFC-0021 full payload: 0x00 | code_hash (32) | hash_type (1) | args
-    let mut payload = Vec::with_capacity(1 + 32 + 1 + args.len());
-    payload.push(0x00);
-    payload.extend_from_slice(code_hash);
-    payload.push(hash_type_byte);
-    payload.extend_from_slice(args);
-
-    bech32::encode::<Bech32m>(hrp, &payload).map_err(|e| e.to_string())
-}
+pub use ckbadger_common::script_to_address;
 
 #[cfg(test)]
 mod tests {
