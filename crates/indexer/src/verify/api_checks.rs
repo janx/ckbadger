@@ -3982,6 +3982,7 @@ mod tests {
 
     fn test_ctx() -> CheckContext {
         CheckContext {
+            network: ckbadger_common::hardfork::NETWORK_MAINNET,
             api_url: "http://localhost:3001/api/v1".to_string(),
             rpc_url: None,
             explorer_url: None,
@@ -4256,6 +4257,7 @@ mod tests {
 
     fn mock_ctx(server: &MockServer) -> CheckContext {
         CheckContext {
+            network: ckbadger_common::hardfork::NETWORK_MAINNET,
             api_url: format!("{}/api/v1", server.uri()),
             rpc_url: None,
             explorer_url: None,
@@ -4412,6 +4414,7 @@ mod tests {
         });
 
         let ctx = CheckContext {
+            network: ckbadger_common::hardfork::NETWORK_MAINNET,
             api_url: format!("{}/api/v1", server.uri()),
             rpc_url: None,
             explorer_url: None,
@@ -4763,6 +4766,7 @@ mod tests {
 
     fn address_tokens_ctx(server: &MockServer) -> CheckContext {
         CheckContext {
+            network: ckbadger_common::hardfork::NETWORK_MAINNET,
             api_url: format!("{}/api/v1", server.uri()),
             rpc_url: None,
             explorer_url: None,

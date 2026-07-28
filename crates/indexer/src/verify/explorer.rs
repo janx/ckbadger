@@ -734,13 +734,26 @@ fn last_30_days() -> Vec<String> {
 // Common explorer check runners
 // ---------------------------------------------------------------------------
 
-/// Exact rational tolerance (0.2%) for the anchored absolute comparison.
-///
-/// Wide enough for the official testnet explorer's known historical projection
-/// gap, narrow enough to catch a wrong per-network baseline. Kept as a rational
+/// Exact rational tolerance (0.2%) for absolute comparisons whose source data
+/// has a trustworthy cumulative baseline. Kept as a rational
 /// numerator/denominator so the comparison stays exact i128 arithmetic — never
 /// f64.
 const ABSOLUTE_ANCHOR_TOLERANCE: (i128, i128) = (1, 500);
+
+/// Select the external absolute-anchor policy for live/dead cell counts.
+///
+/// The official testnet explorer's historical projection left
+/// `dead_cells_count` unchanged from 2021-03-30 through 2021-08-17 while
+/// accumulating those historical transitions into `live_cells_count`. Its
+/// recent daily changes are exact, but the resulting cumulative levels are not
+/// chain-native absolute anchors. Mainnet retains the absolute comparison.
+fn cell_count_absolute_anchor_tolerance(network: &str) -> anyhow::Result<Option<(i128, i128)>> {
+    match network {
+        ckbadger_common::hardfork::NETWORK_MAINNET => Ok(Some(ABSOLUTE_ANCHOR_TOLERANCE)),
+        ckbadger_common::hardfork::NETWORK_TESTNET => Ok(None),
+        network => anyhow::bail!("unsupported network for cell-count verification: '{network}'"),
+    }
+}
 
 /// Compare exact changes between consecutive cumulative observations, and
 /// optionally anchor the absolute level at the latest overlapping date.
@@ -755,8 +768,7 @@ const ABSOLUTE_ANCHOR_TOLERANCE: (i128, i128) = (1, 500);
 /// difference. Callers that must also detect that pass
 /// `absolute_anchor_tolerance` — one absolute comparison at the newest
 /// overlapping date, under an exact rational relative tolerance. Callers with a
-/// legitimately offset baseline (X2's documented testnet total-deposit gap) pass
-/// `None` and keep pure delta semantics.
+/// legitimately offset baseline pass `None` and keep pure delta semantics.
 fn run_exact_i128_explorer_daily_delta_check(
     our_data: &HashMap<String, String>,
     explorer_data: &HashMap<String, String>,
@@ -1495,7 +1507,7 @@ impl Check for ExplorerLiveCellCount {
             &explorer_data,
             progress,
             "live_cells_count",
-            Some(ABSOLUTE_ANCHOR_TOLERANCE),
+            cell_count_absolute_anchor_tolerance(ctx.network)?,
             |ours, theirs| Some((ours.parse::<i128>().ok()?, theirs.parse::<i128>().ok()?)),
         ))
     }
@@ -1528,7 +1540,7 @@ impl Check for ExplorerDeadCellCount {
             &explorer_data,
             progress,
             "dead_cells_count",
-            Some(ABSOLUTE_ANCHOR_TOLERANCE),
+            cell_count_absolute_anchor_tolerance(ctx.network)?,
             |ours, theirs| Some((ours.parse::<i128>().ok()?, theirs.parse::<i128>().ok()?)),
         ))
     }
@@ -2443,8 +2455,12 @@ mod tests {
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
-    fn explorer_test_context(server: &MockServer) -> CheckContext {
+    fn explorer_test_context_for_network(
+        server: &MockServer,
+        network: &'static str,
+    ) -> CheckContext {
         CheckContext {
+            network,
             api_url: format!("{}/api/v1", server.uri()),
             rpc_url: None,
             explorer_url: Some(server.uri()),
@@ -2456,6 +2472,10 @@ mod tests {
         }
     }
 
+    fn explorer_test_context(server: &MockServer) -> CheckContext {
+        explorer_test_context_for_network(server, ckbadger_common::hardfork::NETWORK_MAINNET)
+    }
+
     fn explorer_timestamp_for_date(date: &str) -> i64 {
         let date = chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").unwrap();
         let utc8 = chrono::FixedOffset::east_opt(ckbadger_common::CKB_UTC8_OFFSET).unwrap();
@@ -2465,6 +2485,151 @@ mod tests {
             .single()
             .unwrap()
             .timestamp()
+    }
+
+    fn mount_cell_count_projection_gap_fixture(
+        runtime: &tokio::runtime::Runtime,
+        server: &MockServer,
+    ) {
+        let dates = last_30_days();
+        let older = dates[1].clone();
+        let newer = dates[0].clone();
+
+        runtime.block_on(async {
+            Mock::given(method("GET"))
+                .and(path("/api/v1/charts/cell-count"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "data": [
+                        {
+                            "date": older,
+                            "values": {
+                                "liveCells": "18639080",
+                                "deadCells": "474220745"
+                            }
+                        },
+                        {
+                            "date": newer,
+                            "values": {
+                                "liveCells": "18649880",
+                                "deadCells": "474241756"
+                            }
+                        }
+                    ]
+                })))
+                .mount(server)
+                .await;
+
+            Mock::given(method("GET"))
+                .and(path("/api/v1/daily_statistics/live_cells_count"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "data": [
+                        {
+                            "attributes": {
+                                "created_at_unixtimestamp":
+                                    explorer_timestamp_for_date(&dates[1]).to_string(),
+                                "live_cells_count": "37076342"
+                            }
+                        },
+                        {
+                            "attributes": {
+                                "created_at_unixtimestamp":
+                                    explorer_timestamp_for_date(&dates[0]).to_string(),
+                                "live_cells_count": "37087142"
+                            }
+                        }
+                    ]
+                })))
+                .mount(server)
+                .await;
+
+            Mock::given(method("GET"))
+                .and(path("/api/v1/daily_statistics/dead_cells_count"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "data": [
+                        {
+                            "attributes": {
+                                "created_at_unixtimestamp":
+                                    explorer_timestamp_for_date(&dates[1]).to_string(),
+                                "dead_cells_count": "455674176"
+                            }
+                        },
+                        {
+                            "attributes": {
+                                "created_at_unixtimestamp":
+                                    explorer_timestamp_for_date(&dates[0]).to_string(),
+                                "dead_cells_count": "455695187"
+                            }
+                        }
+                    ]
+                })))
+                .mount(server)
+                .await;
+        });
+    }
+
+    #[test]
+    fn testnet_cell_count_checks_allow_known_historical_projection_gap() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let server = runtime.block_on(MockServer::start());
+        mount_cell_count_projection_gap_fixture(&runtime, &server);
+        let ctx =
+            explorer_test_context_for_network(&server, ckbadger_common::hardfork::NETWORK_TESTNET);
+
+        let live_result = ExplorerLiveCellCount
+            .run(&ctx, &ProgressReporter::new(None))
+            .unwrap();
+        let dead_result = ExplorerDeadCellCount
+            .run(&ctx, &ProgressReporter::new(None))
+            .unwrap();
+
+        assert!(
+            live_result.passed,
+            "testnet live-cell deltas match exactly; historical absolute gap must not fail: {:?}",
+            live_result.findings
+        );
+        assert!(
+            dead_result.passed,
+            "testnet dead-cell deltas match exactly; historical absolute gap must not fail: {:?}",
+            dead_result.findings
+        );
+    }
+
+    #[test]
+    fn mainnet_cell_count_checks_keep_absolute_anchor() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let server = runtime.block_on(MockServer::start());
+        mount_cell_count_projection_gap_fixture(&runtime, &server);
+        let ctx =
+            explorer_test_context_for_network(&server, ckbadger_common::hardfork::NETWORK_MAINNET);
+
+        let live_result = ExplorerLiveCellCount
+            .run(&ctx, &ProgressReporter::new(None))
+            .unwrap();
+        let dead_result = ExplorerDeadCellCount
+            .run(&ctx, &ProgressReporter::new(None))
+            .unwrap();
+
+        assert!(!live_result.passed, "mainnet must retain its live anchor");
+        assert!(!dead_result.passed, "mainnet must retain its dead anchor");
+        assert!(live_result.findings.iter().any(|finding| finding
+            .details
+            .iter()
+            .any(|detail| detail.contains("absolute anchor"))));
+        assert!(dead_result.findings.iter().any(|finding| finding
+            .details
+            .iter()
+            .any(|detail| detail.contains("absolute anchor"))));
+    }
+
+    #[test]
+    fn cell_count_anchor_policy_rejects_unknown_network() {
+        let error = cell_count_absolute_anchor_tolerance("devnet").unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("unsupported network for cell-count verification"),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]

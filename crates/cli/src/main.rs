@@ -1295,6 +1295,7 @@ async fn cmd_verify(workdir: &Path, args: &VerifyArgs) -> Result<()> {
 
         let network = target.network.clone();
         let verify_args = indexer_verify::VerifyArgs {
+            network: network.clone(),
             api_url: target.api_url,
             rpc_url: Some(target.rpc_url),
             explorer_url: target.explorer_url,
