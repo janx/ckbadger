@@ -1587,3 +1587,179 @@ fn startup_route_fail_fast_when_chain_tip_is_behind_sync_tip() {
     assert!(err.to_string().contains("invalid tip ordering"));
     assert!(err.to_string().contains("startup sync path test"));
 }
+
+// ============================================================
+// B4 regression: bulk build must materialize the chain-level
+// hourly buckets (STATS_PREFIX_HOURLY, UTC-keyed) and the miner
+// daily buckets (STATS_PREFIX_MINER, UTC+8 date + witness-miner
+// lock hash) with semantics identical to the live writer —
+// otherwise every rebuild leaves 24h metrics missing history and
+// the miner distribution covering only the live-sync segment.
+// ============================================================
+
+/// Blocks at UTC 2023-11-18T20:01/20:02/21:01. The UTC hour keys are
+/// "2023111820"/"2023111821", while the UTC+8 calendar date of the same
+/// instants is 2023-11-19 — so the fixture pins BOTH conventions: hourly
+/// buckets keyed on the UTC clock, miner buckets on the UTC+8 date.
+fn chain_hourly_and_miner_fixture() -> Vec<BlockResponseWithCycles> {
+    let hour1_start_ms: i64 = 1_700_337_600_000; // 2023-11-18T20:00:00Z
+
+    let create_tx = TransactionView {
+        hash: format!("0x{}", "a7".repeat(32)),
+        version: "0x0".to_string(),
+        cell_deps: vec![],
+        header_deps: vec![],
+        inputs: vec![CellInput {
+            since: "0x0".to_string(),
+            previous_output: OutPoint {
+                tx_hash: format!("0x{}", "00".repeat(32)),
+                index: "0xffffffff".to_string(),
+            },
+        }],
+        outputs: vec![CellOutput {
+            capacity: "0x2540be400".to_string(), // 10_000_000_000
+            lock: fixture_lock_script(),
+            type_: None,
+        }],
+        outputs_data: vec!["0x".to_string()],
+        witnesses: vec![TEST_CELLBASE_WITNESS.to_string()],
+    };
+    let consume_tx = TransactionView {
+        hash: format!("0x{}", "b7".repeat(32)),
+        version: "0x0".to_string(),
+        cell_deps: vec![],
+        header_deps: vec![],
+        inputs: vec![CellInput {
+            since: "0x0".to_string(),
+            previous_output: OutPoint {
+                tx_hash: create_tx.hash.clone(),
+                index: "0x0".to_string(),
+            },
+        }],
+        outputs: vec![CellOutput {
+            capacity: "0x2540be400".to_string(),
+            lock: fixture_lock_script_b(),
+            type_: None,
+        }],
+        outputs_data: vec!["0x".to_string()],
+        witnesses: vec!["0x".to_string()],
+    };
+    let cellbase_only = |hash_hex: &str| TransactionView {
+        hash: format!("0x{}", hash_hex.repeat(32)),
+        version: "0x0".to_string(),
+        cell_deps: vec![],
+        header_deps: vec![],
+        inputs: vec![CellInput {
+            since: "0x0".to_string(),
+            previous_output: OutPoint {
+                tx_hash: format!("0x{}", "00".repeat(32)),
+                index: "0xffffffff".to_string(),
+            },
+        }],
+        outputs: vec![CellOutput {
+            capacity: "0x2540be400".to_string(),
+            lock: fixture_lock_script(),
+            type_: None,
+        }],
+        outputs_data: vec!["0x".to_string()],
+        witnesses: vec![TEST_CELLBASE_WITNESS.to_string()],
+    };
+
+    vec![
+        BlockResponseWithCycles {
+            block: BlockView {
+                header: fixture_header_with_timestamp(100, 0xc1, hour1_start_ms + 60_000),
+                uncles: vec![],
+                transactions: vec![create_tx, consume_tx],
+                proposals: vec![],
+            },
+            cycles: None,
+        },
+        BlockResponseWithCycles {
+            block: BlockView {
+                header: fixture_header_with_timestamp(101, 0xc2, hour1_start_ms + 120_000),
+                uncles: vec![],
+                transactions: vec![cellbase_only("c7")],
+                proposals: vec![],
+            },
+            cycles: None,
+        },
+        BlockResponseWithCycles {
+            block: BlockView {
+                header: fixture_header_with_timestamp(102, 0xc3, hour1_start_ms + 3_660_000),
+                uncles: vec![],
+                transactions: vec![cellbase_only("d7")],
+                proposals: vec![],
+            },
+            cycles: None,
+        },
+    ]
+}
+
+#[test]
+fn bulk_build_materializes_utc_keyed_chain_hourly_stats() {
+    let snapshot = materialize_bulk_artifacts_for_test(&chain_hourly_and_miner_fixture())
+        .expect("bulk build artifact snapshot");
+
+    // Live-writer semantics, bit for bit: blocks per bucket, tx count
+    // INCLUDING cellbase, per-block cells created/consumed, non-cellbase
+    // output capacity as capacity_transferred, HourlyStats.hour = UTC
+    // hour-start epoch seconds.
+    let hour1 = snapshot
+        .hourly_chain_stats
+        .get("2023111820")
+        .expect("UTC hour bucket 2023111820 must be materialized by bulk build");
+    assert_eq!(hour1.hour, 1_700_337_600);
+    assert_eq!(hour1.blocks_count, 2);
+    assert_eq!(hour1.transactions_count, 3, "tx count includes cellbase");
+    assert_eq!(hour1.cells_created, 3);
+    assert_eq!(hour1.cells_consumed, 1);
+    assert_eq!(hour1.capacity_transferred, 10_000_000_000);
+
+    let hour2 = snapshot
+        .hourly_chain_stats
+        .get("2023111821")
+        .expect("UTC hour bucket 2023111821 must be materialized by bulk build");
+    assert_eq!(hour2.hour, 1_700_341_200);
+    assert_eq!(hour2.blocks_count, 1);
+    assert_eq!(hour2.transactions_count, 1);
+    assert_eq!(hour2.cells_created, 1);
+    assert_eq!(hour2.cells_consumed, 0);
+    assert_eq!(hour2.capacity_transferred, 0);
+
+    // The UTC+8 hour strings for the same instants must NOT appear: chain
+    // hourly buckets are UTC-keyed (activity hourly buckets are the UTC+8
+    // family).
+    assert!(!snapshot.hourly_chain_stats.contains_key("2023111904"));
+    assert!(!snapshot.hourly_chain_stats.contains_key("2023111905"));
+}
+
+#[test]
+fn bulk_build_materializes_miner_stats_from_cellbase_witness() {
+    let snapshot = materialize_bulk_artifacts_for_test(&chain_hourly_and_miner_fixture())
+        .expect("bulk build artifact snapshot");
+
+    // Miner attribution: the cellbase WITNESS lock (RFC-0022) — the same
+    // semantics the live writer uses — keyed by the UTC+8 calendar date
+    // ("20231119" for UTC 2023-11-18T20:xx).
+    let miner_lock = Script {
+        code_hash: "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8".to_string(),
+        hash_type: "type".to_string(),
+        args: "0x8211f1b938a107cd53b6302cc752a6fc3965638d".to_string(),
+    };
+    let miner_hash = ScriptParser::compute_script_hash(&miner_lock);
+
+    let row = snapshot
+        .miner_stats
+        .get(&("20231119".to_string(), miner_hash.clone()))
+        .expect("miner daily bucket must be materialized by bulk build (UTC+8 date key)");
+    assert_eq!(row.miner_lock_hash, miner_hash);
+    assert_eq!(row.blocks_count, 3);
+    assert_eq!(row.last_block_number, 102);
+
+    // The UTC calendar date must NOT be used for the miner key.
+    assert!(!snapshot
+        .miner_stats
+        .keys()
+        .any(|(date, _)| date == "20231118"));
+}

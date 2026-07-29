@@ -16,8 +16,8 @@ use ckbadger_store::types::{
     decode_live_cell_marker, BulkBuildSessionMarker, CachedBlockHeader,
     CellDistributionTrackerState, ConsumedCellMeta, DailyActivityStats, DailyAddressCohort,
     DailyCellDistribution, DailyHodlWave, DaoDailySnapshot, DaoLatestStatistics, DaoTopDepositors,
-    HodlTrackerState, LiveCellInfo, LockScriptEntry, ObjectStandard, ScriptDailyDelta,
-    SporeTypeIndex, SyncStatus, TokenTransferRecord, TxActions, TxIndexEntry,
+    HodlTrackerState, HourlyStats, LiveCellInfo, LockScriptEntry, MinerStats, ObjectStandard,
+    ScriptDailyDelta, SporeTypeIndex, SyncStatus, TokenTransferRecord, TxActions, TxIndexEntry,
     BIT_CELL_SENTINEL_COLLECTION, DID_CKB_SENTINEL_COLLECTION, DOTBIT_SENTINEL_COLLECTION,
     SOLE_SPORES_SENTINEL_COLLECTION,
 };
@@ -1726,9 +1726,9 @@ fn checked_unique_address_count(len: usize, bucket: &str) -> Result<u32> {
 
 /// Accumulates chain-level daily statistics during bulk-build.
 ///
-/// Covers `DailyStats`, `DailyBlockStats`, block-time distribution, and
-/// epoch-time distribution — the same data that `SyncBatch::finalize()`
-/// writes during live sync.
+/// Covers `DailyStats`, `DailyBlockStats`, `HourlyStats`, `MinerStats`,
+/// block-time distribution, and epoch-time distribution — the same data that
+/// `SyncBatch::finalize()` writes during live sync.
 #[derive(Default)]
 #[allow(clippy::type_complexity)]
 struct ChainStatsAccumulator {
@@ -1741,6 +1741,16 @@ struct ChainStatsAccumulator {
     daily_dao_fields: FxHashMap<chrono::NaiveDate, [u8; 32]>,
     /// Per-day block time accumulation: (sum_ms, count)
     daily_block_times: FxHashMap<chrono::NaiveDate, (i64, i32)>,
+    /// Per-UTC-hour: (blocks, txs, cells_created, cells_consumed,
+    /// capacity_transferred), keyed by the hour-start epoch seconds. Mirrors
+    /// the live writer's `STATS_PREFIX_HOURLY` bucket exactly: UTC hour keys
+    /// and tx counts INCLUDING the cellbase (see
+    /// `BatchWriter::update_hourly_statistics`).
+    hourly_stats: FxHashMap<i64, (i32, i32, i32, i32, i128)>,
+    /// Per-(UTC+8 date, cellbase-witness miner lock hash):
+    /// (blocks_count, last_block_number). Mirrors the live writer's
+    /// `STATS_PREFIX_MINER` bucket (`BatchWriter::update_miner_statistics_batch`).
+    miner_stats: FxHashMap<(chrono::NaiveDate, [u8; 32]), (i32, i64)>,
     /// Block time distribution buckets (seconds → count).
     block_time_dist: FxHashMap<i32, i32>,
     /// Epoch time distribution buckets (minutes → count).
@@ -1762,7 +1772,10 @@ impl ChainStatsAccumulator {
             + self.daily_block_times.len();
         let dist_count = self.block_time_dist.len() + self.epoch_time_dist.len();
         let epoch_count = self.epoch_stats.len();
-        (daily_count * 100 + dist_count * 16 + epoch_count * 48) as u64
+        let hourly_count = self.hourly_stats.len();
+        let miner_count = self.miner_stats.len();
+        (daily_count * 100 + dist_count * 16 + epoch_count * 48 + hourly_count * 48
+            + miner_count * 64) as u64
     }
 
     /// Accumulate chain statistics from a batch of blocks.
@@ -1852,6 +1865,34 @@ impl ChainStatsAccumulator {
             })?;
             entry.7 += data_size_added;
             entry.8 += data_size_consumed;
+
+            // --- HourlyStats (UTC hour bucket; same per-block values as the
+            // daily row above, tx count including the cellbase — identical to
+            // the live write point in SyncBatch) ---
+            let hour_start_secs = block.timestamp_ms.div_euclid(3_600_000) * 3600;
+            let hourly_entry = self.hourly_stats.entry(hour_start_secs).or_default();
+            hourly_entry.0 += 1;
+            hourly_entry.1 += block.transactions_count;
+            hourly_entry.2 += cells_created;
+            hourly_entry.3 += cells_consumed;
+            hourly_entry.4 = hourly_entry
+                .4
+                .checked_add(capacity_transferred)
+                .ok_or_else(|| {
+                    anyhow!(
+                        "chain stats: hourly capacity_transferred overflow: hour_start={} block={}",
+                        hour_start_secs,
+                        block.number
+                    )
+                })?;
+
+            // --- MinerStats (cellbase-witness miner, RFC-0022; UTC+8 date
+            // key like every date-scoped stats row; genesis has no miner) ---
+            if let Some(miner) = block.miner_lock_hash {
+                let miner_entry = self.miner_stats.entry((block_date, miner)).or_default();
+                miner_entry.0 += 1;
+                miner_entry.1 = miner_entry.1.max(block.number);
+            }
 
             // --- DAO field (last per day wins) ---
             self.daily_dao_fields.insert(block_date, block.dao);
@@ -2037,6 +2078,60 @@ impl ChainStatsAccumulator {
                 keys::encode_stats_key(
                     keys::stats_prefix::DAILY_BLOCK,
                     date.format("%Y%m%d").to_string().as_bytes(),
+                ),
+                bincode::serialize(&stats)?,
+            ));
+        }
+
+        // --- HourlyStats (UTC `%Y%m%d%H` keys — the live writer's
+        // `update_hourly_statistics` convention, bit for bit) ---
+        let mut sorted_hours: Vec<_> = self.hourly_stats.keys().copied().collect();
+        sorted_hours.sort_unstable();
+        for hour_start_secs in sorted_hours {
+            let (blocks, txs, created, consumed, capacity) = self.hourly_stats[&hour_start_secs];
+            let hour_dt =
+                chrono::DateTime::<chrono::Utc>::from_timestamp(hour_start_secs, 0).ok_or_else(
+                    || {
+                        anyhow!(
+                            "chain stats: hourly bucket start out of range: hour_start={}",
+                            hour_start_secs
+                        )
+                    },
+                )?;
+            let stats = ckbadger_store::types::HourlyStats {
+                hour: hour_start_secs,
+                blocks_count: blocks,
+                transactions_count: txs,
+                cells_created: created,
+                cells_consumed: consumed,
+                capacity_transferred: capacity,
+            };
+            rows.push(materialize::MaterializedRow::new(
+                CF_STATS_CHAIN,
+                keys::encode_stats_key(
+                    keys::stats_prefix::HOURLY,
+                    hour_dt.format("%Y%m%d%H").to_string().as_bytes(),
+                ),
+                bincode::serialize(&stats)?,
+            ));
+        }
+
+        // --- MinerStats (UTC+8 `%Y%m%d` + 32B witness-miner lock hash — the
+        // live writer's `update_miner_statistics_batch` convention) ---
+        let mut sorted_miners: Vec<_> = self.miner_stats.keys().cloned().collect();
+        sorted_miners.sort_unstable();
+        for (date, miner_hash) in sorted_miners {
+            let (blocks_count, last_block_number) = self.miner_stats[&(date, miner_hash)];
+            let stats = ckbadger_store::types::MinerStats {
+                miner_lock_hash: miner_hash.to_vec(),
+                blocks_count,
+                last_block_number,
+            };
+            rows.push(materialize::MaterializedRow::new(
+                CF_STATS_CHAIN,
+                keys::encode_stats_key(
+                    keys::stats_prefix::MINER,
+                    &[date.format("%Y%m%d").to_string().as_bytes(), &miner_hash[..]].concat(),
                 ),
                 bincode::serialize(&stats)?,
             ));
@@ -3059,6 +3154,10 @@ pub struct BulkArtifactSnapshot {
     pub tx_actions_map: HashMap<Vec<u8>, TxActions>,
     pub daily_activity_stats: HashMap<String, DailyActivityStats>,
     pub hourly_activity_stats: HashMap<String, DailyActivityStats>,
+    /// Chain-level hourly buckets, keyed by their UTC `%Y%m%d%H` strings.
+    pub hourly_chain_stats: HashMap<String, HourlyStats>,
+    /// Per-miner daily buckets, keyed by (UTC+8 `%Y%m%d`, miner lock hash).
+    pub miner_stats: HashMap<(String, Vec<u8>), MinerStats>,
     pub dao_daily_snapshots: HashMap<String, DaoDailySnapshot>,
     pub latest_dao_statistics: Option<DaoLatestStatistics>,
     pub dao_top_depositors: Option<DaoTopDepositors>,
@@ -3386,6 +3485,7 @@ fn collect_bulk_artifact_snapshot(
         collect_history_snapshot(domain_store)?;
     let (daily_activity_stats, hourly_activity_stats) =
         collect_activity_stats_snapshot(domain_store)?;
+    let (hourly_chain_stats, miner_stats) = collect_chain_hourly_and_miner_snapshot(domain_store)?;
     let (dao_daily_snapshots, latest_dao_statistics, dao_top_depositors) =
         collect_dao_stats_snapshot(domain_store)?;
     let script_daily_deltas = collect_script_daily_deltas_snapshot(domain_store)?;
@@ -3420,6 +3520,8 @@ fn collect_bulk_artifact_snapshot(
         tx_actions_map,
         daily_activity_stats,
         hourly_activity_stats,
+        hourly_chain_stats,
+        miner_stats,
         dao_daily_snapshots,
         latest_dao_statistics,
         dao_top_depositors,
@@ -3434,6 +3536,70 @@ fn collect_bulk_artifact_snapshot(
         cell_by_data_hash,
         core,
     })
+}
+
+/// Read back the chain-level hourly and per-miner daily stats rows for test
+/// snapshots, keyed exactly as stored (UTC hour strings / UTC+8 date + miner
+/// lock hash) so key-encoding regressions surface in assertions.
+#[allow(clippy::type_complexity)]
+fn collect_chain_hourly_and_miner_snapshot(
+    domain_store: &CkbadgerStore,
+) -> Result<(
+    HashMap<String, HourlyStats>,
+    HashMap<(String, Vec<u8>), MinerStats>,
+)> {
+    let mut hourly: HashMap<String, HourlyStats> = HashMap::new();
+    let mut miners: HashMap<(String, Vec<u8>), MinerStats> = HashMap::new();
+
+    let iter = domain_store.iterator_cf(domain_store.cf_stats_chain(), IteratorMode::Start);
+    for item in iter {
+        let (key, value) = item?;
+        match key.first().copied() {
+            Some(keys::STATS_PREFIX_HOURLY) if key.len() == 11 => {
+                let hour_key = std::str::from_utf8(&key[1..])
+                    .map_err(|e| {
+                        anyhow!(
+                            "invalid UTF-8 hourly stats key in bulk artifact snapshot: key=0x{}, {}",
+                            hex::encode(&key),
+                            e
+                        )
+                    })?
+                    .to_string();
+                let stats: HourlyStats = bincode::deserialize(&value).map_err(|e| {
+                    anyhow!(
+                        "failed to deserialize hourly stats in bulk artifact snapshot: hour={}, {}",
+                        hour_key,
+                        e
+                    )
+                })?;
+                hourly.insert(hour_key, stats);
+            }
+            Some(keys::STATS_PREFIX_MINER) if key.len() == 41 => {
+                let date = std::str::from_utf8(&key[1..9])
+                    .map_err(|e| {
+                        anyhow!(
+                            "invalid UTF-8 miner stats date in bulk artifact snapshot: key=0x{}, {}",
+                            hex::encode(&key),
+                            e
+                        )
+                    })?
+                    .to_string();
+                let miner_hash = key[9..41].to_vec();
+                let stats: MinerStats = bincode::deserialize(&value).map_err(|e| {
+                    anyhow!(
+                        "failed to deserialize miner stats in bulk artifact snapshot: date={}, miner=0x{}, {}",
+                        date,
+                        hex::encode(&miner_hash),
+                        e
+                    )
+                })?;
+                miners.insert((date, miner_hash), stats);
+            }
+            _ => {}
+        }
+    }
+
+    Ok((hourly, miners))
 }
 
 #[allow(clippy::type_complexity)]
