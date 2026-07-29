@@ -17,7 +17,7 @@ use crate::response::{
 };
 use crate::utils::{
     accumulate_owned_capacity, apply_owned_capacity_delta, date_keys_inclusive,
-    parse_chart_date_range, script_to_address,
+    parse_chart_date_range, parse_hash32, script_to_address,
 };
 use crate::warmup::CachedAssetEntry;
 use crate::AppState;
@@ -392,8 +392,7 @@ async fn get_token(
     State(state): State<Arc<AppState>>,
     Path(type_hash): Path<String>,
 ) -> ApiResult<TokenResponse> {
-    let hash = hex::decode(type_hash.strip_prefix("0x").unwrap_or(&type_hash))
-        .map_err(|_| ApiError::bad_request("Invalid type script hash"))?;
+    let hash = parse_hash32(&type_hash, "type_hash")?;
 
     let store = state.store.clone();
     let hash_c = hash.clone();
@@ -463,8 +462,7 @@ async fn get_token_holders(
     Path(type_hash): Path<String>,
     Query(params): Query<HolderParams>,
 ) -> ApiResult<CursorPaginatedResponse<TokenHolderResponse>> {
-    let hash = hex::decode(type_hash.strip_prefix("0x").unwrap_or(&type_hash))
-        .map_err(|_| ApiError::bad_request("Invalid type script hash"))?;
+    let hash = parse_hash32(&type_hash, "type_hash")?;
 
     let limit = params.limit.clamp(1, 100) as usize;
     let cursor = params
@@ -599,8 +597,7 @@ async fn get_token_activities(
     Path(type_hash): Path<String>,
     Query(params): Query<ActivityParams>,
 ) -> ApiResult<CursorPaginatedResponse<TokenActivityResponse>> {
-    let hash = hex::decode(type_hash.strip_prefix("0x").unwrap_or(&type_hash))
-        .map_err(|_| ApiError::bad_request("Invalid type script hash"))?;
+    let hash = parse_hash32(&type_hash, "type_hash")?;
 
     let limit = params.limit.clamp(1, 100) as usize;
 
@@ -712,8 +709,7 @@ async fn get_token_transfers(
     Path(type_hash): Path<String>,
     Query(params): Query<TransferParams>,
 ) -> ApiResult<CursorPaginatedResponse<TokenTransferResponse>> {
-    let hash = hex::decode(type_hash.strip_prefix("0x").unwrap_or(&type_hash))
-        .map_err(|_| ApiError::bad_request("Invalid type script hash"))?;
+    let hash = parse_hash32(&type_hash, "type_hash")?;
 
     let limit = params.limit.clamp(1, 100) as usize;
 
@@ -804,8 +800,7 @@ async fn get_token_capacity_chart(
     Path(type_hash): Path<String>,
     Query(params): Query<ChartRangeParams>,
 ) -> ApiResult<StackedAreaChartResponse> {
-    let hash = hex::decode(type_hash.strip_prefix("0x").unwrap_or(&type_hash))
-        .map_err(|_| ApiError::bad_request("Invalid type script hash"))?;
+    let hash = parse_hash32(&type_hash, "type_hash")?;
 
     let (from_date, to_date) = parse_chart_date_range(params.from.as_deref(), params.to.as_deref())
         .map_err(|msg| ApiError::bad_request(&msg))?;

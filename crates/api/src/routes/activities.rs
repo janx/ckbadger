@@ -19,6 +19,7 @@ use crate::response::{
     CursorPaginatedResponse,
 };
 use crate::utils::address::{address_to_lock_script_hash, compute_script_hash, script_to_address};
+use crate::utils::parse_hash32;
 use crate::AppState;
 
 /// Resolve a lock_hash to a CKB address using the persistent lock script mapping.
@@ -832,8 +833,7 @@ async fn get_address_activities(
         address_to_lock_script_hash(&addr)
             .map_err(|e| ApiError::bad_request(format!("Invalid address: {}", e)))?
     } else {
-        hex::decode(addr.strip_prefix("0x").unwrap_or(&addr))
-            .map_err(|_| ApiError::bad_request("Invalid lock script hash"))?
+        parse_hash32(&addr, "address/lock script hash")?
     };
 
     let limit = params.limit.clamp(1, 100) as usize;

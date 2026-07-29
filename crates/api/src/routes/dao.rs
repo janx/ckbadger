@@ -16,7 +16,9 @@ use crate::response::{
     chart_response_has_data, default_limit, ok, ApiError, ApiResult, ApiRouteError, ChartDataPoint,
     ChartResponse, CursorPaginatedResponse,
 };
-use crate::utils::{dao_supply, script_to_address, shannon_to_ckb, shannon_to_ckb_signed};
+use crate::utils::{
+    dao_supply, parse_hash32, script_to_address, shannon_to_ckb, shannon_to_ckb_signed,
+};
 use crate::AppState;
 use tracing::instrument;
 
@@ -554,11 +556,7 @@ async fn get_deposits_by_address(
     Path(lock_hash): Path<String>,
     Query(params): Query<ListParams>,
 ) -> ApiResult<CursorPaginatedResponse<DaoDepositResponse>> {
-    let hash = hex::decode(lock_hash.strip_prefix("0x").unwrap_or(&lock_hash))
-        .map_err(|_| ApiError::bad_request("Invalid lock script hash"))?;
-    if hash.len() != 32 {
-        return Err(ApiError::bad_request("Invalid lock script hash"));
-    }
+    let hash = parse_hash32(&lock_hash, "lock_hash")?;
 
     let limit = params.limit.clamp(1, 100) as usize;
     let cursor_key = parse_dao_cursor_key(
@@ -705,11 +703,7 @@ async fn get_address_dao_summary(
     State(state): State<Arc<AppState>>,
     Path(lock_hash): Path<String>,
 ) -> ApiResult<AddressDaoSummaryResponse> {
-    let hash = hex::decode(lock_hash.strip_prefix("0x").unwrap_or(&lock_hash))
-        .map_err(|_| ApiError::bad_request("Invalid lock script hash"))?;
-    if hash.len() != 32 {
-        return Err(ApiError::bad_request("Invalid lock script hash"));
-    }
+    let hash = parse_hash32(&lock_hash, "lock_hash")?;
 
     let (latest_block_number, latest_ar, _tip_timestamp, _s) =
         resolve_latest_block_and_ar(&state, "summary")?;

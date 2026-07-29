@@ -16,7 +16,7 @@ use crate::cache::{CacheBackend, CacheKeys, CacheTtl};
 use crate::response::{default_limit, ok, ApiError, ApiResult, CursorPaginatedResponse};
 use crate::routes::hardforks::HardforkResourceResponse;
 use crate::routes::transactions::tx_serialized_size_in_block;
-use crate::utils::script_to_address;
+use crate::utils::{parse_hash32, script_to_address};
 use crate::AppState;
 
 pub fn routes() -> Router<Arc<AppState>> {
@@ -326,8 +326,7 @@ async fn get_block(
     let ckb_store = state.ckb_store.clone();
 
     let block_result: Option<(i64, ckbadger_store::CachedBlockHeader)> = if id.starts_with("0x") {
-        let hash = hex::decode(id.strip_prefix("0x").unwrap_or(&id))
-            .map_err(|_| ApiError::bad_request("Invalid block hash"))?;
+        let hash = parse_hash32(&id, "block hash")?;
 
         let store_c = store.clone();
         let hash_c = hash.clone();
@@ -632,8 +631,7 @@ async fn get_block_fee_stats(
     let store = state.store.clone();
 
     let block_number: i64 = if id.starts_with("0x") {
-        let hash = hex::decode(id.strip_prefix("0x").unwrap_or(&id))
-            .map_err(|_| ApiError::bad_request("Invalid block hash"))?;
+        let hash = parse_hash32(&id, "block hash")?;
 
         let store_c = store.clone();
         tokio::task::spawn_blocking(move || store_c.get_block_number_by_hash(&hash))
@@ -770,8 +768,7 @@ async fn get_block_proposals(
     let store = state.store.clone();
 
     let block_number: i64 = if id.starts_with("0x") {
-        let hash = hex::decode(id.strip_prefix("0x").unwrap_or(&id))
-            .map_err(|_| ApiError::bad_request("Invalid block hash"))?;
+        let hash = parse_hash32(&id, "block hash")?;
 
         let store_c = store.clone();
         tokio::task::spawn_blocking(move || store_c.get_block_number_by_hash(&hash))

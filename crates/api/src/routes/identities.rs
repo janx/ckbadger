@@ -24,7 +24,7 @@ use crate::cache::InMemoryCache;
 use crate::response::{
     default_limit, ok, ApiError, ApiResult, ApiRouteError, CursorPaginatedResponse,
 };
-use crate::utils::accumulate_owned_capacity;
+use crate::utils::{accumulate_owned_capacity, parse_asset_id_max32};
 use crate::AppState;
 
 /// Decode an identity collection ID from a URL path segment.
@@ -45,8 +45,7 @@ fn decode_identity_collection_id(
     if matches!(normalized.as_str(), "bit_cell" | "bit-cell" | ".bit-cell") {
         return Ok(BIT_CELL_SENTINEL_COLLECTION.to_vec());
     }
-    let bytes = hex::decode(raw.strip_prefix("0x").unwrap_or(raw))
-        .map_err(|_| ApiError::bad_request("Invalid identity collection ID"))?;
+    let bytes = parse_asset_id_max32(raw, "identity collection ID")?;
     if bytes != DOTBIT_SENTINEL_COLLECTION
         && bytes != BIT_CELL_SENTINEL_COLLECTION
         && bytes != DID_CKB_SENTINEL_COLLECTION

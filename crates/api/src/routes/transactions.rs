@@ -16,7 +16,7 @@ use crate::response::{
     ApiRouteError, CursorPaginatedResponse, ScriptResponse,
 };
 use crate::routes::tx_lookup::{fetch_transaction_lookup, pending_transaction_resource_error};
-use crate::utils::script_to_address;
+use crate::utils::{parse_hash32, script_to_address};
 use crate::AppState;
 use tracing::instrument;
 
@@ -390,8 +390,7 @@ async fn get_transaction(
     State(state): State<Arc<AppState>>,
     Path(hash): Path<String>,
 ) -> ApiResult<TransactionResponse> {
-    let hash_bytes = hex::decode(hash.strip_prefix("0x").unwrap_or(&hash))
-        .map_err(|_| ApiError::bad_request("Invalid transaction hash"))?;
+    let hash_bytes = parse_hash32(&hash, "transaction hash")?;
 
     let store = state.store.clone();
     let hash_c = hash_bytes.clone();
@@ -699,8 +698,7 @@ async fn get_transaction_detail(
     State(state): State<Arc<AppState>>,
     Path(hash): Path<String>,
 ) -> ApiResult<TransactionDetailResponse> {
-    let hash_bytes = hex::decode(hash.strip_prefix("0x").unwrap_or(&hash))
-        .map_err(|_| ApiError::bad_request("Invalid transaction hash"))?;
+    let hash_bytes = parse_hash32(&hash, "transaction hash")?;
 
     let store = state.store.clone();
     let hash_c = hash_bytes.clone();
@@ -1506,8 +1504,7 @@ async fn get_cell_deps(
     State(state): State<Arc<AppState>>,
     Path(hash): Path<String>,
 ) -> ApiResult<Vec<CellDepResponse>> {
-    let hash_bytes = hex::decode(hash.strip_prefix("0x").unwrap_or(&hash))
-        .map_err(|_| ApiError::bad_request("Invalid transaction hash"))?;
+    let hash_bytes = parse_hash32(&hash, "transaction hash")?;
 
     // Read cell_deps directly from CKB's RocksDB
     if let Some(ref store) = state.ckb_store {
@@ -1558,8 +1555,7 @@ async fn get_cycles_status(
     State(state): State<Arc<AppState>>,
     Path(hash): Path<String>,
 ) -> ApiResult<CyclesStatusResponse> {
-    let hash_bytes = hex::decode(hash.strip_prefix("0x").unwrap_or(&hash))
-        .map_err(|_| ApiError::bad_request("Invalid transaction hash"))?;
+    let hash_bytes = parse_hash32(&hash, "transaction hash")?;
 
     let (db_cycles, is_cellbase) = match load_tx_cycles_state(&state, &hash_bytes).await? {
         Some(state) => state,
@@ -1621,8 +1617,7 @@ async fn trigger_cycles_calculation(
     State(state): State<Arc<AppState>>,
     Path(hash): Path<String>,
 ) -> ApiResult<CyclesStatusResponse> {
-    let hash_bytes = hex::decode(hash.strip_prefix("0x").unwrap_or(&hash))
-        .map_err(|_| ApiError::bad_request("Invalid transaction hash"))?;
+    let hash_bytes = parse_hash32(&hash, "transaction hash")?;
 
     let (db_cycles, is_cellbase) = match load_tx_cycles_state(&state, &hash_bytes).await? {
         Some(state) => state,
@@ -1863,8 +1858,7 @@ async fn get_transaction_lifecycle(
     State(state): State<Arc<AppState>>,
     Path(hash): Path<String>,
 ) -> ApiResult<TransactionLifecycleResponse> {
-    let hash_bytes = hex::decode(hash.strip_prefix("0x").unwrap_or(&hash))
-        .map_err(|_| ApiError::bad_request("Invalid transaction hash"))?;
+    let hash_bytes = parse_hash32(&hash, "transaction hash")?;
 
     let short_hash = if hash_bytes.len() >= 10 {
         hash_bytes[..10].to_vec()

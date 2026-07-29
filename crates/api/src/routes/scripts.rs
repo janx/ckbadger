@@ -21,7 +21,7 @@ use crate::utils::script_resolution::resolve_dep_cells_for_transaction;
 use crate::utils::{
     apply_owned_capacity_delta, date_keys_inclusive, deployment_reference_hashes,
     hash_type_to_string, hash_type_to_u8, list_version_code_cells, merge_script_info_for_reference,
-    parse_chart_date_range, reference_form_member_version, resolve_script_by_hash,
+    parse_chart_date_range, parse_hash32, reference_form_member_version, resolve_script_by_hash,
     resolve_script_form_by_hash, CurrentScriptVersionResolution, VersionCodeCell,
 };
 use crate::warmup::{
@@ -1246,21 +1246,26 @@ async fn lookup_scripts(
         ));
     }
 
-    let code_hash_bytes: Result<Vec<Vec<u8>>, _> = request
+    // Every entry is validated: one malformed code_hash fails the whole batch
+    // rather than being truncated into a lookup for a different script.
+    let code_hash_bytes = request
         .code_hashes
         .iter()
-        .map(|h| hex::decode(h.strip_prefix("0x").unwrap_or(h)))
-        .collect();
-
-    let code_hash_bytes =
-        code_hash_bytes.map_err(|_| ApiError::bad_request("Invalid hex in code_hashes"))?;
+        .map(|h| parse_hash32(h, "code_hashes entry"))
+        .collect::<Result<Vec<Vec<u8>>, _>>()?;
 
     let mut result: HashMap<String, ScriptLookupInfo> = HashMap::new();
     let all_script_infos = load_script_infos_cached(&state)?;
-    let per_tx_mappings = request
-        .tx_hash
-        .as_deref()
-        .and_then(|tx_hash| resolve_dep_cells_for_transaction(&state, tx_hash));
+    // The optional per-tx hint is still request data: validate its shape here so
+    // a malformed txHash is reported rather than silently degrading to global
+    // resolution.
+    let per_tx_mappings = match request.tx_hash.as_deref() {
+        Some(tx_hash) => {
+            parse_hash32(tx_hash, "txHash")?;
+            resolve_dep_cells_for_transaction(&state, tx_hash)
+        }
+        None => None,
+    };
 
     for code_hash in &code_hash_bytes {
         let reference_hash_hex = format!("0x{}", hex::encode(code_hash));
@@ -1400,9 +1405,7 @@ impl CodeCellQuery {
     /// the whole deployment family. Both code-cell endpoints go through here so
     /// they can never disagree.
     fn resolve(&self, state: &AppState) -> Result<ScriptIdentifierResolution, ApiRouteError> {
-        let code_hash_bytes =
-            hex::decode(self.code_hash.strip_prefix("0x").unwrap_or(&self.code_hash))
-                .map_err(|_| ApiError::bad_request("Invalid code_hash hex"))?;
+        let code_hash_bytes = parse_hash32(&self.code_hash, "code_hash")?;
 
         match self.hash_type.as_deref() {
             Some(raw) => {
@@ -1749,15 +1752,6 @@ fn parse_script_kind_filter(script_kind: Option<&str>) -> Result<Vec<bool>, ApiR
     }
 }
 
-fn parse_code_hash_hex(code_hash: &str) -> Result<Vec<u8>, ApiRouteError> {
-    let decoded = hex::decode(code_hash.strip_prefix("0x").unwrap_or(code_hash))
-        .map_err(|_| ApiError::bad_request("Invalid code_hash hex"))?;
-    if decoded.len() != 32 {
-        return Err(ApiError::bad_request("Invalid code_hash length"));
-    }
-    Ok(decoded)
-}
-
 fn apply_script_chart_delta(
     cumulative_capacity: i128,
     cumulative_used: i128,
@@ -1972,7 +1966,7 @@ async fn get_script_capacity_history_chart(
     let code_hash_filter = params
         .code_hash
         .as_deref()
-        .map(parse_code_hash_hex)
+        .map(|raw| parse_hash32(raw, "code_hash"))
         .transpose()?;
     let kind_filter = parse_script_kind_filter(params.script_kind.as_deref())?;
 
@@ -2033,7 +2027,7 @@ async fn get_script_capacity_history_chart_by_code_hash(
     let (from_date, to_date) = parse_chart_date_range(params.from.as_deref(), params.to.as_deref())
         .map_err(|msg| ApiError::bad_request(&msg))?;
 
-    let code_hash = parse_code_hash_hex(&params.code_hash)?;
+    let code_hash = parse_hash32(&params.code_hash, "code_hash")?;
     let kind_filter = parse_script_kind_filter(params.script_kind.as_deref())?;
     let title = format!("0x{} Capacity History", hex::encode(&code_hash));
 

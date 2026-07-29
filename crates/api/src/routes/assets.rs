@@ -23,7 +23,7 @@ use crate::response::{
     default_limit, ok, ApiError, ApiResult, ApiRouteError, CursorPaginatedResponse,
 };
 use crate::utils::{
-    apply_owned_capacity_delta, date_keys_inclusive, parse_chart_date_range,
+    apply_owned_capacity_delta, date_keys_inclusive, parse_asset_id_max32, parse_chart_date_range,
     resolve_collection_standard, resolve_object_collection_composition_tier_override,
     resolve_object_collection_name,
 };
@@ -901,22 +901,19 @@ fn decode_object_collection_id(
     if matches!(normalized.as_str(), "bit_cell" | "bit-cell" | ".bit-cell") {
         return Ok(BIT_CELL_SENTINEL_COLLECTION.to_vec());
     }
-    hex::decode(raw.strip_prefix("0x").unwrap_or(raw))
-        .map_err(|_| ApiError::bad_request("Invalid object collection ID"))
+    parse_asset_id_max32(raw, "object collection ID")
 }
 
 pub(crate) fn decode_object_item_cursor(
     raw: &str,
 ) -> Result<Vec<u8>, (axum::http::StatusCode, Json<ApiError>)> {
-    hex::decode(raw.strip_prefix("0x").unwrap_or(raw))
-        .map_err(|_| ApiError::bad_request("Invalid object items cursor"))
+    parse_asset_id_max32(raw, "object items cursor (expected an item ID)")
 }
 
 pub(super) fn decode_item_id(
     raw: &str,
 ) -> Result<Vec<u8>, (axum::http::StatusCode, Json<ApiError>)> {
-    hex::decode(raw.strip_prefix("0x").unwrap_or(raw))
-        .map_err(|_| ApiError::bad_request("Invalid item ID"))
+    parse_asset_id_max32(raw, "item ID")
 }
 
 pub(crate) fn decode_activity_cursor(

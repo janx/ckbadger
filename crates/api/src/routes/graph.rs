@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 use crate::response::{ok, ApiError, ApiResult};
 use crate::routes::tx_lookup::{fetch_transaction_lookup, pending_transaction_resource_error};
+use crate::utils::parse_hash32;
 use crate::AppState;
 use tracing::instrument;
 
@@ -166,8 +167,7 @@ async fn get_cell_graph(
     Path((tx_hash, output_index)): Path<(String, i32)>,
     Query(params): Query<GraphParams>,
 ) -> ApiResult<GraphResponse> {
-    let hash_bytes = hex::decode(tx_hash.strip_prefix("0x").unwrap_or(&tx_hash))
-        .map_err(|_| ApiError::bad_request("Invalid transaction hash"))?;
+    let hash_bytes = parse_hash32(&tx_hash, "tx_hash")?;
 
     let mut nodes = Vec::new();
     let mut links = Vec::new();
@@ -319,8 +319,7 @@ async fn get_tx_graph(
     Path(hash): Path<String>,
     Query(_params): Query<GraphParams>,
 ) -> ApiResult<GraphResponse> {
-    let hash_bytes = hex::decode(hash.strip_prefix("0x").unwrap_or(&hash))
-        .map_err(|_| ApiError::bad_request("Invalid transaction hash"))?;
+    let hash_bytes = parse_hash32(&hash, "transaction hash")?;
 
     let mut nodes = Vec::new();
     let mut links = Vec::new();

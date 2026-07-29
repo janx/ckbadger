@@ -329,10 +329,17 @@ pub const CELL_CODE_INDEX_KEY_SIZE: usize = 75;
 /// Prefix covering one `(code_hash, hash_type)` form in a cell-by-code index.
 pub const CELL_CODE_INDEX_PREFIX_SIZE: usize = 33;
 
+/// # Invariant
+///
+/// `code_hash` must be exactly 32 bytes. A shorter hash cannot fill the key
+/// window, and a longer one would be truncated into the prefix of a *different*
+/// script reference form — silently answering for the wrong script. Callers own
+/// this invariant: request-supplied hashes are length-checked at the API
+/// boundary (`ckbadger_api::utils::parse_hash32`) before they get here.
 pub fn encode_cell_code_index_prefix(code_hash: &[u8], hash_type: u8) -> Vec<u8> {
     assert!(
-        code_hash.len() >= 32,
-        "encode_cell_code_index_prefix: code_hash must be >= 32 bytes, got {}",
+        code_hash.len() == 32,
+        "encode_cell_code_index_prefix: code_hash must be exactly 32 bytes, got {}",
         code_hash.len()
     );
     let mut prefix = Vec::with_capacity(CELL_CODE_INDEX_PREFIX_SIZE);
@@ -341,6 +348,11 @@ pub fn encode_cell_code_index_prefix(code_hash: &[u8], hash_type: u8) -> Vec<u8>
     prefix
 }
 
+/// # Invariant
+///
+/// `code_hash` and `tx_hash` must each be exactly 32 bytes, for the same reason
+/// as [`encode_cell_code_index_prefix`]: anything longer would be truncated into
+/// a key belonging to a different script form or outpoint.
 pub fn encode_cell_code_index_key(
     code_hash: &[u8],
     hash_type: u8,
@@ -349,13 +361,13 @@ pub fn encode_cell_code_index_key(
     output_index: i16,
 ) -> Vec<u8> {
     assert!(
-        code_hash.len() >= 32,
-        "encode_cell_code_index_key: code_hash must be >= 32 bytes, got {}",
+        code_hash.len() == 32,
+        "encode_cell_code_index_key: code_hash must be exactly 32 bytes, got {}",
         code_hash.len()
     );
     assert!(
-        tx_hash.len() >= 32,
-        "encode_cell_code_index_key: tx_hash must be >= 32 bytes, got {}",
+        tx_hash.len() == 32,
+        "encode_cell_code_index_key: tx_hash must be exactly 32 bytes, got {}",
         tx_hash.len()
     );
     let mut key = Vec::with_capacity(CELL_CODE_INDEX_KEY_SIZE);
@@ -1529,6 +1541,39 @@ mod tests {
         assert!(!max_data_form.starts_with(&type_prefix));
         assert!(min_type_form.starts_with(&type_prefix));
         assert!(!min_type_form.starts_with(&data_prefix));
+    }
+
+    /// A 33-byte code hash used to be accepted and silently truncated to its
+    /// first 32 bytes, producing the prefix of a *different* script reference
+    /// form. The encoder now enforces the exact-length invariant.
+    #[test]
+    #[should_panic(expected = "code_hash must be exactly 32 bytes, got 33")]
+    fn test_cell_code_index_prefix_rejects_oversized_code_hash() {
+        encode_cell_code_index_prefix(&[0x9b; 33], 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "code_hash must be exactly 32 bytes, got 31")]
+    fn test_cell_code_index_prefix_rejects_undersized_code_hash() {
+        encode_cell_code_index_prefix(&[0x9b; 31], 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "code_hash must be exactly 32 bytes, got 33")]
+    fn test_cell_code_index_key_rejects_oversized_code_hash() {
+        encode_cell_code_index_key(&[0x9b; 33], 1, 123, &[0xab; 32], 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "tx_hash must be exactly 32 bytes, got 33")]
+    fn test_cell_code_index_key_rejects_oversized_tx_hash() {
+        encode_cell_code_index_key(&[0x9b; 32], 1, 123, &[0xab; 33], 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "code_hash must be exactly 32 bytes, got 31")]
+    fn test_cell_code_index_key_rejects_undersized_code_hash() {
+        encode_cell_code_index_key(&[0x9b; 31], 1, 123, &[0xab; 32], 0);
     }
 
     #[test]

@@ -14,7 +14,7 @@ use ckbadger_indexer::parser::{build_dob1_svg, extract_dob1_pattern};
 
 use super::assets::{
     build_nft_item_activities_response, count_nft_collection_activities_cached,
-    decode_activity_cursor, decode_item_id, list_canonical_nft_collection_activities_page,
+    decode_activity_cursor, list_canonical_nft_collection_activities_page,
     normalize_activity_action_filter, MnftItemActivitiesParams, MnftItemActivityResponse,
     NftLifecycleStandard,
 };
@@ -22,7 +22,9 @@ use super::statistics::{StackedAreaChartResponse, StackedAreaDataPoint, StackedA
 use crate::response::{
     default_limit, ok, ApiError, ApiResult, ApiRouteError, CursorPaginatedResponse,
 };
-use crate::utils::{apply_owned_capacity_delta, date_keys_inclusive, parse_chart_date_range};
+use crate::utils::{
+    apply_owned_capacity_delta, date_keys_inclusive, parse_chart_date_range, parse_hash32,
+};
 use crate::warmup::{CachedAssetEntry, SporeCache};
 use crate::AppState;
 use ckbadger_store::types::SOLE_SPORES_SENTINEL_COLLECTION;
@@ -152,19 +154,6 @@ fn normalize_cluster_activity_action_filter(
     }
 }
 
-fn parse_fixed_len_hex(
-    raw: &str,
-    expected_len: usize,
-    err_msg: &'static str,
-) -> Result<Vec<u8>, (axum::http::StatusCode, axum::Json<ApiError>)> {
-    let bytes = hex::decode(raw.strip_prefix("0x").unwrap_or(raw))
-        .map_err(|_| ApiError::bad_request(err_msg))?;
-    if bytes.len() != expected_len {
-        return Err(ApiError::bad_request(err_msg));
-    }
-    Ok(bytes)
-}
-
 /// Parse a cluster_id URL parameter. Accepts "sole-spores" alias
 /// or a 32-byte hex string.
 fn parse_cluster_id_param(
@@ -173,11 +162,7 @@ fn parse_cluster_id_param(
     if raw.eq_ignore_ascii_case("sole-spores") {
         return Ok(SOLE_SPORES_SENTINEL_COLLECTION.to_vec());
     }
-    parse_fixed_len_hex(
-        raw,
-        32,
-        "Invalid cluster ID (expected 32-byte hex or 'sole-spores')",
-    )
+    parse_hash32(raw, "cluster ID (expected 32-byte hex or 'sole-spores')")
 }
 
 fn is_sole_spores_sentinel(id: &[u8]) -> bool {
@@ -1052,8 +1037,7 @@ async fn get_spore(
     State(state): State<Arc<AppState>>,
     Path(spore_id): Path<String>,
 ) -> ApiResult<SporeResponse> {
-    let id = hex::decode(spore_id.strip_prefix("0x").unwrap_or(&spore_id))
-        .map_err(|_| ApiError::bad_request("Invalid spore ID"))?;
+    let id = parse_hash32(&spore_id, "spore ID")?;
 
     let store = state.store.clone();
     let id_c = id.clone();
@@ -1099,7 +1083,7 @@ async fn list_spore_item_activities(
 ) -> ApiResult<CursorPaginatedResponse<MnftItemActivityResponse>> {
     let limit = params.limit.clamp(1, 100);
     let action_filter = normalize_activity_action_filter(params.action.as_deref())?;
-    let spore_id_bytes = decode_item_id(&spore_id)?;
+    let spore_id_bytes = parse_hash32(&spore_id, "spore ID")?;
 
     // Verify the spore exists and is not a cluster
     let entry = state
@@ -1131,8 +1115,7 @@ async fn decode_spore(
     State(state): State<Arc<AppState>>,
     Path(spore_id): Path<String>,
 ) -> ApiResult<SporeDobDecodeResponse> {
-    let id = hex::decode(spore_id.strip_prefix("0x").unwrap_or(&spore_id))
-        .map_err(|_| ApiError::bad_request("Invalid spore ID"))?;
+    let id = parse_hash32(&spore_id, "spore ID")?;
 
     let store = state.store.clone();
     let id_c = id.clone();
@@ -1292,8 +1275,7 @@ async fn serve_media(
         ));
     }
 
-    let id = hex::decode(spore_id.strip_prefix("0x").unwrap_or(&spore_id))
-        .map_err(|_| ApiError::bad_request("Invalid spore ID hex"))?;
+    let id = parse_hash32(&spore_id, "spore ID")?;
 
     // 2. Load decoded entry to validate hash membership
     let store = state.store.clone();
@@ -1383,8 +1365,7 @@ async fn render_spore_svg(
     State(state): State<Arc<AppState>>,
     Path(spore_id): Path<String>,
 ) -> Result<Response, (StatusCode, axum::Json<ApiError>)> {
-    let id = hex::decode(spore_id.strip_prefix("0x").unwrap_or(&spore_id))
-        .map_err(|_| ApiError::bad_request("Invalid spore ID hex"))?;
+    let id = parse_hash32(&spore_id, "spore ID")?;
 
     // Load decoded traits
     let store = state.store.clone();
@@ -1568,8 +1549,7 @@ async fn get_spore_capacity_chart(
     let (from_date, to_date) = parse_chart_date_range(params.from.as_deref(), params.to.as_deref())
         .map_err(|msg| ApiError::bad_request(&msg))?;
 
-    let id = hex::decode(spore_id.strip_prefix("0x").unwrap_or(&spore_id))
-        .map_err(|_| ApiError::bad_request("Invalid spore ID"))?;
+    let id = parse_hash32(&spore_id, "spore ID")?;
 
     let store = state.store.clone();
     let id_c = id.clone();
@@ -1636,8 +1616,7 @@ async fn get_spores_by_owner(
     Path(lock_hash): Path<String>,
     Query(params): Query<ListParams>,
 ) -> ApiResult<CursorPaginatedResponse<SporeResponse>> {
-    let hash = hex::decode(lock_hash.strip_prefix("0x").unwrap_or(&lock_hash))
-        .map_err(|_| ApiError::bad_request("Invalid lock script hash"))?;
+    let hash = parse_hash32(&lock_hash, "lock_hash")?;
 
     let limit = params.limit.clamp(1, 100) as usize;
     let cursor_block = params.cursor.unwrap_or(i64::MAX);
@@ -1894,9 +1873,12 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_fixed_len_hex_rejects_non_32_bytes() {
-        let err = parse_fixed_len_hex("0x1234", 32, "Invalid cluster ID").unwrap_err();
-        assert_eq!(err.0, axum::http::StatusCode::BAD_REQUEST);
+    fn test_parse_cluster_id_param_rejects_non_32_bytes() {
+        for raw in ["0x1234", &"ab".repeat(31), &"ab".repeat(33)] {
+            let err = parse_cluster_id_param(raw).unwrap_err();
+            assert_eq!(err.0, axum::http::StatusCode::BAD_REQUEST, "raw={raw}");
+            assert!(err.1 .0.message.contains("cluster ID"), "raw={raw}");
+        }
     }
 
     #[test]

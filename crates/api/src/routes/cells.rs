@@ -19,7 +19,7 @@ use crate::response::{
 };
 use crate::utils::{
     address_to_lock_script_hash, deployment_key_for_script, deployment_reference_hashes,
-    is_ckb_address, is_known_script_name, merge_script_info_for_reference,
+    is_ckb_address, is_known_script_name, merge_script_info_for_reference, parse_hash32,
     resolve_code_hash_for_hash_type, script_to_address, shannon_to_ckb,
 };
 use crate::warmup::{
@@ -1753,27 +1753,20 @@ async fn list_live_cells(
             address_to_lock_script_hash(lock_hash)
                 .map_err(|e| ApiError::bad_request(format!("Invalid CKB address: {}", e)))?
         } else {
-            hex::decode(lock_hash.strip_prefix("0x").unwrap_or(lock_hash))
-                .map_err(|_| ApiError::bad_request("Invalid lock script hash"))?
+            parse_hash32(lock_hash, "lock_script_hash")?
         })
     } else {
         None
     };
 
     let type_hash_bytes = if let Some(ref type_hash) = params.type_script_hash {
-        Some(
-            hex::decode(type_hash.strip_prefix("0x").unwrap_or(type_hash))
-                .map_err(|_| ApiError::bad_request("Invalid type script hash"))?,
-        )
+        Some(parse_hash32(type_hash, "type_script_hash")?)
     } else {
         None
     };
 
     let _type_code_hash_bytes = if let Some(ref code_hash) = params.type_code_hash {
-        Some(
-            hex::decode(code_hash.strip_prefix("0x").unwrap_or(code_hash))
-                .map_err(|_| ApiError::bad_request("Invalid type code hash"))?,
-        )
+        Some(parse_hash32(code_hash, "type_code_hash")?)
     } else {
         None
     };
@@ -2147,13 +2140,7 @@ async fn list_cells_by_script(
 ) -> ApiResult<CursorPaginatedResponse<CellResponse>> {
     let limit = params.limit.clamp(1, 100) as usize;
 
-    let code_hash_bytes = hex::decode(
-        params
-            .code_hash
-            .strip_prefix("0x")
-            .unwrap_or(&params.code_hash),
-    )
-    .map_err(|_| ApiError::bad_request("Invalid code_hash hex"))?;
+    let code_hash_bytes = parse_hash32(&params.code_hash, "code_hash")?;
 
     let hash_type_num = parse_hash_type(&params.hash_type).ok_or_else(|| {
         ApiError::bad_request("Invalid hash_type. Must be one of: data, type, data1, data2")
@@ -2331,8 +2318,7 @@ async fn get_address(
             .map_err(|e| ApiError::bad_request(format!("Invalid CKB address: {}", e)))?;
         (hash, Some(addr.clone()))
     } else {
-        let hash = hex::decode(addr.strip_prefix("0x").unwrap_or(&addr))
-            .map_err(|_| ApiError::bad_request("Invalid address/lock script hash"))?;
+        let hash = parse_hash32(&addr, "address/lock script hash")?;
         (hash, None)
     };
 
@@ -2599,8 +2585,7 @@ async fn get_cell(
     State(state): State<Arc<AppState>>,
     axum::extract::Path((tx_hash, output_index)): axum::extract::Path<(String, i32)>,
 ) -> ApiResult<CellDetailResponse> {
-    let hash_bytes = hex::decode(tx_hash.strip_prefix("0x").unwrap_or(&tx_hash))
-        .map_err(|_| ApiError::bad_request("Invalid transaction hash"))?;
+    let hash_bytes = parse_hash32(&tx_hash, "tx_hash")?;
 
     let output_idx = output_index as i16;
 
@@ -2925,8 +2910,7 @@ async fn get_address_transactions(
         address_to_lock_script_hash(&addr)
             .map_err(|e| ApiError::bad_request(format!("Invalid CKB address: {}", e)))?
     } else {
-        hex::decode(addr.strip_prefix("0x").unwrap_or(&addr))
-            .map_err(|_| ApiError::bad_request("Invalid address/lock script hash"))?
+        parse_hash32(&addr, "address/lock script hash")?
     };
 
     let limit = params.limit.clamp(1, 100) as usize;
@@ -3077,8 +3061,7 @@ async fn get_address_tokens(
         address_to_lock_script_hash(&addr)
             .map_err(|e| ApiError::bad_request(format!("Invalid CKB address: {}", e)))?
     } else {
-        hex::decode(addr.strip_prefix("0x").unwrap_or(&addr))
-            .map_err(|_| ApiError::bad_request("Invalid address/lock script hash"))?
+        parse_hash32(&addr, "address/lock script hash")?
     };
 
     let limit = params.limit.clamp(1, 100) as usize;
