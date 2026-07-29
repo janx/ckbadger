@@ -7,7 +7,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use anyhow::Result;
-use anyhow::{anyhow, bail};
+use anyhow::{anyhow, bail, Context};
 use ckb_types::utilities::compact_to_difficulty as ckb_compact_to_difficulty;
 use ckbadger_common::TokenBalance;
 use ckbadger_store::keys;
@@ -4909,10 +4909,20 @@ where
             ),
             Vec::new(),
         ))?;
+        let lock_hash_type = keys::cell_code_index_hash_type_byte(slot.lock_hash_type)
+            .with_context(|| {
+                format!(
+                    "invalid lock hash_type for bulk build cell-by-lock-code index: outpoint=0x{}:{}, hash_type={}",
+                    hex::encode(outpoint.tx_hash),
+                    outpoint_index,
+                    slot.lock_hash_type
+                )
+            })?;
         emit(materialize::MaterializedRow::new(
             CF_CELL_BY_LOCK_CODE,
-            keys::encode_cell_index_key(
+            keys::encode_cell_code_index_key(
                 interner.resolve_bytes(slot.lock_code_hash_id),
+                lock_hash_type,
                 slot.created_at_block,
                 &outpoint.tx_hash,
                 outpoint_index,
@@ -4932,10 +4942,27 @@ where
             ))?;
         }
         if let Some(type_code_hash_id) = slot.type_code_hash_id {
+            let type_hash_type = slot.type_hash_type.ok_or_else(|| {
+                anyhow!(
+                    "bulk build live slot has type_code_hash but no type_hash_type: outpoint=0x{}:{}",
+                    hex::encode(outpoint.tx_hash),
+                    outpoint_index
+                )
+            })?;
+            let type_hash_type = keys::cell_code_index_hash_type_byte(type_hash_type)
+                .with_context(|| {
+                    format!(
+                        "invalid type hash_type for bulk build cell-by-type-code index: outpoint=0x{}:{}, hash_type={:?}",
+                        hex::encode(outpoint.tx_hash),
+                        outpoint_index,
+                        slot.type_hash_type
+                    )
+                })?;
             emit(materialize::MaterializedRow::new(
                 CF_CELL_BY_TYPE_CODE,
-                keys::encode_cell_index_key(
+                keys::encode_cell_code_index_key(
                     interner.resolve_bytes(type_code_hash_id),
+                    type_hash_type,
                     slot.created_at_block,
                     &outpoint.tx_hash,
                     outpoint_index,

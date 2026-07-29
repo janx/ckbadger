@@ -24,6 +24,7 @@ import { api } from '@/lib/api';
 import { getCapacityRangeParams, CapacityRangeKey } from '@/lib/capacity-range';
 import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
 import {
+  encodeCellsByScriptCursor,
   getScriptRefQueryHashType,
   normalizeScriptRefHashType,
   type ScriptRefHashType,
@@ -117,39 +118,6 @@ function compareCellsByCreatedAt(
     return a.cell.txHash.localeCompare(b.cell.txHash);
   }
   return a.cell.outputIndex - b.cell.outputIndex;
-}
-
-function hexToBytes(hex: string): number[] {
-  const normalized = hex.startsWith('0x') ? hex.slice(2) : hex;
-  if (normalized.length % 2 !== 0) {
-    throw new Error(`Invalid hex length for cursor encoding: ${hex}`);
-  }
-
-  const bytes: number[] = [];
-  for (let index = 0; index < normalized.length; index += 2) {
-    const pair = normalized.slice(index, index + 2);
-    const value = Number.parseInt(pair, 16);
-    if (Number.isNaN(value)) {
-      throw new Error(`Invalid hex value for cursor encoding: ${hex}`);
-    }
-    bytes.push(value);
-  }
-  return bytes;
-}
-
-function encodeVersionCellCursor(
-  referenceHash: string,
-  createdAtBlock: number,
-  txHash: string,
-  outputIndex: number
-): string {
-  const bytes = [
-    ...hexToBytes(referenceHash),
-    ...Array.from(new Uint8Array(new BigInt64Array([BigInt(createdAtBlock)]).buffer).reverse()),
-    ...hexToBytes(txHash),
-    ...Array.from(new Uint8Array(new Int16Array([outputIndex]).buffer).reverse()),
-  ];
-  return bytes.map((value) => value.toString(16).padStart(2, '0')).join('');
 }
 
 function decodeVersionCellsCursorState(
@@ -843,12 +811,16 @@ export default function ScriptDetailPage({
       }
 
       if (lastConsumedCell) {
-        nextCursorState[reference.key] = encodeVersionCellCursor(
-          reference.referenceHash,
-          lastConsumedCell.createdAtBlock,
-          lastConsumedCell.txHash,
-          lastConsumedCell.outputIndex
-        );
+        nextCursorState[reference.key] = encodeCellsByScriptCursor({
+          referenceHash: reference.referenceHash,
+          hashType: reference.hashType,
+          createdAtBlock: lastConsumedCell.createdAtBlock,
+          txHash: lastConsumedCell.txHash,
+          outputIndex: lastConsumedCell.outputIndex,
+          // Without an explicit script kind the request is script_kind=both,
+          // whose cursor is phase-composite.
+          phase: selectedScriptKindForChart ? undefined : lastConsumedCell.matchedScriptKind,
+        });
       }
     }
 
@@ -865,6 +837,7 @@ export default function ScriptDetailPage({
       currentCount: pageEntries.length,
     };
   }, [
+    selectedScriptKindForChart,
     selectedVersionCellsQueries,
     selectedVersionUsage?.liveCellsCount,
     versionCellsCursorState,

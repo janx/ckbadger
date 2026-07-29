@@ -317,6 +317,69 @@ pub fn encode_cell_index_key(
     key
 }
 
+/// Cell-by-code index key (CF_CELL_BY_LOCK_CODE / CF_CELL_BY_TYPE_CODE):
+/// code_hash(32B) + hash_type(1B) + block_num(8B BE) + outpoint(34B) = 75 bytes.
+///
+/// The hash_type byte sits directly after the code hash so each script
+/// reference form `(code_hash, hash_type)` is one contiguous key range: a
+/// prefix scan over `encode_cell_code_index_prefix` hits exactly that form
+/// and never pages through sibling forms sharing the same code hash bytes.
+pub const CELL_CODE_INDEX_KEY_SIZE: usize = 75;
+
+/// Prefix covering one `(code_hash, hash_type)` form in a cell-by-code index.
+pub const CELL_CODE_INDEX_PREFIX_SIZE: usize = 33;
+
+pub fn encode_cell_code_index_prefix(code_hash: &[u8], hash_type: u8) -> Vec<u8> {
+    assert!(
+        code_hash.len() >= 32,
+        "encode_cell_code_index_prefix: code_hash must be >= 32 bytes, got {}",
+        code_hash.len()
+    );
+    let mut prefix = Vec::with_capacity(CELL_CODE_INDEX_PREFIX_SIZE);
+    prefix.extend_from_slice(&code_hash[..32]);
+    prefix.push(hash_type);
+    prefix
+}
+
+pub fn encode_cell_code_index_key(
+    code_hash: &[u8],
+    hash_type: u8,
+    block_num: i64,
+    tx_hash: &[u8],
+    output_index: i16,
+) -> Vec<u8> {
+    assert!(
+        code_hash.len() >= 32,
+        "encode_cell_code_index_key: code_hash must be >= 32 bytes, got {}",
+        code_hash.len()
+    );
+    assert!(
+        tx_hash.len() >= 32,
+        "encode_cell_code_index_key: tx_hash must be >= 32 bytes, got {}",
+        tx_hash.len()
+    );
+    let mut key = Vec::with_capacity(CELL_CODE_INDEX_KEY_SIZE);
+    key.extend_from_slice(&code_hash[..32]);
+    key.push(hash_type);
+    key.extend_from_slice(&block_num.to_be_bytes());
+    key.extend_from_slice(&tx_hash[..32]);
+    key.extend_from_slice(&output_index.to_be_bytes());
+    key
+}
+
+/// Convert a stored `i16` script hash_type into the single key byte used by
+/// the cell-by-code indexes. Stored hash types are protocol values (0 = data,
+/// 1 = type, 2 = data1, 4 = data2); anything outside `u8` range is corrupt
+/// state and must fail fast at the call site with outpoint context.
+pub fn cell_code_index_hash_type_byte(hash_type: i16) -> anyhow::Result<u8> {
+    u8::try_from(hash_type).map_err(|_| {
+        anyhow::anyhow!(
+            "script hash_type {} does not fit the cell-by-code index key byte",
+            hash_type
+        )
+    })
+}
+
 /// Address-tx key: lock_hash(32B) + block_num_desc(8B BE) + tx_idx_desc(4B BE) + tx_hash(32B)
 pub const ADDR_TX_KEY_SIZE: usize = 76;
 
@@ -1429,6 +1492,53 @@ mod tests {
         let (decoded_hash, decoded_idx) = decode_outpoint(&key);
         assert_eq!(decoded_hash, tx_hash.to_vec());
         assert_eq!(decoded_idx, output_index);
+    }
+
+    #[test]
+    fn test_cell_code_index_key_layout() {
+        let code_hash = [0x9b; 32];
+        let tx_hash = [0xab; 32];
+        let key = encode_cell_code_index_key(&code_hash, 1, 123, &tx_hash, 7);
+
+        assert_eq!(key.len(), CELL_CODE_INDEX_KEY_SIZE);
+        assert_eq!(&key[..32], &code_hash);
+        assert_eq!(key[32], 1, "hash_type byte sits directly after code_hash");
+        assert_eq!(&key[33..41], &123i64.to_be_bytes());
+        assert_eq!(&key[41..73], &tx_hash);
+        assert_eq!(&key[73..75], &7i16.to_be_bytes());
+
+        let prefix = encode_cell_code_index_prefix(&code_hash, 1);
+        assert_eq!(prefix.len(), CELL_CODE_INDEX_PREFIX_SIZE);
+        assert!(key.starts_with(&prefix));
+    }
+
+    #[test]
+    fn test_cell_code_index_key_forms_never_interleave() {
+        // Same code hash bytes with different hash_types must be disjoint
+        // contiguous key ranges: every key of the lower form sorts strictly
+        // before every key of the higher form, regardless of block numbers.
+        let code_hash = [0x9b; 32];
+        let max_data_form =
+            encode_cell_code_index_key(&code_hash, 0, i64::MAX, &[0xff; 32], i16::MAX);
+        let min_type_form = encode_cell_code_index_key(&code_hash, 1, 0, &[0x00; 32], 0);
+        assert!(max_data_form < min_type_form);
+
+        let data_prefix = encode_cell_code_index_prefix(&code_hash, 0);
+        let type_prefix = encode_cell_code_index_prefix(&code_hash, 1);
+        assert!(max_data_form.starts_with(&data_prefix));
+        assert!(!max_data_form.starts_with(&type_prefix));
+        assert!(min_type_form.starts_with(&type_prefix));
+        assert!(!min_type_form.starts_with(&data_prefix));
+    }
+
+    #[test]
+    fn test_cell_code_index_hash_type_byte_conversion() {
+        assert_eq!(cell_code_index_hash_type_byte(0).unwrap(), 0);
+        assert_eq!(cell_code_index_hash_type_byte(1).unwrap(), 1);
+        assert_eq!(cell_code_index_hash_type_byte(2).unwrap(), 2);
+        assert_eq!(cell_code_index_hash_type_byte(4).unwrap(), 4);
+        assert!(cell_code_index_hash_type_byte(-1).is_err());
+        assert!(cell_code_index_hash_type_byte(256).is_err());
     }
 
     #[test]

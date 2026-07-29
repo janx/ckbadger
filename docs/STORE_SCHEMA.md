@@ -20,8 +20,8 @@ The indexer opens the two chain stores (domain + append-only) read-write and the
 | `block_hash_index`               | block_hash (32B)                                                  | block_number (8B)                                                    | Reverse lookup: hash -> number                                                                                                                                                         |
 | `cell_by_lock`                   | lock_script_hash + outpoint                                       | empty                                                                | Cell index by lock script                                                                                                                                                              |
 | `cell_by_type`                   | type_script_hash + outpoint                                       | empty                                                                | Cell index by type script                                                                                                                                                              |
-| `cell_by_lock_code`              | lock_code_hash + outpoint                                         | empty                                                                | Cell index by lock code_hash                                                                                                                                                           |
-| `cell_by_type_code`              | type_code_hash + outpoint                                         | empty                                                                | Cell index by type code_hash                                                                                                                                                           |
+| `cell_by_lock_code`              | lock_code_hash (32B) + hash_type (1B) + block (8B BE) + outpoint  | empty                                                                | Cell index by lock script reference form `(code_hash, hash_type)`                                                                                                                      |
+| `cell_by_type_code`              | type_code_hash (32B) + hash_type (1B) + block (8B BE) + outpoint  | empty                                                                | Cell index by type script reference form `(code_hash, hash_type)`                                                                                                                      |
 | `cell_by_data_hash`              | blake2b(cell_data) + outpoint                                     | empty                                                                | Cell index by data hash (code cell resolution)                                                                                                                                         |
 | `tx_index`                       | block_number + tx_index                                           | tx_hash                                                              | Transaction ordering index                                                                                                                                                             |
 | `tx_hash_map`                    | tx_hash (32B)                                                     | block_number + tx_index                                              | Reverse lookup: tx_hash -> position                                                                                                                                                    |
@@ -74,6 +74,20 @@ The indexer opens the two chain stores (domain + append-only) read-write and the
 | `lock_scripts`                   | lock_hash (32B)                                                   | LockScriptEntry                                                      | Lock script components by hash (survives cell consumption for address resolution)                                                                                                      |
 | `net_nodes` **(network store)**  | peer_id (raw bytes)                                               | NodeRecord                                                           | Per-peer crawler observation (own_addrs, client_version, flags, protocols, first/last_seen, last_reachable_at, reachable, geo, asn, last_rtt_ms, sampled known_peers)                  |
 | `net_stats` **(network store)**  | `0x00` singleton, or metric(1B)+gran(1B)+bucket(8B BE)            | LatestStatus / HistoryPoint                                          | Latest-round status singleton (key `0x00`) + time-bucketed history points keyed per metric × granularity                                                                               |
+
+### Cell-by-Code Index Note
+
+`cell_by_lock_code` / `cell_by_type_code` keys carry the script's `hash_type` byte directly after
+the 32-byte code hash (75-byte keys: `code_hash(32) + hash_type(1) + block(8 BE) + outpoint(34)`).
+Runtime script reference identity is `(reference_hash, hash_type)`, not bare `code_hash`, so each
+reference form occupies its own contiguous key range. A reader seeking one form
+(`encode_cell_code_index_prefix`) reads exactly that form's rows — a sparse form under a dense code
+hash costs its own row count, never the whole code-hash prefix, and pagination inside a form is
+exact with no cross-form filtering.
+
+The other cell indexes (`cell_by_lock`, `cell_by_type`, `cell_by_data_hash`) are keyed by a full
+script hash or data hash, which already encodes `hash_type`, so they keep the 74-byte
+`hash(32) + block(8 BE) + outpoint(34)` shape.
 
 ### Script Modeling Note
 

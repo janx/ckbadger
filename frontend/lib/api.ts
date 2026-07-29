@@ -437,6 +437,8 @@ interface Cell {
   virtualCommonKnowledgeSize?: string;
   udtAmount?: string;
   daoInfo?: CellDaoInfo;
+  /** `/cells/by-script` only: which index enumerated this row. */
+  matchedScriptKind?: 'lock' | 'type';
 }
 
 interface CellDep {

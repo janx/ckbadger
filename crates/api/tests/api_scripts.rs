@@ -1209,7 +1209,7 @@ async fn test_cells_by_script_resolves_reference_hash_type_alias() {
         },
         123,
     );
-    batch.put_cell_by_lock_code(&type_hash, 123, &tx_hash, 0);
+    batch.put_cell_by_lock_code(&type_hash, 1, 123, &tx_hash, 0);
     batch.commit().unwrap();
 
     let config = test_config(store);
@@ -1296,7 +1296,7 @@ async fn test_cells_by_script_type_request_returns_empty_for_data_only_deploymen
         },
         123,
     );
-    batch.put_cell_by_lock_code(&data_hash, 123, &tx_hash, 0);
+    batch.put_cell_by_lock_code(&data_hash, 0, 123, &tx_hash, 0);
     batch.commit().unwrap();
 
     let config = test_config(store);
@@ -1417,7 +1417,7 @@ async fn test_cells_by_script_hash_type_filters_rows_strictly() {
         },
         10,
     );
-    batch.put_cell_by_lock_code(&code_hash, 10, &tx_type_form, 0);
+    batch.put_cell_by_lock_code(&code_hash, 1, 10, &tx_type_form, 0);
     batch.put_cell(
         &tx_data_form,
         0,
@@ -1438,7 +1438,7 @@ async fn test_cells_by_script_hash_type_filters_rows_strictly() {
         },
         11,
     );
-    batch.put_cell_by_lock_code(&code_hash, 11, &tx_data_form, 0);
+    batch.put_cell_by_lock_code(&code_hash, 0, 11, &tx_data_form, 0);
     batch.commit().unwrap();
 
     let config = test_config(store);

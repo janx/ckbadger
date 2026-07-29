@@ -119,6 +119,40 @@ fn validate_input_cell_occupied_capacity(
     Ok(())
 }
 
+/// Resolve the lock hash_type key byte for a cell's cell-by-lock-code index
+/// row, failing fast with outpoint context on corrupt stored values.
+fn lock_code_index_hash_type(info: &LiveCellInfo, tx_hash: &[u8], output_index: i16) -> Result<u8> {
+    keys::cell_code_index_hash_type_byte(info.lock_hash_type).with_context(|| {
+        format!(
+            "invalid lock hash_type for cell-by-lock-code index: outpoint=0x{}:{}, hash_type={}",
+            hex::encode(tx_hash),
+            output_index,
+            info.lock_hash_type
+        )
+    })
+}
+
+/// Resolve the type hash_type key byte for a cell's cell-by-type-code index
+/// row. The caller has already established `type_code_hash` is present, so a
+/// missing `type_hash_type` is a payload invariant violation.
+fn type_code_index_hash_type(info: &LiveCellInfo, tx_hash: &[u8], output_index: i16) -> Result<u8> {
+    let type_hash_type = info.type_hash_type.ok_or_else(|| {
+        anyhow!(
+            "cell has type_code_hash but no type_hash_type: outpoint=0x{}:{}",
+            hex::encode(tx_hash),
+            output_index
+        )
+    })?;
+    keys::cell_code_index_hash_type_byte(type_hash_type).with_context(|| {
+        format!(
+            "invalid type hash_type for cell-by-type-code index: outpoint=0x{}:{}, hash_type={}",
+            hex::encode(tx_hash),
+            output_index,
+            type_hash_type
+        )
+    })
+}
+
 impl BatchWriter {
     pub fn insert_cells_batch(
         &self,
@@ -165,6 +199,7 @@ impl BatchWriter {
                 );
                 domain_batch.put_cell_by_lock_code(
                     &info.lock_code_hash,
+                    lock_code_index_hash_type(&info, tx_hash, *output_index)?,
                     info.created_at_block,
                     tx_hash,
                     *output_index,
@@ -180,6 +215,7 @@ impl BatchWriter {
                 if let Some(ref type_code_hash) = info.type_code_hash {
                     domain_batch.put_cell_by_type_code(
                         type_code_hash,
+                        type_code_index_hash_type(&info, tx_hash, *output_index)?,
                         info.created_at_block,
                         tx_hash,
                         *output_index,
@@ -380,6 +416,7 @@ impl BatchWriter {
                 );
                 domain_batch.delete_cell_by_lock_code(
                     &info.lock_code_hash,
+                    lock_code_index_hash_type(info, tx_hash, *output_index)?,
                     info.created_at_block,
                     tx_hash,
                     *output_index,
@@ -395,6 +432,7 @@ impl BatchWriter {
                 if let Some(ref type_code_hash) = info.type_code_hash {
                     domain_batch.delete_cell_by_type_code(
                         type_code_hash,
+                        type_code_index_hash_type(info, tx_hash, *output_index)?,
                         info.created_at_block,
                         tx_hash,
                         *output_index,

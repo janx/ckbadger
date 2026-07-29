@@ -931,6 +931,66 @@ fn should_log_rollback_progress(scanned: u64, since_last_log: Duration) -> bool 
         && since_last_log >= ROLLBACK_PROGRESS_MIN_INTERVAL
 }
 
+/// Resolve the cell-by-code index keys (lock, and type when present) for one
+/// cell. Fails fast when a stored hash_type cannot form a key byte, with the
+/// outpoint context needed to locate the corrupt payload.
+fn cell_code_index_keys(
+    cell: &LiveCellInfo,
+    created_at_block: i64,
+    tx_hash: &[u8],
+    output_index: i16,
+) -> anyhow::Result<(Vec<u8>, Option<Vec<u8>>)> {
+    let lock_hash_type = keys::cell_code_index_hash_type_byte(cell.lock_hash_type)
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "invalid lock hash_type for cell-by-lock-code index during rollback: outpoint=0x{}:{}, error={}",
+                bytes_to_hex(tx_hash),
+                output_index,
+                e
+            )
+        })?;
+    let lock_code_key = keys::encode_cell_code_index_key(
+        &cell.lock_code_hash,
+        lock_hash_type,
+        created_at_block,
+        tx_hash,
+        output_index,
+    );
+
+    let type_code_key = match (&cell.type_code_hash, cell.type_hash_type) {
+        (Some(type_code_hash), Some(type_hash_type)) => {
+            let type_hash_type = keys::cell_code_index_hash_type_byte(type_hash_type)
+                .map_err(|e| {
+                    anyhow::anyhow!(
+                        "invalid type hash_type for cell-by-type-code index during rollback: outpoint=0x{}:{}, error={}",
+                        bytes_to_hex(tx_hash),
+                        output_index,
+                        e
+                    )
+                })?;
+            Some(keys::encode_cell_code_index_key(
+                type_code_hash,
+                type_hash_type,
+                created_at_block,
+                tx_hash,
+                output_index,
+            ))
+        }
+        (None, None) => None,
+        (type_code_hash, type_hash_type) => {
+            anyhow::bail!(
+                "cell type_code_hash/type_hash_type presence mismatch during rollback: outpoint=0x{}:{}, has_code_hash={}, has_hash_type={}",
+                bytes_to_hex(tx_hash),
+                output_index,
+                type_code_hash.is_some(),
+                type_hash_type.is_some()
+            );
+        }
+    };
+
+    Ok((lock_code_key, type_code_key))
+}
+
 fn delete_cell_index_entries(
     store: &CkbadgerStore,
     batch: &mut WriteBatch,
@@ -938,7 +998,7 @@ fn delete_cell_index_entries(
     created_at_block: i64,
     tx_hash: &[u8],
     output_index: i16,
-) {
+) -> anyhow::Result<()> {
     let idx_key = keys::encode_cell_index_key(
         &cell.lock_script_hash,
         created_at_block,
@@ -946,28 +1006,23 @@ fn delete_cell_index_entries(
         output_index,
     );
     batch.delete_cf(store.cf_cell_by_lock(), &idx_key);
-    let idx_key = keys::encode_cell_index_key(
-        &cell.lock_code_hash,
-        created_at_block,
-        tx_hash,
-        output_index,
-    );
-    batch.delete_cf(store.cf_cell_by_lock_code(), &idx_key);
+    let (lock_code_key, type_code_key) =
+        cell_code_index_keys(cell, created_at_block, tx_hash, output_index)?;
+    batch.delete_cf(store.cf_cell_by_lock_code(), &lock_code_key);
     if let Some(ref type_hash) = cell.type_script_hash {
         let idx_key =
             keys::encode_cell_index_key(type_hash, created_at_block, tx_hash, output_index);
         batch.delete_cf(store.cf_cell_by_type(), &idx_key);
     }
-    if let Some(ref type_code_hash) = cell.type_code_hash {
-        let idx_key =
-            keys::encode_cell_index_key(type_code_hash, created_at_block, tx_hash, output_index);
-        batch.delete_cf(store.cf_cell_by_type_code(), &idx_key);
+    if let Some(type_code_key) = type_code_key {
+        batch.delete_cf(store.cf_cell_by_type_code(), &type_code_key);
     }
     if let Some(ref data_hash) = cell.data_hash {
         let idx_key =
             keys::encode_cell_index_key(data_hash, created_at_block, tx_hash, output_index);
         batch.delete_cf(store.cf_cell_by_data_hash(), &idx_key);
     }
+    Ok(())
 }
 
 fn put_cell_index_entries(
@@ -977,7 +1032,7 @@ fn put_cell_index_entries(
     created_at_block: i64,
     tx_hash: &[u8],
     output_index: i16,
-) {
+) -> anyhow::Result<()> {
     let idx_key = keys::encode_cell_index_key(
         &cell.lock_script_hash,
         created_at_block,
@@ -985,28 +1040,23 @@ fn put_cell_index_entries(
         output_index,
     );
     batch.put_cf(store.cf_cell_by_lock(), &idx_key, []);
-    let idx_key = keys::encode_cell_index_key(
-        &cell.lock_code_hash,
-        created_at_block,
-        tx_hash,
-        output_index,
-    );
-    batch.put_cf(store.cf_cell_by_lock_code(), &idx_key, []);
+    let (lock_code_key, type_code_key) =
+        cell_code_index_keys(cell, created_at_block, tx_hash, output_index)?;
+    batch.put_cf(store.cf_cell_by_lock_code(), &lock_code_key, []);
     if let Some(ref type_hash) = cell.type_script_hash {
         let idx_key =
             keys::encode_cell_index_key(type_hash, created_at_block, tx_hash, output_index);
         batch.put_cf(store.cf_cell_by_type(), &idx_key, []);
     }
-    if let Some(ref type_code_hash) = cell.type_code_hash {
-        let idx_key =
-            keys::encode_cell_index_key(type_code_hash, created_at_block, tx_hash, output_index);
-        batch.put_cf(store.cf_cell_by_type_code(), &idx_key, []);
+    if let Some(type_code_key) = type_code_key {
+        batch.put_cf(store.cf_cell_by_type_code(), &type_code_key, []);
     }
     if let Some(ref data_hash) = cell.data_hash {
         let idx_key =
             keys::encode_cell_index_key(data_hash, created_at_block, tx_hash, output_index);
         batch.put_cf(store.cf_cell_by_data_hash(), &idx_key, []);
     }
+    Ok(())
 }
 
 /// Accumulate derived-CF deltas for a cell changing live state during rollback.
@@ -2133,7 +2183,7 @@ impl CkbadgerStore {
                         positioned.created_at_block,
                         &tx_hash,
                         output_index,
-                    );
+                    )?;
                     cells_removed += 1;
                     accumulate_cell_deltas(
                         &positioned.cell,
@@ -2230,7 +2280,7 @@ impl CkbadgerStore {
                         meta.created_at_block,
                         &tx_hash,
                         output_index,
-                    );
+                    )?;
                     cells_restored += 1;
                     accumulate_cell_deltas(
                         &info,
@@ -2294,7 +2344,7 @@ impl CkbadgerStore {
                             positioned.created_at_block,
                             &ctx.tx_hash,
                             output_index,
-                        );
+                        )?;
                         cells_removed += 1;
                         accumulate_cell_deltas(
                             &positioned.cell,
@@ -2404,7 +2454,7 @@ impl CkbadgerStore {
                                     consumed.created_at_block,
                                     &input.tx_hash,
                                     input.output_index,
-                                );
+                                )?;
                                 cells_restored += 1;
                                 accumulate_cell_deltas(
                                     &consumed.cell,

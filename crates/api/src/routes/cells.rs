@@ -1431,6 +1431,11 @@ pub struct CellResponse {
     pub virtual_used_capacity: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub udt_amount: Option<String>,
+    /// `cells/by-script` only: which index enumerated this row (`lock` or
+    /// `type`). In `script_kind=both` this is the phase of the composite
+    /// cursor a client would build from this row.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub matched_script_kind: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1693,6 +1698,7 @@ fn cell_info_to_response(
             None
         },
         udt_amount: info.udt_amount.map(|amount| amount.to_string()),
+        matched_script_kind: None,
     }
 }
 
@@ -1972,74 +1978,167 @@ fn load_script_infos_cached(
         .ok_or_else(|| ApiError::warmup_pending("script cache unavailable; warmup in progress"))
 }
 
-#[derive(Clone, Copy)]
-enum ByScriptIndexKind {
+/// Which cell-by-code index a by-script row was enumerated from. In
+/// `script_kind=both` the lock index is exhausted before the type index
+/// starts, so the phase plus the row's raw index key resumes pagination
+/// exactly.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ByScriptPhase {
     Lock,
     Type,
 }
 
-/// Collect up to `limit` live cells under `code_hash` whose relevant script
-/// (lock or type, per index kind) uses exactly `hash_type`.
+impl ByScriptPhase {
+    fn as_str(self) -> &'static str {
+        match self {
+            ByScriptPhase::Lock => "lock",
+            ByScriptPhase::Type => "type",
+        }
+    }
+}
+
+/// One by-script result row: enumeration phase + outpoint + cell payload.
+type ByScriptRow = (
+    ByScriptPhase,
+    Vec<u8>,
+    i16,
+    ckbadger_store::PositionedCellInfo,
+);
+
+/// Parse a `cells/by-script` cursor.
 ///
-/// The per-code_hash cell indexes are keyed by code_hash bytes only, so the
-/// same prefix can contain rows of every hash_type form. This scans the index
-/// in pages and filters on the cell payload's hash_type; continuation uses the
-/// raw index key of the last scanned row so filtered-out rows never truncate
-/// pagination.
-#[allow(clippy::type_complexity)]
-fn collect_cells_by_script_form(
-    state: &AppState,
-    index: ByScriptIndexKind,
+/// For `script_kind=lock|type` the cursor is the hex-encoded 75-byte
+/// cell-by-code index key of the last returned row. For `script_kind=both` it
+/// is phase-composite: `lock:<hex>` or `type:<hex>`. The key must belong to
+/// the requested `(code_hash, hash_type)` form — anything else is a client
+/// error, not a silent empty page.
+fn parse_by_script_cursor(
+    cursor: &str,
+    script_kind: &str,
+    expected_prefix: &[u8],
+) -> Result<(ByScriptPhase, Vec<u8>), ApiRouteError> {
+    let (phase, key_hex) = match script_kind {
+        "lock" => (ByScriptPhase::Lock, cursor),
+        "type" => (ByScriptPhase::Type, cursor),
+        _ => match cursor.split_once(':') {
+            Some(("lock", rest)) => (ByScriptPhase::Lock, rest),
+            Some(("type", rest)) => (ByScriptPhase::Type, rest),
+            _ => return Err(ApiError::bad_request(
+                "Invalid cursor for script_kind=both: expected \"lock:<hex>\" or \"type:<hex>\"",
+            )),
+        },
+    };
+    let key = hex::decode(key_hex.strip_prefix("0x").unwrap_or(key_hex))
+        .map_err(|_| ApiError::bad_request("Invalid cursor: not a hex-encoded cell index key"))?;
+    if key.len() != keys::CELL_CODE_INDEX_KEY_SIZE || !key.starts_with(expected_prefix) {
+        return Err(ApiError::bad_request(
+            "Invalid cursor: key does not match the requested code_hash/hash_type form",
+        ));
+    }
+    Ok((phase, key))
+}
+
+/// Collect up to `fetch_limit` live cells of the reference form
+/// `(code_hash, hash_type)` for one `script_kind`, resuming from `cursor`.
+///
+/// Each form is a contiguous key range in the cell-by-code indexes, so this
+/// reads rows directly — no cross-form scanning or post-filtering. In `both`
+/// mode the lock index is enumerated to exhaustion first, then the type index;
+/// type-phase rows whose lock script also uses this exact form are skipped
+/// because the lock phase already emitted them.
+fn collect_by_script_rows(
+    store: &ckbadger_store::CkbadgerStore,
+    append_only_store: &ckbadger_store::CkbadgerStore,
+    script_kind: &str,
     code_hash: &[u8],
     hash_type: u8,
-    limit: usize,
-    after_key: Option<&[u8]>,
-) -> Result<Vec<(Vec<u8>, i16, ckbadger_store::PositionedCellInfo)>, ApiRouteError> {
-    let mut collected = Vec::new();
-    let mut cursor: Option<Vec<u8>> = after_key.map(|key| key.to_vec());
-    let scan_page = limit.max(1);
-
-    loop {
-        let page = match index {
-            ByScriptIndexKind::Lock => state.store.list_cells_by_lock_code_hash(
+    fetch_limit: usize,
+    cursor: Option<(ByScriptPhase, Vec<u8>)>,
+) -> anyhow::Result<Vec<ByScriptRow>> {
+    let mut rows: Vec<ByScriptRow> = Vec::new();
+    match script_kind {
+        "lock" => {
+            let after = cursor.as_ref().map(|(_, key)| key.as_slice());
+            for (tx_hash, output_index, info) in store.list_cells_by_lock_code_hash(
                 code_hash,
-                scan_page,
-                cursor.as_deref(),
-                &state.append_only_store,
-            ),
-            ByScriptIndexKind::Type => state.store.list_cells_by_type_code_hash(
-                code_hash,
-                scan_page,
-                cursor.as_deref(),
-                &state.append_only_store,
-            ),
+                hash_type,
+                fetch_limit,
+                after,
+                append_only_store,
+            )? {
+                rows.push((ByScriptPhase::Lock, tx_hash, output_index, info));
+            }
         }
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-        let page_full = page.len() >= scan_page;
-
-        for (tx_hash, output_index, info) in page {
-            cursor = Some(keys::encode_cell_index_key(
+        "type" => {
+            let after = cursor.as_ref().map(|(_, key)| key.as_slice());
+            for (tx_hash, output_index, info) in store.list_cells_by_type_code_hash(
                 code_hash,
-                info.created_at_block,
-                &tx_hash,
-                output_index,
-            ));
-            let matches = match index {
-                ByScriptIndexKind::Lock => info.cell.lock_hash_type == i16::from(hash_type),
-                ByScriptIndexKind::Type => info.cell.type_hash_type == Some(i16::from(hash_type)),
+                hash_type,
+                fetch_limit,
+                after,
+                append_only_store,
+            )? {
+                rows.push((ByScriptPhase::Type, tx_hash, output_index, info));
+            }
+        }
+        "both" => {
+            let (start_phase, after_key) = match cursor {
+                Some((phase, key)) => (phase, Some(key)),
+                None => (ByScriptPhase::Lock, None),
             };
-            if matches {
-                collected.push((tx_hash, output_index, info));
-                if collected.len() >= limit {
-                    return Ok(collected);
+            if start_phase == ByScriptPhase::Lock {
+                for (tx_hash, output_index, info) in store.list_cells_by_lock_code_hash(
+                    code_hash,
+                    hash_type,
+                    fetch_limit,
+                    after_key.as_deref(),
+                    append_only_store,
+                )? {
+                    rows.push((ByScriptPhase::Lock, tx_hash, output_index, info));
+                }
+            }
+            if rows.len() < fetch_limit {
+                // Lock phase exhausted (or resuming inside the type phase).
+                let mut type_after: Option<Vec<u8>> = match start_phase {
+                    ByScriptPhase::Type => after_key,
+                    ByScriptPhase::Lock => None,
+                };
+                loop {
+                    let need = fetch_limit - rows.len();
+                    let page = store.list_cells_by_type_code_hash(
+                        code_hash,
+                        hash_type,
+                        need,
+                        type_after.as_deref(),
+                        append_only_store,
+                    )?;
+                    let page_len = page.len();
+                    for (tx_hash, output_index, info) in page {
+                        type_after = Some(keys::encode_cell_code_index_key(
+                            code_hash,
+                            hash_type,
+                            info.created_at_block,
+                            &tx_hash,
+                            output_index,
+                        ));
+                        // A cell whose lock script also uses this exact form
+                        // was already emitted by the exhausted lock phase.
+                        let lock_also_matches = info.cell.lock_code_hash.as_slice() == code_hash
+                            && info.cell.lock_hash_type == i16::from(hash_type);
+                        if lock_also_matches {
+                            continue;
+                        }
+                        rows.push((ByScriptPhase::Type, tx_hash, output_index, info));
+                    }
+                    if rows.len() >= fetch_limit || page_len < need {
+                        break;
+                    }
                 }
             }
         }
-
-        if !page_full {
-            return Ok(collected);
-        }
+        other => anyhow::bail!("unsupported script_kind in collect_by_script_rows: {other}"),
     }
+    Ok(rows)
 }
 
 async fn list_cells_by_script(
@@ -2060,6 +2159,14 @@ async fn list_cells_by_script(
         ApiError::bad_request("Invalid hash_type. Must be one of: data, type, data1, data2")
     })?;
 
+    let script_kind = params.script_kind.as_str();
+    if !matches!(script_kind, "lock" | "type" | "both") {
+        return Err(ApiError::bad_request(
+            "Invalid script_kind. Must be one of: lock, type, both",
+        ));
+    }
+    let is_both = script_kind == "both";
+
     let all_script_infos: Vec<ckbadger_store::ScriptInfo> = load_script_infos_cached(&state)?;
 
     // "type" references are not universally available. If this deployment has no type reference,
@@ -2068,12 +2175,20 @@ async fn list_cells_by_script(
         if let Some(info) = merge_script_info_for_reference(&all_script_infos, &code_hash_bytes) {
             let (type_ref, _) = deployment_reference_hashes(&info);
             if type_ref.is_none() {
-                return ok(CursorPaginatedResponse::new(
-                    Vec::new(),
-                    0,
-                    limit as i64,
-                    None,
-                ));
+                return if is_both {
+                    ok(CursorPaginatedResponse::without_total(
+                        Vec::new(),
+                        limit as i64,
+                        None,
+                    ))
+                } else {
+                    ok(CursorPaginatedResponse::new(
+                        Vec::new(),
+                        0,
+                        limit as i64,
+                        None,
+                    ))
+                };
             }
         }
     }
@@ -2082,138 +2197,123 @@ async fn list_cells_by_script(
         resolve_code_hash_for_hash_type(&all_script_infos, &code_hash_bytes, &params.hash_type)
             .unwrap_or_else(|| code_hash_bytes.clone());
 
-    let script_kind = params.script_kind.as_str();
-
-    // Total comes from the per-form reference counters — the same universe as
-    // the strictly-filtered rows below (cells whose lock/type script is
-    // exactly {resolved_code_hash, hash_type}). The cross-form ScriptInfo
-    // counters would overcount when the same code_hash bytes are also used
-    // with other hash_types.
-    let reference_info = state
-        .store
-        .get_script_reference_info(hash_type_num, &resolved_code_hash)
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-    let total: i64 = match (script_kind, reference_info.as_ref()) {
-        ("lock", Some(info)) => info.lock_live_cells_count,
-        ("type", Some(info)) => info.type_live_cells_count,
-        (_, Some(info)) => info.lock_live_cells_count + info.type_live_cells_count,
-        (_, None) => 0,
-    };
-
-    // Parse cursor for pagination
-    let after_key = params.cursor.as_deref().and_then(decode_cell_cursor);
-    let after_key_ref = after_key.as_deref();
+    let expected_prefix = keys::encode_cell_code_index_prefix(&resolved_code_hash, hash_type_num);
+    let cursor = params
+        .cursor
+        .as_deref()
+        .map(|cursor| parse_by_script_cursor(cursor, script_kind, &expected_prefix))
+        .transpose()?;
+    let is_first_page = cursor.is_none();
 
     // Fetch limit+1 to detect has_more
     let fetch_limit = limit + 1;
 
-    // Use code_hash indexes for efficient prefix scans, strictly filtered to
-    // the requested hash_type form.
-    let results: Vec<(Vec<u8>, i16, ckbadger_store::PositionedCellInfo)> = match script_kind {
-        "lock" => collect_cells_by_script_form(
-            &state,
-            ByScriptIndexKind::Lock,
-            &resolved_code_hash,
+    // Store reads run on the blocking pool: the prefix scans and per-row
+    // payload loads are synchronous RocksDB I/O.
+    let store = state.store.clone();
+    let append_only_store = state.append_only_store.clone();
+    let script_kind_owned = script_kind.to_string();
+    let resolved_code_hash_blocking = resolved_code_hash.clone();
+    let (rows, total) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+        // Total comes from the per-form reference counters — the same universe
+        // as the rows (live cells whose lock/type script is exactly
+        // {resolved_code_hash, hash_type}). For `both` the deduplicated union
+        // has no cheap exact counter, so total is omitted rather than wrong.
+        let total: Option<i64> = if script_kind_owned == "both" {
+            None
+        } else {
+            let reference_info =
+                store.get_script_reference_info(hash_type_num, &resolved_code_hash_blocking)?;
+            Some(
+                match (script_kind_owned.as_str(), reference_info.as_ref()) {
+                    ("lock", Some(info)) => info.lock_live_cells_count,
+                    ("type", Some(info)) => info.type_live_cells_count,
+                    _ => 0,
+                },
+            )
+        };
+        let rows = collect_by_script_rows(
+            &store,
+            &append_only_store,
+            &script_kind_owned,
+            &resolved_code_hash_blocking,
             hash_type_num,
             fetch_limit,
-            after_key_ref,
-        )?,
-        "type" => collect_cells_by_script_form(
-            &state,
-            ByScriptIndexKind::Type,
-            &resolved_code_hash,
-            hash_type_num,
-            fetch_limit,
-            after_key_ref,
-        )?,
-        _ => {
-            // "both": merge results from lock and type indexes.
-            // Cursor pagination is not supported for "both" mode because the cursor
-            // from one CF is not valid in the other, causing missing items.
-            if after_key_ref.is_some() {
-                return Err(ApiError::bad_request(
-                    "Cursor pagination is not supported for script_kind=both. Use script_kind=lock or script_kind=type for paginated results.",
-                ));
-            }
-            let mut merged = collect_cells_by_script_form(
-                &state,
-                ByScriptIndexKind::Lock,
-                &resolved_code_hash,
-                hash_type_num,
-                fetch_limit,
-                None,
-            )?;
-            let type_results = collect_cells_by_script_form(
-                &state,
-                ByScriptIndexKind::Type,
-                &resolved_code_hash,
-                hash_type_num,
-                fetch_limit,
-                None,
-            )?;
-            for r in type_results {
-                if merged.len() >= fetch_limit {
-                    break;
-                }
-                // Deduplicate: a cell could match both lock and type
-                if !merged.iter().any(|(h, i, _)| h == &r.0 && *i == r.1) {
-                    merged.push(r);
-                }
-            }
-            merged
-        }
-    };
+            cursor,
+        )?;
+        Ok((rows, total))
+    })
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?
+    .map_err(|e| ApiError::internal(e.to_string()))?;
 
     // Rows and total share one universe (live cells of exactly this reference
     // form). A first page larger than the per-form counter means the counter
     // is missing or wrong — fail fast instead of reporting a bogus total.
-    if after_key_ref.is_none() && results.len() as i64 > total {
-        return Err(ApiError::internal(format!(
-            "cells/by-script rows exceed the per-form reference counter: code_hash=0x{}, hash_type={}, script_kind={}, rows={}, total={}",
-            hex::encode(&resolved_code_hash),
-            hash_type_num,
-            script_kind,
-            results.len(),
-            total
-        )));
+    if let Some(total) = total {
+        if is_first_page && rows.len() as i64 > total {
+            return Err(ApiError::internal(format!(
+                "cells/by-script rows exceed the per-form reference counter: code_hash=0x{}, hash_type={}, script_kind={}, rows={}, total={}",
+                hex::encode(&resolved_code_hash),
+                hash_type_num,
+                script_kind,
+                rows.len(),
+                total
+            )));
+        }
     }
 
-    let has_more = results.len() > limit;
-    let results: Vec<_> = results.into_iter().take(limit).collect();
+    let has_more = rows.len() > limit;
+    let rows: Vec<ByScriptRow> = rows.into_iter().take(limit).collect();
 
     let next_cursor = if has_more {
-        results.last().map(|(tx_hash, output_index, info)| {
-            encode_cell_cursor(
+        rows.last().map(|(phase, tx_hash, output_index, info)| {
+            let key = keys::encode_cell_code_index_key(
                 &resolved_code_hash,
+                hash_type_num,
                 info.created_at_block,
                 tx_hash,
                 *output_index,
-            )
+            );
+            if is_both {
+                format!("{}:{}", phase.as_str(), hex::encode(key))
+            } else {
+                hex::encode(key)
+            }
         })
     } else {
         None
     };
 
     let virtual_occupied = state.genesis_baseline()?.virtual_occupied;
-    let cells: Vec<CellResponse> = results
+    let cells: Vec<CellResponse> = rows
         .iter()
-        .map(|(tx_hash, output_index, info)| {
-            cell_info_to_response(
+        .map(|(phase, tx_hash, output_index, info)| {
+            let mut cell = cell_info_to_response(
                 tx_hash,
                 *output_index,
                 info,
                 &state.ckb_network,
                 virtual_occupied,
-            )
+            );
+            cell.matched_script_kind = Some(phase.as_str().to_string());
+            cell
         })
         .collect();
 
-    ok(CursorPaginatedResponse::new(
-        cells,
-        total,
-        limit as i64,
-        next_cursor,
-    ))
+    match total {
+        Some(total) => ok(CursorPaginatedResponse::new(
+            cells,
+            total,
+            limit as i64,
+            next_cursor,
+        )),
+        None => ok(CursorPaginatedResponse::without_total(
+            cells,
+            limit as i64,
+            next_cursor,
+        )),
+    }
 }
 
 async fn get_address(

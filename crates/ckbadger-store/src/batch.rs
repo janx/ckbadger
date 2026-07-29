@@ -517,44 +517,72 @@ impl<'a> StoreBatch<'a> {
     pub fn put_cell_by_lock_code(
         &mut self,
         lock_code_hash: &[u8],
+        hash_type: u8,
         block_num: i64,
         tx_hash: &[u8],
         output_index: i16,
     ) {
-        let key = keys::encode_cell_index_key(lock_code_hash, block_num, tx_hash, output_index);
+        let key = keys::encode_cell_code_index_key(
+            lock_code_hash,
+            hash_type,
+            block_num,
+            tx_hash,
+            output_index,
+        );
         self.put_cf(self.store.cf_cell_by_lock_code(), key, []);
     }
 
     pub fn delete_cell_by_lock_code(
         &mut self,
         lock_code_hash: &[u8],
+        hash_type: u8,
         block_num: i64,
         tx_hash: &[u8],
         output_index: i16,
     ) {
-        let key = keys::encode_cell_index_key(lock_code_hash, block_num, tx_hash, output_index);
+        let key = keys::encode_cell_code_index_key(
+            lock_code_hash,
+            hash_type,
+            block_num,
+            tx_hash,
+            output_index,
+        );
         self.delete_cf(self.store.cf_cell_by_lock_code(), &key);
     }
 
     pub fn put_cell_by_type_code(
         &mut self,
         type_code_hash: &[u8],
+        hash_type: u8,
         block_num: i64,
         tx_hash: &[u8],
         output_index: i16,
     ) {
-        let key = keys::encode_cell_index_key(type_code_hash, block_num, tx_hash, output_index);
+        let key = keys::encode_cell_code_index_key(
+            type_code_hash,
+            hash_type,
+            block_num,
+            tx_hash,
+            output_index,
+        );
         self.put_cf(self.store.cf_cell_by_type_code(), key, []);
     }
 
     pub fn delete_cell_by_type_code(
         &mut self,
         type_code_hash: &[u8],
+        hash_type: u8,
         block_num: i64,
         tx_hash: &[u8],
         output_index: i16,
     ) {
-        let key = keys::encode_cell_index_key(type_code_hash, block_num, tx_hash, output_index);
+        let key = keys::encode_cell_code_index_key(
+            type_code_hash,
+            hash_type,
+            block_num,
+            tx_hash,
+            output_index,
+        );
         self.delete_cf(self.store.cf_cell_by_type_code(), &key);
     }
 
@@ -598,21 +626,9 @@ impl<'a> StoreBatch<'a> {
         self.delete_cf(self.store.cf_cell_by_type(), key);
     }
 
-    pub fn put_cell_by_lock_code_raw(&mut self, key: &[u8]) {
-        self.put_cf(self.store.cf_cell_by_lock_code(), key, []);
-    }
-
-    pub fn delete_cell_by_lock_code_raw(&mut self, key: &[u8]) {
-        self.delete_cf(self.store.cf_cell_by_lock_code(), key);
-    }
-
-    pub fn put_cell_by_type_code_raw(&mut self, key: &[u8]) {
-        self.put_cf(self.store.cf_cell_by_type_code(), key, []);
-    }
-
-    pub fn delete_cell_by_type_code_raw(&mut self, key: &[u8]) {
-        self.delete_cf(self.store.cf_cell_by_type_code(), key);
-    }
+    // NOTE: no raw-key helpers for the cell-by-code CFs. Their keys carry a
+    // hash_type dimension after the code hash; all writers must go through
+    // put/delete_cell_by_{lock,type}_code so the key shape stays enforced.
 
     // ---- Block headers ----
 

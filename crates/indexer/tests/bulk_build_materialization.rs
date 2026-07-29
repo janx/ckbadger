@@ -981,12 +981,14 @@ fn bulk_build_materializes_consumed_cells_and_live_cell_indexes_from_single_pass
 
     let expected_live_lock =
         keys::encode_cell_index_key(&lock_hash, 14_000_777, &consume_tx_hash, 0);
+    // Cell-by-code index rows carry the script's hash_type: both fixtures use
+    // hash_type=type (1), so a bulk-built row must be filed under that form.
     let expected_live_lock_code =
-        keys::encode_cell_index_key(&lock_code_hash, 14_000_777, &consume_tx_hash, 0);
+        keys::encode_cell_code_index_key(&lock_code_hash, 1, 14_000_777, &consume_tx_hash, 0);
     let expected_live_type =
         keys::encode_cell_index_key(&type_hash, 14_000_777, &consume_tx_hash, 0);
     let expected_live_type_code =
-        keys::encode_cell_index_key(&type_code_hash, 14_000_777, &consume_tx_hash, 0);
+        keys::encode_cell_code_index_key(&type_code_hash, 1, 14_000_777, &consume_tx_hash, 0);
     let old_lock_key = keys::encode_cell_index_key(&lock_hash, 14_000_777, &create_tx_hash, 0);
 
     assert_eq!(snapshot.cell_by_lock.len(), 1);
@@ -1002,6 +1004,12 @@ fn bulk_build_materializes_consumed_cells_and_live_cell_indexes_from_single_pass
     assert!(snapshot
         .cell_by_type_code
         .contains(&expected_live_type_code));
+
+    // The data-form key of the same code hash must not exist: bulk build files
+    // each row under exactly one (code_hash, hash_type) form.
+    let data_form_lock_code =
+        keys::encode_cell_code_index_key(&lock_code_hash, 0, 14_000_777, &consume_tx_hash, 0);
+    assert!(!snapshot.cell_by_lock_code.contains(&data_form_lock_code));
 
     let expected_data_hash_create =
         keys::encode_cell_index_key(&data_hash, 14_000_777, &create_tx_hash, 0);

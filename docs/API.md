@@ -205,6 +205,23 @@ output_index`; activity cursors encode `block_num:tx_idx`.
 - `ListCellsParams` — `limit`, `lock_script_hash`, `type_script_hash`, `type_code_hash`, `cursor`
 - `ListCellsByScriptParams` — `limit`, `code_hash`, `hash_type`, `script_kind` (default `both`), `cursor`
 - `TopAddressesParams` — `limit` (default 100)
+
+**`/cells/by-script` behavior**
+
+- Rows are the live cells of exactly one script reference form `(code_hash, hash_type)`, read
+  directly from that form's contiguous range in `cell_by_lock_code` / `cell_by_type_code`.
+- `cursor` is opaque and form-scoped. For `script_kind=lock|type` it is the hex-encoded 75-byte
+  cell-by-code index key of the last returned row; for `script_kind=both` it is phase-composite —
+  `lock:<hex>` or `type:<hex>`. Replaying a cursor against a different `code_hash`/`hash_type` form,
+  or a bare key in `both` mode, is a `400`.
+- `script_kind=both` enumerates the deduplicated union across pages: the lock form is exhausted
+  first, then type-form rows whose lock script is not already the same form. Each cell appears
+  exactly once.
+- `total` is the per-form reference counter for `script_kind=lock|type`. For `script_kind=both` it
+  is **omitted**: the deduplicated union count is not available from the per-form counters, and
+  `lock + type` would double-count cells matching on both sides.
+- Each row carries `matchedScriptKind` (`lock` | `type`) — which index enumerated it, and the phase
+  a client would use when building a `both` cursor from that row.
 - `ActiveAddressesParams` — `limit` (default 100), `days` (default 7)
 - `AddressTxParams` — `limit`, `cursor`
 - `AddressTokensParams` — `limit`, `cursor`

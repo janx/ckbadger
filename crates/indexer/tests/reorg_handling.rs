@@ -559,7 +559,13 @@ fn insert_udt_cell(
     }
     domain_batch.put_cell_by_lock(lock_hash, block_num, &tx_hash, 0);
     domain_batch.put_cell_by_type(type_hash, block_num, &tx_hash, 0);
-    domain_batch.put_cell_by_type_code(type_code_hash, block_num, &tx_hash, 0);
+    domain_batch.put_cell_by_type_code(
+        type_code_hash,
+        cell.type_hash_type.unwrap() as u8,
+        block_num,
+        &tx_hash,
+        0,
+    );
     domain_batch.commit().unwrap();
 }
 

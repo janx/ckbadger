@@ -753,7 +753,13 @@ fn test_skip_cell_indices_omits_index_entries() {
     );
 
     let by_lock_code = store
-        .list_cells_by_lock_code_hash(&cell.lock_code_hash, 100, None, &store)
+        .list_cells_by_lock_code_hash(
+            &cell.lock_code_hash,
+            cell.lock_hash_type as u8,
+            100,
+            None,
+            &store,
+        )
         .unwrap();
     assert!(
         by_lock_code.is_empty(),
@@ -761,11 +767,92 @@ fn test_skip_cell_indices_omits_index_entries() {
     );
 
     let by_type_code = store
-        .list_cells_by_type_code_hash(cell.type_code_hash.as_ref().unwrap(), 100, None, &store)
+        .list_cells_by_type_code_hash(
+            cell.type_code_hash.as_ref().unwrap(),
+            cell.type_hash_type.unwrap() as u8,
+            100,
+            None,
+            &store,
+        )
         .unwrap();
     assert!(
         by_type_code.is_empty(),
         "type_code index should be empty when skipped"
+    );
+}
+
+#[test]
+fn test_live_sync_files_cell_by_code_rows_under_their_hash_type_form() {
+    // The live-sync writer must file each cell-by-code row under the script's
+    // own (code_hash, hash_type) form, so a query for a sibling form of the
+    // same code hash sees nothing instead of scanning across forms.
+    let (store, writer) = setup_store();
+    let data_form_tx = vec![0x01u8; 32];
+    let type_form_tx = vec![0x02u8; 32];
+
+    // `make_cell` uses lock hash_type=0 (data) and type hash_type=1 (type).
+    let data_form_cell = make_cell(200_00000000, 0, 0xAA);
+    let mut type_form_cell = make_cell(300_00000000, 0, 0xBB);
+    type_form_cell.lock_hash_type = 1;
+
+    insert_cells_for_test(
+        &store,
+        &writer,
+        &[
+            (&data_form_tx, 0, &data_form_cell, 1000),
+            (&type_form_tx, 0, &type_form_cell, 1001),
+        ],
+        false,
+    );
+
+    let code_hash = &data_form_cell.lock_code_hash;
+    assert_eq!(code_hash, &type_form_cell.lock_code_hash);
+
+    let data_form = store
+        .list_cells_by_lock_code_hash(code_hash, 0, 100, None, &store)
+        .unwrap();
+    assert_eq!(data_form.len(), 1, "data form holds exactly its own cell");
+    assert_eq!(data_form[0].0, data_form_tx);
+
+    let type_form = store
+        .list_cells_by_lock_code_hash(code_hash, 1, 100, None, &store)
+        .unwrap();
+    assert_eq!(type_form.len(), 1, "type form holds exactly its own cell");
+    assert_eq!(type_form[0].0, type_form_tx);
+
+    // An unobserved form under the same code hash is empty.
+    assert!(store
+        .list_cells_by_lock_code_hash(code_hash, 4, 100, None, &store)
+        .unwrap()
+        .is_empty());
+
+    // Consumption removes the row from the same form it was filed under.
+    let mut domain_batch = StoreBatch::new(&store);
+    let preloaded = writer
+        .get_full_cells_info_batch(&[(&data_form_tx, 0)])
+        .unwrap();
+    writer
+        .consume_cells_batch_preloaded(
+            &[(&data_form_tx, 0, 1000, &type_form_tx, 1002, 0)],
+            &preloaded,
+            &Default::default(),
+            &mut domain_batch,
+            false,
+        )
+        .unwrap();
+    domain_batch.commit().unwrap();
+
+    assert!(store
+        .list_cells_by_lock_code_hash(code_hash, 0, 100, None, &store)
+        .unwrap()
+        .is_empty());
+    assert_eq!(
+        store
+            .list_cells_by_lock_code_hash(code_hash, 1, 100, None, &store)
+            .unwrap()
+            .len(),
+        1,
+        "consuming a data-form cell must not touch the type form"
     );
 }
 
