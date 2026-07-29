@@ -498,7 +498,8 @@ interface AddressToken {
   standard: string;
   name: string | null;
   symbol: string | null;
-  decimals: number;
+  /** null when unknown (no label and no on-chain info cell) */
+  decimals: number | null;
   iconUrl: string | null;
   balance: string;
 }
@@ -731,7 +732,8 @@ interface Token {
   standard: string;
   name: string | null;
   symbol: string | null;
-  decimals: number;
+  /** null when unknown (no label and no on-chain info cell) */
+  decimals: number | null;
   description: string | null;
   iconUrl: string | null;
   published: boolean;
@@ -762,9 +764,9 @@ interface TokenTransfer {
   txHash: string;
   blockNumber: number;
   fromLockHash: string | null;
-  fromAddress?: string | null;
+  fromAddress: string | null;
   toLockHash: string;
-  toAddress?: string;
+  toAddress: string | null;
   amount: string;
   isMint: boolean;
   isBurn: boolean;

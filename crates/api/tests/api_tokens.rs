@@ -1001,3 +1001,202 @@ async fn test_token_capacity_chart_rejects_invalid_date_range() {
     let response = app.oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
+
+// ---------------------------------------------------------------------------
+// B5: unknown decimals must surface as null — never a fabricated 0.
+// A token with no TOML label and no on-chain info cell (e.g. USDI) has
+// `decimals: None` in the store; flattening it to 0 makes amounts
+// indistinguishable from a genuine 0-decimals token.
+// ---------------------------------------------------------------------------
+
+fn placeholder_token_without_metadata() -> TokenInfo {
+    TokenInfo {
+        type_code_hash: vec![0x55; 32],
+        hash_type: 1,
+        type_args: vec![0x66; 32],
+        standard: "xudt".to_string(),
+        name: None,
+        symbol: None,
+        decimals: None,
+        max_supply: None,
+        first_seen_block: 0,
+        icon_url: None,
+        description: None,
+        transfers_count: 0,
+    }
+}
+
+#[tokio::test]
+async fn test_get_token_unknown_decimals_serialize_as_null() {
+    let store = test_store();
+    let type_hash = vec![0x5D; 32];
+    store
+        .put_token_direct(&type_hash, &placeholder_token_without_metadata())
+        .unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri(format!("/api/v1/tokens/0x{}", hex::encode(&type_hash)))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        json["decimals"],
+        serde_json::Value::Null,
+        "unknown decimals must be null, got {}",
+        json["decimals"]
+    );
+}
+
+#[tokio::test]
+async fn test_get_address_tokens_unknown_decimals_serialize_as_null() {
+    let store = test_store();
+    let lock_hash = vec![0x89; 32];
+    let type_hash = vec![0x8A; 32];
+    store
+        .put_token_direct(&type_hash, &placeholder_token_without_metadata())
+        .unwrap();
+
+    let mut batch = StoreBatch::new(&store);
+    batch.put_token_holder(&type_hash, &lock_hash, 500);
+    batch.put_token_holder_by_balance(&type_hash, &lock_hash, 500);
+    batch.put_addr_token_by_balance(&lock_hash, &type_hash, 500);
+    batch.commit().unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/addresses/0x{}/tokens",
+            hex::encode(&lock_hash)
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        json["data"][0]["typeScriptHash"],
+        format!("0x{}", hex::encode(&type_hash))
+    );
+    assert_eq!(
+        json["data"][0]["decimals"],
+        serde_json::Value::Null,
+        "unknown decimals must be null, got {}",
+        json["data"][0]["decimals"]
+    );
+}
+
+// ---------------------------------------------------------------------------
+// B10: /tokens/{h}/transfers (and the activity detail rows) must resolve
+// from/to lock hashes to addresses via CF_LOCK_SCRIPTS when the script is
+// known, and keep null (never guess) when it is not.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_token_transfers_and_activities_resolve_addresses_from_lock_scripts() {
+    let store = test_store();
+    let type_hash = vec![0x7A; 32];
+    let mut token = placeholder_token_without_metadata();
+    token.transfers_count = 1;
+    store.put_token_direct(&type_hash, &token).unwrap();
+
+    let secp_code_hash =
+        hex::decode("9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8").unwrap();
+    let to_lock_args = vec![0x11; 20];
+    let to_lock_hash = vec![0xB1; 32];
+    // The sender's lock script is NOT in CF_LOCK_SCRIPTS: address must stay null.
+    let from_lock_hash = vec![0xA1; 32];
+
+    let mut batch = StoreBatch::new(&store);
+    batch.put_lock_script(
+        &to_lock_hash,
+        &ckbadger_store::types::LockScriptEntry {
+            code_hash: secp_code_hash.clone(),
+            hash_type: 1,
+            args: to_lock_args.clone(),
+        },
+    );
+    batch.put_token_transfer(
+        &type_hash,
+        100,
+        0,
+        &ckbadger_store::types::TokenTransferRecord {
+            tx_hash: vec![0xCC; 32],
+            block_number: 100,
+            from_lock_hash: Some(from_lock_hash.clone()),
+            to_lock_hash: to_lock_hash.clone(),
+            amount: 5,
+            is_mint: false,
+            is_burn: false,
+            timestamp: 1_700_000_000_000,
+        },
+    );
+    batch.commit().unwrap();
+
+    let expected_to_address =
+        ckbadger_common::script_to_address(&secp_code_hash, 1, &to_lock_args, "mainnet").unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+    let type_hash_hex = format!("0x{}", hex::encode(&type_hash));
+
+    // /transfers
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/v1/tokens/{type_hash_hex}/transfers"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let row = &json["data"][0];
+    assert_eq!(
+        row["toAddress"],
+        serde_json::Value::String(expected_to_address.clone()),
+        "resolvable lock hash must produce an address, got {}",
+        row["toAddress"]
+    );
+    assert_eq!(
+        row["fromAddress"],
+        serde_json::Value::Null,
+        "unresolvable lock hash must stay null, got {}",
+        row["fromAddress"]
+    );
+
+    // /activities embeds the same transfer rows
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/v1/tokens/{type_hash_hex}/activities"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let transfer = &json["data"][0]["transfers"][0];
+    assert_eq!(
+        transfer["toAddress"],
+        serde_json::Value::String(expected_to_address),
+        "activity transfer toAddress must resolve, got {}",
+        transfer["toAddress"]
+    );
+    assert_eq!(transfer["fromAddress"], serde_json::Value::Null);
+}

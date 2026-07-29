@@ -1,7 +1,12 @@
 import type { AssetTransfer } from '@/lib/api';
 
-export function formatTokenBalance(balance: string, decimals: number): string {
-  if (decimals === 0) return BigInt(balance).toLocaleString();
+/**
+ * Format a token balance for display. `decimals: null` means the token's
+ * decimals are unknown (no label, no on-chain info cell): the raw base-unit
+ * integer is returned — callers annotate the display, never assume 0.
+ */
+export function formatTokenBalance(balance: string, decimals: number | null): string {
+  if (decimals == null || decimals === 0) return BigInt(balance).toLocaleString();
   const balanceBigInt = BigInt(balance);
   const divisor = BigInt(10 ** decimals);
   const wholePart = balanceBigInt / divisor;
@@ -16,8 +21,7 @@ export function formatTokenBalance(balance: string, decimals: number): string {
 
 export function formatAssetAmount(transfer: AssetTransfer): string {
   if (!transfer.amount) return '1';
-  const decimals = transfer.tokenDecimals ?? 0;
-  return formatTokenBalance(transfer.amount, decimals);
+  return formatTokenBalance(transfer.amount, transfer.tokenDecimals ?? null);
 }
 
 export function getAssetLabel(transfer: AssetTransfer): string {

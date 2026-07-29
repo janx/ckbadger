@@ -525,7 +525,7 @@ function renderTokenSummary(token: Token) {
       ['symbol', token.symbol ?? '-'],
       ['name', token.name ?? '-'],
       ['standard', token.standard],
-      ['decimals', token.decimals],
+      ['decimals', token.decimals ?? 'unknown'],
       ['totalSupply', token.totalSupply],
       ['holdersCount', token.holdersCount],
       ['transfersCount', token.transfersCount],

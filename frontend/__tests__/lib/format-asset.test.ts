@@ -24,6 +24,12 @@ describe('formatTokenBalance', () => {
   it('handles small amounts', () => {
     expect(formatTokenBalance('1', 8)).toBe('0.00000001');
   });
+
+  it('renders null decimals as the raw base-unit amount', () => {
+    // B5: unknown decimals must never be flattened to 0; the raw integer is
+    // shown (annotation is applied by the UI at the display site).
+    expect(formatTokenBalance('123456789', null)).toBe('123,456,789');
+  });
 });
 
 describe('formatAssetAmount', () => {
@@ -41,7 +47,7 @@ describe('formatAssetAmount', () => {
     expect(formatAssetAmount(transfer)).toBe('1.5');
   });
 
-  it('handles null decimals as 0', () => {
+  it('renders null decimals as the raw base-unit amount', () => {
     const transfer = {
       amount: '1000',
       tokenDecimals: null,

@@ -73,24 +73,34 @@ export default function TokenDetailPage({ typeHash }: TokenDetailPageProps) {
         : api.getTokenCapacityChart(typeHash),
     enabled: !!token,
   });
-  const formatTokenAmount = (amount: string, decimals: number) => {
+  // decimals === null means unknown (no label, no on-chain info cell): show
+  // the raw base-unit integer — never assume 0.
+  const formatTokenAmount = (amount: string, decimals: number | null) => {
     const num = BigInt(amount);
+    if (decimals == null || decimals === 0) {
+      return { integer: num.toLocaleString('en-US'), decimal: '' };
+    }
     const divisor = BigInt(10 ** decimals);
     const whole = num / divisor;
     const remainder = num % divisor;
     const integer = whole.toLocaleString('en-US');
-    if (decimals === 0) {
-      return { integer, decimal: '' };
-    }
     const decimal = remainder.toString().padStart(decimals, '0');
     return { integer, decimal };
   };
-  const TokenAmount = ({ amount, decimals }: { amount: string; decimals: number }) => {
+  const TokenAmount = ({ amount, decimals }: { amount: string; decimals: number | null }) => {
     const { integer, decimal } = formatTokenAmount(amount, decimals);
     return (
       <span className="font-mono tabular-nums">
         <span>{integer}</span>
         {decimal && <span className="text-emphasis-dim text-[0.85em]">.{decimal}</span>}
+        {decimals == null && (
+          <span
+            className="text-text-dim ml-1 text-[0.7em] uppercase"
+            title="Token decimals unknown — raw base-unit amount"
+          >
+            raw
+          </span>
+        )}
       </span>
     );
   };
@@ -125,6 +135,12 @@ export default function TokenDetailPage({ typeHash }: TokenDetailPageProps) {
       </div>
     );
   }
+  // Stat-block amounts: raw base-unit + "(raw)" suffix when decimals unknown.
+  const formatAmountStat = (amount: string) => {
+    const { integer, decimal } = formatTokenAmount(amount, token.decimals);
+    const base = decimal ? `${integer}.${decimal}` : integer;
+    return token.decimals == null ? `${base} (raw)` : base;
+  };
   return (
     <div className="bg-base-bg min-h-screen">
       <Header />
@@ -188,16 +204,10 @@ export default function TokenDetailPage({ typeHash }: TokenDetailPageProps) {
               <StatGrid columns={3}>
                 <StatBlock label="Holders" value={token.holdersCount} color="jade" />
                 <StatBlock label="Transfers" value={token.transfersCount} color="gold" />
-                <StatBlock label="Decimals" value={token.decimals} color="default" />
+                <StatBlock label="Decimals" value={token.decimals ?? 'Unknown'} color="default" />
                 <StatBlock
                   label="Total Circulation"
-                  value={(() => {
-                    const { integer, decimal } = formatTokenAmount(
-                      token.totalSupply,
-                      token.decimals
-                    );
-                    return decimal ? `${integer}.${decimal}` : integer;
-                  })()}
+                  value={formatAmountStat(token.totalSupply)}
                   color="jade"
                 />
                 <StatBlock
@@ -207,11 +217,7 @@ export default function TokenDetailPage({ typeHash }: TokenDetailPageProps) {
                     if (token.maximumSupplyStatus !== 'limited' || !token.maximumSupply) {
                       return 'Unknown';
                     }
-                    const { integer, decimal } = formatTokenAmount(
-                      token.maximumSupply,
-                      token.decimals
-                    );
-                    return decimal ? `${integer}.${decimal}` : integer;
+                    return formatAmountStat(token.maximumSupply);
                   })()}
                   color="default"
                 />

@@ -1628,7 +1628,9 @@ pub struct AddressTokenResponse {
     pub standard: String,
     pub name: Option<String>,
     pub symbol: Option<String>,
-    pub decimals: i16,
+    /// None when unknown (no TOML label and no on-chain info cell) — never a
+    /// fabricated 0, which would be indistinguishable from true 0 decimals.
+    pub decimals: Option<i16>,
     pub icon_url: Option<String>,
     pub balance: String,
 }
@@ -3041,7 +3043,7 @@ async fn get_address_tokens(
                 standard: token_info.standard.clone(),
                 name: token_info.name.clone(),
                 symbol: token_info.symbol.clone(),
-                decimals: token_info.decimals.unwrap_or(0) as i16,
+                decimals: token_info.decimals.map(|d| d as i16),
                 icon_url: token_info.icon_url.clone(),
                 balance: balance.to_string(),
             })
