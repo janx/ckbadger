@@ -20,7 +20,7 @@ pub use script_resolution::{
     deployment_key_for_script, deployment_reference_hashes, hash_type_to_string, hash_type_to_u8,
     is_known_script_name, list_version_code_cells, merge_script_info_for_reference,
     reference_form_member_version, related_code_hashes_for_reference,
-    resolve_code_hash_for_hash_type, resolve_script_by_hash, CurrentScriptVersionResolution,
-    VersionCodeCell,
+    resolve_code_hash_for_hash_type, resolve_script_by_hash, resolve_script_form_by_hash,
+    CurrentScriptVersionResolution, VersionCodeCell,
 };
 pub use supply::{dao_supply, dao_treasury, DaoSupply};

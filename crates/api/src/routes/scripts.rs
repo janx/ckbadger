@@ -22,7 +22,7 @@ use crate::utils::{
     apply_owned_capacity_delta, date_keys_inclusive, deployment_reference_hashes,
     hash_type_to_string, hash_type_to_u8, list_version_code_cells, merge_script_info_for_reference,
     parse_chart_date_range, reference_form_member_version, resolve_script_by_hash,
-    CurrentScriptVersionResolution, VersionCodeCell,
+    resolve_script_form_by_hash, CurrentScriptVersionResolution, VersionCodeCell,
 };
 use crate::warmup::{
     CACHE_KEY_SCRIPTS_ALL, CACHE_KEY_SCRIPT_FAMILIES_ALL, CACHE_KEY_SCRIPT_VERSIONS_ALL,
@@ -374,9 +374,35 @@ fn resolve_script_identifier(
     state: &AppState,
     hash_bytes: &[u8],
 ) -> Result<ScriptIdentifierResolution, ApiRouteError> {
-    match resolve_script_by_hash(&state.store, &state.append_only_store, hash_bytes)
-        .map_err(|e| ApiError::internal(e.to_string()))?
-    {
+    let resolution = resolve_script_by_hash(&state.store, &state.append_only_store, hash_bytes)
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    finish_script_identifier_resolution(state, hash_bytes, resolution)
+}
+
+/// Resolve exactly one observed reference form (code_hash + hash_type) into the
+/// same shape [`resolve_script_identifier`] returns, so callers that know the
+/// form get its code cells and nothing else.
+fn resolve_script_identifier_for_form(
+    state: &AppState,
+    hash_bytes: &[u8],
+    hash_type: u8,
+) -> Result<ScriptIdentifierResolution, ApiRouteError> {
+    let resolution = resolve_script_form_by_hash(
+        &state.store,
+        &state.append_only_store,
+        hash_type,
+        hash_bytes,
+    )
+    .map_err(|e| ApiError::internal(e.to_string()))?;
+    finish_script_identifier_resolution(state, hash_bytes, resolution)
+}
+
+fn finish_script_identifier_resolution(
+    state: &AppState,
+    hash_bytes: &[u8],
+    resolution: CurrentScriptVersionResolution,
+) -> Result<ScriptIdentifierResolution, ApiRouteError> {
+    match resolution {
         CurrentScriptVersionResolution::Resolved(resolved) => {
             let resolved = *resolved;
             let version_info = match resolved.version_info {
@@ -1365,8 +1391,31 @@ async fn lookup_scripts(
 #[derive(Debug, Deserialize)]
 pub struct CodeCellQuery {
     code_hash: String,
-    #[serde(rename = "hash_type")]
-    _hash_type: Option<String>,
+    hash_type: Option<String>,
+}
+
+impl CodeCellQuery {
+    /// Resolve the queried script the way the caller asked for it: with a
+    /// hash_type this is the exact observed reference form, without one it is
+    /// the whole deployment family. Both code-cell endpoints go through here so
+    /// they can never disagree.
+    fn resolve(&self, state: &AppState) -> Result<ScriptIdentifierResolution, ApiRouteError> {
+        let code_hash_bytes =
+            hex::decode(self.code_hash.strip_prefix("0x").unwrap_or(&self.code_hash))
+                .map_err(|_| ApiError::bad_request("Invalid code_hash hex"))?;
+
+        match self.hash_type.as_deref() {
+            Some(raw) => {
+                let hash_type = hash_type_to_u8(raw).ok_or_else(|| {
+                    ApiError::bad_request(format!(
+                        "Invalid hash_type '{raw}': expected one of data, type, data1, data2"
+                    ))
+                })?;
+                resolve_script_identifier_for_form(state, &code_hash_bytes, hash_type)
+            }
+            None => resolve_script_identifier(state, &code_hash_bytes),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -1417,15 +1466,7 @@ async fn get_code_cell(
     State(state): State<Arc<AppState>>,
     Query(params): Query<CodeCellQuery>,
 ) -> ApiResult<CodeCellResponse> {
-    let code_hash_bytes = hex::decode(
-        params
-            .code_hash
-            .strip_prefix("0x")
-            .unwrap_or(&params.code_hash),
-    )
-    .map_err(|_| ApiError::bad_request("Invalid code_hash hex"))?;
-
-    match resolve_script_identifier(&state, &code_hash_bytes)? {
+    match params.resolve(&state)? {
         ScriptIdentifierResolution::Resolved(resolved) => {
             let ResolvedScriptIdentifier { mut code_cells, .. } = *resolved;
             sort_code_cells(&mut code_cells);
@@ -1453,15 +1494,7 @@ async fn get_code_cells(
     State(state): State<Arc<AppState>>,
     Query(params): Query<CodeCellQuery>,
 ) -> ApiResult<CodeCellsResponse> {
-    let code_hash_bytes = hex::decode(
-        params
-            .code_hash
-            .strip_prefix("0x")
-            .unwrap_or(&params.code_hash),
-    )
-    .map_err(|_| ApiError::bad_request("Invalid code_hash hex"))?;
-
-    match resolve_script_identifier(&state, &code_hash_bytes)? {
+    match params.resolve(&state)? {
         ScriptIdentifierResolution::Resolved(resolved) => {
             let ResolvedScriptIdentifier {
                 version_hash,
@@ -2180,13 +2213,18 @@ mod tests {
     }
 
     #[test]
-    fn code_cell_query_deserializes_legacy_hash_type_field() {
+    fn code_cell_query_keeps_hash_type_field() {
         let uri: Uri = "/scripts/code-cell?code_hash=0x1234&hash_type=data"
             .parse()
             .unwrap();
         let Query(params) = Query::<CodeCellQuery>::try_from_uri(&uri).unwrap();
 
         assert_eq!(params.code_hash, "0x1234");
+        assert_eq!(params.hash_type.as_deref(), Some("data"));
+
+        let uri: Uri = "/scripts/code-cell?code_hash=0x1234".parse().unwrap();
+        let Query(params) = Query::<CodeCellQuery>::try_from_uri(&uri).unwrap();
+        assert_eq!(params.hash_type, None);
     }
 
     /// When type-ref lookup fails (dep_type_hash set but no matching live cell),

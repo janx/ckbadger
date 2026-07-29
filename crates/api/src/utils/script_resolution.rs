@@ -512,6 +512,88 @@ pub fn reference_form_member_version(
     Ok(None)
 }
 
+/// Resolve ONE observed reference form -- the exact (reference_hash,
+/// hash_type) pair -- to its version.
+///
+/// Unlike [`resolve_script_by_hash`], which answers "what does this hash mean
+/// anywhere on chain" and therefore spans every form of a deployment, this
+/// answers "what does this hash mean when used with this hash_type". It is the
+/// resolution behind the code-cell endpoints when the caller supplies a
+/// hash_type, so a junk data form that reuses a type reference's bytes cannot
+/// borrow the real deployment's code cells.
+///
+/// Membership itself is not recomputed here: it reuses
+/// [`reference_form_member_version`] (persisted candidate, then a data-family
+/// self-reference) with "a code cell carries this bytecode" as the
+/// admissible-version rule, then -- for type forms only, which have no
+/// self-reference branch -- falls back to live type-referenced code cells.
+pub fn resolve_script_form_by_hash(
+    store: &CkbadgerStore,
+    cells_store: &CkbadgerStore,
+    hash_type: u8,
+    reference_hash: &[u8],
+) -> anyhow::Result<CurrentScriptVersionResolution> {
+    if hash_type_to_string(hash_type).is_none() {
+        anyhow::bail!(
+            "cannot resolve a script reference form with unknown hash_type: reference_hash=0x{}, hash_type={}",
+            hex::encode(reference_hash),
+            hash_type
+        );
+    }
+
+    let has_own_code_cell = store
+        .find_any_cell_by_data_hash(reference_hash, cells_store)?
+        .is_some();
+    let member_version = reference_form_member_version(
+        store,
+        cells_store,
+        hash_type,
+        reference_hash,
+        &|hash: &[u8]| has_own_code_cell && hash == reference_hash,
+    )?;
+    if let Some(version_hash) = member_version {
+        let version_info = store.get_script_version(&version_hash)?;
+        return Ok(CurrentScriptVersionResolution::Resolved(Box::new(
+            CurrentScriptVersion {
+                version_hash,
+                version_info,
+            },
+        )));
+    }
+
+    if hash_type != 1 {
+        return Ok(CurrentScriptVersionResolution::NotFound);
+    }
+
+    let type_matches = resolve_live_type_reference_matches(store, cells_store, reference_hash)?;
+    let unique_versions: Vec<Vec<u8>> = {
+        let mut seen = HashSet::new();
+        type_matches
+            .iter()
+            .filter(|m| seen.insert(m.version_hash.clone()))
+            .map(|m| m.version_hash.clone())
+            .collect()
+    };
+    match unique_versions.len() {
+        0 => Ok(CurrentScriptVersionResolution::NotFound),
+        1 => {
+            let version_hash = unique_versions[0].clone();
+            let version_info = store.get_script_version(&version_hash)?;
+            Ok(CurrentScriptVersionResolution::Resolved(Box::new(
+                CurrentScriptVersion {
+                    version_hash,
+                    version_info,
+                },
+            )))
+        }
+        _ => Ok(CurrentScriptVersionResolution::Ambiguous(Box::new(
+            AmbiguousCurrentScriptVersion {
+                version_hashes: unique_versions,
+            },
+        ))),
+    }
+}
+
 /// Resolve a script hash to a version using cell indexes.
 ///
 /// Resolution order:
@@ -1002,6 +1084,128 @@ mod tests {
                 panic!("expected code-cell-backed data self-mapping to resolve, got {other:?}")
             }
         }
+    }
+
+    #[test]
+    fn test_resolve_script_form_separates_type_and_junk_data_forms() {
+        // Mainnet secp junk-lock scenario, asked per form: the type form
+        // resolves to the real bytecode version, while the data form of the
+        // same reference bytes -- whose binary does not exist on chain --
+        // resolves to nothing instead of borrowing the type form's version.
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        let reference_hash = vec![0x9b; 32];
+        let version_hash = vec![0x70; 32];
+
+        store
+            .put_script_reference_to_version_direct(1, &reference_hash, &version_hash)
+            .unwrap();
+        store
+            .put_script_reference_to_version_direct(0, &reference_hash, &reference_hash)
+            .unwrap();
+
+        match resolve_script_form_by_hash(&store, &store, 1, &reference_hash).unwrap() {
+            CurrentScriptVersionResolution::Resolved(resolved) => {
+                assert_eq!(resolved.version_hash, version_hash);
+            }
+            other => panic!("expected the type form to resolve, got {other:?}"),
+        }
+        assert_eq!(
+            resolve_script_form_by_hash(&store, &store, 0, &reference_hash).unwrap(),
+            CurrentScriptVersionResolution::NotFound
+        );
+    }
+
+    #[test]
+    fn test_resolve_script_form_resolves_data_form_backed_by_code_cell() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        let reference_hash = vec![0x70; 32];
+        let code_cell_tx = vec![0x77; 32];
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_cell(
+            &code_cell_tx,
+            0,
+            &LiveCellInfo {
+                capacity: 100,
+                lock_script_hash: vec![0x11; 32],
+                lock_code_hash: vec![0x12; 32],
+                lock_hash_type: 1,
+                lock_args: vec![],
+                type_script_hash: None,
+                type_code_hash: None,
+                type_hash_type: None,
+                type_args: None,
+                data_size: 4,
+                occupied_capacity: 80,
+                udt_amount: None,
+                data_hash: Some(reference_hash.clone()),
+            },
+            5,
+        );
+        batch.put_cell_by_data_hash(&reference_hash, 5, &code_cell_tx, 0);
+        batch.commit().unwrap();
+
+        match resolve_script_form_by_hash(&store, &store, 0, &reference_hash).unwrap() {
+            CurrentScriptVersionResolution::Resolved(resolved) => {
+                assert_eq!(resolved.version_hash, reference_hash);
+            }
+            other => panic!("expected the code-cell-backed data form to resolve, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_resolve_script_form_uses_live_type_matches_without_persisted_mapping() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        let reference_hash = vec![0x47; 32];
+        let version_hash = vec![0x58; 32];
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_cell(
+            &[0x92; 32],
+            0,
+            &LiveCellInfo {
+                capacity: 100,
+                lock_script_hash: vec![0x11; 32],
+                lock_code_hash: vec![0x12; 32],
+                lock_hash_type: 1,
+                lock_args: vec![],
+                type_script_hash: Some(reference_hash.clone()),
+                type_code_hash: Some(vec![0x13; 32]),
+                type_hash_type: Some(1),
+                type_args: Some(vec![]),
+                data_size: 0,
+                occupied_capacity: 80,
+                udt_amount: None,
+                data_hash: Some(version_hash.clone()),
+            },
+            10,
+        );
+        batch.put_cell_by_type(&reference_hash, 10, &[0x92; 32], 0);
+        batch.commit().unwrap();
+
+        match resolve_script_form_by_hash(&store, &store, 1, &reference_hash).unwrap() {
+            CurrentScriptVersionResolution::Resolved(resolved) => {
+                assert_eq!(resolved.version_hash, version_hash);
+            }
+            other => panic!("expected the live type match to resolve, got {other:?}"),
+        }
+        // The same bytes used as a data form have no binary on chain.
+        assert_eq!(
+            resolve_script_form_by_hash(&store, &store, 0, &reference_hash).unwrap(),
+            CurrentScriptVersionResolution::NotFound
+        );
+    }
+
+    #[test]
+    fn test_resolve_script_form_rejects_unknown_hash_type() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+
+        let err = resolve_script_form_by_hash(&store, &store, 3, &[0x9b; 32]).unwrap_err();
+        assert!(err.to_string().contains("unknown hash_type"), "{err}");
     }
 
     #[test]

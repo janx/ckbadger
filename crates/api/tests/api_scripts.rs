@@ -606,6 +606,170 @@ async fn test_script_lookup_and_code_cells_allow_unlabeled_resolved_type_referen
 }
 
 #[tokio::test]
+async fn test_code_cell_endpoints_resolve_exact_form_when_hash_type_given() {
+    // Mainnet secp scenario: the type form (0x9b..) maps to the real bytecode
+    // version (0x70..) whose code cell exists, while a junk data-form
+    // self-mapping exists for the same reference bytes with no code cell
+    // carrying that data hash. With an explicit hash_type the endpoints must
+    // resolve exactly that one form instead of the whole family.
+    let store = test_store();
+
+    let version_hash = vec![0x70; 32];
+    let type_hash = vec![0x9b; 32];
+    let code_cell_tx_hash = vec![0xe2; 32];
+    let code_cell_output_index = 1i16;
+
+    store
+        .put_script_reference_to_version_direct(1, &type_hash, &version_hash)
+        .unwrap();
+    // Garbage data-form self-mapping written from junk usage of the same bytes.
+    store
+        .put_script_reference_to_version_direct(0, &type_hash, &type_hash)
+        .unwrap();
+
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_script_version(
+        &version_hash,
+        &ScriptVersionInfo {
+            version_hash: version_hash.clone(),
+            name: Some("SECP256K1_BLAKE160".to_string()),
+            ..Default::default()
+        },
+    );
+    batch.put_cell(
+        &code_cell_tx_hash,
+        code_cell_output_index,
+        &LiveCellInfo {
+            capacity: 100_00000000,
+            lock_script_hash: vec![0x11; 32],
+            lock_code_hash: vec![0x22; 32],
+            lock_hash_type: 1,
+            lock_args: vec![],
+            type_script_hash: Some(type_hash.clone()),
+            type_code_hash: Some(vec![0x33; 32]),
+            type_hash_type: Some(1),
+            type_args: Some(vec![]),
+            data_size: 32,
+            occupied_capacity: 61_00000000,
+            udt_amount: None,
+            data_hash: Some(version_hash.clone()),
+        },
+        123,
+    );
+    batch.put_cell_by_type(&type_hash, 123, &code_cell_tx_hash, code_cell_output_index);
+    batch.put_cell_by_data_hash(
+        &version_hash,
+        123,
+        &code_cell_tx_hash,
+        code_cell_output_index,
+    );
+    batch.commit().unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let type_hash_hex = format!("0x{}", hex::encode(&type_hash));
+    let version_hash_hex = format!("0x{}", hex::encode(&version_hash));
+    let code_cell_tx_hash_hex = format!("0x{}", hex::encode(&code_cell_tx_hash));
+
+    // hash_type=type resolves through the persisted type mapping to the real
+    // code cell.
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/scripts/code-cell?code_hash={}&hash_type=type",
+            type_hash_hex
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["txHash"], code_cell_tx_hash_hex);
+    assert_eq!(json["outputIndex"], 1);
+
+    // hash_type=data asks for the binary whose data hash IS 0x9b.. -- no such
+    // code cell exists, so the exact form must NOT fall back to the family.
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/scripts/code-cell?code_hash={}&hash_type=data",
+            type_hash_hex
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["txHash"], serde_json::Value::Null);
+    assert_eq!(json["outputIndex"], serde_json::Value::Null);
+
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/scripts/code-cells?code_hash={}&hash_type=data",
+            type_hash_hex
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["codeCells"], serde_json::json!([]));
+    assert_eq!(json["totalCount"], 0);
+    assert_eq!(json["resolvedVersionHash"], serde_json::Value::Null);
+
+    // The bytecode hash queried as its own data form still resolves.
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/scripts/code-cells?code_hash={}&hash_type=data",
+            version_hash_hex
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["resolvedVersionHash"], version_hash_hex);
+    assert_eq!(json["codeCells"][0]["txHash"], code_cell_tx_hash_hex);
+
+    // Without hash_type the whole-reference family resolution is unchanged.
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/scripts/code-cell?code_hash={}",
+            type_hash_hex
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["txHash"], code_cell_tx_hash_hex);
+
+    // Invalid hash_type values are a bad request on both endpoints.
+    for uri in [
+        format!(
+            "/api/v1/scripts/code-cell?code_hash={}&hash_type=bogus",
+            type_hash_hex
+        ),
+        format!(
+            "/api/v1/scripts/code-cells?code_hash={}&hash_type=bogus",
+            type_hash_hex
+        ),
+    ] {
+        let request = Request::builder().uri(&uri).body(Body::empty()).unwrap();
+        let response = app.clone().oneshot(request).await.unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::BAD_REQUEST,
+            "uri={uri} must reject invalid hash_type"
+        );
+    }
+}
+
+#[tokio::test]
 async fn test_scripts_list_merges_unknown_reference_into_known_deployment() {
     let store = test_store();
 
