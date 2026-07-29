@@ -179,6 +179,10 @@ async fn test_transaction_detail_prefers_committed_store_over_mempool() {
     assert_eq!(json["blockNumber"], 321);
     assert_eq!(json["fee"], "1234");
     assert_eq!(json["txSize"], 222);
+    // feeRate divides by the serialized size in block (molecule size + 4),
+    // matching the node/explorer/wallet convention: 1234 * 1000 / 226 = 5460.
+    // The `txSize` field itself stays molecule-sized.
+    assert_eq!(json["feeRate"], "5460");
     assert_eq!(json["cycles"], 333);
 }
 

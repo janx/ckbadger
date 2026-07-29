@@ -29,7 +29,6 @@ type TxIoBundle = (
     u128,
     u128,
     u128,
-    Option<u128>, // computed_fee: None when unavailable (e.g., DAO withdrawal)
     Vec<String>,
     bool,
 );
@@ -49,6 +48,22 @@ struct PendingTxIoBundle {
 const DAO_TYPE_CODE_HASH_HEX: &str =
     "82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e";
 const TX_BLOCK_HASHES_CACHE_TTL: StdDuration = StdDuration::from_secs(30);
+
+/// Fee-rate denominator: fee rates divide by the transaction's serialized
+/// size in block — molecule size plus the 4-byte offset slot the transaction
+/// occupies in the block's transactions table — matching the node, explorer,
+/// and wallet convention. The `size`/`txSize` response fields themselves stay
+/// molecule-sized. This is the single denominator definition for every
+/// fee-rate the API serves (transaction detail, pending detail, block
+/// fee-stats).
+pub(crate) fn tx_serialized_size_in_block(molecule_size: i32) -> u128 {
+    u128::try_from(i64::from(molecule_size) + 4).unwrap_or_else(|_| {
+        panic!(
+            "fee-rate call sites guard molecule_size > 0, got {}",
+            molecule_size
+        )
+    })
+}
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
@@ -581,6 +596,12 @@ fn is_dao_type_code_hash_hex(code_hash: &str) -> bool {
 
 /// Compute transaction fee from input/output capacities.
 ///
+/// PENDING (mempool) transactions only: they have no indexed `TxIndexEntry`,
+/// so when the node RPC omits the pool fee this is the only source.
+/// Committed transactions always serve the stored fee — the indexer write
+/// path is the single calculation path and already accounts for DAO phase-2
+/// compensation.
+///
 /// Returns `None` for DAO phase-2 withdrawals where outputs > inputs due to
 /// compensation (the compensation amount is not available here, so the fee
 /// cannot be computed from I/O alone).
@@ -742,7 +763,7 @@ async fn get_transaction_detail(
                 return None;
             }
             let fee_value: u128 = fee.parse().ok()?;
-            Some(((fee_value * 1000) / size as u128).to_string())
+            Some(((fee_value * 1000) / tx_serialized_size_in_block(size)).to_string())
         });
 
         let pool_cycles = tx_lookup.cycles.map(|value| value as i64);
@@ -830,7 +851,6 @@ async fn get_transaction_detail(
         outputs_capacity,
         inputs_occupied_capacity,
         outputs_occupied_capacity,
-        computed_fee,
         witnesses,
         witnesses_available,
     ) = if let Some(ref ckb_store) = state.ckb_store {
@@ -858,21 +878,21 @@ async fn get_transaction_detail(
         empty_inputs_outputs()
     };
 
-    // Use computed fee from inputs/outputs if available, otherwise use stored fee
-    let fee = match computed_fee {
-        Some(f) if f > 0 => f.to_string(),
-        _ => entry.fee.to_string(),
-    };
+    // The fee persisted by the indexer is the single source of truth; the
+    // write path already accounts for DAO phase-2 compensation, so there is
+    // no read-time recomputation from inputs/outputs.
+    let fee_value = u128::try_from(entry.fee).map_err(|_| {
+        ApiError::internal(format!(
+            "negative stored fee for committed tx 0x{} at block {}: {}",
+            hex::encode(&hash_bytes),
+            block_number,
+            entry.fee
+        ))
+    })?;
+    let fee = fee_value.to_string();
 
-    let fee_rate = final_tx_size.map(|size| {
-        if size > 0 {
-            let fee_val: u128 = fee.parse().unwrap_or(0);
-            let rate = (fee_val * 1000) / (size as u128);
-            rate.to_string()
-        } else {
-            "0".to_string()
-        }
-    });
+    let fee_rate = final_tx_size
+        .map(|size| ((fee_value * 1000) / tx_serialized_size_in_block(size)).to_string());
 
     ok(TransactionDetailResponse {
         hash: tx_hash_hex,
@@ -903,7 +923,7 @@ async fn get_transaction_detail(
 }
 
 fn empty_inputs_outputs() -> TxIoBundle {
-    (vec![], vec![], 0, 0, 0, 0, None, vec![], false)
+    (vec![], vec![], 0, 0, 0, 0, vec![], false)
 }
 
 fn build_inputs_outputs_from_rpc_pending(
@@ -1226,7 +1246,6 @@ fn build_inputs_outputs_from_ckb(
 
     let mut inputs_capacity: u128 = 0;
     let mut inputs_occupied_capacity: u128 = 0;
-    let mut has_dao_type_input = false;
 
     let inputs: Vec<TransactionInputResponse> = rpc_tx
         .inputs
@@ -1346,13 +1365,6 @@ fn build_inputs_outputs_from_ckb(
                 }
             };
 
-            if type_script
-                .as_ref()
-                .is_some_and(|script| is_dao_type_code_hash_hex(&script.code_hash))
-            {
-                has_dao_type_input = true;
-            }
-
             Ok(TransactionInputResponse {
                 previous_output: Some(PreviousOutput {
                     tx_hash: prev_tx_hash_hex.clone(),
@@ -1470,21 +1482,6 @@ fn build_inputs_outputs_from_ckb(
         )
         .collect::<Result<Vec<_>, _>>()?;
 
-    let is_cellbase = rpc_tx.inputs.first().is_some_and(|input| {
-        input.previous_output.tx_hash
-            == "0x0000000000000000000000000000000000000000000000000000000000000000"
-    });
-
-    // DAO phase-2 withdrawals may legitimately have outputs > inputs due to compensation.
-    let computed_fee = compute_tx_fee_from_io(
-        inputs_capacity,
-        outputs_capacity,
-        is_cellbase,
-        has_dao_type_input,
-        block_number,
-        tx_view.hash().raw_data().as_ref(),
-    )?;
-
     Ok((
         inputs,
         outputs,
@@ -1492,7 +1489,6 @@ fn build_inputs_outputs_from_ckb(
         outputs_capacity,
         inputs_occupied_capacity,
         outputs_occupied_capacity,
-        computed_fee,
         witnesses,
         true,
     ))

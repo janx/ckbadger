@@ -192,3 +192,37 @@ async fn test_block_not_found() {
     let response = app.oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn test_block_fee_stats_uses_serialized_size_in_block_denominator() {
+    let store = test_store();
+    // Seeds block 321 with one non-cellbase tx: fee=1234, molecule size=222.
+    insert_committed_transaction(&store, &[0xabu8; 32]);
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri("/api/v1/blocks/321/fee-stats")
+        .body(Body::empty())
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["blockNumber"], 321);
+    assert_eq!(json["transactionCount"], 1);
+    // totalSize keeps the molecule size; only the fee-rate denominator uses
+    // the serialized size in block (molecule + 4), matching the node,
+    // explorer, and wallet convention: 1234 * 1000 / 226.
+    assert_eq!(json["totalSize"], 222);
+    let expected_rate = 1234.0f64 * 1000.0 / 226.0;
+    for field in ["avgFeeRate", "minFeeRate", "maxFeeRate"] {
+        let got = json[field].as_f64().unwrap();
+        assert!(
+            (got - expected_rate).abs() < 1e-9,
+            "{field} must divide by serialized_size_in_block: got {got}, expected {expected_rate}"
+        );
+    }
+}
