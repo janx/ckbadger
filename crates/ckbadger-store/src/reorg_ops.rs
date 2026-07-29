@@ -217,6 +217,7 @@ fn subtract_activity_stats_delta(
 /// deliberately use two clocks (see `keys::stats_prefix`):
 /// - `cutoff_yyyymmddhh_utc8`: UTC+8 — matches ACTIVITY_HOURLY keys;
 /// - `cutoff_yyyymmddhh_utc`: UTC — matches chain-level HOURLY keys.
+///
 /// Each must stay aligned with the same-prefix predicate in
 /// `should_delete_stats_for_replay`, whose `>=` delete range includes the
 /// cutoff bucket that this repair intercepts.
@@ -526,6 +527,7 @@ fn parse_cutoff_date_yyyymmdd(cutoff_yyyymmdd: &[u8]) -> anyhow::Result<u32> {
 /// deliberately use two clocks (see `keys::stats_prefix`):
 /// - `cutoff_yyyymmddhh_utc8` (UTC+8) governs ACTIVITY_HOURLY keys;
 /// - `cutoff_yyyymmddhh_utc` (UTC) governs chain-level HOURLY keys.
+///
 /// The per-prefix routing here MUST stay aligned with
 /// `repair_cutoff_date_stats`: the `>=` ranges include the cutoff bucket,
 /// and only the matching-clock repair branch saves it from deletion.
