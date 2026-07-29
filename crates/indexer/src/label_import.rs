@@ -1689,3 +1689,48 @@ mod label_override_conflict_tests {
         assert!(conflict.contains("decimals 6 -> 8"), "got: {conflict}");
     }
 }
+
+#[cfg(test)]
+mod bundled_label_chain_consistency_tests {
+    use super::bundled;
+    use crate::sync::token_helpers::parse_unique_cell_token_info;
+
+    /// Real mainnet Unique Cell payload from the RGB++ Protocol issuance
+    /// (tx 0xd088a128…, output 0) — the same vector the parser test uses.
+    const RGBPP_UNIQUE_CELL_DATA_HEX: &str = "080e5247422b2b2050726f746f636f6c055247422b2b";
+    const RGBPP_MAINNET_ARGS: &str =
+        "0x08875c56644d39dd9629d291357d3026debc5d22fa88d924d60ce8f16dd50e70";
+
+    /// A bundled label always wins over on-chain metadata (label import runs
+    /// last by design), so a bundled label that disagrees with the chain
+    /// permanently hides the truth from users. Where a real on-chain vector
+    /// exists, the bundled entry must agree with it.
+    #[test]
+    fn bundled_rgbpp_label_matches_the_on_chain_info_cell() {
+        let chain = parse_unique_cell_token_info(&hex::decode(RGBPP_UNIQUE_CELL_DATA_HEX).unwrap())
+            .expect("RGB++ mainnet Unique Cell vector must parse");
+
+        let label = bundled::udt_labels()
+            .into_iter()
+            .find(|t| {
+                t.mainnet
+                    .as_ref()
+                    .is_some_and(|d| d.args.eq_ignore_ascii_case(RGBPP_MAINNET_ARGS))
+            })
+            .expect("bundled labels must contain the RGB++ Protocol mainnet deployment");
+
+        assert_eq!(
+            label.symbol, chain.symbol,
+            "bundled symbol must match the on-chain info cell"
+        );
+        assert_eq!(
+            label.name, chain.name,
+            "bundled name must match the on-chain info cell"
+        );
+        assert_eq!(
+            i32::from(label.decimals),
+            i32::from(chain.decimal),
+            "bundled decimals must match the on-chain info cell"
+        );
+    }
+}

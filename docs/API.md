@@ -543,7 +543,10 @@ disabled or empty state. A point lookup still returns not found.
 
 - `ListParams` — `limit`, `cursor`, `network`, `decoder_type` (unused), `search`, `sort_key`, `sort_direction`
 - `LookupScriptsRequest` (POST body via `Json<>`) — `code_hashes: Vec<String>`, optional `tx_hash`
-- `CodeCellQuery` — `code_hash`, `hash_type` (unused alias)
+- `CodeCellQuery` — `code_hash`, optional `hash_type` (`data` \| `type` \| `data1` \| `data2`). With
+  `hash_type` the lookup resolves the exact observed reference form (a data-family form only
+  resolves when a code cell with that data hash exists on chain); without it the whole deployment
+  family is resolved. An unrecognized `hash_type` is a 400.
 - `ScriptCapacityHistoryQuery` — `code_hash` (Option), `script_kind`, `from`, `to` (used with `{name}` path)
 - `ScriptCapacityHistoryByCodeHashQuery` — required `code_hash`, plus `script_kind`/`from`/`to`
 - `Path(name): Path<String>`

@@ -1,5 +1,5 @@
 name = "RGB++ Protocol"
-symbol = "RGB++ Protocol"
+symbol = "RGB++"
 decimals = 8
 standard = "xudt"
 icon = "logo.png"

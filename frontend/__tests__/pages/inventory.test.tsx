@@ -308,6 +308,35 @@ describe('Tokens Inventory Page', () => {
     });
   });
 
+  it('marks total supply as raw when token decimals are unknown', async () => {
+    // An unknown-decimals token must never render like a real 0-decimals
+    // token: 1000000 base units is not "1,000,000 tokens".
+    vi.mocked(api.getAssets).mockResolvedValue({
+      ...mockTokenAssets,
+      data: [{ ...mockTokenAssets.data[0], decimals: null, totalSupply: '1000000' }],
+    });
+
+    render(<TokensPage />);
+
+    await waitFor(() => {
+      expect(screen.getAllByText(/1,000,000 \(raw\)/).length).toBeGreaterThan(0);
+    });
+  });
+
+  it('does not mark total supply for genuine 0-decimals tokens', async () => {
+    vi.mocked(api.getAssets).mockResolvedValue({
+      ...mockTokenAssets,
+      data: [{ ...mockTokenAssets.data[0], decimals: 0, totalSupply: '1000000' }],
+    });
+
+    render(<TokensPage />);
+
+    await waitFor(() => {
+      expect(screen.getAllByText('1,000,000').length).toBeGreaterThan(0);
+    });
+    expect(screen.queryByText(/\(raw\)/)).toBeNull();
+  });
+
   it('uses type-hash fallback name for tokens without symbol and name', async () => {
     const typeHash = '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef';
     vi.mocked(api.getAssets).mockResolvedValue({
