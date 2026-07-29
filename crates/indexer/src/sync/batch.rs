@@ -306,58 +306,94 @@ fn tx_slice_claimed_dao_compensation(
     Ok(claimed)
 }
 
-/// Correct fees for DAO withdrawal-completion txs in the live-sync pipeline.
+/// Correct fees for DAO withdrawal-completion (phase-2) txs on the live-sync
+/// write path, BEFORE `insert_transactions_batch` serializes `TxIndexEntry`.
 ///
 /// The parser stage cannot compute the real miner fee for these txs because
-/// DAO compensation (interest) makes outputs > inputs. It sets fee=0.
-/// After `pre_compute_dao_compensations` runs, we can add compensation to
-/// the input side and derive the correct fee = (inputs + compensation) - outputs.
+/// DAO compensation (interest) is unknown at parse time: it writes a fee=0
+/// placeholder when outputs exceed raw inputs, or an undercounted fee when
+/// extra plain inputs keep raw inputs >= outputs. The correction criterion is
+/// therefore "does this tx consume a withdraw-request outpoint" — never the
+/// current fee value. For every such tx the fee is unconditionally recomputed
+/// as `(raw inputs + compensation) - outputs`, mirroring the bulk path
+/// (`bulk_build::resolved_tx_fee`). Phase-1 (withdraw request) txs consume
+/// deposit outpoints, not withdraw-request outpoints, so their parser fee
+/// stands untouched.
 fn correct_dao_withdrawal_fees(
     all_tx_data: &mut [TxData],
+    dao_withdraw_outpoints: &HashSet<(Vec<u8>, i16)>,
     dao_compensations: &HashMap<(Vec<u8>, i16), i64>,
 ) -> Result<()> {
+    if dao_withdraw_outpoints.is_empty() {
+        return Ok(());
+    }
     for tx_data in all_tx_data.iter_mut() {
-        if tx_data.is_cellbase || tx_data.fee != 0 {
+        if tx_data.is_cellbase {
             continue;
         }
-        // Sum DAO compensation for all inputs in this tx
+        let mut consumes_withdraw_request = false;
         let mut total_compensation: i64 = 0;
         for input in &tx_data.inputs {
             let key = (
                 input.previous_tx_hash.to_vec(),
                 parsed_input_outpoint_index_i16(input.previous_output_index, "dao_fee_correct")?,
             );
-            if let Some(&comp) = dao_compensations.get(&key) {
-                total_compensation = total_compensation.checked_add(comp).ok_or_else(|| {
-                    anyhow!(
-                        "DAO compensation overflow in fee correction: tx=0x{} block={}",
-                        hex::encode(tx_data.hash),
-                        tx_data.block_number
-                    )
-                })?;
+            if !dao_withdraw_outpoints.contains(&key) {
+                continue;
             }
-        }
-        if total_compensation > 0 {
-            let effective_input = tx_data
-                .total_input_capacity
-                .checked_add(total_compensation)
-                .ok_or_else(|| {
-                    anyhow!(
-                        "effective input overflow in DAO fee correction: tx=0x{} block={}",
-                        hex::encode(tx_data.hash),
-                        tx_data.block_number
-                    )
-                })?;
-            tx_data.fee = effective_input.checked_sub(tx_data.total_output_capacity).ok_or_else(|| {
+            consumes_withdraw_request = true;
+            let comp = dao_compensations.get(&key).ok_or_else(|| {
                 anyhow!(
-                    "negative fee after DAO compensation in fee correction: tx=0x{} block={} effective_input={} outputs={}",
+                    "missing pre-computed DAO compensation for consumed withdraw-request outpoint: tx=0x{} block={} outpoint=0x{}:{}",
+                    hex::encode(tx_data.hash),
+                    tx_data.block_number,
+                    hex::encode(input.previous_tx_hash),
+                    input.previous_output_index
+                )
+            })?;
+            total_compensation = total_compensation.checked_add(*comp).ok_or_else(|| {
+                anyhow!(
+                    "DAO compensation overflow in fee correction: tx=0x{} block={}",
+                    hex::encode(tx_data.hash),
+                    tx_data.block_number
+                )
+            })?;
+        }
+        if !consumes_withdraw_request {
+            continue;
+        }
+        let effective_input = tx_data
+            .total_input_capacity
+            .checked_add(total_compensation)
+            .ok_or_else(|| {
+                anyhow!(
+                    "effective input overflow in DAO fee correction: tx=0x{} block={}",
+                    hex::encode(tx_data.hash),
+                    tx_data.block_number
+                )
+            })?;
+        let fee = effective_input
+            .checked_sub(tx_data.total_output_capacity)
+            .ok_or_else(|| {
+                anyhow!(
+                    "fee subtraction overflow in DAO fee correction: tx=0x{} block={} effective_input={} outputs={}",
                     hex::encode(tx_data.hash),
                     tx_data.block_number,
                     effective_input,
                     tx_data.total_output_capacity
                 )
             })?;
+        if fee < 0 {
+            bail!(
+                "negative fee after DAO compensation in fee correction: tx=0x{} block={} raw_inputs={} compensation={} outputs={}",
+                hex::encode(tx_data.hash),
+                tx_data.block_number,
+                tx_data.total_input_capacity,
+                total_compensation,
+                tx_data.total_output_capacity
+            );
         }
+        tx_data.fee = fee;
     }
     Ok(())
 }
@@ -1335,6 +1371,44 @@ impl Indexer {
             }
         }
 
+        // DAO context resolution + phase-2 fee correction.
+        //
+        // This MUST run before `insert_transactions_batch` below stages
+        // `TxIndexEntry`: the parser writes a placeholder fee for txs that
+        // consume a withdraw-request outpoint (DAO compensation is unknown at
+        // parse time), and this is the single point on the live path where
+        // the real fee is computed (mirroring bulk_build::resolved_tx_fee).
+        // All reads go to committed store state: a consumed withdraw-request
+        // outpoint always references a request committed in an earlier batch
+        // (a same-block request+completion is impossible — the completion
+        // must reference the request block header as a header dep).
+        let consumed_dao_map = {
+            let unique_outpoints: Vec<(Vec<u8>, i16)> = {
+                let mut seen = HashSet::new();
+                all_input_outpoints
+                    .into_iter()
+                    .filter(|x| seen.insert(x.clone()))
+                    .collect()
+            };
+            if unique_outpoints.is_empty() {
+                HashMap::new()
+            } else {
+                let outpoint_refs: Vec<(&[u8], i16)> = unique_outpoints
+                    .iter()
+                    .map(|(h, i)| (h.as_slice(), *i))
+                    .collect();
+                self.writer
+                    .find_consumed_dao_deposits_batch(&outpoint_refs)?
+            }
+        };
+        // DAO withdraw-request outpoints for fee correction and activity
+        // classification (no per-input DB reads).
+        let dao_withdraw_outpoints = dao_withdraw_outpoints_from_map(&consumed_dao_map);
+        // Pre-computed DAO compensations for fee correction and activities.
+        let dao_compensations =
+            pre_compute_dao_compensations(self.writer.store(), &consumed_dao_map)?;
+        correct_dao_withdrawal_fees(&mut all_tx_data, &dao_withdraw_outpoints, &dao_compensations)?;
+
         let mut all_cells: Vec<(&[u8], i16, &crate::parser::cell::ParsedCell, i64)> = Vec::new();
         let mut all_consumptions: Vec<(&[u8], i16, i64, &[u8], i64, i16)> = Vec::new();
         let txs_for_batch: Vec<&TxData> = all_tx_data.iter().collect();
@@ -1746,11 +1820,6 @@ impl Indexer {
         // addr_tx writes are deferred until participant tags are known (see
         // tags_by_addr_tx construction during TxActions processing below).
 
-        // DAO withdraw-request outpoints for activity classification (no per-input DB reads).
-        let dao_withdraw_outpoints: HashSet<(Vec<u8>, i16)>;
-        // Pre-computed DAO compensations for activity entries.
-        let dao_compensations: HashMap<(Vec<u8>, i16), i64>;
-
         // Group A: DAO processing
         {
             // Build DAO field map from parsed blocks so that
@@ -1787,58 +1856,9 @@ impl Indexer {
                     .insert_dao_deposits_batch(&all_dao_deposits, &mut data_batch)?;
             }
 
-            // Batch query consumed DAO deposits
-            let mut all_input_outpoints_dao: Vec<(Vec<u8>, i16)> = Vec::new();
-            let mut block_tx_idx = 0usize;
-            for parsed in all_parsed_blocks {
-                let tx_count_for_block =
-                    checked_tx_count(parsed.transactions_count, parsed.number)?;
-                let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
-                block_tx_idx += tx_count_for_block;
-                for tx_data in tx_slice {
-                    if tx_data.is_cellbase || tx_data.inputs.is_empty() {
-                        continue;
-                    }
-                    for input in &tx_data.inputs {
-                        all_input_outpoints_dao.push((
-                            input.previous_tx_hash.to_vec(),
-                            parsed_input_outpoint_index_i16(
-                                input.previous_output_index,
-                                "sync_indexer",
-                            )?,
-                        ));
-                    }
-                }
-            }
-
-            let consumed_dao_map = if !all_input_outpoints_dao.is_empty() {
-                let unique_outpoints: Vec<(Vec<u8>, i16)> = {
-                    let mut seen = HashSet::new();
-                    all_input_outpoints_dao
-                        .into_iter()
-                        .filter(|x| seen.insert(x.clone()))
-                        .collect()
-                };
-                let outpoint_refs: Vec<(&[u8], i16)> = unique_outpoints
-                    .iter()
-                    .map(|(h, i)| (h.as_slice(), *i))
-                    .collect();
-                self.writer
-                    .find_consumed_dao_deposits_batch(&outpoint_refs)?
-            } else {
-                HashMap::new()
-            };
-            dao_withdraw_outpoints = dao_withdraw_outpoints_from_map(&consumed_dao_map);
-            dao_compensations =
-                pre_compute_dao_compensations(self.writer.store(), &consumed_dao_map)?;
-
-            // Correct fees for DAO withdrawal-completion txs.
-            // The parser stage sets fee=0 for these txs (outputs > inputs)
-            // because it doesn't have DAO compensation data. Now that
-            // dao_compensations is available, re-compute the correct miner fee.
-            if !dao_compensations.is_empty() {
-                correct_dao_withdrawal_fees(&mut all_tx_data, &dao_compensations)?;
-            }
+            // `consumed_dao_map`, `dao_withdraw_outpoints`, and
+            // `dao_compensations` were resolved before the tx index was
+            // staged (see the phase-2 fee correction above).
 
             // Build a same-batch deposit map for deposits created in this
             // batch that may also be consumed within the same batch.
@@ -4716,6 +4736,131 @@ mod tests {
         }
     }
 
+    fn withdraw_consuming_tx(
+        request_outpoint: ([u8; 32], i32),
+        extra_inputs: Vec<crate::parser::transaction::ParsedInput>,
+        total_input_capacity: i64,
+        total_output_capacity: i64,
+        parser_fee: i64,
+    ) -> TxData {
+        let mut inputs = vec![crate::parser::transaction::ParsedInput {
+            previous_tx_hash: request_outpoint.0,
+            previous_output_index: request_outpoint.1,
+            since: 0,
+        }];
+        inputs.extend(extra_inputs);
+        let mut tx = dummy_tx_data([0xd3; 32], false, inputs, vec![], vec![], vec![]);
+        tx.total_input_capacity = total_input_capacity;
+        tx.total_output_capacity = total_output_capacity;
+        tx.fee = parser_fee;
+        tx
+    }
+
+    #[test]
+    fn test_correct_dao_withdrawal_fees_replaces_placeholder_zero() {
+        let request = ([0xd2u8; 32], 0i32);
+        let mut txs = vec![withdraw_consuming_tx(
+            request,
+            vec![],
+            100_000_000_000,
+            100_897_999_473,
+            0,
+        )];
+        let outpoints: HashSet<(Vec<u8>, i16)> = [(request.0.to_vec(), 0i16)].into();
+        let compensations: HashMap<(Vec<u8>, i16), i64> =
+            [((request.0.to_vec(), 0i16), 8_98000000i64)].into();
+
+        correct_dao_withdrawal_fees(&mut txs, &outpoints, &compensations).unwrap();
+        assert_eq!(txs[0].fee, 527);
+    }
+
+    #[test]
+    fn test_correct_dao_withdrawal_fees_recomputes_nonzero_parser_fee() {
+        // Extra plain input keeps raw inputs >= outputs, so the parser
+        // computed a NON-zero fee that undercounts compensation. The
+        // criterion is the consumed withdraw-request outpoint, so the fee
+        // must still be recomputed.
+        let request = ([0xd2u8; 32], 0i32);
+        let mut txs = vec![withdraw_consuming_tx(
+            request,
+            vec![crate::parser::transaction::ParsedInput {
+                previous_tx_hash: [0xd1; 32],
+                previous_output_index: 1,
+                since: 0,
+            }],
+            280_000_000_000,
+            279_898_000_000,
+            1_02000000,
+        )];
+        let outpoints: HashSet<(Vec<u8>, i16)> = [(request.0.to_vec(), 0i16)].into();
+        let compensations: HashMap<(Vec<u8>, i16), i64> =
+            [((request.0.to_vec(), 0i16), 8_98000000i64)].into();
+
+        correct_dao_withdrawal_fees(&mut txs, &outpoints, &compensations).unwrap();
+        assert_eq!(txs[0].fee, 10_00000000);
+    }
+
+    #[test]
+    fn test_correct_dao_withdrawal_fees_leaves_non_withdraw_txs_untouched() {
+        // Phase-1 (withdraw request) and plain txs consume no
+        // withdraw-request outpoint: the parser fee stands.
+        let mut txs = vec![withdraw_consuming_tx(
+            ([0xaa; 32], 0),
+            vec![],
+            1_000,
+            900,
+            100,
+        )];
+        let outpoints: HashSet<(Vec<u8>, i16)> = [(vec![0xd2u8; 32], 0i16)].into();
+        let compensations: HashMap<(Vec<u8>, i16), i64> =
+            [((vec![0xd2u8; 32], 0i16), 8_98000000i64)].into();
+
+        correct_dao_withdrawal_fees(&mut txs, &outpoints, &compensations).unwrap();
+        assert_eq!(txs[0].fee, 100);
+    }
+
+    #[test]
+    fn test_correct_dao_withdrawal_fees_errors_on_missing_compensation() {
+        let request = ([0xd2u8; 32], 0i32);
+        let mut txs = vec![withdraw_consuming_tx(
+            request,
+            vec![],
+            100_000_000_000,
+            100_897_999_473,
+            0,
+        )];
+        let outpoints: HashSet<(Vec<u8>, i16)> = [(request.0.to_vec(), 0i16)].into();
+        let compensations: HashMap<(Vec<u8>, i16), i64> = HashMap::new();
+
+        let err = correct_dao_withdrawal_fees(&mut txs, &outpoints, &compensations).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("missing pre-computed DAO compensation"));
+        assert!(msg.contains(&hex::encode([0xd3u8; 32])));
+        assert!(msg.contains(&hex::encode([0xd2u8; 32])));
+    }
+
+    #[test]
+    fn test_correct_dao_withdrawal_fees_errors_on_negative_fee() {
+        // Outputs exceed raw inputs + compensation: invariant violation must
+        // fail fast instead of storing a bogus fee.
+        let request = ([0xd2u8; 32], 0i32);
+        let mut txs = vec![withdraw_consuming_tx(
+            request,
+            vec![],
+            100_000_000_000,
+            100_900_000_000,
+            0,
+        )];
+        let outpoints: HashSet<(Vec<u8>, i16)> = [(request.0.to_vec(), 0i16)].into();
+        let compensations: HashMap<(Vec<u8>, i16), i64> =
+            [((request.0.to_vec(), 0i16), 8_98000000i64)].into();
+
+        let err = correct_dao_withdrawal_fees(&mut txs, &outpoints, &compensations).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("negative fee after DAO compensation"));
+        assert!(msg.contains(&hex::encode([0xd3u8; 32])));
+    }
+
     #[test]
     fn test_load_latest_dao_daily_snapshot_propagates_deserialize_error() {
         let dir = tempfile::tempdir().unwrap();
@@ -4827,5 +4972,575 @@ mod tests {
         assert!(msg.contains("100-120"));
         assert!(msg.contains("chain_tip=1500"));
         assert!(msg.contains("run through bulk build engine first"));
+    }
+
+    // ── Live write-path DAO phase-2 fee regression tests ─────────────────
+    //
+    // Drives the real live-sync write path (parse → parser fee pass →
+    // `write_parsed_batch`) across four single-block batches:
+    // funding cellbase → DAO deposit → withdraw request (phase 1) →
+    // withdrawal completion (phase 2), then asserts the fee persisted in
+    // `TxIndexEntry` for the phase-2 tx. This is the storage-level truth the
+    // API serves; the parser can only write a placeholder for phase-2 txs
+    // because DAO compensation is unknown at parse time.
+
+    mod live_dao_fee {
+        use super::*;
+        use crate::config::Config;
+        use crate::db::writer::cell_distribution::CellDistributionTracker;
+        use crate::db::writer::hodl_wave::HodlWaveTracker;
+        use crate::db::Repository;
+        use crate::runtime_diag::FlightRecorder;
+        use crate::rpc::{BlockView, CellInput, CellOutput, HeaderView, OutPoint, Script,
+            TransactionView};
+        use crate::sync::pipeline::compute_parser_input_capacities_and_fees;
+        use crate::sync::progress::SyncProgress;
+        use crate::sync::shutdown::ShutdownSignal;
+        use crate::sync::types::CachedCellInfo;
+        use crate::sync::TEST_CELLBASE_WITNESS;
+        use ckbadger_store::types::LiveCellInfo;
+        use ckbadger_store::StoreRuntimeConfig;
+        use std::path::PathBuf;
+        use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8};
+
+        const SECP_CODE_HASH: &str =
+            "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8";
+        const DAO_CODE_HASH: &str =
+            "0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e";
+        /// AR at the deposit block (101) and at the withdraw-request block
+        /// (102). With a 1000 CKB deposit whose occupied capacity is the
+        /// standard 102 CKB, free capacity is 898 CKB and the compensation is
+        /// exactly 898_00000000 * 101/100 - 898_00000000 = 8_98000000.
+        const AR_DEPOSIT: u64 = 10_000_000_000_000_000;
+        const AR_REQUEST: u64 = 10_100_000_000_000_000;
+        const DAO_COMPENSATION: i64 = 8_98000000;
+        const DEPOSIT_CAPACITY: u64 = 1000_00000000;
+        const FUNDING_CAPACITY: u64 = 3000_00000000;
+        const CHANGE_CAPACITY: u64 = 1800_00000000;
+
+        fn lock_script() -> Script {
+            Script {
+                code_hash: SECP_CODE_HASH.to_string(),
+                hash_type: "type".to_string(),
+                args: format!("0x{}", "01".repeat(20)),
+            }
+        }
+
+        fn dao_type_script() -> Script {
+            Script {
+                code_hash: DAO_CODE_HASH.to_string(),
+                hash_type: "type".to_string(),
+                args: "0x".to_string(),
+            }
+        }
+
+        fn header(number: u64, ar: u64) -> HeaderView {
+            // DAO field: C (total issuance) and U (occupied) must satisfy
+            // C > U for the secondary-miner split; AR drives compensation.
+            let mut dao = [0u8; 32];
+            dao[0..8].copy_from_slice(&3_360_000_000_000_000_000u64.to_le_bytes());
+            dao[8..16].copy_from_slice(&ar.to_le_bytes());
+            dao[24..32].copy_from_slice(&100_000_000_000_000u64.to_le_bytes());
+            // Epoch 40 (length 1800) starts at block 100, so the first
+            // fixture batch opens the epoch stats row exactly like a real
+            // epoch boundary block would.
+            let epoch = (1800u64 << 40) | ((number - 100) << 24) | 40;
+            HeaderView {
+                version: "0x0".to_string(),
+                compact_target: "0x1a08a97e".to_string(),
+                timestamp: format!("0x{:x}", 1_700_000_000_000u64 + number * 1000),
+                number: format!("0x{number:x}"),
+                epoch: format!("0x{epoch:x}"),
+                parent_hash: format!("0x{}", "11".repeat(32)),
+                transactions_root: format!("0x{}", "22".repeat(32)),
+                proposals_hash: format!("0x{}", "33".repeat(32)),
+                extra_hash: format!("0x{}", "44".repeat(32)),
+                dao: format!("0x{}", hex::encode(dao)),
+                nonce: "0x1".to_string(),
+                hash: format!("0x{}", hex::encode({
+                    let mut h = [0x55u8; 32];
+                    h[0..8].copy_from_slice(&number.to_le_bytes());
+                    h
+                })),
+            }
+        }
+
+        fn cellbase_tx(hash_byte: u8, capacity: u64) -> TransactionView {
+            TransactionView {
+                hash: format!("0x{}", hex::encode([hash_byte; 32])),
+                version: "0x0".to_string(),
+                cell_deps: vec![],
+                header_deps: vec![],
+                inputs: vec![CellInput {
+                    since: "0x0".to_string(),
+                    previous_output: OutPoint {
+                        tx_hash: format!("0x{}", "00".repeat(32)),
+                        index: "0xffffffff".to_string(),
+                    },
+                }],
+                outputs: vec![CellOutput {
+                    capacity: format!("0x{capacity:x}"),
+                    lock: lock_script(),
+                    type_: None,
+                }],
+                outputs_data: vec!["0x".to_string()],
+                witnesses: vec![TEST_CELLBASE_WITNESS.to_string()],
+            }
+        }
+
+        fn block(number: u64, ar: u64, transactions: Vec<TransactionView>) -> BlockResponseWithCycles {
+            BlockResponseWithCycles {
+                block: BlockView {
+                    header: header(number, ar),
+                    uncles: vec![],
+                    transactions,
+                    proposals: vec![],
+                },
+                cycles: None,
+            }
+        }
+
+        fn indexer_for_live_write_test(store: Arc<CkbadgerStore>) -> Indexer {
+            // Live-path writers derive knowledge_size from DAO `U` minus the
+            // genesis baseline; seed a baseline with zero virtual occupied
+            // capacity so the fixture headers' small U stays non-negative.
+            store
+                .set_genesis_baseline(&ckbadger_store::GenesisBaseline {
+                    total_issuance: 3_360_000_000_000_000_000,
+                    burnt: 840_000_000_000_000_000,
+                    virtual_occupied: 0,
+                })
+                .expect("seed genesis baseline");
+            let config = Config {
+                domain_data_path: "unused-domain".to_string(),
+                append_only_data_path: "unused-append".to_string(),
+                bulk_sync_perf_output_root: String::new(),
+                build_version: "test".to_string(),
+                ckb_rpc_url: "http://127.0.0.1:1".to_string(),
+                poll_interval_ms: 1000,
+                start_block: None,
+                bulk_sync_threshold: 72,
+                bulk_memory_budget_gb: None,
+                fast_sync_mode: true,
+                ckb_db_path: "unused-ckb-db".to_string(),
+                metadata_path: None,
+                network: "mainnet".to_string(),
+                force_startup_cleanup: false,
+                store_runtime_config: StoreRuntimeConfig::default(),
+                decoder_cache_path: "unused-decoder-cache".to_string(),
+                dob_decode_dir: "unused-dob-decode".to_string(),
+                cycles_request_dir: None,
+            };
+            let cache_invalidator = crate::cache::CacheInvalidator::new(store.clone());
+            Indexer {
+                run_id: "live-dao-fee-test".to_string(),
+                config,
+                rpc: CkbRpcClient::new("http://127.0.0.1:1"),
+                repo: Repository::new(store.clone()),
+                writer: BatchWriter::new(store.clone(), store.clone()),
+                append_only_store: store.clone(),
+                progress: Arc::new(SyncProgress::new(0, 0)),
+                cell_cache: Arc::new(DashMap::<([u8; 32], i16), CachedCellInfo>::new()),
+                udt_cell_cache: Arc::new(DashMap::new()),
+                perf: PerfStats::default(),
+                parser_cell_lookup_stats: Arc::new(ParserCellLookupStats::default()),
+                pipeline_perf: Arc::new(PipelinePerfStats::default()),
+                bulk_build_perf: Arc::new(BulkBuildPerfStats::default()),
+                adaptive_batch_controller: Arc::new(LiveBatchController::new()),
+                cache_invalidator,
+                last_cache_invalidation: tokio::sync::Mutex::new(0),
+                was_bulk_sync_active: AtomicBool::new(false),
+                bulk_sync_allowed: AtomicBool::new(false),
+                rebuild_pause_flag: Arc::new(AtomicBool::new(false)),
+                pipeline_reset_notify_flag: Arc::new(AtomicBool::new(false)),
+                pipeline_reset_reason_code: Arc::new(AtomicU8::new(0)),
+                startup_phase: AtomicU8::new(STARTUP_PHASE_NONE),
+                pipeline_reset_epoch: Arc::new(AtomicU64::new(0)),
+                incident_seq: AtomicU64::new(0),
+                flight_recorder: FlightRecorder::new(FLIGHT_RECORDER_CAPACITY),
+                repeated_warning_tracker: RepeatedWarningTracker::default(),
+                incident_dir: PathBuf::from("unused-incidents"),
+                bulk_sync_perf_run: std::sync::Mutex::new(None),
+                shutdown: ShutdownSignal::default(),
+                ckb_store: None,
+                hodl_tracker: std::sync::Mutex::new(HodlWaveTracker::new()),
+                cell_dist_tracker: std::sync::Mutex::new(CellDistributionTracker::new()),
+            }
+        }
+
+        /// Mirror of the parser Pass 3 address-delta accumulation for the
+        /// fixture: balances, live/total cell counts, and occupied deltas per
+        /// lock hash. `write_parsed_batch` persists AddressBalance rows from
+        /// this map, and the HODL/cell-distribution trackers baseline their
+        /// per-lock live counts on those rows.
+        fn accumulate_fixture_address_deltas(
+            all_tx_data: &[TxData],
+            input_cell_info: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
+            batch_cell_infos: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
+        ) -> Result<HashMap<Vec<u8>, AddressBalanceDelta>> {
+            let mut changes: HashMap<Vec<u8>, AddressBalanceDelta> = HashMap::new();
+            for tx_data in all_tx_data {
+                let mut balance: HashMap<Vec<u8>, i128> = HashMap::new();
+                let mut created: HashMap<Vec<u8>, i32> = HashMap::new();
+                let mut consumed: HashMap<Vec<u8>, i32> = HashMap::new();
+                let mut used: HashMap<Vec<u8>, i128> = HashMap::new();
+                if !tx_data.is_cellbase {
+                    for input in &tx_data.inputs {
+                        let key = (
+                            input.previous_tx_hash.to_vec(),
+                            parsed_input_outpoint_index_i16(
+                                input.previous_output_index,
+                                "live fee test address deltas",
+                            )?,
+                        );
+                        let info = input_cell_info
+                            .get(&key)
+                            .or_else(|| batch_cell_infos.get(&key))
+                            .ok_or_else(|| {
+                                anyhow!(
+                                    "fixture input cell missing: outpoint=0x{}:{}",
+                                    hex::encode(&key.0),
+                                    key.1
+                                )
+                            })?;
+                        *balance.entry(info.lock_script_hash.clone()).or_default() -=
+                            i128::from(info.capacity);
+                        *consumed.entry(info.lock_script_hash.clone()).or_default() += 1;
+                        *used.entry(info.lock_script_hash.clone()).or_default() -=
+                            i128::from(info.occupied_capacity);
+                    }
+                }
+                for cell in &tx_data.cells {
+                    *balance.entry(cell.lock_script_hash.clone()).or_default() +=
+                        i128::from(cell.capacity);
+                    *created.entry(cell.lock_script_hash.clone()).or_default() += 1;
+                    *used.entry(cell.lock_script_hash.clone()).or_default() +=
+                        i128::from(occupied_capacity_shannons_i64(
+                            cell.lock_args.len(),
+                            cell.type_args.as_ref().map(|args| args.len()),
+                            cell.data_size,
+                        ));
+                }
+                let all_addresses: HashSet<Vec<u8>> = balance
+                    .keys()
+                    .chain(created.keys())
+                    .chain(consumed.keys())
+                    .chain(used.keys())
+                    .cloned()
+                    .collect();
+                for lock_hash in all_addresses {
+                    let entry = changes.entry(lock_hash.clone()).or_insert(AddressBalanceDelta {
+                        balance_delta: 0,
+                        live_delta: 0,
+                        total_delta: 0,
+                        tx_delta: 0,
+                        used_delta: 0,
+                        first_seen_block: tx_data.block_number,
+                        first_seen_tx: tx_data.hash.to_vec(),
+                        last_activity_block: tx_data.block_number,
+                        last_activity_tx: tx_data.hash.to_vec(),
+                    });
+                    entry.balance_delta += balance.get(&lock_hash).copied().unwrap_or(0);
+                    entry.live_delta += created.get(&lock_hash).copied().unwrap_or(0)
+                        - consumed.get(&lock_hash).copied().unwrap_or(0);
+                    entry.total_delta += created.get(&lock_hash).copied().unwrap_or(0);
+                    entry.tx_delta += 1;
+                    entry.used_delta += used.get(&lock_hash).copied().unwrap_or(0);
+                    entry.last_activity_block = tx_data.block_number;
+                    entry.last_activity_tx = tx_data.hash.to_vec();
+                }
+            }
+            Ok(changes)
+        }
+
+        /// Drive one block through the same steps the live pipeline performs:
+        /// raw parse, batch cell info construction, input prefetch from the
+        /// store, the parser fee pass, then `write_parsed_batch`.
+        async fn write_live_block(indexer: &Indexer, block: BlockResponseWithCycles) -> Result<()> {
+            let blocks = vec![block];
+            let (all_parsed_blocks, mut all_tx_data, all_input_outpoints) =
+                parse_blocks_parallel(&blocks)?;
+
+            let mut batch_cell_infos: HashMap<(Vec<u8>, i16), PositionedCellInfo> = HashMap::new();
+            for tx_data in &all_tx_data {
+                for (output_index, cell) in tx_data.cells.iter().enumerate() {
+                    let output_index_i16 =
+                        checked_usize_to_i16(output_index, "live fee test output index")?;
+                    let occupied_capacity = occupied_capacity_shannons_i64(
+                        cell.lock_args.len(),
+                        cell.type_args.as_ref().map(|args| args.len()),
+                        cell.data_size,
+                    );
+                    batch_cell_infos.insert(
+                        (tx_data.hash.to_vec(), output_index_i16),
+                        PositionedCellInfo::new(
+                            LiveCellInfo {
+                                capacity: cell.capacity,
+                                lock_script_hash: cell.lock_script_hash.clone(),
+                                lock_code_hash: cell.lock_code_hash.clone(),
+                                lock_hash_type: cell.lock_hash_type,
+                                lock_args: cell.lock_args.clone(),
+                                type_script_hash: cell.type_script_hash.clone(),
+                                type_code_hash: cell.type_code_hash.clone(),
+                                type_hash_type: cell.type_hash_type,
+                                type_args: cell.type_args.clone(),
+                                data_size: cell.data_size,
+                                occupied_capacity,
+                                udt_amount: None,
+                                data_hash: Some(cell.data_hash.to_vec()),
+                            },
+                            tx_data.block_number,
+                        ),
+                    );
+                }
+            }
+
+            let outpoint_refs: Vec<(&[u8], i16)> = all_input_outpoints
+                .iter()
+                .map(|(hash, index)| (hash.as_slice(), *index))
+                .collect();
+            let input_cell_info = indexer
+                .writer
+                .get_full_cells_info_batch_chunk(&outpoint_refs)?;
+
+            compute_parser_input_capacities_and_fees(
+                &mut all_tx_data,
+                &input_cell_info,
+                &batch_cell_infos,
+            )?;
+            let address_balance_changes = accumulate_fixture_address_deltas(
+                &all_tx_data,
+                &input_cell_info,
+                &batch_cell_infos,
+            )?;
+
+            let chain_tip = u64::try_from(all_parsed_blocks.last().unwrap().number)?;
+            indexer
+                .write_parsed_batch(
+                    &blocks,
+                    &all_parsed_blocks,
+                    all_tx_data,
+                    input_cell_info,
+                    batch_cell_infos,
+                    address_balance_changes,
+                    HashMap::new(),
+                    HashMap::new(),
+                    HashMap::new(),
+                    HashMap::new(),
+                    HashMap::new(),
+                    HashMap::new(),
+                    HashMap::new(),
+                    HashMap::new(),
+                    HashMap::new(),
+                    chain_tip,
+                )
+                .await?;
+            Ok(())
+        }
+
+        /// Blocks 100-102: funding cellbase, DAO deposit, withdraw request.
+        fn phase_setup_blocks() -> Vec<BlockResponseWithCycles> {
+            // Block 100: funding cellbase (0xc0) with 3000 CKB.
+            let block_100 = block(100, AR_DEPOSIT, vec![cellbase_tx(0xc0, FUNDING_CAPACITY)]);
+
+            // Block 101: deposit tx (0xd1) spends the funding cell into a
+            // 1000 CKB DAO deposit plus 1800 CKB change (200 CKB fee).
+            let deposit_tx = TransactionView {
+                hash: format!("0x{}", hex::encode([0xd1; 32])),
+                version: "0x0".to_string(),
+                cell_deps: vec![],
+                header_deps: vec![],
+                inputs: vec![CellInput {
+                    since: "0x0".to_string(),
+                    previous_output: OutPoint {
+                        tx_hash: format!("0x{}", hex::encode([0xc0; 32])),
+                        index: "0x0".to_string(),
+                    },
+                }],
+                outputs: vec![
+                    CellOutput {
+                        capacity: format!("0x{DEPOSIT_CAPACITY:x}"),
+                        lock: lock_script(),
+                        type_: Some(dao_type_script()),
+                    },
+                    CellOutput {
+                        capacity: format!("0x{CHANGE_CAPACITY:x}"),
+                        lock: lock_script(),
+                        type_: None,
+                    },
+                ],
+                outputs_data: vec![format!("0x{}", "00".repeat(8)), "0x".to_string()],
+                witnesses: vec!["0x".to_string()],
+            };
+            let block_101 = block(
+                101,
+                AR_DEPOSIT,
+                vec![cellbase_tx(0xc1, 500_00000000), deposit_tx],
+            );
+
+            // Block 102: withdraw request tx (0xd2) converts the deposit into
+            // a request cell (same capacity, data = deposit block number).
+            let request_tx = TransactionView {
+                hash: format!("0x{}", hex::encode([0xd2; 32])),
+                version: "0x0".to_string(),
+                cell_deps: vec![],
+                header_deps: vec![],
+                inputs: vec![CellInput {
+                    since: "0x0".to_string(),
+                    previous_output: OutPoint {
+                        tx_hash: format!("0x{}", hex::encode([0xd1; 32])),
+                        index: "0x0".to_string(),
+                    },
+                }],
+                outputs: vec![CellOutput {
+                    capacity: format!("0x{DEPOSIT_CAPACITY:x}"),
+                    lock: lock_script(),
+                    type_: Some(dao_type_script()),
+                }],
+                outputs_data: vec![format!("0x{}", hex::encode(101u64.to_le_bytes()))],
+                witnesses: vec!["0x".to_string()],
+            };
+            let block_102 = block(
+                102,
+                AR_REQUEST,
+                vec![cellbase_tx(0xc2, 500_00000000), request_tx],
+            );
+
+            vec![block_100, block_101, block_102]
+        }
+
+        fn stored_fee(store: &CkbadgerStore, tx_hash: [u8; 32]) -> i64 {
+            let (_, _, entry) = store
+                .get_tx_by_hash(&tx_hash)
+                .expect("tx lookup must not fail")
+                .expect("phase-2 tx must be indexed");
+            entry.fee
+        }
+
+        /// A DAO withdrawal-completion (phase-2) tx whose outputs exceed its
+        /// raw inputs (the common shape: single request input, single output
+        /// carrying capacity + compensation - fee). The parser writes a fee=0
+        /// placeholder; the live write path must persist the corrected fee
+        /// `raw_inputs + compensation - outputs` in `TxIndexEntry`.
+        #[tokio::test]
+        async fn test_live_write_path_stores_corrected_dao_phase2_fee() {
+            let dir = tempfile::tempdir().unwrap();
+            let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+            std::mem::forget(dir);
+            let indexer = indexer_for_live_write_test(store.clone());
+
+            for setup_block in phase_setup_blocks() {
+                write_live_block(&indexer, setup_block).await.unwrap();
+            }
+
+            // Block 103: completion tx (0xd3) consumes the request outpoint.
+            // True miner fee mirrors the 2026-07-29 audit case (527 shannons):
+            // output = 1000 CKB + compensation - 527.
+            let expected_fee: i64 = 527;
+            let output_capacity =
+                i64::try_from(DEPOSIT_CAPACITY).unwrap() + DAO_COMPENSATION - expected_fee;
+            let completion_tx = TransactionView {
+                hash: format!("0x{}", hex::encode([0xd3; 32])),
+                version: "0x0".to_string(),
+                cell_deps: vec![],
+                header_deps: vec![],
+                inputs: vec![CellInput {
+                    since: "0x0".to_string(),
+                    previous_output: OutPoint {
+                        tx_hash: format!("0x{}", hex::encode([0xd2; 32])),
+                        index: "0x0".to_string(),
+                    },
+                }],
+                outputs: vec![CellOutput {
+                    capacity: format!("0x{output_capacity:x}"),
+                    lock: lock_script(),
+                    type_: None,
+                }],
+                outputs_data: vec!["0x".to_string()],
+                witnesses: vec!["0x".to_string()],
+            };
+            let block_103 = block(
+                103,
+                10_200_000_000_000_000,
+                vec![cellbase_tx(0xc3, 500_00000000), completion_tx],
+            );
+            write_live_block(&indexer, block_103).await.unwrap();
+
+            assert_eq!(
+                stored_fee(&store, [0xd3; 32]),
+                expected_fee,
+                "phase-2 tx fee stored in TxIndexEntry must include DAO compensation on the input side"
+            );
+        }
+
+        /// A phase-2 tx that also spends a plain cell so its raw inputs
+        /// already exceed its outputs. The parser then computes a NON-zero
+        /// fee that undercounts compensation; the write path must still
+        /// recompute the fee because the tx consumes a withdraw-request
+        /// outpoint — the correction criterion is the input kind, never the
+        /// current fee value.
+        #[tokio::test]
+        async fn test_live_write_path_recomputes_fee_for_phase2_with_plain_inputs() {
+            let dir = tempfile::tempdir().unwrap();
+            let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+            std::mem::forget(dir);
+            let indexer = indexer_for_live_write_test(store.clone());
+
+            for setup_block in phase_setup_blocks() {
+                write_live_block(&indexer, setup_block).await.unwrap();
+            }
+
+            // Block 103: completion tx (0xd3) consumes the request outpoint
+            // (1000 CKB) plus the plain change cell (1800 CKB). True fee is
+            // 10 CKB (> compensation), so raw inputs (2800 CKB) exceed the
+            // single output (2800 CKB + compensation - 10 CKB) and the parser
+            // computes an undercounted placeholder of
+            // 10 CKB - compensation = 1_02000000.
+            let expected_fee: i64 = 10_00000000;
+            let raw_inputs =
+                i64::try_from(DEPOSIT_CAPACITY).unwrap() + i64::try_from(CHANGE_CAPACITY).unwrap();
+            let output_capacity = raw_inputs + DAO_COMPENSATION - expected_fee;
+            let completion_tx = TransactionView {
+                hash: format!("0x{}", hex::encode([0xd3; 32])),
+                version: "0x0".to_string(),
+                cell_deps: vec![],
+                header_deps: vec![],
+                inputs: vec![
+                    CellInput {
+                        since: "0x0".to_string(),
+                        previous_output: OutPoint {
+                            tx_hash: format!("0x{}", hex::encode([0xd2; 32])),
+                            index: "0x0".to_string(),
+                        },
+                    },
+                    CellInput {
+                        since: "0x0".to_string(),
+                        previous_output: OutPoint {
+                            tx_hash: format!("0x{}", hex::encode([0xd1; 32])),
+                            index: "0x1".to_string(),
+                        },
+                    },
+                ],
+                outputs: vec![CellOutput {
+                    capacity: format!("0x{output_capacity:x}"),
+                    lock: lock_script(),
+                    type_: None,
+                }],
+                outputs_data: vec!["0x".to_string()],
+                witnesses: vec!["0x".to_string()],
+            };
+            let block_103 = block(
+                103,
+                10_200_000_000_000_000,
+                vec![cellbase_tx(0xc3, 500_00000000), completion_tx],
+            );
+            write_live_block(&indexer, block_103).await.unwrap();
+
+            assert_eq!(
+                stored_fee(&store, [0xd3; 32]),
+                expected_fee,
+                "phase-2 tx with extra plain inputs must have its fee recomputed with compensation"
+            );
+        }
     }
 }
