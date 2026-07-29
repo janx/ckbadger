@@ -2169,9 +2169,9 @@ impl Indexer {
                 // Types carried by inputs created before this batch, projected
                 // from the prefetched input view this write already resolved —
                 // no second resolution path. Every input of every non-cellbase
-                // tx is guaranteed to be in `input_cell_info` or in this
-                // batch's own outputs (the unresolved-input check above
-                // fail-fasts otherwise), so the union the co-occurrence rule
+                // tx is either in `input_cell_info` or in this batch's own
+                // outputs, or else `resolve_consumed_stats` aborts the whole
+                // write before any commit, so the union the co-occurrence rule
                 // sees is exactly the bulk reducer's resolved-input set. Using
                 // `input_udt_info` here would be narrower than bulk: it drops
                 // owner-mode (amount-less) and not-yet-registered typed inputs,
