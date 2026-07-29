@@ -2685,7 +2685,7 @@ mod tests {
                 b"hodl",
             ),
             (
-                crate::keys::encode_script_daily_key(&[0xAB; 32], false, 20240201).to_vec(),
+                crate::keys::encode_script_daily_key(&[0xAB; 32], 1, false, 20240201).to_vec(),
                 b"script",
             ),
             (

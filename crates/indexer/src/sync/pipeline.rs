@@ -734,7 +734,7 @@ impl Indexer {
             address_balance_changes: HashMap<Vec<u8>, AddressBalanceDelta>,
             script_usage_changes: ScriptUsageChanges,
             script_reference_usage_changes: ScriptReferenceUsageChanges,
-            script_daily_changes: HashMap<(Vec<u8>, bool, u32), (i128, i128)>,
+            script_daily_changes: HashMap<(Vec<u8>, u8, bool, u32), (i128, i128)>,
             token_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)>,
             spore_type_index_changes: HashMap<Vec<u8>, SporeTypeIndex>,
             spore_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)>,
@@ -1447,9 +1447,7 @@ impl Indexer {
                 ) {
                     error!(
                         start_block,
-                        end_block,
-                        "Parser: invalid tx fee accounting: {}",
-                        err
+                        end_block, "Parser: invalid tx fee accounting: {}", err
                     );
                     record_worker_exit_reason(
                         &parser_exit_reason_for_parser,
@@ -1470,7 +1468,7 @@ impl Indexer {
                 let mut script_usage_changes: ScriptUsageChanges = HashMap::new();
                 let mut script_reference_usage_changes: ScriptReferenceUsageChanges =
                     HashMap::new();
-                let mut script_daily_changes: HashMap<(Vec<u8>, bool, u32), (i128, i128)> =
+                let mut script_daily_changes: HashMap<(Vec<u8>, u8, bool, u32), (i128, i128)> =
                     HashMap::new();
                 let mut token_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)> = HashMap::new();
                 let mut spore_type_index_changes: HashMap<Vec<u8>, SporeTypeIndex> = HashMap::new();
@@ -1605,7 +1603,12 @@ impl Indexer {
                         entry.4 += i128::from(cell_occupied);
                         entry.5 += i128::from(cell_occupied);
                         let daily_entry = script_daily_changes
-                            .entry((cell.lock_code_hash.clone(), false, date_yyyymmdd))
+                            .entry((
+                                cell.lock_code_hash.clone(),
+                                lock_hash_type,
+                                false,
+                                date_yyyymmdd,
+                            ))
                             .or_insert((0, 0));
                         daily_entry.0 += i128::from(cell.capacity);
                         daily_entry.1 += i128::from(cell_occupied);
@@ -1663,7 +1666,12 @@ impl Indexer {
                             entry.4 += i128::from(cell_occupied);
                             entry.5 += i128::from(cell_occupied);
                             let daily_entry = script_daily_changes
-                                .entry((type_code_hash.clone(), true, date_yyyymmdd))
+                                .entry((
+                                    type_code_hash.clone(),
+                                    type_hash_type,
+                                    true,
+                                    date_yyyymmdd,
+                                ))
                                 .or_insert((0, 0));
                             daily_entry.0 += i128::from(cell.capacity);
                             daily_entry.1 += i128::from(cell_occupied);
@@ -1816,7 +1824,12 @@ impl Indexer {
                                 entry.3 -= i128::from(info.capacity);
                                 entry.5 -= i128::from(info.occupied_capacity);
                                 let daily_entry = script_daily_changes
-                                    .entry((info.lock_code_hash.clone(), false, date_yyyymmdd))
+                                    .entry((
+                                        info.lock_code_hash.clone(),
+                                        lock_hash_type,
+                                        false,
+                                        date_yyyymmdd,
+                                    ))
                                     .or_insert((0, 0));
                                 daily_entry.0 -= i128::from(info.capacity);
                                 daily_entry.1 -= i128::from(info.occupied_capacity);
@@ -1868,7 +1881,12 @@ impl Indexer {
                                     entry.3 -= i128::from(info.capacity);
                                     entry.5 -= i128::from(info.occupied_capacity);
                                     let daily_entry = script_daily_changes
-                                        .entry((type_code_hash.clone(), true, date_yyyymmdd))
+                                        .entry((
+                                            type_code_hash.clone(),
+                                            type_hash_type,
+                                            true,
+                                            date_yyyymmdd,
+                                        ))
                                         .or_insert((0, 0));
                                     daily_entry.0 -= i128::from(info.capacity);
                                     daily_entry.1 -= i128::from(info.occupied_capacity);

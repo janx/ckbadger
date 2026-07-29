@@ -761,7 +761,7 @@ fn build_most_utilized_share_chart(
 async fn get_most_utilized_scripts_chart(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<MostUtilizedScriptsChartResponse> {
-    let cache_key = "chart:most-utilized-scripts:v2";
+    let cache_key = "chart:most-utilized-scripts:v3";
     if let Some(cached) = state
         .cache
         .get::<MostUtilizedScriptsChartResponse>(cache_key)
@@ -770,66 +770,133 @@ async fn get_most_utilized_scripts_chart(
         return ok(cached);
     }
 
-    let all_scripts = load_script_infos_cached(&state)?;
+    // Entities follow the same family resolution the usage counters use: every
+    // observed reference form resolving into a family version is grouped under
+    // that family, so the chart totals equal /scripts/{name}/usage. Loose
+    // reference forms without a family keep their own label.
+    let script_infos_by_code_hash: HashMap<Vec<u8>, ckbadger_store::ScriptInfo> =
+        load_script_infos_cached(&state)?.into_iter().collect();
+    let version_families: HashMap<Vec<u8>, String> =
+        super::scripts::load_script_versions_cached(&state)?
+            .into_iter()
+            .filter_map(|(version_hash, info)| Some((version_hash, info.family_id?)))
+            .collect();
+    let family_names: HashMap<String, String> =
+        super::scripts::load_script_families_cached(&state)?
+            .into_iter()
+            .map(|(family_id, info)| (family_id, info.name))
+            .collect();
 
     let mut labels_by_key: HashMap<String, String> = HashMap::new();
     let mut final_by_key: HashMap<String, (i128, i128)> = HashMap::new();
-    let mut deltas_by_date: BTreeMap<u32, Vec<(String, i128, i128)>> = BTreeMap::new();
+    let mut entity_key_by_form: HashMap<(Vec<u8>, u8), String> = HashMap::new();
+    let mut code_hashes: std::collections::BTreeSet<Vec<u8>> = std::collections::BTreeSet::new();
 
-    for (code_hash, info) in all_scripts {
-        let code_hash_hex = format!("0x{}", hex::encode(&code_hash));
-        let raw_name = info.name.as_deref().unwrap_or("Unknown").trim();
-        let is_known_script = is_known_script_name(raw_name);
-        let key = if is_known_script {
-            format!("known:{raw_name}")
-        } else {
-            format!("unknown:{code_hash_hex}")
-        };
+    for ((reference_hash, hash_type), reference_info) in
+        state
+            .store
+            .list_script_reference_infos()
+            .map_err(|e| ApiError::internal(e.to_string()))?
+    {
+        let member_version = crate::utils::reference_form_member_version(
+            &state.store,
+            &state.append_only_store,
+            hash_type,
+            &reference_hash,
+            &|hash: &[u8]| version_families.contains_key(hash),
+        )
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+        let family_id = member_version.and_then(|version| version_families.get(&version).cloned());
 
-        let label = if is_known_script {
-            raw_name.to_string()
-        } else {
-            code_hash_hex.clone()
+        let (key, label) = match family_id {
+            Some(family_id) => {
+                let name = family_names.get(&family_id).ok_or_else(|| {
+                    ApiError::internal(format!(
+                        "script version points to missing family in most-utilized chart: family_id={}",
+                        family_id
+                    ))
+                })?;
+                (format!("known:{name}"), name.clone())
+            }
+            None => {
+                let code_hash_hex = format!("0x{}", hex::encode(&reference_hash));
+                let script_name = script_infos_by_code_hash
+                    .get(&reference_hash)
+                    .and_then(|info| info.name.as_deref())
+                    .unwrap_or("Unknown")
+                    .trim()
+                    .to_string();
+                if is_known_script_name(&script_name) {
+                    (format!("known:{script_name}"), script_name)
+                } else {
+                    (format!("unknown:{code_hash_hex}"), code_hash_hex)
+                }
+            }
         };
-        labels_by_key.insert(key.clone(), label);
 
         let final_total_cells_capacity =
-            info.lock_owned_capacity_sum + info.type_owned_capacity_sum;
-        let final_used_capacity = info.lock_owned_knowledge_sum + info.type_owned_knowledge_sum;
+            reference_info.lock_owned_capacity_sum + reference_info.type_owned_capacity_sum;
+        let final_used_capacity =
+            reference_info.lock_owned_knowledge_sum + reference_info.type_owned_knowledge_sum;
         if final_total_cells_capacity < 0 {
             return Err(ApiError::internal(format!(
-                "negative script total capacity for key {}: {}",
-                key, final_total_cells_capacity
+                "negative script total capacity for key {}: reference_hash=0x{}, hash_type={}, value={}",
+                key,
+                hex::encode(&reference_hash),
+                hash_type,
+                final_total_cells_capacity
             )));
         }
         if final_used_capacity < 0 {
             return Err(ApiError::internal(format!(
-                "negative script common knowledge size for key {}: {}",
-                key, final_used_capacity
+                "negative script common knowledge size for key {}: reference_hash=0x{}, hash_type={}, value={}",
+                key,
+                hex::encode(&reference_hash),
+                hash_type,
+                final_used_capacity
             )));
         }
         if final_used_capacity > final_total_cells_capacity {
             return Err(ApiError::internal(format!(
-                "script common knowledge size exceeds total for key {}: used={}, total={}",
-                key, final_used_capacity, final_total_cells_capacity
+                "script common knowledge size exceeds total for key {}: reference_hash=0x{}, hash_type={}, used={}, total={}",
+                key,
+                hex::encode(&reference_hash),
+                hash_type,
+                final_used_capacity,
+                final_total_cells_capacity
             )));
         }
+
+        labels_by_key.insert(key.clone(), label);
         let entry = final_by_key.entry(key.clone()).or_insert((0, 0));
         entry.0 += final_total_cells_capacity;
         entry.1 += final_used_capacity;
+        entity_key_by_form.insert((reference_hash.clone(), hash_type), key);
+        code_hashes.insert(reference_hash);
+    }
 
-        for is_type in [false, true] {
-            let deltas = state
-                .store
-                .list_script_daily_deltas(&code_hash, is_type)
-                .map_err(|e| ApiError::internal(e.to_string()))?;
-            for (date, delta) in deltas {
-                deltas_by_date.entry(date).or_default().push((
-                    key.clone(),
-                    delta.owned_capacity_delta,
-                    delta.owned_knowledge_delta,
-                ));
-            }
+    let mut deltas_by_date: BTreeMap<u32, Vec<(String, i128, i128)>> = BTreeMap::new();
+    for code_hash in &code_hashes {
+        let rows = state
+            .store
+            .list_script_daily_deltas_by_code_hash(code_hash)
+            .map_err(|e| ApiError::internal(e.to_string()))?;
+        for ((hash_type, _is_type, date), delta) in rows {
+            let key = entity_key_by_form
+                .get(&(code_hash.clone(), hash_type))
+                .ok_or_else(|| {
+                    ApiError::internal(format!(
+                        "script daily row without a matching reference form: code_hash=0x{}, hash_type={}, date={}",
+                        hex::encode(code_hash),
+                        hash_type,
+                        date
+                    ))
+                })?;
+            deltas_by_date.entry(date).or_default().push((
+                key.clone(),
+                delta.owned_capacity_delta,
+                delta.owned_knowledge_delta,
+            ));
         }
     }
 
@@ -1421,12 +1488,15 @@ async fn get_common_knowledge_composition_chart(
         let store = state.store.clone();
         let code_hash_c = code_hash.clone();
         let deltas = tokio::task::spawn_blocking(move || {
-            store.list_script_daily_deltas_in_range(&code_hash_c, true, None, None)
+            store.list_script_daily_deltas_by_code_hash(&code_hash_c)
         })
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?
         .map_err(|e| ApiError::internal(e.to_string()))?;
-        for (date, delta) in deltas {
+        for ((_hash_type, is_type, date), delta) in deltas {
+            if !is_type {
+                continue;
+            }
             let used_delta = delta.owned_knowledge_delta;
             *type_daily_delta.entry(date).or_insert(0) += used_delta;
 

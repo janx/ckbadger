@@ -1200,7 +1200,11 @@ async fn test_network_stats_transactions_per_day_matches_window_rate() {
         .unwrap()
         .parse()
         .unwrap();
-    let per_day: f64 = json["transactionsPerDay"].as_str().unwrap().parse().unwrap();
+    let per_day: f64 = json["transactionsPerDay"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
     assert!(
         (per_day - per_minute * 1440.0).abs() <= 0.05 * 1440.0 + 0.5,
         "perDay ({}) must be consistent with perMinute ({}) × 1440",
@@ -1221,7 +1225,9 @@ async fn test_tx_stats_current_day_reports_natural_day_so_far() {
     let now = chrono::Utc::now();
     let now_ms = now.timestamp_millis();
     let this_hour = now.timestamp() / 3600 * 3600;
-    let date_str = ckbadger_common::block_date(now).format("%Y%m%d").to_string();
+    let date_str = ckbadger_common::block_date(now)
+        .format("%Y%m%d")
+        .to_string();
 
     let mut core_batch = StoreBatch::new(core_store.as_ref());
     core_batch.put_block_header(

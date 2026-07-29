@@ -23,7 +23,7 @@ pub(crate) struct ScriptOwner {
     reference_infos: FxHashMap<(Vec<u8>, u8), ScriptReferenceInfo>,
     type_reference_live_versions: FxHashMap<Vec<u8>, FxHashMap<Vec<u8>, u32>>,
     type_reference_versions: FxHashMap<Vec<u8>, Option<Vec<u8>>>,
-    daily_deltas: FxHashMap<(Vec<u8>, bool, u32), ScriptDailyDelta>,
+    daily_deltas: FxHashMap<(Vec<u8>, u8, bool, u32), ScriptDailyDelta>,
 }
 
 enum TypeReferenceResolution {
@@ -171,9 +171,11 @@ impl ScriptOwner {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn record_daily_delta(
         &mut self,
         code_hash: &[u8],
+        hash_type: u8,
         is_type: bool,
         date_yyyymmdd: u32,
         owned_capacity_delta: i128,
@@ -184,13 +186,15 @@ impl ScriptOwner {
             return Ok(());
         }
 
+        let kind = if is_type { "type" } else { "lock" };
+        let kind_context = format!("{kind}(hash_type={hash_type})");
         let entry = self
             .daily_deltas
-            .entry((code_hash.to_vec(), is_type, date_yyyymmdd))
+            .entry((code_hash.to_vec(), hash_type, is_type, date_yyyymmdd))
             .or_default();
         entry.owned_capacity_delta = checked_signed_i128(
             code_hash,
-            if is_type { "type" } else { "lock" },
+            &kind_context,
             "daily owned_capacity_delta",
             entry.owned_capacity_delta,
             owned_capacity_delta,
@@ -198,7 +202,7 @@ impl ScriptOwner {
         )?;
         entry.owned_knowledge_delta = checked_signed_i128(
             code_hash,
-            if is_type { "type" } else { "lock" },
+            &kind_context,
             "daily owned_knowledge_delta",
             entry.owned_knowledge_delta,
             owned_knowledge_delta,
@@ -213,15 +217,16 @@ impl ScriptOwner {
 
         daily_keys
             .into_iter()
-            .filter_map(|(code_hash, is_type, date)| {
+            .filter_map(|(code_hash, hash_type, is_type, date)| {
                 let delta = self
                     .daily_deltas
-                    .get(&(code_hash.clone(), *is_type, *date))
+                    .get(&(code_hash.clone(), *hash_type, *is_type, *date))
                     .expect("sorted script daily key must exist");
                 (delta.owned_capacity_delta != 0 || delta.owned_knowledge_delta != 0).then_some(
                     MaterializedRow::new(
                         CF_STATS_SCRIPT,
-                        keys::encode_script_daily_key(code_hash, *is_type, *date).to_vec(),
+                        keys::encode_script_daily_key(code_hash, *hash_type, *is_type, *date)
+                            .to_vec(),
                         bincode::serialize(delta)
                             .expect("script daily delta serialization must succeed"),
                     ),
@@ -437,23 +442,6 @@ impl BulkReducer for ScriptOwner {
                         )
                     })?;
             }
-
-            self.record_daily_delta(
-                &code_hash,
-                false,
-                date_yyyymmdd,
-                delta.lock_owned_capacity_delta,
-                delta.lock_owned_knowledge_delta,
-                tx,
-            )?;
-            self.record_daily_delta(
-                &code_hash,
-                true,
-                date_yyyymmdd,
-                delta.type_owned_capacity_delta,
-                delta.type_owned_knowledge_delta,
-                tx,
-            )?;
         }
 
         for ((reference_hash, hash_type), delta) in reference_deltas {
@@ -466,6 +454,28 @@ impl BulkReducer for ScriptOwner {
                     ..Default::default()
                 });
             apply_reference_delta(info, &reference_hash, hash_type, &delta, tx)?;
+
+            // Daily deltas are recorded per reference form: the same code_hash
+            // bytes used with different hash_types are distinct references
+            // with independent capacity timelines (matches the live pipeline).
+            self.record_daily_delta(
+                &reference_hash,
+                hash_type,
+                false,
+                date_yyyymmdd,
+                delta.lock_owned_capacity_delta,
+                delta.lock_owned_knowledge_delta,
+                tx,
+            )?;
+            self.record_daily_delta(
+                &reference_hash,
+                hash_type,
+                true,
+                date_yyyymmdd,
+                delta.type_owned_capacity_delta,
+                delta.type_owned_knowledge_delta,
+                tx,
+            )?;
         }
 
         Ok(())

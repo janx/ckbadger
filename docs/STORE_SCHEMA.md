@@ -58,7 +58,7 @@ The indexer opens the two chain stores (domain + append-only) read-write and the
 | `stats_chain`                    | prefixed keys                                                     | chain chart snapshots                                                | Daily/hourly/epoch/miner/block stats (DailyActivityStats includes protocol_action_counts)                                                                                              |
 | `stats_dao`                      | prefixed keys                                                     | DAO snapshots                                                        | DAO daily snapshots plus latest/top DAO summaries (sealed aggregates in bulk build)                                                                                                    |
 | `stats_hodl`                     | prefixed keys                                                     | HODL/chart snapshots                                                 | HODL waves, cell distribution, address cohorts                                                                                                                                         |
-| `stats_script`                   | prefixed keys                                                     | ScriptDailyDelta                                                     | Script daily deltas (per `code_hash` + lock/type + day; sealed in bulk build)                                                                                                          |
+| `stats_script`                   | prefixed keys                                                     | ScriptDailyDelta                                                     | Script daily deltas (per `code_hash` + `hash_type` + lock/type + day; sealed in bulk build)                                                                                            |
 | `stats_token`                    | prefixed keys                                                     | token rollups + deltas                                               | Token transfer totals, hourly buckets, and daily deltas (sealed in bulk build)                                                                                                         |
 | `stats_spore`                    | prefixed keys                                                     | spore rollups/indexes                                                | Spore/cluster daily + owner/index stats                                                                                                                                                |
 | `stats_mnft`                     | prefixed keys                                                     | mNFT rollups/indexes                                                 | mNFT daily + hourly + owner/index stats                                                                                                                                                |
@@ -124,7 +124,10 @@ inline as Class C sealed aggregates:
 
 - `stats_dao` stores DAO daily snapshots keyed by date, then refreshes the latest/top summary rows
   after sync tip metadata is finalized.
-- `stats_script` stores `ScriptDailyDelta` rows keyed by `code_hash + kind(lock/type) + YYYYMMDD`.
+- `stats_script` stores `ScriptDailyDelta` rows keyed by
+  `code_hash + hash_type + kind(lock/type) + YYYYMMDD` — the hash_type byte keeps
+  references that share code_hash bytes but differ in hash_type (data/type/data1/data2)
+  on independent daily timelines.
 - `stats_token` stores total transfer counters, hourly transfer buckets, and `TokenDailyDelta`
   rows keyed by token `type_script_hash`.
 

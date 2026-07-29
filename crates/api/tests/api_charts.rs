@@ -111,12 +111,32 @@ async fn test_most_utilized_scripts_chart_ranks_by_used_and_capacity() {
     let code_hash_b = vec![0x21; 32];
     let code_hash_unknown = vec![0x31; 32];
 
+    // Entities are derived from per-form reference counters; ScriptInfos
+    // provide the labels for loose (non-family) references.
+    for (code_hash, name) in [
+        (&code_hash_a1, Some("Script A")),
+        (&code_hash_a2, Some("Script A")),
+        (&code_hash_b, Some("Script B")),
+        (&code_hash_unknown, None),
+    ] {
+        store
+            .put_script_info_direct(
+                code_hash,
+                &ScriptInfo {
+                    code_hash: (*code_hash).clone(),
+                    name: name.map(str::to_string),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+    }
     store
-        .put_script_info_direct(
+        .put_script_reference_info_direct(
+            1,
             &code_hash_a1,
-            &ScriptInfo {
-                code_hash: code_hash_a1.clone(),
-                name: Some("Script A".to_string()),
+            &ScriptReferenceInfo {
+                reference_hash: code_hash_a1.clone(),
+                hash_type: 1,
                 lock_cells_count: 10,
                 lock_live_cells_count: 8,
                 lock_owned_capacity_sum: 500,
@@ -126,11 +146,12 @@ async fn test_most_utilized_scripts_chart_ranks_by_used_and_capacity() {
         )
         .unwrap();
     store
-        .put_script_info_direct(
+        .put_script_reference_info_direct(
+            1,
             &code_hash_a2,
-            &ScriptInfo {
-                code_hash: code_hash_a2.clone(),
-                name: Some("Script A".to_string()),
+            &ScriptReferenceInfo {
+                reference_hash: code_hash_a2.clone(),
+                hash_type: 1,
                 type_cells_count: 6,
                 type_live_cells_count: 5,
                 type_owned_capacity_sum: 700,
@@ -140,11 +161,12 @@ async fn test_most_utilized_scripts_chart_ranks_by_used_and_capacity() {
         )
         .unwrap();
     store
-        .put_script_info_direct(
+        .put_script_reference_info_direct(
+            1,
             &code_hash_b,
-            &ScriptInfo {
-                code_hash: code_hash_b.clone(),
-                name: Some("Script B".to_string()),
+            &ScriptReferenceInfo {
+                reference_hash: code_hash_b.clone(),
+                hash_type: 1,
                 lock_cells_count: 9,
                 lock_live_cells_count: 7,
                 lock_owned_capacity_sum: 800,
@@ -154,11 +176,12 @@ async fn test_most_utilized_scripts_chart_ranks_by_used_and_capacity() {
         )
         .unwrap();
     store
-        .put_script_info_direct(
+        .put_script_reference_info_direct(
+            1,
             &code_hash_unknown,
-            &ScriptInfo {
-                code_hash: code_hash_unknown.clone(),
-                name: None,
+            &ScriptReferenceInfo {
+                reference_hash: code_hash_unknown.clone(),
+                hash_type: 1,
                 lock_cells_count: 4,
                 lock_live_cells_count: 4,
                 lock_owned_capacity_sum: 600,
@@ -170,6 +193,7 @@ async fn test_most_utilized_scripts_chart_ranks_by_used_and_capacity() {
     store
         .put_script_daily_delta(
             &code_hash_a1,
+            1,
             false,
             20240101,
             &ScriptDailyDelta {
@@ -181,6 +205,7 @@ async fn test_most_utilized_scripts_chart_ranks_by_used_and_capacity() {
     store
         .put_script_daily_delta(
             &code_hash_a2,
+            1,
             true,
             20240101,
             &ScriptDailyDelta {
@@ -192,6 +217,7 @@ async fn test_most_utilized_scripts_chart_ranks_by_used_and_capacity() {
     store
         .put_script_daily_delta(
             &code_hash_b,
+            1,
             false,
             20240101,
             &ScriptDailyDelta {
@@ -203,6 +229,7 @@ async fn test_most_utilized_scripts_chart_ranks_by_used_and_capacity() {
     store
         .put_script_daily_delta(
             &code_hash_unknown,
+            1,
             false,
             20240101,
             &ScriptDailyDelta {
@@ -261,6 +288,119 @@ async fn test_most_utilized_scripts_chart_ranks_by_used_and_capacity() {
     assert_eq!(capacity_data[0]["values"]["top1"], "800");
     assert_eq!(capacity_data[0]["values"]["top2"], "600");
     assert_eq!(capacity_data[0]["values"]["others"], "0");
+}
+
+#[tokio::test]
+async fn test_most_utilized_scripts_chart_groups_family_members_like_usage() {
+    // Entity grouping must follow the same family resolution the usage
+    // counters use: references resolving into a family version are ONE entity
+    // (the family), even when a member reference carries a different
+    // ScriptInfo label (the USDI-inside-xUDT case). Loose references without a
+    // family keep their own label.
+    let store = test_store();
+
+    let version_hash = vec![0x1c; 32];
+    let r_main = vec![0x2a; 32];
+    let r_alt = vec![0x2b; 32];
+    seed_two_reference_script_family(
+        &store,
+        "xUDT",
+        "family:xudt",
+        &version_hash,
+        &r_main,
+        &r_alt,
+        "USDI",
+    );
+
+    store
+        .put_script_daily_delta(
+            &r_main,
+            1,
+            true,
+            20240101,
+            &ScriptDailyDelta {
+                owned_capacity_delta: 200,
+                owned_knowledge_delta: 120,
+            },
+        )
+        .unwrap();
+    store
+        .put_script_daily_delta(
+            &r_alt,
+            1,
+            true,
+            20240101,
+            &ScriptDailyDelta {
+                owned_capacity_delta: 100,
+                owned_knowledge_delta: 60,
+            },
+        )
+        .unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri("/api/v1/charts/most-utilized-scripts")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    let capacity_share = &json["capacityShare"];
+    let labels: Vec<String> = capacity_share["series"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|series| series["label"].as_str().unwrap().to_string())
+        .collect();
+    assert!(
+        labels.contains(&"xUDT".to_string()),
+        "family entity must be present, got labels {labels:?}"
+    );
+    assert!(
+        !labels.contains(&"USDI".to_string()),
+        "family member reference must not appear as its own entity, got labels {labels:?}"
+    );
+
+    let capacity_data = capacity_share["data"].as_array().unwrap();
+    assert_eq!(capacity_data.len(), 1);
+    let xudt_index = labels.iter().position(|label| label == "xUDT").unwrap();
+    assert_eq!(
+        capacity_data[0]["values"][format!("top{xudt_index}")],
+        "300",
+        "family entity capacity must merge all member reference forms"
+    );
+
+    let used_share = &json["usedShare"];
+    let used_labels: Vec<String> = used_share["series"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|series| series["label"].as_str().unwrap().to_string())
+        .collect();
+    let used_index = used_labels
+        .iter()
+        .position(|label| label == "xUDT")
+        .unwrap();
+    assert_eq!(
+        used_share["data"].as_array().unwrap()[0]["values"][format!("top{used_index}")],
+        "180"
+    );
+
+    // Same-source lock: chart family totals == usage endpoint totals.
+    let request = Request::builder()
+        .uri("/api/v1/scripts/xUDT/usage")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let usage: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(usage["ownedCapacitySum"], "300");
+    assert_eq!(usage["ownedKnowledgeSum"], "180");
 }
 
 #[tokio::test]

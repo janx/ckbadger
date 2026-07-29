@@ -1291,7 +1291,7 @@ impl Indexer {
         address_balance_changes: HashMap<Vec<u8>, AddressBalanceDelta>,
         script_usage_changes: ScriptUsageChanges,
         script_reference_usage_changes: ScriptReferenceUsageChanges,
-        script_daily_changes: HashMap<(Vec<u8>, bool, u32), (i128, i128)>,
+        script_daily_changes: HashMap<(Vec<u8>, u8, bool, u32), (i128, i128)>,
         token_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)>,
         spore_type_index_changes: HashMap<Vec<u8>, SporeTypeIndex>,
         spore_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)>,
@@ -1407,7 +1407,11 @@ impl Indexer {
         // Pre-computed DAO compensations for fee correction and activities.
         let dao_compensations =
             pre_compute_dao_compensations(self.writer.store(), &consumed_dao_map)?;
-        correct_dao_withdrawal_fees(&mut all_tx_data, &dao_withdraw_outpoints, &dao_compensations)?;
+        correct_dao_withdrawal_fees(
+            &mut all_tx_data,
+            &dao_withdraw_outpoints,
+            &dao_compensations,
+        )?;
 
         let mut all_cells: Vec<(&[u8], i16, &crate::parser::cell::ParsedCell, i64)> = Vec::new();
         let mut all_consumptions: Vec<(&[u8], i16, i64, &[u8], i64, i16)> = Vec::new();
@@ -4997,9 +5001,10 @@ mod tests {
         use crate::db::writer::cell_distribution::CellDistributionTracker;
         use crate::db::writer::hodl_wave::HodlWaveTracker;
         use crate::db::Repository;
+        use crate::rpc::{
+            BlockView, CellInput, CellOutput, HeaderView, OutPoint, Script, TransactionView,
+        };
         use crate::runtime_diag::FlightRecorder;
-        use crate::rpc::{BlockView, CellInput, CellOutput, HeaderView, OutPoint, Script,
-            TransactionView};
         use crate::sync::pipeline::compute_parser_input_capacities_and_fees;
         use crate::sync::progress::SyncProgress;
         use crate::sync::shutdown::ShutdownSignal;
@@ -5064,11 +5069,14 @@ mod tests {
                 extra_hash: format!("0x{}", "44".repeat(32)),
                 dao: format!("0x{}", hex::encode(dao)),
                 nonce: "0x1".to_string(),
-                hash: format!("0x{}", hex::encode({
-                    let mut h = [0x55u8; 32];
-                    h[0..8].copy_from_slice(&number.to_le_bytes());
-                    h
-                })),
+                hash: format!(
+                    "0x{}",
+                    hex::encode({
+                        let mut h = [0x55u8; 32];
+                        h[0..8].copy_from_slice(&number.to_le_bytes());
+                        h
+                    })
+                ),
             }
         }
 
@@ -5095,7 +5103,11 @@ mod tests {
             }
         }
 
-        fn block(number: u64, ar: u64, transactions: Vec<TransactionView>) -> BlockResponseWithCycles {
+        fn block(
+            number: u64,
+            ar: u64,
+            transactions: Vec<TransactionView>,
+        ) -> BlockResponseWithCycles {
             BlockResponseWithCycles {
                 block: BlockView {
                     header: header(number, ar),
@@ -5236,17 +5248,19 @@ mod tests {
                     .cloned()
                     .collect();
                 for lock_hash in all_addresses {
-                    let entry = changes.entry(lock_hash.clone()).or_insert(AddressBalanceDelta {
-                        balance_delta: 0,
-                        live_delta: 0,
-                        total_delta: 0,
-                        tx_delta: 0,
-                        used_delta: 0,
-                        first_seen_block: tx_data.block_number,
-                        first_seen_tx: tx_data.hash.to_vec(),
-                        last_activity_block: tx_data.block_number,
-                        last_activity_tx: tx_data.hash.to_vec(),
-                    });
+                    let entry = changes
+                        .entry(lock_hash.clone())
+                        .or_insert(AddressBalanceDelta {
+                            balance_delta: 0,
+                            live_delta: 0,
+                            total_delta: 0,
+                            tx_delta: 0,
+                            used_delta: 0,
+                            first_seen_block: tx_data.block_number,
+                            first_seen_tx: tx_data.hash.to_vec(),
+                            last_activity_block: tx_data.block_number,
+                            last_activity_tx: tx_data.hash.to_vec(),
+                        });
                     entry.balance_delta += balance.get(&lock_hash).copied().unwrap_or(0);
                     entry.live_delta += created.get(&lock_hash).copied().unwrap_or(0)
                         - consumed.get(&lock_hash).copied().unwrap_or(0);

@@ -1774,7 +1774,10 @@ impl ChainStatsAccumulator {
         let epoch_count = self.epoch_stats.len();
         let hourly_count = self.hourly_stats.len();
         let miner_count = self.miner_stats.len();
-        (daily_count * 100 + dist_count * 16 + epoch_count * 48 + hourly_count * 48
+        (daily_count * 100
+            + dist_count * 16
+            + epoch_count * 48
+            + hourly_count * 48
             + miner_count * 64) as u64
     }
 
@@ -2089,15 +2092,13 @@ impl ChainStatsAccumulator {
         sorted_hours.sort_unstable();
         for hour_start_secs in sorted_hours {
             let (blocks, txs, created, consumed, capacity) = self.hourly_stats[&hour_start_secs];
-            let hour_dt =
-                chrono::DateTime::<chrono::Utc>::from_timestamp(hour_start_secs, 0).ok_or_else(
-                    || {
-                        anyhow!(
-                            "chain stats: hourly bucket start out of range: hour_start={}",
-                            hour_start_secs
-                        )
-                    },
-                )?;
+            let hour_dt = chrono::DateTime::<chrono::Utc>::from_timestamp(hour_start_secs, 0)
+                .ok_or_else(|| {
+                    anyhow!(
+                        "chain stats: hourly bucket start out of range: hour_start={}",
+                        hour_start_secs
+                    )
+                })?;
             let stats = ckbadger_store::types::HourlyStats {
                 hour: hour_start_secs,
                 blocks_count: blocks,
@@ -2131,7 +2132,11 @@ impl ChainStatsAccumulator {
                 CF_STATS_CHAIN,
                 keys::encode_stats_key(
                     keys::stats_prefix::MINER,
-                    &[date.format("%Y%m%d").to_string().as_bytes(), &miner_hash[..]].concat(),
+                    &[
+                        date.format("%Y%m%d").to_string().as_bytes(),
+                        &miner_hash[..],
+                    ]
+                    .concat(),
                 ),
                 bincode::serialize(&stats)?,
             ));
@@ -3161,7 +3166,7 @@ pub struct BulkArtifactSnapshot {
     pub dao_daily_snapshots: HashMap<String, DaoDailySnapshot>,
     pub latest_dao_statistics: Option<DaoLatestStatistics>,
     pub dao_top_depositors: Option<DaoTopDepositors>,
-    pub script_daily_deltas: HashMap<(Vec<u8>, bool), HashMap<u32, ScriptDailyDelta>>,
+    pub script_daily_deltas: HashMap<(Vec<u8>, u8, bool), HashMap<u32, ScriptDailyDelta>>,
     pub cell_payloads: HashMap<Vec<u8>, LiveCellInfo>,
     pub live_cells: HashMap<Vec<u8>, i64>,
     pub consumed_cells: HashMap<Vec<u8>, ConsumedCellMeta>,
@@ -3627,9 +3632,9 @@ fn collect_dao_stats_snapshot(
 #[allow(clippy::type_complexity)]
 fn collect_script_daily_deltas_snapshot(
     domain_store: &CkbadgerStore,
-) -> Result<HashMap<(Vec<u8>, bool), HashMap<u32, ScriptDailyDelta>>> {
+) -> Result<HashMap<(Vec<u8>, u8, bool), HashMap<u32, ScriptDailyDelta>>> {
     let iter = domain_store.iterator_cf(domain_store.cf_stats_script(), IteratorMode::Start);
-    let mut script_daily_deltas: HashMap<(Vec<u8>, bool), HashMap<u32, ScriptDailyDelta>> =
+    let mut script_daily_deltas: HashMap<(Vec<u8>, u8, bool), HashMap<u32, ScriptDailyDelta>> =
         HashMap::new();
 
     for item in iter {
@@ -3640,18 +3645,19 @@ fn collect_script_daily_deltas_snapshot(
             continue;
         }
 
-        let (code_hash, is_type, date) = keys::decode_script_daily_key(&key);
+        let (code_hash, hash_type, is_type, date) = keys::decode_script_daily_key(&key);
         let delta: ScriptDailyDelta = bincode::deserialize(&value).map_err(|e| {
             anyhow!(
-                "failed to deserialize script daily delta in bulk artifact snapshot helper: code_hash=0x{}, is_type={}, date={}, error={}",
+                "failed to deserialize script daily delta in bulk artifact snapshot helper: code_hash=0x{}, hash_type={}, is_type={}, date={}, error={}",
                 hex::encode(&code_hash),
+                hash_type,
                 is_type,
                 date,
                 e
             )
         })?;
         script_daily_deltas
-            .entry((code_hash, is_type))
+            .entry((code_hash, hash_type, is_type))
             .or_default()
             .insert(date, delta);
     }

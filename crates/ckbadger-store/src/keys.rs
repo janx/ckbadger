@@ -992,32 +992,65 @@ pub fn encode_object_hourly_prefix(collection_id: &[u8]) -> Vec<u8> {
 }
 
 /// Script daily stats key:
-/// prefix(1B) + code_hash(32B) + script_kind(1B, 0=lock/1=type) + date(4B YYYYMMDD BE)
-pub const SCRIPT_DAILY_KEY_SIZE: usize = 38;
+/// prefix(1B) + code_hash(32B) + hash_type(1B) + script_kind(1B, 0=lock/1=type) + date(4B YYYYMMDD BE)
+///
+/// The hash_type byte is part of the row identity: the same code_hash bytes
+/// used with different hash_types (data/type/data1/data2) are distinct script
+/// references with independent capacity timelines.
+pub const SCRIPT_DAILY_KEY_SIZE: usize = 39;
 
-pub fn encode_script_daily_key(code_hash: &[u8], is_type: bool, date_yyyymmdd: u32) -> [u8; 38] {
+/// Panics on a hash_type outside the CKB script hash_type domain {0,1,2,4}
+/// to prevent silently writing rows under a corrupt reference identity.
+fn assert_script_hash_type(hash_type: u8) {
+    assert!(
+        matches!(hash_type, 0 | 1 | 2 | 4),
+        "script daily key hash_type must be one of 0/1/2/4, got {}",
+        hash_type
+    );
+}
+
+pub fn encode_script_daily_key(
+    code_hash: &[u8],
+    hash_type: u8,
+    is_type: bool,
+    date_yyyymmdd: u32,
+) -> [u8; SCRIPT_DAILY_KEY_SIZE] {
+    assert_script_hash_type(hash_type);
     let mut key = [0u8; SCRIPT_DAILY_KEY_SIZE];
     key[0] = STATS_PREFIX_SCRIPT_DAILY;
     key[1..33].copy_from_slice(&code_hash[..32]);
-    key[33] = if is_type { 1 } else { 0 };
-    key[34..38].copy_from_slice(&date_yyyymmdd.to_be_bytes());
+    key[33] = hash_type;
+    key[34] = if is_type { 1 } else { 0 };
+    key[35..39].copy_from_slice(&date_yyyymmdd.to_be_bytes());
     key
 }
 
-/// Prefix for scanning a script daily timeline by deployment and kind.
-pub fn encode_script_daily_prefix(code_hash: &[u8], is_type: bool) -> [u8; 34] {
-    let mut prefix = [0u8; 34];
+/// Prefix for scanning a script daily timeline by reference form and kind.
+pub fn encode_script_daily_prefix(code_hash: &[u8], hash_type: u8, is_type: bool) -> [u8; 35] {
+    assert_script_hash_type(hash_type);
+    let mut prefix = [0u8; 35];
     prefix[0] = STATS_PREFIX_SCRIPT_DAILY;
     prefix[1..33].copy_from_slice(&code_hash[..32]);
-    prefix[33] = if is_type { 1 } else { 0 };
+    prefix[33] = hash_type;
+    prefix[34] = if is_type { 1 } else { 0 };
     prefix
 }
 
-pub fn decode_script_daily_key(key: &[u8]) -> (Vec<u8>, bool, u32) {
+/// Prefix for scanning all script daily rows of a code_hash across every
+/// hash_type form and script kind.
+pub fn encode_script_daily_code_hash_prefix(code_hash: &[u8]) -> [u8; 33] {
+    let mut prefix = [0u8; 33];
+    prefix[0] = STATS_PREFIX_SCRIPT_DAILY;
+    prefix[1..33].copy_from_slice(&code_hash[..32]);
+    prefix
+}
+
+pub fn decode_script_daily_key(key: &[u8]) -> (Vec<u8>, u8, bool, u32) {
     let code_hash = key[1..33].to_vec();
-    let is_type = key[33] == 1;
-    let date = u32::from_be_bytes(key[34..38].try_into().unwrap());
-    (code_hash, is_type, date)
+    let hash_type = key[33];
+    let is_type = key[34] == 1;
+    let date = u32::from_be_bytes(key[35..39].try_into().unwrap());
+    (code_hash, hash_type, is_type, date)
 }
 
 /// Token transfer key: type_hash(32B) + block_num_desc(8B BE) + tx_idx_desc(4B BE) = 44 bytes
@@ -1853,21 +1886,46 @@ mod tests {
     #[test]
     fn test_script_daily_key_roundtrip() {
         let code_hash = [0x55u8; 32];
-        let key = encode_script_daily_key(&code_hash, true, 20250219);
+        let key = encode_script_daily_key(&code_hash, 2, true, 20250219);
         assert_eq!(key.len(), SCRIPT_DAILY_KEY_SIZE);
-        let (decoded_hash, decoded_is_type, decoded_date) = decode_script_daily_key(&key);
+        let (decoded_hash, decoded_hash_type, decoded_is_type, decoded_date) =
+            decode_script_daily_key(&key);
         assert_eq!(decoded_hash, code_hash.to_vec());
+        assert_eq!(decoded_hash_type, 2);
         assert!(decoded_is_type);
         assert_eq!(decoded_date, 20250219);
     }
 
     #[test]
+    fn test_script_daily_key_separates_hash_type_forms() {
+        // Same code_hash + kind + date under different hash_types must be
+        // distinct rows: the missing hash_type dimension was the root cause of
+        // junk data-form capacity leaking into type-form family charts.
+        let code_hash = [0x9bu8; 32];
+        let type_form = encode_script_daily_key(&code_hash, 1, false, 20240101);
+        let data_form = encode_script_daily_key(&code_hash, 0, false, 20240101);
+        assert_ne!(type_form, data_form);
+    }
+
+    #[test]
+    #[should_panic(expected = "script daily key hash_type must be one of 0/1/2/4")]
+    fn test_script_daily_key_rejects_invalid_hash_type() {
+        let code_hash = [0x55u8; 32];
+        let _ = encode_script_daily_key(&code_hash, 3, false, 20240101);
+    }
+
+    #[test]
     fn test_script_daily_prefix_is_prefix_of_full_key() {
         let code_hash = [0x42u8; 32];
-        let prefix = encode_script_daily_prefix(&code_hash, false);
-        let full = encode_script_daily_key(&code_hash, false, 20240101);
-        assert_eq!(prefix.len(), 34);
+        let prefix = encode_script_daily_prefix(&code_hash, 0, false);
+        let full = encode_script_daily_key(&code_hash, 0, false, 20240101);
+        assert_eq!(prefix.len(), 35);
         assert!(full.starts_with(&prefix));
+
+        let code_hash_prefix = encode_script_daily_code_hash_prefix(&code_hash);
+        assert_eq!(code_hash_prefix.len(), 33);
+        assert!(full.starts_with(&code_hash_prefix));
+        assert!(prefix.starts_with(&code_hash_prefix));
     }
 
     #[test]

@@ -349,6 +349,107 @@ pub fn make_test_participant(
     }
 }
 
+/// Seed a script family with two type-form member references resolving to one
+/// version, mirroring the production rollup shape: family record + name index +
+/// version (with family_id) + version-by-family index + reference->version
+/// mappings + per-form reference counters + per-reference ScriptInfos.
+///
+/// `r_main` carries the family name as its ScriptInfo label; `r_alt` carries
+/// `alt_label` (the USDI-style separately-labeled member). Usage sums:
+/// r_main type 200/120, r_alt type 100/60, version and family 300/180.
+pub fn seed_two_reference_script_family(
+    store: &Arc<CkbadgerStore>,
+    family_name: &str,
+    family_id: &str,
+    version_hash: &[u8],
+    r_main: &[u8],
+    r_alt: &[u8],
+    alt_label: &str,
+) {
+    store
+        .put_script_family_direct(
+            family_id,
+            &ScriptFamilyInfo {
+                family_id: family_id.to_string(),
+                name: family_name.to_string(),
+                versions_count: 1,
+                live_cells_count: 3,
+                cells_count: 3,
+                type_cells_count: 3,
+                owned_capacity_sum: 300,
+                owned_knowledge_sum: 180,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    store
+        .put_script_family_name_direct(family_name, family_id)
+        .unwrap();
+    store
+        .put_script_version(
+            version_hash,
+            &ScriptVersionInfo {
+                version_hash: version_hash.to_vec(),
+                name: Some(family_name.to_string()),
+                family_id: Some(family_id.to_string()),
+                type_cells_count: 3,
+                type_live_cells_count: 3,
+                type_capacity_sum: 300,
+                type_owned_capacity_sum: 300,
+                type_used_capacity_sum: 180,
+                type_owned_knowledge_sum: 180,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    store
+        .put_script_version_by_family_direct(family_id, version_hash)
+        .unwrap();
+
+    for (reference_hash, label, cells, capacity, knowledge) in [
+        (r_main, family_name, 2i64, 200i128, 120i128),
+        (r_alt, alt_label, 1i64, 100i128, 60i128),
+    ] {
+        store
+            .put_script_reference_to_version_direct(1, reference_hash, version_hash)
+            .unwrap();
+        store
+            .put_script_reference_info_direct(
+                1,
+                reference_hash,
+                &ScriptReferenceInfo {
+                    reference_hash: reference_hash.to_vec(),
+                    hash_type: 1,
+                    type_cells_count: cells,
+                    type_live_cells_count: cells,
+                    type_capacity_sum: capacity,
+                    type_owned_capacity_sum: capacity,
+                    type_used_capacity_sum: knowledge,
+                    type_owned_knowledge_sum: knowledge,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        store
+            .put_script_info_direct(
+                reference_hash,
+                &ScriptInfo {
+                    code_hash: reference_hash.to_vec(),
+                    hash_type: 1,
+                    name: Some(label.to_string()),
+                    type_cells_count: cells,
+                    type_live_cells_count: cells,
+                    type_capacity_sum: capacity,
+                    type_owned_capacity_sum: capacity,
+                    type_used_capacity_sum: knowledge,
+                    type_owned_knowledge_sum: knowledge,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+    }
+}
+
 /// Open a fresh seeded network store for API tests (a couple of nodes + a status + history).
 pub fn test_network_store() -> std::sync::Arc<ckbadger_store::CkbadgerStore> {
     use ckbadger_store::network_keys::{Granularity, Metric};

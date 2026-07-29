@@ -1281,7 +1281,7 @@ fn bulk_build_materializes_script_daily_deltas_from_same_block_recreate() {
 
     let lock_daily = snapshot
         .script_daily_deltas
-        .get(&(lock_code_hash.clone(), false))
+        .get(&(lock_code_hash.clone(), 1, false))
         .and_then(|timeline| timeline.get(&date))
         .expect("lock daily delta");
     let lock_info = snapshot
@@ -1300,7 +1300,7 @@ fn bulk_build_materializes_script_daily_deltas_from_same_block_recreate() {
 
     let type_daily = snapshot
         .script_daily_deltas
-        .get(&(type_code_hash.clone(), true))
+        .get(&(type_code_hash.clone(), 1, true))
         .and_then(|timeline| timeline.get(&date))
         .expect("type daily delta");
     let type_info = snapshot

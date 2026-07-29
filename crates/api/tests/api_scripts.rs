@@ -1004,6 +1004,25 @@ async fn test_cells_by_script_resolves_reference_hash_type_alias() {
             },
         )
         .unwrap();
+    // Per-form reference counters (production invariant: written for every
+    // observed reference form; the endpoint total reads them).
+    store
+        .put_script_reference_info_direct(
+            1,
+            &type_hash,
+            &ScriptReferenceInfo {
+                reference_hash: type_hash.clone(),
+                hash_type: 1,
+                lock_cells_count: 1,
+                lock_live_cells_count: 1,
+                lock_capacity_sum: 100_00000000,
+                lock_owned_capacity_sum: 100_00000000,
+                lock_used_capacity_sum: 61_00000000,
+                lock_owned_knowledge_sum: 61_00000000,
+                ..Default::default()
+            },
+        )
+        .unwrap();
 
     let mut batch = StoreBatch::new(store.as_ref());
     batch.put_cell(
@@ -1072,6 +1091,25 @@ async fn test_cells_by_script_type_request_returns_empty_for_data_only_deploymen
             },
         )
         .unwrap();
+    // Per-form reference counters (production invariant: written for every
+    // observed reference form; the endpoint total reads them).
+    store
+        .put_script_reference_info_direct(
+            0,
+            &data_hash,
+            &ScriptReferenceInfo {
+                reference_hash: data_hash.clone(),
+                hash_type: 0,
+                lock_cells_count: 1,
+                lock_live_cells_count: 1,
+                lock_capacity_sum: 100_00000000,
+                lock_owned_capacity_sum: 100_00000000,
+                lock_used_capacity_sum: 61_00000000,
+                lock_owned_knowledge_sum: 61_00000000,
+                ..Default::default()
+            },
+        )
+        .unwrap();
 
     let mut batch = StoreBatch::new(store.as_ref());
     batch.put_cell(
@@ -1131,6 +1169,169 @@ async fn test_cells_by_script_type_request_returns_empty_for_data_only_deploymen
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["total"], 0);
     assert_eq!(json["data"].as_array().unwrap().len(), 0);
+}
+
+#[tokio::test]
+async fn test_cells_by_script_hash_type_filters_rows_strictly() {
+    // Mixed-form fixture: two live cells share the same lock code_hash bytes
+    // but use different hash_types (type vs data). The hash_type query
+    // parameter must strictly filter rows, and total must match the filtered
+    // row universe (per-form reference counters), not the cross-form counters.
+    let store = test_store();
+    seed_genesis_baseline(&store);
+
+    let code_hash = vec![0x9b; 32];
+    let tx_type_form = vec![0xa1; 32];
+    let tx_data_form = vec![0xa2; 32];
+
+    store
+        .put_script_info_direct(
+            &code_hash,
+            &ScriptInfo {
+                code_hash: code_hash.clone(),
+                hash_type: 1,
+                name: Some("Default Lock".to_string()),
+                lock_cells_count: 2,
+                lock_live_cells_count: 2,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    store
+        .put_script_reference_info_direct(
+            1,
+            &code_hash,
+            &ScriptReferenceInfo {
+                reference_hash: code_hash.clone(),
+                hash_type: 1,
+                lock_cells_count: 1,
+                lock_live_cells_count: 1,
+                lock_capacity_sum: 100_00000000,
+                lock_owned_capacity_sum: 100_00000000,
+                lock_used_capacity_sum: 61_00000000,
+                lock_owned_knowledge_sum: 61_00000000,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    store
+        .put_script_reference_info_direct(
+            0,
+            &code_hash,
+            &ScriptReferenceInfo {
+                reference_hash: code_hash.clone(),
+                hash_type: 0,
+                lock_cells_count: 1,
+                lock_live_cells_count: 1,
+                lock_capacity_sum: 61_00000000,
+                lock_owned_capacity_sum: 61_00000000,
+                lock_used_capacity_sum: 61_00000000,
+                lock_owned_knowledge_sum: 61_00000000,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_cell(
+        &tx_type_form,
+        0,
+        &LiveCellInfo {
+            capacity: 100_00000000,
+            lock_script_hash: vec![0x11; 32],
+            lock_code_hash: code_hash.clone(),
+            lock_hash_type: 1,
+            lock_args: vec![],
+            type_script_hash: None,
+            type_code_hash: None,
+            type_hash_type: None,
+            type_args: None,
+            data_size: 0,
+            occupied_capacity: 61_00000000,
+            udt_amount: None,
+            data_hash: None,
+        },
+        10,
+    );
+    batch.put_cell_by_lock_code(&code_hash, 10, &tx_type_form, 0);
+    batch.put_cell(
+        &tx_data_form,
+        0,
+        &LiveCellInfo {
+            capacity: 61_00000000,
+            lock_script_hash: vec![0x22; 32],
+            lock_code_hash: code_hash.clone(),
+            lock_hash_type: 0,
+            lock_args: vec![],
+            type_script_hash: None,
+            type_code_hash: None,
+            type_hash_type: None,
+            type_args: None,
+            data_size: 0,
+            occupied_capacity: 61_00000000,
+            udt_amount: None,
+            data_hash: None,
+        },
+        11,
+    );
+    batch.put_cell_by_lock_code(&code_hash, 11, &tx_data_form, 0);
+    batch.commit().unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+    let code_hash_hex = format!("0x{}", hex::encode(&code_hash));
+
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/cells/by-script?code_hash={}&hash_type=type&script_kind=lock&limit=20",
+            code_hash_hex
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let data = json["data"].as_array().unwrap();
+    assert_eq!(
+        data.len(),
+        1,
+        "hash_type=type must exclude the data-form cell"
+    );
+    assert_eq!(
+        data[0]["txHash"],
+        format!("0x{}", hex::encode(&tx_type_form))
+    );
+    assert_eq!(
+        json["total"], 1,
+        "total must match the filtered row universe"
+    );
+
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/cells/by-script?code_hash={}&hash_type=data&script_kind=lock&limit=20",
+            code_hash_hex
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let data = json["data"].as_array().unwrap();
+    assert_eq!(
+        data.len(),
+        1,
+        "hash_type=data must exclude the type-form cell"
+    );
+    assert_eq!(
+        data[0]["txHash"],
+        format!("0x{}", hex::encode(&tx_data_form))
+    );
+    assert_eq!(
+        json["total"], 1,
+        "total must match the filtered row universe"
+    );
 }
 
 #[tokio::test]
@@ -1691,32 +1892,61 @@ async fn test_script_capacity_chart_aggregates_deployments() {
 
     let code_hash_a = vec![0x11; 32];
     let code_hash_b = vec![0x22; 32];
+    let version_a = vec![0xA1; 32];
+    let version_b = vec![0xB1; 32];
     let name = "SECP256K1_BLAKE160".to_string();
+    let family_id = "family:secp";
 
+    // Family-shaped fixture: the {name} chart aggregates the family's member
+    // reference forms (same membership computation as the usage counters).
     store
-        .put_script_info_direct(
-            &code_hash_a,
-            &ScriptInfo {
-                code_hash: code_hash_a.clone(),
-                name: Some(name.clone()),
+        .put_script_family_direct(
+            family_id,
+            &ScriptFamilyInfo {
+                family_id: family_id.to_string(),
+                name: name.clone(),
+                versions_count: 2,
                 ..Default::default()
             },
         )
         .unwrap();
     store
-        .put_script_info_direct(
-            &code_hash_b,
-            &ScriptInfo {
-                code_hash: code_hash_b.clone(),
-                name: Some(name.clone()),
-                ..Default::default()
-            },
-        )
+        .put_script_family_name_direct(&name, family_id)
         .unwrap();
+    for (version_hash, reference_hash) in [(&version_a, &code_hash_a), (&version_b, &code_hash_b)] {
+        store
+            .put_script_version(
+                version_hash,
+                &ScriptVersionInfo {
+                    version_hash: (*version_hash).clone(),
+                    family_id: Some(family_id.to_string()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        store
+            .put_script_version_by_family_direct(family_id, version_hash)
+            .unwrap();
+        store
+            .put_script_reference_to_version_direct(1, reference_hash, version_hash)
+            .unwrap();
+        store
+            .put_script_reference_info_direct(
+                1,
+                reference_hash,
+                &ScriptReferenceInfo {
+                    reference_hash: (*reference_hash).clone(),
+                    hash_type: 1,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+    }
 
     store
         .put_script_daily_delta(
             &code_hash_a,
+            1,
             false,
             20240115,
             &ScriptDailyDelta {
@@ -1728,6 +1958,7 @@ async fn test_script_capacity_chart_aggregates_deployments() {
     store
         .put_script_daily_delta(
             &code_hash_a,
+            1,
             false,
             20240117,
             &ScriptDailyDelta {
@@ -1739,6 +1970,7 @@ async fn test_script_capacity_chart_aggregates_deployments() {
     store
         .put_script_daily_delta(
             &code_hash_b,
+            1,
             false,
             20240115,
             &ScriptDailyDelta {
@@ -1750,6 +1982,7 @@ async fn test_script_capacity_chart_aggregates_deployments() {
     store
         .put_script_daily_delta(
             &code_hash_b,
+            1,
             false,
             20240117,
             &ScriptDailyDelta {
@@ -1822,6 +2055,106 @@ async fn test_script_capacity_chart_aggregates_deployments() {
 }
 
 #[tokio::test]
+async fn test_script_capacity_history_chart_aggregates_family_member_references() {
+    // The family capacity chart must aggregate the SAME reference set the
+    // usage counters are built from: every observed reference form resolving
+    // to a family version — including members whose ScriptInfo label differs
+    // from the family name (the USDI-inside-xUDT case).
+    let store = test_store();
+
+    let version_hash = vec![0x1c; 32];
+    let r_main = vec![0x2a; 32];
+    let r_alt = vec![0x2b; 32];
+    seed_two_reference_script_family(
+        &store,
+        "xUDT",
+        "family:xudt",
+        &version_hash,
+        &r_main,
+        &r_alt,
+        "USDI",
+    );
+
+    store
+        .put_script_daily_delta(
+            &r_main,
+            1,
+            true,
+            20240115,
+            &ScriptDailyDelta {
+                owned_capacity_delta: 200,
+                owned_knowledge_delta: 120,
+            },
+        )
+        .unwrap();
+    store
+        .put_script_daily_delta(
+            &r_alt,
+            1,
+            true,
+            20240115,
+            &ScriptDailyDelta {
+                owned_capacity_delta: 100,
+                owned_knowledge_delta: 60,
+            },
+        )
+        .unwrap();
+
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_block_header(
+        300,
+        &CachedBlockHeader {
+            hash: vec![0x03; 32],
+            parent_hash: vec![0u8; 32],
+            timestamp: 1_705_536_000_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+            uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
+            cycles: None,
+        },
+    );
+    batch.commit().unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri("/api/v1/scripts/xUDT/charts/capacity-history")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let data = json["data"].as_array().unwrap();
+    assert!(!data.is_empty(), "family chart must have history");
+    assert_eq!(data[0]["date"], "2024-01-15");
+    let last = data.last().unwrap();
+    // Family counters: owned 300 / knowledge 180 -> used 180, unused 120.
+    // The chart end state must equal the family/usage counters exactly.
+    assert_eq!(last["values"]["used"], "180");
+    assert_eq!(last["values"]["unused"], "120");
+
+    // Same-source lock: the usage endpoint totals must match the chart end state.
+    let request = Request::builder()
+        .uri("/api/v1/scripts/xUDT/usage")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let usage: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(usage["ownedCapacitySum"], "300");
+    assert_eq!(usage["ownedKnowledgeSum"], "180");
+}
+
+#[tokio::test]
 async fn test_script_capacity_chart_by_code_hash_with_kind_filter() {
     let store = test_store();
     let code_hash = vec![0x33; 32];
@@ -1830,6 +2163,7 @@ async fn test_script_capacity_chart_by_code_hash_with_kind_filter() {
     store
         .put_script_daily_delta(
             &code_hash,
+            1,
             false,
             20240115,
             &ScriptDailyDelta {
@@ -1841,6 +2175,7 @@ async fn test_script_capacity_chart_by_code_hash_with_kind_filter() {
     store
         .put_script_daily_delta(
             &code_hash,
+            1,
             true,
             20240115,
             &ScriptDailyDelta {
@@ -1902,6 +2237,7 @@ async fn test_script_capacity_chart_by_code_hash_extends_to_latest_complete_ckb_
     store
         .put_script_daily_delta(
             &code_hash,
+            1,
             false,
             20240115,
             &ScriptDailyDelta {

@@ -20,8 +20,8 @@ use crate::response::{
 use crate::utils::script_resolution::resolve_dep_cells_for_transaction;
 use crate::utils::{
     apply_owned_capacity_delta, date_keys_inclusive, deployment_reference_hashes,
-    hash_type_to_string, list_version_code_cells, merge_script_info_for_reference,
-    parse_chart_date_range, related_code_hashes_for_reference, resolve_script_by_hash,
+    hash_type_to_string, hash_type_to_u8, list_version_code_cells, merge_script_info_for_reference,
+    parse_chart_date_range, reference_form_member_version, resolve_script_by_hash,
     CurrentScriptVersionResolution, VersionCodeCell,
 };
 use crate::warmup::{
@@ -38,7 +38,7 @@ fn load_script_infos_cached(
         .ok_or_else(|| ApiError::warmup_pending("script cache unavailable; warmup in progress"))
 }
 
-fn load_script_families_cached(
+pub(crate) fn load_script_families_cached(
     state: &Arc<AppState>,
 ) -> Result<Vec<(String, ckbadger_store::types::ScriptFamilyInfo)>, ApiRouteError> {
     state
@@ -49,7 +49,7 @@ fn load_script_families_cached(
         .ok_or_else(|| ApiError::warmup_pending("script cache unavailable; warmup in progress"))
 }
 
-fn load_script_versions_cached(
+pub(crate) fn load_script_versions_cached(
     state: &Arc<AppState>,
 ) -> Result<Vec<(Vec<u8>, ckbadger_store::types::ScriptVersionInfo)>, ApiRouteError> {
     state
@@ -860,6 +860,86 @@ fn script_version_deployments(
         .collect()
 }
 
+/// An observed reference form that resolved into a family/version set.
+struct FamilyMemberForm {
+    reference_hash: Vec<u8>,
+    hash_type: u8,
+    version_hash: Vec<u8>,
+    info: ckbadger_store::types::ScriptReferenceInfo,
+}
+
+fn canonical_reference_set(
+    versions: &[(Vec<u8>, ckbadger_store::types::ScriptVersionInfo)],
+) -> HashSet<(u8, Vec<u8>)> {
+    versions
+        .iter()
+        .filter_map(|(_, info)| {
+            Some((
+                info.canonical_hash_type?,
+                info.canonical_reference_hash.as_ref()?.clone(),
+            ))
+        })
+        .collect()
+}
+
+/// Enumerate the observed reference forms belonging to a version set.
+///
+/// THE single family-membership computation: the family detail response, the
+/// family capacity-history chart and the most-utilized grouping all derive
+/// their reference sets through [`reference_form_member_version`] over the
+/// persisted reference forms, so counters and charts cannot diverge.
+///
+/// A canonical reference that fails to resolve into the set is an invariant
+/// violation and is reported as an error.
+fn family_member_reference_forms(
+    state: &AppState,
+    membership_context: &str,
+    allowed_versions: &HashSet<Vec<u8>>,
+    canonical_references: &HashSet<(u8, Vec<u8>)>,
+) -> Result<Vec<FamilyMemberForm>, ApiRouteError> {
+    let mut members = Vec::new();
+
+    for ((reference_hash, hash_type), info) in state
+        .store
+        .list_script_reference_infos()
+        .map_err(|e| ApiError::internal(e.to_string()))?
+    {
+        let member_version = reference_form_member_version(
+            &state.store,
+            &state.append_only_store,
+            hash_type,
+            &reference_hash,
+            &|hash: &[u8]| allowed_versions.contains(hash),
+        )
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+
+        let version_hash = match member_version {
+            Some(version_hash) if allowed_versions.contains(&version_hash) => version_hash,
+            Some(_) => continue,
+            None => {
+                if canonical_references.contains(&(hash_type, reference_hash.clone())) {
+                    return Err(ApiError::internal(format!(
+                        "script family detail is missing reference->version mapping: context={}, reference_hash=0x{}, hash_type={}",
+                        membership_context,
+                        hex::encode(&reference_hash),
+                        hash_type
+                    )));
+                }
+                continue;
+            }
+        };
+
+        members.push(FamilyMemberForm {
+            reference_hash,
+            hash_type,
+            version_hash,
+            info,
+        });
+    }
+
+    Ok(members)
+}
+
 fn observed_references_by_version(
     state: &AppState,
     family_id: &str,
@@ -870,47 +950,15 @@ fn observed_references_by_version(
         .iter()
         .map(|(version_hash, _)| version_hash.clone())
         .collect();
-    let canonical_references: HashSet<(u8, Vec<u8>)> = versions
-        .iter()
-        .filter_map(|(_, info)| {
-            Some((
-                info.canonical_hash_type?,
-                info.canonical_reference_hash.as_ref()?.clone(),
-            ))
-        })
-        .collect();
+    let canonical_references = canonical_reference_set(versions);
 
-    for ((reference_hash, hash_type), info) in state
-        .store
-        .list_script_reference_infos()
-        .map_err(|e| ApiError::internal(e.to_string()))?
+    for member in
+        family_member_reference_forms(state, family_id, &allowed_versions, &canonical_references)?
     {
-        let version_hash = if let Some(version_hash) = state
-            .store
-            .get_script_reference_version_hash(hash_type, &reference_hash)
-            .map_err(|e| ApiError::internal(e.to_string()))?
-        {
-            if !allowed_versions.contains(&version_hash) {
-                continue;
-            }
-            version_hash
-        } else if matches!(hash_type, 0 | 2 | 4) && allowed_versions.contains(&reference_hash) {
-            reference_hash.clone()
-        } else if canonical_references.contains(&(hash_type, reference_hash.clone())) {
-            return Err(ApiError::internal(format!(
-                "script family detail is missing reference->version mapping: family_id={}, reference_hash=0x{}, hash_type={}",
-                family_id,
-                hex::encode(&reference_hash),
-                hash_type
-            )));
-        } else {
-            continue;
-        };
-
         by_version
-            .entry(version_hash)
+            .entry(member.version_hash)
             .or_default()
-            .push(reference_info_to_response(&info)?);
+            .push(reference_info_to_response(&member.info)?);
     }
 
     for references in by_version.values_mut() {
@@ -1332,6 +1380,7 @@ pub struct ScriptCapacityHistoryQuery {
 #[derive(Debug, Deserialize)]
 pub struct ScriptCapacityHistoryByCodeHashQuery {
     code_hash: String,
+    hash_type: Option<String>,
     script_kind: Option<String>,
     from: Option<String>,
     to: Option<String>,
@@ -1756,7 +1805,7 @@ fn resolve_script_capacity_chart_bounds(
 
 fn build_script_capacity_history_chart(
     state: &AppState,
-    targets: Vec<(Vec<u8>, bool)>,
+    targets: Vec<(Vec<u8>, u8, bool)>,
     title: String,
     from_date: Option<u32>,
     to_date: Option<u32>,
@@ -1783,7 +1832,7 @@ fn build_script_capacity_history_chart(
     }
 
     let mut dedup = HashSet::new();
-    let unique_targets: Vec<(Vec<u8>, bool)> = targets
+    let unique_targets: Vec<(Vec<u8>, u8, bool)> = targets
         .into_iter()
         .filter(|target| dedup.insert(target.clone()))
         .collect();
@@ -1792,11 +1841,12 @@ fn build_script_capacity_history_chart(
     let mut cumulative_used: i128 = 0;
     if let Some(from) = from_date {
         let mut baseline_daily: BTreeMap<u32, (i128, i128)> = BTreeMap::new();
-        for (code_hash, is_type) in &unique_targets {
+        for (code_hash, hash_type, is_type) in &unique_targets {
             let baseline = state
                 .store
                 .list_script_daily_deltas_in_range(
                     code_hash,
+                    *hash_type,
                     *is_type,
                     None,
                     Some(from.saturating_sub(1)),
@@ -1820,10 +1870,10 @@ fn build_script_capacity_history_chart(
     }
 
     let mut daily_deltas: BTreeMap<u32, (i128, i128)> = BTreeMap::new();
-    for (code_hash, is_type) in &unique_targets {
+    for (code_hash, hash_type, is_type) in &unique_targets {
         let deltas = state
             .store
-            .list_script_daily_deltas_in_range(code_hash, *is_type, from_date, to_date)
+            .list_script_daily_deltas_in_range(code_hash, *hash_type, *is_type, from_date, to_date)
             .map_err(|e| ApiError::internal(e.to_string()))?;
         for (date, delta) in deltas {
             let entry = daily_deltas.entry(date).or_insert((0, 0));
@@ -1886,30 +1936,39 @@ async fn get_script_capacity_history_chart(
     let (from_date, to_date) = parse_chart_date_range(params.from.as_deref(), params.to.as_deref())
         .map_err(|msg| ApiError::bad_request(&msg))?;
 
-    let all_scripts = load_script_infos_cached(&state)?;
-
     let code_hash_filter = params
         .code_hash
         .as_deref()
         .map(parse_code_hash_hex)
         .transpose()?;
-    let matching: Vec<ckbadger_store::ScriptInfo> = all_scripts
-        .into_iter()
-        .filter(|(_, info)| info.name.as_deref() == Some(name.as_str()))
-        .filter(|(_, info)| {
-            code_hash_filter
-                .as_ref()
-                .map(|filter| &info.code_hash == filter)
-                .unwrap_or(true)
-        })
-        .map(|(_, info)| info)
-        .collect();
-
     let kind_filter = parse_script_kind_filter(params.script_kind.as_deref())?;
+
+    // The chart aggregates exactly the family's member reference forms — the
+    // same membership computation the usage counters and family detail use.
+    let (family_id, _family) = load_script_family_by_name(&state, &name)?;
+    let family_versions = load_family_versions(&state, &family_id)?;
+    let allowed_versions: HashSet<Vec<u8>> = family_versions
+        .iter()
+        .map(|(version_hash, _)| version_hash.clone())
+        .collect();
+    let canonical_references = canonical_reference_set(&family_versions);
+    let member_forms = family_member_reference_forms(
+        &state,
+        &family_id,
+        &allowed_versions,
+        &canonical_references,
+    )?;
+
     let mut targets = Vec::new();
-    for info in matching {
-        for is_type in &kind_filter {
-            targets.push((info.code_hash.clone(), *is_type));
+    for member in member_forms {
+        if code_hash_filter
+            .as_ref()
+            .map(|filter| &member.reference_hash == filter)
+            .unwrap_or(true)
+        {
+            for is_type in &kind_filter {
+                targets.push((member.reference_hash.clone(), member.hash_type, *is_type));
+            }
         }
     }
 
@@ -1922,6 +1981,18 @@ async fn get_script_capacity_history_chart(
     )?)
 }
 
+/// Capacity-history chart addressed by code_hash.
+///
+/// With an explicit `hash_type` parameter the chart covers exactly the single
+/// observed reference form `(code_hash, hash_type)` — no resolution.
+///
+/// Without `hash_type` the reference is resolved and the chart covers the
+/// member reference set of the resolved version's family — the same set the
+/// `/scripts/{name}/charts/capacity-history` path aggregates, so both
+/// endpoints and the family counters share one membership computation. A
+/// resolved version without a family charts the forms observed for that
+/// version alone; an unknown reference charts every form recorded under the
+/// code_hash bytes.
 async fn get_script_capacity_history_chart_by_code_hash(
     State(state): State<Arc<AppState>>,
     Query(params): Query<ScriptCapacityHistoryByCodeHashQuery>,
@@ -1931,8 +2002,22 @@ async fn get_script_capacity_history_chart_by_code_hash(
 
     let code_hash = parse_code_hash_hex(&params.code_hash)?;
     let kind_filter = parse_script_kind_filter(params.script_kind.as_deref())?;
-    let mut targets = Vec::new();
+    let title = format!("0x{} Capacity History", hex::encode(&code_hash));
 
+    if let Some(hash_type_str) = params.hash_type.as_deref() {
+        let hash_type = hash_type_to_u8(hash_type_str).ok_or_else(|| {
+            ApiError::bad_request("Invalid hash_type, expected data/type/data1/data2")
+        })?;
+        let targets = kind_filter
+            .iter()
+            .map(|is_type| (code_hash.clone(), hash_type, *is_type))
+            .collect();
+        return ok(build_script_capacity_history_chart(
+            &state, targets, title, from_date, to_date,
+        )?);
+    }
+
+    let mut targets = Vec::new();
     match resolve_script_identifier(&state, &code_hash)? {
         ScriptIdentifierResolution::Resolved(resolved) => {
             let ResolvedScriptIdentifier {
@@ -1940,33 +2025,31 @@ async fn get_script_capacity_history_chart_by_code_hash(
                 version_info,
                 ..
             } = *resolved;
-            // Use version_hash and look up related code hashes from ScriptInfo
-            let all_script_infos: Vec<ckbadger_store::ScriptInfo> =
-                load_script_infos_cached(&state)?
-                    .into_iter()
-                    .map(|(_, info)| info)
-                    .collect();
-            let mut related_hashes =
-                related_code_hashes_for_reference(&all_script_infos, &version_hash);
-            // For type-hash scripts the version_hash is a data_hash, which may
-            // only match the data-hash ScriptInfo.  The type-hash ScriptInfo
-            // (where the vast majority of daily deltas live) won't be found
-            // unless its dep_data_hash is populated.  Always include the
-            // associated_code_hash from label data so both code_hashes
-            // contribute to the chart.
-            if let Some(assoc) = version_info.associated_code_hash.as_ref() {
-                if !related_hashes.iter().any(|h| h == assoc) {
-                    related_hashes.push(assoc.clone());
-                }
-            }
-            let target_hashes = if related_hashes.is_empty() {
-                vec![version_hash]
-            } else {
-                related_hashes
-            };
-            for target_hash in target_hashes {
+            let (allowed_versions, canonical_references, membership_context) =
+                if let Some(family_id) = version_info.family_id.as_deref() {
+                    let family_versions = load_family_versions(&state, family_id)?;
+                    let allowed: HashSet<Vec<u8>> = family_versions
+                        .iter()
+                        .map(|(version_hash, _)| version_hash.clone())
+                        .collect();
+                    let canonical = canonical_reference_set(&family_versions);
+                    (allowed, canonical, family_id.to_string())
+                } else {
+                    (
+                        HashSet::from([version_hash.clone()]),
+                        HashSet::new(),
+                        format!("version 0x{}", hex::encode(&version_hash)),
+                    )
+                };
+            let member_forms = family_member_reference_forms(
+                &state,
+                &membership_context,
+                &allowed_versions,
+                &canonical_references,
+            )?;
+            for member in member_forms {
                 for is_type in &kind_filter {
-                    targets.push((target_hash.clone(), *is_type));
+                    targets.push((member.reference_hash.clone(), member.hash_type, *is_type));
                 }
             }
         }
@@ -1976,31 +2059,16 @@ async fn get_script_capacity_history_chart_by_code_hash(
             ));
         }
         ScriptIdentifierResolution::NotFound => {
-            let all_script_infos: Vec<ckbadger_store::ScriptInfo> =
-                load_script_infos_cached(&state)?
-                    .into_iter()
-                    .map(|(_, info)| info)
-                    .collect();
-            let related_hashes = related_code_hashes_for_reference(&all_script_infos, &code_hash);
-            let target_hashes = if related_hashes.is_empty() {
-                vec![code_hash.clone()]
-            } else {
-                related_hashes
-            };
-            for target_hash in target_hashes {
+            for hash_type in [0u8, 1u8, 2u8, 4u8] {
                 for is_type in &kind_filter {
-                    targets.push((target_hash.clone(), *is_type));
+                    targets.push((code_hash.clone(), hash_type, *is_type));
                 }
             }
         }
     }
 
     ok(build_script_capacity_history_chart(
-        &state,
-        targets,
-        format!("0x{} Capacity History", hex::encode(&code_hash)),
-        from_date,
-        to_date,
+        &state, targets, title, from_date, to_date,
     )?)
 }
 

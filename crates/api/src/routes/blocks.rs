@@ -693,8 +693,8 @@ async fn get_block_fee_stats(
             non_cellbase_count += 1;
             total_size += entry.tx_size as i64;
             if entry.tx_size > 0 {
-                let fee_rate = (entry.fee as f64 * 1000.0)
-                    / tx_serialized_size_in_block(entry.tx_size) as f64;
+                let fee_rate =
+                    (entry.fee as f64 * 1000.0) / tx_serialized_size_in_block(entry.tx_size) as f64;
                 fee_rates.push(fee_rate);
             }
         }
@@ -714,8 +714,8 @@ async fn get_block_fee_stats(
                 Some(_) | None => any_missing = true,
             }
             if entry.tx_size > 0 {
-                let fee_rate = (entry.fee as f64 * 1000.0)
-                    / tx_serialized_size_in_block(entry.tx_size) as f64;
+                let fee_rate =
+                    (entry.fee as f64 * 1000.0) / tx_serialized_size_in_block(entry.tx_size) as f64;
                 fee_rates.push(fee_rate);
             }
         }

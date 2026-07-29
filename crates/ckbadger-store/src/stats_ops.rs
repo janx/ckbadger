@@ -706,10 +706,11 @@ impl CkbadgerStore {
     pub fn get_script_daily_delta(
         &self,
         code_hash: &[u8],
+        hash_type: u8,
         is_type: bool,
         date_yyyymmdd: u32,
     ) -> anyhow::Result<Option<ScriptDailyDelta>> {
-        let key = keys::encode_script_daily_key(code_hash, is_type, date_yyyymmdd);
+        let key = keys::encode_script_daily_key(code_hash, hash_type, is_type, date_yyyymmdd);
         match self.get_cf(self.cf_stats_script(), &key)? {
             Some(value) => Ok(Some(bincode::deserialize(&value)?)),
             None => Ok(None),
@@ -719,11 +720,12 @@ impl CkbadgerStore {
     pub fn put_script_daily_delta(
         &self,
         code_hash: &[u8],
+        hash_type: u8,
         is_type: bool,
         date_yyyymmdd: u32,
         delta: &ScriptDailyDelta,
     ) -> anyhow::Result<()> {
-        let key = keys::encode_script_daily_key(code_hash, is_type, date_yyyymmdd);
+        let key = keys::encode_script_daily_key(code_hash, hash_type, is_type, date_yyyymmdd);
         let value = bincode::serialize(delta)?;
         self.put_cf(self.cf_stats_script(), &key, &value)
     }
@@ -731,21 +733,24 @@ impl CkbadgerStore {
     pub fn list_script_daily_deltas(
         &self,
         code_hash: &[u8],
+        hash_type: u8,
         is_type: bool,
     ) -> anyhow::Result<Vec<(u32, ScriptDailyDelta)>> {
-        self.list_script_daily_deltas_in_range(code_hash, is_type, None, None)
+        self.list_script_daily_deltas_in_range(code_hash, hash_type, is_type, None, None)
     }
 
     pub fn list_script_daily_deltas_in_range(
         &self,
         code_hash: &[u8],
+        hash_type: u8,
         is_type: bool,
         from_date_yyyymmdd: Option<u32>,
         to_date_yyyymmdd: Option<u32>,
     ) -> anyhow::Result<Vec<(u32, ScriptDailyDelta)>> {
-        let prefix = keys::encode_script_daily_prefix(code_hash, is_type);
+        let prefix = keys::encode_script_daily_prefix(code_hash, hash_type, is_type);
         let start_key = keys::encode_script_daily_key(
             code_hash,
+            hash_type,
             is_type,
             from_date_yyyymmdd.unwrap_or(u32::MIN),
         );
@@ -768,7 +773,7 @@ impl CkbadgerStore {
             if key.len() != keys::SCRIPT_DAILY_KEY_SIZE {
                 continue;
             }
-            let (_, _, date) = keys::decode_script_daily_key(&key);
+            let (_, _, _, date) = keys::decode_script_daily_key(&key);
             if let Some(to_date) = to_date_yyyymmdd {
                 if date > to_date {
                     break;
@@ -776,14 +781,60 @@ impl CkbadgerStore {
             }
             let delta: ScriptDailyDelta = bincode::deserialize(&value).map_err(|e| {
                 anyhow::anyhow!(
-                    "failed to deserialize script daily delta in list_script_daily_deltas_in_range: code_hash=0x{}, is_type={}, date={}, error={}",
+                    "failed to deserialize script daily delta in list_script_daily_deltas_in_range: code_hash=0x{}, hash_type={}, is_type={}, date={}, error={}",
                     bytes_to_hex(code_hash),
+                    hash_type,
                     is_type,
                     date,
                     e
                 )
             })?;
             results.push((date, delta));
+        }
+
+        Ok(results)
+    }
+
+    /// List every script daily row of a code_hash across all hash_type forms
+    /// and script kinds. Returns ((hash_type, is_type, date), delta) rows in
+    /// key order.
+    #[allow(clippy::type_complexity)]
+    pub fn list_script_daily_deltas_by_code_hash(
+        &self,
+        code_hash: &[u8],
+    ) -> anyhow::Result<Vec<((u8, bool, u32), ScriptDailyDelta)>> {
+        let prefix = keys::encode_script_daily_code_hash_prefix(code_hash);
+        let iter = self.iterator_cf(
+            self.cf_stats_script(),
+            rocksdb::IteratorMode::From(&prefix, rocksdb::Direction::Forward),
+        );
+        let mut results = Vec::new();
+
+        for item in iter {
+            let (key, value) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate stats_script in list_script_daily_deltas_by_code_hash: {}",
+                    e
+                )
+            })?;
+            if !key.starts_with(&prefix) {
+                break;
+            }
+            if key.len() != keys::SCRIPT_DAILY_KEY_SIZE {
+                continue;
+            }
+            let (_, hash_type, is_type, date) = keys::decode_script_daily_key(&key);
+            let delta: ScriptDailyDelta = bincode::deserialize(&value).map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to deserialize script daily delta in list_script_daily_deltas_by_code_hash: code_hash=0x{}, hash_type={}, is_type={}, date={}, error={}",
+                    bytes_to_hex(code_hash),
+                    hash_type,
+                    is_type,
+                    date,
+                    e
+                )
+            })?;
+            results.push(((hash_type, is_type, date), delta));
         }
 
         Ok(results)
@@ -1501,29 +1552,77 @@ mod tests {
             owned_knowledge_delta: -120_000_000_000,
         };
         store
-            .put_script_daily_delta(&code_hash, false, 20240115, &d1)
+            .put_script_daily_delta(&code_hash, 1, false, 20240115, &d1)
             .unwrap();
         store
-            .put_script_daily_delta(&code_hash, false, 20240116, &d2)
+            .put_script_daily_delta(&code_hash, 1, false, 20240116, &d2)
             .unwrap();
 
         let loaded = store
-            .get_script_daily_delta(&code_hash, false, 20240115)
+            .get_script_daily_delta(&code_hash, 1, false, 20240115)
             .unwrap()
             .unwrap();
         assert_eq!(loaded.owned_capacity_delta, d1.owned_capacity_delta);
         assert_eq!(loaded.owned_knowledge_delta, d1.owned_knowledge_delta);
 
-        let listed = store.list_script_daily_deltas(&code_hash, false).unwrap();
+        let listed = store
+            .list_script_daily_deltas(&code_hash, 1, false)
+            .unwrap();
         assert_eq!(listed.len(), 2);
         assert_eq!(listed[0].0, 20240115);
         assert_eq!(listed[1].0, 20240116);
 
         let ranged = store
-            .list_script_daily_deltas_in_range(&code_hash, false, Some(20240116), Some(20240116))
+            .list_script_daily_deltas_in_range(&code_hash, 1, false, Some(20240116), Some(20240116))
             .unwrap();
         assert_eq!(ranged.len(), 1);
         assert_eq!(ranged[0].0, 20240116);
+    }
+
+    #[test]
+    fn test_script_daily_delta_rows_are_independent_per_hash_type() {
+        // Regression (B8 root cause): two references sharing the same
+        // code_hash bytes but using different hash_types must produce
+        // independent daily rows — junk data-form deltas must not merge into
+        // the type-form timeline.
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path().to_str().unwrap()).unwrap();
+        let code_hash = vec![0x9B; 32];
+
+        let type_form = ScriptDailyDelta {
+            owned_capacity_delta: 500,
+            owned_knowledge_delta: 300,
+        };
+        let data_form = ScriptDailyDelta {
+            owned_capacity_delta: 98,
+            owned_knowledge_delta: 98,
+        };
+        store
+            .put_script_daily_delta(&code_hash, 1, false, 20240115, &type_form)
+            .unwrap();
+        store
+            .put_script_daily_delta(&code_hash, 0, false, 20240115, &data_form)
+            .unwrap();
+
+        let type_rows = store
+            .list_script_daily_deltas(&code_hash, 1, false)
+            .unwrap();
+        assert_eq!(type_rows.len(), 1);
+        assert_eq!(type_rows[0].1.owned_capacity_delta, 500);
+
+        let data_rows = store
+            .list_script_daily_deltas(&code_hash, 0, false)
+            .unwrap();
+        assert_eq!(data_rows.len(), 1);
+        assert_eq!(data_rows[0].1.owned_capacity_delta, 98);
+
+        let all_rows = store
+            .list_script_daily_deltas_by_code_hash(&code_hash)
+            .unwrap();
+        assert_eq!(all_rows.len(), 2);
+        let keys: Vec<(u8, bool, u32)> = all_rows.iter().map(|(key, _)| *key).collect();
+        assert!(keys.contains(&(0, false, 20240115)));
+        assert!(keys.contains(&(1, false, 20240115)));
     }
 
     #[test]
