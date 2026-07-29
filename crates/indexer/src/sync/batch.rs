@@ -2957,7 +2957,9 @@ impl Indexer {
                     let day_stats = daily_activity_accum.entry(date.clone()).or_default();
                     BatchWriter::accumulate_tx_activity_stats(tx_actions, day_stats);
 
-                    // Accumulate hourly activity stats
+                    // Accumulate hourly activity stats. Activity hour keys
+                    // are UTC+8 (`block_datetime_from_ms`) — unlike the
+                    // chain-level hourly stats, whose keys are UTC.
                     let hour = ckbadger_common::block_datetime_from_ms(tx_actions.timestamp)
                         .format("%Y%m%d%H")
                         .to_string();
@@ -3284,6 +3286,11 @@ impl Indexer {
                 .daily_dao_fields
                 .insert(block_date, parsed.dao.to_vec());
             {
+                // Chain-level hourly bucket: keyed by the UTC-truncated block
+                // hour (`STATS_PREFIX_HOURLY` keys are UTC `%Y%m%d%H`; the
+                // activity hourly family below is UTC+8 instead). The tx
+                // count includes the cellbase. Reorg rollback and the bulk
+                // ChainStatsAccumulator must mirror these semantics exactly.
                 let block_hour = truncate_to_hour(parsed.timestamp);
                 let entry = batch_stats.hourly_stats.entry(block_hour).or_default();
                 entry.0 += 1;

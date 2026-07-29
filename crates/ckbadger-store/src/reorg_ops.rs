@@ -14,12 +14,13 @@ use crate::types::*;
 
 /// Bundled rollback delta maps for cutoff-date stats repair.
 struct RollbackStatsDeltas {
-    /// Per-date: (blocks, txs, cells_created, cells_consumed)
+    /// Per-date (UTC+8): (blocks, txs, cells_created, cells_consumed)
     date: HashMap<String, (i32, i32, i32, i32)>,
     /// Per-date rolled-back uncle count (from CachedBlockHeader.uncles_count).
     /// Used to repair DailyBlockStats.total_uncles on the cutoff date.
     date_uncles: HashMap<String, i32>,
-    /// Per-hour: (blocks, txs, cells_created, cells_consumed)
+    /// Per-hour: (blocks, txs, cells_created, cells_consumed), keyed by the
+    /// **UTC** `%Y%m%d%H` strings of the chain-level HOURLY stats CF.
     hour: HashMap<String, (i32, i32, i32, i32)>,
     /// Per-date: (cap_transferred, used_cap_created, used_cap_consumed, data_created, data_consumed)
     date_capacity: HashMap<String, (i128, i128, i128, i64, i64)>,
@@ -46,16 +47,186 @@ fn cell_dist_size_bucket(occupied_capacity: i64) -> usize {
     }
 }
 
+/// Fail-fast checked subtraction for activity stats rollback repair.
+fn checked_activity_sub_u32(
+    current: u32,
+    delta: u32,
+    field: &str,
+    bucket_kind: &str,
+    bucket: &str,
+) -> anyhow::Result<u32> {
+    current.checked_sub(delta).ok_or_else(|| {
+        anyhow::anyhow!(
+            "activity stats rollback underflow: {}={}, field={}, stored={}, rolled_back={} (delta collection out of sync with persisted state)",
+            bucket_kind,
+            bucket,
+            field,
+            current,
+            delta
+        )
+    })
+}
+
+/// Subtract rolled-back activity deltas from a persisted activity stats row.
+///
+/// Single calculation path shared by the ACTIVITY_DAILY and ACTIVITY_HOURLY
+/// repair branches. Every subtraction is checked: an underflow (or a delta
+/// referencing a script/protocol key absent from the stored row) means the
+/// rollback delta collection disagrees with the persisted state, and masking
+/// it with a zero clamp would leave silently-corrupt aggregates — fail with
+/// enough context to locate the upstream bug instead.
+///
+/// `unique_address_count` is intentionally NOT touched: the cutoff-bucket
+/// addr set is preserved (not deleted) so live-sync dedup remains correct.
+fn subtract_activity_stats_delta(
+    s: &mut DailyActivityStats,
+    delta: &DailyActivityStats,
+    bucket_kind: &str,
+    bucket: &str,
+) -> anyhow::Result<()> {
+    s.transfer_count = checked_activity_sub_u32(
+        s.transfer_count,
+        delta.transfer_count,
+        "transfer_count",
+        bucket_kind,
+        bucket,
+    )?;
+    s.dao_deposit_count = checked_activity_sub_u32(
+        s.dao_deposit_count,
+        delta.dao_deposit_count,
+        "dao_deposit_count",
+        bucket_kind,
+        bucket,
+    )?;
+    s.dao_withdraw_request_count = checked_activity_sub_u32(
+        s.dao_withdraw_request_count,
+        delta.dao_withdraw_request_count,
+        "dao_withdraw_request_count",
+        bucket_kind,
+        bucket,
+    )?;
+    s.dao_withdraw_complete_count = checked_activity_sub_u32(
+        s.dao_withdraw_complete_count,
+        delta.dao_withdraw_complete_count,
+        "dao_withdraw_complete_count",
+        bucket_kind,
+        bucket,
+    )?;
+    s.token_count = checked_activity_sub_u32(
+        s.token_count,
+        delta.token_count,
+        "token_count",
+        bucket_kind,
+        bucket,
+    )?;
+    s.object_count = checked_activity_sub_u32(
+        s.object_count,
+        delta.object_count,
+        "object_count",
+        bucket_kind,
+        bucket,
+    )?;
+    s.identity_count = checked_activity_sub_u32(
+        s.identity_count,
+        delta.identity_count,
+        "identity_count",
+        bucket_kind,
+        bucket,
+    )?;
+    s.script_call_count = checked_activity_sub_u32(
+        s.script_call_count,
+        delta.script_call_count,
+        "script_call_count",
+        bucket_kind,
+        bucket,
+    )?;
+    s.unknown_count = checked_activity_sub_u32(
+        s.unknown_count,
+        delta.unknown_count,
+        "unknown_count",
+        bucket_kind,
+        bucket,
+    )?;
+    s.coinbase_count = checked_activity_sub_u32(
+        s.coinbase_count,
+        delta.coinbase_count,
+        "coinbase_count",
+        bucket_kind,
+        bucket,
+    )?;
+    s.total_ckb_moved = s
+        .total_ckb_moved
+        .checked_sub(delta.total_ckb_moved)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "activity stats rollback underflow: {}={}, field=total_ckb_moved, stored={}, rolled_back={} (delta collection out of sync with persisted state)",
+                bucket_kind,
+                bucket,
+                s.total_ckb_moved,
+                delta.total_ckb_moved
+            )
+        })?;
+    for (k, v) in &delta.script_counts {
+        let existing = s.script_counts.get_mut(k).ok_or_else(|| {
+            anyhow::anyhow!(
+                "activity stats rollback references script_count key missing from stored row: {}={}, script={}, rolled_back={}",
+                bucket_kind,
+                bucket,
+                k,
+                v
+            )
+        })?;
+        *existing = checked_activity_sub_u32(
+            *existing,
+            *v,
+            &format!("script_counts[{}]", k),
+            bucket_kind,
+            bucket,
+        )?;
+    }
+    s.script_counts.retain(|_, v| *v > 0);
+    for (k, v) in &delta.protocol_action_counts {
+        let existing = s.protocol_action_counts.get_mut(k).ok_or_else(|| {
+            anyhow::anyhow!(
+                "activity stats rollback references protocol_action key missing from stored row: {}={}, action={}, rolled_back={}",
+                bucket_kind,
+                bucket,
+                k,
+                v
+            )
+        })?;
+        *existing = checked_activity_sub_u32(
+            *existing,
+            *v,
+            &format!("protocol_action_counts[{}]", k),
+            bucket_kind,
+            bucket,
+        )?;
+    }
+    s.protocol_action_counts.retain(|_, v| *v > 0);
+    Ok(())
+}
+
 /// Attempt to repair a daily or hourly stats entry on the cutoff date by
 /// subtracting the rolled-back block/tx/cell deltas instead of deleting.
 /// Returns `true` if the entry was repaired (caller should NOT delete it),
 /// `false` if it should be deleted as before (e.g. not a daily/hourly prefix,
 /// or the entire day's blocks were rolled back).
+///
+/// Two hour cutoffs are required because the hour-keyed stats CFs
+/// deliberately use two clocks (see `keys::stats_prefix`):
+/// - `cutoff_yyyymmddhh_utc8`: UTC+8 — matches ACTIVITY_HOURLY keys;
+/// - `cutoff_yyyymmddhh_utc`: UTC — matches chain-level HOURLY keys.
+/// Each must stay aligned with the same-prefix predicate in
+/// `should_delete_stats_for_replay`, whose `>=` delete range includes the
+/// cutoff bucket that this repair intercepts.
+#[allow(clippy::too_many_arguments)]
 fn repair_cutoff_date_stats(
     key: &[u8],
     value: &[u8],
     cutoff_date: &str,
-    cutoff_yyyymmddhh: &str,
+    cutoff_yyyymmddhh_utc8: &str,
+    cutoff_yyyymmddhh_utc: &str,
     deltas: &RollbackStatsDeltas,
     store: &CkbadgerStore,
     batch: &mut WriteBatch,
@@ -140,13 +311,12 @@ fn repair_cutoff_date_stats(
             }
             let hour_str = std::str::from_utf8(&suffix[..10])
                 .map_err(|e| anyhow::anyhow!("invalid hourly stats hour: {}", e))?;
-            let date_part = &hour_str[..8];
-            if date_part != cutoff_date {
-                return Ok(false);
-            }
-            // Only repair the cutoff hour itself; later hours are fully
-            // rolled back and should be deleted.
-            if hour_str != cutoff_yyyymmddhh {
+            // Chain-level hourly keys are UTC hour strings (see
+            // `BatchWriter::update_hourly_statistics`), so they compare
+            // against the UTC cutoff — NOT the UTC+8 one used by the
+            // date-scoped and activity buckets. Only the cutoff hour itself
+            // is repaired; later hours are fully rolled back and deleted.
+            if hour_str != cutoff_yyyymmddhh_utc {
                 return Ok(false);
             }
             let delta = match deltas.hour.get(hour_str) {
@@ -194,37 +364,10 @@ fn repair_cutoff_date_stats(
                     e
                 )
             })?;
-            s.transfer_count = s.transfer_count.saturating_sub(delta.transfer_count);
-            s.dao_deposit_count = s.dao_deposit_count.saturating_sub(delta.dao_deposit_count);
-            s.dao_withdraw_request_count = s
-                .dao_withdraw_request_count
-                .saturating_sub(delta.dao_withdraw_request_count);
-            s.dao_withdraw_complete_count = s
-                .dao_withdraw_complete_count
-                .saturating_sub(delta.dao_withdraw_complete_count);
-            s.token_count = s.token_count.saturating_sub(delta.token_count);
-            s.object_count = s.object_count.saturating_sub(delta.object_count);
-            s.identity_count = s.identity_count.saturating_sub(delta.identity_count);
-            s.script_call_count = s.script_call_count.saturating_sub(delta.script_call_count);
-            s.unknown_count = s.unknown_count.saturating_sub(delta.unknown_count);
-            s.coinbase_count = s.coinbase_count.saturating_sub(delta.coinbase_count);
-            s.total_ckb_moved = s.total_ckb_moved.saturating_sub(delta.total_ckb_moved);
-            // unique_address_count: keep existing value — cutoff-date addr set
-            // is preserved (not deleted) so live sync dedup remains correct.
-            // Subtract script_counts
-            for (k, v) in &delta.script_counts {
-                if let Some(existing) = s.script_counts.get_mut(k) {
-                    *existing = existing.saturating_sub(*v);
-                }
-            }
-            s.script_counts.retain(|_, v| *v > 0);
-            // Subtract protocol_action_counts
-            for (k, v) in &delta.protocol_action_counts {
-                if let Some(existing) = s.protocol_action_counts.get_mut(k) {
-                    *existing = existing.saturating_sub(*v);
-                }
-            }
-            s.protocol_action_counts.retain(|_, v| *v > 0);
+            // unique_address_count is preserved inside this helper — the
+            // cutoff-date addr set is kept (not deleted) so live sync dedup
+            // remains correct.
+            subtract_activity_stats_delta(&mut s, delta, "date", date_str)?;
             let cf = store.stats_cf_by_prefix(prefix)?;
             let encoded = bincode::serialize(&s)
                 .map_err(|e| anyhow::anyhow!("serialize activity daily stats repair: {}", e))?;
@@ -241,8 +384,10 @@ fn repair_cutoff_date_stats(
             if date_part != cutoff_date {
                 return Ok(false);
             }
-            // Only repair the cutoff hour; later hours are fully rolled back.
-            if hour_str != cutoff_yyyymmddhh {
+            // Activity hourly keys are UTC+8 hour strings (the
+            // `block_datetime_from_ms` convention). Only the cutoff hour is
+            // repaired; later hours are fully rolled back.
+            if hour_str != cutoff_yyyymmddhh_utc8 {
                 return Ok(false);
             }
             let delta = match deltas.activity_hour.get(hour_str) {
@@ -256,33 +401,7 @@ fn repair_cutoff_date_stats(
                     e
                 )
             })?;
-            s.transfer_count = s.transfer_count.saturating_sub(delta.transfer_count);
-            s.dao_deposit_count = s.dao_deposit_count.saturating_sub(delta.dao_deposit_count);
-            s.dao_withdraw_request_count = s
-                .dao_withdraw_request_count
-                .saturating_sub(delta.dao_withdraw_request_count);
-            s.dao_withdraw_complete_count = s
-                .dao_withdraw_complete_count
-                .saturating_sub(delta.dao_withdraw_complete_count);
-            s.token_count = s.token_count.saturating_sub(delta.token_count);
-            s.object_count = s.object_count.saturating_sub(delta.object_count);
-            s.identity_count = s.identity_count.saturating_sub(delta.identity_count);
-            s.script_call_count = s.script_call_count.saturating_sub(delta.script_call_count);
-            s.unknown_count = s.unknown_count.saturating_sub(delta.unknown_count);
-            s.coinbase_count = s.coinbase_count.saturating_sub(delta.coinbase_count);
-            s.total_ckb_moved = s.total_ckb_moved.saturating_sub(delta.total_ckb_moved);
-            for (k, v) in &delta.script_counts {
-                if let Some(existing) = s.script_counts.get_mut(k) {
-                    *existing = existing.saturating_sub(*v);
-                }
-            }
-            s.script_counts.retain(|_, v| *v > 0);
-            for (k, v) in &delta.protocol_action_counts {
-                if let Some(existing) = s.protocol_action_counts.get_mut(k) {
-                    *existing = existing.saturating_sub(*v);
-                }
-            }
-            s.protocol_action_counts.retain(|_, v| *v > 0);
+            subtract_activity_stats_delta(&mut s, delta, "hour", hour_str)?;
             let cf = store.stats_cf_by_prefix(prefix)?;
             let encoded = bincode::serialize(&s)
                 .map_err(|e| anyhow::anyhow!("serialize activity hourly stats repair: {}", e))?;
@@ -401,10 +520,20 @@ fn parse_cutoff_date_yyyymmdd(cutoff_yyyymmdd: &[u8]) -> anyhow::Result<u32> {
         .map_err(|e| anyhow::anyhow!("invalid cutoff date '{}': {}", cutoff_str, e))
 }
 
+/// Decide whether a stats row falls inside the replayed range and must go.
+///
+/// Two hour cutoffs are required because the hour-keyed stats CFs
+/// deliberately use two clocks (see `keys::stats_prefix`):
+/// - `cutoff_yyyymmddhh_utc8` (UTC+8) governs ACTIVITY_HOURLY keys;
+/// - `cutoff_yyyymmddhh_utc` (UTC) governs chain-level HOURLY keys.
+/// The per-prefix routing here MUST stay aligned with
+/// `repair_cutoff_date_stats`: the `>=` ranges include the cutoff bucket,
+/// and only the matching-clock repair branch saves it from deletion.
 fn should_delete_stats_for_replay(
     key: &[u8],
     cutoff_yyyymmdd: &[u8],
-    cutoff_yyyymmddhh: &[u8],
+    cutoff_yyyymmddhh_utc8: &[u8],
+    cutoff_yyyymmddhh_utc: &[u8],
     cutoff_hour: i64,
     cutoff_epoch: i64,
     delete_cutoff_epoch: bool,
@@ -416,7 +545,7 @@ fn should_delete_stats_for_replay(
     let suffix = &key[1..];
 
     match prefix {
-        // date scoped: YYYYMMDD
+        // date scoped: YYYYMMDD (UTC+8 calendar dates)
         keys::STATS_PREFIX_DAILY
         | keys::STATS_PREFIX_DAILY_BLOCK
         | keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT
@@ -425,8 +554,11 @@ fn should_delete_stats_for_replay(
         | keys::STATS_PREFIX_ADDR_COHORT => {
             Ok(suffix.len() >= 8 && &suffix[..8] >= cutoff_yyyymmdd)
         }
-        // hour scoped: YYYYMMDDHH
-        keys::STATS_PREFIX_HOURLY => Ok(suffix.len() >= 10 && &suffix[..10] >= cutoff_yyyymmddhh),
+        // hour scoped: YYYYMMDDHH on the UTC clock (chain-level hourly stats
+        // keys come from the UTC-truncated block hour — NOT UTC+8)
+        keys::STATS_PREFIX_HOURLY => {
+            Ok(suffix.len() >= 10 && &suffix[..10] >= cutoff_yyyymmddhh_utc)
+        }
         // date+miner hash: YYYYMMDD + 32-byte lock hash
         keys::STATS_PREFIX_MINER => Ok(suffix.len() >= 40 && &suffix[..8] >= cutoff_yyyymmdd),
         // code_hash(32) + kind(1) + date(4B u32 YYYYMMDD BE)
@@ -492,13 +624,14 @@ fn should_delete_stats_for_replay(
         keys::STATS_PREFIX_ACTIVITY_DAILY_ADDR_SET => {
             Ok(suffix.len() >= 8 && &suffix[..8] > cutoff_yyyymmdd)
         }
-        // activity hourly: YYYYMMDDHH
+        // activity hourly: YYYYMMDDHH on the UTC+8 clock
+        // (`block_datetime_from_ms` convention)
         keys::STATS_PREFIX_ACTIVITY_HOURLY => {
-            Ok(suffix.len() >= 10 && &suffix[..10] >= cutoff_yyyymmddhh)
+            Ok(suffix.len() >= 10 && &suffix[..10] >= cutoff_yyyymmddhh_utc8)
         }
         // Strict > : preserve cutoff-hour addr set for dedup continuity
         keys::STATS_PREFIX_ACTIVITY_HOURLY_ADDR_SET => {
-            Ok(suffix.len() >= 10 && &suffix[..10] > cutoff_yyyymmddhh)
+            Ok(suffix.len() >= 10 && &suffix[..10] > cutoff_yyyymmddhh_utc8)
         }
         // per-asset hourly transfer counters: entity_hash(32B) + hour_bucket(8B BE i64)
         keys::STATS_PREFIX_TOKEN_HOURLY
@@ -1308,11 +1441,20 @@ impl CkbadgerStore {
             .as_ref()
             .map(|h| h.timestamp / 3_600_000);
         let replay_cutoff_epoch = replay_start_header.as_ref().map(|h| h.epoch_number);
-        let replay_cutoff_hour_str = replay_start_header.as_ref().map(|h| {
+        // UTC+8 hour cutoff — governs the ACTIVITY_HOURLY bucket family.
+        let replay_cutoff_hour_str_utc8 = replay_start_header.as_ref().map(|h| {
             ckbadger_common::block_datetime_from_ms(h.timestamp)
                 .format("%Y%m%d%H")
                 .to_string()
         });
+        // UTC hour cutoff — governs the chain-level HOURLY bucket family,
+        // whose keys are UTC hour strings (see
+        // `BatchWriter::update_hourly_statistics`). Routing the wrong clock
+        // here made rollback never touch those buckets, leaving rolled-back
+        // residue to accumulate monotonically.
+        let replay_cutoff_hour_str_utc = replay_start_header
+            .as_ref()
+            .map(|h| ckbadger_common::utc_hour_key_from_ms(h.timestamp));
 
         // Determine the date of the fork_point itself so we can detect
         // partial-day rollbacks (fork_point and first rolled-back block on
@@ -1329,8 +1471,11 @@ impl CkbadgerStore {
 
         info!(rollback_to, replay_start, "Rollback cleanup started");
 
-        // block_date_map: block_num → (date_yyyymmdd, hour_yyyymmddhh) for
-        // rolled-back blocks, used for per-date stats delta subtraction.
+        // block_date_map: block_num → (date_yyyymmdd UTC+8, hour_yyyymmddhh
+        // UTC) for rolled-back blocks, used for per-date/per-hour stats delta
+        // subtraction. The hour element is UTC because it repairs the
+        // UTC-keyed chain-level HOURLY buckets; the date element is UTC+8
+        // like every date-scoped stats key.
         let mut block_date_map: HashMap<i64, (String, String)> = HashMap::new();
         // Per-date rolled-back uncle count, populated during block header deletion loop.
         let mut stats_date_uncles: HashMap<String, i32> = HashMap::new();
@@ -1372,10 +1517,13 @@ impl CkbadgerStore {
                     e
                 )
             })?;
-            // Collect block→date/hour mapping for stats delta subtraction.
-            let block_dt = ckbadger_common::block_datetime_from_ms(header.timestamp);
-            let date_str = block_dt.format("%Y%m%d").to_string();
-            let hour_str = block_dt.format("%Y%m%d%H").to_string();
+            // Collect block→date/hour mapping for stats delta subtraction:
+            // UTC+8 date (date-scoped stats keys) + UTC hour (chain-level
+            // HOURLY stats keys).
+            let date_str = ckbadger_common::block_date_from_ms(header.timestamp)
+                .format("%Y%m%d")
+                .to_string();
+            let hour_str = ckbadger_common::utc_hour_key_from_ms(header.timestamp);
             // Accumulate per-date uncle count for repair_cutoff_date_stats.
             let uncles_entry = stats_date_uncles.entry(date_str.clone()).or_insert(0);
             *uncles_entry = uncles_entry
@@ -1414,7 +1562,8 @@ impl CkbadgerStore {
         // these from the existing daily/hourly stats instead of deleting.
         // Keyed by date_yyyymmdd.  Fields: (blocks, txs, cells_created, cells_consumed).
         let mut stats_date_deltas: HashMap<String, (i32, i32, i32, i32)> = HashMap::new();
-        // Per-hour stats rollback deltas, keyed by hour_yyyymmddhh.
+        // Per-hour stats rollback deltas, keyed by UTC hour_yyyymmddhh
+        // (matching the chain-level HOURLY stats keys they repair).
         let mut stats_hour_deltas: HashMap<String, (i32, i32, i32, i32)> = HashMap::new();
         // Per-date capacity/used_capacity/data_size deltas, populated during cell rollback.
         // Keyed by date_yyyymmdd: (capacity_transferred, used_capacity_created,
@@ -2122,9 +2271,12 @@ impl CkbadgerStore {
                 replay_cutoff_hour.expect("cutoff_hour must be set when cutoff_date is set");
             let cutoff_epoch =
                 replay_cutoff_epoch.expect("cutoff_epoch must be set when cutoff_date is set");
-            let cutoff_hour_str = replay_cutoff_hour_str
+            let cutoff_hour_str_utc8 = replay_cutoff_hour_str_utc8
                 .as_deref()
-                .expect("cutoff_hour_str must be set when cutoff_date is set");
+                .expect("cutoff_hour_str_utc8 must be set when cutoff_date is set");
+            let cutoff_hour_str_utc = replay_cutoff_hour_str_utc
+                .as_deref()
+                .expect("cutoff_hour_str_utc must be set when cutoff_date is set");
             // Detect partial-day rollback: fork_point and first rolled-back block
             // share the same calendar date.
             let is_partial_day = fork_point_date.as_deref().is_some_and(|fpd| fpd == cutoff);
@@ -2218,7 +2370,8 @@ impl CkbadgerStore {
                     if !should_delete_stats_for_replay(
                         &key,
                         cutoff.as_bytes(),
-                        cutoff_hour_str.as_bytes(),
+                        cutoff_hour_str_utc8.as_bytes(),
+                        cutoff_hour_str_utc.as_bytes(),
                         cutoff_hour,
                         cutoff_epoch,
                         delete_cutoff_epoch,
@@ -2249,7 +2402,8 @@ impl CkbadgerStore {
                             &key,
                             &value,
                             cutoff,
-                            cutoff_hour_str,
+                            cutoff_hour_str_utc8,
+                            cutoff_hour_str_utc,
                             &rollback_deltas,
                             self,
                             &mut batch,
@@ -4021,10 +4175,10 @@ mod tests {
         let cutoff = b"20260210";
         let cutoff_hh = b"2026021000";
         let key = crate::keys::encode_stats_key(crate::keys::STATS_PREFIX_DAILY, b"20260211");
-        assert!(should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, 0, false).unwrap());
+        assert!(should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, 0, false).unwrap());
 
         let key_old = crate::keys::encode_stats_key(crate::keys::STATS_PREFIX_DAILY, b"20260209");
-        assert!(!should_delete_stats_for_replay(&key_old, cutoff, cutoff_hh, 0, 0, false).unwrap());
+        assert!(!should_delete_stats_for_replay(&key_old, cutoff, cutoff_hh, cutoff_hh, 0, 0, false).unwrap());
     }
 
     #[test]
@@ -4032,11 +4186,225 @@ mod tests {
         let cutoff = b"20260210";
         let cutoff_hh = b"2026021000";
         let hourly = crate::keys::encode_stats_key(crate::keys::STATS_PREFIX_HOURLY, b"2026021001");
-        assert!(should_delete_stats_for_replay(&hourly, cutoff, cutoff_hh, 0, 0, false).unwrap());
+        assert!(should_delete_stats_for_replay(&hourly, cutoff, cutoff_hh, cutoff_hh, 0, 0, false).unwrap());
 
         let miner_suffix = [b"20260210".as_slice(), &[0xAA; 32]].concat();
         let miner = crate::keys::encode_stats_key(crate::keys::STATS_PREFIX_MINER, &miner_suffix);
-        assert!(should_delete_stats_for_replay(&miner, cutoff, cutoff_hh, 0, 0, false).unwrap());
+        assert!(should_delete_stats_for_replay(&miner, cutoff, cutoff_hh, cutoff_hh, 0, 0, false).unwrap());
+    }
+
+    /// The two hour-keyed bucket families use different clocks: chain-level
+    /// HOURLY keys are UTC, activity hourly keys are UTC+8. A replay whose
+    /// start instant is 2026-02-10T07:xx UTC == 2026-02-10T15:xx UTC+8 must
+    /// route each prefix through its own cutoff — the pre-fix behavior applied
+    /// the UTC+8 cutoff to UTC keys, so chain hourly rows were never deleted.
+    #[test]
+    fn test_should_delete_stats_for_replay_routes_hour_cutoffs_by_clock() {
+        let cutoff = b"20260210";
+        let cutoff_hh_utc8 = b"2026021015";
+        let cutoff_hh_utc = b"2026021007";
+        let check = |prefix: u8, hour: &[u8]| {
+            let key = crate::keys::encode_stats_key(prefix, hour);
+            should_delete_stats_for_replay(&key, cutoff, cutoff_hh_utc8, cutoff_hh_utc, 0, 0, false)
+                .unwrap()
+        };
+
+        // Chain HOURLY at/after the UTC cutoff hour — deleted (the cutoff
+        // bucket itself is intercepted by repair when the day is partial).
+        assert!(check(crate::keys::STATS_PREFIX_HOURLY, b"2026021007"));
+        assert!(check(crate::keys::STATS_PREFIX_HOURLY, b"2026021008"));
+        // Chain HOURLY before the UTC cutoff hour — preserved.
+        assert!(!check(crate::keys::STATS_PREFIX_HOURLY, b"2026021006"));
+
+        // Activity hourly keys stay governed by the UTC+8 cutoff: the bucket
+        // matching the UTC cutoff string sits 8 hours BEFORE the replay start
+        // on the activity clock and must be preserved.
+        assert!(!check(crate::keys::STATS_PREFIX_ACTIVITY_HOURLY, b"2026021007"));
+        assert!(check(crate::keys::STATS_PREFIX_ACTIVITY_HOURLY, b"2026021015"));
+    }
+
+    /// The HOURLY repair branch must compare against the UTC cutoff hour and
+    /// find its deltas under UTC hour keys — aligned with the `>=` delete
+    /// predicate that includes the cutoff bucket.
+    #[test]
+    fn test_repair_hourly_uses_utc_cutoff_hour() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+
+        let original = HourlyStats {
+            hour: 1_770_692_400, // 2026-02-10T07:00:00Z
+            blocks_count: 300,
+            transactions_count: 900,
+            cells_created: 1200,
+            cells_consumed: 800,
+            capacity_transferred: 0,
+        };
+        let key = keys::encode_stats_key(keys::STATS_PREFIX_HOURLY, b"2026021007");
+        let value = bincode::serialize(&original).unwrap();
+
+        let mut hour_deltas = std::collections::HashMap::new();
+        hour_deltas.insert("2026021007".to_string(), (2i32, 6, 10, 4));
+        let deltas = RollbackStatsDeltas {
+            date: std::collections::HashMap::new(),
+            date_uncles: std::collections::HashMap::new(),
+            hour: hour_deltas,
+            date_capacity: std::collections::HashMap::new(),
+            activity_date: std::collections::HashMap::new(),
+            activity_hour: std::collections::HashMap::new(),
+            miner: std::collections::HashMap::new(),
+        };
+
+        let mut batch = rocksdb::WriteBatch::default();
+        // UTC+8 cutoff hour is 2026021015; the UTC one is 2026021007.
+        let repaired = repair_cutoff_date_stats(
+            &key,
+            &value,
+            "20260210",
+            "2026021015",
+            "2026021007",
+            &deltas,
+            &store,
+            &mut batch,
+        )
+        .unwrap();
+        assert!(
+            repaired,
+            "UTC-keyed HOURLY cutoff bucket must be repaired via the UTC cutoff"
+        );
+
+        store.write_batch(batch).unwrap();
+        let raw = store.get_stats_key(&key).unwrap().unwrap();
+        let result: HourlyStats = bincode::deserialize(&raw).unwrap();
+        assert_eq!(result.blocks_count, 298);
+        assert_eq!(result.transactions_count, 894);
+        assert_eq!(result.cells_created, 1190);
+        assert_eq!(result.cells_consumed, 796);
+
+        // An hour strictly after the UTC cutoff is NOT repaired (deleted by
+        // the caller instead).
+        let later_key = keys::encode_stats_key(keys::STATS_PREFIX_HOURLY, b"2026021008");
+        let mut batch = rocksdb::WriteBatch::default();
+        let repaired = repair_cutoff_date_stats(
+            &later_key,
+            &value,
+            "20260210",
+            "2026021015",
+            "2026021007",
+            &deltas,
+            &store,
+            &mut batch,
+        )
+        .unwrap();
+        assert!(!repaired);
+    }
+
+    /// Rolled-back activity deltas exceeding the stored aggregate mean the
+    /// delta collection is out of sync with persisted state. That must fail
+    /// fast with key/date context — never be masked by a zero clamp.
+    #[test]
+    fn test_repair_activity_underflow_fails_fast() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+
+        let date = "20260210";
+        let original = DailyActivityStats {
+            transfer_count: 2,
+            ..Default::default()
+        };
+        store.put_daily_activity_stats(date, &original).unwrap();
+
+        let mut activity_date = std::collections::HashMap::new();
+        activity_date.insert(
+            date.to_string(),
+            DailyActivityStats {
+                transfer_count: 5, // more than stored
+                ..Default::default()
+            },
+        );
+        let deltas = RollbackStatsDeltas {
+            date: std::collections::HashMap::new(),
+            date_uncles: std::collections::HashMap::new(),
+            hour: std::collections::HashMap::new(),
+            date_capacity: std::collections::HashMap::new(),
+            activity_date,
+            activity_hour: std::collections::HashMap::new(),
+            miner: std::collections::HashMap::new(),
+        };
+
+        let key = keys::encode_stats_key(keys::STATS_PREFIX_ACTIVITY_DAILY, date.as_bytes());
+        let value = bincode::serialize(&original).unwrap();
+        let mut batch = rocksdb::WriteBatch::default();
+        let err = repair_cutoff_date_stats(
+            &key,
+            &value,
+            date,
+            "2026021015",
+            "2026021007",
+            &deltas,
+            &store,
+            &mut batch,
+        )
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("underflow")
+                && msg.contains("transfer_count")
+                && msg.contains("20260210")
+                && msg.contains("stored=2")
+                && msg.contains("rolled_back=5"),
+            "underflow error must carry field/bucket/value context, got: {}",
+            msg
+        );
+    }
+
+    /// A delta referencing a script_count key absent from the stored row is
+    /// the same invariant violation and must also fail fast with context.
+    #[test]
+    fn test_repair_activity_missing_script_key_fails_fast() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+
+        let date = "20260210";
+        let original = DailyActivityStats {
+            transfer_count: 10,
+            ..Default::default()
+        };
+        store.put_daily_activity_stats(date, &original).unwrap();
+
+        let mut delta = DailyActivityStats::default();
+        delta.script_counts.insert("aabb".to_string(), 1);
+        let mut activity_date = std::collections::HashMap::new();
+        activity_date.insert(date.to_string(), delta);
+        let deltas = RollbackStatsDeltas {
+            date: std::collections::HashMap::new(),
+            date_uncles: std::collections::HashMap::new(),
+            hour: std::collections::HashMap::new(),
+            date_capacity: std::collections::HashMap::new(),
+            activity_date,
+            activity_hour: std::collections::HashMap::new(),
+            miner: std::collections::HashMap::new(),
+        };
+
+        let key = keys::encode_stats_key(keys::STATS_PREFIX_ACTIVITY_DAILY, date.as_bytes());
+        let value = bincode::serialize(&original).unwrap();
+        let mut batch = rocksdb::WriteBatch::default();
+        let err = repair_cutoff_date_stats(
+            &key,
+            &value,
+            date,
+            "2026021015",
+            "2026021007",
+            &deltas,
+            &store,
+            &mut batch,
+        )
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("missing from stored row") && msg.contains("aabb"),
+            "missing-key error must carry script/bucket context, got: {}",
+            msg
+        );
     }
 
     #[test]
@@ -4046,10 +4414,10 @@ mod tests {
         let code_hash = [0xAA; 32];
 
         let new_key = crate::keys::encode_script_daily_key(&code_hash, false, 20260211);
-        assert!(should_delete_stats_for_replay(&new_key, cutoff, cutoff_hh, 0, 0, false).unwrap());
+        assert!(should_delete_stats_for_replay(&new_key, cutoff, cutoff_hh, cutoff_hh, 0, 0, false).unwrap());
 
         let old_key = crate::keys::encode_script_daily_key(&code_hash, true, 20260209);
-        assert!(!should_delete_stats_for_replay(&old_key, cutoff, cutoff_hh, 0, 0, false).unwrap());
+        assert!(!should_delete_stats_for_replay(&old_key, cutoff, cutoff_hh, cutoff_hh, 0, 0, false).unwrap());
     }
 
     #[test]
@@ -4059,10 +4427,10 @@ mod tests {
         let type_hash = [0xBB; 32];
 
         let new_key = crate::keys::encode_token_daily_key(&type_hash, 20260211);
-        assert!(should_delete_stats_for_replay(&new_key, cutoff, cutoff_hh, 0, 0, false).unwrap());
+        assert!(should_delete_stats_for_replay(&new_key, cutoff, cutoff_hh, cutoff_hh, 0, 0, false).unwrap());
 
         let old_key = crate::keys::encode_token_daily_key(&type_hash, 20260209);
-        assert!(!should_delete_stats_for_replay(&old_key, cutoff, cutoff_hh, 0, 0, false).unwrap());
+        assert!(!should_delete_stats_for_replay(&old_key, cutoff, cutoff_hh, cutoff_hh, 0, 0, false).unwrap());
     }
 
     #[test]
@@ -4072,10 +4440,10 @@ mod tests {
         let cluster_id = [0xCC; 32];
 
         let new_key = crate::keys::encode_cluster_daily_key(&cluster_id, 20260211);
-        assert!(should_delete_stats_for_replay(&new_key, cutoff, cutoff_hh, 0, 0, false).unwrap());
+        assert!(should_delete_stats_for_replay(&new_key, cutoff, cutoff_hh, cutoff_hh, 0, 0, false).unwrap());
 
         let old_key = crate::keys::encode_cluster_daily_key(&cluster_id, 20260209);
-        assert!(!should_delete_stats_for_replay(&old_key, cutoff, cutoff_hh, 0, 0, false).unwrap());
+        assert!(!should_delete_stats_for_replay(&old_key, cutoff, cutoff_hh, cutoff_hh, 0, 0, false).unwrap());
     }
 
     #[test]
@@ -4085,10 +4453,10 @@ mod tests {
         let spore_id = [0xDD; 32];
 
         let new_key = crate::keys::encode_spore_daily_key(&spore_id, 20260211);
-        assert!(should_delete_stats_for_replay(&new_key, cutoff, cutoff_hh, 0, 0, false).unwrap());
+        assert!(should_delete_stats_for_replay(&new_key, cutoff, cutoff_hh, cutoff_hh, 0, 0, false).unwrap());
 
         let old_key = crate::keys::encode_spore_daily_key(&spore_id, 20260209);
-        assert!(!should_delete_stats_for_replay(&old_key, cutoff, cutoff_hh, 0, 0, false).unwrap());
+        assert!(!should_delete_stats_for_replay(&old_key, cutoff, cutoff_hh, cutoff_hh, 0, 0, false).unwrap());
     }
 
     #[test]
@@ -4098,10 +4466,10 @@ mod tests {
         let collection_id = [0xEE; 24];
 
         let new_key = crate::keys::encode_object_daily_key(&collection_id, 20260211);
-        assert!(should_delete_stats_for_replay(&new_key, cutoff, cutoff_hh, 0, 0, false).unwrap());
+        assert!(should_delete_stats_for_replay(&new_key, cutoff, cutoff_hh, cutoff_hh, 0, 0, false).unwrap());
 
         let old_key = crate::keys::encode_object_daily_key(&collection_id, 20260209);
-        assert!(!should_delete_stats_for_replay(&old_key, cutoff, cutoff_hh, 0, 0, false).unwrap());
+        assert!(!should_delete_stats_for_replay(&old_key, cutoff, cutoff_hh, cutoff_hh, 0, 0, false).unwrap());
     }
 
     #[test]
@@ -4114,20 +4482,20 @@ mod tests {
         let key =
             crate::keys::encode_stats_key(crate::keys::STATS_PREFIX_EPOCH, &100_i64.to_be_bytes());
         assert!(
-            !should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, cutoff_epoch, false)
+            !should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, cutoff_epoch, false)
                 .unwrap()
         );
 
         // Boundary epoch, replay starts at its first block → delete (full rebuild)
         assert!(
-            should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, cutoff_epoch, true).unwrap()
+            should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, cutoff_epoch, true).unwrap()
         );
 
         // Epoch after cutoff → delete regardless
         let key =
             crate::keys::encode_stats_key(crate::keys::STATS_PREFIX_EPOCH, &101_i64.to_be_bytes());
         assert!(
-            should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, cutoff_epoch, false)
+            should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, cutoff_epoch, false)
                 .unwrap()
         );
 
@@ -4135,7 +4503,7 @@ mod tests {
         let key =
             crate::keys::encode_stats_key(crate::keys::STATS_PREFIX_EPOCH, &99_i64.to_be_bytes());
         assert!(
-            !should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, cutoff_epoch, false)
+            !should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, cutoff_epoch, false)
                 .unwrap()
         );
     }
@@ -4153,32 +4521,32 @@ mod tests {
         let type_script_hash = [0xDD; 32];
 
         let key = crate::keys::encode_spore_outpoint_key(&tx_hash, output_index);
-        assert!(!should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, 0, false).unwrap());
+        assert!(!should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, 0, false).unwrap());
 
         let key = crate::keys::encode_spore_outpoint_by_id_key(&spore_id, &tx_hash, output_index);
-        assert!(!should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, 0, false).unwrap());
+        assert!(!should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, 0, false).unwrap());
 
         let key = crate::keys::encode_spore_type_index_key(&type_script_hash);
-        assert!(!should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, 0, false).unwrap());
+        assert!(!should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, 0, false).unwrap());
 
         let key = crate::keys::encode_mnft_class_outpoint_key(&tx_hash, output_index);
-        assert!(!should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, 0, false).unwrap());
+        assert!(!should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, 0, false).unwrap());
 
         let key = crate::keys::encode_mnft_token_outpoint_key(&tx_hash, output_index);
-        assert!(!should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, 0, false).unwrap());
+        assert!(!should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, 0, false).unwrap());
 
         let key = crate::keys::encode_dotbit_account_outpoint_key(&tx_hash, output_index);
-        assert!(!should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, 0, false).unwrap());
+        assert!(!should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, 0, false).unwrap());
 
         let key = crate::keys::encode_dotbit_outpoint_by_account_id_key(
             &account_id,
             &tx_hash,
             output_index,
         );
-        assert!(!should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, 0, false).unwrap());
+        assert!(!should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, 0, false).unwrap());
 
         let key = crate::keys::encode_object_type_index_key(&type_script_hash);
-        assert!(!should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, 0, false).unwrap());
+        assert!(!should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, 0, false).unwrap());
     }
 
     #[test]
@@ -4194,39 +4562,39 @@ mod tests {
         // TOKEN_HOURLY at cutoff_hour → deleted
         let key = crate::keys::encode_token_hourly_key(&type_hash, cutoff_hour);
         assert!(
-            should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hour, 0, false).unwrap()
+            should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, cutoff_hour, 0, false).unwrap()
         );
 
         // TOKEN_HOURLY before cutoff → preserved
         let key = crate::keys::encode_token_hourly_key(&type_hash, cutoff_hour - 1);
         assert!(
-            !should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hour, 0, false)
+            !should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, cutoff_hour, 0, false)
                 .unwrap()
         );
 
         // SPORE_HOURLY at cutoff_hour → deleted
         let key = crate::keys::encode_spore_hourly_key(&cluster_id, cutoff_hour);
         assert!(
-            should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hour, 0, false).unwrap()
+            should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, cutoff_hour, 0, false).unwrap()
         );
 
         // SPORE_HOURLY before cutoff → preserved
         let key = crate::keys::encode_spore_hourly_key(&cluster_id, cutoff_hour - 1);
         assert!(
-            !should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hour, 0, false)
+            !should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, cutoff_hour, 0, false)
                 .unwrap()
         );
 
         // OBJECT_HOURLY at cutoff_hour → deleted
         let key = crate::keys::encode_object_hourly_key(&collection_id, cutoff_hour);
         assert!(
-            should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hour, 0, false).unwrap()
+            should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, cutoff_hour, 0, false).unwrap()
         );
 
         // OBJECT_HOURLY before cutoff → preserved
         let key = crate::keys::encode_object_hourly_key(&collection_id, cutoff_hour - 1);
         assert!(
-            !should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hour, 0, false)
+            !should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, cutoff_hour, 0, false)
                 .unwrap()
         );
     }
@@ -4237,7 +4605,7 @@ mod tests {
         let cutoff_hh = b"invalid-cutoff";
         let code_hash = [0xAA; 32];
         let key = crate::keys::encode_script_daily_key(&code_hash, false, 20260211);
-        let err = should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, 0, false).unwrap_err();
+        let err = should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, 0, false).unwrap_err();
         assert!(err.to_string().contains("invalid cutoff date"));
     }
 
@@ -7971,23 +8339,23 @@ mod tests {
         // Hour 14 on same date — canonical, should NOT be deleted
         let key_before = keys::encode_stats_key(keys::STATS_PREFIX_HOURLY, b"2026021014");
         assert!(
-            !should_delete_stats_for_replay(&key_before, cutoff, cutoff_hh, 0, 0, false).unwrap()
+            !should_delete_stats_for_replay(&key_before, cutoff, cutoff_hh, cutoff_hh, 0, 0, false).unwrap()
         );
 
         // Hour 15 (cutoff hour) — should be deleted (repair handles it)
         let key_at = keys::encode_stats_key(keys::STATS_PREFIX_HOURLY, b"2026021015");
-        assert!(should_delete_stats_for_replay(&key_at, cutoff, cutoff_hh, 0, 0, false).unwrap());
+        assert!(should_delete_stats_for_replay(&key_at, cutoff, cutoff_hh, cutoff_hh, 0, 0, false).unwrap());
 
         // Hour 16 — after cutoff, should be deleted
         let key_after = keys::encode_stats_key(keys::STATS_PREFIX_HOURLY, b"2026021016");
         assert!(
-            should_delete_stats_for_replay(&key_after, cutoff, cutoff_hh, 0, 0, false).unwrap()
+            should_delete_stats_for_replay(&key_after, cutoff, cutoff_hh, cutoff_hh, 0, 0, false).unwrap()
         );
 
         // Previous day — should NOT be deleted
         let key_prev_day = keys::encode_stats_key(keys::STATS_PREFIX_HOURLY, b"2026020923");
         assert!(
-            !should_delete_stats_for_replay(&key_prev_day, cutoff, cutoff_hh, 0, 0, false).unwrap()
+            !should_delete_stats_for_replay(&key_prev_day, cutoff, cutoff_hh, cutoff_hh, 0, 0, false).unwrap()
         );
     }
 
@@ -7998,15 +8366,15 @@ mod tests {
 
         // Hour 14 — canonical, NOT deleted
         let key = keys::encode_stats_key(keys::STATS_PREFIX_ACTIVITY_HOURLY, b"2026021014");
-        assert!(!should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, 0, false).unwrap());
+        assert!(!should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, 0, false).unwrap());
 
         // Hour 15 (cutoff) — deleted
         let key = keys::encode_stats_key(keys::STATS_PREFIX_ACTIVITY_HOURLY, b"2026021015");
-        assert!(should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, 0, false).unwrap());
+        assert!(should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, 0, false).unwrap());
 
         // Hour 16 — deleted
         let key = keys::encode_stats_key(keys::STATS_PREFIX_ACTIVITY_HOURLY, b"2026021016");
-        assert!(should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, 0, false).unwrap());
+        assert!(should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, 0, false).unwrap());
     }
 
     #[test]
@@ -8016,26 +8384,26 @@ mod tests {
 
         // Daily ADDR_SET on cutoff date — preserved (strict >)
         let key = keys::encode_stats_key(keys::STATS_PREFIX_ACTIVITY_DAILY_ADDR_SET, b"20260210");
-        assert!(!should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, 0, false).unwrap());
+        assert!(!should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, 0, false).unwrap());
 
         // Daily ADDR_SET day after — deleted
         let key = keys::encode_stats_key(keys::STATS_PREFIX_ACTIVITY_DAILY_ADDR_SET, b"20260211");
-        assert!(should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, 0, false).unwrap());
+        assert!(should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, 0, false).unwrap());
 
         // Hourly ADDR_SET at cutoff hour — preserved (strict >)
         let key =
             keys::encode_stats_key(keys::STATS_PREFIX_ACTIVITY_HOURLY_ADDR_SET, b"2026021015");
-        assert!(!should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, 0, false).unwrap());
+        assert!(!should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, 0, false).unwrap());
 
         // Hourly ADDR_SET hour before cutoff — preserved
         let key =
             keys::encode_stats_key(keys::STATS_PREFIX_ACTIVITY_HOURLY_ADDR_SET, b"2026021014");
-        assert!(!should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, 0, false).unwrap());
+        assert!(!should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, 0, false).unwrap());
 
         // Hourly ADDR_SET hour after cutoff — deleted
         let key =
             keys::encode_stats_key(keys::STATS_PREFIX_ACTIVITY_HOURLY_ADDR_SET, b"2026021016");
-        assert!(should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, 0, false).unwrap());
+        assert!(should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, 0, false).unwrap());
     }
 
     #[test]
@@ -8093,6 +8461,7 @@ mod tests {
             &value,
             date,
             "2026021015",
+            "2026021015",
             &deltas,
             &store,
             &mut batch,
@@ -8146,6 +8515,7 @@ mod tests {
             &value,
             date,
             "2026021015",
+            "2026021015",
             &deltas,
             &store,
             &mut batch,
@@ -8194,6 +8564,7 @@ mod tests {
             &key,
             &value,
             date,
+            "2026021015",
             "2026021015",
             &deltas,
             &store,

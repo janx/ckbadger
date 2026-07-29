@@ -489,10 +489,34 @@ pub fn encode_stats_key(prefix: u8, suffix: &[u8]) -> Vec<u8> {
 }
 
 /// Stats key prefixes
+///
+/// # Timezone conventions (deliberate, but two-clocked — read before
+/// comparing against these keys)
+///
+/// - **Date-scoped suffixes (`%Y%m%d`)** — `DAILY`, `DAILY_BLOCK`, `MINER`,
+///   `DAO_DAILY_SNAPSHOT`, `ACTIVITY_DAILY`, `HODL_WAVE`, etc. — use the
+///   **UTC+8** calendar day (`ckbadger_common::block_date_from_ms`), matching
+///   the CKB explorer's day boundary.
+/// - **`HOURLY` (`%Y%m%d%H`)** uses the **UTC** clock: the live writer
+///   formats the UTC-truncated block hour
+///   (`BatchWriter::update_hourly_statistics`), and
+///   `ckbadger_common::utc_hour_key_from_ms` is the shared encoder.
+/// - **`ACTIVITY_HOURLY` / `ACTIVITY_HOURLY_ADDR_SET` (`%Y%m%d%H`)** use the
+///   **UTC+8** clock (`ckbadger_common::block_datetime_from_ms`), keeping the
+///   hourly activity series aligned with its UTC+8 daily parent.
+///
+/// Any cutoff/window computation against an hour-keyed prefix MUST use the
+/// clock of that prefix (see reorg `should_delete_stats_for_replay`, which
+/// carries one cutoff per clock).
 pub mod stats_prefix {
+    /// Chain daily stats. Suffix: `%Y%m%d`, UTC+8 calendar day.
     pub const DAILY: u8 = 0x01;
+    /// Chain hourly stats. Suffix: `%Y%m%d%H` on the **UTC** clock — the one
+    /// hour-keyed family that is NOT UTC+8.
     pub const HOURLY: u8 = 0x02;
     pub const EPOCH: u8 = 0x03;
+    /// Per-miner daily blocks. Suffix: `%Y%m%d` (UTC+8) + 32B miner lock hash
+    /// (cellbase-witness miner, RFC-0022).
     pub const MINER: u8 = 0x04;
     pub const BLOCK_TIME_DIST: u8 = 0x05;
     pub const EPOCH_TIME_DIST: u8 = 0x06;
@@ -518,7 +542,10 @@ pub mod stats_prefix {
     pub const SPORE_OUTPOINT_BY_ID: u8 = 0x1A;
     pub const DAO_LATEST_STATS: u8 = 0x1B;
     pub const OBJECT_COLLECTION_OWNER: u8 = 0x1C;
+    /// Activity daily stats. Suffix: `%Y%m%d`, UTC+8 calendar day.
     pub const ACTIVITY_DAILY: u8 = 0x1D;
+    /// Activity hourly stats. Suffix: `%Y%m%d%H` on the **UTC+8** clock
+    /// (unlike chain-level `HOURLY`, which is UTC).
     pub const ACTIVITY_HOURLY: u8 = 0x1E;
     pub const DOTBIT_OUTPOINT_BY_ACCOUNT_ID: u8 = 0x1F;
     pub const DAO_TOP_DEPOSITORS: u8 = 0x20;

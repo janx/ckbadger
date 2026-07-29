@@ -124,6 +124,14 @@ impl ExactDaoSnapshotCompensation {
 }
 
 impl BatchWriter {
+    /// Upsert one chain-level hourly stats bucket.
+    ///
+    /// `hour` is the UTC-truncated hour start; the row key is its **UTC**
+    /// `%Y%m%d%H` string (`stats_prefix::HOURLY` convention — activity hourly
+    /// buckets use UTC+8 keys instead) and `HourlyStats.hour` is its epoch
+    /// seconds. `transactions_count` includes the cellbase. Reorg rollback
+    /// cutoffs and the bulk-build `ChainStatsAccumulator` mirror exactly
+    /// these semantics.
     pub fn update_hourly_statistics(
         &self,
         hour: DateTime<Utc>,
@@ -401,6 +409,12 @@ impl BatchWriter {
         Ok(())
     }
 
+    /// Upsert one per-miner daily bucket.
+    ///
+    /// `date` is the UTC+8 calendar day (`block_date` convention shared by
+    /// all date-scoped stats keys); `lock_script_hash` is the cellbase
+    /// WITNESS miner (RFC-0022). The bulk-build `ChainStatsAccumulator`
+    /// mirrors exactly these semantics.
     pub fn update_miner_statistics_batch(
         &self,
         lock_script_hash: &[u8],

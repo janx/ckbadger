@@ -3,8 +3,8 @@
 use ckbadger_common::TokenBalance;
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::types::{
-    AddrTxValue, AddressBalance, FiberChannel, FiberChannelState, ParticipantDelta, ScriptInfo,
-    ScriptReferenceInfo, TokenInfo, TxActions,
+    AddrTxValue, AddressBalance, FiberChannel, FiberChannelState, HourlyStats, ParticipantDelta,
+    ScriptInfo, ScriptReferenceInfo, TokenInfo, TxActions,
 };
 use ckbadger_store::CkbadgerStore;
 use ckbadger_store::{
@@ -1192,4 +1192,107 @@ fn test_rollback_deletes_multi_participant_activities() {
         0,
         "lock_b: all activities were in rolled-back blocks"
     );
+}
+
+// ============================================================
+// B2b regression: chain-level hourly stats (STATS_PREFIX_HOURLY)
+// are keyed by UTC hour strings, while the reorg cutoff used to be
+// derived on the UTC+8 clock — so rollback never touched them and
+// rolled-back residue accumulated monotonically.
+// ============================================================
+
+#[test]
+fn test_rollback_truncates_utc_keyed_chain_hourly_stats() {
+    let (domain, append) = setup_split_stores();
+    let lock_hash = vec![0xEC; 32];
+
+    // make_header timestamps (1_000_000 + n*1000 ms) all sit inside the UTC
+    // hour 1970-01-01T00:00 → chain-hourly key "1970010100". The UTC+8 hour
+    // string for the same instant is "1970010108" — a cutoff computed on the
+    // UTC+8 clock can never match these keys.
+    for n in 1..=5 {
+        insert_full_block(&domain, Some(append.as_ref()), n, &lock_hash);
+    }
+    populate_derived_cfs(&domain, &lock_hash, 5);
+
+    // Pre-rollback bucket state consistent with 5 blocks × (2 txs, 3 outputs
+    // per tx, 2 inputs per non-cellbase tx) from the fixtures above.
+    domain
+        .put_hourly_stats(
+            "1970010100",
+            &HourlyStats {
+                hour: 0,
+                blocks_count: 5,
+                transactions_count: 10,
+                cells_created: 30,
+                cells_consumed: 10,
+                capacity_transferred: 0,
+            },
+        )
+        .unwrap();
+    // A later UTC-hour bucket: everything at/after the replay hour except the
+    // (repaired) cutoff bucket itself must be deleted outright.
+    domain
+        .put_hourly_stats(
+            "1970010101",
+            &HourlyStats {
+                hour: 3600,
+                blocks_count: 1,
+                transactions_count: 2,
+                cells_created: 6,
+                cells_consumed: 2,
+                capacity_transferred: 0,
+            },
+        )
+        .unwrap();
+    // An earlier bucket that must survive untouched.
+    domain
+        .put_hourly_stats(
+            "1969123123",
+            &HourlyStats {
+                hour: -3600,
+                blocks_count: 7,
+                transactions_count: 14,
+                cells_created: 42,
+                cells_consumed: 14,
+                capacity_transferred: 0,
+            },
+        )
+        .unwrap();
+
+    // Shallow reorg: fork point block 3, blocks 4-5 rolled back. The fork
+    // splits the "1970010100" hour, so that bucket must be repaired by delta
+    // subtraction (2 blocks, 4 txs, 12 created, 4 consumed), not deleted.
+    let result = domain
+        .rollback_to_block_with_append_only_store(3, Some(append.as_ref()))
+        .unwrap();
+    assert_eq!(result.blocks_removed, 2);
+
+    let hourly: std::collections::HashMap<String, HourlyStats> = domain
+        .list_hourly_stats_with_keys()
+        .unwrap()
+        .into_iter()
+        .collect();
+
+    let cutoff_bucket = hourly
+        .get("1970010100")
+        .expect("cutoff-hour bucket must be repaired, not deleted");
+    assert_eq!(
+        cutoff_bucket.blocks_count, 3,
+        "cutoff-hour bucket must have the 2 rolled-back blocks subtracted"
+    );
+    assert_eq!(cutoff_bucket.transactions_count, 6);
+    assert_eq!(cutoff_bucket.cells_created, 18);
+    assert_eq!(cutoff_bucket.cells_consumed, 6);
+
+    assert!(
+        !hourly.contains_key("1970010101"),
+        "post-cutoff UTC-hour bucket must be deleted by rollback"
+    );
+
+    let earlier = hourly
+        .get("1969123123")
+        .expect("pre-cutoff bucket must survive");
+    assert_eq!(earlier.blocks_count, 7);
+    assert_eq!(earlier.transactions_count, 14);
 }
