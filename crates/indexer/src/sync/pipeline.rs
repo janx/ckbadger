@@ -59,6 +59,55 @@ impl ParserPrecomputePhaseMetrics {
     }
 }
 
+/// Parser-stage Pass 2: resolve every non-cellbase input against the
+/// prefetched cell info, accumulate `total_input_capacity`, and set the
+/// parser-stage fee via `checked_tx_fee`.
+///
+/// For DAO withdrawal-completion (phase-2) transactions the DAO compensation
+/// is unknown at parse time, so `checked_tx_fee` yields a placeholder (0 when
+/// outputs exceed raw inputs) or an undercounted value (when extra plain
+/// inputs keep raw inputs >= outputs). `write_parsed_batch` MUST correct the
+/// fee for every tx that consumes a withdraw-request outpoint BEFORE
+/// serializing `TxIndexEntry` (see `correct_dao_withdrawal_fees`).
+pub(crate) fn compute_parser_input_capacities_and_fees(
+    all_tx_data: &mut [TxData],
+    input_cell_info: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
+    batch_cell_infos: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
+) -> Result<()> {
+    for tx_data in all_tx_data.iter_mut() {
+        if tx_data.is_cellbase {
+            continue;
+        }
+        let mut has_dao_input = false;
+        for input in &tx_data.inputs {
+            let output_index =
+                parsed_input_outpoint_index_i16(input.previous_output_index, "sync_indexer")?;
+            let key = (input.previous_tx_hash.to_vec(), output_index);
+            if let Some(info) = input_cell_info
+                .get(&key)
+                .or_else(|| batch_cell_infos.get(&key))
+            {
+                tx_data.total_input_capacity += info.capacity;
+                if info
+                    .type_code_hash
+                    .as_deref()
+                    .is_some_and(DaoParser::is_dao_code_hash)
+                {
+                    has_dao_input = true;
+                }
+            }
+        }
+        tx_data.fee = checked_tx_fee(
+            tx_data.total_input_capacity,
+            tx_data.total_output_capacity,
+            has_dao_input,
+            &tx_data.hash,
+            tx_data.block_number,
+        )?;
+    }
+    Ok(())
+}
+
 #[derive(Debug, Default, Clone, Copy)]
 struct ParserBatchPerfSample {
     parse_ms: f64,
@@ -1391,79 +1440,25 @@ impl Indexer {
 
                 // Pass 2: Compute input capacity + fee
                 let compute_fee_started = Instant::now();
-                for tx_data in &mut all_tx_data {
-                    if !tx_data.is_cellbase {
-                        let mut has_dao_input = false;
-                        for input in &tx_data.inputs {
-                            let output_index = match parsed_input_outpoint_index_i16(
-                                input.previous_output_index,
-                                "sync_indexer",
-                            ) {
-                                Ok(v) => v,
-                                Err(e) => {
-                                    record_worker_exit_reason(
-                                        &parser_exit_reason_for_parser,
-                                        format!(
-                                            "parsed_input_outpoint_index_i16 failed for range {}-{}: {}",
-                                            start_block, end_block, e
-                                        ),
-                                    );
-                                    return;
-                                }
-                            };
-                            let key = (input.previous_tx_hash.to_vec(), output_index);
-                            if let Some(info) = input_cell_info.get(&key) {
-                                tx_data.total_input_capacity += info.capacity;
-                                if info
-                                    .type_code_hash
-                                    .as_deref()
-                                    .is_some_and(DaoParser::is_dao_code_hash)
-                                {
-                                    has_dao_input = true;
-                                }
-                            } else if let Some(info) = batch_cell_infos.get(&key) {
-                                tx_data.total_input_capacity += info.capacity;
-                                if info
-                                    .type_code_hash
-                                    .as_deref()
-                                    .is_some_and(DaoParser::is_dao_code_hash)
-                                {
-                                    has_dao_input = true;
-                                }
-                            }
-                        }
-                        tx_data.fee = match checked_tx_fee(
-                            tx_data.total_input_capacity,
-                            tx_data.total_output_capacity,
-                            has_dao_input,
-                            &tx_data.hash,
-                            tx_data.block_number,
-                        ) {
-                            Ok(fee) => fee,
-                            Err(err) => {
-                                error!(
-                                    start_block,
-                                    end_block,
-                                    tx_hash = %hex::encode(tx_data.hash),
-                                    block_number = tx_data.block_number,
-                                    "Parser: invalid tx fee accounting: {}",
-                                    err
-                                );
-                                record_worker_exit_reason(
-                                    &parser_exit_reason_for_parser,
-                                    format!(
-                                        "invalid tx fee accounting: range {}-{}, block={}, tx=0x{}, error={}",
-                                        start_block,
-                                        end_block,
-                                        tx_data.block_number,
-                                        hex::encode(tx_data.hash),
-                                        err
-                                    ),
-                                );
-                                return;
-                            }
-                        };
-                    }
+                if let Err(err) = compute_parser_input_capacities_and_fees(
+                    &mut all_tx_data,
+                    &input_cell_info,
+                    &batch_cell_infos,
+                ) {
+                    error!(
+                        start_block,
+                        end_block,
+                        "Parser: invalid tx fee accounting: {}",
+                        err
+                    );
+                    record_worker_exit_reason(
+                        &parser_exit_reason_for_parser,
+                        format!(
+                            "invalid tx fee accounting: range {}-{}, error={}",
+                            start_block, end_block, err
+                        ),
+                    );
+                    return;
                 }
                 precompute_phase_metrics.compute_fee_ms =
                     compute_fee_started.elapsed().as_secs_f64() * 1000.0;
