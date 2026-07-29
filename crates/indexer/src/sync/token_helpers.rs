@@ -484,6 +484,14 @@ pub(crate) struct OnchainTokenInfo {
     pub binding: OnchainInfoBinding,
 }
 
+/// Type script hash by outpoint — a borrowed view over cells the caller has
+/// already resolved, used to answer "does this input carry type X?" without
+/// resolving anything again.
+///
+/// Two such views are needed to cover every input of a batch: outputs created
+/// inside the batch, and inputs created earlier and prefetched from the store.
+pub(crate) type OutpointTypeHashes<'a> = HashMap<(&'a [u8], i32), &'a [u8]>;
+
 /// Resolve Unique Cell token info to xUDT token type_hashes.
 ///
 /// Two binding paths, in priority order:
@@ -497,15 +505,21 @@ pub(crate) struct OnchainTokenInfo {
 ///    script (all parseable ones agreeing on a single info) AND mints exactly
 ///    one xUDT type. An extension binding is never displaced by a
 ///    co-occurrence binding.
+///
+/// `persisted_input_types` carries the types of inputs created before this
+/// batch; without it a transfer of an already-issued token would look like a
+/// mint (see [`collect_issuance_cooccurrence_binding`]).
 pub(crate) fn collect_token_onchain_info(
     all_tx_data: &[TxData],
+    persisted_input_types: &OutpointTypeHashes<'_>,
 ) -> HashMap<Vec<u8>, OnchainTokenInfo> {
     let mut result: HashMap<Vec<u8>, OnchainTokenInfo> = HashMap::new();
 
-    // Outpoint → type_script_hash for outputs created in this batch. Used to
-    // screen same-batch transfers out of the issuance co-occurrence rule
-    // (an input carrying the candidate type means the tx moves, not mints it).
-    let mut batch_output_types: HashMap<(&[u8; 32], i32), &[u8]> = HashMap::new();
+    // Outpoint → type_script_hash for outputs created in this batch. Used
+    // together with `persisted_input_types` to screen transfers out of the
+    // issuance co-occurrence rule (an input carrying the candidate type means
+    // the tx moves, not mints it).
+    let mut batch_output_types: OutpointTypeHashes<'_> = HashMap::new();
     for tx_data in all_tx_data {
         for (output_index, cell) in tx_data.cells.iter().enumerate() {
             let Some(type_script_hash) = cell.type_script_hash.as_ref() else {
@@ -514,7 +528,7 @@ pub(crate) fn collect_token_onchain_info(
             let Ok(output_index) = i32::try_from(output_index) else {
                 continue;
             };
-            batch_output_types.insert((&tx_data.hash, output_index), type_script_hash);
+            batch_output_types.insert((tx_data.hash.as_slice(), output_index), type_script_hash);
         }
     }
 
@@ -572,9 +586,11 @@ pub(crate) fn collect_token_onchain_info(
         }
 
         // -- 2. issuance co-occurrence binding (heuristic) ------------------
-        if let Some((token_type_hash, info)) =
-            collect_issuance_cooccurrence_binding(tx_data, &batch_output_types)
-        {
+        if let Some((token_type_hash, info)) = collect_issuance_cooccurrence_binding(
+            tx_data,
+            &batch_output_types,
+            persisted_input_types,
+        ) {
             result.entry(token_type_hash).or_insert(OnchainTokenInfo {
                 info,
                 binding: OnchainInfoBinding::IssuanceCooccurrence,
@@ -591,13 +607,19 @@ pub(crate) fn collect_token_onchain_info(
 /// Safety rules (see `collect_token_onchain_info`): at least one output typed
 /// with the deployed Unique Cell type script, all parseable unique outputs
 /// agreeing on exactly one info, and exactly one minted xUDT type — an
-/// amount-carrying xUDT output whose type is not present on any input
-/// resolvable within this batch. Inputs created outside the batch cannot veto
-/// here; the store-level apply additionally never overwrites already-known
-/// metadata, so a non-issuance false positive cannot clobber existing state.
+/// amount-carrying xUDT output whose type is present on no input of the
+/// transaction.
+///
+/// The input veto set is the union of two disjoint provenances that together
+/// cover every input: cells created by this batch (`batch_output_types`) and
+/// cells created earlier and resolved from the store
+/// (`persisted_input_types`). This mirrors the bulk reducer, which vetoes on
+/// `ResolvedTxFacts::resolved_inputs`; both paths must classify mints
+/// identically or the same chain yields different stored metadata.
 fn collect_issuance_cooccurrence_binding(
     tx_data: &TxData,
-    batch_output_types: &HashMap<(&[u8; 32], i32), &[u8]>,
+    batch_output_types: &OutpointTypeHashes<'_>,
+    persisted_input_types: &OutpointTypeHashes<'_>,
 ) -> Option<(Vec<u8>, UniqueTokenInfo)> {
     // Exactly one distinct parsed info among Unique-Cell-typed outputs.
     let mut unique_info: Option<UniqueTokenInfo> = None;
@@ -619,11 +641,17 @@ fn collect_issuance_cooccurrence_binding(
     }
     let unique_info = unique_info?;
 
-    // Types carried by inputs that resolve to outputs created in this batch.
+    // Types carried by this transaction's inputs, whichever side they were
+    // resolved from (same-batch outputs or persisted store state).
     let mut input_types: HashSet<&[u8]> = HashSet::new();
     for input in &tx_data.inputs {
-        if let Some(type_hash) =
-            batch_output_types.get(&(&input.previous_tx_hash, input.previous_output_index))
+        let key = (
+            input.previous_tx_hash.as_slice(),
+            input.previous_output_index,
+        );
+        if let Some(type_hash) = batch_output_types
+            .get(&key)
+            .or_else(|| persisted_input_types.get(&key))
         {
             input_types.insert(type_hash);
         }
@@ -1478,7 +1506,7 @@ mod tests {
             vec![],
         );
 
-        let infos = collect_token_onchain_info(&[tx]);
+        let infos = collect_token_onchain_info(&[tx], &HashMap::new());
         let bound = infos.get(token_type_hash.as_slice()).unwrap();
         assert_eq!(bound.binding, OnchainInfoBinding::XudtExtension);
         assert_eq!(bound.info.name, "Token");
@@ -1494,7 +1522,7 @@ mod tests {
         let xudt_cell = dummy_xudt_cell(token_type_hash, type_args);
         let tx = dummy_tx_data([0xF1; 32], false, vec![], vec![xudt_cell], vec![], vec![]);
 
-        let infos = collect_token_onchain_info(&[tx]);
+        let infos = collect_token_onchain_info(&[tx], &HashMap::new());
         assert!(infos.is_empty());
     }
 
@@ -1568,7 +1596,7 @@ mod tests {
             vec![],
         );
 
-        let infos = collect_token_onchain_info(&[tx]);
+        let infos = collect_token_onchain_info(&[tx], &HashMap::new());
         let bound = infos
             .get(token_type_hash.as_slice())
             .expect("single-mint issuance tx with a Unique Cell output must bind token info");
@@ -1613,10 +1641,49 @@ mod tests {
             vec![],
         );
 
-        let infos = collect_token_onchain_info(&[tx1, tx2]);
+        let infos = collect_token_onchain_info(&[tx1, tx2], &HashMap::new());
         assert!(
             !infos.contains_key(token_type_hash.as_slice()),
             "a same-batch transfer must not be treated as an issuance"
+        );
+    }
+
+    #[test]
+    fn test_collect_token_onchain_info_cooccurrence_skips_persisted_transfer_input() {
+        // The token was issued in an earlier batch, so its input resolves from
+        // the store rather than from this batch's outputs. It is still a
+        // transfer, not an issuance, and must not adopt the Unique Cell info.
+        let token_type_hash = [0x9C; 32];
+        let previous_tx_hash = [0xE1; 32];
+        let tx = dummy_tx_data(
+            [0xE2; 32],
+            false,
+            vec![crate::parser::transaction::ParsedInput {
+                previous_tx_hash,
+                previous_output_index: 0,
+                since: 0,
+            }],
+            vec![
+                dummy_unique_info_cell_with_code_hash(
+                    mainnet_unique_code_hash(),
+                    vec![0x9D; UNIQUE_TYPE_ARGS_LEN],
+                    rgbpp_unique_cell_data(),
+                ),
+                dummy_xudt_cell(token_type_hash, vec![0x0C; 32]),
+            ],
+            vec![],
+            vec![],
+        );
+
+        // The consumed cell was created before this batch, so its type reaches
+        // the rule through the persisted (prefetched) input view.
+        let mut persisted_input_types: OutpointTypeHashes<'_> = HashMap::new();
+        persisted_input_types.insert((previous_tx_hash.as_slice(), 0), token_type_hash.as_slice());
+
+        let infos = collect_token_onchain_info(&[tx], &persisted_input_types);
+        assert!(
+            !infos.contains_key(token_type_hash.as_slice()),
+            "an input resolved from persisted store state must veto the mint classification"
         );
     }
 
@@ -1643,7 +1710,7 @@ mod tests {
             vec![],
         );
 
-        let infos = collect_token_onchain_info(&[tx]);
+        let infos = collect_token_onchain_info(&[tx], &HashMap::new());
         assert!(!infos.contains_key(token_a.as_slice()));
         assert!(!infos.contains_key(token_b.as_slice()));
     }
@@ -1692,7 +1759,7 @@ mod tests {
             vec![],
         );
 
-        let infos = collect_token_onchain_info(&[tx1, tx2]);
+        let infos = collect_token_onchain_info(&[tx1, tx2], &HashMap::new());
         let bound = infos
             .get(token_type_hash.as_slice())
             .expect("extension binding must be present");

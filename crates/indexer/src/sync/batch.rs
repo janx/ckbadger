@@ -2166,7 +2166,29 @@ impl Indexer {
 
             if !udt_tx_contexts.is_empty() {
                 let max_supply_observations = collect_token_max_supply_observations(&all_tx_data);
-                let onchain_token_info = collect_token_onchain_info(&all_tx_data);
+                // Types carried by inputs created before this batch, projected
+                // from the prefetched input view this write already resolved —
+                // no second resolution path. Every input of every non-cellbase
+                // tx is guaranteed to be in `input_cell_info` or in this
+                // batch's own outputs (the unresolved-input check above
+                // fail-fasts otherwise), so the union the co-occurrence rule
+                // sees is exactly the bulk reducer's resolved-input set. Using
+                // `input_udt_info` here would be narrower than bulk: it drops
+                // owner-mode (amount-less) and not-yet-registered typed inputs,
+                // which must still veto a "mint" classification.
+                let persisted_input_types: OutpointTypeHashes<'_> = input_cell_info
+                    .iter()
+                    .filter_map(|((tx_hash, output_index), info)| {
+                        info.type_script_hash.as_deref().map(|type_script_hash| {
+                            (
+                                (tx_hash.as_slice(), i32::from(*output_index)),
+                                type_script_hash,
+                            )
+                        })
+                    })
+                    .collect();
+                let onchain_token_info =
+                    collect_token_onchain_info(&all_tx_data, &persisted_input_types);
                 let mut all_transfers: Vec<(crate::parser::ParsedUdtTransfer, Vec<u8>, i64)> =
                     Vec::new();
                 for ctx in &udt_tx_contexts {
@@ -4994,6 +5016,10 @@ mod tests {
     // `TxIndexEntry` for the phase-2 tx. This is the storage-level truth the
     // API serves; the parser can only write a placeholder for phase-2 txs
     // because DAO compensation is unknown at parse time.
+    //
+    // This module also owns the single in-crate live write-path driver
+    // (`indexer_for_live_write_test` + `write_live_block`); sibling test
+    // modules reuse it instead of standing up a second harness.
 
     mod live_dao_fee {
         use super::*;
@@ -5030,7 +5056,7 @@ mod tests {
         const FUNDING_CAPACITY: u64 = 3000_00000000;
         const CHANGE_CAPACITY: u64 = 1800_00000000;
 
-        fn lock_script() -> Script {
+        pub(super) fn lock_script() -> Script {
             Script {
                 code_hash: SECP_CODE_HASH.to_string(),
                 hash_type: "type".to_string(),
@@ -5080,7 +5106,7 @@ mod tests {
             }
         }
 
-        fn cellbase_tx(hash_byte: u8, capacity: u64) -> TransactionView {
+        pub(super) fn cellbase_tx(hash_byte: u8, capacity: u64) -> TransactionView {
             TransactionView {
                 hash: format!("0x{}", hex::encode([hash_byte; 32])),
                 version: "0x0".to_string(),
@@ -5103,7 +5129,7 @@ mod tests {
             }
         }
 
-        fn block(
+        pub(super) fn block(
             number: u64,
             ar: u64,
             transactions: Vec<TransactionView>,
@@ -5119,7 +5145,7 @@ mod tests {
             }
         }
 
-        fn indexer_for_live_write_test(store: Arc<CkbadgerStore>) -> Indexer {
+        pub(super) fn indexer_for_live_write_test(store: Arc<CkbadgerStore>) -> Indexer {
             // Live-path writers derive knowledge_size from DAO `U` minus the
             // genesis baseline; seed a baseline with zero virtual occupied
             // capacity so the fixture headers' small U stays non-negative.
@@ -5277,7 +5303,10 @@ mod tests {
         /// Drive one block through the same steps the live pipeline performs:
         /// raw parse, batch cell info construction, input prefetch from the
         /// store, the parser fee pass, then `write_parsed_batch`.
-        async fn write_live_block(indexer: &Indexer, block: BlockResponseWithCycles) -> Result<()> {
+        pub(super) async fn write_live_block(
+            indexer: &Indexer,
+            block: BlockResponseWithCycles,
+        ) -> Result<()> {
             let blocks = vec![block];
             let (all_parsed_blocks, mut all_tx_data, all_input_outpoints) =
                 parse_blocks_parallel(&blocks)?;
@@ -5292,6 +5321,11 @@ mod tests {
                         cell.type_args.as_ref().map(|args| args.len()),
                         cell.data_size,
                     );
+                    // Mirror the parser's Pass 1 (`pipeline.rs`): UDT outputs
+                    // carry their parsed amount into `batch_cell_infos`, which
+                    // is what the write path persists as live cell state.
+                    let udt_amount =
+                        parse_parsed_cell_udt_amount(cell, &tx_data.hash, output_index_i16, None)?;
                     batch_cell_infos.insert(
                         (tx_data.hash.to_vec(), output_index_i16),
                         PositionedCellInfo::new(
@@ -5307,7 +5341,7 @@ mod tests {
                                 type_args: cell.type_args.clone(),
                                 data_size: cell.data_size,
                                 occupied_capacity,
-                                udt_amount: None,
+                                udt_amount,
                                 data_hash: Some(cell.data_hash.to_vec()),
                             },
                             tx_data.block_number,
@@ -5562,6 +5596,286 @@ mod tests {
                 expected_fee,
                 "phase-2 tx with extra plain inputs must have its fee recomputed with compensation"
             );
+        }
+    }
+
+    // ── Unique Cell binding: live write path vs bulk build ────────────────
+    //
+    // The issuance co-occurrence rule binds a Unique Cell's token metadata to
+    // the single xUDT type *minted* in the same transaction. "Minted" means the
+    // type appears on no input of that transaction — including inputs created
+    // in earlier batches, which is the normal case for an already-issued token.
+    // The bulk reducer vetoes on all resolved inputs, so the live write path
+    // must veto on exactly the same set; otherwise the two sync paths persist
+    // different metadata for the same chain.
+
+    mod live_token_binding {
+        use super::live_dao_fee::{
+            block, cellbase_tx, indexer_for_live_write_test, lock_script, write_live_block,
+        };
+        use super::*;
+        use crate::parser::udt::XUDT_CODE_HASH_TYPE;
+        use crate::parser::ScriptParser;
+        use crate::rpc::{CellInput, CellOutput, OutPoint, Script, TransactionView};
+        use crate::sync::materialize_bulk_artifacts_for_test;
+        use ckbadger_store::types::TokenInfo;
+
+        const AR: u64 = 10_000_000_000_000_000;
+        const FUNDING_CAPACITY: u64 = 3000_00000000;
+        const CELL_CAPACITY: u64 = 200_00000000;
+        const TOKEN_AMOUNT: u128 = 1_000_000;
+
+        /// Real mainnet Unique Cell payload from the RGB++ Protocol issuance
+        /// (tx 0xd088a12852664145773257eb1467cb0feca0d1d478968ce90b7f29bce24e2a4a):
+        /// decimal 8, name "RGB++ Protocol", symbol "RGB++".
+        const RGBPP_UNIQUE_CELL_DATA_HEX: &str = "080e5247422b2b2050726f746f636f6c055247422b2b";
+
+        fn lock_script_b() -> Script {
+            Script {
+                args: format!("0x{}", "02".repeat(20)),
+                ..lock_script()
+            }
+        }
+
+        /// xUDT type script whose args are a plain 32-byte owner lock hash (no
+        /// extension flags) — the RGB++-style issuance shape the co-occurrence
+        /// rule exists for.
+        fn xudt_type_script(owner_byte: u8) -> Script {
+            Script {
+                code_hash: XUDT_CODE_HASH_TYPE.to_string(),
+                hash_type: "type".to_string(),
+                args: format!("0x{}", format!("{owner_byte:02x}").repeat(32)),
+            }
+        }
+
+        fn unique_type_script() -> Script {
+            Script {
+                code_hash: crate::sync::token_helpers::UNIQUE_CELL_CODE_HASH_MAINNET.to_string(),
+                hash_type: "type".to_string(),
+                args: format!("0x{}", "9a".repeat(20)),
+            }
+        }
+
+        fn token_type_hash(owner_byte: u8) -> Vec<u8> {
+            ScriptParser::compute_script_hash(&xudt_type_script(owner_byte))
+        }
+
+        fn amount_data(amount: u128) -> String {
+            format!("0x{}", hex::encode(amount.to_le_bytes()))
+        }
+
+        fn outpoint(tx_hash_byte: u8, index: u32) -> OutPoint {
+            OutPoint {
+                tx_hash: format!("0x{}", hex::encode([tx_hash_byte; 32])),
+                index: format!("0x{index:x}"),
+            }
+        }
+
+        fn input(tx_hash_byte: u8, index: u32) -> CellInput {
+            CellInput {
+                since: "0x0".to_string(),
+                previous_output: outpoint(tx_hash_byte, index),
+            }
+        }
+
+        fn output(capacity: u64, lock: Script, type_: Option<Script>) -> CellOutput {
+            CellOutput {
+                capacity: format!("0x{capacity:x}"),
+                lock,
+                type_,
+            }
+        }
+
+        /// Block 100 funds the fixture; block 101 issues token A (owner byte
+        /// 0xa1) with no Unique Cell, so its stored metadata stays empty.
+        fn issuance_blocks() -> Vec<BlockResponseWithCycles> {
+            let block_100 = block(100, AR, vec![cellbase_tx(0xc0, FUNDING_CAPACITY)]);
+
+            let issue_tx = TransactionView {
+                hash: format!("0x{}", hex::encode([0xe1; 32])),
+                version: "0x0".to_string(),
+                cell_deps: vec![],
+                header_deps: vec![],
+                inputs: vec![input(0xc0, 0)],
+                outputs: vec![
+                    output(CELL_CAPACITY, lock_script(), Some(xudt_type_script(0xa1))),
+                    output(FUNDING_CAPACITY - CELL_CAPACITY, lock_script(), None),
+                ],
+                outputs_data: vec![amount_data(TOKEN_AMOUNT), "0x".to_string()],
+                witnesses: vec!["0x".to_string()],
+            };
+            let block_101 = block(101, AR, vec![cellbase_tx(0xc1, 500_00000000), issue_tx]);
+
+            vec![block_100, block_101]
+        }
+
+        /// Block 102: a plain transfer of the already-issued token A that also
+        /// creates a Unique Cell carrying somebody else's token info. The
+        /// token's type is present on an input created in an earlier batch, so
+        /// this is NOT an issuance and nothing may be bound.
+        fn cross_batch_transfer_block() -> BlockResponseWithCycles {
+            let transfer_tx = TransactionView {
+                hash: format!("0x{}", hex::encode([0xe2; 32])),
+                version: "0x0".to_string(),
+                cell_deps: vec![],
+                header_deps: vec![],
+                // in[0]: token A cell (block 101), in[1]: change cell (block 101)
+                inputs: vec![input(0xe1, 0), input(0xe1, 1)],
+                outputs: vec![
+                    output(CELL_CAPACITY, lock_script(), Some(unique_type_script())),
+                    // token A moves to a different lock so the transfer nets out
+                    // non-zero and the token row is rewritten in this batch.
+                    output(CELL_CAPACITY, lock_script_b(), Some(xudt_type_script(0xa1))),
+                    output(FUNDING_CAPACITY - 3 * CELL_CAPACITY, lock_script(), None),
+                ],
+                outputs_data: vec![
+                    format!("0x{RGBPP_UNIQUE_CELL_DATA_HEX}"),
+                    amount_data(TOKEN_AMOUNT),
+                    "0x".to_string(),
+                ],
+                witnesses: vec!["0x".to_string()],
+            };
+            block(102, AR, vec![cellbase_tx(0xc2, 500_00000000), transfer_tx])
+        }
+
+        /// Block 102 variant: a genuine issuance of a *new* token B alongside
+        /// the Unique Cell. Both sync paths must bind the metadata here.
+        fn real_issuance_block() -> BlockResponseWithCycles {
+            let issue_tx = TransactionView {
+                hash: format!("0x{}", hex::encode([0xe3; 32])),
+                version: "0x0".to_string(),
+                cell_deps: vec![],
+                header_deps: vec![],
+                inputs: vec![input(0xe1, 1)],
+                outputs: vec![
+                    output(CELL_CAPACITY, lock_script(), Some(unique_type_script())),
+                    output(CELL_CAPACITY, lock_script_b(), Some(xudt_type_script(0xb2))),
+                    output(FUNDING_CAPACITY - 4 * CELL_CAPACITY, lock_script(), None),
+                ],
+                outputs_data: vec![
+                    format!("0x{RGBPP_UNIQUE_CELL_DATA_HEX}"),
+                    amount_data(TOKEN_AMOUNT),
+                    "0x".to_string(),
+                ],
+                witnesses: vec!["0x".to_string()],
+            };
+            block(102, AR, vec![cellbase_tx(0xc2, 500_00000000), issue_tx])
+        }
+
+        async fn write_blocks_live(blocks: &[BlockResponseWithCycles]) -> Arc<CkbadgerStore> {
+            let dir = tempfile::tempdir().unwrap();
+            let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+            std::mem::forget(dir);
+            let indexer = indexer_for_live_write_test(store.clone());
+            for block in blocks {
+                write_live_block(&indexer, block.clone()).await.unwrap();
+            }
+            store
+        }
+
+        fn assert_same_token_metadata(live: &TokenInfo, bulk: &TokenInfo, label: &str) {
+            assert_eq!(live.name, bulk.name, "{label}: token name must match");
+            assert_eq!(live.symbol, bulk.symbol, "{label}: token symbol must match");
+            assert_eq!(
+                live.decimals, bulk.decimals,
+                "{label}: token decimals must match"
+            );
+            assert_eq!(
+                live.max_supply, bulk.max_supply,
+                "{label}: token max supply must match"
+            );
+            assert_eq!(
+                live.standard, bulk.standard,
+                "{label}: token standard must match"
+            );
+        }
+
+        /// Regression: a Unique Cell created in the same transaction as an
+        /// ordinary transfer of a token issued in an EARLIER batch must not be
+        /// treated as that token's issuance info. The live path used to screen
+        /// only inputs created inside the current batch, so the token's own
+        /// input was invisible and the transfer looked like a single-type mint.
+        #[tokio::test]
+        async fn live_write_path_does_not_bind_unique_info_to_previously_issued_token() {
+            let mut blocks = issuance_blocks();
+            blocks.push(cross_batch_transfer_block());
+            let store = write_blocks_live(&blocks).await;
+
+            let token = store
+                .get_token(&token_type_hash(0xa1))
+                .expect("token lookup must not fail")
+                .expect("issued token must be indexed");
+
+            assert_eq!(
+                token.name, None,
+                "a transfer that co-creates a Unique Cell must not adopt its name"
+            );
+            assert_eq!(
+                token.symbol, None,
+                "a transfer that co-creates a Unique Cell must not adopt its symbol"
+            );
+            assert_eq!(
+                token.decimals, None,
+                "a transfer that co-creates a Unique Cell must not adopt its decimals"
+            );
+        }
+
+        /// Live and bulk must persist bit-identical token metadata for the same
+        /// blocks — here the cross-batch transfer that only bulk classified
+        /// correctly before the fix.
+        #[tokio::test]
+        async fn live_and_bulk_agree_on_metadata_for_cross_batch_transfer() {
+            let mut blocks = issuance_blocks();
+            blocks.push(cross_batch_transfer_block());
+            let store = write_blocks_live(&blocks).await;
+
+            let type_hash = token_type_hash(0xa1);
+            let live = store
+                .get_token(&type_hash)
+                .expect("token lookup must not fail")
+                .expect("issued token must be indexed on the live path");
+            let bulk_snapshot =
+                materialize_bulk_artifacts_for_test(&blocks).expect("bulk build must succeed");
+            let bulk = bulk_snapshot
+                .core
+                .token_state
+                .tokens
+                .get(&type_hash)
+                .expect("issued token must be indexed on the bulk path");
+
+            assert_same_token_metadata(&live, bulk, "cross-batch transfer");
+        }
+
+        /// The same equivalence assertion for a real single-type issuance: both
+        /// paths must bind the Unique Cell's metadata.
+        #[tokio::test]
+        async fn live_and_bulk_agree_on_metadata_for_real_issuance() {
+            let mut blocks = issuance_blocks();
+            blocks.push(real_issuance_block());
+            let store = write_blocks_live(&blocks).await;
+
+            let type_hash = token_type_hash(0xb2);
+            let live = store
+                .get_token(&type_hash)
+                .expect("token lookup must not fail")
+                .expect("newly issued token must be indexed on the live path");
+            let bulk_snapshot =
+                materialize_bulk_artifacts_for_test(&blocks).expect("bulk build must succeed");
+            let bulk = bulk_snapshot
+                .core
+                .token_state
+                .tokens
+                .get(&type_hash)
+                .expect("newly issued token must be indexed on the bulk path");
+
+            assert_same_token_metadata(&live, bulk, "real issuance");
+            assert_eq!(
+                live.name.as_deref(),
+                Some("RGB++ Protocol"),
+                "a genuine single-type issuance must still adopt the Unique Cell name"
+            );
+            assert_eq!(live.symbol.as_deref(), Some("RGB++"));
+            assert_eq!(live.decimals, Some(8));
         }
     }
 }
