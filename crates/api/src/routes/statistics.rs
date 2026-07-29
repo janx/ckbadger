@@ -19,7 +19,9 @@ use crate::response::{
     chart_response_has_data, ok, ApiError, ApiResult, ApiRouteError, ChartDataPoint, ChartResponse,
     SyncStatusResponse as SyncStatus,
 };
-use crate::utils::{apply_owned_capacity_delta, dao_supply, dao_treasury, format_duration};
+use crate::utils::{
+    apply_owned_capacity_delta, dao_supply, dao_treasury, format_duration, hash_type_to_string,
+};
 use crate::warmup::CACHE_KEY_SCRIPTS_ALL;
 use crate::AppState;
 use tracing::instrument;
@@ -761,7 +763,7 @@ fn build_most_utilized_share_chart(
 async fn get_most_utilized_scripts_chart(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<MostUtilizedScriptsChartResponse> {
-    let cache_key = "chart:most-utilized-scripts:v3";
+    let cache_key = "chart:most-utilized-scripts:v4";
     if let Some(cached) = state
         .cache
         .get::<MostUtilizedScriptsChartResponse>(cache_key)
@@ -808,6 +810,14 @@ async fn get_most_utilized_scripts_chart(
         .map_err(|e| ApiError::internal(e.to_string()))?;
         let family_id = member_version.and_then(|version| version_families.get(&version).cloned());
 
+        // Aggregation keys are identities, never display names: a family bucket
+        // is keyed by its family_id, a loose reference form by (code_hash,
+        // hash_type). Buckets that merely share a label stay separate -- the
+        // junk secp data form inherits the type form's ScriptInfo label
+        // (ScriptInfo is keyed by code_hash alone) and two unrelated
+        // deployments may carry the same name, yet none of them are the same
+        // script. Labels ride along for display only, and loose forms carry
+        // their form so same-named identities stay distinguishable.
         let (key, label) = match family_id {
             Some(family_id) => {
                 let name = family_names.get(&family_id).ok_or_else(|| {
@@ -816,21 +826,31 @@ async fn get_most_utilized_scripts_chart(
                         family_id
                     ))
                 })?;
-                (format!("known:{name}"), name.clone())
+                (format!("family:{family_id}"), name.clone())
             }
             None => {
                 let code_hash_hex = format!("0x{}", hex::encode(&reference_hash));
+                let hash_type_name = hash_type_to_string(hash_type).ok_or_else(|| {
+                    ApiError::internal(format!(
+                        "script reference form has an unknown hash_type in most-utilized chart: reference_hash={}, hash_type={}",
+                        code_hash_hex, hash_type
+                    ))
+                })?;
                 let script_name = script_infos_by_code_hash
                     .get(&reference_hash)
                     .and_then(|info| info.name.as_deref())
                     .unwrap_or("Unknown")
                     .trim()
                     .to_string();
-                if is_known_script_name(&script_name) {
-                    (format!("known:{script_name}"), script_name)
+                let display = if is_known_script_name(&script_name) {
+                    script_name
                 } else {
-                    (format!("unknown:{code_hash_hex}"), code_hash_hex)
-                }
+                    code_hash_hex.clone()
+                };
+                (
+                    format!("ref:{code_hash_hex}:{hash_type_name}"),
+                    format!("{display} ({hash_type_name})"),
+                )
             }
         };
 

@@ -254,39 +254,46 @@ async fn test_most_utilized_scripts_chart_ranks_by_used_and_capacity() {
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
     assert_eq!(json["title"], "Scripts Used & Total CKBytes");
+    // a1 and a2 share the "Script A" label but are different code hashes, so
+    // they are different scripts and stay different entities.
     let used_share = &json["usedShare"];
     let used_series = used_share["series"].as_array().unwrap();
-    assert_eq!(used_series.len(), 4);
-    assert_eq!(used_series[0]["label"], "Script A");
+    assert_eq!(used_series.len(), 5);
     assert_eq!(
-        used_series[1]["label"],
-        format!("0x{}", hex::encode(&code_hash_unknown))
+        used_series[0]["label"],
+        format!("0x{} (type)", hex::encode(&code_hash_unknown))
     );
-    assert_eq!(used_series[2]["label"], "Script B");
-    assert_eq!(used_series[3]["label"], "Others");
+    assert_eq!(used_series[1]["label"], "Script A (type)");
+    assert_eq!(used_series[2]["label"], "Script A (type)");
+    assert_eq!(used_series[3]["label"], "Script B (type)");
+    assert_eq!(used_series[4]["label"], "Others");
 
     let used_data = used_share["data"].as_array().unwrap();
     assert_eq!(used_data.len(), 1);
     assert_eq!(used_data[0]["date"], "2024-01-01");
-    assert_eq!(used_data[0]["values"]["top0"], "800");
-    assert_eq!(used_data[0]["values"]["top1"], "550");
-    assert_eq!(used_data[0]["values"]["top2"], "200");
+    assert_eq!(used_data[0]["values"]["top0"], "550");
+    assert_eq!(used_data[0]["values"]["top1"], "500");
+    assert_eq!(used_data[0]["values"]["top2"], "300");
+    assert_eq!(used_data[0]["values"]["top3"], "200");
     assert_eq!(used_data[0]["values"]["others"], "0");
 
     let capacity_share = &json["capacityShare"];
     let capacity_series = capacity_share["series"].as_array().unwrap();
-    assert_eq!(capacity_series[0]["label"], "Script A");
-    assert_eq!(capacity_series[1]["label"], "Script B");
+    assert_eq!(capacity_series.len(), 5);
+    assert_eq!(capacity_series[0]["label"], "Script B (type)");
+    assert_eq!(capacity_series[1]["label"], "Script A (type)");
     assert_eq!(
         capacity_series[2]["label"],
-        format!("0x{}", hex::encode(&code_hash_unknown))
+        format!("0x{} (type)", hex::encode(&code_hash_unknown))
     );
-    assert_eq!(capacity_series[3]["label"], "Others");
+    assert_eq!(capacity_series[3]["label"], "Script A (type)");
+    assert_eq!(capacity_series[4]["label"], "Others");
 
     let capacity_data = capacity_share["data"].as_array().unwrap();
-    assert_eq!(capacity_data[0]["values"]["top0"], "1200");
-    assert_eq!(capacity_data[0]["values"]["top1"], "800");
+    assert_eq!(capacity_data[0]["values"]["top0"], "800");
+    assert_eq!(capacity_data[0]["values"]["top1"], "700");
     assert_eq!(capacity_data[0]["values"]["top2"], "600");
+    assert_eq!(capacity_data[0]["values"]["top3"], "500");
     assert_eq!(capacity_data[0]["values"]["others"], "0");
 }
 
@@ -393,6 +400,152 @@ async fn test_most_utilized_scripts_chart_groups_family_members_like_usage() {
     // Same-source lock: chart family totals == usage endpoint totals.
     let request = Request::builder()
         .uri("/api/v1/scripts/xUDT/usage")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let usage: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(usage["ownedCapacitySum"], "300");
+    assert_eq!(usage["ownedKnowledgeSum"], "180");
+}
+
+#[tokio::test]
+async fn test_most_utilized_scripts_chart_keeps_junk_form_out_of_family_bucket() {
+    // Aggregation keys must be identities, not display names. A junk data-form
+    // usage of a family's type reference hash (the mainnet secp case: ScriptInfo
+    // is keyed by code_hash, so the junk form inherits the family-named label)
+    // must stay its own entity instead of folding back into the family bucket.
+    let store = test_store();
+
+    let version_hash = vec![0x1c; 32];
+    let r_main = vec![0x9b; 32];
+    let r_alt = vec![0x2b; 32];
+    seed_two_reference_script_family(
+        &store,
+        "SecpFamily",
+        "family:secp",
+        &version_hash,
+        &r_main,
+        &r_alt,
+        "USDI",
+    );
+
+    store
+        .put_script_daily_delta(
+            &r_main,
+            1,
+            true,
+            20240101,
+            &ScriptDailyDelta {
+                owned_capacity_delta: 200,
+                owned_knowledge_delta: 120,
+            },
+        )
+        .unwrap();
+    store
+        .put_script_daily_delta(
+            &r_alt,
+            1,
+            true,
+            20240101,
+            &ScriptDailyDelta {
+                owned_capacity_delta: 100,
+                owned_knowledge_delta: 60,
+            },
+        )
+        .unwrap();
+
+    // Junk data form: same reference bytes as the family's type form, but no
+    // code cell carries data hashing to it and no persisted mapping resolves
+    // it into the family. Its ScriptInfo label (keyed by code_hash) is the
+    // family name, which must NOT merge it into the family bucket.
+    store
+        .put_script_reference_info_direct(
+            0,
+            &r_main,
+            &ScriptReferenceInfo {
+                reference_hash: r_main.clone(),
+                hash_type: 0,
+                lock_cells_count: 3,
+                lock_live_cells_count: 3,
+                lock_capacity_sum: 400,
+                lock_owned_capacity_sum: 400,
+                lock_used_capacity_sum: 250,
+                lock_owned_knowledge_sum: 250,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    store
+        .put_script_daily_delta(
+            &r_main,
+            0,
+            false,
+            20240101,
+            &ScriptDailyDelta {
+                owned_capacity_delta: 400,
+                owned_knowledge_delta: 250,
+            },
+        )
+        .unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri("/api/v1/charts/most-utilized-scripts")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    let buckets = |share: &serde_json::Value| -> Vec<(String, String)> {
+        let values = &share["data"].as_array().unwrap()[0]["values"];
+        share["series"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|series| {
+                (
+                    series["label"].as_str().unwrap().to_string(),
+                    values[series["key"].as_str().unwrap()]
+                        .as_str()
+                        .unwrap()
+                        .to_string(),
+                )
+            })
+            .collect()
+    };
+
+    // Family bucket keeps the member forms only (300/180); the junk data form
+    // is a separate entity (400/250) whose label carries its form. A single
+    // merged 700/430 bucket is the bug.
+    let capacity = buckets(&json["capacityShare"]);
+    assert!(
+        capacity.contains(&("SecpFamily".to_string(), "300".to_string())),
+        "family bucket must keep only its member forms, got {capacity:?}"
+    );
+    assert!(
+        capacity.contains(&("SecpFamily (data)".to_string(), "400".to_string())),
+        "junk data form must be its own bucket, got {capacity:?}"
+    );
+    let used = buckets(&json["usedShare"]);
+    assert!(
+        used.contains(&("SecpFamily".to_string(), "180".to_string())),
+        "family bucket must keep only its member forms, got {used:?}"
+    );
+    assert!(
+        used.contains(&("SecpFamily (data)".to_string(), "250".to_string())),
+        "junk data form must be its own bucket, got {used:?}"
+    );
+
+    // Same-source lock: one of the buckets is the family and matches the
+    // usage endpoint totals exactly.
+    let request = Request::builder()
+        .uri("/api/v1/scripts/SecpFamily/usage")
         .body(Body::empty())
         .unwrap();
     let response = app.oneshot(request).await.unwrap();
