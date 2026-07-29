@@ -264,10 +264,18 @@ async fn get_tx_stats(State(state): State<Arc<AppState>>) -> ApiResult<TxStatsRe
         .first()
         .map(|(_, h)| h.transactions_count as i64)
         .unwrap_or(0);
-    let txs_in_24_hours: i64 = recent_hourly
+    // currentDay reports the natural (UTC+8) day so far — the same daily
+    // bucket series that dailyData charts. The rolling window-normalized
+    // per-day RATE lives in /statistics/network (transactionsPerDay); this
+    // endpoint deliberately does not introduce a third semantic. An absent
+    // bucket means no transactions have landed today yet (legitimate empty
+    // state right after the UTC+8 midnight, not a masked invariant).
+    let reference_date_str = reference_date.format("%Y%m%d").to_string();
+    let txs_today: i64 = recent_daily
         .iter()
-        .map(|(_, h)| h.transactions_count as i64)
-        .sum();
+        .find(|(date_str, _)| *date_str == reference_date_str)
+        .map(|(_, s)| s.transactions_count as i64)
+        .unwrap_or(0);
 
     let hourly_data: Vec<TxStatsDataPoint> = recent_hourly
         .into_iter()
@@ -299,7 +307,7 @@ async fn get_tx_stats(State(state): State<Arc<AppState>>) -> ApiResult<TxStatsRe
 
     let response = TxStatsResponse {
         current_hour: txs_this_hour,
-        current_day: txs_in_24_hours,
+        current_day: txs_today,
         hourly_data,
         daily_data,
     };
@@ -2159,6 +2167,11 @@ async fn fetch_network_stats_from_db(
         0.0
     };
     let tx_per_minute = tps * 60.0;
+    // Normalized over the same rolling window as tps/perMinute — the three
+    // fields are one rate at three scales and must agree. The raw bucket sum
+    // previously served here covers a ~23h quantized window (and less while
+    // the window is still filling after a rebuild), contradicting perMinute.
+    let tx_per_day = tps * 86400.0;
 
     // Get sync status from store (single source of truth)
     let store_sync = store
@@ -2356,7 +2369,7 @@ async fn fetch_network_stats_from_db(
         tps: format!("{:.2}", tps),
         estimated_epoch_time: format_duration(estimated_epoch_seconds as u64),
         transactions_per_minute: format!("{:.1}", tx_per_minute),
-        transactions_per_day: tx_count_24h.to_string(),
+        transactions_per_day: format!("{:.0}", tx_per_day),
         sync_status,
         deep_fork_status,
         knowledge_size,
@@ -3204,9 +3217,12 @@ async fn get_activity_summary_24h(
         return ok(cached);
     }
 
-    // Compute the hour key for 24 hours ago
-    let now = chrono::Utc::now();
-    let cutoff = now - chrono::Duration::hours(24);
+    // Compute the hour key for 24 hours ago. Activity hourly buckets are
+    // keyed by UTC+8 hour strings (the `block_datetime_from_ms` convention
+    // shared by the live and bulk write paths), so the cutoff must come from
+    // the same UTC+8 clock — a UTC cutoff sits 8 hours too early in key
+    // space and widens the window to ~33 buckets.
+    let cutoff = ckbadger_common::now_datetime_utc8() - chrono::Duration::hours(24);
     let since_hour = cutoff.format("%Y%m%d%H").to_string();
 
     let store = state.store.clone();

@@ -393,8 +393,10 @@ async fn test_network_stats_reads_derived_statistics() {
     //    "8.00s"), not a hardcoded 10.00s;
     //  - hashRate = difficulty / avg seconds in true H/s ("165.01 PH/s"),
     //    not the 1000×-understated per-millisecond figure;
-    //  - transactionsPerDay = rolling last-24h hourly-bucket sum, not
-    //    today+yesterday calendar days.
+    //  - transactionsPerDay = the rolling last-24h rate normalized to a day
+    //    (count / window_secs * 86400) from the same hourly-bucket window as
+    //    tps/perMinute — not today+yesterday calendar days, and not the raw
+    //    quantized-window sum.
     let core_store = test_store();
     let append_only_store = test_append_only_store();
 
@@ -460,7 +462,13 @@ async fn test_network_stats_reads_derived_statistics() {
 
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(json["transactionsPerDay"], "200");
+    // perDay replicates the handler's exact normalization: 200 txs over the
+    // window from the oldest included bucket start (now_hour - 3600) to the
+    // tip timestamp, scaled to 86400s. The stale 999-tx bucket stays excluded
+    // (a raw or wider window would inflate this far beyond the expectation).
+    let window_secs = (now_ms as f64 / 1000.0) - (now_hour - 3600) as f64;
+    let expected_per_day = format!("{:.0}", 200.0 / window_secs * 86400.0);
+    assert_eq!(json["transactionsPerDay"], expected_per_day);
     assert_eq!(json["difficulty"], "1.32 E");
     assert_eq!(json["avgBlockTime"], "8.00s");
     // 1,320,058,941,807,520,729 hashes-per-block / 8s = 165.01 PH/s.
@@ -1045,4 +1053,252 @@ async fn test_asset_ecosystem_returns_expected_structure() {
         .map(|c| c["category"].as_str().unwrap())
         .collect();
     assert_eq!(categories, vec!["dao", "tokens", "objects", "other"]);
+}
+
+// ============================================================
+// B2a regression: /stats/activity-summary-24h window timezone
+// ============================================================
+
+#[tokio::test]
+async fn test_activity_summary_24h_window_uses_utc8_bucket_clock() {
+    // Activity hourly buckets are keyed by UTC+8 hour strings (the
+    // `block_datetime_from_ms` convention shared by both write paths). A
+    // cutoff computed on the UTC clock sits 8 hours too early in key space,
+    // silently widening the "24h" window to 32-33 buckets (+~33% on every
+    // aggregated field).
+    let core_store = test_store();
+    let append_only_store = test_append_only_store();
+
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    // Seed 40 consecutive UTC+8-keyed hourly buckets ending at the current hour.
+    for i in 0..40i64 {
+        let hour_key = ckbadger_common::block_datetime_from_ms(now_ms - i * 3_600_000)
+            .format("%Y%m%d%H")
+            .to_string();
+        core_store
+            .put_hourly_activity_stats(
+                &hour_key,
+                &ckbadger_store::types::DailyActivityStats {
+                    transfer_count: 1,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+    }
+
+    let config = test_config_with_append_only(core_store, append_only_store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri("/api/v1/stats/activity-summary-24h")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let hours_covered = json["hoursCovered"].as_u64().unwrap();
+    // Buckets at offsets 0..=24 from the current UTC+8 hour fall inside the
+    // 24h cutoff (25 buckets; 24 if the wall clock crossed an hour boundary
+    // between seeding and the request).
+    assert!(
+        (24..=25).contains(&hours_covered),
+        "24h window must cover 24-25 UTC+8 hour buckets, got {}",
+        hours_covered
+    );
+    assert_eq!(
+        json["transferCount"].as_u64().unwrap(),
+        hours_covered,
+        "aggregate must sum exactly the covered buckets"
+    );
+}
+
+// ============================================================
+// B3 regression: transactionsPerDay window normalization and
+// tx-stats currentDay natural-day semantics
+// ============================================================
+
+#[tokio::test]
+async fn test_network_stats_transactions_per_day_matches_window_rate() {
+    // transactionsPerDay must be normalized over the same rolling window that
+    // tps/transactionsPerMinute use (count / window_secs * 86400), not the raw
+    // bucket sum: the window spans 23h between bucket-start quantization
+    // edges, so the raw sum self-contradicts perMinute by ~4% (and far more
+    // while the window is still filling after a rebuild).
+    let core_store = test_store();
+    let append_only_store = test_append_only_store();
+
+    // Fixed reference: tip block exactly at a UTC hour boundary.
+    let tip_secs: i64 = 1_700_337_600; // 2023-11-18T20:00:00Z
+    let tip_ms = tip_secs * 1000;
+
+    let mut core_batch = StoreBatch::new(core_store.as_ref());
+    core_batch.put_block_header(
+        200,
+        &CachedBlockHeader {
+            hash: vec![0x42; 32],
+            parent_hash: vec![0u8; 32],
+            timestamp: tip_ms,
+            epoch_number: 42,
+            epoch_index: 10,
+            epoch_length: 1800,
+            dao: vec![0; 32],
+            transactions_count: 1,
+            uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0x190d_f964,
+            miner_lock_hash: None,
+            cycles: None,
+        },
+    );
+    core_batch.commit().unwrap();
+
+    // 24 hourly buckets: the tip hour plus the 23 before it. The rolling
+    // window spans from the oldest bucket start to the reference timestamp:
+    // 23h = 82,800s. Total count = 24 * 60 = 1440.
+    for i in 0..24i64 {
+        let bucket_start = tip_secs - i * 3600;
+        core_store
+            .put_hourly_stats(
+                &chrono::DateTime::from_timestamp(bucket_start, 0)
+                    .unwrap()
+                    .format("%Y%m%d%H")
+                    .to_string(),
+                &HourlyStats {
+                    hour: bucket_start,
+                    blocks_count: 1,
+                    transactions_count: 60,
+                    cells_created: 0,
+                    cells_consumed: 0,
+                    capacity_transferred: 0,
+                },
+            )
+            .unwrap();
+    }
+
+    let config = test_config_with_append_only(core_store, append_only_store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri("/api/v1/statistics/network")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    // round(1440 / 82800 * 86400) = round(1502.6) = 1503 — NOT the raw 1440.
+    assert_eq!(json["transactionsPerDay"], "1503");
+
+    // Internal consistency: perDay ≈ perMinute × 1440 within perMinute's
+    // one-decimal formatting granularity (0.05 × 1440 = 72) plus rounding.
+    let per_minute: f64 = json["transactionsPerMinute"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let per_day: f64 = json["transactionsPerDay"].as_str().unwrap().parse().unwrap();
+    assert!(
+        (per_day - per_minute * 1440.0).abs() <= 0.05 * 1440.0 + 0.5,
+        "perDay ({}) must be consistent with perMinute ({}) × 1440",
+        per_day,
+        per_minute
+    );
+}
+
+#[tokio::test]
+async fn test_tx_stats_current_day_reports_natural_day_so_far() {
+    // currentDay reports the natural (UTC+8) day so far — the same daily
+    // bucket series that dailyData charts — while the rolling normalized
+    // per-day rate lives in /statistics/network transactionsPerDay. It must
+    // NOT be a third semantic (raw rolling 24h hourly sum).
+    let core_store = test_store();
+    let append_only_store = test_append_only_store();
+
+    let now = chrono::Utc::now();
+    let now_ms = now.timestamp_millis();
+    let this_hour = now.timestamp() / 3600 * 3600;
+    let date_str = ckbadger_common::block_date(now).format("%Y%m%d").to_string();
+
+    let mut core_batch = StoreBatch::new(core_store.as_ref());
+    core_batch.put_block_header(
+        100,
+        &CachedBlockHeader {
+            hash: vec![0x10; 32],
+            parent_hash: vec![0u8; 32],
+            timestamp: now_ms,
+            epoch_number: 1,
+            epoch_index: 10,
+            epoch_length: 1800,
+            dao: vec![0; 32],
+            transactions_count: 1,
+            uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
+            cycles: None,
+        },
+    );
+    core_batch.commit().unwrap();
+
+    // An hourly bucket inside the trailing 24h whose sum (77) differs from
+    // today's daily bucket (456): currentDay must report the daily bucket.
+    core_store
+        .put_hourly_stats(
+            &chrono::DateTime::from_timestamp(this_hour, 0)
+                .unwrap()
+                .format("%Y%m%d%H")
+                .to_string(),
+            &HourlyStats {
+                hour: this_hour,
+                blocks_count: 1,
+                transactions_count: 77,
+                cells_created: 0,
+                cells_consumed: 0,
+                capacity_transferred: 0,
+            },
+        )
+        .unwrap();
+    core_store
+        .put_daily_stats(
+            &date_str,
+            &DailyStats {
+                blocks_count: 10,
+                transactions_count: 456,
+                cells_created: 0,
+                cells_consumed: 0,
+                capacity_transferred: 0,
+                used_capacity_created: 0,
+                used_capacity_consumed: 0,
+                total_live_cells: 0,
+                total_dead_cells: 0,
+                total_all_cells: 0,
+                total_data_size: 0,
+                knowledge_size: None,
+                block_time_sum_ms: 0,
+                block_time_count: 0,
+            },
+        )
+        .unwrap();
+
+    let config = test_config_with_append_only(core_store, append_only_store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri("/api/v1/statistics/tx-stats")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["currentHour"], 77);
+    assert_eq!(
+        json["currentDay"], 456,
+        "currentDay must be today's natural-day bucket, not a rolling hourly sum"
+    );
 }
