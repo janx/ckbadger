@@ -999,26 +999,52 @@ async fn get_top_depositors(
     }
 
     let store = state.store.clone();
-    let top = tokio::task::spawn_blocking(move || store.get_dao_top_depositors())
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?
-        .map_err(|e| ApiError::internal(e.to_string()))?
-        .unwrap_or_else(|| ckbadger_store::DaoTopDepositors {
-            tip_block_number: 0,
-            depositors: vec![],
-        });
+    let network = state.ckb_network.clone();
+    let (top, addresses) = tokio::task::spawn_blocking(move || {
+        let top =
+            store
+                .get_dao_top_depositors()?
+                .unwrap_or_else(|| ckbadger_store::DaoTopDepositors {
+                    tip_block_number: 0,
+                    depositors: vec![],
+                });
+        let addresses = top
+            .depositors
+            .iter()
+            .map(|d| {
+                Ok(match store.get_lock_script(&d.lock_script_hash)? {
+                    Some(entry) => Some(
+                        script_to_address(&entry.code_hash, entry.hash_type, &entry.args, &network)
+                            .map_err(|e| {
+                                anyhow::anyhow!(
+                                    "failed to encode address for top depositor lock_hash=0x{}: {}",
+                                    hex::encode(&d.lock_script_hash),
+                                    e
+                                )
+                            })?,
+                    ),
+                    None => None,
+                })
+            })
+            .collect::<anyhow::Result<Vec<Option<String>>>>()?;
+        Ok::<_, anyhow::Error>((top, addresses))
+    })
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?
+    .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let depositors = top
         .depositors
         .iter()
+        .zip(addresses)
         .enumerate()
-        .map(|(i, d)| {
+        .map(|(i, (d, address))| {
             let capacity_str = d.total_capacity.to_string();
             let avg_days = d.average_deposit_ms / 86_400_000.0;
             DaoTopDepositorResponse {
                 rank: (i + 1) as i32,
                 lock_script_hash: format!("0x{}", hex::encode(&d.lock_script_hash)),
-                address: None,
+                address,
                 total_capacity: capacity_str.clone(),
                 total_capacity_ckb: shannon_to_ckb(&capacity_str),
                 deposit_count: d.deposit_count,

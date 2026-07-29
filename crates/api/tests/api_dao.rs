@@ -833,3 +833,77 @@ async fn test_dao_deposits_by_lock_hash_cursor_mismatch_returns_bad_request() {
         .unwrap()
         .contains("Invalid dao deposits by address cursor"));
 }
+
+#[tokio::test]
+async fn test_top_depositors_resolves_address_from_lock_script() {
+    use ckbadger_store::{DaoTopDepositorEntry, DaoTopDepositors, LockScriptEntry, StoreBatch};
+
+    let store = test_store();
+
+    // secp256k1_blake160 (hash_type=type) with 20-byte args.
+    let code_hash =
+        hex::decode("9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8").unwrap();
+    let args = vec![0x11u8; 20];
+    let lock_hash = vec![0xABu8; 32];
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_lock_script(
+        &lock_hash,
+        &LockScriptEntry {
+            code_hash: code_hash.clone(),
+            hash_type: 1,
+            args: args.clone(),
+        },
+    );
+    batch.commit().unwrap();
+
+    store
+        .put_dao_top_depositors(&DaoTopDepositors {
+            tip_block_number: 100,
+            depositors: vec![DaoTopDepositorEntry {
+                lock_script_hash: lock_hash.clone(),
+                total_capacity: 100_000_000_000,
+                deposit_count: 2,
+                average_deposit_ms: 86_400_000.0,
+            }],
+        })
+        .unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+    let (status, json) = get_json(&app, "/dao/top-depositors").await;
+    assert_eq!(status, StatusCode::OK);
+
+    let expected =
+        ckbadger_common::script_to_address(&code_hash, 1, &args, "mainnet").expect("encode");
+    assert!(expected.starts_with("ckb1"));
+    let dep = &json["depositors"][0];
+    assert_eq!(
+        dep["lockScriptHash"],
+        serde_json::json!(format!("0x{}", hex::encode(&lock_hash)))
+    );
+    assert_eq!(dep["address"], serde_json::json!(expected));
+}
+
+#[tokio::test]
+async fn test_top_depositors_address_null_when_lock_script_unknown() {
+    use ckbadger_store::{DaoTopDepositorEntry, DaoTopDepositors};
+
+    let store = test_store();
+    store
+        .put_dao_top_depositors(&DaoTopDepositors {
+            tip_block_number: 100,
+            depositors: vec![DaoTopDepositorEntry {
+                lock_script_hash: vec![0xCDu8; 32],
+                total_capacity: 42,
+                deposit_count: 1,
+                average_deposit_ms: 0.0,
+            }],
+        })
+        .unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+    let (status, json) = get_json(&app, "/dao/top-depositors").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(json["depositors"][0]["address"].is_null());
+}
