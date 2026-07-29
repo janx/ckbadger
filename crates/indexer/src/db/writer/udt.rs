@@ -238,7 +238,7 @@ impl BatchWriter {
         &self,
         transfers: &[(&ParsedUdtTransfer, &[u8], i64)],
         max_supply_observations: &HashMap<Vec<u8>, u128>,
-        onchain_token_info: &HashMap<Vec<u8>, crate::sync::token_helpers::UniqueTokenInfo>,
+        onchain_token_info: &HashMap<Vec<u8>, crate::sync::token_helpers::OnchainTokenInfo>,
         block_timestamps: &HashMap<i64, i64>,
         batch: &mut StoreBatch,
     ) -> Result<()> {
@@ -257,7 +257,7 @@ impl BatchWriter {
         &self,
         transfers: &[(&ParsedUdtTransfer, &[u8], i64)],
         max_supply_observations: &HashMap<Vec<u8>, u128>,
-        onchain_token_info: &HashMap<Vec<u8>, crate::sync::token_helpers::UniqueTokenInfo>,
+        onchain_token_info: &HashMap<Vec<u8>, crate::sync::token_helpers::OnchainTokenInfo>,
         block_timestamps: &HashMap<i64, i64>,
         batch: &mut StoreBatch,
         state: &mut UdtBatchState,
@@ -564,20 +564,38 @@ struct TokenUpdate<'a> {
 fn apply_onchain_token_info(
     type_hash: &[u8],
     info: &mut TokenInfo,
-    onchain_info: &HashMap<Vec<u8>, crate::sync::token_helpers::UniqueTokenInfo>,
+    onchain_info: &HashMap<Vec<u8>, crate::sync::token_helpers::OnchainTokenInfo>,
 ) {
-    let Some(onchain) = onchain_info.get(type_hash) else {
+    let Some(bound) = onchain_info.get(type_hash) else {
         return;
     };
-    // Always write on-chain data. label_import unconditionally overwrites at startup,
-    // so TOML priority is maintained by execution order, not conditional checks.
-    if !onchain.name.is_empty() {
-        info.name = Some(onchain.name.clone());
+    match bound.binding {
+        crate::sync::token_helpers::OnchainInfoBinding::XudtExtension => {
+            // Cryptographic binding: always write on-chain data. label_import
+            // unconditionally overwrites at startup, so TOML priority is
+            // maintained by execution order, not conditional checks.
+            if !bound.info.name.is_empty() {
+                info.name = Some(bound.info.name.clone());
+            }
+            if !bound.info.symbol.is_empty() {
+                info.symbol = Some(bound.info.symbol.clone());
+            }
+            info.decimals = Some(bound.info.decimal as i32);
+        }
+        crate::sync::token_helpers::OnchainInfoBinding::IssuanceCooccurrence => {
+            // Heuristic same-tx binding: fill gaps only, never overwrite
+            // already-known metadata (TOML labels or earlier on-chain info).
+            if info.name.is_none() && !bound.info.name.is_empty() {
+                info.name = Some(bound.info.name.clone());
+            }
+            if info.symbol.is_none() && !bound.info.symbol.is_empty() {
+                info.symbol = Some(bound.info.symbol.clone());
+            }
+            if info.decimals.is_none() {
+                info.decimals = Some(bound.info.decimal as i32);
+            }
+        }
     }
-    if !onchain.symbol.is_empty() {
-        info.symbol = Some(onchain.symbol.clone());
-    }
-    info.decimals = Some(onchain.decimal as i32);
 }
 
 #[cfg(test)]
@@ -1562,5 +1580,93 @@ mod tests {
             )
             .unwrap_err();
         assert!(err.to_string().contains("missing block timestamp"));
+    }
+
+    // -- apply_onchain_token_info binding semantics -----------------------------
+
+    fn onchain_map(
+        type_hash: &[u8],
+        binding: crate::sync::token_helpers::OnchainInfoBinding,
+    ) -> HashMap<Vec<u8>, crate::sync::token_helpers::OnchainTokenInfo> {
+        let mut map = HashMap::new();
+        map.insert(
+            type_hash.to_vec(),
+            crate::sync::token_helpers::OnchainTokenInfo {
+                info: crate::sync::token_helpers::UniqueTokenInfo {
+                    decimal: 8,
+                    name: "OnChain".to_string(),
+                    symbol: "OC".to_string(),
+                    total_supply: None,
+                },
+                binding,
+            },
+        );
+        map
+    }
+
+    fn token_with_metadata() -> TokenInfo {
+        TokenInfo {
+            type_code_hash: vec![0x55; 32],
+            hash_type: 1,
+            type_args: vec![0x66; 32],
+            standard: "xudt".to_string(),
+            name: Some("Labelled".to_string()),
+            symbol: Some("LBL".to_string()),
+            decimals: Some(4),
+            max_supply: None,
+            first_seen_block: 0,
+            icon_url: None,
+            description: None,
+            transfers_count: 0,
+        }
+    }
+
+    fn token_without_metadata() -> TokenInfo {
+        TokenInfo {
+            name: None,
+            symbol: None,
+            decimals: None,
+            ..token_with_metadata()
+        }
+    }
+
+    #[test]
+    fn test_apply_onchain_token_info_cooccurrence_fills_gaps_only() {
+        let type_hash = vec![0xAB; 32];
+        let map = onchain_map(
+            &type_hash,
+            crate::sync::token_helpers::OnchainInfoBinding::IssuanceCooccurrence,
+        );
+
+        // Gaps are filled…
+        let mut empty = token_without_metadata();
+        apply_onchain_token_info(&type_hash, &mut empty, &map);
+        assert_eq!(empty.name.as_deref(), Some("OnChain"));
+        assert_eq!(empty.symbol.as_deref(), Some("OC"));
+        assert_eq!(empty.decimals, Some(8));
+
+        // …but already-known metadata is never overwritten.
+        let mut labelled = token_with_metadata();
+        apply_onchain_token_info(&type_hash, &mut labelled, &map);
+        assert_eq!(labelled.name.as_deref(), Some("Labelled"));
+        assert_eq!(labelled.symbol.as_deref(), Some("LBL"));
+        assert_eq!(labelled.decimals, Some(4));
+    }
+
+    #[test]
+    fn test_apply_onchain_token_info_extension_binding_still_overwrites() {
+        // The cryptographic extension binding keeps its long-standing
+        // always-write semantics (label import re-overwrites at startup).
+        let type_hash = vec![0xAC; 32];
+        let map = onchain_map(
+            &type_hash,
+            crate::sync::token_helpers::OnchainInfoBinding::XudtExtension,
+        );
+
+        let mut labelled = token_with_metadata();
+        apply_onchain_token_info(&type_hash, &mut labelled, &map);
+        assert_eq!(labelled.name.as_deref(), Some("OnChain"));
+        assert_eq!(labelled.symbol.as_deref(), Some("OC"));
+        assert_eq!(labelled.decimals, Some(8));
     }
 }
