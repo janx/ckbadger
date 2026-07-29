@@ -1216,7 +1216,10 @@ fn test_rollback_truncates_utc_keyed_chain_hourly_stats() {
     populate_derived_cfs(&domain, &lock_hash, 5);
 
     // Pre-rollback bucket state consistent with 5 blocks × (2 txs, 3 outputs
-    // per tx, 2 inputs per non-cellbase tx) from the fixtures above.
+    // per tx, 2 inputs per non-cellbase tx) from the fixtures above, including
+    // the capacity actually created by those blocks (one 10 CKB cell each on
+    // the non-cellbase tx) — a zero here would let a stale capacity slip
+    // through unnoticed.
     domain
         .put_hourly_stats(
             "1970010100",
@@ -1226,7 +1229,7 @@ fn test_rollback_truncates_utc_keyed_chain_hourly_stats() {
                 transactions_count: 10,
                 cells_created: 30,
                 cells_consumed: 10,
-                capacity_transferred: 0,
+                capacity_transferred: 5 * 10_000_000_000,
             },
         )
         .unwrap();
@@ -1284,6 +1287,11 @@ fn test_rollback_truncates_utc_keyed_chain_hourly_stats() {
     assert_eq!(cutoff_bucket.transactions_count, 6);
     assert_eq!(cutoff_bucket.cells_created, 18);
     assert_eq!(cutoff_bucket.cells_consumed, 6);
+    assert_eq!(
+        cutoff_bucket.capacity_transferred,
+        3 * 10_000_000_000,
+        "cutoff-hour capacity_transferred must drop the 2 rolled-back blocks' cells"
+    );
 
     assert!(
         !hourly.contains_key("1970010101"),
@@ -1295,4 +1303,499 @@ fn test_rollback_truncates_utc_keyed_chain_hourly_stats() {
         .expect("pre-cutoff bucket must survive");
     assert_eq!(earlier.blocks_count, 7);
     assert_eq!(earlier.transactions_count, 14);
+}
+
+// ============================================================
+// F2 regression: after a shallow partial-day reorg the cutoff-hour
+// HourlyStats row must equal a recomputation from the surviving chain on
+// EVERY field — including capacity_transferred, which the repair used to
+// leave untouched ("not tracked per-hour"). The cutoff-day DailyStats
+// capacity flow fields must likewise account for cells that were created
+// AND consumed inside the rolled-back range (the "pair" case), which the
+// pre-fix cell walk skipped on both the creation and consumption side.
+// ============================================================
+
+#[test]
+fn test_rollback_repairs_cutoff_hour_capacity_and_pair_flows() {
+    use ckbadger_store::types::DailyStats;
+
+    let (domain, append) = setup_split_stores();
+    let lock_hash = vec![0xF2; 32];
+
+    const CAP_STD: i64 = 10_000_000_000; // make_cell capacity
+    const CAP_PAIR: i64 = 700_000_000;
+    const OCC_PAIR: i64 = 300_000_000;
+    const DATA_PAIR: i32 = 16;
+    const CAP_RST: i64 = 900_000_000;
+    const OCC_RST: i64 = 400_000_000;
+    const DATA_RST: i32 = 32;
+
+    // Blocks 1..=5: make_header timestamps (1_000_000 + n*1000 ms) all sit in
+    // UTC hour "1970010100" and UTC+8 date "19700101". Each block has a
+    // cellbase + one normal tx whose output 0 is a live cell of CAP_STD.
+    for n in 1..=5 {
+        insert_full_block(&domain, Some(append.as_ref()), n, &lock_hash);
+    }
+    populate_derived_cfs(&domain, &lock_hash, 5);
+
+    // Normal (non-cellbase) tx hash of block n — matches insert_full_block.
+    let normal_tx_hash = |n: i64| {
+        let mut h = vec![0u8; 32];
+        h[0..8].copy_from_slice(&n.to_le_bytes());
+        h[8] = 0x01;
+        h
+    };
+    let make_extra_cell = |capacity: i64, occupied: i64, data_size: i32| LiveCellInfo {
+        capacity,
+        lock_script_hash: lock_hash.clone(),
+        lock_code_hash: vec![0xAA; 32],
+        lock_hash_type: 1,
+        lock_args: vec![0xBB; 20],
+        type_script_hash: None,
+        type_code_hash: None,
+        type_hash_type: None,
+        type_args: None,
+        data_size,
+        occupied_capacity: occupied,
+        udt_amount: None,
+        data_hash: None,
+    };
+
+    // Pair cell: created by block 4's normal tx (output 1), consumed in
+    // block 5 — created AND consumed inside the rolled-back range.
+    let pair_cell = make_extra_cell(CAP_PAIR, OCC_PAIR, DATA_PAIR);
+    // Restore cell: created by block 2's normal tx (output 1), consumed in
+    // block 5 — consumption is rolled back, the cell returns to live.
+    let restore_cell = make_extra_cell(CAP_RST, OCC_RST, DATA_RST);
+
+    let mut cells_batch = StoreBatch::new(&append);
+    cells_batch.put_cell_payload_by_outpoint(&normal_tx_hash(4), 1, &pair_cell);
+    cells_batch.put_cell_payload_by_outpoint(&normal_tx_hash(2), 1, &restore_cell);
+    cells_batch.commit().unwrap();
+    let mut domain_batch = StoreBatch::new(&domain);
+    domain_batch.put_consumed_cell_meta(&normal_tx_hash(4), 1, 4, 5, Some(&normal_tx_hash(5)));
+    domain_batch.put_consumed_cell_meta(&normal_tx_hash(2), 1, 2, 5, Some(&normal_tx_hash(5)));
+    domain_batch.commit().unwrap();
+
+    // Seed the cutoff-hour and cutoff-day stats rows exactly as forward sync
+    // would have written them for the fixture chain:
+    // capacity_transferred = all non-cellbase output capacities by creating
+    // block; used/data flows from the two extra cells (std cells have occ=0,
+    // data=0).
+    let seeded_capacity: i128 = 5 * CAP_STD as i128 + CAP_PAIR as i128 + CAP_RST as i128;
+    domain
+        .put_hourly_stats(
+            "1970010100",
+            &HourlyStats {
+                hour: 0,
+                blocks_count: 5,
+                transactions_count: 10,
+                cells_created: 30,
+                cells_consumed: 10,
+                capacity_transferred: seeded_capacity,
+            },
+        )
+        .unwrap();
+    let daily_key = ckbadger_store::keys::encode_stats_key(
+        ckbadger_store::keys::STATS_PREFIX_DAILY,
+        b"19700101",
+    );
+    let seeded_daily = DailyStats {
+        blocks_count: 5,
+        transactions_count: 10,
+        cells_created: 30,
+        cells_consumed: 10,
+        capacity_transferred: seeded_capacity,
+        used_capacity_created: (OCC_PAIR + OCC_RST) as i128,
+        used_capacity_consumed: (OCC_PAIR + OCC_RST) as i128,
+        total_live_cells: 20,
+        total_dead_cells: 10,
+        total_all_cells: 30,
+        total_data_size: 0,
+        knowledge_size: None,
+        block_time_sum_ms: 0,
+        block_time_count: 0,
+    };
+    domain
+        .put_cf(
+            domain.cf_stats_chain(),
+            &daily_key,
+            &bincode::serialize(&seeded_daily).unwrap(),
+        )
+        .unwrap();
+
+    // Shallow partial-day, partial-hour reorg: fork point block 3.
+    let result = domain
+        .rollback_to_block_with_append_only_store(3, Some(append.as_ref()))
+        .unwrap();
+    assert_eq!(result.blocks_removed, 2);
+    assert_eq!(result.cells_removed, 2, "std cells of blocks 4-5 removed");
+    assert_eq!(result.cells_restored, 1, "restore cell returns to live");
+
+    // Recompute the expected cutoff-hour row directly from the surviving
+    // chain (blocks 1..=3): 2 txs per block, cellbase outputs 3 + normal
+    // outputs 3, normal inputs 2; capacity = surviving non-cellbase output
+    // capacities (3 std cells + the restore cell created in block 2).
+    let expected_hour = HourlyStats {
+        hour: 0,
+        blocks_count: 3,
+        transactions_count: 6,
+        cells_created: 18,
+        cells_consumed: 6,
+        capacity_transferred: 3 * CAP_STD as i128 + CAP_RST as i128,
+    };
+    let hourly: std::collections::HashMap<String, HourlyStats> = domain
+        .list_hourly_stats_with_keys()
+        .unwrap()
+        .into_iter()
+        .collect();
+    let repaired_hour = hourly
+        .get("1970010100")
+        .expect("cutoff-hour bucket must be repaired, not deleted");
+    assert_eq!(repaired_hour.hour, expected_hour.hour);
+    assert_eq!(repaired_hour.blocks_count, expected_hour.blocks_count);
+    assert_eq!(
+        repaired_hour.transactions_count,
+        expected_hour.transactions_count
+    );
+    assert_eq!(repaired_hour.cells_created, expected_hour.cells_created);
+    assert_eq!(repaired_hour.cells_consumed, expected_hour.cells_consumed);
+    assert_eq!(
+        repaired_hour.capacity_transferred, expected_hour.capacity_transferred,
+        "cutoff-hour capacity_transferred must equal a recomputation from the surviving chain"
+    );
+
+    // Cutoff-day flows recomputed from the surviving chain: creations from
+    // blocks 1..=3 (3 std cells + restore cell), zero surviving consumption
+    // (both consumptions happened in rolled-back block 5).
+    let repaired_daily: DailyStats = bincode::deserialize(
+        &domain
+            .get_stats_key(&daily_key)
+            .unwrap()
+            .expect("cutoff-day daily stats must be repaired, not deleted"),
+    )
+    .unwrap();
+    assert_eq!(repaired_daily.blocks_count, 3);
+    assert_eq!(repaired_daily.transactions_count, 6);
+    assert_eq!(repaired_daily.cells_created, 18);
+    assert_eq!(repaired_daily.cells_consumed, 6);
+    assert_eq!(
+        repaired_daily.capacity_transferred,
+        3 * CAP_STD as i128 + CAP_RST as i128,
+        "pair-cell creation must be subtracted from cutoff-day capacity_transferred"
+    );
+    assert_eq!(
+        repaired_daily.used_capacity_created, OCC_RST as i128,
+        "pair-cell occupied capacity must be subtracted from used_capacity_created"
+    );
+    assert_eq!(
+        repaired_daily.used_capacity_consumed, 0,
+        "all rolled-back consumption (pair + restored cell) must be subtracted"
+    );
+    assert_eq!(
+        repaired_daily.total_data_size, DATA_RST as i64,
+        "surviving data = restore cell's data (its rolled-back consumption is reversed)"
+    );
+}
+
+// ============================================================
+// F3 regression: reorg must reset the cutoff day/hour unique-address sets
+// (and their unique_address_count) to the surviving portion of the bucket,
+// then let replay merge the new branch through the same live-path merge
+// function. The pre-fix rollback preserved the whole old-branch set, so an
+// address exclusive to the orphaned branch inflated the bucket forever.
+// ============================================================
+
+#[test]
+fn test_rollback_resets_cutoff_bucket_unique_addr_sets() {
+    use ckbadger_indexer::db::BatchWriter;
+    use ckbadger_store::keys as store_keys;
+    use ckbadger_store::types::DailyActivityStats;
+    use std::collections::HashSet;
+
+    let (domain, append) = setup_split_stores();
+    let writer = BatchWriter::new(domain.clone(), append.clone());
+
+    let addr_a = [0xA1u8; 32];
+    let addr_b = [0xB2u8; 32]; // exclusive to the orphaned branch
+    let addr_c = [0xC3u8; 32]; // introduced by the new branch
+    let addr_d = [0xD4u8; 32]; // earlier hour, same day
+
+    // 2024-03-24 12:00:00 UTC+8 = 1_711_252_800_000 ms. Block 1 sits in the
+    // 11:00 UTC+8 hour; blocks 2..=5 in the 12:00 hour. All share the UTC+8
+    // date 20240324.
+    let base_ts_ms: i64 = 1_711_252_800_000;
+    let block_ts = |b: i64| {
+        if b == 1 {
+            base_ts_ms - 3_600_000
+        } else {
+            base_ts_ms + b * 1000
+        }
+    };
+    const DATE: &str = "20240324";
+    const HOUR_EARLY: &str = "2024032411";
+    const HOUR_CUTOFF: &str = "2024032412";
+
+    let make_header_at = |b: i64| CachedBlockHeader {
+        hash: vec![b as u8; 32],
+        parent_hash: vec![0u8; 32],
+        timestamp: block_ts(b),
+        epoch_number: if b >= 4 { 1 } else { 0 },
+        epoch_index: if b >= 4 {
+            (b - 4) as i32
+        } else {
+            (b - 1) as i32
+        },
+        epoch_length: 1800,
+        dao: vec![0u8; 32],
+        transactions_count: 2,
+        uncles_count: 0,
+        proposals_count: 0,
+        compact_target: 0,
+        miner_lock_hash: None,
+        cycles: None,
+    };
+    let make_actions = |b: i64, tx_seed: u8, participants: &[[u8; 32]]| TxActions {
+        tx_hash: vec![tx_seed; 32],
+        block_hash: make_header_at(b).hash,
+        block_number: b,
+        tx_index: 1,
+        timestamp: block_ts(b),
+        is_cellbase: false,
+        protocol_actions: vec![],
+        type_calls: vec![],
+        lock_calls: vec![],
+        participants: participants
+            .iter()
+            .map(|lh| ParticipantDelta {
+                lock_hash: lh.to_vec(),
+                ckb_delta: 100_000_000,
+                used_delta: 0,
+                item_deltas: vec![],
+                tags: 0,
+            })
+            .collect(),
+    };
+    let make_cellbase_actions = |b: i64| TxActions {
+        tx_hash: vec![0xE0 | b as u8; 32],
+        block_hash: make_header_at(b).hash,
+        block_number: b,
+        tx_index: 0,
+        timestamp: block_ts(b),
+        is_cellbase: true,
+        protocol_actions: vec![],
+        type_calls: vec![],
+        lock_calls: vec![],
+        participants: vec![],
+    };
+
+    // Old branch: block 1 → {D} (11:00 hour), blocks 2,3 → {A},
+    // block 4 → {A,B}, block 5 → {B}. B is exclusive to blocks 4-5.
+    let tx_rows = vec![
+        make_actions(1, 0x11, &[addr_d]),
+        make_actions(2, 0x22, &[addr_a]),
+        make_actions(3, 0x33, &[addr_a]),
+        make_actions(4, 0x44, &[addr_a, addr_b]),
+        make_actions(5, 0x55, &[addr_b]),
+    ];
+
+    let mut batch = StoreBatch::new(&domain);
+    for b in 1..=5i64 {
+        batch.put_block_header(b, &make_header_at(b));
+    }
+    for row in &tx_rows {
+        batch.put_tx_actions(row);
+    }
+    batch.commit().unwrap();
+    // Boundary epoch (epoch 0, blocks 1..=3) row; epoch 1 starts at
+    // replay_start (block 4) so rollback deletes it wholesale.
+    domain
+        .put_epoch_stats(
+            0,
+            &ckbadger_store::types::EpochStats {
+                epoch_number: 0,
+                start_block: 1,
+                end_block: Some(3),
+                blocks_count: 3,
+                length: 1800,
+                start_timestamp: chrono::DateTime::from_timestamp_millis(block_ts(1)).unwrap(),
+                end_timestamp: None,
+                transactions_count: 6,
+            },
+        )
+        .unwrap();
+
+    // Write the pre-reorg activity stats + addr sets through the live write
+    // path (accumulate per bucket incl. the in-memory cellbase rows, then
+    // update_*_activity_stats), exactly as SyncBatch does.
+    let mut day_accum = DailyActivityStats::default();
+    let mut hour_accums: std::collections::HashMap<String, DailyActivityStats> =
+        std::collections::HashMap::new();
+    let mut day_addrs: HashSet<[u8; 32]> = HashSet::new();
+    let mut hour_addrs: std::collections::HashMap<String, HashSet<[u8; 32]>> =
+        std::collections::HashMap::new();
+    for b in 1..=5i64 {
+        let hour_key = if b == 1 { HOUR_EARLY } else { HOUR_CUTOFF };
+        let cellbase = make_cellbase_actions(b);
+        BatchWriter::accumulate_tx_activity_stats(&cellbase, &mut day_accum);
+        BatchWriter::accumulate_tx_activity_stats(
+            &cellbase,
+            hour_accums.entry(hour_key.to_string()).or_default(),
+        );
+        let row = &tx_rows[(b - 1) as usize];
+        BatchWriter::accumulate_tx_activity_stats(row, &mut day_accum);
+        BatchWriter::accumulate_tx_activity_stats(
+            row,
+            hour_accums.entry(hour_key.to_string()).or_default(),
+        );
+        for p in &row.participants {
+            let mut lh = [0u8; 32];
+            lh.copy_from_slice(&p.lock_hash);
+            day_addrs.insert(lh);
+            hour_addrs
+                .entry(hour_key.to_string())
+                .or_default()
+                .insert(lh);
+        }
+    }
+    let mut stats_batch = StoreBatch::new(&domain);
+    writer
+        .update_daily_activity_stats(DATE, &day_accum, &day_addrs, &mut stats_batch)
+        .unwrap();
+    for (hour_key, accum) in &hour_accums {
+        writer
+            .update_hourly_activity_stats(
+                hour_key,
+                accum,
+                hour_addrs.get(hour_key).unwrap(),
+                &mut stats_batch,
+            )
+            .unwrap();
+    }
+    stats_batch.commit().unwrap();
+
+    // Sanity: pre-reorg state as forward sync produced it.
+    let pre_day = domain.get_daily_activity_stats(DATE).unwrap().unwrap();
+    assert_eq!(pre_day.unique_address_count, 3, "{{A,B,D}} before reorg");
+    assert_eq!(pre_day.coinbase_count, 5);
+    assert_eq!(pre_day.transfer_count, 5);
+
+    let read_addr_set = |prefix: u8, bucket: &str| -> HashSet<[u8; 32]> {
+        let key = store_keys::encode_stats_key(prefix, bucket.as_bytes());
+        let raw = domain.get_stats_key(&key).unwrap();
+        let mut set = HashSet::new();
+        if let Some(raw) = raw {
+            assert_eq!(raw.len() % 32, 0, "addr set row must be whole 32B hashes");
+            for chunk in raw.chunks_exact(32) {
+                let mut lh = [0u8; 32];
+                lh.copy_from_slice(chunk);
+                set.insert(lh);
+            }
+        }
+        set
+    };
+
+    // Shallow partial-day reorg: fork point block 3, blocks 4-5 orphaned.
+    domain
+        .rollback_to_block_with_append_only_store(3, Some(append.as_ref()))
+        .unwrap();
+
+    // Cutoff-day bucket: reset to the surviving portion {A, D}.
+    let day_after = domain.get_daily_activity_stats(DATE).unwrap().unwrap();
+    assert_eq!(
+        day_after.unique_address_count, 2,
+        "cutoff-day unique addrs must be reset to survivors {{A,D}} (B must not linger)"
+    );
+    assert_eq!(
+        day_after.coinbase_count, 3,
+        "rolled-back blocks' coinbase activities must be subtracted"
+    );
+    assert_eq!(day_after.transfer_count, 3);
+    let day_set = read_addr_set(store_keys::STATS_PREFIX_ACTIVITY_DAILY_ADDR_SET, DATE);
+    assert_eq!(
+        day_set,
+        HashSet::from([addr_a, addr_d]),
+        "cutoff-day addr set must contain exactly the surviving addresses"
+    );
+
+    // Cutoff-hour bucket: reset to survivors {A}.
+    let hour_after = domain
+        .get_hourly_activity_stats(HOUR_CUTOFF)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        hour_after.unique_address_count, 1,
+        "cutoff-hour unique addrs must be reset to survivors {{A}}"
+    );
+    assert_eq!(hour_after.coinbase_count, 2);
+    assert_eq!(hour_after.transfer_count, 2);
+    let hour_set = read_addr_set(
+        store_keys::STATS_PREFIX_ACTIVITY_HOURLY_ADDR_SET,
+        HOUR_CUTOFF,
+    );
+    assert_eq!(hour_set, HashSet::from([addr_a]));
+
+    // Earlier hour on the same day is untouched.
+    let early_after = domain
+        .get_hourly_activity_stats(HOUR_EARLY)
+        .unwrap()
+        .unwrap();
+    assert_eq!(early_after.unique_address_count, 1);
+    assert_eq!(early_after.coinbase_count, 1);
+    let early_set = read_addr_set(
+        store_keys::STATS_PREFIX_ACTIVITY_HOURLY_ADDR_SET,
+        HOUR_EARLY,
+    );
+    assert_eq!(early_set, HashSet::from([addr_d]));
+
+    // Replay the new branch (blocks 4'-5' in the cutoff hour, address C)
+    // through the same live write path.
+    let mut replay_day = DailyActivityStats::default();
+    let mut replay_hour = DailyActivityStats::default();
+    let replay_rows = [
+        make_actions(4, 0x66, &[addr_c]),
+        make_actions(5, 0x77, &[addr_c]),
+    ];
+    for b in 4..=5i64 {
+        let cellbase = make_cellbase_actions(b);
+        BatchWriter::accumulate_tx_activity_stats(&cellbase, &mut replay_day);
+        BatchWriter::accumulate_tx_activity_stats(&cellbase, &mut replay_hour);
+        let row = &replay_rows[(b - 4) as usize];
+        BatchWriter::accumulate_tx_activity_stats(row, &mut replay_day);
+        BatchWriter::accumulate_tx_activity_stats(row, &mut replay_hour);
+    }
+    let replay_addrs = HashSet::from([addr_c]);
+    let mut replay_batch = StoreBatch::new(&domain);
+    writer
+        .update_daily_activity_stats(DATE, &replay_day, &replay_addrs, &mut replay_batch)
+        .unwrap();
+    writer
+        .update_hourly_activity_stats(HOUR_CUTOFF, &replay_hour, &replay_addrs, &mut replay_batch)
+        .unwrap();
+    replay_batch.commit().unwrap();
+
+    // Final state must be exactly {survivors ∪ new branch}, without B.
+    let final_day = domain.get_daily_activity_stats(DATE).unwrap().unwrap();
+    assert_eq!(
+        final_day.unique_address_count, 3,
+        "final day bucket = {{A,C,D}}; the orphaned-branch-only address B must be gone"
+    );
+    assert_eq!(final_day.coinbase_count, 5);
+    assert_eq!(final_day.transfer_count, 5);
+    let final_day_set = read_addr_set(store_keys::STATS_PREFIX_ACTIVITY_DAILY_ADDR_SET, DATE);
+    assert_eq!(final_day_set, HashSet::from([addr_a, addr_c, addr_d]));
+    assert!(!final_day_set.contains(&addr_b));
+
+    let final_hour = domain
+        .get_hourly_activity_stats(HOUR_CUTOFF)
+        .unwrap()
+        .unwrap();
+    assert_eq!(final_hour.unique_address_count, 2, "final hour = {{A,C}}");
+    assert_eq!(final_hour.coinbase_count, 4);
+    let final_hour_set = read_addr_set(
+        store_keys::STATS_PREFIX_ACTIVITY_HOURLY_ADDR_SET,
+        HOUR_CUTOFF,
+    );
+    assert_eq!(final_hour_set, HashSet::from([addr_a, addr_c]));
+    assert!(!final_hour_set.contains(&addr_b));
 }

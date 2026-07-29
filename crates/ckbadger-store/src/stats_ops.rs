@@ -7,6 +7,63 @@ use crate::types::*;
 use crate::bytes_to_hex;
 use ckbadger_common::dao::calculate_secondary_miner_delta;
 
+// ---------------------------------------------------------------------------
+// Activity address-set rows (ACTIVITY_DAILY_ADDR_SET / ACTIVITY_HOURLY_ADDR_SET)
+//
+// The persistent per-bucket address set is the dedup memory behind
+// `DailyActivityStats::unique_address_count`. Its on-disk form and its count
+// derivation have exactly one implementation — these functions — shared by the
+// live write path (`BatchWriter::merge_persistent_addr_set`) and by reorg
+// rollback repair (`reorg_ops`). Set and count must never be derived
+// independently, or a rollback can leave them disagreeing forever.
+// ---------------------------------------------------------------------------
+
+/// Canonical on-disk encoding of an activity address-set row: the bucket's
+/// 32-byte lock hashes, deduplicated and sorted, concatenated.
+pub fn encode_activity_addr_set<I: IntoIterator<Item = [u8; 32]>>(addrs: I) -> Vec<u8> {
+    let mut sorted: Vec<[u8; 32]> = addrs.into_iter().collect();
+    sorted.sort_unstable();
+    sorted.dedup();
+    sorted.into_iter().flatten().collect()
+}
+
+/// Decode a persisted activity address-set row.
+///
+/// A length that is not a whole number of 32-byte hashes means the row was
+/// written by something other than `encode_activity_addr_set` — fail with the
+/// bucket rather than silently dropping the trailing partial hash, which would
+/// undercount `unique_address_count` forever.
+pub fn decode_activity_addr_set(
+    raw: &[u8],
+    bucket: &str,
+) -> anyhow::Result<std::collections::HashSet<[u8; 32]>> {
+    if !raw.len().is_multiple_of(32) {
+        anyhow::bail!(
+            "corrupt activity addr set row: bucket={}, len={} (not a multiple of 32)",
+            bucket,
+            raw.len()
+        );
+    }
+    let mut set = std::collections::HashSet::with_capacity(raw.len() / 32);
+    for chunk in raw.chunks_exact(32) {
+        let mut hash = [0u8; 32];
+        hash.copy_from_slice(chunk);
+        set.insert(hash);
+    }
+    Ok(set)
+}
+
+/// Derive `unique_address_count` from an address-set size.
+pub fn activity_addr_set_count(len: usize, bucket: &str) -> anyhow::Result<u32> {
+    u32::try_from(len).map_err(|_| {
+        anyhow::anyhow!(
+            "unique_address_count exceeds u32: bucket={}, count={}",
+            bucket,
+            len
+        )
+    })
+}
+
 impl CkbadgerStore {
     // ---- Daily stats ----
 
@@ -1428,6 +1485,60 @@ fn extract_dao_ar(dao: &[u8]) -> Option<u64> {
 mod tests {
     use super::*;
     use crate::CkbadgerStore;
+
+    #[test]
+    fn test_activity_addr_set_encode_decode_roundtrip() {
+        let addrs = std::collections::HashSet::from([[0xC3u8; 32], [0xA1u8; 32], [0xB2u8; 32]]);
+        let encoded = encode_activity_addr_set(addrs.iter().copied());
+        assert_eq!(encoded.len(), 96);
+        // Deterministic sorted layout, regardless of iteration order.
+        assert_eq!(&encoded[0..32], &[0xA1u8; 32]);
+        assert_eq!(&encoded[32..64], &[0xB2u8; 32]);
+        assert_eq!(&encoded[64..96], &[0xC3u8; 32]);
+        let decoded = decode_activity_addr_set(&encoded, "20260210").unwrap();
+        assert_eq!(decoded, addrs);
+        assert_eq!(
+            activity_addr_set_count(decoded.len(), "20260210").unwrap(),
+            3
+        );
+    }
+
+    #[test]
+    fn test_activity_addr_set_encode_dedups_repeats() {
+        let encoded = encode_activity_addr_set([[0xA1u8; 32], [0xA1u8; 32], [0xB2u8; 32]]);
+        assert_eq!(
+            encoded.len(),
+            64,
+            "repeated hashes must collapse to one row"
+        );
+        assert_eq!(
+            decode_activity_addr_set(&encoded, "2026021015")
+                .unwrap()
+                .len(),
+            2
+        );
+    }
+
+    #[test]
+    fn test_activity_addr_set_decode_rejects_partial_hash() {
+        let mut raw = vec![0xA1u8; 32];
+        raw.extend_from_slice(&[0xB2u8; 7]); // truncated trailing hash
+        let err = decode_activity_addr_set(&raw, "20260210").unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("corrupt activity addr set row")
+                && msg.contains("20260210")
+                && msg.contains("39"),
+            "decode must fail fast with bucket + length context, got: {}",
+            msg
+        );
+    }
+
+    #[test]
+    fn test_activity_addr_set_count_rejects_overflow() {
+        let err = activity_addr_set_count(u32::MAX as usize + 1, "20260210").unwrap_err();
+        assert!(err.to_string().contains("unique_address_count exceeds u32"));
+    }
 
     #[test]
     fn test_hodl_wave_put_get_roundtrip() {

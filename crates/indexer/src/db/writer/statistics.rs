@@ -755,6 +755,9 @@ impl BatchWriter {
     /// Load an existing persistent address set from CF_STATS_CHAIN, merge in
     /// new addresses from the current batch, store back, and return the total
     /// unique address count as u32.
+    ///
+    /// Row encoding and count derivation come from the shared store-level
+    /// helpers, so reorg rollback repair rebuilds byte-identical rows.
     fn merge_persistent_addr_set(
         &self,
         prefix: u8,
@@ -763,31 +766,15 @@ impl BatchWriter {
         batch: &mut StoreBatch,
     ) -> Result<u32> {
         let set_key = keys::encode_stats_key(prefix, bucket);
+        let bucket_label = String::from_utf8_lossy(bucket).into_owned();
         let mut addrs: HashSet<[u8; 32]> = match self.store.get_stats_key(&set_key)? {
-            Some(raw) => {
-                let mut set = HashSet::with_capacity(raw.len() / 32);
-                for chunk in raw.chunks_exact(32) {
-                    let mut hash = [0u8; 32];
-                    hash.copy_from_slice(chunk);
-                    set.insert(hash);
-                }
-                set
-            }
+            Some(raw) => ckbadger_store::decode_activity_addr_set(&raw, &bucket_label)?,
             None => HashSet::new(),
         };
         addrs.extend(batch_addrs);
-        // Serialize as sorted flat bytes for deterministic storage.
-        let mut sorted: Vec<[u8; 32]> = addrs.iter().copied().collect();
-        sorted.sort_unstable();
-        let flat: Vec<u8> = sorted.iter().flat_map(|h| h.iter().copied()).collect();
+        let flat = ckbadger_store::encode_activity_addr_set(addrs.iter().copied());
         batch.put_stats(&set_key, &flat);
-        u32::try_from(sorted.len()).map_err(|_| {
-            anyhow::anyhow!(
-                "unique_address_count exceeds u32: bucket=0x{}, count={}",
-                hex::encode(bucket),
-                sorted.len()
-            )
-        })
+        ckbadger_store::activity_addr_set_count(addrs.len(), &bucket_label)
     }
 
     pub fn refresh_token_24h_transfers(&self) -> Result<u64> {

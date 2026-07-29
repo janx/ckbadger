@@ -13,6 +13,7 @@ use crate::sync_ops::checked_rollback_total;
 use crate::types::*;
 
 /// Bundled rollback delta maps for cutoff-date stats repair.
+#[derive(Default)]
 struct RollbackStatsDeltas {
     /// Per-date (UTC+8): (blocks, txs, cells_created, cells_consumed)
     date: HashMap<String, (i32, i32, i32, i32)>,
@@ -24,10 +25,23 @@ struct RollbackStatsDeltas {
     hour: HashMap<String, (i32, i32, i32, i32)>,
     /// Per-date: (cap_transferred, used_cap_created, used_cap_consumed, data_created, data_consumed)
     date_capacity: HashMap<String, (i128, i128, i128, i64, i64)>,
+    /// Per-hour rolled-back `capacity_transferred`, keyed by the **UTC**
+    /// `%Y%m%d%H` strings of the chain-level HOURLY stats CF. `HourlyStats`
+    /// carries no other capacity/data field, so this single value completes
+    /// its additive-field set.
+    hour_capacity: HashMap<String, i128>,
     /// Per-date activity stats from rolled-back TxActions
     activity_date: HashMap<String, DailyActivityStats>,
     /// Per-hour activity stats from rolled-back TxActions
     activity_hour: HashMap<String, DailyActivityStats>,
+    /// Rebuilt unique-address set of the cutoff **date** bucket: exactly the
+    /// addresses of the surviving (block <= rollback_to) portion. Replaces the
+    /// stored set instead of subtracting from it — an address may appear in
+    /// both the surviving and the orphaned portion, so set difference is not
+    /// expressible as a count delta.
+    activity_addr_date: HashSet<[u8; 32]>,
+    /// Rebuilt unique-address set of the cutoff **hour** bucket (UTC+8 key).
+    activity_addr_hour: HashSet<[u8; 32]>,
     /// Per-(date, miner_lock_hash) rolled-back block count
     miner: HashMap<(String, Vec<u8>), i32>,
 }
@@ -45,6 +59,52 @@ fn cell_dist_size_bucket(occupied_capacity: i64) -> usize {
         100_000..=999_999 => 4,
         _ => 5,
     }
+}
+
+/// Fail-fast subtraction for a non-negative `i32` counter in a stats row.
+///
+/// `checked_sub` alone only catches arithmetic overflow — `0i32.checked_sub(5)`
+/// is `Some(-5)` — so the sign is checked too: a count that would go negative
+/// means the rollback delta collection disagrees with the persisted row.
+fn checked_stats_sub_i32(
+    current: i32,
+    delta: i32,
+    field: &str,
+    bucket_kind: &str,
+    bucket: &str,
+) -> anyhow::Result<i32> {
+    let result = current.checked_sub(delta).filter(|v| *v >= 0);
+    result.ok_or_else(|| {
+        anyhow::anyhow!(
+            "stats rollback underflow: {}={}, field={}, stored={}, rolled_back={} (delta collection out of sync with persisted state)",
+            bucket_kind,
+            bucket,
+            field,
+            current,
+            delta
+        )
+    })
+}
+
+/// Fail-fast subtraction for a non-negative `i128` capacity field.
+fn checked_stats_sub_i128(
+    current: i128,
+    delta: i128,
+    field: &str,
+    bucket_kind: &str,
+    bucket: &str,
+) -> anyhow::Result<i128> {
+    let result = current.checked_sub(delta).filter(|v| *v >= 0);
+    result.ok_or_else(|| {
+        anyhow::anyhow!(
+            "stats rollback underflow: {}={}, field={}, stored={}, rolled_back={} (delta collection out of sync with persisted state)",
+            bucket_kind,
+            bucket,
+            field,
+            current,
+            delta
+        )
+    })
 }
 
 /// Fail-fast checked subtraction for activity stats rollback repair.
@@ -76,14 +136,21 @@ fn checked_activity_sub_u32(
 /// it with a zero clamp would leave silently-corrupt aggregates — fail with
 /// enough context to locate the upstream bug instead.
 ///
-/// `unique_address_count` is intentionally NOT touched: the cutoff-bucket
-/// addr set is preserved (not deleted) so live-sync dedup remains correct.
+/// `unique_address_count` is NOT subtracted — it is *set* from
+/// `rebuilt_addrs`, the address set of the surviving portion of this bucket.
+/// The orphaned branch may share addresses with the surviving portion, so the
+/// rolled-back address count is not a subtractable delta; the set (and with it
+/// the count) is rebuilt instead. Caller must persist the same set into the
+/// bucket's ADDR_SET row so live-sync dedup keeps agreeing with the count.
 fn subtract_activity_stats_delta(
     s: &mut DailyActivityStats,
     delta: &DailyActivityStats,
+    rebuilt_addrs: &HashSet<[u8; 32]>,
     bucket_kind: &str,
     bucket: &str,
 ) -> anyhow::Result<()> {
+    s.unique_address_count =
+        crate::stats_ops::activity_addr_set_count(rebuilt_addrs.len(), bucket)?;
     s.transfer_count = checked_activity_sub_u32(
         s.transfer_count,
         delta.transfer_count,
@@ -320,11 +387,13 @@ fn repair_cutoff_date_stats(
             if hour_str != cutoff_yyyymmddhh_utc {
                 return Ok(false);
             }
-            let delta = match deltas.hour.get(hour_str) {
-                Some(d) => *d,
-                None => return Ok(false),
-            };
-            let (rb_blocks, rb_txs, rb_created, rb_consumed) = delta;
+            let delta = deltas.hour.get(hour_str);
+            let cap_delta = deltas.hour_capacity.get(hour_str);
+            if delta.is_none() && cap_delta.is_none() {
+                return Ok(false);
+            }
+            let (rb_blocks, rb_txs, rb_created, rb_consumed) = delta.copied().unwrap_or_default();
+            let rb_capacity = cap_delta.copied().unwrap_or_default();
             let mut s: HourlyStats = bincode::deserialize(value).map_err(|e| {
                 anyhow::anyhow!(
                     "failed to deserialize hourly stats for rollback repair: hour={}, {}",
@@ -332,12 +401,39 @@ fn repair_cutoff_date_stats(
                     e
                 )
             })?;
-            s.blocks_count -= rb_blocks;
-            s.transactions_count -= rb_txs;
-            s.cells_created -= rb_created;
-            s.cells_consumed -= rb_consumed;
-            // capacity_transferred for hourly — subtract from date-level
-            // capacity deltas (not tracked per-hour; leave unchanged for hourly)
+            // Every additive HourlyStats field is repaired here; `hour` is the
+            // bucket's identity (epoch seconds of the hour start), not an
+            // accumulator, so it stays as stored.
+            s.blocks_count =
+                checked_stats_sub_i32(s.blocks_count, rb_blocks, "blocks_count", "hour", hour_str)?;
+            s.transactions_count = checked_stats_sub_i32(
+                s.transactions_count,
+                rb_txs,
+                "transactions_count",
+                "hour",
+                hour_str,
+            )?;
+            s.cells_created = checked_stats_sub_i32(
+                s.cells_created,
+                rb_created,
+                "cells_created",
+                "hour",
+                hour_str,
+            )?;
+            s.cells_consumed = checked_stats_sub_i32(
+                s.cells_consumed,
+                rb_consumed,
+                "cells_consumed",
+                "hour",
+                hour_str,
+            )?;
+            s.capacity_transferred = checked_stats_sub_i128(
+                s.capacity_transferred,
+                rb_capacity,
+                "capacity_transferred",
+                "hour",
+                hour_str,
+            )?;
 
             let cf = store.stats_cf_by_prefix(prefix)?;
             let encoded = bincode::serialize(&s)
@@ -365,10 +461,16 @@ fn repair_cutoff_date_stats(
                     e
                 )
             })?;
-            // unique_address_count is preserved inside this helper — the
-            // cutoff-date addr set is kept (not deleted) so live sync dedup
-            // remains correct.
-            subtract_activity_stats_delta(&mut s, delta, "date", date_str)?;
+            // unique_address_count is reset to the surviving portion's address
+            // set inside this helper; the caller writes the matching ADDR_SET
+            // row so set and count stay one value.
+            subtract_activity_stats_delta(
+                &mut s,
+                delta,
+                &deltas.activity_addr_date,
+                "date",
+                date_str,
+            )?;
             let cf = store.stats_cf_by_prefix(prefix)?;
             let encoded = bincode::serialize(&s)
                 .map_err(|e| anyhow::anyhow!("serialize activity daily stats repair: {}", e))?;
@@ -402,7 +504,13 @@ fn repair_cutoff_date_stats(
                     e
                 )
             })?;
-            subtract_activity_stats_delta(&mut s, delta, "hour", hour_str)?;
+            subtract_activity_stats_delta(
+                &mut s,
+                delta,
+                &deltas.activity_addr_hour,
+                "hour",
+                hour_str,
+            )?;
             let cf = store.stats_cf_by_prefix(prefix)?;
             let encoded = bincode::serialize(&s)
                 .map_err(|e| anyhow::anyhow!("serialize activity hourly stats repair: {}", e))?;
@@ -511,6 +619,135 @@ fn repair_cutoff_date_stats(
         // for shallow reorgs. Fall through to deletion.
         _ => Ok(false),
     }
+}
+
+/// Unique-address sets of the cutoff buckets, rebuilt from the surviving
+/// (block <= rollback_to) portion of the chain.
+struct CutoffAddrSets {
+    /// Cutoff **date** bucket (UTC+8 `%Y%m%d`), ACTIVITY_DAILY_ADDR_SET.
+    date: HashSet<[u8; 32]>,
+    /// Cutoff **hour** bucket (UTC+8 `%Y%m%d%H`), ACTIVITY_HOURLY_ADDR_SET.
+    hour: HashSet<[u8; 32]>,
+}
+
+/// Rebuild the cutoff day/hour unique-address sets from the surviving portion
+/// of the chain.
+///
+/// The persisted address set is a *set*, not a counter: an address active in
+/// both the orphaned and the surviving portion cannot be removed by
+/// subtracting a rolled-back count. So the cutoff buckets are recomputed from
+/// the surviving TxActions using the same bucket assignment and participant
+/// filter as the live write path (`SyncBatch`): non-cellbase transactions,
+/// 32-byte participant lock hashes, UTC+8 date / UTC+8 hour of the tx
+/// timestamp. Replay then merges the new branch into these rebuilt rows
+/// through `BatchWriter::merge_persistent_addr_set` as usual.
+///
+/// Scan bound: block headers are walked backwards from `rollback_to` while
+/// they still carry the cutoff date, which gives the first block of the cutoff
+/// day; TxActions are then scanned over `[first_block_of_day, rollback_to]`.
+/// This mirrors the forward walk in `recompute_dao_daily_snapshot_for_date`.
+fn rebuild_cutoff_activity_addr_sets(
+    store: &CkbadgerStore,
+    rollback_to: i64,
+    cutoff_date: &str,
+    cutoff_hour_utc8: &str,
+) -> anyhow::Result<CutoffAddrSets> {
+    let mut sets = CutoffAddrSets {
+        date: HashSet::new(),
+        hour: HashSet::new(),
+    };
+    if rollback_to < 0 {
+        // Everything was rolled back — both buckets are empty.
+        return Ok(sets);
+    }
+
+    // 1. Lowest surviving block that still belongs to the cutoff date.
+    let mut scan_from_block = rollback_to + 1;
+    let mut bn = rollback_to;
+    while bn >= 0 {
+        let Some(header) = store.get_block_header(bn)? else {
+            // Sparse header range — stop, exactly like the forward walk in
+            // recompute_dao_daily_snapshot_for_date.
+            break;
+        };
+        let date = ckbadger_common::block_date_from_ms(header.timestamp)
+            .format("%Y%m%d")
+            .to_string();
+        if date != cutoff_date {
+            break;
+        }
+        scan_from_block = bn;
+        bn -= 1;
+    }
+    if scan_from_block > rollback_to {
+        // No surviving block carries the cutoff date.
+        return Ok(sets);
+    }
+
+    // 2. Collect participants of surviving TxActions, bucketed by their own
+    //    timestamp — the same rule the live write path applies.
+    //    CF_TX_ACTIONS is keyed newest-first; seek to the first entry of
+    //    `rollback_to` and walk down to `scan_from_block`.
+    let seek_key = keys::encode_tx_actions_key(rollback_to, i32::MAX, &[0u8; 32]);
+    let iter = store.iterator_cf(
+        store.cf_tx_actions(),
+        IteratorMode::From(&seek_key, rocksdb::Direction::Forward),
+    );
+    for item in iter {
+        let (key, value) = item.map_err(|e| {
+            anyhow::anyhow!(
+                "failed to iterate tx_actions while rebuilding cutoff addr sets: cutoff_date={}, {}",
+                cutoff_date,
+                e
+            )
+        })?;
+        if key.len() != keys::TX_ACTIONS_KEY_SIZE {
+            continue;
+        }
+        let (block_num, _tx_idx, _tx_hash) = keys::decode_tx_actions_key(&key);
+        if block_num < scan_from_block {
+            break;
+        }
+        if block_num > rollback_to {
+            anyhow::bail!(
+                "tx_actions scan for cutoff addr set rebuild started above the fork point: block_num={}, rollback_to={}",
+                block_num,
+                rollback_to
+            );
+        }
+        let tx_actions: TxActions = bincode::deserialize(&value).map_err(|e| {
+            anyhow::anyhow!(
+                "failed to deserialize TxActions while rebuilding cutoff addr sets: block_num={}, {}",
+                block_num,
+                e
+            )
+        })?;
+        // Coinbase participants are excluded from unique-address counts.
+        if tx_actions.is_cellbase {
+            continue;
+        }
+        let dt = ckbadger_common::block_datetime_from_ms(tx_actions.timestamp);
+        let in_date = dt.format("%Y%m%d").to_string() == cutoff_date;
+        let in_hour = dt.format("%Y%m%d%H").to_string() == cutoff_hour_utc8;
+        if !in_date && !in_hour {
+            continue;
+        }
+        for participant in &tx_actions.participants {
+            if participant.lock_hash.len() != 32 {
+                continue;
+            }
+            let mut lock_hash = [0u8; 32];
+            lock_hash.copy_from_slice(&participant.lock_hash);
+            if in_date {
+                sets.date.insert(lock_hash);
+            }
+            if in_hour {
+                sets.hour.insert(lock_hash);
+            }
+        }
+    }
+
+    Ok(sets)
 }
 
 fn parse_cutoff_date_yyyymmdd(cutoff_yyyymmdd: &[u8]) -> anyhow::Result<u32> {
@@ -1488,6 +1725,14 @@ impl CkbadgerStore {
         // stats repair. Sourced from the header's cellbase-witness miner —
         // the same attribution the forward write path uses.
         let mut miner_rollback_deltas: HashMap<(String, Vec<u8>), i32> = HashMap::new();
+        // Rolled-back cellbase activity counts for the activity buckets, keyed
+        // by the **UTC+8** date / hour (the `block_datetime_from_ms` clock the
+        // ACTIVITY_* buckets use). Every block contributes exactly one cellbase
+        // activity to `DailyActivityStats::coinbase_count`, but cellbase rows
+        // are deliberately not persisted in CF_TX_ACTIONS, so the TxActions
+        // prescan below cannot see them — they are counted from the headers.
+        let mut activity_coinbase_date_deltas: HashMap<String, u32> = HashMap::new();
+        let mut activity_coinbase_hour_deltas: HashMap<String, u32> = HashMap::new();
 
         // 1. Delete block headers > rollback_to
         let mut stage = RollbackStageProgress::new("delete_block_headers");
@@ -1541,6 +1786,16 @@ impl CkbadgerStore {
                     .entry((date_str.clone(), miner.clone()))
                     .or_insert(0) += 1;
             }
+            // Activity buckets run on the UTC+8 clock for both date and hour.
+            {
+                let dt = ckbadger_common::block_datetime_from_ms(header.timestamp);
+                *activity_coinbase_date_deltas
+                    .entry(dt.format("%Y%m%d").to_string())
+                    .or_insert(0) += 1;
+                *activity_coinbase_hour_deltas
+                    .entry(dt.format("%Y%m%d%H").to_string())
+                    .or_insert(0) += 1;
+            }
             block_date_map.insert(block_num, (date_str, hour_str));
             let epoch_txs = epoch_tx_removed.entry(header.epoch_number).or_insert(0);
             *epoch_txs = epoch_txs
@@ -1572,6 +1827,9 @@ impl CkbadgerStore {
         //                          used_capacity_consumed, data_size_created, data_size_consumed)
         let mut stats_date_capacity_deltas: HashMap<String, (i128, i128, i128, i64, i64)> =
             HashMap::new();
+        // Per-hour rolled-back capacity_transferred, keyed by UTC hour_yyyymmddhh
+        // (matching the chain-level HOURLY stats keys it repairs).
+        let mut stats_hour_capacity_deltas: HashMap<String, i128> = HashMap::new();
         // Cellbase tx hashes for rolled-back blocks (used to exclude cellbase
         // outputs from capacity_transferred in stage 4).
         let mut cellbase_tx_hashes: HashSet<Vec<u8>> = HashSet::new();
@@ -1751,38 +2009,48 @@ impl CkbadgerStore {
         }
         stage.finish(tx_hash_map_removed);
 
-        // Helper: accumulate per-date capacity deltas for stats repair.
-        // `tx_hash`: first 32 bytes of outpoint key
-        // `created_at_block`: block where cell was created
-        // `is_removal`: true if cell is being removed (created after fork), false if restored
+        // Helper: accumulate per-date and per-hour capacity/data deltas for
+        // stats repair.
+        //
+        // Each side of a cell's life is rolled back independently, decided by
+        // whether that side's block is itself rolled back (`block_date_map`
+        // holds exactly the rolled-back blocks):
+        //   - creation side rolled back  → subtract capacity_transferred (only
+        //     for non-cellbase creating txs), used_capacity_created, data_created
+        //   - consumption side rolled back → subtract used_capacity_consumed,
+        //     data_consumed
+        // A cell created *and* consumed inside the rolled-back range has both
+        // sides subtracted: its live-state deltas cancel out, but its flow
+        // contributions were counted on both sides and must both be removed.
+        //
+        // `tx_hash`: creating tx (first 32 bytes of the outpoint key)
         let accumulate_stats_capacity_delta =
             |cell: &LiveCellInfo,
              tx_hash: &[u8],
              created_at_block: i64,
              consumed_at_block: Option<i64>,
-             is_removal: bool,
              block_date_map: &HashMap<i64, (String, String)>,
              cellbase_tx_hashes: &HashSet<Vec<u8>>,
-             date_cap_deltas: &mut HashMap<String, (i128, i128, i128, i64, i64)>| {
-                if is_removal {
-                    // Cell was created after fork_point — subtract its contribution.
-                    if let Some((date_str, _)) = block_date_map.get(&created_at_block) {
-                        let e = date_cap_deltas.entry(date_str.clone()).or_default();
-                        // capacity_transferred: only non-cellbase tx outputs
-                        if !cellbase_tx_hashes.contains(tx_hash) {
-                            e.0 += cell.capacity as i128;
-                        }
-                        e.1 += cell.occupied_capacity as i128; // used_capacity_created
-                        e.3 += cell.data_size as i64; // data_size_created
+             date_cap_deltas: &mut HashMap<String, (i128, i128, i128, i64, i64)>,
+             hour_cap_deltas: &mut HashMap<String, i128>| {
+                if let Some((date_str, hour_str)) = block_date_map.get(&created_at_block) {
+                    let e = date_cap_deltas.entry(date_str.clone()).or_default();
+                    // capacity_transferred: only non-cellbase tx outputs
+                    if !cellbase_tx_hashes.contains(tx_hash) {
+                        e.0 += cell.capacity as i128;
+                        // Chain-level HOURLY buckets carry capacity_transferred
+                        // too, on the UTC clock of the creating block.
+                        *hour_cap_deltas.entry(hour_str.clone()).or_default() +=
+                            cell.capacity as i128;
                     }
-                } else {
-                    // Cell was consumed after fork_point — subtract its consumption.
-                    if let Some(consumed_block) = consumed_at_block {
-                        if let Some((date_str, _)) = block_date_map.get(&consumed_block) {
-                            let e = date_cap_deltas.entry(date_str.clone()).or_default();
-                            e.2 += cell.occupied_capacity as i128; // used_capacity_consumed
-                            e.4 += cell.data_size as i64; // data_size_consumed
-                        }
+                    e.1 += cell.occupied_capacity as i128; // used_capacity_created
+                    e.3 += cell.data_size as i64; // data_size_created
+                }
+                if let Some(consumed_block) = consumed_at_block {
+                    if let Some((date_str, _)) = block_date_map.get(&consumed_block) {
+                        let e = date_cap_deltas.entry(date_str.clone()).or_default();
+                        e.2 += cell.occupied_capacity as i128; // used_capacity_consumed
+                        e.4 += cell.data_size as i64; // data_size_consumed
                     }
                 }
             };
@@ -1884,10 +2152,10 @@ impl CkbadgerStore {
                         &tx_hash,
                         positioned.created_at_block,
                         None,
-                        true,
                         &block_date_map,
                         &cellbase_tx_hashes,
                         &mut stats_date_capacity_deltas,
+                        &mut stats_hour_capacity_deltas,
                     );
                 }
                 stage.tick(cells_removed);
@@ -1934,6 +2202,21 @@ impl CkbadgerStore {
                             output_index
                         )
                     })?;
+                // Flow deltas are per-side: the consumption is always rolled
+                // back here, and the creation too when the cell was also
+                // created inside the rolled-back range (in which case the
+                // cell simply ceases to exist — no live-state delta, but both
+                // flow contributions must go).
+                accumulate_stats_capacity_delta(
+                    &info,
+                    &tx_hash,
+                    meta.created_at_block,
+                    Some(meta.consumed_at_block),
+                    &block_date_map,
+                    &cellbase_tx_hashes,
+                    &mut stats_date_capacity_deltas,
+                    &mut stats_hour_capacity_deltas,
+                );
                 if meta.created_at_block <= rollback_to {
                     batch.put_cf(
                         self.cf_live_cells(),
@@ -1961,16 +2244,6 @@ impl CkbadgerStore {
                         meta.created_at_block,
                         &mut hodl_capacity_deltas,
                     )?;
-                    accumulate_stats_capacity_delta(
-                        &info,
-                        &tx_hash,
-                        meta.created_at_block,
-                        Some(meta.consumed_at_block),
-                        false,
-                        &block_date_map,
-                        &cellbase_tx_hashes,
-                        &mut stats_date_capacity_deltas,
-                    );
                 }
                 stage.tick(cells_restored);
             }
@@ -2040,13 +2313,17 @@ impl CkbadgerStore {
                             &ctx.tx_hash,
                             positioned.created_at_block,
                             None,
-                            true,
                             &block_date_map,
                             &cellbase_tx_hashes,
                             &mut stats_date_capacity_deltas,
+                            &mut stats_hour_capacity_deltas,
                         );
                     }
                     // Remove consumed marker for outputs created in rolled-back blocks.
+                    // An output of a rolled-back tx that is already consumed was
+                    // necessarily consumed by another rolled-back tx; that tx's
+                    // input loop below owns both flow sides of this cell, so no
+                    // stats delta is accumulated here.
                     batch.delete_cf(self.cf_consumed_cells(), outpoint_key);
                 }
 
@@ -2101,6 +2378,19 @@ impl CkbadgerStore {
                                 }
                             }
                             batch.delete_cf(self.cf_consumed_cells(), outpoint_key);
+                            // Per-side flow rollback: the consumption is always
+                            // rolled back here; the creation as well when this
+                            // cell was also created inside the rolled-back range.
+                            accumulate_stats_capacity_delta(
+                                &consumed.cell,
+                                &input.tx_hash,
+                                consumed.created_at_block,
+                                Some(consumed.consumed_at_block),
+                                &block_date_map,
+                                &cellbase_tx_hashes,
+                                &mut stats_date_capacity_deltas,
+                                &mut stats_hour_capacity_deltas,
+                            );
                             if consumed.created_at_block <= rollback_to {
                                 batch.put_cf(
                                     self.cf_live_cells(),
@@ -2128,16 +2418,6 @@ impl CkbadgerStore {
                                     consumed.created_at_block,
                                     &mut hodl_capacity_deltas,
                                 )?;
-                                accumulate_stats_capacity_delta(
-                                    &consumed.cell,
-                                    &input.tx_hash,
-                                    consumed.created_at_block,
-                                    Some(consumed.consumed_at_block),
-                                    false,
-                                    &block_date_map,
-                                    &cellbase_tx_hashes,
-                                    &mut stats_date_capacity_deltas,
-                                );
                             }
                         }
                         None => {
@@ -2319,6 +2599,17 @@ impl CkbadgerStore {
                                 e
                             )
                         })?;
+                    // Cellbase activities are counted from block headers below;
+                    // a persisted cellbase row would double-count them, so the
+                    // write path's "no cellbase in CF_TX_ACTIONS" invariant is
+                    // asserted here rather than silently absorbed.
+                    if tx_actions.is_cellbase {
+                        anyhow::bail!(
+                            "cellbase TxActions row found in CF_TX_ACTIONS during rollback prescan: block_num={}, tx_hash=0x{} (write path invariant violated)",
+                            block_num,
+                            bytes_to_hex(&tx_actions.tx_hash)
+                        );
+                    }
                     let dt = ckbadger_common::block_datetime_from_ms(tx_actions.timestamp);
                     let date_str = dt.format("%Y%m%d").to_string();
                     let hour_str = dt.format("%Y%m%d%H").to_string();
@@ -2336,15 +2627,43 @@ impl CkbadgerStore {
                     stage.tick(scanned);
                 }
                 stage.finish(scanned);
+
+                // Fold in the header-derived cellbase counts: one coinbase
+                // activity per rolled-back block. Without this the repaired
+                // rows keep counting the orphaned branch's cellbases forever.
+                for (bucket, count) in &activity_coinbase_date_deltas {
+                    activity_date_deltas
+                        .entry(bucket.clone())
+                        .or_default()
+                        .coinbase_count += count;
+                }
+                for (bucket, count) in &activity_coinbase_hour_deltas {
+                    activity_hour_deltas
+                        .entry(bucket.clone())
+                        .or_default()
+                        .coinbase_count += count;
+                }
             }
+
+            // Rebuild the cutoff day/hour unique-address sets from the
+            // surviving chain. Unconditional (not gated on `is_partial_day`):
+            // when the whole cutoff day is rolled back the surviving portion is
+            // empty and the stale set must be dropped, otherwise the orphaned
+            // branch's addresses would stay in the bucket forever and inflate
+            // every later `unique_address_count` merge.
+            let cutoff_addr_sets =
+                rebuild_cutoff_activity_addr_sets(self, rollback_to, cutoff, cutoff_hour_str_utc8)?;
 
             let rollback_deltas = RollbackStatsDeltas {
                 date: stats_date_deltas,
                 date_uncles: stats_date_uncles,
                 hour: stats_hour_deltas,
                 date_capacity: stats_date_capacity_deltas,
+                hour_capacity: stats_hour_capacity_deltas,
                 activity_date: activity_date_deltas,
                 activity_hour: activity_hour_deltas,
+                activity_addr_date: cutoff_addr_sets.date,
+                activity_addr_hour: cutoff_addr_sets.hour,
                 miner: miner_rollback_deltas,
             };
 
@@ -2426,6 +2745,44 @@ impl CkbadgerStore {
                 info!(
                     stats_repaired,
                     stats_removed, "rollback: cutoff-day stats repaired via delta subtraction"
+                );
+            }
+
+            // 7a-0. Persist the rebuilt cutoff-bucket address sets. Written
+            // after the sweep so the rebuilt rows win, and encoded through the
+            // same helper as the live write path so replay's merge reads back
+            // exactly what it would have written itself. An empty surviving
+            // portion means the row must go, not be left stale.
+            {
+                let addr_set_rows: [(u8, &str, &HashSet<[u8; 32]>); 2] = [
+                    (
+                        keys::STATS_PREFIX_ACTIVITY_DAILY_ADDR_SET,
+                        cutoff,
+                        &rollback_deltas.activity_addr_date,
+                    ),
+                    (
+                        keys::STATS_PREFIX_ACTIVITY_HOURLY_ADDR_SET,
+                        cutoff_hour_str_utc8,
+                        &rollback_deltas.activity_addr_hour,
+                    ),
+                ];
+                for (prefix, bucket, addrs) in addr_set_rows {
+                    let key = keys::encode_stats_key(prefix, bucket.as_bytes());
+                    let cf = self.stats_cf_by_prefix(prefix)?;
+                    if addrs.is_empty() {
+                        batch.delete_cf(cf, &key);
+                    } else {
+                        let encoded =
+                            crate::stats_ops::encode_activity_addr_set(addrs.iter().copied());
+                        batch.put_cf(cf, &key, &encoded);
+                    }
+                }
+                info!(
+                    cutoff_date = cutoff,
+                    cutoff_hour = cutoff_hour_str_utc8,
+                    date_addrs = rollback_deltas.activity_addr_date.len(),
+                    hour_addrs = rollback_deltas.activity_addr_hour.len(),
+                    "rollback: cutoff-bucket unique address sets rebuilt from surviving chain"
                 );
             }
 
@@ -4265,13 +4622,8 @@ mod tests {
         let mut hour_deltas = std::collections::HashMap::new();
         hour_deltas.insert("2026021007".to_string(), (2i32, 6, 10, 4));
         let deltas = RollbackStatsDeltas {
-            date: std::collections::HashMap::new(),
-            date_uncles: std::collections::HashMap::new(),
             hour: hour_deltas,
-            date_capacity: std::collections::HashMap::new(),
-            activity_date: std::collections::HashMap::new(),
-            activity_hour: std::collections::HashMap::new(),
-            miner: std::collections::HashMap::new(),
+            ..Default::default()
         };
 
         let mut batch = rocksdb::WriteBatch::default();
@@ -4342,13 +4694,8 @@ mod tests {
             },
         );
         let deltas = RollbackStatsDeltas {
-            date: std::collections::HashMap::new(),
-            date_uncles: std::collections::HashMap::new(),
-            hour: std::collections::HashMap::new(),
-            date_capacity: std::collections::HashMap::new(),
             activity_date,
-            activity_hour: std::collections::HashMap::new(),
-            miner: std::collections::HashMap::new(),
+            ..Default::default()
         };
 
         let key = keys::encode_stats_key(keys::STATS_PREFIX_ACTIVITY_DAILY, date.as_bytes());
@@ -4396,13 +4743,8 @@ mod tests {
         let mut activity_date = std::collections::HashMap::new();
         activity_date.insert(date.to_string(), delta);
         let deltas = RollbackStatsDeltas {
-            date: std::collections::HashMap::new(),
-            date_uncles: std::collections::HashMap::new(),
-            hour: std::collections::HashMap::new(),
-            date_capacity: std::collections::HashMap::new(),
             activity_date,
-            activity_hour: std::collections::HashMap::new(),
-            miner: std::collections::HashMap::new(),
+            ..Default::default()
         };
 
         let key = keys::encode_stats_key(keys::STATS_PREFIX_ACTIVITY_DAILY, date.as_bytes());
@@ -8648,14 +8990,15 @@ mod tests {
         let mut activity_date = std::collections::HashMap::new();
         activity_date.insert(date.to_string(), activity_delta);
 
+        // The surviving portion of the cutoff date holds these two addresses;
+        // the repaired row's unique_address_count is that set's size, not the
+        // stored 200 (an orphaned-branch-only address must not linger).
+        let activity_addr_date = HashSet::from([[0xA1u8; 32], [0xA2u8; 32]]);
+
         let deltas = RollbackStatsDeltas {
-            date: std::collections::HashMap::new(),
-            date_uncles: std::collections::HashMap::new(),
-            hour: std::collections::HashMap::new(),
-            date_capacity: std::collections::HashMap::new(),
             activity_date,
-            activity_hour: std::collections::HashMap::new(),
-            miner: std::collections::HashMap::new(),
+            activity_addr_date,
+            ..Default::default()
         };
 
         let key = keys::encode_stats_key(keys::STATS_PREFIX_ACTIVITY_DAILY, date.as_bytes());
@@ -8682,8 +9025,9 @@ mod tests {
         assert_eq!(result.transfer_count, 97);
         assert_eq!(result.coinbase_count, 49);
         assert_eq!(result.total_ckb_moved, 490_000);
-        // unique_address_count preserved
-        assert_eq!(result.unique_address_count, 200);
+        // unique_address_count is rebuilt from the surviving portion's address
+        // set, never carried over from the pre-reorg row.
+        assert_eq!(result.unique_address_count, 2);
     }
 
     #[test]
@@ -8707,12 +9051,7 @@ mod tests {
 
         let deltas = RollbackStatsDeltas {
             date: date_deltas,
-            date_uncles: std::collections::HashMap::new(),
-            hour: std::collections::HashMap::new(),
-            date_capacity: std::collections::HashMap::new(),
-            activity_date: std::collections::HashMap::new(),
-            activity_hour: std::collections::HashMap::new(),
-            miner: std::collections::HashMap::new(),
+            ..Default::default()
         };
 
         let mut batch = rocksdb::WriteBatch::default();
@@ -8755,15 +9094,7 @@ mod tests {
         let value = bincode::serialize(&original).unwrap();
 
         // Empty miner deltas — this miner not rolled back
-        let deltas = RollbackStatsDeltas {
-            date: std::collections::HashMap::new(),
-            date_uncles: std::collections::HashMap::new(),
-            hour: std::collections::HashMap::new(),
-            date_capacity: std::collections::HashMap::new(),
-            activity_date: std::collections::HashMap::new(),
-            activity_hour: std::collections::HashMap::new(),
-            miner: std::collections::HashMap::new(),
-        };
+        let deltas = RollbackStatsDeltas::default();
 
         let mut batch = rocksdb::WriteBatch::default();
         let repaired = repair_cutoff_date_stats(
