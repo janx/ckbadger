@@ -3287,12 +3287,15 @@ async fn get_activity_summary_24h(
         return ok(cached);
     }
 
-    // Compute the hour key for 24 hours ago. Activity hourly buckets are
-    // keyed by UTC+8 hour strings (the `block_datetime_from_ms` convention
-    // shared by the live and bulk write paths), so the cutoff must come from
-    // the same UTC+8 clock — a UTC cutoff sits 8 hours too early in key
-    // space and widens the window to ~33 buckets.
-    let cutoff = ckbadger_common::now_datetime_utc8() - chrono::Duration::hours(24);
+    // Activity hourly buckets are keyed by UTC+8 hour strings (the
+    // `block_datetime_from_ms` convention shared by the live and bulk write
+    // paths), so the cutoff must come from the same UTC+8 clock — a UTC
+    // cutoff sits 8 hours too early in key space and widens the window to
+    // ~33 buckets. The rolling window is exactly the last 24 buckets — the
+    // current partial hour plus the 23 full hours before it — so the
+    // inclusive `since` key is now-23h; an inclusive now-24h cutoff would
+    // add a 25th bucket and span up to 25 hours.
+    let cutoff = ckbadger_common::now_datetime_utc8() - chrono::Duration::hours(23);
     let since_hour = cutoff.format("%Y%m%d%H").to_string();
 
     let store = state.store.clone();

@@ -1099,12 +1099,13 @@ async fn test_activity_summary_24h_window_uses_utc8_bucket_clock() {
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     let hours_covered = json["hoursCovered"].as_u64().unwrap();
-    // Buckets at offsets 0..=24 from the current UTC+8 hour fall inside the
-    // 24h cutoff (25 buckets; 24 if the wall clock crossed an hour boundary
-    // between seeding and the request).
-    assert!(
-        (24..=25).contains(&hours_covered),
-        "24h window must cover 24-25 UTC+8 hour buckets, got {}",
+    // A rolling 24h window is exactly the last 24 hour buckets: the current
+    // partial hour plus the 23 full hours before it (offsets 0..=23). An
+    // inclusive cutoff at now-24h would silently include a 25th bucket and
+    // span up to 25 hours of data.
+    assert_eq!(
+        hours_covered, 24,
+        "24h window must cover exactly 24 UTC+8 hour buckets, got {}",
         hours_covered
     );
     assert_eq!(

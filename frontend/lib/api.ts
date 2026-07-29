@@ -529,7 +529,13 @@ interface AssetTransferParams {
 }
 
 type ItemDelta =
-  | { kind: 'token'; typeScriptHash: string; delta: string; symbol?: string; decimals?: number }
+  | {
+      kind: 'token';
+      typeScriptHash: string;
+      delta: string;
+      symbol?: string;
+      decimals?: number | null;
+    }
   | { kind: 'object'; objectId: string; delta: number }
   | { kind: 'identity'; identityId: string; delta: number };
 

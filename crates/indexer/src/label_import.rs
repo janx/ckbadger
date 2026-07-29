@@ -3,7 +3,7 @@ use ckbadger_common::{LabelImportConfig, LabelImportResult};
 use ckbadger_store::CkbadgerStore;
 use serde::Deserialize;
 use std::path::Path;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use crate::parser::script::ScriptParser;
 use crate::rpc::Script;
@@ -193,6 +193,36 @@ impl ScriptNetworkMetadata {
             .cloned()
             .map(ImportDeployment::Version)
             .collect()
+    }
+}
+
+/// Describe label fields that would overwrite a *different* pre-existing
+/// value (chain-derived on-chain info or an earlier label). Returns None when
+/// the label agrees with, or only fills, the existing metadata.
+fn label_override_conflicts(
+    existing: &ckbadger_store::types::TokenInfo,
+    label: &TokenMetadata,
+) -> Option<String> {
+    let mut parts = Vec::new();
+    if let Some(name) = existing.name.as_deref() {
+        if name != label.name {
+            parts.push(format!("name {:?} -> {:?}", name, label.name));
+        }
+    }
+    if let Some(symbol) = existing.symbol.as_deref() {
+        if symbol != label.symbol {
+            parts.push(format!("symbol {:?} -> {:?}", symbol, label.symbol));
+        }
+    }
+    if let Some(decimals) = existing.decimals {
+        if decimals != i32::from(label.decimals) {
+            parts.push(format!("decimals {} -> {}", decimals, label.decimals));
+        }
+    }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join(", "))
     }
 }
 
@@ -399,6 +429,17 @@ fn upsert_token_label(
                 description: None,
                 transfers_count: 0,
             });
+
+    if let Some(conflict) = label_override_conflicts(&info, token) {
+        warn!(
+            type_hash = %format!("0x{}", hex::encode(&type_hash)),
+            label = %token.symbol,
+            %conflict,
+            "token label overrides differing pre-existing metadata (labels take \
+             precedence by design; if the previous value is chain-derived, fix \
+             the upstream token-labels entry)"
+        );
+    }
 
     // Update label fields while preserving chain-derived metadata.
     info.name = Some(token.name.clone());
@@ -1573,5 +1614,78 @@ canonical_hash_type = "data1"
                 .unwrap(),
             vec![version_hash]
         );
+    }
+}
+
+#[cfg(test)]
+mod label_override_conflict_tests {
+    use super::{label_override_conflicts, TokenDeployment, TokenMetadata};
+
+    fn token_info(
+        name: Option<&str>,
+        symbol: Option<&str>,
+        decimals: Option<i32>,
+    ) -> ckbadger_store::types::TokenInfo {
+        ckbadger_store::types::TokenInfo {
+            type_code_hash: vec![0u8; 32],
+            hash_type: 1,
+            type_args: vec![],
+            standard: "xudt".to_string(),
+            name: name.map(str::to_string),
+            symbol: symbol.map(str::to_string),
+            decimals,
+            max_supply: None,
+            first_seen_block: 0,
+            icon_url: None,
+            description: None,
+            transfers_count: 0,
+        }
+    }
+
+    fn label(name: &str, symbol: &str, decimals: i16) -> TokenMetadata {
+        TokenMetadata {
+            name: name.to_string(),
+            symbol: symbol.to_string(),
+            decimals,
+            standard: "xudt".to_string(),
+            icon: None,
+            description: None,
+            disabled: false,
+            mainnet: None::<TokenDeployment>,
+            testnet: None::<TokenDeployment>,
+        }
+    }
+
+    #[test]
+    fn reports_differing_chain_derived_symbol() {
+        // The RGB++ case: chain info cell says "RGB++", the bundled TOML says
+        // "RGB++ Protocol" — the override must be surfaced, not silent.
+        let existing = token_info(Some("RGB++ Protocol"), Some("RGB++"), Some(8));
+        let conflict =
+            label_override_conflicts(&existing, &label("RGB++ Protocol", "RGB++ Protocol", 8))
+                .expect("differing symbol must be reported");
+        assert!(conflict.contains("symbol"), "got: {conflict}");
+        assert!(!conflict.contains("name"), "got: {conflict}");
+    }
+
+    #[test]
+    fn silent_when_label_agrees_or_fills_gaps() {
+        assert!(
+            label_override_conflicts(&token_info(None, None, None), &label("Seal", "SEAL", 8))
+                .is_none()
+        );
+        assert!(label_override_conflicts(
+            &token_info(Some("Seal"), Some("SEAL"), Some(8)),
+            &label("Seal", "SEAL", 8)
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn reports_decimals_divergence() {
+        let conflict =
+            label_override_conflicts(&token_info(None, None, Some(6)), &label("USDI", "USDI", 8))
+                .expect("decimals divergence must be reported");
+        assert!(conflict.contains("decimals 6 -> 8"), "got: {conflict}");
     }
 }

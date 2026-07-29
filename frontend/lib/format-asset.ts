@@ -19,6 +19,19 @@ export function formatTokenBalance(balance: string, decimals: number | null): st
   return `${wholePart.toLocaleString()}.${trimmedFractional}`;
 }
 
+/** Hover text for amounts rendered from a token whose decimals are unknown. */
+export const RAW_AMOUNT_TITLE = 'Token decimals unknown \u2014 raw base-unit amount';
+
+/**
+ * Format a token balance and append an explicit " (raw)" marker when the
+ * token's decimals are unknown, so an unscaled base-unit amount can never be
+ * mistaken for a real 0-decimals amount.
+ */
+export function formatTokenBalanceWithRawMarker(balance: string, decimals: number | null): string {
+  const base = formatTokenBalance(balance, decimals);
+  return decimals == null ? `${base} (raw)` : base;
+}
+
 export function formatAssetAmount(transfer: AssetTransfer): string {
   if (!transfer.amount) return '1';
   return formatTokenBalance(transfer.amount, transfer.tokenDecimals ?? null);

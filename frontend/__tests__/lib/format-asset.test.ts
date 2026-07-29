@@ -4,6 +4,7 @@ import {
   formatAssetAmount,
   getAssetLabel,
   getAssetBadgeVariant,
+  formatTokenBalanceWithRawMarker,
 } from '@/lib/format-asset';
 import type { AssetTransfer } from '@/lib/api';
 
@@ -96,5 +97,19 @@ describe('getAssetBadgeVariant', () => {
     expect(getAssetBadgeVariant('identity')).toBe('blue');
     expect(getAssetBadgeVariant('dao')).toBe('gray');
     expect(getAssetBadgeVariant('unknown')).toBe('gray');
+  });
+});
+
+describe('formatTokenBalanceWithRawMarker', () => {
+  it('appends (raw) when decimals are unknown', () => {
+    expect(formatTokenBalanceWithRawMarker('12345', null)).toBe('12,345 (raw)');
+  });
+
+  it('does not mark true 0-decimals amounts', () => {
+    expect(formatTokenBalanceWithRawMarker('12345', 0)).toBe('12,345');
+  });
+
+  it('scales known decimals without a marker', () => {
+    expect(formatTokenBalanceWithRawMarker('12345', 2)).toBe('123.45');
   });
 });

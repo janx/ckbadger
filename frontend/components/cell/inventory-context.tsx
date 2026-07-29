@@ -3,7 +3,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import type { Cell, Token } from '@/lib/api';
-import { formatTokenBalance } from '@/lib/format-asset';
+import { formatTokenBalanceWithRawMarker } from '@/lib/format-asset';
 import { formatNumber } from '@/lib/utils';
 
 // ---------------------------------------------------------------------------
@@ -129,7 +129,7 @@ function buildUdtDisplayName(token: Token): string | null {
 
 function buildUdtSummary(token: Token, cell: Cell): string | null {
   if (!cell.udtAmount) return null;
-  const amount = formatTokenBalance(cell.udtAmount, token.decimals);
+  const amount = formatTokenBalanceWithRawMarker(cell.udtAmount, token.decimals);
   return token.symbol ? `${amount} ${token.symbol}` : amount;
 }
 
