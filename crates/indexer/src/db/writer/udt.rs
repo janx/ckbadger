@@ -274,7 +274,11 @@ impl BatchWriter {
             for type_hash in all_keys {
                 if let Some(mut info) = self.store.get_token(type_hash)? {
                     Self::apply_observed_max_supply(type_hash, &mut info, max_supply_observations);
-                    apply_onchain_token_info(type_hash, &mut info, onchain_token_info);
+                    apply_onchain_token_info(
+                        type_hash,
+                        &mut info,
+                        onchain_token_info.get(type_hash),
+                    );
                     batch.put_token(type_hash, &info);
                 }
             }
@@ -356,7 +360,7 @@ impl BatchWriter {
                 },
             };
             Self::apply_observed_max_supply(type_hash, &mut updated, max_supply_observations);
-            apply_onchain_token_info(type_hash, &mut updated, onchain_token_info);
+            apply_onchain_token_info(type_hash, &mut updated, onchain_token_info.get(type_hash));
 
             updated.transfers_count = new_total;
             batch.put_token(type_hash, &updated);
@@ -561,19 +565,65 @@ struct TokenUpdate<'a> {
     transfers_count: i64,
 }
 
-fn apply_onchain_token_info(
+/// The one definition of how a token's on-chain Unique Cell metadata merges
+/// into the row about to be stored. Both sync modes call this: live sync from
+/// the batch writer, bulk sync from `TokenOwner::emit_snapshot_rows`. Keeping
+/// a second copy of the rule is how the two modes came to store different
+/// metadata for the same chain data.
+///
+/// `info` must already carry whatever the store holds for this token, because
+/// precedence is decided against it. Precedence follows
+/// [`crate::sync::token_helpers::OnchainInfoBinding`] and nothing else:
+///
+/// * `XudtExtension` — the xUDT's own args name the Unique Cell, so the
+///   association is cryptographic and the chain wins.
+/// * `IssuanceCooccurrence` — the Unique Cell was merely co-created in the
+///   token's mint transaction. That is a heuristic, so it fills gaps only and
+///   never displaces already-known metadata (a curated label, or an earlier
+///   extension-bound observation, which is the stronger evidence).
+///
+/// Whichever side wins, a *disagreement* is reported. This is the only moment
+/// in the process where both values exist: label import runs once, before the
+/// first block is indexed, so the conflict check it performs can only compare
+/// a label against the label it wrote itself. Without the report here, a
+/// bundled label that contradicts the chain stays silently authoritative and
+/// is discoverable only by a human noticing the wrong name in the UI — which
+/// is exactly how the wrong RGB++ symbol was eventually found.
+pub(crate) fn apply_onchain_token_info(
     type_hash: &[u8],
     info: &mut TokenInfo,
-    onchain_info: &HashMap<Vec<u8>, crate::sync::token_helpers::OnchainTokenInfo>,
+    bound: Option<&crate::sync::token_helpers::OnchainTokenInfo>,
 ) {
-    let Some(bound) = onchain_info.get(type_hash) else {
+    let Some(bound) = bound else {
         return;
     };
+
+    // Only values that would actually be written can conflict: an empty
+    // name/symbol in a Unique Cell asserts nothing and is never stored.
+    if let Some(divergence) = crate::label_import::token_metadata_divergence(
+        info,
+        Some(bound.info.name.as_str()).filter(|name| !name.is_empty()),
+        Some(bound.info.symbol.as_str()).filter(|symbol| !symbol.is_empty()),
+        Some(i32::from(bound.info.decimal)),
+    ) {
+        warn!(
+            token_type_hash = %hex::encode(type_hash),
+            binding = ?bound.binding,
+            %divergence,
+            authority = match bound.binding {
+                crate::sync::token_helpers::OnchainInfoBinding::XudtExtension => "chain",
+                crate::sync::token_helpers::OnchainInfoBinding::IssuanceCooccurrence => "stored",
+            },
+            "stored token metadata disagrees with the token's own on-chain Unique Cell \
+             (shown as `stored -> chain`); if the stored value came from a bundled label, \
+             the label contradicts the chain and the correction belongs upstream in \
+             token-labels"
+        );
+    }
+
     match bound.binding {
         crate::sync::token_helpers::OnchainInfoBinding::XudtExtension => {
-            // Cryptographic binding: always write on-chain data. label_import
-            // unconditionally overwrites at startup, so TOML priority is
-            // maintained by execution order, not conditional checks.
+            // Cryptographic binding: always write on-chain data.
             if !bound.info.name.is_empty() {
                 info.name = Some(bound.info.name.clone());
             }
@@ -1640,14 +1690,14 @@ mod tests {
 
         // Gaps are filled…
         let mut empty = token_without_metadata();
-        apply_onchain_token_info(&type_hash, &mut empty, &map);
+        apply_onchain_token_info(&type_hash, &mut empty, map.get(&type_hash));
         assert_eq!(empty.name.as_deref(), Some("OnChain"));
         assert_eq!(empty.symbol.as_deref(), Some("OC"));
         assert_eq!(empty.decimals, Some(8));
 
         // …but already-known metadata is never overwritten.
         let mut labelled = token_with_metadata();
-        apply_onchain_token_info(&type_hash, &mut labelled, &map);
+        apply_onchain_token_info(&type_hash, &mut labelled, map.get(&type_hash));
         assert_eq!(labelled.name.as_deref(), Some("Labelled"));
         assert_eq!(labelled.symbol.as_deref(), Some("LBL"));
         assert_eq!(labelled.decimals, Some(4));
@@ -1664,9 +1714,105 @@ mod tests {
         );
 
         let mut labelled = token_with_metadata();
-        apply_onchain_token_info(&type_hash, &mut labelled, &map);
+        apply_onchain_token_info(&type_hash, &mut labelled, map.get(&type_hash));
         assert_eq!(labelled.name.as_deref(), Some("OnChain"));
         assert_eq!(labelled.symbol.as_deref(), Some("OC"));
         assert_eq!(labelled.decimals, Some(8));
+    }
+
+    #[test]
+    fn test_cooccurrence_binding_reports_metadata_it_is_forbidden_to_write() {
+        // The regression: a curated label that contradicts the token's own
+        // Unique Cell keeps winning here forever (label import runs before the
+        // first block is indexed, so the row is never empty by the time the
+        // chain value shows up). Silently dropping the chain value is what made
+        // the wrong RGB++ symbol survive until a human noticed it in the UI.
+        let type_hash = vec![0xAD; 32];
+        let map = onchain_map(
+            &type_hash,
+            crate::sync::token_helpers::OnchainInfoBinding::IssuanceCooccurrence,
+        );
+
+        let mut labelled = token_with_metadata();
+        let (_, logs) = crate::label_import::test_log_capture::capture_warnings(|| {
+            apply_onchain_token_info(&type_hash, &mut labelled, map.get(&type_hash));
+        });
+
+        assert!(
+            logs.contains(&hex::encode(&type_hash)),
+            "the contradicted token must be identified: {logs}"
+        );
+        assert!(
+            logs.contains("LBL") && logs.contains("OC"),
+            "both the stored and the on-chain value must be shown: {logs}"
+        );
+        // Precedence is unchanged: the heuristic binding still must not
+        // overwrite already-known metadata.
+        assert_eq!(labelled.name.as_deref(), Some("Labelled"));
+        assert_eq!(labelled.symbol.as_deref(), Some("LBL"));
+        assert_eq!(labelled.decimals, Some(4));
+    }
+
+    #[test]
+    fn test_extension_binding_reports_the_label_it_overwrites() {
+        let type_hash = vec![0xAE; 32];
+        let map = onchain_map(
+            &type_hash,
+            crate::sync::token_helpers::OnchainInfoBinding::XudtExtension,
+        );
+
+        let mut labelled = token_with_metadata();
+        let (_, logs) = crate::label_import::test_log_capture::capture_warnings(|| {
+            apply_onchain_token_info(&type_hash, &mut labelled, map.get(&type_hash));
+        });
+
+        assert!(
+            logs.contains(&hex::encode(&type_hash)),
+            "the contradicted token must be identified: {logs}"
+        );
+    }
+
+    #[test]
+    fn test_agreeing_onchain_info_is_not_reported() {
+        let type_hash = vec![0xAF; 32];
+        let map = onchain_map(
+            &type_hash,
+            crate::sync::token_helpers::OnchainInfoBinding::IssuanceCooccurrence,
+        );
+
+        let mut agreeing = TokenInfo {
+            name: Some("OnChain".to_string()),
+            symbol: Some("OC".to_string()),
+            decimals: Some(8),
+            ..token_with_metadata()
+        };
+        let (_, logs) = crate::label_import::test_log_capture::capture_warnings(|| {
+            apply_onchain_token_info(&type_hash, &mut agreeing, map.get(&type_hash));
+        });
+        assert!(logs.is_empty(), "agreement must be silent: {logs}");
+    }
+
+    #[test]
+    fn test_empty_onchain_strings_assert_nothing_and_are_not_reported() {
+        // A Unique Cell may carry an empty name/symbol. The write path skips
+        // those, so the divergence check must skip them too — otherwise it
+        // reports a conflict against a value that is never written.
+        let type_hash = vec![0xB0; 32];
+        let mut map = onchain_map(
+            &type_hash,
+            crate::sync::token_helpers::OnchainInfoBinding::XudtExtension,
+        );
+        let entry = map.get_mut(&type_hash).unwrap();
+        entry.info.name = String::new();
+        entry.info.symbol = String::new();
+        entry.info.decimal = 4;
+
+        let mut labelled = token_with_metadata();
+        let (_, logs) = crate::label_import::test_log_capture::capture_warnings(|| {
+            apply_onchain_token_info(&type_hash, &mut labelled, map.get(&type_hash));
+        });
+        assert!(logs.is_empty(), "empty chain fields assert nothing: {logs}");
+        assert_eq!(labelled.name.as_deref(), Some("Labelled"));
+        assert_eq!(labelled.symbol.as_deref(), Some("LBL"));
     }
 }

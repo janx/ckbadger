@@ -399,27 +399,14 @@ impl TokenOwner {
                 .expect("sorted token type hash must exist");
             let mut info = token.to_info(type_hash.clone());
 
-            // Apply on-chain max_supply observations (omnilock supply info cells)
-            if let Some(&observed) = self.max_supply_observations.get(type_hash) {
-                info.max_supply = Some(observed);
-            }
-
-            // Apply on-chain token info from Unique Cells. Existing store
-            // metadata (labels or earlier on-chain info) overlays below, so
-            // neither binding kind can overwrite already-known fields here.
-            if let Some(onchain) = self.token_onchain_info.get(type_hash) {
-                if !onchain.info.name.is_empty() {
-                    info.name = Some(onchain.info.name.clone());
-                }
-                if !onchain.info.symbol.is_empty() {
-                    info.symbol = Some(onchain.info.symbol.clone());
-                }
-                info.decimals = Some(onchain.info.decimal as i32);
-            }
-
-            // Preserve label fields from existing store data (written by label import)
-            if let Some(existing) = existing_tokens.get(type_hash) {
-                // Display fields: store values unconditionally win (includes TOML label data)
+            // Start from what the store already holds. Label import runs
+            // before the first block is indexed, so on a fresh database this
+            // is the curated label; on a restart it is whatever the previous
+            // run stored. Live sync reads exactly this row before merging the
+            // chain observation, so seeding it here is what lets both modes
+            // share one merge rule instead of each inventing a precedence.
+            let existing = existing_tokens.get(type_hash);
+            if let Some(existing) = existing {
                 if existing.name.is_some() {
                     info.name = existing.name.clone();
                 }
@@ -435,11 +422,26 @@ impl TokenOwner {
                 if existing.description.is_some() {
                     info.description = existing.description.clone();
                 }
-                // max_supply: only fill gaps (on-chain observations are canonical)
-                if info.max_supply.is_none() {
-                    info.max_supply = existing.max_supply;
-                }
             }
+
+            // max_supply: an on-chain observation (omnilock supply info cell)
+            // is canonical, the stored value only fills the gap.
+            if let Some(&observed) = self.max_supply_observations.get(type_hash) {
+                info.max_supply = Some(observed);
+            } else if let Some(existing) = existing {
+                info.max_supply = existing.max_supply;
+            }
+
+            // Name/symbol/decimals from the token's Unique Cell, merged by the
+            // single shared rule (see the helper's docs for precedence) so a
+            // rebuild from genesis cannot store different metadata than live
+            // sync would, and so a label that contradicts the chain is
+            // reported on this path too.
+            crate::db::writer::udt::apply_onchain_token_info(
+                type_hash,
+                &mut info,
+                self.token_onchain_info.get(type_hash),
+            );
 
             emit(MaterializedRow::new(
                 CF_TOKENS,
@@ -1958,5 +1960,159 @@ mod tests {
         );
         assert_eq!(token.symbol.as_deref(), Some("RGB++"));
         assert_eq!(token.decimals, Some(8));
+    }
+
+    fn labelled_token_row() -> TokenInfo {
+        TokenInfo {
+            type_code_hash: vec![0x11; 32],
+            hash_type: 1,
+            type_args: vec![0x22; 32],
+            standard: "xudt".to_string(),
+            name: Some("Labelled".to_string()),
+            symbol: Some("LBL".to_string()),
+            decimals: Some(4),
+            max_supply: None,
+            first_seen_block: 7,
+            icon_url: Some("logo.png".to_string()),
+            description: Some("curated".to_string()),
+            transfers_count: 0,
+        }
+    }
+
+    /// Bulk sync and live sync must store the same token metadata for the same
+    /// chain data.
+    ///
+    /// They did not: `emit_snapshot_rows` overlaid the existing store row (the
+    /// label written before the first block was indexed) on top of every
+    /// on-chain observation without ever reading `OnchainInfoBinding`, while
+    /// the live writer let a cryptographic extension binding win. The same
+    /// token therefore ended up with a different name/symbol/decimals
+    /// depending on whether its issuance block arrived during bulk or live
+    /// sync — and a rebuild from genesis silently changed the answer.
+    #[test]
+    fn bulk_and_live_agree_on_onchain_token_metadata_precedence() {
+        let dir = tempfile::tempdir().unwrap();
+        let domain_store = CkbadgerStore::open_domain(dir.path()).unwrap();
+
+        let type_hash = vec![0x7a; 32];
+        let labelled = labelled_token_row();
+        domain_store
+            .put_token_direct(&type_hash, &labelled)
+            .unwrap();
+
+        for binding in [
+            crate::sync::token_helpers::OnchainInfoBinding::XudtExtension,
+            crate::sync::token_helpers::OnchainInfoBinding::IssuanceCooccurrence,
+        ] {
+            let observed = crate::sync::token_helpers::OnchainTokenInfo {
+                info: crate::sync::token_helpers::UniqueTokenInfo {
+                    decimal: 8,
+                    name: "OnChain".to_string(),
+                    symbol: "OC".to_string(),
+                    total_supply: None,
+                },
+                binding,
+            };
+
+            let mut owner = TokenOwner::default();
+            owner.tokens.insert(
+                type_hash.clone(),
+                TokenAccum {
+                    type_code_hash: labelled.type_code_hash.clone(),
+                    hash_type: labelled.hash_type,
+                    type_args: labelled.type_args.clone(),
+                    standard: "xudt",
+                    first_seen_block: labelled.first_seen_block,
+                    holders: FxHashMap::default(),
+                    transfers_count: 0,
+                    hourly_transfers: FxHashMap::default(),
+                    daily_deltas: FxHashMap::default(),
+                },
+            );
+            owner
+                .token_onchain_info
+                .insert(type_hash.clone(), observed.clone());
+
+            let rows = owner.build_snapshot_rows(&domain_store).unwrap();
+            let row = rows
+                .iter()
+                .find(|row| row.cf_name == CF_TOKENS && row.key == type_hash)
+                .expect("bulk snapshot must emit the token row");
+            let bulk: TokenInfo = bincode::deserialize(&row.value).unwrap();
+
+            let mut live = labelled.clone();
+            crate::db::writer::udt::apply_onchain_token_info(
+                &type_hash,
+                &mut live,
+                Some(&observed),
+            );
+
+            assert_eq!(
+                (bulk.name.as_deref(), bulk.symbol.as_deref(), bulk.decimals),
+                (live.name.as_deref(), live.symbol.as_deref(), live.decimals),
+                "bulk and live must store identical token metadata for {binding:?}"
+            );
+            // Curated fields the chain never carries survive in both modes.
+            assert_eq!(bulk.icon_url, labelled.icon_url);
+            assert_eq!(bulk.description, labelled.description);
+        }
+    }
+
+    /// The bulk snapshot writer must surface a curated label that contradicts
+    /// the token's own Unique Cell, exactly as the live writer does. Bulk is
+    /// the path a rebuild from genesis takes, so detection that only exists in
+    /// live sync never runs for a historically issued token.
+    #[test]
+    fn bulk_snapshot_reports_a_label_that_contradicts_the_chain() {
+        let dir = tempfile::tempdir().unwrap();
+        let domain_store = CkbadgerStore::open_domain(dir.path()).unwrap();
+
+        let type_hash = vec![0x7b; 32];
+        let labelled = labelled_token_row();
+        domain_store
+            .put_token_direct(&type_hash, &labelled)
+            .unwrap();
+
+        let mut owner = TokenOwner::default();
+        owner.tokens.insert(
+            type_hash.clone(),
+            TokenAccum {
+                type_code_hash: labelled.type_code_hash.clone(),
+                hash_type: labelled.hash_type,
+                type_args: labelled.type_args.clone(),
+                standard: "xudt",
+                first_seen_block: labelled.first_seen_block,
+                holders: FxHashMap::default(),
+                transfers_count: 0,
+                hourly_transfers: FxHashMap::default(),
+                daily_deltas: FxHashMap::default(),
+            },
+        );
+        owner.token_onchain_info.insert(
+            type_hash.clone(),
+            crate::sync::token_helpers::OnchainTokenInfo {
+                info: crate::sync::token_helpers::UniqueTokenInfo {
+                    decimal: 8,
+                    name: "OnChain".to_string(),
+                    symbol: "OC".to_string(),
+                    total_supply: None,
+                },
+                binding: crate::sync::token_helpers::OnchainInfoBinding::IssuanceCooccurrence,
+            },
+        );
+
+        let (rows, logs) = crate::label_import::test_log_capture::capture_warnings(|| {
+            owner.build_snapshot_rows(&domain_store).unwrap()
+        });
+
+        assert!(
+            logs.contains(&hex::encode(&type_hash)),
+            "bulk must identify the contradicted token: {logs}"
+        );
+        assert!(
+            logs.contains("LBL") && logs.contains("OC"),
+            "bulk must show both the stored and the on-chain value: {logs}"
+        );
+        assert!(rows.iter().any(|row| row.cf_name == CF_TOKENS));
     }
 }

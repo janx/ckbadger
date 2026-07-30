@@ -100,7 +100,7 @@ mod spore;
 pub(crate) mod stablepp_detector;
 mod statistics;
 mod sync;
-mod udt;
+pub(crate) mod udt;
 pub(crate) mod utxoswap_detector;
 
 pub use crate::sync::DaoConsumedRow;

@@ -196,27 +196,35 @@ impl ScriptNetworkMetadata {
     }
 }
 
-/// Describe label fields that would overwrite a *different* pre-existing
-/// value (chain-derived on-chain info or an earlier label). Returns None when
-/// the label agrees with, or only fills, the existing metadata.
-fn label_override_conflicts(
+/// Describe the fields where the stored token row contradicts what another
+/// source asserts about the same token. `None` when they agree, when the store
+/// has no value yet, or when the other source asserts nothing (`None` argument).
+///
+/// This is the one comparison used by every token-metadata observation point:
+/// label import (label vs. store) and the sync write path (chain vs. store).
+/// Keeping a single implementation is what makes "the bundled label disagrees
+/// with the chain" a detectable event rather than a matter of which observer
+/// happened to be written most recently.
+pub(crate) fn token_metadata_divergence(
     existing: &ckbadger_store::types::TokenInfo,
-    label: &TokenMetadata,
+    asserted_name: Option<&str>,
+    asserted_symbol: Option<&str>,
+    asserted_decimals: Option<i32>,
 ) -> Option<String> {
     let mut parts = Vec::new();
-    if let Some(name) = existing.name.as_deref() {
-        if name != label.name {
-            parts.push(format!("name {:?} -> {:?}", name, label.name));
+    if let (Some(name), Some(asserted)) = (existing.name.as_deref(), asserted_name) {
+        if name != asserted {
+            parts.push(format!("name {name:?} -> {asserted:?}"));
         }
     }
-    if let Some(symbol) = existing.symbol.as_deref() {
-        if symbol != label.symbol {
-            parts.push(format!("symbol {:?} -> {:?}", symbol, label.symbol));
+    if let (Some(symbol), Some(asserted)) = (existing.symbol.as_deref(), asserted_symbol) {
+        if symbol != asserted {
+            parts.push(format!("symbol {symbol:?} -> {asserted:?}"));
         }
     }
-    if let Some(decimals) = existing.decimals {
-        if decimals != i32::from(label.decimals) {
-            parts.push(format!("decimals {} -> {}", decimals, label.decimals));
+    if let (Some(decimals), Some(asserted)) = (existing.decimals, asserted_decimals) {
+        if decimals != asserted {
+            parts.push(format!("decimals {decimals} -> {asserted}"));
         }
     }
     if parts.is_empty() {
@@ -224,6 +232,29 @@ fn label_override_conflicts(
     } else {
         Some(parts.join(", "))
     }
+}
+
+/// Describe label fields that would overwrite a *different* pre-existing
+/// value (chain-derived on-chain info or an earlier label). Returns None when
+/// the label agrees with, or only fills, the existing metadata.
+///
+/// This observer only sees what is already in the store when the indexer
+/// starts. It can therefore never see a chain value that the store does not
+/// yet hold — for tokens whose only on-chain metadata binding is the issuance
+/// co-occurrence heuristic, the stored value at startup *is* this same label,
+/// so nothing diverges. Detecting label-vs-chain disagreement is the job of
+/// the sync write path, which is the only place both values coexist; see
+/// `crate::db::writer::udt::apply_onchain_token_info`.
+fn label_override_conflicts(
+    existing: &ckbadger_store::types::TokenInfo,
+    label: &TokenMetadata,
+) -> Option<String> {
+    token_metadata_divergence(
+        existing,
+        Some(&label.name),
+        Some(&label.symbol),
+        Some(i32::from(label.decimals)),
+    )
 }
 
 fn compute_type_hash(deployment: &TokenDeployment) -> Result<Vec<u8>> {
@@ -700,6 +731,65 @@ fn import_single_deployment(
     store.insert_script_version_by_label(&script.name, &version_hash)?;
     store.put_script_version_by_family_direct(family_id, &version_hash)?;
     Ok(())
+}
+
+/// Capture the tracing output a piece of production code emits.
+///
+/// The surface for "a curated label contradicts the chain" is a warning, so
+/// the only honest assertion is on the log line the production path actually
+/// writes. Tests that assert on a hand-rolled copy of the comparison would
+/// pass even if the comparison were never wired up — which is exactly the
+/// failure mode being guarded against here.
+#[cfg(test)]
+pub(crate) mod test_log_capture {
+    use std::io::Write;
+    use std::sync::{Arc, Mutex};
+
+    #[derive(Clone, Default)]
+    pub(crate) struct SharedBuffer(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for SharedBuffer {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0
+                .lock()
+                .expect("log capture buffer poisoned")
+                .extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for SharedBuffer {
+        type Writer = SharedBuffer;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    /// Run `f` with a thread-local subscriber capturing WARN and above, and
+    /// return its result together with everything that was logged.
+    pub(crate) fn capture_warnings<T>(f: impl FnOnce() -> T) -> (T, String) {
+        let buffer = SharedBuffer::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(buffer.clone())
+            .with_max_level(tracing::Level::WARN)
+            .with_ansi(false)
+            .finish();
+        let value = tracing::subscriber::with_default(subscriber, f);
+        let logged = buffer
+            .0
+            .lock()
+            .expect("log capture buffer poisoned")
+            .clone();
+        (
+            value,
+            String::from_utf8(logged).expect("tracing output must be UTF-8"),
+        )
+    }
 }
 
 #[cfg(test)]
@@ -1692,8 +1782,16 @@ mod label_override_conflict_tests {
 
 #[cfg(test)]
 mod bundled_label_chain_consistency_tests {
-    use super::bundled;
-    use crate::sync::token_helpers::parse_unique_cell_token_info;
+    use super::test_log_capture::capture_warnings;
+    use super::{bundled, compute_type_hash, TokenDeployment, TokenMetadata};
+    use crate::db::writer::udt::apply_onchain_token_info;
+    use crate::sync::token_helpers::{
+        parse_unique_cell_token_info, OnchainInfoBinding, OnchainTokenInfo, UniqueTokenInfo,
+    };
+    use ckbadger_store::types::TokenInfo;
+    use ckbadger_store::CkbadgerStore;
+    use std::collections::HashSet;
+    use tempfile::TempDir;
 
     /// Real mainnet Unique Cell payload from the RGB++ Protocol issuance
     /// (tx 0xd088a128…, output 0) — the same vector the parser test uses.
@@ -1701,10 +1799,218 @@ mod bundled_label_chain_consistency_tests {
     const RGBPP_MAINNET_ARGS: &str =
         "0x08875c56644d39dd9629d291357d3026debc5d22fa88d924d60ce8f16dd50e70";
 
-    /// A bundled label always wins over on-chain metadata (label import runs
-    /// last by design), so a bundled label that disagrees with the chain
-    /// permanently hides the truth from users. Where a real on-chain vector
-    /// exists, the bundled entry must agree with it.
+    /// Every network a bundled token can deploy to. The corpus guard runs over
+    /// all of them, so no bundled row sits outside the check.
+    const NETWORKS: [&str; 2] = ["mainnet", "testnet"];
+
+    fn deployment_for<'a>(token: &'a TokenMetadata, network: &str) -> Option<&'a TokenDeployment> {
+        match network {
+            "mainnet" => token.mainnet.as_ref(),
+            "testnet" => token.testnet.as_ref(),
+            other => panic!("unhandled network in the bundled-label guard: {other}"),
+        }
+    }
+
+    /// Every token row the bundled labels produce for `network`, read back out
+    /// of a real label import rather than reconstructed from the TOML — this
+    /// is the state the sync write path meets on a fresh database.
+    fn stored_label_rows(store: &CkbadgerStore, network: &str) -> Vec<(Vec<u8>, TokenInfo)> {
+        let mut rows = Vec::new();
+        let mut seen = HashSet::new();
+        for token in bundled::udt_labels() {
+            if token.disabled {
+                continue;
+            }
+            let Some(deployment) = deployment_for(&token, network) else {
+                continue;
+            };
+            let type_hash = compute_type_hash(deployment).expect("bundled deployment must hash");
+            if !seen.insert(type_hash.clone()) {
+                continue;
+            }
+            let info = store
+                .get_token(&type_hash)
+                .expect("token read must succeed")
+                .unwrap_or_else(|| {
+                    panic!(
+                        "label import must have written token {} (0x{})",
+                        token.symbol,
+                        hex::encode(&type_hash)
+                    )
+                });
+            rows.push((type_hash, info));
+        }
+        rows
+    }
+
+    /// Import the bundled labels for `network` into a throwaway store and hand
+    /// the resulting rows to `check`.
+    fn with_imported_labels(network: &str, check: impl FnOnce(&[(Vec<u8>, TokenInfo)])) {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path().to_str().unwrap()).unwrap();
+        super::run_label_import_bundled(&store, network).unwrap();
+        check(&stored_label_rows(&store, network));
+    }
+
+    /// The guard only means something if it reaches the whole corpus. Every
+    /// enabled bundled token must deploy to a network the loop below imports;
+    /// a token outside that set would be unchecked exactly the way 1469 rows
+    /// were unchecked when only one vector was pinned.
+    #[test]
+    fn the_bundled_corpus_is_fully_reachable_by_the_guard() {
+        let labels = bundled::udt_labels();
+        assert!(labels.len() > 1000, "corpus shrank to {}", labels.len());
+        let unreachable: Vec<&str> = labels
+            .iter()
+            .filter(|token| !token.disabled)
+            .filter(|token| {
+                !NETWORKS
+                    .iter()
+                    .any(|network| deployment_for(token, network).is_some())
+            })
+            .map(|token| token.symbol.as_str())
+            .collect();
+        assert!(
+            unreachable.is_empty(),
+            "{} bundled tokens deploy to no checked network: {:?}",
+            unreachable.len(),
+            &unreachable[..unreachable.len().min(5)]
+        );
+    }
+
+    /// A Unique Cell observation that says exactly what the stored row says.
+    fn agreeing_observation(stored: &TokenInfo, binding: OnchainInfoBinding) -> OnchainTokenInfo {
+        OnchainTokenInfo {
+            info: UniqueTokenInfo {
+                decimal: stored
+                    .decimals
+                    .map(|d| u8::try_from(d).expect("bundled decimals must fit a Unique Cell byte"))
+                    .expect("label import writes decimals for every bundled token"),
+                name: stored.name.clone().unwrap_or_default(),
+                symbol: stored.symbol.clone().unwrap_or_default(),
+                total_supply: None,
+            },
+            binding,
+        }
+    }
+
+    /// A Unique Cell observation that contradicts the stored row.
+    fn contradicting_observation(
+        stored: &TokenInfo,
+        binding: OnchainInfoBinding,
+    ) -> OnchainTokenInfo {
+        let mut observation = agreeing_observation(stored, binding);
+        observation.info.name = format!("{}~chain", observation.info.name);
+        observation.info.symbol = format!("{}~chain", observation.info.symbol);
+        observation
+    }
+
+    /// Pull the `token_type_hash` field out of every captured warning.
+    fn warned_type_hashes(logs: &str) -> HashSet<String> {
+        const FIELD: &str = "token_type_hash=";
+        let mut found = HashSet::new();
+        for line in logs.lines() {
+            let Some(rest) = line.split(FIELD).nth(1) else {
+                continue;
+            };
+            let hash: String = rest.chars().take_while(char::is_ascii_hexdigit).collect();
+            if !hash.is_empty() {
+                found.insert(hash);
+            }
+        }
+        found
+    }
+
+    /// The corpus-wide guard. A bundled label is written before the first
+    /// block is indexed and (for the issuance co-occurrence binding) keeps
+    /// winning forever, so a label that contradicts the chain would otherwise
+    /// be discoverable only by a human noticing the wrong symbol in the UI —
+    /// which is exactly how the RGB++ row was found.
+    ///
+    /// Pinning one known-good vector guards one row out of ~1470. This walks
+    /// every bundled label on every network through the real write path and
+    /// requires the contradiction to be reported for each one, under both
+    /// binding kinds, so no label can be silently authoritative.
+    #[test]
+    fn every_bundled_label_is_checked_against_the_chain_at_write_time() {
+        let mut total = 0usize;
+        for network in NETWORKS {
+            with_imported_labels(network, |stored| {
+                assert!(
+                    !stored.is_empty(),
+                    "no bundled labels imported for {network}"
+                );
+                total += stored.len();
+
+                for binding in [
+                    OnchainInfoBinding::IssuanceCooccurrence,
+                    OnchainInfoBinding::XudtExtension,
+                ] {
+                    let (_, logs) = capture_warnings(|| {
+                        for (type_hash, info) in stored {
+                            let mut row = info.clone();
+                            let observed = contradicting_observation(info, binding);
+                            apply_onchain_token_info(type_hash, &mut row, Some(&observed));
+                        }
+                    });
+
+                    let warned = warned_type_hashes(&logs);
+                    let silent: Vec<String> = stored
+                        .iter()
+                        .map(|(type_hash, _)| hex::encode(type_hash))
+                        .filter(|type_hash| !warned.contains(type_hash))
+                        .collect();
+                    assert!(
+                        silent.is_empty(),
+                        "{} of {} bundled {network} labels silently outrank contradicting \
+                         on-chain metadata under {:?}; first few: {:?}",
+                        silent.len(),
+                        stored.len(),
+                        binding,
+                        &silent[..silent.len().min(5)]
+                    );
+                }
+            });
+        }
+        assert!(
+            total >= bundled::udt_labels().len(),
+            "the two networks must cover at least one row per bundled token, got {total}"
+        );
+    }
+
+    /// The other half of the same guard: agreement must stay quiet, or the
+    /// warning is noise and gets ignored. Runs over the whole corpus so real
+    /// label shapes (empty strings, unicode symbols, 0 and 255 decimals) are
+    /// covered, not just a hand-picked row.
+    #[test]
+    fn bundled_labels_that_agree_with_the_chain_are_not_reported() {
+        for network in NETWORKS {
+            with_imported_labels(network, |stored| {
+                for binding in [
+                    OnchainInfoBinding::IssuanceCooccurrence,
+                    OnchainInfoBinding::XudtExtension,
+                ] {
+                    let (_, logs) = capture_warnings(|| {
+                        for (type_hash, info) in stored {
+                            let mut row = info.clone();
+                            let observed = agreeing_observation(info, binding);
+                            apply_onchain_token_info(type_hash, &mut row, Some(&observed));
+                        }
+                    });
+                    assert!(
+                        warned_type_hashes(&logs).is_empty(),
+                        "agreeing on-chain metadata must not be reported \
+                         ({network}, {binding:?}): {logs}"
+                    );
+                }
+            });
+        }
+    }
+
+    /// The one row backed by genuine chain bytes rather than a synthesized
+    /// observation, driven through the same production path: decode the real
+    /// mainnet Unique Cell and require the imported RGB++ row to agree with
+    /// it. Regressing the bundled TOML re-fires the warning and fails here.
     #[test]
     fn bundled_rgbpp_label_matches_the_on_chain_info_cell() {
         let chain = parse_unique_cell_token_info(&hex::decode(RGBPP_UNIQUE_CELL_DATA_HEX).unwrap())
@@ -1718,19 +2024,33 @@ mod bundled_label_chain_consistency_tests {
                     .is_some_and(|d| d.args.eq_ignore_ascii_case(RGBPP_MAINNET_ARGS))
             })
             .expect("bundled labels must contain the RGB++ Protocol mainnet deployment");
+        let deployment = label.mainnet.as_ref().expect("mainnet deployment");
+        let type_hash = compute_type_hash(deployment).unwrap();
 
-        assert_eq!(
-            label.symbol, chain.symbol,
-            "bundled symbol must match the on-chain info cell"
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path().to_str().unwrap()).unwrap();
+        super::run_label_import_bundled(&store, "mainnet").unwrap();
+        let mut row = store
+            .get_token(&type_hash)
+            .unwrap()
+            .expect("RGB++ label row must be imported");
+
+        // RGB++ carries a plain owner-lock-hash in its xUDT args, so the chain
+        // binds its Unique Cell by issuance co-occurrence.
+        let observed = OnchainTokenInfo {
+            info: chain.clone(),
+            binding: OnchainInfoBinding::IssuanceCooccurrence,
+        };
+        let (_, logs) = capture_warnings(|| {
+            apply_onchain_token_info(&type_hash, &mut row, Some(&observed));
+        });
+
+        assert!(
+            warned_type_hashes(&logs).is_empty(),
+            "bundled RGB++ label must agree with the on-chain info cell: {logs}"
         );
-        assert_eq!(
-            label.name, chain.name,
-            "bundled name must match the on-chain info cell"
-        );
-        assert_eq!(
-            i32::from(label.decimals),
-            i32::from(chain.decimal),
-            "bundled decimals must match the on-chain info cell"
-        );
+        assert_eq!(row.symbol.as_deref(), Some(chain.symbol.as_str()));
+        assert_eq!(row.name.as_deref(), Some(chain.name.as_str()));
+        assert_eq!(row.decimals, Some(i32::from(chain.decimal)));
     }
 }
