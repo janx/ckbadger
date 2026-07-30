@@ -192,8 +192,9 @@ Memory sizing is per network rather than a fixed host-wide peak:
 - The domain and append-only RocksDB instances inside one process share one block cache and one
   WriteBufferManager. Store-local memtables/table readers are summed, while shared resources are
   counted once.
-- `[indexer].bulk_memory_budget_gb` optionally caps whole-process `VmRSS + VmSwap` during bulk
-  build; otherwise the per-network RAM share is used.
+- `[indexer].bulk_memory_budget_gb` optionally caps whole-process `VmRSS + VmSwap` on Linux or
+  process physical footprint on macOS during bulk build; otherwise the per-network RAM share is
+  used.
 
 ## Config Keys
 

@@ -136,7 +136,7 @@ where
                 _ => {}
             }
 
-            if status.past_bulk == Some(true) {
+            if status.blocked.is_none() && status.past_bulk == Some(true) {
                 info!(
                     gating = %gating,
                     deferred = %deferred,
@@ -519,6 +519,53 @@ mod tests {
             "a blocked gate must never let the next network start"
         );
         assert_eq!(*observed.borrow(), 5, "kept polling the blocked gate");
+    }
+
+    #[tokio::test]
+    async fn a_blocked_gate_never_advances_even_when_its_store_is_past_bulk() {
+        // A rebuild-required or failed handoff can leave durable bulk-complete
+        // metadata behind. Child health is the stronger gate: stale progress
+        // must never admit the next network while that child is blocked.
+        let (tx, rx) = watch::channel(false);
+        let observed = RefCell::new(0usize);
+        let spawned = RefCell::new(Vec::<usize>::new());
+        let stop = tx.clone();
+        sequence_indexers(
+            &names(2),
+            |_prev| {
+                let observed = &observed;
+                let stop = &stop;
+                async move {
+                    *observed.borrow_mut() += 1;
+                    if *observed.borrow() >= 4 {
+                        stop.send(true).unwrap();
+                    }
+                    Ok(GateStatus {
+                        past_bulk: Some(true),
+                        bulk_completed: true,
+                        blocked: Some("rebuild required (exit 78)".to_string()),
+                        ..GateStatus::default()
+                    })
+                }
+            },
+            |i| {
+                let spawned = &spawned;
+                async move {
+                    spawned.borrow_mut().push(i);
+                    Ok(SpawnOutcome::Started)
+                }
+            },
+            Duration::from_millis(1),
+            rx,
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            spawned.borrow().is_empty(),
+            "blocked child health must override stale past-bulk metadata"
+        );
+        assert_eq!(*observed.borrow(), 4, "kept polling the blocked gate");
     }
 
     #[tokio::test]

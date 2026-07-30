@@ -1,5 +1,6 @@
 pub mod address;
 pub mod assets;
+pub(crate) mod client_ip;
 pub mod format;
 pub mod hash;
 pub mod http;

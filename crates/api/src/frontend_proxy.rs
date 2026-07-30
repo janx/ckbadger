@@ -5,10 +5,12 @@
 //! distinct local port, and this module routes network-prefixed requests to the
 //! matching backend:
 //!
-//! - `<method> /api/{network}/v1/{*rest}` → `http://127.0.0.1:{port}/api/v1/{rest}`
+//! - `<method> /api/{network}/v1/{*rest}` → that network's configured API
+//!   bind host and port at `/api/v1/{rest}`
 //!   (both request and response bodies are streamed via reqwest, so large
 //!   payloads never buffer fully inside the proxy).
-//! - `GET /ws/{network}` → `ws://127.0.0.1:{port}/ws` (bidirectional frame relay
+//! - `GET /ws/{network}` → that network's configured API host and port at `/ws`
+//!   (bidirectional frame relay
 //!   via tokio-tungstenite).
 //!
 //! Upstream targets match how `ckbadger-api` mounts itself: the API nests its
@@ -20,13 +22,14 @@
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::body::Body;
 use axum::extract::ws::{
     CloseFrame as AxCloseFrame, Message as AxMessage, WebSocket, WebSocketUpgrade,
 };
 use axum::extract::{ConnectInfo, Path, Request, State};
-use axum::http::{header, HeaderValue, StatusCode};
+use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get};
 use axum::{Json, Router};
@@ -46,31 +49,95 @@ use crate::response::ApiError;
 /// ends up outside this prefix has escaped the advertised contract.
 const UPSTREAM_API_PREFIX: &str = "/api/v1/";
 
-/// Per-network backend routing table: network name → local `ckbadger-api` port,
-/// plus the HTTP client used to reach those backends.
+/// One configured `ckbadger-api` upstream.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct UpstreamTarget {
+    host: String,
+    port: u16,
+}
+
+impl UpstreamTarget {
+    fn from_bind_host(host: String, port: u16) -> Self {
+        let unbracketed = host
+            .strip_prefix('[')
+            .and_then(|value| value.strip_suffix(']'))
+            .unwrap_or(&host);
+        let host = match unbracketed.parse::<IpAddr>() {
+            Ok(IpAddr::V4(ip)) if ip.is_unspecified() => std::net::Ipv4Addr::LOCALHOST.to_string(),
+            Ok(IpAddr::V6(ip)) if ip.is_unspecified() => std::net::Ipv6Addr::LOCALHOST.to_string(),
+            Ok(ip) => ip.to_string(),
+            Err(_) => host,
+        };
+        Self { host, port }
+    }
+
+    fn authority(&self) -> String {
+        match self.host.parse::<IpAddr>() {
+            Ok(ip) => SocketAddr::new(ip, self.port).to_string(),
+            Err(_) => format!("{}:{}", self.host, self.port),
+        }
+    }
+
+    fn http_url(&self, rest: &str, query: &str) -> Option<reqwest::Url> {
+        reqwest::Url::parse(&format!(
+            "http://{}{UPSTREAM_API_PREFIX}{rest}{query}",
+            self.authority()
+        ))
+        .ok()
+    }
+
+    fn websocket_url(&self) -> String {
+        format!("ws://{}/ws", self.authority())
+    }
+}
+
+/// Per-network backend routing table plus the clients/timeouts used to reach it.
 pub struct ProxyState {
-    ports: HashMap<String, u16>,
+    upstreams: HashMap<String, UpstreamTarget>,
     client: reqwest::Client,
+    ws_handshake_timeout: Duration,
 }
 
 impl ProxyState {
     /// Routing table wired to the process-wide proxy HTTP client (production).
-    pub fn new(ports: HashMap<String, u16>) -> Self {
+    pub fn new(upstreams: HashMap<String, (String, u16)>) -> Self {
         Self {
-            ports,
+            upstreams: upstreams
+                .into_iter()
+                .map(|(name, (host, port))| (name, UpstreamTarget::from_bind_host(host, port)))
+                .collect(),
             client: crate::utils::http::proxy_http_client().clone(),
+            ws_handshake_timeout: crate::utils::http::PROXY_READ_TIMEOUT,
         }
     }
 
     /// Same routing table with a caller-supplied client. Exists so tests can
     /// exercise the timeout paths on a budget measured in milliseconds instead
     /// of the production minute-scale one.
-    pub fn with_client(ports: HashMap<String, u16>, client: reqwest::Client) -> Self {
-        Self { ports, client }
+    pub fn with_client(upstreams: HashMap<String, (String, u16)>, client: reqwest::Client) -> Self {
+        Self {
+            upstreams: upstreams
+                .into_iter()
+                .map(|(name, (host, port))| (name, UpstreamTarget::from_bind_host(host, port)))
+                .collect(),
+            client,
+            ws_handshake_timeout: crate::utils::http::PROXY_READ_TIMEOUT,
+        }
     }
 
-    fn upstream_port(&self, network: &str) -> Option<u16> {
-        self.ports.get(network).copied()
+    #[cfg(test)]
+    fn with_client_and_ws_timeout(
+        upstreams: HashMap<String, (String, u16)>,
+        client: reqwest::Client,
+        ws_handshake_timeout: Duration,
+    ) -> Self {
+        let mut state = Self::with_client(upstreams, client);
+        state.ws_handshake_timeout = ws_handshake_timeout;
+        state
+    }
+
+    fn upstream(&self, network: &str) -> Option<&UpstreamTarget> {
+        self.upstreams.get(network)
     }
 }
 
@@ -131,7 +198,7 @@ fn raw_rest_path(path: &str) -> Option<&str> {
 }
 
 /// Forward `/api/{network}/v1/{*rest}` (with query string) to the network's API
-/// server at `http://127.0.0.1:{port}/api/v1/{rest}`.
+/// server at its configured bind host and port under `/api/v1/{rest}`.
 ///
 /// Both directions stream: the request body is wrapped with
 /// [`reqwest::Body::wrap_stream`] and the upstream response is returned via
@@ -144,7 +211,7 @@ pub async fn proxy_api(
     Path((network, _decoded_rest)): Path<(String, String)>,
     req: Request,
 ) -> Response {
-    let Some(port) = state.upstream_port(&network) else {
+    let Some(upstream) = state.upstream(&network) else {
         return unknown_network(&network, &state);
     };
 
@@ -156,7 +223,16 @@ pub async fn proxy_api(
             "proxy client address unavailable".to_string(),
         );
     };
-    let client_ip = peer.0.ip().to_string();
+    let Some(client_ip) =
+        crate::utils::client_ip::resolve_client_ip(Some(peer.0.ip()), &parts.headers)
+    else {
+        return proxy_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            "proxy could not resolve a client address from its socket peer".to_string(),
+        );
+    };
+    let client_ip = client_ip.to_string();
     let Some(rest) = raw_rest_path(parts.uri.path()) else {
         return proxy_error(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -172,9 +248,7 @@ pub async fn proxy_api(
         .query()
         .map(|q| format!("?{q}"))
         .unwrap_or_default();
-    let Ok(url) = reqwest::Url::parse(&format!(
-        "http://127.0.0.1:{port}{UPSTREAM_API_PREFIX}{rest}{query}"
-    )) else {
+    let Some(url) = upstream.http_url(rest, &query) else {
         return proxy_error(
             StatusCode::BAD_REQUEST,
             "invalid_path",
@@ -241,7 +315,7 @@ pub async fn proxy_api(
     }
 }
 
-/// Relay `/ws/{network}` to the network's API server at `ws://127.0.0.1:{port}/ws`.
+/// Relay `/ws/{network}` to the network's configured API host and port at `/ws`.
 ///
 /// The upstream socket is opened *before* the client's own upgrade is completed.
 /// An upstream that refuses the handshake — the pre-sync `503 initializing`
@@ -254,19 +328,41 @@ pub async fn proxy_ws(
     State(state): State<Arc<ProxyState>>,
     Path(network): Path<String>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     ws: WebSocketUpgrade,
 ) -> Response {
-    let Some(port) = state.upstream_port(&network) else {
+    let Some(upstream) = state.upstream(&network) else {
         return unknown_network(&network, &state);
     };
+    let Some(client_ip) = crate::utils::client_ip::resolve_client_ip(Some(peer.ip()), &headers)
+    else {
+        return proxy_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            "proxy could not resolve a websocket client address from its socket peer".to_string(),
+        );
+    };
 
-    match connect_upstream_ws(port, peer.ip()).await {
-        Ok(upstream) => ws.on_upgrade(move |client| relay_ws(client, upstream)),
-        Err(TgError::Http(rejection)) => upstream_handshake_rejection(&network, rejection),
-        Err(e) => proxy_error(
+    match tokio::time::timeout(
+        state.ws_handshake_timeout,
+        connect_upstream_ws(upstream, client_ip),
+    )
+    .await
+    {
+        Ok(Ok(upstream)) => ws.on_upgrade(move |client| relay_ws(client, upstream)),
+        Ok(Err(TgError::Http(rejection))) => upstream_handshake_rejection(&network, rejection),
+        Ok(Err(e)) => proxy_error(
             StatusCode::BAD_GATEWAY,
             "upstream_unreachable",
             format!("upstream network '{network}' websocket unreachable: {e}"),
+        ),
+        Err(_) => proxy_error(
+            StatusCode::GATEWAY_TIMEOUT,
+            "upstream_timeout",
+            format!(
+                "upstream network '{network}' websocket handshake timed out after {:?}",
+                state.ws_handshake_timeout
+            ),
         ),
     }
 }
@@ -280,8 +376,11 @@ type UpstreamWs = WebSocketStream<MaybeTlsStream<TcpStream>>;
 /// peer, and `extract_client_ip` treats a loopback peer with no forwarded
 /// address as local — so the rate limiter skips it and every proxied socket is
 /// effectively un-limited. The HTTP path already forwards them; this mirrors it.
-async fn connect_upstream_ws(port: u16, client_ip: IpAddr) -> Result<UpstreamWs, TgError> {
-    let mut request = format!("ws://127.0.0.1:{port}/ws").into_client_request()?;
+async fn connect_upstream_ws(
+    upstream: &UpstreamTarget,
+    client_ip: IpAddr,
+) -> Result<UpstreamWs, TgError> {
+    let mut request = upstream.websocket_url().into_client_request()?;
     let client_ip = HeaderValue::from_str(&client_ip.to_string())
         .expect("an IP address is always a valid header value");
     request
@@ -365,7 +464,7 @@ fn proxy_error(status: StatusCode, code: &'static str, message: String) -> Respo
 /// Actionable `404` for a network absent from the routing table. Lists the known
 /// networks so the caller can see the valid choices immediately.
 fn unknown_network(network: &str, state: &ProxyState) -> Response {
-    let mut known: Vec<&str> = state.ports.keys().map(String::as_str).collect();
+    let mut known: Vec<&str> = state.upstreams.keys().map(String::as_str).collect();
     known.sort_unstable();
     proxy_error(
         StatusCode::NOT_FOUND,
@@ -535,6 +634,22 @@ mod tests {
         port
     }
 
+    /// Accept TCP and then never emit an HTTP/WebSocket response head.
+    async fn spawn_stalled_handshake_upstream() -> u16 {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            loop {
+                let (socket, _) = listener.accept().await.unwrap();
+                tokio::spawn(async move {
+                    let _socket = socket;
+                    tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+                });
+            }
+        });
+        port
+    }
+
     /// Serve a proxy router on an ephemeral port *with* connect info, exactly as
     /// `run_frontend_server` does, so client-address handling behaves as in
     /// production.
@@ -555,7 +670,7 @@ mod tests {
     fn testnet_proxy(port: u16) -> Router {
         proxy_router(Arc::new(ProxyState::new(HashMap::from([(
             "testnet".to_string(),
-            port,
+            ("127.0.0.1".to_string(), port),
         )]))))
     }
 
@@ -567,9 +682,10 @@ mod tests {
             .read_timeout(std::time::Duration::from_millis(200))
             .build()
             .expect("test proxy client");
-        proxy_router(Arc::new(ProxyState::with_client(
-            HashMap::from([("testnet".to_string(), port)]),
+        proxy_router(Arc::new(ProxyState::with_client_and_ws_timeout(
+            HashMap::from([("testnet".to_string(), ("127.0.0.1".to_string(), port))]),
             client,
+            std::time::Duration::from_millis(200),
         )))
     }
 
@@ -597,6 +713,25 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
         let body = resp.into_body().collect().await.unwrap().to_bytes();
         assert_eq!(&body[..], b"203.0.113.42|203.0.113.42");
+    }
+
+    #[tokio::test]
+    async fn proxy_preserves_forwarded_client_from_a_trusted_local_hop() {
+        let port = spawn_mock_upstream().await;
+        let request = Request::builder()
+            .uri("/api/testnet/v1/echo-forwarded")
+            .header("x-forwarded-for", "203.0.113.77, 127.0.0.1")
+            .header("x-real-ip", "203.0.113.77")
+            .body(Body::empty())
+            .unwrap();
+        let resp = testnet_proxy(port)
+            .oneshot(with_peer(request, "127.0.0.1:4242"))
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        assert_eq!(&body[..], b"203.0.113.77|203.0.113.77");
     }
 
     #[tokio::test]
@@ -766,6 +901,24 @@ mod tests {
         // Shapes the route pattern can never produce.
         assert_eq!(raw_rest_path("/api/testnet/v2/ping"), None);
         assert_eq!(raw_rest_path("/ws/testnet"), None);
+    }
+
+    #[test]
+    fn upstream_target_uses_specific_hosts_and_normalizes_wildcard_binds() {
+        let specific = UpstreamTarget::from_bind_host("192.0.2.25".to_string(), 8101);
+        assert_eq!(specific.authority(), "192.0.2.25:8101");
+        assert_eq!(
+            specific.http_url("blocks/42", "").unwrap().as_str(),
+            "http://192.0.2.25:8101/api/v1/blocks/42"
+        );
+        assert_eq!(specific.websocket_url(), "ws://192.0.2.25:8101/ws");
+
+        let wildcard_v4 = UpstreamTarget::from_bind_host("0.0.0.0".to_string(), 8102);
+        assert_eq!(wildcard_v4.authority(), "127.0.0.1:8102");
+
+        let wildcard_v6 = UpstreamTarget::from_bind_host("::".to_string(), 8103);
+        assert_eq!(wildcard_v6.authority(), "[::1]:8103");
+        assert_eq!(wildcard_v6.websocket_url(), "ws://[::1]:8103/ws");
     }
 
     #[tokio::test]
@@ -947,6 +1100,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn ws_relay_preserves_forwarded_client_from_a_trusted_local_hop() {
+        let upstream_port = spawn_mock_upstream().await;
+        let proxy_port = serve_proxy(testnet_proxy(upstream_port)).await;
+        let mut request = format!("ws://127.0.0.1:{proxy_port}/ws/testnet")
+            .into_client_request()
+            .unwrap();
+        request.headers_mut().insert(
+            "x-forwarded-for",
+            HeaderValue::from_static("203.0.113.78, 127.0.0.1"),
+        );
+        request
+            .headers_mut()
+            .insert("x-real-ip", HeaderValue::from_static("203.0.113.78"));
+
+        let (mut ws, _resp) = tokio_tungstenite::connect_async(request)
+            .await
+            .expect("client should connect through the trusted local proxy hop");
+        ws.send(TgMessage::Text("whoami".to_owned())).await.unwrap();
+        let reply = ws.next().await.expect("a reply frame").unwrap();
+        assert_eq!(
+            reply,
+            TgMessage::Text("xff:203.0.113.78|203.0.113.78".to_owned())
+        );
+    }
+
+    #[tokio::test]
     async fn ws_upstream_503_reaches_the_client_as_a_real_503() {
         // A pre-sync upstream rejects the upgrade with 503 + the `initializing`
         // payload. Collapsing that into a post-upgrade Close(1011) would tell the
@@ -998,6 +1177,34 @@ mod tests {
                 );
             }
             other => panic!("expected an HTTP 502 handshake rejection, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn ws_stalled_upstream_handshake_is_bounded_with_504() {
+        let stalled_port = spawn_stalled_handshake_upstream().await;
+        let proxy_port = serve_proxy(testnet_proxy_with_short_timeouts(stalled_port)).await;
+
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{proxy_port}/ws/testnet")),
+        )
+        .await
+        .expect("the proxy must bound a stalled upstream websocket handshake");
+        let err = result.expect_err("a stalled upstream must reject the client handshake");
+
+        match err {
+            tokio_tungstenite::tungstenite::Error::Http(resp) => {
+                assert_eq!(resp.status(), StatusCode::GATEWAY_TIMEOUT);
+                let body = resp.body().as_ref().expect("504 handshake body present");
+                let json: serde_json::Value = serde_json::from_slice(body).unwrap();
+                assert_eq!(json["error"], "upstream_timeout");
+                assert!(
+                    json["message"].as_str().unwrap().contains("testnet"),
+                    "504 body should name the stalled network: {json}"
+                );
+            }
+            other => panic!("expected an HTTP 504 handshake rejection, got {other:?}"),
         }
     }
 

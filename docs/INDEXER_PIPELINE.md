@@ -264,8 +264,9 @@ Live batch span adapts to chain density (~20-5000 blocks per batch).
 
 Bulk-build mode adds in-memory state for the live-cell set (LiveCellOwner), intern tables, and
 reducer-owned domain state. Its growth is controlled by compact fixed-size state, MTP-sealed
-activity buckets, actual-byte queue backpressure, a whole-process `VmRSS + VmSwap` budget, and
-byte-bounded finalization. See the Bulk-Build Engine section for details.
+activity buckets, actual-byte queue backpressure, a whole-process memory budget (`VmRSS + VmSwap`
+on Linux, process physical footprint on macOS), and byte-bounded finalization. See the Bulk-Build
+Engine section for details.
 
 ### Channel Backpressure
 
@@ -501,9 +502,10 @@ Failures are classified via a typed `DobDecodeError` (`crates/indexer/src/sync/d
   rayon) to avoid starving CPU-bound build work.
   Located in `crates/indexer/src/sync/bulk_build/prefetch.rs`.
 
-- **BulkMemoryGuard**: checks process `VmRSS + VmSwap` before each batch, after each build, and
-  before finalization. It reduces the next input-byte cap to preserve transient build headroom and
-  fails with detailed process/owner diagnostics if the configured limit is exceeded.
+- **BulkMemoryGuard**: checks process `VmRSS + VmSwap` on Linux or process physical footprint on
+  macOS before each batch, after each build, and before finalization. It reduces the next
+  input-byte cap to preserve transient build headroom and fails with detailed process/owner
+  diagnostics if the configured limit is exceeded.
   `[indexer].bulk_memory_budget_gb` is optional; without it, the store's per-network RAM share is
   used.
 
@@ -542,7 +544,7 @@ crates/indexer/src/sync/
     facts.rs         # FactsArena — per-batch fact graph
     interner.rs      # IdentityInterner (DashMap) + FrozenIdentityView
     live_cells.rs    # LiveCellOwner — compact UTXO set + sparse extras side-map
-    memory_guard.rs  # Whole-process RSS + swap budget and transient batch headroom
+    memory_guard.rs  # Portable whole-process budget and transient batch headroom
     sequencer.rs     # Canonical tx-order sequencing + input resolution
     accounting.rs    # Fee/capacity accounting
     materialize.rs   # Byte-bounded domain finalization + dual-store history writes

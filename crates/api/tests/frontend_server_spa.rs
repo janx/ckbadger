@@ -30,6 +30,7 @@ async fn frontend_server_falls_back_to_index_html_for_spa_route() {
         default_network: "mainnet".to_string(),
         networks: vec![FrontendNetwork {
             name: "mainnet".to_string(),
+            api_host: "127.0.0.1".to_string(),
             api_port: 8101,
         }],
     })
@@ -103,6 +104,7 @@ async fn frontend_server_routes_api_paths_to_the_proxy_not_the_spa_fallback() {
         default_network: "mainnet".to_string(),
         networks: vec![FrontendNetwork {
             name: "mainnet".to_string(),
+            api_host: "127.0.0.1".to_string(),
             api_port: dead_port,
         }],
     })

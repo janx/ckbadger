@@ -11,6 +11,7 @@ use std::path::Path;
 use std::sync::Mutex;
 
 const CGROUP_ROOT: &str = "/sys/fs/cgroup";
+#[cfg(not(target_os = "macos"))]
 const PROC_SELF_STATUS: &str = "/proc/self/status";
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -277,6 +278,23 @@ pub fn read_cgroup_memory_snapshot() -> CgroupMemorySnapshot {
 }
 
 pub fn read_process_memory_snapshot() -> anyhow::Result<ProcessMemorySnapshot> {
+    let snapshot = read_platform_process_memory_snapshot()?;
+
+    #[cfg(all(not(target_env = "msvc"), not(target_os = "macos")))]
+    {
+        let mut snapshot = snapshot;
+        populate_jemalloc_memory_snapshot(&mut snapshot)?;
+        Ok(snapshot)
+    }
+
+    #[cfg(any(target_env = "msvc", target_os = "macos"))]
+    {
+        Ok(snapshot)
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn read_platform_process_memory_snapshot() -> anyhow::Result<ProcessMemorySnapshot> {
     let content = fs::read_to_string(PROC_SELF_STATUS).map_err(|err| {
         anyhow::anyhow!(
             "failed to read process memory status {}: {}",
@@ -284,48 +302,105 @@ pub fn read_process_memory_snapshot() -> anyhow::Result<ProcessMemorySnapshot> {
             err
         )
     })?;
-    let mut snapshot = parse_process_memory_status(&content)?;
-
-    #[cfg(all(not(target_env = "msvc"), not(target_os = "macos")))]
-    {
-        epoch::advance()
-            .map_err(|err| anyhow::anyhow!("failed to advance jemalloc stats epoch: {err}"))?;
-        snapshot.jemalloc_stats_available = true;
-        snapshot.jemalloc_allocated_bytes = usize_memory_to_u64(
-            "jemalloc.allocated_bytes",
-            stats::allocated::read()
-                .map_err(|err| anyhow::anyhow!("failed to read jemalloc allocated bytes: {err}"))?,
-        )?;
-        snapshot.jemalloc_active_bytes = usize_memory_to_u64(
-            "jemalloc.active_bytes",
-            stats::active::read()
-                .map_err(|err| anyhow::anyhow!("failed to read jemalloc active bytes: {err}"))?,
-        )?;
-        snapshot.jemalloc_resident_bytes = usize_memory_to_u64(
-            "jemalloc.resident_bytes",
-            stats::resident::read()
-                .map_err(|err| anyhow::anyhow!("failed to read jemalloc resident bytes: {err}"))?,
-        )?;
-        snapshot.jemalloc_mapped_bytes = usize_memory_to_u64(
-            "jemalloc.mapped_bytes",
-            stats::mapped::read()
-                .map_err(|err| anyhow::anyhow!("failed to read jemalloc mapped bytes: {err}"))?,
-        )?;
-        snapshot.jemalloc_retained_bytes = usize_memory_to_u64(
-            "jemalloc.retained_bytes",
-            stats::retained::read()
-                .map_err(|err| anyhow::anyhow!("failed to read jemalloc retained bytes: {err}"))?,
-        )?;
-        snapshot.jemalloc_metadata_bytes = usize_memory_to_u64(
-            "jemalloc.metadata_bytes",
-            stats::metadata::read()
-                .map_err(|err| anyhow::anyhow!("failed to read jemalloc metadata bytes: {err}"))?,
-        )?;
-    }
-
-    Ok(snapshot)
+    parse_process_memory_status(&content)
 }
 
+#[cfg(target_os = "macos")]
+fn read_platform_process_memory_snapshot() -> anyhow::Result<ProcessMemorySnapshot> {
+    let pid = libc::pid_t::try_from(std::process::id()).map_err(|_| {
+        anyhow::anyhow!(
+            "process id does not fit macOS pid_t: pid={}",
+            std::process::id()
+        )
+    })?;
+    let mut usage = std::mem::MaybeUninit::<libc::rusage_info_v4>::zeroed();
+
+    // SAFETY: `usage` points to writable storage of exactly the structure
+    // requested by RUSAGE_INFO_V4. `proc_pid_rusage` initializes it on a zero
+    // return code, which is checked before `assume_init`.
+    let result = unsafe {
+        libc::proc_pid_rusage(
+            pid,
+            libc::RUSAGE_INFO_V4,
+            usage.as_mut_ptr().cast::<libc::rusage_info_t>(),
+        )
+    };
+    if result != 0 {
+        return Err(anyhow::anyhow!(
+            "failed to read macOS process memory with proc_pid_rusage: pid={} error={}",
+            pid,
+            std::io::Error::last_os_error()
+        ));
+    }
+    // SAFETY: the successful call above initialized the requested V4 structure.
+    let usage = unsafe { usage.assume_init() };
+
+    // macOS does not expose Linux's per-process VmSwap/RSS breakdown. Physical
+    // footprint includes resident and compressed process-owned memory, making it
+    // the conservative committed-memory measurement for the bulk hard limit.
+    // Keep unavailable breakdown fields at zero rather than inventing values.
+    if usage.ri_phys_footprint == 0 {
+        return Err(anyhow::anyhow!(
+            "macOS process memory reported a zero physical footprint: pid={} resident_bytes={}",
+            pid,
+            usage.ri_resident_size
+        ));
+    }
+    if usage.ri_lifetime_max_phys_footprint < usage.ri_phys_footprint {
+        return Err(anyhow::anyhow!(
+            "macOS process memory high-water invariant violated: pid={} current_footprint_bytes={} lifetime_max_footprint_bytes={}",
+            pid,
+            usage.ri_phys_footprint,
+            usage.ri_lifetime_max_phys_footprint
+        ));
+    }
+
+    Ok(ProcessMemorySnapshot {
+        rss_bytes: usage.ri_phys_footprint,
+        high_water_rss_bytes: usage.ri_lifetime_max_phys_footprint,
+        ..Default::default()
+    })
+}
+
+#[cfg(all(not(target_env = "msvc"), not(target_os = "macos")))]
+fn populate_jemalloc_memory_snapshot(snapshot: &mut ProcessMemorySnapshot) -> anyhow::Result<()> {
+    epoch::advance()
+        .map_err(|err| anyhow::anyhow!("failed to advance jemalloc stats epoch: {err}"))?;
+    snapshot.jemalloc_stats_available = true;
+    snapshot.jemalloc_allocated_bytes = usize_memory_to_u64(
+        "jemalloc.allocated_bytes",
+        stats::allocated::read()
+            .map_err(|err| anyhow::anyhow!("failed to read jemalloc allocated bytes: {err}"))?,
+    )?;
+    snapshot.jemalloc_active_bytes = usize_memory_to_u64(
+        "jemalloc.active_bytes",
+        stats::active::read()
+            .map_err(|err| anyhow::anyhow!("failed to read jemalloc active bytes: {err}"))?,
+    )?;
+    snapshot.jemalloc_resident_bytes = usize_memory_to_u64(
+        "jemalloc.resident_bytes",
+        stats::resident::read()
+            .map_err(|err| anyhow::anyhow!("failed to read jemalloc resident bytes: {err}"))?,
+    )?;
+    snapshot.jemalloc_mapped_bytes = usize_memory_to_u64(
+        "jemalloc.mapped_bytes",
+        stats::mapped::read()
+            .map_err(|err| anyhow::anyhow!("failed to read jemalloc mapped bytes: {err}"))?,
+    )?;
+    snapshot.jemalloc_retained_bytes = usize_memory_to_u64(
+        "jemalloc.retained_bytes",
+        stats::retained::read()
+            .map_err(|err| anyhow::anyhow!("failed to read jemalloc retained bytes: {err}"))?,
+    )?;
+    snapshot.jemalloc_metadata_bytes = usize_memory_to_u64(
+        "jemalloc.metadata_bytes",
+        stats::metadata::read()
+            .map_err(|err| anyhow::anyhow!("failed to read jemalloc metadata bytes: {err}"))?,
+    )?;
+    Ok(())
+}
+
+#[cfg(any(not(target_os = "macos"), test))]
 fn parse_process_memory_status(content: &str) -> anyhow::Result<ProcessMemorySnapshot> {
     let read_field = |name: &str| -> anyhow::Result<u64> {
         let line = content
@@ -495,6 +570,22 @@ VmSwap:  1024 kB
         assert_eq!(snapshot.high_water_rss_bytes, 4 * 1024 * 1024);
         assert_eq!(snapshot.committed_bytes().unwrap(), 4 * 1024 * 1024);
         assert!(!snapshot.jemalloc_stats_available);
+    }
+
+    #[test]
+    fn test_process_memory_snapshot_is_available_on_the_host_platform() {
+        // Regression: bulk sync calls this reader before every batch. The
+        // Linux-only `/proc/self/status` implementation made every macOS bulk
+        // session fail at its first checkpoint.
+        let snapshot = read_platform_process_memory_snapshot().unwrap();
+        assert!(
+            snapshot.rss_bytes > 0,
+            "a running process must report a non-zero memory footprint"
+        );
+        assert!(
+            snapshot.high_water_rss_bytes >= snapshot.rss_bytes,
+            "high-water memory must cover the current footprint: {snapshot:?}"
+        );
     }
 
     #[test]

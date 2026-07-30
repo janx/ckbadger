@@ -110,30 +110,7 @@ fn extract_client_ip<B>(req: &Request<B>) -> Option<IpAddr> {
         .extensions()
         .get::<axum::extract::ConnectInfo<SocketAddr>>()
         .map(|ci| ci.0.ip());
-
-    // Forwarded addresses are trusted only across the local frontend→API hop.
-    // A remote socket peer is authoritative and cannot claim loopback through a
-    // caller-controlled header.
-    match peer_ip {
-        Some(ip) if !ip.is_loopback() => return Some(ip),
-        None => return None,
-        Some(_) => {}
-    }
-
-    let forwarded = req
-        .headers()
-        .get("x-forwarded-for")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.split(',').next())
-        .and_then(|s| s.trim().parse().ok())
-        .or_else(|| {
-            req.headers()
-                .get("x-real-ip")
-                .and_then(|v| v.to_str().ok())
-                .and_then(|s| s.trim().parse().ok())
-        });
-
-    forwarded.or(peer_ip)
+    crate::utils::client_ip::resolve_client_ip(peer_ip, req.headers())
 }
 
 #[cfg(test)]

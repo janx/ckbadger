@@ -334,24 +334,72 @@ async fn run_cli() -> Result<()> {
             cmd_verify(&workdir, &args).await
         }
         Command::Crawl(args) => {
-            init_tracing_from_config(&workdir);
-            let config = load_config(&workdir)?;
+            let command_workdir = resolve_manual_network_workdir(&workdir, "crawl")?;
+            init_tracing_from_config(&command_workdir);
+            let config = load_config(&command_workdir)?;
             ckbadger_crawler::entry::run_crawler(
-                &workdir,
+                &command_workdir,
                 args.once,
-                store_runtime_config(&config.store, &workdir)?,
+                store_runtime_config(&config.store, &command_workdir)?,
             )
             .await
         }
         Command::LabelImport(_) => {
-            init_tracing_from_config(&workdir);
-            cmd_label_import(&workdir).await
+            let command_workdir = resolve_manual_network_workdir(&workdir, "label-import")?;
+            init_tracing_from_config(&command_workdir);
+            cmd_label_import(&command_workdir).await
         }
         Command::Internal(args) => {
             init_tracing_from_config(&workdir);
             cmd_internal(&workdir, &args).await
         }
     }
+}
+
+/// Resolve a command that operates on exactly one network.
+///
+/// The default `init` layout is an orchestrator root even when it contains only
+/// mainnet, so manual commands transparently enter that sole child. A
+/// multi-network root is ambiguous and must name a child with `-C`; choosing the
+/// first network silently would make an operator act on the wrong chain.
+fn resolve_manual_network_workdir(root: &Path, command: &str) -> Result<PathBuf> {
+    if !is_orchestrator(root) {
+        return Ok(root.to_path_buf());
+    }
+
+    let orchestrator = load_orchestrator_config(root)?;
+    if orchestrator.networks.len() != 1 {
+        let choices = orchestrator
+            .networks
+            .iter()
+            .map(|entry| {
+                format!(
+                    "{} ({})",
+                    entry.name,
+                    network_workdir(root, entry).display()
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        bail!(
+            "`ckbadger {command}` operates on one network, but orchestrator root {} contains {} networks: {}. Select one of those child workdirs explicitly with `ckbadger -C <child-workdir> {command}`",
+            root.display(),
+            orchestrator.networks.len(),
+            choices
+        );
+    }
+
+    let entry = &orchestrator.networks[0];
+    let child = network_workdir(root, entry);
+    let config = load_config(&child).with_context(|| {
+        format!(
+            "{command}: reading the sole network '{}' at {}",
+            entry.name,
+            child.display()
+        )
+    })?;
+    validate_network_entry(entry, &config.ckb.network)?;
+    Ok(child)
 }
 
 // ---------------------------------------------------------------------------
@@ -486,8 +534,8 @@ async fn cmd_run_orchestrator(root: &Path, args: &RunArgs) -> Result<()> {
     // only one network bulk-syncs at a time (see `run_supervisor_sequenced`).
     let mut immediate: Vec<supervisor::ChildSpec> = Vec::new();
     let mut indexers: Vec<supervisor::SequencedIndexer> = Vec::new();
-    // (network_name, api_port, resolved_workdir) for fail-fast binding checks.
-    let mut nets: Vec<(String, u16, PathBuf)> = Vec::new();
+    // Fully resolved host/store bindings for fail-fast collision checks.
+    let mut nets: Vec<OrchestratorNetworkBinding> = Vec::new();
     for entry in &orch.networks {
         let sub = network_workdir(root, entry);
         if !sub.join("config.toml").is_file() {
@@ -499,8 +547,16 @@ async fn cmd_run_orchestrator(root: &Path, args: &RunArgs) -> Result<()> {
         }
         let cfg = load_config(&sub)?;
         let network = validate_network_entry(entry, &cfg.ckb.network)?.to_string();
-        nets.push((network.clone(), cfg.api.port, sub.clone()));
         let sub_str = sub.to_string_lossy().to_string();
+        let store_paths = resolve_store_paths(&sub, &cfg.store);
+        nets.push(OrchestratorNetworkBinding {
+            network: network.clone(),
+            api_port: cfg.api.port,
+            workdir: sub.clone(),
+            domain_data_path: store_paths.domain_data.clone(),
+            append_only_data_path: store_paths.append_only_data.clone(),
+            network_data_path: store_paths.network_data.clone(),
+        });
 
         immediate.push(supervisor::ChildSpec {
             label: format!("{network}/api"),
@@ -514,7 +570,6 @@ async fn cmd_run_orchestrator(root: &Path, args: &RunArgs) -> Result<()> {
                 workdir: sub_str.clone(),
             });
         }
-        let store_paths = resolve_store_paths(&sub, &cfg.store);
         indexers.push(supervisor::SequencedIndexer {
             spec: supervisor::ChildSpec {
                 label: format!("{network}/indexer"),
@@ -538,8 +593,8 @@ async fn cmd_run_orchestrator(root: &Path, args: &RunArgs) -> Result<()> {
 
     // Fail fast on host-global collisions workdir isolation can't catch:
     // duplicate TCP ports (second API restart-loops), an API port colliding with
-    // the shared frontend proxy's port, and duplicate workdirs (RocksDB LOCK /
-    // DB-identity confusion). Must run BEFORE any child spawns.
+    // the shared frontend proxy's port, duplicate workdirs, or any shared
+    // domain/append-only/network RocksDB path. Must run BEFORE any child spawns.
     check_orchestrator_bindings(&nets, orch.frontend.port)?;
 
     // One shared frontend proxy for all networks (the child re-reads the
@@ -553,44 +608,122 @@ async fn cmd_run_orchestrator(root: &Path, args: &RunArgs) -> Result<()> {
     supervisor::run_supervisor_sequenced(&root_work, immediate, indexers).await
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct OrchestratorNetworkBinding {
+    network: String,
+    api_port: u16,
+    workdir: PathBuf,
+    domain_data_path: PathBuf,
+    append_only_data_path: PathBuf,
+    network_data_path: PathBuf,
+}
+
+impl OrchestratorNetworkBinding {
+    fn logical_store_paths(&self) -> [(&'static str, &Path); 3] {
+        [
+            ("domain", self.domain_data_path.as_path()),
+            ("append-only", self.append_only_data_path.as_path()),
+            ("network", self.network_data_path.as_path()),
+        ]
+    }
+}
+
+fn path_collision_identity(path: &Path) -> Result<PathBuf> {
+    let absolute = std::path::absolute(path)
+        .with_context(|| format!("failed to resolve absolute path for {}", path.display()))?;
+    if absolute
+        .try_exists()
+        .with_context(|| format!("failed to inspect resolved path {}", absolute.display()))?
+    {
+        return absolute.canonicalize().with_context(|| {
+            format!(
+                "failed to canonicalize existing resolved path {}",
+                absolute.display()
+            )
+        });
+    }
+
+    let mut normalized = PathBuf::new();
+    for component in absolute.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                normalized.pop();
+            }
+            std::path::Component::Prefix(_) | std::path::Component::RootDir => {
+                normalized.push(component.as_os_str());
+            }
+            std::path::Component::Normal(value) => normalized.push(value),
+        }
+    }
+    Ok(normalized)
+}
+
 /// Fail-fast validation of orchestrator network bindings before spawning.
-/// `nets` = (network_name, api_port, resolved_workdir) per [[network]].
 /// `frontend_port` is the shared frontend proxy's `[frontend].port`.
 ///
 /// Workdir isolation covers sockets/logs/data but NOT host-global TCP ports,
 /// so two networks sharing an `[api].port` would make the second API fail to
-/// bind and restart-loop into a degraded state. Two entries resolving to the
-/// same workdir would collide on the RocksDB LOCK / DB identity. The single
-/// shared frontend binds a host-global port too, and it competes with every
-/// `[api].port` in exactly the same way — whichever of the two loses the race
-/// restart-loops, which is worse than an API/API clash because the frontend is
-/// the whole deployment's entry point. Reject all three up front instead of
-/// degrading at runtime.
-fn check_orchestrator_bindings(nets: &[(String, u16, PathBuf)], frontend_port: u16) -> Result<()> {
+/// bind and restart-loop into a degraded state. Workdirs and all three logical
+/// store paths must also be deployment-wide unique: custom absolute paths can
+/// otherwise bypass workdir isolation and make two writers contend for one
+/// RocksDB identity. The single shared frontend binds a host-global port too,
+/// and it competes with every `[api].port` in exactly the same way. Reject all
+/// collisions before any child starts.
+fn check_orchestrator_bindings(
+    nets: &[OrchestratorNetworkBinding],
+    frontend_port: u16,
+) -> Result<()> {
     for i in 0..nets.len() {
-        if nets[i].1 == frontend_port {
+        if nets[i].api_port == frontend_port {
             bail!(
                 "network '{}' uses API port {}, which is also the shared [frontend].port — \
                  the frontend proxy and that API cannot both bind it; give one a distinct port",
-                nets[i].0,
-                nets[i].1
+                nets[i].network,
+                nets[i].api_port
             );
         }
         for j in (i + 1)..nets.len() {
-            if nets[i].1 == nets[j].1 {
+            if nets[i].api_port == nets[j].api_port {
                 bail!(
                     "networks '{}' and '{}' both use API port {} — each network needs a distinct [api].port",
-                    nets[i].0, nets[j].0, nets[i].1
+                    nets[i].network, nets[j].network, nets[i].api_port
                 );
             }
-            if nets[i].2 == nets[j].2 {
+            if path_collision_identity(&nets[i].workdir)?
+                == path_collision_identity(&nets[j].workdir)?
+            {
                 bail!(
                     "networks '{}' and '{}' resolve to the same workdir {} — give each a distinct [[network]].dir",
-                    nets[i].0, nets[j].0, nets[i].2.display()
+                    nets[i].network, nets[j].network, nets[i].workdir.display()
                 );
             }
         }
     }
+
+    let mut claimed_store_paths: Vec<(&str, &str, &Path, PathBuf)> = Vec::new();
+    for net in nets {
+        for (logical_store, path) in net.logical_store_paths() {
+            let identity = path_collision_identity(path)?;
+            if let Some((owner_network, owner_store, owner_path, _)) = claimed_store_paths
+                .iter()
+                .find(|(_, _, _, claimed)| *claimed == identity)
+            {
+                bail!(
+                    "network '{}' {} store path {} collides with network '{}' {} store path {} — \
+                     every domain, append-only, and network store needs a distinct resolved path",
+                    net.network,
+                    logical_store,
+                    path.display(),
+                    owner_network,
+                    owner_store,
+                    owner_path.display()
+                );
+            }
+            claimed_store_paths.push((net.network.as_str(), logical_store, path, identity));
+        }
+    }
+
     Ok(())
 }
 
@@ -614,6 +747,7 @@ fn build_orchestrator_frontend_config(
         let network = validate_network_entry(entry, &cfg.ckb.network)?;
         networks.push(ckbadger_api::entry::FrontendNetwork {
             name: network.to_string(),
+            api_host: cfg.api.host.clone(),
             api_port: cfg.api.port,
         });
     }
@@ -718,9 +852,7 @@ async fn cmd_internal(workdir: &Path, args: &InternalArgs) -> Result<()> {
                 // Resolve the network-store path the same way the crawler does
                 // (workdir + relative), so the API secondary targets the crawler's
                 // primary. Opening is opt-in and handled in run_api.
-                network_data_path: resolve_workdir_path(workdir, &config.store.network_data_path)
-                    .to_string_lossy()
-                    .to_string(),
+                network_data_path: store_paths.network_data.to_string_lossy().to_string(),
                 crawler_enabled: config.crawler.enabled,
             };
             run_api(api_config).await
@@ -731,6 +863,7 @@ async fn cmd_internal(workdir: &Path, args: &InternalArgs) -> Result<()> {
             let frontend_dir = resolve_frontend_dir(&work);
             let networks = vec![ckbadger_api::entry::FrontendNetwork {
                 name: config.ckb.network.clone(),
+                api_host: config.api.host.clone(),
                 api_port: config.api.port,
             }];
             let frontend_config = FrontendServiceConfig {
@@ -2031,6 +2164,44 @@ mod tests {
         assert!(!orchestrator_has_testnet(&root).unwrap());
     }
 
+    #[test]
+    fn manual_network_command_enters_the_only_orchestrator_child() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().to_path_buf();
+        cmd_init(
+            &root,
+            &InitArgs {
+                with_testnet: false,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            resolve_manual_network_workdir(&root, "crawl").unwrap(),
+            root.join("mainnet")
+        );
+        assert_eq!(
+            resolve_manual_network_workdir(&root, "label-import").unwrap(),
+            root.join("mainnet")
+        );
+    }
+
+    #[test]
+    fn manual_network_command_rejects_an_ambiguous_orchestrator_root() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().to_path_buf();
+        cmd_init(&root, &InitArgs { with_testnet: true }).unwrap();
+
+        let err = resolve_manual_network_workdir(&root, "crawl")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("crawl"), "got: {err}");
+        assert!(err.contains("2 networks"), "got: {err}");
+        assert!(err.contains("mainnet"), "got: {err}");
+        assert!(err.contains("testnet"), "got: {err}");
+        assert!(err.contains("-C"), "got: {err}");
+    }
+
     // -- verify command --
 
     #[tokio::test]
@@ -2055,11 +2226,23 @@ mod tests {
     /// The scaffolded default frontend port, distinct from every default API port.
     const TEST_FRONTEND_PORT: u16 = 3000;
 
+    fn test_binding(name: &str, api_port: u16, workdir: &str) -> OrchestratorNetworkBinding {
+        let workdir = PathBuf::from(workdir);
+        OrchestratorNetworkBinding {
+            network: name.to_string(),
+            api_port,
+            domain_data_path: workdir.join("data/domain"),
+            append_only_data_path: workdir.join("data/append-only"),
+            network_data_path: workdir.join("data/network"),
+            workdir,
+        }
+    }
+
     #[test]
     fn test_check_orchestrator_bindings_distinct_ports_and_dirs_ok() {
         let nets = vec![
-            ("mainnet".to_string(), 8101, PathBuf::from("/root/mainnet")),
-            ("testnet".to_string(), 8102, PathBuf::from("/root/testnet")),
+            test_binding("mainnet", 8101, "/root/mainnet"),
+            test_binding("testnet", 8102, "/root/testnet"),
         ];
         assert!(check_orchestrator_bindings(&nets, TEST_FRONTEND_PORT).is_ok());
     }
@@ -2067,8 +2250,8 @@ mod tests {
     #[test]
     fn test_check_orchestrator_bindings_duplicate_port_errors() {
         let nets = vec![
-            ("mainnet".to_string(), 8101, PathBuf::from("/root/mainnet")),
-            ("testnet".to_string(), 8101, PathBuf::from("/root/testnet")),
+            test_binding("mainnet", 8101, "/root/mainnet"),
+            test_binding("testnet", 8101, "/root/testnet"),
         ];
         let err = check_orchestrator_bindings(&nets, TEST_FRONTEND_PORT)
             .unwrap_err()
@@ -2085,8 +2268,8 @@ mod tests {
         // runtime, where whichever lost the bind race restart-looped — and the
         // frontend is the whole deployment's entry point.
         let nets = vec![
-            ("mainnet".to_string(), 8101, PathBuf::from("/root/mainnet")),
-            ("testnet".to_string(), 3000, PathBuf::from("/root/testnet")),
+            test_binding("mainnet", 8101, "/root/mainnet"),
+            test_binding("testnet", 3000, "/root/testnet"),
         ];
         let err = check_orchestrator_bindings(&nets, TEST_FRONTEND_PORT)
             .unwrap_err()
@@ -2103,7 +2286,7 @@ mod tests {
     fn test_check_orchestrator_bindings_frontend_collides_with_the_first_network_too() {
         // Guards the loop bound: the frontend must be compared against EVERY api
         // port, not only the ones after the first.
-        let nets = vec![("mainnet".to_string(), 8101, PathBuf::from("/root/mainnet"))];
+        let nets = vec![test_binding("mainnet", 8101, "/root/mainnet")];
         let err = check_orchestrator_bindings(&nets, 8101)
             .unwrap_err()
             .to_string();
@@ -2114,8 +2297,8 @@ mod tests {
     #[test]
     fn test_check_orchestrator_bindings_duplicate_workdir_errors() {
         let nets = vec![
-            ("mainnet".to_string(), 8101, PathBuf::from("/root/shared")),
-            ("testnet".to_string(), 8102, PathBuf::from("/root/shared")),
+            test_binding("mainnet", 8101, "/root/shared"),
+            test_binding("testnet", 8102, "/root/shared"),
         ];
         let err = check_orchestrator_bindings(&nets, TEST_FRONTEND_PORT)
             .unwrap_err()
@@ -2126,6 +2309,55 @@ mod tests {
             err.contains("/root/shared"),
             "error names the shared workdir: {err}"
         );
+    }
+
+    #[test]
+    fn test_check_orchestrator_bindings_rejects_each_duplicate_logical_store_path() {
+        for logical_store in ["domain", "append-only", "network"] {
+            let mut nets = vec![
+                test_binding("mainnet", 8101, "/root/mainnet"),
+                test_binding("testnet", 8102, "/root/testnet"),
+            ];
+            let shared = PathBuf::from(format!("/custom/shared-{logical_store}"));
+            match logical_store {
+                "domain" => {
+                    nets[0].domain_data_path = shared.clone();
+                    nets[1].domain_data_path = shared.clone();
+                }
+                "append-only" => {
+                    nets[0].append_only_data_path = shared.clone();
+                    nets[1].append_only_data_path = shared.clone();
+                }
+                "network" => {
+                    nets[0].network_data_path = shared.clone();
+                    nets[1].network_data_path = shared.clone();
+                }
+                _ => unreachable!("test table contains only logical store names"),
+            }
+
+            let err = check_orchestrator_bindings(&nets, TEST_FRONTEND_PORT)
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("mainnet"), "got: {err}");
+            assert!(err.contains("testnet"), "got: {err}");
+            assert!(err.contains(logical_store), "got: {err}");
+            assert!(err.contains(&shared.display().to_string()), "got: {err}");
+        }
+    }
+
+    #[test]
+    fn test_check_orchestrator_bindings_rejects_cross_class_store_collision() {
+        let mut nets = vec![
+            test_binding("mainnet", 8101, "/root/mainnet"),
+            test_binding("testnet", 8102, "/root/testnet"),
+        ];
+        nets[1].network_data_path = nets[0].domain_data_path.clone();
+
+        let err = check_orchestrator_bindings(&nets, TEST_FRONTEND_PORT)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("domain"), "got: {err}");
+        assert!(err.contains("network"), "got: {err}");
     }
 
     // -- shared frontend (orchestrator) --
@@ -2159,8 +2391,10 @@ mod tests {
 
         assert_eq!(cfg.networks.len(), 2);
         assert_eq!(cfg.networks[0].name, "mainnet");
+        assert_eq!(cfg.networks[0].api_host, "127.0.0.1");
         assert_eq!(cfg.networks[0].api_port, 8101);
         assert_eq!(cfg.networks[1].name, "testnet");
+        assert_eq!(cfg.networks[1].api_host, "127.0.0.1");
         assert_eq!(cfg.networks[1].api_port, 8102);
         // default_network is the first listed network.
         assert_eq!(cfg.default_network, "mainnet");
@@ -2196,6 +2430,27 @@ mod tests {
         assert!(err.contains("mainnet"));
         assert!(err.contains("testnet"));
         assert!(err.contains("mismatch"));
+    }
+
+    #[test]
+    fn test_build_orchestrator_frontend_config_preserves_each_api_bind_host() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        std::fs::write(
+            root.join("ckbadger.toml"),
+            default_orchestrator_toml(&["mainnet"]),
+        )
+        .unwrap();
+        std::fs::create_dir_all(root.join("mainnet")).unwrap();
+        let child_config = default_config_toml("mainnet", 8101).replacen(
+            "host = \"127.0.0.1\"",
+            "host = \"192.0.2.25\"",
+            1,
+        );
+        std::fs::write(root.join("mainnet/config.toml"), child_config).unwrap();
+
+        let config = build_orchestrator_frontend_config(root, None).unwrap();
+        assert_eq!(config.networks[0].api_host, "192.0.2.25");
     }
 
     #[test]

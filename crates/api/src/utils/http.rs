@@ -22,7 +22,7 @@ const PROXY_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 /// head), not the total transfer, so an arbitrarily long streaming response
 /// stays safe while a wedged upstream is released instead of pinning the
 /// connection forever.
-const PROXY_READ_TIMEOUT: Duration = Duration::from_secs(60);
+pub(crate) const PROXY_READ_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Dedicated HTTP client for the frontend reverse proxy.
 ///

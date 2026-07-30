@@ -44,6 +44,7 @@ pub struct ApiServiceConfig {
 #[derive(Clone, Debug)]
 pub struct FrontendNetwork {
     pub name: String,
+    pub api_host: String,
     pub api_port: u16,
 }
 
@@ -289,7 +290,7 @@ pub fn build_frontend_router(config: FrontendServiceConfig) -> Result<Router> {
         config
             .networks
             .iter()
-            .map(|n| (n.name.clone(), n.api_port))
+            .map(|n| (n.name.clone(), (n.api_host.clone(), n.api_port)))
             .collect(),
     ));
     let proxy_router = crate::frontend_proxy::proxy_router(proxy_state);
@@ -680,6 +681,7 @@ mod tests {
             default_network: "mainnet".to_string(),
             networks: vec![FrontendNetwork {
                 name: "mainnet".to_string(),
+                api_host: "127.0.0.1".to_string(),
                 api_port: 8101,
             }],
         };
@@ -712,6 +714,7 @@ mod tests {
             default_network: "mainnet".to_string(),
             networks: vec![FrontendNetwork {
                 name: "mainnet".to_string(),
+                api_host: "127.0.0.1".to_string(),
                 api_port: 8101,
             }],
         };
@@ -745,6 +748,7 @@ mod tests {
             default_network: "mainnet".to_string(),
             networks: vec![FrontendNetwork {
                 name: "mainnet".to_string(),
+                api_host: "127.0.0.1".to_string(),
                 api_port: 8101,
             }],
         })
@@ -768,6 +772,7 @@ mod tests {
             default_network: "mainnet".to_string(),
             networks: vec![FrontendNetwork {
                 name: "mainnet".to_string(),
+                api_host: "127.0.0.1".to_string(),
                 api_port: 8101,
             }],
         })
@@ -806,10 +811,12 @@ mod tests {
             networks: vec![
                 FrontendNetwork {
                     name: "mainnet".to_string(),
+                    api_host: "127.0.0.1".to_string(),
                     api_port: 8101,
                 },
                 FrontendNetwork {
                     name: "testnet".to_string(),
+                    api_host: "127.0.0.1".to_string(),
                     api_port: 8102,
                 },
             ],
@@ -908,10 +915,12 @@ mod tests {
             networks: vec![
                 FrontendNetwork {
                     name: "mainnet".to_string(),
+                    api_host: "127.0.0.1".to_string(),
                     api_port: 8101,
                 },
                 FrontendNetwork {
                     name: "testnet".to_string(),
+                    api_host: "127.0.0.1".to_string(),
                     api_port: 8102,
                 },
             ],
@@ -943,10 +952,12 @@ mod tests {
             networks: vec![
                 FrontendNetwork {
                     name: "mainnet".to_string(),
+                    api_host: "127.0.0.1".to_string(),
                     api_port: 8101,
                 },
                 FrontendNetwork {
                     name: "testnet".to_string(),
+                    api_host: "127.0.0.1".to_string(),
                     api_port: 8102,
                 },
             ],

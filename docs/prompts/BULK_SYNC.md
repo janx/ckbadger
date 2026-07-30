@@ -97,13 +97,16 @@ architecture details.
 - Class B owners and live-cell indexes emit sequentially through domain-store batches capped at
   32 MiB. `CF_CELLS` remains on the separate append-only history path and is never targeted by
   finalize materialization.
-- The whole-process guard uses `VmRSS + VmSwap`. `[indexer].bulk_memory_budget_gb` overrides the
-  automatic per-network RAM share; a zero budget is invalid.
+- The whole-process guard uses `VmRSS + VmSwap` on Linux and the process physical footprint
+  (resident + compressed memory from `proc_pid_rusage`) on macOS. An unavailable or invalid
+  platform measurement fails the batch checkpoint. `[indexer].bulk_memory_budget_gb` overrides
+  the automatic per-network RAM share; a zero budget is invalid.
 - On supported platforms the `ckbadger` process uses jemalloc for both Rust and unprefixed C
   allocation symbols, so RocksDB `WriteBatch` churn and Rust reducer churn have one allocator
   owner whose unused pages can be reclaimed consistently. Memory failures and performance
-  samples must report process RSS/swap, jemalloc allocated/active/resident/retained bytes, and
-  separate domain/append-only memtable and table-reader observations.
+  samples must report the platform's available process/allocator measurements (RSS/swap and
+  jemalloc allocated/active/resident/retained bytes on Linux; process physical footprint on
+  macOS), plus separate domain/append-only memtable and table-reader observations.
 - Domain and append-only RocksDB memtables, table readers, compaction backlog, SSTs, L0 files,
   and immutable memtables are store-local and must be summed. Their block cache and
   WriteBufferManager are process-wide shared resources and must be counted exactly once.

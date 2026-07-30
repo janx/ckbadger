@@ -421,6 +421,7 @@ level = "info"
 pub struct ResolvedStorePaths {
     pub domain_data: PathBuf,
     pub append_only_data: PathBuf,
+    pub network_data: PathBuf,
     pub decoder_cache: PathBuf,
 }
 
@@ -457,6 +458,7 @@ pub fn resolve_store_paths(work_dir: &Path, store: &StoreConfig) -> ResolvedStor
     ResolvedStorePaths {
         domain_data: resolve_workdir_path(work_dir, &store.domain_data_path),
         append_only_data: resolve_workdir_path(work_dir, &store.append_only_data_path),
+        network_data: resolve_workdir_path(work_dir, &store.network_data_path),
         decoder_cache: resolve_workdir_path(work_dir, &store.decoder_cache_path),
     }
 }
@@ -835,6 +837,10 @@ data_path = "/var/lib/ckb/data/db"
             PathBuf::from("/tmp/ckbadger/custom/domain")
         );
         assert_eq!(resolved.append_only_data, PathBuf::from("/ssd/append-only"));
+        assert_eq!(
+            resolved.network_data,
+            PathBuf::from("/tmp/ckbadger/data/network")
+        );
     }
 
     #[test]
