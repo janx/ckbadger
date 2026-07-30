@@ -482,6 +482,24 @@ impl BatchWriter {
             );
         }
 
+        // The cluster_id comes out of the spore cell's molecule `Bytes` data, which
+        // carries no width guarantee of its own. Bulk sync validates it via
+        // `parse_optional_fixed_protocol_id::<32>`; the live path did not, so the
+        // two modes disagreed on the same cell — and once it reaches a key encoder
+        // a wrong width either panics without context or truncates into another
+        // cluster's key range. Same check, same context, both modes.
+        if let Some(cluster_id) = spore.cluster_id.as_deref() {
+            if cluster_id.len() != 32 {
+                bail!(
+                    "invalid spore cluster_id length: tx=0x{}, output_index={}, spore_id=0x{}, expected=32, actual={}",
+                    hex::encode(tx_hash),
+                    output_index,
+                    hex::encode(&spore.spore_id),
+                    cluster_id.len()
+                );
+            }
+        }
+
         // did:ckb entries are written to the identity store, not the spore/object store.
         if new_is_did {
             let existing = state.get_identity(self.store.as_ref(), &spore.spore_id)?;
@@ -1588,6 +1606,47 @@ mod tests {
         assert_eq!(new_agg.live_count, 1);
         assert_eq!(new_agg.owner_count, 1);
         assert_eq!(new_agg.pure_ckb_count, 1);
+    }
+
+    /// A spore's `cluster_id` is a molecule `Bytes` field with no intrinsic
+    /// width guarantee. Bulk sync rejects a wrong width with tx/output context
+    /// (`parse_optional_fixed_protocol_id::<32>`); the live path used to pass it
+    /// straight to the key encoders, where it either truncated into another
+    /// cluster's range or panicked without saying which cell caused it.
+    #[test]
+    fn test_insert_spore_cell_rejects_cluster_id_of_the_wrong_width() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone(), store.clone());
+
+        let spore_id = vec![0x91; 32];
+        let owner = vec![0xA1; 32];
+        let tx_hash = vec![0xB1; 32];
+
+        for bad_width in [16usize, 31, 33, 64] {
+            let cluster_id = vec![0x81; bad_width];
+            let mut batch = StoreBatch::new(writer.store());
+            let mut state = writer.new_spore_batch_state();
+            let err = writer
+                .insert_spore_cell(
+                    &make_parsed_spore(&spore_id, &cluster_id, &owner),
+                    &tx_hash,
+                    3,
+                    20,
+                    14_400_000,
+                    &mut batch,
+                    &mut state,
+                )
+                .expect_err(&format!(
+                    "a {bad_width}-byte cluster_id must be rejected, not written"
+                ));
+            let msg = err.to_string();
+            assert!(msg.contains("cluster_id"), "{msg}");
+            assert!(msg.contains(&format!("actual={bad_width}")), "{msg}");
+            // Locating the offending cell must not require a debugger.
+            assert!(msg.contains(&hex::encode(&tx_hash)), "{msg}");
+            assert!(msg.contains("output_index=3"), "{msg}");
+        }
     }
 
     #[test]
