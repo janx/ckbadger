@@ -594,6 +594,14 @@ async fn list_dotbit_item_activities(
     let limit = params.limit.clamp(1, 100);
     let action_filter = normalize_activity_action_filter(params.action.as_deref())?;
     let identity_id_bytes = decode_item_id(&identity_id)?;
+    // Validated before the existence lookup: request shape is a boundary
+    // concern, so whether a malformed cursor is reported must not depend on
+    // whether the item happens to exist.
+    let cursor = params
+        .cursor
+        .as_deref()
+        .map(decode_activity_cursor)
+        .transpose()?;
     let store = state.store.clone();
     let identity_id_bytes_c = identity_id_bytes.clone();
     let entry = tokio::task::spawn_blocking(move || store.get_identity(&identity_id_bytes_c))
@@ -608,11 +616,6 @@ async fn list_dotbit_item_activities(
         return Err(ApiError::bad_request("Item is not a .bit account"));
     }
 
-    let cursor = params
-        .cursor
-        .as_deref()
-        .map(decode_activity_cursor)
-        .transpose()?;
     let response = build_nft_item_activities_response(
         &state,
         &identity_id_bytes,
@@ -632,6 +635,14 @@ async fn list_did_ckb_item_activities(
     let limit = params.limit.clamp(1, 100);
     let action_filter = normalize_activity_action_filter(params.action.as_deref())?;
     let identity_id_bytes = decode_item_id(&identity_id)?;
+    // Validated before the existence lookup: request shape is a boundary
+    // concern, so whether a malformed cursor is reported must not depend on
+    // whether the item happens to exist.
+    let cursor = params
+        .cursor
+        .as_deref()
+        .map(decode_activity_cursor)
+        .transpose()?;
     let store = state.store.clone();
     let identity_id_bytes_c = identity_id_bytes.clone();
     let entry = tokio::task::spawn_blocking(move || store.get_identity(&identity_id_bytes_c))
@@ -643,11 +654,6 @@ async fn list_did_ckb_item_activities(
         return Err(ApiError::bad_request("Item is not a did:ckb identity"));
     }
 
-    let cursor = params
-        .cursor
-        .as_deref()
-        .map(decode_activity_cursor)
-        .transpose()?;
     let response = build_nft_item_activities_response(
         &state,
         &identity_id_bytes,
@@ -667,6 +673,14 @@ async fn list_bit_cell_item_activities(
     let limit = params.limit.clamp(1, 100);
     let action_filter = normalize_activity_action_filter(params.action.as_deref())?;
     let identity_id_bytes = decode_item_id(&identity_id)?;
+    // Validated before the existence lookup: request shape is a boundary
+    // concern, so whether a malformed cursor is reported must not depend on
+    // whether the item happens to exist.
+    let cursor = params
+        .cursor
+        .as_deref()
+        .map(decode_activity_cursor)
+        .transpose()?;
     let store = state.store.clone();
     let identity_id_bytes_c = identity_id_bytes.clone();
     let entry = tokio::task::spawn_blocking(move || store.get_identity(&identity_id_bytes_c))
@@ -678,11 +692,6 @@ async fn list_bit_cell_item_activities(
         return Err(ApiError::bad_request("Item is not a .bit Cell identity"));
     }
 
-    let cursor = params
-        .cursor
-        .as_deref()
-        .map(decode_activity_cursor)
-        .transpose()?;
     let response = build_nft_item_activities_response(
         &state,
         &identity_id_bytes,

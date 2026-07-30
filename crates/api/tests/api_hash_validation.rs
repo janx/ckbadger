@@ -300,10 +300,15 @@ async fn test_identity_item_endpoints_reject_oversized_ids() {
 }
 
 /// Identity *collections* are the three fixed 32-byte sentinels, so every other
-/// ID — oversized included — is a 400. The point here is that an oversized ID is
-/// rejected at the boundary rather than reaching `pad_id_32`.
+/// ID — oversized included — is already a 400 via the sentinel comparison. That
+/// makes a status-only assertion here vacuous: it would stay green with the
+/// boundary check removed entirely.
+///
+/// So this asserts the *reason*. An oversized ID must be rejected for its
+/// length, by `parse_asset_id_max32`, before it can reach `pad_id_32` — not
+/// incidentally, for failing to equal a sentinel.
 #[tokio::test]
-async fn test_identity_collection_endpoints_reject_oversized_ids() {
+async fn test_identity_collection_endpoints_reject_oversized_ids_for_their_length() {
     let app = test_app().await;
     for template in [
         "/assets/identities/{H}",
@@ -317,6 +322,12 @@ async fn test_identity_collection_endpoints_reject_oversized_ids() {
             status,
             StatusCode::BAD_REQUEST,
             "GET /api/v1{path} must reject a 33-byte collection ID with 400, got {status} body={body}"
+        );
+        let message = body["message"].as_str().unwrap_or_default();
+        assert!(
+            message.contains("33 bytes"),
+            "GET /api/v1{path} must reject the 33-byte ID for its length, not for failing the \
+             sentinel comparison — got {message:?}"
         );
     }
 }

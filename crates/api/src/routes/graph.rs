@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use crate::response::{ok, ApiError, ApiResult};
 use crate::routes::tx_lookup::{fetch_transaction_lookup, pending_transaction_resource_error};
-use crate::utils::parse_hash32;
+use crate::utils::{parse_hash32, parse_output_index, validate_block_number};
 use crate::AppState;
 use tracing::instrument;
 
@@ -173,10 +173,14 @@ async fn get_cell_graph(
     let mut links = Vec::new();
     let depth = params.depth.clamp(1, 5);
 
+    // Narrowed before it is echoed back: the old `as i16` wrapped, so a request
+    // for output 65536 was answered with output 0's capacity and block while
+    // still reporting `"outputIndex": 65536`.
+    let output_idx = parse_output_index(output_index, "output index")?;
+
     let cell_id = format!("cell-{}-{}", tx_hash, output_index);
 
     // Look up the transaction to verify it exists
-    let output_idx = output_index as i16;
     let store = state.store.clone();
     let ao_store = state.append_only_store.clone();
     let hash_c = hash_bytes.clone();
@@ -566,6 +570,7 @@ async fn get_proposal_graph(
     State(state): State<Arc<AppState>>,
     Path(block_number): Path<i64>,
 ) -> ApiResult<ProposalGraphResponse> {
+    let block_number = validate_block_number(block_number, "block number")?;
     let store = state.store.clone();
     let block_header = tokio::task::spawn_blocking(move || store.get_block_header(block_number))
         .await

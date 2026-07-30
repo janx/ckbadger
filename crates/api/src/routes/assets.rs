@@ -23,9 +23,9 @@ use crate::response::{
     default_limit, ok, ApiError, ApiResult, ApiRouteError, CursorPaginatedResponse,
 };
 use crate::utils::{
-    apply_owned_capacity_delta, date_keys_inclusive, parse_asset_id_max32, parse_chart_date_range,
-    resolve_collection_standard, resolve_object_collection_composition_tier_override,
-    resolve_object_collection_name,
+    apply_owned_capacity_delta, date_keys_inclusive, parse_asset_id_max32, parse_block_tx_cursor,
+    parse_chart_date_range, resolve_collection_standard,
+    resolve_object_collection_composition_tier_override, resolve_object_collection_name,
 };
 use crate::warmup::CachedAssetEntry;
 use crate::AppState;
@@ -916,24 +916,16 @@ pub(super) fn decode_item_id(
     parse_asset_id_max32(raw, "item ID")
 }
 
+/// Activity cursor for the asset, identity and spore item/collection feeds.
+///
+/// These handlers build the seek key on the axum task itself rather than inside
+/// `spawn_blocking`, so a value that trips a key encoder's assert unwinds
+/// straight out of the handler — not even wrapped in a 500. All validation
+/// therefore lives in the shared parser.
 pub(crate) fn decode_activity_cursor(
     raw: &str,
 ) -> Result<(i64, i32), (axum::http::StatusCode, Json<ApiError>)> {
-    let mut parts = raw.split(':');
-    let block = parts
-        .next()
-        .ok_or_else(|| ApiError::bad_request("Invalid activity cursor"))?
-        .parse::<i64>()
-        .map_err(|_| ApiError::bad_request("Invalid activity cursor"))?;
-    let tx_index = parts
-        .next()
-        .ok_or_else(|| ApiError::bad_request("Invalid activity cursor"))?
-        .parse::<i32>()
-        .map_err(|_| ApiError::bad_request("Invalid activity cursor"))?;
-    if parts.next().is_some() {
-        return Err(ApiError::bad_request("Invalid activity cursor"));
-    }
-    Ok((block, tx_index))
+    parse_block_tx_cursor(raw, "activity cursor")
 }
 
 fn decode_object_collection_holders_cursor(
@@ -1756,6 +1748,15 @@ async fn list_mnft_item_activities(
     let limit = params.limit.clamp(1, 100);
     let action_filter = normalize_activity_action_filter(params.action.as_deref())?;
     let object_id_bytes = decode_item_id(&object_id)?;
+    // Validated before the existence lookup: request shape is a boundary
+    // concern, so whether a malformed cursor is reported must not depend on
+    // whether the item happens to exist.
+    let cursor = params
+        .cursor
+        .as_deref()
+        .map(decode_activity_cursor)
+        .transpose()?;
+
     let entry = state
         .store
         .get_mnft(&object_id_bytes)
@@ -1770,11 +1771,6 @@ async fn list_mnft_item_activities(
         ));
     }
 
-    let cursor = params
-        .cursor
-        .as_deref()
-        .map(decode_activity_cursor)
-        .transpose()?;
     let response = build_nft_item_activities_response(
         &state,
         &object_id_bytes,

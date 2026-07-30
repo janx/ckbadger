@@ -1236,36 +1236,41 @@ async fn lookup_scripts(
     State(state): State<Arc<AppState>>,
     Json(request): Json<LookupScriptsRequest>,
 ) -> ApiResult<HashMap<String, ScriptLookupInfo>> {
-    if request.code_hashes.is_empty() {
-        return ok(HashMap::new());
-    }
-
     if request.code_hashes.len() > 100 {
         return Err(ApiError::bad_request(
             "Too many code_hashes, maximum is 100",
         ));
     }
 
-    // Every entry is validated: one malformed code_hash fails the whole batch
-    // rather than being truncated into a lookup for a different script.
+    // Every request-supplied hash is validated before any short-circuit below,
+    // so whether a malformed one is reported never depends on an unrelated
+    // field. `txHash` used to be checked after the empty-`code_hashes` early
+    // return, which made `{"codeHashes": [], "txHash": "0x1234"}` a silent 200
+    // and the same body with one code hash a 400 — one field, two contracts.
+    let tx_hash = match request.tx_hash.as_deref() {
+        Some(tx_hash) => {
+            parse_hash32(tx_hash, "txHash")?;
+            Some(tx_hash)
+        }
+        None => None,
+    };
+
+    // One malformed code_hash fails the whole batch rather than being truncated
+    // into a lookup for a different script.
     let code_hash_bytes = request
         .code_hashes
         .iter()
         .map(|h| parse_hash32(h, "code_hashes entry"))
         .collect::<Result<Vec<Vec<u8>>, _>>()?;
 
+    if code_hash_bytes.is_empty() {
+        return ok(HashMap::new());
+    }
+
     let mut result: HashMap<String, ScriptLookupInfo> = HashMap::new();
     let all_script_infos = load_script_infos_cached(&state)?;
-    // The optional per-tx hint is still request data: validate its shape here so
-    // a malformed txHash is reported rather than silently degrading to global
-    // resolution.
-    let per_tx_mappings = match request.tx_hash.as_deref() {
-        Some(tx_hash) => {
-            parse_hash32(tx_hash, "txHash")?;
-            resolve_dep_cells_for_transaction(&state, tx_hash)
-        }
-        None => None,
-    };
+    let per_tx_mappings =
+        tx_hash.and_then(|tx_hash| resolve_dep_cells_for_transaction(&state, tx_hash));
 
     for code_hash in &code_hash_bytes {
         let reference_hash_hex = format!("0x{}", hex::encode(code_hash));
@@ -1588,12 +1593,19 @@ async fn list_scripts(
 
     let total = filtered.len() as i64;
 
-    let start_idx = params
-        .cursor
-        .as_deref()
-        .and_then(decode_cursor_single)
-        .and_then(|v| usize::try_from(v).ok())
-        .unwrap_or(0);
+    // An offset cursor, not a key — but a malformed one silently collapsing to
+    // 0 hands the client page 1 again, so it is reported like every other
+    // cursor in the API instead of being swallowed.
+    let start_idx = match params.cursor.as_deref() {
+        None | Some("") => 0usize,
+        Some(cursor) => decode_cursor_single(cursor)
+            .and_then(|v| usize::try_from(v).ok())
+            .ok_or_else(|| {
+                ApiError::bad_request(format!(
+                    "Invalid cursor: expected a non-negative offset, got {cursor:?}"
+                ))
+            })?,
+    };
 
     let page: Vec<_> = filtered
         .into_iter()

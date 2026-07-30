@@ -23,7 +23,8 @@ use crate::response::{
     default_limit, ok, ApiError, ApiResult, ApiRouteError, CursorPaginatedResponse,
 };
 use crate::utils::{
-    apply_owned_capacity_delta, date_keys_inclusive, parse_chart_date_range, parse_hash32,
+    apply_owned_capacity_delta, date_keys_inclusive, parse_block_tx_cursor, parse_chart_date_range,
+    parse_hash32,
 };
 use crate::warmup::{CachedAssetEntry, SporeCache};
 use crate::AppState;
@@ -119,21 +120,7 @@ fn decode_cluster_holders_cursor(
 fn decode_cluster_activity_cursor(
     raw: &str,
 ) -> Result<(i64, i32), (axum::http::StatusCode, axum::Json<ApiError>)> {
-    let mut parts = raw.split(':');
-    let block = parts
-        .next()
-        .ok_or_else(|| ApiError::bad_request("Invalid cluster activities cursor"))?
-        .parse::<i64>()
-        .map_err(|_| ApiError::bad_request("Invalid cluster activities cursor"))?;
-    let tx_index = parts
-        .next()
-        .ok_or_else(|| ApiError::bad_request("Invalid cluster activities cursor"))?
-        .parse::<i32>()
-        .map_err(|_| ApiError::bad_request("Invalid cluster activities cursor"))?;
-    if parts.next().is_some() {
-        return Err(ApiError::bad_request("Invalid cluster activities cursor"));
-    }
-    Ok((block, tx_index))
+    parse_block_tx_cursor(raw, "cluster activities cursor")
 }
 
 fn normalize_cluster_activity_action_filter(
@@ -1084,6 +1071,14 @@ async fn list_spore_item_activities(
     let limit = params.limit.clamp(1, 100);
     let action_filter = normalize_activity_action_filter(params.action.as_deref())?;
     let spore_id_bytes = parse_hash32(&spore_id, "spore ID")?;
+    // Validated before the existence lookup: request shape is a boundary
+    // concern, so whether a malformed cursor is reported must not depend on
+    // whether the spore happens to exist.
+    let cursor = params
+        .cursor
+        .as_deref()
+        .map(decode_activity_cursor)
+        .transpose()?;
 
     // Verify the spore exists and is not a cluster
     let entry = state
@@ -1095,11 +1090,6 @@ async fn list_spore_item_activities(
         return Err(ApiError::not_found("Spore not found"));
     }
 
-    let cursor = params
-        .cursor
-        .as_deref()
-        .map(decode_activity_cursor)
-        .transpose()?;
     let response = build_nft_item_activities_response(
         &state,
         &spore_id_bytes,

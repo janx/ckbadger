@@ -16,7 +16,7 @@ use crate::cache::{CacheBackend, CacheKeys, CacheTtl};
 use crate::response::{default_limit, ok, ApiError, ApiResult, CursorPaginatedResponse};
 use crate::routes::hardforks::HardforkResourceResponse;
 use crate::routes::transactions::tx_serialized_size_in_block;
-use crate::utils::{parse_hash32, script_to_address};
+use crate::utils::{parse_block_number, parse_hash32, script_to_address};
 use crate::AppState;
 
 pub fn routes() -> Router<Arc<AppState>> {
@@ -342,9 +342,7 @@ async fn get_block(
         .map_err(|e| ApiError::internal(e.to_string()))?
         .map_err(|e| ApiError::internal(e.to_string()))?
     } else {
-        let number: i64 = id
-            .parse()
-            .map_err(|_| ApiError::bad_request("Invalid block number"))?;
+        let number = parse_block_number(&id, "block number")?;
 
         let store_c = store.clone();
         tokio::task::spawn_blocking(move || -> Result<_, anyhow::Error> {
@@ -640,8 +638,7 @@ async fn get_block_fee_stats(
             .map_err(|e| ApiError::internal(e.to_string()))?
             .ok_or_else(|| ApiError::not_found("Block not found"))?
     } else {
-        id.parse()
-            .map_err(|_| ApiError::bad_request("Invalid block number"))?
+        parse_block_number(&id, "block number")?
     };
 
     // Try to read pre-computed cycles from block header first
@@ -777,8 +774,7 @@ async fn get_block_proposals(
             .map_err(|e| ApiError::internal(e.to_string()))?
             .ok_or_else(|| ApiError::not_found("Block not found"))?
     } else {
-        id.parse()
-            .map_err(|_| ApiError::bad_request("Invalid block number"))?
+        parse_block_number(&id, "block number")?
     };
 
     // Read proposals from CKB node's RocksDB (raw block data)

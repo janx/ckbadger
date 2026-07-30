@@ -19,7 +19,7 @@ use crate::response::{
     CursorPaginatedResponse,
 };
 use crate::utils::address::{address_to_lock_script_hash, compute_script_hash, script_to_address};
-use crate::utils::parse_hash32;
+use crate::utils::{parse_hash32, parse_optional_block_tx_cursor};
 use crate::AppState;
 
 /// Resolve a lock_hash to a CKB address using the persistent lock script mapping.
@@ -646,15 +646,6 @@ fn validate_global_activity_filter(filter: Option<&str>) -> Result<(), ApiRouteE
     Ok(())
 }
 
-fn parse_activity_cursor(value: &str) -> Option<(i64, i32)> {
-    let parts: Vec<&str> = value.split(':').collect();
-    match parts.as_slice() {
-        // Current format: block_num:tx_idx
-        [block_num, tx_idx] => Some((block_num.parse::<i64>().ok()?, tx_idx.parse::<i32>().ok()?)),
-        _ => None,
-    }
-}
-
 /// Check if an addr_tx entry is canonical using the same logic as
 /// the transactions endpoint (`is_canonical_addr_tx` in cells.rs):
 /// verify tx_hash location matches (block_num, tx_idx) in TX_HASH_MAP + TX_INDEX.
@@ -838,13 +829,7 @@ async fn get_address_activities(
 
     let limit = params.limit.clamp(1, 100) as usize;
 
-    let cursor = match params.cursor.as_deref() {
-        None | Some("") => None,
-        Some(c) => Some(
-            parse_activity_cursor(c)
-                .ok_or_else(|| ApiError::bad_request("invalid cursor format"))?,
-        ),
-    };
+    let cursor = parse_optional_block_tx_cursor(params.cursor.as_deref(), "activity cursor")?;
 
     let filter = params.filter.clone();
     let store = state.store.clone();
@@ -931,13 +916,7 @@ async fn get_global_activities(
     validate_global_activity_filter(params.filter.as_deref())?;
 
     let limit = params.limit.clamp(1, 100) as usize;
-    let cursor = match params.cursor.as_deref() {
-        None | Some("") => None,
-        Some(value) => Some(
-            parse_activity_cursor(value)
-                .ok_or_else(|| ApiError::bad_request("invalid cursor format"))?,
-        ),
-    };
+    let cursor = parse_optional_block_tx_cursor(params.cursor.as_deref(), "activity cursor")?;
 
     let store = state.store.clone();
     let ao_store = state.append_only_store.clone();
@@ -1093,13 +1072,6 @@ mod tests {
         assert!(validate_global_activity_filter(Some("script")).is_ok());
         assert!(validate_global_activity_filter(Some("protocol")).is_ok());
         assert!(validate_global_activity_filter(Some("nft")).is_err());
-    }
-
-    #[test]
-    fn test_parse_activity_cursor_format() {
-        assert_eq!(parse_activity_cursor("100:2"), Some((100, 2)));
-        assert_eq!(parse_activity_cursor("100:2:7"), None);
-        assert_eq!(parse_activity_cursor("100"), None);
     }
 
     // Integration tests for activities are in crates/api/tests/api_activities.rs

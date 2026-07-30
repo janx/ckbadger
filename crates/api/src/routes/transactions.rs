@@ -12,11 +12,13 @@ use tokio::time::{sleep, Instant};
 use crate::cache::InMemoryCache;
 use crate::cycles::{CyclesStatus, CyclesStatusResponse};
 use crate::response::{
-    decode_cursor, default_limit, encode_cursor, hash_type_to_str, ok, ApiError, ApiResult,
-    ApiRouteError, CursorPaginatedResponse, ScriptResponse,
+    default_limit, encode_cursor, hash_type_to_str, ok, ApiError, ApiResult, ApiRouteError,
+    CursorPaginatedResponse, ScriptResponse,
 };
 use crate::routes::tx_lookup::{fetch_transaction_lookup, pending_transaction_resource_error};
-use crate::utils::{parse_hash32, script_to_address};
+use crate::utils::{
+    parse_hash32, parse_optional_block_tx_cursor, script_to_address, validate_block_number,
+};
 use crate::AppState;
 use tracing::instrument;
 
@@ -207,8 +209,9 @@ async fn list_transactions(
     let mem_cache = state.mem_cache.clone();
 
     if let Some(block_number) = params.block_number {
+        let block_number = validate_block_number(block_number, "block_number")?;
         // List transactions for a specific block (ascending order)
-        let cursor = params.cursor.as_ref().and_then(|c| decode_cursor(c));
+        let cursor = parse_optional_block_tx_cursor(params.cursor.as_deref(), "cursor")?;
         // Cursor is the tx_idx of the last item on the previous page.
         // We want txs AFTER that index. Use -1 for first page (returns from idx 0).
         let after_tx_idx = cursor.map(|(_, idx)| idx).unwrap_or(-1);
@@ -281,7 +284,7 @@ async fn list_transactions(
         ok(CursorPaginatedResponse::new(txs, total, limit, next_cursor))
     } else {
         // List latest transactions (DESC order across blocks)
-        let cursor = params.cursor.as_ref().and_then(|c| decode_cursor(c));
+        let cursor = parse_optional_block_tx_cursor(params.cursor.as_deref(), "cursor")?;
         let (cursor_block, cursor_index) = cursor.unwrap_or((i64::MAX, i32::MAX));
 
         let store_c = store.clone();
