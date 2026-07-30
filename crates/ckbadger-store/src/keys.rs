@@ -18,7 +18,51 @@ pub const BLOCK_OUTPOINT_KEY_SIZE: usize = BLOCK_NUM_KEY_SIZE + OUTPOINT_KEY_SIZ
 /// Reorg undo-log key: block_number(8B BE) + seq(8B BE) = 16 bytes
 pub const REORG_UNDO_LOG_KEY_SIZE: usize = 16;
 
+/// Byte width of a blake2b-256 identifier (script hash, code hash, tx hash,
+/// block hash, spore/cluster id, …) in a key window.
+const HASH32_LEN: usize = 32;
+
+/// Byte width of a `.bit` account ID in a key window.
+const DOTBIT_ACCOUNT_ID_LEN: usize = 20;
+
+/// Assert that a fixed-width key component exactly fills the window its key
+/// layout reserves for it.
+///
+/// Keys in this module are delimiter-free byte layouts, so both directions are
+/// invariant violations and neither may be repaired silently:
+///
+/// * **Too short** — the component cannot fill its window; slicing it used to
+///   die as a bare `range end index N out of range` with no field name, which
+///   tells an operator nothing about which caller is wrong.
+/// * **Too long** — the surplus bytes are truncated away and the encoder
+///   returns a *well-formed key belonging to a different entity*, silently
+///   answering for the wrong script, address, token or outpoint. This is the
+///   dangerous half, and it is exactly what an exact assert closes.
+///
+/// Callers own this invariant: request-supplied hashes are length-checked at
+/// the API boundary (`ckbadger_api::utils::parse_hash32`) and chain-derived
+/// ones are fixed-width by construction (`[u8; 32]` / `[u8; 20]` protocol
+/// facts), so reaching this assert means an upstream bug, not bad user input.
+///
+/// Identifiers that are legitimately narrower than the 32-byte window — mNFT
+/// class (24B) and token (28B) IDs, `.bit` account IDs (20B) — do not come
+/// through here; they are right-padded by [`pad_id_32`], which enforces its own
+/// (upper-bound) invariant.
+#[inline]
+#[track_caller]
+fn assert_key_component_len(encoder: &str, component: &str, actual: usize, expected: usize) {
+    assert!(
+        actual == expected,
+        "{}: {} must be exactly {} bytes, got {}",
+        encoder,
+        component,
+        expected,
+        actual
+    );
+}
+
 pub fn encode_outpoint(tx_hash: &[u8], output_index: i16) -> [u8; OUTPOINT_KEY_SIZE] {
+    assert_key_component_len("encode_outpoint", "tx_hash", tx_hash.len(), HASH32_LEN);
     assert!(
         output_index >= 0,
         "encode_outpoint: expected non-negative output_index, got {}",
@@ -37,10 +81,11 @@ pub fn decode_outpoint(key: &[u8]) -> (Vec<u8>, i16) {
 }
 
 pub fn encode_script_version_by_label_key(label_key: &str, version_hash: &[u8]) -> Vec<u8> {
-    assert!(
-        version_hash.len() >= SCRIPT_VERSION_HASH_SIZE,
-        "encode_script_version_by_label_key: version_hash must be >= 32 bytes, got {}",
-        version_hash.len()
+    assert_key_component_len(
+        "encode_script_version_by_label_key",
+        "version_hash",
+        version_hash.len(),
+        SCRIPT_VERSION_HASH_SIZE,
     );
     let label_bytes = label_key.as_bytes();
     let label_len = u16::try_from(label_bytes.len()).expect("label_key length exceeds u16::MAX");
@@ -85,10 +130,11 @@ pub fn decode_script_version_by_label_key(key: &[u8]) -> (String, Vec<u8>) {
 }
 
 pub fn encode_script_version_by_family_key(family_id: &str, version_hash: &[u8]) -> Vec<u8> {
-    assert!(
-        version_hash.len() == SCRIPT_VERSION_HASH_SIZE,
-        "encode_script_version_by_family_key: version_hash must be exactly 32 bytes, got {}",
-        version_hash.len()
+    assert_key_component_len(
+        "encode_script_version_by_family_key",
+        "version_hash",
+        version_hash.len(),
+        SCRIPT_VERSION_HASH_SIZE,
     );
     let family_bytes = family_id.as_bytes();
     let family_len = u16::try_from(family_bytes.len()).expect("family_id length exceeds u16::MAX");
@@ -136,10 +182,11 @@ pub fn encode_script_reference_key(
     hash_type: u8,
     reference_hash: &[u8],
 ) -> [u8; SCRIPT_REFERENCE_KEY_SIZE] {
-    assert!(
-        reference_hash.len() == SCRIPT_VERSION_HASH_SIZE,
-        "encode_script_reference_key: reference_hash must be exactly 32 bytes, got {}",
-        reference_hash.len()
+    assert_key_component_len(
+        "encode_script_reference_key",
+        "reference_hash",
+        reference_hash.len(),
+        SCRIPT_VERSION_HASH_SIZE,
     );
     let mut key = [0u8; SCRIPT_REFERENCE_KEY_SIZE];
     key[0] = hash_type;
@@ -303,12 +350,30 @@ fn decode_desc_token_balance(bytes: &[u8]) -> TokenBalance {
 
 /// Encode a cell-by-lock/type index key:
 /// lock_hash(32B) + block_num(8B BE) + outpoint(34B) = 74 bytes
+///
+/// # Invariant
+///
+/// `script_hash` and `tx_hash` must each be exactly 32 bytes: the key window is
+/// fixed, so a longer hash is truncated into the block-number bytes of another
+/// script's row and the scan answers for a different cell owner.
 pub fn encode_cell_index_key(
     script_hash: &[u8],
     block_num: i64,
     tx_hash: &[u8],
     output_index: i16,
 ) -> Vec<u8> {
+    assert_key_component_len(
+        "encode_cell_index_key",
+        "script_hash",
+        script_hash.len(),
+        HASH32_LEN,
+    );
+    assert_key_component_len(
+        "encode_cell_index_key",
+        "tx_hash",
+        tx_hash.len(),
+        HASH32_LEN,
+    );
     let mut key = Vec::with_capacity(74);
     key.extend_from_slice(&script_hash[..32]);
     key.extend_from_slice(&block_num.to_be_bytes());
@@ -337,10 +402,11 @@ pub const CELL_CODE_INDEX_PREFIX_SIZE: usize = 33;
 /// this invariant: request-supplied hashes are length-checked at the API
 /// boundary (`ckbadger_api::utils::parse_hash32`) before they get here.
 pub fn encode_cell_code_index_prefix(code_hash: &[u8], hash_type: u8) -> Vec<u8> {
-    assert!(
-        code_hash.len() == 32,
-        "encode_cell_code_index_prefix: code_hash must be exactly 32 bytes, got {}",
-        code_hash.len()
+    assert_key_component_len(
+        "encode_cell_code_index_prefix",
+        "code_hash",
+        code_hash.len(),
+        HASH32_LEN,
     );
     let mut prefix = Vec::with_capacity(CELL_CODE_INDEX_PREFIX_SIZE);
     prefix.extend_from_slice(&code_hash[..32]);
@@ -360,15 +426,17 @@ pub fn encode_cell_code_index_key(
     tx_hash: &[u8],
     output_index: i16,
 ) -> Vec<u8> {
-    assert!(
-        code_hash.len() == 32,
-        "encode_cell_code_index_key: code_hash must be exactly 32 bytes, got {}",
-        code_hash.len()
+    assert_key_component_len(
+        "encode_cell_code_index_key",
+        "code_hash",
+        code_hash.len(),
+        HASH32_LEN,
     );
-    assert!(
-        tx_hash.len() == 32,
-        "encode_cell_code_index_key: tx_hash must be exactly 32 bytes, got {}",
-        tx_hash.len()
+    assert_key_component_len(
+        "encode_cell_code_index_key",
+        "tx_hash",
+        tx_hash.len(),
+        HASH32_LEN,
     );
     let mut key = Vec::with_capacity(CELL_CODE_INDEX_KEY_SIZE);
     key.extend_from_slice(&code_hash[..32]);
@@ -401,16 +469,13 @@ pub fn encode_addr_tx_key(
     tx_idx: i32,
     tx_hash: &[u8],
 ) -> Vec<u8> {
-    assert!(
-        lock_hash.len() >= 32,
-        "encode_addr_tx_key: lock_hash must be >= 32 bytes, got {}",
-        lock_hash.len()
+    assert_key_component_len(
+        "encode_addr_tx_key",
+        "lock_hash",
+        lock_hash.len(),
+        HASH32_LEN,
     );
-    assert!(
-        tx_hash.len() >= 32,
-        "encode_addr_tx_key: tx_hash must be >= 32 bytes, got {}",
-        tx_hash.len()
-    );
+    assert_key_component_len("encode_addr_tx_key", "tx_hash", tx_hash.len(), HASH32_LEN);
     let mut key = Vec::with_capacity(ADDR_TX_KEY_SIZE);
     key.extend_from_slice(&lock_hash[..32]);
     key.extend_from_slice(&encode_desc_block_num(block_num));
@@ -420,10 +485,11 @@ pub fn encode_addr_tx_key(
 }
 
 pub fn encode_addr_tx_seek_after_key(lock_hash: &[u8], block_num: i64, tx_idx: i32) -> Vec<u8> {
-    assert!(
-        lock_hash.len() >= 32,
-        "encode_addr_tx_seek_after_key: lock_hash must be >= 32 bytes, got {}",
-        lock_hash.len()
+    assert_key_component_len(
+        "encode_addr_tx_seek_after_key",
+        "lock_hash",
+        lock_hash.len(),
+        HASH32_LEN,
     );
     let mut key = Vec::with_capacity(ADDR_TX_KEY_SIZE);
     key.extend_from_slice(&lock_hash[..32]);
@@ -449,6 +515,18 @@ pub fn decode_addr_tx_key(key: &[u8]) -> (Vec<u8>, i64, i32, Vec<u8>) {
 
 /// Encode a token_holders key: type_hash(32B) + lock_hash(32B) = 64 bytes
 pub fn encode_token_holder_key(type_hash: &[u8], lock_hash: &[u8]) -> [u8; 64] {
+    assert_key_component_len(
+        "encode_token_holder_key",
+        "type_hash",
+        type_hash.len(),
+        HASH32_LEN,
+    );
+    assert_key_component_len(
+        "encode_token_holder_key",
+        "lock_hash",
+        lock_hash.len(),
+        HASH32_LEN,
+    );
     let mut key = [0u8; 64];
     key[..32].copy_from_slice(&type_hash[..32]);
     key[32..64].copy_from_slice(&lock_hash[..32]);
@@ -464,15 +542,17 @@ pub fn encode_token_holder_balance_key(
     balance: &TokenBalance,
     lock_hash: &[u8],
 ) -> [u8; TOKEN_HOLDER_BALANCE_KEY_SIZE] {
-    assert!(
-        type_hash.len() >= 32,
-        "encode_token_holder_balance_key: type_hash must be >= 32 bytes, got {}",
-        type_hash.len()
+    assert_key_component_len(
+        "encode_token_holder_balance_key",
+        "type_hash",
+        type_hash.len(),
+        HASH32_LEN,
     );
-    assert!(
-        lock_hash.len() >= 32,
-        "encode_token_holder_balance_key: lock_hash must be >= 32 bytes, got {}",
-        lock_hash.len()
+    assert_key_component_len(
+        "encode_token_holder_balance_key",
+        "lock_hash",
+        lock_hash.len(),
+        HASH32_LEN,
     );
     let mut key = [0u8; TOKEN_HOLDER_BALANCE_KEY_SIZE];
     key[..32].copy_from_slice(&type_hash[..32]);
@@ -514,15 +594,17 @@ pub fn encode_addr_token_balance_key(
     balance: &TokenBalance,
     type_hash: &[u8],
 ) -> [u8; ADDR_TOKEN_BALANCE_KEY_SIZE] {
-    assert!(
-        lock_hash.len() >= 32,
-        "encode_addr_token_balance_key: lock_hash must be >= 32 bytes, got {}",
-        lock_hash.len()
+    assert_key_component_len(
+        "encode_addr_token_balance_key",
+        "lock_hash",
+        lock_hash.len(),
+        HASH32_LEN,
     );
-    assert!(
-        type_hash.len() >= 32,
-        "encode_addr_token_balance_key: type_hash must be >= 32 bytes, got {}",
-        type_hash.len()
+    assert_key_component_len(
+        "encode_addr_token_balance_key",
+        "type_hash",
+        type_hash.len(),
+        HASH32_LEN,
     );
     let mut key = [0u8; ADDR_TOKEN_BALANCE_KEY_SIZE];
     key[..32].copy_from_slice(&lock_hash[..32]);
@@ -674,6 +756,12 @@ pub const STATS_PREFIX_ACTIVITY_HOURLY_ADDR_SET: u8 = stats_prefix::ACTIVITY_HOU
 
 /// Token transfers total count key: prefix(1B) + type_hash(32B) = 33 bytes
 pub fn encode_token_transfers_key(type_hash: &[u8]) -> Vec<u8> {
+    assert_key_component_len(
+        "encode_token_transfers_key",
+        "type_hash",
+        type_hash.len(),
+        HASH32_LEN,
+    );
     let mut key = Vec::with_capacity(33);
     key.push(STATS_PREFIX_TOKEN_TRANSFERS);
     key.extend_from_slice(&type_hash[..32]);
@@ -683,6 +771,12 @@ pub fn encode_token_transfers_key(type_hash: &[u8]) -> Vec<u8> {
 /// Token hourly transfer count key: prefix(1B) + type_hash(32B) + hour_bucket(8B BE) = 41 bytes
 /// hour_bucket = timestamp_ms / 3_600_000
 pub fn encode_token_hourly_key(type_hash: &[u8], hour_bucket: i64) -> Vec<u8> {
+    assert_key_component_len(
+        "encode_token_hourly_key",
+        "type_hash",
+        type_hash.len(),
+        HASH32_LEN,
+    );
     let mut key = Vec::with_capacity(41);
     key.push(STATS_PREFIX_TOKEN_HOURLY);
     key.extend_from_slice(&type_hash[..32]);
@@ -692,6 +786,12 @@ pub fn encode_token_hourly_key(type_hash: &[u8], hour_bucket: i64) -> Vec<u8> {
 
 /// Prefix for scanning all hourly buckets of a given token.
 pub fn encode_token_hourly_prefix(type_hash: &[u8]) -> Vec<u8> {
+    assert_key_component_len(
+        "encode_token_hourly_prefix",
+        "type_hash",
+        type_hash.len(),
+        HASH32_LEN,
+    );
     let mut key = Vec::with_capacity(33);
     key.push(STATS_PREFIX_TOKEN_HOURLY);
     key.extend_from_slice(&type_hash[..32]);
@@ -702,6 +802,12 @@ pub fn encode_token_hourly_prefix(type_hash: &[u8]) -> Vec<u8> {
 pub const TOKEN_DAILY_KEY_SIZE: usize = 37;
 
 pub fn encode_token_daily_key(type_hash: &[u8], date_yyyymmdd: u32) -> [u8; TOKEN_DAILY_KEY_SIZE] {
+    assert_key_component_len(
+        "encode_token_daily_key",
+        "type_hash",
+        type_hash.len(),
+        HASH32_LEN,
+    );
     let mut key = [0u8; TOKEN_DAILY_KEY_SIZE];
     key[0] = STATS_PREFIX_TOKEN_DAILY;
     key[1..33].copy_from_slice(&type_hash[..32]);
@@ -711,6 +817,12 @@ pub fn encode_token_daily_key(type_hash: &[u8], date_yyyymmdd: u32) -> [u8; TOKE
 
 /// Prefix for scanning all token daily entries.
 pub fn encode_token_daily_prefix(type_hash: &[u8]) -> [u8; 33] {
+    assert_key_component_len(
+        "encode_token_daily_prefix",
+        "type_hash",
+        type_hash.len(),
+        HASH32_LEN,
+    );
     let mut prefix = [0u8; 33];
     prefix[0] = STATS_PREFIX_TOKEN_DAILY;
     prefix[1..33].copy_from_slice(&type_hash[..32]);
@@ -730,6 +842,12 @@ pub fn encode_cluster_daily_key(
     cluster_id: &[u8],
     date_yyyymmdd: u32,
 ) -> [u8; CLUSTER_DAILY_KEY_SIZE] {
+    assert_key_component_len(
+        "encode_cluster_daily_key",
+        "cluster_id",
+        cluster_id.len(),
+        HASH32_LEN,
+    );
     let mut key = [0u8; CLUSTER_DAILY_KEY_SIZE];
     key[0] = STATS_PREFIX_CLUSTER_DAILY;
     key[1..33].copy_from_slice(&cluster_id[..32]);
@@ -738,6 +856,12 @@ pub fn encode_cluster_daily_key(
 }
 
 pub fn encode_cluster_daily_prefix(cluster_id: &[u8]) -> [u8; 33] {
+    assert_key_component_len(
+        "encode_cluster_daily_prefix",
+        "cluster_id",
+        cluster_id.len(),
+        HASH32_LEN,
+    );
     let mut prefix = [0u8; 33];
     prefix[0] = STATS_PREFIX_CLUSTER_DAILY;
     prefix[1..33].copy_from_slice(&cluster_id[..32]);
@@ -754,6 +878,12 @@ pub fn decode_cluster_daily_key(key: &[u8]) -> (Vec<u8>, u32) {
 pub const SPORE_DAILY_KEY_SIZE: usize = 37;
 
 pub fn encode_spore_daily_key(spore_id: &[u8], date_yyyymmdd: u32) -> [u8; SPORE_DAILY_KEY_SIZE] {
+    assert_key_component_len(
+        "encode_spore_daily_key",
+        "spore_id",
+        spore_id.len(),
+        HASH32_LEN,
+    );
     let mut key = [0u8; SPORE_DAILY_KEY_SIZE];
     key[0] = STATS_PREFIX_SPORE_DAILY;
     key[1..33].copy_from_slice(&spore_id[..32]);
@@ -762,6 +892,12 @@ pub fn encode_spore_daily_key(spore_id: &[u8], date_yyyymmdd: u32) -> [u8; SPORE
 }
 
 pub fn encode_spore_daily_prefix(spore_id: &[u8]) -> [u8; 33] {
+    assert_key_component_len(
+        "encode_spore_daily_prefix",
+        "spore_id",
+        spore_id.len(),
+        HASH32_LEN,
+    );
     let mut prefix = [0u8; 33];
     prefix[0] = STATS_PREFIX_SPORE_DAILY;
     prefix[1..33].copy_from_slice(&spore_id[..32]);
@@ -802,6 +938,12 @@ pub fn encode_spore_outpoint_by_id_key(
     tx_hash: &[u8],
     output_index: i16,
 ) -> [u8; SPORE_OUTPOINT_BY_ID_KEY_SIZE] {
+    assert_key_component_len(
+        "encode_spore_outpoint_by_id_key",
+        "spore_id",
+        spore_id.len(),
+        HASH32_LEN,
+    );
     let mut key = [0u8; SPORE_OUTPOINT_BY_ID_KEY_SIZE];
     key[0] = STATS_PREFIX_SPORE_OUTPOINT_BY_ID;
     key[1..33].copy_from_slice(&spore_id[..32]);
@@ -812,6 +954,12 @@ pub fn encode_spore_outpoint_by_id_key(
 pub fn encode_spore_outpoint_by_id_prefix(
     spore_id: &[u8],
 ) -> [u8; SPORE_OUTPOINT_BY_ID_PREFIX_SIZE] {
+    assert_key_component_len(
+        "encode_spore_outpoint_by_id_prefix",
+        "spore_id",
+        spore_id.len(),
+        HASH32_LEN,
+    );
     let mut prefix = [0u8; SPORE_OUTPOINT_BY_ID_PREFIX_SIZE];
     prefix[0] = STATS_PREFIX_SPORE_OUTPOINT_BY_ID;
     prefix[1..33].copy_from_slice(&spore_id[..32]);
@@ -876,6 +1024,12 @@ pub fn encode_dotbit_outpoint_by_account_id_key(
     tx_hash: &[u8],
     output_index: i16,
 ) -> [u8; DOTBIT_OUTPOINT_BY_ACCOUNT_ID_KEY_SIZE] {
+    assert_key_component_len(
+        "encode_dotbit_outpoint_by_account_id_key",
+        "account_id",
+        account_id.len(),
+        DOTBIT_ACCOUNT_ID_LEN,
+    );
     let mut key = [0u8; DOTBIT_OUTPOINT_BY_ACCOUNT_ID_KEY_SIZE];
     key[0] = STATS_PREFIX_DOTBIT_OUTPOINT_BY_ACCOUNT_ID;
     key[1..21].copy_from_slice(&account_id[..20]);
@@ -886,6 +1040,12 @@ pub fn encode_dotbit_outpoint_by_account_id_key(
 pub fn encode_dotbit_outpoint_by_account_id_prefix(
     account_id: &[u8],
 ) -> [u8; DOTBIT_OUTPOINT_BY_ACCOUNT_ID_PREFIX_SIZE] {
+    assert_key_component_len(
+        "encode_dotbit_outpoint_by_account_id_prefix",
+        "account_id",
+        account_id.len(),
+        DOTBIT_ACCOUNT_ID_LEN,
+    );
     let mut prefix = [0u8; DOTBIT_OUTPOINT_BY_ACCOUNT_ID_PREFIX_SIZE];
     prefix[0] = STATS_PREFIX_DOTBIT_OUTPOINT_BY_ACCOUNT_ID;
     prefix[1..21].copy_from_slice(&account_id[..20]);
@@ -900,6 +1060,12 @@ pub fn decode_dotbit_outpoint_by_account_id_key(key: &[u8]) -> (Vec<u8>, i16) {
 pub const SPORE_TYPE_INDEX_KEY_SIZE: usize = 33;
 
 pub fn encode_spore_type_index_key(type_script_hash: &[u8]) -> [u8; SPORE_TYPE_INDEX_KEY_SIZE] {
+    assert_key_component_len(
+        "encode_spore_type_index_key",
+        "type_script_hash",
+        type_script_hash.len(),
+        HASH32_LEN,
+    );
     let mut key = [0u8; SPORE_TYPE_INDEX_KEY_SIZE];
     key[0] = STATS_PREFIX_SPORE_TYPE_INDEX;
     key[1..33].copy_from_slice(&type_script_hash[..32]);
@@ -933,10 +1099,18 @@ pub fn encode_object_collection_owner_key(
     collection_id: &[u8],
     lock_hash: &[u8],
 ) -> [u8; OBJECT_COLLECTION_OWNER_KEY_SIZE] {
+    // `collection_id` is padded (mNFT class IDs are 24B); the owner segment is a
+    // lock hash and must fill its window exactly.
+    assert_key_component_len(
+        "encode_object_collection_owner_key",
+        "lock_hash",
+        lock_hash.len(),
+        HASH32_LEN,
+    );
     let mut key = [0u8; OBJECT_COLLECTION_OWNER_KEY_SIZE];
     key[0] = STATS_PREFIX_OBJECT_COLLECTION_OWNER;
     key[1..33].copy_from_slice(&pad_id_32(collection_id));
-    key[33..65].copy_from_slice(&pad_id_32(lock_hash));
+    key[33..65].copy_from_slice(lock_hash);
     key
 }
 
@@ -957,6 +1131,12 @@ pub fn decode_object_daily_key(key: &[u8]) -> (Vec<u8>, u32) {
 pub const OBJECT_TYPE_INDEX_KEY_SIZE: usize = 33;
 
 pub fn encode_object_type_index_key(type_script_hash: &[u8]) -> [u8; OBJECT_TYPE_INDEX_KEY_SIZE] {
+    assert_key_component_len(
+        "encode_object_type_index_key",
+        "type_script_hash",
+        type_script_hash.len(),
+        HASH32_LEN,
+    );
     let mut key = [0u8; OBJECT_TYPE_INDEX_KEY_SIZE];
     key[0] = STATS_PREFIX_OBJECT_TYPE_INDEX;
     key[1..33].copy_from_slice(&type_script_hash[..32]);
@@ -1008,9 +1188,17 @@ pub fn encode_identity_owner_key(
     collection_id: &[u8],
     lock_hash: &[u8],
 ) -> [u8; IDENTITY_OWNER_KEY_SIZE] {
+    // `collection_id` is padded (sentinel collections and `.bit` IDs are
+    // narrower); the owner segment is a lock hash and must fill it exactly.
+    assert_key_component_len(
+        "encode_identity_owner_key",
+        "lock_hash",
+        lock_hash.len(),
+        HASH32_LEN,
+    );
     let mut key = [0u8; IDENTITY_OWNER_KEY_SIZE];
     key[..32].copy_from_slice(&pad_id_32(collection_id));
-    key[32..64].copy_from_slice(&lock_hash[..32]);
+    key[32..64].copy_from_slice(lock_hash);
     key
 }
 
@@ -1090,6 +1278,12 @@ pub fn encode_script_daily_key(
     is_type: bool,
     date_yyyymmdd: u32,
 ) -> [u8; SCRIPT_DAILY_KEY_SIZE] {
+    assert_key_component_len(
+        "encode_script_daily_key",
+        "code_hash",
+        code_hash.len(),
+        HASH32_LEN,
+    );
     assert_script_hash_type(hash_type);
     let mut key = [0u8; SCRIPT_DAILY_KEY_SIZE];
     key[0] = STATS_PREFIX_SCRIPT_DAILY;
@@ -1102,6 +1296,12 @@ pub fn encode_script_daily_key(
 
 /// Prefix for scanning a script daily timeline by reference form and kind.
 pub fn encode_script_daily_prefix(code_hash: &[u8], hash_type: u8, is_type: bool) -> [u8; 35] {
+    assert_key_component_len(
+        "encode_script_daily_prefix",
+        "code_hash",
+        code_hash.len(),
+        HASH32_LEN,
+    );
     assert_script_hash_type(hash_type);
     let mut prefix = [0u8; 35];
     prefix[0] = STATS_PREFIX_SCRIPT_DAILY;
@@ -1114,6 +1314,12 @@ pub fn encode_script_daily_prefix(code_hash: &[u8], hash_type: u8, is_type: bool
 /// Prefix for scanning all script daily rows of a code_hash across every
 /// hash_type form and script kind.
 pub fn encode_script_daily_code_hash_prefix(code_hash: &[u8]) -> [u8; 33] {
+    assert_key_component_len(
+        "encode_script_daily_code_hash_prefix",
+        "code_hash",
+        code_hash.len(),
+        HASH32_LEN,
+    );
     let mut prefix = [0u8; 33];
     prefix[0] = STATS_PREFIX_SCRIPT_DAILY;
     prefix[1..33].copy_from_slice(&code_hash[..32]);
@@ -1131,6 +1337,12 @@ pub fn decode_script_daily_key(key: &[u8]) -> (Vec<u8>, u8, bool, u32) {
 /// Token transfer key: type_hash(32B) + block_num_desc(8B BE) + tx_idx_desc(4B BE) = 44 bytes
 /// Uses descending block_num and tx_idx so newest transfers come first in prefix scan.
 pub fn encode_token_transfer_key(type_hash: &[u8], block_num: i64, tx_idx: i32) -> Vec<u8> {
+    assert_key_component_len(
+        "encode_token_transfer_key",
+        "type_hash",
+        type_hash.len(),
+        HASH32_LEN,
+    );
     let mut key = Vec::with_capacity(44);
     key.extend_from_slice(&type_hash[..32]);
     key.extend_from_slice(&encode_desc_block_num(block_num));
@@ -1155,6 +1367,18 @@ pub fn encode_cluster_owner_key(
     cluster_id: &[u8],
     lock_hash: &[u8],
 ) -> [u8; CLUSTER_OWNER_KEY_SIZE] {
+    assert_key_component_len(
+        "encode_cluster_owner_key",
+        "cluster_id",
+        cluster_id.len(),
+        HASH32_LEN,
+    );
+    assert_key_component_len(
+        "encode_cluster_owner_key",
+        "lock_hash",
+        lock_hash.len(),
+        HASH32_LEN,
+    );
     let mut key = [0u8; CLUSTER_OWNER_KEY_SIZE];
     key[0] = STATS_PREFIX_CLUSTER_OWNER;
     key[1..33].copy_from_slice(&cluster_id[..32]);
@@ -1164,6 +1388,12 @@ pub fn encode_cluster_owner_key(
 
 /// Prefix for scanning all owners of a given cluster.
 pub fn encode_cluster_owner_prefix(cluster_id: &[u8]) -> [u8; 33] {
+    assert_key_component_len(
+        "encode_cluster_owner_prefix",
+        "cluster_id",
+        cluster_id.len(),
+        HASH32_LEN,
+    );
     let mut prefix = [0u8; 33];
     prefix[0] = STATS_PREFIX_CLUSTER_OWNER;
     prefix[1..33].copy_from_slice(&cluster_id[..32]);
@@ -1172,6 +1402,18 @@ pub fn encode_cluster_owner_prefix(cluster_id: &[u8]) -> [u8; 33] {
 
 /// Spore-by-cluster key: cluster_id(32B) + spore_id(32B) = 64 bytes
 pub fn encode_spore_by_cluster_key(cluster_id: &[u8], spore_id: &[u8]) -> [u8; 64] {
+    assert_key_component_len(
+        "encode_spore_by_cluster_key",
+        "cluster_id",
+        cluster_id.len(),
+        HASH32_LEN,
+    );
+    assert_key_component_len(
+        "encode_spore_by_cluster_key",
+        "spore_id",
+        spore_id.len(),
+        HASH32_LEN,
+    );
     let mut key = [0u8; 64];
     key[..32].copy_from_slice(&cluster_id[..32]);
     key[32..64].copy_from_slice(&spore_id[..32]);
@@ -1182,10 +1424,11 @@ pub fn encode_spore_by_cluster_key(cluster_id: &[u8], spore_id: &[u8]) -> [u8; 6
 pub const TX_ACTIONS_KEY_SIZE: usize = 44;
 
 pub fn encode_tx_actions_key(block_num: i64, tx_idx: i32, tx_hash: &[u8]) -> Vec<u8> {
-    assert!(
-        tx_hash.len() >= 32,
-        "encode_tx_actions_key: tx_hash must be >= 32 bytes, got {}",
-        tx_hash.len()
+    assert_key_component_len(
+        "encode_tx_actions_key",
+        "tx_hash",
+        tx_hash.len(),
+        HASH32_LEN,
     );
     let mut key = Vec::with_capacity(TX_ACTIONS_KEY_SIZE);
     key.extend_from_slice(&encode_desc_block_num(block_num));
@@ -1355,15 +1598,19 @@ pub fn encode_object_collection_activity_key(
     block_hash: &[u8],
     tx_hash: &[u8],
 ) -> [u8; OBJECT_COLLECTION_ACTIVITY_KEY_SIZE] {
-    assert!(
-        block_hash.len() >= 32,
-        "encode_object_collection_activity_key: block_hash must be >= 32 bytes, got {}",
-        block_hash.len()
+    // `collection_id` is padded (mNFT class IDs are 24B, `.bit` IDs 20B); the
+    // two hash segments must fill their windows exactly.
+    assert_key_component_len(
+        "encode_object_collection_activity_key",
+        "block_hash",
+        block_hash.len(),
+        HASH32_LEN,
     );
-    assert!(
-        tx_hash.len() >= 32,
-        "encode_object_collection_activity_key: tx_hash must be >= 32 bytes, got {}",
-        tx_hash.len()
+    assert_key_component_len(
+        "encode_object_collection_activity_key",
+        "tx_hash",
+        tx_hash.len(),
+        HASH32_LEN,
     );
     let mut key = [0u8; OBJECT_COLLECTION_ACTIVITY_KEY_SIZE];
     key[..32].copy_from_slice(&pad_id_32(collection_id));
@@ -1432,7 +1679,19 @@ pub mod sync_meta_keys {
 
 pub const FIBER_CHANNEL_KEY_SIZE: usize = 32;
 
+/// # Invariant
+///
+/// The channel ID is the hash of the funding outpoint, so `funding_tx_hash`
+/// must be exactly 32 bytes: a different width silently yields a different
+/// channel identity rather than a truncated key, which is just as wrong and
+/// far harder to spot.
 pub fn encode_fiber_channel_id(funding_tx_hash: &[u8], output_index: u32) -> Vec<u8> {
+    assert_key_component_len(
+        "encode_fiber_channel_id",
+        "funding_tx_hash",
+        funding_tx_hash.len(),
+        HASH32_LEN,
+    );
     use ckb_hash::new_blake2b;
     let mut hasher = new_blake2b();
     hasher.update(funding_tx_hash);
@@ -1444,7 +1703,19 @@ pub fn encode_fiber_channel_id(funding_tx_hash: &[u8], output_index: u32) -> Vec
 
 pub const FIBER_OUTPOINT_SIZE: usize = 36;
 
+/// # Invariant
+///
+/// `tx_hash` must be exactly 32 bytes so the encoding is exactly
+/// [`FIBER_OUTPOINT_SIZE`]. Any other width shifts the trailing index field,
+/// and [`decode_fiber_outpoint`] would read a different tx hash and index back
+/// out of it.
 pub fn encode_fiber_outpoint(tx_hash: &[u8], output_index: u32) -> Vec<u8> {
+    assert_key_component_len(
+        "encode_fiber_outpoint",
+        "tx_hash",
+        tx_hash.len(),
+        HASH32_LEN,
+    );
     let mut out = Vec::with_capacity(FIBER_OUTPOINT_SIZE);
     out.extend_from_slice(tx_hash);
     out.extend_from_slice(&output_index.to_le_bytes());
@@ -1466,15 +1737,17 @@ pub fn decode_fiber_outpoint(data: &[u8]) -> (Vec<u8>, u32) {
 pub const ADDR_FIBER_CHANNEL_KEY_SIZE: usize = 64;
 
 pub fn encode_addr_fiber_channel_key(lock_hash: &[u8], channel_id: &[u8]) -> Vec<u8> {
-    assert!(
-        lock_hash.len() >= 32,
-        "encode_addr_fiber_channel_key: lock_hash must be >= 32 bytes, got {}",
-        lock_hash.len()
+    assert_key_component_len(
+        "encode_addr_fiber_channel_key",
+        "lock_hash",
+        lock_hash.len(),
+        HASH32_LEN,
     );
-    assert!(
-        channel_id.len() >= 32,
-        "encode_addr_fiber_channel_key: channel_id must be >= 32 bytes, got {}",
-        channel_id.len()
+    assert_key_component_len(
+        "encode_addr_fiber_channel_key",
+        "channel_id",
+        channel_id.len(),
+        HASH32_LEN,
     );
     let mut key = Vec::with_capacity(ADDR_FIBER_CHANNEL_KEY_SIZE);
     key.extend_from_slice(&lock_hash[..32]);
@@ -2524,5 +2797,735 @@ mod tests {
         let addr_next = encode_addr_token_balance_key(&lock_hash, &next_lower, &[0x00; 32]);
         assert!(addr_base.as_slice() < addr_seek_after.as_slice());
         assert!(addr_seek_after.as_slice() < addr_next.as_slice());
+    }
+
+    // -- fixed-width key component invariants -------------------------------
+    //
+    // Keys in this module are delimiter-free byte layouts, so an identifier
+    // that does not exactly fill its window is an invariant violation in both
+    // directions: too short cannot fill the window, too long is truncated into
+    // the *next* component and yields a well-formed key belonging to a
+    // different entity. The sweeps below prove every encoder that owns a
+    // fixed-width window enforces that uniformly and says so actionably.
+
+    /// Capture the panic message `f` produces, or `None` when it returns.
+    fn encoder_panic_message(f: impl FnOnce()) -> Option<String> {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(f))
+            .err()
+            .map(|payload| {
+                payload
+                    .downcast_ref::<String>()
+                    .cloned()
+                    .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_string()))
+                    .unwrap_or_else(|| "<non-string panic payload>".to_string())
+            })
+    }
+
+    /// Invoke one encoder with the supplied bytes in the slot under test and
+    /// valid values in every other argument.
+    type EncoderCall = fn(&[u8]);
+
+    /// One fixed-width identifier of one encoder.
+    struct FixedWidthCase {
+        encoder: &'static str,
+        component: &'static str,
+        expected: usize,
+        call: EncoderCall,
+    }
+
+    /// Every encoder slot in this module that copies an identifier into a
+    /// fixed-width key window and owns its own length assert.
+    ///
+    /// Excluded on purpose:
+    /// * delegating encoders (`encode_spore_outpoint_key`, …) — the window is
+    ///   owned by [`encode_outpoint`], covered by its own case plus
+    ///   `test_delegating_outpoint_encoders_propagate_the_tx_hash_invariant`;
+    /// * the DAO family, which already asserts exact widths in its own wording;
+    /// * everything routed through [`pad_id_32`], whose identifiers are
+    ///   legitimately narrower than 32 bytes (mNFT class 24B / token 28B,
+    ///   `.bit` account 20B) — see
+    ///   `test_padded_encoders_still_accept_their_variable_width_ids`.
+    fn fixed_width_cases() -> Vec<FixedWidthCase> {
+        // `call` is a plain fn pointer, so nothing can be captured; the filler
+        // hash is a const and the ranked-key cases build their own balance.
+        const H: [u8; 32] = [0xAB; 32];
+        vec![
+            FixedWidthCase {
+                encoder: "encode_outpoint",
+                component: "tx_hash",
+                expected: 32,
+                call: |h| {
+                    let _ = encode_outpoint(h, 0);
+                },
+            },
+            FixedWidthCase {
+                encoder: "encode_cell_index_key",
+                component: "script_hash",
+                expected: 32,
+                call: |h| {
+                    let _ = encode_cell_index_key(h, 1, &H, 0);
+                },
+            },
+            FixedWidthCase {
+                encoder: "encode_cell_index_key",
+                component: "tx_hash",
+                expected: 32,
+                call: |h| {
+                    let _ = encode_cell_index_key(&H, 1, h, 0);
+                },
+            },
+            FixedWidthCase {
+                encoder: "encode_cell_code_index_prefix",
+                component: "code_hash",
+                expected: 32,
+                call: |h| {
+                    let _ = encode_cell_code_index_prefix(h, 1);
+                },
+            },
+            FixedWidthCase {
+                encoder: "encode_cell_code_index_key",
+                component: "code_hash",
+                expected: 32,
+                call: |h| {
+                    let _ = encode_cell_code_index_key(h, 1, 1, &H, 0);
+                },
+            },
+            FixedWidthCase {
+                encoder: "encode_cell_code_index_key",
+                component: "tx_hash",
+                expected: 32,
+                call: |h| {
+                    let _ = encode_cell_code_index_key(&H, 1, 1, h, 0);
+                },
+            },
+            FixedWidthCase {
+                encoder: "encode_script_version_by_label_key",
+                component: "version_hash",
+                expected: 32,
+                call: |h| {
+                    let _ = encode_script_version_by_label_key("Default Lock", h);
+                },
+            },
+            FixedWidthCase {
+                encoder: "encode_script_version_by_family_key",
+                component: "version_hash",
+                expected: 32,
+                call: |h| {
+                    let _ = encode_script_version_by_family_key("family/default-lock", h);
+                },
+            },
+            FixedWidthCase {
+                encoder: "encode_script_reference_key",
+                component: "reference_hash",
+                expected: 32,
+                call: |h| {
+                    let _ = encode_script_reference_key(1, h);
+                },
+            },
+            FixedWidthCase {
+                encoder: "encode_addr_tx_key",
+                component: "lock_hash",
+                expected: 32,
+                call: |h| {
+                    let _ = encode_addr_tx_key(h, 1, 0, &H);
+                },
+            },
+            FixedWidthCase {
+                encoder: "encode_addr_tx_key",
+                component: "tx_hash",
+                expected: 32,
+                call: |h| {
+                    let _ = encode_addr_tx_key(&H, 1, 0, h);
+                },
+            },
+            FixedWidthCase {
+                encoder: "encode_addr_tx_seek_after_key",
+                component: "lock_hash",
+                expected: 32,
+                call: |h| {
+                    let _ = encode_addr_tx_seek_after_key(h, 1, 0);
+                },
+            },
+            FixedWidthCase {
+                encoder: "encode_token_holder_key",
+                component: "type_hash",
+                expected: 32,
+                call: |h| {
+                    let _ = encode_token_holder_key(h, &H);
+                },
+            },
+            FixedWidthCase {
+                encoder: "encode_token_holder_key",
+                component: "lock_hash",
+                expected: 32,
+                call: |h| {
+                    let _ = encode_token_holder_key(&H, h);
+                },
+            },
+            FixedWidthCase {
+                encoder: "encode_token_holder_balance_key",
+                component: "type_hash",
+                expected: 32,
+                call: |h| {
+                    let _ = encode_token_holder_balance_key(h, &TokenBalance::from(7u128), &H);
+                },
+            },
+            FixedWidthCase {
+                encoder: "encode_token_holder_balance_key",
+                component: "lock_hash",
+                expected: 32,
+                call: |h| {
+                    let _ = encode_token_holder_balance_key(&H, &TokenBalance::from(7u128), h);
+                },
+            },
+            FixedWidthCase {
+                encoder: "encode_addr_token_balance_key",
+                component: "lock_hash",
+                expected: 32,
+                call: |h| {
+                    let _ = encode_addr_token_balance_key(h, &TokenBalance::from(7u128), &H);
+                },
+            },
+            FixedWidthCase {
+                encoder: "encode_addr_token_balance_key",
+                component: "type_hash",
+                expected: 32,
+                call: |h| {
+                    let _ = encode_addr_token_balance_key(&H, &TokenBalance::from(7u128), h);
+                },
+            },
+            FixedWidthCase {
+                encoder: "encode_token_transfers_key",
+                component: "type_hash",
+                expected: 32,
+                call: |h| {
+                    let _ = encode_token_transfers_key(h);
+                },
+            },
+            FixedWidthCase {
+                encoder: "encode_token_hourly_key",
+                component: "type_hash",
+                expected: 32,
+                call: |h| {
+                    let _ = encode_token_hourly_key(h, 1);
+                },
+            },
+            FixedWidthCase {
+                encoder: "encode_token_hourly_prefix",
+                component: "type_hash",
+                expected: 32,
+                call: |h| {
+                    let _ = encode_token_hourly_prefix(h);
+                },
+            },
+            FixedWidthCase {
+                encoder: "encode_token_daily_key",
+                component: "type_hash",
+                expected: 32,
+                call: |h| {
+                    let _ = encode_token_daily_key(h, 20240101);
+                },
+            },
+            FixedWidthCase {
+                encoder: "encode_token_daily_prefix",
+                component: "type_hash",
+                expected: 32,
+                call: |h| {
+                    let _ = encode_token_daily_prefix(h);
+                },
+            },
+            FixedWidthCase {
+                encoder: "encode_token_transfer_key",
+                component: "type_hash",
+                expected: 32,
+                call: |h| {
+                    let _ = encode_token_transfer_key(h, 1, 0);
+                },
+            },
+            FixedWidthCase {
+                encoder: "encode_cluster_daily_key",
+                component: "cluster_id",
+                expected: 32,
+                call: |h| {
+                    let _ = encode_cluster_daily_key(h, 20240101);
+                },
+            },
+            FixedWidthCase {
+                encoder: "encode_cluster_daily_prefix",
+                component: "cluster_id",
+                expected: 32,
+                call: |h| {
+                    let _ = encode_cluster_daily_prefix(h);
+                },
+            },
+            FixedWidthCase {
+                encoder: "encode_cluster_owner_key",
+                component: "cluster_id",
+                expected: 32,
+                call: |h| {
+                    let _ = encode_cluster_owner_key(h, &H);
+                },
+            },
+            FixedWidthCase {
+                encoder: "encode_cluster_owner_key",
+                component: "lock_hash",
+                expected: 32,
+                call: |h| {
+                    let _ = encode_cluster_owner_key(&H, h);
+                },
+            },
+            FixedWidthCase {
+                encoder: "encode_cluster_owner_prefix",
+                component: "cluster_id",
+                expected: 32,
+                call: |h| {
+                    let _ = encode_cluster_owner_prefix(h);
+                },
+            },
+            FixedWidthCase {
+                encoder: "encode_spore_by_cluster_key",
+                component: "cluster_id",
+                expected: 32,
+                call: |h| {
+                    let _ = encode_spore_by_cluster_key(h, &H);
+                },
+            },
+            FixedWidthCase {
+                encoder: "encode_spore_by_cluster_key",
+                component: "spore_id",
+                expected: 32,
+                call: |h| {
+                    let _ = encode_spore_by_cluster_key(&H, h);
+                },
+            },
+            FixedWidthCase {
+                encoder: "encode_spore_daily_key",
+                component: "spore_id",
+                expected: 32,
+                call: |h| {
+                    let _ = encode_spore_daily_key(h, 20240101);
+                },
+            },
+            FixedWidthCase {
+                encoder: "encode_spore_daily_prefix",
+                component: "spore_id",
+                expected: 32,
+                call: |h| {
+                    let _ = encode_spore_daily_prefix(h);
+                },
+            },
+            FixedWidthCase {
+                encoder: "encode_spore_outpoint_by_id_key",
+                component: "spore_id",
+                expected: 32,
+                call: |h| {
+                    let _ = encode_spore_outpoint_by_id_key(h, &H, 0);
+                },
+            },
+            FixedWidthCase {
+                encoder: "encode_spore_outpoint_by_id_prefix",
+                component: "spore_id",
+                expected: 32,
+                call: |h| {
+                    let _ = encode_spore_outpoint_by_id_prefix(h);
+                },
+            },
+            FixedWidthCase {
+                encoder: "encode_spore_type_index_key",
+                component: "type_script_hash",
+                expected: 32,
+                call: |h| {
+                    let _ = encode_spore_type_index_key(h);
+                },
+            },
+            FixedWidthCase {
+                encoder: "encode_object_type_index_key",
+                component: "type_script_hash",
+                expected: 32,
+                call: |h| {
+                    let _ = encode_object_type_index_key(h);
+                },
+            },
+            FixedWidthCase {
+                encoder: "encode_object_collection_owner_key",
+                component: "lock_hash",
+                expected: 32,
+                call: |h| {
+                    let _ = encode_object_collection_owner_key(&H, h);
+                },
+            },
+            FixedWidthCase {
+                encoder: "encode_identity_owner_key",
+                component: "lock_hash",
+                expected: 32,
+                call: |h| {
+                    let _ = encode_identity_owner_key(&H, h);
+                },
+            },
+            FixedWidthCase {
+                encoder: "encode_dotbit_outpoint_by_account_id_key",
+                component: "account_id",
+                expected: 20,
+                call: |h| {
+                    let _ = encode_dotbit_outpoint_by_account_id_key(h, &H, 0);
+                },
+            },
+            FixedWidthCase {
+                encoder: "encode_dotbit_outpoint_by_account_id_prefix",
+                component: "account_id",
+                expected: 20,
+                call: |h| {
+                    let _ = encode_dotbit_outpoint_by_account_id_prefix(h);
+                },
+            },
+            FixedWidthCase {
+                encoder: "encode_script_daily_key",
+                component: "code_hash",
+                expected: 32,
+                call: |h| {
+                    let _ = encode_script_daily_key(h, 1, false, 20240101);
+                },
+            },
+            FixedWidthCase {
+                encoder: "encode_script_daily_prefix",
+                component: "code_hash",
+                expected: 32,
+                call: |h| {
+                    let _ = encode_script_daily_prefix(h, 1, false);
+                },
+            },
+            FixedWidthCase {
+                encoder: "encode_script_daily_code_hash_prefix",
+                component: "code_hash",
+                expected: 32,
+                call: |h| {
+                    let _ = encode_script_daily_code_hash_prefix(h);
+                },
+            },
+            FixedWidthCase {
+                encoder: "encode_tx_actions_key",
+                component: "tx_hash",
+                expected: 32,
+                call: |h| {
+                    let _ = encode_tx_actions_key(1, 0, h);
+                },
+            },
+            FixedWidthCase {
+                encoder: "encode_object_collection_activity_key",
+                component: "block_hash",
+                expected: 32,
+                call: |h| {
+                    let _ = encode_object_collection_activity_key(&H, 1, 0, h, &H);
+                },
+            },
+            FixedWidthCase {
+                encoder: "encode_object_collection_activity_key",
+                component: "tx_hash",
+                expected: 32,
+                call: |h| {
+                    let _ = encode_object_collection_activity_key(&H, 1, 0, &H, h);
+                },
+            },
+            FixedWidthCase {
+                encoder: "encode_fiber_channel_id",
+                component: "funding_tx_hash",
+                expected: 32,
+                call: |h| {
+                    let _ = encode_fiber_channel_id(h, 0);
+                },
+            },
+            FixedWidthCase {
+                encoder: "encode_fiber_outpoint",
+                component: "tx_hash",
+                expected: 32,
+                call: |h| {
+                    let _ = encode_fiber_outpoint(h, 0);
+                },
+            },
+            FixedWidthCase {
+                encoder: "encode_addr_fiber_channel_key",
+                component: "lock_hash",
+                expected: 32,
+                call: |h| {
+                    let _ = encode_addr_fiber_channel_key(h, &H);
+                },
+            },
+            FixedWidthCase {
+                encoder: "encode_addr_fiber_channel_key",
+                component: "channel_id",
+                expected: 32,
+                call: |h| {
+                    let _ = encode_addr_fiber_channel_key(&H, h);
+                },
+            },
+        ]
+    }
+
+    /// The regression this hardening exists for: an over-long identifier used
+    /// to be truncated into its window, producing a key that belongs to a
+    /// different entity. Every fixed-width slot must reject it instead.
+    #[test]
+    fn test_every_fixed_width_encoder_rejects_oversized_identifier() {
+        for case in fixed_width_cases() {
+            let oversized = vec![0x9B; case.expected + 1];
+            let message = encoder_panic_message(|| (case.call)(&oversized)).unwrap_or_else(|| {
+                panic!(
+                    "{}: {} of {} bytes was accepted and silently truncated into the {}-byte window",
+                    case.encoder,
+                    case.component,
+                    case.expected + 1,
+                    case.expected
+                )
+            });
+            let expected = format!(
+                "{}: {} must be exactly {} bytes, got {}",
+                case.encoder,
+                case.component,
+                case.expected,
+                case.expected + 1
+            );
+            assert!(
+                message.contains(&expected),
+                "{} must fail actionably on an oversized {}: expected a message containing {:?}, got {:?}",
+                case.encoder,
+                case.component,
+                expected,
+                message
+            );
+        }
+    }
+
+    /// A short identifier used to die as an uncontextual slice-index panic
+    /// naming no field. It must now name the encoder, the component and both
+    /// lengths so an operator can locate the upstream caller.
+    #[test]
+    fn test_every_fixed_width_encoder_rejects_undersized_identifier() {
+        for case in fixed_width_cases() {
+            let undersized = vec![0x9B; case.expected - 1];
+            let message = encoder_panic_message(|| (case.call)(&undersized)).unwrap_or_else(|| {
+                panic!(
+                    "{}: {} of {} bytes was accepted into the {}-byte window",
+                    case.encoder,
+                    case.component,
+                    case.expected - 1,
+                    case.expected
+                )
+            });
+            let expected = format!(
+                "{}: {} must be exactly {} bytes, got {}",
+                case.encoder,
+                case.component,
+                case.expected,
+                case.expected - 1
+            );
+            assert!(
+                message.contains(&expected),
+                "{} must fail actionably on an undersized {}: expected a message containing {:?}, got {:?}",
+                case.encoder,
+                case.component,
+                expected,
+                message
+            );
+        }
+    }
+
+    /// The asserts must not reject their own valid inputs.
+    #[test]
+    fn test_every_fixed_width_encoder_accepts_exact_identifier() {
+        for case in fixed_width_cases() {
+            let exact = vec![0x9B; case.expected];
+            if let Some(message) = encoder_panic_message(|| (case.call)(&exact)) {
+                panic!(
+                    "{} rejected a valid {}-byte {}: {}",
+                    case.encoder, case.expected, case.component, message
+                );
+            }
+        }
+    }
+
+    /// Pin the exact aliasing the sweep prevents: a 33-byte script hash must
+    /// not produce the key its 32-byte prefix produces.
+    #[test]
+    fn test_oversized_identifier_never_aliases_its_32_byte_prefix() {
+        let prefix = [0x9B; 32];
+        let mut oversized = prefix.to_vec();
+        oversized.push(0xFF);
+
+        let tx_hash = [0xAB; 32];
+        let prefix_key = encode_cell_index_key(&prefix, 7, &tx_hash, 1);
+
+        let message = encoder_panic_message(|| {
+            let _ = encode_cell_index_key(&oversized, 7, &tx_hash, 1);
+        })
+        .expect("a 33-byte script_hash must be rejected, not truncated to its 32-byte prefix");
+        assert!(
+            message.contains("encode_cell_index_key: script_hash must be exactly 32 bytes, got 33"),
+            "unexpected panic message: {message}"
+        );
+
+        // The 32-byte form is still the only way to reach that key range.
+        assert_eq!(prefix_key.len(), 74);
+        assert_eq!(&prefix_key[..32], &prefix);
+    }
+
+    /// Encoders that delegate their outpoint window to [`encode_outpoint`]
+    /// inherit the invariant, and the message names the encoder that owns it.
+    #[test]
+    fn test_delegating_outpoint_encoders_propagate_the_tx_hash_invariant() {
+        let delegating: Vec<(&str, EncoderCall)> = vec![
+            ("encode_block_outpoint_key", |h| {
+                let _ = encode_block_outpoint_key(1, h, 0);
+            }),
+            ("encode_spore_outpoint_key", |h| {
+                let _ = encode_spore_outpoint_key(h, 0);
+            }),
+            ("encode_mnft_class_outpoint_key", |h| {
+                let _ = encode_mnft_class_outpoint_key(h, 0);
+            }),
+            ("encode_mnft_token_outpoint_key", |h| {
+                let _ = encode_mnft_token_outpoint_key(h, 0);
+            }),
+            ("encode_dotbit_account_outpoint_key", |h| {
+                let _ = encode_dotbit_account_outpoint_key(h, 0);
+            }),
+        ];
+
+        for (name, call) in delegating {
+            let message = encoder_panic_message(|| call(&[0x9B; 33]))
+                .unwrap_or_else(|| panic!("{name} accepted a 33-byte tx_hash"));
+            assert!(
+                message.contains("encode_outpoint: tx_hash must be exactly 32 bytes, got 33"),
+                "{name} must surface the outpoint invariant, got {message:?}"
+            );
+        }
+    }
+
+    /// Guard the other half: identifiers that are legitimately narrower than
+    /// the 32-byte window keep working. Hardening these into exact-32 asserts
+    /// would break mNFT and `.bit` sync outright.
+    #[test]
+    fn test_padded_encoders_still_accept_their_variable_width_ids() {
+        let mnft_class_id = [0xC1u8; 24];
+        let mnft_token_id = [0xC2u8; 28];
+        let dotbit_account_id = [0xC3u8; 20];
+        let lock_hash = [0xD0u8; 32];
+
+        assert_eq!(encode_object_daily_key(&mnft_class_id, 20240101).len(), 37);
+        assert_eq!(encode_object_daily_prefix(&mnft_class_id).len(), 33);
+        assert_eq!(encode_object_hourly_key(&mnft_class_id, 7).len(), 41);
+        assert_eq!(encode_object_hourly_prefix(&mnft_class_id).len(), 33);
+        assert_eq!(encode_spore_hourly_key(&dotbit_account_id, 7).len(), 41);
+        assert_eq!(encode_spore_hourly_prefix(&dotbit_account_id).len(), 33);
+        assert_eq!(
+            encode_object_collection_owner_key(&mnft_class_id, &lock_hash).len(),
+            OBJECT_COLLECTION_OWNER_KEY_SIZE
+        );
+        assert_eq!(
+            encode_object_collection_owner_prefix(&mnft_class_id).len(),
+            33
+        );
+        assert_eq!(
+            encode_identity_owner_key(&dotbit_account_id, &lock_hash).len(),
+            IDENTITY_OWNER_KEY_SIZE
+        );
+        assert_eq!(encode_identity_owner_prefix(&dotbit_account_id).len(), 32);
+        assert_eq!(
+            encode_object_by_collection_key(&mnft_class_id, &mnft_token_id).len(),
+            32 + mnft_token_id.len()
+        );
+        assert_eq!(
+            encode_identity_by_collection_key(&mnft_class_id, &dotbit_account_id).len(),
+            32 + dotbit_account_id.len()
+        );
+        assert_eq!(
+            encode_object_collection_activity_key(&mnft_class_id, 1, 0, &[0xE1; 32], &[0xE2; 32])
+                .len(),
+            OBJECT_COLLECTION_ACTIVITY_KEY_SIZE
+        );
+        assert_eq!(
+            encode_object_collection_activity_prefix(&mnft_class_id).len(),
+            32
+        );
+        assert_eq!(
+            encode_object_collection_activity_seek_after_key(&mnft_class_id, 1, 0).len(),
+            OBJECT_COLLECTION_ACTIVITY_KEY_SIZE
+        );
+
+        // `.bit` account IDs are 20 bytes by protocol, not a truncated hash.
+        assert_eq!(
+            encode_dotbit_outpoint_by_account_id_key(&dotbit_account_id, &[0xE3; 32], 0).len(),
+            DOTBIT_OUTPOINT_BY_ACCOUNT_ID_KEY_SIZE
+        );
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "encode_cell_index_key: script_hash must be exactly 32 bytes, got 33"
+    )]
+    fn test_cell_index_key_rejects_oversized_script_hash() {
+        let _ = encode_cell_index_key(&[0x9B; 33], 1, &[0xAB; 32], 0);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "encode_cell_index_key: script_hash must be exactly 32 bytes, got 31"
+    )]
+    fn test_cell_index_key_rejects_undersized_script_hash() {
+        let _ = encode_cell_index_key(&[0x9B; 31], 1, &[0xAB; 32], 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "encode_cell_index_key: tx_hash must be exactly 32 bytes, got 33")]
+    fn test_cell_index_key_rejects_oversized_tx_hash() {
+        let _ = encode_cell_index_key(&[0x9B; 32], 1, &[0xAB; 33], 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "encode_outpoint: tx_hash must be exactly 32 bytes, got 33")]
+    fn test_outpoint_rejects_oversized_tx_hash() {
+        let _ = encode_outpoint(&[0x9B; 33], 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "encode_outpoint: tx_hash must be exactly 32 bytes, got 31")]
+    fn test_outpoint_rejects_undersized_tx_hash() {
+        let _ = encode_outpoint(&[0x9B; 31], 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "encode_addr_tx_key: lock_hash must be exactly 32 bytes, got 33")]
+    fn test_addr_tx_key_rejects_oversized_lock_hash() {
+        let _ = encode_addr_tx_key(&[0x9B; 33], 1, 0, &[0xAB; 32]);
+    }
+
+    #[test]
+    #[should_panic(expected = "encode_addr_tx_key: tx_hash must be exactly 32 bytes, got 33")]
+    fn test_addr_tx_key_rejects_oversized_tx_hash() {
+        let _ = encode_addr_tx_key(&[0x9B; 32], 1, 0, &[0xAB; 33]);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "encode_token_holder_balance_key: type_hash must be exactly 32 bytes, got 33"
+    )]
+    fn test_token_holder_balance_key_rejects_oversized_type_hash() {
+        let _ =
+            encode_token_holder_balance_key(&[0x9B; 33], &TokenBalance::from(1u128), &[0xAB; 32]);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "encode_object_collection_activity_key: block_hash must be exactly 32 bytes, got 33"
+    )]
+    fn test_object_collection_activity_key_rejects_oversized_block_hash() {
+        let _ = encode_object_collection_activity_key(&[0xAA; 32], 1, 0, &[0x9B; 33], &[0xAB; 32]);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "encode_dotbit_outpoint_by_account_id_key: account_id must be exactly 20 bytes, got 21"
+    )]
+    fn test_dotbit_outpoint_by_account_id_key_rejects_oversized_account_id() {
+        let _ = encode_dotbit_outpoint_by_account_id_key(&[0x9B; 21], &[0xAB; 32], 0);
     }
 }
