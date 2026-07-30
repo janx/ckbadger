@@ -20,6 +20,7 @@ import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { CapacityStatisticsSection } from '@/components/ui/capacity-statistics-section';
 import { api, TokenHolder, TokenActivity, TokenTransferDetail } from '@/lib/api';
+import { RAW_AMOUNT_TITLE, splitTokenAmount } from '@/lib/format-asset';
 import { getCapacityRangeParams, CapacityRangeKey } from '@/lib/capacity-range';
 import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
 import { formatTimeAgo, formatNumber } from '@/lib/utils';
@@ -73,31 +74,18 @@ export default function TokenDetailPage({ typeHash }: TokenDetailPageProps) {
         : api.getTokenCapacityChart(typeHash),
     enabled: !!token,
   });
-  // decimals === null means unknown (no label, no on-chain info cell): show
-  // the raw base-unit integer — never assume 0.
-  const formatTokenAmount = (amount: string, decimals: number | null) => {
-    const num = BigInt(amount);
-    if (decimals == null || decimals === 0) {
-      return { integer: num.toLocaleString('en-US'), decimal: '' };
-    }
-    const divisor = BigInt(10 ** decimals);
-    const whole = num / divisor;
-    const remainder = num % divisor;
-    const integer = whole.toLocaleString('en-US');
-    const decimal = remainder.toString().padStart(decimals, '0');
-    return { integer, decimal };
-  };
+  // Full declared precision: unlike the compact renderers, the token detail page
+  // keeps the fraction's trailing zeros, so it consumes the shared split rather
+  // than the trimmed string. `decimals === null` means unknown (no label, no
+  // on-chain info cell): the raw base-unit integer is shown — never assume 0.
   const TokenAmount = ({ amount, decimals }: { amount: string; decimals: number | null }) => {
-    const { integer, decimal } = formatTokenAmount(amount, decimals);
+    const { integer, fraction } = splitTokenAmount(amount, decimals);
     return (
       <span className="font-mono tabular-nums">
         <span>{integer}</span>
-        {decimal && <span className="text-emphasis-dim text-[0.85em]">.{decimal}</span>}
+        {fraction && <span className="text-emphasis-dim text-[0.85em]">.{fraction}</span>}
         {decimals == null && (
-          <span
-            className="text-text-dim ml-1 text-[0.7em] uppercase"
-            title="Token decimals unknown — raw base-unit amount"
-          >
+          <span className="text-text-dim ml-1 text-[0.7em] uppercase" title={RAW_AMOUNT_TITLE}>
             raw
           </span>
         )}
@@ -137,8 +125,8 @@ export default function TokenDetailPage({ typeHash }: TokenDetailPageProps) {
   }
   // Stat-block amounts: raw base-unit + "(raw)" suffix when decimals unknown.
   const formatAmountStat = (amount: string) => {
-    const { integer, decimal } = formatTokenAmount(amount, token.decimals);
-    const base = decimal ? `${integer}.${decimal}` : integer;
+    const { integer, fraction } = splitTokenAmount(amount, token.decimals);
+    const base = fraction ? `${integer}.${fraction}` : integer;
     return token.decimals == null ? `${base} (raw)` : base;
   };
   return (

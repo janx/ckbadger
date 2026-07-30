@@ -323,6 +323,25 @@ describe('Tokens Inventory Page', () => {
     });
   });
 
+  it('scales total supply exactly for decimals beyond double precision', async () => {
+    // decimals is the raw, unvalidated first byte of the xUDT Unique Cell, so
+    // >= 23 is reachable. A BigInt(10 ** 24) divisor rendered 10^24 base units
+    // as "1.000000000000000016777216".
+    vi.mocked(api.getAssets).mockResolvedValue({
+      ...mockTokenAssets,
+      data: [
+        { ...mockTokenAssets.data[0], decimals: 24, totalSupply: '1000000000000000000000000' },
+      ],
+    });
+
+    render(<TokensPage />);
+
+    await waitFor(() => {
+      expect(screen.getAllByTitle('Total Circulation: 1').length).toBeGreaterThan(0);
+    });
+    expect(screen.queryByText(/1\.000000000000000016777216/)).toBeNull();
+  });
+
   it('does not mark total supply for genuine 0-decimals tokens', async () => {
     vi.mocked(api.getAssets).mockResolvedValue({
       ...mockTokenAssets,

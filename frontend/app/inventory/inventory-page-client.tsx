@@ -17,7 +17,7 @@ import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { HMulHelpPopover } from '@/components/ui/hmul-info';
 import { compositionTierCardStyle } from '@/components/object/storage-tier';
-import { RAW_AMOUNT_TITLE } from '@/lib/format-asset';
+import { formatTokenBalanceWithRawMarker, RAW_AMOUNT_TITLE } from '@/lib/format-asset';
 import { api, Asset } from '@/lib/api';
 import {
   getClusterDetailHref,
@@ -126,28 +126,6 @@ function formatStandardLabel(standard: string): string {
     default:
       return standard.toUpperCase();
   }
-}
-/**
- * `decimals: null` means unknown (no label, no on-chain info cell): the raw
- * base-unit integer is shown with an explicit "(raw)" marker so it can never
- * be mistaken for a real 0-decimals amount.
- */
-function formatTokenSupply(totalSupply: string | null, decimals: number | null): string | null {
-  if (!totalSupply) return null;
-  if (decimals == null) {
-    return `${new Intl.NumberFormat().format(BigInt(totalSupply))} (raw)`;
-  }
-  if (decimals === 0) {
-    return new Intl.NumberFormat().format(BigInt(totalSupply));
-  }
-  const num = BigInt(totalSupply);
-  const divisor = BigInt(10 ** decimals);
-  const integer = (num / divisor).toString();
-  const remainder = num % divisor;
-  const formatted = new Intl.NumberFormat().format(BigInt(integer));
-  if (remainder === BigInt(0)) return formatted;
-  const decimal = remainder.toString().padStart(decimals, '0').replace(/0+$/, '');
-  return `${formatted}.${decimal}`;
 }
 function getStandardOptions(assetType: AssetType, selectedStandard?: string) {
   const options =
@@ -424,7 +402,13 @@ function InventoryTable({
                 className={`${capacityColumnClass} text-text-bright hidden font-mono tabular-nums xl:block`}
               >
                 {(() => {
-                  const formatted = formatTokenSupply(asset.totalSupply, asset.decimals);
+                  // `decimals: null` means unknown (no label, no on-chain info
+                  // cell): the shared helper renders the raw base-unit integer
+                  // with an explicit "(raw)" marker so it can never be mistaken
+                  // for a real 0-decimals amount.
+                  const formatted = asset.totalSupply
+                    ? formatTokenBalanceWithRawMarker(asset.totalSupply, asset.decimals)
+                    : null;
                   return formatted ? (
                     <span
                       className="block truncate"

@@ -248,4 +248,26 @@ describe('TokenDetailPage', () => {
     });
     expect(screen.getAllByTitle(/decimals unknown/i).length).toBeGreaterThan(0);
   });
+
+  it('scales amounts exactly for decimals beyond double precision', async () => {
+    // decimals is the raw, unvalidated first byte of the xUDT Unique Cell, so
+    // >= 23 is reachable. A BigInt(10 ** 24) divisor rendered 10^24 base units
+    // as "1.000000000000000016777216".
+    vi.mocked(api.getToken).mockResolvedValue({
+      ...mockToken,
+      decimals: 24,
+      totalSupply: '1000000000000000000000000',
+    });
+
+    render(
+      <TokenDetailPage typeHash="0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef" />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('TEST')).toBeInTheDocument();
+    });
+
+    expect(screen.getByText('1.000000000000000000000000')).toBeInTheDocument();
+    expect(screen.queryByText('1.000000000000000016777216')).toBeNull();
+  });
 });

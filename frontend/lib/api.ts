@@ -75,6 +75,17 @@ export function isNetworkInitializingError(error: unknown): error is ApiRequestE
   return candidate.code === 'initializing' && candidate.status === 503;
 }
 
+/**
+ * "The resource does not exist", read from the HTTP status the API answered
+ * with — never from the rendered message text, which is prose and changes.
+ */
+export function isNotFoundApiError(error: unknown): error is ApiRequestError {
+  if (!error || typeof error !== 'object') {
+    return false;
+  }
+  return (error as Partial<ApiRequestError>).status === 404;
+}
+
 interface PaginatedResponse<T> {
   data: T[];
   total: number;

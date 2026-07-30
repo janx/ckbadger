@@ -39,6 +39,77 @@ export function getIdentityCollectionHref(standard: string, collectionId: string
   return `/identities/${encodeURIComponent(collectionId)}`;
 }
 
+/** Sentinel collection IDs the indexer assigns to the identity standards. */
+export const DOTBIT_COLLECTION_ID =
+  '0x646f746269745f636f6c6c656374696f6e5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f';
+export const DID_CKB_COLLECTION_ID =
+  '0x6469645f636b625f636f6c6c656374696f6e5f5f5f5f5f5f5f5f5f5f5f5f5f5f';
+
+export function isDotbitCollectionAlias(value: string): boolean {
+  const normalized = value.trim().toLowerCase();
+  return normalized === 'dotbit' || normalized === '.bit' || normalized === DOTBIT_COLLECTION_ID;
+}
+
+export function isDidCkbCollectionAlias(value: string): boolean {
+  const normalized = value.trim().toLowerCase();
+  return (
+    normalized === 'did:ckb' || normalized === 'did_ckb' || normalized === DID_CKB_COLLECTION_ID
+  );
+}
+
+/**
+ * Byte widths of the identifier classes that can arrive at `/objects/{id}`.
+ * They do not overlap, so which resource an identifier denotes is a property of
+ * the identifier itself and must never be inferred from an endpoint's error
+ * status.
+ */
+const SPORE_OBJECT_ID_BYTES = 32;
+/** mNFT class ID: 20-byte issuer ID + 4-byte class index (parser/mnft.rs). */
+const MNFT_CLASS_ID_BYTES = 24;
+
+export type ObjectRouteTarget =
+  /** The identifier belongs to another page; send the user there. */
+  | { kind: 'redirect'; href: string }
+  /** A 32-byte ID: a Spore object, or a 32-byte object/identity collection. */
+  | { kind: 'spore-object'; assetId: string }
+  /** No object route owns this identifier. */
+  | { kind: 'unroutable' };
+
+/** Byte length of a hex identifier, or null when it is not whole-byte hex. */
+function hexByteLength(value: string): number | null {
+  const body = value.startsWith('0x') || value.startsWith('0X') ? value.slice(2) : value;
+  if (body.length === 0 || body.length % 2 !== 0 || !/^[0-9a-f]+$/i.test(body)) {
+    return null;
+  }
+  return body.length / 2;
+}
+
+/**
+ * Resolve what an `/objects/{id}` identifier actually denotes, before any
+ * request is made. mNFT class IDs (24 bytes) and Spore object IDs (32 bytes)
+ * are distinguishable by width alone, so the page dispatches on the identifier
+ * instead of probing one endpoint and reading its failure as a routing signal.
+ */
+export function resolveObjectRouteTarget(rawAssetId: string): ObjectRouteTarget {
+  const assetId = rawAssetId.trim();
+  if (isDotbitCollectionAlias(assetId)) {
+    return { kind: 'redirect', href: getIdentityCollectionHref('dotbit', assetId) };
+  }
+  if (isDidCkbCollectionAlias(assetId)) {
+    return { kind: 'redirect', href: getIdentityCollectionHref('did:ckb', assetId) };
+  }
+  switch (hexByteLength(assetId)) {
+    case MNFT_CLASS_ID_BYTES: {
+      const canonical = `0x${assetId.replace(/^0x/i, '').toLowerCase()}`;
+      return { kind: 'redirect', href: getMnftClassDetailHref(canonical) };
+    }
+    case SPORE_OBJECT_ID_BYTES:
+      return { kind: 'spore-object', assetId };
+    default:
+      return { kind: 'unroutable' };
+  }
+}
+
 export function getIdentityItemDetailHref(standard: string, identityId: string): string {
   if (standard === 'dotbit') return `/identities/dotbit/${encodeURIComponent(identityId)}`;
   if (standard === 'did_ckb' || standard === 'did:ckb')
