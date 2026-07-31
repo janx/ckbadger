@@ -260,6 +260,97 @@ impl CkbadgerStore {
         Ok(results)
     }
 
+    /// List UTC+8 daily miner rows in the inclusive `YYYYMMDD` range.
+    ///
+    /// The date remains part of the key rather than the value, so range
+    /// filtering belongs here in the store's single read path. Every row is
+    /// checked against the key's miner hash to surface corrupted aggregates
+    /// instead of silently attributing blocks to the serialized value.
+    pub fn list_miner_stats_in_date_range(
+        &self,
+        from_yyyymmdd: &str,
+        to_yyyymmdd: &str,
+    ) -> anyhow::Result<Vec<MinerStats>> {
+        let parse_date = |value: &str, field: &str| {
+            let parsed = chrono::NaiveDate::parse_from_str(value, "%Y%m%d")
+                .map_err(|e| anyhow::anyhow!("invalid miner stats {} '{}': {}", field, value, e))?;
+            if parsed.format("%Y%m%d").to_string() != value {
+                anyhow::bail!(
+                    "non-canonical miner stats {} '{}': expected YYYYMMDD",
+                    field,
+                    value
+                );
+            }
+            Ok(parsed)
+        };
+        let from_date = parse_date(from_yyyymmdd, "from date")?;
+        let to_date = parse_date(to_yyyymmdd, "to date")?;
+        if from_date > to_date {
+            anyhow::bail!(
+                "invalid miner stats date range: from={} is after to={}",
+                from_yyyymmdd,
+                to_yyyymmdd
+            );
+        }
+
+        let start_key = keys::encode_stats_key(stats_prefix::MINER, from_yyyymmdd.as_bytes());
+        let iter = self.iterator_cf(
+            self.cf_stats_chain(),
+            rocksdb::IteratorMode::From(&start_key, rocksdb::Direction::Forward),
+        );
+        let mut results = Vec::new();
+
+        for item in iter {
+            let (key, value) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate stats_chain in list_miner_stats_in_date_range: {}",
+                    e
+                )
+            })?;
+            if key.first().copied() != Some(stats_prefix::MINER) {
+                break;
+            }
+            if key.len() != 1 + 8 + 32 {
+                anyhow::bail!(
+                    "invalid miner stats key length in date range: key=0x{}, len={}",
+                    bytes_to_hex(&key),
+                    key.len()
+                );
+            }
+            let date_bytes = &key[1..9];
+            let date_str = std::str::from_utf8(date_bytes).map_err(|error| {
+                anyhow::anyhow!(
+                    "invalid UTF-8 miner stats date in key: key=0x{}, error={}",
+                    bytes_to_hex(&key),
+                    error
+                )
+            })?;
+            parse_date(date_str, "stored date")?;
+            if date_bytes > to_yyyymmdd.as_bytes() {
+                break;
+            }
+
+            let stats: MinerStats = bincode::deserialize(&value).map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to deserialize miner stats in date range: key=0x{}, error={}",
+                    bytes_to_hex(&key),
+                    e
+                )
+            })?;
+            let key_miner_hash = &key[9..41];
+            if stats.miner_lock_hash != key_miner_hash {
+                anyhow::bail!(
+                    "miner stats key/value hash mismatch: date={}, key_hash=0x{}, value_hash=0x{}",
+                    date_str,
+                    bytes_to_hex(key_miner_hash),
+                    bytes_to_hex(&stats.miner_lock_hash)
+                );
+            }
+            results.push(stats);
+        }
+        Ok(results)
+    }
+
     // ---- Daily block stats ----
 
     pub fn get_daily_block_stats(&self, date: &str) -> anyhow::Result<Option<DailyBlockStats>> {

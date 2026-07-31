@@ -321,6 +321,7 @@ pub struct DaoDailySnapshot {
     pub depositors_count: i64,
     pub new_deposits: i64,
     pub withdrawals: i64,
+    /// Cumulative DAO compensation claimed by completed phase-2 withdrawals.
     pub compensation: i128,
     /// Cumulative gross deposit amount (sum of all deposit capacities, never
     /// decreased by withdrawals). Used to compute daily gross deposits via

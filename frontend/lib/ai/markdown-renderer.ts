@@ -346,14 +346,17 @@ function renderMinerDistribution(chart: MinerDistributionResponse): string {
     `## ${chart.title}`,
     '',
     markdownTable(
-      ['address', 'minerName', 'blocksMined', 'percentage'],
+      ['minerLockHash', 'address', 'minerName', 'blocksMined', 'percentage'],
       chart.data.map((miner) => [
-        hashShort(miner.address),
+        hashShort(miner.minerLockHash),
+        miner.address ?? '-',
         miner.minerName ?? '-',
         miner.blocksMined,
         miner.percentage,
       ])
     ),
+    '',
+    `Window: ${chart.fromDate}–${chart.toDate} (${chart.windowDays} complete UTC+8 days)`,
     '',
     `Total blocks: ${chart.totalBlocks}`,
   ].join('\n');

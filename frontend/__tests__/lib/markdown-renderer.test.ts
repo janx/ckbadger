@@ -160,8 +160,12 @@ describe('renderMarkdownPage', () => {
     vi.mocked(api.getMinerAddressDistributionChart).mockResolvedValue({
       title: 'Miner Distribution',
       totalBlocks: 100,
+      windowDays: 7,
+      fromDate: '2026-07-23',
+      toDate: '2026-07-29',
       data: [
         {
+          minerLockHash: `0x${'d'.repeat(64)}`,
           address: `0x${'d'.repeat(64)}`,
           minerName: 'ExampleMiner',
           blocksMined: 42,

@@ -21,6 +21,7 @@ use crate::response::{
 };
 use crate::utils::{
     apply_owned_capacity_delta, dao_supply, dao_treasury, format_duration, hash_type_to_string,
+    script_to_address,
 };
 use crate::warmup::CACHE_KEY_SCRIPTS_ALL;
 use crate::AppState;
@@ -2615,7 +2616,8 @@ async fn get_uncle_rate_chart(State(state): State<Arc<AppState>>) -> ApiResult<C
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MinerDistributionDataPoint {
-    pub address: String,
+    pub miner_lock_hash: String,
+    pub address: Option<String>,
     pub miner_name: Option<String>,
     pub blocks_mined: i64,
     pub percentage: String,
@@ -2627,65 +2629,172 @@ pub struct MinerDistributionResponse {
     pub data: Vec<MinerDistributionDataPoint>,
     pub title: String,
     pub total_blocks: i64,
+    pub window_days: i64,
+    pub from_date: String,
+    pub to_date: String,
+}
+
+const MINER_DISTRIBUTION_WINDOW_DAYS: i64 = 7;
+
+fn format_exact_percentage_4(
+    numerator: i128,
+    denominator: i128,
+    context: &str,
+) -> Result<String, ApiRouteError> {
+    if numerator < 0 || denominator <= 0 {
+        return Err(ApiError::internal(format!(
+            "invalid percentage operands for {}: numerator={}, denominator={}",
+            context, numerator, denominator
+        )));
+    }
+    let scaled = numerator.checked_mul(1_000_000).ok_or_else(|| {
+        ApiError::internal(format!(
+            "percentage scaling overflow for {}: numerator={}",
+            context, numerator
+        ))
+    })? / denominator;
+    Ok(format!("{}.{:04}", scaled / 10_000, scaled % 10_000))
+}
+
+fn build_miner_distribution_response(
+    miner_stats: Vec<ckbadger_store::MinerStats>,
+    addresses: HashMap<Vec<u8>, String>,
+    from_date: chrono::NaiveDate,
+    to_date: chrono::NaiveDate,
+) -> Result<MinerDistributionResponse, ApiRouteError> {
+    let mut aggregated: HashMap<Vec<u8>, i64> = HashMap::new();
+    for stats in miner_stats {
+        if stats.miner_lock_hash.len() != 32 {
+            return Err(ApiError::internal(format!(
+                "invalid miner lock hash length in miner stats: hash=0x{}, len={}",
+                hex::encode(&stats.miner_lock_hash),
+                stats.miner_lock_hash.len()
+            )));
+        }
+        if stats.blocks_count <= 0 {
+            return Err(ApiError::internal(format!(
+                "non-positive miner block count in miner stats: hash=0x{}, blocks_count={}",
+                hex::encode(&stats.miner_lock_hash),
+                stats.blocks_count
+            )));
+        }
+        let current = aggregated.entry(stats.miner_lock_hash.clone()).or_default();
+        *current = current
+            .checked_add(i64::from(stats.blocks_count))
+            .ok_or_else(|| {
+                ApiError::internal(format!(
+                    "miner block count overflow: hash=0x{}, current={}, delta={}",
+                    hex::encode(&stats.miner_lock_hash),
+                    current,
+                    stats.blocks_count
+                ))
+            })?;
+    }
+
+    let total_blocks = aggregated.values().try_fold(0_i64, |total, blocks| {
+        total.checked_add(*blocks).ok_or_else(|| {
+            ApiError::internal(format!(
+                "total miner block count overflow: current={}, delta={}",
+                total, blocks
+            ))
+        })
+    })?;
+
+    let mut sorted: Vec<(Vec<u8>, i64)> = aggregated.into_iter().collect();
+    sorted.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    sorted.truncate(100);
+
+    let data = if total_blocks == 0 {
+        Vec::new()
+    } else {
+        sorted
+            .into_iter()
+            .map(|(hash, blocks_mined)| {
+                Ok(MinerDistributionDataPoint {
+                    miner_lock_hash: format!("0x{}", hex::encode(&hash)),
+                    address: addresses.get(&hash).cloned(),
+                    miner_name: None,
+                    blocks_mined,
+                    percentage: format_exact_percentage_4(
+                        i128::from(blocks_mined),
+                        i128::from(total_blocks),
+                        &format!("miner 0x{}", hex::encode(&hash)),
+                    )?,
+                })
+            })
+            .collect::<Result<Vec<_>, ApiRouteError>>()?
+    };
+
+    Ok(MinerDistributionResponse {
+        data,
+        title: format!(
+            "Miner Distribution (Last {} Complete Days, UTC+8)",
+            MINER_DISTRIBUTION_WINDOW_DAYS
+        ),
+        total_blocks,
+        window_days: MINER_DISTRIBUTION_WINDOW_DAYS,
+        from_date: from_date.format("%Y-%m-%d").to_string(),
+        to_date: to_date.format("%Y-%m-%d").to_string(),
+    })
 }
 
 async fn get_miner_address_distribution_chart(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<MinerDistributionResponse> {
-    let cache_key = "chart:miner-address-distribution";
+    let utc8 = chrono::FixedOffset::east_opt(ckbadger_common::CKB_UTC8_OFFSET)
+        .ok_or_else(|| ApiError::internal("invalid CKB UTC+8 offset"))?;
+    let to_date = Utc::now().with_timezone(&utc8).date_naive() - chrono::Duration::days(1);
+    let from_date = to_date - chrono::Duration::days(MINER_DISTRIBUTION_WINDOW_DAYS - 1);
+    let from_key = from_date.format("%Y%m%d").to_string();
+    let to_key = to_date.format("%Y%m%d").to_string();
+    let cache_key = format!(
+        "chart:miner-address-distribution:v2:{}:{}",
+        MINER_DISTRIBUTION_WINDOW_DAYS, to_key
+    );
     if let Some(cached) = state
         .cache
-        .get::<MinerDistributionResponse>(cache_key)
+        .get::<MinerDistributionResponse>(&cache_key)
         .await
     {
         return ok(cached);
     }
 
     let store = state.store.clone();
-    let miner_stats = tokio::task::spawn_blocking(move || store.list_miner_stats())
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-
-    // Aggregate by miner_lock_hash across all dates
-    let mut aggregated: std::collections::HashMap<Vec<u8>, i64> = std::collections::HashMap::new();
-    for ms in &miner_stats {
-        *aggregated.entry(ms.miner_lock_hash.clone()).or_insert(0) += ms.blocks_count as i64;
-    }
-
-    let total_blocks: i64 = aggregated.values().sum();
-    let total = total_blocks as f64;
-
-    // Sort by blocks descending and take top 100
-    let mut sorted: Vec<(Vec<u8>, i64)> = aggregated.into_iter().collect();
-    sorted.sort_by(|a, b| b.1.cmp(&a.1));
-    sorted.truncate(100);
-
-    let data: Vec<MinerDistributionDataPoint> = sorted
-        .into_iter()
-        .map(|(hash, blocks_mined)| {
-            let percentage = if total > 0.0 {
-                (blocks_mined as f64 / total) * 100.0
-            } else {
-                0.0
-            };
-            let address = format!("0x{}", hex::encode(&hash));
-            MinerDistributionDataPoint {
-                address,
-                miner_name: None,
-                blocks_mined,
-                percentage: format!("{:.4}", percentage),
+    let network = state.ckb_network.clone();
+    let (miner_stats, addresses) = tokio::task::spawn_blocking(move || {
+        let miner_stats = store.list_miner_stats_in_date_range(&from_key, &to_key)?;
+        let mut addresses = HashMap::new();
+        for stats in &miner_stats {
+            if addresses.contains_key(&stats.miner_lock_hash) {
+                continue;
             }
-        })
-        .collect();
+            let Some(script) = store.get_lock_script(&stats.miner_lock_hash)? else {
+                continue;
+            };
+            let address =
+                script_to_address(&script.code_hash, script.hash_type, &script.args, &network)
+                    .map_err(|error| {
+                        anyhow::anyhow!(
+                            "failed to encode miner address: lock_hash=0x{}, network={}, error={}",
+                            hex::encode(&stats.miner_lock_hash),
+                            network,
+                            error
+                        )
+                    })?;
+            addresses.insert(stats.miner_lock_hash.clone(), address);
+        }
+        anyhow::Ok((miner_stats, addresses))
+    })
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?
+    .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    let response = MinerDistributionResponse {
-        data,
-        title: "Miner Address Distribution".to_string(),
-        total_blocks,
-    };
+    let response = build_miner_distribution_response(miner_stats, addresses, from_date, to_date)?;
 
-    state.cache.set(cache_key, &response, CacheTtl::CHART).await;
+    state
+        .cache
+        .set(&cache_key, &response, CacheTtl::CHART)
+        .await;
 
     ok(response)
 }
@@ -2940,40 +3049,266 @@ async fn get_secondary_issuance_chart(
     ok(response)
 }
 
-async fn get_inflation_rate_chart(State(_state): State<Arc<AppState>>) -> ApiResult<ChartResponse> {
-    let data: Vec<ChartDataPoint> = (0..=100)
-        .map(|i| {
-            let year = i as f64 * 0.5;
-            let (nominal, real) = calculate_inflation_rates(year);
-            ChartDataPoint {
-                date: format!("{:.1}", year),
-                value: format!("{:.4}", nominal),
-                value2: Some(format!("{:.4}", real)),
-            }
-        })
-        .collect();
+const INFLATION_TRAILING_DAYS: i64 = 365;
 
-    ok(ChartResponse {
+fn inflation_rate_response(data: Vec<ChartDataPoint>) -> ChartResponse {
+    ChartResponse {
         data,
-        title: "Inflation Rate".to_string(),
+        title: format!(
+            "Realized Inflation Rate (Trailing {} Complete Days)",
+            INFLATION_TRAILING_DAYS
+        ),
         y_axis_label: "Nominal Inflation (%)".to_string(),
         y2_axis_label: Some("Real Inflation (%)".to_string()),
-    })
+    }
 }
 
-fn calculate_inflation_rates(year: f64) -> (f64, f64) {
-    const INITIAL_PRIMARY_RATE: f64 = 0.125;
-    const SECONDARY_RATE: f64 = 0.0134;
+fn snapshot_total_secondary_issuance(
+    snapshot: &ckbadger_store::DaoDailySnapshot,
+) -> Result<i128, ApiRouteError> {
+    if snapshot.cum_miner_secondary < 0 {
+        return Err(ApiError::internal(format!(
+            "negative cum_miner_secondary in dao_daily_snapshots for {}: {}",
+            snapshot.date, snapshot.cum_miner_secondary
+        )));
+    }
+    if snapshot.secondary_pool < 0 {
+        return Err(ApiError::internal(format!(
+            "negative secondary_pool in dao_daily_snapshots for {}: {}",
+            snapshot.date, snapshot.secondary_pool
+        )));
+    }
+    if snapshot.compensation < 0 {
+        return Err(ApiError::internal(format!(
+            "negative cumulative claimed compensation in dao_daily_snapshots for {}: {}",
+            snapshot.date, snapshot.compensation
+        )));
+    }
 
-    let halving_era = (year / 4.0).floor() as u32;
-    let primary_rate = INITIAL_PRIMARY_RATE / 2.0_f64.powi(halving_era as i32);
+    // RFC-0023's S field contains non-miner secondary issuance that has not
+    // yet been claimed. Add cumulative claimed compensation back to S, then
+    // add the independently materialized miner share. `cum_dao_compensation`
+    // and `cum_treasury` cannot be summed here because both include frozen
+    // phase-1 compensation.
+    snapshot
+        .cum_miner_secondary
+        .checked_add(snapshot.secondary_pool)
+        .and_then(|value| value.checked_add(snapshot.compensation))
+        .ok_or_else(|| {
+            ApiError::internal(format!(
+                "cumulative secondary issuance overflow in dao_daily_snapshots for {}: miner={}, secondary_pool={}, claimed={}",
+                snapshot.date,
+                snapshot.cum_miner_secondary,
+                snapshot.secondary_pool,
+                snapshot.compensation
+            ))
+        })
+}
 
-    let nominal = (primary_rate + SECONDARY_RATE) * 100.0;
+fn build_inflation_rate_response(
+    snapshots: &[ckbadger_store::DaoDailySnapshot],
+    incomplete_tip_date: Option<chrono::NaiveDate>,
+) -> Result<ChartResponse, ApiRouteError> {
+    if snapshots.is_empty() {
+        return Ok(inflation_rate_response(Vec::new()));
+    }
+    let incomplete_tip_date = incomplete_tip_date.ok_or_else(|| {
+        ApiError::internal(
+            "DAO daily snapshots exist without a sync-tip block; cannot identify incomplete day",
+        )
+    })?;
 
-    let effective_locked_ratio = 0.5;
-    let real = (primary_rate + SECONDARY_RATE * (1.0 - effective_locked_ratio)) * 100.0;
+    let mut by_date: BTreeMap<chrono::NaiveDate, &ckbadger_store::DaoDailySnapshot> =
+        BTreeMap::new();
+    let mut saw_tip_date = false;
+    for snapshot in snapshots {
+        let date =
+            chrono::NaiveDate::parse_from_str(&snapshot.date, "%Y-%m-%d").map_err(|error| {
+                ApiError::internal(format!(
+                    "invalid dao_daily_snapshots date '{}': {}",
+                    snapshot.date, error
+                ))
+            })?;
+        if date.format("%Y-%m-%d").to_string() != snapshot.date {
+            return Err(ApiError::internal(format!(
+                "non-canonical dao_daily_snapshots date '{}': expected YYYY-MM-DD",
+                snapshot.date
+            )));
+        }
+        if date > incomplete_tip_date {
+            return Err(ApiError::internal(format!(
+                "DAO daily snapshot is after the sync-tip date: snapshot_date={}, tip_date={}",
+                snapshot.date, incomplete_tip_date
+            )));
+        }
+        if date == incomplete_tip_date {
+            saw_tip_date = true;
+            continue;
+        }
+        if by_date.insert(date, snapshot).is_some() {
+            return Err(ApiError::internal(format!(
+                "duplicate dao_daily_snapshots date while building inflation chart: {}",
+                snapshot.date
+            )));
+        }
+    }
+    if !saw_tip_date {
+        return Err(ApiError::internal(format!(
+            "missing incomplete tip-day DAO snapshot: tip_date={}",
+            incomplete_tip_date
+        )));
+    }
 
-    (nominal, real)
+    let Some(first_date) = by_date.keys().next().copied() else {
+        return Ok(inflation_rate_response(Vec::new()));
+    };
+
+    let mut previous_observed_date = None;
+    for &date in by_date.keys() {
+        if let Some(previous) = previous_observed_date {
+            let expected = previous + chrono::Duration::days(1);
+            if date != expected {
+                return Err(ApiError::internal(format!(
+                    "missing complete-day DAO snapshot while building inflation chart: previous_date={}, expected_date={}, next_date={}",
+                    previous, expected, date
+                )));
+            }
+        }
+        previous_observed_date = Some(date);
+    }
+
+    let mut data = Vec::new();
+    for (&date, current) in &by_date {
+        if date.signed_duration_since(first_date).num_days() < INFLATION_TRAILING_DAYS {
+            continue;
+        }
+        let previous_date = date - chrono::Duration::days(INFLATION_TRAILING_DAYS);
+        let previous = by_date.get(&previous_date).ok_or_else(|| {
+            ApiError::internal(format!(
+                "missing trailing-year DAO snapshot for inflation chart: date={}, required_previous_date={}",
+                date, previous_date
+            ))
+        })?;
+        if previous.total_issuance <= 0 {
+            return Err(ApiError::internal(format!(
+                "non-positive total_issuance in dao_daily_snapshots for inflation base date {}: {}. delete RocksDB and re-sync from genesis",
+                previous.date, previous.total_issuance
+            )));
+        }
+        if current.total_issuance < previous.total_issuance {
+            return Err(ApiError::internal(format!(
+                "total_issuance decreased across inflation window: from_date={}, from={}, to_date={}, to={}",
+                previous.date,
+                previous.total_issuance,
+                current.date,
+                current.total_issuance
+            )));
+        }
+
+        let nominal_issuance = current
+            .total_issuance
+            .checked_sub(previous.total_issuance)
+            .ok_or_else(|| {
+                ApiError::internal(format!(
+                    "total_issuance subtraction overflow across inflation window: from_date={}, from={}, to_date={}, to={}",
+                    previous.date,
+                    previous.total_issuance,
+                    current.date,
+                    current.total_issuance
+                ))
+        })?;
+        let previous_secondary = snapshot_total_secondary_issuance(previous)?;
+        let current_secondary = snapshot_total_secondary_issuance(current)?;
+        if current_secondary < previous_secondary {
+            return Err(ApiError::internal(format!(
+                "cumulative secondary issuance decreased across inflation window: from_date={}, from={}, to_date={}, to={}",
+                previous.date, previous_secondary, current.date, current_secondary
+            )));
+        }
+        let secondary_issuance =
+            current_secondary.checked_sub(previous_secondary).ok_or_else(|| {
+                ApiError::internal(format!(
+                    "cumulative secondary issuance subtraction overflow across inflation window: from_date={}, from={}, to_date={}, to={}",
+                    previous.date, previous_secondary, current.date, current_secondary
+                ))
+            })?;
+        if secondary_issuance > nominal_issuance {
+            return Err(ApiError::internal(format!(
+                "secondary issuance exceeds total issuance growth across inflation window: from_date={}, to_date={}, total_delta={}, secondary_delta={}",
+                previous.date, current.date, nominal_issuance, secondary_issuance
+            )));
+        }
+        let primary_issuance = nominal_issuance
+            .checked_sub(secondary_issuance)
+            .ok_or_else(|| {
+                ApiError::internal(format!(
+                    "primary issuance subtraction overflow across inflation window: from_date={}, to_date={}, total_delta={}, secondary_delta={}",
+                    previous.date, current.date, nominal_issuance, secondary_issuance
+                ))
+            })?;
+
+        data.push(ChartDataPoint {
+            date: current.date.clone(),
+            value: format_exact_percentage_4(
+                nominal_issuance,
+                previous.total_issuance,
+                &format!("nominal inflation ending {}", current.date),
+            )?,
+            value2: Some(format_exact_percentage_4(
+                primary_issuance,
+                previous.total_issuance,
+                &format!("real inflation ending {}", current.date),
+            )?),
+        });
+    }
+
+    Ok(inflation_rate_response(data))
+}
+
+async fn get_inflation_rate_chart(State(state): State<Arc<AppState>>) -> ApiResult<ChartResponse> {
+    let utc8 = chrono::FixedOffset::east_opt(ckbadger_common::CKB_UTC8_OFFSET)
+        .ok_or_else(|| ApiError::internal("invalid CKB UTC+8 offset"))?;
+
+    let store = state.store.clone();
+    let (snapshots, tip_timestamp) = tokio::task::spawn_blocking(move || {
+        let snapshots = store.list_dao_daily_snapshots()?;
+        let tip_timestamp = store
+            .get_sync_tip_block()?
+            .map(|(_, header)| header.timestamp);
+        Ok::<_, anyhow::Error>((snapshots, tip_timestamp))
+    })
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?
+    .map_err(|e| ApiError::internal(e.to_string()))?;
+    let incomplete_tip_date = tip_timestamp
+        .map(|timestamp| {
+            DateTime::from_timestamp_millis(timestamp)
+                .ok_or_else(|| {
+                    ApiError::internal(format!(
+                        "invalid sync-tip block timestamp while building inflation chart: {}",
+                        timestamp
+                    ))
+                })
+                .map(|date_time| date_time.with_timezone(&utc8).date_naive())
+        })
+        .transpose()?;
+    let cache_key = format!(
+        "chart:inflation-rate:v2:{}",
+        incomplete_tip_date
+            .map(|date| date.format("%Y%m%d").to_string())
+            .unwrap_or_else(|| "empty".to_string())
+    );
+    if let Some(cached) = state.cache.get::<ChartResponse>(&cache_key).await {
+        return ok(cached);
+    }
+
+    let response = build_inflation_rate_response(&snapshots, incomplete_tip_date)?;
+
+    state
+        .cache
+        .set(&cache_key, &response, CacheTtl::CHART)
+        .await;
+    ok(response)
 }
 
 /// Convert a date string from "YYYY-MM-DD" to "YYYY/MM/DD" for chart display.
@@ -3636,6 +3971,32 @@ mod tests {
 
         let err = snapshot_secondary_cumulative(&s).unwrap_err();
         assert!(err.1 .0.message.contains("negative cum_miner_secondary"));
+    }
+
+    #[test]
+    fn test_total_secondary_issuance_does_not_double_count_frozen_compensation() {
+        let mut s = snapshot("2026-02-17", 100, 1_000, 50, 0);
+        s.compensation = 10;
+        s.cum_miner_secondary = 40;
+        s.cum_dao_compensation = 30;
+        s.cum_treasury = 30;
+
+        assert_eq!(snapshot_total_secondary_issuance(&s).unwrap(), 100);
+    }
+
+    #[test]
+    fn test_inflation_chart_rejects_missing_complete_day_snapshot() {
+        let first = snapshot("2026-02-15", 100, 1_000, 0, 0);
+        let after_gap = snapshot("2026-02-17", 100, 1_001, 0, 0);
+        let tip = snapshot("2026-02-18", 100, 1_002, 0, 0);
+
+        let error = build_inflation_rate_response(
+            &[first, after_gap, tip],
+            Some(chrono::NaiveDate::from_ymd_opt(2026, 2, 18).unwrap()),
+        )
+        .unwrap_err();
+
+        assert!(error.1 .0.message.contains("expected_date=2026-02-16"));
     }
 
     #[test]

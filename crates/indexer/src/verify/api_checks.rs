@@ -275,7 +275,8 @@ struct StackedChartDataPoint {
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct MinerDistributionDataPoint {
-    address: String,
+    miner_lock_hash: String,
+    address: Option<String>,
     blocks_mined: i64,
     percentage: String,
 }
@@ -2153,7 +2154,7 @@ impl Check for ChartMinerDistributionConsistency {
         "chart_miner_distribution_consistency"
     }
     fn description(&self) -> &'static str {
-        "Miner distribution: address format, totals, and percentages sane"
+        "Miner distribution: lock hash, optional address, totals, and percentages sane"
     }
     fn tier(&self) -> CheckTier {
         CheckTier::Sampling
@@ -2187,19 +2188,27 @@ impl Check for ChartMinerDistributionConsistency {
         }
 
         for miner in &chart.data {
-            if !miner.address.starts_with("0x") || miner.address.len() != 66 {
+            if !miner.miner_lock_hash.starts_with("0x") || miner.miner_lock_hash.len() != 66 {
                 findings.push(Finding {
-                    entity: miner.address.clone(),
+                    entity: miner.miner_lock_hash.clone(),
                     details: vec![format!(
                         "invalid miner lock hash format: '{}'",
-                        miner.address
+                        miner.miner_lock_hash
                     )],
                 });
+            }
+            if let Some(address) = &miner.address {
+                if !address.starts_with("ckb1") && !address.starts_with("ckt1") {
+                    findings.push(Finding {
+                        entity: miner.miner_lock_hash.clone(),
+                        details: vec![format!("invalid resolved miner address: '{}'", address)],
+                    });
+                }
             }
 
             if miner.blocks_mined < 0 {
                 findings.push(Finding {
-                    entity: miner.address.clone(),
+                    entity: miner.miner_lock_hash.clone(),
                     details: vec![format!("negative blocksMined: {}", miner.blocks_mined)],
                 });
             } else {
@@ -2209,11 +2218,11 @@ impl Check for ChartMinerDistributionConsistency {
             match miner.percentage.parse::<f64>() {
                 Ok(pct) if (0.0..=100.0).contains(&pct) => sum_percentage += pct,
                 Ok(pct) => findings.push(Finding {
-                    entity: miner.address.clone(),
+                    entity: miner.miner_lock_hash.clone(),
                     details: vec![format!("percentage out of range [0,100]: {}", pct)],
                 }),
                 Err(_) => findings.push(Finding {
-                    entity: miner.address.clone(),
+                    entity: miner.miner_lock_hash.clone(),
                     details: vec![format!("invalid percentage '{}'", miner.percentage)],
                 }),
             }
@@ -2342,7 +2351,7 @@ impl Check for ChartNominalApcSane {
     }
 }
 
-/// S13: GET /charts/inflation-rate → nominal/real relationship and timeline sanity.
+/// S13: GET /charts/inflation-rate → realized nominal/real relationship and date sanity.
 pub struct ChartInflationRateSane;
 
 impl Check for ChartInflationRateSane {
@@ -2350,7 +2359,7 @@ impl Check for ChartInflationRateSane {
         "chart_inflation_rate_sane"
     }
     fn description(&self) -> &'static str {
-        "Inflation chart: expected point count, 0.5y step, nominal >= real"
+        "Inflation chart: chronological daily dates and nominal >= real"
     }
     fn tier(&self) -> CheckTier {
         CheckTier::Sampling
@@ -2358,26 +2367,15 @@ impl Check for ChartInflationRateSane {
     fn run(&self, ctx: &CheckContext, _progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
         let chart: ChartWrapper<ChartDataPoint> = api_get(ctx, "charts/inflation-rate")?;
         let mut findings = vec![];
-        let mut prev_year: Option<f64> = None;
-        let mut prev_nominal: Option<f64> = None;
-
-        if chart.data.len() != 101 {
-            findings.push(Finding {
-                entity: "chart".to_string(),
-                details: vec![format!(
-                    "expected 101 data points (0..50y at 0.5y), got {}",
-                    chart.data.len()
-                )],
-            });
-        }
+        let mut prev_date: Option<chrono::NaiveDate> = None;
 
         for point in &chart.data {
-            let year = match point.date.parse::<f64>() {
-                Ok(y) if y >= 0.0 => y,
+            let date = match chrono::NaiveDate::parse_from_str(&point.date, "%Y-%m-%d") {
+                Ok(date) => date,
                 _ => {
                     findings.push(Finding {
                         entity: point.date.clone(),
-                        details: vec![format!("invalid year '{}'", point.date)],
+                        details: vec![format!("invalid YYYY-MM-DD date '{}'", point.date)],
                     });
                     continue;
                 }
@@ -2426,29 +2424,17 @@ impl Check for ChartInflationRateSane {
                     )],
                 });
             }
-            if let Some(prev) = prev_year {
-                let step = year - prev;
-                if (step - 0.5).abs() > 0.0001 {
+            if let Some(prev) = prev_date {
+                let step = date.signed_duration_since(prev).num_days();
+                if step != 1 {
                     findings.push(Finding {
                         entity: point.date.clone(),
-                        details: vec![format!("year step is {}, expected 0.5", step)],
-                    });
-                }
-            }
-            if let Some(prev) = prev_nominal {
-                if nominal > prev + 1e-9 {
-                    findings.push(Finding {
-                        entity: point.date.clone(),
-                        details: vec![format!(
-                            "nominal inflation increased: {:.6} -> {:.6}",
-                            prev, nominal
-                        )],
+                        details: vec![format!("date step is {} days, expected 1", step)],
                     });
                 }
             }
 
-            prev_year = Some(year);
-            prev_nominal = Some(nominal);
+            prev_date = Some(date);
         }
 
         let checked = chart.data.len() as u64;

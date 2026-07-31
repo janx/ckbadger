@@ -111,8 +111,19 @@ const mockChartResponse = {
 
 const mockMinerDistributionResponse = {
   title: 'Miner Distribution',
-  data: [{ address: 'ckb1...', minerName: 'Pool', blocksMined: 100, percentage: '50' }],
+  data: [
+    {
+      minerLockHash: `0x${'a'.repeat(64)}`,
+      address: 'ckb1...',
+      minerName: 'Pool',
+      blocksMined: 100,
+      percentage: '50',
+    },
+  ],
   totalBlocks: 200,
+  windowDays: 7,
+  fromDate: '2026-07-23',
+  toDate: '2026-07-29',
 };
 
 const mockStackedAreaResponse = {

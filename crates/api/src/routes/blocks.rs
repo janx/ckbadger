@@ -228,7 +228,7 @@ fn cached_header_to_block_response(
     let parent_hash = format!("0x{}", hex::encode(&header.parent_hash));
     let (nonce, transactions_root, version) = match header_info {
         Some(ref info) => (
-            format!("0x{}", hex::encode(info.nonce.to_le_bytes())),
+            format!("{:#x}", info.nonce),
             format!("0x{}", hex::encode(info.transactions_root)),
             info.version as i32,
         ),
@@ -864,6 +864,48 @@ mod tests {
         assert_eq!(resp.difficulty, "1320058941807520729");
         assert_eq!(resp.proposals_count, 3);
         assert_eq!(resp.uncles_count, 2);
+    }
+
+    /// Regression: nonce is a numeric JSON-RPC quantity. Encoding the u128's
+    /// little-endian memory bytes reverses the displayed value.
+    #[test]
+    fn test_block_response_formats_nonce_as_numeric_hex() {
+        let header = ckbadger_store::CachedBlockHeader {
+            hash: vec![0x22; 32],
+            parent_hash: vec![0x11; 32],
+            timestamp: 1_705_733_626_764,
+            epoch_number: 9128,
+            epoch_index: 909,
+            epoch_length: 1691,
+            dao: vec![0; 32],
+            transactions_count: 1,
+            uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0x190d_f964,
+            miner_lock_hash: None,
+            cycles: None,
+        };
+        let header_info = ckb_store_reader::BlockHeaderInfo {
+            parent_hash: [0x11; 32],
+            nonce: 0x8a4c_8eb5_1d72_599e_0000_0001_2028_0402_u128,
+            transactions_root: [0x33; 32],
+            version: 0,
+        };
+
+        let response = cached_header_to_block_response(
+            20_008_000,
+            header,
+            Some(header_info),
+            BlockExtra {
+                miner_address: None,
+                miner_message: None,
+                mining_reward: None,
+                mining_reward_tx_hash: None,
+                hardfork_activation: None,
+            },
+        );
+
+        assert_eq!(response.nonce, "0x8a4c8eb51d72599e0000000120280402");
     }
 
     /// Convert compact target to difficulty string (in human-readable format like "1.49 EH")

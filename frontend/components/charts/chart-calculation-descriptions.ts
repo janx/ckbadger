@@ -276,12 +276,13 @@ const CHART_DESCRIPTION_BUILDERS: Record<string, ChartDescriptionBuilder> = {
     ),
   }),
   'chart-inflation-rate': ({ yAxisLabel }) => ({
-    overview: 'Shows annualized supply growth rate trend.',
+    overview:
+      'Shows realized issuance growth over each trailing 365 complete UTC+8 days from on-chain DAO headers.',
     legendItems: [
       {
         label: yAxisLabel ?? 'Inflation Rate',
         description:
-          'For each period: (new issuance over period / supply base) annualized to percentage.',
+          'Nominal uses total DAO C-field growth; real removes the exact secondary-issuance growth, leaving primary-issuance dilution. Both divide by the C field 365 days earlier.',
       },
     ],
   }),

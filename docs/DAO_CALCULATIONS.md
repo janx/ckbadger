@@ -423,6 +423,47 @@ from the persisted baseline for the active network.
 
 **Implementation**: `crates/api/src/routes/statistics.rs::calculate_nominal_apc()`
 
+### Realized Inflation Chart
+
+Shows the exact trailing-365-complete-day issuance rate derived from DAO daily
+snapshots. It is a historical chain measurement, not a future issuance
+projection:
+
+```
+nominal_issuance =
+    C_today - C_365_days_ago
+
+cumulative_secondary =
+    cum_miner_secondary + secondary_pool + cumulative_claimed_compensation
+
+secondary_issuance =
+    cumulative_secondary_today - cumulative_secondary_365_days_ago
+
+primary_issuance =
+    nominal_issuance - secondary_issuance
+
+nominal_inflation =
+    nominal_issuance / C_365_days_ago
+
+real_inflation =
+    primary_issuance / C_365_days_ago
+```
+
+Rates are calculated with checked integer arithmetic and truncated only when
+formatted to four decimal percentage places. The current incomplete UTC+8 day
+is excluded. A missing daily snapshot or decreasing cumulative value is an
+invariant violation and fails the request with the affected dates.
+
+`secondary_pool` is DAO header `S`, the non-miner secondary issuance that has
+not yet been claimed. Adding cumulative claimed compensation restores the
+amount that left `S`; adding `cum_miner_secondary` then gives total secondary
+issuance. Do not sum the secondary-issuance chart's
+`cum_dao_compensation` and `cum_treasury` series here: frozen phase-1
+compensation is represented in both and would be counted twice.
+
+**Implementation**:
+`crates/api/src/routes/statistics.rs::build_inflation_rate_response()`
+
 ## 7. Common Pitfalls
 
 ### Confusing total_issuance with circulating

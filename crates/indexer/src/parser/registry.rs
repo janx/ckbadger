@@ -162,6 +162,12 @@ mod tests {
             )),
             Some(ProtocolScript::Sudt)
         );
+        assert_eq!(
+            r.get(&parse_hex_to_bytes(
+                "0x48dbf59b4c7ee1547238021b4869bceedf4eea6b43772e5d66ef8865b6ae7212"
+            )),
+            Some(ProtocolScript::Sudt)
+        );
         // `.bit Cell` and the Web5 `did:ckb` contract are separate protocols.
         assert_eq!(
             r.get(&parse_hex_to_bytes(

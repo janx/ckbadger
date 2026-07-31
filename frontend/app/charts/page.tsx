@@ -144,7 +144,9 @@ function MinerDistributionPreview({
   const pieData = data
     ? (() => {
         const items = data.data.slice(0, 8).map((m) => ({
-          label: m.minerName || `${m.address.slice(0, 8)}...${m.address.slice(-6)}`,
+          label:
+            m.minerName ||
+            `${(m.address ?? m.minerLockHash).slice(0, 8)}...${(m.address ?? m.minerLockHash).slice(-6)}`,
           value: parseFloat(m.percentage),
         }));
         const othersPercentage = data.data

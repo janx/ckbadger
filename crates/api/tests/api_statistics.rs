@@ -873,15 +873,48 @@ async fn test_miner_distribution_reads_from_derived_store() {
     let core_store = test_store();
     let append_only_store = test_append_only_store();
 
-    let miner_hash = vec![0x66; 32];
+    let utc8 = chrono::FixedOffset::east_opt(ckbadger_common::CKB_UTC8_OFFSET).unwrap();
+    let latest_complete_date =
+        chrono::Utc::now().with_timezone(&utc8).date_naive() - chrono::Duration::days(1);
+    let included_date = latest_complete_date.format("%Y%m%d").to_string();
+    let excluded_date = (latest_complete_date - chrono::Duration::days(7))
+        .format("%Y%m%d")
+        .to_string();
+
+    let code_hash =
+        hex::decode("9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8").unwrap();
+    let args = hex::decode("8211f1b938a107cd53b6302cc752a6fc3965638d").unwrap();
+    let miner_hash = compute_script_hash(&code_hash, 1, &args);
+    let mut batch = StoreBatch::new(core_store.as_ref());
+    batch.put_lock_script(
+        &miner_hash,
+        &ckbadger_store::LockScriptEntry {
+            code_hash,
+            hash_type: 1,
+            args,
+        },
+    );
+    batch.commit().unwrap();
+
     core_store
         .put_miner_stats(
-            "20260101",
+            &included_date,
             &miner_hash,
             &MinerStats {
                 miner_lock_hash: miner_hash.clone(),
                 blocks_count: 10,
                 last_block_number: 99,
+            },
+        )
+        .unwrap();
+    core_store
+        .put_miner_stats(
+            &excluded_date,
+            &[0x77; 32],
+            &MinerStats {
+                miner_lock_hash: vec![0x77; 32],
+                blocks_count: 90,
+                last_block_number: 1,
             },
         )
         .unwrap();
@@ -900,6 +933,164 @@ async fn test_miner_distribution_reads_from_derived_store() {
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["totalBlocks"], 10);
     assert_eq!(json["data"][0]["blocksMined"], 10);
+    assert_eq!(json["windowDays"], 7);
+    assert_eq!(
+        json["fromDate"],
+        (latest_complete_date - chrono::Duration::days(6))
+            .format("%Y-%m-%d")
+            .to_string()
+    );
+    assert_eq!(
+        json["toDate"],
+        latest_complete_date.format("%Y-%m-%d").to_string()
+    );
+    assert_eq!(
+        json["data"][0]["minerLockHash"],
+        format!("0x{}", hex::encode(&miner_hash))
+    );
+    assert!(json["data"][0]["address"]
+        .as_str()
+        .unwrap()
+        .starts_with("ckb1"));
+}
+
+#[tokio::test]
+async fn test_inflation_rate_uses_exact_trailing_year_dao_snapshots() {
+    let core_store = test_store();
+    let append_only_store = test_append_only_store();
+
+    let utc8 = chrono::FixedOffset::east_opt(ckbadger_common::CKB_UTC8_OFFSET).unwrap();
+    let end_date = chrono::Utc::now().with_timezone(&utc8).date_naive() - chrono::Duration::days(1);
+    let incomplete_tip_date = end_date + chrono::Duration::days(1);
+    let start_date = end_date - chrono::Duration::days(365);
+
+    let snapshot = |date: chrono::NaiveDate,
+                    total_issuance: i128,
+                    secondary_pool: i128,
+                    claimed_compensation: i128,
+                    cum_miner_secondary: i128,
+                    cum_dao_compensation: i128,
+                    cum_treasury: i128,
+                    unclaimed_compensation: i128,
+                    unmade_dao_interests: i128| DaoDailySnapshot {
+        date: date.format("%Y-%m-%d").to_string(),
+        total_deposited: 0,
+        depositors_count: 0,
+        new_deposits: 0,
+        withdrawals: 0,
+        compensation: claimed_compensation,
+        cumulative_deposit_amount: 0,
+        total_issuance,
+        secondary_pool,
+        occupied_capacity: 0,
+        cum_miner_secondary,
+        cum_dao_compensation,
+        cum_treasury,
+        unmade_dao_interests,
+        unclaimed_compensation,
+        cumulative_depositors: 0,
+        daily_depositor_addresses: 0,
+        protocol_deposited: None,
+    };
+
+    // C grows by 10%; exact cumulative secondary issuance
+    // (miner + S + claimed) grows by 2%, leaving 8% primary dilution.
+    // cum_dao_compensation and cum_treasury deliberately overlap on frozen
+    // compensation, so adding those chart components would incorrectly report
+    // 3% secondary growth.
+    let mut rows = Vec::new();
+    for day_offset in 0..=365_i64 {
+        let scale = i128::from(day_offset);
+        let total_issuance = 1_000_000_000 + 100_000_000 * scale / 365;
+        let cum_miner = 40_000_000 + 10_000_000 * scale / 365;
+        let claimed = 10_000_000 + 5_000_000 * scale / 365;
+        let secondary_pool = 50_000_000 + 5_000_000 * scale / 365;
+        let unclaimed = 20_000_000 + 10_000_000 * scale / 365;
+        let cum_dao = claimed + unclaimed;
+        let active_unmade = 20_000_000;
+        let treasury = secondary_pool - active_unmade;
+        rows.push(snapshot(
+            start_date + chrono::Duration::days(day_offset),
+            total_issuance,
+            secondary_pool,
+            claimed,
+            cum_miner,
+            cum_dao,
+            treasury,
+            unclaimed,
+            active_unmade,
+        ));
+    }
+    rows.push(snapshot(
+        incomplete_tip_date,
+        1_200_000_000,
+        60_000_000,
+        20_000_000,
+        60_000_000,
+        55_000_000,
+        40_000_000,
+        35_000_000,
+        20_000_000,
+    ));
+
+    for row in rows {
+        let date_key = row.date.replace('-', "");
+        let key = ckbadger_store::keys::encode_stats_key(
+            ckbadger_store::keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT,
+            date_key.as_bytes(),
+        );
+        core_store
+            .put_cf(
+                core_store.cf_stats_dao(),
+                &key,
+                &bincode::serialize(&row).unwrap(),
+            )
+            .unwrap();
+    }
+    let tip_timestamp = incomplete_tip_date
+        .and_hms_opt(12, 0, 0)
+        .unwrap()
+        .and_local_timezone(utc8)
+        .single()
+        .unwrap()
+        .timestamp_millis();
+    let mut batch = StoreBatch::new(core_store.as_ref());
+    batch.put_block_header(
+        1,
+        &CachedBlockHeader {
+            hash: vec![0x55; 32],
+            parent_hash: vec![0x44; 32],
+            timestamp: tip_timestamp,
+            epoch_number: 0,
+            epoch_index: 1,
+            epoch_length: 1800,
+            dao: vec![0; 32],
+            transactions_count: 1,
+            uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
+            cycles: None,
+        },
+    );
+    batch.commit().unwrap();
+
+    let config = test_config_with_append_only(core_store, append_only_store);
+    let app = create_router(config).await;
+    let request = Request::builder()
+        .uri("/api/v1/charts/inflation-rate")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let data = json["data"].as_array().unwrap();
+    assert_eq!(data.len(), 1);
+    assert_eq!(data[0]["date"], end_date.format("%Y-%m-%d").to_string());
+    assert_eq!(data[0]["value"], "10.0000");
+    assert_eq!(data[0]["value2"], "8.0000");
 }
 
 #[tokio::test]

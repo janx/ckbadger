@@ -510,6 +510,20 @@ mod tests {
         );
     }
 
+    /// Regression: early testnet sUDTs use the deployed binary's data hash.
+    /// Bundled token labels already identify this family as sUDT, so parser
+    /// detection must derive the same identity from the script registry.
+    #[test]
+    fn detects_legacy_testnet_sudt_data_hash() {
+        let code_hash = crate::rpc::parse_hex_to_bytes(
+            "0x48dbf59b4c7ee1547238021b4869bceedf4eea6b43772e5d66ef8865b6ae7212",
+        );
+        assert_eq!(
+            UdtParser::is_udt_code_hash_bytes(&code_hash, 0),
+            Some(UdtStandard::Sudt)
+        );
+    }
+
     #[test]
     fn test_is_udt_code_hash_bytes_xudt() {
         let code_hash = parse_hex_to_bytes(XUDT_CODE_HASH_TYPE);

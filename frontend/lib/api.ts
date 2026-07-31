@@ -1232,7 +1232,8 @@ interface RecentBlocksResponse {
 }
 
 interface MinerDistributionDataPoint {
-  address: string;
+  minerLockHash: string;
+  address: string | null;
   minerName: string | null;
   blocksMined: number;
   percentage: string;
@@ -1242,6 +1243,9 @@ interface MinerDistributionResponse {
   data: MinerDistributionDataPoint[];
   title: string;
   totalBlocks: number;
+  windowDays: number;
+  fromDate: string;
+  toDate: string;
 }
 
 interface StackedAreaDataPoint {
