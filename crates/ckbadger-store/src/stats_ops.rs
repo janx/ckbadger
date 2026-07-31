@@ -1522,37 +1522,6 @@ impl CkbadgerStore {
         batch.put_stats(&key, &bincode::serialize(&snapshot)?);
         Ok(())
     }
-
-    /// Binary-search `block_headers` to find the first block whose timestamp
-    /// is >= `ms`. Returns None if no such block exists.
-    fn find_first_block_at_or_after_ms(&self, ms: i64) -> anyhow::Result<Option<i64>> {
-        let (tip, _) = match self.get_sync_tip_block()? {
-            Some(x) => x,
-            None => return Ok(None),
-        };
-        let mut lo: i64 = 0;
-        let mut hi: i64 = tip;
-        let mut result: Option<i64> = None;
-        while lo <= hi {
-            let mid = lo + (hi - lo) / 2;
-            match self.get_block_header(mid)? {
-                Some(h) => {
-                    if h.timestamp >= ms {
-                        result = Some(mid);
-                        hi = mid - 1;
-                    } else {
-                        lo = mid + 1;
-                    }
-                }
-                None => {
-                    // Hole in block_headers — search above (higher blocks may
-                    // still exist for dense CF).
-                    lo = mid + 1;
-                }
-            }
-        }
-        Ok(result)
-    }
 }
 
 fn extract_dao_csu(dao: &[u8]) -> Option<(i128, i128, i128)> {

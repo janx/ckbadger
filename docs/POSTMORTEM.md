@@ -1435,4 +1435,45 @@ sync from genesis; do not add a repair/backfill workflow.
 
 ---
 
-_Last updated: 2026-07-25_
+### DAO-027: Inflation chart rejected legitimate testnet blockless days
+
+**Date**: 2026-07-31
+
+**Symptom**: Testnet `chart_inflation_rate_sane` failed because
+`/charts/inflation-rate` returned 500 for a DAO snapshot jump from 2020-05-12
+to 2020-05-22.
+
+**Root cause**:
+
+1. The realized-inflation read path assumed persisted DAO snapshot dates were
+   a dense calendar series and classified every missing date as corruption.
+2. DAO snapshots are intentionally materialized only for dates containing
+   blocks. Testnet block 0 is dated 2020-05-12, while consecutive block 1 is
+   dated 2020-05-22, so the intervening nine complete dates have no blocks and
+   correctly have no persisted snapshots.
+3. The API regression fixture fabricated all 366 daily rows and therefore did
+   not exercise the real testnet genesis-to-first-block timestamp gap.
+
+**Fix**:
+
+- Validate every observed snapshot gap against canonical block headers.
+- If the first canonical block after a gap belongs to the next snapshot date,
+  carry the previous state through each blockless day exactly for the
+  trailing-365-calendar-day calculation.
+- If any canonical block belongs to a missing snapshot date, retain the
+  fail-fast 500 with the missing date and first affected block.
+- Keep the densification on the API read path; no RocksDB rows are synthesized
+  or written by the API.
+
+**Tests Added**:
+
+- Real testnet block-0/block-1 timestamps prove blockless days are filled and
+  produce continuous trailing-year chart points.
+- A block-bearing missing date still fails with canonical block context.
+
+**Re-sync required**: No. The sparse persisted snapshots are correct; purging
+and replaying the same chain would reproduce the same legitimate date gap.
+
+---
+
+_Last updated: 2026-07-31_

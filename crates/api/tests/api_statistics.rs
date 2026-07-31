@@ -1094,6 +1094,217 @@ async fn test_inflation_rate_uses_exact_trailing_year_dao_snapshots() {
 }
 
 #[tokio::test]
+async fn test_inflation_rate_forward_fills_testnet_genesis_blockless_days() {
+    let core_store = test_store();
+    let append_only_store = test_append_only_store();
+    let utc8 = chrono::FixedOffset::east_opt(ckbadger_common::CKB_UTC8_OFFSET).unwrap();
+    let genesis_date = chrono::NaiveDate::from_ymd_opt(2020, 5, 12).unwrap();
+    let first_mined_date = chrono::NaiveDate::from_ymd_opt(2020, 5, 22).unwrap();
+    let last_complete_date = chrono::NaiveDate::from_ymd_opt(2021, 5, 22).unwrap();
+    let incomplete_tip_date = last_complete_date + chrono::Duration::days(1);
+
+    let snapshot = |date: chrono::NaiveDate, total_issuance: i128| DaoDailySnapshot {
+        date: date.format("%Y-%m-%d").to_string(),
+        total_deposited: 0,
+        depositors_count: 0,
+        new_deposits: 0,
+        withdrawals: 0,
+        compensation: 0,
+        cumulative_deposit_amount: 0,
+        total_issuance,
+        secondary_pool: 0,
+        occupied_capacity: 0,
+        cum_miner_secondary: 0,
+        cum_dao_compensation: 0,
+        cum_treasury: 0,
+        unmade_dao_interests: 0,
+        unclaimed_compensation: 0,
+        cumulative_depositors: 0,
+        daily_depositor_addresses: 0,
+        protocol_deposited: None,
+    };
+
+    let mut rows = vec![snapshot(genesis_date, 1_000_000_000)];
+    let mut date = first_mined_date;
+    while date <= incomplete_tip_date {
+        let elapsed_days = date.signed_duration_since(genesis_date).num_days();
+        rows.push(snapshot(
+            date,
+            1_000_000_000 + i128::from(elapsed_days) * 1_000_000,
+        ));
+        date += chrono::Duration::days(1);
+    }
+
+    for row in rows {
+        let date_key = row.date.replace('-', "");
+        let key = ckbadger_store::keys::encode_stats_key(
+            ckbadger_store::keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT,
+            date_key.as_bytes(),
+        );
+        core_store
+            .put_cf(
+                core_store.cf_stats_dao(),
+                &key,
+                &bincode::serialize(&row).unwrap(),
+            )
+            .unwrap();
+    }
+
+    let tip_timestamp = incomplete_tip_date
+        .and_hms_opt(12, 0, 0)
+        .unwrap()
+        .and_local_timezone(utc8)
+        .single()
+        .unwrap()
+        .timestamp_millis();
+    let mut batch = StoreBatch::new(core_store.as_ref());
+    for (number, timestamp) in [
+        (0, 1_589_276_230_000), // testnet genesis: 2020-05-12 17:37:10 UTC+8
+        (1, 1_590_137_711_584), // first mined block: 2020-05-22 16:55:11.584 UTC+8
+        (2, tip_timestamp),
+    ] {
+        batch.put_block_header(
+            number,
+            &CachedBlockHeader {
+                hash: vec![number as u8; 32],
+                parent_hash: vec![number.saturating_sub(1) as u8; 32],
+                timestamp,
+                epoch_number: 0,
+                epoch_index: number as i32,
+                epoch_length: 1800,
+                dao: vec![0; 32],
+                transactions_count: 1,
+                uncles_count: 0,
+                proposals_count: 0,
+                compact_target: 0,
+                miner_lock_hash: None,
+                cycles: None,
+            },
+        );
+    }
+    batch.commit().unwrap();
+
+    let config = test_config_with_append_only(core_store, append_only_store);
+    let app = create_router(config).await;
+    let request = Request::builder()
+        .uri("/api/v1/charts/inflation-rate")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let data = json["data"].as_array().unwrap();
+    assert_eq!(data.len(), 11);
+    assert_eq!(data.first().unwrap()["date"], "2021-05-12");
+    assert_eq!(data.last().unwrap()["date"], "2021-05-22");
+    assert!(data.iter().all(|point| point["value"] == point["value2"]));
+}
+
+#[tokio::test]
+async fn test_inflation_rate_rejects_missing_snapshot_on_block_bearing_day() {
+    let core_store = test_store();
+    let append_only_store = test_append_only_store();
+    let utc8 = chrono::FixedOffset::east_opt(ckbadger_common::CKB_UTC8_OFFSET).unwrap();
+    let first_date = chrono::NaiveDate::from_ymd_opt(2026, 2, 15).unwrap();
+    let missing_date = first_date + chrono::Duration::days(1);
+    let next_snapshot_date = missing_date + chrono::Duration::days(1);
+    let incomplete_tip_date = next_snapshot_date + chrono::Duration::days(1);
+
+    for (date, total_issuance) in [
+        (first_date, 1_000_000_000),
+        (next_snapshot_date, 1_001_000_000),
+        (incomplete_tip_date, 1_002_000_000),
+    ] {
+        let row = DaoDailySnapshot {
+            date: date.format("%Y-%m-%d").to_string(),
+            total_deposited: 0,
+            depositors_count: 0,
+            new_deposits: 0,
+            withdrawals: 0,
+            compensation: 0,
+            cumulative_deposit_amount: 0,
+            total_issuance,
+            secondary_pool: 0,
+            occupied_capacity: 0,
+            cum_miner_secondary: 0,
+            cum_dao_compensation: 0,
+            cum_treasury: 0,
+            unmade_dao_interests: 0,
+            unclaimed_compensation: 0,
+            cumulative_depositors: 0,
+            daily_depositor_addresses: 0,
+            protocol_deposited: None,
+        };
+        let date_key = row.date.replace('-', "");
+        let key = ckbadger_store::keys::encode_stats_key(
+            ckbadger_store::keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT,
+            date_key.as_bytes(),
+        );
+        core_store
+            .put_cf(
+                core_store.cf_stats_dao(),
+                &key,
+                &bincode::serialize(&row).unwrap(),
+            )
+            .unwrap();
+    }
+
+    let timestamp = |date: chrono::NaiveDate| {
+        date.and_hms_opt(12, 0, 0)
+            .unwrap()
+            .and_local_timezone(utc8)
+            .single()
+            .unwrap()
+            .timestamp_millis()
+    };
+    let mut batch = StoreBatch::new(core_store.as_ref());
+    for (number, date) in [
+        (0, first_date),
+        (1, missing_date),
+        (2, next_snapshot_date),
+        (3, incomplete_tip_date),
+    ] {
+        batch.put_block_header(
+            number,
+            &CachedBlockHeader {
+                hash: vec![number as u8; 32],
+                parent_hash: vec![number.saturating_sub(1) as u8; 32],
+                timestamp: timestamp(date),
+                epoch_number: 0,
+                epoch_index: number as i32,
+                epoch_length: 1800,
+                dao: vec![0; 32],
+                transactions_count: 1,
+                uncles_count: 0,
+                proposals_count: 0,
+                compact_target: 0,
+                miner_lock_hash: None,
+                cycles: None,
+            },
+        );
+    }
+    batch.commit().unwrap();
+
+    let config = test_config_with_append_only(core_store, append_only_store);
+    let app = create_router(config).await;
+    let request = Request::builder()
+        .uri("/api/v1/charts/inflation-rate")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(json["message"]
+        .as_str()
+        .unwrap()
+        .contains("missing_date=2026-02-16, first_block=1"));
+}
+
+#[tokio::test]
 async fn test_hodl_wave_chart_empty_db() {
     let store = test_store();
     let config = test_config(store);

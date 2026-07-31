@@ -64,6 +64,42 @@ impl CkbadgerStore {
         Ok(None)
     }
 
+    /// Binary-search `block_headers` to find the first block whose timestamp
+    /// is greater than or equal to `timestamp_ms`.
+    pub fn find_first_block_at_or_after_ms(
+        &self,
+        timestamp_ms: i64,
+    ) -> anyhow::Result<Option<i64>> {
+        let (tip, _) = match self.get_sync_tip_block()? {
+            Some(tip) => tip,
+            None => return Ok(None),
+        };
+        let mut low = 0i64;
+        let mut high = tip;
+        let mut result = None;
+        while low <= high {
+            let middle = low + (high - low) / 2;
+            match self.get_block_header(middle)? {
+                Some(header) => {
+                    if header.timestamp >= timestamp_ms {
+                        result = Some(middle);
+                        high = middle - 1;
+                    } else {
+                        low = middle + 1;
+                    }
+                }
+                None => {
+                    // A rollback repair can temporarily search a pre-commit
+                    // view with a lower header already absent. Continue above
+                    // the hole; the owning recomputation validates the exact
+                    // predecessor it needs with DAO-specific context.
+                    low = middle + 1;
+                }
+            }
+        }
+        Ok(result)
+    }
+
     /// List blocks in descending order.
     pub fn list_blocks_desc(
         &self,
@@ -319,6 +355,31 @@ mod tests {
         batch.commit().unwrap();
 
         assert_eq!(store.find_first_block_header_gap().unwrap(), Some(0));
+    }
+
+    #[test]
+    fn test_find_first_block_at_or_after_ms_uses_timestamp_order() {
+        let dir = tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+
+        let mut batch = StoreBatch::new(&store);
+        for (number, timestamp) in [(0, 1_000), (1, 2_000), (2, 4_000), (3, 8_000)] {
+            let mut header = make_header(number);
+            header.timestamp = timestamp;
+            batch.put_block_header(number, &header);
+        }
+        batch.commit().unwrap();
+
+        assert_eq!(store.find_first_block_at_or_after_ms(0).unwrap(), Some(0));
+        assert_eq!(
+            store.find_first_block_at_or_after_ms(2_001).unwrap(),
+            Some(2)
+        );
+        assert_eq!(
+            store.find_first_block_at_or_after_ms(8_000).unwrap(),
+            Some(3)
+        );
+        assert_eq!(store.find_first_block_at_or_after_ms(8_001).unwrap(), None);
     }
 
     #[test]

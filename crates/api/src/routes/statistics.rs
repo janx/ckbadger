@@ -5,7 +5,7 @@ use axum::{
     routing::get,
     Router,
 };
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeZone, Utc};
 use ckb_types::utilities::compact_to_difficulty as ckb_compact_to_difficulty;
 use ckbadger_common::sync::{format_duration_smart, BackgroundTaskEntry, SyncProgressData};
 use ckbadger_indexer::parser::registry::{ProtocolScript, PROTOCOL_REGISTRY};
@@ -3105,10 +3105,91 @@ fn snapshot_total_secondary_issuance(
         })
 }
 
-fn build_inflation_rate_response(
+fn certify_inflation_snapshot_gap_is_blockless(
+    store: &ckbadger_store::CkbadgerStore,
+    first_missing_date: chrono::NaiveDate,
+    next_snapshot_date: chrono::NaiveDate,
+) -> Result<(), ApiRouteError> {
+    if first_missing_date >= next_snapshot_date {
+        return Err(ApiError::internal(format!(
+            "invalid DAO snapshot gap bounds: first_missing_date={}, next_snapshot_date={}",
+            first_missing_date, next_snapshot_date
+        )));
+    }
+
+    let utc8 = chrono::FixedOffset::east_opt(ckbadger_common::CKB_UTC8_OFFSET)
+        .ok_or_else(|| ApiError::internal("invalid CKB UTC+8 offset"))?;
+    let day_start = first_missing_date.and_hms_opt(0, 0, 0).ok_or_else(|| {
+        ApiError::internal(format!(
+            "invalid start of missing DAO snapshot date {}",
+            first_missing_date
+        ))
+    })?;
+    let day_start_ms = utc8
+        .from_local_datetime(&day_start)
+        .single()
+        .ok_or_else(|| {
+            ApiError::internal(format!(
+                "ambiguous start of missing DAO snapshot date {}",
+                first_missing_date
+            ))
+        })?
+        .timestamp_millis();
+
+    let first_block = store
+        .find_first_block_at_or_after_ms(day_start_ms)
+        .map_err(|error| {
+            ApiError::internal(format!(
+                "failed to locate canonical block coverage for DAO snapshot gap starting {}: {}",
+                first_missing_date, error
+            ))
+        })?
+        .ok_or_else(|| {
+            ApiError::internal(format!(
+                "DAO snapshot exists for {} but no canonical block exists at or after preceding gap start {}",
+                next_snapshot_date, first_missing_date
+            ))
+        })?;
+    let first_header = store
+        .get_block_header(first_block)
+        .map_err(|error| {
+            ApiError::internal(format!(
+                "failed to read canonical block {} while validating DAO snapshot gap starting {}: {}",
+                first_block, first_missing_date, error
+            ))
+        })?
+        .ok_or_else(|| {
+            ApiError::internal(format!(
+                "canonical block header disappeared while validating DAO snapshot gap: block={}, first_missing_date={}",
+                first_block, first_missing_date
+            ))
+        })?;
+    let first_block_date = ckbadger_common::block_date_from_ms(first_header.timestamp);
+
+    if first_block_date < next_snapshot_date {
+        return Err(ApiError::internal(format!(
+            "missing complete-day DAO snapshot for block-bearing date: missing_date={}, first_block={}, next_snapshot_date={}",
+            first_block_date, first_block, next_snapshot_date
+        )));
+    }
+    if first_block_date > next_snapshot_date {
+        return Err(ApiError::internal(format!(
+            "DAO snapshot has no canonical block-date coverage: snapshot_date={}, first_block_at_or_after_gap={}, first_block_date={}",
+            next_snapshot_date, first_block, first_block_date
+        )));
+    }
+
+    Ok(())
+}
+
+fn build_inflation_rate_response<F>(
     snapshots: &[ckbadger_store::DaoDailySnapshot],
     incomplete_tip_date: Option<chrono::NaiveDate>,
-) -> Result<ChartResponse, ApiRouteError> {
+    mut certify_blockless_gap: F,
+) -> Result<ChartResponse, ApiRouteError>
+where
+    F: FnMut(chrono::NaiveDate, chrono::NaiveDate) -> Result<(), ApiRouteError>,
+{
     if snapshots.is_empty() {
         return Ok(inflation_rate_response(Vec::new()));
     }
@@ -3118,7 +3199,7 @@ fn build_inflation_rate_response(
         )
     })?;
 
-    let mut by_date: BTreeMap<chrono::NaiveDate, &ckbadger_store::DaoDailySnapshot> =
+    let mut observed_by_date: BTreeMap<chrono::NaiveDate, &ckbadger_store::DaoDailySnapshot> =
         BTreeMap::new();
     let mut saw_tip_date = false;
     for snapshot in snapshots {
@@ -3143,9 +3224,8 @@ fn build_inflation_rate_response(
         }
         if date == incomplete_tip_date {
             saw_tip_date = true;
-            continue;
         }
-        if by_date.insert(date, snapshot).is_some() {
+        if observed_by_date.insert(date, snapshot).is_some() {
             return Err(ApiError::internal(format!(
                 "duplicate dao_daily_snapshots date while building inflation chart: {}",
                 snapshot.date
@@ -3159,23 +3239,39 @@ fn build_inflation_rate_response(
         )));
     }
 
+    let mut by_date: BTreeMap<chrono::NaiveDate, ckbadger_store::DaoDailySnapshot> =
+        BTreeMap::new();
+    let mut previous_observed: Option<(chrono::NaiveDate, &ckbadger_store::DaoDailySnapshot)> =
+        None;
+    for (&date, &snapshot) in &observed_by_date {
+        if let Some((previous_date, previous_snapshot)) = previous_observed {
+            let first_missing_date = previous_date + chrono::Duration::days(1);
+            if first_missing_date < date {
+                certify_blockless_gap(first_missing_date, date)?;
+
+                let mut missing_date = first_missing_date;
+                while missing_date < date {
+                    let mut carried = previous_snapshot.clone();
+                    carried.date = missing_date.format("%Y-%m-%d").to_string();
+                    if by_date.insert(missing_date, carried).is_some() {
+                        return Err(ApiError::internal(format!(
+                            "duplicate carried DAO snapshot date while building inflation chart: {}",
+                            missing_date
+                        )));
+                    }
+                    missing_date += chrono::Duration::days(1);
+                }
+            }
+        }
+
+        by_date.insert(date, snapshot.clone());
+        previous_observed = Some((date, snapshot));
+    }
+    by_date.remove(&incomplete_tip_date);
+
     let Some(first_date) = by_date.keys().next().copied() else {
         return Ok(inflation_rate_response(Vec::new()));
     };
-
-    let mut previous_observed_date = None;
-    for &date in by_date.keys() {
-        if let Some(previous) = previous_observed_date {
-            let expected = previous + chrono::Duration::days(1);
-            if date != expected {
-                return Err(ApiError::internal(format!(
-                    "missing complete-day DAO snapshot while building inflation chart: previous_date={}, expected_date={}, next_date={}",
-                    previous, expected, date
-                )));
-            }
-        }
-        previous_observed_date = Some(date);
-    }
 
     let mut data = Vec::new();
     for (&date, current) in &by_date {
@@ -3270,12 +3366,12 @@ async fn get_inflation_rate_chart(State(state): State<Arc<AppState>>) -> ApiResu
         .ok_or_else(|| ApiError::internal("invalid CKB UTC+8 offset"))?;
 
     let store = state.store.clone();
-    let (snapshots, tip_timestamp) = tokio::task::spawn_blocking(move || {
-        let snapshots = store.list_dao_daily_snapshots()?;
-        let tip_timestamp = store
-            .get_sync_tip_block()?
-            .map(|(_, header)| header.timestamp);
-        Ok::<_, anyhow::Error>((snapshots, tip_timestamp))
+    let tip_timestamp = tokio::task::spawn_blocking(move || {
+        Ok::<_, anyhow::Error>(
+            store
+                .get_sync_tip_block()?
+                .map(|(_, header)| header.timestamp),
+        )
     })
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?
@@ -3302,7 +3398,25 @@ async fn get_inflation_rate_chart(State(state): State<Arc<AppState>>) -> ApiResu
         return ok(cached);
     }
 
-    let response = build_inflation_rate_response(&snapshots, incomplete_tip_date)?;
+    let store = state.store.clone();
+    let response = tokio::task::spawn_blocking(move || {
+        let snapshots = store
+            .list_dao_daily_snapshots()
+            .map_err(|error| ApiError::internal(error.to_string()))?;
+        build_inflation_rate_response(
+            &snapshots,
+            incomplete_tip_date,
+            |first_missing_date, next_snapshot_date| {
+                certify_inflation_snapshot_gap_is_blockless(
+                    &store,
+                    first_missing_date,
+                    next_snapshot_date,
+                )
+            },
+        )
+    })
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))??;
 
     state
         .cache
@@ -3993,10 +4107,16 @@ mod tests {
         let error = build_inflation_rate_response(
             &[first, after_gap, tip],
             Some(chrono::NaiveDate::from_ymd_opt(2026, 2, 18).unwrap()),
+            |first_missing_date, next_snapshot_date| {
+                Err(ApiError::internal(format!(
+                    "missing complete-day DAO snapshot for block-bearing date: missing_date={}, next_snapshot_date={}",
+                    first_missing_date, next_snapshot_date
+                )))
+            },
         )
         .unwrap_err();
 
-        assert!(error.1 .0.message.contains("expected_date=2026-02-16"));
+        assert!(error.1 .0.message.contains("missing_date=2026-02-16"));
     }
 
     #[test]

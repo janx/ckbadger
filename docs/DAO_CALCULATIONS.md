@@ -451,8 +451,13 @@ real_inflation =
 
 Rates are calculated with checked integer arithmetic and truncated only when
 formatted to four decimal percentage places. The current incomplete UTC+8 day
-is excluded. A missing daily snapshot or decreasing cumulative value is an
-invariant violation and fails the request with the affected dates.
+is excluded. The persisted DAO series is sparse because snapshot dates are
+driven by blocks, so a complete calendar day with no blocks may have no row.
+The API first verifies such a gap against canonical block headers and then
+carries the preceding end-of-block state forward exactly; this is not
+interpolation because chain state did not change. If a canonical block exists
+on a date whose DAO snapshot is missing, or if a cumulative value decreases,
+the request fails with the affected date and block context.
 
 `secondary_pool` is DAO header `S`, the non-miner secondary issuance that has
 not yet been claimed. Adding cumulative claimed compensation restores the
