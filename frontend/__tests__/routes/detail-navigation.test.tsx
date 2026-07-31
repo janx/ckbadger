@@ -25,6 +25,12 @@ vi.mock('@/app/scripts/[name]/client-page', () => ({
   default: ({ name }: { name: string }) => <div>named script detail {name}</div>,
 }));
 
+vi.mock('@/app/identities/bit-cell/[identityId]/client-page', () => ({
+  default: ({ identityId }: { identityId: string }) => (
+    <div>.bit Cell identity detail {identityId}</div>
+  ),
+}));
+
 const mockScriptsResponse = {
   data: [
     {
@@ -101,5 +107,17 @@ describe('detail navigation', () => {
       );
       expect(screen.getByText('named script detail SECP256K1_BLAKE160')).toBeInTheDocument();
     });
+  });
+
+  it('routes .bit Cell identity cards to the item detail page', async () => {
+    render(
+      <MemoryRouter initialEntries={['/mainnet/identities/bit-cell/0xbitcell']}>
+        <RouterHarness />
+      </MemoryRouter>
+    );
+
+    expect(
+      await screen.findByText('.bit Cell identity detail 0xbitcell', {}, { timeout: 3000 })
+    ).toBeInTheDocument();
   });
 });

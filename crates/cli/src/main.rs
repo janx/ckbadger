@@ -631,20 +631,49 @@ impl OrchestratorNetworkBinding {
 fn path_collision_identity(path: &Path) -> Result<PathBuf> {
     let absolute = std::path::absolute(path)
         .with_context(|| format!("failed to resolve absolute path for {}", path.display()))?;
-    if absolute
-        .try_exists()
-        .with_context(|| format!("failed to inspect resolved path {}", absolute.display()))?
-    {
-        return absolute.canonicalize().with_context(|| {
+
+    // A fresh RocksDB leaf cannot itself be canonicalized, but any symlink in
+    // its existing prefix still determines the directory RocksDB will open.
+    // Canonicalize the nearest existing ancestor, then restore the missing
+    // suffix so fresh and already-materialized spellings share one identity.
+    let mut existing_ancestor = absolute.as_path();
+    loop {
+        if existing_ancestor.try_exists().with_context(|| {
             format!(
-                "failed to canonicalize existing resolved path {}",
+                "failed to inspect resolved path ancestor {} for {}",
+                existing_ancestor.display(),
                 absolute.display()
             )
-        });
+        })? {
+            break;
+        }
+        let Some(parent) = existing_ancestor.parent() else {
+            bail!(
+                "resolved path {} has no existing ancestor to canonicalize",
+                absolute.display()
+            );
+        };
+        existing_ancestor = parent;
     }
 
+    let canonical_ancestor = existing_ancestor.canonicalize().with_context(|| {
+        format!(
+            "failed to canonicalize existing resolved path ancestor {} for {}",
+            existing_ancestor.display(),
+            absolute.display()
+        )
+    })?;
+    let missing_suffix = absolute.strip_prefix(existing_ancestor).with_context(|| {
+        format!(
+            "failed to derive missing suffix of {} from ancestor {}",
+            absolute.display(),
+            existing_ancestor.display()
+        )
+    })?;
+
+    let resolved = canonical_ancestor.join(missing_suffix);
     let mut normalized = PathBuf::new();
-    for component in absolute.components() {
+    for component in resolved.components() {
         match component {
             std::path::Component::CurDir => {}
             std::path::Component::ParentDir => {
@@ -1520,8 +1549,6 @@ fn cmd_init(root: &Path, args: &InitArgs) -> Result<()> {
     std::fs::create_dir_all(root)
         .with_context(|| format!("failed to create {}", root.display()))?;
     let orch_toml = default_orchestrator_toml(&nets.iter().map(|(n, _)| *n).collect::<Vec<_>>());
-    std::fs::write(&orch_path, orch_toml)
-        .with_context(|| format!("failed to write {}", orch_path.display()))?;
 
     for (name, api_port) in &nets {
         let sub = root.join(name);
@@ -1540,6 +1567,11 @@ fn cmd_init(root: &Path, args: &InitArgs) -> Result<()> {
         println!("initialized network '{}' at {}", name, sub.display());
     }
 
+    // The manifest is the initialization commit point: publish it only after
+    // every declared child workdir is usable, so a failed scaffold remains
+    // retryable instead of looking successfully initialized.
+    std::fs::write(&orch_path, orch_toml)
+        .with_context(|| format!("failed to write {}", orch_path.display()))?;
     println!("Orchestrator written: {}", orch_path.display());
     println!("Edit each <network>/config.toml to set [ckb].workdir before `ckbadger run`.");
     Ok(())
@@ -2165,6 +2197,36 @@ mod tests {
     }
 
     #[test]
+    fn test_init_does_not_publish_manifest_when_child_scaffolding_fails() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().to_path_buf();
+        std::fs::write(root.join("mainnet"), "blocks child directory creation").unwrap();
+
+        let err = cmd_init(
+            &root,
+            &InitArgs {
+                with_testnet: false,
+            },
+        )
+        .unwrap_err();
+        assert!(
+            !root.join("ckbadger.toml").exists(),
+            "the orchestrator manifest must not mark a partial scaffold initialized: {err:#}"
+        );
+
+        std::fs::remove_file(root.join("mainnet")).unwrap();
+        cmd_init(
+            &root,
+            &InitArgs {
+                with_testnet: false,
+            },
+        )
+        .expect("init should recover after the child-path problem is fixed");
+        assert!(root.join("ckbadger.toml").is_file());
+        assert!(root.join("mainnet/config.toml").is_file());
+    }
+
+    #[test]
     fn manual_network_command_enters_the_only_orchestrator_child() {
         let dir = TempDir::new().unwrap();
         let root = dir.path().to_path_buf();
@@ -2358,6 +2420,40 @@ mod tests {
             .to_string();
         assert!(err.contains("domain"), "got: {err}");
         assert!(err.contains("network"), "got: {err}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_check_orchestrator_bindings_rejects_fresh_store_collision_through_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        let shared = root.join("shared");
+        let store_link = root.join("store-link");
+        std::fs::create_dir(&shared).unwrap();
+        symlink(&shared, &store_link).unwrap();
+
+        let mainnet_workdir = root.join("mainnet");
+        let testnet_workdir = root.join("testnet");
+        let mut nets = vec![
+            test_binding("mainnet", 8101, mainnet_workdir.to_str().unwrap()),
+            test_binding("testnet", 8102, testnet_workdir.to_str().unwrap()),
+        ];
+        nets[0].domain_data_path = store_link.join("domain");
+        nets[1].domain_data_path = shared.join("domain");
+        assert!(
+            !nets[0].domain_data_path.exists() && !nets[1].domain_data_path.exists(),
+            "the regression requires both colliding store leaves to be fresh"
+        );
+
+        let err = check_orchestrator_bindings(&nets, TEST_FRONTEND_PORT)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("mainnet"), "got: {err}");
+        assert!(err.contains("testnet"), "got: {err}");
+        assert!(err.contains("domain"), "got: {err}");
+        assert!(err.contains("collides"), "got: {err}");
     }
 
     // -- shared frontend (orchestrator) --

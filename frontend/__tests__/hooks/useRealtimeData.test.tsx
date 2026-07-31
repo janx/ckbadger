@@ -3,6 +3,7 @@ import { act, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom';
+import { NetworkQueryScope } from '@/components/network-query-scope';
 import { useRealtimeData, useRealtimeStore } from '@/hooks/useRealtimeStore';
 
 // A minimal WebSocket stand-in that records every socket the store opens, so we
@@ -55,7 +56,14 @@ function renderHarness(initialPath = '/mainnet/') {
     <QueryClientProvider client={queryClient}>
       <MemoryRouter initialEntries={[initialPath]}>
         <Routes>
-          <Route path="/:network/*" element={<Harness />} />
+          <Route
+            path="/:network/*"
+            element={
+              <NetworkQueryScope>
+                <Harness />
+              </NetworkQueryScope>
+            }
+          />
         </Routes>
       </MemoryRouter>
     </QueryClientProvider>

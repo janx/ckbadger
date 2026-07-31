@@ -19,6 +19,8 @@ vi.mock('@/lib/api', () => ({
     getDotbitItemActivities: vi.fn(),
     getDidCkbItemDetail: vi.fn(),
     getDidCkbItemActivities: vi.fn(),
+    getBitCellItemDetail: vi.fn(),
+    getBitCellItemActivities: vi.fn(),
     getMnftItemDetail: vi.fn(),
     getMnftItemActivities: vi.fn(),
     getNetworkSummary: vi.fn(),
@@ -510,6 +512,51 @@ describe('renderMarkdownPage', () => {
     expect(result.body).toContain('## Activities');
     expect(result.body).toContain('transfer');
     expect(api.getDidCkbItemActivities).toHaveBeenCalledWith('0xdid', {
+      limit: 20,
+      cursor: undefined,
+      action: undefined,
+    });
+  });
+
+  it('renders .bit Cell item detail markdown', async () => {
+    vi.mocked(api.getBitCellItemDetail).mockResolvedValue({
+      nftId: '0xbitcell',
+      name: 'alice.bit-cell',
+      standard: 'bit_cell',
+      ownerLockHash: '0xowner',
+      isLive: true,
+      createdAtBlock: 456,
+      expiredAt: 1800000000,
+      txHash: '0xtx',
+      outputIndex: 3,
+    } as any);
+    vi.mocked(api.getBitCellItemActivities).mockResolvedValue({
+      data: [
+        {
+          txHash: '0xtx',
+          blockNumber: 456,
+          txIndex: 0,
+          timestamp: '1700000000',
+          actions: ['mint'],
+        },
+      ],
+      limit: 20,
+      hasMore: false,
+      nextCursor: null,
+    } as any);
+
+    const result = await renderMarkdownPage({
+      page: parseMarkdownSourcePath('/identities/bit-cell/0xbitcell'),
+      searchParams: new URLSearchParams(),
+      origin: 'http://localhost:3000',
+    });
+
+    expect(result.status).toBe(200);
+    expect(result.body).toContain('# .bit Cell alice.bit-cell');
+    expect(result.body).toContain('## Identity');
+    expect(result.body).toContain('expiredAt');
+    expect(result.body).toContain('## Activities');
+    expect(api.getBitCellItemActivities).toHaveBeenCalledWith('0xbitcell', {
       limit: 20,
       cursor: undefined,
       action: undefined,

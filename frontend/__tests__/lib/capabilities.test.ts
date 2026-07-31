@@ -64,13 +64,18 @@ describe('buildAiCapabilities', () => {
     expect(capabilities.routes.markdown).toContain('/network');
     expect(capabilities.routes.markdown).toContain('/identities/dotbit/{identityId}');
     expect(capabilities.routes.markdown).toContain('/identities/did/{identityId}');
+    expect(capabilities.routes.markdown).toContain('/identities/bit-cell/{identityId}');
     expect(capabilities.routes.markdown).toContain('/objects/mnft/{objectId}');
     expect(capabilities.routes.raw).toContain('/tx/{hash}');
     expect(capabilities.routes.raw).toContain('/identities/dotbit/{identityId}');
     expect(capabilities.routes.raw).toContain('/identities/did/{identityId}');
+    expect(capabilities.routes.raw).toContain('/identities/bit-cell/{identityId}');
     expect(capabilities.routes.raw).toContain('/objects/mnft/{objectId}');
     expect(capabilities.rawProfiles.routes['/identities/dotbit/{identityId}']).toEqual(['default']);
     expect(capabilities.rawProfiles.routes['/identities/did/{identityId}']).toEqual(['default']);
+    expect(capabilities.rawProfiles.routes['/identities/bit-cell/{identityId}']).toEqual([
+      'default',
+    ]);
     expect(capabilities.rawProfiles.routes['/objects/mnft/{objectId}']).toEqual(['default']);
     expect(capabilities.rawProfiles.routes['/tx/{hash}']).toEqual(['default', 'debugger']);
     expect(capabilities.rawProfiles.txDebuggerProfile.payloadPath).toBe(

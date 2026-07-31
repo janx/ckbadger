@@ -29,6 +29,7 @@ Raw output convention:
   - `/cell/{outpoint}.raw` (profile: `default`)
   - `/identities/dotbit/{identityId}.raw` (profile: `default`)
   - `/identities/did/{identityId}.raw` (profile: `default`)
+  - `/identities/bit-cell/{identityId}.raw` (profile: `default`)
   - `/objects/mnft/{objectId}.raw` (profile: `default`)
   - `/tx/{hash}.raw` (profiles: `default`, `debugger`)
 - `profile=debugger` includes `data.txDebugger.mockTransaction`, compatible with `ckb-debugger --tx-file`.
@@ -62,6 +63,7 @@ Known markdown page routes (shown relative to `/{network}`):
 - `/identities/{collectionId}`
 - `/identities/dotbit/{identityId}`
 - `/identities/did/{identityId}`
+- `/identities/bit-cell/{identityId}`
 - `/objects`
 - `/objects/{sporeId}`
 - `/objects/mnft/{objectId}`

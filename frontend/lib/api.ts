@@ -2441,6 +2441,24 @@ export const api = {
     );
   },
 
+  getBitCellItemDetail: (nftId: string): Promise<CollectionItem> => {
+    return fetchApi(`/assets/identities/bit-cell/items/${encodeURIComponent(nftId)}`);
+  },
+
+  getBitCellItemActivities: (
+    nftId: string,
+    params: MnftItemActivitiesParams = {}
+  ): Promise<CursorPaginatedResponse<MnftItemActivity>> => {
+    const query = new URLSearchParams();
+    if (params.limit) query.set('limit', String(params.limit));
+    if (params.cursor) query.set('cursor', params.cursor);
+    if (params.action) query.set('action', params.action);
+    const suffix = query.toString();
+    return fetchApi(
+      `/assets/identities/bit-cell/items/${encodeURIComponent(nftId)}/activities${suffix ? `?${suffix}` : ''}`
+    );
+  },
+
   getMnftItemDetail: (nftId: string): Promise<MnftItemDetail> => {
     return fetchApi(`/assets/objects/items/${encodeURIComponent(nftId)}`);
   },

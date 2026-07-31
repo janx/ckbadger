@@ -165,10 +165,8 @@ function disconnectWebSocket() {
 export function useRealtimeData() {
   const queryClient = useQueryClient();
   const network = useActiveNetwork();
-  const { isConnected, latestBlock, latestTx, setLatestBlock, setLatestTx, reset } =
-    useRealtimeStore();
+  const { isConnected, latestBlock, latestTx, setLatestBlock, setLatestTx } = useRealtimeStore();
   const handlerRef = useRef<MessageHandler | null>(null);
-  const previousNetwork = useRef(network);
 
   const handleMessage = useCallback(
     (message: WebSocketMessage) => {
@@ -242,16 +240,6 @@ export function useRealtimeData() {
     },
     [queryClient, setLatestBlock, setLatestTx]
   );
-
-  // Clear stale realtime data (blocks/txs/connection) when the active network
-  // changes, so a switched-away network's data isn't shown while the socket
-  // reconnects to the new network.
-  useEffect(() => {
-    if (previousNetwork.current !== network) {
-      reset();
-      previousNetwork.current = network;
-    }
-  }, [network, reset]);
 
   useEffect(() => {
     wsSubscribers++;

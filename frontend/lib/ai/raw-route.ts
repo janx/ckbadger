@@ -3,6 +3,7 @@ export type ParsedRawPage =
   | { kind: 'cell_detail'; pathname: string; outpoint: string }
   | { kind: 'dotbit_item_detail'; pathname: string; identityId: string }
   | { kind: 'did_ckb_item_detail'; pathname: string; identityId: string }
+  | { kind: 'bit_cell_item_detail'; pathname: string; identityId: string }
   | { kind: 'mnft_item_detail'; pathname: string; objectId: string }
   | { kind: 'tx_detail'; pathname: string; hash: string }
   | { kind: 'unknown'; pathname: string };
@@ -12,6 +13,7 @@ export const RAW_ROUTE_PATTERNS = [
   '/cell/{outpoint}',
   '/identities/dotbit/{identityId}',
   '/identities/did/{identityId}',
+  '/identities/bit-cell/{identityId}',
   '/objects/mnft/{objectId}',
   '/tx/{hash}',
 ] as const;
@@ -79,6 +81,15 @@ export function parseRawSourcePath(pathname: string): ParsedRawPage {
       kind: 'did_ckb_item_detail',
       pathname: normalized,
       identityId: decodeParam(didMatch[1]),
+    };
+  }
+
+  const bitCellMatch = normalized.match(/^\/identities\/bit-cell\/([^/]+)$/);
+  if (bitCellMatch) {
+    return {
+      kind: 'bit_cell_item_detail',
+      pathname: normalized,
+      identityId: decodeParam(bitCellMatch[1]),
     };
   }
 

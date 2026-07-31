@@ -11,6 +11,8 @@ vi.mock('@/lib/api', () => ({
     getDotbitItemDetail: vi.fn(),
     getDidCkbItemActivities: vi.fn(),
     getDidCkbItemDetail: vi.fn(),
+    getBitCellItemActivities: vi.fn(),
+    getBitCellItemDetail: vi.fn(),
     getMnftItemActivities: vi.fn(),
     getMnftItemDetail: vi.fn(),
     getTransactionDetail: vi.fn(),
@@ -363,6 +365,50 @@ describe('renderRawPage', () => {
     expect(result.body.data?.dotbitActivities?.data[0]?.actions).toEqual(['mint']);
     expect(api.getDotbitItemDetail).toHaveBeenCalledWith('0xdotbit');
     expect(api.getDotbitItemActivities).toHaveBeenCalledWith('0xdotbit', {
+      action: undefined,
+      cursor: undefined,
+      limit: 20,
+    });
+  });
+
+  it('renders .bit Cell item raw with default profile', async () => {
+    vi.mocked(api.getBitCellItemDetail).mockResolvedValue({
+      nftId: '0xbitcell',
+      name: 'alice.bit-cell',
+      standard: 'bit_cell',
+      ownerLockHash: '0xowner',
+      isLive: true,
+      createdAtBlock: 456,
+      txHash: '0xtx',
+      outputIndex: 3,
+      expiredAt: 1_800_000_000,
+    });
+    vi.mocked(api.getBitCellItemActivities).mockResolvedValue({
+      data: [
+        {
+          txHash: '0xactbitcell',
+          blockNumber: 457,
+          txIndex: 0,
+          timestamp: '2026-02-23T00:00:00Z',
+          actions: ['mint'],
+        },
+      ],
+      limit: 20,
+      hasMore: false,
+      nextCursor: null,
+    });
+
+    const result = await renderRawPage({
+      page: parseRawSourcePath('/identities/bit-cell/0xbitcell'),
+      searchParams: new URLSearchParams(),
+      origin: 'http://localhost:3000',
+    });
+
+    expect(result.status).toBe(200);
+    expect(result.body.data?.bitCellItem?.name).toBe('alice.bit-cell');
+    expect(result.body.data?.bitCellActivities?.data[0]?.actions).toEqual(['mint']);
+    expect(api.getBitCellItemDetail).toHaveBeenCalledWith('0xbitcell');
+    expect(api.getBitCellItemActivities).toHaveBeenCalledWith('0xbitcell', {
       action: undefined,
       cursor: undefined,
       limit: 20,

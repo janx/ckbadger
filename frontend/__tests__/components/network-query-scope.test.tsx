@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NetworkQueryScope } from '@/components/network-query-scope';
 import { useActiveNetwork } from '@/hooks/useActiveNetwork';
 import { useRecentBlocksStore } from '@/hooks/useRecentBlocksStore';
+import { useRealtimeStore } from '@/hooks/useRealtimeStore';
 
 function NetworkData({ fetchNetwork }: { fetchNetwork: (network: string) => Promise<string> }) {
   const network = useActiveNetwork();
@@ -60,6 +61,7 @@ describe('NetworkQueryScope', () => {
 
   beforeEach(() => {
     fetchNetwork = vi.fn(async (network: string) => network);
+    useRealtimeStore.getState().reset();
   });
 
   afterEach(() => {
@@ -117,6 +119,41 @@ describe('NetworkQueryScope', () => {
     });
     expect(useRecentBlocksStore.getState().blocks).toEqual([]);
     expect(useRecentBlocksStore.getState().initialized).toBe(false);
+  });
+
+  it('clears module-global realtime data when the network changes', async () => {
+    const user = userEvent.setup();
+    renderScope(fetchNetwork);
+
+    expect(await screen.findByText('mainnet')).toBeInTheDocument();
+    act(() => {
+      useRealtimeStore.setState({
+        isConnected: true,
+        latestBlock: {
+          number: 999,
+          hash: '0xmainnet',
+          timestamp: '2024-01-01T00:00:00Z',
+          transactionsCount: 1,
+        } as never,
+        latestTx: {
+          hash: '0xmainnettx',
+          blockNumber: 999,
+          inputsCount: 1,
+          outputsCount: 1,
+          fee: '1000',
+          timestamp: '2024-01-01T00:00:00Z',
+        } as never,
+      });
+    });
+
+    await user.click(screen.getByRole('button', { name: 'go-testnet' }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('network-data')).toHaveTextContent('testnet');
+      expect(useRealtimeStore.getState().isConnected).toBe(false);
+      expect(useRealtimeStore.getState().latestBlock).toBeNull();
+      expect(useRealtimeStore.getState().latestTx).toBeNull();
+    });
   });
 
   it('does not mutate the parent query cache', async () => {

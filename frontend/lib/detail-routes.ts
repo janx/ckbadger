@@ -36,6 +36,7 @@ export function getMnftClassDetailHref(classId: string): string {
 export function getIdentityCollectionHref(standard: string, collectionId: string): string {
   if (standard === 'dotbit') return '/identities/dotbit';
   if (standard === 'did_ckb' || standard === 'did:ckb') return '/identities/did:ckb';
+  if (standard === 'bit_cell' || standard === 'bit-cell') return '/identities/bit-cell';
   return `/identities/${encodeURIComponent(collectionId)}`;
 }
 
@@ -111,9 +112,12 @@ export function resolveObjectRouteTarget(rawAssetId: string): ObjectRouteTarget 
 }
 
 export function getIdentityItemDetailHref(standard: string, identityId: string): string {
-  if (standard === 'dotbit') return `/identities/dotbit/${encodeURIComponent(identityId)}`;
-  if (standard === 'did_ckb' || standard === 'did:ckb')
+  const normalized = standard.toLowerCase();
+  if (normalized === 'dotbit') return `/identities/dotbit/${encodeURIComponent(identityId)}`;
+  if (normalized === 'did_ckb' || normalized === 'did:ckb')
     return `/identities/did/${encodeURIComponent(identityId)}`;
+  if (normalized === 'bit_cell' || normalized === 'bit-cell')
+    return `/identities/bit-cell/${encodeURIComponent(identityId)}`;
   return `/objects/mnft/${encodeURIComponent(identityId)}`;
 }
 

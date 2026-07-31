@@ -16,6 +16,7 @@ const RAW_ROUTE_PROFILES: Record<string, readonly string[]> = {
   '/cell/{outpoint}': ['default'],
   '/identities/dotbit/{identityId}': ['default'],
   '/identities/did/{identityId}': ['default'],
+  '/identities/bit-cell/{identityId}': ['default'],
   '/objects/mnft/{objectId}': ['default'],
   '/tx/{hash}': ['default', 'debugger'],
 };

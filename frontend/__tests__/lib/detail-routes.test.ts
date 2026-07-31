@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest';
 import {
   DID_CKB_COLLECTION_ID,
   DOTBIT_COLLECTION_ID,
+  getIdentityCollectionHref,
+  getIdentityItemDetailHref,
   getMnftClassDetailHref,
   isDidCkbCollectionAlias,
   isDotbitCollectionAlias,
@@ -63,6 +65,15 @@ describe('resolveObjectRouteTarget', () => {
     expect(resolveObjectRouteTarget('0xnothex')).toEqual({ kind: 'unroutable' });
     expect(resolveObjectRouteTarget('0x123')).toEqual({ kind: 'unroutable' });
     expect(resolveObjectRouteTarget('')).toEqual({ kind: 'unroutable' });
+  });
+});
+
+describe('identity item routes', () => {
+  it('routes .bit Cell IDs to the dedicated identity detail page', () => {
+    expect(getIdentityItemDetailHref('bit_cell', '0xbit/cell')).toBe(
+      '/identities/bit-cell/0xbit%2Fcell'
+    );
+    expect(getIdentityCollectionHref('bit_cell', '0xcollection')).toBe('/identities/bit-cell');
   });
 });
 

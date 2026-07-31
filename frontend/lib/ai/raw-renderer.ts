@@ -37,6 +37,7 @@ const ROUTE_PROFILE_MATRIX: Record<RouteKind, RawProfile[]> = {
   cell_detail: ['default'],
   dotbit_item_detail: ['default'],
   did_ckb_item_detail: ['default'],
+  bit_cell_item_detail: ['default'],
   mnft_item_detail: ['default'],
   tx_detail: ['default', 'debugger'],
 };
@@ -231,6 +232,8 @@ type RawPayload = {
   dotbitActivities?: CursorPaginatedResponse<MnftItemActivity>;
   didCkbItem?: CollectionItem;
   didCkbActivities?: CursorPaginatedResponse<MnftItemActivity>;
+  bitCellItem?: CollectionItem;
+  bitCellActivities?: CursorPaginatedResponse<MnftItemActivity>;
   mnftItem?: MnftItemDetail;
   mnftActivities?: CursorPaginatedResponse<MnftItemActivity>;
   transaction?: TransactionDetail;
@@ -802,6 +805,23 @@ export async function renderRawPage(input: RenderRawInput): Promise<RenderRawOut
         return {
           status: 200,
           body: { meta, data: { didCkbItem, didCkbActivities } },
+        };
+      }
+      case 'bit_cell_item_detail': {
+        const limit = parseLimit(searchParams);
+        const cursor = searchParams.get('cursor') ?? undefined;
+        const action = parseMnftActivityAction(searchParams.get('action'));
+        const [bitCellItem, bitCellActivities] = await Promise.all([
+          api.getBitCellItemDetail(page.identityId),
+          api.getBitCellItemActivities(page.identityId, {
+            limit,
+            cursor,
+            action,
+          }),
+        ]);
+        return {
+          status: 200,
+          body: { meta, data: { bitCellItem, bitCellActivities } },
         };
       }
       case 'mnft_item_detail': {

@@ -20,6 +20,7 @@ Machine-friendly endpoints:
   - Example: `/mainnet/tx/0x....raw?profile=debugger`
   - Example: `/mainnet/identities/dotbit/{identityId}.raw`
   - Example: `/testnet/identities/did/{identityId}.raw`
+  - Example: `/mainnet/identities/bit-cell/{identityId}.raw`
   - Example: `/mainnet/objects/mnft/{objectId}.raw`
   - `profile=debugger` returns `mockTransaction` for `ckb-debugger --tx-file`
   - `/tx/{hash}.raw` also includes `data.txWitness` (witness analyses + inference)
@@ -38,7 +39,7 @@ Core page groups below are relative to `/{network}`:
 - `/objects`, `/objects/{sporeId}`, `/objects/mnft/{objectId}`
 - `/clusters/{clusterId}`, `/classes/{classId}`
 - `/identities/{collectionId}`, `/identities/dotbit/{identityId}`,
-  `/identities/did/{identityId}`
+  `/identities/did/{identityId}`, `/identities/bit-cell/{identityId}`
 - `/scripts`, `/scripts/{name}`, `/script/{codeHash}`
 - `/dao`, `/dao/charts`
 - `/fiber/channels`, `/fiber/channels/{channelId}`

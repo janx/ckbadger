@@ -53,6 +53,7 @@ export type ParsedMarkdownPage =
   | { kind: 'object_detail'; pathname: string; sporeId: string }
   | { kind: 'dotbit_item_detail'; pathname: string; identityId: string }
   | { kind: 'did_ckb_item_detail'; pathname: string; identityId: string }
+  | { kind: 'bit_cell_item_detail'; pathname: string; identityId: string }
   | { kind: 'mnft_item_detail'; pathname: string; objectId: string }
   | { kind: 'script_by_code_hash'; pathname: string; codeHash: string }
   | { kind: 'scripts_list'; pathname: '/scripts' }
@@ -88,6 +89,7 @@ export const MARKDOWN_ROUTE_PATTERNS = [
   '/identities/{collectionId}',
   '/identities/dotbit/{identityId}',
   '/identities/did/{identityId}',
+  '/identities/bit-cell/{identityId}',
   '/objects',
   '/objects/{sporeId}',
   '/objects/mnft/{objectId}',
@@ -253,6 +255,15 @@ export function parseMarkdownSourcePath(pathname: string): ParsedMarkdownPage {
       kind: 'did_ckb_item_detail',
       pathname: normalized,
       identityId: decodeParam(didItemMatch[1]),
+    };
+  }
+
+  const bitCellItemMatch = normalized.match(/^\/identities\/bit-cell\/([^/]+)$/);
+  if (bitCellItemMatch) {
+    return {
+      kind: 'bit_cell_item_detail',
+      pathname: normalized,
+      identityId: decodeParam(bitCellItemMatch[1]),
     };
   }
 

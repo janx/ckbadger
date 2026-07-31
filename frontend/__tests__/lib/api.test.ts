@@ -930,6 +930,58 @@ describe('api', () => {
       expect(activities.data[0].actions[0]).toBe('transfer');
     });
 
+    it('fetches .bit Cell item detail', async () => {
+      server.use(
+        http.get('/api/:network/v1/assets/identities/bit-cell/items/:nftId', ({ params }) => {
+          expect(params.nftId).toBe('0xbitcell');
+          return HttpResponse.json({
+            nftId: '0xbitcell',
+            name: 'alice.bit-cell',
+            standard: 'bit_cell',
+            ownerLockHash: '0xowner',
+            isLive: true,
+            createdAtBlock: 456,
+            expiredAt: 1800000000,
+            txHash: '0xtx',
+            outputIndex: 3,
+          });
+        })
+      );
+
+      const detail = await api.getBitCellItemDetail('0xbitcell');
+      expect(detail.nftId).toBe('0xbitcell');
+      expect(detail.standard).toBe('bit_cell');
+      expect(detail.outputIndex).toBe(3);
+    });
+
+    it('fetches .bit Cell item activities with query params', async () => {
+      server.use(
+        http.get(
+          '/api/:network/v1/assets/identities/bit-cell/items/:nftId/activities',
+          ({ request, params }) => {
+            const url = new URL(request.url);
+            expect(params.nftId).toBe('0xbitcell');
+            expect(url.searchParams.get('limit')).toBe('20');
+            expect(url.searchParams.get('cursor')).toBe('456:0');
+            expect(url.searchParams.get('action')).toBe('transfer');
+            return HttpResponse.json({
+              data: [],
+              limit: 20,
+              hasMore: false,
+              nextCursor: null,
+            });
+          }
+        )
+      );
+
+      const activities = await api.getBitCellItemActivities('0xbitcell', {
+        limit: 20,
+        cursor: '456:0',
+        action: 'transfer',
+      });
+      expect(activities.data).toEqual([]);
+    });
+
     it('fetches mnft item detail', async () => {
       server.use(
         http.get('/api/:network/v1/assets/objects/items/:nftId', ({ params }) => {
