@@ -181,7 +181,7 @@ export function buildAiCapabilities(origin?: string): AiCapabilities & { origin?
         profile: 'debugger',
         payloadPath: 'data.txDebugger.mockTransaction',
         debuggerCommandTemplate:
-          'curl "<url>.raw?profile=debugger" | jq \'.data.txDebugger.mockTransaction\' > mock_tx.json && ckb-debugger --tx-file mock_tx.json --cell-index 0 --cell-type input --script-group-type lock',
+          "curl \"<url>.raw?profile=debugger\" | jq '.data.txDebugger.mockTransaction' > mock_tx.json && ckb-debugger --tx-file mock_tx.json --cell-index 0 --cell-type input --script-group-type lock --script-version <2|1|0: VM ceiling at the tx's commit epoch; 0 pre-Mirana, 1 pre-Meepo, else 2>",
       },
       txWitnessPayload: {
         route: '/tx/{hash}',

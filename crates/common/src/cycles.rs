@@ -196,13 +196,60 @@ pub struct RpcCellData {
     pub content: String,
 }
 
-pub async fn calculate_cycles(ckb_rpc_url: &str, tx_hash: &str) -> Result<i64, String> {
-    let tx = fetch_transaction(ckb_rpc_url, tx_hash).await?;
-    let mock_tx = build_mock_transaction(ckb_rpc_url, &tx).await?;
-    run_ckb_debugger(&mock_tx).await
+/// VM activation epochs read from the chain's `get_consensus` hardfork features.
+///
+/// `u64::MAX` means the feature is not activated on this chain (absent entry or
+/// null `epoch_number`), so no reachable epoch ever selects that VM.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VmActivationEpochs {
+    /// RFC0032 (CKB-VM version 1) activation epoch.
+    pub vm1: u64,
+    /// RFC0049 (CKB-VM version 2) activation epoch.
+    pub vm2: u64,
 }
 
-async fn fetch_transaction(ckb_rpc_url: &str, tx_hash: &str) -> Result<RpcTransaction, String> {
+/// RFC number activating CKB-VM version 1 (CKB2021 / Mirana).
+const RFC_VM1: &str = "0032";
+/// RFC number activating CKB-VM version 2 (CKB2023 / Meepo).
+const RFC_VM2: &str = "0049";
+
+pub async fn calculate_cycles(ckb_rpc_url: &str, tx_hash: &str) -> Result<i64, String> {
+    let (tx, tx_status) = fetch_transaction(ckb_rpc_url, tx_hash).await?;
+
+    // Consensus pins VM selection to the epoch of the block that COMMITTED the
+    // transaction (RFC0032/RFC0049). Without a commit block there is no epoch,
+    // so cycles are undefined — fail fast instead of guessing a VM.
+    if tx_status.status != "committed" {
+        return Err(format!(
+            "cannot calculate cycles for tx {}: tx status is '{}', not 'committed'",
+            tx_hash, tx_status.status
+        ));
+    }
+    let block_hash = tx_status.block_hash.ok_or_else(|| {
+        format!(
+            "cannot calculate cycles for tx {}: status is 'committed' but block_hash is missing",
+            tx_hash
+        )
+    })?;
+
+    let epochs = fetch_vm_activation_epochs(ckb_rpc_url).await?;
+    let header = fetch_header(ckb_rpc_url, &block_hash).await?;
+    let epoch_number = parse_epoch_number(&header.epoch).map_err(|e| {
+        format!(
+            "invalid epoch in commit header {} for tx {}: {}",
+            block_hash, tx_hash, e
+        )
+    })?;
+    let script_version = script_version_for_epoch(epoch_number, &epochs);
+
+    let mock_tx = build_mock_transaction(ckb_rpc_url, &tx).await?;
+    run_ckb_debugger(&mock_tx, script_version).await
+}
+
+async fn fetch_transaction(
+    ckb_rpc_url: &str,
+    tx_hash: &str,
+) -> Result<(RpcTransaction, TxStatus), String> {
     let client = reqwest::Client::new();
     let body = serde_json::json!({
         "id": 1,
@@ -225,9 +272,113 @@ async fn fetch_transaction(ckb_rpc_url: &str, tx_hash: &str) -> Result<RpcTransa
         return Err(format!("RPC error: {}", err.message));
     }
 
-    resp.result
-        .and_then(|r| r.transaction)
-        .ok_or_else(|| "Transaction not found".to_string())
+    let with_status = resp
+        .result
+        .ok_or_else(|| format!("Transaction {} not found", tx_hash))?;
+    let status = with_status.tx_status.status.clone();
+    let tx = with_status.transaction.ok_or_else(|| {
+        format!(
+            "Transaction {} has no transaction body (status: '{}')",
+            tx_hash, status
+        )
+    })?;
+
+    Ok((tx, with_status.tx_status))
+}
+
+/// Fetch the VM activation epochs (RFC0032 -> VM1, RFC0049 -> VM2) from the
+/// chain's `get_consensus` response. Chain data is the source of truth — no
+/// per-network hardcoded tables.
+async fn fetch_vm_activation_epochs(ckb_rpc_url: &str) -> Result<VmActivationEpochs, String> {
+    let client = reqwest::Client::new();
+    let body = serde_json::json!({
+        "id": 1,
+        "jsonrpc": "2.0",
+        "method": "get_consensus",
+        "params": []
+    });
+
+    let resp: RpcResponse<serde_json::Value> = client
+        .post(ckb_rpc_url)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("RPC request failed: {}", e))?
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse RPC response: {}", e))?;
+
+    if let Some(err) = resp.error {
+        return Err(format!("RPC error: {}", err.message));
+    }
+
+    let consensus = resp
+        .result
+        .ok_or_else(|| "get_consensus returned no result".to_string())?;
+
+    parse_vm_activation_epochs(&consensus)
+}
+
+/// Extract VM activation epochs from a `get_consensus` result object.
+///
+/// An absent rfc entry or a null `epoch_number` means the feature is not
+/// activated on this chain and maps to `u64::MAX`. A malformed
+/// `hardfork_features` shape or a non-hex epoch value is an error.
+fn parse_vm_activation_epochs(consensus: &serde_json::Value) -> Result<VmActivationEpochs, String> {
+    let features = consensus
+        .get("hardfork_features")
+        .and_then(|f| f.as_array())
+        .ok_or_else(|| "get_consensus result missing hardfork_features array".to_string())?;
+
+    Ok(VmActivationEpochs {
+        vm1: vm_activation_epoch_for_rfc(features, RFC_VM1)?,
+        vm2: vm_activation_epoch_for_rfc(features, RFC_VM2)?,
+    })
+}
+
+fn vm_activation_epoch_for_rfc(features: &[serde_json::Value], rfc: &str) -> Result<u64, String> {
+    let entry = features
+        .iter()
+        .find(|f| f.get("rfc").and_then(|r| r.as_str()) == Some(rfc));
+
+    match entry {
+        // Absent entry: the feature does not exist on this chain.
+        None => Ok(u64::MAX),
+        Some(feature) => match feature.get("epoch_number") {
+            // Null (or omitted) epoch_number: known feature, not activated.
+            None | Some(serde_json::Value::Null) => Ok(u64::MAX),
+            Some(serde_json::Value::String(hex)) => parse_hex_u64(hex)
+                .map_err(|e| format!("invalid epoch_number for rfc {}: {}", rfc, e)),
+            Some(other) => Err(format!(
+                "unexpected epoch_number type for rfc {}: {}",
+                rfc, other
+            )),
+        },
+    }
+}
+
+/// Map a commit-block epoch number to the consensus CKB-VM script version.
+fn script_version_for_epoch(epoch_number: u64, epochs: &VmActivationEpochs) -> u8 {
+    if epoch_number >= epochs.vm2 {
+        2
+    } else if epoch_number >= epochs.vm1 {
+        1
+    } else {
+        0
+    }
+}
+
+fn parse_hex_u64(hex: &str) -> Result<u64, String> {
+    let stripped = hex.strip_prefix("0x").unwrap_or(hex);
+    u64::from_str_radix(stripped, 16).map_err(|e| format!("invalid hex u64 '{}': {}", hex, e))
+}
+
+/// Extract the epoch number from a header `epoch` field.
+///
+/// The header packs `length << 40 | index << 24 | number`; the epoch number is
+/// the low 24 bits.
+fn parse_epoch_number(epoch_hex: &str) -> Result<u64, String> {
+    Ok(parse_hex_u64(epoch_hex)? & 0xFF_FFFF)
 }
 
 async fn fetch_cell_with_data(
@@ -618,21 +769,37 @@ fn enumerate_script_groups(mock_tx: &MockTransaction) -> Vec<ScriptGroupRef> {
     groups
 }
 
+/// Build the ckb-debugger argument list for one script group.
+///
+/// `--script-version` must always be pinned explicitly: ckb-debugger defaults
+/// to VM2 for `hash_type: "type"` groups, but consensus selects the VM from the
+/// commit block's epoch.
+fn debugger_args_for_group(
+    temp_file: &str,
+    group: &ScriptGroupRef,
+    script_version: u8,
+) -> Vec<String> {
+    vec![
+        "--tx-file".to_string(),
+        temp_file.to_string(),
+        "--cell-index".to_string(),
+        group.cell_index.to_string(),
+        "--cell-type".to_string(),
+        group.cell_type.to_string(),
+        "--script-group-type".to_string(),
+        group.script_group_type.to_string(),
+        "--script-version".to_string(),
+        script_version.to_string(),
+    ]
+}
+
 async fn run_ckb_debugger_for_group(
     temp_file: &str,
     group: &ScriptGroupRef,
+    script_version: u8,
 ) -> Result<i64, String> {
     let output = Command::new("ckb-debugger")
-        .args([
-            "--tx-file",
-            temp_file,
-            "--cell-index",
-            &group.cell_index.to_string(),
-            "--cell-type",
-            group.cell_type,
-            "--script-group-type",
-            group.script_group_type,
-        ])
+        .args(debugger_args_for_group(temp_file, group, script_version))
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()
@@ -646,6 +813,7 @@ async fn run_ckb_debugger_for_group(
         group_type = group.script_group_type,
         cell_type = group.cell_type,
         cell_index = group.cell_index,
+        script_version,
         "ckb-debugger stdout: {}",
         stdout
     );
@@ -655,11 +823,11 @@ async fn run_ckb_debugger_for_group(
     parse_all_cycles_from_output(&combined)
 }
 
-async fn run_ckb_debugger(mock_tx: &MockTransaction) -> Result<i64, String> {
+async fn run_ckb_debugger(mock_tx: &MockTransaction, script_version: u8) -> Result<i64, String> {
     let json = serde_json::to_string(mock_tx)
         .map_err(|e| format!("Failed to serialize mock transaction: {}", e))?;
 
-    debug!("Running ckb-debugger with mock transaction");
+    debug!(script_version, "Running ckb-debugger with mock transaction");
 
     let temp_dir = std::env::temp_dir();
     let temp_file = temp_dir.join(format!("ckbadger_mock_tx_{}.json", uuid::Uuid::new_v4()));
@@ -680,7 +848,7 @@ async fn run_ckb_debugger(mock_tx: &MockTransaction) -> Result<i64, String> {
 
     let mut total_cycles: i64 = 0;
     for group in &groups {
-        match run_ckb_debugger_for_group(temp_file_str, group).await {
+        match run_ckb_debugger_for_group(temp_file_str, group, script_version).await {
             Ok(cycles) => {
                 total_cycles = total_cycles
                     .checked_add(cycles)
@@ -763,6 +931,212 @@ mod tests {
         );
         assert_eq!(out_points[0].index, "0x3");
         assert_eq!(out_points[1].index, "0x1");
+    }
+
+    #[test]
+    fn test_debugger_args_include_script_version() {
+        let group = ScriptGroupRef {
+            cell_index: 3,
+            cell_type: "input",
+            script_group_type: "lock",
+        };
+        let args = debugger_args_for_group("/tmp/mock_tx.json", &group, 1);
+        let pos = args
+            .iter()
+            .position(|a| a == "--script-version")
+            .unwrap_or_else(|| {
+                panic!(
+                    "ckb-debugger args must pin --script-version (consensus VM selection \
+                     is defined by the commit block's epoch; without it ckb-debugger \
+                     defaults to VM2 for every group), got: {:?}",
+                    args
+                )
+            });
+        assert_eq!(
+            args[pos + 1],
+            "1",
+            "mapped script version must follow the flag"
+        );
+
+        // The pre-existing group args must survive the refactor.
+        for expected in [
+            "--tx-file",
+            "/tmp/mock_tx.json",
+            "--cell-index",
+            "3",
+            "--cell-type",
+            "input",
+            "--script-group-type",
+            "lock",
+        ] {
+            assert!(
+                args.iter().any(|a| a == expected),
+                "missing arg {}",
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn test_script_version_for_epoch_boundaries() {
+        // Mainnet chain-truth epochs: RFC0032 at 5414, RFC0049 at 12293.
+        let mainnet = VmActivationEpochs {
+            vm1: 5414,
+            vm2: 12293,
+        };
+        assert_eq!(script_version_for_epoch(5413, &mainnet), 0);
+        assert_eq!(script_version_for_epoch(5414, &mainnet), 1);
+        assert_eq!(script_version_for_epoch(12292, &mainnet), 1);
+        assert_eq!(script_version_for_epoch(12293, &mainnet), 2);
+
+        // vm2 not activated -> even the max representable epoch number (24 bits)
+        // stays on the lower version.
+        let no_vm2 = VmActivationEpochs {
+            vm1: 5414,
+            vm2: u64::MAX,
+        };
+        assert_eq!(script_version_for_epoch(0xFF_FFFF, &no_vm2), 1);
+
+        // Nothing activated -> always VM0.
+        let no_forks = VmActivationEpochs {
+            vm1: u64::MAX,
+            vm2: u64::MAX,
+        };
+        assert_eq!(script_version_for_epoch(0, &no_forks), 0);
+        assert_eq!(script_version_for_epoch(0xFF_FFFF, &no_forks), 0);
+    }
+
+    /// Shaped like a real mainnet `get_consensus` result (extra fields included
+    /// to prove tolerance; key order matches the live node).
+    fn consensus_fixture() -> serde_json::Value {
+        serde_json::json!({
+            "block_version": "0x0",
+            "genesis_hash": "0x92b197aa1fba0f63633922c61c92375c9c074a93e85963554f5499fe1450d0e5",
+            "hardfork_features": [
+                { "epoch_number": "0x1526", "rfc": "0028" },
+                { "epoch_number": "0x0", "rfc": "0029" },
+                { "epoch_number": "0x0", "rfc": "0030" },
+                { "epoch_number": "0x0", "rfc": "0031" },
+                { "epoch_number": "0x1526", "rfc": "0032" },
+                { "epoch_number": "0x0", "rfc": "0036" },
+                { "epoch_number": "0x0", "rfc": "0038" },
+                { "epoch_number": "0x3005", "rfc": "0048" },
+                { "epoch_number": "0x3005", "rfc": "0049" }
+            ],
+            "id": "ckb",
+            "max_block_cycles": "0xd09dc300"
+        })
+    }
+
+    #[test]
+    fn test_parse_vm_activation_epochs_from_consensus_fixture() {
+        let epochs = parse_vm_activation_epochs(&consensus_fixture()).unwrap();
+        assert_eq!(epochs.vm1, 5414); // 0x1526
+        assert_eq!(epochs.vm2, 12293); // 0x3005
+    }
+
+    #[test]
+    fn test_parse_vm_activation_epochs_null_epoch_means_not_activated() {
+        // A chain where RFC0049 is known but not activated: epoch_number null.
+        let mut consensus = consensus_fixture();
+        let features = consensus["hardfork_features"].as_array_mut().unwrap();
+        features[8]["epoch_number"] = serde_json::Value::Null;
+
+        let epochs = parse_vm_activation_epochs(&consensus).unwrap();
+        assert_eq!(epochs.vm1, 5414);
+        assert_eq!(epochs.vm2, u64::MAX);
+    }
+
+    #[test]
+    fn test_parse_vm_activation_epochs_absent_entry_means_not_activated() {
+        // A chain that predates RFC0049 entirely: no "0049" entry.
+        let mut consensus = consensus_fixture();
+        let features = consensus["hardfork_features"].as_array_mut().unwrap();
+        features.retain(|f| f["rfc"] != "0049");
+
+        let epochs = parse_vm_activation_epochs(&consensus).unwrap();
+        assert_eq!(epochs.vm1, 5414);
+        assert_eq!(epochs.vm2, u64::MAX);
+    }
+
+    #[test]
+    fn test_parse_vm_activation_epochs_malformed_is_error() {
+        // Missing hardfork_features entirely.
+        let no_features = serde_json::json!({ "id": "ckb" });
+        assert!(parse_vm_activation_epochs(&no_features)
+            .unwrap_err()
+            .contains("hardfork_features"));
+
+        // Non-hex epoch_number on the rfc 0032 entry.
+        let mut bad_hex = consensus_fixture();
+        bad_hex["hardfork_features"][4]["epoch_number"] = serde_json::json!("not-hex");
+        assert!(parse_vm_activation_epochs(&bad_hex)
+            .unwrap_err()
+            .contains("rfc 0032"));
+    }
+
+    #[test]
+    fn test_parse_epoch_number_from_header_epoch() {
+        // Header epoch packs length << 40 | index << 24 | number.
+        let packed: u64 = (1800u64 << 40) | (5u64 << 24) | 5414;
+        let hex = format!("0x{:x}", packed);
+        assert_eq!(parse_epoch_number(&hex), Ok(5414));
+
+        // Genesis-style plain epoch.
+        assert_eq!(parse_epoch_number("0x0"), Ok(0));
+
+        // Parse failures are errors, not defaults.
+        assert!(parse_epoch_number("0xzz").is_err());
+        assert!(parse_epoch_number("").is_err());
+    }
+
+    /// Empirical consensus-truth validation against a local mainnet node.
+    ///
+    /// Requires a synced mainnet CKB node (default http://127.0.0.1:8114,
+    /// override via CKBADGER_TEST_RPC) plus ckb-debugger on PATH. Run with:
+    /// `cargo test -p ckbadger-common -- --ignored --nocapture`
+    #[tokio::test]
+    #[ignore = "requires local mainnet CKB node + ckb-debugger binary"]
+    async fn test_calculate_cycles_matches_consensus_across_vm_eras() {
+        let rpc_url = std::env::var("CKBADGER_TEST_RPC")
+            .unwrap_or_else(|_| "http://127.0.0.1:8114".to_string());
+
+        let cases: [(&str, i64, &str); 3] = [
+            // NOTE: the official explorer reports 1,700,168 for this tx, which
+            // is its VM1 execution — impossible at commit time (epoch 264,
+            // January 2020; RFC0032/VM1 activated at epoch 5414, May 2022).
+            // Consensus verification of block 420003 ran VM0: 1,709,221.
+            // ckb-debugger per version: v0=1,709,221 v1=1,700,168 v2=1,644,449.
+            (
+                "0x0f8a27d60818030ad7da6a35559a79fb052ffb0f4911f9b9ae04a40ee8ba0747",
+                1_709_221,
+                "VM0 era (epoch 264)",
+            ),
+            (
+                "0x648c489a392b17e8345644f1612b8f112c6a1d680eff92034988b42946abceac",
+                3_051_004,
+                "VM1 era",
+            ),
+            (
+                "0x32cc2f0725595cb7bdda6f97f3e737069e1f7191b37ed9c41daf01c4b921d579",
+                6_895_905,
+                "VM2 era",
+            ),
+        ];
+
+        for (tx_hash, expected, era) in cases {
+            let cycles = calculate_cycles(&rpc_url, tx_hash)
+                .await
+                .unwrap_or_else(|e| {
+                    panic!("calculate_cycles failed for {} ({}): {}", tx_hash, era, e)
+                });
+            println!("{} ({}): {} cycles", tx_hash, era, cycles);
+            assert_eq!(
+                cycles, expected,
+                "cycles mismatch for {} ({})",
+                tx_hash, era
+            );
+        }
     }
 
     #[test]
