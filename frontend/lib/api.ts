@@ -1633,7 +1633,9 @@ interface CapacityCategory {
 
 interface AssetEcosystemResponse {
   topTokens: TopTokenEntry[];
+  /** Shares of total live capacity (C − S at the tip), not of knowledge size. */
   capacityBreakdown: CapacityCategory[];
+  totalLiveCapacityCkb: string;
   totalKnowledgeSizeCkb: string;
 }
 

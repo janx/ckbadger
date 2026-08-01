@@ -52,13 +52,16 @@ function mockAssetEcosystem(
         totalCapacityCkb: '80000.00',
       },
     ],
+    // Percentages are shares of totalLiveCapacityCkb (the four categories
+    // partition it exactly); knowledge size is a standalone stat.
     capacityBreakdown: [
-      { category: 'dao', capacityCkb: '11200000000.00', percentage: '57.1' },
-      { category: 'tokens', capacityCkb: '1500000000.00', percentage: '7.6' },
-      { category: 'objects', capacityCkb: '500000000.00', percentage: '2.5' },
-      { category: 'other', capacityCkb: '6300000000.00', percentage: '32.8' },
+      { category: 'dao', capacityCkb: '11200000000.00', percentage: '57.4' },
+      { category: 'tokens', capacityCkb: '1500000000.00', percentage: '7.7' },
+      { category: 'objects', capacityCkb: '500000000.00', percentage: '2.6' },
+      { category: 'other', capacityCkb: '6300000000.00', percentage: '32.3' },
     ],
-    totalKnowledgeSizeCkb: '19500000000.00',
+    totalLiveCapacityCkb: '19500000000.00',
+    totalKnowledgeSizeCkb: '7300000000.00',
     ...overrides,
   };
 }
@@ -104,9 +107,9 @@ describe('AssetEcosystem', () => {
     expect(screen.getByText('Tokens')).toBeInTheDocument();
     expect(screen.getByText('Objects')).toBeInTheDocument();
     expect(screen.getByText('Other')).toBeInTheDocument();
-    expect(screen.getByText('57.1%')).toBeInTheDocument();
-    expect(screen.getByText('7.6%')).toBeInTheDocument();
-    expect(screen.getByText('2.5%')).toBeInTheDocument();
-    expect(screen.getByText('32.8%')).toBeInTheDocument();
+    expect(screen.getByText('57.4%')).toBeInTheDocument();
+    expect(screen.getByText('7.7%')).toBeInTheDocument();
+    expect(screen.getByText('2.6%')).toBeInTheDocument();
+    expect(screen.getByText('32.3%')).toBeInTheDocument();
   });
 });

@@ -236,6 +236,94 @@ async fn test_recent_blocks_endpoint_empty_db() {
     assert!(json["blocks"].as_array().unwrap().is_empty());
 }
 
+fn recent_block_header(number: i64, ts_ms: i64) -> CachedBlockHeader {
+    CachedBlockHeader {
+        hash: vec![(number % 251) as u8; 32],
+        parent_hash: vec![0u8; 32],
+        timestamp: ts_ms,
+        epoch_number: 1,
+        epoch_index: 0,
+        epoch_length: 1800,
+        dao: vec![0; 32],
+        transactions_count: 2,
+        uncles_count: 0,
+        proposals_count: 0,
+        compact_target: 0,
+        miner_lock_hash: None,
+        cycles: None,
+    }
+}
+
+/// Regression (C4): the 24h window must never be silently truncated by a
+/// fixed fetch cap. Node-proven: 2026-07-30 (UTC+8) had 10,141 blocks inside
+/// 24h, while the old implementation fetched a single 10,000-block page and
+/// filtered, silently dropping the oldest in-window blocks.
+#[tokio::test]
+async fn test_recent_blocks_covers_full_24h_window_beyond_10000_blocks() {
+    let store = test_store();
+
+    let tip_ms: i64 = 1_800_000_000_000;
+    let cutoff_ms = tip_ms - 24 * 3600 * 1000;
+    let in_window = 10_001i64;
+    // 10,000 gaps at 8s span ~22.2h — every seeded recent block sits inside
+    // the 24h window.
+    let oldest_in_window_ms = tip_ms - (in_window - 1) * 8_000;
+    assert!(oldest_in_window_ms > cutoff_ms);
+
+    let mut batch = StoreBatch::new(store.as_ref());
+    // Blocks 3..=10_003 are inside the window (10_001 blocks, tip = 10_003)…
+    for i in 0..in_window {
+        let number = 3 + i;
+        batch.put_block_header(
+            number,
+            &recent_block_header(number, oldest_in_window_ms + i * 8_000),
+        );
+    }
+    // …blocks 0..=2 are at/before the cutoff and must be excluded.
+    for number in 0..3i64 {
+        batch.put_block_header(
+            number,
+            &recent_block_header(number, cutoff_ms - (3 - number) * 8_000),
+        );
+    }
+    batch.commit().unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri("/api/v1/statistics/recent-blocks")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let blocks = json["blocks"].as_array().unwrap();
+
+    assert_eq!(
+        blocks.len(),
+        in_window as usize,
+        "every block inside the 24h window must be returned"
+    );
+    // Ascending order: first is the oldest in-window block, last is the tip.
+    assert_eq!(
+        blocks[0]["timestamp"].as_i64().unwrap(),
+        oldest_in_window_ms
+    );
+    assert_eq!(
+        blocks.last().unwrap()["timestamp"].as_i64().unwrap(),
+        tip_ms
+    );
+    assert!(
+        blocks
+            .iter()
+            .all(|b| b["timestamp"].as_i64().unwrap() > cutoff_ms),
+        "blocks at/before the cutoff must be excluded"
+    );
+}
+
 #[tokio::test]
 async fn test_tx_stats_reads_from_derived_store() {
     let core_store = test_store();
@@ -391,8 +479,10 @@ async fn test_network_stats_reads_derived_statistics() {
     //    not a daily average;
     //  - avgBlockTime = windowed average with ms precision (two 8s gaps →
     //    "8.00s"), not a hardcoded 10.00s;
-    //  - hashRate = difficulty / avg seconds in true H/s ("165.01 PH/s"),
-    //    not the 1000×-understated per-millisecond figure;
+    //  - hashRate = the window's summed per-block work over its span in true
+    //    H/s ("165.01 PH/s"; equal to difficulty / avg seconds here because
+    //    the seeded window is uniform-difficulty), not the 1000×-understated
+    //    per-millisecond figure;
     //  - transactionsPerDay = the rolling last-24h rate normalized to a day
     //    (count / window_secs * 86400) from the same hourly-bucket window as
     //    tps/perMinute — not today+yesterday calendar days, and not the raw
@@ -1378,6 +1468,32 @@ async fn test_hodl_wave_chart_with_data() {
 async fn test_asset_ecosystem_returns_expected_structure() {
     let store = test_store();
 
+    // Tip header supplies the live-capacity denominator (C − S = 100k CKB),
+    // consistent with the 500 CKB token seeded below (cells cannot exist
+    // without blocks; a categorized capacity above live capacity fails fast).
+    let mut dao_field = vec![0u8; 32];
+    dao_field[0..8].copy_from_slice(&10_000_000_000_000u64.to_le_bytes());
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_block_header(
+        100,
+        &CachedBlockHeader {
+            hash: vec![0x11; 32],
+            parent_hash: vec![0u8; 32],
+            timestamp: 1_800_000_000_000,
+            epoch_number: 1,
+            epoch_index: 0,
+            epoch_length: 1800,
+            dao: dao_field,
+            transactions_count: 1,
+            uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
+            cycles: None,
+        },
+    );
+    batch.commit().unwrap();
+
     // Seed one token so the warmup cache populates CACHE_KEY_ASSETS_TOKEN.
     store
         .put_token_direct(
@@ -1437,6 +1553,10 @@ async fn test_asset_ecosystem_returns_expected_structure() {
         "capacityBreakdown should be an array"
     );
     assert!(
+        json["totalLiveCapacityCkb"].is_string(),
+        "totalLiveCapacityCkb should be a string"
+    );
+    assert!(
         json["totalKnowledgeSizeCkb"].is_string(),
         "totalKnowledgeSizeCkb should be a string"
     );
@@ -1455,6 +1575,163 @@ async fn test_asset_ecosystem_returns_expected_structure() {
         .map(|c| c["category"].as_str().unwrap())
         .collect();
     assert_eq!(categories, vec!["dao", "tokens", "objects", "other"]);
+}
+
+/// Regression (C3): the capacity breakdown must be a share of TOTAL LIVE
+/// CAPACITY (C − S from the tip header's DAO field), not of the snapshot
+/// knowledge size. The old denominator counted occupied bytes only while the
+/// dao numerator was full deposit capacity (mostly free capacity), producing
+/// a self-contradictory 161% DAO share whose violation the `other` clamp
+/// silently masked.
+#[tokio::test]
+async fn test_asset_ecosystem_breakdown_is_share_of_total_live_capacity() {
+    let store = test_store();
+
+    // Tip header DAO field with realistic mainnet magnitudes:
+    // C = 47.9B CKB total issuance, S = 0.3B CKB unissued secondary
+    // ⇒ total live capacity C − S = 47.6B CKB.
+    let total_issuance_c: u64 = 4_790_000_000_000_000_000;
+    let unissued_secondary_s: u64 = 30_000_000_000_000_000;
+    let mut dao_field = vec![0u8; 32];
+    dao_field[0..8].copy_from_slice(&total_issuance_c.to_le_bytes());
+    dao_field[16..24].copy_from_slice(&unissued_secondary_s.to_le_bytes());
+
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_block_header(
+        200,
+        &CachedBlockHeader {
+            hash: vec![0x66; 32],
+            parent_hash: vec![0u8; 32],
+            timestamp: 1_800_000_000_000,
+            epoch_number: 42,
+            epoch_index: 10,
+            epoch_length: 1800,
+            dao: dao_field,
+            transactions_count: 1,
+            uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
+            cycles: None,
+        },
+    );
+    batch.commit().unwrap();
+
+    // DAO snapshot: 8.37B CKB deposited but only 5.2B CKB knowledge size —
+    // deposits are mostly free capacity, so deposited > knowledge is the
+    // structural norm, and the old knowledge denominator showed dao = 160.96%.
+    let snapshot = DaoDailySnapshot {
+        date: "2026-07-30".to_string(),
+        total_deposited: 837_000_000_000_000_000,
+        depositors_count: 100,
+        new_deposits: 5,
+        withdrawals: 2,
+        compensation: 0,
+        cumulative_deposit_amount: 0,
+        total_issuance: total_issuance_c as i128,
+        secondary_pool: unissued_secondary_s as i128,
+        occupied_capacity: 520_000_000_000_000_000,
+        cum_miner_secondary: 0,
+        cum_dao_compensation: 0,
+        cum_treasury: 0,
+        unclaimed_compensation: 0,
+        unmade_dao_interests: 0,
+        cumulative_depositors: 0,
+        daily_depositor_addresses: 0,
+        protocol_deposited: None,
+    };
+    let snapshot_key = ckbadger_store::keys::encode_stats_key(
+        ckbadger_store::keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT,
+        b"20260730",
+    );
+    store
+        .put_cf(
+            store.cf_stats_dao(),
+            &snapshot_key,
+            &bincode::serialize(&snapshot).unwrap(),
+        )
+        .unwrap();
+
+    // One token (500 CKB owned capacity) so the tokens share is non-zero.
+    store
+        .put_token_direct(
+            &[0xAA; 32],
+            &TokenInfo {
+                type_code_hash: vec![0x01; 32],
+                hash_type: 1,
+                type_args: vec![0x02; 20],
+                standard: "xudt".to_string(),
+                name: Some("TestToken".to_string()),
+                symbol: Some("TT".to_string()),
+                decimals: Some(8),
+                max_supply: None,
+                first_seen_block: 1,
+                icon_url: None,
+                description: None,
+                transfers_count: 10,
+            },
+        )
+        .unwrap();
+    {
+        let mut batch = StoreBatch::new(store.as_ref());
+        batch.put_token_holder(&[0xAA; 32], &[0x01; 32], 500_000);
+        batch.commit().unwrap();
+    }
+    store
+        .put_token_daily_delta(
+            &[0xAA; 32],
+            20240101,
+            &TokenDailyDelta {
+                owned_capacity_delta: 500_00000000,
+                owned_knowledge_delta: 300_00000000,
+            },
+        )
+        .unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri("/api/v1/statistics/asset-ecosystem")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    // The denominator is exposed alongside the standalone knowledge stat.
+    assert_eq!(json["totalLiveCapacityCkb"], "47600000000");
+    assert_eq!(json["totalKnowledgeSizeCkb"], "5200000000");
+
+    let breakdown = json["capacityBreakdown"].as_array().unwrap();
+    let pct_of = |category: &str| -> f64 {
+        breakdown
+            .iter()
+            .find(|c| c["category"] == category)
+            .unwrap_or_else(|| panic!("missing category {category}"))["percentage"]
+            .as_str()
+            .unwrap()
+            .parse()
+            .unwrap()
+    };
+
+    // dao = 8.37B / 47.6B = 17.58% — a share of live capacity, never >100%.
+    let dao_pct = pct_of("dao");
+    assert!(
+        (15.0..18.0).contains(&dao_pct),
+        "dao share of live capacity must be ~17.58%, got {dao_pct}"
+    );
+
+    let pct_sum: f64 = ["dao", "tokens", "objects", "other"]
+        .iter()
+        .map(|c| pct_of(c))
+        .sum();
+    assert!(
+        (99.9..=100.01).contains(&pct_sum),
+        "category shares must partition live capacity, got {pct_sum}"
+    );
 }
 
 // ============================================================

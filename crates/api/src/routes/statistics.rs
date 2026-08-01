@@ -9,7 +9,7 @@ use chrono::{DateTime, TimeZone, Utc};
 use ckb_types::utilities::compact_to_difficulty as ckb_compact_to_difficulty;
 use ckbadger_common::sync::{format_duration_smart, BackgroundTaskEntry, SyncProgressData};
 use ckbadger_indexer::parser::registry::{ProtocolScript, PROTOCOL_REGISTRY};
-use ckbadger_store::types::{DailyAddressCohort, DailyCellDistribution};
+use ckbadger_store::types::{CachedBlockHeader, DailyAddressCohort, DailyCellDistribution};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::sync::Arc;
@@ -147,7 +147,14 @@ pub struct NetworkStats {
 #[serde(rename_all = "camelCase")]
 pub struct AssetEcosystemResponse {
     pub top_tokens: Vec<TopTokenEntry>,
+    /// Shares of `total_live_capacity_ckb` (full cell capacities on both
+    /// sides), NOT of the knowledge size.
     pub capacity_breakdown: Vec<CapacityCategory>,
+    /// Breakdown denominator: total live capacity, `C − S` from the tip
+    /// header's DAO field.
+    pub total_live_capacity_ckb: String,
+    /// Standalone stat: common knowledge size (occupied bytes) from the
+    /// latest DAO daily snapshot.
     pub total_knowledge_size_ckb: String,
 }
 
@@ -336,6 +343,66 @@ pub struct RecentBlocksResponse {
     pub blocks: Vec<RecentBlockItem>,
 }
 
+/// Page size for the recent-blocks 24h window collection (~10s/block ⇒
+/// ~8.6k blocks/day, so a normal day spans ~5 pages).
+const RECENT_BLOCKS_PAGE_SIZE: usize = 2000;
+
+/// Safety bound on pages per collection. At the production page size this is
+/// 200k blocks — impossible inside 24h — so hitting it means the cutoff or
+/// the stored timestamps broke an invariant; fail fast instead of silently
+/// truncating the window.
+const RECENT_BLOCKS_MAX_PAGES: usize = 100;
+
+/// Collect every header newer than `cutoff_ts`, walking `list_blocks_desc`
+/// pages down from the tip until the first at-or-before-cutoff header or
+/// store exhaustion — never a fixed total cap. A busy day exceeds any such
+/// cap (node-proven: 10,141 blocks inside 24h on 2026-07-30, silently
+/// shortened by the old single 10,000-block fetch). Returns headers
+/// newest-first.
+fn collect_recent_window_blocks(
+    store: &ckbadger_store::CkbadgerStore,
+    cutoff_ts: i64,
+    page_size: usize,
+) -> Result<Vec<(i64, CachedBlockHeader)>, ApiRouteError> {
+    let mut blocks: Vec<(i64, CachedBlockHeader)> = Vec::new();
+    let mut from_block: Option<i64> = None;
+    for _ in 0..RECENT_BLOCKS_MAX_PAGES {
+        let page = store
+            .list_blocks_desc(from_block, page_size)
+            .map_err(|e| ApiError::internal(e.to_string()))?;
+        let exhausted = page.len() < page_size;
+        for (block_num, header) in page {
+            if header.timestamp <= cutoff_ts {
+                return Ok(blocks);
+            }
+            blocks.push((block_num, header));
+        }
+        if exhausted {
+            // Every stored block is inside the window.
+            return Ok(blocks);
+        }
+        // A full page whose headers were all at/before the cutoff returned
+        // above at its first header, so a full page always pushed blocks.
+        let lowest_num = blocks
+            .last()
+            .map(|(num, _)| *num)
+            .expect("full page produced no in-window blocks");
+        if lowest_num == 0 {
+            // Genesis reached: nothing exists below block 0 (and the cursor
+            // must not step negative — encode_block_num rejects it).
+            return Ok(blocks);
+        }
+        from_block = Some(lowest_num - 1);
+    }
+    Err(ApiError::internal(format!(
+        "recent-blocks window collection exceeded safety bound: {} blocks in {} pages (page_size={}) without reaching cutoff_ts={} — cutoff or stored timestamps are broken",
+        blocks.len(),
+        RECENT_BLOCKS_MAX_PAGES,
+        page_size,
+        cutoff_ts
+    )))
+}
+
 async fn get_recent_blocks(State(state): State<Arc<AppState>>) -> ApiResult<RecentBlocksResponse> {
     let cache_key = "statistics:recent-blocks";
     if let Some(cached) = state.cache.get::<RecentBlocksResponse>(cache_key).await {
@@ -356,20 +423,14 @@ async fn get_recent_blocks(State(state): State<Arc<AppState>>) -> ApiResult<Rece
 
     let cutoff_ts = reference_ts - 24 * 3600 * 1000; // 24 hours ago in ms
 
-    // Get blocks for last 24 hours
-    // Estimate: ~8640 blocks in 24h at ~10s/block
-    let blocks_desc = store
-        .list_blocks_desc(None, 10000)
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-
-    let mut blocks: Vec<RecentBlockItem> = blocks_desc
-        .into_iter()
-        .filter(|(_, h)| h.timestamp > cutoff_ts)
-        .map(|(_, h)| RecentBlockItem {
-            timestamp: h.timestamp,
-            transactions_count: h.transactions_count,
-        })
-        .collect();
+    let mut blocks: Vec<RecentBlockItem> =
+        collect_recent_window_blocks(&store, cutoff_ts, RECENT_BLOCKS_PAGE_SIZE)?
+            .into_iter()
+            .map(|(_, h)| RecentBlockItem {
+                timestamp: h.timestamp,
+                transactions_count: h.transactions_count,
+            })
+            .collect();
 
     // Reverse to ascending order
     blocks.reverse();
@@ -387,6 +448,56 @@ async fn get_recent_blocks(State(state): State<Arc<AppState>>) -> ApiResult<Rece
 /// Number of block gaps in the network-stats average-block-time window
 /// (~100 minutes of chain time at the 10s target).
 const NETWORK_STATS_BLOCK_TIME_WINDOW: usize = 600;
+
+/// Estimate the network hash rate (true H/s) from the actual PoW work in the
+/// recent header window: Σ per-block difficulty over the window's time span.
+///
+/// For Eaglesong PoW a block's difficulty ≈ the expected hashes to mine it,
+/// so summing each block's own difficulty measures the work actually done in
+/// the span. Dividing the tip-epoch difficulty by the window's average block
+/// time instead overstates the rate by the difficulty step (~+20% observed,
+/// 87.98 vs exact 73.54 PH/s) for the first ~window blocks after every epoch
+/// boundary, because the window still spans mostly previous-epoch blocks
+/// mined at the old difficulty.
+///
+/// `headers_desc` is newest-first (`list_blocks_desc` order). The oldest
+/// header's own difficulty is excluded from the numerator: the span covers
+/// only the gaps from oldest to newest, and the oldest block's work predates
+/// its first gap. Returns `Ok(None)` while the store holds fewer than 2
+/// blocks (mirrors the avg-block-time "no data yet" case).
+fn estimate_hash_rate_from_window(
+    headers_desc: &[(i64, CachedBlockHeader)],
+) -> Result<Option<f64>, ApiRouteError> {
+    if headers_desc.len() < 2 {
+        return Ok(None);
+    }
+    let (newest_num, newest) = headers_desc.first().expect("len >= 2");
+    let (oldest_num, oldest) = headers_desc.last().expect("len >= 2");
+    let span_ms = newest.timestamp - oldest.timestamp;
+    if span_ms <= 0 {
+        return Err(ApiError::internal(format!(
+            "non-increasing block timestamps across hash-rate window: newest_block={}, newest_ts_ms={}, oldest_block={}, oldest_ts_ms={}",
+            newest_num, newest.timestamp, oldest_num, oldest.timestamp
+        )));
+    }
+    let mut work_sum: u128 = 0;
+    for (block_num, header) in &headers_desc[..headers_desc.len() - 1] {
+        let difficulty_u256 = ckb_compact_to_difficulty(header.compact_target);
+        let difficulty: u128 = difficulty_u256.to_string().parse().map_err(|_| {
+            ApiError::internal(format!(
+                "block difficulty exceeds u128 range in hash-rate window: block={}, compact_target={:#x}, difficulty={}",
+                block_num, header.compact_target, difficulty_u256
+            ))
+        })?;
+        work_sum = work_sum.checked_add(difficulty).ok_or_else(|| {
+            ApiError::internal(format!(
+                "summed work overflows u128 in hash-rate window: block={}, work_sum_so_far={}",
+                block_num, work_sum
+            ))
+        })?;
+    }
+    Ok(Some(work_sum as f64 / (span_ms as f64 / 1000.0)))
+}
 
 /// Sum committed transactions over the trailing 24 hours of hourly buckets:
 /// buckets whose start falls in `(reference - 24h, reference]`, newest 24.
@@ -2423,14 +2534,12 @@ async fn fetch_network_stats_from_db(
         fork_point: deep_fork_fork_point,
     };
 
-    // For Eaglesong PoW, difficulty ≈ expected hashes per block, so the
-    // network hash rate in true H/s is difficulty / avg block seconds.
-    // (The old code divided by milliseconds — the explorer's internal storage
-    // convention — while still formatting as H/s, understating by 1000×.)
-    let hash_rate = match avg_block_time_secs {
-        Some(avg_secs) if avg_secs > 0.0 => difficulty as f64 / avg_secs,
-        _ => 0.0,
-    };
+    // Network hash rate from the actual work in the recent window — NOT
+    // tip_difficulty / avg_block_time, which overstates by the difficulty
+    // step ratio for the first ~window blocks after every epoch boundary.
+    // The displayed `difficulty` field below stays tip-epoch difficulty
+    // (that semantic is correct). Zero only while the store holds < 2 blocks.
+    let hash_rate = estimate_hash_rate_from_window(&window_headers)?.unwrap_or(0.0);
 
     // Hero metrics from latest DAO daily snapshot
     let dao_snapshot = store
@@ -3853,6 +3962,83 @@ async fn get_activity_summary_24h(
     ok(result)
 }
 
+/// Total live capacity in shannons from a block header's 32-byte DAO field:
+/// `C − S` (RFC-0023 little-endian u64s: C = cumulative total issuance at
+/// bytes [0..8], S = complete unissued secondary pool at bytes [16..24]).
+/// Every existing cell's capacity — DAO deposits included — is part of
+/// `C − S`, which makes it the structural upper bound for any breakdown of
+/// live capacity.
+fn live_capacity_from_dao(dao: &[u8]) -> Result<i128, String> {
+    if dao.len() != 32 {
+        return Err(format!("DAO field must be 32 bytes, got {}", dao.len()));
+    }
+    let total_issuance = u64::from_le_bytes(dao[0..8].try_into().expect("8-byte slice"));
+    let unissued_secondary = u64::from_le_bytes(dao[16..24].try_into().expect("8-byte slice"));
+    if unissued_secondary > total_issuance {
+        return Err(format!(
+            "unissued secondary pool exceeds total issuance: C={total_issuance}, S={unissued_secondary}"
+        ));
+    }
+    Ok(total_issuance as i128 - unissued_secondary as i128)
+}
+
+/// Split total live capacity into the four asset-ecosystem categories, each
+/// as an absolute capacity plus its percentage share of live capacity.
+///
+/// All four numerators are full cell capacities, matching the denominator's
+/// unit. (The old denominator — snapshot knowledge size — counts occupied
+/// bytes only, while DAO deposits are mostly free capacity, so dao displayed
+/// as 161% and a clamp on `other` silently masked the contradiction.)
+/// `other` is the exact remainder; a negative remainder is structurally
+/// impossible — every categorized shannon is a live cell's capacity — so it
+/// fails fast naming all four inputs.
+fn build_capacity_breakdown(
+    live_capacity: i128,
+    dao_capacity: i128,
+    token_capacity: i128,
+    object_capacity: i128,
+) -> Result<Vec<CapacityCategory>, ApiRouteError> {
+    let other_capacity = live_capacity - dao_capacity - token_capacity - object_capacity;
+    if other_capacity < 0 {
+        return Err(ApiError::internal(format!(
+            "categorized capacity exceeds total live capacity: live_capacity={live_capacity}, dao={dao_capacity}, tokens={token_capacity}, objects={object_capacity}"
+        )));
+    }
+    let pct = |value: i128| -> String {
+        if live_capacity <= 0 {
+            return "0.00".to_string();
+        }
+        // value ≤ live_capacity < 2^64 shannons, so value × 10_000 is far
+        // from i128 overflow, and live_capacity > 0 here.
+        let scaled = value * 10_000 / live_capacity;
+        let whole = scaled / 100;
+        let frac = (scaled % 100).abs();
+        format!("{whole}.{frac:02}")
+    };
+    Ok(vec![
+        CapacityCategory {
+            category: "dao".to_string(),
+            capacity_ckb: shannon_to_ckb_string(dao_capacity),
+            percentage: pct(dao_capacity),
+        },
+        CapacityCategory {
+            category: "tokens".to_string(),
+            capacity_ckb: shannon_to_ckb_string(token_capacity),
+            percentage: pct(token_capacity),
+        },
+        CapacityCategory {
+            category: "objects".to_string(),
+            capacity_ckb: shannon_to_ckb_string(object_capacity),
+            percentage: pct(object_capacity),
+        },
+        CapacityCategory {
+            category: "other".to_string(),
+            capacity_ckb: shannon_to_ckb_string(other_capacity),
+            percentage: pct(other_capacity),
+        },
+    ])
+}
+
 #[instrument(skip(state), level = "debug")]
 async fn get_asset_ecosystem(
     State(state): State<Arc<AppState>>,
@@ -3910,72 +4096,46 @@ async fn get_asset_ecosystem(
         })
         .sum();
 
-    // Get DAO locked and knowledge size from latest snapshot
+    // Tip live capacity (the breakdown denominator) + latest DAO snapshot.
     let store = state.store.clone();
-    let dao_snapshot = tokio::task::spawn_blocking(move || store.get_latest_dao_daily_snapshot())
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let (tip, dao_snapshot) = tokio::task::spawn_blocking(move || {
+        (
+            store.get_sync_tip_block(),
+            store.get_latest_dao_daily_snapshot(),
+        )
+    })
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?;
+    let tip = tip.map_err(|e| ApiError::internal(e.to_string()))?;
+    let dao_snapshot = dao_snapshot.map_err(|e| ApiError::internal(e.to_string()))?;
+
+    // Zero only while the store is empty (no tip header ⇒ no cells at all);
+    // any nonzero categorized capacity then fails the breakdown invariant.
+    let live_capacity: i128 = match tip {
+        Some((tip_block, header)) => live_capacity_from_dao(&header.dao).map_err(|e| {
+            ApiError::internal(format!(
+                "invalid DAO field on tip header: tip_block={tip_block}: {e}"
+            ))
+        })?,
+        None => 0,
+    };
 
     let (dao_locked, knowledge_size) = match dao_snapshot.as_ref() {
         Some(s) => (s.total_deposited, s.occupied_capacity),
         None => (0, 0),
     };
 
-    // Compute "other" = knowledge_size - (tokens + objects + dao)
-    // Categorized may transiently exceed knowledge_size because token/object
-    // capacity comes from the warmup cache (current tip) while knowledge_size
-    // comes from the latest DAO daily snapshot (end-of-day). Clamp to zero
-    // instead of failing.
-    let categorized = total_token_capacity + total_object_capacity + dao_locked;
-    let other_capacity = if knowledge_size > categorized {
-        knowledge_size - categorized
-    } else {
-        0
-    };
-
-    // Build capacity breakdown with percentages
-    let total = knowledge_size;
-    let pct = |value: i128| -> String {
-        if total <= 0 {
-            return "0.00".to_string();
-        }
-        let scaled = value
-            .checked_mul(10_000)
-            .unwrap_or(0)
-            .checked_div(total)
-            .unwrap_or(0);
-        let whole = scaled / 100;
-        let frac = (scaled % 100).abs();
-        format!("{whole}.{frac:02}")
-    };
-
-    let capacity_breakdown = vec![
-        CapacityCategory {
-            category: "dao".to_string(),
-            capacity_ckb: shannon_to_ckb_string(dao_locked),
-            percentage: pct(dao_locked),
-        },
-        CapacityCategory {
-            category: "tokens".to_string(),
-            capacity_ckb: shannon_to_ckb_string(total_token_capacity),
-            percentage: pct(total_token_capacity),
-        },
-        CapacityCategory {
-            category: "objects".to_string(),
-            capacity_ckb: shannon_to_ckb_string(total_object_capacity),
-            percentage: pct(total_object_capacity),
-        },
-        CapacityCategory {
-            category: "other".to_string(),
-            capacity_ckb: shannon_to_ckb_string(other_capacity),
-            percentage: pct(other_capacity),
-        },
-    ];
+    let capacity_breakdown = build_capacity_breakdown(
+        live_capacity,
+        dao_locked,
+        total_token_capacity,
+        total_object_capacity,
+    )?;
 
     let response = AssetEcosystemResponse {
         top_tokens,
         capacity_breakdown,
+        total_live_capacity_ckb: shannon_to_ckb_string(live_capacity),
         total_knowledge_size_ckb: shannon_to_ckb_string(knowledge_size),
     };
 
@@ -4278,6 +4438,258 @@ mod tests {
         assert_eq!(hash_rate, 100.0);
     }
 
+    fn window_header(number: i64, ts_ms: i64, compact_target: u32) -> CachedBlockHeader {
+        CachedBlockHeader {
+            hash: vec![number as u8; 32],
+            parent_hash: vec![0u8; 32],
+            timestamp: ts_ms,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1800,
+            dao: vec![0; 32],
+            transactions_count: 1,
+            uncles_count: 0,
+            proposals_count: 0,
+            compact_target,
+            miner_lock_hash: None,
+            cycles: None,
+        }
+    }
+
+    /// Regression (C2): hashRate must be the window's summed per-block work
+    /// over its time span, not tip-epoch difficulty over the average gap.
+    /// Right after an epoch difficulty step the window still spans mostly
+    /// previous-epoch blocks, so the old formula overstated by the step ratio
+    /// (~+20%) for ~600 blocks after EVERY epoch boundary.
+    #[test]
+    fn test_estimate_hash_rate_sums_window_work_instead_of_tip_difficulty() {
+        // Mainnet-shaped step: 581 old-epoch gaps at difficulty D and 19
+        // new-epoch blocks at ≈1.2·D inside one 600-gap window (the live
+        // observation behind this fix: 87.98 displayed vs 73.54 exact PH/s).
+        const COMPACT_OLD: u32 = 0x190d_f964;
+        const COMPACT_NEW: u32 = 0x190b_a529; // ≈1.2× the difficulty of COMPACT_OLD
+        let d_old: u128 = ckb_compact_to_difficulty(COMPACT_OLD)
+            .to_string()
+            .parse()
+            .unwrap();
+        let d_new: u128 = ckb_compact_to_difficulty(COMPACT_NEW)
+            .to_string()
+            .parse()
+            .unwrap();
+        let step = d_new as f64 / d_old as f64;
+        assert!(
+            (1.19..=1.21).contains(&step),
+            "compact pair must encode a ~1.2× difficulty step, got {step}"
+        );
+
+        // 601 headers newest-first, uniform 8s gaps: 19 new-epoch at the top,
+        // 582 old-epoch below (the oldest of which is outside the numerator).
+        let gap_ms = 8_000i64;
+        let total = 601usize;
+        let headers: Vec<(i64, CachedBlockHeader)> = (0..total)
+            .map(|i| {
+                let number = (total - 1 - i) as i64;
+                let ts_ms = 1_800_000_000_000i64 - (i as i64) * gap_ms;
+                let compact = if i < 19 { COMPACT_NEW } else { COMPACT_OLD };
+                (number, window_header(number, ts_ms, compact))
+            })
+            .collect();
+
+        let span_secs = 600.0 * 8.0;
+        // The oldest header's own difficulty predates the span: the counted
+        // work is 581 old-epoch + 19 new-epoch blocks.
+        let expected = (581 * d_old + 19 * d_new) as f64 / span_secs;
+        let got = estimate_hash_rate_from_window(&headers).unwrap().unwrap();
+        assert!(
+            ((got - expected) / expected).abs() < 1e-12,
+            "hash rate must be window work over span: got {got}, expected {expected}"
+        );
+
+        // The replaced formula — tip-epoch difficulty over the average gap —
+        // reports the new-epoch rate for a window that is still ~97%
+        // old-epoch blocks, overstating by ~19%.
+        let old_formula = d_new as f64 / 8.0;
+        assert!(
+            old_formula > got * 1.15,
+            "old formula ({old_formula}) must overstate the window-work rate ({got}) by ~19%"
+        );
+    }
+
+    #[test]
+    fn test_estimate_hash_rate_returns_none_below_two_headers() {
+        assert_eq!(estimate_hash_rate_from_window(&[]).unwrap(), None);
+        let single = vec![(7i64, window_header(7, 1_000, 0x190d_f964))];
+        assert_eq!(estimate_hash_rate_from_window(&single).unwrap(), None);
+    }
+
+    #[test]
+    fn test_estimate_hash_rate_fails_fast_on_non_increasing_timestamps() {
+        let headers = vec![
+            (2i64, window_header(2, 5_000, 0x190d_f964)),
+            (1i64, window_header(1, 5_000, 0x190d_f964)),
+        ];
+        let err = estimate_hash_rate_from_window(&headers).unwrap_err();
+        assert!(err.1 .0.message.contains("non-increasing block timestamps"));
+        assert!(err.1 .0.message.contains("newest_block=2"));
+    }
+
+    /// Regression (C4): the 24h recent-blocks window must page through the
+    /// store until the cutoff — the old single-fetch cap silently truncated
+    /// any window holding more blocks than the cap.
+    #[test]
+    fn test_collect_recent_window_blocks_paginates_beyond_one_page() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        let cutoff_ms = 1_000_000i64;
+
+        let mut batch = StoreBatch::new(&store);
+        // Blocks 0..=2 sit at/before the cutoff and must be excluded.
+        for number in 0..=2i64 {
+            batch.put_block_header(
+                number,
+                &window_header(number, cutoff_ms - (3 - number) * 1_000, 0),
+            );
+        }
+        // Blocks 3..=10 (8 blocks) are inside the window.
+        for number in 3..=10i64 {
+            batch.put_block_header(
+                number,
+                &window_header(number, cutoff_ms + (number - 2) * 1_000, 0),
+            );
+        }
+        batch.commit().unwrap();
+
+        // page_size 3 < 8 in-window blocks: the old one-shot logic returned
+        // only the first page's worth and silently dropped the rest.
+        let blocks = collect_recent_window_blocks(&store, cutoff_ms, 3).unwrap();
+        let numbers: Vec<i64> = blocks.iter().map(|(n, _)| *n).collect();
+        assert_eq!(
+            numbers,
+            vec![10, 9, 8, 7, 6, 5, 4, 3],
+            "every in-window block must be returned, newest first"
+        );
+        assert!(blocks.iter().all(|(_, h)| h.timestamp > cutoff_ms));
+    }
+
+    #[test]
+    fn test_collect_recent_window_blocks_handles_genesis_page_boundary() {
+        // page_size 1 with every block in-window: the final page ends exactly
+        // at genesis and the cursor must stop instead of stepping below
+        // block 0 (encode_block_num panics on negatives).
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        let mut batch = StoreBatch::new(&store);
+        for number in 0..=2i64 {
+            batch.put_block_header(number, &window_header(number, 10_000 + number * 1_000, 0));
+        }
+        batch.commit().unwrap();
+
+        let blocks = collect_recent_window_blocks(&store, 0, 1).unwrap();
+        let numbers: Vec<i64> = blocks.iter().map(|(n, _)| *n).collect();
+        assert_eq!(numbers, vec![2, 1, 0]);
+    }
+
+    #[test]
+    fn test_collect_recent_window_blocks_fails_fast_at_safety_bound() {
+        // 301 in-window blocks at page_size 3 need 101 pages — beyond the
+        // 100-page bound. A window that deep relative to page size means the
+        // cutoff or timestamps are broken; the helper must fail with the
+        // counts, never silently truncate.
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        let mut batch = StoreBatch::new(&store);
+        for number in 1..=301i64 {
+            batch.put_block_header(number, &window_header(number, number, 0));
+        }
+        batch.commit().unwrap();
+
+        let err = collect_recent_window_blocks(&store, 0, 3).unwrap_err();
+        assert!(err.1 .0.message.contains("safety bound"));
+        assert!(
+            err.1 .0.message.contains("300 blocks"),
+            "error must name the collected block count: {}",
+            err.1 .0.message
+        );
+    }
+
+    #[test]
+    fn test_live_capacity_from_dao_is_c_minus_s() {
+        // C = 47.9B CKB, S = 0.3B CKB (little-endian u64s at [0..8]/[16..24]);
+        // AR and U are populated but must not affect the result.
+        let mut dao = [0u8; 32];
+        dao[0..8].copy_from_slice(&4_790_000_000_000_000_000u64.to_le_bytes());
+        dao[8..16].copy_from_slice(&10_000_000_000_000_000_000u64.to_le_bytes());
+        dao[16..24].copy_from_slice(&30_000_000_000_000_000u64.to_le_bytes());
+        dao[24..32].copy_from_slice(&200_000_000_000_000_000u64.to_le_bytes());
+        assert_eq!(
+            live_capacity_from_dao(&dao).unwrap(),
+            4_760_000_000_000_000_000i128
+        );
+    }
+
+    #[test]
+    fn test_live_capacity_from_dao_fails_fast_on_bad_input() {
+        assert!(live_capacity_from_dao(&[0u8; 31])
+            .unwrap_err()
+            .contains("32 bytes"));
+        let mut dao = [0u8; 32];
+        dao[16..24].copy_from_slice(&1u64.to_le_bytes()); // S > C
+        assert!(live_capacity_from_dao(&dao)
+            .unwrap_err()
+            .contains("exceeds total issuance"));
+    }
+
+    /// Regression (C3): the breakdown percentages are shares of TOTAL LIVE
+    /// CAPACITY. With the old knowledge-size denominator (occupied bytes
+    /// only) against the full-capacity dao numerator, dao displayed 161%.
+    #[test]
+    fn test_build_capacity_breakdown_percentages_are_shares_of_live_capacity() {
+        // Realistic mainnet magnitudes in shannons: 47.6B CKB live capacity,
+        // 8.37B CKB in DAO deposits, 0.12B tokens, 0.03B objects.
+        let live = 4_760_000_000_000_000_000i128;
+        let dao = 837_000_000_000_000_000i128;
+        let tokens = 12_000_000_000_000_000i128;
+        let objects = 3_000_000_000_000_000i128;
+
+        let breakdown = build_capacity_breakdown(live, dao, tokens, objects).unwrap();
+        let categories: Vec<&str> = breakdown.iter().map(|c| c.category.as_str()).collect();
+        assert_eq!(categories, vec!["dao", "tokens", "objects", "other"]);
+
+        let dao_pct: f64 = breakdown[0].percentage.parse().unwrap();
+        assert_eq!(breakdown[0].percentage, "17.58");
+        assert!(
+            (15.0..18.0).contains(&dao_pct),
+            "dao share of live capacity must be ~17.58%, got {dao_pct}"
+        );
+
+        // `other` is the exact remainder and the four shares partition 100%.
+        assert_eq!(
+            breakdown[3].capacity_ckb,
+            shannon_to_ckb_string(live - dao - tokens - objects)
+        );
+        let pct_sum: f64 = breakdown
+            .iter()
+            .map(|c| c.percentage.parse::<f64>().unwrap())
+            .sum();
+        assert!(
+            (99.9..=100.01).contains(&pct_sum),
+            "category shares must partition live capacity, got {pct_sum}"
+        );
+    }
+
+    #[test]
+    fn test_build_capacity_breakdown_fails_fast_when_categorized_exceeds_live() {
+        // The old code clamped `other` to zero here, silently masking the
+        // unit inconsistency instead of failing.
+        let err = build_capacity_breakdown(520_000_000_000_000_000, 837_000_000_000_000_000, 1, 2)
+            .unwrap_err();
+        let message = &err.1 .0.message;
+        assert!(message.contains("live_capacity=520000000000000000"));
+        assert!(message.contains("dao=837000000000000000"));
+        assert!(message.contains("tokens=1"));
+        assert!(message.contains("objects=2"));
+    }
+
     #[test]
     fn test_hodl_wave_cache_has_holder_count_true_when_all_present() {
         let mut values = std::collections::HashMap::new();
@@ -4521,11 +4933,13 @@ mod tests {
                 capacity_ckb: "500".to_string(),
                 percentage: "50.00".to_string(),
             }],
+            total_live_capacity_ckb: "2000".to_string(),
             total_knowledge_size_ckb: "1000".to_string(),
         };
         let json = serde_json::to_string(&response).unwrap();
         assert!(json.contains("\"topTokens\""));
         assert!(json.contains("\"capacityBreakdown\""));
+        assert!(json.contains("\"totalLiveCapacityCkb\""));
         assert!(json.contains("\"totalKnowledgeSizeCkb\""));
         assert!(json.contains("\"typeScriptHash\""));
         assert!(json.contains("\"holdersCount\""));
@@ -4564,13 +4978,15 @@ mod tests {
                     percentage: "60.00".to_string(),
                 },
             ],
-            total_knowledge_size_ckb: "500".to_string(),
+            total_live_capacity_ckb: "500".to_string(),
+            total_knowledge_size_ckb: "200".to_string(),
         };
         let json = serde_json::to_string(&response).unwrap();
         let deserialized: AssetEcosystemResponse = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.top_tokens.len(), 2);
         assert_eq!(deserialized.capacity_breakdown.len(), 2);
-        assert_eq!(deserialized.total_knowledge_size_ckb, "500");
+        assert_eq!(deserialized.total_live_capacity_ckb, "500");
+        assert_eq!(deserialized.total_knowledge_size_ckb, "200");
         assert_eq!(deserialized.top_tokens[0].type_script_hash, "0xaa");
         assert_eq!(deserialized.top_tokens[1].holders_count, 100);
         assert_eq!(deserialized.capacity_breakdown[0].category, "dao");
