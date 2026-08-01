@@ -1495,6 +1495,14 @@ fn build_inputs_outputs_from_ckb(
     ))
 }
 
+/// Parse an out-point index as served by the CKB store reader (hex, usually
+/// `0x`-prefixed). The value is node-derived, so a parse failure means
+/// corrupted upstream data and must surface as an error, never as index 0.
+fn parse_out_point_index(raw: &str) -> Result<i32, String> {
+    let idx_str = raw.strip_prefix("0x").unwrap_or(raw);
+    i32::from_str_radix(idx_str, 16).map_err(|e| e.to_string())
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CellDepResponse {
@@ -1519,19 +1527,21 @@ async fn get_cell_deps(
                 let cell_deps: Vec<CellDepResponse> = rpc_tx
                     .cell_deps
                     .into_iter()
-                    .map(|dep| CellDepResponse {
-                        out_point_tx_hash: dep.out_point.tx_hash,
-                        out_point_index: {
-                            let idx_str = dep
-                                .out_point
-                                .index
-                                .strip_prefix("0x")
-                                .unwrap_or(&dep.out_point.index);
-                            i32::from_str_radix(idx_str, 16).unwrap_or(0)
-                        },
-                        dep_type: dep.dep_type,
+                    .map(|dep| {
+                        let out_point_index =
+                            parse_out_point_index(&dep.out_point.index).map_err(|e| {
+                                ApiError::internal(format!(
+                                    "malformed cell dep out_point index {:?} in tx {}: {}",
+                                    dep.out_point.index, hash, e
+                                ))
+                            })?;
+                        Ok(CellDepResponse {
+                            out_point_tx_hash: dep.out_point.tx_hash,
+                            out_point_index,
+                            dep_type: dep.dep_type,
+                        })
                     })
-                    .collect();
+                    .collect::<Result<_, crate::response::ApiRouteError>>()?;
                 return ok(cell_deps);
             }
         }
@@ -2047,6 +2057,18 @@ mod tests {
     use ckbadger_common::cycles_task::{CyclesTaskResult, CyclesTaskStatus};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+
+    #[test]
+    fn test_parse_out_point_index_valid_and_malformed() {
+        assert_eq!(parse_out_point_index("0x0"), Ok(0));
+        assert_eq!(parse_out_point_index("0x2"), Ok(2));
+        assert_eq!(parse_out_point_index("0xff"), Ok(255));
+        assert_eq!(parse_out_point_index("5"), Ok(5));
+        // Malformed node-derived data must error, never default to index 0.
+        assert!(parse_out_point_index("0xzz").is_err());
+        assert!(parse_out_point_index("").is_err());
+        assert!(parse_out_point_index("0x").is_err());
+    }
 
     #[test]
     fn test_transaction_response_serialization() {
