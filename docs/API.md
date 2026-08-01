@@ -27,7 +27,8 @@ details that aren't reproduced here.
   `CursorPaginatedResponse<T> = { data: Vec<T>, total?, limit, hasMore, nextCursor }`.
   The cursor is opaque; pass the previous response's `nextCursor` back as
   `?cursor=`. Address-cell cursors encode `script_hash + block_num + tx_hash +
-output_index`; activity cursors encode `block_num:tx_idx`.
+output_index`; activity cursors encode `block_num:tx_idx`; spore/cluster list cursors
+  encode `block_num:0x<32-byte-id>` over a `(block DESC, id ASC)` order.
 - **Address inputs.** Any `lock_script_hash` parameter accepts either a CKB
   address (auto-decoded) or a 0x-prefixed lock hash. `type_script_hash` accepts
   only the 0x-prefixed 32-byte hash.
@@ -240,36 +241,36 @@ output_index`; activity cursors encode `block_num:tx_idx`.
 
 ### statistics (crates/api/src/routes/statistics.rs)
 
-| Method | Path                                          | Handler                                  | Purpose                                                                            |
-| ------ | --------------------------------------------- | ---------------------------------------- | ---------------------------------------------------------------------------------- |
-| GET    | `/api/v1/statistics/network`                  | `get_network_stats`                      | Network stats (tip, hash rate, difficulty, TPS, DAO totals, sync/deep-fork status) |
-| GET    | `/api/v1/statistics/tx-stats`                 | `get_tx_stats`                           | Hourly + daily transaction-count timeseries (24h + 14d)                            |
-| GET    | `/api/v1/statistics/recent-blocks`            | `get_recent_blocks`                      | Recent 24h blocks (timestamp + tx count)                                           |
-| GET    | `/api/v1/charts/transaction-count`            | `get_transaction_count_chart`            | Daily transaction count chart                                                      |
-| GET    | `/api/v1/charts/cell-count`                   | `get_cell_count_chart`                   | Cell count chart (all/live/dead stacked area)                                      |
-| GET    | `/api/v1/charts/knowledge-size`               | `get_knowledge_size_chart`               | Common-knowledge-size chart with utilization%                                      |
-| GET    | `/api/v1/charts/common-knowledge-composition` | `get_common_knowledge_composition_chart` | Stacked area: transfer / DAO / UDT / NFT-Spore / other contracts                   |
-| GET    | `/api/v1/charts/capacity-turnover-ratio`      | `get_capacity_turnover_ratio_chart`      | Daily + weekly capacity turnover chart                                             |
-| GET    | `/api/v1/charts/cell-size-distribution`       | `get_cell_size_distribution_chart`       | Cell-size histogram chart                                                          |
-| GET    | `/api/v1/charts/address-cohort-retention`     | `get_address_cohort_retention_chart`     | Address cohort retention chart                                                     |
-| GET    | `/api/v1/charts/most-utilized-scripts`        | `get_most_utilized_scripts_chart`        | Top scripts share charts (used + capacity)                                         |
-| GET    | `/api/v1/charts/most-utilized-assets`         | `get_most_utilized_assets_chart`         | Top assets share charts (used + capacity)                                          |
-| GET    | `/api/v1/charts/block-time-distribution`      | `get_block_time_distribution_chart`      | Block time distribution histogram (last 42 epochs)                                 |
-| GET    | `/api/v1/charts/epoch-time-distribution`      | `get_epoch_time_distribution_chart`      | Epoch duration histogram                                                           |
-| GET    | `/api/v1/charts/epoch-time-length`            | `get_epoch_time_length_chart`            | Per-epoch length (hours) + blocks                                                  |
-| GET    | `/api/v1/charts/average-block-time`           | `get_average_block_time_chart`           | Daily average block time                                                           |
-| GET    | `/api/v1/charts/hash-rate`                    | `get_hash_rate_chart`                    | Daily hash-rate chart                                                              |
-| GET    | `/api/v1/charts/difficulty`                   | `get_difficulty_chart`                   | Daily difficulty chart                                                             |
-| GET    | `/api/v1/charts/uncle-rate`                   | `get_uncle_rate_chart`                   | Daily uncle-rate chart                                                             |
-| GET    | `/api/v1/charts/miner-address-distribution`   | `get_miner_address_distribution_chart`   | Miner distribution for the last 7 complete UTC+8 days                              |
-| GET    | `/api/v1/charts/total-supply`                 | `get_total_supply_chart`                 | Total supply (circulating / DAO-locked / burnt) stacked area                       |
-| GET    | `/api/v1/charts/nominal-apc`                  | `get_nominal_apc_chart`                  | Synthesized nominal APC curve (no DB read)                                         |
-| GET    | `/api/v1/charts/secondary-issuance`           | `get_secondary_issuance_chart`           | Secondary issuance breakdown (compensation/mining/burnt)                           |
-| GET    | `/api/v1/charts/inflation-rate`               | `get_inflation_rate_chart`               | Exact trailing-365-day nominal & real inflation from DAO snapshots                 |
-| GET    | `/api/v1/charts/hodl-wave`                    | `get_hodl_wave_chart`                    | HODL-wave bands (24h…>3y) + holder_count                                           |
-| GET    | `/api/v1/stats/daily-activities`              | `get_daily_activity_stats`               | Per-day activity breakdown by tx-type and script (param: `days`, default 30)       |
-| GET    | `/api/v1/stats/activity-summary-24h`          | `get_activity_summary_24h`               | Rolling 24h activity summary aggregated from hourly buckets                        |
-| GET    | `/api/v1/statistics/asset-ecosystem`          | `get_asset_ecosystem`                    | Top tokens + capacity-category breakdown (tokens/objects/DAO/other)                |
+| Method | Path                                          | Handler                                  | Purpose                                                                                                    |
+| ------ | --------------------------------------------- | ---------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| GET    | `/api/v1/statistics/network`                  | `get_network_stats`                      | Network stats (tip, hash rate, difficulty, TPS, DAO totals, sync/deep-fork status)                         |
+| GET    | `/api/v1/statistics/tx-stats`                 | `get_tx_stats`                           | Hourly + daily transaction-count timeseries (24h + 14d)                                                    |
+| GET    | `/api/v1/statistics/recent-blocks`            | `get_recent_blocks`                      | Recent 24h blocks (timestamp + tx count)                                                                   |
+| GET    | `/api/v1/charts/transaction-count`            | `get_transaction_count_chart`            | Daily transaction count chart                                                                              |
+| GET    | `/api/v1/charts/cell-count`                   | `get_cell_count_chart`                   | Cell count chart (all/live/dead stacked area)                                                              |
+| GET    | `/api/v1/charts/knowledge-size`               | `get_knowledge_size_chart`               | Common-knowledge-size chart with utilization%                                                              |
+| GET    | `/api/v1/charts/common-knowledge-composition` | `get_common_knowledge_composition_chart` | Stacked area: transfer / DAO / UDT / NFT-Spore / other contracts                                           |
+| GET    | `/api/v1/charts/capacity-turnover-ratio`      | `get_capacity_turnover_ratio_chart`      | Daily + weekly capacity turnover chart                                                                     |
+| GET    | `/api/v1/charts/cell-size-distribution`       | `get_cell_size_distribution_chart`       | Cell-size histogram chart                                                                                  |
+| GET    | `/api/v1/charts/address-cohort-retention`     | `get_address_cohort_retention_chart`     | Address cohort retention chart                                                                             |
+| GET    | `/api/v1/charts/most-utilized-scripts`        | `get_most_utilized_scripts_chart`        | Top scripts share charts (used + capacity)                                                                 |
+| GET    | `/api/v1/charts/most-utilized-assets`         | `get_most_utilized_assets_chart`         | Top assets share charts (used + capacity)                                                                  |
+| GET    | `/api/v1/charts/block-time-distribution`      | `get_block_time_distribution_chart`      | Block time distribution histogram (last 42 epochs)                                                         |
+| GET    | `/api/v1/charts/epoch-time-distribution`      | `get_epoch_time_distribution_chart`      | Epoch duration histogram                                                                                   |
+| GET    | `/api/v1/charts/epoch-time-length`            | `get_epoch_time_length_chart`            | Per-epoch length (hours) + blocks                                                                          |
+| GET    | `/api/v1/charts/average-block-time`           | `get_average_block_time_chart`           | Daily average block time                                                                                   |
+| GET    | `/api/v1/charts/hash-rate`                    | `get_hash_rate_chart`                    | Daily hash-rate chart                                                                                      |
+| GET    | `/api/v1/charts/difficulty`                   | `get_difficulty_chart`                   | Daily difficulty chart                                                                                     |
+| GET    | `/api/v1/charts/uncle-rate`                   | `get_uncle_rate_chart`                   | Daily uncle-rate chart                                                                                     |
+| GET    | `/api/v1/charts/miner-address-distribution`   | `get_miner_address_distribution_chart`   | Miner distribution for the last 7 complete UTC+8 days                                                      |
+| GET    | `/api/v1/charts/total-supply`                 | `get_total_supply_chart`                 | Total supply (circulating / DAO-locked / burnt) stacked area                                               |
+| GET    | `/api/v1/charts/nominal-apc`                  | `get_nominal_apc_chart`                  | Synthesized nominal APC curve (no DB read)                                                                 |
+| GET    | `/api/v1/charts/secondary-issuance`           | `get_secondary_issuance_chart`           | Secondary issuance breakdown (compensation/mining/burnt)                                                   |
+| GET    | `/api/v1/charts/inflation-rate`               | `get_inflation_rate_chart`               | Exact trailing-365-day nominal & real inflation from DAO snapshots                                         |
+| GET    | `/api/v1/charts/hodl-wave`                    | `get_hodl_wave_chart`                    | HODL-wave bands (24h…>3y) + holder_count                                                                   |
+| GET    | `/api/v1/stats/daily-activities`              | `get_daily_activity_stats`               | Per-day activity breakdown by tx-type and script (param: `days`, default 30)                               |
+| GET    | `/api/v1/stats/activity-summary-24h`          | `get_activity_summary_24h`               | Rolling 24h activity summary aggregated from hourly buckets                                                |
+| GET    | `/api/v1/statistics/asset-ecosystem`          | `get_asset_ecosystem`                    | Top tokens + capacity-category breakdown (tokens/objects/DAO/other, shares of total live capacity `C - S`) |
 
 **Params**
 
@@ -434,20 +435,20 @@ output_index`; activity cursors encode `block_num:tx_idx`.
 
 | Method | Path                                                          | Handler                      | Purpose                                                                                        |
 | ------ | ------------------------------------------------------------- | ---------------------------- | ---------------------------------------------------------------------------------------------- |
-| GET    | `/api/v1/spore/clusters`                                      | `list_clusters`              | List Spore clusters from warmup cache (cursor by block)                                        |
+| GET    | `/api/v1/spore/clusters`                                      | `list_clusters`              | List Spore clusters from warmup cache (cursor `block:0x<id>`)                                  |
 | GET    | `/api/v1/spore/clusters/{cluster_id}`                         | `get_cluster`                | Get cluster detail (supports `sole-spores` alias)                                              |
 | GET    | `/api/v1/spore/clusters/{cluster_id}/charts/capacity-history` | `get_cluster_capacity_chart` | Cluster capacity history (stacked area, date range)                                            |
 | GET    | `/api/v1/spore/clusters/{cluster_id}/holders`                 | `get_cluster_holders`        | List ranked cluster holders (cursor)                                                           |
 | GET    | `/api/v1/spore/clusters/{cluster_id}/activities`              | `get_cluster_activities`     | List cluster activities (cursor, optional `action` mint/transfer/burn)                         |
-| GET    | `/api/v1/spore/clusters/{cluster_id}/spores`                  | `get_spores_by_cluster`      | List spores in a cluster (cursor by block, from in-memory cache)                               |
-| GET    | `/api/v1/spore/objects`                                       | `list_spores`                | List all live spores (cursor by block, from in-memory cache)                                   |
+| GET    | `/api/v1/spore/clusters/{cluster_id}/spores`                  | `get_spores_by_cluster`      | List spores in a cluster (cursor `block:0x<id>`, from in-memory cache)                         |
+| GET    | `/api/v1/spore/objects`                                       | `list_spores`                | List all live spores (cursor `block:0x<id>`, from in-memory cache)                             |
 | GET    | `/api/v1/spore/objects/{spore_id}`                            | `get_spore`                  | Get spore detail (with cumulative owned capacity from daily deltas)                            |
 | GET    | `/api/v1/spore/objects/{spore_id}/activities`                 | `list_spore_item_activities` | Per-spore activities (cursor, optional `action`)                                               |
 | GET    | `/api/v1/spore/objects/{spore_id}/decode`                     | `decode_spore`               | DOB-decoded traits + media (with on-the-fly SVG render URL when applicable)                    |
 | GET    | `/api/v1/spore/objects/{spore_id}/media/{hash}`               | `serve_media`                | **Binary** content-addressed media blob (raw bytes, CSP/no-sniff headers)                      |
 | GET    | `/api/v1/spore/objects/{spore_id}/render`                     | `render_spore_svg`           | **Raw SVG** rendered on-the-fly from decoded traits or cluster DOB1 patterns (`image/svg+xml`) |
 | GET    | `/api/v1/spore/objects/{spore_id}/charts/capacity-history`    | `get_spore_capacity_chart`   | Single-spore capacity history (stacked area, date range)                                       |
-| GET    | `/api/v1/spore/owner/{lock_hash}`                             | `get_spores_by_owner`        | List spores owned by a lock_hash (cursor by block)                                             |
+| GET    | `/api/v1/spore/owner/{lock_hash}`                             | `get_spores_by_owner`        | List spores owned by a lock_hash (cursor `block:0x<id>`)                                       |
 
 **Params**
 

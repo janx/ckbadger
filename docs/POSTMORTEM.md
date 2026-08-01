@@ -586,6 +586,74 @@ Test by wiping database and re-syncing from genesis.
 
 ---
 
+### STATS-007: Home hashRate overstated ~20% after every epoch difficulty step
+
+**Date**: 2026-08-01
+
+**Symptom**: `/statistics/network` `hashRate` read 87.98 PH/s while the exact
+windowed value was 73.54 PH/s, right after an epoch difficulty increase; the
+error decayed over the next ~600 blocks and recurred at every epoch boundary.
+
+**Root Cause**: `hash_rate = tip_epoch_difficulty / avg_block_time` applied the
+tip epoch's difficulty to a 600-gap window that still consisted mostly of
+previous-epoch (lower-difficulty) blocks — mixing one epoch's difficulty with
+another epoch's block rate.
+
+**Fix**: Estimate from actual work in the window:
+`Σ per-block compact_to_difficulty(compact_target) / window span seconds`,
+excluding the oldest boundary block's work (it predates the span). The
+displayed `difficulty` field stays tip-epoch difficulty.
+
+**Lesson**: A rate derived from difficulty is only valid over blocks mined at
+that difficulty. Any window crossing an epoch boundary must sum per-block
+work, not scale a point difficulty.
+
+---
+
+### STATS-008: Asset-ecosystem capacity breakdown mixed units (DAO showed 161%)
+
+**Date**: 2026-08-01
+
+**Symptom**: `/statistics/asset-ecosystem` `capacityBreakdown` reported DAO at
+161.01% and the categories summed to 162.6%; `other` was silently clamped to 0.
+
+**Root Cause**: Numerators were full cell capacities (DAO `total_deposited`,
+token/object owned capacity) but the denominator was the DAO snapshot's
+`occupied_capacity` (knowledge size — occupied bytes only, where a DAO cell
+contributes ~102 CKB, not its deposit). `other = clamp(total - categorized, 0)`
+masked the structural violation as a "transient warmup skew".
+
+**Fix**: Denominator is total live capacity `C − S` from the tip header's DAO
+field (every issued-but-live shannon sits in a cell); response adds
+`totalLiveCapacityCkb`; `other` is the exact remainder and a negative remainder
+is a hard error naming all four numbers. `totalKnowledgeSizeCkb` remains as a
+standalone stat.
+
+**Lesson**: Every ratio needs numerator and denominator in the same unit, and a
+`clamp(…, 0)` on a derived remainder is a bug mask, not robustness.
+
+---
+
+### STATS-009: recent-blocks silently truncated the 24h window at 10,000 blocks
+
+**Date**: 2026-08-01
+
+**Symptom**: `/statistics/recent-blocks` fetched `list_blocks_desc(None, 10000)`
+then filtered by cutoff; 2026-07-30 (UTC+8) had 10,141 mainnet blocks in 24h,
+so peak days silently lost the oldest ~24 minutes of the window.
+
+**Root Cause**: A one-shot fetch sized by the ~8,640-block estimate treated an
+estimate as a bound.
+
+**Fix**: Cursor-paginate until the first block at or before the cutoff (or
+store exhaustion), with a generous safety bound that returns an explicit error
+instead of truncating.
+
+**Lesson**: Never bound a time-window query by an estimated row count; page
+until the boundary condition is actually seen, and make any safety cap loud.
+
+---
+
 ## Category: Docker & Build
 
 ### BUILD-001: Rust version compatibility (0ebb92c, 3d5e392, 2dc515e)
@@ -1476,4 +1544,106 @@ and replaying the same chain would reproduce the same legitimate date gap.
 
 ---
 
-_Last updated: 2026-07-31_
+## Category: API Read Path
+
+### API-001: Lazy cycles executed historical scripts on the wrong VM version
+
+**Date**: 2026-08-01
+
+**Symptom**: `/transactions/{hash}/cycles` returned 1,644,449 for an epoch-264
+secp transfer whose consensus-true count is 1,709,221. Every pre-Meepo
+transaction with a `hash_type: "type"` script group was affected.
+
+**Root Cause**: The lazy path shells out to `ckb-debugger` without any epoch
+context; the debugger defaults to `--script-version 2`, so `hash_type: "type"`
+groups always ran on the newest VM. Consensus pins VM selection to the commit
+block's epoch (RFC0032 → VM1, RFC0049 → VM2).
+
+**Fix**: `calculate_cycles` now requires a committed tx, derives the epoch from
+the commit header, maps it to a script version using activation epochs fetched
+from the node's `get_consensus` (`rfc "0032"` / `"0049"`; absent or null = never
+activated — no hardcoded per-network tables), and passes `--script-version` for
+every group. `--script-version` is a consensus _ceiling_: `data*` groups stay
+pinned by their hash_type, so one per-tx value reproduces consensus exactly.
+Already-persisted wrong values heal on re-sync (bulk sync stores node-reported
+cycles only when present; the lazy path recomputes the rest with fixed logic).
+
+**Lesson**: Replaying historical execution requires the historical rule set.
+Any re-execution tool must be pinned to the consensus parameters of the block
+being replayed — and "matches the official explorer" is not validation for
+pre-Mirana history: the explorer's own cycles for that era are VM1 replays,
+wrong the same way.
+
+---
+
+### API-002: Spore cursor pagination irrecoverably skipped same-block groups
+
+**Date**: 2026-08-01
+
+**Symptom**: Walking `/spore/objects` to exhaustion returned 31,975 of 37,291
+live spores (15.6% missing). All 5,806 missing ids shared `createdAtBlock` with
+a page-boundary cursor.
+
+**Root Cause**: The cursor was `created_at_block` alone with a strict
+`created_at_block < cursor` resume, so any entries of the cursor's block not
+consumed by the previous page were skipped forever. Blocks hold up to 181
+spores while the page limit caps at 100, so some blocks could never be fully
+listed. The same design existed in the clusters list, per-cluster spores, and
+per-owner spores paths.
+
+**Fix**: Composite cursor `{block}:{0x-id}` over an explicit total order
+`(created_at_block DESC, id ASC)`, one strict parser shared by all four
+endpoints (malformed or legacy numeric cursors → 400).
+
+**Lesson**: A pagination cursor must name a unique position in a total order.
+If the sort key isn't unique, the cursor needs a tiebreaker — and the same
+cursor bug rarely lives in only one endpoint.
+
+---
+
+### API-003: Cluster cells leaked into the spore objects list as dead links
+
+**Date**: 2026-08-01
+
+**Symptom**: All 490 live cluster cells appeared as rows in `/spore/objects`
+(and per-owner lists) with empty contentType; their `/spore/objects/{id}`
+detail returned 404.
+
+**Root Cause**: The spore store CF holds spores and clusters together;
+`SporeCache::build` filtered clusters out of `by_cluster`/`name_index` but not
+out of `live_indices`/`by_owner`, while the detail handler rejects clusters.
+
+**Fix**: Exclude cluster entries from both list indexes; clusters remain served
+by their own list/detail endpoints.
+
+**Lesson**: When one CF stores two kinds, every index built over it must state
+which kind it serves; a filter applied to some indexes and not others is a
+latent inconsistency.
+
+---
+
+### API-004: Cluster sporesCount mixed ever-minted and live semantics
+
+**Date**: 2026-08-01
+
+**Symptom**: `/spore/clusters/{id}` showed `sporesCount: 97` beside live-based
+holders (10), items (10), and composition (10) for a cluster with 87 melted
+spores; 197 of 490 clusters were affected, including one showing 20 spores
+with 0 items and 0 holders.
+
+**Root Cause**: The detail and list paths read `agg.total_count` (ever minted,
+including melted) for a field displayed among live-based figures; the list
+additionally consumed it through a cached field named `transfers_count`.
+
+**Fix**: All spore-count fields on the spore surfaces read `agg.live_count`
+(single path shared by list and detail); cluster existence is judged by store
+presence so fully-melted clusters still resolve. The ever-minted total remains
+available as `totalCount` on the `/assets` surface, which was already correct.
+
+**Lesson**: When a response mixes counters, every counter must state its
+population (live vs ever). A cached field whose name doesn't match its content
+(`transfers_count` = mint total) will eventually be consumed as its name.
+
+---
+
+_Last updated: 2026-08-01_
