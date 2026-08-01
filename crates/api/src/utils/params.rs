@@ -140,6 +140,71 @@ pub fn parse_optional_block_tx_cursor(
     }
 }
 
+/// Parse a `"<block_number>:<0x-object-id>"` pagination cursor.
+///
+/// This is the one parser for the composite cursor used by the spore list
+/// endpoints (`/spore/objects`, `/spore/clusters`,
+/// `/spore/clusters/{id}/spores`, `/spore/owner/{lock_hash}`), which page over
+/// `(created_at_block DESC, id ASC)`. Their previous cursor was the block
+/// number alone, resumed with a strict `created_at_block < cursor` comparison
+/// — that skips every remaining entry of the cursor's block, and a mainnet
+/// block can hold more spores than the page-size cap, so those rows were
+/// irrecoverably unlistable (5,806 of 37,291 live spores). The composite
+/// cursor names the exact row instead.
+///
+/// The id part must be the `0x`-prefixed 32-byte hex id exactly as emitted in
+/// `nextCursor`. The legacy numeric-only form is rejected rather than
+/// reinterpreted: treating `"100"` as "block 100, first id" would silently
+/// resume at a *different* row than the client's stale cursor named.
+pub fn parse_block_id_cursor(raw: &str, field: &str) -> Result<(i64, Vec<u8>), ApiRouteError> {
+    let invalid = |detail: &str| {
+        ApiError::bad_request(format!(
+            "Invalid {field}: expected \"<block_number>:<0x-object-id>\" with a non-negative \
+             block number and a 0x-prefixed 32-byte hex id, {detail}"
+        ))
+    };
+
+    let (block_str, id_str) = raw
+        .split_once(':')
+        .ok_or_else(|| invalid(&format!("got {raw:?}")))?;
+
+    let block_num = block_str
+        .parse::<i64>()
+        .map_err(|_| invalid(&format!("got a non-numeric block number {block_str:?}")))?;
+    if block_num < 0 {
+        return Err(invalid(&format!("got block number {block_num}")));
+    }
+
+    let id_hex = id_str
+        .strip_prefix("0x")
+        .ok_or_else(|| invalid(&format!("got an object id without 0x prefix {id_str:?}")))?;
+    let id =
+        hex::decode(id_hex).map_err(|_| invalid(&format!("got a non-hex object id {id_str:?}")))?;
+    if id.len() != super::hash::HASH32_LEN {
+        return Err(invalid(&format!(
+            "got an object id of {} bytes instead of {}",
+            id.len(),
+            super::hash::HASH32_LEN
+        )));
+    }
+
+    Ok((block_num, id))
+}
+
+/// Parse an optional `"<block_number>:<0x-object-id>"` cursor.
+///
+/// Same contract as [`parse_optional_block_tx_cursor`]: absent and empty both
+/// mean page 1, present-but-malformed is an error — never "no cursor".
+pub fn parse_optional_block_id_cursor(
+    raw: Option<&str>,
+    field: &str,
+) -> Result<Option<(i64, Vec<u8>)>, ApiRouteError> {
+    match raw {
+        None | Some("") => Ok(None),
+        Some(cursor) => Ok(Some(parse_block_id_cursor(cursor, field)?)),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -268,5 +333,76 @@ mod tests {
             None
         );
         assert!(parse_block_tx_cursor("", "cursor").is_err());
+    }
+
+    #[test]
+    fn test_parse_block_id_cursor_roundtrips_valid_input() {
+        let id_hex = "ab".repeat(32);
+        assert_eq!(
+            parse_block_id_cursor(&format!("0:0x{id_hex}"), "cursor").unwrap(),
+            (0, vec![0xAB; 32])
+        );
+        assert_eq!(
+            parse_block_id_cursor(&format!("1234:0x{id_hex}"), "cursor").unwrap(),
+            (1234, vec![0xAB; 32])
+        );
+    }
+
+    #[test]
+    fn test_parse_block_id_cursor_rejects_negative_block() {
+        let raw = format!("-3:0x{}", "ab".repeat(32));
+        let err = parse_block_id_cursor(&raw, "spore list cursor").unwrap_err();
+        assert_eq!(err.0, StatusCode::BAD_REQUEST);
+        let msg = message(err);
+        assert!(msg.contains("spore list cursor"), "{msg}");
+        assert!(msg.contains("-3"), "{msg}");
+    }
+
+    /// The legacy numeric-only block cursor is rejected, not reinterpreted.
+    #[test]
+    fn test_parse_block_id_cursor_rejects_legacy_numeric_form() {
+        let err = parse_block_id_cursor("100", "cursor").unwrap_err();
+        assert_eq!(err.0, StatusCode::BAD_REQUEST);
+        assert!(message(err).contains("\"100\""));
+    }
+
+    #[test]
+    fn test_parse_block_id_cursor_rejects_malformed_shapes() {
+        let ok_id = format!("0x{}", "ab".repeat(32));
+        let no_prefix_id = "ab".repeat(32);
+        for raw in [
+            String::new(),
+            "abc".to_string(),
+            "1:zz".to_string(),
+            format!("1:2:{ok_id}"),
+            "1:".to_string(),
+            ":0xab".to_string(),
+            "1:0x".to_string(),
+            "1:0xabcd".to_string(),             // 2 bytes, not 32
+            format!("1:{no_prefix_id}"),        // missing 0x prefix
+            format!("1:0x{}", "ab".repeat(33)), // 33 bytes
+        ] {
+            let err = parse_block_id_cursor(&raw, "cursor").unwrap_err();
+            assert_eq!(err.0, StatusCode::BAD_REQUEST, "raw={raw:?}");
+        }
+    }
+
+    #[test]
+    fn test_parse_optional_block_id_cursor_distinguishes_absent_from_malformed() {
+        assert_eq!(
+            parse_optional_block_id_cursor(None, "cursor").unwrap(),
+            None
+        );
+        assert_eq!(
+            parse_optional_block_id_cursor(Some(""), "cursor").unwrap(),
+            None
+        );
+        let raw = format!("7:0x{}", "cd".repeat(32));
+        assert_eq!(
+            parse_optional_block_id_cursor(Some(&raw), "cursor").unwrap(),
+            Some((7, vec![0xCD; 32]))
+        );
+        assert!(parse_optional_block_id_cursor(Some("100"), "cursor").is_err());
+        assert!(parse_optional_block_id_cursor(Some("zzz"), "cursor").is_err());
     }
 }
