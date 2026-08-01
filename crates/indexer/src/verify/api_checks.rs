@@ -1097,7 +1097,7 @@ impl Check for DaoStatisticsSane {
 }
 
 /// F7: The persisted genesis economic baseline is present and its burnt supply
-/// equals the network invariant (8.4B CKB).
+/// equals the network invariant (8.4B CKB) on the latest completed day.
 ///
 /// The verify harness is purely API-backed and has no store handle, so this
 /// check observes the baseline through the API rather than reading
@@ -1108,8 +1108,12 @@ impl Check for DaoStatisticsSane {
 ///  - Value: `total-supply.burnt - secondary-issuance.burnt` isolates the
 ///    genesis burnt, which must equal 8.4B CKB (mainnet and testnet share it).
 ///
-/// This is the Fast-tier, latest-point counterpart to S17
-/// (`BurntSupplyGenesisInvariant`), which checks every overlapping date.
+/// The mutable current UTC+8 day is intentionally excluded: these two endpoints
+/// have independent caches, so their current-day snapshots need not represent
+/// the same block. Completed snapshots are immutable and exactly comparable.
+///
+/// This is the Fast-tier counterpart to S17 (`BurntSupplyGenesisInvariant`),
+/// which checks every overlapping completed date.
 pub struct GenesisBaselineBurntInvariant;
 
 impl Check for GenesisBaselineBurntInvariant {
@@ -1117,7 +1121,7 @@ impl Check for GenesisBaselineBurntInvariant {
         "genesis_baseline_burnt_invariant"
     }
     fn description(&self) -> &'static str {
-        "genesis baseline present and burnt equals network invariant (8.4B CKB)"
+        "completed-day genesis baseline burnt equals network invariant (8.4B CKB)"
     }
     fn tier(&self) -> CheckTier {
         CheckTier::Fast
@@ -1130,8 +1134,13 @@ impl Check for GenesisBaselineBurntInvariant {
         let secondary: ChartWrapper<StackedChartDataPoint> =
             api_get(ctx, "charts/secondary-issuance")?;
 
+        let current_date = current_ckb_date();
         let mut secondary_burnt_by_date = std::collections::HashMap::<&str, i128>::new();
-        for point in &secondary.data {
+        for point in secondary
+            .data
+            .iter()
+            .filter(|point| point.date != current_date)
+        {
             if let Some(burnt) = point
                 .values
                 .get("burnt")
@@ -1141,20 +1150,25 @@ impl Check for GenesisBaselineBurntInvariant {
             }
         }
 
-        // Latest date present in both charts (data is date-ascending).
-        let latest = total_supply.data.iter().rev().find_map(|point| {
-            let total_burnt = point
-                .values
-                .get("burnt")
-                .and_then(|v| parse_non_negative_i128(v))?;
-            let secondary_burnt = secondary_burnt_by_date.get(point.date.as_str())?;
-            Some((point.date.as_str(), total_burnt - secondary_burnt))
-        });
+        // Latest completed date present in both charts (data is date-ascending).
+        let latest = total_supply
+            .data
+            .iter()
+            .rev()
+            .filter(|point| point.date != current_date)
+            .find_map(|point| {
+                let total_burnt = point
+                    .values
+                    .get("burnt")
+                    .and_then(|v| parse_non_negative_i128(v))?;
+                let secondary_burnt = secondary_burnt_by_date.get(point.date.as_str())?;
+                Some((point.date.as_str(), total_burnt - secondary_burnt))
+            });
 
         let Some((date, gap_ckb)) = latest else {
             return Ok(CheckResult::pass_with_detail(
                 0,
-                "no overlapping dates between total-supply and secondary-issuance charts"
+                "no completed overlapping dates between total-supply and secondary-issuance charts"
                     .to_string(),
             ));
         };
@@ -2468,6 +2482,12 @@ fn parse_non_negative_i128(raw: &str) -> Option<i128> {
     (value >= 0).then_some(value)
 }
 
+fn current_ckb_date() -> String {
+    ckbadger_common::now_datetime_utc8()
+        .format("%Y-%m-%d")
+        .to_string()
+}
+
 fn parse_ckb_to_shannons(raw: &str) -> Option<i128> {
     let s = raw.trim();
     if s.is_empty() || s.starts_with('-') {
@@ -2781,7 +2801,10 @@ impl Check for SecondaryIssuanceMatchesDaoStatistics {
     }
 }
 
-/// S17: For overlapping dates, total-supply burnt minus secondary burnt must equal genesis burnt.
+/// S17: For overlapping completed dates, total-supply burnt minus secondary
+/// burnt must equal genesis burnt. The current UTC+8 day is mutable and the two
+/// chart endpoints are cached independently, so comparing it would race two
+/// different block snapshots.
 pub struct BurntSupplyGenesisInvariant;
 
 impl Check for BurntSupplyGenesisInvariant {
@@ -2789,7 +2812,7 @@ impl Check for BurntSupplyGenesisInvariant {
         "burnt_supply_genesis_invariant"
     }
     fn description(&self) -> &'static str {
-        "total-supply.burnt - secondary-issuance.burnt equals genesis burnt (8.4B CKB)"
+        "completed-day total-supply.burnt - secondary-issuance.burnt equals genesis burnt (8.4B CKB)"
     }
     fn tier(&self) -> CheckTier {
         CheckTier::Sampling
@@ -2800,9 +2823,14 @@ impl Check for BurntSupplyGenesisInvariant {
         let secondary: ChartWrapper<StackedChartDataPoint> =
             api_get(ctx, "charts/secondary-issuance")?;
 
+        let current_date = current_ckb_date();
         let mut findings = vec![];
         let mut secondary_burnt_by_date = std::collections::HashMap::<String, i128>::new();
-        for point in &secondary.data {
+        for point in secondary
+            .data
+            .iter()
+            .filter(|point| point.date != current_date)
+        {
             if let Some(burnt) = point
                 .values
                 .get("burnt")
@@ -2820,7 +2848,11 @@ impl Check for BurntSupplyGenesisInvariant {
         let expected_gap_ckb = GENESIS_BURNT_SHANNONS / SHANNONS_PER_CKB;
         let mut checked = 0u64;
 
-        for point in &total_supply.data {
+        for point in total_supply
+            .data
+            .iter()
+            .filter(|point| point.date != current_date)
+        {
             let Some(secondary_burnt) = secondary_burnt_by_date.get(&point.date) else {
                 continue;
             };
@@ -2856,14 +2888,14 @@ impl Check for BurntSupplyGenesisInvariant {
         if checked == 0 {
             return Ok(CheckResult::pass_with_detail(
                 0,
-                "no overlapping dates with secondary issuance chart".to_string(),
+                "no completed overlapping dates with secondary issuance chart".to_string(),
             ));
         }
 
         if findings.is_empty() {
             Ok(CheckResult::pass_with_detail(
                 checked,
-                format!("{} overlapping date points", checked),
+                format!("{} overlapping completed-date points", checked),
             ))
         } else {
             Ok(CheckResult::fail(checked, findings))
@@ -4401,12 +4433,22 @@ mod tests {
         total_supply_burnt_ckb: &str,
         secondary_burnt_ckb: &str,
     ) {
-        let total = json!({
-            "data": [{ "date": "2024-01-01", "values": { "burnt": total_supply_burnt_ckb } }]
-        });
-        let secondary = json!({
-            "data": [{ "date": "2024-01-01", "values": { "burnt": secondary_burnt_ckb } }]
-        });
+        mount_burnt_chart_data(
+            runtime,
+            server,
+            json!([{ "date": "2024-01-01", "values": { "burnt": total_supply_burnt_ckb } }]),
+            json!([{ "date": "2024-01-01", "values": { "burnt": secondary_burnt_ckb } }]),
+        );
+    }
+
+    fn mount_burnt_chart_data(
+        runtime: &tokio::runtime::Runtime,
+        server: &MockServer,
+        total_supply_data: serde_json::Value,
+        secondary_data: serde_json::Value,
+    ) {
+        let total = json!({ "data": total_supply_data });
+        let secondary = json!({ "data": secondary_data });
         runtime.block_on(async {
             Mock::given(method("GET"))
                 .and(path("/api/v1/charts/total-supply"))
@@ -4451,6 +4493,61 @@ mod tests {
         assert!(!result.passed);
         assert_eq!(result.findings.len(), 1);
         assert!(result.findings[0].details[0].contains("8.4B network invariant"));
+
+        let sampling = BurntSupplyGenesisInvariant.run(&ctx, &progress).unwrap();
+        assert!(!sampling.passed, "completed-day mismatch must still fail");
+        assert_eq!(sampling.items_checked, 1);
+        assert_eq!(sampling.findings.len(), 1);
+    }
+
+    #[test]
+    fn burnt_genesis_checks_ignore_cache_skew_on_incomplete_current_day() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let server = runtime.block_on(MockServer::start());
+        let today = ckbadger_common::now_datetime_utc8().date();
+        let yesterday = today - chrono::Duration::days(1);
+
+        mount_burnt_chart_data(
+            &runtime,
+            &server,
+            json!([
+                {
+                    "date": yesterday.format("%Y-%m-%d").to_string(),
+                    "values": { "burnt": "8400001000" }
+                },
+                {
+                    "date": today.format("%Y-%m-%d").to_string(),
+                    "values": { "burnt": "8400000698" }
+                }
+            ]),
+            json!([
+                {
+                    "date": yesterday.format("%Y-%m-%d").to_string(),
+                    "values": { "burnt": "1000" }
+                },
+                {
+                    "date": today.format("%Y-%m-%d").to_string(),
+                    "values": { "burnt": "1000" }
+                }
+            ]),
+        );
+
+        let ctx = mock_ctx(&server);
+        let progress = ProgressReporter::new(None);
+
+        let fast = GenesisBaselineBurntInvariant.run(&ctx, &progress).unwrap();
+        assert!(fast.passed, "fast findings: {:?}", fast.findings);
+
+        let sampling = BurntSupplyGenesisInvariant.run(&ctx, &progress).unwrap();
+        assert!(
+            sampling.passed,
+            "sampling findings: {:?}",
+            sampling.findings
+        );
+        assert_eq!(
+            sampling.items_checked, 1,
+            "only the completed day is stable"
+        );
     }
 
     #[test]
