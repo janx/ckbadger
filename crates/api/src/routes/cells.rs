@@ -2678,23 +2678,38 @@ async fn get_cell(
     };
 
     // Use the cell's own stored hash_type (not from script_info, which is a canonical
-    // default and may differ from the actual per-cell hash_type).
+    // default and may differ from the actual per-cell hash_type). Only 0/1/2/4 are
+    // valid on chain, so anything else is upstream store corruption and must be
+    // reported, not rendered as a guess — the same rule `get_address` applies, via
+    // the same `hash_type_to_str` so this module keeps one conversion path.
+    let outpoint = format!("0x{}:{}", hex::encode(&hash_bytes), output_idx);
     let lock_hash_type_num: i16 = info.lock_hash_type;
-
-    let hash_type_str = |ht: i16| match ht {
-        0 => "data",
-        1 => "type",
-        2 => "data1",
-        4 => "data2",
-        _ => "data",
-    };
+    let lock_hash_type_str = hash_type_to_str(lock_hash_type_num).ok_or_else(|| {
+        ApiError::internal(format!(
+            "invalid stored lock hash_type: outpoint={}, hash_type={}",
+            outpoint, lock_hash_type_num
+        ))
+    })?;
 
     let type_script = if let Some(code_hash) = info.type_code_hash.as_ref() {
-        // Use the cell's own stored type_hash_type (not script_info canonical default)
-        let type_hash_type_num: i16 = info.type_hash_type.unwrap_or(1);
+        // Use the cell's own stored type_hash_type (not script_info canonical
+        // default). A cell that has a type code_hash always had a hash_type on
+        // chain, so a missing one is an incomplete indexer write, not a default.
+        let type_hash_type_num: i16 = info.type_hash_type.ok_or_else(|| {
+            ApiError::internal(format!(
+                "cell has a type script code_hash but no stored type hash_type: outpoint={}",
+                outpoint
+            ))
+        })?;
+        let type_hash_type_str = hash_type_to_str(type_hash_type_num).ok_or_else(|| {
+            ApiError::internal(format!(
+                "invalid stored type hash_type: outpoint={}, hash_type={}",
+                outpoint, type_hash_type_num
+            ))
+        })?;
         Some(ScriptResponse {
             code_hash: format!("0x{}", hex::encode(code_hash)),
-            hash_type: hash_type_str(type_hash_type_num).to_string(),
+            hash_type: type_hash_type_str.to_string(),
             args: format!(
                 "0x{}",
                 info.type_args
@@ -2706,13 +2721,22 @@ async fn get_cell(
         None
     };
 
-    let address = script_to_address(
-        &info.lock_code_hash,
-        lock_hash_type_num,
-        &info.lock_args,
-        &state.ckb_network,
-    )
-    .ok();
+    // Every cell has a lock, so it always has an address. Swallowing the encoder
+    // error rendered `address: null`, indistinguishable from a cell that has none.
+    let address = Some(
+        script_to_address(
+            &info.lock_code_hash,
+            lock_hash_type_num,
+            &info.lock_args,
+            &state.ckb_network,
+        )
+        .map_err(|e| {
+            ApiError::internal(format!(
+                "failed to encode address: outpoint={}, error={}",
+                outpoint, e
+            ))
+        })?,
+    );
 
     // For cell data (e.g. dep groups), read from CKB direct store if available
     let cell_data = state.ckb_store.as_ref().and_then(|ckb| {
@@ -2805,7 +2829,7 @@ async fn get_cell(
         consumed_by_tx,
         lock: ScriptResponse {
             code_hash: format!("0x{}", hex::encode(&info.lock_code_hash)),
-            hash_type: hash_type_str(lock_hash_type_num).to_string(),
+            hash_type: lock_hash_type_str.to_string(),
             args: format!("0x{}", hex::encode(&info.lock_args)),
         },
         type_script,

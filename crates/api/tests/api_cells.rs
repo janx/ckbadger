@@ -682,3 +682,122 @@ async fn test_get_address_fails_fast_on_invalid_stored_hash_type() {
         "error must name the lock hash and the bad hash_type, got {message}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// R4-G item 2: the `/cells/{tx_hash}/{index}` detail handler carried the same
+// class of silent guard 288730bb removed from `get_address` in this module — a
+// local `_ => "data"` hash_type fallback, `type_hash_type.unwrap_or(1)`, and
+// `script_to_address(...).ok()`. Each rendered a plausible guess over corrupt
+// stored state instead of reporting it.
+// ---------------------------------------------------------------------------
+
+/// A live cell whose fields the individual tests perturb.
+fn cell_with(lock_hash_type: i16, type_hash_type: Option<i16>) -> LiveCellInfo {
+    LiveCellInfo {
+        capacity: 100_00000000,
+        lock_script_hash: vec![0x11; 32],
+        lock_code_hash: vec![0x22; 32],
+        lock_hash_type,
+        lock_args: vec![0x33; 20],
+        type_script_hash: Some(vec![0x44; 32]),
+        type_code_hash: Some(vec![0x55; 32]),
+        type_hash_type,
+        type_args: Some(vec![0xaa, 0xbb]),
+        data_size: 42,
+        occupied_capacity: 138_00000000,
+        udt_amount: None,
+        data_hash: None,
+    }
+}
+
+async fn get_cell_json(tx_hash: &[u8], cell: LiveCellInfo) -> (StatusCode, serde_json::Value) {
+    let store = test_store();
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_cell(tx_hash, 1, &cell, 123);
+    batch.commit().unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+    get_json(&app, &format!("/cells/0x{}/1", hex::encode(tx_hash))).await
+}
+
+#[tokio::test]
+async fn test_get_cell_fails_fast_on_invalid_stored_lock_hash_type() {
+    // 0/1/2/4 are the only hash_type values CKB consensus allows; 3 in the store
+    // is corruption. It used to render as "data" — a valid-looking lie.
+    let tx_hash = vec![0xc1; 32];
+    let (status, json) = get_cell_json(&tx_hash, cell_with(3, Some(1))).await;
+
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "got {json}");
+    let message = json["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains(&hex::encode(&tx_hash)) && message.contains("hash_type"),
+        "error must name the outpoint and the bad hash_type, got {message}"
+    );
+}
+
+#[tokio::test]
+async fn test_get_cell_fails_fast_on_invalid_stored_type_hash_type() {
+    let tx_hash = vec![0xc2; 32];
+    let (status, json) = get_cell_json(&tx_hash, cell_with(1, Some(3))).await;
+
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "got {json}");
+    let message = json["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains(&hex::encode(&tx_hash)) && message.contains("hash_type"),
+        "error must name the outpoint and the bad hash_type, got {message}"
+    );
+}
+
+#[tokio::test]
+async fn test_get_cell_fails_fast_on_missing_type_hash_type() {
+    // A cell with a type script always has a hash_type on chain. `unwrap_or(1)`
+    // silently rendered "type" for a cell the indexer stored incompletely.
+    let tx_hash = vec![0xc3; 32];
+    let (status, json) = get_cell_json(&tx_hash, cell_with(1, None)).await;
+
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "got {json}");
+    let message = json["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains(&hex::encode(&tx_hash)) && message.contains("hash_type"),
+        "error must name the outpoint and the missing hash_type, got {message}"
+    );
+}
+
+#[tokio::test]
+async fn test_get_cell_fails_fast_when_address_cannot_be_encoded() {
+    // `script_to_address(...).ok()` turned an unencodable lock into `address:
+    // null`, indistinguishable from a cell that legitimately has no address —
+    // there is no such cell.
+    let tx_hash = vec![0xc4; 32];
+    let mut cell = cell_with(1, Some(1));
+    cell.lock_code_hash = vec![0x22; 31]; // RFC-0021 requires exactly 32 bytes
+
+    let (status, json) = get_cell_json(&tx_hash, cell).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "got {json}");
+    let message = json["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains(&hex::encode(&tx_hash)) && message.contains("address"),
+        "error must name the outpoint and the encoding failure, got {message}"
+    );
+}
+
+#[tokio::test]
+async fn test_get_cell_keeps_exact_hash_types() {
+    // Control (passes on both revisions): every valid hash_type renders as
+    // itself, never collapsed to the "data" fallback.
+    let tx_hash = vec![0xc5; 32];
+    let (status, json) = get_cell_json(&tx_hash, cell_with(2, Some(4))).await;
+
+    assert_eq!(status, StatusCode::OK, "got {json}");
+    assert_eq!(json["lock"]["hashType"], "data1");
+    assert_eq!(json["type"]["hashType"], "data2");
+    assert!(
+        json["address"]
+            .as_str()
+            .unwrap_or_default()
+            .starts_with("ckb1"),
+        "a live cell always has an encodable address, got {}",
+        json["address"]
+    );
+}
