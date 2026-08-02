@@ -63,7 +63,8 @@ async fn test_average_block_time_chart_recomputes_after_initial_empty_response()
     let second_json: serde_json::Value = serde_json::from_slice(&second_body).unwrap();
     let second_data = second_json["data"].as_array().unwrap();
     assert_eq!(second_data.len(), 1);
-    assert_eq!(second_data[0]["date"], "20240115");
+    // Canonical chart date format, converted from the RocksDB day key.
+    assert_eq!(second_data[0]["date"], "2024-01-15");
     assert_eq!(second_data[0]["value"], "12.00");
 }
 
@@ -773,4 +774,71 @@ async fn test_charts_block_time_distribution_with_data() {
     let point_2s = data.iter().find(|point| point["date"] == "2.0").unwrap();
     assert_eq!(point_1s["value"], "50.000");
     assert_eq!(point_2s["value"], "50.000");
+}
+
+/// Regression: every date-keyed chart emits ONE canonical date format
+/// (`YYYY-MM-DD`). Five endpoints used to leak the raw RocksDB `YYYYMMDD` day
+/// key because their formatter only replaced `-` with `/`, which is a no-op on
+/// a dash-less key, so chart pages disagreed on date presentation.
+#[tokio::test]
+async fn test_date_keyed_charts_emit_canonical_iso_dates() {
+    let store = test_store();
+
+    for (date, difficulty) in [("20240115", 1_000_000.0), ("20240116", 2_000_000.0)] {
+        store
+            .put_daily_block_stats(
+                date,
+                &DailyBlockStats {
+                    avg_difficulty: difficulty,
+                    block_count: 100,
+                    total_uncles: 2,
+                    block_time_sum_ms: 100 * 10_000,
+                    block_time_count: 100,
+                },
+            )
+            .unwrap();
+        store
+            .put_daily_stats(
+                date,
+                &DailyStats {
+                    blocks_count: 100,
+                    transactions_count: 500,
+                    cells_created: 10,
+                    total_all_cells: 10,
+                    total_live_cells: 8,
+                    total_dead_cells: 2,
+                    block_time_sum_ms: 100 * 10_000,
+                    block_time_count: 100,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+    }
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    for uri in [
+        "/api/v1/charts/hash-rate",
+        "/api/v1/charts/difficulty",
+        "/api/v1/charts/uncle-rate",
+        "/api/v1/charts/transaction-count",
+        "/api/v1/charts/average-block-time",
+        "/api/v1/charts/cell-count",
+    ] {
+        let request = Request::builder().uri(uri).body(Body::empty()).unwrap();
+        let response = app.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "uri={uri}");
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let data = json["data"].as_array().unwrap();
+        assert!(!data.is_empty(), "uri={uri} returned no points");
+        for point in data {
+            let date = point["date"].as_str().unwrap();
+            assert!(
+                date.starts_with("2024-01-1") && date.len() == 10,
+                "uri={uri} must emit YYYY-MM-DD dates, got {date}"
+            );
+        }
+    }
 }

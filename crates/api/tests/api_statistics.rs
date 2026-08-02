@@ -722,7 +722,8 @@ async fn test_network_stats_includes_hero_metrics_from_dao_snapshot() {
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
-    // knowledge_size = occupied_capacity
+    // knowledge_size = occupied_capacity (U) − virtual_occupied, and this
+    // baseline declares no burn adjustment.
     assert_eq!(json["knowledgeSize"], "1000000000000000000");
     // circulating_supply = DAO C - genesis burnt - DAO S (all unissued secondary).
     let expected_circulating: i128 =
@@ -940,6 +941,21 @@ async fn test_daily_block_charts_read_from_derived_store() {
             },
         )
         .unwrap();
+    // The hash-rate divisor comes from DailyStats (the copy both the bulk and
+    // the live writer maintain), so every daily-block row needs its sibling.
+    for (date, blocks) in [("20260101", 100), ("20260102", 120)] {
+        core_store
+            .put_daily_stats(
+                date,
+                &DailyStats {
+                    blocks_count: blocks,
+                    block_time_sum_ms: blocks as i64 * 10_000,
+                    block_time_count: blocks,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+    }
 
     let config = test_config_with_append_only(core_store, append_only_store);
     let app = create_router(config).await;
@@ -1688,6 +1704,10 @@ async fn test_asset_ecosystem_breakdown_is_share_of_total_live_capacity() {
         )
         .unwrap();
 
+    // The standalone knowledge stat is U − virtual_occupied, so the mainnet
+    // baseline must be present.
+    seed_genesis_baseline(&store);
+
     let config = test_config(store);
     let app = create_router(config).await;
 
@@ -1703,7 +1723,8 @@ async fn test_asset_ecosystem_breakdown_is_share_of_total_live_capacity() {
 
     // The denominator is exposed alongside the standalone knowledge stat.
     assert_eq!(json["totalLiveCapacityCkb"], "47600000000");
-    assert_eq!(json["totalKnowledgeSizeCkb"], "5200000000");
+    // 520_000_000_000_000_000 (U) − 504_000_000_000_000_000 (virtual occupied)
+    assert_eq!(json["totalKnowledgeSizeCkb"], "160000000");
 
     let breakdown = json["capacityBreakdown"].as_array().unwrap();
     let pct_of = |category: &str| -> f64 {
@@ -1986,5 +2007,359 @@ async fn test_tx_stats_current_day_reports_natural_day_so_far() {
     assert_eq!(
         json["currentDay"], 456,
         "currentDay must be today's natural-day bucket, not a rolling hourly sum"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Common Knowledge Size: one definition on every surface
+// ---------------------------------------------------------------------------
+
+/// Build a DAO daily snapshot whose only interesting field is the DAO header
+/// `U` (`occupied_capacity`), plus a tip header so the network/asset handlers
+/// have a chain to read.
+fn seed_knowledge_size_fixture(store: &Arc<CkbadgerStore>, occupied_capacity: i128) {
+    let total_issuance_c: u64 = 4_790_000_000_000_000_000;
+    let unissued_secondary_s: u64 = 30_000_000_000_000_000;
+    let mut dao_field = vec![0u8; 32];
+    dao_field[0..8].copy_from_slice(&total_issuance_c.to_le_bytes());
+    dao_field[16..24].copy_from_slice(&unissued_secondary_s.to_le_bytes());
+
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_block_header(
+        200,
+        &CachedBlockHeader {
+            hash: vec![0x77; 32],
+            parent_hash: vec![0u8; 32],
+            timestamp: chrono::Utc::now().timestamp_millis(),
+            epoch_number: 42,
+            epoch_index: 10,
+            epoch_length: 1800,
+            dao: dao_field,
+            transactions_count: 1,
+            uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
+            cycles: None,
+        },
+    );
+    batch.commit().unwrap();
+
+    let snapshot = DaoDailySnapshot {
+        date: "2026-07-30".to_string(),
+        total_deposited: 837_000_000_000_000_000,
+        depositors_count: 100,
+        new_deposits: 5,
+        withdrawals: 2,
+        compensation: 0,
+        cumulative_deposit_amount: 0,
+        total_issuance: total_issuance_c as i128,
+        secondary_pool: unissued_secondary_s as i128,
+        occupied_capacity,
+        cum_miner_secondary: 0,
+        cum_dao_compensation: 0,
+        cum_treasury: 0,
+        unclaimed_compensation: 0,
+        unmade_dao_interests: 0,
+        cumulative_depositors: 0,
+        daily_depositor_addresses: 0,
+        protocol_deposited: None,
+    };
+    let snapshot_key = ckbadger_store::keys::encode_stats_key(
+        ckbadger_store::keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT,
+        b"20260730",
+    );
+    store
+        .put_cf(
+            store.cf_stats_dao(),
+            &snapshot_key,
+            &bincode::serialize(&snapshot).unwrap(),
+        )
+        .unwrap();
+    seed_genesis_baseline(store);
+}
+
+/// Regression: `/statistics/network` must report Common Knowledge Size the way
+/// CLAUDE.md and `docs/DAO_CALCULATIONS.md` §8 define it — DAO header `U` minus
+/// the network's genesis-derived `virtual_occupied` — the same quantity
+/// `/charts/knowledge-size` plots. Raw `U` was 32.6× larger on mainnet.
+#[tokio::test]
+async fn test_network_stats_knowledge_size_subtracts_genesis_virtual_occupied() {
+    let store = test_store();
+    // Real mainnet tip U at the time this bug was found.
+    seed_knowledge_size_fixture(&store, 519_967_746_700_000_000);
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri("/api/v1/statistics/network")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    // 519_967_746_700_000_000 (U) − 504_000_000_000_000_000 (virtual occupied)
+    assert_eq!(
+        json["knowledgeSize"], "15967746700000000",
+        "hero Knowledge Size must equal the knowledge-size chart's definition"
+    );
+}
+
+/// Regression: `/statistics/asset-ecosystem` shares the single Common Knowledge
+/// Size path with `/statistics/network` and `/charts/knowledge-size`.
+#[tokio::test]
+async fn test_asset_ecosystem_knowledge_size_subtracts_genesis_virtual_occupied() {
+    let store = test_store();
+    seed_knowledge_size_fixture(&store, 519_967_746_700_000_000);
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri("/api/v1/statistics/asset-ecosystem")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(
+        json["totalKnowledgeSizeCkb"], "159677467",
+        "asset-ecosystem knowledge size must be U − virtual_occupied, in CKB"
+    );
+}
+
+/// Fail fast (never clamp) when `U` is below the network's virtual occupied
+/// capacity: that is a broken snapshot or a wrong baseline, not a zero.
+#[tokio::test]
+async fn test_network_stats_fails_fast_when_knowledge_size_is_negative() {
+    let store = test_store();
+    // U below the seeded mainnet virtual_occupied (504e15) is impossible on a
+    // synced mainnet store.
+    seed_knowledge_size_fixture(&store, 1_000_000_000_000_000);
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri("/api/v1/statistics/network")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let message = json["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("2026-07-30")
+            && message.contains("1000000000000000")
+            && message.contains("504000000000000000"),
+        "error must name the date, U and virtual_occupied: {json}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Daily hash rate: divide the day's work by the time actually spent mining it
+// ---------------------------------------------------------------------------
+
+/// Regression: mainnet's genesis day is partial — the chain started 05:09:50
+/// UTC+8, so its 598 blocks were mined in 67_712_964 ms, not 86_400_000 ms.
+/// The stored `DailyStats.block_time_sum_ms` is that exact span (it sums every
+/// `ts(b) − ts(b−1)` gap for blocks on the day), so the hash rate is
+/// `Σdifficulty / block_time_sum_ms` = 73_466_099_633.87 H/ms — matching the
+/// node and the official explorer. The full-day divisor returned
+/// 57_576_474_071 (−21.6%).
+///
+/// `DailyBlockStats.block_time_sum_ms` is left at 0 on purpose: only the bulk
+/// builder ever fills that copy, while `DailyStats` is maintained by both the
+/// bulk and the live writer, so it is the only correct source.
+#[tokio::test]
+async fn test_hash_rate_chart_divides_by_the_day_s_actual_mined_span() {
+    let store = test_store();
+
+    store
+        .put_daily_block_stats(
+            "20191116",
+            &DailyBlockStats {
+                avg_difficulty: 8_318_741_404_228_533.0,
+                block_count: 598,
+                total_uncles: 0,
+                block_time_sum_ms: 0,
+                block_time_count: 0,
+            },
+        )
+        .unwrap();
+    store
+        .put_daily_stats(
+            "20191116",
+            &DailyStats {
+                blocks_count: 598,
+                block_time_sum_ms: 67_712_964,
+                block_time_count: 597,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    // A later day so the genesis day is not the excluded incomplete max date.
+    store
+        .put_daily_block_stats(
+            "20191117",
+            &DailyBlockStats {
+                avg_difficulty: 8_400_000_000_000_000.0,
+                block_count: 700,
+                total_uncles: 0,
+                block_time_sum_ms: 0,
+                block_time_count: 0,
+            },
+        )
+        .unwrap();
+    store
+        .put_daily_stats(
+            "20191117",
+            &DailyStats {
+                blocks_count: 700,
+                block_time_sum_ms: 86_400_000,
+                block_time_count: 700,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri("/api/v1/charts/hash-rate")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let data = json["data"].as_array().unwrap();
+    assert_eq!(
+        data.len(),
+        1,
+        "the incomplete latest day is excluded: {json}"
+    );
+    assert_eq!(data[0]["value"], "73466099634");
+}
+
+/// Fail fast when a day has blocks but no accumulated inter-block time: the
+/// divisor is missing, and inventing 86_400_000 ms is exactly the bug above.
+#[tokio::test]
+async fn test_hash_rate_chart_fails_fast_without_block_time_sum() {
+    let store = test_store();
+
+    store
+        .put_daily_block_stats(
+            "20260101",
+            &DailyBlockStats {
+                avg_difficulty: 1_000_000.0,
+                block_count: 100,
+                total_uncles: 0,
+                block_time_sum_ms: 0,
+                block_time_count: 0,
+            },
+        )
+        .unwrap();
+    store
+        .put_daily_stats(
+            "20260101",
+            &DailyStats {
+                blocks_count: 100,
+                block_time_sum_ms: 0,
+                block_time_count: 0,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    store
+        .put_daily_block_stats(
+            "20260102",
+            &DailyBlockStats {
+                avg_difficulty: 1_000_000.0,
+                block_count: 100,
+                total_uncles: 0,
+                block_time_sum_ms: 0,
+                block_time_count: 0,
+            },
+        )
+        .unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri("/api/v1/charts/hash-rate")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let message = json["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("20260101") && message.contains("block_time_sum_ms"),
+        "error must name the date and the missing divisor: {json}"
+    );
+}
+
+/// Fail fast when the day's `DailyStats` row is missing entirely: both rows are
+/// written in the same batch, so a hole is upstream corruption.
+#[tokio::test]
+async fn test_hash_rate_chart_fails_fast_when_daily_stats_row_missing() {
+    let store = test_store();
+
+    store
+        .put_daily_block_stats(
+            "20260101",
+            &DailyBlockStats {
+                avg_difficulty: 1_000_000.0,
+                block_count: 100,
+                total_uncles: 0,
+                block_time_sum_ms: 500_000,
+                block_time_count: 100,
+            },
+        )
+        .unwrap();
+    store
+        .put_daily_block_stats(
+            "20260102",
+            &DailyBlockStats {
+                avg_difficulty: 1_000_000.0,
+                block_count: 100,
+                total_uncles: 0,
+                block_time_sum_ms: 500_000,
+                block_time_count: 100,
+            },
+        )
+        .unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri("/api/v1/charts/hash-rate")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let message = json["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("20260101"),
+        "error must name the date whose daily stats row is missing: {json}"
     );
 }

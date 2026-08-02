@@ -860,7 +860,7 @@ fn build_most_utilized_share_chart(
         values.insert("others".to_string(), others.to_string());
 
         data.push(StackedAreaDataPoint {
-            date: format_date_key(&format!("{date:08}")),
+            date: format_chart_date(&format!("{date:08}"))?,
             values,
         });
     }
@@ -1332,14 +1332,13 @@ async fn get_transaction_count_chart(
     let data: Vec<ChartDataPoint> = daily_stats
         .into_iter()
         .map(|(date_str, stats)| {
-            let formatted_date = format_date_for_chart(&date_str);
-            ChartDataPoint {
-                date: formatted_date,
+            Ok(ChartDataPoint {
+                date: format_chart_date(&date_str)?,
                 value: stats.transactions_count.to_string(),
                 value2: None,
-            }
+            })
         })
-        .collect();
+        .collect::<Result<Vec<_>, ApiRouteError>>()?;
 
     ok(ChartResponse {
         data,
@@ -1362,21 +1361,18 @@ async fn get_cell_count_chart(
     // forward the previous day's totals + today's deltas).
     let data: Vec<StackedAreaDataPoint> = daily_stats
         .into_iter()
-        .filter_map(|(date_str, stats)| {
-            if stats.total_all_cells <= 0 {
-                return None;
-            }
-
+        .filter(|(_, stats)| stats.total_all_cells > 0)
+        .map(|(date_str, stats)| {
             let mut values = std::collections::HashMap::new();
             values.insert("allCells".to_string(), stats.total_all_cells.to_string());
             values.insert("liveCells".to_string(), stats.total_live_cells.to_string());
             values.insert("deadCells".to_string(), stats.total_dead_cells.to_string());
-            Some(StackedAreaDataPoint {
-                date: format_date_for_chart(&date_str),
+            Ok(StackedAreaDataPoint {
+                date: format_chart_date(&date_str)?,
                 values,
             })
         })
-        .collect();
+        .collect::<Result<Vec<_>, ApiRouteError>>()?;
 
     let series = vec![
         StackedAreaSeries {
@@ -1401,6 +1397,37 @@ async fn get_cell_count_chart(
         series,
         title: "Cell Count".to_string(),
     })
+}
+
+/// Common Knowledge Size (shannons) of a materialized DAO daily snapshot.
+///
+/// THE read-path definition of the concept, shared by `/statistics/network`,
+/// `/statistics/asset-ecosystem` and `/charts/knowledge-size`: DAO header `U`
+/// minus the active network's genesis-derived `virtual_occupied`
+/// (CLAUDE.md "Common Knowledge", `docs/DAO_CALCULATIONS.md` §8).
+///
+/// `DaoDailySnapshot.occupied_capacity` is raw `U` — it still contains the
+/// genesis burn cell's virtual occupied capacity (5.04B CKB on mainnet), which
+/// stores no common knowledge. Reporting raw `U` as "Knowledge Size" made the
+/// hero stat 32.6× the chart it links to. The persisted chart series applies
+/// exactly this subtraction at write time
+/// (`ckbadger_indexer::db::writer::calculate_knowledge_size`), so every surface
+/// now plots one quantity.
+///
+/// A negative result means the snapshot's `U` or the baseline is wrong; it is
+/// reported with both operands instead of being clamped to zero.
+fn common_knowledge_size(
+    snapshot: &ckbadger_store::DaoDailySnapshot,
+    virtual_occupied: i128,
+) -> Result<i128, ApiRouteError> {
+    let knowledge_size = snapshot.occupied_capacity - virtual_occupied;
+    if knowledge_size < 0 {
+        return Err(ApiError::internal(format!(
+            "negative common knowledge size on {}: occupied_capacity(U)={}, genesis virtual_occupied={}",
+            snapshot.date, snapshot.occupied_capacity, virtual_occupied
+        )));
+    }
+    Ok(knowledge_size)
 }
 
 async fn get_knowledge_size_chart(State(state): State<Arc<AppState>>) -> ApiResult<ChartResponse> {
@@ -1428,29 +1455,31 @@ async fn get_knowledge_size_chart(State(state): State<Arc<AppState>>) -> ApiResu
 
     // Exclude the current incomplete day to prevent cache divergence with composition chart.
     let today_key = current_ckb_date_key();
-    let data: Vec<ChartDataPoint> = daily_stats
-        .into_iter()
-        .filter(|(date_str, _)| date_str.as_str() != today_key)
-        .filter_map(|(date_str, stats)| {
-            let snapshot_date = format_date_key(&date_str);
-            stats.knowledge_size.map(|ks| ChartDataPoint {
-                date: snapshot_date.clone(),
-                value: shannon_to_ckb_string(ks),
-                value2: Some(
-                    liquid_by_date
-                        .get(&snapshot_date)
-                        .map(|circulating| {
-                            if *circulating > 0 {
-                                format!("{:.4}", ks as f64 * 100.0 / *circulating as f64)
-                            } else {
-                                "0.0000".to_string()
-                            }
-                        })
-                        .unwrap_or_else(|| "0.0000".to_string()),
-                ),
+    let mut data: Vec<ChartDataPoint> = Vec::with_capacity(daily_stats.len());
+    for (date_str, stats) in daily_stats {
+        if date_str.as_str() == today_key {
+            continue;
+        }
+        let Some(ks) = stats.knowledge_size else {
+            continue;
+        };
+        let snapshot_date = format_chart_date(&date_str)?;
+        let utilization = liquid_by_date
+            .get(&snapshot_date)
+            .map(|circulating| {
+                if *circulating > 0 {
+                    format!("{:.4}", ks as f64 * 100.0 / *circulating as f64)
+                } else {
+                    "0.0000".to_string()
+                }
             })
-        })
-        .collect();
+            .unwrap_or_else(|| "0.0000".to_string());
+        data.push(ChartDataPoint {
+            date: snapshot_date,
+            value: shannon_to_ckb_string(ks),
+            value2: Some(utilization),
+        });
+    }
 
     let response = ChartResponse {
         data,
@@ -1704,7 +1733,7 @@ async fn get_common_knowledge_composition_chart(
         let transfer = knowledge - typed_effective;
 
         data.push(StackedAreaDataPoint {
-            date: format_date_key(&format!("{date:08}")),
+            date: format_chart_date(&format!("{date:08}"))?,
             values: HashMap::from([
                 ("transfer".to_string(), shannon_to_ckb_string(transfer)),
                 ("dao".to_string(), shannon_to_ckb_string(dao)),
@@ -1893,7 +1922,7 @@ async fn get_capacity_turnover_ratio_chart(
         };
 
         data.push(ChartDataPoint {
-            date: format_date_key(&date),
+            date: format_chart_date(&date)?,
             value: format!("{daily_turnover:.6}"),
             value2: Some(format!("{weekly_turnover:.6}")),
         });
@@ -2192,16 +2221,17 @@ async fn get_average_block_time_chart(
         .map_err(|e| ApiError::internal(e.to_string()))?
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    let data: Vec<ChartDataPoint> = daily_stats
-        .into_iter()
-        .filter_map(|(date_str, stats)| {
-            stats.avg_block_time_ms().map(|avg_time_ms| ChartDataPoint {
-                date: format_date_for_chart(&date_str),
-                value: format!("{:.2}", avg_time_ms as f64 / 1000.0),
-                value2: None,
-            })
-        })
-        .collect();
+    let mut data: Vec<ChartDataPoint> = Vec::with_capacity(daily_stats.len());
+    for (date_str, stats) in daily_stats {
+        let Some(avg_time_ms) = stats.avg_block_time_ms() else {
+            continue;
+        };
+        data.push(ChartDataPoint {
+            date: format_chart_date(&date_str)?,
+            value: format!("{:.2}", avg_time_ms as f64 / 1000.0),
+            value2: None,
+        });
+    }
 
     let response = ChartResponse {
         data,
@@ -2545,9 +2575,13 @@ async fn fetch_network_stats_from_db(
     let dao_snapshot = store
         .get_latest_dao_daily_snapshot()
         .map_err(|e| ApiError::internal(e.to_string()))?;
-    let knowledge_size = dao_snapshot
-        .as_ref()
-        .map(|s| s.occupied_capacity.to_string());
+    let knowledge_size = match dao_snapshot.as_ref() {
+        Some(s) => {
+            let virtual_occupied = state.genesis_baseline()?.virtual_occupied;
+            Some(common_knowledge_size(s, virtual_occupied)?.to_string())
+        }
+        None => None,
+    };
     let circulating_supply = match dao_snapshot.as_ref() {
         Some(s) => {
             let genesis_burnt = state.genesis_baseline()?.burnt;
@@ -2589,10 +2623,22 @@ async fn get_hash_rate_chart(State(state): State<Arc<AppState>>) -> ApiResult<Ch
     }
 
     let store = state.store.clone();
-    let daily_block_stats = tokio::task::spawn_blocking(move || store.list_daily_block_stats())
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+    // `block_time_sum_ms` is read from `DailyStats`, not from the same-named
+    // `DailyBlockStats` field: only the bulk builder fills the latter, while
+    // both the bulk builder and the live writer maintain the former.
+    let (daily_block_stats, daily_stats) = tokio::task::spawn_blocking(move || {
+        let block_stats = store.list_daily_block_stats()?;
+        let stats = store.list_daily_stats_with_dates()?;
+        anyhow::Ok((block_stats, stats))
+    })
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?
+    .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    let block_time_sum_by_date: HashMap<String, i64> = daily_stats
+        .into_iter()
+        .map(|(date, stats)| (date, stats.block_time_sum_ms))
+        .collect();
 
     // Exclude the last day (incomplete) like the SQL version did
     let max_date = daily_block_stats
@@ -2601,22 +2647,28 @@ async fn get_hash_rate_chart(State(state): State<Arc<AppState>>) -> ApiResult<Ch
         .max()
         .map(|s| s.to_string());
 
-    let data: Vec<ChartDataPoint> = daily_block_stats
-        .into_iter()
-        .filter(|(date, stats)| {
-            stats.avg_difficulty > 0.0
-                && max_date.as_ref().is_none_or(|m| date.as_str() < m.as_str())
-        })
-        .map(|(date_str, stats)| {
-            let hash_rate =
-                calculate_daily_hash_rate(stats.avg_difficulty as u64, stats.block_count);
-            ChartDataPoint {
-                date: format_date_for_chart(&date_str),
-                value: format!("{:.0}", hash_rate),
-                value2: None,
-            }
-        })
-        .collect();
+    let mut data: Vec<ChartDataPoint> = Vec::with_capacity(daily_block_stats.len());
+    for (date_str, stats) in daily_block_stats {
+        if stats.avg_difficulty <= 0.0
+            || max_date
+                .as_ref()
+                .is_some_and(|m| date_str.as_str() >= m.as_str())
+        {
+            continue;
+        }
+        let block_time_sum_ms = *block_time_sum_by_date.get(&date_str).ok_or_else(|| {
+            ApiError::internal(format!(
+                "daily block stats for {date_str} have no matching daily stats row; \
+                 both are written in the same batch, so this is upstream corruption"
+            ))
+        })?;
+        let hash_rate = calculate_daily_hash_rate(&date_str, &stats, block_time_sum_ms)?;
+        data.push(ChartDataPoint {
+            date: format_chart_date(&date_str)?,
+            value: format!("{:.0}", hash_rate),
+            value2: None,
+        });
+    }
 
     let response = ChartResponse {
         data,
@@ -2656,12 +2708,14 @@ async fn get_difficulty_chart(State(state): State<Arc<AppState>>) -> ApiResult<C
             stats.avg_difficulty > 0.0
                 && max_date.as_ref().is_none_or(|m| date.as_str() < m.as_str())
         })
-        .map(|(date_str, stats)| ChartDataPoint {
-            date: format_date_for_chart(&date_str),
-            value: format!("{:.0}", stats.avg_difficulty),
-            value2: None,
+        .map(|(date_str, stats)| {
+            Ok(ChartDataPoint {
+                date: format_chart_date(&date_str)?,
+                value: format!("{:.0}", stats.avg_difficulty),
+                value2: None,
+            })
         })
-        .collect();
+        .collect::<Result<Vec<_>, ApiRouteError>>()?;
 
     let response = ChartResponse {
         data,
@@ -2702,13 +2756,13 @@ async fn get_uncle_rate_chart(State(state): State<Arc<AppState>>) -> ApiResult<C
             } else {
                 0.0
             };
-            ChartDataPoint {
-                date: format_date_for_chart(&date_str),
+            Ok(ChartDataPoint {
+                date: format_chart_date(&date_str)?,
                 value: format!("{:.6}", uncle_rate),
                 value2: None,
-            }
+            })
         })
-        .collect();
+        .collect::<Result<Vec<_>, ApiRouteError>>()?;
 
     let response = ChartResponse {
         data,
@@ -2908,20 +2962,42 @@ async fn get_miner_address_distribution_chart(
     ok(response)
 }
 
-fn calculate_daily_hash_rate(difficulty: u64, block_count: i32) -> f64 {
-    if block_count <= 0 {
-        return 0.0;
+/// Exact daily network hash rate in hashes per millisecond: the day's total
+/// mined work divided by the time actually spent mining it.
+///
+/// * numerator — `avg_difficulty × block_count` is the day's exact difficulty
+///   sum (the indexer stores the sum divided by the count).
+/// * denominator — `DailyStats.block_time_sum_ms` sums every inter-block gap
+///   `ts(b) − ts(b−1)` for the blocks `b` dated to this day, including the gap
+///   across midnight from the previous day's last block, so it telescopes to
+///   `ts(last block of day) − ts(last block of previous day)`: the day's real
+///   mined span. Only block 0 contributes no gap, which is why mainnet's
+///   genesis day spans 67_712_964 ms (the chain started 05:09:50 UTC+8) and
+///   not 86_400_000.
+///
+/// Assuming a full calendar day understated the genesis day by 21.6% and every
+/// later day by the difference between its real span and 86_400_000 ms.
+fn calculate_daily_hash_rate(
+    date_key: &str,
+    block_stats: &ckbadger_store::DailyBlockStats,
+    block_time_sum_ms: i64,
+) -> Result<f64, ApiRouteError> {
+    if block_stats.block_count <= 0 {
+        return Err(ApiError::internal(format!(
+            "daily block stats for {date_key} have avg_difficulty={} but block_count={}",
+            block_stats.avg_difficulty, block_stats.block_count
+        )));
     }
-
-    // Hash rate = difficulty / avg_block_time_ms
-    // CKB Explorer divides by millisecond-denominated block time (CKB timestamps are ms).
-    // avg_block_time_ms = 86_400_000 / block_count
-    let avg_block_time_ms = 86_400_000.0 / block_count as f64;
-    if avg_block_time_ms <= 0.0 {
-        0.0
-    } else {
-        difficulty as f64 / avg_block_time_ms
+    if block_time_sum_ms <= 0 {
+        return Err(ApiError::internal(format!(
+            "cannot derive hash rate for {date_key}: block_time_sum_ms={block_time_sum_ms} with block_count={}. \
+             The day's mined span is the only valid divisor, and every block except the genesis block \
+             contributes a gap to it",
+            block_stats.block_count
+        )));
     }
+    let difficulty_sum = block_stats.avg_difficulty * block_stats.block_count as f64;
+    Ok(difficulty_sum / block_time_sum_ms as f64)
 }
 
 fn snapshot_secondary_cumulative(
@@ -3534,23 +3610,22 @@ async fn get_inflation_rate_chart(State(state): State<Arc<AppState>>) -> ApiResu
     ok(response)
 }
 
-/// Convert a date string from "YYYY-MM-DD" to "YYYY/MM/DD" for chart display.
-fn format_date_for_chart(date_str: &str) -> String {
-    date_str.replace('-', "/")
-}
-
-/// Format YYYYMMDD date key to YYYY-MM-DD for chart display.
-fn format_date_key(date_key: &str) -> String {
-    if date_key.len() == 8 {
-        format!(
-            "{}-{}-{}",
-            &date_key[0..4],
-            &date_key[4..6],
-            &date_key[6..8]
-        )
-    } else {
-        date_key.to_string()
-    }
+/// THE conversion from a RocksDB day key (`YYYYMMDD`, the UTC+8 stats-key
+/// convention) to the one date format every chart point carries: `YYYY-MM-DD`.
+///
+/// Charts used to have two formatters. The second one only replaced `-` with
+/// `/`, which is a no-op on a dash-less day key, so five endpoints shipped raw
+/// `20191116` keys while their siblings shipped `2019-11-16`. Parsing through
+/// `NaiveDate` keeps this total: a key that is not a real calendar date fails
+/// with the key itself rather than reaching the client as a plausible label.
+fn format_chart_date(date_key: &str) -> Result<String, ApiRouteError> {
+    chrono::NaiveDate::parse_from_str(date_key, "%Y%m%d")
+        .map(|date| date.format("%Y-%m-%d").to_string())
+        .map_err(|error| {
+            ApiError::internal(format!(
+                "malformed chart date key {date_key:?} (expected YYYYMMDD): {error}"
+            ))
+        })
 }
 
 /// Current CKB day (UTC+8) as "YYYYMMDD" key. Used to exclude incomplete current day from charts.
@@ -3621,12 +3696,12 @@ async fn get_hodl_wave_chart(
             values.insert("gt3y".to_string(), pct(w.band_gt_3y));
             values.insert("holderCount".to_string(), w.holder_count.to_string());
 
-            StackedAreaDataPoint {
-                date: format_date_key(date),
+            Ok(StackedAreaDataPoint {
+                date: format_chart_date(date)?,
                 values,
-            }
+            })
         })
-        .collect();
+        .collect::<Result<Vec<_>, ApiRouteError>>()?;
 
     let series = vec![
         StackedAreaSeries {
@@ -4121,7 +4196,13 @@ async fn get_asset_ecosystem(
     };
 
     let (dao_locked, knowledge_size) = match dao_snapshot.as_ref() {
-        Some(s) => (s.total_deposited, s.occupied_capacity),
+        Some(s) => {
+            let virtual_occupied = state.genesis_baseline()?.virtual_occupied;
+            (
+                s.total_deposited,
+                common_knowledge_size(s, virtual_occupied)?,
+            )
+        }
         None => (0, 0),
     };
 
@@ -4430,12 +4511,113 @@ mod tests {
         assert!(err.1 .0.message.contains("underflow"));
     }
 
+    fn daily_block_stats(avg_difficulty: f64, block_count: i32) -> ckbadger_store::DailyBlockStats {
+        ckbadger_store::DailyBlockStats {
+            avg_difficulty,
+            block_count,
+            total_uncles: 0,
+            // Deliberately zero: only the bulk builder fills this copy, so the
+            // read path must take its divisor from `DailyStats`.
+            block_time_sum_ms: 0,
+            block_time_count: 0,
+        }
+    }
+
     #[test]
     fn test_calculate_daily_hash_rate_uses_milliseconds() {
-        // 8,640 blocks/day => 10s avg block time => 10,000ms
-        // hash_rate = difficulty / avg_block_time_ms = 1_000_000 / 10_000 = 100
-        let hash_rate = calculate_daily_hash_rate(1_000_000, 8_640);
+        // 8,640 blocks whose gaps sum to a full day (10s average):
+        // hash_rate = Σdifficulty / block_time_sum_ms
+        //           = 1_000_000 × 8_640 / 86_400_000 = 100 H/ms
+        let hash_rate = calculate_daily_hash_rate(
+            "20240115",
+            &daily_block_stats(1_000_000.0, 8_640),
+            86_400_000,
+        )
+        .unwrap();
         assert_eq!(hash_rate, 100.0);
+    }
+
+    /// Regression: mainnet's genesis day is partial — 598 blocks mined in
+    /// 67_712_964 ms because the chain started 05:09:50 UTC+8. The node and the
+    /// official explorer both report 73_466_099_633.87 H/ms; the full-day
+    /// divisor reported 57_576_474_071 (−21.6%).
+    #[test]
+    fn test_calculate_daily_hash_rate_matches_node_on_partial_genesis_day() {
+        let hash_rate = calculate_daily_hash_rate(
+            "20191116",
+            &daily_block_stats(8_318_741_404_228_533.0, 598),
+            67_712_964,
+        )
+        .unwrap();
+        assert_eq!(format!("{hash_rate:.2}"), "73466099633.87");
+    }
+
+    #[test]
+    fn test_calculate_daily_hash_rate_fails_without_a_mined_span() {
+        let err = calculate_daily_hash_rate("20260101", &daily_block_stats(1_000_000.0, 100), 0)
+            .unwrap_err();
+        assert!(
+            err.1 .0.message.contains("20260101")
+                && err.1 .0.message.contains("block_time_sum_ms=0"),
+            "unexpected message: {}",
+            err.1 .0.message
+        );
+    }
+
+    #[test]
+    fn test_format_chart_date_converts_day_keys_and_rejects_junk() {
+        assert_eq!(format_chart_date("20191116").unwrap(), "2019-11-16");
+        assert_eq!(format_chart_date("20240101").unwrap(), "2024-01-01");
+        for junk in ["2024-01-15", "202401", "00000000", "2024011x"] {
+            let err = format_chart_date(junk).unwrap_err();
+            assert!(
+                err.1 .0.message.contains(junk),
+                "error must name the offending key: {}",
+                err.1 .0.message
+            );
+        }
+    }
+
+    #[test]
+    fn test_common_knowledge_size_subtracts_virtual_occupied_and_fails_below_zero() {
+        let mut snapshot = ckbadger_store::DaoDailySnapshot {
+            date: "2026-07-30".to_string(),
+            total_deposited: 0,
+            depositors_count: 0,
+            new_deposits: 0,
+            withdrawals: 0,
+            compensation: 0,
+            cumulative_deposit_amount: 0,
+            total_issuance: 0,
+            secondary_pool: 0,
+            occupied_capacity: 519_967_746_700_000_000,
+            cum_miner_secondary: 0,
+            cum_dao_compensation: 0,
+            cum_treasury: 0,
+            unmade_dao_interests: 0,
+            unclaimed_compensation: 0,
+            cumulative_depositors: 0,
+            daily_depositor_addresses: 0,
+            protocol_deposited: None,
+        };
+        assert_eq!(
+            common_knowledge_size(&snapshot, 504_000_000_000_000_000).unwrap(),
+            15_967_746_700_000_000
+        );
+        // No burn policy declared ⇒ knowledge size is the raw U field.
+        assert_eq!(
+            common_knowledge_size(&snapshot, 0).unwrap(),
+            519_967_746_700_000_000
+        );
+
+        snapshot.occupied_capacity = 1;
+        let err = common_knowledge_size(&snapshot, 504_000_000_000_000_000).unwrap_err();
+        assert!(
+            err.1 .0.message.contains("2026-07-30")
+                && err.1 .0.message.contains("504000000000000000"),
+            "unexpected message: {}",
+            err.1 .0.message
+        );
     }
 
     fn window_header(number: i64, ts_ms: i64, compact_target: u32) -> CachedBlockHeader {
