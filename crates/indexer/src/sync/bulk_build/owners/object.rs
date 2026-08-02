@@ -2922,7 +2922,7 @@ mod tests {
 
     fn create_mnft_class_type_script(issuer_id: &[u8; 20], class_index: u32) -> Script {
         let mut args = issuer_id.to_vec();
-        args.extend_from_slice(&class_index.to_le_bytes());
+        args.extend_from_slice(&class_index.to_be_bytes());
         Script {
             code_hash: MNFT_CLASS_CODE_HASH.to_string(),
             hash_type: "type".to_string(),
@@ -2932,7 +2932,8 @@ mod tests {
 
     fn create_mnft_token_type_script(class_id: &[u8], token_index: u32) -> Script {
         let mut args = class_id.to_vec();
-        args.extend_from_slice(&token_index.to_le_bytes());
+        // Big-endian, matching the official contract's parse_type_args_id.
+        args.extend_from_slice(&token_index.to_be_bytes());
         Script {
             code_hash: MNFT_TOKEN_CODE_HASH.to_string(),
             hash_type: "type".to_string(),
@@ -2981,7 +2982,7 @@ mod tests {
     fn bulk_build_mnft_object_fixture() -> Vec<BlockResponseWithCycles> {
         let issuer_id = [0x44; 20];
         let mut class_id = issuer_id.to_vec();
-        class_id.extend_from_slice(&7u32.to_le_bytes());
+        class_id.extend_from_slice(&7u32.to_be_bytes());
         let issuer_type_id = format!("0x{}", "ab".repeat(32));
 
         let create_tx = TransactionView {
@@ -3454,7 +3455,7 @@ mod tests {
     fn object_owner_real_mnft_blocks_apply_activity_count_deltas() {
         let issuer_id = [0x44; 20];
         let mut class_id = issuer_id.to_vec();
-        class_id.extend_from_slice(&7u32.to_le_bytes());
+        class_id.extend_from_slice(&7u32.to_be_bytes());
 
         let blocks = bulk_build_mnft_object_fixture();
         let interner = IdentityInterner::default();
@@ -3538,9 +3539,9 @@ mod tests {
 
         let issuer_id = [0x11; 20];
         let mut class_id = issuer_id.to_vec();
-        class_id.extend_from_slice(&7u32.to_le_bytes());
+        class_id.extend_from_slice(&7u32.to_be_bytes());
         let mut token_id = class_id.clone();
-        token_id.extend_from_slice(&9u32.to_le_bytes());
+        token_id.extend_from_slice(&9u32.to_be_bytes());
 
         let tx0 = ResolvedTxFacts {
             tx_hash: [0x21; 32],
