@@ -118,6 +118,15 @@ fn parse_yyyymmdd_key(date_yyyymmdd: u32) -> Result<NaiveDate, String> {
         .map_err(|_| format!("Invalid date key: {}", date_yyyymmdd))
 }
 
+/// Longest daily series any chart may materialize.
+///
+/// One entry is built per day in the requested span, so an unbounded span is
+/// unauthenticated memory amplification: `?from=1970-01-01&to=9999-12-31`
+/// asked for ~2.9M keys (plus a chart point each). CKB mainnet launched
+/// 2019-11-16 and testnet 2020-05-12, so ~137 years of days can never be a
+/// real query while still leaving every chain-lifetime request untouched.
+pub const MAX_CHART_DAYS: usize = 50_000;
+
 /// Build inclusive daily keys in YYYYMMDD format.
 pub fn date_keys_inclusive(
     from_date_yyyymmdd: u32,
@@ -129,6 +138,13 @@ pub fn date_keys_inclusive(
         return Err(format!(
             "Invalid date key range: {} > {}",
             from_date_yyyymmdd, to_date_yyyymmdd
+        ));
+    }
+    let span_days = (end - current).num_days() + 1;
+    if span_days > MAX_CHART_DAYS as i64 {
+        return Err(format!(
+            "Date range too large: {} to {} spans {} days, limit is {}",
+            from_date_yyyymmdd, to_date_yyyymmdd, span_days, MAX_CHART_DAYS
         ));
     }
 
@@ -247,6 +263,25 @@ mod tests {
         assert_eq!(
             date_keys_inclusive(20240115, 20240117).unwrap(),
             vec![20240115, 20240116, 20240117]
+        );
+    }
+
+    /// A chart materializes one key (and later one point) per day in the
+    /// requested span, so an unbounded span is unauthenticated memory
+    /// amplification: `?from=1970-01-01&to=9999-12-31` asked for ~2.9M keys on
+    /// four different chart endpoints. Reject spans no real chain could have.
+    #[test]
+    fn test_date_keys_inclusive_rejects_a_span_no_chain_could_have() {
+        let err = date_keys_inclusive(19700101, 99991231).unwrap_err();
+        assert!(
+            err.contains("Date range too large") && err.contains("50000"),
+            "error must name the limit, got: {err}"
+        );
+        // The whole CKB lifetime, and then some, still resolves.
+        assert_eq!(
+            date_keys_inclusive(20191116, 20260802).unwrap().len(),
+            2452,
+            "every chain-lifetime query must be unaffected"
         );
     }
 
