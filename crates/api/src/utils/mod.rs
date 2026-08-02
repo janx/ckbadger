@@ -21,8 +21,9 @@ pub use format::{
 pub use hash::{parse_asset_id_max32, parse_hash32, HASH32_LEN};
 pub use http::shared_http_client;
 pub use params::{
-    is_valid_block_number, parse_block_number, parse_block_tx_cursor,
-    parse_optional_block_tx_cursor, parse_output_index, validate_block_number, MAX_OUTPUT_INDEX,
+    is_valid_block_number, parse_block_cursor_start, parse_block_number, parse_block_tx_cursor,
+    parse_optional_block_cursor_start, parse_optional_block_tx_cursor, parse_output_index,
+    validate_block_number, MAX_OUTPUT_INDEX,
 };
 pub use script_resolution::{
     deployment_key_for_script, deployment_reference_hashes, hash_type_to_string, hash_type_to_u8,

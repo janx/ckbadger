@@ -177,6 +177,87 @@ async fn test_block_endpoints_reject_negative_block_number() {
     }
 }
 
+/// `/blocks?cursor=` is the one paginated endpoint whose cursor was a bare
+/// typed integer instead of a string routed through a validating parser, so the
+/// sweep that fixed `/blocks/-1` above never reached it.
+///
+/// The cursor is the *exclusive* upper bound, so the handler scans from
+/// `cursor - 1`: `?cursor=0` asked the store for block `-1` and
+/// `encode_block_num` aborted the process. Verified live — `?cursor=1` answered
+/// 200 while `?cursor=0` dropped the connection and took port 8101 down until
+/// the supervisor restarted it.
+///
+/// Here the abort is masked twice over: the test profile unwinds instead of
+/// aborting, and the store call is inside `spawn_blocking`, so tokio converts
+/// the panic into a `JoinError` that the handler maps to a 500. A 500 in this
+/// test is the in-process shadow of a dead API process in release.
+#[tokio::test]
+async fn test_block_listing_rejects_non_positive_cursor() {
+    let app = test_app().await;
+    for cursor in ["0", "-1", "-5"] {
+        assert_bad_request(
+            &app,
+            &format!("/blocks?cursor={cursor}"),
+            "a non-positive block cursor",
+        )
+        .await;
+    }
+}
+
+/// `i64::MIN - 1` overflows before it can even reach the store: it panics on
+/// the axum task itself in an overflow-checked build (killing the request
+/// future outright) and wraps to `i64::MAX` in release, silently serving the
+/// newest page under a cursor that asked for the oldest.
+#[tokio::test]
+async fn test_block_listing_rejects_cursor_that_would_overflow_the_scan_start() {
+    let app = test_app().await;
+    assert_bad_request(
+        &app,
+        "/blocks?cursor=-9223372036854775808",
+        "a block cursor whose scan start would overflow",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn test_block_listing_rejects_non_numeric_cursor() {
+    let app = test_app().await;
+    for cursor in ["zzz", "1:2", "99999999999999999999999999"] {
+        assert_bad_request(
+            &app,
+            &format!("/blocks?cursor={cursor}"),
+            "a non-numeric block cursor",
+        )
+        .await;
+    }
+}
+
+/// The boundary is `< 1`, not `<= 1`: `?cursor=1` resumes at genesis and is the
+/// smallest cursor that names a real block.
+#[tokio::test]
+async fn test_block_listing_accepts_the_genesis_cursor() {
+    let app = test_app().await;
+    let (status, body) = get_json(&app, "/blocks?cursor=1").await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "?cursor=1 resumes the scan at genesis and must be accepted, got {status} body={body}"
+    );
+}
+
+/// Same contract as every other cursor in `utils::params`: absent and empty
+/// both mean page 1.
+#[tokio::test]
+async fn test_block_listing_treats_an_empty_cursor_as_page_one() {
+    let app = test_app().await;
+    let (status, body) = get_json(&app, "/blocks?cursor=").await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "an empty block cursor must mean page 1, got {status} body={body}"
+    );
+}
+
 /// Free-text search forwards whatever the user typed. A negative number is
 /// simply not a block number, so the block lookup must not run — and must not
 /// abort the process on the way.

@@ -81,6 +81,53 @@ pub fn parse_output_index(value: i32, field: &str) -> Result<i16, ApiRouteError>
     Ok(value as i16)
 }
 
+/// Parse the `/blocks` list cursor into the first block of its descending scan.
+///
+/// The cursor is the *exclusive* upper bound — `nextCursor` is the last block
+/// number the previous page returned — so the scan resumes at `cursor - 1` and
+/// the smallest cursor that names a real block is 1 (`?cursor=1` resumes at
+/// genesis). `/blocks` was the only paginated route whose cursor was a bare
+/// `Option<i64>` rather than a string routed through a parser here, which is
+/// how it escaped the sweep that pinned `/blocks/-1`: `?cursor=0` handed
+/// `encode_block_num` a `-1` and aborted the process, and `?cursor=i64::MIN`
+/// overflowed the subtraction itself.
+///
+/// The resolved start block is returned instead of the raw cursor so the
+/// subtraction lives *inside* the check that makes it safe. A caller can then
+/// hold no value it could take below genesis, which is what the store's assert
+/// requires and what returning the cursor itself would leave to the caller to
+/// remember.
+pub fn parse_block_cursor_start(raw: &str, field: &str) -> Result<i64, ApiRouteError> {
+    let invalid = |detail: String| {
+        ApiError::bad_request(format!(
+            "Invalid {field}: expected a block number greater than 0 (the cursor is the \
+             exclusive upper bound, so 1 resumes at genesis), {detail}"
+        ))
+    };
+
+    let cursor = raw
+        .parse::<i64>()
+        .map_err(|_| invalid(format!("got {raw:?}")))?;
+    if cursor < 1 {
+        return Err(invalid(format!("got {cursor}")));
+    }
+    Ok(cursor - 1)
+}
+
+/// Parse an optional `/blocks` list cursor into its scan start.
+///
+/// Same contract as [`parse_optional_block_tx_cursor`]: absent and empty both
+/// mean page 1, present-but-malformed is an error — never "no cursor".
+pub fn parse_optional_block_cursor_start(
+    raw: Option<&str>,
+    field: &str,
+) -> Result<Option<i64>, ApiRouteError> {
+    match raw {
+        None | Some("") => Ok(None),
+        Some(cursor) => Ok(Some(parse_block_cursor_start(cursor, field)?)),
+    }
+}
+
 /// Parse a `"<block_number>:<tx_index>"` pagination cursor.
 ///
 /// This is the one parser for that cursor shape. It previously existed as four
@@ -278,6 +325,58 @@ mod tests {
         let err = parse_output_index(-1, "output index").unwrap_err();
         assert_eq!(err.0, StatusCode::BAD_REQUEST);
         assert!(message(err).contains("got -1"));
+    }
+
+    #[test]
+    fn test_parse_block_cursor_start_resumes_one_block_below_the_cursor() {
+        assert_eq!(parse_block_cursor_start("1", "block cursor").unwrap(), 0);
+        assert_eq!(parse_block_cursor_start("100", "block cursor").unwrap(), 99);
+        assert_eq!(
+            parse_block_cursor_start(&i64::MAX.to_string(), "block cursor").unwrap(),
+            i64::MAX - 1
+        );
+    }
+
+    /// `?cursor=0` resolved to block `-1` and aborted the process inside
+    /// `encode_block_num`; `?cursor=i64::MIN` overflowed the subtraction before
+    /// it could even get there.
+    #[test]
+    fn test_parse_block_cursor_start_rejects_cursors_below_genesis() {
+        for raw in ["0", "-1", "-5", "-9223372036854775808"] {
+            let err = parse_block_cursor_start(raw, "block cursor").unwrap_err();
+            assert_eq!(err.0, StatusCode::BAD_REQUEST, "raw={raw}");
+            let msg = message(err);
+            assert!(msg.contains("block cursor"), "{msg}");
+            assert!(msg.contains(raw), "{msg}");
+        }
+    }
+
+    #[test]
+    fn test_parse_block_cursor_start_rejects_non_numeric() {
+        for raw in ["", "zzz", "1:2", "99999999999999999999999999", "1.5"] {
+            assert!(
+                parse_block_cursor_start(raw, "block cursor").is_err(),
+                "expected {raw:?} to be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn test_parse_optional_block_cursor_start_distinguishes_absent_from_malformed() {
+        assert_eq!(
+            parse_optional_block_cursor_start(None, "block cursor").unwrap(),
+            None
+        );
+        assert_eq!(
+            parse_optional_block_cursor_start(Some(""), "block cursor").unwrap(),
+            None
+        );
+        assert_eq!(
+            parse_optional_block_cursor_start(Some("7"), "block cursor").unwrap(),
+            Some(6)
+        );
+        assert!(parse_optional_block_cursor_start(Some("0"), "block cursor").is_err());
+        assert!(parse_optional_block_cursor_start(Some("zzz"), "block cursor").is_err());
     }
 
     #[test]

@@ -16,7 +16,9 @@ use crate::cache::{CacheBackend, CacheKeys, CacheTtl};
 use crate::response::{default_limit, ok, ApiError, ApiResult, CursorPaginatedResponse};
 use crate::routes::hardforks::HardforkResourceResponse;
 use crate::routes::transactions::tx_serialized_size_in_block;
-use crate::utils::{parse_block_number, parse_hash32, script_to_address};
+use crate::utils::{
+    parse_block_number, parse_hash32, parse_optional_block_cursor_start, script_to_address,
+};
 use crate::AppState;
 
 pub fn routes() -> Router<Arc<AppState>> {
@@ -31,7 +33,11 @@ pub fn routes() -> Router<Arc<AppState>> {
 pub struct ListParams {
     #[serde(default = "default_limit")]
     limit: i64,
-    cursor: Option<i64>,
+    /// Exclusive upper-bound block number
+    /// (see [`parse_optional_block_cursor_start`]). A string, not an `i64`, so
+    /// that every rejection comes from the one parser and answers in this
+    /// API's error envelope instead of axum's raw deserialization message.
+    cursor: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -77,8 +83,14 @@ async fn list_blocks(
 ) -> ApiResult<CursorPaginatedResponse<BlockResponse>> {
     let limit = params.limit.clamp(1, 100);
 
+    // `list_blocks_desc` scans backwards from `from_block` inclusive while the
+    // cursor is the exclusive upper bound, so the scan starts one block below
+    // it. The parser owns that subtraction because it is the check that keeps
+    // the result at or above genesis — `encode_block_num` asserts it.
+    let from_block = parse_optional_block_cursor_start(params.cursor.as_deref(), "block cursor")?;
+
     let cache_key = format!("{}:{}", CacheKeys::LATEST_BLOCKS, limit);
-    let is_first_page = params.cursor.is_none();
+    let is_first_page = from_block.is_none();
     if is_first_page {
         if let Some(cached) = state
             .cache
@@ -95,11 +107,6 @@ async fn list_blocks(
         .map_err(|e| ApiError::internal(format!("sync status unavailable: {}", e)))?;
     let total = sync.tip_block_number + 1;
 
-    // Use from_block: for cursor pagination, we want blocks with number < cursor
-    // list_blocks_desc takes from_block as the starting point (inclusive in scan, but we want exclusive)
-    // Since list_blocks_desc starts from `from_block` and goes backwards, we pass cursor - 1
-    // or if no cursor, None (which starts from the end)
-    let from_block = params.cursor.map(|c| c - 1);
     let fetch_limit = (limit + 1) as usize;
     let network = state.ckb_network.clone();
 
