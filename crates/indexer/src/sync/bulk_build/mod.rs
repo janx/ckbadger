@@ -36,6 +36,7 @@ use super::indexer::{
     finalize_bulk_stage_handoff_state, persist_bulk_sync_completion_status,
     take_bulk_sync_completion_transition, Indexer,
 };
+use super::reorg::{begin_cell_distribution_block, begin_hodl_wave_block};
 use crate::bulk_sync_perf::BatchSample;
 use crate::lifecycle::RebuildRequiredError;
 use crate::parser::{ParsedUdtCell, UdtParser, UdtStandard};
@@ -2403,35 +2404,15 @@ impl BulkBuildRuntimeState {
                                 for block in &arena.blocks {
                                     let block_date =
                                         ckbadger_common::block_date_from_ms(block.timestamp_ms);
-                                    cell_dist_tracker
-                                        .record_block_date(block.number, block_date);
-
-                                    for tx in &resolved[block.tx_range.clone()] {
-                                        for input in &tx.resolved_inputs {
-                                            cell_dist_tracker
-                                                .cell_consumed(input.occupied_capacity)?;
-                                        }
-                                        for cell in tx.cells.iter() {
-                                            cell_dist_tracker
-                                                .cell_created(cell.occupied_capacity);
-                                        }
-
-                                        let address_deltas =
-                                            address.apply_tx_with_deltas(tx, &ctx)?;
-                                        apply_cell_dist_cohort_deltas(
+                                    if let Some((snapshot_date, snapshot, cohort)) =
+                                        begin_cell_distribution_block(
                                             cell_dist_tracker,
-                                            address,
-                                            &address_deltas,
-                                            tx,
-                                        )?;
-                                    }
-
-                                    if let Some((snapshot_date, snapshot)) =
-                                        cell_dist_tracker.maybe_snapshot(block_date)
+                                            block.number,
+                                            block_date,
+                                        )
                                     {
                                         let date_str =
                                             snapshot_date.format("%Y%m%d").to_string();
-                                        let cohort = cell_dist_tracker.cohort_snapshot();
                                         cell_dist_sealed_rows.push(
                                             materialize::MaterializedRow::new(
                                                 CF_STATS_HODL,
@@ -2452,6 +2433,26 @@ impl BulkBuildRuntimeState {
                                                 bincode::serialize(&cohort)?,
                                             ),
                                         );
+                                    }
+
+                                    for tx in &resolved[block.tx_range.clone()] {
+                                        for input in &tx.resolved_inputs {
+                                            cell_dist_tracker
+                                                .cell_consumed(input.occupied_capacity)?;
+                                        }
+                                        for cell in tx.cells.iter() {
+                                            cell_dist_tracker
+                                                .cell_created(cell.occupied_capacity);
+                                        }
+
+                                        let address_deltas =
+                                            address.apply_tx_with_deltas(tx, &ctx)?;
+                                        apply_cell_dist_cohort_deltas(
+                                            cell_dist_tracker,
+                                            address,
+                                            &address_deltas,
+                                            tx,
+                                        )?;
                                     }
                                 }
                                 Ok(cell_dist_sealed_rows)
@@ -2706,18 +2707,16 @@ impl BulkBuildRuntimeState {
                             let mut cell_dist_sealed_rows = Vec::new();
                             for block in &arena.blocks {
                                 let block_date = ckbadger_common::block_date_from_ms(block.timestamp_ms);
-                                cell_dist_tracker.record_block_date(block.number, block_date);
+                                if let Some((snapshot_date, snapshot, cohort)) = begin_cell_distribution_block(cell_dist_tracker, block.number, block_date) {
+                                    let date_str = snapshot_date.format("%Y%m%d").to_string();
+                                    cell_dist_sealed_rows.push(materialize::MaterializedRow::new(ckbadger_store::CF_STATS_HODL, ckbadger_store::keys::encode_stats_key(ckbadger_store::keys::stats_prefix::CELL_DISTRIBUTION, date_str.as_bytes()), bincode::serialize(&snapshot)?));
+                                    cell_dist_sealed_rows.push(materialize::MaterializedRow::new(ckbadger_store::CF_STATS_HODL, ckbadger_store::keys::encode_stats_key(ckbadger_store::keys::stats_prefix::ADDR_COHORT, date_str.as_bytes()), bincode::serialize(&cohort)?));
+                                }
                                 for tx in &resolved[block.tx_range.clone()] {
                                     for input in &tx.resolved_inputs { cell_dist_tracker.cell_consumed(input.occupied_capacity)?; }
                                     for cell in tx.cells.iter() { cell_dist_tracker.cell_created(cell.occupied_capacity); }
                                     let address_deltas = address.apply_tx_with_deltas(tx, &ctx)?;
                                     apply_cell_dist_cohort_deltas(cell_dist_tracker, address, &address_deltas, tx)?;
-                                }
-                                if let Some((snapshot_date, snapshot)) = cell_dist_tracker.maybe_snapshot(block_date) {
-                                    let date_str = snapshot_date.format("%Y%m%d").to_string();
-                                    let cohort = cell_dist_tracker.cohort_snapshot();
-                                    cell_dist_sealed_rows.push(materialize::MaterializedRow::new(ckbadger_store::CF_STATS_HODL, ckbadger_store::keys::encode_stats_key(ckbadger_store::keys::stats_prefix::CELL_DISTRIBUTION, date_str.as_bytes()), bincode::serialize(&snapshot)?));
-                                    cell_dist_sealed_rows.push(materialize::MaterializedRow::new(ckbadger_store::CF_STATS_HODL, ckbadger_store::keys::encode_stats_key(ckbadger_store::keys::stats_prefix::ADDR_COHORT, date_str.as_bytes()), bincode::serialize(&cohort)?));
                                 }
                             }
                             Ok(cell_dist_sealed_rows)
@@ -2882,7 +2881,16 @@ fn apply_hodl_tracker_batch_standalone(
     let mut sealed_rows = Vec::new();
     for block in &arena.blocks {
         let block_date = ckbadger_common::block_date_from_ms(block.timestamp_ms);
-        hodl_tracker.record_block_date(block.number, block_date);
+        if let Some((snapshot_date, snapshot)) =
+            begin_hodl_wave_block(hodl_tracker, block.number, block_date)
+        {
+            let date_str = snapshot_date.format("%Y%m%d").to_string();
+            sealed_rows.push(materialize::MaterializedRow::new(
+                CF_STATS_HODL,
+                keys::encode_stats_key(keys::stats_prefix::HODL_WAVE, date_str.as_bytes()),
+                bincode::serialize(&snapshot)?,
+            ));
+        }
 
         for tx in &resolved[block.tx_range.clone()] {
             for input in &tx.resolved_inputs {
@@ -2905,15 +2913,6 @@ fn apply_hodl_tracker_batch_standalone(
                 )?;
                 hodl_tracker.cell_created(block_date, cell.capacity);
             }
-        }
-
-        if let Some((snapshot_date, snapshot)) = hodl_tracker.maybe_snapshot(block_date) {
-            let date_str = snapshot_date.format("%Y%m%d").to_string();
-            sealed_rows.push(materialize::MaterializedRow::new(
-                CF_STATS_HODL,
-                keys::encode_stats_key(keys::stats_prefix::HODL_WAVE, date_str.as_bytes()),
-                bincode::serialize(&snapshot)?,
-            ));
         }
     }
 

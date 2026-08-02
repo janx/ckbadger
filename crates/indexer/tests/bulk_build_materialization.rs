@@ -716,6 +716,39 @@ fn cell_distribution_snapshot_fixture() -> Vec<BlockResponseWithCycles> {
     ]
 }
 
+/// Same two 2024-01-15 blocks as `cell_distribution_snapshot_fixture`, but the
+/// first block of 2024-01-16 CHANGES the tracked totals (a cellbase minting one
+/// new cell, like mainnet block 20,022,562 at 00:00:21 UTC+8). A day-boundary
+/// snapshot labelled 2024-01-15 must not contain it.
+fn cell_distribution_next_day_mutating_fixture() -> Vec<BlockResponseWithCycles> {
+    let mut blocks = cell_distribution_snapshot_fixture();
+
+    let next_day_cellbase = TransactionView {
+        hash: format!("0x{}", "f4".repeat(32)),
+        version: "0x0".to_string(),
+        cell_deps: vec![],
+        header_deps: vec![],
+        inputs: vec![CellInput {
+            since: "0x0".to_string(),
+            previous_output: OutPoint {
+                tx_hash: format!("0x{}", "00".repeat(32)),
+                index: "0xffffffff".to_string(),
+            },
+        }],
+        outputs: vec![CellOutput {
+            capacity: "0x342770c00".to_string(),
+            lock: fixture_lock_script_with_args(&format!("0x{}", "03".repeat(20))),
+            type_: None,
+        }],
+        outputs_data: vec!["0x".to_string()],
+        witnesses: vec![TEST_CELLBASE_WITNESS.to_string()],
+    };
+
+    let boundary = blocks.last_mut().expect("day-boundary block");
+    boundary.block.transactions = vec![next_day_cellbase];
+    blocks
+}
+
 fn hodl_wave_snapshot_fixture() -> Vec<BlockResponseWithCycles> {
     let mut blocks = hodl_tracker_fixture();
     // Every real block carries a cellbase (blocks 1..=11 on mainnet have one
@@ -746,6 +779,38 @@ fn hodl_wave_snapshot_fixture() -> Vec<BlockResponseWithCycles> {
         },
         cycles: None,
     });
+    blocks
+}
+
+/// Same two 2024-01-15 blocks as `hodl_wave_snapshot_fixture`, but the first
+/// block of 2024-01-16 mints a cell for a brand-new holder, so folding it into
+/// the 2024-01-15 snapshot is visible in both `holder_count` and the age bands.
+fn hodl_wave_next_day_mutating_fixture() -> Vec<BlockResponseWithCycles> {
+    let mut blocks = hodl_wave_snapshot_fixture();
+
+    let next_day_cellbase = TransactionView {
+        hash: format!("0x{}", "f8".repeat(32)),
+        version: "0x0".to_string(),
+        cell_deps: vec![],
+        header_deps: vec![],
+        inputs: vec![CellInput {
+            since: "0x0".to_string(),
+            previous_output: OutPoint {
+                tx_hash: format!("0x{}", "00".repeat(32)),
+                index: "0xffffffff".to_string(),
+            },
+        }],
+        outputs: vec![CellOutput {
+            capacity: "0x342770c00".to_string(),
+            lock: fixture_lock_script_with_args(&format!("0x{}", "04".repeat(20))),
+            type_: None,
+        }],
+        outputs_data: vec!["0x".to_string()],
+        witnesses: vec![TEST_CELLBASE_WITNESS.to_string()],
+    };
+
+    let boundary = blocks.last_mut().expect("day-boundary block");
+    boundary.block.transactions = vec![next_day_cellbase];
     blocks
 }
 
@@ -1435,6 +1500,49 @@ fn bulk_build_materializes_sealed_cell_distribution_and_address_cohort_on_day_bo
         !snapshot.address_cohort_snapshots.contains_key("20240116"),
         "current in-progress day must not be materialized"
     );
+}
+
+#[test]
+fn bulk_build_seals_cell_distribution_before_applying_the_first_block_of_the_next_day() {
+    let snapshot =
+        materialize_bulk_artifacts_for_test(&cell_distribution_next_day_mutating_fixture())
+            .expect("cell distribution day-boundary snapshot");
+
+    let dist = snapshot
+        .cell_distribution_snapshots
+        .get("20240115")
+        .expect("sealed cell distribution snapshot");
+    // 2024-01-15 ended with exactly two live cells (80 + 60 CKB, 61 CKB
+    // occupied each). The 2024-01-16 cellbase mints a third one; it belongs to
+    // the next day's snapshot, never to this one.
+    assert_eq!(dist.size_bucket_counts, [2, 0, 0, 0, 0, 0]);
+    assert_eq!(dist.size_bucket_capacities, [122_00000000, 0, 0, 0, 0, 0]);
+
+    let cohort = snapshot
+        .address_cohort_snapshots
+        .get("20240115")
+        .expect("sealed address cohort snapshot");
+    assert_eq!(cohort.cohorts.len(), 1);
+    assert_eq!(cohort.cohorts[0].cohort_month, "2024-01");
+    assert_eq!(cohort.cohorts[0].used_capacity, 122_00000000);
+    assert_eq!(cohort.cohorts[0].total_balance, 140_00000000);
+}
+
+#[test]
+fn bulk_build_seals_hodl_wave_before_applying_the_first_block_of_the_next_day() {
+    let snapshot = materialize_bulk_artifacts_for_test(&hodl_wave_next_day_mutating_fixture())
+        .expect("hodl wave day-boundary snapshot");
+
+    let wave = snapshot
+        .hodl_waves
+        .get("20240115")
+        .expect("sealed hodl wave snapshot");
+    // Two holders and 140 CKB, all created on 2024-01-15. The 2024-01-16
+    // cellbase adds a third holder whose cell is one day NEWER than the
+    // snapshot date, so folding it in would also land it in a nonsense band.
+    assert_eq!(wave.holder_count, 2);
+    assert_eq!(wave.band_24h, 140_00000000);
+    assert_eq!(wave.band_gt_3y, 0);
 }
 
 #[test]
