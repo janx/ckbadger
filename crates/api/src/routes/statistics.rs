@@ -2626,19 +2626,23 @@ async fn get_hash_rate_chart(State(state): State<Arc<AppState>>) -> ApiResult<Ch
     // The day's mined span comes from `DailyStats.block_time_sum_ms`, the single
     // place inter-block time is stored; `DailyBlockStats` carries the difficulty
     // and block count that form the numerator.
-    let (daily_block_stats, daily_stats) = tokio::task::spawn_blocking(move || {
+    let (daily_block_stats, daily_stats, genesis_header) = tokio::task::spawn_blocking(move || {
         let block_stats = store.list_daily_block_stats()?;
         let stats = store.list_daily_stats_with_dates()?;
-        anyhow::Ok((block_stats, stats))
+        let genesis_header = store.get_block_header(0)?;
+        anyhow::Ok((block_stats, stats, genesis_header))
     })
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?
     .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    let block_time_sum_by_date: HashMap<String, i64> = daily_stats
-        .into_iter()
-        .map(|(date, stats)| (date, stats.block_time_sum_ms))
-        .collect();
+    let daily_stats_by_date: HashMap<String, ckbadger_store::DailyStats> =
+        daily_stats.into_iter().collect();
+    let genesis_date_key = genesis_header.map(|header| {
+        ckbadger_common::block_date_from_ms(header.timestamp)
+            .format("%Y%m%d")
+            .to_string()
+    });
 
     // Exclude the last day (incomplete) like the SQL version did
     let max_date = daily_block_stats
@@ -2656,13 +2660,17 @@ async fn get_hash_rate_chart(State(state): State<Arc<AppState>>) -> ApiResult<Ch
         {
             continue;
         }
-        let block_time_sum_ms = *block_time_sum_by_date.get(&date_str).ok_or_else(|| {
+        let day_stats = daily_stats_by_date.get(&date_str).ok_or_else(|| {
             ApiError::internal(format!(
                 "daily block stats for {date_str} have no matching daily stats row; \
                  both are written in the same batch, so this is upstream corruption"
             ))
         })?;
-        let hash_rate = calculate_daily_hash_rate(&date_str, &stats, block_time_sum_ms)?;
+        let Some(hash_rate) =
+            calculate_daily_hash_rate(&date_str, &stats, day_stats, genesis_date_key.as_deref())?
+        else {
+            continue;
+        };
         data.push(ChartDataPoint {
             date: format_chart_date(&date_str)?,
             value: format!("{:.0}", hash_rate),
@@ -2977,27 +2985,50 @@ async fn get_miner_address_distribution_chart(
 ///
 /// Assuming a full calendar day understated the genesis day by 21.6% and every
 /// later day by the difference between its real span and 86_400_000 ms.
+/// A genesis day containing only block 0 has no span at all, so its rate is
+/// mathematically undefined and the chart omits that point (`Ok(None)`). The
+/// block-0 header supplies the authoritative genesis date; every other missing
+/// divisor remains an invariant violation.
 fn calculate_daily_hash_rate(
     date_key: &str,
     block_stats: &ckbadger_store::DailyBlockStats,
-    block_time_sum_ms: i64,
-) -> Result<f64, ApiRouteError> {
+    day_stats: &ckbadger_store::DailyStats,
+    genesis_date_key: Option<&str>,
+) -> Result<Option<f64>, ApiRouteError> {
     if block_stats.block_count <= 0 {
         return Err(ApiError::internal(format!(
             "daily block stats for {date_key} have avg_difficulty={} but block_count={}",
             block_stats.avg_difficulty, block_stats.block_count
         )));
     }
-    if block_time_sum_ms <= 0 {
+    if day_stats.blocks_count != block_stats.block_count {
         return Err(ApiError::internal(format!(
-            "cannot derive hash rate for {date_key}: block_time_sum_ms={block_time_sum_ms} with block_count={}. \
+            "daily stats block count mismatch for {date_key}: daily_stats={}, daily_block_stats={}; \
+             both rows are written from the same blocks",
+            day_stats.blocks_count, block_stats.block_count
+        )));
+    }
+
+    let is_spanless_genesis_day = genesis_date_key == Some(date_key)
+        && block_stats.block_count == 1
+        && day_stats.block_time_count == 0
+        && day_stats.block_time_sum_ms == 0;
+    if is_spanless_genesis_day {
+        return Ok(None);
+    }
+
+    if day_stats.block_time_sum_ms <= 0 || day_stats.block_time_count <= 0 {
+        return Err(ApiError::internal(format!(
+            "cannot derive hash rate for {date_key}: block_time_sum_ms={} and block_time_count={} with block_count={}. \
              The day's mined span is the only valid divisor, and every block except the genesis block \
              contributes a gap to it",
+            day_stats.block_time_sum_ms,
+            day_stats.block_time_count,
             block_stats.block_count
         )));
     }
     let difficulty_sum = block_stats.avg_difficulty * block_stats.block_count as f64;
-    Ok(difficulty_sum / block_time_sum_ms as f64)
+    Ok(Some(difficulty_sum / day_stats.block_time_sum_ms as f64))
 }
 
 fn snapshot_secondary_cumulative(
@@ -4516,8 +4547,19 @@ mod tests {
             avg_difficulty,
             block_count,
             total_uncles: 0,
-            // Deliberately zero: only the bulk builder fills this copy, so the
-            // read path must take its divisor from `DailyStats`.
+        }
+    }
+
+    fn daily_stats(
+        blocks_count: i32,
+        block_time_sum_ms: i64,
+        block_time_count: i32,
+    ) -> ckbadger_store::DailyStats {
+        ckbadger_store::DailyStats {
+            blocks_count,
+            block_time_sum_ms,
+            block_time_count,
+            ..Default::default()
         }
     }
 
@@ -4529,8 +4571,10 @@ mod tests {
         let hash_rate = calculate_daily_hash_rate(
             "20240115",
             &daily_block_stats(1_000_000.0, 8_640),
-            86_400_000,
+            &daily_stats(8_640, 86_400_000, 8_640),
+            None,
         )
+        .unwrap()
         .unwrap();
         assert_eq!(hash_rate, 100.0);
     }
@@ -4544,16 +4588,61 @@ mod tests {
         let hash_rate = calculate_daily_hash_rate(
             "20191116",
             &daily_block_stats(8_318_741_404_228_533.0, 598),
-            67_712_964,
+            &daily_stats(598, 67_712_964, 597),
+            Some("20191116"),
         )
+        .unwrap()
         .unwrap();
         assert_eq!(format!("{hash_rate:.2}"), "73466099633.87");
     }
 
     #[test]
+    fn test_calculate_daily_hash_rate_omits_only_spanless_genesis_day() {
+        let genesis = calculate_daily_hash_rate(
+            "20200512",
+            &daily_block_stats(12_582_960.0, 1),
+            &daily_stats(1, 0, 0),
+            Some("20200512"),
+        )
+        .unwrap();
+        assert_eq!(genesis, None);
+
+        let err = calculate_daily_hash_rate(
+            "20260101",
+            &daily_block_stats(12_582_960.0, 1),
+            &daily_stats(1, 0, 0),
+            Some("20200512"),
+        )
+        .unwrap_err();
+        assert!(err.1 .0.message.contains("20260101"));
+    }
+
+    #[test]
+    fn test_calculate_daily_hash_rate_rejects_sibling_block_count_mismatch() {
+        let err = calculate_daily_hash_rate(
+            "20260101",
+            &daily_block_stats(1_000_000.0, 2),
+            &daily_stats(1, 10_000, 1),
+            None,
+        )
+        .unwrap_err();
+        assert!(
+            err.1 .0.message.contains("daily_stats=1")
+                && err.1 .0.message.contains("daily_block_stats=2"),
+            "unexpected message: {}",
+            err.1 .0.message
+        );
+    }
+
+    #[test]
     fn test_calculate_daily_hash_rate_fails_without_a_mined_span() {
-        let err = calculate_daily_hash_rate("20260101", &daily_block_stats(1_000_000.0, 100), 0)
-            .unwrap_err();
+        let err = calculate_daily_hash_rate(
+            "20260101",
+            &daily_block_stats(1_000_000.0, 100),
+            &daily_stats(100, 0, 0),
+            None,
+        )
+        .unwrap_err();
         assert!(
             err.1 .0.message.contains("20260101")
                 && err.1 .0.message.contains("block_time_sum_ms=0"),

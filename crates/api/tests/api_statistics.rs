@@ -2240,6 +2240,73 @@ async fn test_hash_rate_chart_divides_by_the_day_s_actual_mined_span() {
     assert_eq!(data[0]["value"], "73466099634");
 }
 
+/// Regression: testnet's genesis day contains only block 0. Block 1 was mined
+/// ten days later, and its gap is correctly attributed to block 1's UTC+8 day,
+/// so the genesis day has no mined span and therefore no definable hash rate.
+/// The chart must omit that one point without inventing a zero/full-day value,
+/// while retaining later complete days that do have an exact span.
+#[tokio::test]
+async fn test_hash_rate_chart_omits_single_block_testnet_genesis_day() {
+    let store = test_store();
+    let genesis_timestamp_ms = chrono::DateTime::parse_from_rfc3339("2020-05-12T09:37:10Z")
+        .unwrap()
+        .timestamp_millis();
+
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_block_header(0, &recent_block_header(0, genesis_timestamp_ms));
+    batch.commit().unwrap();
+
+    for (date, block_count, block_time_sum_ms, block_time_count) in [
+        ("20200512", 1, 0, 0),
+        ("20200522", 2, 20_000, 2),
+        // Latest/incomplete date: present only so 20200522 is chart-eligible.
+        ("20200523", 1, 10_000, 1),
+    ] {
+        store
+            .put_daily_block_stats(
+                date,
+                &DailyBlockStats {
+                    avg_difficulty: 1_000_000.0,
+                    block_count,
+                    total_uncles: 0,
+                },
+            )
+            .unwrap();
+        store
+            .put_daily_stats(
+                date,
+                &DailyStats {
+                    blocks_count: block_count,
+                    block_time_sum_ms,
+                    block_time_count,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+    }
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+    let request = Request::builder()
+        .uri("/api/v1/charts/hash-rate")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        json["data"],
+        serde_json::json!([{
+            "date": "2020-05-22",
+            "value": "100",
+            "value2": null
+        }]),
+        "the undefined genesis day must be absent without hiding later exact points: {json}"
+    );
+}
+
 /// Fail fast when a day has blocks but no accumulated inter-block time: the
 /// divisor is missing, and inventing 86_400_000 ms is exactly the bug above.
 #[tokio::test]
