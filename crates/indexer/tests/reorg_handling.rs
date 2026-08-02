@@ -481,13 +481,15 @@ fn test_rollback_deletes_activities_for_rolled_back_blocks() {
             &AddrTxValue::new(0, false, true, 0),
         );
     }
-    // Also insert block headers so rollback_to_block works
-    for i in 1..=5i64 {
-        let block = i * 100;
+    // Seed a contiguous header chain 1..=500. Rollback derives each orphaned
+    // block's inter-block gap from its immediate predecessor's header, so a
+    // sparse header range is a chain the store can never hold (the indexer
+    // fails startup on any internal header gap) and rollback now says so.
+    for block in 1..=500i64 {
         domain_batch.put_block_header(block, &make_header(block));
     }
     domain_batch.commit().unwrap();
-    seed_epoch_rows(&domain, (1..=5i64).map(|i| i * 100));
+    seed_epoch_rows(&domain, 1..=500i64);
 
     // Verify all 5 exist
     let before = domain.list_activities(&lock_hash, 100, None, None).unwrap();
@@ -1419,8 +1421,10 @@ fn test_rollback_repairs_cutoff_hour_capacity_and_pair_flows() {
         total_all_cells: 30,
         total_data_size: 0,
         knowledge_size: None,
-        block_time_sum_ms: 0,
-        block_time_count: 0,
+        // `make_header` puts blocks 1..=5 exactly 1000 ms apart; block 1 has no
+        // predecessor in this fixture, so forward sync accumulated four gaps.
+        block_time_sum_ms: 4 * 1_000,
+        block_time_count: 4,
     };
     domain
         .put_cf(
@@ -1501,6 +1505,14 @@ fn test_rollback_repairs_cutoff_hour_capacity_and_pair_flows() {
     assert_eq!(
         repaired_daily.total_data_size, DATA_RST as i64,
         "surviving data = restore cell's data (its rolled-back consumption is reversed)"
+    );
+    assert_eq!(
+        (
+            repaired_daily.block_time_sum_ms,
+            repaired_daily.block_time_count
+        ),
+        (2 * 1_000, 2),
+        "blocks 4 and 5 each contributed a 1000 ms gap; both must be reversed"
     );
 }
 

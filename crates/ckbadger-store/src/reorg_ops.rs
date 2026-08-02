@@ -20,6 +20,15 @@ struct RollbackStatsDeltas {
     /// Per-date rolled-back uncle count (from CachedBlockHeader.uncles_count).
     /// Used to repair DailyBlockStats.total_uncles on the cutoff date.
     date_uncles: HashMap<String, i32>,
+    /// Per-date rolled-back inter-block time: `(sum_ms, count)`.
+    ///
+    /// Mirrors the forward writers exactly (`BatchStats::accumulate_block_time`
+    /// and `ChainStatsAccumulator`): the gap `ts(b) - ts(b-1)` is attributed to
+    /// block `b`'s UTC+8 date, and a negative gap (clock skew) contributes
+    /// nothing. Repairs `DailyStats.block_time_sum_ms`/`block_time_count`, which
+    /// drive /charts/average-block-time and (since the exact hash-rate fix) the
+    /// divisor of /charts/hash-rate.
+    date_block_time: HashMap<String, (i64, i32)>,
     /// Per-hour: (blocks, txs, cells_created, cells_consumed), keyed by the
     /// **UTC** `%Y%m%d%H` strings of the chain-level HOURLY stats CF.
     hour: HashMap<String, (i32, i32, i32, i32)>,
@@ -73,6 +82,27 @@ fn checked_stats_sub_i32(
     bucket_kind: &str,
     bucket: &str,
 ) -> anyhow::Result<i32> {
+    let result = current.checked_sub(delta).filter(|v| *v >= 0);
+    result.ok_or_else(|| {
+        anyhow::anyhow!(
+            "stats rollback underflow: {}={}, field={}, stored={}, rolled_back={} (delta collection out of sync with persisted state)",
+            bucket_kind,
+            bucket,
+            field,
+            current,
+            delta
+        )
+    })
+}
+
+/// Fail-fast subtraction for a non-negative `i64` accumulator in a stats row.
+fn checked_stats_sub_i64(
+    current: i64,
+    delta: i64,
+    field: &str,
+    bucket_kind: &str,
+    bucket: &str,
+) -> anyhow::Result<i64> {
     let result = current.checked_sub(delta).filter(|v| *v >= 0);
     result.ok_or_else(|| {
         anyhow::anyhow!(
@@ -323,6 +353,11 @@ fn repair_cutoff_date_stats(
             let (rb_blocks, rb_txs, rb_created, rb_consumed) = delta.copied().unwrap_or_default();
             let (rb_cap, rb_used_created, rb_used_consumed, rb_data_created, rb_data_consumed) =
                 cap_delta.copied().unwrap_or_default();
+            let (rb_block_time_sum_ms, rb_block_time_count) = deltas
+                .date_block_time
+                .get(date_str)
+                .copied()
+                .unwrap_or((0, 0));
 
             let mut s: DailyStats = bincode::deserialize(value).map_err(|e| {
                 anyhow::anyhow!(
@@ -331,6 +366,24 @@ fn repair_cutoff_date_stats(
                     e
                 )
             })?;
+            // Inter-block time: reverse exactly the gaps the orphaned blocks
+            // contributed. Leaving them in makes the day's average block time —
+            // and the hash-rate chart, which divides by this sum — permanently
+            // wrong for every day a reorg touched.
+            s.block_time_sum_ms = checked_stats_sub_i64(
+                s.block_time_sum_ms,
+                rb_block_time_sum_ms,
+                "block_time_sum_ms",
+                "date",
+                date_str,
+            )?;
+            s.block_time_count = checked_stats_sub_i32(
+                s.block_time_count,
+                rb_block_time_count,
+                "block_time_count",
+                "date",
+                date_str,
+            )?;
             s.blocks_count -= rb_blocks;
             s.transactions_count -= rb_txs;
             s.cells_created -= rb_created;
@@ -1754,18 +1807,20 @@ impl CkbadgerStore {
             .as_ref()
             .map(|h| ckbadger_common::utc_hour_key_from_ms(h.timestamp));
 
-        // Determine the date of the fork_point itself so we can detect
-        // partial-day rollbacks (fork_point and first rolled-back block on
-        // the same calendar day).
-        let fork_point_date = if rollback_to >= 0 {
-            self.get_block_header(rollback_to)?.map(|h| {
-                ckbadger_common::block_date_from_ms(h.timestamp)
-                    .format("%Y%m%d")
-                    .to_string()
-            })
+        // The surviving fork-point header: its date detects partial-day
+        // rollbacks (fork_point and first rolled-back block on the same calendar
+        // day), and its timestamp is the predecessor of the first orphaned
+        // block's inter-block gap.
+        let fork_point_header = if rollback_to >= 0 {
+            self.get_block_header(rollback_to)?
         } else {
             None
         };
+        let fork_point_date = fork_point_header.as_ref().map(|h| {
+            ckbadger_common::block_date_from_ms(h.timestamp)
+                .format("%Y%m%d")
+                .to_string()
+        });
 
         info!(rollback_to, replay_start, "Rollback cleanup started");
 
@@ -1777,6 +1832,14 @@ impl CkbadgerStore {
         let mut block_date_map: HashMap<i64, (String, String)> = HashMap::new();
         // Per-date rolled-back uncle count, populated during block header deletion loop.
         let mut stats_date_uncles: HashMap<String, i32> = HashMap::new();
+        // Per-date rolled-back inter-block time `(sum_ms, count)`, populated in
+        // the same loop. `prev_header` walks the chain from the surviving fork
+        // point so every orphaned block's gap `ts(b) - ts(b-1)` is the exact
+        // value the forward writers added.
+        let mut stats_date_block_time: HashMap<String, (i64, i32)> = HashMap::new();
+        let mut prev_header: Option<(i64, i64)> = fork_point_header
+            .as_ref()
+            .map(|h| (rollback_to, h.timestamp));
         // Per-epoch rolled-back transaction count, used to truncate the
         // boundary epoch stats row (the epoch containing replay_start).
         let mut epoch_tx_removed: HashMap<i64, i64> = HashMap::new();
@@ -1845,6 +1908,45 @@ impl CkbadgerStore {
                     .entry((date_str.clone(), miner.clone()))
                     .or_insert(0) += 1;
             }
+            // Reverse this block's inter-block time contribution. The forward
+            // writers attribute `ts(b) - ts(b-1)` to block b's UTC+8 date and
+            // skip a negative gap, so the same two rules apply here — an
+            // approximation would leave the day's average block time and hash
+            // rate permanently wrong.
+            match prev_header {
+                Some((prev_num, prev_ts)) if prev_num + 1 == block_num => {
+                    let delta_ms = header.timestamp - prev_ts;
+                    if delta_ms >= 0 {
+                        let entry = stats_date_block_time
+                            .entry(date_str.clone())
+                            .or_insert((0, 0));
+                        entry.0 = entry.0.checked_add(delta_ms).ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "block_time_sum_ms overflow during rollback delta accumulation: block_num={}, delta_ms={}",
+                                block_num,
+                                delta_ms
+                            )
+                        })?;
+                        entry.1 += 1;
+                    }
+                }
+                Some((prev_num, _)) => {
+                    anyhow::bail!(
+                        "block header gap inside the rollback range: expected block {}, found {} (rollback_to={}); the inter-block time delta cannot be derived",
+                        prev_num + 1,
+                        block_num,
+                        rollback_to
+                    );
+                }
+                // No predecessor: either the genesis block (which the forward
+                // writers also give no gap), or `rollback_to`'s header is absent
+                // — and then `fork_point_date` is `None`, `is_partial_day` is
+                // false, and the cutoff day's row is deleted rather than
+                // repaired, so no delta is consumed.
+                None => {}
+            }
+            prev_header = Some((block_num, header.timestamp));
+
             // Activity buckets run on the UTC+8 clock for both date and hour.
             {
                 let dt = ckbadger_common::block_datetime_from_ms(header.timestamp);
@@ -2716,6 +2818,7 @@ impl CkbadgerStore {
             let rollback_deltas = RollbackStatsDeltas {
                 date: stats_date_deltas,
                 date_uncles: stats_date_uncles,
+                date_block_time: stats_date_block_time,
                 hour: stats_hour_deltas,
                 date_capacity: stats_date_capacity_deltas,
                 hour_capacity: stats_hour_capacity_deltas,
@@ -8889,8 +8992,10 @@ mod tests {
             total_all_cells: 110,
             total_data_size: 500,
             knowledge_size: None,
-            block_time_sum_ms: 0,
-            block_time_count: 0,
+            // Blocks 1..5 are 1 hour apart and block 1 has no predecessor here,
+            // so the forward writers accumulated four 3_600_000 ms gaps.
+            block_time_sum_ms: 4 * 3_600_000,
+            block_time_count: 4,
         };
         store
             .put_cf(
@@ -8916,6 +9021,10 @@ mod tests {
         assert_eq!(repaired.transactions_count, 6); // 10 - 4
         assert_eq!(repaired.cells_created, 12); // 20 - 8
         assert_eq!(repaired.cells_consumed, 6); // 10 - 4
+                                                // Blocks 4 and 5 each carried a 3_600_000 ms gap; both are reversed.
+        assert_eq!(repaired.block_time_sum_ms, 2 * 3_600_000);
+        assert_eq!(repaired.block_time_count, 2);
+        assert_eq!(repaired.avg_block_time_ms(), Some(3_600_000));
     }
 
     #[test]
@@ -9320,6 +9429,183 @@ mod tests {
             1,
             "total_uncles must be decremented from 2 → 1 when the rolled-back block had 1 uncle (currently {})",
             repaired.total_uncles
+        );
+    }
+
+    /// Rollback must reverse the orphaned blocks' inter-block time contribution
+    /// to the cutoff day, not just the block/tx/cell counters.
+    ///
+    /// The forward writers attribute the gap `ts(b) - ts(b-1)` to block `b`'s
+    /// UTC+8 date (`BatchStats::accumulate_block_time` /
+    /// `ChainStatsAccumulator`, negative gaps skipped). Leaving an orphaned
+    /// block's gap in `DailyStats.block_time_sum_ms` corrupts
+    /// /charts/average-block-time for that day forever, and since 07904e8f the
+    /// hash-rate chart divides by that same field.
+    #[test]
+    fn test_rollback_reverses_daily_block_time_on_cutoff_date() {
+        // 2026-04-08 00:00 UTC+8 = 2026-04-07 16:00 UTC.
+        let day_start_ms: i64 = 1775577600000;
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+
+        // Blocks 0..4, all on 2026-04-08 UTC+8. Gaps attributed forward:
+        //   b1: 1000, b2: 1000, b3: 1000, b4: 1500  → sum 4500 over 4 deltas.
+        let timestamps = [0i64, 1000, 2000, 3000, 4500];
+        let mut batch = StoreBatch::new(&store);
+        for (block, offset) in timestamps.iter().enumerate() {
+            batch.put_block_header(
+                block as i64,
+                &CachedBlockHeader {
+                    hash: vec![block as u8; 32],
+                    parent_hash: vec![block.saturating_sub(1) as u8; 32],
+                    timestamp: day_start_ms + offset,
+                    epoch_number: 1,
+                    epoch_index: block as i32,
+                    epoch_length: 1800,
+                    dao: vec![0u8; 32],
+                    transactions_count: 1,
+                    uncles_count: 0,
+                    proposals_count: 0,
+                    compact_target: 0,
+                    miner_lock_hash: None,
+                    cycles: None,
+                },
+            );
+        }
+        batch.commit().unwrap();
+
+        store
+            .put_daily_stats(
+                "20260408",
+                &DailyStats {
+                    blocks_count: 5,
+                    transactions_count: 0,
+                    cells_created: 0,
+                    cells_consumed: 0,
+                    capacity_transferred: 0,
+                    used_capacity_created: 0,
+                    used_capacity_consumed: 0,
+                    total_live_cells: 0,
+                    total_dead_cells: 0,
+                    total_all_cells: 0,
+                    total_data_size: 0,
+                    knowledge_size: None,
+                    block_time_sum_ms: 4_500,
+                    block_time_count: 4,
+                },
+            )
+            .unwrap();
+
+        seed_epoch_row(
+            &store,
+            &EpochStats {
+                epoch_number: 1,
+                start_block: 0,
+                end_block: Some(4),
+                blocks_count: 5,
+                length: 1800,
+                start_timestamp: chrono::DateTime::from_timestamp_millis(day_start_ms).unwrap(),
+                end_timestamp: None,
+                transactions_count: 5,
+            },
+        );
+
+        // Orphan block 4 only. Its gap is ts(4) - ts(3) = 1500 ms, one delta.
+        store.rollback_to_block(3).unwrap();
+
+        let repaired = store
+            .get_daily_stats("20260408")
+            .unwrap()
+            .expect("DailyStats for 20260408 must survive a partial-day rollback");
+        assert_eq!(
+            repaired.blocks_count, 4,
+            "blocks_count must drop by the one orphaned block"
+        );
+        assert_eq!(
+            repaired.block_time_sum_ms, 3_000,
+            "the orphaned block's 1500 ms gap must be reversed exactly (got {})",
+            repaired.block_time_sum_ms
+        );
+        assert_eq!(
+            repaired.block_time_count, 3,
+            "the orphaned block contributed exactly one delta (got {})",
+            repaired.block_time_count
+        );
+        assert_eq!(
+            repaired.avg_block_time_ms(),
+            Some(1_000),
+            "the surviving day averages its three surviving 1000 ms gaps"
+        );
+    }
+
+    /// A negative gap (clock skew) is skipped by both forward writers, so
+    /// rollback must skip it too — subtracting it would inflate the day's sum.
+    #[test]
+    fn test_rollback_skips_negative_block_time_gap_like_the_writers() {
+        let day_start_ms: i64 = 1775577600000;
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+
+        // b3 -> b4 goes backwards by 500 ms: the forward path never counted it.
+        let timestamps = [0i64, 1000, 2000, 3000, 2500];
+        let mut batch = StoreBatch::new(&store);
+        for (block, offset) in timestamps.iter().enumerate() {
+            batch.put_block_header(
+                block as i64,
+                &CachedBlockHeader {
+                    hash: vec![block as u8; 32],
+                    parent_hash: vec![block.saturating_sub(1) as u8; 32],
+                    timestamp: day_start_ms + offset,
+                    epoch_number: 1,
+                    epoch_index: block as i32,
+                    epoch_length: 1800,
+                    dao: vec![0u8; 32],
+                    transactions_count: 1,
+                    uncles_count: 0,
+                    proposals_count: 0,
+                    compact_target: 0,
+                    miner_lock_hash: None,
+                    cycles: None,
+                },
+            );
+        }
+        batch.commit().unwrap();
+
+        store
+            .put_daily_stats(
+                "20260408",
+                &DailyStats {
+                    blocks_count: 5,
+                    block_time_sum_ms: 3_000,
+                    block_time_count: 3,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+        seed_epoch_row(
+            &store,
+            &EpochStats {
+                epoch_number: 1,
+                start_block: 0,
+                end_block: Some(4),
+                blocks_count: 5,
+                length: 1800,
+                start_timestamp: chrono::DateTime::from_timestamp_millis(day_start_ms).unwrap(),
+                end_timestamp: None,
+                transactions_count: 5,
+            },
+        );
+
+        store.rollback_to_block(3).unwrap();
+
+        let repaired = store.get_daily_stats("20260408").unwrap().unwrap();
+        assert_eq!(
+            (repaired.block_time_sum_ms, repaired.block_time_count),
+            (3_000, 3),
+            "a gap the writers skipped must not be subtracted on rollback"
         );
     }
 
