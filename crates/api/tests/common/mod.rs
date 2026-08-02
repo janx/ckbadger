@@ -169,6 +169,65 @@ pub fn create_router_without_warmup(config: AppConfig) -> axum::Router {
         .with_state(state)
 }
 
+/// A CKB-node-format RocksDB seeded with real blocks. Feed `path`/`cleanup` into
+/// [`test_config_with_ckb_db_path`] so `create_router` opens it exactly the way
+/// production does.
+pub struct TestCkbChain {
+    pub path: String,
+    pub cleanup: Arc<CleanupPathGuard>,
+}
+
+/// Write `blocks` into a throwaway RocksDB laid out exactly like a CKB node's own
+/// database, so the production `CkbChainReader` can read them back.
+///
+/// Column families mirror `ckb-db-schema`: `0` = index (number <-> hash), `1` =
+/// block header (`packed::HeaderView`), `3` = block uncles
+/// (`packed::UncleBlockVecView`), `7` = block proposal ids
+/// (`packed::ProposalShortIdVec`). Storing the *packed view* forms (not the bare
+/// `Header`/`UncleBlock`) is what the node does and what the reader parses back.
+pub fn seed_ckb_chain(blocks: &[ckb_types::core::BlockView]) -> TestCkbChain {
+    use ckb_types::prelude::*;
+
+    let db_path =
+        std::env::temp_dir().join(format!("ckbadger-api-test-ckb-chain-{}", Uuid::new_v4()));
+    let mut db_opts = Options::default();
+    db_opts.create_if_missing(true);
+    db_opts.create_missing_column_families(true);
+    let cf_descriptors: Vec<ColumnFamilyDescriptor> = (0..=18)
+        .map(|index| ColumnFamilyDescriptor::new(index.to_string(), Options::default()))
+        .collect();
+
+    {
+        let db = DB::open_cf_descriptors(&db_opts, &db_path, cf_descriptors).unwrap();
+        let cf_index = db.cf_handle("0").unwrap();
+        let cf_header = db.cf_handle("1").unwrap();
+        let cf_uncle = db.cf_handle("3").unwrap();
+        let cf_proposals = db.cf_handle("7").unwrap();
+        for block in blocks {
+            let hash: [u8; 32] = block.hash().unpack();
+            let number = block.number();
+            db.put_cf(&cf_index, number.to_le_bytes(), hash).unwrap();
+            db.put_cf(&cf_index, hash, number.to_le_bytes()).unwrap();
+            db.put_cf(&cf_header, hash, block.header().pack().as_slice())
+                .unwrap();
+            db.put_cf(&cf_uncle, hash, block.uncles().pack().as_slice())
+                .unwrap();
+            db.put_cf(&cf_proposals, hash, block.data().proposals().as_slice())
+                .unwrap();
+        }
+        // The reader attaches as a secondary instance, so everything must be in SST
+        // files before it opens.
+        for cf in [&cf_index, &cf_header, &cf_uncle, &cf_proposals] {
+            db.flush_cf(cf).unwrap();
+        }
+    }
+
+    TestCkbChain {
+        path: db_path.to_string_lossy().to_string(),
+        cleanup: Arc::new(CleanupPathGuard::new(db_path)),
+    }
+}
+
 /// Issue a GET against the router and parse the JSON body.
 /// `path` is relative to the `/api/v1` mount (e.g. `/network/summary`).
 /// Mirrors the inline `oneshot` + `to_bytes` + `from_slice` idiom used across `api_*.rs`.

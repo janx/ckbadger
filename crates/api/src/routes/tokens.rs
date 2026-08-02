@@ -461,14 +461,22 @@ async fn get_token_holders(
 
     let store = state.store.clone();
     let hash_c = hash.clone();
-    let (_token, holders_count, mut page) =
+    let network = state.ckb_network.clone();
+    let (_token, holders_count, mut page, addresses) =
         tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
             let token = store
                 .get_token(&hash_c)?
                 .ok_or_else(|| anyhow::anyhow!("not_found"))?;
             let (holders_count, _) = store.aggregate_token_holder_stats(&hash_c)?;
             let page = store.list_token_holders_by_balance(&hash_c, limit + 1, cursor)?;
-            Ok((token, holders_count, page))
+            // Resolve only the rendered rows: the `limit + 1`-th row exists solely to
+            // detect `has_more` and is truncated away below.
+            let addresses = resolve_lock_addresses(
+                &store,
+                &network,
+                page.iter().take(limit).map(|(lock, _)| lock.as_slice()),
+            )?;
+            Ok((token, holders_count, page, addresses))
         })
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?
@@ -508,8 +516,8 @@ async fn get_token_holders(
     let holders: Vec<TokenHolderResponse> = page
         .into_iter()
         .map(|(lock_script_hash, balance)| TokenHolderResponse {
+            address: addresses.get(&lock_script_hash).cloned(),
             lock_script_hash: format!("0x{}", hex::encode(lock_script_hash)),
-            address: None,
             balance: balance.to_string(),
         })
         .collect();

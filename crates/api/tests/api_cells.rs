@@ -503,3 +503,182 @@ async fn test_cells_by_script_rejects_cursors_from_another_form() {
     .await;
     assert_eq!(status, StatusCode::OK);
 }
+
+// ---------------------------------------------------------------------------
+// R4-E bug 2: /addresses/{lock_hash} must resolve its lock script through
+// CF_LOCK_SCRIPTS (`get_lock_script`), the same single path every other handler
+// uses. It used to derive the script from one *live* cell, so any fully spent
+// address (completed DAO withdrawers, emptied wallets) reported
+// `address: null` and no `lockScript` even though the script is stored.
+// ---------------------------------------------------------------------------
+
+/// secp256k1_blake160_sighash_all code hash + args with an externally verified
+/// mainnet address (see `crates/api/src/utils/address.rs` tests).
+fn known_secp_lock() -> (Vec<u8>, Vec<u8>, &'static str) {
+    (
+        hex::decode("9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8").unwrap(),
+        hex::decode("b39bbc0b3673c7d36450bc14cfcdad2d559c6c64").unwrap(),
+        "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqdnnw7qkdnnclfkg59uzn8umtfd2kwxceqxwquc4",
+    )
+}
+
+#[tokio::test]
+async fn test_get_address_resolves_lock_script_with_zero_live_cells() {
+    let store = test_store();
+    let (code_hash, args, expected_address) = known_secp_lock();
+    let lock_hash = compute_script_hash(&code_hash, 1, &args);
+
+    let mut batch = StoreBatch::new(store.as_ref());
+    // Address with history but every cell spent: no live cell, lock script stored.
+    batch.put_lock_script(
+        &lock_hash,
+        &ckbadger_store::types::LockScriptEntry {
+            code_hash: code_hash.clone(),
+            hash_type: 1,
+            args: args.clone(),
+        },
+    );
+    batch.put_addr_balance(
+        &lock_hash,
+        &ckbadger_store::types::AddressBalance {
+            balance: 0,
+            used_capacity: 0,
+            live_cells_count: 0,
+            total_cells_count: 3,
+            txs_count: 3,
+            first_seen_block: 10,
+            first_seen_tx: vec![0x01; 32],
+            last_activity_block: 90,
+            last_activity_tx: vec![0x02; 32],
+        },
+    );
+    batch.commit().unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let (status, json) = get_json(&app, &format!("/addresses/0x{}", hex::encode(&lock_hash))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json["liveCellsCount"], 0);
+    assert_eq!(json["transactionsCount"], 3);
+    assert_eq!(
+        json["address"],
+        serde_json::Value::String(expected_address.to_string()),
+        "fully spent address must still resolve from CF_LOCK_SCRIPTS, got {}",
+        json["address"]
+    );
+    assert_eq!(
+        json["lockScript"]["codeHash"],
+        format!("0x{}", hex::encode(&code_hash))
+    );
+    assert_eq!(json["lockScript"]["hashType"], "type");
+    assert_eq!(
+        json["lockScript"]["args"],
+        format!("0x{}", hex::encode(&args))
+    );
+}
+
+#[tokio::test]
+async fn test_get_address_keeps_exact_hash_type_for_live_address() {
+    // Control: an address that still has live cells resolves identically, and the
+    // stored hash_type (data1 == 2) is reported exactly, never a canonical guess.
+    let store = test_store();
+    let code_hash = vec![0x9c; 32];
+    let args = vec![0x44; 20];
+    let lock_hash = compute_script_hash(&code_hash, 2, &args);
+    let expected_address =
+        ckbadger_common::script_to_address(&code_hash, 2, &args, "mainnet").unwrap();
+
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_lock_script(
+        &lock_hash,
+        &ckbadger_store::types::LockScriptEntry {
+            code_hash: code_hash.clone(),
+            hash_type: 2,
+            args: args.clone(),
+        },
+    );
+    batch.put_cell(
+        &[0x51; 32],
+        0,
+        &LiveCellInfo {
+            capacity: 200_00000000,
+            lock_script_hash: lock_hash.clone(),
+            lock_code_hash: code_hash.clone(),
+            lock_hash_type: 2,
+            lock_args: args.clone(),
+            type_script_hash: None,
+            type_code_hash: None,
+            type_hash_type: None,
+            type_args: None,
+            data_size: 0,
+            occupied_capacity: 61_00000000,
+            udt_amount: None,
+            data_hash: None,
+        },
+        77,
+    );
+    batch.put_cell_by_lock(&lock_hash, 77, &[0x51; 32], 0);
+    batch.put_addr_balance(
+        &lock_hash,
+        &ckbadger_store::types::AddressBalance {
+            balance: 200_00000000,
+            used_capacity: 61_00000000,
+            live_cells_count: 1,
+            total_cells_count: 1,
+            txs_count: 1,
+            first_seen_block: 77,
+            first_seen_tx: vec![0x51; 32],
+            last_activity_block: 77,
+            last_activity_tx: vec![0x51; 32],
+        },
+    );
+    batch.commit().unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let (status, json) = get_json(&app, &format!("/addresses/0x{}", hex::encode(&lock_hash))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json["liveCellsCount"], 1);
+    assert_eq!(json["balance"], "20000000000");
+    assert_eq!(
+        json["address"],
+        serde_json::Value::String(expected_address),
+        "live address must resolve, got {}",
+        json["address"]
+    );
+    assert_eq!(json["lockScript"]["hashType"], "data1");
+}
+
+#[tokio::test]
+async fn test_get_address_fails_fast_on_invalid_stored_hash_type() {
+    // 0/1/2/4 are the only hash_type values CKB consensus allows. Anything else in
+    // CF_LOCK_SCRIPTS is a store corruption: report it instead of rendering a guess.
+    let store = test_store();
+    let code_hash = vec![0x8d; 32];
+    let args = vec![0x66; 20];
+    let lock_hash = vec![0xBE; 32];
+
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_lock_script(
+        &lock_hash,
+        &ckbadger_store::types::LockScriptEntry {
+            code_hash,
+            hash_type: 3,
+            args,
+        },
+    );
+    batch.commit().unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let (status, json) = get_json(&app, &format!("/addresses/0x{}", hex::encode(&lock_hash))).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    let message = json["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains(&hex::encode(&lock_hash)) && message.contains("hash_type"),
+        "error must name the lock hash and the bad hash_type, got {message}"
+    );
+}

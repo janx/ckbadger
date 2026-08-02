@@ -264,3 +264,245 @@ async fn test_transaction_not_found() {
     let response = app.oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
+
+// ---------------------------------------------------------------------------
+// R4-E bug 3: /transactions/{hash}/lifecycle must honour proposal zones carried
+// by *uncles* embedded in a window block, not just the main chain block's own
+// `proposals()`. CKB consensus counts uncle proposal zones, so a tx proposed
+// only inside an uncle used to report `proposedIn: null`.
+// ---------------------------------------------------------------------------
+
+/// One block of the fixture chain: its own proposal zone plus the proposal zones
+/// of the uncles it embeds.
+struct ProposalZone {
+    number: u64,
+    proposals: Vec<Vec<u8>>,
+    uncles: Vec<(u64, Vec<Vec<u8>>)>,
+}
+
+fn build_fixture_block(zone: &ProposalZone) -> ckb_types::core::BlockView {
+    use ckb_types::core::{BlockBuilder, EpochNumberWithFraction};
+    use ckb_types::packed::ProposalShortId;
+    use ckb_types::prelude::*;
+
+    let proposal_id = |raw: &Vec<u8>| ProposalShortId::from_slice(raw).expect("10-byte short id");
+    // Non-genesis headers must carry a well-formed epoch (length > index > 0-length).
+    let epoch = EpochNumberWithFraction::new(1, 0, 1800);
+
+    let mut uncle_views = Vec::new();
+    for (uncle_number, uncle_proposals) in &zone.uncles {
+        let mut uncle = BlockBuilder::default()
+            .number(uncle_number.pack())
+            .epoch(epoch.pack());
+        for raw in uncle_proposals {
+            uncle = uncle.proposal(proposal_id(raw));
+        }
+        uncle_views.push(uncle.build().as_uncle());
+    }
+
+    let mut builder = BlockBuilder::default()
+        .number(zone.number.pack())
+        .epoch(epoch.pack());
+    for raw in &zone.proposals {
+        builder = builder.proposal(proposal_id(raw));
+    }
+    for uncle in uncle_views {
+        builder = builder.uncle(uncle);
+    }
+    builder.build()
+}
+
+/// Seed a committed transaction plus the [commit-10, commit-2] proposal window in
+/// both stores: ckbadger block headers (hash + timestamp) and a CKB-node-format
+/// RocksDB holding the real blocks.
+fn seed_lifecycle_fixture(
+    tx_hash: &[u8],
+    commit_block: i64,
+    zones: &[ProposalZone],
+) -> (Arc<CkbadgerStore>, TestCkbChain) {
+    use ckb_types::prelude::*;
+
+    let store = test_store();
+    let blocks: Vec<ckb_types::core::BlockView> = zones.iter().map(build_fixture_block).collect();
+
+    let mut batch = StoreBatch::new(store.as_ref());
+    let header = |hash: Vec<u8>, number: i64| CachedBlockHeader {
+        hash,
+        parent_hash: vec![0u8; 32],
+        timestamp: 1_700_000_000_000 + number,
+        epoch_number: 1,
+        epoch_index: 0,
+        epoch_length: 1800,
+        dao: vec![0; 32],
+        transactions_count: 1,
+        uncles_count: 0,
+        proposals_count: 0,
+        compact_target: 0,
+        miner_lock_hash: None,
+        cycles: None,
+    };
+    for block in &blocks {
+        let hash: [u8; 32] = block.hash().unpack();
+        batch.put_block_header(
+            block.number() as i64,
+            &header(hash.to_vec(), block.number() as i64),
+        );
+    }
+    batch.put_block_header(commit_block, &header(vec![0xC0; 32], commit_block));
+    batch.put_tx_hash_map(tx_hash, commit_block, 0);
+    batch.put_tx_index(
+        commit_block,
+        0,
+        &TxIndexEntry {
+            is_cellbase: false,
+            timestamp: 1_700_000_000_000 + commit_block,
+            inputs_count: 1,
+            outputs_count: 1,
+            fee: 1000,
+            tx_size: 500,
+            cycles: Some(1000),
+            semantic_tags: 0,
+        },
+    );
+    batch.commit().unwrap();
+    store
+        .update_sync_status(|s| {
+            s.tip_block_number = commit_block + 100;
+        })
+        .unwrap();
+
+    let chain = seed_ckb_chain(&blocks);
+    (store, chain)
+}
+
+#[tokio::test]
+async fn test_transaction_lifecycle_honours_uncle_proposal_zone() {
+    let tx_hash = vec![0x7b; 32];
+    let short_id = tx_hash[..10].to_vec();
+    let other_id = vec![0x9f; 10];
+    let commit_block = 442i64;
+
+    // The tx's short id appears ONLY in the proposals of an uncle (#438) embedded
+    // in main block 440; block 440's own proposal zone holds a different id.
+    let zones = vec![
+        ProposalZone {
+            number: 434,
+            proposals: vec![],
+            uncles: vec![],
+        },
+        ProposalZone {
+            number: 437,
+            proposals: vec![other_id.clone()],
+            uncles: vec![],
+        },
+        ProposalZone {
+            number: 440,
+            proposals: vec![other_id.clone()],
+            uncles: vec![(438, vec![short_id.clone()])],
+        },
+    ];
+    let (store, chain) = seed_lifecycle_fixture(&tx_hash, commit_block, &zones);
+
+    let config = test_config_with_ckb_db_path(
+        store.clone(),
+        store,
+        chain.path.clone(),
+        Some(chain.cleanup.clone()),
+    );
+    let app = create_router(config).await;
+
+    let (status, json) = get_json(
+        &app,
+        &format!("/transactions/0x{}/lifecycle", hex::encode(&tx_hash)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json["phase"], "committed");
+    assert_eq!(
+        json["proposedIn"]["blockNumber"], 440,
+        "uncle-borne proposals belong to the main-chain block that embeds the uncle, got {}",
+        json["proposedIn"]
+    );
+    assert_eq!(json["commitmentDistance"], commit_block - 440);
+    assert_eq!(json["proposedInUncle"]["blockNumber"], 438);
+    assert_eq!(json["committedIn"]["blockNumber"], commit_block);
+}
+
+#[tokio::test]
+async fn test_transaction_lifecycle_reports_earliest_main_proposal() {
+    // Control: a tx proposed directly in the main proposal zone still reports the
+    // earliest window block, and carries no uncle attribution.
+    let tx_hash = vec![0x3c; 32];
+    let short_id = tx_hash[..10].to_vec();
+    let commit_block = 442i64;
+
+    let zones = vec![
+        ProposalZone {
+            number: 434,
+            proposals: vec![],
+            uncles: vec![],
+        },
+        ProposalZone {
+            number: 435,
+            proposals: vec![short_id.clone()],
+            uncles: vec![],
+        },
+        ProposalZone {
+            number: 437,
+            proposals: vec![short_id.clone()],
+            uncles: vec![],
+        },
+    ];
+    let (store, chain) = seed_lifecycle_fixture(&tx_hash, commit_block, &zones);
+
+    let config = test_config_with_ckb_db_path(
+        store.clone(),
+        store,
+        chain.path.clone(),
+        Some(chain.cleanup.clone()),
+    );
+    let app = create_router(config).await;
+
+    let (status, json) = get_json(
+        &app,
+        &format!("/transactions/0x{}/lifecycle", hex::encode(&tx_hash)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json["proposedIn"]["blockNumber"], 435);
+    assert_eq!(json["commitmentDistance"], commit_block - 435);
+    assert_eq!(json["proposedInUncle"], serde_json::Value::Null);
+}
+
+#[tokio::test]
+async fn test_transaction_lifecycle_prefers_main_zone_over_uncle_in_same_block() {
+    // When one block proposes the tx both directly and through an uncle, the
+    // direct main-chain proposal owns the attribution.
+    let tx_hash = vec![0x5e; 32];
+    let short_id = tx_hash[..10].to_vec();
+    let commit_block = 442i64;
+
+    let zones = vec![ProposalZone {
+        number: 436,
+        proposals: vec![short_id.clone()],
+        uncles: vec![(433, vec![short_id.clone()])],
+    }];
+    let (store, chain) = seed_lifecycle_fixture(&tx_hash, commit_block, &zones);
+
+    let config = test_config_with_ckb_db_path(
+        store.clone(),
+        store,
+        chain.path.clone(),
+        Some(chain.cleanup.clone()),
+    );
+    let app = create_router(config).await;
+
+    let (status, json) = get_json(
+        &app,
+        &format!("/transactions/0x{}/lifecycle", hex::encode(&tx_hash)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json["proposedIn"]["blockNumber"], 436);
+    assert_eq!(json["proposedInUncle"], serde_json::Value::Null);
+}

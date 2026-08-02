@@ -1200,3 +1200,156 @@ async fn test_token_transfers_and_activities_resolve_addresses_from_lock_scripts
     );
     assert_eq!(transfer["fromAddress"], serde_json::Value::Null);
 }
+
+// ---------------------------------------------------------------------------
+// R4-E bug 1: /tokens/{h}/holders must resolve each holder's lock hash to its
+// CKB address through the same CF_LOCK_SCRIPTS path the transfer/activity
+// handlers already use — the handler used to hardcode `address: None`.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_get_token_holders_resolve_addresses_from_lock_scripts() {
+    let store = test_store();
+    let type_hash = vec![0x7C; 32];
+    store
+        .put_token_direct(&type_hash, &placeholder_token_without_metadata())
+        .unwrap();
+
+    // Externally verified vector (see crates/api/src/utils/address.rs tests):
+    // secp256k1_blake160_sighash_all + hash_type "type" + these args.
+    let secp_code_hash =
+        hex::decode("9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8").unwrap();
+    let known_args = hex::decode("b39bbc0b3673c7d36450bc14cfcdad2d559c6c64").unwrap();
+    let known_address = "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqdnnw7qkdnnclfkg59uzn8umtfd2kwxceqxwquc4";
+    let known_lock_hash = compute_script_hash(&secp_code_hash, 1, &known_args);
+    // Second holder has no CF_LOCK_SCRIPTS row: its address must stay null, never guessed.
+    let unknown_lock_hash = vec![0xE7; 32];
+
+    let mut batch = StoreBatch::new(&store);
+    batch.put_lock_script(
+        &known_lock_hash,
+        &ckbadger_store::types::LockScriptEntry {
+            code_hash: secp_code_hash.clone(),
+            hash_type: 1,
+            args: known_args.clone(),
+        },
+    );
+    batch.put_token_holder(&type_hash, &known_lock_hash, 900);
+    batch.put_token_holder(&type_hash, &unknown_lock_hash, 100);
+    batch.put_token_holder_by_balance(&type_hash, &known_lock_hash, 900);
+    batch.put_token_holder_by_balance(&type_hash, &unknown_lock_hash, 100);
+    batch.put_addr_token_by_balance(&known_lock_hash, &type_hash, 900);
+    batch.put_addr_token_by_balance(&unknown_lock_hash, &type_hash, 100);
+    batch.commit().unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+    let type_hash_hex = format!("0x{}", hex::encode(&type_hash));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/v1/tokens/{type_hash_hex}/holders?limit=10"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(json["total"], 2);
+    assert_eq!(
+        json["data"][0]["lockScriptHash"],
+        format!("0x{}", hex::encode(&known_lock_hash))
+    );
+    assert_eq!(
+        json["data"][0]["address"],
+        serde_json::Value::String(known_address.to_string()),
+        "holder address must resolve from CF_LOCK_SCRIPTS, got {}",
+        json["data"][0]["address"]
+    );
+    assert_eq!(json["data"][0]["balance"], "900");
+    assert_eq!(
+        json["data"][1]["lockScriptHash"],
+        format!("0x{}", hex::encode(&unknown_lock_hash))
+    );
+    assert_eq!(
+        json["data"][1]["address"],
+        serde_json::Value::Null,
+        "unknown lock script must stay null, never guessed"
+    );
+}
+
+#[tokio::test]
+async fn test_get_token_holders_resolve_addresses_per_page_only() {
+    // Address resolution must not change cursor/total semantics: page 1 and page 2
+    // each carry exactly their own holder's resolved address.
+    let store = test_store();
+    let type_hash = vec![0x7E; 32];
+    store
+        .put_token_direct(&type_hash, &placeholder_token_without_metadata())
+        .unwrap();
+
+    let secp_code_hash =
+        hex::decode("9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8").unwrap();
+    let first_args = vec![0x11; 20];
+    let second_args = vec![0x22; 20];
+    let first_lock_hash = compute_script_hash(&secp_code_hash, 1, &first_args);
+    let second_lock_hash = compute_script_hash(&secp_code_hash, 1, &second_args);
+    let first_address =
+        ckbadger_common::script_to_address(&secp_code_hash, 1, &first_args, "mainnet").unwrap();
+    let second_address =
+        ckbadger_common::script_to_address(&secp_code_hash, 1, &second_args, "mainnet").unwrap();
+
+    let mut batch = StoreBatch::new(&store);
+    for (lock_hash, args, balance) in [
+        (&first_lock_hash, &first_args, 200u128),
+        (&second_lock_hash, &second_args, 100u128),
+    ] {
+        batch.put_lock_script(
+            lock_hash,
+            &ckbadger_store::types::LockScriptEntry {
+                code_hash: secp_code_hash.clone(),
+                hash_type: 1,
+                args: args.clone(),
+            },
+        );
+        batch.put_token_holder(&type_hash, lock_hash, balance);
+        batch.put_token_holder_by_balance(&type_hash, lock_hash, balance);
+        batch.put_addr_token_by_balance(lock_hash, &type_hash, balance);
+    }
+    batch.commit().unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+    let type_hash_hex = format!("0x{}", hex::encode(&type_hash));
+
+    let (status, first_json) =
+        get_json(&app, &format!("/tokens/{type_hash_hex}/holders?limit=1")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(first_json["total"], 2);
+    assert_eq!(first_json["hasMore"], true);
+    assert_eq!(first_json["data"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        first_json["data"][0]["address"],
+        serde_json::Value::String(first_address)
+    );
+    let next_cursor = first_json["nextCursor"]
+        .as_str()
+        .expect("first page should have next cursor")
+        .to_string();
+
+    let (status, second_json) = get_json(
+        &app,
+        &format!("/tokens/{type_hash_hex}/holders?limit=1&cursor={next_cursor}"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        second_json["data"][0]["address"],
+        serde_json::Value::String(second_address)
+    );
+    assert_eq!(second_json["hasMore"], false);
+}

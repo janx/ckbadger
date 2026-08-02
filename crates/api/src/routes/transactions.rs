@@ -3,6 +3,7 @@ use axum::{
     routing::{get, post},
     Router,
 };
+use ckb_types::packed;
 use ckbadger_common::cycles_task::{CyclesTaskResult, CyclesTaskStatus};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -1845,12 +1846,40 @@ pub struct TransactionLifecycleResponse {
     pub hash: String,
     pub phase: LifecyclePhase,
     pub proposal_id: String,
+    /// Main-chain block whose proposal zone carried this transaction's short id.
+    /// For a proposal that arrived through an embedded uncle this is still the
+    /// containing main-chain block — that is the block the commitment window is
+    /// measured against — and `proposed_in_uncle` names the uncle itself.
     pub proposed_in: Option<LifecycleBlockInfo>,
+    /// The embedded uncle that actually listed the short id, when the containing
+    /// block's own proposal zone did not. `None` for directly proposed txs.
+    pub proposed_in_uncle: Option<LifecycleUncleInfo>,
     pub committed_in: Option<LifecycleBlockInfo>,
     pub commitment_distance: Option<i64>,
     pub commitment_window: CommitmentWindow,
     pub is_cellbase: bool,
     pub confirmations: Option<i64>,
+}
+
+/// Identity of an uncle block that carried a transaction's proposal.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LifecycleUncleInfo {
+    /// The uncle's own header block number (not the containing block's).
+    pub block_number: i64,
+    pub block_hash: String,
+}
+
+/// Where a committed transaction's proposal was found inside the
+/// `[commit - 10, commit - 2]` window.
+struct ProposalWindowHit {
+    /// Main-chain block whose proposal zone (own or uncle-borne) carried the short id.
+    block_number: i64,
+    block_hash: Vec<u8>,
+    timestamp: i64,
+    /// `(uncle block number, uncle block hash)` when the short id came from an
+    /// uncle embedded in `block_number`.
+    uncle: Option<(i64, Vec<u8>)>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1907,6 +1936,7 @@ async fn get_transaction_lifecycle(
                 phase: LifecyclePhase::Pending,
                 proposal_id: format!("0x{}", hex::encode(&short_hash)),
                 proposed_in: None,
+                proposed_in_uncle: None,
                 committed_in: None,
                 commitment_distance: None,
                 commitment_window: CommitmentWindow::default(),
@@ -1962,6 +1992,7 @@ async fn get_transaction_lifecycle(
             phase: LifecyclePhase::Committed,
             proposal_id: proposal_id_hex,
             proposed_in: None,
+            proposed_in_uncle: None,
             committed_in: Some(LifecycleBlockInfo {
                 block_number: commit_block_number,
                 block_hash: format!("0x{}", hex::encode(&commit_block_hash)),
@@ -1980,7 +2011,7 @@ async fn get_transaction_lifecycle(
         let store_c = state.store.clone();
         let ckb_store_c = ckb_store.clone();
         let short_hash_c = short_hash.clone();
-        tokio::task::spawn_blocking(move || -> Option<(i64, Vec<u8>, i64)> {
+        tokio::task::spawn_blocking(move || -> Option<ProposalWindowHit> {
             if commit_block_number < 2 {
                 return None;
             }
@@ -1994,18 +2025,42 @@ async fn get_transaction_lifecycle(
                 return None;
             }
             for bn in start..=end {
-                if let Ok(Some(header)) = store_c.get_block_header(bn) {
-                    if header.hash.len() == 32 {
-                        let mut hash = [0u8; 32];
-                        hash.copy_from_slice(&header.hash);
-                        if let Some(block) = ckb_store_c.get_block(&hash) {
-                            for proposal_id in block.data().proposals().into_iter() {
-                                let proposal_bytes: Vec<u8> = proposal_id.raw_data().to_vec();
-                                if proposal_bytes == short_hash_c {
-                                    return Some((bn, header.hash.clone(), header.timestamp));
-                                }
-                            }
-                        }
+                let Ok(Some(header)) = store_c.get_block_header(bn) else {
+                    continue;
+                };
+                if header.hash.len() != 32 {
+                    continue;
+                }
+                let mut hash = [0u8; 32];
+                hash.copy_from_slice(&header.hash);
+                let Some(block) = ckb_store_c.get_block(&hash) else {
+                    continue;
+                };
+                let contains_short_id = |proposals: packed::ProposalShortIdVec| {
+                    proposals
+                        .into_iter()
+                        .any(|id| id.raw_data().to_vec() == short_hash_c)
+                };
+                // The block's own proposal zone owns the attribution when both it and
+                // one of its uncles carry the short id.
+                if contains_short_id(block.data().proposals()) {
+                    return Some(ProposalWindowHit {
+                        block_number: bn,
+                        block_hash: header.hash.clone(),
+                        timestamp: header.timestamp,
+                        uncle: None,
+                    });
+                }
+                // CKB consensus counts the proposal zones of the uncles a block
+                // embeds, so a tx can legitimately be proposed only inside an uncle.
+                for uncle in block.uncles() {
+                    if contains_short_id(uncle.data().proposals()) {
+                        return Some(ProposalWindowHit {
+                            block_number: bn,
+                            block_hash: header.hash.clone(),
+                            timestamp: header.timestamp,
+                            uncle: Some((uncle.number() as i64, uncle.hash().raw_data().to_vec())),
+                        });
                     }
                 }
             }
@@ -2017,21 +2072,26 @@ async fn get_transaction_lifecycle(
         None
     };
 
-    let (proposed_in_info, commitment_distance) = match proposed_in {
-        Some((proposal_block, proposal_hash, proposal_ts)) => {
-            let ts = chrono::DateTime::from_timestamp_millis(proposal_ts)
+    let (proposed_in_info, proposed_in_uncle, commitment_distance) = match proposed_in {
+        Some(hit) => {
+            let ts = chrono::DateTime::from_timestamp_millis(hit.timestamp)
                 .map(|dt| dt.to_rfc3339())
                 .unwrap_or_default();
             (
                 Some(LifecycleBlockInfo {
-                    block_number: proposal_block,
-                    block_hash: format!("0x{}", hex::encode(&proposal_hash)),
+                    block_number: hit.block_number,
+                    block_hash: format!("0x{}", hex::encode(&hit.block_hash)),
                     timestamp: ts,
                 }),
-                Some(commit_block_number - proposal_block),
+                hit.uncle
+                    .map(|(uncle_number, uncle_hash)| LifecycleUncleInfo {
+                        block_number: uncle_number,
+                        block_hash: format!("0x{}", hex::encode(&uncle_hash)),
+                    }),
+                Some(commit_block_number - hit.block_number),
             )
         }
-        None => (None, None),
+        None => (None, None, None),
     };
 
     ok(TransactionLifecycleResponse {
@@ -2039,6 +2099,7 @@ async fn get_transaction_lifecycle(
         phase: LifecyclePhase::Committed,
         proposal_id: proposal_id_hex,
         proposed_in: proposed_in_info,
+        proposed_in_uncle,
         committed_in: Some(LifecycleBlockInfo {
             block_number: commit_block_number,
             block_hash: format!("0x{}", hex::encode(&commit_block_hash)),

@@ -14,8 +14,8 @@ use ckbadger_common::TokenBalance;
 
 use crate::cache::{CacheKeys, CacheTtl};
 use crate::response::{
-    default_limit, encode_cursor, ok, ApiError, ApiResult, ApiRouteError, CursorPaginatedResponse,
-    ScriptResponse,
+    default_limit, encode_cursor, hash_type_to_str, ok, ApiError, ApiResult, ApiRouteError,
+    CursorPaginatedResponse, ScriptResponse,
 };
 use crate::utils::{
     address_to_lock_script_hash, deployment_key_for_script, deployment_reference_hashes,
@@ -2386,53 +2386,62 @@ async fn get_address(
         None => ("0".to_string(), "0".to_string(), 0, 0),
     };
 
-    // Try to find a cell for this lock hash to get the lock script details
+    // Resolve the lock script through the single canonical path: `CF_LOCK_SCRIPTS`
+    // (written once per lock at cell creation, never deleted). Deriving it from a
+    // live cell instead would lose the script the moment an address is fully spent
+    // (completed DAO withdrawers, emptied wallets), which is exactly the state the
+    // rest of the response still describes.
     let store = state.store.clone();
-    let ao_store = state.append_only_store.clone();
     let lock_hash_c = lock_hash.clone();
-    let cells_for_script = tokio::task::spawn_blocking(move || {
-        store.list_cells_by_lock(&lock_hash_c, 1, None, &ao_store)
-    })
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?
-    .map_err(|e| ApiError::internal(e.to_string()))?;
+    let lock_script_entry =
+        tokio::task::spawn_blocking(move || store.get_lock_script(&lock_hash_c))
+            .await
+            .map_err(|e| ApiError::internal(e.to_string()))?
+            .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    let (lock_script, lock_script_info, address) = if let Some((_, _, info)) =
-        cells_for_script.first()
-    {
+    let (lock_script, lock_script_info, address) = if let Some(entry) = lock_script_entry {
         let store = state.store.clone();
-        let code_hash_c = info.lock_code_hash.clone();
+        let code_hash_c = entry.code_hash.clone();
         let script_info = tokio::task::spawn_blocking(move || store.get_script_info(&code_hash_c))
             .await
             .map_err(|e| ApiError::internal(e.to_string()))?
             .map_err(|e| ApiError::internal(e.to_string()))?;
 
-        // Use the cell's own stored lock_hash_type (not script_info canonical default)
-        let hash_type_num = info.lock_hash_type;
-
-        let hash_type_str = match hash_type_num {
-            0 => "data",
-            1 => "type",
-            2 => "data1",
-            4 => "data2",
-            _ => "data",
-        };
+        // The stored per-lock hash_type is authoritative (never a script_info
+        // canonical default). Only 0/1/2/4 are valid on chain, so anything else is
+        // upstream store corruption and must be reported, not rendered as a guess.
+        let hash_type_str = hash_type_to_str(entry.hash_type).ok_or_else(|| {
+            ApiError::internal(format!(
+                "invalid stored lock hash_type: lock_hash=0x{}, hash_type={}",
+                hex::encode(&lock_hash),
+                entry.hash_type
+            ))
+        })?;
 
         let script = ScriptResponse {
-            code_hash: format!("0x{}", hex::encode(&info.lock_code_hash)),
+            code_hash: format!("0x{}", hex::encode(&entry.code_hash)),
             hash_type: hash_type_str.to_string(),
-            args: format!("0x{}", hex::encode(&info.lock_args)),
+            args: format!("0x{}", hex::encode(&entry.args)),
         };
 
-        let addr = input_address.or_else(|| {
-            script_to_address(
-                &info.lock_code_hash,
-                hash_type_num,
-                &info.lock_args,
-                &state.ckb_network,
-            )
-            .ok()
-        });
+        let addr = match input_address {
+            Some(addr) => Some(addr),
+            None => Some(
+                script_to_address(
+                    &entry.code_hash,
+                    entry.hash_type,
+                    &entry.args,
+                    &state.ckb_network,
+                )
+                .map_err(|e| {
+                    ApiError::internal(format!(
+                        "failed to encode address: lock_hash=0x{}, error={}",
+                        hex::encode(&lock_hash),
+                        e
+                    ))
+                })?,
+            ),
+        };
 
         let script_info_response = script_info.map(|si| LockScriptInfo {
             code_hash: format!("0x{}", hex::encode(&si.code_hash)),
@@ -2443,8 +2452,8 @@ async fn get_address(
 
         (Some(script), script_info_response, addr)
     } else {
-        // No live cells found, also check consumed cells for script info.
-        // For now, just return what we have.
+        // No cell with this lock has ever been indexed, so the script components are
+        // genuinely unknown: report the hash only, never a guessed script.
         (None, None, input_address)
     };
 
