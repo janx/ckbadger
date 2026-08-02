@@ -31,8 +31,6 @@ describe('useRealtimeStore', () => {
         epochNumber: 100,
         epochIndex: 450,
         epochLength: 1800,
-        avgBlockTime: '10.50s',
-        estimatedEpochTime: '3h 45m',
         syncStatus: {
           isSyncing: false,
           syncedBlock: 12345,
@@ -279,8 +277,6 @@ describe('useRealtimeStore', () => {
         epochNumber: 100,
         epochIndex: 450,
         epochLength: 1800,
-        avgBlockTime: '10.50s',
-        estimatedEpochTime: '3h 45m',
         syncStatus: {
           isSyncing: false,
           syncedBlock: 12345,
@@ -301,14 +297,18 @@ describe('useRealtimeStore', () => {
       expect(epochString).toBe('100(450/1800)');
     });
 
-    it('updates network-stats with avgBlockTime and estimatedEpochTime from block', () => {
+    // Mirrors the cache merge in useRealtimeData: block-derived facts advance,
+    // window-averaged network statistics stay untouched (they belong to
+    // /statistics/network). The behavioural test drives the real hook in
+    // useRealtimeData.test.tsx.
+    it('merges only block-derived facts into network-stats', () => {
       const queryClient = new QueryClient();
 
       const oldStats = {
         latestBlock: 12340,
         epoch: '100(445/1800)',
-        avgBlockTime: '10.00s',
-        estimatedEpochTime: '4h 0m',
+        avgBlockTime: '9.62s',
+        estimatedEpochTime: '3h 36m',
         syncStatus: {
           isSyncing: false,
           syncedBlock: 12345,
@@ -332,8 +332,6 @@ describe('useRealtimeStore', () => {
         epochNumber: 100,
         epochIndex: 450,
         epochLength: 1800,
-        avgBlockTime: '10.50s',
-        estimatedEpochTime: '3h 45m',
         syncStatus: {
           isSyncing: false,
           syncedBlock: 12345,
@@ -357,8 +355,6 @@ describe('useRealtimeStore', () => {
             | {
                 latestBlock: number;
                 epoch?: string;
-                avgBlockTime?: string;
-                estimatedEpochTime?: string;
               }
             | undefined
         ) => {
@@ -368,8 +364,6 @@ describe('useRealtimeStore', () => {
             ...old,
             latestBlock: blockData.number,
             epoch: epochString,
-            avgBlockTime: blockData.avgBlockTime,
-            estimatedEpochTime: blockData.estimatedEpochTime,
             syncStatus: blockData.syncStatus ?? old,
           };
         }
@@ -384,8 +378,8 @@ describe('useRealtimeStore', () => {
 
       expect(updatedStats.latestBlock).toBe(12345);
       expect(updatedStats.epoch).toBe('100(450/1800)');
-      expect(updatedStats.avgBlockTime).toBe('10.50s');
-      expect(updatedStats.estimatedEpochTime).toBe('3h 45m');
+      expect(updatedStats.avgBlockTime).toBe('9.62s');
+      expect(updatedStats.estimatedEpochTime).toBe('3h 36m');
     });
   });
 });

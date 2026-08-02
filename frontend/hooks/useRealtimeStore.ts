@@ -31,8 +31,6 @@ interface Block {
   epochNumber: number;
   epochIndex: number;
   epochLength: number;
-  avgBlockTime: string;
-  estimatedEpochTime: string;
   syncStatus: SyncStatus;
 }
 
@@ -184,6 +182,10 @@ export function useRealtimeData() {
           };
         });
 
+        // Only what this block itself states. `avgBlockTime` and
+        // `estimatedEpochTime` are rolling window averages owned by
+        // /statistics/network — overwriting them here replaced that average
+        // with whatever a single block-to-block interval happened to be.
         queryClient.setQueryData(
           ['network-stats'],
           (
@@ -192,8 +194,6 @@ export function useRealtimeData() {
                   latestBlock: number;
                   syncStatus?: SyncStatus;
                   epoch?: string;
-                  estimatedEpochTime?: string;
-                  avgBlockTime?: string;
                 }
               | undefined
           ) => {
@@ -205,8 +205,6 @@ export function useRealtimeData() {
               ...old,
               latestBlock: blockData.number,
               epoch: epochString,
-              avgBlockTime: blockData.avgBlockTime,
-              estimatedEpochTime: blockData.estimatedEpochTime,
               syncStatus: blockData.syncStatus ?? old.syncStatus,
             };
           }

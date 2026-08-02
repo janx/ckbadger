@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClient, QueryClientProvider, useQueryClient } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom';
 import { NetworkQueryScope } from '@/components/network-query-scope';
 import { useRealtimeData, useRealtimeStore } from '@/hooks/useRealtimeStore';
@@ -40,8 +40,13 @@ let instances: MockWebSocket[] = [];
 // Mirrors RECONNECT_INTERVAL in @/hooks/useRealtimeStore.
 const RECONNECT_INTERVAL_MS = 3000;
 
+// The query cache the hook actually writes to lives inside NetworkQueryScope
+// (one client per active network), not in the outer provider.
+let scopedQueryClient: QueryClient | null = null;
+
 function Harness() {
   useRealtimeData();
+  scopedQueryClient = useQueryClient();
   const navigate = useNavigate();
   return (
     <button type="button" onClick={() => navigate('/testnet/')}>
@@ -133,6 +138,52 @@ describe('useRealtimeData network scoping', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('keeps the REST-derived block time and epoch ETA when a block arrives', () => {
+    renderHarness();
+    const queryClient = scopedQueryClient as QueryClient;
+
+    // /statistics/network already answered: its avgBlockTime is the recent-window
+    // average and its estimatedEpochTime is derived from that same average.
+    queryClient.setQueryData(['network-stats'], {
+      latestBlock: 12344,
+      epoch: '100(449/1800)',
+      avgBlockTime: '9.62s',
+      estimatedEpochTime: '3h 36m',
+    });
+
+    act(() => {
+      instances[0].onmessage?.({
+        data: JSON.stringify({
+          type: 'new_block',
+          data: {
+            number: 12345,
+            hash: '0xabc123',
+            timestamp: '2024-01-01T00:00:00Z',
+            transactionsCount: 5,
+            epochNumber: 100,
+            epochIndex: 450,
+            epochLength: 1800,
+          },
+        }),
+      });
+    });
+
+    const stats = queryClient.getQueryData(['network-stats']) as {
+      latestBlock: number;
+      epoch: string;
+      avgBlockTime: string;
+      estimatedEpochTime: string;
+    };
+
+    // Block-derived facts advance…
+    expect(stats.latestBlock).toBe(12345);
+    expect(stats.epoch).toBe('100(450/1800)');
+    // …but the window-averaged network statistics stay exactly as the single
+    // computation path in /statistics/network produced them.
+    expect(stats.avgBlockTime).toBe('9.62s');
+    expect(stats.estimatedEpochTime).toBe('3h 36m');
   });
 
   it('resets stale realtime store data on network switch', async () => {
