@@ -544,17 +544,23 @@ fn fetch_assets_cached(
     all_cached
         .sort_by(|a, b| compare_asset_entries(a, b, request.sort_key, request.sort_direction));
 
-    // Apply cursor-based pagination: skip items up to and including the cursor item
-    if let Some(cursor_str) = request.cursor {
-        if let Some((c_type, c_id)) = parse_asset_cursor(cursor_str) {
-            // Find the cursor item by its unique (id, asset_type) and skip past it
-            if let Some(pos) = all_cached
-                .iter()
-                .position(|e| e.id == c_id && e.asset_type == c_type)
-            {
-                all_cached = all_cached.split_off(pos + 1);
-            }
-        }
+    // Apply cursor-based pagination: skip items up to and including the cursor
+    // item. A cursor that names no row in this result set is an error, not a
+    // silent restart at page 1 — the row it named is gone (or the filters
+    // changed under it), and re-serving page 1 would hand the client rows it
+    // has already seen and never terminate. This is the same answer `/tokens`
+    // gives for its own missing-row cursor.
+    if let Some((c_type, c_id)) = parse_optional_asset_cursor(request.cursor)? {
+        let pos = all_cached
+            .iter()
+            .position(|e| e.id == c_id && e.asset_type == c_type)
+            .ok_or_else(|| {
+                ApiError::bad_request(format!(
+                    "Invalid asset cursor: {c_type}:{c_id} names no asset in this result set; \
+                     drop the cursor to restart from the first page"
+                ))
+            })?;
+        all_cached = all_cached.split_off(pos + 1);
     }
 
     all_cached.truncate((request.limit + 1) as usize);
@@ -602,24 +608,57 @@ fn normalize_assets_composition_tier(
     }
 }
 
-/// Parse cursor string.
-/// Current format: "asset_type:id"
-fn parse_asset_cursor(cursor: &str) -> Option<(String, String)> {
-    let normalize_type = |asset_type: &str| match asset_type {
-        "token" => Some("token"),
-        "object" => Some("object"),
-        "identity" => Some("identity"),
-        _ => None,
+/// Parse an `"<asset_type>:<id>"` `/assets` pagination cursor.
+///
+/// Returns `Result`, not `Option`. The `Option` form combined with the caller's
+/// nested `if let Some(..)` made an unparseable cursor indistinguishable from
+/// "no cursor", so `?cursor=zzzz` answered 200 with page 1 again and a client
+/// resending its corrupted cursor paged forever on the first page — while
+/// `/tokens?cursor=zzzz` correctly answered 400. This is the same shape
+/// `parse_cell_cursor` and `parse_by_script_cursor` were converted away from;
+/// `/assets` was the one that got missed.
+///
+/// The three asset types are the complete set `warmup` can emit (`token`, and
+/// `object`/`identity` split by collection standard), so an unknown type is a
+/// corrupt cursor rather than a forward-compatible one.
+///
+/// Splitting on the *first* colon only is load-bearing: identity ids such as
+/// `did:ckb` contain one.
+fn parse_asset_cursor(cursor: &str) -> Result<(&'static str, &str), ApiRouteError> {
+    let invalid = |detail: String| {
+        ApiError::bad_request(format!(
+            "Invalid asset cursor: expected \"<token|object|identity>:<id>\", {detail}"
+        ))
     };
 
-    let parts: Vec<&str> = cursor.splitn(2, ':').collect();
-    if parts.len() == 2 {
-        if let Some(asset_type) = normalize_type(parts[0]) {
-            return Some((asset_type.to_string(), parts[1].to_string()));
-        }
+    let (asset_type, id) = cursor
+        .split_once(':')
+        .ok_or_else(|| invalid(format!("got {cursor:?}")))?;
+
+    let asset_type = match asset_type {
+        "token" => "token",
+        "object" => "object",
+        "identity" => "identity",
+        other => return Err(invalid(format!("got an unknown asset type {other:?}"))),
+    };
+    if id.is_empty() {
+        return Err(invalid(format!("got an empty id in {cursor:?}")));
     }
 
-    None
+    Ok((asset_type, id))
+}
+
+/// Parse an optional `/assets` cursor.
+///
+/// Same contract as the cursors in [`crate::utils::params`]: absent and empty
+/// both mean page 1, present-but-malformed is an error.
+fn parse_optional_asset_cursor(
+    cursor: Option<&str>,
+) -> Result<Option<(&'static str, &str)>, ApiRouteError> {
+    match cursor {
+        None | Some("") => Ok(None),
+        Some(cursor) => Ok(Some(parse_asset_cursor(cursor)?)),
+    }
 }
 
 fn apply_direction(ordering: Ordering, direction: SortDirection) -> Ordering {
@@ -2840,6 +2879,47 @@ mod tests {
     use ckbadger_store::batch::StoreBatch;
     use ckbadger_store::types::{AssetAction, CachedBlockHeader, TxIndexEntry};
 
+    /// Identity ids contain a colon, so only the first one separates the type.
+    #[test]
+    fn test_parse_asset_cursor_keeps_colons_inside_the_id() {
+        assert_eq!(
+            parse_asset_cursor("identity:did:ckb").unwrap(),
+            ("identity", "did:ckb")
+        );
+    }
+
+    /// Each of these used to be swallowed into "no cursor" and answered with
+    /// page 1.
+    #[test]
+    fn test_parse_asset_cursor_rejects_malformed_shapes() {
+        let long = format!("0x{}", "ab".repeat(600));
+        for raw in [
+            "zzzz",
+            "-1",
+            "-1:0",
+            "99999999999999999999999999:0",
+            &long,
+            "token:",
+            "spore:0xdeadbeef",
+            "",
+            ":0xabcd",
+        ] {
+            let err = parse_asset_cursor(raw).unwrap_err();
+            assert_eq!(err.0, axum::http::StatusCode::BAD_REQUEST, "raw={raw:?}");
+        }
+    }
+
+    #[test]
+    fn test_parse_optional_asset_cursor_distinguishes_absent_from_malformed() {
+        assert_eq!(parse_optional_asset_cursor(None).unwrap(), None);
+        assert_eq!(parse_optional_asset_cursor(Some("")).unwrap(), None);
+        assert_eq!(
+            parse_optional_asset_cursor(Some("token:0x01")).unwrap(),
+            Some(("token", "0x01"))
+        );
+        assert!(parse_optional_asset_cursor(Some("zzzz")).is_err());
+    }
+
     fn make_header(hash_byte: u8) -> CachedBlockHeader {
         CachedBlockHeader {
             hash: vec![hash_byte; 32],
@@ -2872,23 +2952,26 @@ mod tests {
         }
     }
 
+    /// Unchanged cases, restated against the `Result` API: the shapes that were
+    /// accepted are still accepted and the shapes that were `None` are now the
+    /// 400 they always should have been.
     #[test]
     fn test_parse_asset_cursor_accepts_only_current_format() {
         assert_eq!(
-            parse_asset_cursor("token:0xabc"),
-            Some(("token".to_string(), "0xabc".to_string()))
+            parse_asset_cursor("token:0xabc").unwrap(),
+            ("token", "0xabc")
         );
         assert_eq!(
-            parse_asset_cursor("object:0xabc"),
-            Some(("object".to_string(), "0xabc".to_string()))
+            parse_asset_cursor("object:0xabc").unwrap(),
+            ("object", "0xabc")
         );
         assert_eq!(
-            parse_asset_cursor("identity:0xabc"),
-            Some(("identity".to_string(), "0xabc".to_string()))
+            parse_asset_cursor("identity:0xabc").unwrap(),
+            ("identity", "0xabc")
         );
-        assert_eq!(parse_asset_cursor("nft:0xdef"), None);
-        assert_eq!(parse_asset_cursor("dob:0xdef"), None);
-        assert_eq!(parse_asset_cursor("1:2:3:nft"), None);
+        assert!(parse_asset_cursor("nft:0xdef").is_err());
+        assert!(parse_asset_cursor("dob:0xdef").is_err());
+        assert!(parse_asset_cursor("1:2:3:nft").is_err());
     }
 
     #[test]

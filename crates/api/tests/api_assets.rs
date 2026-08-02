@@ -2929,3 +2929,148 @@ async fn test_assets_nft_item_activities_dotbit_recycled_has_burn_history() {
     assert_eq!(json["data"][1]["actions"][0], "transfer");
     assert_eq!(json["data"][2]["actions"][0], "mint");
 }
+
+// ---------------------------------------------------------------------------
+// `/assets` cursor strictness — the silent-page-1 family.
+// ---------------------------------------------------------------------------
+
+/// Seed two tokens so `/assets` has a stable two-row, one-page-per-row list.
+fn seed_two_assets_for_cursor_tests() -> (Arc<CkbadgerStore>, [u8; 32], [u8; 32]) {
+    let store = test_store();
+    let token_a = [0x11u8; 32];
+    let token_b = [0x22u8; 32];
+
+    for (id, code_hash, arg, name, symbol) in [
+        (&token_a, 0xAAu8, 0x01u8, "Alpha Token", "ALPHA"),
+        (&token_b, 0xBBu8, 0x02u8, "Beta Token", "BETA"),
+    ] {
+        store
+            .put_token_direct(
+                id,
+                &TokenInfo {
+                    type_code_hash: vec![code_hash; 32],
+                    hash_type: 1,
+                    type_args: vec![arg; 20],
+                    standard: "xudt".to_string(),
+                    name: Some(name.to_string()),
+                    symbol: Some(symbol.to_string()),
+                    decimals: Some(8),
+                    max_supply: None,
+                    first_seen_block: 1,
+                    icon_url: None,
+                    description: None,
+                    transfers_count: 1,
+                },
+            )
+            .unwrap();
+    }
+
+    store
+        .put_token_daily_delta(
+            &token_a,
+            20240115,
+            &TokenDailyDelta {
+                owned_capacity_delta: 100,
+                owned_knowledge_delta: 60,
+            },
+        )
+        .unwrap();
+    store
+        .put_token_daily_delta(
+            &token_b,
+            20240115,
+            &TokenDailyDelta {
+                owned_capacity_delta: 300,
+                owned_knowledge_delta: 120,
+            },
+        )
+        .unwrap();
+
+    (store, token_a, token_b)
+}
+
+/// A cursor `/assets` cannot parse must be a 400, not page 1 again.
+///
+/// `parse_asset_cursor` returned `Option` and the caller consumed it as nested
+/// `if let Some(..)`, so an unparseable cursor and a cursor naming no row both
+/// fell through to "skip nothing". Verified live: `?limit=2&cursor=zzzz`
+/// answered 200 with rows byte-identical to page 1, so a client paging with a
+/// corrupted cursor loops on page 1 forever instead of learning it broke —
+/// while `/tokens?limit=2&cursor=zzzz` correctly answered 400.
+#[tokio::test]
+async fn test_assets_reject_unparseable_cursor_instead_of_reserving_page_one() {
+    let (store, _, _) = seed_two_assets_for_cursor_tests();
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let long_hex = format!("0x{}", "ab".repeat(600));
+    for cursor in [
+        "zzzz",                         // no separator at all
+        "-1",                           // no separator, numeric
+        "-1:0",                         // separator, but not an asset type
+        "99999999999999999999999999:0", // separator, but not an asset type
+        &long_hex,                      // 1200 hex chars, no separator
+        "token:",                       // known type, empty id
+        "spore:0xdeadbeef",             // unknown asset type
+    ] {
+        let (status, body) = get_json(&app, &format!("/assets?limit=2&cursor={cursor}")).await;
+        assert_eq!(
+            status,
+            StatusCode::BAD_REQUEST,
+            "GET /api/v1/assets?cursor={cursor} must reject an unparseable cursor with 400 \
+             instead of silently re-serving page 1, got {status} body={body}"
+        );
+    }
+}
+
+/// A well-formed cursor naming a row that is not in the current result set is
+/// also a 400 — same answer `/tokens` already gives (`tokens.rs` maps a missing
+/// `position(..)` to `bad_request("Invalid token cursor")`). Resuming at page 1
+/// would hand the client rows it has already seen and never terminate.
+#[tokio::test]
+async fn test_assets_reject_well_formed_cursor_that_names_no_row() {
+    let (store, _, _) = seed_two_assets_for_cursor_tests();
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let unknown = format!("token:0x{}", "de".repeat(32));
+    let (status, body) = get_json(&app, &format!("/assets?limit=2&cursor={unknown}")).await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "GET /api/v1/assets?cursor={unknown} names no row in the result set and must be \
+         rejected rather than restarting pagination, got {status} body={body}"
+    );
+}
+
+/// The strictness must not break the cursor the endpoint itself emits, and
+/// `?cursor=` must stay page 1 like every other list route.
+#[tokio::test]
+async fn test_assets_round_trip_their_own_cursor_and_treat_empty_as_page_one() {
+    let (store, token_a, token_b) = seed_two_assets_for_cursor_tests();
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let (status, page1) = get_json(&app, "/assets?type=token&limit=1&cursor=").await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "an empty cursor must mean page 1, got {status} body={page1}"
+    );
+    assert_eq!(
+        page1["data"][0]["id"],
+        format!("0x{}", hex::encode(token_b))
+    );
+
+    let next = page1["nextCursor"]
+        .as_str()
+        .expect("page 1 has a next cursor");
+    let (status, page2) =
+        get_json(&app, &format!("/assets?type=token&limit=1&cursor={next}")).await;
+    assert_eq!(status, StatusCode::OK, "body={page2}");
+    assert_eq!(
+        page2["data"][0]["id"],
+        format!("0x{}", hex::encode(token_a))
+    );
+    assert!(page2["nextCursor"].is_null());
+}
