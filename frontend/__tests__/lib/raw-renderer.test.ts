@@ -89,6 +89,8 @@ describe('renderRawPage', () => {
     const inputTxHash = `0x${'1'.repeat(64)}`;
     const depTxHash = `0x${'2'.repeat(64)}`;
     const headerHash = `0x${'3'.repeat(64)}`;
+    const inputCommitBlockHash = `0x${'4'.repeat(64)}`;
+    const depCommitBlockHash = `0x${'5'.repeat(64)}`;
 
     vi.mocked(api.getTransactionDetail).mockResolvedValue({
       hash: txHash,
@@ -149,6 +151,25 @@ describe('renderRawPage', () => {
       };
 
       if (payload.method === 'get_transaction') {
+        // Verbosity 0x1 resolves a resolved cell's header association (the
+        // block that committed the transaction which created it).
+        if (payload.params?.[1] === '0x1') {
+          return new Response(
+            JSON.stringify({
+              jsonrpc: '2.0',
+              id: 1,
+              result: {
+                transaction: null,
+                tx_status: {
+                  status: 'committed',
+                  block_hash:
+                    payload.params?.[0] === inputTxHash ? inputCommitBlockHash : depCommitBlockHash,
+                },
+              },
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } }
+          );
+        }
         expect(payload.params?.[0]).toBe(txHash);
         return new Response(
           JSON.stringify({
@@ -273,6 +294,17 @@ describe('renderRawPage', () => {
     expect(result.body.data?.txDebugger?.debugger.directRunnable).toBe(true);
     expect(result.body.data?.txDebugger?.mockTransaction.mock_info.inputs).toHaveLength(1);
     expect(result.body.data?.txDebugger?.mockTransaction.mock_info.cell_deps).toHaveLength(1);
+    // R4-G item 4: ckb-mock-tx-types carries `header` on every mock input and
+    // cell dep. Without it the cell's transaction_info block hash is the zero
+    // hash inside ckb-debugger, and the Nervos DAO type script's
+    // load_header(source = Input) answers ItemMissing — every DAO transaction
+    // this payload describes fails to replay.
+    expect(result.body.data?.txDebugger?.mockTransaction.mock_info.inputs[0]?.header).toBe(
+      inputCommitBlockHash
+    );
+    expect(result.body.data?.txDebugger?.mockTransaction.mock_info.cell_deps[0]?.header).toBe(
+      depCommitBlockHash
+    );
     expect(result.body.data?.txDebugger?.debugger.rpcUrl).toContain('8114');
     expect(result.body.data?.txWitness?.witnessesCount).toBe(2);
     expect(
@@ -478,6 +510,133 @@ describe('renderRawPage', () => {
       cursor: undefined,
       limit: 20,
     });
+  });
+
+  it('fails fast when a resolved cell has no committing block', async () => {
+    // A cell consumed by a committed transaction always has a committing block.
+    // Fabricating a header (zero hash, or omitting the field) is what made every
+    // Nervos DAO transaction fail to replay, so an unresolvable one is reported.
+    const txHash = `0x${'a'.repeat(64)}`;
+    const inputTxHash = `0x${'1'.repeat(64)}`;
+
+    vi.mocked(api.getTransactionDetail).mockResolvedValue({
+      hash: txHash,
+      status: 'committed',
+      pendingSince: null,
+      blockNumber: 123,
+      blockHash: `0x${'b'.repeat(64)}`,
+      index: 0,
+      inputsCount: 1,
+      outputsCount: 1,
+      fee: '1000',
+      confirmations: 10,
+      isCellbase: false,
+      timestamp: '2026-02-23T00:00:00Z',
+      inputsCapacity: '100',
+      outputsCapacity: '99',
+      inputsCommonKnowledgeSize: '50',
+      outputsCommonKnowledgeSize: '49',
+      inputs: [],
+      outputs: [],
+      witnesses: [],
+      witnessesAvailable: true,
+    });
+    vi.mocked(api.getTransactionCellDeps).mockResolvedValue([]);
+    vi.mocked(api.getTransactionLifecycle).mockResolvedValue({
+      hash: txHash,
+      phase: 'committed',
+      proposalId: `0x${'d'.repeat(20)}`,
+      proposedIn: null,
+      committedIn: {
+        blockNumber: 123,
+        blockHash: `0x${'b'.repeat(64)}`,
+        timestamp: '2026-02-23T00:00:00Z',
+      },
+      commitmentDistance: 0,
+      commitmentWindow: { close: 2, far: 10 },
+      isCellbase: false,
+      confirmations: 10,
+    });
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        const payload = JSON.parse(String(init?.body ?? '{}')) as {
+          method?: string;
+          params?: unknown[];
+        };
+
+        if (payload.method === 'get_transaction' && payload.params?.[1] === '0x1') {
+          return new Response(
+            JSON.stringify({
+              jsonrpc: '2.0',
+              id: 1,
+              result: {
+                transaction: null,
+                tx_status: { status: 'pending', block_hash: null },
+              },
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } }
+          );
+        }
+
+        if (payload.method === 'get_transaction') {
+          return new Response(
+            JSON.stringify({
+              jsonrpc: '2.0',
+              id: 1,
+              result: {
+                transaction: {
+                  version: '0x0',
+                  cell_deps: [],
+                  header_deps: [],
+                  inputs: [
+                    { previous_output: { tx_hash: inputTxHash, index: '0x0' }, since: '0x0' },
+                  ],
+                  outputs: [],
+                  outputs_data: [],
+                  witnesses: [],
+                },
+              },
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } }
+          );
+        }
+
+        if (payload.method === 'get_live_cell') {
+          return new Response(
+            JSON.stringify({
+              jsonrpc: '2.0',
+              id: 1,
+              result: {
+                status: 'live',
+                cell: {
+                  output: {
+                    capacity: '0x174876e800',
+                    lock: { code_hash: `0x${'f'.repeat(64)}`, hash_type: 'type', args: '0x' },
+                    type: null,
+                  },
+                  data: { content: '0x' },
+                },
+              },
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } }
+          );
+        }
+
+        throw new Error(`Unexpected RPC call: ${payload.method}`);
+      })
+    );
+
+    await expect(
+      renderRawPage({
+        page: parseRawSourcePath(`/tx/${txHash}`),
+        searchParams: new URLSearchParams('profile=debugger'),
+        origin: 'http://localhost:3000',
+      })
+    ).rejects.toEqual(
+      expect.objectContaining<Partial<RawRenderError>>({ code: 'tx_not_committed' })
+    );
   });
 
   it('fails fast on unsupported profile', async () => {

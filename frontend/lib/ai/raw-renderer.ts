@@ -113,8 +113,14 @@ interface RpcTransaction {
   witnesses: string[];
 }
 
+interface RpcTxStatus {
+  status: string;
+  block_hash?: string | null;
+}
+
 interface RpcTransactionWithStatus {
   transaction?: RpcTransaction | null;
+  tx_status?: RpcTxStatus | null;
 }
 
 interface RpcLiveCell {
@@ -171,16 +177,33 @@ interface DebuggerOutput {
   type?: DebuggerScript;
 }
 
+/**
+ * Mirrors `ckb_mock_tx_types::ReprMockInput`.
+ *
+ * `header` is the cell's *header association*: the hash of the block that
+ * committed the transaction which created this cell. The node derives it for
+ * every resolved cell (`CellMeta::transaction_info`), and scripts read it back
+ * with `load_header(source = Input)` — the Nervos DAO type script does exactly
+ * that in both withdraw phases. A cell consumed by a committed transaction
+ * always has a committing block, so an unresolvable one is an invariant
+ * violation, not an omission.
+ */
 interface DebuggerMockInput {
   input: DebuggerInput;
   output: DebuggerOutput;
   data: string;
+  header: string;
 }
 
+/**
+ * Mirrors `ckb_mock_tx_types::ReprMockCellDep`; see {@link DebuggerMockInput}
+ * for the header association, which `load_header(source = CellDep)` reads back.
+ */
 interface DebuggerMockCellDep {
   cell_dep: DebuggerCellDep;
   output: DebuggerOutput;
   data: string;
+  header: string;
 }
 
 interface DebuggerMockInfo {
@@ -581,6 +604,60 @@ async function fetchCellWithData(
   return fetchCellFromTxByOutPoint(rpcUrl, normalizedOutPoint);
 }
 
+/**
+ * The hash of the block that committed `txHash`.
+ *
+ * Single source for "which block does this transaction belong to". A
+ * transaction that is not committed has no such block, so this fails fast
+ * instead of substituting a placeholder.
+ */
+function committedBlockHash(txHash: string, status: RpcTxStatus | null | undefined): string {
+  if (!status) {
+    throw new RawRenderError(
+      502,
+      'rpc_tx_status_missing',
+      `CKB RPC returned no tx_status for transaction ${normalizeHex(txHash)}`
+    );
+  }
+  if (status.status !== 'committed') {
+    throw new RawRenderError(
+      502,
+      'tx_not_committed',
+      `Transaction ${normalizeHex(txHash)} has status "${status.status}", not "committed"`
+    );
+  }
+  if (!status.block_hash) {
+    throw new RawRenderError(
+      502,
+      'rpc_block_hash_missing',
+      `Transaction ${normalizeHex(txHash)} is "committed" but the node returned no block_hash`
+    );
+  }
+  return normalizeHex(status.block_hash);
+}
+
+/**
+ * Resolve the committing block of `txHash` without downloading its body.
+ *
+ * Verbosity `0x1` returns the `tx_status` only (`transaction: null`), which is
+ * all the header association needs — the genesis system-script transaction
+ * alone is 2.4 MB, and cell payloads are resolved separately.
+ */
+async function fetchCommittingBlockHash(rpcUrl: string, txHash: string): Promise<string> {
+  const result = await rpcCall<RpcTransactionWithStatus | null>(rpcUrl, 'get_transaction', [
+    normalizeHex(txHash),
+    '0x1',
+  ]);
+  if (!result) {
+    throw new RawRenderError(
+      404,
+      'tx_not_found',
+      `Transaction not found in CKB RPC: ${normalizeHex(txHash)}`
+    );
+  }
+  return committedBlockHash(txHash, result.tx_status);
+}
+
 async function fetchRpcHeader(rpcUrl: string, blockHash: string): Promise<RpcHeader> {
   const header = await rpcCall<RpcHeader | null>(rpcUrl, 'get_header', [normalizeHex(blockHash)]);
   if (!header) {
@@ -593,6 +670,16 @@ async function fetchRpcHeader(rpcUrl: string, blockHash: string): Promise<RpcHea
   return header;
 }
 
+/** Resolve one out point into the cell payload plus its header association. */
+async function resolveCell(
+  rpcUrl: string,
+  outPoint: RpcOutPoint
+): Promise<{ output: RpcOutput; data: string; header: string }> {
+  const { output, data } = await fetchCellWithData(rpcUrl, outPoint);
+  const header = await fetchCommittingBlockHash(rpcUrl, outPoint.tx_hash);
+  return { output, data, header };
+}
+
 async function buildDebuggerMockTransaction(
   rpcUrl: string,
   txHash: string
@@ -601,11 +688,12 @@ async function buildDebuggerMockTransaction(
 
   const mockInputs = await Promise.all(
     tx.inputs.map(async (input) => {
-      const { output, data } = await fetchCellWithData(rpcUrl, input.previous_output);
+      const { output, data, header } = await resolveCell(rpcUrl, input.previous_output);
       return {
         input: toDebuggerInput(input),
         output: toDebuggerOutput(output),
         data,
+        header,
       };
     })
   );
@@ -613,12 +701,13 @@ async function buildDebuggerMockTransaction(
   const mockCellDeps: DebuggerMockCellDep[] = [];
   const seenOutPoints = new Set<string>();
   for (const cellDep of tx.cell_deps) {
-    const { output, data } = await fetchCellWithData(rpcUrl, cellDep.out_point);
+    const { output, data, header } = await resolveCell(rpcUrl, cellDep.out_point);
     const dep = toDebuggerCellDep(cellDep);
     mockCellDeps.push({
       cell_dep: dep,
       output: toDebuggerOutput(output),
       data,
+      header,
     });
     seenOutPoints.add(outPointKey(dep.out_point));
 
@@ -631,10 +720,11 @@ async function buildDebuggerMockTransaction(
       if (seenOutPoints.has(outPointKey(referencedOutPoint))) {
         continue;
       }
-      const { output: refOutput, data: refData } = await fetchCellWithData(
-        rpcUrl,
-        referencedOutPoint
-      );
+      const {
+        output: refOutput,
+        data: refData,
+        header: refHeader,
+      } = await resolveCell(rpcUrl, referencedOutPoint);
       const depOutPoint: DebuggerOutPoint = {
         tx_hash: normalizeHex(referencedOutPoint.tx_hash),
         index: referencedOutPoint.index,
@@ -646,6 +736,7 @@ async function buildDebuggerMockTransaction(
         },
         output: toDebuggerOutput(refOutput),
         data: refData,
+        header: refHeader,
       });
       seenOutPoints.add(outPointKey(depOutPoint));
     }
