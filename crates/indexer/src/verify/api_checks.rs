@@ -511,7 +511,6 @@ struct AddressCountSnapshot {
     transactions_count: i64,
     recent_activities_count: i64,
     tx_total: i64,
-    activity_total: i64,
     live_cell_total: i64,
 }
 
@@ -521,13 +520,17 @@ fn fetch_address_count_snapshot(
 ) -> anyhow::Result<AddressCountSnapshot> {
     let address: AddressDetailApiRecord = api_get(ctx, &format!("addresses/{}", holder_lock_hash))?;
 
-    // Read pre-computed totals from endpoint responses (single request each)
-    // instead of paginating through all records.
+    // Read the pre-computed totals exposed by the transaction and live-cell
+    // endpoints instead of paginating through every record.
     let tx_page: CursorPageWithTotal<serde_json::Value> = api_get(
         ctx,
         &format!("addresses/{}/transactions?limit=1", holder_lock_hash),
     )?;
-    let activity_page: CursorPageWithTotal<serde_json::Value> = api_get(
+    // Address activities intentionally expose only cursor pagination. They are
+    // a different set from address transactions (cellbase rows are absent), so
+    // there is no authoritative pre-computed total to compare here. Still probe
+    // the endpoint and deserialize its cursor contract for every sampled holder.
+    let _: CursorPage<serde_json::Value> = api_get(
         ctx,
         &format!("addresses/{}/activities?limit=1", holder_lock_hash),
     )?;
@@ -542,9 +545,6 @@ fn fetch_address_count_snapshot(
             holder_lock_hash
         )
     })?;
-    let activity_total = activity_page.total.ok_or_else(|| {
-        anyhow::anyhow!("activities endpoint missing total for {}", holder_lock_hash)
-    })?;
     let live_cell_total = live_cell_page.total.ok_or_else(|| {
         anyhow::anyhow!("live cells endpoint missing total for {}", holder_lock_hash)
     })?;
@@ -555,7 +555,6 @@ fn fetch_address_count_snapshot(
         transactions_count: address.transactions_count,
         recent_activities_count: address.recent_activities_count,
         tx_total,
-        activity_total,
         live_cell_total,
     })
 }
@@ -582,18 +581,6 @@ fn address_count_mismatch_details(
         details.push(format!(
             "transactions endpoint total={} != address transactionsCount={}",
             snapshot.tx_total, snapshot.transactions_count
-        ));
-    }
-    if snapshot.activity_total != snapshot.transactions_count {
-        details.push(format!(
-            "activities endpoint total={} != address transactionsCount={}",
-            snapshot.activity_total, snapshot.transactions_count
-        ));
-    }
-    if snapshot.tx_total != snapshot.activity_total {
-        details.push(format!(
-            "transactions endpoint total={} != activities endpoint total={}",
-            snapshot.tx_total, snapshot.activity_total
         ));
     }
     if snapshot.live_cell_total != snapshot.live_cells_count {
@@ -3506,7 +3493,7 @@ impl Check for ObjectAssetCollectionConsistency {
     }
 }
 
-/// S22: Top token/object asset holders must align with address-page counts.
+/// S22: Top token/object asset holders must align with address-page invariants.
 pub struct AssetTopHoldersAddressConsistency;
 
 impl Check for AssetTopHoldersAddressConsistency {
@@ -3514,7 +3501,7 @@ impl Check for AssetTopHoldersAddressConsistency {
         "asset_top_holders_address_consistency"
     }
     fn description(&self) -> &'static str {
-        "Top asset holders align with address activities/cells/transactions counts"
+        "Top asset holders align with address, activity-page, cell, and transaction invariants"
     }
     fn tier(&self) -> CheckTier {
         CheckTier::Sampling
@@ -5449,6 +5436,63 @@ mod tests {
     }
 
     #[test]
+    fn test_fetch_address_count_snapshot_accepts_activity_page_without_total() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let server = runtime.block_on(MockServer::start());
+        let lock_hash = "0x45da319453058ab9c22b145107070b77ec97269c1816397f4881d727232c049c";
+
+        runtime.block_on(async {
+            Mock::given(method("GET"))
+                .and(path(format!("/api/v1/addresses/{lock_hash}")))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "lockScriptHash": lock_hash,
+                    "liveCellsCount": 3,
+                    "transactionsCount": 5,
+                    "recentActivitiesCount": 5
+                })))
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path(format!("/api/v1/addresses/{lock_hash}/transactions")))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "data": [],
+                    "total": 5
+                })))
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path(format!("/api/v1/addresses/{lock_hash}/activities")))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "data": [],
+                    "limit": 1,
+                    "hasMore": false,
+                    "nextCursor": null
+                })))
+                .expect(1)
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/api/v1/cells/live"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "data": [],
+                    "total": 3
+                })))
+                .mount(&server)
+                .await;
+        });
+
+        let snapshot = fetch_address_count_snapshot(&mock_ctx(&server), lock_hash)
+            .expect("cursor-only activities response is the declared API contract");
+
+        assert_eq!(snapshot.lock_script_hash, lock_hash);
+        assert_eq!(snapshot.transactions_count, 5);
+        assert_eq!(snapshot.tx_total, 5);
+        assert_eq!(snapshot.live_cells_count, 3);
+        assert_eq!(snapshot.live_cell_total, 3);
+        runtime.block_on(server.verify());
+    }
+
+    #[test]
     fn test_address_count_mismatch_details_empty_when_consistent() {
         let snapshot = AddressCountSnapshot {
             lock_script_hash: "0xabc".to_string(),
@@ -5456,7 +5500,6 @@ mod tests {
             transactions_count: 5,
             recent_activities_count: 5,
             tx_total: 5,
-            activity_total: 5,
             live_cell_total: 3,
         };
 
@@ -5472,7 +5515,6 @@ mod tests {
             transactions_count: 6,
             recent_activities_count: 4,
             tx_total: 3,
-            activity_total: 2,
             live_cell_total: 9,
         };
 
@@ -5487,13 +5529,6 @@ mod tests {
             .iter()
             .any(|line| line
                 .contains("transactions endpoint total=3 != address transactionsCount=6")));
-        assert!(details.iter().any(
-            |line| line.contains("activities endpoint total=2 != address transactionsCount=6")
-        ));
-        assert!(details
-            .iter()
-            .any(|line| line
-                .contains("transactions endpoint total=3 != activities endpoint total=2")));
         assert!(details
             .iter()
             .any(|line| line.contains("live cells endpoint total=9 != address liveCellsCount=7")));
