@@ -184,19 +184,30 @@ async fn list_transactions(
 ) -> ApiResult<CursorPaginatedResponse<TransactionResponse>> {
     let limit = params.limit.clamp(1, 100);
 
+    // Validate before any store access: `get_block_header` encodes the number
+    // into a store key, and a negative one trips an assert that aborts the
+    // process under `panic = "abort"`.
+    let block_number = params
+        .block_number
+        .map(|bn| validate_block_number(bn, "block_number"))
+        .transpose()?;
+
     // Get total count
-    let total: i64 = if let Some(block_number) = params.block_number {
+    let total: i64 = if let Some(block_number) = block_number {
         let store = state.store.clone();
-        tokio::task::spawn_blocking(move || -> i64 {
+        tokio::task::spawn_blocking(move || {
             store
                 .get_block_header(block_number)
-                .ok()
-                .flatten()
-                .map(|h| h.transactions_count as i64)
-                .unwrap_or(0)
+                .map(|header| header.map(|h| h.transactions_count as i64).unwrap_or(0))
         })
         .await
-        .unwrap_or(0)
+        .map_err(|e| ApiError::internal(format!("block header lookup failed: {}", e)))?
+        .map_err(|e| {
+            ApiError::internal(format!(
+                "block header unavailable for block_number={}: {}",
+                block_number, e
+            ))
+        })?
     } else {
         state
             .store
@@ -209,8 +220,7 @@ async fn list_transactions(
     let ckb_store = state.ckb_store.clone();
     let mem_cache = state.mem_cache.clone();
 
-    if let Some(block_number) = params.block_number {
-        let block_number = validate_block_number(block_number, "block_number")?;
+    if let Some(block_number) = block_number {
         // List transactions for a specific block (ascending order)
         let cursor = parse_optional_block_tx_cursor(params.cursor.as_deref(), "cursor")?;
         // Cursor is the tx_idx of the last item on the previous page.

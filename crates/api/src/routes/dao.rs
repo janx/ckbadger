@@ -18,6 +18,7 @@ use crate::response::{
 };
 use crate::utils::{
     dao_supply, parse_hash32, script_to_address, shannon_to_ckb, shannon_to_ckb_signed,
+    validate_block_number,
 };
 use crate::AppState;
 use tracing::instrument;
@@ -862,29 +863,52 @@ async fn calculate_compensation(
         .parse()
         .map_err(|_| ApiError::bad_request("Invalid capacity"))?;
 
-    let latest_block = state
+    // Validate before any store access: `get_block_header` encodes the number
+    // into a store key, and a negative one trips an assert that aborts the
+    // process under `panic = "abort"`. This handler runs on the axum task
+    // itself, so the abort is immediate.
+    let deposit_block = validate_block_number(params.deposit_block, "deposit_block")?;
+    let requested_withdraw_block = params
+        .withdraw_block
+        .map(|bn| validate_block_number(bn, "withdraw_block"))
+        .transpose()?;
+
+    let latest_block = match state
         .store
         .get_sync_tip_block()
-        .ok()
-        .flatten()
-        .map(|(n, _)| n)
-        .unwrap_or(0);
+        .map_err(|e| ApiError::internal(format!("sync tip unavailable: {}", e)))?
+    {
+        Some((number, _)) => number,
+        None => {
+            return Err(ApiError::initializing(
+                "no synced block yet: the DAO calculator needs a chain tip",
+            ))
+        }
+    };
 
-    let withdraw_block = params.withdraw_block.unwrap_or(latest_block);
-    ensure_withdraw_block_not_before_deposit(params.deposit_block, withdraw_block)?;
+    let withdraw_block = requested_withdraw_block.unwrap_or(latest_block);
+    ensure_withdraw_block_not_before_deposit(deposit_block, withdraw_block)?;
 
     let deposit_dao = state
         .store
-        .get_block_header(params.deposit_block)
-        .ok()
-        .flatten()
+        .get_block_header(deposit_block)
+        .map_err(|e| {
+            ApiError::internal(format!(
+                "block header unavailable for deposit_block={}: {}",
+                deposit_block, e
+            ))
+        })?
         .map(|h| h.dao);
 
     let withdraw_dao = state
         .store
         .get_block_header(withdraw_block)
-        .ok()
-        .flatten()
+        .map_err(|e| {
+            ApiError::internal(format!(
+                "block header unavailable for withdraw_block={}: {}",
+                withdraw_block, e
+            ))
+        })?
         .map(|h| h.dao);
 
     let (ar_deposit, ar_withdraw) = match (deposit_dao, withdraw_dao) {
@@ -892,7 +916,7 @@ async fn calculate_compensation(
             let ar_d = extract_ar(&d).ok_or_else(|| {
                 ApiError::internal(format!(
                     "invalid DAO field in deposit block header: block_number={}",
-                    params.deposit_block
+                    deposit_block
                 ))
             })?;
             let ar_w = extract_ar(&w).ok_or_else(|| {
@@ -925,7 +949,7 @@ async fn calculate_compensation(
 
     let total = capacity + compensation;
 
-    let blocks_held = (withdraw_block - params.deposit_block) as f64;
+    let blocks_held = (withdraw_block - deposit_block) as f64;
     let years = blocks_held / (365.25 * 24.0 * 60.0 * 60.0 / 8.0);
     let apc = if years > 0.0 && free > 0 {
         (compensation as f64 / free as f64 / years) * 100.0
@@ -936,7 +960,7 @@ async fn calculate_compensation(
     ok(CalculatorResponse {
         capacity: capacity.to_string(),
         capacity_ckb: shannon_to_ckb(&capacity.to_string()),
-        deposit_block: params.deposit_block,
+        deposit_block,
         withdraw_block,
         estimated_compensation: compensation.to_string(),
         estimated_compensation_ckb: shannon_to_ckb(&compensation.to_string()),

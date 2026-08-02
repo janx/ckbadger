@@ -172,6 +172,36 @@ async fn test_block_endpoints_reject_negative_block_number() {
         "/blocks/-1/proposals",
         "/graph/proposals/-1",
         "/transactions?block_number=-1",
+        "/dao/calculator?capacity=10200000000&deposit_block=-1",
+        "/dao/calculator?capacity=10200000000&deposit_block=-5&withdraw_block=-1",
+    ] {
+        assert_bad_request(&app, path, "a negative block number").await;
+    }
+}
+
+/// Why the assertion above is now load-bearing for `/transactions` and
+/// `/dao/calculator`, and was not before.
+///
+/// Both handlers used to look the block header up *before* validating, and
+/// both swallowed the result: `get_block_header(..).ok().flatten()` — in
+/// `/transactions` inside a `spawn_blocking` whose `JoinError` was then
+/// `.unwrap_or(0)`-ed. Under the test profile a panic unwinds and those guards
+/// absorbed it, so control reached a later `validate_block_number` and the
+/// endpoint answered a reassuring 400. Under `panic = "abort"` in release the
+/// process was already gone.
+///
+/// The fix validates first *and* deletes the swallowing, so a lookup that
+/// panics can no longer be laundered into a 400: if the ordering ever
+/// regresses, the test profile surfaces it as a 500 and this test fails
+/// instead of passing for the wrong reason.
+#[tokio::test]
+async fn test_negative_block_number_is_rejected_before_any_store_lookup() {
+    let app = test_app().await;
+    for path in [
+        "/transactions?block_number=-1",
+        "/transactions?block_number=-9223372036854775808",
+        "/dao/calculator?capacity=10200000000&deposit_block=-1",
+        "/dao/calculator?capacity=10200000000&deposit_block=0&withdraw_block=-1",
     ] {
         assert_bad_request(&app, path, "a negative block number").await;
     }

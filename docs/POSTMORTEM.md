@@ -1646,4 +1646,202 @@ population (live vs ever). A cached field whose name doesn't match its content
 
 ---
 
-_Last updated: 2026-08-01_
+### API-005: One name, two quantities — "Knowledge Size" on the hero vs the chart
+
+**Date**: 2026-08-02
+
+**Symptom**: `/statistics/network` reported `knowledgeSize` 519,967,746,700,000,000
+shannon — bit-identical to the node's raw DAO header `U` — while
+`/charts/knowledge-size`, which the homepage tile links to, plotted
+159,659,096 CKB for the same moment. The same named concept differed by 32.6×.
+`/statistics/asset-ecosystem`'s `totalKnowledgeSizeCkb` had the identical defect.
+The frontend compounded it: `ckbytes-card` computed
+`free = circulating − knowledge − dao` from the raw-`U` value, misallocating
+~5.04B CKB in the circulation bar, and hid the impossible result behind a
+`Math.max(0, …)` clamp.
+
+**Root Cause**: Both handlers passed `DaoDailySnapshot.occupied_capacity`
+(documented as the DAO header `U`) straight through, without subtracting the
+network's `GenesisBaseline.virtual_occupied`. The chart series applies that
+subtraction at write time, so two surfaces carried two quantities under one
+name. The adjacent `circulating_supply` in the very same handler already read
+`genesis_baseline()` correctly, which is what made the divergence invisible.
+
+**Fix**: One `common_knowledge_size(snapshot, virtual_occupied)` helper shared
+by `/statistics/network`, `/statistics/asset-ecosystem` and the chart path; a
+result below zero is a hard error naming the date, `U` and `virtual_occupied`.
+The frontend clamp is replaced by a labelled allocation-error box.
+
+**Lesson**: A derived quantity needs one function, not one formula repeated at
+each call site — repetition is how two call sites end up implementing two
+different definitions of the same word. When a UI clamps a value to keep a bar
+renderable, the clamp is hiding the arithmetic that proves the value wrong.
+
+---
+
+### API-006: Silent default-empty plus a full-scan fallback hid a post-reorg gap
+
+**Date**: 2026-08-02
+
+**Symptom**: For ~35-40 seconds after every reorg, `/dao/top-depositors`
+returned HTTP 200 with an empty leaderboard. Captured live on testnet across
+three reorgs in one evening.
+
+**Root Cause**: Rollback deleted the DAO singleton rows, and the indexer
+re-derived them only after that batch committed — a real ~6s window with no
+row. The handler masked the absence with
+`unwrap_or_else(|| DaoTopDepositors { depositors: vec![], .. })`, then cached
+that empty response for the full 30s TTL. `/dao/statistics` hid the same state
+behind a silent full-scan recompute — a fallback chain that had additionally
+*drifted* from the indexer's own treasury/compensation formulas, so the two
+paths would have disagreed had anyone compared them.
+
+**Fix**: Rollback no longer deletes the singletons (they are tip-scoped rows
+the indexer rewrites wholesale right after every rollback, every batch commit,
+and unconditionally at startup, so deleting them bought nothing); the read path
+fails fast when a singleton is genuinely missing at a synced tip and reports
+`initializing` before the first block; absent/failed states are never cached;
+the `/dao/statistics` recompute fallback is deleted.
+
+**Lesson**: A silent default-empty turns a transient write-path gap into a
+plausible-looking answer, and a fallback recompute keeps it invisible while
+quietly drifting from the path it shadows. Both are the forbidden pattern; the
+gap itself is the bug to close.
+
+---
+
+### API-007: Proposal scans ignored uncle proposal zones
+
+**Date**: 2026-08-02
+
+**Symptom**: `/transactions/{hash}/lifecycle` returned `proposedIn: null` and
+`commitmentDistance: null` for consensus-valid committed transactions, so the
+tx page silently dropped the "Proposed" step of two-step commitment. Measured
+at 33 of 58,687 committed txs (~0.05-0.07%) in uncle-bearing eras.
+
+**Root Cause**: The `[commit−10, commit−2]` window scan read only
+`block.data().proposals()` for each main-chain block and never
+`block.uncles()[i].proposals()` — even though CKB consensus counts uncle
+proposal zones and the uncle data already travelled inside the very block
+objects the loop had fetched. `/graph/proposals/{block_number}` had the same
+defect.
+
+**Fix**: Both scans walk embedded uncles. `proposedIn` reports the
+**containing main-chain block** (the block whose proposal zone the uncle
+contributes to, and the block the commitment window is measured against), so
+`commitmentDistance` stays consensus-meaningful; uncle identity is surfaced as
+an explicit additional field.
+
+**Lesson**: Consensus rules that admit two sources for one fact (main
+proposals ∪ uncle proposals) need both sources read, and the derived field
+must stay anchored to the entity the rule is measured against — reporting the
+uncle's own number would have produced a distance corresponding to no rule.
+
+---
+
+### API-008: Address resolution that depended on having a live cell
+
+**Date**: 2026-08-02
+
+**Symptom**: `/addresses/{lock_hash}` returned `address: null` with no
+`lockScript` for any fully-spent address (completed DAO withdrawers, emptied
+wallets) despite showing a non-zero transaction count, while
+`/dao/deposits?status=2` resolved the very same locks to full addresses.
+Separately, `/tokens/{type_hash}/holders` returned `address: null` for every
+holder.
+
+**Root Cause**: Two divergent resolution paths. The address handler derived the
+lock script from *one live cell* instead of `get_lock_script`, so it degraded
+to null exactly when an address had no live cells. The holders handler simply
+hardcoded `address: None` while the module's own `resolve_lock_addresses` —
+used by the sibling transfers/activities handlers — sat unused.
+
+**Fix**: Both handlers use the stored lock script and the shared resolver;
+`CF_LOCK_SCRIPTS` is written by both sync paths from the same fields the old
+code read off the cell and is never deleted, so the resolution is exact and
+outlives the cells. The `_ => "data"` hash-type fallback is replaced by a
+fail-fast conversion.
+
+**Lesson**: Deriving a durable fact from a transient artifact (a live cell)
+gives an answer that disappears with the artifact. When one module already has
+a resolver, a second call site that returns null is not a missing feature — it
+is a second path that will drift.
+
+---
+
+### API-009: Failed script replays were harvested as authoritative cycle counts
+
+**Date**: 2026-08-02
+
+**Symptom**: Every Nervos DAO phase-1 and phase-2 transaction served wrong
+cycles as `status: done`. Example: phase-2
+`0x6fa94cb21df82144505c5a9e5d3197e431ea0296a09c55a3e83e669f9ac01ab9` served
+3,374,403 against a consensus-true 3,380,228. Genesis transactions served
+15,511 for a run that had in fact failed.
+
+**Root Cause**: Two composed defects. The mock transaction carried no header
+association, so the DAO type script's `load_header(source=Input)` hit
+ItemMissing and the group aborted after ~8k cycles. And the runner never
+checked the child exit code or the `Run result:` line, so the aborted group's
+partial count was summed into the total and persisted as a completed value —
+which no later request would recompute.
+
+**Fix**: `MockInput`/`MockCellDep` carry a required committing-block hash
+(an unresolvable one is an invariant violation, not a `None`), and a group is
+accepted only when `Run result: 0` *and* exit code 0; anything else is an
+error, which the existing worker persists as the `-1` failed marker.
+
+**Lesson**: An external verifier's exit status is part of its answer. Parsing
+its stdout for a number while ignoring "this run failed" converts an error into
+a fact — and persisting that fact as `done` makes it permanent. Note the fix
+does not heal stored values: they clear on re-sync.
+
+---
+
+### API-010: Three more unvalidated block numbers aborted the whole process
+
+**Date**: 2026-08-02
+
+**Symptom**: `GET /api/v1/blocks?limit=2&cursor=0` dropped the connection and
+took the entire mainnet API down — every endpoint, every client — until the
+supervisor restarted it (~40-60s). Verified live: `?cursor=1` answered 200,
+`?cursor=0` made the listening PID vanish. Two sibling vectors were found by
+sweeping the class: `/dao/calculator?deposit_block=-1` and
+`/transactions?block_number=-1`.
+
+**Root Cause**: An unvalidated negative reaches `keys::encode_block_num`, whose
+`assert!(n >= 0)` is a correct internal invariant — but the release profile
+sets `panic = "abort"` and the API has no catch-panic layer, so the assert
+kills the process instead of the request. `/blocks` computed `cursor - 1`
+(so `cursor = 0` produced `-1`, and `i64::MIN` wrapped to `i64::MAX` in
+release, silently serving the newest page); `/dao/calculator` only compared
+`withdraw < deposit`, which `-1` passes; `/transactions` did call
+`validate_block_number` — 21 lines *after* it had already looked the header up.
+
+**Why a green test did not protect `/transactions`**: its regression test
+asserted 400 and passed for months. Under the test profile a panic unwinds,
+and the handler swallowed the result twice (`get_block_header(..).ok()` inside
+a `spawn_blocking` whose `JoinError` was `.unwrap_or(0)`-ed), so control
+reached the later validation and returned a reassuring 400 — while the release
+binary was already dead. The fix therefore validates first *and* deletes the
+swallowing, so an ordering regression now surfaces as a 500 rather than a
+passing test.
+
+**Fix**: One validating parser at the boundary for the `/blocks` cursor
+(returning the resolved scan start, so no caller can hold a value that could
+go below genesis), `validate_block_number` hoisted above every store access in
+the other two handlers, and the silent guards that laundered the panic removed.
+The `keys.rs` assert is deliberately untouched.
+
+**Lesson**: An internal `assert!` plus `panic = "abort"` makes every missing
+boundary check a remote denial of service, so the boundary sweep has to be
+exhaustive by construction rather than by memory — this is the third round in
+which this family resurfaced, each time in the one shape the previous sweep's
+tests did not cover (path params, then hash lengths, now bare integer query
+params). And a test that asserts on a response cannot prove a panic did not
+happen: if the code under test swallows failures, the test profile will hide
+the crash the release profile takes.
+
+---
+
+_Last updated: 2026-08-02_
