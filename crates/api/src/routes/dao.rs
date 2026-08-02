@@ -8,7 +8,7 @@ use ckbadger_common::dao::{
 };
 use ckbadger_store::keys;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -183,146 +183,13 @@ fn dao_address_summary_cache_key(lock_hash: &[u8], latest_block_number: i64) -> 
     )
 }
 
-#[derive(Default)]
-struct DaoStatisticsAccumulator {
-    total_deposited: i128,
-    pending_withdrawal_capacity: i128,
-    unique_depositors: HashSet<Vec<u8>>,
-    active_count: i32,
-    total_compensation_paid: i128,
-    total_ms_held: f64,
-    active_filtered_count: usize,
-    total_unclaimed: i128,
-    /// AR-based compensation for status-0 deposits only (explorer-compatible treasury).
-    unmade_active_compensation: i128,
-    /// Capacity-weighted deposit-days for status-0 deposits.
-    weighted_deposit_days_status0: f64,
-    /// Capacity-weighted deposit-days for status-1 deposits (frozen at phase-1 time).
-    weighted_deposit_days_status1: f64,
-    /// Total capacity of deposits (status 0 + status 1) included in average.
-    avg_total_capacity: i128,
-    /// Status-1 deposits needing block header lookup for weighted average.
-    status1_for_avg: Vec<(i64, i64, i64)>, // (capacity, deposit_timestamp, withdraw_request_block)
-}
-
-fn accumulate_dao_statistics_entry(
-    acc: &mut DaoStatisticsAccumulator,
-    entry: &ckbadger_store::DaoDepositCacheEntry,
-    latest_block_number: i64,
-    latest_ar: u64,
-    tip_timestamp: i64,
-) -> anyhow::Result<()> {
-    match entry.status {
-        0 => {
-            acc.total_deposited = acc
-                .total_deposited
-                .checked_add(i128::from(entry.capacity))
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "DAO total deposited overflow at deposit block {}",
-                        entry.deposit_block_number
-                    )
-                })?;
-            acc.unique_depositors.insert(entry.lock_script_hash.clone());
-            acc.active_count = acc.active_count.checked_add(1).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "DAO active deposit count overflow at deposit block {}",
-                    entry.deposit_block_number
-                )
-            })?;
-
-            if entry.deposit_block_number <= latest_block_number {
-                let held_ms = tip_timestamp - entry.deposit_timestamp;
-                acc.total_ms_held += held_ms as f64;
-                acc.active_filtered_count += 1;
-
-                let days_held = held_ms as f64 / 86_400_000.0;
-                acc.weighted_deposit_days_status0 += entry.capacity as f64 * days_held;
-                acc.avg_total_capacity = acc
-                    .avg_total_capacity
-                    .checked_add(i128::from(entry.capacity))
-                    .ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "DAO average capacity overflow at deposit block {}",
-                            entry.deposit_block_number
-                        )
-                    })?;
-            }
-        }
-        1 => {
-            acc.pending_withdrawal_capacity = acc
-                .pending_withdrawal_capacity
-                .checked_add(i128::from(entry.capacity))
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "DAO pending withdrawal capacity overflow at deposit block {}",
-                        entry.deposit_block_number
-                    )
-                })?;
-            acc.active_count = acc.active_count.checked_add(1).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "DAO active deposit count overflow at deposit block {}",
-                    entry.deposit_block_number
-                )
-            })?;
-
-            if entry.deposit_block_number <= latest_block_number {
-                // Collect status-1 deposit info for capacity-weighted average.
-                if let Some(request_block) = entry.withdraw_request_block {
-                    acc.status1_for_avg.push((
-                        entry.capacity,
-                        entry.deposit_timestamp,
-                        request_block,
-                    ));
-                }
-            }
-        }
-        2 => {}
-        _ => {
-            anyhow::bail!(
-                "unknown DAO deposit status {} for deposit_block={}",
-                entry.status,
-                entry.deposit_block_number
-            );
-        }
-    }
-
-    let contribution =
-        ckbadger_store::dao_compensation_for_entry_at(entry, latest_block_number, latest_ar)?;
-    acc.total_compensation_paid = acc
-        .total_compensation_paid
-        .checked_add(contribution.claimed)
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "DAO claimed compensation overflow at observation block {}",
-                latest_block_number
-            )
-        })?;
-    acc.total_unclaimed = acc
-        .total_unclaimed
-        .checked_add(contribution.unclaimed)
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "DAO unclaimed compensation overflow at observation block {}",
-                latest_block_number
-            )
-        })?;
-    acc.unmade_active_compensation = acc
-        .unmade_active_compensation
-        .checked_add(contribution.active_unmade)
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "DAO active unmade compensation overflow at observation block {}",
-                latest_block_number
-            )
-        })?;
-
-    Ok(())
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DaoStatisticsResponse {
+    /// Block the indexer computed these statistics at. The singleton trails the
+    /// sync tip by at most one batch commit, so this makes the as-of block
+    /// explicit instead of implying "current".
+    pub tip_block_number: i64,
     pub total_deposited: String,
     pub total_deposited_ckb: String,
     pub total_depositors: i32,
@@ -366,6 +233,8 @@ pub struct DaoTopDepositorResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DaoTopDepositorsResponse {
+    /// Block the indexer built this leaderboard at.
+    pub tip_block_number: i64,
     pub depositors: Vec<DaoTopDepositorResponse>,
 }
 
@@ -663,6 +532,7 @@ fn dao_latest_to_response(
     latest: &ckbadger_store::DaoLatestStatistics,
     deltas: DaoDeltas,
 ) -> DaoStatisticsResponse {
+    let tip_block_number = latest.tip_block_number;
     let total_deposited = latest.total_deposited.to_string();
     let total_compensation_paid = latest.total_compensation_paid.to_string();
     let unclaimed_compensation = latest.unclaimed_compensation.to_string();
@@ -671,6 +541,7 @@ fn dao_latest_to_response(
     let burnt = latest.burnt.to_string();
 
     DaoStatisticsResponse {
+        tip_block_number,
         total_deposited: total_deposited.clone(),
         total_deposited_ckb: shannon_to_ckb(&total_deposited),
         total_depositors: latest.total_depositors,
@@ -836,183 +707,98 @@ async fn get_address_dao_summary(
     ok(response)
 }
 
-#[instrument(skip(state), level = "debug")]
-async fn get_statistics(State(state): State<Arc<AppState>>) -> ApiResult<DaoStatisticsResponse> {
-    let (latest_block_number, latest_ar, tip_timestamp, tip_s) =
-        resolve_latest_block_and_ar(&state, "statistics")?;
-    if let Some(latest) = state
-        .store
-        .get_latest_dao_statistics()
-        .map_err(|e| ApiError::internal(e.to_string()))?
-    {
-        if latest.tip_block_number == latest_block_number {
-            let deltas = compute_dao_24h_deltas(&state);
-            return ok(dao_latest_to_response(&latest, deltas));
-        }
+/// Report a missing DAO singleton with the state that explains it.
+///
+/// The indexer writes both singletons after every committed batch and advances
+/// them again after every reorg rollback (rollback no longer deletes them), so
+/// they are absent only before the first post-genesis batch commits. That
+/// startup window is the explicit `initializing` state; absence at a synced tip
+/// is an invariant violation and must say so, with the tip it was observed at,
+/// instead of being papered over with an empty default.
+fn dao_singleton_missing(state: &AppState, singleton: &str) -> ApiRouteError {
+    match state.store.get_sync_tip_block() {
+        Err(e) => ApiError::internal(format!(
+            "failed to load sync tip block while reporting missing {}: {}",
+            singleton, e
+        )),
+        Ok(None) => ApiError::initializing(format!(
+            "{} not written yet: the indexer has not committed a block",
+            singleton
+        )),
+        Ok(Some((0, _))) => ApiError::initializing(format!(
+            "{} not written yet: only genesis is committed",
+            singleton
+        )),
+        Ok(Some((tip_block_number, _))) => ApiError::internal(format!(
+            "missing {} at sync tip block {}: the indexer writes it after every batch commit \
+             and after every reorg rollback",
+            singleton, tip_block_number
+        )),
     }
-
-    let cache_key = format!("dao:statistics:tip:{}", latest_block_number);
-    if let Some(cached) = state.mem_cache.get::<DaoStatisticsResponse>(&cache_key) {
-        return ok(cached);
-    }
-
-    let mut acc = DaoStatisticsAccumulator::default();
-    state
-        .store
-        .scan_dao_deposits(|_, entry| {
-            accumulate_dao_statistics_entry(
-                &mut acc,
-                entry,
-                latest_block_number,
-                latest_ar,
-                tip_timestamp,
-            )
-        })
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-
-    let total_depositors = acc.unique_depositors.len() as i32;
-
-    // Resolve status-1 deposit timestamps from block headers.
-    for &(capacity, deposit_ts, request_block) in &acc.status1_for_avg {
-        if let Ok(Some(header)) = state.store.get_block_header(request_block) {
-            let frozen_days = (header.timestamp - deposit_ts) as f64 / 86_400_000.0;
-            if frozen_days >= 0.0 {
-                acc.weighted_deposit_days_status1 += capacity as f64 * frozen_days;
-                acc.avg_total_capacity += capacity as i128;
-            }
-        }
-    }
-
-    // Capacity-weighted average deposit time (matches CKB Explorer).
-    let total_weighted_days = acc.weighted_deposit_days_status0 + acc.weighted_deposit_days_status1;
-    let avg_days = if acc.avg_total_capacity > 0 {
-        total_weighted_days / acc.avg_total_capacity as f64
-    } else {
-        0.0
-    };
-    let avg_days_str = format_days(avg_days);
-
-    let estimated_apc = estimated_apc_from_state(&state)?;
-
-    let store = state.store.clone();
-    let latest_snapshot =
-        tokio::task::spawn_blocking(move || store.get_latest_dao_daily_snapshot())
-            .await
-            .map_err(|e| ApiError::internal(e.to_string()))?
-            .map_err(|e| ApiError::internal(e.to_string()))?;
-
-    let total_deposited_str = acc.total_deposited.to_string();
-    let total_comp_str = acc.total_compensation_paid.to_string();
-    let exact_deposit_compensation = acc
-        .total_compensation_paid
-        .checked_add(acc.total_unclaimed)
-        .ok_or_else(|| {
-            ApiError::internal(format!(
-                "DAO total compensation overflow at block {}: claimed={}, unclaimed={}",
-                latest_block_number, acc.total_compensation_paid, acc.total_unclaimed
-            ))
-        })?;
-    // No snapshot yet means the indexer has not closed the first day — a startup
-    // window that resolves itself, so report it as `initializing` rather than as
-    // a fault. (A snapshot that exists but is malformed stays a 500 below.)
-    let snapshot = latest_snapshot.as_ref().ok_or_else(|| {
-        ApiError::initializing(format!(
-            "missing DAO daily snapshot at sync tip block {}",
-            latest_block_number
-        ))
-    })?;
-    if snapshot.cum_miner_secondary < 0 {
-        return Err(ApiError::internal(format!(
-            "negative cum_miner_secondary in dao_daily_snapshots for {}: {}",
-            snapshot.date, snapshot.cum_miner_secondary
-        )));
-    }
-    // Use tip S-field and live unmade computation for explorer-compatible treasury.
-    let treasury_from_s = tip_s as i128 - acc.unmade_active_compensation;
-    if treasury_from_s < 0 {
-        return Err(ApiError::internal(format!(
-            "negative treasury_from_s in dao statistics: tip_s={}, unmade_active_compensation={}",
-            tip_s, acc.unmade_active_compensation
-        )));
-    }
-    let mining_reward = snapshot.cum_miner_secondary.to_string();
-    let deposit_compensation = exact_deposit_compensation.to_string();
-    let burnt = treasury_from_s.to_string();
-
-    let deltas = compute_dao_24h_deltas(&state);
-
-    let response = DaoStatisticsResponse {
-        total_deposited: total_deposited_str.clone(),
-        total_deposited_ckb: shannon_to_ckb(&total_deposited_str),
-        total_depositors,
-        active_deposits: acc.active_count,
-        total_compensation_paid: total_comp_str.clone(),
-        total_compensation_paid_ckb: shannon_to_ckb(&total_comp_str),
-        unclaimed_compensation: acc.total_unclaimed.to_string(),
-        unclaimed_compensation_ckb: shannon_to_ckb(&acc.total_unclaimed.to_string()),
-        average_deposit_days: avg_days_str,
-        estimated_apc,
-        mining_reward: mining_reward.clone(),
-        mining_reward_ckb: shannon_to_ckb(&mining_reward),
-        deposit_compensation: deposit_compensation.clone(),
-        deposit_compensation_ckb: shannon_to_ckb(&deposit_compensation),
-        burnt: burnt.clone(),
-        burnt_ckb: shannon_to_ckb(&burnt),
-        pending_withdrawal_capacity: acc.pending_withdrawal_capacity.to_string(),
-        pending_withdrawal_capacity_ckb: shannon_to_ckb(
-            &acc.pending_withdrawal_capacity.to_string(),
-        ),
-        deposit_change_24h: deltas.deposit_change,
-        depositors_change_24h: deltas.depositors_change,
-        claimed_compensation_change_24h: deltas.claimed_compensation_change,
-        unclaimed_compensation_change_24h: deltas.unclaimed_compensation_change,
-    };
-
-    state
-        .mem_cache
-        .set(&cache_key, &response, DAO_STATS_CACHE_TTL);
-    ok(response)
 }
 
-fn format_days(days: f64) -> String {
-    if days >= 1000.0 {
-        format!("{:.1}K days+", days / 1000.0)
-    } else if days < 1.0 && days > 0.0 {
-        format!("{:.1} days", days)
-    } else {
-        format!("{:.0} days", days)
-    }
+/// DAO statistics come from the indexer-maintained `dao_latest_stats`
+/// singleton and from nowhere else.
+///
+/// There is deliberately no read-side recomputation: a second derivation of the
+/// same numbers drifted from the indexer's (different treasury and compensation
+/// formulas) and, worse, it silently stood in for a missing singleton, which is
+/// how the post-reorg singleton gap stayed invisible. The singleton lags the
+/// sync tip by at most one batch commit, so the response reports the block it
+/// was computed at rather than pretending to be current.
+#[instrument(skip(state), level = "debug")]
+async fn get_statistics(State(state): State<Arc<AppState>>) -> ApiResult<DaoStatisticsResponse> {
+    let store = state.store.clone();
+    let latest = tokio::task::spawn_blocking(move || store.get_latest_dao_statistics())
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let Some(latest) = latest else {
+        return Err(dao_singleton_missing(&state, "dao_latest_stats"));
+    };
+
+    let deltas = compute_dao_24h_deltas(&state);
+    ok(dao_latest_to_response(&latest, deltas))
 }
 
 async fn get_top_depositors(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<DaoTopDepositorsResponse> {
-    let cache_key = "dao:top-depositors";
-    if let Some(cached) = state.mem_cache.get::<DaoTopDepositorsResponse>(cache_key) {
+    let store = state.store.clone();
+    let top = tokio::task::spawn_blocking(move || store.get_dao_top_depositors())
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let Some(top) = top else {
+        return Err(dao_singleton_missing(&state, "dao_top_depositors"));
+    };
+
+    // Keyed by the singleton's own tip: a refreshed leaderboard is served the
+    // moment the indexer writes it instead of waiting out a TTL, and a failed
+    // or absent read never reaches the cache at all.
+    let cache_key = format!("dao:top-depositors:tip:{}", top.tip_block_number);
+    if let Some(cached) = state.mem_cache.get::<DaoTopDepositorsResponse>(&cache_key) {
         return ok(cached);
     }
 
     let store = state.store.clone();
     let network = state.ckb_network.clone();
-    let (top, addresses) = tokio::task::spawn_blocking(move || {
-        let top =
-            store
-                .get_dao_top_depositors()?
-                .unwrap_or_else(|| ckbadger_store::DaoTopDepositors {
-                    tip_block_number: 0,
-                    depositors: vec![],
-                });
-        let addresses = top
-            .depositors
+    let lock_hashes: Vec<Vec<u8>> = top
+        .depositors
+        .iter()
+        .map(|d| d.lock_script_hash.clone())
+        .collect();
+    let addresses = tokio::task::spawn_blocking(move || {
+        lock_hashes
             .iter()
-            .map(|d| {
-                Ok(match store.get_lock_script(&d.lock_script_hash)? {
+            .map(|lock_hash| {
+                Ok(match store.get_lock_script(lock_hash)? {
                     Some(entry) => Some(
                         script_to_address(&entry.code_hash, entry.hash_type, &entry.args, &network)
                             .map_err(|e| {
                                 anyhow::anyhow!(
                                     "failed to encode address for top depositor lock_hash=0x{}: {}",
-                                    hex::encode(&d.lock_script_hash),
+                                    hex::encode(lock_hash),
                                     e
                                 )
                             })?,
@@ -1020,8 +806,7 @@ async fn get_top_depositors(
                     None => None,
                 })
             })
-            .collect::<anyhow::Result<Vec<Option<String>>>>()?;
-        Ok::<_, anyhow::Error>((top, addresses))
+            .collect::<anyhow::Result<Vec<Option<String>>>>()
     })
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?
@@ -1047,10 +832,13 @@ async fn get_top_depositors(
         })
         .collect();
 
-    let response = DaoTopDepositorsResponse { depositors };
+    let response = DaoTopDepositorsResponse {
+        tip_block_number: top.tip_block_number,
+        depositors,
+    };
     state
         .mem_cache
-        .set(cache_key, &response, DAO_STATS_CACHE_TTL);
+        .set(&cache_key, &response, DAO_STATS_CACHE_TTL);
     ok(response)
 }
 
@@ -1251,11 +1039,17 @@ async fn get_total_deposit_chart(State(state): State<Arc<AppState>>) -> ApiResul
 async fn get_daily_deposit_chart(State(state): State<Arc<AppState>>) -> ApiResult<ChartResponse> {
     let cache_key = "chart:dao-daily-deposit";
     if let Some(cached) = state.mem_cache.get::<ChartResponse>(cache_key) {
-        return ok(cached);
+        if chart_response_has_data(&cached) {
+            return ok(cached);
+        }
+        state.mem_cache.delete(cache_key);
     }
     if let Some(cached) = state.cache.get::<ChartResponse>(cache_key).await {
-        state.mem_cache.set(cache_key, &cached, CHART_CACHE_TTL);
-        return ok(cached);
+        if chart_response_has_data(&cached) {
+            state.mem_cache.set(cache_key, &cached, CHART_CACHE_TTL);
+            return ok(cached);
+        }
+        state.cache.delete(cache_key).await;
     }
 
     let store = state.store.clone();
@@ -1264,48 +1058,67 @@ async fn get_daily_deposit_chart(State(state): State<Arc<AppState>>) -> ApiResul
         .map_err(|e| ApiError::internal(e.to_string()))?
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    // Compute daily gross deposits from cumulative deposit amounts.
-    // Uses cumulative_deposit_amount (gross, never reduced by withdrawals)
-    // to match the official explorer's daily_dao_deposit metric.
-    let data: Vec<ChartDataPoint> = snapshots
-        .windows(2)
-        .map(|w| -> Result<ChartDataPoint, ApiRouteError> {
-            let daily_deposited = w[1]
-                .cumulative_deposit_amount
-                .checked_sub(w[0].cumulative_deposit_amount)
-                .ok_or_else(|| {
-                    ApiError::internal(format!(
-                        "cumulative_deposit_amount decreased between {} and {}",
-                        w[0].date, w[1].date
-                    ))
-                })?;
-            let daily_deposits = w[1]
-                .new_deposits
-                .checked_sub(w[0].new_deposits)
-                .ok_or_else(|| {
-                    ApiError::internal(format!(
-                        "new_deposits decreased between {} and {}",
-                        w[0].date, w[1].date
-                    ))
-                })?;
-            Ok(ChartDataPoint {
-                date: w[1].date.clone(),
-                value: shannon_to_ckb(&daily_deposited.to_string()),
-                value2: Some(daily_deposits.to_string()),
-            })
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-
     let response = ChartResponse {
-        data,
+        data: build_daily_deposit_series(&snapshots)?,
         title: "Daily Deposit".to_string(),
         y_axis_label: "CKB".to_string(),
         y2_axis_label: Some("Count".to_string()),
     };
 
-    state.cache.set(cache_key, &response, CHART_CACHE_TTL).await;
-    state.mem_cache.set(cache_key, &response, CHART_CACHE_TTL);
+    if chart_response_has_data(&response) {
+        state.cache.set(cache_key, &response, CHART_CACHE_TTL).await;
+        state.mem_cache.set(cache_key, &response, CHART_CACHE_TTL);
+    }
     ok(response)
+}
+
+/// Daily gross deposits, derived as day-over-day deltas of the cumulative
+/// series (`cumulative_deposit_amount` is gross and never reduced by
+/// withdrawals, matching the official explorer's `daily_dao_deposit`).
+///
+/// The first snapshot day is measured against a zero baseline: nothing was
+/// deposited before the chain's first DAO day, so its delta is its own
+/// cumulative total. Pairing snapshots off against each other instead dropped
+/// that day entirely and hid launch day's deposits from the chart.
+fn build_daily_deposit_series(
+    snapshots: &[ckbadger_store::DaoDailySnapshot],
+) -> Result<Vec<ChartDataPoint>, ApiRouteError> {
+    let mut data = Vec::with_capacity(snapshots.len());
+    let mut previous: Option<&ckbadger_store::DaoDailySnapshot> = None;
+
+    for snapshot in snapshots {
+        let (prev_amount, prev_deposits, prev_label) = match previous {
+            Some(prev) => (
+                prev.cumulative_deposit_amount,
+                prev.new_deposits,
+                prev.date.as_str(),
+            ),
+            None => (0, 0, "the zero baseline before the first snapshot day"),
+        };
+        if snapshot.cumulative_deposit_amount < prev_amount {
+            return Err(ApiError::internal(format!(
+                "cumulative_deposit_amount decreased between {} and {}",
+                prev_label, snapshot.date
+            )));
+        }
+        if snapshot.new_deposits < prev_deposits {
+            return Err(ApiError::internal(format!(
+                "new_deposits decreased between {} and {}",
+                prev_label, snapshot.date
+            )));
+        }
+        let daily_deposited = snapshot.cumulative_deposit_amount - prev_amount;
+        let daily_deposits = snapshot.new_deposits - prev_deposits;
+
+        data.push(ChartDataPoint {
+            date: snapshot.date.clone(),
+            value: shannon_to_ckb(&daily_deposited.to_string()),
+            value2: Some(daily_deposits.to_string()),
+        });
+        previous = Some(snapshot);
+    }
+
+    Ok(data)
 }
 
 async fn get_daily_depositors_chart(
@@ -1410,9 +1223,7 @@ async fn get_circulation_ratio_chart(
 mod tests {
     use super::*;
     use crate::cache::InMemoryCache;
-    use ckbadger_common::dao::DAO_OCCUPIED_CAPACITY;
     use ckbadger_store::types::CachedBlockHeader;
-    use ckbadger_store::types::DaoDepositCacheEntry;
     use std::time::Duration;
 
     fn snapshot(
@@ -1548,124 +1359,68 @@ mod tests {
         assert!(ensure_withdraw_block_not_before_deposit(100, 100).is_ok());
     }
 
+    fn daily_snapshot(
+        date: &str,
+        cumulative: i128,
+        deposits: i64,
+    ) -> ckbadger_store::DaoDailySnapshot {
+        ckbadger_store::DaoDailySnapshot {
+            date: date.to_string(),
+            cumulative_deposit_amount: cumulative,
+            new_deposits: deposits,
+            ..snapshot(1, 0, 0)
+        }
+    }
+
+    /// The first snapshot day is a real data point measured against a zero
+    /// baseline; pairing snapshots off against each other dropped it.
     #[test]
-    fn test_accumulate_dao_statistics_entry_tracks_active_and_completed() {
-        let mut acc = DaoStatisticsAccumulator::default();
-        let active = DaoDepositCacheEntry {
-            capacity: (DAO_OCCUPIED_CAPACITY + 1_000) as i64,
-            occupied_capacity: DAO_OCCUPIED_CAPACITY as i64,
-            deposit_block_number: 90,
-            deposit_timestamp: 0,
-            lock_script_hash: vec![0xAB; 32],
-            deposit_ar: 100,
-            status: 0,
-            withdraw_request_tx: None,
-            withdraw_request_output_index: None,
-            withdraw_request_block: None,
-            withdraw_request_ar: None,
-            withdraw_block: None,
-            withdraw_tx: None,
-            withdraw_to_output_index: None,
-            compensation: None,
-        };
-        let completed = DaoDepositCacheEntry {
-            capacity: 1_500,
-            occupied_capacity: 500,
-            deposit_block_number: 80,
-            deposit_timestamp: 0,
-            lock_script_hash: vec![0xCD; 32],
-            deposit_ar: 100,
-            status: 2,
-            withdraw_request_tx: Some(vec![0x11; 32]),
-            withdraw_request_output_index: Some(0),
-            withdraw_request_block: Some(90),
-            withdraw_request_ar: Some(150),
-            withdraw_block: Some(95),
-            withdraw_tx: Some(vec![0x22; 32]),
-            withdraw_to_output_index: Some(0),
-            compensation: Some(500),
-        };
+    fn test_build_daily_deposit_series_includes_the_first_snapshot_day() {
+        let snapshots = vec![
+            daily_snapshot("2019-11-16", 3_715_755_618_324_833, 33),
+            daily_snapshot("2019-11-17", 3_815_755_618_324_833, 77),
+        ];
 
-        // tip_timestamp = deposit_timestamp(0) + 10 days in ms
-        let tip_ts = 10 * 86_400_000i64;
-        accumulate_dao_statistics_entry(&mut acc, &active, 100, 200, tip_ts).unwrap();
-        accumulate_dao_statistics_entry(&mut acc, &completed, 100, 200, tip_ts).unwrap();
-
-        assert_eq!(acc.total_deposited, active.capacity as i128);
-        assert_eq!(acc.unique_depositors.len(), 1);
-        assert_eq!(acc.active_count, 1);
-        assert_eq!(acc.total_compensation_paid, 500);
-        assert_eq!(
-            acc.total_ms_held,
-            (tip_ts - active.deposit_timestamp) as f64
-        );
-        assert_eq!(acc.active_filtered_count, 1);
-        assert_eq!(acc.total_unclaimed, 1_000);
-        // New fields: unmade_active_compensation mirrors total_unclaimed for status-0.
-        assert_eq!(acc.unmade_active_compensation, 1_000);
-        // Capacity-weighted deposit days for the active deposit.
-        let expected_days = tip_ts as f64 / 86_400_000.0;
-        let expected_weighted = active.capacity as f64 * expected_days;
-        assert!((acc.weighted_deposit_days_status0 - expected_weighted).abs() < 0.001);
-        assert_eq!(acc.avg_total_capacity, active.capacity as i128);
-        // No status-1 deposits in this test.
-        assert!(acc.status1_for_avg.is_empty());
+        let series = build_daily_deposit_series(&snapshots).unwrap();
+        assert_eq!(series.len(), 2);
+        assert_eq!(series[0].date, "2019-11-16");
+        assert_eq!(series[0].value, "37157556.18324833");
+        assert_eq!(series[0].value2.as_deref(), Some("33"));
+        assert_eq!(series[1].date, "2019-11-17");
+        assert_eq!(series[1].value, "1000000");
+        assert_eq!(series[1].value2.as_deref(), Some("44"));
     }
 
     #[test]
-    fn test_accumulate_dao_statistics_entry_status1_uses_withdraw_request_ar() {
-        let mut acc = DaoStatisticsAccumulator::default();
-        let active = DaoDepositCacheEntry {
-            capacity: (DAO_OCCUPIED_CAPACITY + 1_000) as i64,
-            occupied_capacity: DAO_OCCUPIED_CAPACITY as i64,
-            deposit_block_number: 90,
-            deposit_timestamp: 8 * 86_400_000,
-            lock_script_hash: vec![0xAB; 32],
-            deposit_ar: 100,
-            status: 0,
-            withdraw_request_tx: None,
-            withdraw_request_output_index: None,
-            withdraw_request_block: None,
-            withdraw_request_ar: None,
-            withdraw_block: None,
-            withdraw_tx: None,
-            withdraw_to_output_index: None,
-            compensation: None,
-        };
-        let pending = DaoDepositCacheEntry {
-            capacity: (DAO_OCCUPIED_CAPACITY + 2_000) as i64,
-            occupied_capacity: DAO_OCCUPIED_CAPACITY as i64,
-            deposit_block_number: 80,
-            deposit_timestamp: 5 * 86_400_000,
-            lock_script_hash: vec![0xCD; 32],
-            deposit_ar: 100,
-            status: 1,
-            withdraw_request_tx: Some(vec![0x11; 32]),
-            withdraw_request_output_index: Some(0),
-            withdraw_request_block: Some(95),
-            withdraw_request_ar: Some(150),
-            withdraw_block: None,
-            withdraw_tx: None,
-            withdraw_to_output_index: None,
-            compensation: None,
-        };
+    fn test_build_daily_deposit_series_empty_input() {
+        assert!(build_daily_deposit_series(&[]).unwrap().is_empty());
+    }
 
-        let tip_ts = 10 * 86_400_000i64;
-        accumulate_dao_statistics_entry(&mut acc, &active, 100, 200, tip_ts).unwrap();
-        accumulate_dao_statistics_entry(&mut acc, &pending, 100, 200, tip_ts).unwrap();
+    #[test]
+    fn test_build_daily_deposit_series_rejects_decreasing_cumulative_series() {
+        let snapshots = vec![
+            daily_snapshot("2019-11-16", 500, 5),
+            daily_snapshot("2019-11-17", 400, 5),
+        ];
+        let err = build_daily_deposit_series(&snapshots).unwrap_err();
+        assert!(err
+            .1
+             .0
+            .message
+            .contains("cumulative_deposit_amount decreased between 2019-11-16 and 2019-11-17"));
+    }
 
-        assert_eq!(acc.total_deposited, active.capacity as i128);
-        assert_eq!(acc.unique_depositors.len(), 1);
-        assert_eq!(acc.active_count, 2);
-        assert_eq!(acc.pending_withdrawal_capacity, pending.capacity as i128);
-        assert_eq!(
-            acc.total_ms_held,
-            (tip_ts - active.deposit_timestamp) as f64
-        );
-        assert_eq!(acc.active_filtered_count, 1);
-        // status=0: free=1000, gross=1000*200/100=2000, comp=1000
-        // status=1: free=2000, gross=2000*150/100=3000, comp=1000 (uses withdraw_request_ar=150)
-        assert_eq!(acc.total_unclaimed, 2_000);
+    /// A negative cumulative on day one is caught by the same zero baseline
+    /// that makes day one a data point at all.
+    #[test]
+    fn test_build_daily_deposit_series_rejects_negative_first_day() {
+        let snapshots = vec![daily_snapshot("2019-11-16", -1, 0)];
+        let err = build_daily_deposit_series(&snapshots).unwrap_err();
+        assert!(err
+            .1
+             .0
+            .message
+            .contains("the zero baseline before the first snapshot day"));
     }
 
     #[test]

@@ -911,8 +911,17 @@ fn should_delete_stats_for_replay(
         // Deleting them would lose all pre-rollback counts since replay
         // only re-processes blocks after the fork point.
         //
-        // DAO singleton aggregates: always delete so they are recomputed after replay
-        keys::STATS_PREFIX_DAO_LATEST_STATS | keys::STATS_PREFIX_DAO_TOP_DEPOSITORS => Ok(true),
+        // DAO singleton aggregates (`dao_latest_stats`, `dao_top_depositors`):
+        // KEPT, never deleted. They are tip-scoped rows that the indexer
+        // rewrites wholesale right after this rollback commits
+        // (`refresh_latest_dao_statistics`), so deleting them buys nothing and
+        // costs a window in which they do not exist at all. The read path
+        // cannot tell that window apart from "never written", which is how
+        // `/dao/top-depositors` came to serve an empty leaderboard for tens of
+        // seconds after every reorg. Leaving the previous row in place keeps
+        // the read path answering with a value whose own `tip_block_number`
+        // states how stale it is, until the refresh overwrites it in place.
+        keys::STATS_PREFIX_DAO_LATEST_STATS | keys::STATS_PREFIX_DAO_TOP_DEPOSITORS => Ok(false),
         // Outpoint/index entries are NOT deleted here. They are append-only
         // historical indexes that cannot be rebuilt from ObjectEntry alone
         // (ObjectEntry lacks the current outpoint). Blanket deletion would
@@ -4577,6 +4586,28 @@ mod tests {
                 ..Default::default()
             })
             .unwrap();
+    }
+
+    /// DAO singletons are tip-scoped derived rows that the indexer rewrites
+    /// right after the rollback commits. Deleting them here would leave a
+    /// window with no singleton at all, which the read path cannot tell apart
+    /// from "never written". Keep the stale row and let the refresh overwrite.
+    #[test]
+    fn test_should_delete_stats_for_replay_keeps_dao_singletons() {
+        let cutoff = b"20260210";
+        let cutoff_hh = b"2026021000";
+        for prefix in [
+            crate::keys::STATS_PREFIX_DAO_LATEST_STATS,
+            crate::keys::STATS_PREFIX_DAO_TOP_DEPOSITORS,
+        ] {
+            let key = crate::keys::encode_stats_key(prefix, b"latest");
+            assert!(
+                !should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, 0, false)
+                    .unwrap(),
+                "DAO singleton prefix 0x{:02x} must survive rollback",
+                prefix
+            );
+        }
     }
 
     #[test]

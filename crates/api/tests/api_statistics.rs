@@ -163,19 +163,14 @@ async fn test_forks_uses_persisted_reorg_detected_at_timestamp() {
         .unwrap();
 
     let detected_at = 1_700_000_123i64;
-    let event = ReorgEvent {
-        detected_at,
-        rollback_from: 101,
-        rollback_to: 100,
-        depth: 60,
-    };
-    store
-        .put_cf(
-            store.cf_sync_meta(),
-            ckbadger_store::keys::sync_meta_keys::REORG_LATEST_EVENT,
-            &bincode::serialize(&event).unwrap(),
-        )
-        .unwrap();
+    seed_reorg_event_of_kind(
+        &store,
+        detected_at * 1000,
+        100,
+        60,
+        0xD1,
+        ckbadger_store::types::ReorgEventKind::Deep,
+    );
 
     let expected_detected_at = chrono::DateTime::<chrono::Utc>::from_timestamp(detected_at, 0)
         .unwrap()
@@ -198,6 +193,9 @@ async fn test_forks_uses_persisted_reorg_detected_at_timestamp() {
         .to_bytes();
     let json_recent: serde_json::Value = serde_json::from_slice(&body_recent).unwrap();
     assert_eq!(json_recent["reorg"]["detectedAt"], expected_detected_at);
+    assert_eq!(json_recent["reorg"]["eventType"], "deep");
+    assert_eq!(json_recent["deepFork"]["detected"], true);
+    assert_eq!(json_recent["deepFork"]["detectedAt"], expected_detected_at);
 
     let request_list = Request::builder()
         .uri("/api/v1/forks")
@@ -2361,5 +2359,113 @@ async fn test_hash_rate_chart_fails_fast_when_daily_stats_row_missing() {
     assert!(
         message.contains("20260101"),
         "error must name the date whose daily stats row is missing: {json}"
+    );
+}
+
+/// Persist one reorg-event history record exactly as the indexer writer does.
+fn seed_reorg_event(
+    store: &Arc<CkbadgerStore>,
+    detected_at_ms: i64,
+    fork_point: i64,
+    depth: i32,
+    seq: u8,
+) {
+    seed_reorg_event_of_kind(
+        store,
+        detected_at_ms,
+        fork_point,
+        depth,
+        seq,
+        ckbadger_store::types::ReorgEventKind::Automatic,
+    );
+}
+
+fn seed_reorg_event_of_kind(
+    store: &Arc<CkbadgerStore>,
+    detected_at_ms: i64,
+    fork_point: i64,
+    depth: i32,
+    seq: u8,
+    kind: ckbadger_store::types::ReorgEventKind,
+) {
+    let event = ReorgEvent {
+        detected_at: detected_at_ms / 1000,
+        kind,
+        fork_point,
+        fork_point_hash: vec![seq; 32],
+        old_tip: fork_point + i64::from(depth),
+        old_tip_hash: vec![0x11; 32],
+        new_tip: fork_point + i64::from(depth) + 1,
+        new_tip_hash: vec![0x22; 32],
+        depth,
+        orphaned_blocks: i64::from(depth),
+        orphaned_txs: i64::from(depth) * 2,
+    };
+    let key = ckbadger_store::keys::encode_reorg_event_key(detected_at_ms, &[seq; 16]).unwrap();
+    store
+        .put_cf(
+            store.cf_sync_meta(),
+            key.as_bytes(),
+            &bincode::serialize(&event).unwrap(),
+        )
+        .unwrap();
+}
+
+/// Every automatic reorg is persisted under a `reorg:<ts_ms>:<uuid>` history
+/// key. `/forks` reporting `total: 0` minutes after "Reorg completed" is the
+/// endpoint lying about what the store holds.
+#[tokio::test]
+async fn test_forks_lists_persisted_reorg_events() {
+    let store = test_store();
+    seed_reorg_event(&store, 1_754_000_000_000, 17_100, 3, 0xA1);
+    seed_reorg_event(&store, 1_754_000_600_000, 17_140, 5, 0xB2);
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri("/api/v1/forks")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(json["total"], 2, "persisted reorg history must be listed");
+    let data = json["data"].as_array().unwrap();
+    assert_eq!(data.len(), 2);
+    // Newest first.
+    assert_eq!(data[0]["forkPointNumber"], 17_140);
+    assert_eq!(data[0]["depth"], 5);
+    assert_eq!(data[1]["forkPointNumber"], 17_100);
+}
+
+/// A shallow reorg is resolved automatically, so `deepFork.detected` stays
+/// false — but it did happen and `/forks/recent` must say so.
+#[tokio::test]
+async fn test_forks_recent_surfaces_persisted_shallow_reorg() {
+    let store = test_store();
+    let detected_at_ms = chrono::Utc::now().timestamp_millis() - 60_000;
+    seed_reorg_event(&store, detected_at_ms, 17_200, 4, 0xC3);
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri("/api/v1/forks/recent")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(json["hasRecentReorg"], true);
+    assert_eq!(json["reorg"]["forkPointNumber"], 17_200);
+    assert_eq!(json["reorg"]["depth"], 4);
+    assert_eq!(
+        json["deepFork"]["detected"], false,
+        "a shallow reorg must not be reported as a deep fork"
     );
 }

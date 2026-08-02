@@ -1659,9 +1659,7 @@ pub mod sync_meta_keys {
     pub const SYNC_STATUS: &[u8] = b"sync_status";
     pub const RUNTIME_STATUS: &[u8] = b"runtime_status";
     pub const ROLLBACK_CLEANUP_IN_PROGRESS: &[u8] = b"rollback_cleanup_in_progress";
-    pub const REORG_LATEST_EVENT: &[u8] = b"reorg_latest_event";
     pub const DEEP_FORK: &[u8] = b"deep_fork";
-    pub const REORG_EVENTS: &[u8] = b"reorg_events";
     pub const HODL_TRACKER: &[u8] = b"hodl_tracker";
     pub const CELL_DIST_TRACKER: &[u8] = b"cell_dist_tracker";
     pub const SYNC_PROGRESS: &[u8] = b"sync_progress";
@@ -1673,6 +1671,103 @@ pub mod sync_meta_keys {
     pub const NETWORK_IDENTITY: &[u8] = b"network_identity";
     /// Genesis economic baseline (bincode `GenesisBaseline`), derived at block 0.
     pub const GENESIS_BASELINE: &[u8] = b"genesis_baseline";
+}
+
+// -- Reorg event history (CF_SYNC_META) --
+
+/// Reorg-event history key: `reorg:<13-digit ms>:<32 hex chars>` (52 bytes).
+///
+/// The millisecond field is zero-padded to a fixed width and the uuid segment
+/// is fixed-length hex, so lexicographic key order **is** chronological order.
+/// The listing path pages through this range with a keyset cursor and depends
+/// on that equivalence; `decode_reorg_event_key` enforces the shape on read so
+/// a key that would break the ordering fails loudly instead of silently
+/// reordering the history.
+pub const REORG_EVENT_KEY_PREFIX: &[u8] = b"reorg:";
+/// Exclusive upper bound of the history range. `;` is `:` + 1, so the range
+/// `[reorg:, reorg;)` holds exactly the history keys and cannot wander into
+/// other sync-meta keys that merely start with `reorg` (`_` sorts above `;`).
+pub const REORG_EVENT_KEY_PREFIX_END: &[u8] = b"reorg;";
+/// Fixed width of the millisecond field; covers 1970-01-01 .. 2286-11-20.
+pub const REORG_EVENT_MS_DIGITS: usize = 13;
+/// Fixed width of the uuid-v4 hex field (16 bytes).
+pub const REORG_EVENT_UUID_HEX_LEN: usize = 32;
+pub const REORG_EVENT_KEY_SIZE: usize = 6 + REORG_EVENT_MS_DIGITS + 1 + REORG_EVENT_UUID_HEX_LEN;
+/// Exclusive upper bound of the millisecond field, set by its fixed width.
+const REORG_EVENT_MS_LIMIT: i64 = 10_000_000_000_000;
+
+/// Build the history key for one reorg observation.
+///
+/// Fails when the host clock is outside the representable window rather than
+/// emitting a key whose width breaks the ordering invariant.
+pub fn encode_reorg_event_key(detected_at_ms: i64, uuid: &[u8; 16]) -> anyhow::Result<String> {
+    if !(0..REORG_EVENT_MS_LIMIT).contains(&detected_at_ms) {
+        anyhow::bail!(
+            "reorg event timestamp outside representable key range: detected_at_ms={}, allowed=0..{}",
+            detected_at_ms,
+            REORG_EVENT_MS_LIMIT
+        );
+    }
+    Ok(format!(
+        "reorg:{:0width$}:{}",
+        detected_at_ms,
+        crate::bytes_to_hex(uuid),
+        width = REORG_EVENT_MS_DIGITS
+    ))
+}
+
+/// Millisecond prefix shared by every key of one observation instant.
+pub fn reorg_event_key_ms_prefix(detected_at_ms: i64) -> anyhow::Result<String> {
+    if !(0..REORG_EVENT_MS_LIMIT).contains(&detected_at_ms) {
+        anyhow::bail!(
+            "reorg event timestamp outside representable key range: detected_at_ms={}, allowed=0..{}",
+            detected_at_ms,
+            REORG_EVENT_MS_LIMIT
+        );
+    }
+    Ok(format!(
+        "reorg:{:0width$}:",
+        detected_at_ms,
+        width = REORG_EVENT_MS_DIGITS
+    ))
+}
+
+/// Parse the detection millisecond out of a history key, enforcing the exact
+/// key shape that makes lexicographic order chronological.
+pub fn decode_reorg_event_key(key: &[u8]) -> anyhow::Result<i64> {
+    if key.len() != REORG_EVENT_KEY_SIZE || !key.starts_with(REORG_EVENT_KEY_PREFIX) {
+        anyhow::bail!(
+            "malformed reorg event key: expected {} bytes of `reorg:<{}-digit ms>:<{} hex>`, got 0x{}",
+            REORG_EVENT_KEY_SIZE,
+            REORG_EVENT_MS_DIGITS,
+            REORG_EVENT_UUID_HEX_LEN,
+            crate::bytes_to_hex(key)
+        );
+    }
+    let ms_end = REORG_EVENT_KEY_PREFIX.len() + REORG_EVENT_MS_DIGITS;
+    let ms = &key[REORG_EVENT_KEY_PREFIX.len()..ms_end];
+    let uuid = &key[ms_end + 1..];
+    if key[ms_end] != b':'
+        || !ms.iter().all(u8::is_ascii_digit)
+        || !uuid.iter().all(u8::is_ascii_hexdigit)
+    {
+        anyhow::bail!(
+            "malformed reorg event key: expected `reorg:<{}-digit ms>:<{} hex>`, got 0x{}",
+            REORG_EVENT_MS_DIGITS,
+            REORG_EVENT_UUID_HEX_LEN,
+            crate::bytes_to_hex(key)
+        );
+    }
+    std::str::from_utf8(ms)
+        .expect("ascii digits are valid utf8")
+        .parse::<i64>()
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "invalid millisecond field in reorg event key 0x{}: {}",
+                crate::bytes_to_hex(key),
+                e
+            )
+        })
 }
 
 // -- Fiber Channels --
@@ -1768,6 +1863,70 @@ pub fn decode_addr_fiber_channel_key(key: &[u8]) -> (&[u8], &[u8]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_reorg_event_key_roundtrip_and_shape() {
+        let key = encode_reorg_event_key(1_700_000_123_456, &[0xAB; 16]).unwrap();
+        assert_eq!(key.len(), REORG_EVENT_KEY_SIZE);
+        assert_eq!(key, format!("reorg:1700000123456:{}", "ab".repeat(16)));
+        assert_eq!(
+            decode_reorg_event_key(key.as_bytes()).unwrap(),
+            1_700_000_123_456
+        );
+        assert!(key.as_bytes().starts_with(REORG_EVENT_KEY_PREFIX));
+        assert!(key.as_bytes() < REORG_EVENT_KEY_PREFIX_END);
+    }
+
+    /// Zero padding is what makes lexicographic key order chronological, which
+    /// the history listing and its keyset cursor depend on.
+    #[test]
+    fn test_reorg_event_key_pads_millisecond_field() {
+        let key = encode_reorg_event_key(42, &[0x00; 16]).unwrap();
+        assert_eq!(&key[..19], "reorg:0000000000042");
+        let later = encode_reorg_event_key(1_700_000_000_000, &[0x00; 16]).unwrap();
+        assert!(key < later);
+    }
+
+    #[test]
+    fn test_reorg_event_key_rejects_unrepresentable_timestamps() {
+        for ms in [-1i64, 10_000_000_000_000, i64::MAX] {
+            let err = encode_reorg_event_key(ms, &[0u8; 16]).unwrap_err();
+            assert!(
+                err.to_string()
+                    .contains("reorg event timestamp outside representable key range"),
+                "unexpected error for {ms}: {err}"
+            );
+            assert!(reorg_event_key_ms_prefix(ms).is_err());
+        }
+    }
+
+    #[test]
+    fn test_decode_reorg_event_key_rejects_malformed_keys() {
+        let valid = encode_reorg_event_key(1_700_000_123_456, &[0xAB; 16]).unwrap();
+        for bad in [
+            b"reorg:1:ab".to_vec(),
+            b"reorg_latest_event".to_vec(),
+            valid.as_bytes()[..valid.len() - 1].to_vec(),
+            // right length, non-digit millisecond field
+            format!("reorg:17000001234x6:{}", "ab".repeat(16)).into_bytes(),
+            // right length, non-hex uuid field
+            format!("reorg:1700000123456:{}z", "ab".repeat(15) + "a").into_bytes(),
+        ] {
+            let err = decode_reorg_event_key(&bad).unwrap_err();
+            assert!(
+                err.to_string().contains("malformed reorg event key"),
+                "unexpected error for {:?}: {err}",
+                String::from_utf8_lossy(&bad)
+            );
+        }
+    }
+
+    #[test]
+    fn test_reorg_event_key_ms_prefix_matches_full_key() {
+        let prefix = reorg_event_key_ms_prefix(1_700_000_123_456).unwrap();
+        let key = encode_reorg_event_key(1_700_000_123_456, &[0x01; 16]).unwrap();
+        assert!(key.starts_with(&prefix));
+    }
 
     #[test]
     fn test_outpoint_roundtrip() {

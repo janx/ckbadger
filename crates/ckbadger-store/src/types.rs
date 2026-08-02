@@ -1297,12 +1297,52 @@ pub struct DeepForkInfo {
     pub fork_point: i64,
 }
 
+/// How the indexer answered a detected fork.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ReorgEventKind {
+    /// Depth within the automatic limit: rolled back and re-synced in place.
+    Automatic,
+    /// Depth beyond the automatic limit: sync paused for operator intervention.
+    Deep,
+}
+
+/// One persisted reorg observation.
+///
+/// This is a log record, so it stores the observation verbatim: every field is
+/// what the writer was handed at detection time, and nothing is re-derived at
+/// read time from chain state that may since have moved. `/forks` reports these
+/// fields directly, so a field that is not recorded here cannot be reported.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReorgEvent {
+    /// Unix seconds at detection.
     pub detected_at: i64,
-    pub rollback_from: i64,
-    pub rollback_to: i64,
+    pub kind: ReorgEventKind,
+    /// Last common ancestor: the block the DB was rolled back to.
+    pub fork_point: i64,
+    pub fork_point_hash: Vec<u8>,
+    /// DB tip on the abandoned branch at detection time.
+    pub old_tip: i64,
+    pub old_tip_hash: Vec<u8>,
+    /// Chain tip on the winning branch at detection time.
+    pub new_tip: i64,
+    pub new_tip_hash: Vec<u8>,
     pub depth: i32,
+    /// Blocks actually removed by the rollback (0 for a paused deep fork,
+    /// which rolls nothing back).
+    pub orphaned_blocks: i64,
+    /// Transactions actually removed by the rollback.
+    pub orphaned_txs: i64,
+}
+
+/// One history row: the persisted event plus the identity of its history key.
+#[derive(Debug, Clone)]
+pub struct ReorgEventRecord {
+    /// Full `reorg:<ms>:<uuid>` history key; also the pagination cursor.
+    pub key: String,
+    /// Detection time in milliseconds, parsed from the key. This is the public
+    /// event id: the uuid segment only breaks same-millisecond ties.
+    pub detected_at_ms: i64,
+    pub event: ReorgEvent,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

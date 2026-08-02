@@ -1805,3 +1805,71 @@ fn test_rollback_resets_cutoff_bucket_unique_addr_sets() {
     assert_eq!(final_hour_set, HashSet::from([addr_a, addr_c]));
     assert!(!final_hour_set.contains(&addr_b));
 }
+
+/// The DAO singleton aggregates (`dao_latest_stats`, `dao_top_depositors`) are
+/// tip-scoped derived rows that the indexer rewrites unconditionally right
+/// after a rollback commits. Deleting them inside the rollback batch opens a
+/// window in which the read path finds no singleton at all — an absence the API
+/// cannot tell apart from "never written", which is how `/dao/top-depositors`
+/// ended up serving an empty leaderboard for ~35-40s after every reorg.
+/// Rollback must leave the previous row in place for the refresh to overwrite.
+#[test]
+fn test_rollback_preserves_dao_singleton_aggregates() {
+    use ckbadger_store::types::{DaoLatestStatistics, DaoTopDepositorEntry, DaoTopDepositors};
+
+    let (store, append_store) = setup_split_stores();
+    let lock_hash = vec![0xF1; 32];
+    for i in 1..=10 {
+        insert_full_block(&store, Some(append_store.as_ref()), i, &lock_hash);
+    }
+    populate_derived_cfs(&store, &lock_hash, 10);
+
+    store
+        .put_dao_top_depositors(&DaoTopDepositors {
+            tip_block_number: 10,
+            depositors: vec![DaoTopDepositorEntry {
+                lock_script_hash: lock_hash.clone(),
+                total_capacity: 10_200_000_000,
+                deposit_count: 1,
+                average_deposit_ms: 86_400_000.0,
+            }],
+        })
+        .unwrap();
+
+    let latest = DaoLatestStatistics {
+        tip_block_number: 10,
+        total_deposited: 10_200_000_000,
+        total_depositors: 1,
+        active_deposits: 1,
+        total_compensation_paid: 0,
+        unclaimed_compensation: 0,
+        average_deposit_days: "1 days".to_string(),
+        estimated_apc: "2.00".to_string(),
+        mining_reward: 0,
+        deposit_compensation: 0,
+        burnt: 0,
+        pending_withdrawal_capacity: 0,
+    };
+    let latest_key = ckbadger_store::keys::encode_stats_key(
+        ckbadger_store::keys::STATS_PREFIX_DAO_LATEST_STATS,
+        b"latest",
+    );
+    let mut batch = StoreBatch::new(&store);
+    batch.put_stats(&latest_key, &bincode::serialize(&latest).unwrap());
+    batch.commit().unwrap();
+
+    store
+        .rollback_to_block_with_append_only_store(5, Some(append_store.as_ref()))
+        .unwrap();
+
+    assert!(
+        store.get_dao_top_depositors().unwrap().is_some(),
+        "rollback must not delete dao_top_depositors: the API cannot distinguish \
+         the gap from a never-written singleton and serves an empty leaderboard"
+    );
+    assert!(
+        store.get_latest_dao_statistics().unwrap().is_some(),
+        "rollback must not delete dao_latest_stats: the post-rollback refresh \
+         overwrites it in place"
+    );
+}
