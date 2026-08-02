@@ -2477,4 +2477,25 @@ mod tests {
         assert_eq!(err.0, axum::http::StatusCode::INTERNAL_SERVER_ERROR);
         assert!(err.1 .0.message.contains("inputs/outputs invariant broken"));
     }
+
+    /// A script replay that failed is persisted as the `-1` marker and must be
+    /// served as `failed` — never as a `done` cycle count. Guards the surface
+    /// that reported an aborted Nervos DAO script group as an authoritative
+    /// total.
+    #[test]
+    fn test_derive_cycles_status_never_reports_failed_replay_as_done() {
+        assert_eq!(
+            derive_cycles_status(Some(-1), false),
+            Some("failed".to_string())
+        );
+        // Not yet calculated stays pending, so the worker can pick it up.
+        assert_eq!(
+            derive_cycles_status(None, false),
+            Some("pending".to_string())
+        );
+        // A successful replay is the only case that reports a number.
+        assert_eq!(derive_cycles_status(Some(3_380_228), false), None);
+        // Cellbase transactions run no scripts; consensus counts them as 0.
+        assert_eq!(derive_cycles_status(Some(0), true), None);
+    }
 }

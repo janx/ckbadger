@@ -17,18 +17,31 @@ pub struct MockInfo {
     pub header_deps: Vec<MockHeader>,
 }
 
+/// Mirrors `ckb_mock_tx_types::ReprMockInput`.
+///
+/// `header` is the cell's *header association*: the hash of the block that
+/// committed the transaction which created this cell. The node derives it for
+/// every resolved cell (`CellMeta::transaction_info`), and scripts read it back
+/// with `load_header(source = Input)` — the Nervos DAO type script does exactly
+/// that in both withdraw phases. Upstream types it `Option<H256>`, but a cell
+/// consumed by a committed transaction always has a committing block, so an
+/// unresolvable one is an invariant violation, not a `None`.
 #[derive(Debug, Serialize)]
 pub struct MockInput {
     pub input: Input,
     pub output: Output,
     pub data: String,
+    pub header: String,
 }
 
+/// Mirrors `ckb_mock_tx_types::ReprMockCellDep`; see [`MockInput::header`] for
+/// the header association, which `load_header(source = CellDep)` reads back.
 #[derive(Debug, Serialize)]
 pub struct MockCellDep {
     pub cell_dep: CellDep,
     pub output: Output,
     pub data: String,
+    pub header: String,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -219,18 +232,7 @@ pub async fn calculate_cycles(ckb_rpc_url: &str, tx_hash: &str) -> Result<i64, S
     // Consensus pins VM selection to the epoch of the block that COMMITTED the
     // transaction (RFC0032/RFC0049). Without a commit block there is no epoch,
     // so cycles are undefined — fail fast instead of guessing a VM.
-    if tx_status.status != "committed" {
-        return Err(format!(
-            "cannot calculate cycles for tx {}: tx status is '{}', not 'committed'",
-            tx_hash, tx_status.status
-        ));
-    }
-    let block_hash = tx_status.block_hash.ok_or_else(|| {
-        format!(
-            "cannot calculate cycles for tx {}: status is 'committed' but block_hash is missing",
-            tx_hash
-        )
-    })?;
+    let block_hash = committed_block_hash(tx_hash, &tx_status)?;
 
     let epochs = fetch_vm_activation_epochs(ckb_rpc_url).await?;
     let header = fetch_header(ckb_rpc_url, &block_hash).await?;
@@ -284,6 +286,62 @@ async fn fetch_transaction(
     })?;
 
     Ok((tx, with_status.tx_status))
+}
+
+/// The hash of the block that committed `tx_hash`.
+///
+/// Single source for "which block does this transaction belong to", used both
+/// for consensus VM selection and for every resolved cell's header association.
+/// A transaction that is not committed has no such block, so this fails fast
+/// instead of substituting a placeholder.
+fn committed_block_hash(tx_hash: &str, status: &TxStatus) -> Result<String, String> {
+    if status.status != "committed" {
+        return Err(format!(
+            "transaction {} has status '{}', not 'committed'",
+            tx_hash, status.status
+        ));
+    }
+    status.block_hash.clone().ok_or_else(|| {
+        format!(
+            "transaction {} is 'committed' but the node returned no block_hash",
+            tx_hash
+        )
+    })
+}
+
+/// Resolve the committing block of `tx_hash` without downloading its body.
+///
+/// Verbosity `0x1` returns the `tx_status` only (`transaction: null`), which is
+/// all the header association needs — the genesis system-script transaction
+/// alone is 2.4 MB, and cell payloads are resolved separately.
+async fn fetch_committing_block_hash(ckb_rpc_url: &str, tx_hash: &str) -> Result<String, String> {
+    let client = reqwest::Client::new();
+    let body = serde_json::json!({
+        "id": 1,
+        "jsonrpc": "2.0",
+        "method": "get_transaction",
+        "params": [tx_hash, "0x1"]
+    });
+
+    let resp: RpcResponse<TransactionWithStatus> = client
+        .post(ckb_rpc_url)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("RPC request failed: {}", e))?
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse RPC response: {}", e))?;
+
+    if let Some(err) = resp.error {
+        return Err(format!("RPC error: {}", err.message));
+    }
+
+    let with_status = resp
+        .result
+        .ok_or_else(|| format!("Transaction {} not found", tx_hash))?;
+
+    committed_block_hash(tx_hash, &with_status.tx_status)
 }
 
 /// Fetch the VM activation epochs (RFC0032 -> VM1, RFC0049 -> VM2) from the
@@ -381,6 +439,33 @@ fn parse_epoch_number(epoch_hex: &str) -> Result<u64, String> {
     Ok(parse_hex_u64(epoch_hex)? & 0xFF_FFFF)
 }
 
+/// A cell resolved from chain data, together with the block that created it.
+struct ResolvedCell {
+    output: RpcOutput,
+    data: String,
+    /// Hash of the block that committed the creating transaction; see
+    /// [`MockInput::header`].
+    block_hash: String,
+}
+
+/// Resolve one out point into the cell payload plus its header association.
+async fn fetch_cell(ckb_rpc_url: &str, out_point: &RpcOutPoint) -> Result<ResolvedCell, String> {
+    let (output, data) = fetch_cell_with_data(ckb_rpc_url, out_point).await?;
+    let block_hash = fetch_committing_block_hash(ckb_rpc_url, &out_point.tx_hash)
+        .await
+        .map_err(|e| {
+            format!(
+                "cannot resolve header association for cell {}:{}: {}",
+                out_point.tx_hash, out_point.index, e
+            )
+        })?;
+    Ok(ResolvedCell {
+        output,
+        data,
+        block_hash,
+    })
+}
+
 async fn fetch_cell_with_data(
     ckb_rpc_url: &str,
     out_point: &RpcOutPoint,
@@ -453,11 +538,17 @@ async fn fetch_cell_from_transaction(
         .get(index)
         .cloned()
         .ok_or_else(|| format!("Output index {} out of range", index))?;
-    let data = tx
-        .outputs_data
-        .get(index)
-        .cloned()
-        .unwrap_or_else(|| "0x".to_string());
+    // outputs_data is 1:1 with outputs in the molecule layout; a short vector
+    // means the node returned a malformed transaction, not an empty cell.
+    let data = tx.outputs_data.get(index).cloned().ok_or_else(|| {
+        format!(
+            "transaction {} has {} outputs but only {} outputs_data entries (index {})",
+            out_point.tx_hash,
+            tx.outputs.len(),
+            tx.outputs_data.len(),
+            index
+        )
+    })?;
 
     Ok((output, data))
 }
@@ -530,68 +621,80 @@ fn parse_dep_group_data(data: &str) -> Result<Vec<RpcOutPoint>, String> {
     Ok(out_points)
 }
 
+fn output_from_rpc(output: RpcOutput) -> Output {
+    Output {
+        capacity: output.capacity,
+        lock: Script {
+            code_hash: output.lock.code_hash,
+            hash_type: output.lock.hash_type,
+            args: output.lock.args,
+        },
+        type_script: output.type_script.map(|t| Script {
+            code_hash: t.code_hash,
+            hash_type: t.hash_type,
+            args: t.args,
+        }),
+    }
+}
+
+/// Assemble a mock input, carrying the resolved cell's header association.
+fn mock_input_from(input: &RpcInput, cell: ResolvedCell) -> MockInput {
+    MockInput {
+        input: Input {
+            previous_output: OutPoint {
+                tx_hash: input.previous_output.tx_hash.clone(),
+                index: input.previous_output.index.clone(),
+            },
+            since: input.since.clone(),
+        },
+        output: output_from_rpc(cell.output),
+        data: cell.data,
+        header: cell.block_hash,
+    }
+}
+
+/// Assemble a mock cell dep, carrying the resolved cell's header association.
+///
+/// Used both for the transaction's own cell deps and for the cells a
+/// `dep_group` expands into (those are always `code` deps).
+fn mock_cell_dep_from(out_point: &RpcOutPoint, dep_type: &str, cell: ResolvedCell) -> MockCellDep {
+    MockCellDep {
+        cell_dep: CellDep {
+            out_point: OutPoint {
+                tx_hash: out_point.tx_hash.clone(),
+                index: out_point.index.clone(),
+            },
+            dep_type: dep_type.to_string(),
+        },
+        output: output_from_rpc(cell.output),
+        data: cell.data,
+        header: cell.block_hash,
+    }
+}
+
 async fn build_mock_transaction(
     ckb_rpc_url: &str,
     tx: &RpcTransaction,
 ) -> Result<MockTransaction, String> {
     let mut mock_inputs = Vec::new();
     for input in &tx.inputs {
-        let (output, data) = fetch_cell_with_data(ckb_rpc_url, &input.previous_output).await?;
-        mock_inputs.push(MockInput {
-            input: Input {
-                previous_output: OutPoint {
-                    tx_hash: input.previous_output.tx_hash.clone(),
-                    index: input.previous_output.index.clone(),
-                },
-                since: input.since.clone(),
-            },
-            output: Output {
-                capacity: output.capacity,
-                lock: Script {
-                    code_hash: output.lock.code_hash,
-                    hash_type: output.lock.hash_type,
-                    args: output.lock.args,
-                },
-                type_script: output.type_script.map(|t| Script {
-                    code_hash: t.code_hash,
-                    hash_type: t.hash_type,
-                    args: t.args,
-                }),
-            },
-            data,
-        });
+        let cell = fetch_cell(ckb_rpc_url, &input.previous_output).await?;
+        mock_inputs.push(mock_input_from(input, cell));
     }
 
     let mut mock_cell_deps = Vec::new();
     for cell_dep in &tx.cell_deps {
-        let (output, data) = fetch_cell_with_data(ckb_rpc_url, &cell_dep.out_point).await?;
+        let cell = fetch_cell(ckb_rpc_url, &cell_dep.out_point).await?;
+        let group_data = cell.data.clone();
 
-        mock_cell_deps.push(MockCellDep {
-            cell_dep: CellDep {
-                out_point: OutPoint {
-                    tx_hash: cell_dep.out_point.tx_hash.clone(),
-                    index: cell_dep.out_point.index.clone(),
-                },
-                dep_type: cell_dep.dep_type.clone(),
-            },
-            output: Output {
-                capacity: output.capacity.clone(),
-                lock: Script {
-                    code_hash: output.lock.code_hash.clone(),
-                    hash_type: output.lock.hash_type.clone(),
-                    args: output.lock.args.clone(),
-                },
-                type_script: output.type_script.clone().map(|t| Script {
-                    code_hash: t.code_hash,
-                    hash_type: t.hash_type,
-                    args: t.args,
-                }),
-            },
-            data: data.clone(),
-        });
+        mock_cell_deps.push(mock_cell_dep_from(
+            &cell_dep.out_point,
+            &cell_dep.dep_type,
+            cell,
+        ));
 
         if cell_dep.dep_type == "dep_group" {
-            let referenced_out_points = parse_dep_group_data(&data)?;
+            let referenced_out_points = parse_dep_group_data(&group_data)?;
             for ref_out_point in referenced_out_points {
                 let already_exists = mock_cell_deps.iter().any(|d| {
                     d.cell_dep.out_point.tx_hash == ref_out_point.tx_hash
@@ -601,32 +704,8 @@ async fn build_mock_transaction(
                     continue;
                 }
 
-                let (ref_output, ref_data) =
-                    fetch_cell_with_data(ckb_rpc_url, &ref_out_point).await?;
-
-                mock_cell_deps.push(MockCellDep {
-                    cell_dep: CellDep {
-                        out_point: OutPoint {
-                            tx_hash: ref_out_point.tx_hash,
-                            index: ref_out_point.index,
-                        },
-                        dep_type: "code".to_string(),
-                    },
-                    output: Output {
-                        capacity: ref_output.capacity,
-                        lock: Script {
-                            code_hash: ref_output.lock.code_hash,
-                            hash_type: ref_output.lock.hash_type,
-                            args: ref_output.lock.args,
-                        },
-                        type_script: ref_output.type_script.map(|t| Script {
-                            code_hash: t.code_hash,
-                            hash_type: t.hash_type,
-                            args: t.args,
-                        }),
-                    },
-                    data: ref_data,
-                });
+                let ref_cell = fetch_cell(ckb_rpc_url, &ref_out_point).await?;
+                mock_cell_deps.push(mock_cell_dep_from(&ref_out_point, "code", ref_cell));
             }
         }
     }
@@ -820,7 +899,7 @@ async fn run_ckb_debugger_for_group(
     debug!("ckb-debugger stderr: {}", stderr);
 
     let combined = format!("{}\n{}", stdout, stderr);
-    parse_all_cycles_from_output(&combined)
+    parse_group_cycles(&combined, output.status.code())
 }
 
 async fn run_ckb_debugger(mock_tx: &MockTransaction, script_version: u8) -> Result<i64, String> {
@@ -843,7 +922,14 @@ async fn run_ckb_debugger(mock_tx: &MockTransaction, script_version: u8) -> Resu
     let groups = enumerate_script_groups(mock_tx);
     if groups.is_empty() {
         let _ = tokio::fs::remove_file(&temp_file).await;
-        return Ok(0);
+        // Every committed non-cellbase transaction resolves at least one input
+        // cell, hence at least one lock group. Zero groups means the mock
+        // transaction was built wrong; reporting 0 cycles would be a lie.
+        return Err(
+            "mock transaction has no script groups: a committed transaction always runs \
+             at least one lock script"
+                .to_string(),
+        );
     }
 
     let mut total_cycles: i64 = 0;
@@ -866,6 +952,69 @@ async fn run_ckb_debugger(mock_tx: &MockTransaction, script_version: u8) -> Resu
 
     let _ = tokio::fs::remove_file(&temp_file).await;
     Ok(total_cycles)
+}
+
+/// The `Run result: <code>` line ckb-debugger prints for every script run.
+fn parse_run_result(output: &str) -> Option<i64> {
+    output.lines().find_map(|line| {
+        line.trim()
+            .strip_prefix("Run result:")
+            .and_then(|rest| rest.trim().parse::<i64>().ok())
+    })
+}
+
+/// Cycles consumed by one script group, or an error if the group did not pass.
+///
+/// A script group only *has* a cycle count when it succeeds: consensus rejects
+/// a transaction whose script exits non-zero, so a failed run has no cycles to
+/// report. ckb-debugger still prints a partial `All cycles:` line for a failed
+/// run (and exits 254), so both the reported `Run result` and the child process
+/// exit code must be verified before any number is harvested.
+fn parse_group_cycles(output: &str, exit_code: Option<i32>) -> Result<i64, String> {
+    let run_result = parse_run_result(output).ok_or_else(|| {
+        format!(
+            "ckb-debugger reported no `Run result` line (exit {}): {}",
+            describe_exit_code(exit_code),
+            summarize_output(output)
+        )
+    })?;
+
+    if run_result != 0 {
+        return Err(format!(
+            "script group failed: ckb-debugger reported `Run result: {}` (exit {}): {}",
+            run_result,
+            describe_exit_code(exit_code),
+            summarize_output(output)
+        ));
+    }
+
+    if exit_code != Some(0) {
+        return Err(format!(
+            "ckb-debugger exited with {} despite `Run result: 0`: {}",
+            describe_exit_code(exit_code),
+            summarize_output(output)
+        ));
+    }
+
+    parse_all_cycles_from_output(output)
+}
+
+fn describe_exit_code(exit_code: Option<i32>) -> String {
+    match exit_code {
+        Some(code) => code.to_string(),
+        None => "signal (no exit code)".to_string(),
+    }
+}
+
+fn summarize_output(output: &str) -> String {
+    let trimmed = output.trim();
+    let truncated: String = trimmed.chars().take(500).collect();
+    let suffix = if truncated.len() < trimmed.len() {
+        "... (truncated)"
+    } else {
+        ""
+    };
+    format!("{}{}", truncated.replace('\n', " | "), suffix)
 }
 
 fn parse_all_cycles_from_output(output: &str) -> Result<i64, String> {
@@ -895,14 +1044,9 @@ fn parse_all_cycles_from_output(output: &str) -> Result<i64, String> {
         }
     }
 
-    let truncated_output = if output.len() > 500 {
-        format!("{}... (truncated)", &output[..500])
-    } else {
-        output.to_string()
-    };
     Err(format!(
         "Could not parse cycles from ckb-debugger output: {}",
-        truncated_output.replace('\n', " | ")
+        summarize_output(output)
     ))
 }
 
@@ -918,6 +1062,155 @@ mod tests {
         let output2 =
             "Run result: 0\nTotal cycles consumed: 7059(6.9K)\nTransfer cycles: 4537(4.4K)";
         assert_eq!(parse_all_cycles_from_output(output2), Ok(7059));
+    }
+
+    #[test]
+    fn test_parse_group_cycles_accepts_successful_run() {
+        // Verbatim ckb-debugger 1.0.0 output for the Nervos DAO type group of
+        // mainnet tx 0x6fa94cb2... once the header association is supplied.
+        let ok = "Run result: 0\nAll cycles: 14095(13.8K)\n";
+        assert_eq!(parse_group_cycles(ok, Some(0)), Ok(14095));
+    }
+
+    #[test]
+    fn test_parse_group_cycles_rejects_failed_run_result() {
+        // Verbatim ckb-debugger 1.0.0 output for the same DAO type group when
+        // `load_header(source = Input)` cannot resolve: the group aborts after
+        // 8270 cycles and the process exits 254. Harvesting that partial number
+        // is what made every DAO transaction report wrong cycles as `done`.
+        let failed = "Run result: 2\nAll cycles: 8270(8.1K)\n";
+        let err = parse_group_cycles(failed, Some(254)).unwrap_err();
+        assert!(err.contains("Run result: 2"), "unexpected error: {}", err);
+        assert!(
+            err.contains("254"),
+            "error must name the exit code: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_parse_group_cycles_rejects_negative_run_result() {
+        // Genesis transactions: consensus never executed their scripts, and a
+        // replay of the secp data-hash lock exits -2 after 15511 cycles.
+        let failed = "Run result: -2\nAll cycles: 15511(15.1K)\n";
+        let err = parse_group_cycles(failed, Some(254)).unwrap_err();
+        assert!(err.contains("Run result: -2"), "unexpected error: {}", err);
+        // The trap this guards: the cycles line alone parses cleanly, so
+        // without the run-result check the aborted run reports a number.
+        assert_eq!(parse_all_cycles_from_output(failed), Ok(15511));
+    }
+
+    #[test]
+    fn test_parse_group_cycles_rejects_nonzero_exit_without_run_result() {
+        // A crashed/aborted debugger prints no `Run result` at all.
+        let err = parse_group_cycles("thread 'main' panicked at ...\n", Some(101)).unwrap_err();
+        assert!(err.contains("no `Run result`"), "unexpected error: {}", err);
+    }
+
+    #[test]
+    fn test_parse_group_cycles_rejects_nonzero_exit_code() {
+        // Successful-looking output plus a non-zero exit is still a failure.
+        let err = parse_group_cycles("Run result: 0\nAll cycles: 100(100)\n", Some(1)).unwrap_err();
+        assert!(err.contains("exited with 1"), "unexpected error: {}", err);
+    }
+
+    #[test]
+    fn test_parse_group_cycles_rejects_signal_termination() {
+        let err = parse_group_cycles("Run result: 0\nAll cycles: 100(100)\n", None).unwrap_err();
+        assert!(err.contains("signal"), "unexpected error: {}", err);
+    }
+
+    #[test]
+    fn test_summarize_output_truncates_on_char_boundary() {
+        // Debugger output can carry multi-byte characters; byte slicing would
+        // panic mid-character.
+        let noisy = "Run result: 2\n".to_string() + &"✗".repeat(600);
+        let summary = summarize_output(&noisy);
+        assert!(summary.ends_with("... (truncated)"));
+        assert!(summary.starts_with("Run result: 2 | "));
+    }
+
+    const DEPOSIT_BLOCK_HASH: &str =
+        "0x41e2ea50e0557f06c6e791f75d466528bc6524d5aaefe07789d36208c0fdea7d";
+
+    fn resolved_cell(block_hash: &str) -> ResolvedCell {
+        ResolvedCell {
+            output: RpcOutput {
+                capacity: "0x2540be400".to_string(),
+                lock: RpcScript {
+                    code_hash: "0xaaa".to_string(),
+                    hash_type: "type".to_string(),
+                    args: "0x01".to_string(),
+                },
+                type_script: None,
+            },
+            data: "0x".to_string(),
+            block_hash: block_hash.to_string(),
+        }
+    }
+
+    /// The Nervos DAO type script calls `load_header(source = Input)` in both
+    /// withdraw phases. Without the header association the debugger answers
+    /// ItemMissing and the whole DAO group fails.
+    #[test]
+    fn test_mock_input_carries_header_association() {
+        let input = RpcInput {
+            previous_output: RpcOutPoint {
+                tx_hash: "0xf398".to_string(),
+                index: "0x0".to_string(),
+            },
+            since: "0x0".to_string(),
+        };
+        let mock = mock_input_from(&input, resolved_cell(DEPOSIT_BLOCK_HASH));
+        assert_eq!(mock.header, DEPOSIT_BLOCK_HASH);
+
+        // Field name and placement must match ckb_mock_tx_types::ReprMockInput.
+        let json = serde_json::to_value(&mock).unwrap();
+        assert_eq!(json["header"], DEPOSIT_BLOCK_HASH);
+        assert_eq!(json["input"]["previous_output"]["tx_hash"], "0xf398");
+    }
+
+    #[test]
+    fn test_mock_cell_dep_carries_header_association() {
+        let out_point = RpcOutPoint {
+            tx_hash: "0xe2fb".to_string(),
+            index: "0x1".to_string(),
+        };
+        let mock = mock_cell_dep_from(&out_point, "code", resolved_cell(DEPOSIT_BLOCK_HASH));
+        assert_eq!(mock.header, DEPOSIT_BLOCK_HASH);
+
+        let json = serde_json::to_value(&mock).unwrap();
+        assert_eq!(json["header"], DEPOSIT_BLOCK_HASH);
+        assert_eq!(json["cell_dep"]["dep_type"], "code");
+    }
+
+    #[test]
+    fn test_committed_block_hash_requires_a_commit_block() {
+        let committed = TxStatus {
+            status: "committed".to_string(),
+            block_hash: Some(DEPOSIT_BLOCK_HASH.to_string()),
+        };
+        assert_eq!(
+            committed_block_hash("0xf398", &committed),
+            Ok(DEPOSIT_BLOCK_HASH.to_string())
+        );
+
+        let pending = TxStatus {
+            status: "pending".to_string(),
+            block_hash: None,
+        };
+        assert!(committed_block_hash("0xf398", &pending)
+            .unwrap_err()
+            .contains("not 'committed'"));
+
+        // Committed without a hash is a node invariant violation, not a None.
+        let broken = TxStatus {
+            status: "committed".to_string(),
+            block_hash: None,
+        };
+        assert!(committed_block_hash("0xf398", &broken)
+            .unwrap_err()
+            .contains("no block_hash"));
     }
 
     #[test]
@@ -1139,6 +1432,101 @@ mod tests {
         }
     }
 
+    /// Zero script groups used to be reported as 0 cycles, which the API then
+    /// serves as "pending" forever. A committed transaction always resolves at
+    /// least one input cell, so no groups means the mock transaction is wrong.
+    #[tokio::test]
+    async fn test_run_ckb_debugger_rejects_mock_tx_without_script_groups() {
+        let mock_tx = MockTransaction {
+            mock_info: MockInfo {
+                inputs: vec![],
+                cell_deps: vec![],
+                header_deps: vec![],
+            },
+            tx: Transaction {
+                version: "0x0".to_string(),
+                cell_deps: vec![],
+                header_deps: vec![],
+                inputs: vec![],
+                outputs: vec![],
+                outputs_data: vec![],
+                witnesses: vec![],
+            },
+        };
+        let err = run_ckb_debugger(&mock_tx, 1)
+            .await
+            .expect_err("no script groups must not report 0 cycles");
+        assert!(
+            err.contains("no script groups"),
+            "unexpected error: {}",
+            err
+        );
+    }
+
+    /// Nervos DAO withdraw phases, which are the transactions that need the
+    /// header association: the DAO type script calls `load_header(Input)` for
+    /// the deposit/withdraw block. Without it the DAO group aborts and its
+    /// partial cycles used to be summed into the total.
+    ///
+    /// Expected values are consensus truth, independently reported by the
+    /// official explorer. Requires a synced mainnet CKB node plus ckb-debugger.
+    #[tokio::test]
+    #[ignore = "requires local mainnet CKB node + ckb-debugger binary"]
+    async fn test_calculate_cycles_includes_dao_script_group() {
+        let rpc_url = std::env::var("CKBADGER_TEST_RPC")
+            .unwrap_or_else(|_| "http://127.0.0.1:8114".to_string());
+
+        let cases: [(&str, i64, &str); 2] = [
+            (
+                // Phase 1, withdraw request (block 10457626, epoch 7995 -> VM1).
+                // Broken total was 3_423_276 (DAO group aborted at 8_364).
+                "0xf398adf5ff836bbdd9cf67af5557c470447c07e85601bf5d02b0f28f866a6aef",
+                3_428_744,
+                "DAO phase 1 (withdraw request)",
+            ),
+            (
+                // Phase 2, completion (block 10463622, epoch 8000 -> VM1).
+                // Broken total was 3_374_403 (DAO group aborted at 8_270).
+                "0x6fa94cb21df82144505c5a9e5d3197e431ea0296a09c55a3e83e669f9ac01ab9",
+                3_380_228,
+                "DAO phase 2 (withdraw completion)",
+            ),
+        ];
+
+        for (tx_hash, expected, phase) in cases {
+            let cycles = calculate_cycles(&rpc_url, tx_hash)
+                .await
+                .unwrap_or_else(|e| {
+                    panic!("calculate_cycles failed for {} ({}): {}", tx_hash, phase, e)
+                });
+            println!("{} ({}): {} cycles", tx_hash, phase, cycles);
+            assert_eq!(
+                cycles, expected,
+                "cycles mismatch for {} ({})",
+                tx_hash, phase
+            );
+        }
+    }
+
+    /// Genesis transactions were never script-verified by consensus, so a
+    /// replay legitimately fails (`Run result: -2` after 15511 cycles). The
+    /// failure must surface as an error instead of being served as `done`.
+    #[tokio::test]
+    #[ignore = "requires local mainnet CKB node + ckb-debugger binary"]
+    async fn test_calculate_cycles_rejects_failed_genesis_replay() {
+        let rpc_url = std::env::var("CKBADGER_TEST_RPC")
+            .unwrap_or_else(|_| "http://127.0.0.1:8114".to_string());
+
+        let err = calculate_cycles(
+            &rpc_url,
+            "0x71a7ba8fc96349fea0ed3a5c47992e3b4084b031a42264a018e0072e8172e46c",
+        )
+        .await
+        .expect_err("a failed script replay must not produce a cycle count");
+        println!("genesis tx error: {}", err);
+        assert!(err.contains("Run result: -2"), "unexpected error: {}", err);
+    }
+
     #[test]
     fn test_enumerate_script_groups_single_lock() {
         let lock = Script {
@@ -1162,6 +1550,7 @@ mod tests {
                         type_script: None,
                     },
                     data: "0x".to_string(),
+                    header: DEPOSIT_BLOCK_HASH.to_string(),
                 }],
                 cell_deps: vec![],
                 header_deps: vec![],
@@ -1202,6 +1591,7 @@ mod tests {
                 type_script: None,
             },
             data: "0x".to_string(),
+            header: DEPOSIT_BLOCK_HASH.to_string(),
         };
         let mock_tx = MockTransaction {
             mock_info: MockInfo {
@@ -1251,6 +1641,7 @@ mod tests {
                         type_script: Some(type_s.clone()),
                     },
                     data: "0x".to_string(),
+                    header: DEPOSIT_BLOCK_HASH.to_string(),
                 }],
                 cell_deps: vec![],
                 header_deps: vec![],
@@ -1299,6 +1690,7 @@ mod tests {
                         type_script: None,
                     },
                     data: "0x".to_string(),
+                    header: DEPOSIT_BLOCK_HASH.to_string(),
                 }],
                 cell_deps: vec![],
                 header_deps: vec![],
