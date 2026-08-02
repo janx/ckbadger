@@ -353,6 +353,46 @@ describe('AddressDetailPage', () => {
     });
   });
 
+  it('never renders the address transaction count as an activity total', async () => {
+    // R4-G item 3: activities exclude cellbase, so the address's transaction
+    // count is not a total this list can ever page to. The API stopped
+    // declaring one; the page must not substitute `transactionsCount`.
+    vi.mocked(api.getAddress).mockResolvedValue({
+      ...mockAddressWithLockScriptInfo,
+      transactionsCount: 4727769,
+    });
+    vi.mocked(api.getAddressActivities).mockResolvedValue({
+      data: [
+        {
+          txHash: '0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+          blockNumber: 123,
+          txIndex: 0,
+          timestamp: '2026-02-20T00:00:00Z',
+          ckbDelta: '100000000',
+          usedDelta: '0',
+          isCellbase: false,
+          participants: [],
+          tags: 1,
+          typeCalls: [],
+          lockCalls: [],
+          protocolActions: [],
+          itemDeltas: [],
+        },
+      ],
+      limit: 50,
+      hasMore: true,
+      nextCursor: '123:0',
+    });
+
+    render(<AddressDetailPage />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Next' })).toBeInTheDocument();
+    });
+    expect(screen.queryByText(/4,727,769 activities/)).not.toBeInTheDocument();
+    expect(screen.getByText(/Showing 1-1 activities/)).toBeInTheDocument();
+  });
+
   it('resets activity filter and pagination cursors when route address changes', async () => {
     const addrA = mockAddressWithLockScriptInfo.address!;
     const lockA = mockAddressWithLockScriptInfo.lockScriptHash;

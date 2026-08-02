@@ -835,7 +835,6 @@ async fn get_address_activities(
     let store = state.store.clone();
     let ao_store = state.append_only_store.clone();
     let network = state.ckb_network.clone();
-    let lock_hash_for_total = lock_hash.clone();
     let lock_hash_clone = lock_hash.clone();
     let (next_cursor, activities) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
         let results = list_canonical_activities_page(
@@ -885,28 +884,22 @@ async fn get_address_activities(
     .map_err(|e| ApiError::internal(e.to_string()))?
     .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    // Total is only meaningful without a filter (pre-computed == unfiltered txs_count).
-    if params.filter.is_none() {
-        let total = state
-            .store
-            .get_addr_balance(&lock_hash_for_total)
-            .ok()
-            .flatten()
-            .map(|ab| ab.txs_count)
-            .unwrap_or(0);
-        ok(CursorPaginatedResponse::new(
-            activities,
-            total,
-            limit as i64,
-            next_cursor,
-        ))
-    } else {
-        ok(CursorPaginatedResponse::without_total(
-            activities,
-            limit as i64,
-            next_cursor,
-        ))
-    }
+    // No total: an activity count per address is not stored anywhere, and the
+    // one count that is — `AddressBalance.txs_count` — counts *transactions*.
+    // Activities are a strictly different set: cellbase rows are deliberately
+    // never persisted in CF_TX_ACTIONS, and `is_canonical_activity` drops more
+    // still. Reporting txs_count therefore declared a total this endpoint can
+    // never page to (mainnet block 12000000's cellbase-output address: 4_727_769
+    // declared against 1_682 rows enumerated to exhaustion). Deriving a real one
+    // means the full canonical scan `list_canonical_activities_page` performs,
+    // over the whole address — unbounded exactly where it matters most.
+    // `has_more`/`next_cursor` remain the honest bound, as they already are for
+    // the filtered case and for /tokens.
+    ok(CursorPaginatedResponse::without_total(
+        activities,
+        limit as i64,
+        next_cursor,
+    ))
 }
 
 async fn get_global_activities(

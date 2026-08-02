@@ -870,9 +870,14 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                     {(activities?.hasMore || activitiesPagination.hasPrevious) && (
                       <TerminalPanelFooter className="flex justify-center">
                         <CursorPagination
-                          total={activityFilter === 'all' ? address.transactionsCount : undefined}
+                          // Activities exclude cellbase, so the address's
+                          // transaction count is not a total this list can page
+                          // to. Render whatever total the API declares — none,
+                          // today — and show the enumerated range instead.
+                          total={activities?.total ?? undefined}
                           totalLabel="activities"
                           pageSize={DEFAULT_PAGE_SIZE}
+                          currentCount={activities?.data?.length ?? 0}
                           hasMore={activities?.hasMore ?? false}
                           hasPrevious={activitiesPagination.hasPrevious}
                           page={activitiesPagination.page}
