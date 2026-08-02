@@ -5,7 +5,7 @@ use axum::{
 };
 use ckb_types::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::response::{ok, ApiError, ApiResult};
@@ -565,6 +565,58 @@ pub struct ProposalCommitmentWindow {
     pub latest_commit_block: i64,
 }
 
+/// One entry of a block's proposal zone: the short id, plus the uncle that
+/// carried it when it did not come from the block's own `proposals()`.
+struct ZoneProposal {
+    short_id: Vec<u8>,
+    /// `(uncle block number, uncle block hash)`; `None` for a direct proposal.
+    uncle: Option<(i64, Vec<u8>)>,
+}
+
+/// The whole proposal zone CKB consensus attributes to `block`: its own
+/// `proposals()` plus the proposal zones of the uncles it embeds.
+///
+/// A proposal borne by an uncle belongs to the main-chain block that embeds
+/// the uncle — that is the block whose commitment window the proposal opens —
+/// which is the same rule `/transactions/{hash}/lifecycle` applies. Ignoring
+/// uncle zones dropped those proposals from the graph entirely and undercounted
+/// `totalProposals`.
+///
+/// The block's own zone wins over its uncles' when both carry an id, and an id
+/// listed by two embedded uncles is one proposal, attributed to the first uncle
+/// in embedding order. The uncle data already travels inside the block, so this
+/// costs no extra I/O.
+fn block_proposal_zone(block: &ckb_types::core::BlockView) -> Vec<ZoneProposal> {
+    let mut seen: HashSet<Vec<u8>> = HashSet::new();
+    let mut zone = Vec::new();
+
+    for proposal_id in block.data().proposals().into_iter() {
+        let short_id = proposal_id.raw_data().to_vec();
+        if seen.insert(short_id.clone()) {
+            zone.push(ZoneProposal {
+                short_id,
+                uncle: None,
+            });
+        }
+    }
+
+    for uncle in block.uncles() {
+        let uncle_number = uncle.number() as i64;
+        let uncle_hash = uncle.hash().raw_data().to_vec();
+        for proposal_id in uncle.data().proposals().into_iter() {
+            let short_id = proposal_id.raw_data().to_vec();
+            if seen.insert(short_id.clone()) {
+                zone.push(ZoneProposal {
+                    short_id,
+                    uncle: Some((uncle_number, uncle_hash.clone())),
+                });
+            }
+        }
+    }
+
+    zone
+}
+
 #[instrument(skip(state), level = "debug")]
 async fn get_proposal_graph(
     State(state): State<Arc<AppState>>,
@@ -586,13 +638,10 @@ async fn get_proposal_graph(
     let earliest_commit = block_number + W_CLOSE;
     let latest_commit = block_number + W_FAR;
 
-    // Get proposal short IDs from CKB store
-    let proposals: Vec<Vec<u8>> = if let Some(ref ckb_store) = state.ckb_store {
+    // Get the block's full proposal zone (own + embedded uncles') from CKB store
+    let proposals: Vec<ZoneProposal> = if let Some(ref ckb_store) = state.ckb_store {
         if let Some(block_view) = ckb_store.get_block_by_number(block_number as u64) {
-            let proposal_ids = block_view.data().proposals();
-            (0..proposal_ids.len())
-                .map(|i| proposal_ids.get(i).unwrap().raw_data().to_vec())
-                .collect()
+            block_proposal_zone(&block_view)
         } else {
             Vec::new()
         }
@@ -623,7 +672,8 @@ async fn get_proposal_graph(
 
     // For each proposal, try to find the committed transaction
     // Proposal short ID is the first 10 bytes of the tx hash
-    for proposal_id in &proposals {
+    for proposal in &proposals {
+        let proposal_id = &proposal.short_id;
         let proposal_id_hex = format!("0x{}", hex::encode(proposal_id));
 
         // Search for the transaction that matches this proposal ID
@@ -664,7 +714,16 @@ async fn get_proposal_graph(
                     "proposalId": proposal_id_hex,
                     "txHash": tx_hash_hex,
                     "commitBlock": commit_block,
-                    "distance": distance
+                    "distance": distance,
+                    // Names the embedded uncle when the id came from its
+                    // proposal zone rather than the source block's own.
+                    // `null` for a directly proposed id.
+                    "proposedInUncle": proposal.uncle.as_ref().map(|(number, hash)| {
+                        serde_json::json!({
+                            "blockNumber": number,
+                            "blockHash": format!("0x{}", hex::encode(hash)),
+                        })
+                    }),
                 }),
             });
 
