@@ -792,8 +792,6 @@ async fn test_date_keyed_charts_emit_canonical_iso_dates() {
                     avg_difficulty: difficulty,
                     block_count: 100,
                     total_uncles: 2,
-                    block_time_sum_ms: 100 * 10_000,
-                    block_time_count: 100,
                 },
             )
             .unwrap();

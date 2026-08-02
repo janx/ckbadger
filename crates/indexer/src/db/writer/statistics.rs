@@ -399,8 +399,6 @@ impl BatchWriter {
                 avg_difficulty,
                 block_count,
                 total_uncles,
-                block_time_sum_ms: 0,
-                block_time_count: 0,
             },
         };
 

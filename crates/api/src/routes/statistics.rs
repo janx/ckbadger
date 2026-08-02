@@ -2623,9 +2623,9 @@ async fn get_hash_rate_chart(State(state): State<Arc<AppState>>) -> ApiResult<Ch
     }
 
     let store = state.store.clone();
-    // `block_time_sum_ms` is read from `DailyStats`, not from the same-named
-    // `DailyBlockStats` field: only the bulk builder fills the latter, while
-    // both the bulk builder and the live writer maintain the former.
+    // The day's mined span comes from `DailyStats.block_time_sum_ms`, the single
+    // place inter-block time is stored; `DailyBlockStats` carries the difficulty
+    // and block count that form the numerator.
     let (daily_block_stats, daily_stats) = tokio::task::spawn_blocking(move || {
         let block_stats = store.list_daily_block_stats()?;
         let stats = store.list_daily_stats_with_dates()?;
@@ -4518,8 +4518,6 @@ mod tests {
             total_uncles: 0,
             // Deliberately zero: only the bulk builder fills this copy, so the
             // read path must take its divisor from `DailyStats`.
-            block_time_sum_ms: 0,
-            block_time_count: 0,
         }
     }
 

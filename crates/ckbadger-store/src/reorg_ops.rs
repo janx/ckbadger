@@ -9230,8 +9230,6 @@ mod tests {
             avg_difficulty: 1000.0,
             block_count: 720,
             total_uncles: 5,
-            block_time_sum_ms: 720 * 10_000,
-            block_time_count: 720,
         };
         let key = keys::encode_stats_key(keys::STATS_PREFIX_DAILY_BLOCK, date.as_bytes());
         let value = bincode::serialize(&original).unwrap();
@@ -9388,8 +9386,6 @@ mod tests {
             avg_difficulty: 1.0,
             block_count: 4,
             total_uncles: 2,
-            block_time_sum_ms: 4 * 1_000,
-            block_time_count: 4,
         };
         store.put_daily_block_stats("20260408", &pre_reorg).unwrap();
 

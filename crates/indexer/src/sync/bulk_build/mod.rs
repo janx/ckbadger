@@ -2064,18 +2064,10 @@ impl ChainStatsAccumulator {
                 0.0
             };
 
-            let (block_time_sum_ms, block_time_count) = self
-                .daily_block_times
-                .get(date)
-                .map(|(sum, count)| (*sum, *count))
-                .unwrap_or((0, 0));
-
             let stats = ckbadger_store::types::DailyBlockStats {
                 avg_difficulty,
                 block_count: count,
                 total_uncles: uncles,
-                block_time_sum_ms,
-                block_time_count,
             };
             rows.push(materialize::MaterializedRow::new(
                 CF_STATS_CHAIN,

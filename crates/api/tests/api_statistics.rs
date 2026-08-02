@@ -661,8 +661,6 @@ async fn test_network_stats_includes_hero_metrics_from_dao_snapshot() {
                 avg_difficulty: 1_000_000.0,
                 block_count: 100,
                 total_uncles: 5,
-                block_time_sum_ms: 100 * 10_000,
-                block_time_count: 100,
             },
         )
         .unwrap();
@@ -922,8 +920,6 @@ async fn test_daily_block_charts_read_from_derived_store() {
                 avg_difficulty: 1_000_000.0,
                 block_count: 100,
                 total_uncles: 2,
-                block_time_sum_ms: 100 * 10_000,
-                block_time_count: 100,
             },
         )
         .unwrap();
@@ -934,8 +930,6 @@ async fn test_daily_block_charts_read_from_derived_store() {
                 avg_difficulty: 2_000_000.0,
                 block_count: 120,
                 total_uncles: 3,
-                block_time_sum_ms: 120 * 10_000,
-                block_time_count: 120,
             },
         )
         .unwrap();
@@ -2175,9 +2169,8 @@ async fn test_network_stats_fails_fast_when_knowledge_size_is_negative() {
 /// node and the official explorer. The full-day divisor returned
 /// 57_576_474_071 (−21.6%).
 ///
-/// `DailyBlockStats.block_time_sum_ms` is left at 0 on purpose: only the bulk
-/// builder ever fills that copy, while `DailyStats` is maintained by both the
-/// bulk and the live writer, so it is the only correct source.
+/// `DailyStats` is the only place inter-block time is stored; `DailyBlockStats`
+/// supplies the difficulty and block count that form the numerator.
 #[tokio::test]
 async fn test_hash_rate_chart_divides_by_the_day_s_actual_mined_span() {
     let store = test_store();
@@ -2189,8 +2182,6 @@ async fn test_hash_rate_chart_divides_by_the_day_s_actual_mined_span() {
                 avg_difficulty: 8_318_741_404_228_533.0,
                 block_count: 598,
                 total_uncles: 0,
-                block_time_sum_ms: 0,
-                block_time_count: 0,
             },
         )
         .unwrap();
@@ -2213,8 +2204,6 @@ async fn test_hash_rate_chart_divides_by_the_day_s_actual_mined_span() {
                 avg_difficulty: 8_400_000_000_000_000.0,
                 block_count: 700,
                 total_uncles: 0,
-                block_time_sum_ms: 0,
-                block_time_count: 0,
             },
         )
         .unwrap();
@@ -2264,8 +2253,6 @@ async fn test_hash_rate_chart_fails_fast_without_block_time_sum() {
                 avg_difficulty: 1_000_000.0,
                 block_count: 100,
                 total_uncles: 0,
-                block_time_sum_ms: 0,
-                block_time_count: 0,
             },
         )
         .unwrap();
@@ -2287,8 +2274,6 @@ async fn test_hash_rate_chart_fails_fast_without_block_time_sum() {
                 avg_difficulty: 1_000_000.0,
                 block_count: 100,
                 total_uncles: 0,
-                block_time_sum_ms: 0,
-                block_time_count: 0,
             },
         )
         .unwrap();
@@ -2325,8 +2310,6 @@ async fn test_hash_rate_chart_fails_fast_when_daily_stats_row_missing() {
                 avg_difficulty: 1_000_000.0,
                 block_count: 100,
                 total_uncles: 0,
-                block_time_sum_ms: 500_000,
-                block_time_count: 100,
             },
         )
         .unwrap();
@@ -2337,8 +2320,6 @@ async fn test_hash_rate_chart_fails_fast_when_daily_stats_row_missing() {
                 avg_difficulty: 1_000_000.0,
                 block_count: 100,
                 total_uncles: 0,
-                block_time_sum_ms: 500_000,
-                block_time_count: 100,
             },
         )
         .unwrap();

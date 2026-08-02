@@ -1519,9 +1519,14 @@ mod tests {
         append_batch.commit().unwrap();
 
         let mut domain_batch = StoreBatch::new(domain.as_ref());
-        domain_batch.put_block_header(150, &make_header(150));
+        // Contiguous headers across the fork point and the rolled-back range:
+        // rollback derives each orphaned block's inter-block gap from its
+        // immediate predecessor's header, and the indexer refuses to start on a
+        // store with an internal header gap, so a sparse chain is unreachable.
+        for block in 150..=200i64 {
+            domain_batch.put_block_header(block, &make_header(block));
+        }
         domain_batch.put_live_cell_marker_by_outpoint(&reactivate_tx_hash, 0, 200);
-        domain_batch.put_block_header(200, &make_header(200));
         domain_batch.put_tx_index(200, 0, &make_tx_entry(1));
         domain_batch.put_tx_hash_map(&reactivate_tx_hash, 200, 0);
         domain_batch.put_script_info(

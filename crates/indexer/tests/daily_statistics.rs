@@ -201,8 +201,6 @@ fn test_daily_block_stats() {
         avg_difficulty: 0.0042,
         block_count: 144,
         total_uncles: 12,
-        block_time_sum_ms: 144 * 8100,
-        block_time_count: 144,
     };
 
     store.put_daily_block_stats("2024-01-15", &stats).unwrap();
@@ -213,7 +211,6 @@ fn test_daily_block_stats() {
     assert!((retrieved.avg_difficulty - 0.0042).abs() < f64::EPSILON);
     assert_eq!(retrieved.block_count, 144);
     assert_eq!(retrieved.total_uncles, 12);
-    assert_eq!(retrieved.avg_block_time_ms(), Some(8100));
 
     // Also verify through the list method
     let all = store.list_daily_block_stats().unwrap();

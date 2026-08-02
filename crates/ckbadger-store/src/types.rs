@@ -916,25 +916,17 @@ pub struct MinerStats {
     pub last_block_number: i64,
 }
 
+/// Per-day block-level aggregates: difficulty, block count, uncle count.
+///
+/// Inter-block time lives on [`DailyStats`] only. This row deliberately does
+/// not duplicate it: /charts/average-block-time and the /charts/hash-rate
+/// divisor both read `DailyStats.block_time_sum_ms`, which every write path
+/// (live, bulk, and reorg rollback repair) maintains.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct DailyBlockStats {
     pub avg_difficulty: f64,
     pub block_count: i32,
     pub total_uncles: i32,
-    #[serde(default)]
-    pub block_time_sum_ms: i64,
-    #[serde(default)]
-    pub block_time_count: i32,
-}
-
-impl DailyBlockStats {
-    pub fn avg_block_time_ms(&self) -> Option<i64> {
-        if self.block_time_count > 0 {
-            Some(self.block_time_sum_ms / self.block_time_count as i64)
-        } else {
-            None
-        }
-    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
