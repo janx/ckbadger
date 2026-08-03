@@ -13,11 +13,6 @@ impl UtxoSwapDetector {
     pub fn new(_is_mainnet: bool) -> Self {
         Self
     }
-
-    /// Format a byte slice as "0x..." hex string for JSON metadata.
-    fn hex(bytes: &[u8]) -> String {
-        format!("0x{}", hex::encode(bytes))
-    }
 }
 
 impl ProtocolDetector for UtxoSwapDetector {
@@ -71,23 +66,11 @@ impl ProtocolDetector for UtxoSwapDetector {
 
                 let action_name = format!("{}_submitted", parsed.intent_type.action_name());
 
-                let mut metadata = serde_json::json!({
-                    "intentType": parsed.intent_type.display_name(),
-                    "poolTypeHash": Self::hex(&parsed.pool_type_hash),
-                    "amountIn": parsed.amount_in.to_string(),
-                    "amountOutMin": parsed.amount_out_min.to_string(),
-                    "assetInIndex": parsed.asset_in_index,
-                });
-
-                if let Some(extra) = &parsed.create_pool_extra {
-                    metadata["assetX"] = serde_json::json!(Self::hex(&extra.asset_x));
-                    metadata["assetY"] = serde_json::json!(Self::hex(&extra.asset_y));
-                    metadata["amountX"] = serde_json::json!(extra.amount_x.to_string());
-                    metadata["amountY"] = serde_json::json!(extra.amount_y.to_string());
-                    metadata["totalFeeRate"] = serde_json::json!(extra.total_fee_rate);
-                }
-
-                actions.push(ProtocolAction::new("utxoswap", action_name, metadata));
+                actions.push(ProtocolAction::new(
+                    "utxoswap",
+                    action_name,
+                    parsed.metadata_json(),
+                ));
             }
         }
 
@@ -106,23 +89,11 @@ impl ProtocolDetector for UtxoSwapDetector {
             if owner_lock_hash.len() >= 20 && owner_lock_hash[..20] == parsed.owner_lock_hash[..] {
                 let action_name = format!("{}_settled", parsed.intent_type.action_name());
 
-                let mut metadata = serde_json::json!({
-                    "intentType": parsed.intent_type.display_name(),
-                    "poolTypeHash": Self::hex(&parsed.pool_type_hash),
-                    "amountIn": parsed.amount_in.to_string(),
-                    "amountOutMin": parsed.amount_out_min.to_string(),
-                    "assetInIndex": parsed.asset_in_index,
-                });
-
-                if let Some(extra) = &parsed.create_pool_extra {
-                    metadata["assetX"] = serde_json::json!(Self::hex(&extra.asset_x));
-                    metadata["assetY"] = serde_json::json!(Self::hex(&extra.asset_y));
-                    metadata["amountX"] = serde_json::json!(extra.amount_x.to_string());
-                    metadata["amountY"] = serde_json::json!(extra.amount_y.to_string());
-                    metadata["totalFeeRate"] = serde_json::json!(extra.total_fee_rate);
-                }
-
-                actions.push(ProtocolAction::new("utxoswap", action_name, metadata));
+                actions.push(ProtocolAction::new(
+                    "utxoswap",
+                    action_name,
+                    parsed.metadata_json(),
+                ));
             }
         }
 
@@ -227,8 +198,10 @@ mod tests {
         }
     }
 
-    /// Build intent lock args for non-CreatePool intent types.
+    /// Build 90-byte swap-layout intent lock args.
     /// The `owner_lock_hash_prefix` is the 20-byte prefix written into args[0..20].
+    /// Only intent types 3 and 4 genuinely carry this layout; passing another
+    /// type deliberately produces a length/type mismatch.
     fn build_intent_args(
         owner_lock_hash_prefix: &[u8; 20],
         intent_type: u8,
@@ -399,9 +372,12 @@ mod tests {
         assert_eq!(meta["assetInIndex"], 1);
     }
 
+    /// A type-1 intent carrying the 90-byte swap layout is malformed: the real
+    /// AddLiquidity payload is 121 bytes. The action name still derives from the
+    /// (trustworthy, type-independent) header, but no amounts may be invented —
+    /// this is exactly the case the old catch-all decode turned into garbage.
     #[test]
     fn test_add_liquidity_submitted() {
-        // intent_type=1 -> "add_liquidity_submitted"
         let intent_code_hash = parse_hex_to_bytes(INTENT_LOCK_CODE_HASH_MAINNET);
         let standard_lock = vec![0x11; 32];
 
@@ -444,6 +420,13 @@ mod tests {
             .expect("should have utxoswap add_liquidity_submitted action");
         let meta = add_liq_action.metadata_value().unwrap();
         assert_eq!(meta["intentType"], "AddLiquidity");
+
+        // Malformed payload -> flagged, never decoded with the swap layout.
+        assert_eq!(meta["payloadUnparsed"], true);
+        assert_eq!(meta["argsLen"], 90);
+        assert!(meta.get("desiredX").is_none(), "meta: {meta}");
+        assert!(meta.get("amountIn").is_none(), "meta: {meta}");
+        assert!(meta.get("amountOutMin").is_none(), "meta: {meta}");
     }
 
     #[test]
@@ -501,6 +484,234 @@ mod tests {
                 .any(|a| a.protocol == "utxoswap"),
             "no utxoswap actions expected because prefix mismatch"
         );
+    }
+
+    // =====================================================================
+    // Real captured mainnet vectors (byte-exact intent lock args fetched from
+    // a local CKB node on 2026-08-03). These pin the PER-TYPE payload layouts:
+    //   type 1 AddLiquidity    = 121 B: 4×u128 LE at [57..121]
+    //                            (desired_x, min_x, desired_y, min_y)
+    //   type 2 RemoveLiquidity = 105 B: 3×u128 LE at [57..105]
+    //                            (lp_amount, min_x, min_y)
+    //   type 3/4 swaps         =  90 B: index u8 + 2×u128 LE (unchanged)
+    // The old decoder applied the 90-B swap layout to every non-CreatePool
+    // type, yielding 2^127-scale garbage amounts for types 1/2.
+    // =====================================================================
+
+    /// AddLiquidity submit tx
+    /// 0x18d1b37ea5a3e83a9a58cb11ec164fb161b4d29f66543c69786a2108f62e7684
+    /// (mainnet block 14,046,271; outputs 0 and 1 carry this 121-byte args).
+    /// True decode: desired_x=9969978, min_x=9920128 (0.5% below),
+    /// desired_y=224336, min_y=223214 (0.5% below).
+    const REAL_ADD_LIQUIDITY_ARGS: &str = "0x0001d85947f67df16556a1caef3b7f939a69fb2329273406698f36e9bdf46db404176859b0ba3a6b00000000000000000000000000000000013a219800000000000000000000000000805e9700000000000000000000000000506c0300000000000000000000000000ee670300000000000000000000000000";
+
+    /// The 2^127-scale garbage the old catch-all decode produced for the
+    /// AddLiquidity vector above (2^127 + (9969978 >> 8)). Must never appear.
+    const OLD_ADD_LIQUIDITY_GARBAGE: &str = "170141183460469231731687303715884144673";
+
+    /// RemoveLiquidity submit tx
+    /// 0x416ed0a39468cf54179f23aa25626a92ee8fdb5117c8418545d4e0bb8cf53a7e
+    /// (mainnet block 20,003,047; output 0 carries this 105-byte args).
+    /// True decode: lp_amount=52147210375003, min_x=5728619911607,
+    /// min_y=516029247141147.
+    const REAL_REMOVE_LIQUIDITY_ARGS: &str = "0xc41696293f5b16b471f9116631da82a4102c5b01b82e9073fee07b9caf625f0be45d3ec061be221200000000000000000100000000000000025b4ff3776d2f00000000000000000000b7d95acc3505000000000000000000001b35f86b53d501000000000000000000";
+
+    /// Old catch-all garbage for the RemoveLiquidity vector above.
+    const OLD_REMOVE_LIQUIDITY_GARBAGE_IN: &str = "243248723228639604741396692235003097935";
+    const OLD_REMOVE_LIQUIDITY_GARBAGE_OUT: &str = "35889155886192728568402790649946725081";
+
+    /// SwapExactInputForOutput submit tx
+    /// 0x44f659be62ba97589f44d24c26eceab9db0501c364fc6e87e381e62f7e5759c4
+    /// (mainnet block 13,845,652; output 0 carries this 90-byte args).
+    /// True decode: asset_in_index=1, amount_in=730000000,
+    /// amount_out_min=147392188210 — swap decoding must stay UNCHANGED.
+    const REAL_SWAP_ARGS: &str = "0xbefc0a6053441e9bcba6d3f6c1599c37a1d8187a235edb927fc68f446e06f2e677fb52aa7f158ae800000000000000000000000000000000030180ea822b000000000000000000000000324f4251220000000000000000000000";
+
+    /// The intent args carry the first 20 bytes of the owner's lock hash in
+    /// [0..20]; build a 32-byte owner lock_script_hash with that real prefix.
+    fn owner_hash_from_args_prefix(args: &[u8]) -> Vec<u8> {
+        let mut hash = vec![0x77u8; 32];
+        hash[..20].copy_from_slice(&args[..20]);
+        hash
+    }
+
+    /// Run the detector over a submit-shaped tx (owner funds an intent output)
+    /// and return the single utxoswap action's (action, metadata).
+    fn detect_submitted(intent_args: &[u8]) -> (String, serde_json::Value) {
+        let intent_code_hash = parse_hex_to_bytes(INTENT_LOCK_CODE_HASH_MAINNET);
+        let standard_lock = vec![0x11; 32];
+        let owner_hash = owner_hash_from_args_prefix(intent_args);
+
+        let input = OwnedInput {
+            lock_script_hash: owner_hash.clone(),
+            lock_code_hash: standard_lock.clone(),
+            lock_args: vec![0x22; 20],
+            capacity: 700_00000000,
+            data: vec![],
+        };
+        let intent_output = OwnedOutput {
+            lock_script_hash: vec![0xF0; 32],
+            lock_code_hash: intent_code_hash,
+            lock_args: intent_args.to_vec(),
+            capacity: 300_00000000,
+            data: vec![],
+        };
+        let change_output = OwnedOutput {
+            lock_script_hash: owner_hash,
+            lock_code_hash: standard_lock,
+            lock_args: vec![0x22; 20],
+            capacity: 300_00000000,
+            data: vec![],
+        };
+        let outputs = vec![intent_output, change_output];
+
+        let tx = TxView {
+            tx_hash: &[0x60; 32],
+            block_hash: &[0xE0; 32],
+            tx_index: 1,
+            block_number: 14_046_271,
+            timestamp: 1_700_400_000,
+            is_cellbase: false,
+            inputs: vec![input.view()],
+            outputs: outputs.iter().map(|o| o.view()).collect(),
+        };
+
+        let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(UtxoSwapDetector::new(true))];
+        let actions_list = build_tx_actions_for_block(&[tx], &detectors).unwrap();
+        let utxoswap: Vec<_> = actions_list[0]
+            .protocol_actions
+            .iter()
+            .filter(|a| a.protocol == "utxoswap")
+            .collect();
+        assert_eq!(
+            utxoswap.len(),
+            1,
+            "expected exactly one utxoswap action, got: {:?}",
+            utxoswap
+                .iter()
+                .map(|a| a.action.clone())
+                .collect::<Vec<_>>()
+        );
+        (
+            utxoswap[0].action.clone(),
+            utxoswap[0].metadata_value().unwrap(),
+        )
+    }
+
+    #[test]
+    fn real_add_liquidity_vector_decodes_four_u128_payload() {
+        let args = parse_hex_to_bytes(REAL_ADD_LIQUIDITY_ARGS);
+        assert_eq!(args.len(), 121, "captured AddLiquidity args must be 121 B");
+        let (action, meta) = detect_submitted(&args);
+
+        assert_eq!(action, "add_liquidity_submitted");
+        assert_eq!(meta["intentType"], "AddLiquidity");
+        assert_eq!(
+            meta["poolTypeHash"],
+            "0x29273406698f36e9bdf46db404176859b0ba3a6b"
+        );
+        assert_eq!(meta["desiredX"], "9969978");
+        assert_eq!(meta["minX"], "9920128");
+        assert_eq!(meta["desiredY"], "224336");
+        assert_eq!(meta["minY"], "223214");
+
+        // The swap-layout fields must be gone for AddLiquidity — they were
+        // never part of this payload.
+        assert!(meta.get("amountIn").is_none(), "meta: {meta}");
+        assert!(meta.get("amountOutMin").is_none(), "meta: {meta}");
+        assert!(meta.get("assetInIndex").is_none(), "meta: {meta}");
+        assert!(
+            !meta.to_string().contains(OLD_ADD_LIQUIDITY_GARBAGE),
+            "old 2^127-scale garbage resurfaced: {meta}"
+        );
+    }
+
+    #[test]
+    fn real_remove_liquidity_vector_decodes_three_u128_payload() {
+        let args = parse_hex_to_bytes(REAL_REMOVE_LIQUIDITY_ARGS);
+        assert_eq!(
+            args.len(),
+            105,
+            "captured RemoveLiquidity args must be 105 B"
+        );
+        let intent_code_hash = parse_hex_to_bytes(INTENT_LOCK_CODE_HASH_MAINNET);
+        let standard_lock = vec![0x11; 32];
+        let owner_hash = owner_hash_from_args_prefix(&args);
+
+        // Settle-shaped tx: the intent cell is consumed, the owner receives.
+        let intent_input = OwnedInput {
+            lock_script_hash: vec![0xF0; 32],
+            lock_code_hash: intent_code_hash,
+            lock_args: args.clone(),
+            capacity: 300_00000000,
+            data: vec![],
+        };
+        let output = OwnedOutput {
+            lock_script_hash: owner_hash,
+            lock_code_hash: standard_lock,
+            lock_args: vec![0x22; 20],
+            capacity: 300_00000000,
+            data: vec![],
+        };
+        let outputs = vec![output];
+
+        let tx = TxView {
+            tx_hash: &[0x61; 32],
+            block_hash: &[0xE1; 32],
+            tx_index: 1,
+            block_number: 20_003_047,
+            timestamp: 1_700_400_010,
+            is_cellbase: false,
+            inputs: vec![intent_input.view()],
+            outputs: outputs.iter().map(|o| o.view()).collect(),
+        };
+
+        let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(UtxoSwapDetector::new(true))];
+        let actions_list = build_tx_actions_for_block(&[tx], &detectors).unwrap();
+        let utxoswap: Vec<_> = actions_list[0]
+            .protocol_actions
+            .iter()
+            .filter(|a| a.protocol == "utxoswap")
+            .collect();
+        assert_eq!(utxoswap.len(), 1);
+        assert_eq!(utxoswap[0].action, "remove_liquidity_settled");
+
+        let meta = utxoswap[0].metadata_value().unwrap();
+        assert_eq!(meta["intentType"], "RemoveLiquidity");
+        assert_eq!(
+            meta["poolTypeHash"],
+            "0xb82e9073fee07b9caf625f0be45d3ec061be2212"
+        );
+        assert_eq!(meta["lpAmount"], "52147210375003");
+        assert_eq!(meta["minX"], "5728619911607");
+        assert_eq!(meta["minY"], "516029247141147");
+
+        assert!(meta.get("amountIn").is_none(), "meta: {meta}");
+        assert!(meta.get("amountOutMin").is_none(), "meta: {meta}");
+        assert!(meta.get("assetInIndex").is_none(), "meta: {meta}");
+        let raw = meta.to_string();
+        assert!(
+            !raw.contains(OLD_REMOVE_LIQUIDITY_GARBAGE_IN)
+                && !raw.contains(OLD_REMOVE_LIQUIDITY_GARBAGE_OUT),
+            "old 2^127-scale garbage resurfaced: {meta}"
+        );
+    }
+
+    #[test]
+    fn real_swap_vector_decoding_is_unchanged() {
+        let args = parse_hex_to_bytes(REAL_SWAP_ARGS);
+        assert_eq!(args.len(), 90, "captured swap args must be 90 B");
+        let (action, meta) = detect_submitted(&args);
+
+        assert_eq!(action, "swap_exact_input_submitted");
+        assert_eq!(meta["intentType"], "SwapExactInputForOutput");
+        assert_eq!(
+            meta["poolTypeHash"],
+            "0x235edb927fc68f446e06f2e677fb52aa7f158ae8"
+        );
+        assert_eq!(meta["assetInIndex"], 1);
+        assert_eq!(meta["amountIn"], "730000000");
+        assert_eq!(meta["amountOutMin"], "147392188210");
     }
 
     #[test]
