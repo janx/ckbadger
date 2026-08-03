@@ -47,7 +47,7 @@ impl ProtocolDetector for UtxoSwapDetector {
         _item_deltas: &[ItemDelta],
         _type_calls: &[TypeCallEntry],
         _lock_calls: &[LockCallEntry],
-    ) -> Vec<ProtocolAction> {
+    ) -> anyhow::Result<Vec<ProtocolAction>> {
         let mut actions = Vec::new();
 
         let ckb_delta = accum.output_capacity - accum.input_capacity;
@@ -126,7 +126,7 @@ impl ProtocolDetector for UtxoSwapDetector {
             }
         }
 
-        actions
+        Ok(actions)
     }
 }
 

@@ -72,6 +72,24 @@ pub fn all_fiber_lock_code_hashes() -> Vec<Vec<u8>> {
     ]
 }
 
+/// Byte width of the UDT amount prefix carried by a UDT-funded funding cell.
+pub const FUNDING_UDT_AMOUNT_LEN: usize = 16;
+
+/// Parse the token amount held by a UDT-funded Fiber funding cell.
+///
+/// Every CKB UDT standard seen funding a Fiber channel encodes the amount as a
+/// 16-byte little-endian prefix of cell data. Verified against live funding
+/// cells of all four kinds present on chain (xUDT `0x25c29dc3…`, USDI
+/// `0xcc9dc33e…`, Stable++ Asset `0x1142755a…`, sUDT `0xc5e5dcf2…`).
+///
+/// This is the single parse path for funding-cell UDT amounts, shared by the
+/// live detector and the bulk reducer. Returns `None` when the data is too
+/// short to hold an amount — callers treat that as an invariant violation on a
+/// typed funding cell, never as a plain-CKB channel.
+pub fn parse_funding_udt_amount(data: &[u8]) -> Option<u128> {
+    crate::parser::udt::UdtParser::parse_amount(data)
+}
+
 /// Parses funding lock args from raw bytes.
 /// Layout: pubkey_hash (20 bytes).
 /// Returns None if args is too short.
@@ -352,6 +370,72 @@ mod tests {
         let parsed = parse_commitment_lock_args(&args).unwrap();
         assert_eq!(parsed.delay_epoch, 0x0102030405060708);
         assert_eq!(parsed.version, 0x0102030405060708);
+    }
+
+    // --- parse_funding_udt_amount tests ---
+
+    /// Real UDT-funded funding cells captured from the testnet node
+    /// (2026-08-03). One per UDT kind present on chain, covering every
+    /// standard that funds a Fiber channel today.
+    #[test]
+    fn test_parse_funding_udt_amount_real_funding_cells() {
+        // (funding tx, cell data hex, expected amount)
+        let vectors: [(&str, &str, u128); 4] = [
+            // xUDT 0x25c29dc3… — tx 0x669579d99c12672d589b38e364e13af566b8e113e0d6f239debdd5a76cb5b59b:0
+            (
+                "0x669579d99c12672d589b38e364e13af566b8e113e0d6f239debdd5a76cb5b59b",
+                "0x00d6b45f150000000000000000000000",
+                91_800_000_000,
+            ),
+            // USDI 0xcc9dc33e… — tx 0x4d49307f8d0572947e53bfbf35b06ce9c56a4affa43eef1a3ded311b67e28e4c:0
+            (
+                "0x4d49307f8d0572947e53bfbf35b06ce9c56a4affa43eef1a3ded311b67e28e4c",
+                "0x32ca9a3b000000000000000000000000",
+                1_000_000_050,
+            ),
+            // Stable++ Asset 0x1142755a… — tx 0x6b1f20dd62f84db5c4cd5847163de1b1098d3c9eadd19f2e62d901527b8751bd:0
+            (
+                "0x6b1f20dd62f84db5c4cd5847163de1b1098d3c9eadd19f2e62d901527b8751bd",
+                "0x00e40b54020000000000000000000000",
+                10_000_000_000,
+            ),
+            // sUDT 0xc5e5dcf2… — tx 0xb137cc910b6b44033eb03bfaec451a8d428d811c7ed8dc211564dd47f56d909f:0
+            (
+                "0xb137cc910b6b44033eb03bfaec451a8d428d811c7ed8dc211564dd47f56d909f",
+                "0x29000000000000000000000000000000",
+                41,
+            ),
+        ];
+
+        for (funding_tx, data_hex, expected) in vectors {
+            let data = parse_hex_to_bytes(data_hex);
+            assert_eq!(data.len(), FUNDING_UDT_AMOUNT_LEN);
+            assert_eq!(
+                parse_funding_udt_amount(&data),
+                Some(expected),
+                "amount mismatch for funding cell {funding_tx}"
+            );
+        }
+    }
+
+    /// A CKB-only funding cell carries empty data — there is no amount to read.
+    /// Vector: testnet tx 0x4400f63c…:0 (`outputs_data[0] == "0x"`).
+    #[test]
+    fn test_parse_funding_udt_amount_ckb_only_funding_cell_is_none() {
+        assert_eq!(parse_funding_udt_amount(&[]), None);
+    }
+
+    #[test]
+    fn test_parse_funding_udt_amount_short_data_is_none() {
+        assert_eq!(parse_funding_udt_amount(&[0u8; 15]), None);
+    }
+
+    #[test]
+    fn test_parse_funding_udt_amount_ignores_trailing_extension_data() {
+        // xUDT cells may carry extension data after the amount prefix.
+        let mut data = 12_345u128.to_le_bytes().to_vec();
+        data.extend_from_slice(&[0xAB; 8]);
+        assert_eq!(parse_funding_udt_amount(&data), Some(12_345));
     }
 
     // --- cross-function tests ---

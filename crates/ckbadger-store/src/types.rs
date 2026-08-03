@@ -1567,7 +1567,7 @@ pub enum FiberChannelState {
     Settled,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FiberChannel {
     pub funding_tx_hash: Vec<u8>,
     pub funding_output_index: u32,

@@ -429,6 +429,22 @@ output_index`; activity cursors encode `block_num:tx_idx`; spore/cluster list cu
 - `Vec<FiberChannelResponse>` for address listing
 - `FiberStatsResponse` — totals
 
+**Field semantics**
+
+- `capacity` — the funding cell's CKB capacity in shannons, for every channel. `totalCapacityLocked`
+  in `FiberStatsResponse` sums this over open channels and is therefore always a CKB figure, never
+  a UDT amount.
+- `udtTypeHash` / `udtAmount` — set together when the funding cell carries a type script: the type
+  script hash identifying the token, and the token amount held by the funding cell (decimal string,
+  `u128`). Both are `null` for plain-CKB channels. A UDT-funded channel still reports its CKB
+  `capacity` alongside these.
+- `participants` — the funding transaction's non-fiber owners. The funding and commitment locks
+  that implement the channel are never listed as participants.
+- `delayEpoch` / `commitmentOutputIndex` — the revocation delay encoded in the commitment lock args
+  and the index of the commitment output, both taken from the commitment cell of the most recent
+  force-close or commitment-revocation event. `null` while a channel is open or cooperatively
+  closed (no commitment cell exists).
+
 ---
 
 ### spore (crates/api/src/routes/spore.rs)

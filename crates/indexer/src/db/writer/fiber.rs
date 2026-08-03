@@ -10,44 +10,13 @@ use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::keys;
 use ckbadger_store::types::{FiberChannel, FiberChannelState, TxActions};
 
-/// Result of applying one Fiber protocol action to the channel store.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum FiberEventOutcome {
-    /// The event was applied to CF_FIBER_CHANNELS.
-    Applied,
-    /// The event referenced a channel this indexer holds no record for.
-    ///
-    /// Fiber is permissionless, so ordinary chain shapes reach this state
-    /// without any indexer bug:
-    ///
-    /// - a tx that only CREATES a commitment-lock output classifies to `None`
-    ///   (see `fiber_detector::classify_event`), so no
-    ///   `CF_FIBER_CHANNEL_BY_COMMITMENT` mapping is written; the later spend of
-    ///   that cell arrives as a `settlement` for an unknown commitment;
-    /// - a splice (funding input AND funding output) classifies as
-    ///   `channel_close`, so the NEW funding cell never gets a channel record and
-    ///   its later spend arrives as a close for an unknown funding outpoint.
-    ///
-    /// Chain data is untrusted input: these are skipped with a warning, never
-    /// escalated into a sync halt.
-    SkippedUnknownChannel,
-}
+use crate::parser::fiber::{parse_commitment_lock_args, CommitmentLockArgs};
 
 /// Per-transaction tally of Fiber event outcomes.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct FiberEventSummary {
     pub applied: usize,
-    pub skipped_unknown_channel: usize,
     pub skipped_unknown_action: usize,
-}
-
-impl FiberEventSummary {
-    fn record(&mut self, outcome: FiberEventOutcome) {
-        match outcome {
-            FiberEventOutcome::Applied => self.applied += 1,
-            FiberEventOutcome::SkippedUnknownChannel => self.skipped_unknown_channel += 1,
-        }
-    }
 }
 
 /// Process Fiber channel lifecycle events from a TxActions.
@@ -85,25 +54,26 @@ pub(crate) fn apply_fiber_channel_events(
             )
         })?;
 
-        // Use the first participant's lock_hash as the "first participant" for channel_open.
-        let first_participant_lock_hash = tx_actions
-            .participants
-            .first()
-            .map(|p| p.lock_hash.as_slice())
-            .unwrap_or(&[]);
-
         match action.action.as_str() {
-            "channel_open" => summary.record(handle_channel_open(
-                batch,
-                tx_actions,
-                first_participant_lock_hash,
-                &metadata,
-            )?),
-            "channel_close" => summary.record(handle_channel_close(batch, tx_actions, &metadata)?),
-            "force_close" => summary.record(handle_force_close(batch, tx_actions, &metadata)?),
-            "settlement" => summary.record(handle_settlement(batch, tx_actions, &metadata)?),
+            "channel_open" => {
+                handle_channel_open(batch, tx_actions, &metadata)?;
+                summary.applied += 1;
+            }
+            "channel_close" => {
+                handle_channel_close(batch, tx_actions, &metadata)?;
+                summary.applied += 1;
+            }
+            "force_close" => {
+                handle_force_close(batch, tx_actions, &metadata)?;
+                summary.applied += 1;
+            }
+            "settlement" => {
+                handle_settlement(batch, tx_actions, &metadata)?;
+                summary.applied += 1;
+            }
             "commitment_revocation" => {
-                summary.record(handle_commitment_revocation(batch, tx_actions, &metadata)?)
+                handle_commitment_revocation(batch, tx_actions, &metadata)?;
+                summary.applied += 1;
             }
             other => {
                 summary.skipped_unknown_action += 1;
@@ -119,33 +89,34 @@ pub(crate) fn apply_fiber_channel_events(
     Ok(summary)
 }
 
-/// Log an event that names a channel the indexer never recorded.
-fn warn_unknown_channel(
+/// An event naming a channel the indexer never recorded is an invariant
+/// violation, not a chain shape: every fiber lock cell that can be consumed was
+/// created by a tx this indexer already processed, so the open must exist.
+/// The bulk reducer has always failed here; the live path now matches, so both
+/// paths share one failure policy.
+fn unknown_channel_error(
     tx_actions: &TxActions,
     action: &str,
     lookup_key: &str,
     lookup_value: String,
-) -> FiberEventOutcome {
-    warn!(
-        skip_reason = "unknown_channel",
+) -> anyhow::Error {
+    anyhow::anyhow!(
+        "fiber {} references a channel with no indexed open: tx=0x{} block={} block_hash=0x{} {}={}",
         action,
-        tx_hash = %hex::encode(&tx_actions.tx_hash),
-        block_number = tx_actions.block_number,
-        block_hash = %hex::encode(&tx_actions.block_hash),
+        hex::encode(&tx_actions.tx_hash),
+        tx_actions.block_number,
+        hex::encode(&tx_actions.block_hash),
         lookup_key,
-        lookup_value = %lookup_value,
-        "fiber event references a channel with no indexed open, skipping"
-    );
-    FiberEventOutcome::SkippedUnknownChannel
+        lookup_value
+    )
 }
 
 /// Handle `channel_open`: create a new FiberChannel with state Open.
 fn handle_channel_open(
     batch: &mut StoreBatch<'_>,
     tx_actions: &TxActions,
-    first_participant_lock_hash: &[u8],
     metadata: &serde_json::Value,
-) -> Result<FiberEventOutcome> {
+) -> Result<()> {
     let (funding_tx_hash, funding_output_index) =
         parse_channel_outpoint(metadata, "channel_open", &tx_actions.tx_hash)?;
 
@@ -179,41 +150,44 @@ fn handle_channel_open(
         );
     }
 
-    // Parse funding_lock_args from metadata
-    let funding_lock_args = match metadata.get("fundingLockArgs").and_then(|v| v.as_str()) {
-        Some(hex_str) => decode_hex_with_prefix(hex_str).ok_or_else(|| {
+    // Funding lock args identify the channel's aggregated pubkey and are
+    // persisted on the row, so a missing value is an invariant violation — the
+    // bulk reducer has always failed here rather than storing empty args.
+    let funding_lock_args_hex = metadata
+        .get("fundingLockArgs")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| {
             anyhow::anyhow!(
-                "fiber channel_open: failed to decode fundingLockArgs hex '{}' in tx 0x{}",
-                hex_str,
-                hex::encode(&tx_actions.tx_hash)
+                "fiber channel_open missing fundingLockArgs metadata in tx 0x{} block={} — detector bug",
+                hex::encode(&tx_actions.tx_hash),
+                tx_actions.block_number
             )
-        })?,
-        None => Vec::new(),
-    };
+        })?;
+    let funding_lock_args = decode_hex_with_prefix(funding_lock_args_hex).ok_or_else(|| {
+        anyhow::anyhow!(
+            "fiber channel_open: failed to decode fundingLockArgs hex '{}' in tx 0x{}",
+            funding_lock_args_hex,
+            hex::encode(&tx_actions.tx_hash)
+        )
+    })?;
 
-    // Collect participant lock_hashes from tx_actions.participants.
-    // With TxActions, protocol_actions are TX-level, so all participants in the
-    // transaction are potential channel participants.
-    let mut participants: Vec<Vec<u8>> = tx_actions
-        .participants
-        .iter()
-        .map(|p| p.lock_hash.clone())
-        .collect();
-    // Ensure the first participant is included (should already be, but be safe)
-    if !participants
-        .iter()
-        .any(|p| p == first_participant_lock_hash)
-    {
-        participants.push(first_participant_lock_hash.to_vec());
-    }
+    // Channel participants come from the detector: the tx's non-fiber owners,
+    // sorted. Reading them from `tx_actions.participants` instead would fold in
+    // the funding/commitment lock owners, which are not participants of the
+    // channel they implement — and would diverge from the bulk reducer.
+    let participants = parse_participants(metadata, &tx_actions.tx_hash)?;
+
+    // UDT-funded channels carry the funding output's type script hash and
+    // token amount. Both keys are present together or not at all.
+    let (udt_type_hash, udt_amount) = parse_udt_fields(metadata, &tx_actions.tx_hash)?;
 
     let channel = FiberChannel {
         funding_tx_hash: funding_tx_hash.to_vec(),
         funding_output_index,
         state: FiberChannelState::Open,
         capacity,
-        udt_type_hash: None,
-        udt_amount: None,
+        udt_type_hash,
+        udt_amount,
         open_block: tx_actions.block_number,
         open_timestamp: tx_actions.timestamp,
         close_tx_hash: None,
@@ -236,7 +210,7 @@ fn handle_channel_open(
         batch.put_addr_fiber_channel(participant, &channel_id);
     }
 
-    Ok(FiberEventOutcome::Applied)
+    Ok(())
 }
 
 /// Handle `channel_close`: cooperative close (funding lock consumed, no commitment output).
@@ -244,12 +218,12 @@ fn handle_channel_close(
     batch: &mut StoreBatch<'_>,
     tx_actions: &TxActions,
     metadata: &serde_json::Value,
-) -> Result<FiberEventOutcome> {
+) -> Result<()> {
     let (funding_tx_hash, funding_output_index) =
         parse_channel_outpoint(metadata, "channel_close", &tx_actions.tx_hash)?;
     let channel_id = keys::encode_fiber_channel_id(&funding_tx_hash, funding_output_index);
     let Some(mut channel) = batch.get_fiber_channel(&channel_id)? else {
-        return Ok(warn_unknown_channel(
+        return Err(unknown_channel_error(
             tx_actions,
             "channel_close",
             "funding_outpoint",
@@ -278,7 +252,7 @@ fn handle_channel_close(
 
     batch.put_fiber_channel(&channel_id, &channel);
 
-    Ok(FiberEventOutcome::Applied)
+    Ok(())
 }
 
 /// Handle `force_close`: funding lock consumed + commitment lock output.
@@ -286,12 +260,12 @@ fn handle_force_close(
     batch: &mut StoreBatch<'_>,
     tx_actions: &TxActions,
     metadata: &serde_json::Value,
-) -> Result<FiberEventOutcome> {
+) -> Result<()> {
     let (funding_tx_hash, funding_output_index) =
         parse_channel_outpoint(metadata, "force_close", &tx_actions.tx_hash)?;
     let channel_id = keys::encode_fiber_channel_id(&funding_tx_hash, funding_output_index);
     let Some(mut channel) = batch.get_fiber_channel(&channel_id)? else {
-        return Ok(warn_unknown_channel(
+        return Err(unknown_channel_error(
             tx_actions,
             "force_close",
             "funding_outpoint",
@@ -318,39 +292,39 @@ fn handle_force_close(
     channel.close_block = Some(tx_actions.block_number);
     channel.close_timestamp = Some(tx_actions.timestamp);
 
-    // Store commitment info if present in metadata
-    if let Some(commitment_args_hex) = metadata.get("commitmentLockArgs").and_then(|v| v.as_str()) {
-        let commitment_args = decode_hex_with_prefix(commitment_args_hex).ok_or_else(|| {
-            anyhow::anyhow!(
-                "fiber force_close: failed to decode commitmentLockArgs hex '{}' in tx 0x{}",
-                commitment_args_hex,
-                hex::encode(&tx_actions.tx_hash)
-            )
-        })?;
-        if !commitment_args.is_empty() {
-            // Use blake2b hash of commitment lock args as the commitment index key
-            let commitment_hash = blake2b_hash(&commitment_args);
-            if let Some(existing_channel_id) =
-                batch.get_fiber_channel_id_by_commitment(&commitment_hash)?
-            {
-                if existing_channel_id != channel_id {
-                    anyhow::bail!(
-                        "fiber force_close duplicate commitment mapping: tx=0x{} commitment_hash=0x{} existing_channel_id=0x{} new_channel_id=0x{}",
-                        hex::encode(&tx_actions.tx_hash),
-                        hex::encode(&commitment_hash),
-                        hex::encode(existing_channel_id),
-                        hex::encode(&channel_id)
-                    );
-                }
-            }
-            channel.commitment_tx_hash = Some(tx_actions.tx_hash.clone());
-            batch.put_fiber_channel_by_commitment(&commitment_hash, &channel_id);
+    // Commitment enrichment: the same fields, parsed the same way, as the bulk
+    // reducer writes (`bulk_build::owners::fiber::apply_commitment_enrichment`).
+    let (commitment_args, commitment_parsed) =
+        parse_commitment_args(metadata, "force_close", "commitmentLockArgs", tx_actions)?;
+    let commitment_output_index = parse_commitment_output_index(
+        metadata,
+        "force_close",
+        "commitmentOutputIndex",
+        tx_actions,
+    )?;
+    let commitment_hash = blake2b_hash(&commitment_args);
+    if let Some(existing_channel_id) = batch.get_fiber_channel_id_by_commitment(&commitment_hash)? {
+        if existing_channel_id != channel_id {
+            anyhow::bail!(
+                "fiber force_close duplicate commitment mapping: tx=0x{} commitment_hash=0x{} existing_channel_id=0x{} new_channel_id=0x{}",
+                hex::encode(&tx_actions.tx_hash),
+                hex::encode(&commitment_hash),
+                hex::encode(existing_channel_id),
+                hex::encode(&channel_id)
+            );
         }
     }
+    apply_commitment_enrichment(
+        &mut channel,
+        &tx_actions.tx_hash,
+        &commitment_parsed,
+        commitment_output_index,
+    );
+    batch.put_fiber_channel_by_commitment(&commitment_hash, &channel_id);
 
     batch.put_fiber_channel(&channel_id, &channel);
 
-    Ok(FiberEventOutcome::Applied)
+    Ok(())
 }
 
 /// Handle `settlement`: commitment lock consumed.
@@ -358,7 +332,7 @@ fn handle_settlement(
     batch: &mut StoreBatch<'_>,
     tx_actions: &TxActions,
     metadata: &serde_json::Value,
-) -> Result<FiberEventOutcome> {
+) -> Result<()> {
     let commitment_args_hex = match metadata.get("commitmentLockArgs").and_then(|v| v.as_str()) {
         Some(s) => s,
         None => {
@@ -379,7 +353,7 @@ fn handle_settlement(
     let commitment_hash = blake2b_hash(&commitment_args);
 
     let Some(channel_id) = batch.get_fiber_channel_id_by_commitment(&commitment_hash)? else {
-        return Ok(warn_unknown_channel(
+        return Err(unknown_channel_error(
             tx_actions,
             "settlement",
             "commitment_hash",
@@ -418,7 +392,7 @@ fn handle_settlement(
 
     batch.put_fiber_channel(&channel_id, &channel);
 
-    Ok(FiberEventOutcome::Applied)
+    Ok(())
 }
 
 /// Handle `commitment_revocation`: commitment-lock input consumed + new commitment-lock output.
@@ -427,7 +401,7 @@ fn handle_commitment_revocation(
     batch: &mut StoreBatch<'_>,
     tx_actions: &TxActions,
     metadata: &serde_json::Value,
-) -> Result<FiberEventOutcome> {
+) -> Result<()> {
     let old_args_hex = match metadata
         .get("oldCommitmentLockArgs")
         .and_then(|v| v.as_str())
@@ -440,19 +414,6 @@ fn handle_commitment_revocation(
             );
         }
     };
-    let new_args_hex = match metadata
-        .get("newCommitmentLockArgs")
-        .and_then(|v| v.as_str())
-    {
-        Some(s) => s,
-        None => {
-            anyhow::bail!(
-                "fiber commitment_revocation missing newCommitmentLockArgs metadata in tx 0x{} — detector bug",
-                hex::encode(&tx_actions.tx_hash)
-            );
-        }
-    };
-
     let old_args = decode_hex_with_prefix(old_args_hex).ok_or_else(|| {
         anyhow::anyhow!(
             "fiber commitment_revocation: failed to decode oldCommitmentLockArgs hex '{}' in tx 0x{}",
@@ -460,19 +421,18 @@ fn handle_commitment_revocation(
             hex::encode(&tx_actions.tx_hash)
         )
     })?;
-    let new_args = decode_hex_with_prefix(new_args_hex).ok_or_else(|| {
-        anyhow::anyhow!(
-            "fiber commitment_revocation: failed to decode newCommitmentLockArgs hex '{}' in tx 0x{}",
-            new_args_hex,
-            hex::encode(&tx_actions.tx_hash)
-        )
-    })?;
+    let (new_args, new_commitment_parsed) = parse_commitment_args(
+        metadata,
+        "commitment_revocation",
+        "newCommitmentLockArgs",
+        tx_actions,
+    )?;
 
     let old_hash = blake2b_hash(&old_args);
     let new_hash = blake2b_hash(&new_args);
 
     let Some(channel_id) = batch.get_fiber_channel_id_by_commitment(&old_hash)? else {
-        return Ok(warn_unknown_channel(
+        return Err(unknown_channel_error(
             tx_actions,
             "commitment_revocation",
             "commitment_hash",
@@ -513,15 +473,190 @@ fn handle_commitment_revocation(
         }
     }
 
-    // Update commitment metadata, keep state as ForceClosed
-    channel.commitment_tx_hash = Some(tx_actions.tx_hash.clone());
+    // Update commitment metadata to the NEW commitment output, keep state
+    // ForceClosed — identical to the bulk reducer's rotation.
+    let new_commitment_output_index = parse_commitment_output_index(
+        metadata,
+        "commitment_revocation",
+        "newCommitmentOutputIndex",
+        tx_actions,
+    )?;
+    apply_commitment_enrichment(
+        &mut channel,
+        &tx_actions.tx_hash,
+        &new_commitment_parsed,
+        new_commitment_output_index,
+    );
 
     // Rotate commitment hash index: remove old, insert new
     batch.delete_fiber_channel_by_commitment(&old_hash);
     batch.put_fiber_channel_by_commitment(&new_hash, &channel_id);
     batch.put_fiber_channel(&channel_id, &channel);
 
-    Ok(FiberEventOutcome::Applied)
+    Ok(())
+}
+
+/// Apply the commitment-cell enrichment shared by `force_close` and
+/// `commitment_revocation`.
+///
+/// This is the single calculation path for a channel's commitment fields: both
+/// the live writer (here) and the bulk reducer call it, so a channel row is
+/// identical whichever path indexed it. `delay_epoch` always comes from the
+/// commitment lock args of the commitment cell named by this event.
+pub(crate) fn apply_commitment_enrichment(
+    channel: &mut FiberChannel,
+    commitment_tx_hash: &[u8],
+    commitment_args: &CommitmentLockArgs,
+    commitment_output_index: u32,
+) {
+    channel.commitment_tx_hash = Some(commitment_tx_hash.to_vec());
+    channel.commitment_output_index = Some(commitment_output_index);
+    channel.delay_epoch = Some(commitment_args.delay_epoch);
+}
+
+/// Decode and parse a commitment-lock-args metadata field, returning the raw
+/// bytes (the commitment index key) alongside the parsed fields.
+///
+/// Malformed args are an invariant violation: the detector only emits these
+/// events for cells whose lock actually IS a commitment lock.
+fn parse_commitment_args(
+    metadata: &serde_json::Value,
+    action: &str,
+    key: &str,
+    tx_actions: &TxActions,
+) -> Result<(Vec<u8>, CommitmentLockArgs)> {
+    let args_hex = metadata.get(key).and_then(|v| v.as_str()).ok_or_else(|| {
+        anyhow::anyhow!(
+            "fiber {} missing {} metadata in tx 0x{} block={} — detector bug",
+            action,
+            key,
+            hex::encode(&tx_actions.tx_hash),
+            tx_actions.block_number
+        )
+    })?;
+    let args = decode_hex_with_prefix(args_hex).ok_or_else(|| {
+        anyhow::anyhow!(
+            "fiber {}: failed to decode {} hex '{}' in tx 0x{} block={}",
+            action,
+            key,
+            args_hex,
+            hex::encode(&tx_actions.tx_hash),
+            tx_actions.block_number
+        )
+    })?;
+    let parsed = parse_commitment_lock_args(&args).ok_or_else(|| {
+        anyhow::anyhow!(
+            "fiber {}: {} is not valid commitment lock args in tx 0x{} block={} args_len={}",
+            action,
+            key,
+            hex::encode(&tx_actions.tx_hash),
+            tx_actions.block_number,
+            args.len()
+        )
+    })?;
+    Ok((args, parsed))
+}
+
+/// Read a commitment output index emitted by the detector.
+fn parse_commitment_output_index(
+    metadata: &serde_json::Value,
+    action: &str,
+    key: &str,
+    tx_actions: &TxActions,
+) -> Result<u32> {
+    let value = metadata.get(key).and_then(|v| v.as_u64()).ok_or_else(|| {
+        anyhow::anyhow!(
+            "fiber {} missing {} metadata in tx 0x{} block={} — detector bug",
+            action,
+            key,
+            hex::encode(&tx_actions.tx_hash),
+            tx_actions.block_number
+        )
+    })?;
+    u32::try_from(value).map_err(|_| {
+        anyhow::anyhow!(
+            "fiber {} {} exceeds u32 range in tx 0x{} block={}: {}",
+            action,
+            key,
+            hex::encode(&tx_actions.tx_hash),
+            tx_actions.block_number,
+            value
+        )
+    })
+}
+
+/// Read the channel participants named by the detector (the tx's non-fiber
+/// owners, already sorted).
+fn parse_participants(metadata: &serde_json::Value, event_tx_hash: &[u8]) -> Result<Vec<Vec<u8>>> {
+    let entries = metadata
+        .get("participants")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "fiber channel_open missing participants metadata in tx 0x{} — detector bug",
+                hex::encode(event_tx_hash)
+            )
+        })?;
+    if entries.is_empty() {
+        anyhow::bail!(
+            "fiber channel_open has no non-fiber participants in tx 0x{}",
+            hex::encode(event_tx_hash)
+        );
+    }
+    entries
+        .iter()
+        .map(|entry| {
+            let hex_str = entry.as_str().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "fiber channel_open participant is not a string in tx 0x{}",
+                    hex::encode(event_tx_hash)
+                )
+            })?;
+            decode_hex_with_prefix(hex_str).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "fiber channel_open participant '{}' is not valid hex in tx 0x{}",
+                    hex_str,
+                    hex::encode(event_tx_hash)
+                )
+            })
+        })
+        .collect()
+}
+
+/// Read the funding cell's UDT identity. Both keys are written together by the
+/// detector, so exactly one of them being present is a detector bug.
+fn parse_udt_fields(
+    metadata: &serde_json::Value,
+    event_tx_hash: &[u8],
+) -> Result<(Option<Vec<u8>>, Option<u128>)> {
+    let type_hash_hex = metadata.get("udtTypeHash").and_then(|v| v.as_str());
+    let amount_str = metadata.get("udtAmount").and_then(|v| v.as_str());
+
+    match (type_hash_hex, amount_str) {
+        (None, None) => Ok((None, None)),
+        (Some(type_hash_hex), Some(amount_str)) => {
+            let type_hash = decode_hex_with_prefix(type_hash_hex).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "fiber channel_open: failed to decode udtTypeHash hex '{}' in tx 0x{}",
+                    type_hash_hex,
+                    hex::encode(event_tx_hash)
+                )
+            })?;
+            let amount: u128 = amount_str.parse().map_err(|e| {
+                anyhow::anyhow!(
+                    "fiber channel_open: failed to parse udtAmount '{}' in tx 0x{}: {}",
+                    amount_str,
+                    hex::encode(event_tx_hash),
+                    e
+                )
+            })?;
+            Ok((Some(type_hash), Some(amount)))
+        }
+        _ => anyhow::bail!(
+            "fiber channel_open has udtTypeHash/udtAmount partially set in tx 0x{} — detector bug",
+            hex::encode(event_tx_hash)
+        ),
+    }
 }
 
 fn parse_channel_outpoint(
@@ -653,11 +788,31 @@ mod tests {
         )
     }
 
+    /// Default participant used by fixtures that do not care about the
+    /// participant set (matches `make_tx_actions_with_fiber_action`'s owner).
+    const DEFAULT_PARTICIPANT: [u8; 32] = [0xAA; 32];
+
     fn make_channel_open_metadata(
         funding_tx_hash: &[u8],
         output_index: u32,
         capacity: u64,
         funding_lock_args: &[u8],
+    ) -> serde_json::Value {
+        make_channel_open_metadata_with_participants(
+            funding_tx_hash,
+            output_index,
+            capacity,
+            funding_lock_args,
+            &[&DEFAULT_PARTICIPANT[..]],
+        )
+    }
+
+    fn make_channel_open_metadata_with_participants(
+        funding_tx_hash: &[u8],
+        output_index: u32,
+        capacity: u64,
+        funding_lock_args: &[u8],
+        participants: &[&[u8]],
     ) -> serde_json::Value {
         let channel_outpoint = channel_outpoint_hex(funding_tx_hash, output_index);
 
@@ -666,6 +821,10 @@ mod tests {
             "channelOutpoint": channel_outpoint,
             "capacity": capacity.to_string(),
             "fundingLockArgs": format!("0x{}", hex::encode(funding_lock_args)),
+            "participants": participants
+                .iter()
+                .map(|p| format!("0x{}", hex::encode(p)))
+                .collect::<Vec<_>>(),
         })
     }
 
@@ -853,6 +1012,7 @@ mod tests {
                 "capacity": "50000000000",
                 "fundingLockArgs": format!("0x{}", hex::encode(funding_lock_args)),
                 "commitmentLockArgs": format!("0x{}", hex::encode(&commitment_args_v1)),
+                "commitmentOutputIndex": 0,
             }),
         );
         let revocation_actions = make_tx_actions_with_fiber_action(
@@ -865,6 +1025,7 @@ mod tests {
                 "event": "commitment_revocation",
                 "oldCommitmentLockArgs": format!("0x{}", hex::encode(&commitment_args_v1)),
                 "newCommitmentLockArgs": format!("0x{}", hex::encode(&commitment_args_v2)),
+                "newCommitmentOutputIndex": 0,
             }),
         );
         let settlement_actions = make_tx_actions_with_fiber_action(
@@ -1017,6 +1178,7 @@ mod tests {
             "capacity": "50000000000",
             "fundingLockArgs": format!("0x{}", hex::encode(funding_lock_args)),
             "commitmentLockArgs": format!("0x{}", hex::encode(&commitment_args)),
+            "commitmentOutputIndex": 0,
         });
         let fc_actions = make_tx_actions_with_fiber_action(
             &[0x42; 32],
@@ -1084,6 +1246,7 @@ mod tests {
             "capacity": "50000000000",
             "fundingLockArgs": format!("0x{}", hex::encode(funding_lock_args)),
             "commitmentLockArgs": format!("0x{}", hex::encode(&commitment_args)),
+            "commitmentOutputIndex": 0,
         });
         let fc_actions = make_tx_actions_with_fiber_action(
             &[0x42; 32],
@@ -1124,6 +1287,381 @@ mod tests {
         assert_eq!(channel.settlement_block, Some(5003));
     }
 
+    // ═══════════════════════════════════════════════════════════════════
+    // Real captured chain vectors (fetched from local mainnet/testnet CKB
+    // nodes on 2026-08-03; hermetic constants, no network in tests).
+    // ═══════════════════════════════════════════════════════════════════
+
+    /// Bug 1 red test (audit B2): channel_open metadata carrying the funding
+    /// output's UDT identity must be persisted on the channel row.
+    /// Vector: testnet USDI-funded open tx 0x4d49307f… (block 20565583),
+    /// funding output USDI type script hash 0x07ac97b5…, amount 1_000_000_050.
+    #[test]
+    fn test_channel_open_persists_udt_fields_from_metadata() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+
+        let funding_tx_hash = decode_hex_with_prefix(
+            "0x4d49307f8d0572947e53bfbf35b06ce9c56a4affa43eef1a3ded311b67e28e4c",
+        )
+        .unwrap();
+        let usdi_type_hash = "0x07ac97b5ff3df4b49f59a59f4d80d33d22c1263a57467c512c93b9c29b7a0de3";
+        // Non-fiber participants of the real open tx, sorted (see detector test).
+        let participant_a = "0x82d8b56da3115bcf8e7f4ebb05415e271967d14a2326d285d32bff3290f5b34f";
+        let participant_b = "0xe121dad700de2ac100e79d7bdbc505e4b63760aed7718c4170f0a46a2afb13cb";
+
+        let metadata = serde_json::json!({
+            "event": "channel_open",
+            "channelOutpoint": channel_outpoint_hex(&funding_tx_hash, 0),
+            "capacity": "36000000000",
+            "fundingLockArgs": "0x00510ea5249c2b102ab35607ee04418ae47cb83b",
+            "udtTypeHash": usdi_type_hash,
+            "udtAmount": "1000000050",
+            "participants": [participant_a, participant_b],
+        });
+        let actions = make_tx_actions_with_fiber_action(
+            &funding_tx_hash,
+            20565583,
+            1_774_580_273_479,
+            &[0xAA; 32],
+            "channel_open",
+            metadata,
+        );
+
+        let mut batch = StoreBatch::new(&store);
+        process_fiber_channel_events(&mut batch, &actions).unwrap();
+        batch.commit().unwrap();
+
+        let channel_id = keys::encode_fiber_channel_id(&funding_tx_hash, 0);
+        let channel = store.get_fiber_channel(&channel_id).unwrap().unwrap();
+        assert_eq!(channel.capacity, 36_000_000_000);
+        assert_eq!(
+            channel.udt_type_hash,
+            Some(decode_hex_with_prefix(usdi_type_hash).unwrap())
+        );
+        assert_eq!(channel.udt_amount, Some(1_000_000_050u128));
+        // Participants come from the detector metadata (non-fiber owners),
+        // matching the bulk reducer — NOT from the raw tx participant list.
+        assert_eq!(
+            channel.participants,
+            vec![
+                decode_hex_with_prefix(participant_a).unwrap(),
+                decode_hex_with_prefix(participant_b).unwrap(),
+            ]
+        );
+        // Both metadata participants must be indexed for address lookup.
+        assert_eq!(
+            store
+                .list_addr_fiber_channels(&decode_hex_with_prefix(participant_a).unwrap(), 10)
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    /// A channel_open without UDT metadata stays a pure-CKB channel.
+    #[test]
+    fn test_channel_open_without_udt_metadata_persists_none() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+
+        let funding_tx_hash = [0x10; 32];
+        let metadata = make_channel_open_metadata(&funding_tx_hash, 0, 500_00000000, &[0xCC; 20]);
+        let actions = make_tx_actions_with_fiber_action(
+            &[0x40; 32],
+            5000,
+            1_700_000_000,
+            &[0xAA; 32],
+            "channel_open",
+            metadata,
+        );
+
+        let mut batch = StoreBatch::new(&store);
+        process_fiber_channel_events(&mut batch, &actions).unwrap();
+        batch.commit().unwrap();
+
+        let channel_id = keys::encode_fiber_channel_id(&funding_tx_hash, 0);
+        let channel = store.get_fiber_channel(&channel_id).unwrap().unwrap();
+        assert_eq!(channel.udt_type_hash, None);
+        assert_eq!(channel.udt_amount, None);
+    }
+
+    /// Bug 3 red test (audit B3): the live force_close path must persist
+    /// delay_epoch and commitment_output_index exactly as the bulk reducer
+    /// does. Vector: mainnet force close 0x2bce4f4c… (block 15676315) of
+    /// channel 0x18e21924…:0. The bulk-built DB row for this channel carries
+    /// delayEpoch 11529216145580097542 (0xA000010000000006, from the 36-byte
+    /// commitment args) and the commitment output at index 0.
+    #[test]
+    fn test_force_close_persists_delay_epoch_and_commitment_output_index() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+
+        let funding_tx_hash = decode_hex_with_prefix(
+            "0x18e21924d3590e865473aa6e16be7a1d45c2b990d5519c03b82d371467783789",
+        )
+        .unwrap();
+        let commitment_args_hex =
+            "0xac47cad13bef8a2b025abb8726b72bc59d6ffdef06000000000100a00000000000000000";
+
+        let open_metadata = serde_json::json!({
+            "event": "channel_open",
+            "channelOutpoint": channel_outpoint_hex(&funding_tx_hash, 0),
+            "capacity": "106200000000",
+            "fundingLockArgs": "0xac47cad13bef8a2b025abb8726b72bc59d6ffdef",
+            "participants": [
+                "0x5a76ef0a255f2703c47c697332bc0e8fefdc02ef58a7f874143ba7d79bd31548",
+                "0x724f15b7e78b82b068f69d442a0993b549ef59d2f7a035066a6cc54847396bf6",
+            ],
+        });
+        let open_actions = make_tx_actions_with_fiber_action(
+            &funding_tx_hash,
+            15676252,
+            1_742_364_647_196,
+            &[0xAA; 32],
+            "channel_open",
+            open_metadata,
+        );
+        let mut batch = StoreBatch::new(&store);
+        process_fiber_channel_events(&mut batch, &open_actions).unwrap();
+        batch.commit().unwrap();
+
+        let force_close_metadata = serde_json::json!({
+            "event": "force_close",
+            "channelOutpoint": channel_outpoint_hex(&funding_tx_hash, 0),
+            "capacity": "106200000000",
+            "fundingLockArgs": "0xac47cad13bef8a2b025abb8726b72bc59d6ffdef",
+            "commitmentLockArgs": commitment_args_hex,
+            "commitmentOutputIndex": 0,
+        });
+        let fc_tx_hash = decode_hex_with_prefix(
+            "0x2bce4f4cdd42a23386325ae204bbebfb94dba267dedbe80569e1553c2fedcc7f",
+        )
+        .unwrap();
+        let fc_actions = make_tx_actions_with_fiber_action(
+            &fc_tx_hash,
+            15676315,
+            1_742_365_295_267,
+            &[0xAA; 32],
+            "force_close",
+            force_close_metadata,
+        );
+        let mut batch = StoreBatch::new(&store);
+        process_fiber_channel_events(&mut batch, &fc_actions).unwrap();
+        batch.commit().unwrap();
+
+        let channel_id = keys::encode_fiber_channel_id(&funding_tx_hash, 0);
+        let channel = store.get_fiber_channel(&channel_id).unwrap().unwrap();
+        assert_eq!(channel.state, FiberChannelState::ForceClosed);
+        assert_eq!(channel.close_tx_hash, Some(fc_tx_hash.clone()));
+        // Bulk parity: same values the bulk reducer wrote for this channel.
+        assert_eq!(channel.delay_epoch, Some(11529216145580097542u64));
+        assert_eq!(channel.commitment_output_index, Some(0));
+        assert_eq!(channel.commitment_tx_hash, Some(fc_tx_hash));
+    }
+
+    /// Bug 3: commitment_revocation must rotate delay_epoch and
+    /// commitment_output_index to the NEW commitment output, as bulk does.
+    #[test]
+    fn test_commitment_revocation_persists_delay_epoch_and_output_index() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+
+        let funding_tx_hash = [0x10; 32];
+        let funding_lock_args = [0xCC; 20];
+        let participant = [0xAA; 32];
+
+        let open_actions = make_tx_actions_with_fiber_action(
+            &[0x40; 32],
+            5000,
+            1_700_000_000,
+            &participant,
+            "channel_open",
+            make_channel_open_metadata(&funding_tx_hash, 0, 500_00000000, &funding_lock_args),
+        );
+        let mut batch = StoreBatch::new(&store);
+        process_fiber_channel_events(&mut batch, &open_actions).unwrap();
+        batch.commit().unwrap();
+
+        let mut commitment_args_v1 = vec![0xDD; 20];
+        commitment_args_v1.extend_from_slice(&100u64.to_le_bytes());
+        commitment_args_v1.extend_from_slice(&1u64.to_be_bytes());
+        let mut commitment_args_v2 = vec![0xDD; 20];
+        commitment_args_v2.extend_from_slice(&250u64.to_le_bytes());
+        commitment_args_v2.extend_from_slice(&2u64.to_be_bytes());
+
+        let fc_actions = make_tx_actions_with_fiber_action(
+            &[0x42; 32],
+            5002,
+            1_700_000_020,
+            &participant,
+            "force_close",
+            serde_json::json!({
+                "event": "force_close",
+                "channelOutpoint": channel_outpoint_hex(&funding_tx_hash, 0),
+                "capacity": "50000000000",
+                "fundingLockArgs": format!("0x{}", hex::encode(funding_lock_args)),
+                "commitmentLockArgs": format!("0x{}", hex::encode(&commitment_args_v1)),
+                "commitmentOutputIndex": 0,
+            }),
+        );
+        let mut batch = StoreBatch::new(&store);
+        process_fiber_channel_events(&mut batch, &fc_actions).unwrap();
+        batch.commit().unwrap();
+
+        let rev_actions = make_tx_actions_with_fiber_action(
+            &[0x44; 32],
+            5004,
+            1_700_000_040,
+            &participant,
+            "commitment_revocation",
+            serde_json::json!({
+                "event": "commitment_revocation",
+                "oldCommitmentLockArgs": format!("0x{}", hex::encode(&commitment_args_v1)),
+                "newCommitmentLockArgs": format!("0x{}", hex::encode(&commitment_args_v2)),
+                "newCommitmentOutputIndex": 0,
+                "newCommitmentOutputIndex": 1,
+            }),
+        );
+        let mut batch = StoreBatch::new(&store);
+        process_fiber_channel_events(&mut batch, &rev_actions).unwrap();
+        batch.commit().unwrap();
+
+        let channel_id = keys::encode_fiber_channel_id(&funding_tx_hash, 0);
+        let channel = store.get_fiber_channel(&channel_id).unwrap().unwrap();
+        assert_eq!(channel.state, FiberChannelState::ForceClosed);
+        // Rotated to the NEW commitment output's delay epoch and index.
+        assert_eq!(channel.delay_epoch, Some(250));
+        assert_eq!(channel.commitment_output_index, Some(1));
+    }
+
+    /// Bug 3 (failure-policy unification): an event naming a channel with no
+    /// indexed open is an invariant violation — the live path must fail fast
+    /// exactly like the bulk reducer, with the outpoint and block in context.
+    #[test]
+    fn test_channel_close_unknown_channel_fails_fast() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+
+        let close_metadata = serde_json::json!({
+            "event": "channel_close",
+            "channelOutpoint": channel_outpoint_hex(&[0x10; 32], 0),
+            "capacity": "50000000000",
+            "fundingLockArgs": "0xcccccccccccccccccccccccccccccccccccccccc",
+        });
+        let actions = make_tx_actions_with_fiber_action(
+            &[0x41; 32],
+            5001,
+            1_700_000_010,
+            &[0xAA; 32],
+            "channel_close",
+            close_metadata,
+        );
+
+        let mut batch = StoreBatch::new(&store);
+        let error = process_fiber_channel_events(&mut batch, &actions).unwrap_err();
+        let message = error.to_string();
+        assert!(
+            message.contains("1010101010"),
+            "error must name the funding outpoint: {message}"
+        );
+        assert!(
+            message.contains("5001"),
+            "error must carry the block number: {message}"
+        );
+    }
+
+    #[test]
+    fn test_force_close_unknown_channel_fails_fast() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+
+        let metadata = serde_json::json!({
+            "event": "force_close",
+            "channelOutpoint": channel_outpoint_hex(&[0x12; 32], 0),
+            "capacity": "50000000000",
+            "fundingLockArgs": "0xcccccccccccccccccccccccccccccccccccccccc",
+            "commitmentLockArgs": format!(
+                "0x{}",
+                hex::encode({
+                    let mut args = vec![0xDD; 20];
+                    args.extend_from_slice(&100u64.to_le_bytes());
+                    args.extend_from_slice(&1u64.to_be_bytes());
+                    args
+                })
+            ),
+            "commitmentOutputIndex": 0,
+        });
+        let actions = make_tx_actions_with_fiber_action(
+            &[0x42; 32],
+            5002,
+            1_700_000_020,
+            &[0xAA; 32],
+            "force_close",
+            metadata,
+        );
+
+        let mut batch = StoreBatch::new(&store);
+        assert!(process_fiber_channel_events(&mut batch, &actions).is_err());
+    }
+
+    #[test]
+    fn test_settlement_unknown_channel_fails_fast() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+
+        let mut commitment_args = vec![0xDD; 20];
+        commitment_args.extend_from_slice(&100u64.to_le_bytes());
+        commitment_args.extend_from_slice(&1u64.to_be_bytes());
+        let metadata = serde_json::json!({
+            "event": "settlement",
+            "capacity": "50000000000",
+            "commitmentLockArgs": format!("0x{}", hex::encode(&commitment_args)),
+        });
+        let actions = make_tx_actions_with_fiber_action(
+            &[0x43; 32],
+            5003,
+            1_700_000_030,
+            &[0xAA; 32],
+            "settlement",
+            metadata,
+        );
+
+        let mut batch = StoreBatch::new(&store);
+        assert!(process_fiber_channel_events(&mut batch, &actions).is_err());
+    }
+
+    #[test]
+    fn test_commitment_revocation_unknown_channel_fails_fast() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+
+        let mut old_args = vec![0xDD; 20];
+        old_args.extend_from_slice(&100u64.to_le_bytes());
+        old_args.extend_from_slice(&1u64.to_be_bytes());
+        let mut new_args = vec![0xEE; 20];
+        new_args.extend_from_slice(&100u64.to_le_bytes());
+        new_args.extend_from_slice(&2u64.to_be_bytes());
+        let metadata = serde_json::json!({
+            "event": "commitment_revocation",
+            "oldCommitmentLockArgs": format!("0x{}", hex::encode(&old_args)),
+            "newCommitmentLockArgs": format!("0x{}", hex::encode(&new_args)),
+            "newCommitmentOutputIndex": 0,
+            "newCommitmentOutputIndex": 0,
+        });
+        let actions = make_tx_actions_with_fiber_action(
+            &[0x44; 32],
+            5004,
+            1_700_000_040,
+            &[0xAA; 32],
+            "commitment_revocation",
+            metadata,
+        );
+
+        let mut batch = StoreBatch::new(&store);
+        assert!(process_fiber_channel_events(&mut batch, &actions).is_err());
+    }
+
     #[test]
     fn test_no_fiber_actions_is_noop() {
         let dir = TempDir::new().unwrap();
@@ -1146,148 +1684,9 @@ mod tests {
         assert!(channels.is_empty());
     }
 
-    /// Deliberate behaviour change (was `test_channel_close_missing_channel_fails_fast`).
-    ///
-    /// A close whose funding outpoint has no channel record is an ordinary
-    /// permissionless-chain shape, not an indexer invariant violation: the
-    /// detector classifies a splice (funding input + funding output) as
-    /// `channel_close`, so the new funding cell never gets a channel record and
-    /// its later spend lands here. Chain data is untrusted input — halting sync
-    /// on it contradicts the malformed-sUDT skip-with-warning policy.
-    #[test]
-    fn test_channel_close_missing_channel_is_skipped() {
-        let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
-
-        let close_metadata = serde_json::json!({
-            "event": "channel_close",
-            "channelOutpoint": channel_outpoint_hex(&[0x10; 32], 0),
-            "capacity": "50000000000",
-            "fundingLockArgs": "0xcccccccccccccccccccccccccccccccccccccccc",
-        });
-        let actions = make_tx_actions_with_fiber_action(
-            &[0x41; 32],
-            5001,
-            1_700_000_010,
-            &[0xAA; 32],
-            "channel_close",
-            close_metadata,
-        );
-
-        let mut batch = StoreBatch::new(&store);
-        let summary = apply_fiber_channel_events(&mut batch, &actions).unwrap();
-        batch.commit().unwrap();
-
-        assert_eq!(summary.applied, 0);
-        assert_eq!(summary.skipped_unknown_channel, 1);
-        assert!(store
-            .list_fiber_channels(10, None, None)
-            .unwrap()
-            .is_empty());
-    }
-
-    #[test]
-    fn test_force_close_missing_channel_is_skipped() {
-        let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
-
-        let metadata = serde_json::json!({
-            "event": "force_close",
-            "channelOutpoint": channel_outpoint_hex(&[0x12; 32], 0),
-            "capacity": "50000000000",
-            "fundingLockArgs": "0xcccccccccccccccccccccccccccccccccccccccc",
-            "commitmentLockArgs": "0xdddddddddddddddddddddddddddddddddddddddd",
-        });
-        let actions = make_tx_actions_with_fiber_action(
-            &[0x42; 32],
-            5002,
-            1_700_000_020,
-            &[0xAA; 32],
-            "force_close",
-            metadata,
-        );
-
-        let mut batch = StoreBatch::new(&store);
-        let summary = apply_fiber_channel_events(&mut batch, &actions).unwrap();
-        batch.commit().unwrap();
-
-        assert_eq!(summary.applied, 0);
-        assert_eq!(summary.skipped_unknown_channel, 1);
-        assert!(store
-            .list_fiber_channels(10, None, None)
-            .unwrap()
-            .is_empty());
-    }
-
-    /// Reachable shape (a): a tx that only CREATES a commitment-lock output
-    /// classifies to `None`, so no `CF_FIBER_CHANNEL_BY_COMMITMENT` mapping is
-    /// ever written; the later spend of that cell arrives here as a settlement
-    /// for a commitment the indexer never saw.
-    #[test]
-    fn test_settlement_missing_channel_by_commitment_is_skipped() {
-        let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
-
-        let metadata = serde_json::json!({
-            "event": "settlement",
-            "capacity": "50000000000",
-            "commitmentLockArgs": "0xdddddddddddddddddddddddddddddddddddddddd",
-        });
-        let actions = make_tx_actions_with_fiber_action(
-            &[0x43; 32],
-            5003,
-            1_700_000_030,
-            &[0xAA; 32],
-            "settlement",
-            metadata,
-        );
-
-        let mut batch = StoreBatch::new(&store);
-        let summary = apply_fiber_channel_events(&mut batch, &actions).unwrap();
-        batch.commit().unwrap();
-
-        assert_eq!(summary.applied, 0);
-        assert_eq!(summary.skipped_unknown_channel, 1);
-        assert!(store
-            .list_fiber_channels(10, None, None)
-            .unwrap()
-            .is_empty());
-    }
-
-    #[test]
-    fn test_commitment_revocation_missing_channel_by_commitment_is_skipped() {
-        let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
-
-        let metadata = serde_json::json!({
-            "event": "commitment_revocation",
-            "oldCommitmentLockArgs": "0xdddddddddddddddddddddddddddddddddddddddd",
-            "newCommitmentLockArgs": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
-        });
-        let actions = make_tx_actions_with_fiber_action(
-            &[0x44; 32],
-            5004,
-            1_700_000_040,
-            &[0xAA; 32],
-            "commitment_revocation",
-            metadata,
-        );
-
-        let mut batch = StoreBatch::new(&store);
-        let summary = apply_fiber_channel_events(&mut batch, &actions).unwrap();
-        batch.commit().unwrap();
-
-        assert_eq!(summary.applied, 0);
-        assert_eq!(summary.skipped_unknown_channel, 1);
-        assert!(store
-            .list_fiber_channels(10, None, None)
-            .unwrap()
-            .is_empty());
-    }
-
-    /// The skip policy covers unknown channels only. A second `channel_open` on
-    /// one funding outpoint cannot happen on-chain (a live cell is consumed
-    /// once), so it stays a hard failure: it means replay or reorg mishandling.
+    /// A second `channel_open` on one funding outpoint cannot happen on-chain
+    /// (a live cell is consumed once), so it is a hard failure: it means replay
+    /// or reorg mishandling.
     #[test]
     fn test_duplicate_channel_open_still_fails_fast() {
         let dir = TempDir::new().unwrap();
@@ -1331,8 +1730,13 @@ mod tests {
         let participant_a = [0xAA; 32];
         let participant_b = [0xBB; 32];
 
-        let metadata =
-            make_channel_open_metadata(&funding_tx_hash, 0, 500_00000000, &funding_lock_args);
+        let metadata = make_channel_open_metadata_with_participants(
+            &funding_tx_hash,
+            0,
+            500_00000000,
+            &funding_lock_args,
+            &[&participant_a[..], &participant_b[..]],
+        );
 
         let actions = make_tx_actions_with_participants_fiber_action(
             &[0x40; 32],
@@ -1396,6 +1800,7 @@ mod tests {
             "capacity": "50000000000",
             "fundingLockArgs": format!("0x{}", hex::encode(funding_lock_args)),
             "commitmentLockArgs": format!("0x{}", hex::encode(&commitment_args_v1)),
+            "commitmentOutputIndex": 0,
         });
         let fc_actions = make_tx_actions_with_fiber_action(
             &[0x42; 32],
@@ -1428,6 +1833,7 @@ mod tests {
             "event": "commitment_revocation",
             "oldCommitmentLockArgs": format!("0x{}", hex::encode(&commitment_args_v1)),
             "newCommitmentLockArgs": format!("0x{}", hex::encode(&commitment_args_v2)),
+            "newCommitmentOutputIndex": 0,
         });
         let rev_actions = make_tx_actions_with_fiber_action(
             &[0x44; 32],
@@ -1499,6 +1905,7 @@ mod tests {
             "capacity": "50000000000",
             "fundingLockArgs": format!("0x{}", hex::encode(funding_lock_args)),
             "commitmentLockArgs": format!("0x{}", hex::encode(&args_v1)),
+            "commitmentOutputIndex": 0,
         });
         let fc_actions = make_tx_actions_with_fiber_action(
             &[0x42; 32],
@@ -1523,6 +1930,7 @@ mod tests {
             "event": "commitment_revocation",
             "oldCommitmentLockArgs": format!("0x{}", hex::encode(&args_v1)),
             "newCommitmentLockArgs": format!("0x{}", hex::encode(&args_v2)),
+            "newCommitmentOutputIndex": 0,
         });
         let rev1_actions = make_tx_actions_with_fiber_action(
             &[0x44; 32],
@@ -1547,6 +1955,7 @@ mod tests {
             "event": "commitment_revocation",
             "oldCommitmentLockArgs": format!("0x{}", hex::encode(&args_v2)),
             "newCommitmentLockArgs": format!("0x{}", hex::encode(&args_v3)),
+            "newCommitmentOutputIndex": 0,
         });
         let rev2_actions = make_tx_actions_with_fiber_action(
             &[0x45; 32],

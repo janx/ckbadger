@@ -1644,7 +1644,12 @@ type FiberChannelState = 'open' | 'cooperativelyClosed' | 'forceClosed' | 'settl
 interface FiberChannel {
   channelId: string;
   state: FiberChannelState;
+  /** Funding cell CKB capacity in shannons — always CKB, even for UDT-funded channels. */
   capacity: string;
+  /** Type script hash of the funding token; null for plain-CKB channels. */
+  udtTypeHash: string | null;
+  /** Token amount held by the funding cell (u128 decimal); null for plain-CKB channels. */
+  udtAmount: string | null;
   fundingTxHash: string;
   fundingOutputIndex: number;
   openBlock: number;
@@ -1652,9 +1657,13 @@ interface FiberChannel {
   closeBlock: number | null;
   closeTimestamp: string | null;
   closeTxHash: string | null;
+  commitmentTxHash: string | null;
+  /** Revocation delay from the commitment lock args; null unless force-closed. */
+  delayEpoch: number | null;
   settlementBlock: number | null;
   settlementTimestamp: string | null;
   settlementTxHash: string | null;
+  /** Non-fiber owners of the funding tx; the fiber locks are never participants. */
   participants: string[];
 }
 
