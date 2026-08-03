@@ -293,6 +293,15 @@ pub struct DaoDepositCacheEntry {
     pub withdraw_request_output_index: Option<i16>,
     pub withdraw_request_block: Option<i64>,
     pub withdraw_request_ar: Option<i64>,
+    /// Exact occupied capacity of the phase-1 withdraw-request cell.
+    ///
+    /// RFC-0023 computes `counted_capacity` from the WITHDRAWING cell, not
+    /// the original deposit cell. The DAO type script does not enforce lock
+    /// preservation, so a withdraw request may carry a different lock than
+    /// its deposit — and then the two occupied capacities differ. Set at
+    /// phase-1; `None` while the deposit is still active (status 0).
+    #[serde(default)]
+    pub withdraw_request_occupied_capacity: Option<i64>,
     pub withdraw_block: Option<i64>,
     pub withdraw_tx: Option<Vec<u8>>,
     #[serde(default)]

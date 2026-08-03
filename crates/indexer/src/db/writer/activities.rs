@@ -446,7 +446,15 @@ fn build_tx_actions<'a>(
         .collect();
 
     // --- Phase 1: Per-owner item deltas and DAO protocol actions ---
+    // `all_protocol_actions` holds per-CELL DAO actions (deposit/withdraw_request/
+    // withdraw_complete below) and must keep every legitimate repeat — one tx can
+    // create/consume N cells with identical capacity for one lock, and each is a
+    // distinct on-chain event. Detector-derived actions are collected separately
+    // in `detector_protocol_actions` because those are emitted once per
+    // participating OWNER for the same tx-level event and must be deduped before
+    // joining the final list (see the dedup call below).
     let mut all_protocol_actions: Vec<ProtocolAction> = Vec::new();
+    let mut detector_protocol_actions: Vec<ProtocolAction> = Vec::new();
     let mut tx_type_calls: BTreeSet<(&[u8], i16, &[u8])> = BTreeSet::new();
     let mut tx_lock_calls: BTreeSet<(&[u8], i16, &[u8])> = BTreeSet::new();
     let mut participants = Vec::with_capacity(owner_hashes.len());
@@ -575,7 +583,10 @@ fn build_tx_actions<'a>(
             })
             .collect();
 
-        // Run detectors per-owner, collect at TX level
+        // Run detectors per-owner, collect at TX level. Detector actions are
+        // gathered into their own vec (not `all_protocol_actions`) so the
+        // per-owner dedup below never touches the per-cell DAO actions pushed
+        // earlier in this loop.
         let detector_actions: Vec<ProtocolAction> = applicable_detectors
             .iter()
             .flat_map(|d| {
@@ -589,7 +600,7 @@ fn build_tx_actions<'a>(
                 )
             })
             .collect();
-        all_protocol_actions.extend(detector_actions);
+        detector_protocol_actions.extend(detector_actions);
 
         // Compute tags bitmask
         let mut tags: u16 = 0;
@@ -624,8 +635,14 @@ fn build_tx_actions<'a>(
         });
     }
 
-    // Deduplicate protocol actions by (protocol, action, metadata)
-    dedup_protocol_actions(&mut all_protocol_actions);
+    // Deduplicate detector-derived actions only: the same detector re-derives
+    // one tx-level event per participating owner (utxoswap/stablepp/fiber/
+    // rgbpp), so owner-duplicates must collapse to one. Per-cell DAO actions in
+    // `all_protocol_actions` are NOT deduped — they are emitted once per cell
+    // and legitimately repeat (e.g. one tx creating six equal-capacity DAO
+    // deposits for one lock must keep all six `dao:deposit` actions).
+    dedup_protocol_actions(&mut detector_protocol_actions);
+    all_protocol_actions.extend(detector_protocol_actions);
 
     // If any protocol_actions exist, set TAG_PROTOCOL on all participants
     if !all_protocol_actions.is_empty() {
@@ -668,6 +685,12 @@ fn build_tx_actions<'a>(
 }
 
 /// Deduplicate protocol actions by (protocol, action, metadata_raw).
+///
+/// Callers must only pass detector-derived actions here (see `build_tx_actions`):
+/// a detector re-derives the same tx-level event once per participating owner,
+/// so owner-duplicates need collapsing. Per-cell DAO actions (deposit/
+/// withdraw_request/withdraw_complete) must never pass through this function —
+/// they are emitted once per cell and legitimately repeat within one tx.
 fn dedup_protocol_actions(actions: &mut Vec<ProtocolAction>) {
     let mut seen = HashSet::new();
     actions.retain(|a| {
@@ -1617,6 +1640,254 @@ mod tests {
         let meta = dao_action.metadata_value().unwrap();
         assert_eq!(meta["capacity"], 102_00000000i64);
         assert_eq!(meta["compensation"], 5_00000000i64);
+    }
+
+    #[test]
+    fn test_dao_deposit_multiplicity_preserved_for_repeated_identical_outputs() {
+        // Regression: mainnet tx
+        // 0x2ee6d00a2840ff050336bc1e412c7ca2f0d73c3669596006897d9525fa3c880a
+        // (block 19841165) creates SIX identical nervos-dao deposit outputs for
+        // one lock — same capacity, same lock hash. `dedup_protocol_actions`
+        // used to run over the whole TX-level action list (including these
+        // per-cell DAO actions) and collapsed the six legitimate deposits down
+        // to one, silently depressing DailyActivityStats.dao_deposit_count and
+        // contradicting the owner's ckbDelta (which reflects all six deposits
+        // leaving the account).
+        let dao_code_hash = crate::rpc::parse_hex_to_bytes(crate::parser::dao::DAO_CODE_HASH);
+        let owner_lock_hash = crate::rpc::parse_hex_to_bytes(
+            "0xb73b6ab39d79390c6de90a09c96b290c331baf1798ed6f97aed02590929734e8",
+        );
+        let tx_hash = crate::rpc::parse_hex_to_bytes(
+            "0x2ee6d00a2840ff050336bc1e412c7ca2f0d73c3669596006897d9525fa3c880a",
+        );
+        let deposit_capacity: i64 = 12_001_863_105_591;
+
+        let mut outputs: Vec<OwnedOutput> = Vec::new();
+        for _ in 0..6 {
+            let mut output = make_output(
+                0xAA,
+                deposit_capacity,
+                Some(dao_code_hash.clone()),
+                None,
+                None,
+                vec![0u8; 8], // 8 zero bytes: deposit_block == 0 => deposit
+            );
+            output.lock_script_hash = owner_lock_hash.clone();
+            outputs.push(output);
+        }
+
+        let tx = TxView {
+            tx_hash: &tx_hash,
+            block_hash: &[0xD1; 32],
+            tx_index: 1,
+            block_number: 19_841_165,
+            timestamp: 1_700_300_000,
+            is_cellbase: false,
+            inputs: vec![],
+            outputs: outputs.iter().map(|o| o.view()).collect(),
+        };
+
+        let actions_list = build_tx_actions_for_block_no_detectors(&[tx]).unwrap();
+        assert_eq!(actions_list.len(), 1);
+        let actions = &actions_list[0];
+
+        let deposit_actions: Vec<_> = actions
+            .protocol_actions
+            .iter()
+            .filter(|a| a.protocol == "dao" && a.action == "deposit")
+            .collect();
+        assert_eq!(
+            deposit_actions.len(),
+            6,
+            "six identical DAO deposit outputs for one owner must produce six \
+             dao:deposit protocol actions, not be collapsed by dedup"
+        );
+        for action in &deposit_actions {
+            let meta = action.metadata_value().unwrap();
+            assert_eq!(meta["capacity"], deposit_capacity);
+            assert_eq!(
+                meta["lockHash"].as_str().unwrap(),
+                hex::encode(&owner_lock_hash)
+            );
+        }
+    }
+
+    #[test]
+    fn test_dao_withdraw_request_multiplicity_preserved_for_repeated_identical_outputs() {
+        // Same legitimate-repeat shape as the deposit case above: a single tx
+        // can create multiple withdraw-request cells with identical
+        // capacity/deposit-block for one lock (e.g. splitting one big deposit
+        // into several requests). Each is a distinct on-chain cell and must
+        // produce its own protocol action.
+        let dao_code_hash = crate::rpc::parse_hex_to_bytes(crate::parser::dao::DAO_CODE_HASH);
+        let owner = 0xAA;
+        let capacity: i64 = 12_001_863_105_591;
+        let deposit_block: u64 = 19_800_000;
+
+        let mut outputs: Vec<OwnedOutput> = Vec::new();
+        for _ in 0..3 {
+            outputs.push(make_output(
+                owner,
+                capacity,
+                Some(dao_code_hash.clone()),
+                None,
+                None,
+                deposit_block.to_le_bytes().to_vec(),
+            ));
+        }
+
+        let tx = TxView {
+            tx_hash: &[0x51; 32],
+            block_hash: &[0xD2; 32],
+            tx_index: 1,
+            block_number: 19_841_200,
+            timestamp: 1_700_300_100,
+            is_cellbase: false,
+            inputs: vec![],
+            outputs: outputs.iter().map(|o| o.view()).collect(),
+        };
+
+        let actions_list = build_tx_actions_for_block_no_detectors(&[tx]).unwrap();
+        let actions = &actions_list[0];
+
+        let requests: Vec<_> = actions
+            .protocol_actions
+            .iter()
+            .filter(|a| a.protocol == "dao" && a.action == "withdraw_request")
+            .collect();
+        assert_eq!(
+            requests.len(),
+            3,
+            "three identical DAO withdraw_request outputs for one owner must produce \
+             three dao:withdraw_request protocol actions, not be collapsed by dedup"
+        );
+        for action in &requests {
+            let meta = action.metadata_value().unwrap();
+            assert_eq!(meta["capacity"], capacity);
+            assert_eq!(meta["depositBlock"], deposit_block as i64);
+        }
+    }
+
+    #[test]
+    fn test_dao_withdraw_complete_multiplicity_preserved_for_repeated_identical_inputs() {
+        // Same legitimate-repeat shape on the input side: a tx can complete
+        // several withdraw-request cells with identical capacity/compensation
+        // for one lock in a single transaction. Each consumed cell is a
+        // distinct withdrawal and must produce its own protocol action.
+        let dao_code_hash = crate::rpc::parse_hex_to_bytes(crate::parser::dao::DAO_CODE_HASH);
+        let owner = 0xAA;
+        let capacity: i64 = 12_001_863_105_591;
+        let compensation: i64 = 5_00000000;
+
+        let mut inputs: Vec<OwnedInput> = Vec::new();
+        for _ in 0..4 {
+            let mut input = make_input(owner, capacity, capacity);
+            input.type_code_hash = Some(dao_code_hash.clone());
+            input.is_dao_withdraw_request = true;
+            input.dao_compensation = Some(compensation);
+            inputs.push(input);
+        }
+
+        let tx = TxView {
+            tx_hash: &[0x52; 32],
+            block_hash: &[0xD3; 32],
+            tx_index: 1,
+            block_number: 19_841_300,
+            timestamp: 1_700_300_200,
+            is_cellbase: false,
+            inputs: inputs.iter().map(|i| i.view()).collect(),
+            outputs: vec![],
+        };
+
+        let actions_list = build_tx_actions_for_block_no_detectors(&[tx]).unwrap();
+        let actions = &actions_list[0];
+
+        let completes: Vec<_> = actions
+            .protocol_actions
+            .iter()
+            .filter(|a| a.protocol == "dao" && a.action == "withdraw_complete")
+            .collect();
+        assert_eq!(
+            completes.len(),
+            4,
+            "four identical DAO withdraw_complete inputs for one owner must produce \
+             four dao:withdraw_complete protocol actions, not be collapsed by dedup"
+        );
+        for action in &completes {
+            let meta = action.metadata_value().unwrap();
+            assert_eq!(meta["capacity"], capacity);
+            assert_eq!(meta["compensation"], compensation);
+        }
+    }
+
+    #[test]
+    fn test_detector_actions_dedup_across_owners_still_collapses() {
+        // Regression guard for the DAO-dedup fix above: detector-derived
+        // actions represent ONE tx-level event that gets re-derived once per
+        // participating owner (see `applicable_detectors` in
+        // `build_tx_actions`), so owner-duplicates must still collapse to a
+        // single action — this must keep working even though per-cell DAO
+        // actions now bypass dedup entirely.
+        struct ConstantActionDetector;
+
+        impl ProtocolDetector for ConstantActionDetector {
+            fn might_apply(&self, _tx: &TxView<'_>) -> bool {
+                true
+            }
+
+            fn detect(
+                &self,
+                _tx: &TxView<'_>,
+                _owner_lock_hash: &[u8],
+                _accum: &OwnerAccum<'_>,
+                _item_deltas: &[ItemDelta],
+                _type_calls: &[TypeCallEntry],
+                _lock_calls: &[LockCallEntry],
+            ) -> Vec<ProtocolAction> {
+                vec![ProtocolAction::new(
+                    "mock",
+                    "shared_event",
+                    serde_json::json!({ "txScoped": true }),
+                )]
+            }
+        }
+
+        let alice = 0xAA;
+        let bob = 0xBB;
+
+        let outputs = vec![
+            make_output(bob, 100_00000000, None, None, None, vec![]),
+            make_output(alice, 200_00000000, None, None, None, vec![]),
+        ];
+
+        let alice_input_owned = make_input(alice, 300_00000000, 61_00000000);
+        let tx = TxView {
+            tx_hash: &[0x53; 32],
+            block_hash: &[0xD4; 32],
+            tx_index: 1,
+            block_number: 3000,
+            timestamp: 1_700_400_000,
+            is_cellbase: false,
+            inputs: vec![alice_input_owned.view()],
+            outputs: outputs.iter().map(|o| o.view()).collect(),
+        };
+
+        let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(ConstantActionDetector)];
+        let actions_list = build_tx_actions_for_block(&[tx], &detectors).unwrap();
+        assert_eq!(actions_list.len(), 1);
+        let actions = &actions_list[0];
+
+        let mock_actions: Vec<_> = actions
+            .protocol_actions
+            .iter()
+            .filter(|a| a.protocol == "mock" && a.action == "shared_event")
+            .collect();
+        assert_eq!(
+            mock_actions.len(),
+            1,
+            "the same detector action re-derived for 2 different owners must dedup to \
+             exactly one"
+        );
     }
 
     #[test]

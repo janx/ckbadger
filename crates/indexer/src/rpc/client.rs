@@ -135,6 +135,23 @@ impl CkbRpcClient {
             .await
     }
 
+    /// Consensus secondary issuance per epoch, in shannons.
+    ///
+    /// Chain data is the source of truth: this constant plus each block
+    /// header's epoch position fully determines the block's total secondary
+    /// issuance `s_i`, which RFC-0023 splits between miner and the DAO/
+    /// treasury pool.
+    pub async fn get_secondary_epoch_reward(&self) -> Result<u64> {
+        let consensus: serde_json::Value = self.call("get_consensus", ()).await?;
+        let raw = consensus
+            .get("secondary_epoch_reward")
+            .and_then(|value| value.as_str())
+            .ok_or_else(|| {
+                anyhow::anyhow!("get_consensus response missing secondary_epoch_reward")
+            })?;
+        parse_hex_u64(raw)
+    }
+
     pub async fn get_transaction(&self, hash: &str) -> Result<Option<TransactionWithStatus>> {
         self.call_optional("get_transaction", (hash,)).await
     }

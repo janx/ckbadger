@@ -125,6 +125,35 @@ impl BulkBuildEngine {
             .ckb_store()
             .ok_or_else(|| anyhow!("bulk build requires direct CKB RocksDB reader"))?;
         let mut runtime = BulkBuildRuntimeState::default();
+        runtime
+            .owners
+            .dao
+            .set_secondary_epoch_reward(required_secondary_epoch_reward(
+                indexer.writer.store().as_ref(),
+            )?);
+        // Resuming above genesis: the first block recorded must split its
+        // secondary issuance against its parent's DAO C/U, which is already
+        // persisted.
+        {
+            let store = indexer.writer.store();
+            let (resume_tip, _resume_tip_hash) = store.get_sync_tip()?;
+            if resume_tip > 0 {
+                let parent = store.get_block_header(resume_tip)?.ok_or_else(|| {
+                    anyhow!(
+                        "missing parent block header while resuming bulk build: block={}",
+                        resume_tip
+                    )
+                })?;
+                let (c, _s, u) = dao_csu_from_bytes(&parent.dao).ok_or_else(|| {
+                    anyhow!(
+                        "invalid parent DAO field while resuming bulk build: block={}, dao_len={}",
+                        resume_tip,
+                        parent.dao.len()
+                    )
+                })?;
+                runtime.owners.dao.seed_prev_dao_cu(c, u);
+            }
+        }
         let mut sync_totals = BulkBuildSyncTotals::default();
         let mut materializer = materialize::Materializer::new(
             indexer.writer.store().as_ref(),
@@ -2188,6 +2217,29 @@ impl ChainStatsAccumulator {
     }
 }
 
+/// Read the consensus secondary issuance per epoch persisted at indexer
+/// startup. Bulk build cannot produce exact miner secondary issuance without
+/// it, so a missing value is an invariant violation, not a default.
+/// Extract DAO `C`/`S`/`U` from a 32-byte header DAO field.
+fn dao_csu_from_bytes(dao: &[u8]) -> Option<(i128, i128, i128)> {
+    if dao.len() < 32 {
+        return None;
+    }
+    let c = u64::from_le_bytes(dao[0..8].try_into().ok()?) as i128;
+    let s = u64::from_le_bytes(dao[16..24].try_into().ok()?) as i128;
+    let u = u64::from_le_bytes(dao[24..32].try_into().ok()?) as i128;
+    Some((c, s, u))
+}
+
+fn required_secondary_epoch_reward(store: &CkbadgerStore) -> Result<u64> {
+    store.get_secondary_epoch_reward()?.ok_or_else(|| {
+        anyhow!(
+            "missing consensus secondary_epoch_reward in sync meta; \
+             it is fetched from the node's get_consensus at indexer startup"
+        )
+    })
+}
+
 struct BulkBuildRuntimeState {
     interner: interner::IdentityInterner,
     interner_liveness: interner::IdentityLiveness,
@@ -3271,6 +3323,15 @@ where
     F: FnOnce(&CkbadgerStore, &CkbadgerStore, BulkStageTestState) -> Result<T>,
 {
     let mut runtime = BulkBuildRuntimeState::default();
+    runtime
+        .owners
+        .dao
+        .set_secondary_epoch_reward(61_369_863_013_698);
+    // Mid-chain fixture: seed the parent DAO C/U for the miner split.
+    runtime
+        .owners
+        .dao
+        .seed_prev_dao_cu(3_360_000_000_000_000_000, 100_000_000_000_000);
     let mut sync_totals = BulkBuildSyncTotals::default();
 
     let root = unique_temp_test_dir(temp_root_label);
@@ -3414,6 +3475,15 @@ fn materialize_bulk_artifacts_from_block_batches_for_test_impl(
     block_batches: &[&[BlockResponseWithCycles]],
 ) -> Result<BulkArtifactSnapshot> {
     let mut runtime = BulkBuildRuntimeState::default();
+    runtime
+        .owners
+        .dao
+        .set_secondary_epoch_reward(61_369_863_013_698);
+    // Mid-chain fixture: seed the parent DAO C/U for the miner split.
+    runtime
+        .owners
+        .dao
+        .seed_prev_dao_cu(3_360_000_000_000_000_000, 100_000_000_000_000);
     let mut sync_totals = BulkBuildSyncTotals::default();
 
     let root = unique_temp_test_dir("bulk-build-core-owners");
@@ -7620,6 +7690,21 @@ mod tests {
     #[test]
     fn prepare_finalize_artifacts_matches_direct_finalize_components() {
         let mut runtime = BulkBuildRuntimeState::default();
+        runtime
+            .owners
+            .dao
+            .set_secondary_epoch_reward(61_369_863_013_698);
+        // Mid-chain fixture: seed the parent DAO C/U for the miner split.
+        runtime
+            .owners
+            .dao
+            .seed_prev_dao_cu(3_360_000_000_000_000_000, 100_000_000_000_000);
+        // The fixture replays a single mid-chain block; seed the parent
+        // DAO C/U it splits its secondary issuance against.
+        runtime
+            .owners
+            .dao
+            .seed_prev_dao_cu(3_360_000_000_000_000_000, 100_000_000_000_000);
         let block = bulk_build_addr_tx_fixture();
         runtime
             .apply_blocks_hex(std::slice::from_ref(&block), true, &FxHashMap::default())
@@ -8493,6 +8578,21 @@ mod tests {
         use super::owners::BulkReducer;
 
         let mut runtime = BulkBuildRuntimeState::default();
+        runtime
+            .owners
+            .dao
+            .set_secondary_epoch_reward(61_369_863_013_698);
+        // Mid-chain fixture: seed the parent DAO C/U for the miner split.
+        runtime
+            .owners
+            .dao
+            .seed_prev_dao_cu(3_360_000_000_000_000_000, 100_000_000_000_000);
+        // The fixture replays a single mid-chain block; seed the parent
+        // DAO C/U it splits its secondary issuance against.
+        runtime
+            .owners
+            .dao
+            .seed_prev_dao_cu(3_360_000_000_000_000_000, 100_000_000_000_000);
         let block = bulk_build_addr_tx_fixture();
         runtime
             .apply_blocks_hex(std::slice::from_ref(&block), true, &FxHashMap::default())

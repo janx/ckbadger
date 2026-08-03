@@ -57,9 +57,22 @@ fn dao_frozen_request_compensation(entry: &DaoDepositCacheEntry) -> anyhow::Resu
             request_ar
         )
     })?;
+    // RFC-0023 derives `counted_capacity` from the WITHDRAWING cell — the
+    // phase-1 request cell — not from the original deposit cell. The DAO type
+    // script does not enforce lock preservation, so a request may carry a
+    // different lock and therefore a different occupied capacity.
+    let request_occupied_capacity =
+        entry.withdraw_request_occupied_capacity.ok_or_else(|| {
+            anyhow::anyhow!(
+                "DAO deposit missing withdraw request occupied capacity: deposit_block={}, request_block={:?}, status={}",
+                entry.deposit_block_number,
+                entry.withdraw_request_block,
+                entry.status
+            )
+        })?;
     calculate_dao_compensation_from_ar(
         entry.capacity,
-        entry.occupied_capacity,
+        request_occupied_capacity,
         deposit_ar,
         request_ar,
     )
@@ -1191,9 +1204,71 @@ mod tests {
             withdraw_request_ar: Some(11_000),
             withdraw_block: Some(30),
             withdraw_tx: Some(vec![0x33; 32]),
+            withdraw_request_occupied_capacity: Some(142_00000000),
             withdraw_to_output_index: Some(0),
             compensation: Some(15_80000000),
         }
+    }
+
+    /// Real mainnet vector: deposit consumed by phase-1 at block 6012563,
+    /// completed at block 6201594. The depositor changed lock at phase-1 —
+    /// the deposit cell carried a 33-byte-args lock (occupied 115 CKB) while
+    /// the withdraw-request cell carries a standard 20-byte-args secp lock
+    /// (occupied 102 CKB).
+    ///
+    /// Per RFC-0023 the protocol computes `counted_capacity` from the
+    /// WITHDRAWING (phase-1 request) cell's occupied capacity, so the exact
+    /// compensation is 2358516107 shannons. Using the deposit cell's
+    /// occupied capacity instead yields 2357681847 — 834260 shannons short.
+    ///
+    /// Request outpoint:
+    /// 0x5e883663a8e985f96102da878bc0e1c8fb9b39e194d911e542bdc0961407609b:0
+    #[test]
+    fn frozen_compensation_uses_the_withdraw_request_cells_occupied_capacity() {
+        let entry = DaoDepositCacheEntry {
+            capacity: 3_685_398_922_674,
+            // Deposit cell: 8 + 33 + 33 (lock args) + 33 + 0 + 8 = 115 bytes.
+            occupied_capacity: 115_00000000,
+            deposit_block_number: 5_954_003,
+            deposit_timestamp: 0,
+            lock_script_hash: vec![0x11; 32],
+            deposit_ar: 10_724_098_007_765_377,
+            status: 1,
+            withdraw_request_tx: Some(vec![0x22; 32]),
+            withdraw_request_output_index: Some(0),
+            withdraw_request_block: Some(6_012_563),
+            withdraw_request_ar: Some(10_730_980_072_768_430),
+            // Request cell: 8 + 33 + 20 (lock args) + 33 + 0 + 8 = 102 bytes.
+            withdraw_request_occupied_capacity: Some(102_00000000),
+            withdraw_block: None,
+            withdraw_tx: None,
+            withdraw_to_output_index: None,
+            compensation: None,
+        };
+
+        assert_eq!(
+            dao_frozen_request_compensation(&entry).unwrap(),
+            2_358_516_107,
+            "frozen compensation must use the withdraw-request cell's \
+             occupied capacity (102 CKB), not the deposit cell's (115 CKB)"
+        );
+    }
+
+    /// A phase-1/phase-2 entry without the request cell's occupied capacity
+    /// cannot produce the protocol's exact compensation — it must fail loudly
+    /// with lifecycle context rather than silently falling back to the
+    /// deposit cell's occupied capacity.
+    #[test]
+    fn frozen_compensation_requires_the_request_occupied_capacity() {
+        let mut entry = lifecycle_entry();
+        entry.withdraw_request_occupied_capacity = None;
+
+        let err = dao_frozen_request_compensation(&entry).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("missing withdraw request occupied capacity"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
@@ -1281,6 +1356,7 @@ mod tests {
             withdraw_request_ar: None,
             withdraw_block: None,
             withdraw_tx: None,
+            withdraw_request_occupied_capacity: None,
             withdraw_to_output_index: None,
             compensation: None,
         };
@@ -1326,6 +1402,7 @@ mod tests {
                     withdraw_request_ar: None,
                     withdraw_block: None,
                     withdraw_tx: None,
+                    withdraw_request_occupied_capacity: None,
                     withdraw_to_output_index: None,
                     compensation: None,
                 },
@@ -1374,6 +1451,7 @@ mod tests {
                 withdraw_request_ar: None,
                 withdraw_block: None,
                 withdraw_tx: None,
+                withdraw_request_occupied_capacity: None,
                 withdraw_to_output_index: None,
                 compensation: None,
             },
@@ -1394,6 +1472,7 @@ mod tests {
                 withdraw_request_ar: Some(2),
                 withdraw_block: None,
                 withdraw_tx: None,
+                withdraw_request_occupied_capacity: Some(0),
                 withdraw_to_output_index: None,
                 compensation: None,
             },
@@ -1436,6 +1515,7 @@ mod tests {
                 withdraw_request_ar: None,
                 withdraw_block: None,
                 withdraw_tx: None,
+                withdraw_request_occupied_capacity: None,
                 withdraw_to_output_index: None,
                 compensation: None,
             },
@@ -1498,6 +1578,7 @@ mod tests {
                 withdraw_request_ar: None,
                 withdraw_block: None,
                 withdraw_tx: None,
+                withdraw_request_occupied_capacity: None,
                 withdraw_to_output_index: None,
                 compensation: None,
             },
@@ -1518,6 +1599,7 @@ mod tests {
                 withdraw_request_ar: None,
                 withdraw_block: None,
                 withdraw_tx: None,
+                withdraw_request_occupied_capacity: None,
                 withdraw_to_output_index: None,
                 compensation: None,
             },
@@ -1555,6 +1637,7 @@ mod tests {
             withdraw_request_ar: None,
             withdraw_block: None,
             withdraw_tx: None,
+            withdraw_request_occupied_capacity: None,
             withdraw_to_output_index: None,
             compensation: None,
         };
@@ -1599,6 +1682,7 @@ mod tests {
                 withdraw_request_ar: None,
                 withdraw_block: None,
                 withdraw_tx: None,
+                withdraw_request_occupied_capacity: None,
                 withdraw_to_output_index: None,
                 compensation: None,
             },
@@ -1619,6 +1703,7 @@ mod tests {
                 withdraw_request_ar: Some(2),
                 withdraw_block: Some(30),
                 withdraw_tx: Some(vec![0xCC; 32]),
+                withdraw_request_occupied_capacity: Some(0),
                 withdraw_to_output_index: Some(0),
                 compensation: Some(5),
             },
@@ -1654,6 +1739,7 @@ mod tests {
                     withdraw_request_ar: None,
                     withdraw_block: None,
                     withdraw_tx: None,
+                    withdraw_request_occupied_capacity: None,
                     withdraw_to_output_index: None,
                     compensation: None,
                 },
@@ -1733,6 +1819,7 @@ mod tests {
                     withdraw_request_ar: None,
                     withdraw_block: None,
                     withdraw_tx: None,
+                    withdraw_request_occupied_capacity: None,
                     withdraw_to_output_index: None,
                     compensation: None,
                 },

@@ -278,34 +278,6 @@ fn dao_withdraw_outpoints_from_map(
         .collect()
 }
 
-fn tx_slice_claimed_dao_compensation(
-    tx_slice: &[TxData],
-    dao_compensations: &HashMap<(Vec<u8>, i16), i64>,
-) -> Result<i128> {
-    let mut claimed = 0i128;
-    for tx in tx_slice.iter().filter(|tx| !tx.is_cellbase) {
-        for input in &tx.inputs {
-            let key = (
-                input.previous_tx_hash.to_vec(),
-                parsed_input_outpoint_index_i16(input.previous_output_index, "sync_indexer")?,
-            );
-            if let Some(compensation) = dao_compensations.get(&key) {
-                claimed = claimed
-                    .checked_add(i128::from(*compensation))
-                    .ok_or_else(|| {
-                        anyhow!(
-                            "claimed DAO compensation overflow while accumulating block totals: tx_hash=0x{}, prev_outpoint=0x{}:{}",
-                            hex::encode(tx.hash),
-                            hex::encode(input.previous_tx_hash),
-                            input.previous_output_index
-                        )
-                    })?;
-            }
-        }
-    }
-    Ok(claimed)
-}
-
 /// Correct fees for DAO withdrawal-completion (phase-2) txs on the live-sync
 /// write path, BEFORE `insert_transactions_batch` serializes `TxIndexEntry`.
 ///
@@ -461,12 +433,23 @@ fn pre_compute_dao_compensations(
                         e
                     )
                 })?;
-            match entry.withdraw_request_block {
-                Some(b) => (b, entry.occupied_capacity),
-                None => bail!(
+            match (
+                entry.withdraw_request_block,
+                // RFC-0023 computes `counted_capacity` from the WITHDRAWING
+                // (phase-1 request) cell, not the original deposit cell.
+                entry.withdraw_request_occupied_capacity,
+            ) {
+                (Some(b), Some(request_occupied)) => (b, request_occupied),
+                (None, _) => bail!(
                     "withdraw_request_block missing for status=1 deposit in compensation pre-compute: outpoint=0x{}:{}",
                     hex::encode(orig_tx_hash),
                     orig_output_index,
+                ),
+                (Some(b), None) => bail!(
+                    "withdraw_request_occupied_capacity missing for status=1 deposit in compensation pre-compute: outpoint=0x{}:{}, request_block={}",
+                    hex::encode(orig_tx_hash),
+                    orig_output_index,
+                    b,
                 ),
             }
         } else {
@@ -1918,6 +1901,7 @@ impl Indexer {
                         withdraw_request_ar: None,
                         withdraw_block: None,
                         withdraw_tx: None,
+                        withdraw_request_occupied_capacity: None,
                         withdraw_to_output_index: None,
                         compensation: None,
                     },
@@ -1971,7 +1955,7 @@ impl Indexer {
                                 Ok((input.previous_tx_hash.to_vec(), output_index))
                             })
                             .collect::<Result<_>>()?;
-                        let mut new_dao_outputs: Vec<(Vec<u8>, i16, Vec<u8>, i64, u64)> =
+                        let mut new_dao_outputs: Vec<crate::db::writer::dao::NewDaoOutput> =
                             Vec::new();
                         let mut candidate_withdraw_to_outputs: Vec<(i16, Vec<u8>)> = Vec::new();
                         for (idx, cell) in tx_data.cells.iter().enumerate() {
@@ -1996,13 +1980,29 @@ impl Indexer {
                                         if let Some(deposit_block) =
                                             DaoParser::parse_deposit_block_number(&data_bytes)
                                         {
-                                            new_dao_outputs.push((
-                                                tx_data.hash.to_vec(),
-                                                output_index,
-                                                cell.lock_script_hash.clone(),
-                                                cell.capacity,
-                                                deposit_block,
-                                            ));
+                                            new_dao_outputs.push(
+                                                crate::db::writer::dao::NewDaoOutput {
+                                                    tx_hash: tx_data.hash.to_vec(),
+                                                    output_index,
+                                                    lock_script_hash: cell.lock_script_hash.clone(),
+                                                    capacity: cell.capacity,
+                                                    // RFC-0023 computes
+                                                    // compensation from the
+                                                    // withdrawing cell, so the
+                                                    // request cell's own
+                                                    // occupied capacity is what
+                                                    // phase-2 must use.
+                                                    occupied_capacity:
+                                                        occupied_capacity_shannons_i64(
+                                                            cell.lock_args.len(),
+                                                            cell.type_args
+                                                                .as_ref()
+                                                                .map(|args| args.len()),
+                                                            cell.data_size,
+                                                        ),
+                                                    deposit_block,
+                                                },
+                                            );
                                         }
                                     }
                                 } else {
@@ -3088,19 +3088,35 @@ impl Indexer {
             } else {
                 None
             };
-        let mut prev_dao_csu: Option<(i128, i128, i128)> =
+        // Parent block's DAO C/U — the base of the per-block miner secondary
+        // split `floor(s_i * U_{i-1} / C_{i-1})` (RFC-0023).
+        let mut prev_dao_cu: Option<(i128, i128)> =
             if let Some(first_block) = all_parsed_blocks.first() {
                 if first_block.number > 0 {
                     self.writer
                         .store()
                         .get_block_header(first_block.number - 1)?
                         .and_then(|h| extract_dao_csu(&h.dao))
+                        .map(|(c, _s, u)| (c, u))
                 } else {
                     None
                 }
             } else {
                 None
             };
+        // Consensus secondary issuance per epoch, persisted from the node's
+        // `get_consensus` at indexer startup. Required for exact per-block
+        // miner secondary issuance.
+        let secondary_epoch_reward = self
+            .writer
+            .store()
+            .get_secondary_epoch_reward()?
+            .ok_or_else(|| {
+                anyhow!(
+                    "missing consensus secondary_epoch_reward in sync meta; \
+                     it is fetched from the node's get_consensus at indexer startup"
+                )
+            })?;
 
         // Pre-build consumed DAO deposit map for delta computation
         let dao_code_hash_for_stats =
@@ -3198,14 +3214,15 @@ impl Indexer {
             let block_date = ckbadger_common::block_date(parsed.timestamp);
             let tx_count_for_block = checked_tx_count(parsed.transactions_count, parsed.number)?;
             let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
-            let claimed_compensation_in_block =
-                tx_slice_claimed_dao_compensation(tx_slice, &dao_compensations)?;
-            accumulate_secondary_issuance_deltas(
+            // The miner secondary series is the protocol's direct split and
+            // takes no claimed-compensation input; claimed compensation feeds
+            // only the compensation aggregates.
+            accumulate_miner_secondary(
                 &mut batch_stats,
                 parsed,
                 block_date,
-                claimed_compensation_in_block,
-                &mut prev_dao_csu,
+                secondary_epoch_reward,
+                &mut prev_dao_cu,
             )?;
             block_tx_idx += tx_count_for_block;
 
@@ -5156,6 +5173,36 @@ mod tests {
                     virtual_occupied: 0,
                 })
                 .expect("seed genesis baseline");
+            // The fixture batches open at block 100. A real resuming indexer
+            // always has block N-1 persisted, and the per-block miner
+            // secondary split needs that parent's DAO C/U — so seed block 99
+            // with the same C/U the fixture headers carry.
+            {
+                let mut dao = vec![0u8; 32];
+                dao[0..8].copy_from_slice(&3_360_000_000_000_000_000u64.to_le_bytes());
+                dao[8..16].copy_from_slice(&AR_DEPOSIT.to_le_bytes());
+                dao[24..32].copy_from_slice(&100_000_000_000_000u64.to_le_bytes());
+                let mut batch = ckbadger_store::batch::StoreBatch::new(store.as_ref());
+                batch.put_block_header(
+                    99,
+                    &ckbadger_store::types::CachedBlockHeader {
+                        hash: vec![0x99; 32],
+                        parent_hash: vec![0x98; 32],
+                        timestamp: 1_699_999_999_000,
+                        epoch_number: 39,
+                        epoch_index: 1799,
+                        epoch_length: 1800,
+                        dao,
+                        transactions_count: 1,
+                        uncles_count: 0,
+                        proposals_count: 0,
+                        compact_target: 0,
+                        miner_lock_hash: None,
+                        cycles: None,
+                    },
+                );
+                batch.commit().expect("seed parent block header");
+            }
             let config = Config {
                 domain_data_path: "unused-domain".to_string(),
                 append_only_data_path: "unused-append".to_string(),
@@ -5482,6 +5529,11 @@ mod tests {
             let dir = tempfile::tempdir().unwrap();
             let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
             std::mem::forget(dir);
+            // Real consensus secondary_epoch_reward; the live write path needs
+            // it for the per-block miner secondary split.
+            store
+                .set_secondary_epoch_reward(61_369_863_013_698)
+                .unwrap();
             let indexer = indexer_for_live_write_test(store.clone());
 
             for setup_block in phase_setup_blocks() {
@@ -5539,6 +5591,11 @@ mod tests {
             let dir = tempfile::tempdir().unwrap();
             let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
             std::mem::forget(dir);
+            // Real consensus secondary_epoch_reward; the live write path needs
+            // it for the per-block miner secondary split.
+            store
+                .set_secondary_epoch_reward(61_369_863_013_698)
+                .unwrap();
             let indexer = indexer_for_live_write_test(store.clone());
 
             for setup_block in phase_setup_blocks() {
@@ -5766,6 +5823,11 @@ mod tests {
             let dir = tempfile::tempdir().unwrap();
             let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
             std::mem::forget(dir);
+            // Real consensus secondary_epoch_reward; the live write path needs
+            // it for the per-block miner secondary split.
+            store
+                .set_secondary_epoch_reward(61_369_863_013_698)
+                .unwrap();
             let indexer = indexer_for_live_write_test(store.clone());
             for block in blocks {
                 write_live_block(&indexer, block.clone()).await.unwrap();

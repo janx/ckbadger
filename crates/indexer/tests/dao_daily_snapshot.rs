@@ -16,6 +16,11 @@ fn setup_store() -> Arc<CkbadgerStore> {
     let dir = tempfile::tempdir().unwrap();
     let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
     std::mem::forget(dir);
+    // Real consensus secondary_epoch_reward (mainnet and testnet agree). The
+    // DAO snapshot recompute needs it for the per-block miner secondary split.
+    store
+        .set_secondary_epoch_reward(61_369_863_013_698)
+        .unwrap();
     store
 }
 
@@ -222,6 +227,7 @@ fn test_partial_day_rollback_recomputes_dao_snapshot() {
         withdraw_request_ar: None,
         withdraw_block: None,
         withdraw_tx: None,
+        withdraw_request_occupied_capacity: None,
         withdraw_to_output_index: None,
         compensation: None,
     };
@@ -239,6 +245,7 @@ fn test_partial_day_rollback_recomputes_dao_snapshot() {
         withdraw_request_ar: None,
         withdraw_block: None,
         withdraw_tx: None,
+        withdraw_request_occupied_capacity: None,
         withdraw_to_output_index: None,
         compensation: None,
     };
@@ -300,8 +307,12 @@ fn test_partial_day_rollback_recomputes_dao_snapshot() {
         repaired.secondary_pool, 5_000_000,
         "secondary_pool must match block 100 DAO field S"
     );
+    // Block 100 is at epoch index 0 of a 1800-block epoch, so its scheduled
+    // secondary issuance is 34_094_368_341 shannons. RFC-0023 splits it
+    // against the PARENT (block 99) state, whose U/C is 0.1 — block 100's own
+    // U/C is 0.3, which would give 10_228_310_502 instead.
     assert_eq!(
-        repaired.cum_miner_secondary, 555_555,
+        repaired.cum_miner_secondary, 3_409_436_834,
         "block 100 miner split must use block 99 C/U, not block 100 C/U"
     );
 }
@@ -490,6 +501,7 @@ fn test_rollback_of_phase1_withdraw_keeps_deposit_active() {
         withdraw_request_ar: Some(10_100_000_000_000_000),
         withdraw_block: None,
         withdraw_tx: None,
+        withdraw_request_occupied_capacity: Some(200_00000000),
         withdraw_to_output_index: None,
         compensation: None,
     };
@@ -686,6 +698,7 @@ fn test_cross_day_rollback_rebuilds_cutoff_date_snapshot() {
         withdraw_request_ar: None,
         withdraw_block: None,
         withdraw_tx: None,
+        withdraw_request_occupied_capacity: None,
         withdraw_to_output_index: None,
         compensation: None,
     };
@@ -703,6 +716,7 @@ fn test_cross_day_rollback_rebuilds_cutoff_date_snapshot() {
         withdraw_request_ar: None,
         withdraw_block: None,
         withdraw_tx: None,
+        withdraw_request_occupied_capacity: None,
         withdraw_to_output_index: None,
         compensation: None,
     };
@@ -941,6 +955,7 @@ fn test_rollback_preserves_cumulative_depositors_with_repeat_lock() {
         withdraw_request_ar: None,
         withdraw_block: None,
         withdraw_tx: None,
+        withdraw_request_occupied_capacity: None,
         withdraw_to_output_index: None,
         compensation: None,
     };
@@ -958,6 +973,7 @@ fn test_rollback_preserves_cumulative_depositors_with_repeat_lock() {
         withdraw_request_ar: None,
         withdraw_block: None,
         withdraw_tx: None,
+        withdraw_request_occupied_capacity: None,
         withdraw_to_output_index: None,
         compensation: None,
     };
