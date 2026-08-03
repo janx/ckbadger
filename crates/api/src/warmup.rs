@@ -33,22 +33,33 @@ const SPORE_CACHE_LIMIT: usize = 100_000;
 
 /// Typed, pre-indexed spore cache. Built once at warmup, replaced atomically.
 /// Eliminates per-request JSON deserialization of the full spore dataset.
+///
+/// `all` must follow the `(created_at_block DESC, id ASC)` total order: the
+/// composite `{block}:{0x-id}` pagination cursor resumes by position in that
+/// order, so it is only well-defined when the order is deterministic. Every
+/// derived index below inherits the order by pushing indices in `all` order.
 pub struct SporeCache {
-    /// All spores sorted by created_at_block descending.
+    /// All entries (spores and cluster cells), (created_at_block DESC, id ASC).
     pub all: Vec<(Vec<u8>, ckbadger_store::ObjectEntry)>,
-    /// Indexes into `all` where is_live == true (preserves desc order).
+    /// Indexes into `all` for live non-cluster spores (preserves order).
+    /// Cluster cells are collection-level entries served by the cluster
+    /// endpoints; the spore objects list must never contain them (their
+    /// `/spore/objects/{id}` detail is a 404 by design).
     pub live_indices: Vec<usize>,
-    /// owner_lock_hash -> sorted indexes into `all` (live spores only).
+    /// owner_lock_hash -> sorted indexes into `all` (live non-cluster spores
+    /// only — same exclusion as `live_indices`, same 404 otherwise).
     pub by_owner: HashMap<Vec<u8>, Vec<usize>>,
-    /// cluster_id -> sorted indexes into `all` (all spores, preserves desc order).
+    /// cluster_id -> sorted indexes into `all` (all non-cluster spores,
+    /// preserves order).
     pub by_cluster: HashMap<Vec<u8>, Vec<usize>>,
     /// (index into `all`, lowercased name) for name-search.
-    /// Non-cluster spores with a name only. Sorted by created_at_block desc.
+    /// Non-cluster spores with a name only. Preserves order.
     pub name_index: Vec<(usize, String)>,
 }
 
 impl SporeCache {
-    /// Build a SporeCache from a pre-sorted (desc by created_at_block) spore list.
+    /// Build a SporeCache from a spore list pre-sorted by
+    /// `(created_at_block DESC, id ASC)`.
     pub fn build(all: Vec<(Vec<u8>, ckbadger_store::ObjectEntry)>) -> Self {
         let mut live_indices = Vec::new();
         let mut by_owner: HashMap<Vec<u8>, Vec<usize>> = HashMap::new();
@@ -56,7 +67,10 @@ impl SporeCache {
         let mut name_index = Vec::new();
 
         for (i, (_id, entry)) in all.iter().enumerate() {
-            if entry.is_live {
+            let is_cluster = entry.standard.is_cluster();
+
+            // Spore-serving indexes: non-cluster entries only (see field docs).
+            if entry.is_live && !is_cluster {
                 live_indices.push(i);
                 if let Some(ref owner) = entry.owner_lock_hash {
                     by_owner.entry(owner.clone()).or_default().push(i);
@@ -64,7 +78,7 @@ impl SporeCache {
             }
 
             // Index all non-cluster spores by their collection_id
-            if !entry.standard.is_cluster() {
+            if !is_cluster {
                 if let Some(ref cluster_id) = entry.collection_id {
                     by_cluster.entry(cluster_id.clone()).or_default().push(i);
                 }
@@ -581,7 +595,14 @@ fn refresh_address_cache_sync(state: &AppState) -> anyhow::Result<()> {
 
 fn refresh_spore_cache_sync(state: &AppState) -> anyhow::Result<()> {
     let mut spores = state.store.list_spores(SPORE_CACHE_LIMIT)?;
-    spores.sort_by(|a, b| b.1.created_at_block.cmp(&a.1.created_at_block));
+    // Explicit (created_at_block DESC, id ASC) total order — the composite
+    // pagination cursor resumes by position in this order, so ties must break
+    // deterministically rather than depending on CF iteration order.
+    spores.sort_by(|a, b| {
+        b.1.created_at_block
+            .cmp(&a.1.created_at_block)
+            .then_with(|| a.0.cmp(&b.0))
+    });
     let cache = SporeCache::build(spores);
     state.spore_cache.store(Arc::new(Some(cache)));
 
@@ -717,11 +738,9 @@ fn build_asset_caches_sync(
     let mut token_assets: Vec<CachedAssetEntry> = Vec::with_capacity(tokens.len());
 
     for (hash, info) in &tokens {
-        // Live-scan CF_TOKEN_HOLDERS for the authoritative holder count.
-        // TokenInfo.holders_count is an incremental counter that can drift;
-        // aggregate_token_holder_stats is the single source of truth (same
-        // path used by the token detail endpoint).
-        let (holders_count, _total_supply) = state.store.aggregate_token_holder_stats(hash)?;
+        // Live-scan CF_TOKEN_HOLDERS for both authoritative aggregates. This is the
+        // same single calculation path used by the token detail endpoint.
+        let (holders_count, total_supply) = state.store.aggregate_token_holder_stats(hash)?;
 
         // Skip noise tokens: no name/symbol and no holders
         if info.name.is_none() && info.symbol.is_none() && holders_count == 0 {
@@ -754,7 +773,7 @@ fn build_asset_caches_sync(
             transfers_count: info.transfers_count,
             transfers_24h,
             decimals: info.decimals.map(|d| d as i16),
-            total_supply: info.total_supply.map(|s| s.to_string()),
+            total_supply: Some(total_supply.to_string()),
             maximum_supply: info.max_supply.map(|s| s.to_string()),
             content_type: None,
             content_size: None,
@@ -1531,14 +1550,16 @@ mod tests {
             ),
             (
                 vec![0x05; 32],
-                make_entry(25, true, None, Some("Cluster One"), true),
+                make_entry(25, true, Some(owner_b.clone()), Some("Cluster One"), true),
             ),
         ];
 
         let cache = SporeCache::build(spores);
 
         assert_eq!(cache.all.len(), 5);
-        assert_eq!(cache.live_indices, vec![0, 2, 3, 4]);
+        // The live cluster cell (index 4) is excluded from every spore-serving
+        // index: it must not surface in /spore/objects or /spore/owner rows.
+        assert_eq!(cache.live_indices, vec![0, 2, 3]);
         assert_eq!(cache.by_owner.get(&owner_a).unwrap(), &vec![0, 3]);
         assert_eq!(cache.by_owner.get(&owner_b).unwrap(), &vec![2]);
         assert_eq!(cache.name_index.len(), 3);

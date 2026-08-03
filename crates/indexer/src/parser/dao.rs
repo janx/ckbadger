@@ -1,13 +1,9 @@
-use std::sync::LazyLock;
-
 use crate::rpc::{parse_hex_to_bytes, CellOutput, TransactionView};
 
 use super::script::ScriptParser;
 
 pub const DAO_CODE_HASH: &str =
     "0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e";
-
-static DAO_CODE_HASH_BYTES: LazyLock<Vec<u8>> = LazyLock::new(|| parse_hex_to_bytes(DAO_CODE_HASH));
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DaoState {
@@ -29,6 +25,7 @@ pub struct ParsedDaoDeposit {
     pub output_index: i32,
     pub lock_script_hash: Vec<u8>,
     pub capacity: i64,
+    pub occupied_capacity: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -56,7 +53,8 @@ fn checked_usize_to_i32(value: usize, context: &str) -> anyhow::Result<i32> {
 
 impl DaoParser {
     pub fn is_dao_code_hash(code_hash: &[u8]) -> bool {
-        code_hash == DAO_CODE_HASH_BYTES.as_slice()
+        crate::parser::registry::PROTOCOL_REGISTRY
+            .is(code_hash, crate::parser::registry::ProtocolScript::Dao)
     }
 
     pub fn is_dao_cell(output: &CellOutput) -> bool {
@@ -123,7 +121,6 @@ impl DaoParser {
         tx_hash: &[u8],
         cells: &[super::cell::ParsedCell],
     ) -> anyhow::Result<Vec<ParsedDaoDeposit>> {
-        let dao_hash = &*DAO_CODE_HASH_BYTES;
         cells
             .iter()
             .enumerate()
@@ -132,7 +129,7 @@ impl DaoParser {
                     Some(v) => v,
                     None => return Ok(None),
                 };
-                if type_code_hash != dao_hash {
+                if !Self::is_dao_code_hash(type_code_hash) {
                     return Ok(None);
                 }
                 // hash_type must be "type" (value 1) to match is_dao_cell() behavior
@@ -150,6 +147,18 @@ impl DaoParser {
                     output_index: checked_usize_to_i32(idx, "deposit output index")?,
                     lock_script_hash: cell.lock_script_hash.clone(),
                     capacity: cell.capacity,
+                    occupied_capacity: ckbadger_common::dao::occupied_capacity_shannons(
+                        usize::try_from(cell.data_size).map_err(|_| {
+                            anyhow::anyhow!(
+                                "negative DAO cell data size: tx_hash=0x{}, output_index={}, data_size={}",
+                                hex::encode(tx_hash),
+                                idx,
+                                cell.data_size
+                            )
+                        })?,
+                        cell.lock_args.len(),
+                        cell.type_args.as_ref().map(Vec::len),
+                    )?,
                 }))
             })
             .filter_map(|r| r.transpose())
@@ -229,6 +238,20 @@ mod tests {
             "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
         );
         assert!(!DaoParser::is_dao_code_hash(&secp_hash));
+    }
+
+    #[test]
+    fn detects_dao_via_registry_not_other_protocols() {
+        // DAO shares one code_hash across mainnet and testnet; detection now
+        // flows through PROTOCOL_REGISTRY. The canonical DAO hash must classify,
+        // and a *different* registered protocol (sUDT) must NOT be seen as DAO.
+        let dao = parse_hex_to_bytes(DAO_CODE_HASH);
+        assert!(DaoParser::is_dao_code_hash(&dao));
+
+        let sudt = parse_hex_to_bytes(
+            "0x5e7a36a77e68eecc013dfa2fe6a23f3b6c344b04005808694ae6dd45eea4cfd5",
+        );
+        assert!(!DaoParser::is_dao_code_hash(&sudt));
     }
 
     #[test]
@@ -327,7 +350,8 @@ mod tests {
         let ar_withdraw: u64 = 10_100_000_000_000_000;
 
         let compensation =
-            calculate_dao_compensation_from_ar(capacity, ar_deposit, ar_withdraw).unwrap();
+            calculate_dao_compensation_from_ar(capacity, 102_00000000, ar_deposit, ar_withdraw)
+                .unwrap();
 
         let free_capacity = (capacity as u128) - 102_00000000u128;
         let expected = (free_capacity * ar_withdraw as u128 / ar_deposit as u128) - free_capacity;
@@ -338,7 +362,7 @@ mod tests {
     fn test_calculate_compensation_zero_ar_deposit() {
         use ckbadger_common::dao::calculate_dao_compensation_from_ar;
         // ar_deposit == 0 is invalid chain data (AR starts at 10^16), returns Err
-        let result = calculate_dao_compensation_from_ar(200_00000000, 0, 100);
+        let result = calculate_dao_compensation_from_ar(200_00000000, 102_00000000, 0, 100);
         assert!(result.is_err());
     }
 
@@ -346,14 +370,15 @@ mod tests {
     fn test_calculate_compensation_no_growth() {
         use ckbadger_common::dao::calculate_dao_compensation_from_ar;
         let ar = 10_000_000_000_000_000u64;
-        let compensation = calculate_dao_compensation_from_ar(200_00000000, ar, ar).unwrap();
+        let compensation =
+            calculate_dao_compensation_from_ar(200_00000000, 102_00000000, ar, ar).unwrap();
         assert_eq!(compensation, 0);
     }
 
     #[test]
     fn test_calculate_compensation_returns_err_when_capacity_below_occupied() {
         use ckbadger_common::dao::calculate_dao_compensation_from_ar;
-        let result = calculate_dao_compensation_from_ar(100, 10, 11);
+        let result = calculate_dao_compensation_from_ar(100, 102_00000000, 10, 11);
         assert!(result.is_err());
     }
 
@@ -363,10 +388,12 @@ mod tests {
 
         let dao_hash = parse_hex_to_bytes(DAO_CODE_HASH);
         let cells = vec![ParsedCell {
-            capacity: 100_00000000,
+            capacity: 300_00000000,
             lock_code_hash: vec![0; 32],
             lock_hash_type: 1,
-            lock_args: vec![],
+            // Non-standard lock args make this DAO cell occupy 142 CKB,
+            // proving the parser does not substitute the 102 CKB default.
+            lock_args: vec![0; 60],
             lock_script_hash: vec![1; 32],
             type_code_hash: Some(dao_hash.clone()),
             type_hash_type: Some(1),
@@ -379,7 +406,8 @@ mod tests {
 
         let deposits = DaoParser::parse_deposits_from_cells(&[0; 32], &cells).unwrap();
         assert_eq!(deposits.len(), 1);
-        assert_eq!(deposits[0].capacity, 100_00000000);
+        assert_eq!(deposits[0].capacity, 300_00000000);
+        assert_eq!(deposits[0].occupied_capacity, 142_00000000);
     }
 
     #[test]
@@ -545,6 +573,7 @@ mod proptest_tests {
 
             let compensation = calculate_dao_compensation_from_ar(
                 capacity,
+                102_00000000,
                 ar_deposit,
                 ar_withdraw
             ).unwrap();
@@ -563,6 +592,7 @@ mod proptest_tests {
 
             let compensation = calculate_dao_compensation_from_ar(
                 capacity,
+                102_00000000,
                 ar_deposit,
                 ar_withdraw
             ).unwrap();

@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use crate::response::{default_limit, ok, ApiError, ApiResult, CursorPaginatedResponse};
-use crate::utils::{address_to_lock_script_hash, is_ckb_address};
+use crate::utils::{address_to_lock_script_hash, is_ckb_address, parse_hash32};
 use crate::AppState;
 
 pub fn routes() -> Router<Arc<AppState>> {
@@ -239,12 +239,7 @@ async fn list_channels(
     };
 
     let cursor_bytes = match params.cursor.as_deref() {
-        Some(c) => {
-            let stripped = c.strip_prefix("0x").unwrap_or(c);
-            let bytes = hex::decode(stripped)
-                .map_err(|_| ApiError::bad_request("invalid cursor: expected hex channel_id"))?;
-            Some(bytes)
-        }
+        Some(c) => Some(parse_hash32(c, "cursor (expected a channel_id)")?),
         None => None,
     };
 
@@ -283,9 +278,7 @@ async fn get_channel(
     State(state): State<Arc<AppState>>,
     Path(channel_id): Path<String>,
 ) -> ApiResult<FiberChannelDetailResponse> {
-    let stripped = channel_id.strip_prefix("0x").unwrap_or(&channel_id);
-    let id_bytes = hex::decode(stripped)
-        .map_err(|_| ApiError::bad_request("invalid channel_id: expected hex string"))?;
+    let id_bytes = parse_hash32(&channel_id, "channel_id")?;
 
     let store = state.store.clone();
     let id_bytes_c = id_bytes.clone();
@@ -316,8 +309,7 @@ async fn get_address_channels(
         address_to_lock_script_hash(&addr)
             .map_err(|e| ApiError::bad_request(format!("Invalid address: {}", e)))?
     } else {
-        hex::decode(addr.strip_prefix("0x").unwrap_or(&addr))
-            .map_err(|_| ApiError::bad_request("Invalid address/lock script hash"))?
+        parse_hash32(&addr, "address/lock script hash")?
     };
 
     let store = state.store.clone();

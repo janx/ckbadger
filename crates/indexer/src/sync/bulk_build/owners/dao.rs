@@ -21,8 +21,7 @@ use crate::sync::bulk_build::interner::IdentityInterner;
 use crate::sync::bulk_build::materialize::{MaterializedRow, Materializer};
 use crate::sync::bulk_build::sequencer::BulkSequencer;
 use crate::sync::dao_helpers::{
-    accumulate_secondary_issuance_deltas_from_csu, derive_running_depositors, extract_dao_csu,
-    BatchStats,
+    accumulate_miner_secondary_for_block, derive_running_depositors, extract_dao_csu, BatchStats,
 };
 use crate::sync::pipeline::build_bulk_facts_arena_from_blocks;
 
@@ -39,12 +38,9 @@ pub(crate) struct DaoOwner {
     daily_withdrawals_delta: FxHashMap<NaiveDate, i64>,
     daily_unique_depositors_delta: FxHashMap<NaiveDate, i64>,
     daily_cumulative_depositors_delta: FxHashMap<NaiveDate, i64>,
-    daily_secondary_non_miner_delta: FxHashMap<NaiveDate, i128>,
     daily_secondary_miner_delta: FxHashMap<NaiveDate, i128>,
-    daily_secondary_dao_delta: FxHashMap<NaiveDate, i128>,
-    daily_secondary_treasury_delta: FxHashMap<NaiveDate, i128>,
     /// Running protocol-level deposited total, updated per-block for accurate
-    /// secondary issuance split.
+    /// protocol-locked DAO statistics.
     running_protocol_deposited: i128,
     /// Protocol delta accumulated within the current block (reset per block).
     current_block_protocol_delta: i128,
@@ -53,11 +49,331 @@ pub(crate) struct DaoOwner {
     ever_deposited: HashSet<Vec<u8>>,
     /// Per-day unique addresses that made deposits (including repeat depositors).
     daily_depositing_addresses: FxHashMap<NaiveDate, HashSet<Vec<u8>>>,
-    claimed_compensation_by_block: FxHashMap<i64, i128>,
-    prev_dao_cs: Option<(i128, i128)>,
+    /// Parent block's DAO `C`/`U`, the base of the per-block miner secondary
+    /// split `floor(s_i * U_{i-1} / C_{i-1})` (RFC-0023).
+    prev_dao_cu: Option<(i128, i128)>,
+    /// Consensus secondary issuance per epoch, from the node's `get_consensus`.
+    /// `None` until configured; the miner split then fails loudly rather than
+    /// silently issuing zero.
+    secondary_epoch_reward: Option<u64>,
     /// Per-date end-of-day block number and AR, for exact unmade_dao_interests
     /// computation during materialization.
     daily_end_of_day: FxHashMap<NaiveDate, (i64, u64)>,
+}
+
+impl DaoOwner {
+    /// Supply the consensus secondary issuance per epoch, required by the
+    /// per-block miner secondary split. Must be called before any block is
+    /// recorded; `record_block` fails loudly otherwise instead of silently
+    /// attributing zero secondary issuance.
+    pub(crate) fn set_secondary_epoch_reward(&mut self, shannons: u64) {
+        self.secondary_epoch_reward = Some(shannons);
+    }
+
+    /// Seed the parent block's DAO `C`/`U` when bulk build resumes at a block
+    /// above genesis. Without it the first recorded block has no state to
+    /// split its secondary issuance against and `record_block` fails fast.
+    pub(crate) fn seed_prev_dao_cu(&mut self, total_issuance: i128, occupied_capacity: i128) {
+        self.prev_dao_cu = Some((total_issuance, occupied_capacity));
+    }
+}
+
+struct DaoCompensationTimeline<'a> {
+    deposits: &'a FxHashMap<OutPointKey, DaoDepositCacheEntry>,
+    deposit_events: Vec<(i64, OutPointKey)>,
+    request_events: Vec<(i64, OutPointKey)>,
+    withdrawal_events: Vec<(i64, OutPointKey)>,
+    next_deposit: usize,
+    next_request: usize,
+    next_withdrawal: usize,
+    active: HashSet<OutPointKey>,
+    frozen: FxHashMap<OutPointKey, i128>,
+    frozen_total: i128,
+    claimed: i128,
+    last_observation_block: Option<i64>,
+}
+
+impl<'a> DaoCompensationTimeline<'a> {
+    fn new(deposits: &'a FxHashMap<OutPointKey, DaoDepositCacheEntry>) -> Result<Self> {
+        let mut deposit_events = Vec::with_capacity(deposits.len());
+        let mut request_events = Vec::new();
+        let mut withdrawal_events = Vec::new();
+
+        for (outpoint, entry) in deposits {
+            if entry.deposit_block_number < 0 {
+                bail!(
+                    "negative DAO deposit block in bulk compensation timeline: outpoint={}, deposit_block={}",
+                    format_outpoint(outpoint),
+                    entry.deposit_block_number
+                );
+            }
+            deposit_events.push((entry.deposit_block_number, *outpoint));
+
+            match (
+                entry.status,
+                entry.withdraw_request_block,
+                entry.withdraw_block,
+            ) {
+                (0, None, None) => {}
+                (1, Some(request_block), None) => {
+                    Self::validate_request_block(*outpoint, entry, request_block)?;
+                    request_events.push((request_block, *outpoint));
+                }
+                (2, Some(request_block), Some(withdraw_block)) => {
+                    Self::validate_request_block(*outpoint, entry, request_block)?;
+                    if withdraw_block <= request_block {
+                        bail!(
+                            "DAO completion block must follow request block in bulk compensation timeline: outpoint={}, request_block={}, withdraw_block={}",
+                            format_outpoint(outpoint),
+                            request_block,
+                            withdraw_block
+                        );
+                    }
+                    if entry.compensation.is_none() {
+                        bail!(
+                            "completed DAO deposit missing compensation in bulk compensation timeline: outpoint={}, withdraw_block={}",
+                            format_outpoint(outpoint),
+                            withdraw_block
+                        );
+                    }
+                    request_events.push((request_block, *outpoint));
+                    withdrawal_events.push((withdraw_block, *outpoint));
+                }
+                _ => {
+                    bail!(
+                        "inconsistent DAO lifecycle in bulk compensation timeline: outpoint={}, status={}, deposit_block={}, request_block={:?}, withdraw_block={:?}",
+                        format_outpoint(outpoint),
+                        entry.status,
+                        entry.deposit_block_number,
+                        entry.withdraw_request_block,
+                        entry.withdraw_block
+                    );
+                }
+            }
+        }
+
+        Self::sort_events(&mut deposit_events);
+        Self::sort_events(&mut request_events);
+        Self::sort_events(&mut withdrawal_events);
+
+        Ok(Self {
+            deposits,
+            deposit_events,
+            request_events,
+            withdrawal_events,
+            next_deposit: 0,
+            next_request: 0,
+            next_withdrawal: 0,
+            active: HashSet::new(),
+            frozen: FxHashMap::default(),
+            frozen_total: 0,
+            claimed: 0,
+            last_observation_block: None,
+        })
+    }
+
+    fn validate_request_block(
+        outpoint: OutPointKey,
+        entry: &DaoDepositCacheEntry,
+        request_block: i64,
+    ) -> Result<()> {
+        if request_block < entry.deposit_block_number {
+            bail!(
+                "DAO request block precedes deposit in bulk compensation timeline: outpoint={}, deposit_block={}, request_block={}",
+                format_outpoint(&outpoint),
+                entry.deposit_block_number,
+                request_block
+            );
+        }
+        Ok(())
+    }
+
+    fn sort_events(events: &mut [(i64, OutPointKey)]) {
+        events.sort_unstable_by(|left, right| {
+            left.0
+                .cmp(&right.0)
+                .then_with(|| left.1.tx_hash.cmp(&right.1.tx_hash))
+                .then_with(|| left.1.index.cmp(&right.1.index))
+        });
+    }
+
+    fn entry(&self, outpoint: OutPointKey) -> Result<&DaoDepositCacheEntry> {
+        self.deposits.get(&outpoint).ok_or_else(|| {
+            anyhow!(
+                "missing DAO entry in bulk compensation timeline: outpoint={}",
+                format_outpoint(&outpoint)
+            )
+        })
+    }
+
+    fn frozen_compensation(&self, outpoint: OutPointKey) -> Result<i128> {
+        let entry = self.entry(outpoint)?;
+        let request_block = entry.withdraw_request_block.ok_or_else(|| {
+            anyhow!(
+                "DAO deposit missing request block in bulk compensation timeline: outpoint={}",
+                format_outpoint(&outpoint)
+            )
+        })?;
+        let request_ar = entry.withdraw_request_ar.ok_or_else(|| {
+            anyhow!(
+                "phase-1 DAO deposit missing request AR in bulk compensation timeline: outpoint={}, request_block={:?}",
+                format_outpoint(&outpoint),
+                entry.withdraw_request_block
+            )
+        })?;
+        let request_ar = u64::try_from(request_ar).map_err(|_| {
+            anyhow!(
+                "negative DAO request AR in bulk compensation timeline: outpoint={}, request_ar={}",
+                format_outpoint(&outpoint),
+                request_ar
+            )
+        })?;
+        let contribution =
+            ckbadger_store::dao_compensation_for_entry_at(entry, request_block, request_ar)?;
+        if contribution.claimed != 0 || contribution.active_unmade != 0 {
+            bail!(
+                "DAO request produced non-frozen compensation in bulk timeline: outpoint={}, request_block={}, contribution={:?}",
+                format_outpoint(&outpoint),
+                request_block,
+                contribution
+            );
+        }
+        Ok(contribution.unclaimed)
+    }
+
+    fn advance_to(
+        &mut self,
+        observation_block: i64,
+        observation_ar: u64,
+    ) -> Result<ckbadger_store::DaoCompensationBreakdown> {
+        if self
+            .last_observation_block
+            .is_some_and(|previous| observation_block < previous)
+        {
+            bail!(
+                "DAO compensation timeline observation moved backwards: previous={:?}, current={}",
+                self.last_observation_block,
+                observation_block
+            );
+        }
+
+        while self
+            .deposit_events
+            .get(self.next_deposit)
+            .is_some_and(|(block, _)| *block <= observation_block)
+        {
+            let (block, outpoint) = self.deposit_events[self.next_deposit];
+            if !self.active.insert(outpoint) {
+                bail!(
+                    "duplicate active DAO deposit event in bulk compensation timeline: outpoint={}, block={}",
+                    format_outpoint(&outpoint),
+                    block
+                );
+            }
+            self.next_deposit += 1;
+        }
+
+        while self
+            .request_events
+            .get(self.next_request)
+            .is_some_and(|(block, _)| *block <= observation_block)
+        {
+            let (block, outpoint) = self.request_events[self.next_request];
+            if !self.active.remove(&outpoint) {
+                bail!(
+                    "DAO request event has no active deposit in bulk compensation timeline: outpoint={}, block={}",
+                    format_outpoint(&outpoint),
+                    block
+                );
+            }
+            let compensation = self.frozen_compensation(outpoint)?;
+            if self.frozen.insert(outpoint, compensation).is_some() {
+                bail!(
+                    "duplicate frozen DAO request in bulk compensation timeline: outpoint={}, block={}",
+                    format_outpoint(&outpoint),
+                    block
+                );
+            }
+            self.frozen_total = self
+                .frozen_total
+                .checked_add(compensation)
+                .ok_or_else(|| anyhow!("frozen DAO compensation overflow at block {}", block))?;
+            self.next_request += 1;
+        }
+
+        while self
+            .withdrawal_events
+            .get(self.next_withdrawal)
+            .is_some_and(|(block, _)| *block <= observation_block)
+        {
+            let (block, outpoint) = self.withdrawal_events[self.next_withdrawal];
+            let compensation = self.frozen.remove(&outpoint).ok_or_else(|| {
+                anyhow!(
+                    "DAO completion event has no frozen request in bulk compensation timeline: outpoint={}, block={}",
+                    format_outpoint(&outpoint),
+                    block
+                )
+            })?;
+            self.frozen_total = self
+                .frozen_total
+                .checked_sub(compensation)
+                .ok_or_else(|| anyhow!("frozen DAO compensation underflow at block {}", block))?;
+            if self.frozen_total < 0 {
+                bail!(
+                    "negative frozen DAO compensation after completion: outpoint={}, block={}, frozen_total={}",
+                    format_outpoint(&outpoint),
+                    block,
+                    self.frozen_total
+                );
+            }
+            self.claimed = self
+                .claimed
+                .checked_add(compensation)
+                .ok_or_else(|| anyhow!("claimed DAO compensation overflow at block {}", block))?;
+            self.next_withdrawal += 1;
+        }
+
+        let mut active_unmade = 0i128;
+        for outpoint in &self.active {
+            let entry = self.entry(*outpoint)?;
+            let contribution = ckbadger_store::dao_compensation_for_entry_at(
+                entry,
+                observation_block,
+                observation_ar,
+            )?;
+            if contribution.claimed != 0 || contribution.unclaimed != contribution.active_unmade {
+                bail!(
+                    "active DAO entry produced non-active compensation in bulk timeline: outpoint={}, block={}, contribution={:?}",
+                    format_outpoint(outpoint),
+                    observation_block,
+                    contribution
+                );
+            }
+            active_unmade = active_unmade
+                .checked_add(contribution.active_unmade)
+                .ok_or_else(|| {
+                    anyhow!(
+                        "active DAO compensation overflow at observation block {}",
+                        observation_block
+                    )
+                })?;
+        }
+
+        self.last_observation_block = Some(observation_block);
+        Ok(ckbadger_store::DaoCompensationBreakdown {
+            claimed: self.claimed,
+            unclaimed: self
+                .frozen_total
+                .checked_add(active_unmade)
+                .ok_or_else(|| {
+                    anyhow!(
+                        "unclaimed DAO compensation overflow at observation block {}",
+                        observation_block
+                    )
+                })?,
+            active_unmade,
+        })
+    }
 }
 
 impl BulkReducer for DaoOwner {
@@ -192,6 +508,12 @@ impl BulkReducer for DaoOwner {
                         tx,
                         "DAO withdraw request output index",
                     )?);
+                    // RFC-0023 computes compensation from the WITHDRAWING
+                    // cell, so persist this request cell's exact occupied
+                    // capacity — it differs from the deposit cell's whenever
+                    // the withdraw request changes lock script.
+                    entry.withdraw_request_occupied_capacity =
+                        Some(request_output.occupied_capacity);
                     if let Some(existing) = self
                         .request_outpoints
                         .insert(request_output.outpoint, origin_outpoint)
@@ -307,8 +629,26 @@ impl BulkReducer for DaoOwner {
                                 )
                             })
                         })?;
-                    let compensation =
-                        calculate_dao_compensation_from_ar(entry.capacity, deposit_ar, request_ar)?;
+                    // RFC-0023: `counted_capacity` comes from the WITHDRAWING
+                    // (phase-1 request) cell, not the original deposit cell.
+                    let request_occupied_capacity = entry
+                        .withdraw_request_occupied_capacity
+                        .ok_or_else(|| {
+                            anyhow!(
+                                "withdraw_request_occupied_capacity missing for DAO status=1 entry: request_block={}, block={}, tx=0x{}, tx_index={}, origin_outpoint={}",
+                                request_block,
+                                tx.block_number,
+                                hex::encode(tx.tx_hash),
+                                tx.tx_index,
+                                format_outpoint(&origin_outpoint)
+                            )
+                        })?;
+                    let compensation = calculate_dao_compensation_from_ar(
+                        entry.capacity,
+                        request_occupied_capacity,
+                        deposit_ar,
+                        request_ar,
+                    )?;
                     let withdraw_to_output_index = infer_withdraw_to_output_index_from_outputs(
                         &candidate_withdraw_to_outputs,
                         &entry.lock_script_hash,
@@ -317,17 +657,10 @@ impl BulkReducer for DaoOwner {
                     entry.status = 2;
                     entry.withdraw_block = Some(tx.block_number);
                     entry.withdraw_tx = Some(tx.tx_hash.to_vec());
-                    entry.withdraw_request_ar = None;
                     entry.withdraw_request_output_index = Some(request_output_index);
                     entry.withdraw_to_output_index = withdraw_to_output_index;
                     entry.compensation = Some(compensation);
                     self.request_outpoints.remove(&input_view.outpoint);
-                    Self::bump_daily_i128_for_block(
-                        &mut self.claimed_compensation_by_block,
-                        tx.block_number,
-                        compensation as i128,
-                        "dao claimed compensation by block",
-                    )?;
                     Self::bump_daily_i64(
                         &mut self.daily_withdrawals_delta,
                         tx_date,
@@ -340,7 +673,16 @@ impl BulkReducer for DaoOwner {
                         -(entry.capacity as i128),
                         "dao daily protocol delta (phase-2 withdrawal)",
                     )?;
-                    self.current_block_protocol_delta -= entry.capacity as i128;
+                    self.current_block_protocol_delta = self
+                        .current_block_protocol_delta
+                        .checked_sub(entry.capacity as i128)
+                        .ok_or_else(|| {
+                            anyhow!(
+                                "DAO block protocol capacity delta underflow: block={}, tx=0x{}",
+                                tx.block_number,
+                                hex::encode(tx.tx_hash)
+                            )
+                        })?;
                     // Active delta and depositor count already subtracted at
                     // phase-1 withdraw request — no double-counting at
                     // phase-2 completion.  Only the compensations above,
@@ -377,6 +719,7 @@ impl BulkReducer for DaoOwner {
                 output.outpoint,
                 DaoDepositCacheEntry {
                     capacity: output.capacity,
+                    occupied_capacity: output.occupied_capacity,
                     deposit_block_number: tx.block_number,
                     deposit_timestamp: tx.timestamp_ms,
                     lock_script_hash: output.lock_hash.clone(),
@@ -396,6 +739,7 @@ impl BulkReducer for DaoOwner {
                     withdraw_request_ar: None,
                     withdraw_block: None,
                     withdraw_tx: None,
+                    withdraw_request_occupied_capacity: None,
                     withdraw_to_output_index: None,
                     compensation: None,
                 },
@@ -422,7 +766,16 @@ impl BulkReducer for DaoOwner {
                 output.capacity as i128,
                 "dao daily protocol delta",
             )?;
-            self.current_block_protocol_delta += output.capacity as i128;
+            self.current_block_protocol_delta = self
+                .current_block_protocol_delta
+                .checked_add(output.capacity as i128)
+                .ok_or_else(|| {
+                    anyhow!(
+                        "DAO block protocol capacity delta overflow: block={}, tx=0x{}",
+                        tx.block_number,
+                        hex::encode(tx.tx_hash)
+                    )
+                })?;
             Self::bump_daily_i128(
                 &mut self.daily_gross_deposit_delta,
                 tx_date,
@@ -469,8 +822,9 @@ impl BulkReducer for DaoOwner {
     }
 
     fn materialize_final(&self, materializer: &mut Materializer<'_>) -> Result<()> {
-        let rows = self.build_snapshot_rows()?;
-        materializer.materialize_final_snapshot(&rows)
+        materializer.materialize_final_snapshot_bounded(|sink| {
+            self.emit_snapshot_rows(|row| sink.push(row))
+        })
     }
 }
 
@@ -496,13 +850,7 @@ impl DaoOwner {
                 * std::mem::size_of::<(NaiveDate, i64)>() as u64
             + self.daily_unique_depositors_delta.len() as u64
                 * std::mem::size_of::<(NaiveDate, i64)>() as u64
-            + self.daily_secondary_non_miner_delta.len() as u64
-                * std::mem::size_of::<(NaiveDate, i128)>() as u64
             + self.daily_secondary_miner_delta.len() as u64
-                * std::mem::size_of::<(NaiveDate, i128)>() as u64
-            + self.daily_secondary_dao_delta.len() as u64
-                * std::mem::size_of::<(NaiveDate, i128)>() as u64
-            + self.daily_secondary_treasury_delta.len() as u64
                 * std::mem::size_of::<(NaiveDate, i128)>() as u64
             + self.active_deposit_counts_by_lock.len() as u64
                 * std::mem::size_of::<(Vec<u8>, i64)>() as u64
@@ -515,8 +863,6 @@ impl DaoOwner {
             + self.daily_depositing_addresses.values().map(|s|
                 s.len() as u64 * (std::mem::size_of::<Vec<u8>>() as u64 + 32)
               ).sum::<u64>()
-            + self.claimed_compensation_by_block.len() as u64
-                * std::mem::size_of::<(i64, i128)>() as u64
             + self.daily_end_of_day.len() as u64
                 * std::mem::size_of::<(NaiveDate, (i64, u64))>() as u64;
         std::mem::size_of::<Self>() as u64
@@ -536,8 +882,7 @@ impl DaoOwner {
         let mut running_total_depositors = 0i64;
         let mut running_cumulative_deposit_amount = 0i128;
         let mut running_cum_miner = 0i128;
-        let mut running_cum_dao = 0i128;
-        let mut running_cum_treasury = 0i128;
+        let mut compensation_timeline = DaoCompensationTimeline::new(&self.deposits)?;
 
         for date in &self.snapshot_dates {
             running_total_deposited = checked_next_i128_total(
@@ -588,32 +933,10 @@ impl DaoOwner {
                 .get(date)
                 .copied()
                 .unwrap_or(0);
-            let daily_dao_share = self
-                .daily_secondary_dao_delta
-                .get(date)
-                .copied()
-                .unwrap_or(0);
-            let daily_treasury_share = self
-                .daily_secondary_treasury_delta
-                .get(date)
-                .copied()
-                .unwrap_or(0);
             running_cum_miner = checked_next_i128_total(
                 running_cum_miner,
                 daily_miner,
                 "dao running cum_miner_secondary",
-                *date,
-            )?;
-            running_cum_dao = checked_next_i128_total(
-                running_cum_dao,
-                daily_dao_share,
-                "dao running cum_dao_compensation",
-                *date,
-            )?;
-            running_cum_treasury = checked_next_i128_total(
-                running_cum_treasury,
-                daily_treasury_share,
-                "dao running cum_treasury",
                 *date,
             )?;
             running_total_depositors = derive_running_depositors(
@@ -633,12 +956,27 @@ impl DaoOwner {
                 )
                 .ok_or_else(|| anyhow!("dao cumulative_depositors overflow on {}", date))?;
 
-            let unmade_dao_interests =
-                if let Some(&(last_block, ar)) = self.daily_end_of_day.get(date) {
-                    self.compute_unmade_at_block(last_block, ar)?
-                } else {
-                    0
-                };
+            let &(last_block, ar) = self.daily_end_of_day.get(date).ok_or_else(|| {
+                anyhow!(
+                    "missing end-of-day DAO block/AR for bulk snapshot date {}",
+                    date
+                )
+            })?;
+            let compensation = compensation_timeline.advance_to(last_block, ar)?;
+            let total_compensation = compensation.total().ok_or_else(|| {
+                anyhow!("DAO total compensation overflow on snapshot date {}", date)
+            })?;
+            let cumulative_treasury = secondary_pool
+                .checked_sub(compensation.active_unmade)
+                .ok_or_else(|| anyhow!("DAO treasury subtraction overflow on {}", date))?;
+            if cumulative_treasury < 0 {
+                bail!(
+                    "active DAO interests exceed secondary pool on {}: secondary_pool={}, active_unmade={}",
+                    date,
+                    secondary_pool,
+                    compensation.active_unmade
+                );
+            }
 
             let snapshot = DaoDailySnapshot {
                 date: date.format("%Y-%m-%d").to_string(),
@@ -646,16 +984,16 @@ impl DaoOwner {
                 depositors_count: running_total_depositors,
                 new_deposits: running_total_deposit_count,
                 withdrawals: running_total_withdrawal_count,
-                compensation: running_cum_dao,
+                compensation: compensation.claimed,
                 cumulative_deposit_amount: running_cumulative_deposit_amount,
                 total_issuance,
                 secondary_pool,
                 occupied_capacity,
                 cum_miner_secondary: running_cum_miner,
-                cum_dao_compensation: running_cum_dao,
-                cum_treasury: running_cum_treasury,
-                unmade_dao_interests,
-                unclaimed_compensation: 0,
+                cum_dao_compensation: total_compensation,
+                cum_treasury: cumulative_treasury,
+                unmade_dao_interests: compensation.active_unmade,
+                unclaimed_compensation: compensation.unclaimed,
                 cumulative_depositors: running_cumulative_depositors,
                 daily_depositor_addresses: self
                     .daily_depositing_addresses
@@ -678,30 +1016,23 @@ impl DaoOwner {
         Ok(rows)
     }
 
-    fn build_snapshot_rows(&self) -> Result<Vec<MaterializedRow>> {
-        let mut rows = Vec::new();
-        let mut outpoints = self.deposits.keys().copied().collect::<Vec<_>>();
-        outpoints.sort_by_key(|outpoint| {
-            keys::encode_outpoint(&outpoint.tx_hash, outpoint.index as i16)
-        });
-
-        for outpoint in outpoints {
-            let entry = self
-                .deposits
-                .get(&outpoint)
-                .expect("sorted DAO outpoint must exist");
-            let outpoint_key = encode_outpoint_key(outpoint)?;
-            rows.push(MaterializedRow::new(
+    pub(crate) fn emit_snapshot_rows<F>(&self, mut emit: F) -> Result<()>
+    where
+        F: FnMut(MaterializedRow) -> Result<()>,
+    {
+        for (outpoint, entry) in &self.deposits {
+            let outpoint_key = encode_outpoint_key(*outpoint)?;
+            emit(MaterializedRow::new(
                 CF_DAO_DEPOSITS,
                 outpoint_key.to_vec(),
                 bincode::serialize(entry)?,
-            ));
-            rows.push(MaterializedRow::new(
+            ))?;
+            emit(MaterializedRow::new(
                 CF_DAO_BY_BLOCK,
                 keys::encode_dao_by_block_key(entry.deposit_block_number, &outpoint_key).to_vec(),
                 Vec::new(),
-            ));
-            rows.push(MaterializedRow::new(
+            ))?;
+            emit(MaterializedRow::new(
                 CF_DAO_BY_LOCK_BLOCK,
                 keys::encode_dao_by_lock_block_key(
                     &entry.lock_script_hash,
@@ -710,8 +1041,8 @@ impl DaoOwner {
                 )
                 .to_vec(),
                 Vec::new(),
-            ));
-            rows.push(MaterializedRow::new(
+            ))?;
+            emit(MaterializedRow::new(
                 CF_DAO_BY_STATUS_BLOCK,
                 keys::encode_dao_by_status_block_key(
                     entry.status,
@@ -720,14 +1051,14 @@ impl DaoOwner {
                 )
                 .to_vec(),
                 Vec::new(),
-            ));
+            ))?;
 
             if entry.status >= 1 {
                 let request_tx_hash = entry.withdraw_request_tx.as_ref().ok_or_else(|| {
                     anyhow!(
                         "DAO status {} missing withdraw_request_tx during materialization: outpoint={}",
                         entry.status,
-                        format_outpoint(&outpoint)
+                        format_outpoint(outpoint)
                     )
                 })?;
                 let request_output_index =
@@ -735,20 +1066,31 @@ impl DaoOwner {
                         anyhow!(
                             "DAO status {} missing withdraw_request_output_index during materialization: outpoint={}",
                             entry.status,
-                            format_outpoint(&outpoint)
+                            format_outpoint(outpoint)
                         )
                     })?;
-                rows.push(MaterializedRow::new(
+                emit(MaterializedRow::new(
                     CF_DAO_BY_WITHDRAW_TX,
                     keys::encode_outpoint(request_tx_hash, request_output_index).to_vec(),
                     outpoint_key.to_vec(),
-                ));
+                ))?;
             }
         }
 
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn build_snapshot_rows(&self) -> Result<Vec<MaterializedRow>> {
+        let mut rows = Vec::new();
+        self.emit_snapshot_rows(|row| {
+            rows.push(row);
+            Ok(())
+        })?;
         Ok(rows)
     }
 
+    #[cfg(test)]
     pub(crate) fn build_final_rows(&self) -> Result<super::super::materialize::OwnerFinalRows> {
         Ok(super::super::materialize::OwnerFinalRows {
             sealed_rows: self.build_sealed_rows()?,
@@ -760,32 +1102,20 @@ impl DaoOwner {
     /// deposits and summing per-deposit compensation for those that were
     /// status-0 at `block_number`.  Same formula as the live-sync path
     /// (`compute_unmade_dao_interests` in dao_ops.rs).
+    #[cfg(test)]
     fn compute_unmade_at_block(&self, block_number: i64, ar: u64) -> Result<i128> {
-        let mut total: i128 = 0;
-        for entry in self.deposits.values() {
-            // Was this deposit status-0 at `block_number`?
-            if entry.deposit_block_number > block_number {
-                continue; // deposit didn't exist yet
-            }
-            if let Some(req_block) = entry.withdraw_request_block {
-                if req_block <= block_number {
-                    continue; // already moved to status 1+ by this block
-                }
-            }
-            let ar_deposit = u64::try_from(entry.deposit_ar).map_err(|_| {
-                anyhow!(
-                    "negative DAO deposit AR in compute_unmade_at_block: deposit_block={}, deposit_ar={}",
-                    entry.deposit_block_number,
-                    entry.deposit_ar
-                )
-            })?;
-            if ar_deposit > 0 && ar > ar_deposit {
-                let compensation =
-                    calculate_dao_compensation_from_ar(entry.capacity, ar_deposit, ar)?;
-                total += compensation as i128;
-            }
-        }
-        Ok(total)
+        Ok(self
+            .compute_compensation_at_block(block_number, ar)?
+            .active_unmade)
+    }
+
+    #[cfg(test)]
+    fn compute_compensation_at_block(
+        &self,
+        block_number: i64,
+        ar: u64,
+    ) -> Result<ckbadger_store::DaoCompensationBreakdown> {
+        DaoCompensationTimeline::new(&self.deposits)?.advance_to(block_number, ar)
     }
 
     pub(crate) fn record_block(&mut self, block: &BlockFacts) -> Result<()> {
@@ -808,37 +1138,24 @@ impl DaoOwner {
             self.daily_end_of_day.insert(block_date, (block.number, ar));
         }
 
-        let claimed_compensation_in_block = self
-            .claimed_compensation_by_block
-            .remove(&block.number)
-            .unwrap_or(0);
-
-        // Use pre-block deposited for the split (apply_tx already ran for this
-        // block's transactions, updating current_block_protocol_delta).
-        // The running value reflects state BEFORE this block's txs because we
-        // only commit the block delta AFTER the split.
-        let deposited_for_split = self.running_protocol_deposited;
-
+        let secondary_epoch_reward = self.secondary_epoch_reward.ok_or_else(|| {
+            anyhow!(
+                "missing consensus secondary_epoch_reward in bulk DAO reducer: block={}",
+                block.number
+            )
+        })?;
         let mut stats = BatchStats::default();
-        accumulate_secondary_issuance_deltas_from_csu(
+        accumulate_miner_secondary_for_block(
             &mut stats,
             block.number,
             block_date,
+            i64::from(block.epoch_index),
+            i64::from(block.epoch_length),
             c,
-            s,
             u,
-            claimed_compensation_in_block,
-            deposited_for_split,
-            &mut self.prev_dao_cs,
+            secondary_epoch_reward,
+            &mut self.prev_dao_cu,
         )?;
-        if let Some(delta) = stats.daily_secondary_non_miner_delta.get(&block_date) {
-            Self::bump_daily_i128(
-                &mut self.daily_secondary_non_miner_delta,
-                block_date,
-                *delta,
-                "dao daily secondary non-miner delta",
-            )?;
-        }
         if let Some(delta) = stats.daily_secondary_miner_delta.get(&block_date) {
             Self::bump_daily_i128(
                 &mut self.daily_secondary_miner_delta,
@@ -847,26 +1164,25 @@ impl DaoOwner {
                 "dao daily secondary miner delta",
             )?;
         }
-        if let Some(delta) = stats.daily_secondary_dao_delta.get(&block_date) {
-            Self::bump_daily_i128(
-                &mut self.daily_secondary_dao_delta,
-                block_date,
-                *delta,
-                "dao daily secondary dao delta",
-            )?;
-        }
-        if let Some(delta) = stats.daily_secondary_treasury_delta.get(&block_date) {
-            Self::bump_daily_i128(
-                &mut self.daily_secondary_treasury_delta,
-                block_date,
-                *delta,
-                "dao daily secondary treasury delta",
-            )?;
-        }
 
         // Commit this block's protocol delta to the running total.
-        self.running_protocol_deposited += self.current_block_protocol_delta;
+        self.running_protocol_deposited = self
+            .running_protocol_deposited
+            .checked_add(self.current_block_protocol_delta)
+            .ok_or_else(|| {
+                anyhow!(
+                    "running DAO protocol capacity overflow after block {}",
+                    block.number
+                )
+            })?;
         self.current_block_protocol_delta = 0;
+        if self.running_protocol_deposited < 0 {
+            bail!(
+                "negative running DAO protocol capacity after block {}: {}",
+                block.number,
+                self.running_protocol_deposited
+            );
+        }
 
         Ok(())
     }
@@ -924,39 +1240,6 @@ impl DaoOwner {
             );
         }
         target.insert(date, next);
-        Ok(())
-    }
-
-    fn bump_daily_i128_for_block(
-        target: &mut FxHashMap<i64, i128>,
-        block_number: i64,
-        delta: i128,
-        metric: &str,
-    ) -> Result<()> {
-        if delta == 0 {
-            return Ok(());
-        }
-        let current = target.get(&block_number).copied().unwrap_or(0);
-        let next = current.checked_add(delta).ok_or_else(|| {
-            anyhow!(
-                "{} overflow: block={} current={} delta={}",
-                metric,
-                block_number,
-                current,
-                delta
-            )
-        })?;
-        if next < 0 {
-            bail!(
-                "{} underflow: block={} current={} delta={} next={}",
-                metric,
-                block_number,
-                current,
-                delta,
-                next
-            );
-        }
-        target.insert(block_number, next);
         Ok(())
     }
 
@@ -1062,6 +1345,7 @@ struct DaoCellView {
     outpoint: OutPointKey,
     lock_hash: Vec<u8>,
     capacity: i64,
+    occupied_capacity: i64,
     state: DaoCellState,
 }
 
@@ -1074,6 +1358,7 @@ impl DaoCellView {
         Self::from_parts(
             cell.outpoint,
             cell.capacity,
+            cell.occupied_capacity,
             cell.lock_script_hash_id,
             cell.semantic_tag,
             cell.dao_state,
@@ -1091,6 +1376,7 @@ impl DaoCellView {
         Self::from_parts(
             input.outpoint,
             input.capacity,
+            input.occupied_capacity,
             input.lock_script_hash_id,
             input.semantic_tag,
             input.dao_state,
@@ -1104,6 +1390,7 @@ impl DaoCellView {
     fn from_parts(
         outpoint: OutPointKey,
         capacity: i64,
+        occupied_capacity: i64,
         lock_script_hash_id: crate::sync::types::InternId,
         semantic_tag: CellSemanticTag,
         dao_state: Option<DaoCellState>,
@@ -1119,6 +1406,7 @@ impl DaoCellView {
             outpoint,
             lock_hash: ctx.resolve_identity(lock_script_hash_id).to_vec(),
             capacity,
+            occupied_capacity,
             state: dao_state.ok_or_else(|| {
                 anyhow!(
                     "missing DAO state for DAO cell in bulk reducer: block={}, tx=0x{}, tx_index={}, {}",
@@ -1405,6 +1693,7 @@ mod tests {
         let ar_genesis: u64 = 10_000_000_000_000_000;
         let deposit = DaoDepositCacheEntry {
             capacity: 193_00000000,
+            occupied_capacity: 102_00000000,
             deposit_block_number: 0,
             deposit_timestamp: 0,
             lock_script_hash: vec![0xaa; 32],
@@ -1416,6 +1705,7 @@ mod tests {
             withdraw_request_ar: None,
             withdraw_block: None,
             withdraw_tx: None,
+            withdraw_request_occupied_capacity: None,
             withdraw_to_output_index: None,
             compensation: None,
         };
@@ -1451,6 +1741,7 @@ mod tests {
         // Deposit at block 100, withdrawn at block 200.
         let deposit_withdrawn = DaoDepositCacheEntry {
             capacity: 200_00000000,
+            occupied_capacity: 102_00000000,
             deposit_block_number: 100,
             deposit_timestamp: 0,
             lock_script_hash: vec![0xbb; 32],
@@ -1462,6 +1753,7 @@ mod tests {
             withdraw_request_ar: Some(10_000_100_000_000_000),
             withdraw_block: None,
             withdraw_tx: None,
+            withdraw_request_occupied_capacity: Some(102_00000000),
             withdraw_to_output_index: None,
             compensation: None,
         };
@@ -1476,6 +1768,7 @@ mod tests {
         // Deposit at block 300 (future).
         let deposit_future = DaoDepositCacheEntry {
             capacity: 300_00000000,
+            occupied_capacity: 102_00000000,
             deposit_block_number: 300,
             deposit_timestamp: 0,
             lock_script_hash: vec![0xcc; 32],
@@ -1487,6 +1780,7 @@ mod tests {
             withdraw_request_ar: None,
             withdraw_block: None,
             withdraw_tx: None,
+            withdraw_request_occupied_capacity: None,
             withdraw_to_output_index: None,
             compensation: None,
         };
@@ -1567,6 +1861,15 @@ mod tests {
             .into(),
         };
         owner.apply_tx(&tx0, &ctx).expect("apply deposit");
+        assert_eq!(owner.current_block_protocol_delta, 200_00000000);
+        assert_eq!(
+            owner
+                .deposits
+                .get(&OutPointKey::new([0x31; 32], 0))
+                .unwrap()
+                .occupied_capacity,
+            142_00000000
+        );
 
         let tx1 = ResolvedTxFacts {
             tx_hash: [0x32; 32],
@@ -1625,6 +1928,14 @@ mod tests {
             .into(),
         };
         owner.apply_tx(&tx1, &ctx).expect("apply request");
+        assert_eq!(
+            owner
+                .compute_compensation_at_block(101, 12_000)
+                .unwrap()
+                .unclaimed,
+            11_60000000,
+            "phase-1 compensation must freeze at request AR using the deposit cell's exact occupied capacity"
+        );
 
         let tx2 = ResolvedTxFacts {
             tx_hash: [0x33; 32],
@@ -1662,7 +1973,7 @@ mod tests {
                 outpoint: OutPointKey::new([0x33; 32], 0),
                 created_at_block: 102,
                 created_by_block_dao_ar: 13_000,
-                capacity: 219_60000000,
+                capacity: 211_60000000,
                 lock_script_hash_id: lock_hash,
                 lock_code_hash_id: InternId::new(5),
                 lock_hash_type: 1,
@@ -1691,13 +2002,34 @@ mod tests {
         assert_eq!(entry.status, 2);
         assert_eq!(entry.withdraw_request_block, Some(101));
         assert_eq!(entry.withdraw_request_tx, Some(vec![0x32; 32]));
-        assert_eq!(entry.withdraw_request_ar, None);
+        assert_eq!(
+            entry.withdraw_request_ar,
+            Some(12_000),
+            "completed entries must retain the request AR so a rollback to phase 1 remains computable"
+        );
         assert_eq!(entry.withdraw_request_output_index, Some(0));
         assert_eq!(entry.withdraw_block, Some(102));
         assert_eq!(entry.withdraw_tx, Some(vec![0x33; 32]));
         assert_eq!(entry.withdraw_to_output_index, Some(0));
-        assert_eq!(entry.compensation, Some(19_60000000));
+        assert_eq!(entry.compensation, Some(11_60000000));
         assert!(owner.request_outpoints.is_empty());
+        assert_eq!(
+            owner.compute_compensation_at_block(101, 12_000).unwrap(),
+            ckbadger_store::DaoCompensationBreakdown {
+                claimed: 0,
+                unclaimed: 11_60000000,
+                active_unmade: 0,
+            },
+            "a finalized entry must reconstruct its historical phase-1 frozen compensation"
+        );
+        assert_eq!(
+            owner.compute_compensation_at_block(102, 13_000).unwrap(),
+            ckbadger_store::DaoCompensationBreakdown {
+                claimed: 11_60000000,
+                unclaimed: 0,
+                active_unmade: 0,
+            }
+        );
     }
 
     #[test]
@@ -1837,6 +2169,7 @@ mod tests {
             origin_outpoint,
             DaoDepositCacheEntry {
                 capacity: 200_00000000,
+                occupied_capacity: 102_00000000,
                 deposit_block_number: 100,
                 deposit_timestamp: 0,
                 lock_script_hash: vec![0xaa; 32],
@@ -1848,6 +2181,7 @@ mod tests {
                 withdraw_request_ar: Some(12_000),
                 withdraw_block: None,
                 withdraw_tx: None,
+                withdraw_request_occupied_capacity: Some(102_00000000),
                 withdraw_to_output_index: None,
                 compensation: None,
             },

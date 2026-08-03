@@ -15,6 +15,7 @@ vi.mock('@/lib/api', () => ({
     getAddressActivities: vi.fn(),
   },
   isWarmupPendingError: vi.fn(() => false),
+  isNetworkInitializingError: vi.fn(() => false),
 }));
 
 vi.mock('@/components/layout/header', () => ({
@@ -171,7 +172,7 @@ describe('AddressDetailPage', () => {
     });
 
     const lockScriptLink = screen.getByText('Default Lock');
-    expect(lockScriptLink.closest('a')).toHaveAttribute('href', '/scripts/Default%20Lock');
+    expect(lockScriptLink.closest('a')).toHaveAttribute('href', '/mainnet/scripts/Default%20Lock');
   });
 
   it('renders address section when lockScriptInfo is null', async () => {
@@ -297,7 +298,7 @@ describe('AddressDetailPage', () => {
     await waitFor(() => {
       expect(screen.getAllByRole('link', { name: fallbackLabel })[0]).toHaveAttribute(
         'href',
-        `/tokens/${typeScriptHash}`
+        `/mainnet/tokens/${typeScriptHash}`
       );
     });
   });
@@ -345,11 +346,51 @@ describe('AddressDetailPage', () => {
       const links = screen.getAllByRole('link');
       const tokenLink = links.find(
         (l) =>
-          l.getAttribute('href') === `/tokens/${typeScriptHash}` &&
+          l.getAttribute('href') === `/mainnet/tokens/${typeScriptHash}` &&
           l.textContent?.includes(fallbackLabel)
       );
       expect(tokenLink).toBeDefined();
     });
+  });
+
+  it('never renders the address transaction count as an activity total', async () => {
+    // R4-G item 3: activities exclude cellbase, so the address's transaction
+    // count is not a total this list can ever page to. The API stopped
+    // declaring one; the page must not substitute `transactionsCount`.
+    vi.mocked(api.getAddress).mockResolvedValue({
+      ...mockAddressWithLockScriptInfo,
+      transactionsCount: 4727769,
+    });
+    vi.mocked(api.getAddressActivities).mockResolvedValue({
+      data: [
+        {
+          txHash: '0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+          blockNumber: 123,
+          txIndex: 0,
+          timestamp: '2026-02-20T00:00:00Z',
+          ckbDelta: '100000000',
+          usedDelta: '0',
+          isCellbase: false,
+          participants: [],
+          tags: 1,
+          typeCalls: [],
+          lockCalls: [],
+          protocolActions: [],
+          itemDeltas: [],
+        },
+      ],
+      limit: 50,
+      hasMore: true,
+      nextCursor: '123:0',
+    });
+
+    render(<AddressDetailPage />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Next' })).toBeInTheDocument();
+    });
+    expect(screen.queryByText(/4,727,769 activities/)).not.toBeInTheDocument();
+    expect(screen.getByText(/Showing 1-1 activities/)).toBeInTheDocument();
   });
 
   it('resets activity filter and pagination cursors when route address changes', async () => {
@@ -654,7 +695,7 @@ describe('AddressDetailPage', () => {
     // Script call name is a link to the script detail page
     expect(screen.getAllByRole('link', { name: 'RGB++ Lock' })[0]).toHaveAttribute(
       'href',
-      '/scripts/RGB%2B%2B%20Lock'
+      '/mainnet/scripts/RGB%2B%2B%20Lock'
     );
   });
 });

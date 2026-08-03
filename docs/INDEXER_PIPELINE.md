@@ -19,7 +19,8 @@ The CKB indexer uses a three-stage pipeline architecture to maximize sync throug
 1. **Decouple I/O from computation** - Block fetching doesn't block parsing; parsing doesn't block DB writes
 2. **Maximize parallelism** - Each stage can work on different batches simultaneously
 3. **Maintain consistency** - Pipeline produces deterministic, correct database state
-4. **Handle failures gracefully** - Stale batches are drained on errors; periodic db_tip resync prevents drift
+4. **Use mode-specific failure handling** - Near-tip batches can drain and retry; fresh-store
+   bulk build fails fast and must restart from empty chain stores
 
 ## Pipeline Stages
 
@@ -127,11 +128,12 @@ Block N arrives
 
 ## Configuration
 
-| Parameter             | Default | Description                                              |
-| --------------------- | ------- | -------------------------------------------------------- |
-| `bulk_sync_threshold` | `1000`  | Blocks behind tip to treat sync as bulk mode             |
-| `poll_interval_ms`    | `1000`  | Live sync new-block poll interval (ms)                   |
-| `ckb.workdir`         | -       | CKB node config directory; ckbadger derives RocksDB path |
+| Parameter               | Default | Description                                                           |
+| ----------------------- | ------- | --------------------------------------------------------------------- |
+| `bulk_sync_threshold`   | `1000`  | Blocks behind tip where bulk-to-near-tip handoff occurs               |
+| `poll_interval_ms`      | `1000`  | Live sync new-block poll interval (ms)                                |
+| `bulk_memory_budget_gb` | auto    | Optional whole-indexer bulk-sync hard limit                           |
+| `ckb.workdir`           | -       | Required CKB node config directory; ckbadger derives its RocksDB path |
 
 Pipeline channel capacity (16) and batch span are hardcoded constants.
 Live batch span is density-adaptive: `40,000 txs / tx_per_block_ema`, clamped to [1, 5000] blocks.
@@ -146,19 +148,36 @@ append_only_data_path = "data/append-only"
 [ckb]
 rpc_url = "http://127.0.0.1:8114"
 workdir = "/var/lib/ckb"
+
+[indexer]
+bulk_sync_threshold = 1000
+poll_interval_ms = 1000
+# bulk_memory_budget_gb = 32
 ```
 
-`bulk_sync_threshold` and `poll_interval_ms` are configured in `ckbadger.toml`.
+These values are configured in each network's `config.toml`. The top-level
+`ckbadger.toml` contains only the `[[network]]` list and shared frontend/log settings.
 
-### CLI Arguments
+### Starting One Indexer
 
 ```bash
-cargo run -p ckbadger-indexer -- \
-  --pipeline-buffer 16 \
-  --batch-size 10000 \
-  --parallel-fetch-size 64 \
-  --bulk-sync-threshold 72
+ckbadger -C <orchestrator-root>/<network> run --only indexer
 ```
+
+`ckbadger-indexer` is a library, not a standalone binary. Pipeline capacity and adaptive batch
+controls are internal implementation details rather than public CLI flags.
+
+### Multi-Network Scheduling
+
+At an orchestrator root, APIs, enabled crawlers, and the shared frontend start immediately.
+Indexers start in `[[network]]` order. The supervisor waits until the active indexer has crossed
+the bulk threshold before admitting the next one, so only one co-resident network performs the
+memory-intensive fresh-store bulk build at a time. Indexers already in the near-tip pipeline keep
+running independently.
+
+Absent an explicit `[store].memory_budget_gb`, detected host RAM is divided by the number of
+networks listed by the governing orchestrator. `[indexer].bulk_memory_budget_gb` overrides the
+whole-process guard for that network and must be greater than zero when set.
 
 ## Error Handling
 
@@ -244,7 +263,10 @@ Pipeline memory is bounded by channel capacity (16) × batch span × block size.
 Live batch span adapts to chain density (~20-5000 blocks per batch).
 
 Bulk-build mode adds in-memory state for the live-cell set (LiveCellOwner), intern tables, and
-reducer-owned domain state. See the Bulk-Build Engine section for details.
+reducer-owned domain state. Its growth is controlled by compact fixed-size state, MTP-sealed
+activity buckets, actual-byte queue backpressure, a whole-process memory budget (`VmRSS + VmSwap`
+on Linux, process physical footprint on macOS), and byte-bounded finalization. See the Bulk-Build
+Engine section for details.
 
 ### Channel Backpressure
 
@@ -362,22 +384,34 @@ for the full design rationale.
 **Key data structures**:
 
 - **FactsArena**: per-batch fact graph with `BlockFacts`, `TxFacts`, `CellFacts`, interned identities
-- **IdentityInterner**: `DashMap<Vec<u8>, u32>` for concurrent insert during parallel parsing;
-  freezes to `FrozenIdentityView` (lock-free `Vec` snapshot) for the reduce phase
+- **IdentityInterner**: `DashMap<Arc<[u8]>, u32>` for concurrent insert during parallel parsing;
+  the lookup map and ID table share each byte payload, and it freezes to an O(1)
+  `FrozenIdentityView` for the reduce phase
 - **LiveCellOwner**: `FxHashMap<OutPointKey, LiveCellSlot>` — authoritative in-memory live-cell set;
-  resolves all consumed inputs without DB reads. Protocol facts stored in a separate
-  `FxHashMap<OutPointKey, CellProtocolFacts>` side-map (only ~1-2% of cells have protocol facts)
+  resolves all consumed inputs without DB reads. The outpoint exists only as the map key, while
+  rare data hash, UDT, and DAO fields live in a sparse `FxHashMap<OutPointKey, LiveCellExtras>`
+  side-map
+- **AddressOwner**: fixed-size `[u8; 32]` keys and transaction hashes with in-place updates; the
+  stable `AddressBalance` representation is created only while final rows are streamed
 - **FxHashMap**: replaces `std::HashMap` in hot structures for 2-5x faster hashing on fixed-size keys
 
 ### Performance Optimizations
 
 1. **FxHashMap**: non-cryptographic hash for `OutPointKey` (36B), lock/type hashes, and all reducer maps
-2. **Protocol facts side-map**: removed `Option<CellProtocolFacts>` from every `LiveCellSlot`, saving ~24B per entry
+2. **Sparse live-cell extras**: outpoints are not duplicated in values, and rare protocol fields
+   are removed from every `LiveCellSlot` into `LiveCellExtras`
 3. **3-way parallel build tree**: history materialization + activity_stats (LEFT), chain_stats (MIDDLE), and hodl + owner reducers (RIGHT) run concurrently via nested `rayon::join`; within RIGHT, address + cell_dist run in parallel with 5 independent reducers (script, token, dao, fiber, object)
 4. **Inter-batch pipelining**: prefetch worker reads batch N+1 from CKB RocksDB while batch N is being built; fetch uses `std::thread::scope` (not rayon) so blocking RocksDB reads don't starve CPU-bound build work
-5. **RocksDB flush overlap**: materialized rows are sent to a flush channel; a dedicated worker commits them to RocksDB concurrently with the next batch's build
+5. **RocksDB flush overlap**: materialized rows are sent to a flush channel; a dedicated worker
+   commits them to RocksDB concurrently with the next batch's build. Queue permits are held for
+   the actual retained row-vector bytes until commit completes
 6. **Parallel block parsing**: `rayon::par_iter` parses blocks within a batch, merges output ranges for global cell indices post-merge
 7. **Bottleneck-driven resource control**: a single `BottleneckController` measures per-batch timing (fetch wait, build CPU, flush wait) and dynamically adjusts `target_cells`, `fetch_threads`, and `bg_jobs`. Batch sizing uses a build-time band [2s, 5s]: below band → grow, above band → shrink, in-band with build > IO → grow (IO headroom), in-band with IO ≥ build → hold (physical limit). Supply cap at 4× actual cells prevents divergence when supply-limited. Drain uses cell count as primary budget with RAM-derived bytes as safety cap
+8. **Bounded finalization**: live-cell indexes and owner rows are emitted sequentially through
+   32 MiB domain-store batches, so finalization does not duplicate the entire in-memory snapshot
+9. **Clean process handoff**: after durable bulk finalization, the indexer exits successfully and
+   the supervisor immediately starts a fresh process for the near-tip pipeline, allowing the OS
+   to reclaim allocator arenas and reducer state
 
 ### Bulk-Build Write Classes
 
@@ -389,7 +423,9 @@ for the full design rationale.
 - **Class C** (sealed aggregates): flushed once the time bucket/epoch closes — `stats_chain`,
   `stats_dao`, `stats_hodl`, `stats_script`, `stats_token`, `stats_spore`, `stats_mnft`
 - **Class D** (bulk-disabled): `reorg_undo_log_by_block`, `pending_proposals`, `dob_decoded` — not
-  written during bulk sync; `sync_meta` holds only build metadata and final completion state
+  written during bulk sync. `sync_meta` still owns network identity, the genesis baseline,
+  build-session state, progress/runtime records, and final completion metadata; it does not become
+  a fallback store for skipped domain aggregates.
 
 ### Bulk-Build Stats Coverage
 
@@ -401,6 +437,9 @@ for the full design rationale.
   during bulk build and become the starting point for later live-sync accumulation.
 - `stats_chain` / `stats_hodl` / object-related sealed stats are also written inline; bulk build
   does not rely on a post-sync backfill pass.
+- Activity hourly/daily buckets use the CKB median-time-past watermark (37 headers including the
+  current header, upper median). Only buckets whose exact UTC+8 end is at or below that watermark
+  are emitted; later actions targeting a sealed bucket are an invariant violation.
 
 ### Still Skipped In Bulk Build
 
@@ -451,30 +490,45 @@ Failures are classified via a typed `DobDecodeError` (`crates/indexer/src/sync/d
 
   Proactive L0 compensation: +1 bg_jobs when L0 EMA > 40 without Flush classification.
   Channel depth (prefetch + flush) is derived from system RAM (16GB→2, 32GB→4, 64GB+→8, max 8).
+  Depth controls scheduling only: prefetched chunks are split by actual Molecule block bytes, and
+  the flush queue also reserves permits for actual retained row-vector bytes.
 
 - **BackgroundSampler**: periodic background thread that samples RocksDB stats and system metrics
   (via cross-platform POSIX APIs) on a configurable interval, decoupling stat collection from the
   hot batch path. Located in `crates/indexer/src/sync/bulk_build/sampler.rs`.
 - **PrefetchChannelHandle**: bounded channel for inter-batch block prefetching. Depth and
-  concurrency are controlled by the bottleneck controller. Fetch uses `std::thread::scope`
-  (temporary threads, not rayon) to avoid starving CPU-bound build work.
+  concurrency are controlled by the bottleneck controller, while fetched blocks are split into
+  messages by their actual encoded bytes. Fetch uses `std::thread::scope` (temporary threads, not
+  rayon) to avoid starving CPU-bound build work.
   Located in `crates/indexer/src/sync/bulk_build/prefetch.rs`.
+
+- **BulkMemoryGuard**: checks process `VmRSS + VmSwap` on Linux or process physical footprint on
+  macOS before each batch, after each build, and before finalization. It reduces the next
+  input-byte cap to preserve transient build headroom and fails with detailed process/owner
+  diagnostics if the configured limit is exceeded.
+  `[indexer].bulk_memory_budget_gb` is optional; without it, the store's per-network RAM share is
+  used.
 
 ### Bulk-Sync Completion Behavior
 
 When bulk sync completes (transitions from `blocks_remaining > threshold` to `<= threshold`):
 
-1. Indexer detects state transition via `was_bulk_sync_active` flag
-2. Marks bulk sync completed in sync status/cache metadata
-3. Finalizes the active bulk-sync perf artifact run under `workdir/perf/bulk-sync/<run_id>/`
-4. Invalidates chart caches
-5. Restores normal compaction options and triggers background compaction
-6. Spawns DOB background decode worker
+1. The bulk engine drains history writes and streams all sealed/final snapshot rows to their
+   owning stores
+2. It flushes memtables, persists sync totals, clears the bulk session marker, and marks bulk sync
+   completed in sync status/cache metadata
+3. It finalizes the active bulk-sync perf artifact under `workdir/perf/bulk-sync/<run_id>/`
+4. The indexer exits with success; the supervisor treats this as a planned handoff and immediately
+   starts a new indexer process without crash backoff
+5. The fresh process sees a non-fresh store, selects the normal near-tip pipeline, restores normal
+   compaction behavior, invalidates caches as required, and starts live-sync background work
 
 ### Implementation Details
 
-- State tracking: `was_bulk_sync_active: AtomicBool` in Indexer struct
-- Detection: `check_bulk_sync_completion()` called after each batch
+- Handoff state is persisted before the successful process exit; the next process cannot re-enter
+  the fresh-store-only bulk route
+- Successful indexer exit is a planned supervisor handoff; unsuccessful exits retain normal crash
+  backoff behavior
 - No automatic call to `BatchWriter::rebuild_all_statistics()` in current runtime path
 - Fresh-db bulk sync writes perf artifacts directly from the indexer runtime under `workdir/perf/bulk-sync/`; failed runs keep their own directory and only completed runs refresh `workdir/perf/bulk-sync/latest/`
 - `metadata.env` records both `run_id` and `build_version`, so artifact comparisons can separate one runtime execution from another binary build
@@ -489,20 +543,21 @@ crates/indexer/src/sync/
     binary_facts.rs  # Binary-format fact serialization for prefetch channel
     facts.rs         # FactsArena — per-batch fact graph
     interner.rs      # IdentityInterner (DashMap) + FrozenIdentityView
-    live_cells.rs    # LiveCellOwner — in-memory UTXO set + protocol facts side-map
+    live_cells.rs    # LiveCellOwner — compact UTXO set + sparse extras side-map
+    memory_guard.rs  # Portable whole-process budget and transient batch headroom
     sequencer.rs     # Canonical tx-order sequencing + input resolution
     accounting.rs    # Fee/capacity accounting
-    materialize.rs   # StoreBatch assembly + flush_rows_to_stores()
+    materialize.rs   # Byte-bounded domain finalization + dual-store history writes
     sampler.rs       # BackgroundSampler — periodic RocksDB + system stats sampling
     prefetch.rs      # PrefetchChannelHandle — bounded block prefetching
-  owners/
-    mod.rs         # ReducerContext, parallel reducer dispatch
-    address.rs     # AddressOwner — balances, cell counts, addr_stats
-    dao.rs         # DaoOwner — deposit lifecycle, DAO indexes
-    token.rs       # TokenOwner — UDT metadata, holders, transfers
-    script.rs      # ScriptOwner — script usage, daily deltas
-    object.rs      # ObjectOwner — spore/mNFT/object/identity/cluster state
-    fiber.rs       # FiberOwner — fiber channel registry
+    owners/
+      mod.rs         # ReducerContext, parallel reducer dispatch
+      address.rs     # AddressOwner — balances, cell counts, addr_stats
+      dao.rs         # DaoOwner — deposit lifecycle, DAO indexes
+      token.rs       # TokenOwner — UDT metadata, holders, transfers
+      script.rs      # ScriptOwner — script usage, daily deltas
+      object.rs      # ObjectOwner — spore/mNFT/object/identity/cluster state
+      fiber.rs       # FiberOwner — fiber channel registry
 ```
 
 ## Crash Recovery
@@ -582,4 +637,4 @@ Sync progress and status are stored directly in RocksDB (no external dependencie
 
 ---
 
-_Last updated: 2026-03-23_
+_Last updated: 2026-07-26_

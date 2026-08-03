@@ -1,23 +1,25 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use anyhow::Result;
-use anyhow::{anyhow, bail};
+use anyhow::{anyhow, bail, Context};
 use ckb_types::utilities::compact_to_difficulty as ckb_compact_to_difficulty;
+use ckbadger_common::TokenBalance;
 use ckbadger_store::keys;
 use ckbadger_store::store::CF_TOKEN_TRANSFERS;
 use ckbadger_store::types::{
     decode_live_cell_marker, BulkBuildSessionMarker, CachedBlockHeader,
     CellDistributionTrackerState, ConsumedCellMeta, DailyActivityStats, DailyAddressCohort,
     DailyCellDistribution, DailyHodlWave, DaoDailySnapshot, DaoLatestStatistics, DaoTopDepositors,
-    HodlTrackerState, LiveCellInfo, LockScriptEntry, ObjectStandard, ScriptDailyDelta,
-    SporeTypeIndex, SyncStatus, TokenTransferRecord, TxActions, TxIndexEntry,
-    DID_CKB_SENTINEL_COLLECTION, DOTBIT_SENTINEL_COLLECTION, SOLE_SPORES_SENTINEL_COLLECTION,
+    HodlTrackerState, HourlyStats, LiveCellInfo, LockScriptEntry, MinerStats, ObjectStandard,
+    ScriptDailyDelta, SporeTypeIndex, SyncStatus, TokenTransferRecord, TxActions, TxIndexEntry,
+    BIT_CELL_SENTINEL_COLLECTION, DID_CKB_SENTINEL_COLLECTION, DOTBIT_SENTINEL_COLLECTION,
+    SOLE_SPORES_SENTINEL_COLLECTION,
 };
 use ckbadger_store::{
     AddressBalance, CkbadgerStore, ScriptInfo, CF_ADDR_TXS, CF_BLOCK_HASH_INDEX, CF_BLOCK_HEADERS,
@@ -28,13 +30,15 @@ use ckbadger_store::{
 };
 use rayon::prelude::*;
 use rocksdb::IteratorMode;
-use tracing::info;
+use tracing::{info, warn};
 
 use super::indexer::{
     finalize_bulk_stage_handoff_state, persist_bulk_sync_completion_status,
     take_bulk_sync_completion_transition, Indexer,
 };
+use super::reorg::{begin_cell_distribution_block, begin_hodl_wave_block};
 use crate::bulk_sync_perf::BatchSample;
+use crate::lifecycle::RebuildRequiredError;
 use crate::parser::{ParsedUdtCell, UdtParser, UdtStandard};
 use crate::rpc::BlockResponseWithCycles;
 use crate::sync::bulk_build::owners::BulkReducer;
@@ -46,6 +50,7 @@ pub(crate) mod facts;
 pub(crate) mod interner;
 pub(crate) mod live_cells;
 pub(crate) mod materialize;
+pub(crate) mod memory_guard;
 pub(crate) mod owners;
 pub(crate) mod prefetch;
 pub(crate) mod sampler;
@@ -57,7 +62,6 @@ use crate::sync::bottleneck::{self, BatchSignals, BottleneckController};
 struct PreparedFinalizeArtifacts {
     activity_sealed_rows: Vec<materialize::MaterializedRow>,
     chain_sealed_rows: Vec<materialize::MaterializedRow>,
-    final_snapshot_rows: Vec<materialize::MaterializedRow>,
 }
 
 #[derive(Default)]
@@ -84,6 +88,7 @@ impl BulkBuildEngine {
             "Bulk build engine route selected; materializing bulk stage before pipeline handoff"
         );
         Self::run_bulk_stage_until_pipeline_handoff(indexer).await?;
+        fail_if_bulk_engine_cancelled(indexer, "after_bulk_stage")?;
         let handoff_tip = i64::try_from(indexer.progress.current()).map_err(|_| {
             anyhow!(
                 "bulk build handoff tip exceeds i64 range: current_block={}",
@@ -92,14 +97,27 @@ impl BulkBuildEngine {
         })?;
         indexer.reconcile_hodl_tracker_with_tip(handoff_tip)?;
         indexer.reconcile_cell_dist_tracker_with_tip(handoff_tip)?;
+        fail_if_bulk_engine_cancelled(indexer, "after_tracker_reconcile")?;
+        persist_bulk_sync_completion_status(
+            indexer.writer.store().as_ref(),
+            indexer.progress.target(),
+        )?;
+        // No cancellation check here: once completion status is persisted, the
+        // build is durable and clearing the marker is all that remains. Failing
+        // on a shutdown request in that window would demand a full rebuild for
+        // nothing.
+        // Clearing the marker is the durable completion commit point. Keep it
+        // until every fallible domain-store finalization step has succeeded.
+        indexer.writer.store().clear_bulk_build_session_marker()?;
+        indexer.finalize_bulk_sync_perf_completed();
         info!(
             run_id = %indexer.run_id,
             current_block = indexer.progress.current(),
             target_block = indexer.progress.target(),
             threshold = indexer.config.bulk_sync_threshold,
-            "Bulk build stage finalized; handing off to pipeline for near-tip/live sync"
+            "Bulk build stage finalized; exiting cleanly so near-tip sync starts with a reclaimed heap"
         );
-        indexer.run_pipeline().await
+        Ok(())
     }
 
     async fn run_bulk_stage_until_pipeline_handoff(indexer: &Indexer) -> Result<()> {
@@ -107,6 +125,35 @@ impl BulkBuildEngine {
             .ckb_store()
             .ok_or_else(|| anyhow!("bulk build requires direct CKB RocksDB reader"))?;
         let mut runtime = BulkBuildRuntimeState::default();
+        runtime
+            .owners
+            .dao
+            .set_secondary_epoch_reward(required_secondary_epoch_reward(
+                indexer.writer.store().as_ref(),
+            )?);
+        // Resuming above genesis: the first block recorded must split its
+        // secondary issuance against its parent's DAO C/U, which is already
+        // persisted.
+        {
+            let store = indexer.writer.store();
+            let (resume_tip, _resume_tip_hash) = store.get_sync_tip()?;
+            if resume_tip > 0 {
+                let parent = store.get_block_header(resume_tip)?.ok_or_else(|| {
+                    anyhow!(
+                        "missing parent block header while resuming bulk build: block={}",
+                        resume_tip
+                    )
+                })?;
+                let (c, _s, u) = dao_csu_from_bytes(&parent.dao).ok_or_else(|| {
+                    anyhow!(
+                        "invalid parent DAO field while resuming bulk build: block={}, dao_len={}",
+                        resume_tip,
+                        parent.dao.len()
+                    )
+                })?;
+                runtime.owners.dao.seed_prev_dao_cu(c, u);
+            }
+        }
         let mut sync_totals = BulkBuildSyncTotals::default();
         let mut materializer = materialize::Materializer::new(
             indexer.writer.store().as_ref(),
@@ -115,11 +162,22 @@ impl BulkBuildEngine {
         let disk_device = crate::sys_info::detect_disk_device(&indexer.config.domain_data_path);
         let sampler = sampler::BackgroundSampler::new(
             indexer.writer.store().clone(),
+            indexer.append_only_store.clone(),
             std::time::Duration::from_millis(200),
             disk_device,
         );
         let token_info_cache = preload_token_info_cache(indexer.writer.store().as_ref())?;
         let mem_profile = indexer.writer.store().memory_profile();
+        let memory_guard = memory_guard::BulkMemoryGuard::new(
+            indexer.config.bulk_memory_budget_gb,
+            mem_profile.system_ram_bytes,
+        )?;
+        info!(
+            run_id = %indexer.run_id,
+            process_memory_budget_bytes = memory_guard.limit_bytes(),
+            configured_process_memory_budget_gb = ?indexer.config.bulk_memory_budget_gb,
+            "Bulk build whole-process memory guard enabled"
+        );
         let prefetch_depth =
             bottleneck::prefetch_channel_depth(mem_profile.system_ram_bytes) as usize;
         let flush_depth = bottleneck::flush_channel_depth(mem_profile.system_ram_bytes) as usize;
@@ -154,17 +212,23 @@ impl BulkBuildEngine {
             initial_handoff,
             threads_rx,
         );
-        let chunk_rx = prefetch.take_receiver();
-        let mut buffer = block_buffer::BlockBufferHandle::new(chunk_rx);
+        let (chunk_rx, remote_prefetch_block_bytes) = prefetch.take_receiver();
+        let mut buffer = block_buffer::BlockBufferHandle::new_with_remote_bytes(
+            chunk_rx,
+            remote_prefetch_block_bytes,
+        );
         // Bounded flush channel: the build loop sends PendingFlush into
         // a channel. A dedicated worker converts rows to WriteBatch via
         // prepare_flush and commits to RocksDB. Build only blocks when the
         // channel is full, eliminating the flush bubble when flush_ms > build_ms.
-        let flush_channel = materialize::FlushChannelHandle::new(
+        let flush_queue_budget_bytes = (memory_guard.limit_bytes() / 8).max(64 * 1024 * 1024);
+        let flush_channel = materialize::FlushChannelHandle::new_with_shutdown(
             flush_depth,
+            flush_queue_budget_bytes,
             indexer.writer.store().clone(),
             indexer.append_only_store.clone(),
-        );
+            indexer.shutdown_flag(),
+        )?;
         // Initial 0.0 is semantically correct (no flush yet) but always
         // overwritten by flush_channel.last_flush_ms() before first read.
         #[allow(unused_assignments)]
@@ -173,8 +237,12 @@ impl BulkBuildEngine {
         let mut cumulative_sealed_rows: usize = 0;
         let mut _flush_send_count: usize = 0;
         let mut last_bottleneck: Option<String> = None;
+        let mut last_owner_memory = runtime.memory_breakdown_bytes();
 
-        loop {
+        let interrupted_stage = 'bulk_loop: loop {
+            if indexer.is_shutdown_requested() {
+                break 'bulk_loop Some("before_batch");
+            }
             ckb_store.refresh()?;
             let chain_tip = ckb_store.tip_number().ok_or_else(|| {
                 anyhow!("failed to get chain tip from CKB RocksDB during bulk build")
@@ -184,7 +252,7 @@ impl BulkBuildEngine {
             let current_block = indexer.progress.current();
             let blocks_remaining = chain_tip.saturating_sub(current_block);
             if blocks_remaining <= indexer.config.bulk_sync_threshold {
-                break;
+                break 'bulk_loop None;
             }
 
             let batch_span = tracing::info_span!(
@@ -198,25 +266,57 @@ impl BulkBuildEngine {
             // buffer with one chunk first (if empty) to get real cell density,
             // then pulls enough chunks for target_cells.
             let recv_started = Instant::now();
-            match buffer.fill_to_cell_budget(controller.target_cells()).await {
+            let fill_result = tokio::select! {
+                biased;
+                _ = indexer.shutdown_cancelled() => {
+                    break 'bulk_loop Some("prefetch_wait");
+                }
+                result = buffer.fill_to_cell_budget(controller.target_cells()) => result,
+            };
+            match fill_result {
                 Ok(true) => {}
                 Ok(false) => {
                     info!("block buffer exhausted, ending bulk build loop");
-                    break;
+                    break 'bulk_loop None;
                 }
                 Err(e) => {
                     return Err(e.context("prefetch error during bulk build"));
                 }
             }
             let prefetch_recv_elapsed = recv_started.elapsed();
+            if indexer.is_shutdown_requested() {
+                break 'bulk_loop Some("after_prefetch");
+            }
+
+            let before_batch_prefetch_bytes = buffer.retained_block_bytes()?;
+            let before_batch_flush_bytes = flush_channel.reserved_bytes()?;
+            let before_batch_memory = retained_memory_breakdown(
+                &last_owner_memory,
+                before_batch_prefetch_bytes,
+                before_batch_flush_bytes,
+                None,
+            )?;
+            let before_batch_store_memory = sampler.latest().store_memory;
+            let process_memory = memory_guard.checkpoint(
+                "before_batch",
+                current_block,
+                &before_batch_memory,
+                &before_batch_store_memory,
+            )?;
+            let safe_max_batch_bytes = memory_guard.safe_batch_input_bytes(
+                process_memory,
+                controller.max_batch_bytes(),
+                current_block,
+                &before_batch_memory,
+                &before_batch_store_memory,
+            )?;
 
             // Enter the batch span for the synchronous build + record section.
             // Dropped explicitly before the next .await (flush_channel.send).
             let _batch_guard = batch_span.enter();
 
             // Drain by cell count with byte safety cap.
-            let drained =
-                buffer.drain_by_cells(controller.target_cells(), controller.max_batch_bytes());
+            let drained = buffer.drain_by_cells(controller.target_cells(), safe_max_batch_bytes);
             let batch_block_count = drained.len() as u64;
             let batch_cells: u64 = drained.iter().map(|b| b.cell_count).sum();
             let batch_bytes: u64 = drained.iter().map(|b| b.block_bytes as u64).sum();
@@ -231,6 +331,26 @@ impl BulkBuildEngine {
                 &token_info_cache,
             )?;
             let build_elapsed = build_started.elapsed();
+            if indexer.is_shutdown_requested() {
+                break 'bulk_loop Some("after_batch_build");
+            }
+            let memory_accounting_started = Instant::now();
+            last_owner_memory = runtime.memory_breakdown_bytes();
+            let pending_flush_bytes = pending_flush.allocated_bytes()?;
+            let after_build_memory = retained_memory_breakdown(
+                &last_owner_memory,
+                buffer.retained_block_bytes()?,
+                flush_channel.reserved_bytes()?,
+                Some(pending_flush_bytes),
+            )?;
+            let memory_accounting_elapsed = memory_accounting_started.elapsed();
+            let after_build_store_memory = sampler.latest().store_memory;
+            memory_guard.checkpoint(
+                "after_batch_build",
+                current_block,
+                &after_build_memory,
+                &after_build_store_memory,
+            )?;
 
             // Read the most recent flush_ms from the worker (non-blocking).
             prev_flush_ms = flush_channel.last_flush_ms();
@@ -238,7 +358,7 @@ impl BulkBuildEngine {
 
             // Capture row counts before send() moves the data.
             let pending_flush_row_count = (
-                pending_flush.history_rows.len(),
+                pending_flush.history_row_count(),
                 pending_flush.sealed_rows.len(),
             );
 
@@ -248,9 +368,19 @@ impl BulkBuildEngine {
             // Send to flush channel.  Blocks when channel is full (natural
             // backpressure).  Channel depth is memory-budget-derived.
             let flush_wait_started = Instant::now();
-            flush_channel.send(pending_flush).await?;
+            let flush_send_result = tokio::select! {
+                biased;
+                _ = indexer.shutdown_cancelled() => {
+                    break 'bulk_loop Some("flush_backpressure");
+                }
+                result = flush_channel
+                    .send_with_allocated_bytes(pending_flush, pending_flush_bytes) => result,
+            };
+            flush_send_result?;
             let flush_wait_elapsed = flush_wait_started.elapsed();
             let flush_channel_pending = flush_channel.pending() as u64;
+            let prefetch_retained_block_bytes = buffer.retained_block_bytes()?;
+            let flush_reserved_bytes = flush_channel.reserved_bytes()?;
 
             cumulative_history_rows += pending_flush_row_count.0;
             cumulative_sealed_rows += pending_flush_row_count.1;
@@ -308,6 +438,35 @@ impl BulkBuildEngine {
             sample.disk_avg_queue_depth = snap.disk_avg_queue_depth;
             sample.disk_in_flight = snap.disk_in_flight;
             sample.disk_state = disk_state.clone();
+            sample.process_committed_bytes = process_memory.committed_bytes()?;
+            sample.process_rss_bytes = process_memory.rss_bytes;
+            sample.process_rss_anon_bytes = process_memory.rss_anon_bytes;
+            sample.process_rss_file_bytes = process_memory.rss_file_bytes;
+            sample.process_rss_shmem_bytes = process_memory.rss_shmem_bytes;
+            sample.process_swap_bytes = process_memory.swap_bytes;
+            sample.process_high_water_rss_bytes = process_memory.high_water_rss_bytes;
+            sample.jemalloc_stats_available = process_memory.jemalloc_stats_available;
+            sample.jemalloc_allocated_bytes = process_memory.jemalloc_allocated_bytes;
+            sample.jemalloc_active_bytes = process_memory.jemalloc_active_bytes;
+            sample.jemalloc_resident_bytes = process_memory.jemalloc_resident_bytes;
+            sample.jemalloc_mapped_bytes = process_memory.jemalloc_mapped_bytes;
+            sample.jemalloc_retained_bytes = process_memory.jemalloc_retained_bytes;
+            sample.jemalloc_metadata_bytes = process_memory.jemalloc_metadata_bytes;
+            sample.rocksdb_domain_memtable_bytes = snap.store_memory.domain_memtable_bytes;
+            sample.rocksdb_append_only_memtable_bytes =
+                snap.store_memory.append_only_memtable_bytes;
+            sample.rocksdb_shared_block_cache_bytes = snap.store_memory.shared_block_cache_bytes;
+            sample.rocksdb_domain_table_readers_bytes =
+                snap.store_memory.domain_table_readers_bytes;
+            sample.rocksdb_append_only_table_readers_bytes =
+                snap.store_memory.append_only_table_readers_bytes;
+            sample.rocksdb_total_memory_bytes = snap.store_memory.total_memory_bytes;
+            sample.rocksdb_domain_compaction_pending_bytes =
+                snap.store_memory.domain_compaction_pending_bytes;
+            sample.rocksdb_append_only_compaction_pending_bytes =
+                snap.store_memory.append_only_compaction_pending_bytes;
+            sample.rocksdb_shared_wbm_usage_bytes = snap.store_memory.shared_wbm_usage_bytes;
+            sample.rocksdb_shared_wbm_budget_bytes = snap.store_memory.shared_wbm_budget_bytes;
             sample.txs = batch_stats.tx_count;
             sample.cells = u64::try_from(batch_stats.cells_created).map_err(|_| {
                 anyhow!(
@@ -329,6 +488,8 @@ impl BulkBuildEngine {
             sample.history_ms = build_timings.history_ms;
             sample.address_reduce_ms = build_timings.address_reduce_ms;
             sample.activity_stats_ms = build_timings.activity_stats_ms;
+            sample.interner_gc_ms = build_timings.interner_gc_ms;
+            sample.memory_accounting_ms = memory_accounting_elapsed.as_secs_f64() * 1000.0;
             sample.facts_par_iter_ms = build_timings.facts_breakdown.par_iter_ms;
             sample.facts_merge_ms = build_timings.facts_breakdown.merge_ms;
             sample.facts_serial_equivalent_ms = build_timings.facts_breakdown.serial_equivalent_ms;
@@ -340,9 +501,17 @@ impl BulkBuildEngine {
             sample.flush_wait_ms = flush_wait_elapsed.as_secs_f64() * 1000.0;
             sample.flush_channel_depth = flush_depth as u64;
             sample.flush_channel_pending = flush_channel_pending;
+            sample.flush_reserved_bytes = flush_reserved_bytes;
             sample.prefetch_recv_ms = prefetch_recv_elapsed.as_secs_f64() * 1000.0;
             sample.prefetch_depth = prefetch_depth as u64;
-            sample.owner_memory_bytes = runtime.memory_breakdown_bytes();
+            sample.prefetch_retained_block_bytes = prefetch_retained_block_bytes;
+            sample.owner_memory_bytes = last_owner_memory.clone();
+            let accounted_retained_bytes = checked_retained_memory_total(
+                &last_owner_memory,
+                prefetch_retained_block_bytes,
+                flush_reserved_bytes,
+            )?;
+            sample.accounted_retained_bytes = accounted_retained_bytes;
             sample.live_cell_count = runtime.sequencer.live_count() as u64;
             // Cumulative row counts: tracks rows sent to flush channel.
             sample.cumulative_history_rows = cumulative_history_rows as u64;
@@ -358,7 +527,7 @@ impl BulkBuildEngine {
 
             // Publish bulk-build metrics to shared atomics for progress monitor -> TUI.
             // Must happen before record_bulk_sync_perf_batch_sample moves sample.
-            let owner_mem_total: u64 = sample.owner_memory_bytes.values().sum();
+            let owner_mem_total = checked_memory_map_total(&sample.owner_memory_bytes)?;
             indexer.bulk_build_perf.record_batch_bytes(batch_bytes);
             indexer.bulk_build_perf.record_disk_telemetry(
                 disk_state.as_deref(),
@@ -429,6 +598,12 @@ impl BulkBuildEngine {
                 history_ms = format!("{:.1}", build_timings.history_ms),
                 address_reduce_ms = format!("{:.1}", build_timings.address_reduce_ms),
                 activity_stats_ms = format!("{:.1}", build_timings.activity_stats_ms),
+                interner_gc_ms = format!("{:.1}", build_timings.interner_gc_ms),
+                memory_accounting_ms =
+                    format!("{:.1}", memory_accounting_elapsed.as_secs_f64() * 1000.0),
+                prefetch_retained_block_bytes,
+                flush_reserved_bytes,
+                accounted_retained_bytes,
                 prev_flush_ms = format!("{:.1}", prev_flush_ms),
                 "Bulk build materialized batch"
             );
@@ -480,21 +655,74 @@ impl BulkBuildEngine {
 
             // Periodic memory summary every 10 batches
             if batch_count.is_multiple_of(10) {
-                let mem = runtime.memory_breakdown_bytes();
-                let total_mb: u64 = mem.values().sum::<u64>() / (1024 * 1024);
+                let total_mb = checked_memory_map_total(&last_owner_memory)? / (1024 * 1024);
                 let live_cells = runtime.sequencer.live_count();
                 let interner_entries = runtime.interner.len();
+                let interner_slots = runtime.interner.slot_len();
+                let interner_free_slots = runtime.interner.free_len();
+                let written_lock_scripts = runtime.interner.lock_script_written_count();
                 info!(
                     total_memory_mb = total_mb,
-                    live_cells, interner_entries, batch_count, "Bulk build memory snapshot"
+                    live_cells,
+                    interner_entries,
+                    interner_slots,
+                    interner_free_slots,
+                    written_lock_scripts,
+                    batch_count,
+                    "Bulk build memory snapshot"
                 );
             }
+        };
+
+        let interrupted_stage = interrupted_stage
+            .or_else(|| indexer.is_shutdown_requested().then_some("before_finalize"));
+        if let Some(stage) = interrupted_stage {
+            drop(buffer);
+            let flush_drain = flush_channel.begin_shutdown();
+            let (prefetch_result, flush_result) =
+                tokio::join!(prefetch.close_and_wait(), flush_drain.wait());
+            sampler.shutdown();
+
+            let mut cleanup_errors = Vec::new();
+            if let Err(error) = prefetch_result {
+                cleanup_errors.push(format!("prefetch: {error:#}"));
+            }
+            if let Err(error) = flush_result {
+                cleanup_errors.push(format!("flush: {error:#}"));
+            }
+            if !cleanup_errors.is_empty() {
+                warn!(
+                    run_id = %indexer.run_id,
+                    stage,
+                    cleanup_errors = ?cleanup_errors,
+                    "Bulk shutdown worker cleanup reported errors"
+                );
+            }
+            return Err(RebuildRequiredError::interrupted_bulk_session(
+                &indexer.run_id,
+                indexer.progress.current(),
+                stage,
+                &cleanup_errors,
+            )
+            .into());
         }
 
         // ── Finalize: decomposed into 13 sub-phases with progress reporting ──
         // The progress monitor (entry.rs, 10s polling) reads these atomics and
         // publishes to RocksDB so the TUI can display a finalize checklist.
         let finalize_started = Instant::now();
+        let before_finalize_memory = retained_memory_breakdown(
+            &last_owner_memory,
+            buffer.retained_block_bytes()?,
+            flush_channel.reserved_bytes()?,
+            None,
+        )?;
+        memory_guard.checkpoint(
+            "before_finalize",
+            indexer.progress.current(),
+            &before_finalize_memory,
+            &sampler.latest().store_memory,
+        )?;
 
         // Drop the buffer handle (and its receiver) to signal prefetch to stop.
         drop(buffer);
@@ -512,7 +740,17 @@ impl BulkBuildEngine {
             .bulk_build_perf
             .record_finalize_step(1, finalize_started.elapsed());
         let flush_drain = flush_channel.begin_shutdown();
-        let prepared_finalize = match runtime.prepare_finalize_artifacts() {
+        // Genesis-derived burn adjustment for knowledge_size. Fail-fast if the
+        // baseline was never derived (single calculation path, no fallback).
+        let virtual_occupied = indexer
+            .writer
+            .store()
+            .get_genesis_baseline()?
+            .ok_or_else(|| {
+                anyhow!("genesis baseline not derived; cannot finalize bulk-build knowledge_size")
+            })?
+            .virtual_occupied;
+        let prepared_finalize = match runtime.prepare_finalize_artifacts(virtual_occupied) {
             Ok(prepared) => prepared,
             Err(err) => {
                 let _ = flush_drain.wait().await;
@@ -534,9 +772,12 @@ impl BulkBuildEngine {
         let append_only_arc = Arc::clone(&indexer.append_only_store);
         let perf_stats = indexer.bulk_build_perf.clone();
         let finalize_started_copy = finalize_started;
+        let materialize_shutdown = indexer.shutdown_flag();
 
         let BulkBuildRuntimeState {
             owners,
+            sequencer,
+            interner,
             hodl_tracker,
             cell_dist_tracker,
             ..
@@ -548,15 +789,38 @@ impl BulkBuildEngine {
                 append_only_arc.as_ref(),
                 prepared_finalize,
                 owners,
+                sequencer,
+                interner,
                 hodl_tracker,
                 cell_dist_tracker,
                 &perf_stats,
                 finalize_started_copy,
+                materialize_shutdown.as_ref(),
             )
         });
 
         let (drain_result, materialize_result) =
             tokio::join!(flush_drain.wait(), materialize_handle,);
+
+        if indexer.is_shutdown_requested() {
+            let mut cleanup_errors = Vec::new();
+            if let Err(error) = &drain_result {
+                cleanup_errors.push(format!("flush: {error:#}"));
+            }
+            match &materialize_result {
+                Err(error) => cleanup_errors.push(format!("materialize join: {error}")),
+                Ok(Err(error)) => cleanup_errors.push(format!("materialize: {error:#}")),
+                Ok(Ok(_)) => {}
+            }
+            sampler.shutdown();
+            return Err(RebuildRequiredError::interrupted_bulk_session(
+                &indexer.run_id,
+                indexer.progress.current(),
+                "finalize_materialization",
+                &cleanup_errors,
+            )
+            .into());
+        }
 
         let flush_stats = drain_result?;
         let materialize_report = materialize_result
@@ -579,6 +843,16 @@ impl BulkBuildEngine {
 
         // Phase 11: memtable flush
         {
+            if indexer.is_shutdown_requested() {
+                sampler.shutdown();
+                return Err(RebuildRequiredError::interrupted_bulk_session(
+                    &indexer.run_id,
+                    indexer.progress.current(),
+                    "before_memtable_flush",
+                    &[],
+                )
+                .into());
+            }
             let _guard = tracing::info_span!("bulk_finalize", phase = 12, label = "memtable_flush")
                 .entered();
             indexer
@@ -592,13 +866,22 @@ impl BulkBuildEngine {
 
         // Phase 12: sync status + cleanup
         {
+            if indexer.is_shutdown_requested() {
+                sampler.shutdown();
+                return Err(RebuildRequiredError::interrupted_bulk_session(
+                    &indexer.run_id,
+                    indexer.progress.current(),
+                    "after_memtable_flush",
+                    &[],
+                )
+                .into());
+            }
             let _guard =
                 tracing::info_span!("bulk_finalize", phase = 13, label = "sync_cleanup").entered();
             indexer
                 .bulk_build_perf
                 .record_finalize_step(13, finalize_started.elapsed());
             sync_totals.finalize_success(indexer.writer.store().as_ref(), false)?;
-            indexer.writer.store().clear_bulk_build_session_marker()?;
             indexer.writer.refresh_latest_dao_statistics()?;
         }
 
@@ -654,6 +937,7 @@ struct BatchBuildTimings {
     history_ms: f64,
     address_reduce_ms: f64,
     activity_stats_ms: f64,
+    interner_gc_ms: f64,
 }
 
 /// Rows produced by `apply_blocks` that need to be flushed to RocksDB.
@@ -799,15 +1083,23 @@ fn materialize_finalize_phases(
     append_only_store: &CkbadgerStore,
     prepared: PreparedFinalizeArtifacts,
     owners: CoreOwners,
+    sequencer: sequencer::BulkSequencer,
+    interner: interner::IdentityInterner,
     hodl_tracker: crate::db::writer::hodl_wave::HodlWaveTracker,
     cell_dist_tracker: crate::db::writer::cell_distribution::CellDistributionTracker,
     perf_stats: &crate::sync::diagnostics::BulkBuildPerfStats,
     finalize_started: Instant,
+    shutdown_requested: &AtomicBool,
 ) -> Result<materialize::MaterializationReport> {
-    let mut materializer = materialize::Materializer::new(domain_store, append_only_store);
+    let mut materializer = materialize::Materializer::new_cancellable(
+        domain_store,
+        append_only_store,
+        shutdown_requested,
+    );
 
     // Step 2: activity stats (sealed aggregates)
     {
+        fail_if_bulk_finalize_cancelled(shutdown_requested, "activity_stats")?;
         let _guard =
             tracing::info_span!("bulk_finalize", phase = 2, label = "activity_stats").entered();
         perf_stats.record_finalize_step(2, finalize_started.elapsed());
@@ -816,6 +1108,7 @@ fn materialize_finalize_phases(
 
     // Step 3: chain stats (sealed aggregates)
     {
+        fail_if_bulk_finalize_cancelled(shutdown_requested, "chain_stats")?;
         let _guard =
             tracing::info_span!("bulk_finalize", phase = 3, label = "chain_stats").entered();
         perf_stats.record_finalize_step(3, finalize_started.elapsed());
@@ -824,68 +1117,31 @@ fn materialize_finalize_phases(
 
     // Step 4: final snapshot (live cell markers + index CFs)
     {
+        fail_if_bulk_finalize_cancelled(shutdown_requested, "final_snapshot")?;
         let _guard =
             tracing::info_span!("bulk_finalize", phase = 4, label = "final_snapshot").entered();
         perf_stats.record_finalize_step(4, finalize_started.elapsed());
-        materializer.materialize_final_snapshot(&prepared.final_snapshot_rows)?;
+        let frozen = interner.snapshot_for_reads();
+        materializer.materialize_final_snapshot_bounded(|sink| {
+            emit_final_snapshot_rows(&sequencer, &frozen, |row| sink.push(row))
+        })?;
     }
 
-    // Steps 5-6: build owner rows in parallel, write sequentially
+    // Steps 5-6: emit each owner sequentially through byte-bounded batches.
+    // Building every owner's full row vector in parallel duplicated the whole
+    // reducer state at the exact point where bulk sync already had peak RSS.
     {
+        fail_if_bulk_finalize_cancelled(shutdown_requested, "owners")?;
         let _guard =
             tracing::info_span!("bulk_finalize", phase = 5, label = "owners_build").entered();
         perf_stats.record_finalize_step(5, finalize_started.elapsed());
-
-        // Build rows in parallel — each owner is independent
-        let (addr_result, fiber_result, dao_result, object_result, script_result, token_result) =
-            std::thread::scope(|s| {
-                let h_addr = s.spawn(|| owners.address.build_final_rows());
-                let h_script = s.spawn(|| owners.script.build_final_rows(domain_store));
-                let h_token = s.spawn(|| owners.token.build_final_rows(domain_store));
-                let h_object = s.spawn(|| owners.object.build_final_rows());
-
-                // dao + fiber are small, run inline on the scope's thread
-                let dao_result = owners.dao.build_final_rows();
-                let fiber_result = owners.fiber.build_final_rows();
-
-                (
-                    h_addr.join().expect("address build_final_rows panicked"),
-                    fiber_result,
-                    dao_result,
-                    h_object.join().expect("object build_final_rows panicked"),
-                    h_script.join().expect("script build_final_rows panicked"),
-                    h_token.join().expect("token build_final_rows panicked"),
-                )
-            });
-
-        let addr_rows = addr_result?;
-        let fiber_rows = fiber_result?;
-        let dao_rows = dao_result?;
-        let object_rows = object_result?;
-        let script_rows = script_result?;
-        let token_rows = token_result?;
-
-        // Write all rows sequentially through Materializer
         perf_stats.record_finalize_step(6, finalize_started.elapsed());
-        for rows in [
-            &addr_rows,
-            &script_rows,
-            &token_rows,
-            &dao_rows,
-            &fiber_rows,
-            &object_rows,
-        ] {
-            if !rows.sealed_rows.is_empty() {
-                materializer.stream_sealed_aggregate_rows(&rows.sealed_rows)?;
-            }
-            if !rows.snapshot_rows.is_empty() {
-                materializer.materialize_final_snapshot(&rows.snapshot_rows)?;
-            }
-        }
+        owners.materialize_all(&mut materializer)?;
     }
 
     // Step 11: metadata (HODL + cell distribution tracker state)
     {
+        fail_if_bulk_finalize_cancelled(shutdown_requested, "metadata")?;
         let _guard = tracing::info_span!("bulk_finalize", phase = 11, label = "metadata").entered();
         perf_stats.record_finalize_step(11, finalize_started.elapsed());
         let mut meta_batch = ckbadger_store::batch::StoreBatch::new(domain_store);
@@ -897,6 +1153,26 @@ fn materialize_finalize_phases(
     }
 
     Ok(materializer.finish())
+}
+
+fn fail_if_bulk_finalize_cancelled(shutdown_requested: &AtomicBool, stage: &str) -> Result<()> {
+    if shutdown_requested.load(Ordering::SeqCst) {
+        bail!("bulk finalize interrupted by shutdown request at stage={stage}");
+    }
+    Ok(())
+}
+
+fn fail_if_bulk_engine_cancelled(indexer: &Indexer, stage: &str) -> Result<()> {
+    if indexer.is_shutdown_requested() {
+        return Err(RebuildRequiredError::interrupted_bulk_session(
+            &indexer.run_id,
+            indexer.progress.current(),
+            stage,
+            &[],
+        )
+        .into());
+    }
+    Ok(())
 }
 
 #[derive(Default)]
@@ -935,7 +1211,7 @@ impl CoreOwners {
         &mut self,
         tx: &facts::ResolvedTxFacts<'_>,
         ctx: &owners::ReducerContext<'_>,
-    ) -> Result<FxHashMap<Vec<u8>, owners::address::AddressTxDelta>> {
+    ) -> Result<FxHashMap<[u8; 32], owners::address::AddressTxDelta>> {
         let address_deltas = self.address.apply_tx_with_deltas(tx, ctx)?;
         self.script.apply_tx(tx, ctx)?;
         self.token.apply_tx(tx, ctx)?;
@@ -945,20 +1221,38 @@ impl CoreOwners {
         Ok(address_deltas)
     }
 
-    fn materialize_all(&mut self, materializer: &mut materialize::Materializer<'_>) -> Result<()> {
-        self.address.flush_sealed(materializer)?;
-        self.script.flush_sealed(materializer)?;
-        self.token.flush_sealed(materializer)?;
-        self.dao.flush_sealed(materializer)?;
-        self.fiber.flush_sealed(materializer)?;
-        self.object.flush_sealed(materializer)?;
+    fn materialize_all(self, materializer: &mut materialize::Materializer<'_>) -> Result<()> {
+        let Self {
+            mut address,
+            mut script,
+            mut token,
+            mut dao,
+            mut fiber,
+            mut object,
+        } = self;
 
-        self.address.materialize_final(materializer)?;
-        self.script.materialize_final(materializer)?;
-        self.token.materialize_final(materializer)?;
-        self.dao.materialize_final(materializer)?;
-        self.fiber.materialize_final(materializer)?;
-        self.object.materialize_final(materializer)?;
+        address.flush_sealed(materializer)?;
+        address.materialize_final(materializer)?;
+        drop(address);
+
+        script.flush_sealed(materializer)?;
+        script.materialize_final(materializer)?;
+        drop(script);
+
+        token.flush_sealed(materializer)?;
+        token.materialize_final(materializer)?;
+        drop(token);
+
+        dao.flush_sealed(materializer)?;
+        dao.materialize_final(materializer)?;
+        drop(dao);
+
+        fiber.flush_sealed(materializer)?;
+        fiber.materialize_final(materializer)?;
+        drop(fiber);
+
+        object.flush_sealed(materializer)?;
+        object.materialize_final(materializer)?;
         Ok(())
     }
 }
@@ -969,6 +1263,9 @@ struct ActivityStatsAccumulator {
     daily_addrs: FxHashMap<String, FxHashSet<[u8; 32]>>,
     hourly_stats: FxHashMap<String, DailyActivityStats>,
     hourly_addrs: FxHashMap<String, FxHashSet<[u8; 32]>>,
+    mtp_timestamps_ms: VecDeque<i64>,
+    sealed_through_ms: Option<i64>,
+    last_block_number: Option<i64>,
 }
 
 impl ActivityStatsAccumulator {
@@ -999,7 +1296,151 @@ impl ActivityStatsAccumulator {
     /// Chrono cache: all txs in the same block share one timestamp, so we
     /// cache the formatted date/hour strings and only reformat on timestamp
     /// change (~47K format calls per batch instead of ~123K).
-    fn apply_tx_actions(&mut self, tx_actions_list: &[TxActions]) -> Result<()> {
+    fn apply_batch(
+        &mut self,
+        blocks: &[facts::BlockFacts],
+        tx_actions_list: &[TxActions],
+    ) -> Result<Vec<materialize::MaterializedRow>> {
+        if blocks.is_empty() {
+            if tx_actions_list.is_empty() {
+                return Ok(Vec::new());
+            }
+            bail!(
+                "activity accumulator received actions without blocks: actions={}",
+                tx_actions_list.len()
+            );
+        }
+
+        let mut expected_number = self
+            .last_block_number
+            .map(|number| {
+                number.checked_add(1).ok_or_else(|| {
+                    anyhow!(
+                        "activity accumulator block number overflow after block={}",
+                        number
+                    )
+                })
+            })
+            .transpose()?;
+        let mut block_timestamps = FxHashMap::default();
+        for block in blocks {
+            if block.timestamp_ms < 0 {
+                bail!(
+                    "activity accumulator received negative block timestamp: block={} timestamp_ms={}",
+                    block.number,
+                    block.timestamp_ms
+                );
+            }
+            if let Some(expected) = expected_number {
+                if block.number != expected {
+                    bail!(
+                        "activity accumulator block discontinuity: expected={} actual={} previous={:?}",
+                        expected,
+                        block.number,
+                        self.last_block_number
+                    );
+                }
+            }
+            if block_timestamps
+                .insert(block.number, block.timestamp_ms)
+                .is_some()
+            {
+                bail!(
+                    "activity accumulator received duplicate block number: block={}",
+                    block.number
+                );
+            }
+            expected_number = Some(block.number.checked_add(1).ok_or_else(|| {
+                anyhow!(
+                    "activity accumulator block number overflow at block={}",
+                    block.number
+                )
+            })?);
+        }
+
+        // A bucket already below the previous batch's MTP can never receive a
+        // valid future CKB block. Treat such input as a chain/order invariant
+        // violation instead of silently recreating an already-written row.
+        if let Some(watermark) = self.sealed_through_ms {
+            for actions in tx_actions_list {
+                for (kind, end_ms) in [
+                    (
+                        "hourly",
+                        activity_bucket_end_ms(actions.timestamp, ACTIVITY_HOUR_MS)?,
+                    ),
+                    (
+                        "daily",
+                        activity_bucket_end_ms(actions.timestamp, ACTIVITY_DAY_MS)?,
+                    ),
+                ] {
+                    if end_ms <= watermark {
+                        bail!(
+                            "already sealed activity bucket received a late action: kind={} block={} tx_index={} timestamp_ms={} bucket_end_ms={} mtp_watermark_ms={}",
+                            kind,
+                            actions.block_number,
+                            actions.tx_index,
+                            actions.timestamp,
+                            end_ms,
+                            watermark
+                        );
+                    }
+                }
+            }
+        }
+
+        for actions in tx_actions_list {
+            let expected_timestamp = block_timestamps.get(&actions.block_number).ok_or_else(|| {
+                anyhow!(
+                    "activity action references block outside current batch: block={} tx_index={} batch_first={} batch_last={}",
+                    actions.block_number,
+                    actions.tx_index,
+                    blocks.first().expect("non-empty checked").number,
+                    blocks.last().expect("non-empty checked").number
+                )
+            })?;
+            if actions.timestamp != *expected_timestamp {
+                bail!(
+                    "activity action timestamp differs from owning block: block={} tx_index={} action_timestamp_ms={} block_timestamp_ms={}",
+                    actions.block_number,
+                    actions.tx_index,
+                    actions.timestamp,
+                    expected_timestamp
+                );
+            }
+        }
+
+        self.accumulate_tx_actions(tx_actions_list)?;
+
+        let mut next_watermark = self.sealed_through_ms;
+        for block in blocks {
+            self.mtp_timestamps_ms.push_back(block.timestamp_ms);
+            if self.mtp_timestamps_ms.len() > CKB_MEDIAN_TIME_BLOCK_COUNT {
+                self.mtp_timestamps_ms.pop_front();
+            }
+            let timestamps = self.mtp_timestamps_ms.make_contiguous();
+            let median = ckb_median_time_ms(timestamps)?;
+            if let Some(previous) = next_watermark {
+                if median < previous {
+                    bail!(
+                        "CKB median-time watermark regressed: block={} previous_mtp_ms={} current_mtp_ms={} window={:?}",
+                        block.number,
+                        previous,
+                        median,
+                        timestamps
+                    );
+                }
+            }
+            next_watermark = Some(median);
+            self.last_block_number = Some(block.number);
+        }
+
+        let watermark = next_watermark.expect("non-empty block batch has a median");
+        let rows = self.drain_sealed_rows(watermark)?;
+        self.sealed_through_ms = Some(watermark);
+        Ok(rows)
+    }
+
+    fn accumulate_tx_actions(&mut self, tx_actions_list: &[TxActions]) -> Result<()> {
         let mut cached_ts = i64::MIN;
         let mut cached_date = String::new();
         let mut cached_hour = String::new();
@@ -1043,6 +1484,30 @@ impl ActivityStatsAccumulator {
         }
 
         Ok(())
+    }
+
+    #[cfg(test)]
+    fn apply_tx_actions(&mut self, tx_actions_list: &[TxActions]) -> Result<()> {
+        self.accumulate_tx_actions(tx_actions_list)
+    }
+
+    fn drain_sealed_rows(
+        &mut self,
+        watermark_ms: i64,
+    ) -> Result<Vec<materialize::MaterializedRow>> {
+        let mut rows = drain_activity_bucket_rows(
+            &mut self.hourly_stats,
+            &mut self.hourly_addrs,
+            watermark_ms,
+            true,
+        )?;
+        rows.extend(drain_activity_bucket_rows(
+            &mut self.daily_stats,
+            &mut self.daily_addrs,
+            watermark_ms,
+            false,
+        )?);
+        Ok(rows)
     }
 
     fn build_rows(&self) -> Result<Vec<materialize::MaterializedRow>> {
@@ -1114,6 +1579,171 @@ impl ActivityStatsAccumulator {
     }
 }
 
+const CKB_MEDIAN_TIME_BLOCK_COUNT: usize = 37;
+const ACTIVITY_HOUR_MS: i64 = 60 * 60 * 1_000;
+const ACTIVITY_DAY_MS: i64 = 24 * ACTIVITY_HOUR_MS;
+const CKB_UTC8_OFFSET_MS: i64 = ckbadger_common::CKB_UTC8_OFFSET as i64 * 1_000;
+
+fn ckb_median_time_ms(timestamps: &[i64]) -> Result<i64> {
+    if timestamps.is_empty() {
+        bail!("cannot calculate CKB median time from an empty timestamp window");
+    }
+    if timestamps.len() > CKB_MEDIAN_TIME_BLOCK_COUNT {
+        bail!(
+            "CKB median-time window exceeds consensus limit: len={} max={}",
+            timestamps.len(),
+            CKB_MEDIAN_TIME_BLOCK_COUNT
+        );
+    }
+    // Consensus fixes the window at at most 37 headers, so keep the working
+    // set on the stack. This preserves the exact upper-median rule without a
+    // heap allocation for every block in a full-chain replay.
+    let mut ordered = [0i64; CKB_MEDIAN_TIME_BLOCK_COUNT];
+    ordered[..timestamps.len()].copy_from_slice(timestamps);
+    let middle = timestamps.len() / 2;
+    let (_, median, _) = ordered[..timestamps.len()].select_nth_unstable(middle);
+    Ok(*median)
+}
+
+fn activity_bucket_end_ms(timestamp_ms: i64, bucket_ms: i64) -> Result<i64> {
+    let shifted = timestamp_ms
+        .checked_add(CKB_UTC8_OFFSET_MS)
+        .ok_or_else(|| {
+            anyhow!(
+                "activity bucket timestamp overflow while applying UTC+8 offset: timestamp_ms={}",
+                timestamp_ms
+            )
+        })?;
+    let next_bucket = shifted
+        .div_euclid(bucket_ms)
+        .checked_add(1)
+        .ok_or_else(|| {
+            anyhow!(
+                "activity bucket index overflow: timestamp_ms={}",
+                timestamp_ms
+            )
+        })?;
+    next_bucket
+        .checked_mul(bucket_ms)
+        .and_then(|end| end.checked_sub(CKB_UTC8_OFFSET_MS))
+        .ok_or_else(|| {
+            anyhow!(
+                "activity bucket end overflow: timestamp_ms={} bucket_ms={}",
+                timestamp_ms,
+                bucket_ms
+            )
+        })
+}
+
+fn activity_bucket_end_from_key(bucket: &str, hourly: bool) -> Result<i64> {
+    let local_start_ms = if hourly {
+        if bucket.len() != 10 {
+            bail!(
+                "invalid hourly activity bucket length: bucket={} len={} expected=10",
+                bucket,
+                bucket.len()
+            );
+        }
+        let date = chrono::NaiveDate::parse_from_str(&bucket[..8], "%Y%m%d")
+            .map_err(|err| anyhow!("invalid hourly activity bucket date {}: {}", bucket, err))?;
+        let hour = bucket[8..]
+            .parse::<u32>()
+            .map_err(|err| anyhow!("invalid hourly activity bucket hour {}: {}", bucket, err))?;
+        date.and_hms_opt(hour, 0, 0)
+            .ok_or_else(|| anyhow!("invalid hour in hourly activity bucket {}", bucket))?
+            .and_utc()
+            .timestamp_millis()
+    } else {
+        chrono::NaiveDate::parse_from_str(bucket, "%Y%m%d")
+            .map_err(|err| anyhow!("invalid daily activity bucket {}: {}", bucket, err))?
+            .and_hms_opt(0, 0, 0)
+            .ok_or_else(|| anyhow!("invalid midnight for daily activity bucket {}", bucket))?
+            .and_utc()
+            .timestamp_millis()
+    };
+    local_start_ms
+        .checked_add(if hourly {
+            ACTIVITY_HOUR_MS
+        } else {
+            ACTIVITY_DAY_MS
+        })
+        .and_then(|end| end.checked_sub(CKB_UTC8_OFFSET_MS))
+        .ok_or_else(|| anyhow!("activity bucket end overflow for key={}", bucket))
+}
+
+fn drain_activity_bucket_rows(
+    stats_by_bucket: &mut FxHashMap<String, DailyActivityStats>,
+    addrs_by_bucket: &mut FxHashMap<String, FxHashSet<[u8; 32]>>,
+    watermark_ms: i64,
+    hourly: bool,
+) -> Result<Vec<materialize::MaterializedRow>> {
+    for bucket in addrs_by_bucket.keys() {
+        if !stats_by_bucket.contains_key(bucket) {
+            bail!(
+                "activity address set has no matching stats bucket: kind={} bucket={}",
+                if hourly { "hourly" } else { "daily" },
+                bucket
+            );
+        }
+    }
+
+    let mut sealed_buckets = stats_by_bucket
+        .keys()
+        .filter_map(
+            |bucket| match activity_bucket_end_from_key(bucket, hourly) {
+                Ok(end_ms) if end_ms <= watermark_ms => Some(Ok(bucket.clone())),
+                Ok(_) => None,
+                Err(err) => Some(Err(err)),
+            },
+        )
+        .collect::<Result<Vec<_>>>()?;
+    sealed_buckets.sort();
+
+    let mut rows = Vec::with_capacity(sealed_buckets.len() * 2);
+    for bucket in sealed_buckets {
+        let mut stats = stats_by_bucket.remove(&bucket).ok_or_else(|| {
+            anyhow!(
+                "sealed activity stats bucket disappeared during drain: kind={} bucket={}",
+                if hourly { "hourly" } else { "daily" },
+                bucket
+            )
+        })?;
+        let addrs = addrs_by_bucket.remove(&bucket);
+        stats.unique_address_count = addrs.as_ref().map_or(Ok(0), |set| {
+            checked_unique_address_count(set.len(), &bucket)
+        })?;
+        let stats_prefix = if hourly {
+            keys::stats_prefix::ACTIVITY_HOURLY
+        } else {
+            keys::stats_prefix::ACTIVITY_DAILY
+        };
+        rows.push(materialize::MaterializedRow::new(
+            CF_STATS_CHAIN,
+            keys::encode_stats_key(stats_prefix, bucket.as_bytes()),
+            bincode::serialize(&stats)?,
+        ));
+        if let Some(addrs) = addrs {
+            let mut sorted = addrs.into_iter().collect::<Vec<_>>();
+            sorted.sort_unstable();
+            let mut flat = Vec::with_capacity(sorted.len() * 32);
+            for hash in sorted {
+                flat.extend_from_slice(&hash);
+            }
+            let addr_prefix = if hourly {
+                keys::stats_prefix::ACTIVITY_HOURLY_ADDR_SET
+            } else {
+                keys::stats_prefix::ACTIVITY_DAILY_ADDR_SET
+            };
+            rows.push(materialize::MaterializedRow::new(
+                CF_STATS_CHAIN,
+                keys::encode_stats_key(addr_prefix, bucket.as_bytes()),
+                flat,
+            ));
+        }
+    }
+    Ok(rows)
+}
+
 fn checked_unique_address_count(len: usize, bucket: &str) -> Result<u32> {
     u32::try_from(len).map_err(|_| {
         anyhow!(
@@ -1126,9 +1756,9 @@ fn checked_unique_address_count(len: usize, bucket: &str) -> Result<u32> {
 
 /// Accumulates chain-level daily statistics during bulk-build.
 ///
-/// Covers `DailyStats`, `DailyBlockStats`, block-time distribution, and
-/// epoch-time distribution — the same data that `SyncBatch::finalize()`
-/// writes during live sync.
+/// Covers `DailyStats`, `DailyBlockStats`, `HourlyStats`, `MinerStats`,
+/// block-time distribution, and epoch-time distribution — the same data that
+/// `SyncBatch::finalize()` writes during live sync.
 #[derive(Default)]
 #[allow(clippy::type_complexity)]
 struct ChainStatsAccumulator {
@@ -1141,6 +1771,16 @@ struct ChainStatsAccumulator {
     daily_dao_fields: FxHashMap<chrono::NaiveDate, [u8; 32]>,
     /// Per-day block time accumulation: (sum_ms, count)
     daily_block_times: FxHashMap<chrono::NaiveDate, (i64, i32)>,
+    /// Per-UTC-hour: (blocks, txs, cells_created, cells_consumed,
+    /// capacity_transferred), keyed by the hour-start epoch seconds. Mirrors
+    /// the live writer's `STATS_PREFIX_HOURLY` bucket exactly: UTC hour keys
+    /// and tx counts INCLUDING the cellbase (see
+    /// `BatchWriter::update_hourly_statistics`).
+    hourly_stats: FxHashMap<i64, (i32, i32, i32, i32, i128)>,
+    /// Per-(UTC+8 date, cellbase-witness miner lock hash):
+    /// (blocks_count, last_block_number). Mirrors the live writer's
+    /// `STATS_PREFIX_MINER` bucket (`BatchWriter::update_miner_statistics_batch`).
+    miner_stats: FxHashMap<(chrono::NaiveDate, [u8; 32]), (i32, i64)>,
     /// Block time distribution buckets (seconds → count).
     block_time_dist: FxHashMap<i32, i32>,
     /// Epoch time distribution buckets (minutes → count).
@@ -1162,7 +1802,13 @@ impl ChainStatsAccumulator {
             + self.daily_block_times.len();
         let dist_count = self.block_time_dist.len() + self.epoch_time_dist.len();
         let epoch_count = self.epoch_stats.len();
-        (daily_count * 100 + dist_count * 16 + epoch_count * 48) as u64
+        let hourly_count = self.hourly_stats.len();
+        let miner_count = self.miner_stats.len();
+        (daily_count * 100
+            + dist_count * 16
+            + epoch_count * 48
+            + hourly_count * 48
+            + miner_count * 64) as u64
     }
 
     /// Accumulate chain statistics from a batch of blocks.
@@ -1253,6 +1899,34 @@ impl ChainStatsAccumulator {
             entry.7 += data_size_added;
             entry.8 += data_size_consumed;
 
+            // --- HourlyStats (UTC hour bucket; same per-block values as the
+            // daily row above, tx count including the cellbase — identical to
+            // the live write point in SyncBatch) ---
+            let hour_start_secs = block.timestamp_ms.div_euclid(3_600_000) * 3600;
+            let hourly_entry = self.hourly_stats.entry(hour_start_secs).or_default();
+            hourly_entry.0 += 1;
+            hourly_entry.1 += block.transactions_count;
+            hourly_entry.2 += cells_created;
+            hourly_entry.3 += cells_consumed;
+            hourly_entry.4 = hourly_entry
+                .4
+                .checked_add(capacity_transferred)
+                .ok_or_else(|| {
+                    anyhow!(
+                        "chain stats: hourly capacity_transferred overflow: hour_start={} block={}",
+                        hour_start_secs,
+                        block.number
+                    )
+                })?;
+
+            // --- MinerStats (cellbase-witness miner, RFC-0022; UTC+8 date
+            // key like every date-scoped stats row; genesis has no miner) ---
+            if let Some(miner) = block.miner_lock_hash {
+                let miner_entry = self.miner_stats.entry((block_date, miner)).or_default();
+                miner_entry.0 += 1;
+                miner_entry.1 = miner_entry.1.max(block.number);
+            }
+
             // --- DAO field (last per day wins) ---
             self.daily_dao_fields.insert(block_date, block.dao);
 
@@ -1338,7 +2012,10 @@ impl ChainStatsAccumulator {
     }
 
     /// Build sealed aggregate rows for `CF_STATS_CHAIN`.
-    fn build_rows(&self) -> Result<Vec<materialize::MaterializedRow>> {
+    ///
+    /// `virtual_occupied` is the genesis-derived burn adjustment (from
+    /// `GenesisBaseline::virtual_occupied`) used by the knowledge_size calc.
+    fn build_rows(&self, virtual_occupied: i128) -> Result<Vec<materialize::MaterializedRow>> {
         let mut rows = Vec::new();
 
         // --- DailyStats (cumulative totals threaded forward) ---
@@ -1371,7 +2048,7 @@ impl ChainStatsAccumulator {
             let knowledge_size = self
                 .daily_dao_fields
                 .get(date)
-                .and_then(|dao| crate::db::writer::calculate_knowledge_size(dao));
+                .and_then(|dao| crate::db::writer::calculate_knowledge_size(dao, virtual_occupied));
 
             let (block_time_sum_ms, block_time_count) = self
                 .daily_block_times
@@ -1416,24 +2093,72 @@ impl ChainStatsAccumulator {
                 0.0
             };
 
-            let (block_time_sum_ms, block_time_count) = self
-                .daily_block_times
-                .get(date)
-                .map(|(sum, count)| (*sum, *count))
-                .unwrap_or((0, 0));
-
             let stats = ckbadger_store::types::DailyBlockStats {
                 avg_difficulty,
                 block_count: count,
                 total_uncles: uncles,
-                block_time_sum_ms,
-                block_time_count,
             };
             rows.push(materialize::MaterializedRow::new(
                 CF_STATS_CHAIN,
                 keys::encode_stats_key(
                     keys::stats_prefix::DAILY_BLOCK,
                     date.format("%Y%m%d").to_string().as_bytes(),
+                ),
+                bincode::serialize(&stats)?,
+            ));
+        }
+
+        // --- HourlyStats (UTC `%Y%m%d%H` keys — the live writer's
+        // `update_hourly_statistics` convention, bit for bit) ---
+        let mut sorted_hours: Vec<_> = self.hourly_stats.keys().copied().collect();
+        sorted_hours.sort_unstable();
+        for hour_start_secs in sorted_hours {
+            let (blocks, txs, created, consumed, capacity) = self.hourly_stats[&hour_start_secs];
+            let hour_dt = chrono::DateTime::<chrono::Utc>::from_timestamp(hour_start_secs, 0)
+                .ok_or_else(|| {
+                    anyhow!(
+                        "chain stats: hourly bucket start out of range: hour_start={}",
+                        hour_start_secs
+                    )
+                })?;
+            let stats = ckbadger_store::types::HourlyStats {
+                hour: hour_start_secs,
+                blocks_count: blocks,
+                transactions_count: txs,
+                cells_created: created,
+                cells_consumed: consumed,
+                capacity_transferred: capacity,
+            };
+            rows.push(materialize::MaterializedRow::new(
+                CF_STATS_CHAIN,
+                keys::encode_stats_key(
+                    keys::stats_prefix::HOURLY,
+                    hour_dt.format("%Y%m%d%H").to_string().as_bytes(),
+                ),
+                bincode::serialize(&stats)?,
+            ));
+        }
+
+        // --- MinerStats (UTC+8 `%Y%m%d` + 32B witness-miner lock hash — the
+        // live writer's `update_miner_statistics_batch` convention) ---
+        let mut sorted_miners: Vec<_> = self.miner_stats.keys().cloned().collect();
+        sorted_miners.sort_unstable();
+        for (date, miner_hash) in sorted_miners {
+            let (blocks_count, last_block_number) = self.miner_stats[&(date, miner_hash)];
+            let stats = ckbadger_store::types::MinerStats {
+                miner_lock_hash: miner_hash.to_vec(),
+                blocks_count,
+                last_block_number,
+            };
+            rows.push(materialize::MaterializedRow::new(
+                CF_STATS_CHAIN,
+                keys::encode_stats_key(
+                    keys::stats_prefix::MINER,
+                    &[
+                        date.format("%Y%m%d").to_string().as_bytes(),
+                        &miner_hash[..],
+                    ]
+                    .concat(),
                 ),
                 bincode::serialize(&stats)?,
             ));
@@ -1492,8 +2217,32 @@ impl ChainStatsAccumulator {
     }
 }
 
+/// Read the consensus secondary issuance per epoch persisted at indexer
+/// startup. Bulk build cannot produce exact miner secondary issuance without
+/// it, so a missing value is an invariant violation, not a default.
+/// Extract DAO `C`/`S`/`U` from a 32-byte header DAO field.
+fn dao_csu_from_bytes(dao: &[u8]) -> Option<(i128, i128, i128)> {
+    if dao.len() < 32 {
+        return None;
+    }
+    let c = u64::from_le_bytes(dao[0..8].try_into().ok()?) as i128;
+    let s = u64::from_le_bytes(dao[16..24].try_into().ok()?) as i128;
+    let u = u64::from_le_bytes(dao[24..32].try_into().ok()?) as i128;
+    Some((c, s, u))
+}
+
+fn required_secondary_epoch_reward(store: &CkbadgerStore) -> Result<u64> {
+    store.get_secondary_epoch_reward()?.ok_or_else(|| {
+        anyhow!(
+            "missing consensus secondary_epoch_reward in sync meta; \
+             it is fetched from the node's get_consensus at indexer startup"
+        )
+    })
+}
+
 struct BulkBuildRuntimeState {
     interner: interner::IdentityInterner,
+    interner_liveness: interner::IdentityLiveness,
     sequencer: sequencer::BulkSequencer,
     owners: CoreOwners,
     activity_stats: ActivityStatsAccumulator,
@@ -1501,17 +2250,13 @@ struct BulkBuildRuntimeState {
     hodl_tracker: crate::db::writer::hodl_wave::HodlWaveTracker,
     cell_dist_tracker: crate::db::writer::cell_distribution::CellDistributionTracker,
     hodl_live_cells_by_lock: FxHashMap<crate::sync::types::InternId, i32>,
-    /// Cross-batch dedup set for CF_LOCK_SCRIPTS rows. Lock script mappings
-    /// (lock_hash -> code_hash + hash_type + args) are immutable, so once
-    /// written they never need to be rewritten. This set persists across
-    /// batches to eliminate ~97% of duplicate CF_LOCK_SCRIPTS writes.
-    written_lock_script_ids: FxHashSet<crate::sync::types::InternId>,
 }
 
 impl Default for BulkBuildRuntimeState {
     fn default() -> Self {
         Self {
             interner: interner::IdentityInterner::with_capacity(8192),
+            interner_liveness: interner::IdentityLiveness::default(),
             sequencer: sequencer::BulkSequencer::default(),
             owners: CoreOwners::default(),
             activity_stats: ActivityStatsAccumulator::default(),
@@ -1519,7 +2264,6 @@ impl Default for BulkBuildRuntimeState {
             hodl_tracker: crate::db::writer::hodl_wave::HodlWaveTracker::new(),
             cell_dist_tracker: crate::db::writer::cell_distribution::CellDistributionTracker::new(),
             hodl_live_cells_by_lock: FxHashMap::default(),
-            written_lock_script_ids: FxHashSet::default(),
         }
     }
 }
@@ -1530,6 +2274,10 @@ impl BulkBuildRuntimeState {
         breakdown.insert("live_cells".to_string(), self.sequencer.live_cells_bytes());
         breakdown.insert("interner".to_string(), self.interner.estimated_bytes());
         breakdown.insert(
+            "interner_liveness".to_string(),
+            self.interner_liveness.estimated_bytes(),
+        );
+        breakdown.insert(
             "activity_stats".to_string(),
             self.activity_stats.estimated_bytes(),
         );
@@ -1539,17 +2287,12 @@ impl BulkBuildRuntimeState {
         );
         breakdown.insert(
             "hodl_live_cells_by_lock".to_string(),
-            crate::sync::bulk_build::accounting::hash_map_bytes(
-                &self.hodl_live_cells_by_lock,
-                |lock_hash_id, live_count| {
-                    std::mem::size_of_val(lock_hash_id) as u64
-                        + std::mem::size_of_val(live_count) as u64
-                },
-            ),
-        );
-        breakdown.insert(
-            "written_lock_script_ids".to_string(),
-            accounting::hash_set_serialized_bytes(&self.written_lock_script_ids),
+            std::mem::size_of_val(&self.hodl_live_cells_by_lock) as u64
+                + self.hodl_live_cells_by_lock.capacity() as u64
+                    * std::mem::size_of::<(crate::sync::types::InternId, i32)>() as u64
+                + self.hodl_live_cells_by_lock.len() as u64
+                    * (std::mem::size_of::<crate::sync::types::InternId>()
+                        + std::mem::size_of::<i32>()) as u64,
         );
         breakdown
     }
@@ -1565,7 +2308,7 @@ impl BulkBuildRuntimeState {
                 BatchExecutionStats::default(),
                 BatchBuildTimings::default(),
                 PendingFlush {
-                    history_rows: Vec::new(),
+                    history_chunks: Vec::new(),
                     sealed_rows: Vec::new(),
                 },
             ));
@@ -1580,7 +2323,11 @@ impl BulkBuildRuntimeState {
         let frozen = self.interner.snapshot_for_reads();
 
         let resolve_started = Instant::now();
-        let resolved = self.sequencer.resolve(&arena)?;
+        self.interner_liveness
+            .ensure_slots(self.interner.slot_len());
+        let resolved = self
+            .sequencer
+            .resolve_with_liveness(&arena, &mut self.interner_liveness)?;
         let resolve_elapsed = resolve_started.elapsed();
 
         let tx_count = u64::try_from(arena.txs.len()).map_err(|_| {
@@ -1612,13 +2359,14 @@ impl BulkBuildRuntimeState {
 
         // Destructure self to split borrows for rayon::join overlap.
         let BulkBuildRuntimeState {
+            interner,
+            interner_liveness,
             owners,
             cell_dist_tracker,
             hodl_tracker,
             hodl_live_cells_by_lock,
             activity_stats,
             chain_stats,
-            written_lock_script_ids,
             ..
         } = self;
         let ctx = owners::ReducerContext::new(&frozen);
@@ -1631,24 +2379,35 @@ impl BulkBuildRuntimeState {
         // Each branch captures disjoint &mut fields. Shared &arena/&resolved/&frozen are immutable.
         let (left_result, (mid_result, right_result)) = rayon::join(
             // LEFT: history materialization → activity stats accumulation
-            || -> Result<(HistoryBuildResult, std::time::Duration, std::time::Duration)> {
+            || -> Result<(
+                HistoryBuildResult,
+                std::time::Duration,
+                std::time::Duration,
+                Vec<materialize::MaterializedRow>,
+            )> {
                 let history_started = Instant::now();
                 let history = build_history_batches(
                     &arena,
                     &resolved,
                     &frozen,
+                    interner,
                     is_mainnet,
                     token_info_cache,
-                    written_lock_script_ids,
                 )?;
                 let history_elapsed = history_started.elapsed();
 
                 // activity_stats depends only on history.tx_actions_list, not on any reducer state.
                 let activity_stats_started = Instant::now();
-                activity_stats.apply_tx_actions(&history.tx_actions_list)?;
+                let activity_sealed_rows =
+                    activity_stats.apply_batch(&arena.blocks, &history.tx_actions_list)?;
                 let activity_stats_elapsed = activity_stats_started.elapsed();
 
-                Ok((history, history_elapsed, activity_stats_elapsed))
+                Ok((
+                    history,
+                    history_elapsed,
+                    activity_stats_elapsed,
+                    activity_sealed_rows,
+                ))
             },
             || {
                 rayon::join(
@@ -1689,35 +2448,15 @@ impl BulkBuildRuntimeState {
                                 for block in &arena.blocks {
                                     let block_date =
                                         ckbadger_common::block_date_from_ms(block.timestamp_ms);
-                                    cell_dist_tracker
-                                        .record_block_date(block.number, block_date);
-
-                                    for tx in &resolved[block.tx_range.clone()] {
-                                        for input in &tx.resolved_inputs {
-                                            cell_dist_tracker
-                                                .cell_consumed(input.occupied_capacity)?;
-                                        }
-                                        for cell in tx.cells.iter() {
-                                            cell_dist_tracker
-                                                .cell_created(cell.occupied_capacity);
-                                        }
-
-                                        let address_deltas =
-                                            address.apply_tx_with_deltas(tx, &ctx)?;
-                                        apply_cell_dist_cohort_deltas(
+                                    if let Some((snapshot_date, snapshot, cohort)) =
+                                        begin_cell_distribution_block(
                                             cell_dist_tracker,
-                                            address.balances(),
-                                            &address_deltas,
-                                            tx,
-                                        )?;
-                                    }
-
-                                    if let Some((snapshot_date, snapshot)) =
-                                        cell_dist_tracker.maybe_snapshot(block_date)
+                                            block.number,
+                                            block_date,
+                                        )
                                     {
                                         let date_str =
                                             snapshot_date.format("%Y%m%d").to_string();
-                                        let cohort = cell_dist_tracker.cohort_snapshot();
                                         cell_dist_sealed_rows.push(
                                             materialize::MaterializedRow::new(
                                                 CF_STATS_HODL,
@@ -1738,6 +2477,26 @@ impl BulkBuildRuntimeState {
                                                 bincode::serialize(&cohort)?,
                                             ),
                                         );
+                                    }
+
+                                    for tx in &resolved[block.tx_range.clone()] {
+                                        for input in &tx.resolved_inputs {
+                                            cell_dist_tracker
+                                                .cell_consumed(input.occupied_capacity)?;
+                                        }
+                                        for cell in tx.cells.iter() {
+                                            cell_dist_tracker
+                                                .cell_created(cell.occupied_capacity);
+                                        }
+
+                                        let address_deltas =
+                                            address.apply_tx_with_deltas(tx, &ctx)?;
+                                        apply_cell_dist_cohort_deltas(
+                                            cell_dist_tracker,
+                                            address,
+                                            &address_deltas,
+                                            tx,
+                                        )?;
                                     }
                                 }
                                 Ok(cell_dist_sealed_rows)
@@ -1807,7 +2566,7 @@ impl BulkBuildRuntimeState {
                 )
             },
         );
-        let (history, history_elapsed, activity_stats_elapsed) = left_result?;
+        let (history, history_elapsed, activity_stats_elapsed, activity_sealed_rows) = left_result?;
         mid_result?;
         let (hodl_sealed_rows, cell_dist_sealed_rows, address_elapsed) = right_result?;
 
@@ -1823,23 +2582,14 @@ impl BulkBuildRuntimeState {
         // Collect sealed rows (pure data, no store dependency).
         let mut sealed_rows = hodl_sealed_rows;
         sealed_rows.extend(cell_dist_sealed_rows);
+        sealed_rows.extend(activity_sealed_rows);
 
         let pending = PendingFlush {
-            history_rows: history.rows,
+            history_chunks: history.rows,
             sealed_rows,
         };
 
-        let timings = BatchBuildTimings {
-            facts_ms: facts_elapsed.as_secs_f64() * 1000.0,
-            facts_breakdown,
-            resolve_ms: resolve_elapsed.as_secs_f64() * 1000.0,
-            reduce_ms: reduce_elapsed.as_secs_f64() * 1000.0,
-            history_ms: history_elapsed.as_secs_f64() * 1000.0,
-            address_reduce_ms: address_elapsed.as_secs_f64() * 1000.0,
-            activity_stats_ms: activity_stats_elapsed.as_secs_f64() * 1000.0,
-        };
-
-        Ok((BatchExecutionStats {
+        let batch_stats = BatchExecutionStats {
             last_block_number: Some(last_block.number),
             last_block_hash: Some(last_block.hash.to_vec()),
             block_count: u64::try_from(arena.blocks.len()).map_err(|_| {
@@ -1851,7 +2601,43 @@ impl BulkBuildRuntimeState {
             tx_count,
             cells_created,
             cells_consumed: consumed_cells,
-        }, timings, pending))
+        };
+
+        // Identity bytes are needed through history/reducer construction only. Release the
+        // frozen view and all batch-local ID holders before reclaiming identities whose live-cell
+        // reference count reached zero. Reclaim also invalidates the matching lock-script write
+        // marker so a reused ID can never suppress a different script row.
+        drop(resolved);
+        drop(frozen);
+        drop(arena);
+        let interner_gc_started = Instant::now();
+        let reclaim_candidates = interner_liveness.drain_zero_candidates();
+        let reclaim_candidate_count = reclaim_candidates.len();
+        let reclaim_stats = interner.reclaim_zero_ref_identities(&reclaim_candidates)?;
+        let interner_gc_elapsed = interner_gc_started.elapsed();
+        tracing::debug!(
+            candidates = reclaim_candidate_count,
+            reclaimed_identities = reclaim_stats.identities,
+            reclaimed_payload_bytes = reclaim_stats.payload_bytes,
+            invalidated_lock_script_markers = reclaim_stats.invalidated_lock_script_markers,
+            active_identities = interner.len(),
+            free_identity_slots = interner.free_len(),
+            interner_gc_ms = format!("{:.1}", interner_gc_elapsed.as_secs_f64() * 1000.0),
+            "Bulk build reclaimed unused interned identities"
+        );
+
+        let timings = BatchBuildTimings {
+            facts_ms: facts_elapsed.as_secs_f64() * 1000.0,
+            facts_breakdown,
+            resolve_ms: resolve_elapsed.as_secs_f64() * 1000.0,
+            reduce_ms: reduce_elapsed.as_secs_f64() * 1000.0,
+            history_ms: history_elapsed.as_secs_f64() * 1000.0,
+            address_reduce_ms: address_elapsed.as_secs_f64() * 1000.0,
+            activity_stats_ms: activity_stats_elapsed.as_secs_f64() * 1000.0,
+            interner_gc_ms: interner_gc_elapsed.as_secs_f64() * 1000.0,
+        };
+
+        Ok((batch_stats, timings, pending))
     }
 
     /// Apply blocks from hex-based RPC fixtures (used by test helpers and integration tests).
@@ -1866,7 +2652,7 @@ impl BulkBuildRuntimeState {
                 BatchExecutionStats::default(),
                 BatchBuildTimings::default(),
                 PendingFlush {
-                    history_rows: Vec::new(),
+                    history_chunks: Vec::new(),
                     sealed_rows: Vec::new(),
                 },
             ));
@@ -1877,7 +2663,11 @@ impl BulkBuildRuntimeState {
         let facts_elapsed = facts_started.elapsed();
         let frozen = self.interner.snapshot_for_reads();
         let resolve_started = Instant::now();
-        let resolved = self.sequencer.resolve(&arena)?;
+        self.interner_liveness
+            .ensure_slots(self.interner.slot_len());
+        let resolved = self
+            .sequencer
+            .resolve_with_liveness(&arena, &mut self.interner_liveness)?;
         let resolve_elapsed = resolve_started.elapsed();
 
         let tx_count = u64::try_from(arena.txs.len()).map_err(|_| {
@@ -1905,13 +2695,14 @@ impl BulkBuildRuntimeState {
             .last()
             .ok_or_else(|| anyhow!("bulk build arena missing blocks for non-empty batch"))?;
         let BulkBuildRuntimeState {
+            interner,
+            interner_liveness,
             owners,
             cell_dist_tracker,
             hodl_tracker,
             hodl_live_cells_by_lock,
             activity_stats,
             chain_stats,
-            written_lock_script_ids,
             ..
         } = self;
         let ctx = owners::ReducerContext::new(&frozen);
@@ -1921,21 +2712,32 @@ impl BulkBuildRuntimeState {
         //   MIDDLE: chain_stats
         //   RIGHT:  hodl → rayon::join(address+cell_dist, 5 independent reducers)
         let (left_result, (mid_result, right_result)) = rayon::join(
-            || -> Result<(HistoryBuildResult, std::time::Duration, std::time::Duration)> {
+            || -> Result<(
+                HistoryBuildResult,
+                std::time::Duration,
+                std::time::Duration,
+                Vec<materialize::MaterializedRow>,
+            )> {
                 let history_started = Instant::now();
                 let history = build_history_batches(
                     &arena,
                     &resolved,
                     &frozen,
+                    interner,
                     is_mainnet,
                     token_info_cache,
-                    written_lock_script_ids,
                 )?;
                 let history_elapsed = history_started.elapsed();
                 let activity_stats_started = Instant::now();
-                activity_stats.apply_tx_actions(&history.tx_actions_list)?;
+                let activity_sealed_rows =
+                    activity_stats.apply_batch(&arena.blocks, &history.tx_actions_list)?;
                 let activity_stats_elapsed = activity_stats_started.elapsed();
-                Ok((history, history_elapsed, activity_stats_elapsed))
+                Ok((
+                    history,
+                    history_elapsed,
+                    activity_stats_elapsed,
+                    activity_sealed_rows,
+                ))
             },
             || {
                 rayon::join(
@@ -1949,18 +2751,16 @@ impl BulkBuildRuntimeState {
                             let mut cell_dist_sealed_rows = Vec::new();
                             for block in &arena.blocks {
                                 let block_date = ckbadger_common::block_date_from_ms(block.timestamp_ms);
-                                cell_dist_tracker.record_block_date(block.number, block_date);
+                                if let Some((snapshot_date, snapshot, cohort)) = begin_cell_distribution_block(cell_dist_tracker, block.number, block_date) {
+                                    let date_str = snapshot_date.format("%Y%m%d").to_string();
+                                    cell_dist_sealed_rows.push(materialize::MaterializedRow::new(ckbadger_store::CF_STATS_HODL, ckbadger_store::keys::encode_stats_key(ckbadger_store::keys::stats_prefix::CELL_DISTRIBUTION, date_str.as_bytes()), bincode::serialize(&snapshot)?));
+                                    cell_dist_sealed_rows.push(materialize::MaterializedRow::new(ckbadger_store::CF_STATS_HODL, ckbadger_store::keys::encode_stats_key(ckbadger_store::keys::stats_prefix::ADDR_COHORT, date_str.as_bytes()), bincode::serialize(&cohort)?));
+                                }
                                 for tx in &resolved[block.tx_range.clone()] {
                                     for input in &tx.resolved_inputs { cell_dist_tracker.cell_consumed(input.occupied_capacity)?; }
                                     for cell in tx.cells.iter() { cell_dist_tracker.cell_created(cell.occupied_capacity); }
                                     let address_deltas = address.apply_tx_with_deltas(tx, &ctx)?;
-                                    apply_cell_dist_cohort_deltas(cell_dist_tracker, address.balances(), &address_deltas, tx)?;
-                                }
-                                if let Some((snapshot_date, snapshot)) = cell_dist_tracker.maybe_snapshot(block_date) {
-                                    let date_str = snapshot_date.format("%Y%m%d").to_string();
-                                    let cohort = cell_dist_tracker.cohort_snapshot();
-                                    cell_dist_sealed_rows.push(materialize::MaterializedRow::new(ckbadger_store::CF_STATS_HODL, ckbadger_store::keys::encode_stats_key(ckbadger_store::keys::stats_prefix::CELL_DISTRIBUTION, date_str.as_bytes()), bincode::serialize(&snapshot)?));
-                                    cell_dist_sealed_rows.push(materialize::MaterializedRow::new(ckbadger_store::CF_STATS_HODL, ckbadger_store::keys::encode_stats_key(ckbadger_store::keys::stats_prefix::ADDR_COHORT, date_str.as_bytes()), bincode::serialize(&cohort)?));
+                                    apply_cell_dist_cohort_deltas(cell_dist_tracker, address, &address_deltas, tx)?;
                                 }
                             }
                             Ok(cell_dist_sealed_rows)
@@ -1981,7 +2781,7 @@ impl BulkBuildRuntimeState {
             )
             },
         );
-        let (history, history_elapsed, activity_stats_elapsed) = left_result?;
+        let (history, history_elapsed, activity_stats_elapsed, activity_sealed_rows) = left_result?;
         mid_result?;
         let (hodl_sealed_rows, cell_dist_sealed_rows, address_elapsed) = right_result?;
         owners
@@ -1995,21 +2795,47 @@ impl BulkBuildRuntimeState {
         // Collect sealed rows (pure data, no store dependency).
         let mut sealed_rows = hodl_sealed_rows;
         sealed_rows.extend(cell_dist_sealed_rows);
+        sealed_rows.extend(activity_sealed_rows);
+
+        let batch_stats = BatchExecutionStats {
+            last_block_number: Some(last_block.number),
+            last_block_hash: Some(last_block.hash.to_vec()),
+            block_count: u64::try_from(arena.blocks.len()).map_err(|_| {
+                anyhow!(
+                    "bulk build block count exceeds u64 range while applying hex block batch: blocks={}",
+                    arena.blocks.len()
+                )
+            })?,
+            tx_count,
+            cells_created,
+            cells_consumed: consumed_cells,
+        };
+        let pending = PendingFlush {
+            history_chunks: history.rows,
+            sealed_rows,
+        };
+
+        drop(resolved);
+        drop(frozen);
+        drop(arena);
+        let interner_gc_started = Instant::now();
+        let reclaim_candidates = interner_liveness.drain_zero_candidates();
+        let reclaim_candidate_count = reclaim_candidates.len();
+        let reclaim_stats = interner.reclaim_zero_ref_identities(&reclaim_candidates)?;
+        let interner_gc_elapsed = interner_gc_started.elapsed();
+        tracing::debug!(
+            candidates = reclaim_candidate_count,
+            reclaimed_identities = reclaim_stats.identities,
+            reclaimed_payload_bytes = reclaim_stats.payload_bytes,
+            invalidated_lock_script_markers = reclaim_stats.invalidated_lock_script_markers,
+            active_identities = interner.len(),
+            free_identity_slots = interner.free_len(),
+            interner_gc_ms = format!("{:.1}", interner_gc_elapsed.as_secs_f64() * 1000.0),
+            "Bulk build reclaimed unused interned identities"
+        );
 
         Ok((
-            BatchExecutionStats {
-                last_block_number: Some(last_block.number),
-                last_block_hash: Some(last_block.hash.to_vec()),
-                block_count: u64::try_from(arena.blocks.len()).map_err(|_| {
-                    anyhow!(
-                        "bulk build block count exceeds u64 range while applying hex block batch: blocks={}",
-                        arena.blocks.len()
-                    )
-                })?,
-                tx_count,
-                cells_created,
-                cells_consumed: consumed_cells,
-            },
+            batch_stats,
             BatchBuildTimings {
                 facts_ms: facts_elapsed.as_secs_f64() * 1000.0,
                 facts_breakdown,
@@ -2018,11 +2844,9 @@ impl BulkBuildRuntimeState {
                 history_ms: history_elapsed.as_secs_f64() * 1000.0,
                 address_reduce_ms: address_elapsed.as_secs_f64() * 1000.0,
                 activity_stats_ms: activity_stats_elapsed.as_secs_f64() * 1000.0,
+                interner_gc_ms: interner_gc_elapsed.as_secs_f64() * 1000.0,
             },
-            PendingFlush {
-                history_rows: history.rows,
-                sealed_rows,
-            },
+            pending,
         ))
     }
 
@@ -2035,9 +2859,19 @@ impl BulkBuildRuntimeState {
         domain_store: &CkbadgerStore,
         materializer: &mut materialize::Materializer<'_>,
     ) -> Result<()> {
-        let prepared_finalize = self.prepare_finalize_artifacts()?;
+        // Genesis-derived burn adjustment for knowledge_size. Fail-fast if the
+        // baseline was never derived (single calculation path, no fallback).
+        let virtual_occupied = domain_store
+            .get_genesis_baseline()?
+            .ok_or_else(|| {
+                anyhow!("genesis baseline not derived; cannot finalize bulk-build knowledge_size")
+            })?
+            .virtual_occupied;
+        let prepared_finalize = self.prepare_finalize_artifacts(virtual_occupied)?;
         let BulkBuildRuntimeState {
             owners,
+            sequencer,
+            interner,
             hodl_tracker,
             cell_dist_tracker,
             ..
@@ -2045,9 +2879,11 @@ impl BulkBuildRuntimeState {
 
         materializer.stream_sealed_aggregate_rows(&prepared_finalize.activity_sealed_rows)?;
         materializer.stream_sealed_aggregate_rows(&prepared_finalize.chain_sealed_rows)?;
-        materializer.materialize_final_snapshot(&prepared_finalize.final_snapshot_rows)?;
+        let frozen = interner.snapshot_for_reads();
+        materializer.materialize_final_snapshot_bounded(|sink| {
+            emit_final_snapshot_rows(&sequencer, &frozen, |row| sink.push(row))
+        })?;
 
-        let mut owners = owners;
         owners.materialize_all(materializer)?;
 
         let mut meta_batch = ckbadger_store::batch::StoreBatch::new(domain_store);
@@ -2059,12 +2895,13 @@ impl BulkBuildRuntimeState {
         Ok(())
     }
 
-    fn prepare_finalize_artifacts(&self) -> Result<PreparedFinalizeArtifacts> {
-        let frozen = self.interner.snapshot_for_reads();
+    fn prepare_finalize_artifacts(
+        &self,
+        virtual_occupied: i128,
+    ) -> Result<PreparedFinalizeArtifacts> {
         Ok(PreparedFinalizeArtifacts {
             activity_sealed_rows: self.activity_stats.build_rows()?,
-            chain_sealed_rows: self.chain_stats.build_rows()?,
-            final_snapshot_rows: build_final_snapshot_rows(&self.sequencer, &frozen)?,
+            chain_sealed_rows: self.chain_stats.build_rows(virtual_occupied)?,
         })
     }
 }
@@ -2088,7 +2925,16 @@ fn apply_hodl_tracker_batch_standalone(
     let mut sealed_rows = Vec::new();
     for block in &arena.blocks {
         let block_date = ckbadger_common::block_date_from_ms(block.timestamp_ms);
-        hodl_tracker.record_block_date(block.number, block_date);
+        if let Some((snapshot_date, snapshot)) =
+            begin_hodl_wave_block(hodl_tracker, block.number, block_date)
+        {
+            let date_str = snapshot_date.format("%Y%m%d").to_string();
+            sealed_rows.push(materialize::MaterializedRow::new(
+                CF_STATS_HODL,
+                keys::encode_stats_key(keys::stats_prefix::HODL_WAVE, date_str.as_bytes()),
+                bincode::serialize(&snapshot)?,
+            ));
+        }
 
         for tx in &resolved[block.tx_range.clone()] {
             for input in &tx.resolved_inputs {
@@ -2111,15 +2957,6 @@ fn apply_hodl_tracker_batch_standalone(
                 )?;
                 hodl_tracker.cell_created(block_date, cell.capacity);
             }
-        }
-
-        if let Some((snapshot_date, snapshot)) = hodl_tracker.maybe_snapshot(block_date) {
-            let date_str = snapshot_date.format("%Y%m%d").to_string();
-            sealed_rows.push(materialize::MaterializedRow::new(
-                CF_STATS_HODL,
-                keys::encode_stats_key(keys::stats_prefix::HODL_WAVE, date_str.as_bytes()),
-                bincode::serialize(&snapshot)?,
-            ));
         }
     }
 
@@ -2171,12 +3008,12 @@ fn update_hodl_holder_count(
 
 fn apply_cell_dist_cohort_deltas(
     tracker: &mut crate::db::writer::cell_distribution::CellDistributionTracker,
-    balances: &FxHashMap<Vec<u8>, AddressBalance>,
-    deltas: &FxHashMap<Vec<u8>, owners::address::AddressTxDelta>,
+    addresses: &owners::address::AddressOwner,
+    deltas: &FxHashMap<[u8; 32], owners::address::AddressTxDelta>,
     tx: &facts::ResolvedTxFacts<'_>,
 ) -> Result<()> {
     for (lock_hash, delta) in deltas {
-        let balance = balances.get(lock_hash).ok_or_else(|| {
+        let balance = addresses.get(lock_hash).ok_or_else(|| {
             anyhow!(
                 "missing address balance after applying tx deltas for cell distribution tracker: lock_hash=0x{}, block={}, tx=0x{}, tx_index={}",
                 hex::encode(lock_hash),
@@ -2208,7 +3045,7 @@ fn apply_cell_dist_cohort_deltas(
 }
 
 struct HistoryBuildResult {
-    rows: Vec<materialize::MaterializedRow>,
+    rows: Vec<materialize::EncodedHistoryChunk>,
     object_activity_count_deltas: FxHashMap<Vec<u8>, i64>,
     identity_activity_count_deltas: FxHashMap<Vec<u8>, i64>,
     tx_actions_list: Vec<ckbadger_store::types::TxActions>,
@@ -2217,12 +3054,121 @@ struct HistoryBuildResult {
 /// Pure-data payload sent to the flush channel. Contains materialized rows
 /// that the flush worker converts to WriteBatch via `prepare_flush`.
 pub(crate) struct PendingFlush {
-    pub(crate) history_rows: Vec<materialize::MaterializedRow>,
+    pub(crate) history_chunks: Vec<materialize::EncodedHistoryChunk>,
     pub(crate) sealed_rows: Vec<materialize::MaterializedRow>,
 }
 
+impl PendingFlush {
+    pub(crate) fn history_row_count(&self) -> usize {
+        self.history_chunks
+            .iter()
+            .map(materialize::EncodedHistoryChunk::row_count)
+            .try_fold(0usize, |total, rows| total.checked_add(rows))
+            .unwrap_or_else(|| panic!("pending flush history row count overflow"))
+    }
+
+    pub(crate) fn allocated_bytes(&self) -> Result<usize> {
+        let chunk_directory_bytes = self
+            .history_chunks
+            .capacity()
+            .checked_mul(std::mem::size_of::<materialize::EncodedHistoryChunk>())
+            .ok_or_else(|| anyhow!("pending flush history chunk-directory capacity overflow"))?;
+        let history_bytes =
+            self.history_chunks
+                .iter()
+                .try_fold(chunk_directory_bytes, |total, chunk| {
+                    total
+                        .checked_add(chunk.allocated_bytes()?)
+                        .ok_or_else(|| anyhow!("pending flush encoded history byte count overflow"))
+                })?;
+        self.sealed_rows.iter().try_fold(
+            self.sealed_rows
+                .capacity()
+                .checked_mul(std::mem::size_of::<materialize::MaterializedRow>())
+                .and_then(|bytes| bytes.checked_add(history_bytes))
+                .ok_or_else(|| anyhow!("pending flush sealed row-vector capacity overflow"))?,
+            |total, row| {
+                total
+                    .checked_add(row.key.capacity())
+                    .and_then(|bytes| bytes.checked_add(row.value.capacity()))
+                    .ok_or_else(|| {
+                        anyhow!(
+                            "pending flush allocated byte count overflow: cf={} key_capacity={} value_capacity={}",
+                            row.cf_name,
+                            row.key.capacity(),
+                            row.value.capacity()
+                        )
+                    })
+            },
+        )
+    }
+}
+
+fn checked_memory_map_total(memory: &HashMap<String, u64>) -> Result<u64> {
+    memory.iter().try_fold(0u64, |total, (component, bytes)| {
+        total.checked_add(*bytes).ok_or_else(|| {
+            anyhow!(
+                "retained memory byte count overflow: component={} component_bytes={} accumulated_bytes={}",
+                component,
+                bytes,
+                total
+            )
+        })
+    })
+}
+
+fn checked_retained_memory_total(
+    owner_memory: &HashMap<String, u64>,
+    prefetch_block_bytes: u64,
+    flush_reserved_bytes: u64,
+) -> Result<u64> {
+    checked_memory_map_total(owner_memory)?
+        .checked_add(prefetch_block_bytes)
+        .and_then(|bytes| bytes.checked_add(flush_reserved_bytes))
+        .ok_or_else(|| {
+            anyhow!(
+                "accounted retained memory byte count overflow: prefetch_block_bytes={} flush_reserved_bytes={}",
+                prefetch_block_bytes,
+                flush_reserved_bytes
+            )
+        })
+}
+
+fn retained_memory_breakdown(
+    owner_memory: &HashMap<String, u64>,
+    prefetch_block_bytes: u64,
+    flush_reserved_bytes: u64,
+    pending_flush_bytes: Option<usize>,
+) -> Result<HashMap<String, u64>> {
+    let mut retained = owner_memory.clone();
+    for (component, bytes) in [
+        ("pipeline.prefetch_blocks", prefetch_block_bytes),
+        ("pipeline.flush_reserved", flush_reserved_bytes),
+    ] {
+        if retained.insert(component.to_string(), bytes).is_some() {
+            bail!("retained memory component name collision: component={component}");
+        }
+    }
+    if let Some(pending_flush_bytes) = pending_flush_bytes {
+        let pending_flush_bytes = u64::try_from(pending_flush_bytes).map_err(|_| {
+            anyhow!(
+                "pending flush allocated byte count exceeds u64: bytes={}",
+                pending_flush_bytes
+            )
+        })?;
+        if retained
+            .insert("pipeline.pending_flush".to_string(), pending_flush_bytes)
+            .is_some()
+        {
+            bail!("retained memory component name collision: component=pipeline.pending_flush");
+        }
+    }
+    checked_memory_map_total(&retained)?;
+    Ok(retained)
+}
+
 struct BlockHistoryRows {
-    rows: Vec<materialize::MaterializedRow>,
+    rows: materialize::EncodedHistoryChunk,
     lock_script_rows: Vec<(crate::sync::types::InternId, materialize::MaterializedRow)>,
     object_activity_count_deltas: FxHashMap<Vec<u8>, i64>,
     identity_activity_count_deltas: FxHashMap<Vec<u8>, i64>,
@@ -2256,10 +3202,14 @@ pub struct BulkArtifactSnapshot {
     pub tx_actions_map: HashMap<Vec<u8>, TxActions>,
     pub daily_activity_stats: HashMap<String, DailyActivityStats>,
     pub hourly_activity_stats: HashMap<String, DailyActivityStats>,
+    /// Chain-level hourly buckets, keyed by their UTC `%Y%m%d%H` strings.
+    pub hourly_chain_stats: HashMap<String, HourlyStats>,
+    /// Per-miner daily buckets, keyed by (UTC+8 `%Y%m%d`, miner lock hash).
+    pub miner_stats: HashMap<(String, Vec<u8>), MinerStats>,
     pub dao_daily_snapshots: HashMap<String, DaoDailySnapshot>,
     pub latest_dao_statistics: Option<DaoLatestStatistics>,
     pub dao_top_depositors: Option<DaoTopDepositors>,
-    pub script_daily_deltas: HashMap<(Vec<u8>, bool), HashMap<u32, ScriptDailyDelta>>,
+    pub script_daily_deltas: HashMap<(Vec<u8>, u8, bool), HashMap<u32, ScriptDailyDelta>>,
     pub cell_payloads: HashMap<Vec<u8>, LiveCellInfo>,
     pub live_cells: HashMap<Vec<u8>, i64>,
     pub consumed_cells: HashMap<Vec<u8>, ConsumedCellMeta>,
@@ -2347,6 +3297,21 @@ struct BulkStageTestState {
     sync_status: SyncStatus,
 }
 
+/// Seed the mainnet genesis economic baseline into a test domain store.
+///
+/// Production derives the baseline at startup (block 0) before the sync loop,
+/// so the bulk-build finalize path can read `virtual_occupied` for the
+/// knowledge_size calc. These test-session helpers drive finalize directly
+/// without that startup step, so they must seed it first (fail-fast otherwise).
+/// Values mirror mainnet genesis: 33.6B issued, 8.4B burnt, 6/10 occupied ratio.
+fn seed_test_genesis_baseline(domain_store: &CkbadgerStore) -> Result<()> {
+    domain_store.set_genesis_baseline(&ckbadger_store::GenesisBaseline {
+        total_issuance: 3_360_000_000_000_000_000,
+        burnt: 840_000_000_000_000_000,
+        virtual_occupied: 504_000_000_000_000_000,
+    })
+}
+
 fn run_bulk_stage_test_session<T, F>(
     blocks: &[BlockResponseWithCycles],
     chain_tip: u64,
@@ -2358,6 +3323,15 @@ where
     F: FnOnce(&CkbadgerStore, &CkbadgerStore, BulkStageTestState) -> Result<T>,
 {
     let mut runtime = BulkBuildRuntimeState::default();
+    runtime
+        .owners
+        .dao
+        .set_secondary_epoch_reward(61_369_863_013_698);
+    // Mid-chain fixture: seed the parent DAO C/U for the miner split.
+    runtime
+        .owners
+        .dao
+        .seed_prev_dao_cu(3_360_000_000_000_000_000, 100_000_000_000_000);
     let mut sync_totals = BulkBuildSyncTotals::default();
 
     let root = unique_temp_test_dir(temp_root_label);
@@ -2371,6 +3345,7 @@ where
         let domain_store = Arc::new(CkbadgerStore::open_domain(&domain_path)?);
         let append_store = Arc::new(CkbadgerStore::open_append_only(&append_path)?);
         domain_store.update_sync_status(|status| status.init_sync_start(0, true))?;
+        seed_test_genesis_baseline(domain_store.as_ref())?;
         start_bulk_build_session_marker(domain_store.as_ref(), "bulk-build-test-session", 0)?;
         let mut materializer =
             materialize::Materializer::new(domain_store.as_ref(), append_store.as_ref());
@@ -2387,12 +3362,12 @@ where
                 true,
                 &FxHashMap::default(),
             )?;
-            let history_count = pending.history_rows.len();
+            let history_count = pending.history_row_count();
             let sealed_count = pending.sealed_rows.len();
             let prepared = materialize::prepare_flush(
                 domain_store.as_ref(),
                 append_store.as_ref(),
-                pending.history_rows,
+                pending.history_chunks,
                 pending.sealed_rows,
             )?;
             materializer.add_external_counts(history_count, sealed_count, 1);
@@ -2500,6 +3475,15 @@ fn materialize_bulk_artifacts_from_block_batches_for_test_impl(
     block_batches: &[&[BlockResponseWithCycles]],
 ) -> Result<BulkArtifactSnapshot> {
     let mut runtime = BulkBuildRuntimeState::default();
+    runtime
+        .owners
+        .dao
+        .set_secondary_epoch_reward(61_369_863_013_698);
+    // Mid-chain fixture: seed the parent DAO C/U for the miner split.
+    runtime
+        .owners
+        .dao
+        .seed_prev_dao_cu(3_360_000_000_000_000_000, 100_000_000_000_000);
     let mut sync_totals = BulkBuildSyncTotals::default();
 
     let root = unique_temp_test_dir("bulk-build-core-owners");
@@ -2513,18 +3497,19 @@ fn materialize_bulk_artifacts_from_block_batches_for_test_impl(
         let domain_store = Arc::new(CkbadgerStore::open_domain(&domain_path)?);
         let append_store = Arc::new(CkbadgerStore::open_append_only(&append_path)?);
         domain_store.update_sync_status(|status| status.init_sync_start(0, true))?;
+        seed_test_genesis_baseline(domain_store.as_ref())?;
         start_bulk_build_session_marker(domain_store.as_ref(), "bulk-build-test-session", 0)?;
         let mut materializer =
             materialize::Materializer::new(domain_store.as_ref(), append_store.as_ref());
         for batch in block_batches {
             let (batch_stats, _timings, pending) =
                 runtime.apply_blocks_hex(batch, true, &FxHashMap::default())?;
-            let history_count = pending.history_rows.len();
+            let history_count = pending.history_row_count();
             let sealed_count = pending.sealed_rows.len();
             let prepared = materialize::prepare_flush(
                 domain_store.as_ref(),
                 append_store.as_ref(),
-                pending.history_rows,
+                pending.history_chunks,
                 pending.sealed_rows,
             )?;
             materializer.add_external_counts(history_count, sealed_count, 1);
@@ -2566,6 +3551,7 @@ fn collect_bulk_artifact_snapshot(
         collect_history_snapshot(domain_store)?;
     let (daily_activity_stats, hourly_activity_stats) =
         collect_activity_stats_snapshot(domain_store)?;
+    let (hourly_chain_stats, miner_stats) = collect_chain_hourly_and_miner_snapshot(domain_store)?;
     let (dao_daily_snapshots, latest_dao_statistics, dao_top_depositors) =
         collect_dao_stats_snapshot(domain_store)?;
     let script_daily_deltas = collect_script_daily_deltas_snapshot(domain_store)?;
@@ -2600,6 +3586,8 @@ fn collect_bulk_artifact_snapshot(
         tx_actions_map,
         daily_activity_stats,
         hourly_activity_stats,
+        hourly_chain_stats,
+        miner_stats,
         dao_daily_snapshots,
         latest_dao_statistics,
         dao_top_depositors,
@@ -2614,6 +3602,70 @@ fn collect_bulk_artifact_snapshot(
         cell_by_data_hash,
         core,
     })
+}
+
+/// Read back the chain-level hourly and per-miner daily stats rows for test
+/// snapshots, keyed exactly as stored (UTC hour strings / UTC+8 date + miner
+/// lock hash) so key-encoding regressions surface in assertions.
+#[allow(clippy::type_complexity)]
+fn collect_chain_hourly_and_miner_snapshot(
+    domain_store: &CkbadgerStore,
+) -> Result<(
+    HashMap<String, HourlyStats>,
+    HashMap<(String, Vec<u8>), MinerStats>,
+)> {
+    let mut hourly: HashMap<String, HourlyStats> = HashMap::new();
+    let mut miners: HashMap<(String, Vec<u8>), MinerStats> = HashMap::new();
+
+    let iter = domain_store.iterator_cf(domain_store.cf_stats_chain(), IteratorMode::Start);
+    for item in iter {
+        let (key, value) = item?;
+        match key.first().copied() {
+            Some(keys::STATS_PREFIX_HOURLY) if key.len() == 11 => {
+                let hour_key = std::str::from_utf8(&key[1..])
+                    .map_err(|e| {
+                        anyhow!(
+                            "invalid UTF-8 hourly stats key in bulk artifact snapshot: key=0x{}, {}",
+                            hex::encode(&key),
+                            e
+                        )
+                    })?
+                    .to_string();
+                let stats: HourlyStats = bincode::deserialize(&value).map_err(|e| {
+                    anyhow!(
+                        "failed to deserialize hourly stats in bulk artifact snapshot: hour={}, {}",
+                        hour_key,
+                        e
+                    )
+                })?;
+                hourly.insert(hour_key, stats);
+            }
+            Some(keys::STATS_PREFIX_MINER) if key.len() == 41 => {
+                let date = std::str::from_utf8(&key[1..9])
+                    .map_err(|e| {
+                        anyhow!(
+                            "invalid UTF-8 miner stats date in bulk artifact snapshot: key=0x{}, {}",
+                            hex::encode(&key),
+                            e
+                        )
+                    })?
+                    .to_string();
+                let miner_hash = key[9..41].to_vec();
+                let stats: MinerStats = bincode::deserialize(&value).map_err(|e| {
+                    anyhow!(
+                        "failed to deserialize miner stats in bulk artifact snapshot: date={}, miner=0x{}, {}",
+                        date,
+                        hex::encode(&miner_hash),
+                        e
+                    )
+                })?;
+                miners.insert((date, miner_hash), stats);
+            }
+            _ => {}
+        }
+    }
+
+    Ok((hourly, miners))
 }
 
 #[allow(clippy::type_complexity)]
@@ -2641,9 +3693,9 @@ fn collect_dao_stats_snapshot(
 #[allow(clippy::type_complexity)]
 fn collect_script_daily_deltas_snapshot(
     domain_store: &CkbadgerStore,
-) -> Result<HashMap<(Vec<u8>, bool), HashMap<u32, ScriptDailyDelta>>> {
+) -> Result<HashMap<(Vec<u8>, u8, bool), HashMap<u32, ScriptDailyDelta>>> {
     let iter = domain_store.iterator_cf(domain_store.cf_stats_script(), IteratorMode::Start);
-    let mut script_daily_deltas: HashMap<(Vec<u8>, bool), HashMap<u32, ScriptDailyDelta>> =
+    let mut script_daily_deltas: HashMap<(Vec<u8>, u8, bool), HashMap<u32, ScriptDailyDelta>> =
         HashMap::new();
 
     for item in iter {
@@ -2654,18 +3706,19 @@ fn collect_script_daily_deltas_snapshot(
             continue;
         }
 
-        let (code_hash, is_type, date) = keys::decode_script_daily_key(&key);
+        let (code_hash, hash_type, is_type, date) = keys::decode_script_daily_key(&key);
         let delta: ScriptDailyDelta = bincode::deserialize(&value).map_err(|e| {
             anyhow!(
-                "failed to deserialize script daily delta in bulk artifact snapshot helper: code_hash=0x{}, is_type={}, date={}, error={}",
+                "failed to deserialize script daily delta in bulk artifact snapshot helper: code_hash=0x{}, hash_type={}, is_type={}, date={}, error={}",
                 hex::encode(&code_hash),
+                hash_type,
                 is_type,
                 date,
                 e
             )
         })?;
         script_daily_deltas
-            .entry((code_hash, is_type))
+            .entry((code_hash, hash_type, is_type))
             .or_default()
             .insert(date, delta);
     }
@@ -2678,9 +3731,9 @@ fn build_history_batches(
     arena: &facts::FactsArena,
     resolved: &[facts::ResolvedTxFacts<'_>],
     interner: &interner::FrozenIdentityView,
+    identity_interner: &interner::IdentityInterner,
     is_mainnet: bool,
     token_info_cache: &FxHashMap<Vec<u8>, (Option<String>, Option<u8>)>,
-    written_lock_script_ids: &mut FxHashSet<crate::sync::types::InternId>,
 ) -> Result<HistoryBuildResult> {
     if arena.txs.len() != resolved.len() {
         bail!(
@@ -2711,23 +3764,26 @@ fn build_history_batches(
         })
         .collect();
 
-    // Merge via Vec::extend (fast pointer moves, no WriteBatch left-fold).
-    let estimated_rows = arena.txs.len().saturating_mul(6);
-    let mut all_rows: Vec<materialize::MaterializedRow> = Vec::with_capacity(estimated_rows);
+    // Preserve one contiguous payload per block. Moving chunk owners is O(blocks)
+    // and never copies the encoded row bytes.
+    let mut all_rows = Vec::with_capacity(block_results.len());
     let mut all_object_deltas: FxHashMap<Vec<u8>, i64> = FxHashMap::default();
     let mut all_identity_deltas: FxHashMap<Vec<u8>, i64> = FxHashMap::default();
     let mut all_tx_actions: Vec<ckbadger_store::types::TxActions> = Vec::new();
     for result in block_results {
-        let block_rows = result?;
-        all_rows.extend(block_rows.rows);
+        let mut block_rows = result?;
 
-        // Cross-batch dedup: only write lock script rows whose InternId has
-        // not been seen in any previous batch. The set persists across batches
-        // via BulkBuildRuntimeState, eliminating ~97% of duplicate writes.
+        // Cross-batch dedup: the interner keeps one exact write bit beside each
+        // reusable InternId slot. Reclaim clears the bit before the ID can be
+        // reused, so a new identity can never inherit stale dedup state.
         for (id, row) in block_rows.lock_script_rows {
-            if written_lock_script_ids.insert(id) {
-                all_rows.push(row);
+            if identity_interner.mark_lock_script_written(id)? {
+                block_rows.rows.push_materialized(row)?;
             }
+        }
+
+        if !block_rows.rows.is_empty() {
+            all_rows.push(block_rows.rows);
         }
 
         all_tx_actions.extend(block_rows.tx_actions_list);
@@ -2826,7 +3882,10 @@ fn build_tx_actions_list_for_bulk(
                         ) => (
                             true,
                             Some(crate::db::writer::dao::calculate_dao_compensation_from_ar(
-                                input.capacity, deposit_ar, withdraw_request_ar,
+                                input.capacity,
+                                input.occupied_capacity,
+                                deposit_ar,
+                                withdraw_request_ar,
                             )?),
                         ),
                         (Some(facts::DaoCellState::WithdrawRequest { .. }), None) => {
@@ -2839,6 +3898,8 @@ fn build_tx_actions_list_for_bulk(
                         _ => (false, None),
                     };
                     Ok(crate::db::writer::activities::InputCellView {
+                        previous_tx_hash: &input.outpoint.tx_hash,
+                        previous_output_index: input.outpoint.index,
                         lock_script_hash: interner.resolve_bytes(input.lock_script_hash_id),
                         lock_code_hash: interner.resolve_bytes(input.lock_code_hash_id),
                         lock_hash_type: input.lock_hash_type,
@@ -2850,6 +3911,12 @@ fn build_tx_actions_list_for_bulk(
                         type_script_hash: input.type_script_hash_id.map(|id| interner.resolve_bytes(id)),
                         type_args: input.type_args_id.map(|id| interner.resolve_bytes(id)),
                         udt_amount: input.udt_amount,
+                        bit_cell_identity_id: match input.protocol_facts.as_ref() {
+                            Some(facts::CellProtocolFacts::BitCell(bit_cell)) => {
+                                Some(bit_cell.identity_id.as_slice())
+                            }
+                            _ => None,
+                        },
                         data: &[],
                         is_dao_withdraw_request,
                         dao_compensation,
@@ -2905,7 +3972,14 @@ fn build_history_rows_for_block(
     detectors: &[Box<dyn crate::db::writer::activities::ProtocolDetector>],
     _token_info_cache: &FxHashMap<Vec<u8>, (Option<String>, Option<u8>)>,
 ) -> Result<BlockHistoryRows> {
-    let mut rows = Vec::with_capacity(block_txs.len().saturating_mul(6));
+    let row_capacity = block_txs.len().checked_mul(6).ok_or_else(|| {
+        anyhow!(
+            "bulk history initial row capacity overflow: block={} txs={}",
+            block.number,
+            block_txs.len()
+        )
+    })?;
+    let mut rows = materialize::EncodedHistoryChunk::with_capacity(row_capacity, 0);
     let mut object_activity_count_deltas: FxHashMap<Vec<u8>, i64> = FxHashMap::default();
     let mut identity_activity_count_deltas: FxHashMap<Vec<u8>, i64> = FxHashMap::default();
 
@@ -2920,18 +3994,21 @@ fn build_history_rows_for_block(
         dao: block.dao.to_vec(),
         transactions_count: block.transactions_count,
         uncles_count: block.uncles_count,
+        proposals_count: block.proposals_count,
+        compact_target: block.compact_target,
+        miner_lock_hash: block.miner_lock_hash.map(|h| h.to_vec()),
         cycles: None,
     };
-    rows.push(materialize::MaterializedRow::new(
+    rows.push_serialized(
         CF_BLOCK_HEADERS,
-        keys::encode_block_num(block.number).to_vec(),
-        bincode_serialize_presized(&header)?,
-    ));
-    rows.push(materialize::MaterializedRow::new(
+        &keys::encode_block_num(block.number),
+        &header,
+    )?;
+    rows.push_raw(
         CF_BLOCK_HASH_INDEX,
-        block.hash.to_vec(),
-        block.number.to_le_bytes().to_vec(),
-    ));
+        &block.hash,
+        &block.number.to_le_bytes(),
+    )?;
 
     if block_txs.len() != block_resolved.len() {
         bail!(
@@ -3008,16 +4085,8 @@ fn build_history_rows_for_block(
             &keys::encode_block_num(tx.block_number),
             &keys::encode_tx_idx(tx.tx_index),
         ]);
-        rows.push(materialize::MaterializedRow::new(
-            CF_TX_INDEX,
-            tx_location.clone(),
-            bincode_serialize_presized(&entry)?,
-        ));
-        rows.push(materialize::MaterializedRow::new(
-            CF_TX_HASH_MAP,
-            tx.hash.to_vec(),
-            tx_location,
-        ));
+        rows.push_serialized(CF_TX_INDEX, &tx_location, &entry)?;
+        rows.push_raw(CF_TX_HASH_MAP, &tx.hash, &tx_location)?;
 
         // Compute per-address capacity change (output_cap - input_cap for each lock).
         let mut per_addr: FxHashMap<crate::sync::types::InternId, (i64, i64, bool, bool)> =
@@ -3067,12 +4136,9 @@ fn build_history_rows_for_block(
             })?;
             let value =
                 ckbadger_store::types::AddrTxValue::new(capacity_change, has_in, has_out, tags);
-            let encoded_value = bincode_serialize_presized(&value)?;
-            rows.push(materialize::MaterializedRow::new(
-                CF_ADDR_TXS,
-                keys::encode_addr_tx_key(lock_hash_bytes, tx.block_number, tx.tx_index, &tx.hash),
-                encoded_value,
-            ));
+            let addr_tx_key =
+                keys::encode_addr_tx_key(lock_hash_bytes, tx.block_number, tx.tx_index, &tx.hash);
+            rows.push_serialized(CF_ADDR_TXS, &addr_tx_key, &value)?;
         }
 
         if tx.is_cellbase {
@@ -3080,19 +4146,19 @@ fn build_history_rows_for_block(
         }
 
         for input in &resolved_tx.resolved_inputs {
-            rows.push(materialize::MaterializedRow::new(
+            let consumed_key = keys::encode_outpoint(
+                &input.outpoint.tx_hash,
+                resolved_input_outpoint_index_i16(input)?,
+            );
+            rows.push_serialized(
                 CF_CONSUMED_CELLS,
-                keys::encode_outpoint(
-                    &input.outpoint.tx_hash,
-                    resolved_input_outpoint_index_i16(input)?,
-                )
-                .to_vec(),
-                bincode_serialize_presized(&ConsumedCellMeta {
+                &consumed_key,
+                &ConsumedCellMeta {
                     created_at_block: input.created_at_block,
                     consumed_at_block: tx.block_number,
                     consumed_by_tx: Some(tx.hash.to_vec()),
-                })?,
-            ));
+                },
+            )?;
         }
     }
 
@@ -3125,15 +4191,12 @@ fn build_history_rows_for_block(
                     is_burn: transfer.is_burn,
                     timestamp: tx.timestamp_ms,
                 };
-                rows.push(materialize::MaterializedRow::new(
-                    CF_TOKEN_TRANSFERS,
-                    keys::encode_token_transfer_key(
-                        &transfer.type_script_hash,
-                        tx.block_number,
-                        *idx,
-                    ),
-                    bincode_serialize_presized(&record)?,
-                ));
+                let transfer_key = keys::encode_token_transfer_key(
+                    &transfer.type_script_hash,
+                    tx.block_number,
+                    *idx,
+                );
+                rows.push_serialized(CF_TOKEN_TRANSFERS, &transfer_key, &record)?;
                 *idx = idx.checked_add(1).ok_or_else(|| {
                     anyhow!(
                         "token transfer index overflow in bulk build history rows: type_hash=0x{} block={}",
@@ -3151,15 +4214,12 @@ fn build_history_rows_for_block(
     // Activity stats accumulation uses the returned in-memory list, not CF_TX_ACTIONS.
     for tx_actions in &tx_actions_list {
         if !tx_actions.is_cellbase {
-            rows.push(materialize::MaterializedRow::new(
-                CF_TX_ACTIONS,
-                keys::encode_tx_actions_key(
-                    tx_actions.block_number,
-                    tx_actions.tx_index,
-                    &tx_actions.tx_hash,
-                ),
-                bincode_serialize_presized(tx_actions)?,
-            ));
+            let tx_actions_key = keys::encode_tx_actions_key(
+                tx_actions.block_number,
+                tx_actions.tx_index,
+                &tx_actions.tx_hash,
+            );
+            rows.push_serialized(CF_TX_ACTIONS, &tx_actions_key, tx_actions)?;
         }
     }
 
@@ -3179,7 +4239,7 @@ fn build_history_rows_for_block(
                     continue;
                 };
                 match protocol {
-                    facts::CellProtocolFacts::Spore(spore) if !spore.is_did => {
+                    facts::CellProtocolFacts::Spore(spore) => {
                         let collection_id = spore
                             .cluster_id
                             .map(|id| id.to_vec())
@@ -3188,6 +4248,18 @@ fn build_history_rows_for_block(
                             &collection_id,
                             &tx.tx_hash,
                             &spore.spore_id,
+                            &tx.block_hash,
+                            tx.block_number,
+                            tx.tx_index,
+                            tx.timestamp_ms,
+                            false,
+                        );
+                    }
+                    facts::CellProtocolFacts::DidCkb(did) => {
+                        identity_activity_acc.record(
+                            &DID_CKB_SENTINEL_COLLECTION,
+                            &tx.tx_hash,
+                            &did.did_id,
                             &tx.block_hash,
                             tx.block_number,
                             tx.tx_index,
@@ -3210,6 +4282,18 @@ fn build_history_rows_for_block(
                     facts::CellProtocolFacts::Dotbit(dotbit) => {
                         dotbit_consumed_account_ids.insert(dotbit.account_id.to_vec());
                     }
+                    facts::CellProtocolFacts::BitCell(bit_cell) => {
+                        identity_activity_acc.record(
+                            &BIT_CELL_SENTINEL_COLLECTION,
+                            &tx.tx_hash,
+                            &bit_cell.identity_id,
+                            &tx.block_hash,
+                            tx.block_number,
+                            tx.tx_index,
+                            tx.timestamp_ms,
+                            false,
+                        );
+                    }
                     _ => {}
                 }
             }
@@ -3219,11 +4303,11 @@ fn build_history_rows_for_block(
                     continue;
                 };
                 match protocol {
-                    facts::CellProtocolFacts::Spore(spore) if spore.is_did => {
+                    facts::CellProtocolFacts::DidCkb(did) => {
                         identity_activity_acc.record(
                             &DID_CKB_SENTINEL_COLLECTION,
                             &tx.tx_hash,
-                            &spore.spore_id,
+                            &did.did_id,
                             &tx.block_hash,
                             tx.block_number,
                             tx.tx_index,
@@ -3262,6 +4346,18 @@ fn build_history_rows_for_block(
                     facts::CellProtocolFacts::Dotbit(dotbit) => {
                         dotbit_created_account_ids.insert(dotbit.account_id.to_vec());
                     }
+                    facts::CellProtocolFacts::BitCell(bit_cell) => {
+                        identity_activity_acc.record(
+                            &BIT_CELL_SENTINEL_COLLECTION,
+                            &tx.tx_hash,
+                            &bit_cell.identity_id,
+                            &tx.block_hash,
+                            tx.block_number,
+                            tx.tx_index,
+                            tx.timestamp_ms,
+                            true,
+                        );
+                    }
                     _ => {}
                 }
             }
@@ -3274,18 +4370,14 @@ fn build_history_rows_for_block(
                 &tx.block_hash,
                 tx.timestamp_ms,
             ) {
-                rows.push(materialize::MaterializedRow::new(
-                    CF_IDENTITY_COLLECTION_ACTIVITIES,
-                    keys::encode_object_collection_activity_key(
-                        &DOTBIT_SENTINEL_COLLECTION,
-                        tx.block_number,
-                        tx.tx_index,
-                        &tx.block_hash,
-                        &tx.tx_hash,
-                    )
-                    .to_vec(),
-                    bincode_serialize_presized(&entry)?,
-                ));
+                let activity_key = keys::encode_object_collection_activity_key(
+                    &DOTBIT_SENTINEL_COLLECTION,
+                    tx.block_number,
+                    tx.tx_index,
+                    &tx.block_hash,
+                    &tx.tx_hash,
+                );
+                rows.push_serialized(CF_IDENTITY_COLLECTION_ACTIVITIES, &activity_key, &entry)?;
                 let delta = identity_activity_count_deltas
                     .entry(DOTBIT_SENTINEL_COLLECTION.to_vec())
                     .or_insert(0);
@@ -3309,18 +4401,18 @@ fn build_history_rows_for_block(
                     hex::encode(&resolved_entry.collection_id)
                 )
             })?;
-            rows.push(materialize::MaterializedRow::new(
+            let activity_key = keys::encode_object_collection_activity_key(
+                &resolved_entry.collection_id,
+                resolved_entry.block_number,
+                resolved_entry.tx_idx,
+                &resolved_entry.entry.block_hash,
+                &resolved_entry.entry.tx_hash,
+            );
+            rows.push_serialized(
                 CF_OBJECT_COLLECTION_ACTIVITIES,
-                keys::encode_object_collection_activity_key(
-                    &resolved_entry.collection_id,
-                    resolved_entry.block_number,
-                    resolved_entry.tx_idx,
-                    &resolved_entry.entry.block_hash,
-                    &resolved_entry.entry.tx_hash,
-                )
-                .to_vec(),
-                bincode_serialize_presized(&resolved_entry.entry)?,
-            ));
+                &activity_key,
+                &resolved_entry.entry,
+            )?;
         }
 
         for resolved_entry in identity_activity_acc.into_resolved_entries() {
@@ -3333,39 +4425,36 @@ fn build_history_rows_for_block(
                     hex::encode(&resolved_entry.collection_id)
                 )
             })?;
-            rows.push(materialize::MaterializedRow::new(
+            let activity_key = keys::encode_object_collection_activity_key(
+                &resolved_entry.collection_id,
+                resolved_entry.block_number,
+                resolved_entry.tx_idx,
+                &resolved_entry.entry.block_hash,
+                &resolved_entry.entry.tx_hash,
+            );
+            rows.push_serialized(
                 CF_IDENTITY_COLLECTION_ACTIVITIES,
-                keys::encode_object_collection_activity_key(
-                    &resolved_entry.collection_id,
-                    resolved_entry.block_number,
-                    resolved_entry.tx_idx,
-                    &resolved_entry.entry.block_hash,
-                    &resolved_entry.entry.tx_hash,
-                )
-                .to_vec(),
-                bincode_serialize_presized(&resolved_entry.entry)?,
-            ));
+                &activity_key,
+                &resolved_entry.entry,
+            )?;
         }
     }
 
     // Cell payloads (CF_CELLS) + data_hash index (CF_CELL_BY_DATA_HASH)
     // + lock script mapping (CF_LOCK_SCRIPTS) for this block's cells.
     //
-    // Lock script rows are collected separately (with their InternId) so
-    // the serial merge phase can perform cross-batch dedup via a persistent
-    // FxHashSet<InternId> in BulkBuildRuntimeState. Per-block dedup still
-    // happens here via `seen_lock_ids` to avoid redundant serialization.
+    // Lock script rows are collected separately (with their InternId) so the
+    // serial merge phase can perform exact cross-batch dedup via the interner's
+    // dense per-slot write markers. Per-block dedup still happens here via
+    // `seen_lock_ids` to avoid redundant serialization.
     let mut seen_lock_ids = rustc_hash::FxHashSet::default();
     let mut lock_script_rows = Vec::new();
     for tx in block_txs {
         for cell in &arena_cells[tx.output_range.clone()] {
             let outpoint_key =
                 keys::encode_outpoint(&cell.outpoint.tx_hash, cell_outpoint_index_i16(cell)?);
-            rows.push(materialize::MaterializedRow::new(
-                CF_CELLS,
-                outpoint_key.to_vec(),
-                bincode_serialize_presized(&cell_facts_to_live_cell_info(cell, interner))?,
-            ));
+            let live_cell_info = cell_facts_to_live_cell_info(cell, interner);
+            rows.push_serialized(CF_CELLS, &outpoint_key, &live_cell_info)?;
 
             // Lock script mapping — dedup within block, cross-batch dedup in merge.
             if seen_lock_ids.insert(cell.lock_script_hash_id) {
@@ -3386,16 +4475,13 @@ fn build_history_rows_for_block(
             }
 
             if let Some(data_hash) = &cell.data_hash {
-                rows.push(materialize::MaterializedRow::new(
-                    CF_CELL_BY_DATA_HASH,
-                    keys::encode_cell_index_key(
-                        data_hash,
-                        cell.created_at_block,
-                        &cell.outpoint.tx_hash,
-                        cell_outpoint_index_i16(cell)?,
-                    ),
-                    vec![],
-                ));
+                let data_hash_key = keys::encode_cell_index_key(
+                    data_hash,
+                    cell.created_at_block,
+                    &cell.outpoint.tx_hash,
+                    cell_outpoint_index_i16(cell)?,
+                );
+                rows.push_raw(CF_CELL_BY_DATA_HASH, &data_hash_key, &[])?;
             }
         }
     }
@@ -3430,7 +4516,7 @@ fn build_object_collection_activity_rows(
                 continue;
             };
             match protocol {
-                facts::CellProtocolFacts::Spore(spore) if !spore.is_did => {
+                facts::CellProtocolFacts::Spore(spore) => {
                     let collection_id = spore
                         .cluster_id
                         .map(|id| id.to_vec())
@@ -3439,6 +4525,18 @@ fn build_object_collection_activity_rows(
                         &collection_id,
                         &tx.tx_hash,
                         &spore.spore_id,
+                        &tx.block_hash,
+                        tx.block_number,
+                        tx.tx_index,
+                        tx.timestamp_ms,
+                        false,
+                    );
+                }
+                facts::CellProtocolFacts::DidCkb(did) => {
+                    identity_activity_acc.record(
+                        &DID_CKB_SENTINEL_COLLECTION,
+                        &tx.tx_hash,
+                        &did.did_id,
                         &tx.block_hash,
                         tx.block_number,
                         tx.tx_index,
@@ -3461,6 +4559,18 @@ fn build_object_collection_activity_rows(
                 facts::CellProtocolFacts::Dotbit(dotbit) => {
                     dotbit_consumed_account_ids.insert(dotbit.account_id.to_vec());
                 }
+                facts::CellProtocolFacts::BitCell(bit_cell) => {
+                    identity_activity_acc.record(
+                        &BIT_CELL_SENTINEL_COLLECTION,
+                        &tx.tx_hash,
+                        &bit_cell.identity_id,
+                        &tx.block_hash,
+                        tx.block_number,
+                        tx.tx_index,
+                        tx.timestamp_ms,
+                        false,
+                    );
+                }
                 _ => {}
             }
         }
@@ -3470,11 +4580,11 @@ fn build_object_collection_activity_rows(
                 continue;
             };
             match protocol {
-                facts::CellProtocolFacts::Spore(spore) if spore.is_did => {
+                facts::CellProtocolFacts::DidCkb(did) => {
                     identity_activity_acc.record(
                         &DID_CKB_SENTINEL_COLLECTION,
                         &tx.tx_hash,
-                        &spore.spore_id,
+                        &did.did_id,
                         &tx.block_hash,
                         tx.block_number,
                         tx.tx_index,
@@ -3512,6 +4622,18 @@ fn build_object_collection_activity_rows(
                 }
                 facts::CellProtocolFacts::Dotbit(dotbit) => {
                     dotbit_created_account_ids.insert(dotbit.account_id.to_vec());
+                }
+                facts::CellProtocolFacts::BitCell(bit_cell) => {
+                    identity_activity_acc.record(
+                        &BIT_CELL_SENTINEL_COLLECTION,
+                        &tx.tx_hash,
+                        &bit_cell.identity_id,
+                        &tx.block_hash,
+                        tx.block_number,
+                        tx.tx_index,
+                        tx.timestamp_ms,
+                        true,
+                    );
                 }
                 _ => {}
             }
@@ -3696,9 +4818,8 @@ fn build_activity_protocol_detectors(
     }
 
     Ok(vec![
-        Box::new(crate::db::writer::rgbpp_detector::RgbppDetector::new(
-            is_mainnet,
-        )) as Box<dyn crate::db::writer::activities::ProtocolDetector>,
+        Box::new(crate::db::writer::rgbpp_detector::RgbppDetector::new())
+            as Box<dyn crate::db::writer::activities::ProtocolDetector>,
         Box::new(crate::db::writer::fiber_detector::FiberDetector::new(
             is_mainnet,
         )),
@@ -3848,65 +4969,107 @@ fn udt_standard_for_semantic_tag(semantic_tag: facts::CellSemanticTag) -> Option
     }
 }
 
-fn build_final_snapshot_rows(
+fn emit_final_snapshot_rows<F>(
     sequencer: &sequencer::BulkSequencer,
     interner: &interner::FrozenIdentityView,
-) -> Result<Vec<materialize::MaterializedRow>> {
-    let mut rows = Vec::with_capacity(sequencer.live_count() * 5);
-
-    for slot in sequencer.live_slots() {
-        let outpoint_index = live_slot_outpoint_index_i16(slot)?;
-        rows.push(materialize::MaterializedRow::new(
+    mut emit: F,
+) -> Result<()>
+where
+    F: FnMut(materialize::MaterializedRow) -> Result<()>,
+{
+    for (outpoint, slot) in sequencer.live_slots() {
+        let outpoint_index = live_slot_outpoint_index_i16(outpoint)?;
+        emit(materialize::MaterializedRow::new(
             CF_LIVE_CELLS,
-            keys::encode_outpoint(&slot.outpoint.tx_hash, outpoint_index).to_vec(),
+            keys::encode_outpoint(&outpoint.tx_hash, outpoint_index).to_vec(),
             slot.created_at_block.to_le_bytes().to_vec(),
-        ));
-        rows.push(materialize::MaterializedRow::new(
+        ))?;
+        emit(materialize::MaterializedRow::new(
             CF_CELL_BY_LOCK,
             keys::encode_cell_index_key(
                 interner.resolve_bytes(slot.lock_script_hash_id),
                 slot.created_at_block,
-                &slot.outpoint.tx_hash,
+                &outpoint.tx_hash,
                 outpoint_index,
             ),
             Vec::new(),
-        ));
-        rows.push(materialize::MaterializedRow::new(
+        ))?;
+        let lock_hash_type = keys::cell_code_index_hash_type_byte(slot.lock_hash_type)
+            .with_context(|| {
+                format!(
+                    "invalid lock hash_type for bulk build cell-by-lock-code index: outpoint=0x{}:{}, hash_type={}",
+                    hex::encode(outpoint.tx_hash),
+                    outpoint_index,
+                    slot.lock_hash_type
+                )
+            })?;
+        emit(materialize::MaterializedRow::new(
             CF_CELL_BY_LOCK_CODE,
-            keys::encode_cell_index_key(
+            keys::encode_cell_code_index_key(
                 interner.resolve_bytes(slot.lock_code_hash_id),
+                lock_hash_type,
                 slot.created_at_block,
-                &slot.outpoint.tx_hash,
+                &outpoint.tx_hash,
                 outpoint_index,
             ),
             Vec::new(),
-        ));
+        ))?;
         if let Some(type_script_hash_id) = slot.type_script_hash_id {
-            rows.push(materialize::MaterializedRow::new(
+            emit(materialize::MaterializedRow::new(
                 CF_CELL_BY_TYPE,
                 keys::encode_cell_index_key(
                     interner.resolve_bytes(type_script_hash_id),
                     slot.created_at_block,
-                    &slot.outpoint.tx_hash,
+                    &outpoint.tx_hash,
                     outpoint_index,
                 ),
                 Vec::new(),
-            ));
+            ))?;
         }
         if let Some(type_code_hash_id) = slot.type_code_hash_id {
-            rows.push(materialize::MaterializedRow::new(
+            let type_hash_type = slot.type_hash_type.ok_or_else(|| {
+                anyhow!(
+                    "bulk build live slot has type_code_hash but no type_hash_type: outpoint=0x{}:{}",
+                    hex::encode(outpoint.tx_hash),
+                    outpoint_index
+                )
+            })?;
+            let type_hash_type = keys::cell_code_index_hash_type_byte(type_hash_type)
+                .with_context(|| {
+                    format!(
+                        "invalid type hash_type for bulk build cell-by-type-code index: outpoint=0x{}:{}, hash_type={:?}",
+                        hex::encode(outpoint.tx_hash),
+                        outpoint_index,
+                        slot.type_hash_type
+                    )
+                })?;
+            emit(materialize::MaterializedRow::new(
                 CF_CELL_BY_TYPE_CODE,
-                keys::encode_cell_index_key(
+                keys::encode_cell_code_index_key(
                     interner.resolve_bytes(type_code_hash_id),
+                    type_hash_type,
                     slot.created_at_block,
-                    &slot.outpoint.tx_hash,
+                    &outpoint.tx_hash,
                     outpoint_index,
                 ),
                 Vec::new(),
-            ));
+            ))?;
         }
     }
 
+    Ok(())
+}
+
+#[cfg(test)]
+fn build_final_snapshot_rows(
+    sequencer: &sequencer::BulkSequencer,
+    interner: &interner::FrozenIdentityView,
+) -> Result<Vec<materialize::MaterializedRow>> {
+    let mut rows = Vec::new();
+    emit_final_snapshot_rows(sequencer, interner, |row| {
+        rows.push(row);
+        Ok(())
+    })?;
     Ok(rows)
 }
 
@@ -3956,6 +5119,7 @@ fn resolved_tx_fee(tx: &facts::TxFacts, resolved_tx: &facts::ResolvedTxFacts<'_>
                     }),
                 ) => crate::db::writer::dao::calculate_dao_compensation_from_ar(
                     input.capacity,
+                    input.occupied_capacity,
                     *deposit_ar,
                     *withdraw_request_ar,
                 )
@@ -4054,12 +5218,12 @@ fn cell_outpoint_index_i16(cell: &facts::CellFacts) -> Result<i16> {
     })
 }
 
-fn live_slot_outpoint_index_i16(slot: &live_cells::LiveCellSlot) -> Result<i16> {
-    i16::try_from(slot.outpoint.index).map_err(|_| {
+fn live_slot_outpoint_index_i16(outpoint: &facts::OutPointKey) -> Result<i16> {
+    i16::try_from(outpoint.index).map_err(|_| {
         anyhow!(
             "bulk build live outpoint index exceeds i16 while materializing live cells: tx=0x{} output_index={}",
-            hex::encode(slot.outpoint.tx_hash),
-            slot.outpoint.index
+            hex::encode(outpoint.tx_hash),
+            outpoint.index
         )
     })
 }
@@ -4383,7 +5547,7 @@ fn collect_core_owner_state_snapshot(
         .list_tokens()?
         .into_iter()
         .collect::<HashMap<_, _>>();
-    let mut token_holders: HashMap<Vec<u8>, HashMap<Vec<u8>, i128>> = HashMap::new();
+    let mut token_holders: HashMap<Vec<u8>, HashMap<Vec<u8>, TokenBalance>> = HashMap::new();
     let mut token_transfer_counts = HashMap::new();
     let mut token_hourly_transfers = HashMap::new();
     let mut token_daily_deltas = HashMap::new();
@@ -4451,7 +5615,7 @@ fn collect_core_owner_state_snapshot(
             token_daily_deltas.insert(type_hash.clone(), daily_deltas);
         }
     }
-    let mut addr_tokens: HashMap<Vec<u8>, HashMap<Vec<u8>, i128>> = HashMap::new();
+    let mut addr_tokens: HashMap<Vec<u8>, HashMap<Vec<u8>, TokenBalance>> = HashMap::new();
     let addr_tokens_iter = domain_store.iterator_cf(
         domain_store.cf_addr_tokens_by_balance(),
         IteratorMode::Start,
@@ -4556,15 +5720,21 @@ fn collect_core_owner_state_snapshot(
         .into_iter()
         .collect::<HashMap<_, _>>();
     let did_agg = domain_store.get_identity_collection_aggregate(&DID_CKB_SENTINEL_COLLECTION)?;
+    let dotbit_agg = domain_store.get_identity_collection_aggregate(&DOTBIT_SENTINEL_COLLECTION)?;
+    let bit_cell_agg =
+        domain_store.get_identity_collection_aggregate(&BIT_CELL_SENTINEL_COLLECTION)?;
     let mut identities_by_collection = HashMap::new();
-    let mut did_ids = domain_store.list_identity_ids_by_collection(
+    for collection_id in [
         &DID_CKB_SENTINEL_COLLECTION,
-        None,
-        usize::MAX,
-    )?;
-    did_ids.sort();
-    if !did_ids.is_empty() {
-        identities_by_collection.insert(DID_CKB_SENTINEL_COLLECTION.to_vec(), did_ids);
+        &DOTBIT_SENTINEL_COLLECTION,
+        &BIT_CELL_SENTINEL_COLLECTION,
+    ] {
+        let mut identity_ids =
+            domain_store.list_identity_ids_by_collection(collection_id, None, usize::MAX)?;
+        identity_ids.sort();
+        if !identity_ids.is_empty() {
+            identities_by_collection.insert(collection_id.to_vec(), identity_ids);
+        }
     }
     let mut spores_by_cluster = HashMap::new();
     let mut cluster_owner_counts = HashMap::new();
@@ -4584,6 +5754,14 @@ fn collect_core_owner_state_snapshot(
     }
     let did_owner_counts = domain_store
         .list_identity_owner_counts(&DID_CKB_SENTINEL_COLLECTION)?
+        .into_iter()
+        .collect::<HashMap<_, _>>();
+    let dotbit_owner_counts = domain_store
+        .list_identity_owner_counts(&DOTBIT_SENTINEL_COLLECTION)?
+        .into_iter()
+        .collect::<HashMap<_, _>>();
+    let bit_cell_owner_counts = domain_store
+        .list_identity_owner_counts(&BIT_CELL_SENTINEL_COLLECTION)?
         .into_iter()
         .collect::<HashMap<_, _>>();
     let mut spore_outpoints = HashMap::new();
@@ -4620,9 +5798,13 @@ fn collect_core_owner_state_snapshot(
         identities,
         cluster_aggs,
         did_agg,
+        dotbit_agg,
+        bit_cell_agg,
         identities_by_collection,
         spores_by_cluster,
         did_owner_counts,
+        dotbit_owner_counts,
+        bit_cell_owner_counts,
         cluster_owner_counts,
         spore_outpoints,
         spore_type_indexes,
@@ -4663,10 +5845,9 @@ fn build_unique_temp_test_dir(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::parser::bit_cell::BIT_CELL_CODE_HASH_TESTNET;
     use crate::parser::fiber::FUNDING_LOCK_CODE_HASH_MAINNET;
-    use crate::parser::spore::{
-        CLUSTER_CODE_HASH_MAINNET_V2, SPORE_CODE_HASH_MAINNET_DID, SPORE_CODE_HASH_MAINNET_V2,
-    };
+    use crate::parser::spore::{CLUSTER_CODE_HASH_MAINNET_V2, SPORE_CODE_HASH_MAINNET_V2};
     use crate::parser::udt::SUDT_CODE_HASH;
     use crate::parser::ScriptParser;
     use crate::rpc::{
@@ -4678,10 +5859,11 @@ mod tests {
         OutPointKey, ResolvedInputFacts, ResolvedTxFacts,
     };
     use crate::sync::types::InternId;
+    use crate::sync::TEST_CELLBASE_WITNESS;
     use ckbadger_store::store::CF_TOKEN_TRANSFERS;
     use ckbadger_store::types::{
         AssetAction, FiberChannelState, ObjectCollectionActivityEntry, TokenInfo,
-        TokenTransferRecord, TxActions, DID_CKB_SENTINEL_COLLECTION, DOTBIT_SENTINEL_COLLECTION,
+        TokenTransferRecord, TxActions, BIT_CELL_SENTINEL_COLLECTION,
     };
     use ckbadger_store::{
         keys, CF_ADDR_TXS, CF_IDENTITY_COLLECTION_ACTIVITIES, CF_OBJECT_COLLECTION_ACTIVITIES,
@@ -4767,7 +5949,7 @@ mod tests {
                 type_: None,
             }],
             outputs_data: vec!["0x".to_string()],
-            witnesses: vec!["0x".to_string()],
+            witnesses: vec![TEST_CELLBASE_WITNESS.to_string()],
         };
 
         let split_tx = TransactionView {
@@ -4840,11 +6022,11 @@ mod tests {
         }
     }
 
-    fn create_did_type_script(did_id: &[u8; 32]) -> Script {
+    fn create_bit_cell_type_script() -> Script {
         Script {
-            code_hash: SPORE_CODE_HASH_MAINNET_DID.to_string(),
+            code_hash: BIT_CELL_CODE_HASH_TESTNET.to_string(),
             hash_type: "type".to_string(),
-            args: format!("0x{}", hex::encode(did_id)),
+            args: "0x".to_string(),
         }
     }
 
@@ -4930,7 +6112,7 @@ mod tests {
                 type_: Some(sudt_type.clone()),
             }],
             outputs_data: vec![u128_data_hex(200)],
-            witnesses: vec!["0x".to_string()],
+            witnesses: vec![TEST_CELLBASE_WITNESS.to_string()],
         };
 
         let split_tx = TransactionView {
@@ -4993,7 +6175,7 @@ mod tests {
                 type_: None,
             }],
             outputs_data: vec!["0x".to_string()],
-            witnesses: vec!["0x".to_string()],
+            witnesses: vec![TEST_CELLBASE_WITNESS.to_string()],
         };
 
         let open_tx = TransactionView {
@@ -5038,7 +6220,6 @@ mod tests {
     fn bulk_build_object_activity_fixture() -> Vec<BlockResponseWithCycles> {
         let cluster_id = [0x11; 32];
         let spore_id = [0x22; 32];
-        let did_id = [0x33; 32];
 
         let create_tx = TransactionView {
             hash: format!("0x{}", "a1".repeat(32)),
@@ -5064,9 +6245,9 @@ mod tests {
                     type_: Some(create_spore_type_script(&spore_id)),
                 },
                 CellOutput {
-                    capacity: format!("0x{:x}", 150_00000000u64),
+                    capacity: format!("0x{:x}", 200_00000000u64),
                     lock: fixture_lock_script(&format!("0x{}", "03".repeat(20))),
-                    type_: Some(create_did_type_script(&did_id)),
+                    type_: Some(create_bit_cell_type_script()),
                 },
             ],
             outputs_data: vec![
@@ -5085,9 +6266,9 @@ mod tests {
                         Some(&cluster_id)
                     ))
                 ),
-                "0x".to_string(),
+                "0x000000003c00000010000000240000002c000000a7d4860aaf1dc83daedf75d6022811d2c2ae250b1b46fc69000000000c00000032303234303530372e626974".to_string(),
             ],
-            witnesses: vec!["0x".to_string()],
+            witnesses: vec![TEST_CELLBASE_WITNESS.to_string()],
         };
 
         let dummy_cellbase = TransactionView {
@@ -5108,7 +6289,7 @@ mod tests {
                 type_: None,
             }],
             outputs_data: vec!["0x".to_string()],
-            witnesses: vec!["0x".to_string()],
+            witnesses: vec![TEST_CELLBASE_WITNESS.to_string()],
         };
 
         let transfer_and_burn_tx = TransactionView {
@@ -5208,9 +6389,9 @@ mod tests {
             &arena,
             &resolved,
             &frozen,
+            &interner,
             true,
             &FxHashMap::default(),
-            &mut FxHashSet::default(),
         )
         .expect("history batches");
 
@@ -5283,9 +6464,9 @@ mod tests {
             &arena,
             &resolved,
             &frozen,
+            &interner,
             true,
             &FxHashMap::default(),
-            &mut FxHashSet::default(),
         )
         .expect("history batches");
         let prepared =
@@ -5359,9 +6540,9 @@ mod tests {
             &arena,
             &resolved,
             &frozen,
+            &interner,
             true,
             &FxHashMap::default(),
-            &mut FxHashSet::default(),
         )
         .expect("history batches");
         // Convert rows to WriteBatch and write to stores (no-WAL) to populate memtables.
@@ -5414,9 +6595,7 @@ mod tests {
                     name: Some("Seal".to_string()),
                     symbol: Some("SEAL".to_string()),
                     decimals: Some(8),
-                    total_supply: Some(200),
                     max_supply: None,
-                    holders_count: 1,
                     first_seen_block: 14_000_889,
                     icon_url: None,
                     description: None,
@@ -5470,9 +6649,9 @@ mod tests {
             &arena,
             &resolved,
             &frozen,
+            &interner,
             true,
             &FxHashMap::default(),
-            &mut FxHashSet::default(),
         )
         .expect("history batches");
         let prepared =
@@ -5549,9 +6728,9 @@ mod tests {
             &arena,
             &resolved,
             &frozen,
+            &interner,
             true,
             &FxHashMap::default(),
-            &mut FxHashSet::default(),
         )
         .expect("history batches");
         let prepared =
@@ -5653,9 +6832,9 @@ mod tests {
             &arena,
             &resolved,
             &frozen,
+            &interner,
             true,
             &FxHashMap::default(),
-            &mut FxHashSet::default(),
         )
         .expect("history batches");
         let sealed_rows =
@@ -5717,7 +6896,7 @@ mod tests {
     }
 
     #[test]
-    fn build_history_rows_materializes_spore_and_did_collection_activities() {
+    fn build_history_rows_materializes_spore_and_bit_cell_identity_activities() {
         let blocks = bulk_build_object_activity_fixture();
         let cluster_id = [0x11; 32];
         let create_block_hash = vec![0x81; 32];
@@ -5734,7 +6913,7 @@ mod tests {
             .expect("resolved txs");
         let frozen = interner.snapshot_for_reads();
 
-        let root = unique_temp_test_dir("bulk-build-spore-did-activity-test");
+        let root = unique_temp_test_dir("bulk-build-spore-bit-cell-activity-test");
         std::fs::create_dir_all(&root).expect("create root");
         let domain_path = root.join("domain");
         let append_path = root.join("append-only");
@@ -5747,9 +6926,9 @@ mod tests {
             &arena,
             &resolved,
             &frozen,
+            &interner,
             true,
             &FxHashMap::default(),
-            &mut FxHashSet::default(),
         )
         .expect("history batches");
         let prepared =
@@ -5808,16 +6987,23 @@ mod tests {
             &transfer_block_hash,
             &transfer_tx_hash,
         );
-        let did_mint_key = keys::encode_object_collection_activity_key(
-            &DID_CKB_SENTINEL_COLLECTION,
+        let bit_cell_mint_key = keys::encode_object_collection_activity_key(
+            &BIT_CELL_SENTINEL_COLLECTION,
             14_001_000,
             0,
             &create_block_hash,
             &create_tx_hash,
         );
+        let bit_cell_burn_key = keys::encode_object_collection_activity_key(
+            &BIT_CELL_SENTINEL_COLLECTION,
+            14_001_001,
+            1,
+            &transfer_block_hash,
+            &transfer_tx_hash,
+        );
 
         assert_eq!(object_rows.len(), 2);
-        assert_eq!(identity_rows.len(), 1);
+        assert_eq!(identity_rows.len(), 2);
 
         let cluster_mint = object_rows
             .get(cluster_mint_key.as_slice())
@@ -5835,13 +7021,21 @@ mod tests {
         assert_eq!(cluster_transfer.actions.len(), 1);
         assert!(matches!(cluster_transfer.actions[0], AssetAction::Transfer));
 
-        let did_mint = identity_rows
-            .get(did_mint_key.as_slice())
-            .expect("did mint activity");
-        assert_eq!(did_mint.tx_hash, create_tx_hash);
-        assert_eq!(did_mint.block_hash, create_block_hash);
-        assert_eq!(did_mint.actions.len(), 1);
-        assert!(matches!(did_mint.actions[0], AssetAction::Mint));
+        let bit_cell_mint = identity_rows
+            .get(bit_cell_mint_key.as_slice())
+            .expect(".bit Cell mint activity");
+        assert_eq!(bit_cell_mint.tx_hash, create_tx_hash);
+        assert_eq!(bit_cell_mint.block_hash, create_block_hash);
+        assert_eq!(bit_cell_mint.actions.len(), 1);
+        assert!(matches!(bit_cell_mint.actions[0], AssetAction::Mint));
+
+        let bit_cell_burn = identity_rows
+            .get(bit_cell_burn_key.as_slice())
+            .expect(".bit Cell burn activity");
+        assert_eq!(bit_cell_burn.tx_hash, transfer_tx_hash);
+        assert_eq!(bit_cell_burn.block_hash, transfer_block_hash);
+        assert_eq!(bit_cell_burn.actions.len(), 1);
+        assert!(matches!(bit_cell_burn.actions[0], AssetAction::Burn));
     }
 
     #[test]
@@ -6293,7 +7487,7 @@ mod tests {
                 type_: None,
             }],
             outputs_data: vec!["0x".to_string()],
-            witnesses: vec!["0x".to_string()],
+            witnesses: vec![TEST_CELLBASE_WITNESS.to_string()],
         };
         let genesis_block = BlockResponseWithCycles {
             block: BlockView {
@@ -6324,7 +7518,7 @@ mod tests {
                 type_: None,
             }],
             outputs_data: vec!["0x".to_string()],
-            witnesses: vec!["0x".to_string()],
+            witnesses: vec![TEST_CELLBASE_WITNESS.to_string()],
         };
         let spend_tx = TransactionView {
             hash: format!("0x{}", "dd".repeat(32)),
@@ -6468,6 +7662,9 @@ mod tests {
             dao: vec![0x00; 32],
             transactions_count: 42,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
         let standard = bincode::serialize(&header).unwrap();
@@ -6504,6 +7701,9 @@ mod tests {
             dao: vec![],
             transactions_count: 0,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
         let standard = bincode::serialize(&header).unwrap();
@@ -6514,20 +7714,39 @@ mod tests {
     #[test]
     fn prepare_finalize_artifacts_matches_direct_finalize_components() {
         let mut runtime = BulkBuildRuntimeState::default();
+        runtime
+            .owners
+            .dao
+            .set_secondary_epoch_reward(61_369_863_013_698);
+        // Mid-chain fixture: seed the parent DAO C/U for the miner split.
+        runtime
+            .owners
+            .dao
+            .seed_prev_dao_cu(3_360_000_000_000_000_000, 100_000_000_000_000);
+        // The fixture replays a single mid-chain block; seed the parent
+        // DAO C/U it splits its secondary issuance against.
+        runtime
+            .owners
+            .dao
+            .seed_prev_dao_cu(3_360_000_000_000_000_000, 100_000_000_000_000);
         let block = bulk_build_addr_tx_fixture();
         runtime
             .apply_blocks_hex(std::slice::from_ref(&block), true, &FxHashMap::default())
             .unwrap();
 
+        // Mainnet genesis virtual-occupied; both paths must use the same value.
+        let virtual_occupied: i128 = 504_000_000_000_000_000;
         let direct_activity_rows = runtime.activity_stats.build_rows().unwrap();
-        let direct_chain_rows = runtime.chain_stats.build_rows().unwrap();
+        let direct_chain_rows = runtime.chain_stats.build_rows(virtual_occupied).unwrap();
         let frozen = runtime.interner.snapshot_for_reads();
         let direct_snapshot_rows = build_final_snapshot_rows(&runtime.sequencer, &frozen).unwrap();
 
-        let prepared = runtime.prepare_finalize_artifacts().unwrap();
+        let prepared = runtime
+            .prepare_finalize_artifacts(virtual_occupied)
+            .unwrap();
         assert_eq!(prepared.activity_sealed_rows, direct_activity_rows);
         assert_eq!(prepared.chain_sealed_rows, direct_chain_rows);
-        assert_eq!(prepared.final_snapshot_rows, direct_snapshot_rows);
+        assert!(!direct_snapshot_rows.is_empty());
     }
 
     #[test]
@@ -6603,6 +7822,125 @@ mod tests {
         assert!(!acc.daily_addrs.contains_key(&date_key) || acc.daily_addrs[&date_key].is_empty());
     }
 
+    #[test]
+    fn ckb_median_time_uses_the_upper_value_for_an_even_window() {
+        assert_eq!(ckb_median_time_ms(&[10, 20]).unwrap(), 20);
+        assert_eq!(ckb_median_time_ms(&[30, 10, 20]).unwrap(), 20);
+    }
+
+    #[test]
+    fn activity_stats_seal_only_buckets_older_than_ckb_mtp() {
+        let action = TxActions {
+            tx_hash: vec![0x11; 32],
+            block_hash: vec![0x22; 32],
+            block_number: 0,
+            tx_index: 0,
+            timestamp: 0,
+            is_cellbase: false,
+            protocol_actions: vec![],
+            type_calls: vec![],
+            lock_calls: vec![],
+            participants: vec![ckbadger_store::types::ParticipantDelta {
+                lock_hash: vec![0x33; 32],
+                ckb_delta: 1,
+                used_delta: 0,
+                item_deltas: vec![],
+                tags: 0,
+            }],
+        };
+        let block = |number, timestamp_ms| facts::BlockFacts {
+            number,
+            timestamp_ms,
+            ..Default::default()
+        };
+
+        let mut acc = ActivityStatsAccumulator::default();
+        assert!(acc
+            .apply_batch(&[block(0, 0)], std::slice::from_ref(&action))
+            .unwrap()
+            .is_empty());
+
+        // [0, 2h, 3h] has MTP=2h. The action's UTC+8 08:00 hourly
+        // bucket ended at 1h, while its daily bucket is still open.
+        let sealed = acc
+            .apply_batch(&[block(1, 7_200_000), block(2, 10_800_000)], &[])
+            .unwrap();
+        assert_eq!(sealed.len(), 2, "hourly stats + hourly address set");
+        let hour_key = ckbadger_common::block_datetime_from_ms(0)
+            .format("%Y%m%d%H")
+            .to_string();
+        let day_key = ckbadger_common::block_date_from_ms(0)
+            .format("%Y%m%d")
+            .to_string();
+        assert!(!acc.hourly_stats.contains_key(&hour_key));
+        assert!(!acc.hourly_addrs.contains_key(&hour_key));
+        assert!(acc.daily_stats.contains_key(&day_key));
+
+        let err = acc
+            .apply_batch(&[block(3, 14_400_000)], &[action])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("already sealed activity bucket"), "{err}");
+        assert!(err.contains("block=0"), "{err}");
+    }
+
+    #[test]
+    fn incremental_activity_sealing_matches_one_shot_materialization_exactly() {
+        let action = TxActions {
+            tx_hash: vec![0x41; 32],
+            block_hash: vec![0x42; 32],
+            block_number: 0,
+            tx_index: 0,
+            timestamp: 0,
+            is_cellbase: false,
+            protocol_actions: vec![],
+            type_calls: vec![],
+            lock_calls: vec![],
+            participants: vec![ckbadger_store::types::ParticipantDelta {
+                lock_hash: vec![0x43; 32],
+                ckb_delta: 123,
+                used_delta: 45,
+                item_deltas: vec![],
+                tags: 0,
+            }],
+        };
+        let block = |number, timestamp_ms| facts::BlockFacts {
+            number,
+            timestamp_ms,
+            ..Default::default()
+        };
+
+        let mut one_shot = ActivityStatsAccumulator::default();
+        one_shot
+            .apply_tx_actions(std::slice::from_ref(&action))
+            .unwrap();
+        let mut expected = one_shot.build_rows().unwrap();
+
+        let mut incremental = ActivityStatsAccumulator::default();
+        let mut actual = incremental
+            .apply_batch(&[block(0, 0)], std::slice::from_ref(&action))
+            .unwrap();
+        actual.extend(
+            incremental
+                .apply_batch(&[block(1, 7_200_000), block(2, 10_800_000)], &[])
+                .unwrap(),
+        );
+        actual.extend(incremental.build_rows().unwrap());
+
+        let sort_rows = |rows: &mut Vec<materialize::MaterializedRow>| {
+            rows.sort_by(|a, b| {
+                (a.cf_name, a.key.as_slice(), a.value.as_slice()).cmp(&(
+                    b.cf_name,
+                    b.key.as_slice(),
+                    b.value.as_slice(),
+                ))
+            });
+        };
+        sort_rows(&mut expected);
+        sort_rows(&mut actual);
+        assert_eq!(actual, expected);
+    }
+
     // -----------------------------------------------------------------------
     // ChainStatsAccumulator tests
     // -----------------------------------------------------------------------
@@ -6631,6 +7969,8 @@ mod tests {
                     dao: [0x00; 32],
                     compact_target: 0x1a08a97e,
                     uncles_count: 0,
+                    proposals_count: 0,
+                    miner_lock_hash: None,
                     transactions_count: 1,
                     tx_range: 0..1,
                 },
@@ -6645,6 +7985,8 @@ mod tests {
                     dao: [0x00; 32],
                     compact_target: 0x1a08a97e,
                     uncles_count: 1,
+                    proposals_count: 0,
+                    miner_lock_hash: None,
                     transactions_count: 2,
                     tx_range: 1..3,
                 },
@@ -6908,7 +8250,7 @@ mod tests {
         acc.daily_stats
             .insert(day2, (8, 15, 3, 1, 800, 300, 100, 50, 10));
 
-        let rows = acc.build_rows().unwrap();
+        let rows = acc.build_rows(0).unwrap();
 
         // Find daily stats rows (prefix DAILY = 0x01)
         let daily_rows: Vec<_> = rows
@@ -7031,7 +8373,7 @@ mod tests {
         assert_eq!(e6.5, 1);
 
         // build_rows should produce EpochStats rows
-        let rows = acc.build_rows().unwrap();
+        let rows = acc.build_rows(0).unwrap();
         let epoch_rows: Vec<_> = rows
             .iter()
             .filter(|r| {
@@ -7104,7 +8446,7 @@ mod tests {
         let resolved: Vec<facts::ResolvedTxFacts<'_>> = vec![];
         acc.apply_blocks(&arena, &resolved).unwrap();
 
-        let rows = acc.build_rows().unwrap();
+        let rows = acc.build_rows(0).unwrap();
         let epoch_rows: Vec<_> = rows
             .iter()
             .filter(|r| {
@@ -7182,16 +8524,14 @@ mod tests {
         let domain_store = CkbadgerStore::open_domain(&domain_path).expect("open domain");
         let append_store = CkbadgerStore::open_append_only(&append_path).expect("open append");
 
-        let mut written_ids = FxHashSet::default();
-
         // First call — should emit lock script rows.
         let result1 = build_history_batches(
             &arena,
             &resolved,
             &frozen,
+            &interner,
             true,
             &FxHashMap::default(),
-            &mut written_ids,
         )
         .expect("first build");
 
@@ -7213,19 +8553,19 @@ mod tests {
             lock_count_after_first > 0,
             "first call should emit lock script rows"
         );
-        let set_size_after_first = written_ids.len();
-        assert_eq!(set_size_after_first, lock_count_after_first);
+        let marker_count_after_first = interner.lock_script_written_count();
+        assert_eq!(marker_count_after_first, lock_count_after_first);
 
-        // Second call with same arena/resolved/frozen and same set —
+        // Second call with the same arena/resolved/frozen and interner markers —
         // should emit zero NEW lock script rows since all lock_hash_ids are
-        // already in written_ids.
+        // already marked written.
         let result2 = build_history_batches(
             &arena,
             &resolved,
             &frozen,
+            &interner,
             true,
             &FxHashMap::default(),
-            &mut written_ids,
         )
         .expect("second build");
 
@@ -7249,9 +8589,9 @@ mod tests {
             "second call should not add new lock script entries"
         );
         assert_eq!(
-            written_ids.len(),
-            set_size_after_first,
-            "set should not grow"
+            interner.lock_script_written_count(),
+            marker_count_after_first,
+            "marker count should not grow"
         );
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -7262,6 +8602,21 @@ mod tests {
         use super::owners::BulkReducer;
 
         let mut runtime = BulkBuildRuntimeState::default();
+        runtime
+            .owners
+            .dao
+            .set_secondary_epoch_reward(61_369_863_013_698);
+        // Mid-chain fixture: seed the parent DAO C/U for the miner split.
+        runtime
+            .owners
+            .dao
+            .seed_prev_dao_cu(3_360_000_000_000_000_000, 100_000_000_000_000);
+        // The fixture replays a single mid-chain block; seed the parent
+        // DAO C/U it splits its secondary issuance against.
+        runtime
+            .owners
+            .dao
+            .seed_prev_dao_cu(3_360_000_000_000_000_000, 100_000_000_000_000);
         let block = bulk_build_addr_tx_fixture();
         runtime
             .apply_blocks_hex(std::slice::from_ref(&block), true, &FxHashMap::default())
@@ -7425,6 +8780,7 @@ mod tests {
 
         let compensation = ckbadger_common::dao::calculate_dao_compensation_from_ar(
             input_capacity,
+            102_00000000,
             deposit_ar,
             withdraw_ar,
         )

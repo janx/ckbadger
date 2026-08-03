@@ -142,6 +142,8 @@ pub mod semantic_tags {
     pub const MNFT: u16 = 1 << 4;
     pub const SPORE: u16 = 1 << 5;
     pub const CLUSTER: u16 = 1 << 6;
+    pub const BIT_CELL: u16 = 1 << 7;
+    pub const DID_CKB: u16 = 1 << 8;
 }
 
 /// Aggregated cell statistics for a token.
@@ -214,6 +216,20 @@ pub struct CachedBlockHeader {
     /// `DailyBlockStats.total_uncles` for rolled-back blocks.
     #[serde(default)]
     pub uncles_count: i32,
+    /// Number of proposal short ids in this block.
+    #[serde(default)]
+    pub proposals_count: i32,
+    /// PoW compact target of this block's header. Source of truth for
+    /// per-block difficulty (`compact_to_difficulty`).
+    #[serde(default)]
+    pub compact_target: u32,
+    /// Script hash of the block's own miner, from the cellbase witness lock
+    /// (RFC-0022 `CellbaseWitness.lock`). `None` only for the genesis block.
+    /// Source of truth for miner attribution (daily miner stats + reorg
+    /// rollback deltas). NOT the cellbase output lock (that pays the reward
+    /// of the block 11 confirmations back).
+    #[serde(default)]
+    pub miner_lock_hash: Option<Vec<u8>>,
     /// Total cycles consumed by all transactions in this block.
     /// Written only by lazy cycles evaluation, not during bulk/live sync.
     #[serde(default)]
@@ -262,6 +278,11 @@ pub struct AddressBalance {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct DaoDepositCacheEntry {
     pub capacity: i64,
+    /// Exact occupied capacity of the original deposit cell.
+    ///
+    /// DAO compensation accrues only on `capacity - occupied_capacity`; this
+    /// varies with the lock script and must not be replaced by a fixed minimum.
+    pub occupied_capacity: i64,
     pub deposit_block_number: i64,
     #[serde(default)]
     pub deposit_timestamp: i64,
@@ -273,11 +294,34 @@ pub struct DaoDepositCacheEntry {
     pub withdraw_request_output_index: Option<i16>,
     pub withdraw_request_block: Option<i64>,
     pub withdraw_request_ar: Option<i64>,
+    /// Exact occupied capacity of the phase-1 withdraw-request cell.
+    ///
+    /// RFC-0023 computes `counted_capacity` from the WITHDRAWING cell, not
+    /// the original deposit cell. The DAO type script does not enforce lock
+    /// preservation, so a withdraw request may carry a different lock than
+    /// its deposit — and then the two occupied capacities differ. Set at
+    /// phase-1; `None` while the deposit is still active (status 0).
+    #[serde(default)]
+    pub withdraw_request_occupied_capacity: Option<i64>,
     pub withdraw_block: Option<i64>,
     pub withdraw_tx: Option<Vec<u8>>,
     #[serde(default)]
     pub withdraw_to_output_index: Option<i16>,
     pub compensation: Option<i64>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct DaoCompensationBreakdown {
+    pub claimed: i128,
+    pub unclaimed: i128,
+    /// Compensation still accruing on status-0 deposits at the observation AR.
+    pub active_unmade: i128,
+}
+
+impl DaoCompensationBreakdown {
+    pub fn total(self) -> Option<i128> {
+        self.claimed.checked_add(self.unclaimed)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -287,6 +331,7 @@ pub struct DaoDailySnapshot {
     pub depositors_count: i64,
     pub new_deposits: i64,
     pub withdrawals: i64,
+    /// Cumulative DAO compensation claimed by completed phase-2 withdrawals.
     pub compensation: i128,
     /// Cumulative gross deposit amount (sum of all deposit capacities, never
     /// decreased by withdrawals). Used to compute daily gross deposits via
@@ -329,6 +374,16 @@ pub struct DaoDailySnapshot {
     /// Protocol-level total deposited (includes status=1 cells still locked in DAO).
     #[serde(default)]
     pub protocol_deposited: Option<i128>,
+}
+
+/// Genesis economic baseline, derived once from block 0 and persisted.
+/// All values are shannons. `virtual_occupied` = `burnt` × the network's
+/// occupied ratio (CKB-Explorer accounting), NOT the genesis DAO U field.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GenesisBaseline {
+    pub total_issuance: i128,
+    pub burnt: i128,
+    pub virtual_occupied: i128,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -377,10 +432,8 @@ pub struct TokenInfo {
     pub name: Option<String>,
     pub symbol: Option<String>,
     pub decimals: Option<i32>,
-    pub total_supply: Option<i128>,
     #[serde(default)]
-    pub max_supply: Option<i128>,
-    pub holders_count: i64,
+    pub max_supply: Option<u128>,
     pub first_seen_block: i64,
     pub icon_url: Option<String>,
     pub description: Option<String>,
@@ -657,6 +710,8 @@ pub enum IdentityStandard {
     /// .bit (DotBit) domain name account.
     #[default]
     DotBit,
+    /// `.bit Cell`, the DID companion asset issued by the .bit protocol.
+    BitCell,
     /// did:ckb decentralized identity.
     DidCkb,
 }
@@ -666,6 +721,7 @@ impl IdentityStandard {
     pub fn as_str(&self) -> &'static str {
         match self {
             IdentityStandard::DotBit => "dotbit",
+            IdentityStandard::BitCell => "bit_cell",
             IdentityStandard::DidCkb => "did_ckb",
         }
     }
@@ -674,6 +730,7 @@ impl IdentityStandard {
     pub fn asset_standard(&self) -> &'static str {
         match self {
             IdentityStandard::DotBit => "dotbit",
+            IdentityStandard::BitCell => "bit_cell",
             IdentityStandard::DidCkb => "did_ckb",
         }
     }
@@ -682,6 +739,7 @@ impl IdentityStandard {
     pub fn sentinel_collection_id(&self) -> &'static [u8; 32] {
         match self {
             IdentityStandard::DotBit => &DOTBIT_SENTINEL_COLLECTION,
+            IdentityStandard::BitCell => &BIT_CELL_SENTINEL_COLLECTION,
             IdentityStandard::DidCkb => &DID_CKB_SENTINEL_COLLECTION,
         }
     }
@@ -689,6 +747,8 @@ impl IdentityStandard {
 
 /// Sentinel collection key for the .bit identity collection (32 bytes).
 pub const DOTBIT_SENTINEL_COLLECTION: [u8; 32] = *b"dotbit_collection_______________";
+/// Sentinel collection key for the `.bit Cell` identity collection (32 bytes).
+pub const BIT_CELL_SENTINEL_COLLECTION: [u8; 32] = *b"bit_cell_collection_____________";
 /// Sentinel collection key for the did:ckb identity collection (32 bytes).
 pub const DID_CKB_SENTINEL_COLLECTION: [u8; 32] = *b"did_ckb_collection______________";
 /// Sentinel collection key for clusterless Spore objects (32 bytes).
@@ -708,13 +768,19 @@ pub enum IdentityExtra {
         #[serde(default)]
         status: Option<u8>,
     },
+    /// `.bit Cell` metadata. `account_id` links the companion DID asset to its
+    /// canonical 20-byte .bit AccountCell identity without merging lifecycles.
+    BitCell {
+        account_id: Vec<u8>,
+        expired_at: u64,
+    },
     /// did:ckb identity: reserved for future fields.
     DidCkb,
 }
 
 /// An Identity entry stored in the `identity_data` column family.
 ///
-/// Covers all identity standards: .bit (DotBit), did:ckb.
+/// Covers all identity standards: .bit AccountCell, `.bit Cell`, and did:ckb.
 /// Standard-specific data lives in `extra`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IdentityEntry {
@@ -860,25 +926,17 @@ pub struct MinerStats {
     pub last_block_number: i64,
 }
 
+/// Per-day block-level aggregates: difficulty, block count, uncle count.
+///
+/// Inter-block time lives on [`DailyStats`] only. This row deliberately does
+/// not duplicate it: /charts/average-block-time and the /charts/hash-rate
+/// divisor both read `DailyStats.block_time_sum_ms`, which every write path
+/// (live, bulk, and reorg rollback repair) maintains.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct DailyBlockStats {
     pub avg_difficulty: f64,
     pub block_count: i32,
     pub total_uncles: i32,
-    #[serde(default)]
-    pub block_time_sum_ms: i64,
-    #[serde(default)]
-    pub block_time_count: i32,
-}
-
-impl DailyBlockStats {
-    pub fn avg_block_time_ms(&self) -> Option<i64> {
-        if self.block_time_count > 0 {
-            Some(self.block_time_sum_ms / self.block_time_count as i64)
-        } else {
-            None
-        }
-    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -954,12 +1012,6 @@ pub struct ScriptVersionInfo {
     pub type_used_capacity_sum: i128,
     #[serde(default)]
     pub type_owned_knowledge_sum: i128,
-    /// The code_hash from the label data (CKB script code_hash).
-    /// For hash_type="data"/"data1"/"data2" scripts, this equals version_hash.
-    /// For hash_type="type" scripts, this differs from version_hash (which is the data_hash).
-    /// Used to look up the correct ScriptInfo for per-version stats.
-    #[serde(default)]
-    pub associated_code_hash: Option<Vec<u8>>,
     #[serde(default)]
     pub canonical_reference_hash: Option<Vec<u8>>,
     #[serde(default)]
@@ -1241,12 +1293,52 @@ pub struct DeepForkInfo {
     pub fork_point: i64,
 }
 
+/// How the indexer answered a detected fork.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ReorgEventKind {
+    /// Depth within the automatic limit: rolled back and re-synced in place.
+    Automatic,
+    /// Depth beyond the automatic limit: sync paused for operator intervention.
+    Deep,
+}
+
+/// One persisted reorg observation.
+///
+/// This is a log record, so it stores the observation verbatim: every field is
+/// what the writer was handed at detection time, and nothing is re-derived at
+/// read time from chain state that may since have moved. `/forks` reports these
+/// fields directly, so a field that is not recorded here cannot be reported.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReorgEvent {
+    /// Unix seconds at detection.
     pub detected_at: i64,
-    pub rollback_from: i64,
-    pub rollback_to: i64,
+    pub kind: ReorgEventKind,
+    /// Last common ancestor: the block the DB was rolled back to.
+    pub fork_point: i64,
+    pub fork_point_hash: Vec<u8>,
+    /// DB tip on the abandoned branch at detection time.
+    pub old_tip: i64,
+    pub old_tip_hash: Vec<u8>,
+    /// Chain tip on the winning branch at detection time.
+    pub new_tip: i64,
+    pub new_tip_hash: Vec<u8>,
     pub depth: i32,
+    /// Blocks actually removed by the rollback (0 for a paused deep fork,
+    /// which rolls nothing back).
+    pub orphaned_blocks: i64,
+    /// Transactions actually removed by the rollback.
+    pub orphaned_txs: i64,
+}
+
+/// One history row: the persisted event plus the identity of its history key.
+#[derive(Debug, Clone)]
+pub struct ReorgEventRecord {
+    /// Full `reorg:<ms>:<uuid>` history key; also the pagination cursor.
+    pub key: String,
+    /// Detection time in milliseconds, parsed from the key. This is the public
+    /// event id: the uuid segment only breaks same-millisecond ties.
+    pub detected_at_ms: i64,
+    pub event: ReorgEvent,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1348,7 +1440,12 @@ pub const ITEM_KIND_IDENTITY: u8 = 2;
 pub struct ItemDelta {
     pub item_id: Vec<u8>,
     pub kind: u8,
-    pub delta: i128,
+    /// Absolute value of the delta. For a token item this is a UDT amount (u128); for
+    /// object/identity items it is a small count. Stored only for non-zero deltas, so
+    /// `magnitude` is always >= 1 when persisted.
+    pub magnitude: u128,
+    /// Sign of the delta (true = negative).
+    pub negative: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1474,7 +1571,7 @@ pub enum FiberChannelState {
     Settled,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FiberChannel {
     pub funding_tx_hash: Vec<u8>,
     pub funding_output_index: u32,
@@ -1938,13 +2035,29 @@ mod tests {
         let item = ItemDelta {
             item_id: vec![0xAA; 32],
             kind: ITEM_KIND_TOKEN,
-            delta: -999_000_000,
+            magnitude: 999000000,
+            negative: true,
         };
         let bytes = bincode::serialize(&item).unwrap();
         let decoded: ItemDelta = bincode::deserialize(&bytes).unwrap();
         assert_eq!(decoded.item_id, vec![0xAA; 32]);
         assert_eq!(decoded.kind, ITEM_KIND_TOKEN);
-        assert_eq!(decoded.delta, -999_000_000);
+        assert_eq!(decoded.magnitude, 999_000_000);
+        assert!(decoded.negative);
+    }
+
+    #[test]
+    fn item_delta_preserves_full_u128_signed_magnitude() {
+        let item = ItemDelta {
+            item_id: vec![],
+            kind: ITEM_KIND_TOKEN,
+            magnitude: u128::MAX,
+            negative: true,
+        };
+        let bytes = bincode::serialize(&item).unwrap();
+        let decoded: ItemDelta = bincode::deserialize(&bytes).unwrap();
+        assert_eq!(decoded.magnitude, u128::MAX);
+        assert!(decoded.negative);
     }
 
     #[test]
@@ -1957,12 +2070,14 @@ mod tests {
                 ItemDelta {
                     item_id: vec![0xAA; 32],
                     kind: ITEM_KIND_TOKEN,
-                    delta: 1_000_000,
+                    magnitude: 1000000,
+                    negative: false,
                 },
                 ItemDelta {
                     item_id: vec![0xCC; 32],
                     kind: ITEM_KIND_OBJECT,
-                    delta: 1,
+                    magnitude: 1,
+                    negative: false,
                 },
             ],
             tags: TAG_TOKEN | TAG_OBJECT,
@@ -2009,7 +2124,8 @@ mod tests {
                 item_deltas: vec![ItemDelta {
                     item_id: vec![0xBB; 32],
                     kind: ITEM_KIND_TOKEN,
-                    delta: 42,
+                    magnitude: 42,
+                    negative: false,
                 }],
                 tags: TAG_TOKEN | TAG_PROTOCOL,
             }],
@@ -2101,12 +2217,14 @@ mod tests {
                         ItemDelta {
                             item_id: vec![0x11; 32],
                             kind: ITEM_KIND_TOKEN,
-                            delta: -50,
+                            magnitude: 50,
+                            negative: true,
                         },
                         ItemDelta {
                             item_id: vec![0x22; 32],
                             kind: ITEM_KIND_IDENTITY,
-                            delta: -1,
+                            magnitude: 1,
+                            negative: true,
                         },
                     ],
                     tags: TAG_TOKEN | TAG_IDENTITY,
@@ -2119,12 +2237,14 @@ mod tests {
                         ItemDelta {
                             item_id: vec![0x11; 32],
                             kind: ITEM_KIND_TOKEN,
-                            delta: 50,
+                            magnitude: 50,
+                            negative: false,
                         },
                         ItemDelta {
                             item_id: vec![0x22; 32],
                             kind: ITEM_KIND_IDENTITY,
-                            delta: 1,
+                            magnitude: 1,
+                            negative: false,
                         },
                     ],
                     tags: TAG_TOKEN | TAG_IDENTITY,
@@ -2245,13 +2365,19 @@ mod tests {
     #[test]
     fn test_identity_standard_as_str() {
         assert_eq!(IdentityStandard::DotBit.as_str(), "dotbit");
+        assert_eq!(IdentityStandard::BitCell.as_str(), "bit_cell");
         assert_eq!(IdentityStandard::DidCkb.as_str(), "did_ckb");
     }
 
     #[test]
     fn test_identity_standard_asset_standard() {
         assert_eq!(IdentityStandard::DotBit.asset_standard(), "dotbit");
+        assert_eq!(IdentityStandard::BitCell.asset_standard(), "bit_cell");
         assert_eq!(IdentityStandard::DidCkb.asset_standard(), "did_ckb");
+        assert_eq!(
+            IdentityStandard::BitCell.sentinel_collection_id(),
+            &BIT_CELL_SENTINEL_COLLECTION
+        );
     }
 
     // ---- Bincode roundtrip: ObjectEntry variants ----
@@ -2477,6 +2603,33 @@ mod tests {
         assert_eq!(decoded.standard, IdentityStandard::DidCkb);
         assert_eq!(decoded.name.as_deref(), Some("did:ckb:test"));
         assert!(matches!(decoded.extra, IdentityExtra::DidCkb));
+    }
+
+    #[test]
+    fn test_identity_entry_bit_cell_roundtrip() {
+        let entry = IdentityEntry {
+            standard: IdentityStandard::BitCell,
+            owner_lock_hash: Some(vec![0x77; 32]),
+            name: Some("20240507.bit".to_string()),
+            is_live: true,
+            created_at_block: 13_184_726,
+            created_at_tx: vec![0x88; 32],
+            extra: IdentityExtra::BitCell {
+                account_id: vec![0x99; 20],
+                expired_at: 1_778_140_699,
+            },
+        };
+        let bytes = bincode::serialize(&entry).unwrap();
+        let decoded: IdentityEntry = bincode::deserialize(&bytes).unwrap();
+        assert_eq!(decoded.standard, IdentityStandard::BitCell);
+        assert_eq!(decoded.name.as_deref(), Some("20240507.bit"));
+        assert!(matches!(
+            decoded.extra,
+            IdentityExtra::BitCell {
+                account_id,
+                expired_at: 1_778_140_699
+            } if account_id == vec![0x99; 20]
+        ));
     }
 
     // ---- AddressBalance ----

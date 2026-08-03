@@ -2,7 +2,7 @@
 
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { type PreviewKind } from '@/lib/preview-utils';
-import { resolveApiBase } from '@/lib/api';
+import { apiBaseFor, resolveActiveNetwork } from '@/lib/active-network';
 
 export type PreviewPhysicality = 'onchain' | 'onchain-btc' | 'default';
 
@@ -177,7 +177,7 @@ function ImagePreview({ dataUrl }: { dataUrl: string }) {
 }
 
 function MediaUrlPreview({ url, mediaType }: { url: string; mediaType: string }) {
-  const apiBase = resolveApiBase();
+  const apiBase = apiBaseFor(resolveActiveNetwork());
   const src = `${apiBase}${url}`;
 
   if (mediaType === 'image/svg+xml') {

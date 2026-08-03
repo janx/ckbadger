@@ -39,7 +39,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
 # HTTP client
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.12", features = ["json", "stream"] }
 
 # Logging
 tracing = "0.1"
@@ -58,6 +58,7 @@ futures = "0.3"
 lru = "0.12"
 rayon = "1.10"
 rustc-hash = "2.1"
+hashbrown = "0.14.5"
 
 # Configuration
 config = "0.14"
@@ -94,6 +95,10 @@ tentacle-secio = "=0.6.2"
 
 # System
 libc = "0.2"
+jemalloc-ctl = { package = "tikv-jemalloc-ctl", version = "0.5.0" }
+tikv-jemallocator = { version = "0.5.0", features = [
+    "unprefixed_malloc_on_supported_platforms",
+] }
 
 # Embedded KV store
 rocksdb = "0.24"

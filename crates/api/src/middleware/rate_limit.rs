@@ -106,20 +106,53 @@ where
 }
 
 fn extract_client_ip<B>(req: &Request<B>) -> Option<IpAddr> {
-    req.headers()
-        .get("x-forwarded-for")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.split(',').next())
-        .and_then(|s| s.trim().parse().ok())
-        .or_else(|| {
-            req.headers()
-                .get("x-real-ip")
-                .and_then(|v| v.to_str().ok())
-                .and_then(|s| s.trim().parse().ok())
-        })
-        .or_else(|| {
-            req.extensions()
-                .get::<axum::extract::ConnectInfo<SocketAddr>>()
-                .map(|ci| ci.0.ip())
-        })
+    let peer_ip = req
+        .extensions()
+        .get::<axum::extract::ConnectInfo<SocketAddr>>()
+        .map(|ci| ci.0.ip());
+    crate::utils::client_ip::resolve_client_ip(peer_ip, req.headers())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::extract::ConnectInfo;
+
+    fn request(peer: &str, forwarded: &str) -> Request<()> {
+        let mut request = Request::builder()
+            .header("x-forwarded-for", forwarded)
+            .body(())
+            .unwrap();
+        request.extensions_mut().insert(ConnectInfo(
+            peer.parse::<SocketAddr>().expect("valid test peer"),
+        ));
+        request
+    }
+
+    #[test]
+    fn direct_remote_peer_cannot_spoof_forwarded_loopback() {
+        let request = request("203.0.113.10:8080", "127.0.0.1");
+        assert_eq!(
+            extract_client_ip(&request),
+            Some("203.0.113.10".parse().unwrap())
+        );
+    }
+
+    #[test]
+    fn local_frontend_proxy_can_forward_remote_peer() {
+        let request = request("127.0.0.1:8080", "203.0.113.11");
+        assert_eq!(
+            extract_client_ip(&request),
+            Some("203.0.113.11".parse().unwrap())
+        );
+    }
+
+    #[test]
+    fn forwarding_header_without_socket_peer_is_not_trusted() {
+        let request = Request::builder()
+            .header("x-forwarded-for", "127.0.0.1")
+            .body(())
+            .unwrap();
+        assert_eq!(extract_client_ip(&request), None);
+    }
 }

@@ -1,5 +1,11 @@
 import { MARKDOWN_ROUTE_PATTERNS } from '@/lib/ai/markdown-route';
 import { RAW_ROUTE_PATTERNS } from '@/lib/ai/raw-route';
+import {
+  resolveApiBasePattern,
+  resolveDefaultNetwork,
+  resolveNetworks,
+  resolveWsUrlPattern,
+} from '@/lib/runtime-config';
 
 const RAW_MEDIA_TYPE = 'application/vnd.ckbadger.raw+json';
 const MARKDOWN_MEDIA_TYPE = 'text/markdown';
@@ -10,6 +16,7 @@ const RAW_ROUTE_PROFILES: Record<string, readonly string[]> = {
   '/cell/{outpoint}': ['default'],
   '/identities/dotbit/{identityId}': ['default'],
   '/identities/did/{identityId}': ['default'],
+  '/identities/bit-cell/{identityId}': ['default'],
   '/objects/mnft/{objectId}': ['default'],
   '/tx/{hash}': ['default', 'debugger'],
 };
@@ -17,7 +24,14 @@ const RAW_ROUTE_PROFILES: Record<string, readonly string[]> = {
 export interface AiCapabilities {
   site: {
     name: 'ckbadger';
-    apiBase: '/api/v1';
+    pageBasePattern: '/{network}';
+    /** Per-network API base, e.g. `/api/{network}/v1`. There is NO un-prefixed API path. */
+    apiBasePattern: string;
+    /** Per-network WebSocket URL, e.g. `/ws/{network}`. There is NO un-prefixed WS path. */
+    wsUrlPattern: string;
+    /** Networks this deployment serves — substitute one for `{network}` above. */
+    networks: readonly string[];
+    defaultNetwork: string;
   };
   formatNegotiation: {
     priority: ['query.format', 'path.suffix', 'accept.header'];
@@ -97,7 +111,11 @@ export function buildAiCapabilities(origin?: string): AiCapabilities & { origin?
     ...(origin ? { origin } : {}),
     site: {
       name: 'ckbadger',
-      apiBase: '/api/v1',
+      pageBasePattern: '/{network}',
+      apiBasePattern: resolveApiBasePattern(),
+      wsUrlPattern: resolveWsUrlPattern(),
+      networks: resolveNetworks(),
+      defaultNetwork: resolveDefaultNetwork(),
     },
     formatNegotiation: {
       priority: ['query.format', 'path.suffix', 'accept.header'],
@@ -163,7 +181,7 @@ export function buildAiCapabilities(origin?: string): AiCapabilities & { origin?
         profile: 'debugger',
         payloadPath: 'data.txDebugger.mockTransaction',
         debuggerCommandTemplate:
-          'curl "<url>.raw?profile=debugger" | jq \'.data.txDebugger.mockTransaction\' > mock_tx.json && ckb-debugger --tx-file mock_tx.json --cell-index 0 --cell-type input --script-group-type lock',
+          "curl \"<url>.raw?profile=debugger\" | jq '.data.txDebugger.mockTransaction' > mock_tx.json && ckb-debugger --tx-file mock_tx.json --cell-index 0 --cell-type input --script-group-type lock --script-version <2|1|0: VM ceiling at the tx's commit epoch; 0 pre-Mirana, 1 pre-Meepo, else 2>",
       },
       txWitnessPayload: {
         route: '/tx/{hash}',

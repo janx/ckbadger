@@ -45,8 +45,11 @@ pub fn analyze_spore_media_profile(
             Ok(text) => {
                 if normalized_type.starts_with("dob/") {
                     if !skip_dob_decode {
+                        // DOB DNA lives in the raw content bytes — the
+                        // raw-binary form (content[0] == 0x00) is not UTF-8
+                        // text, so this branch must not go through `text`.
                         let (mut dob_sources, _dob_rendered) =
-                            extract_dob_media_sources(&text, cluster_description, &mut issues);
+                            extract_dob_media_sources(content, cluster_description, &mut issues);
                         sources.append(&mut dob_sources);
                     }
                     // When skipped, DOB media sources will be backfilled
@@ -152,7 +155,7 @@ pub(crate) fn uri_seems_image(uri: &str) -> bool {
 }
 
 fn extract_dob_media_sources(
-    content_text: &str,
+    content: &[u8],
     cluster_description: Option<&str>,
     issues: &mut Vec<String>,
 ) -> (Vec<SporeMediaSource>, bool) {
@@ -160,7 +163,7 @@ fn extract_dob_media_sources(
     if metadata.is_none() {
         issues.push("missing or invalid cluster description for DOB media analysis".to_string());
     }
-    let dna_hex = parse_dna_hex_from_content_text(content_text);
+    let dna_hex = parse_dna_hex_from_content(content);
     if dna_hex.is_none() {
         issues.push("missing or invalid DNA for DOB media analysis".to_string());
     }
@@ -393,7 +396,27 @@ fn clean_hex(raw: &str) -> Option<String> {
     Some(normalized)
 }
 
-pub(crate) fn parse_dna_hex_from_content_text(content_text: &str) -> Option<String> {
+/// Extract DOB DNA hex from raw Spore content bytes.
+///
+/// Single calculation path mirroring the official
+/// dob-decoder-standalone-server `decode_spore_content`:
+/// - first content byte `0x00` → raw-binary form, the DNA is the hex
+///   encoding of the remaining raw bytes;
+/// - otherwise the content is UTF-8 text holding either a JSON string, a
+///   JSON array (first element), a JSON object with a `"dna"` field, or
+///   bare hex text.
+///
+/// Empty content has no DNA (`None`); non-UTF-8 text-form content is
+/// rejected exactly like the official server's `serde_json::from_slice`.
+pub(crate) fn parse_dna_hex_from_content(content: &[u8]) -> Option<String> {
+    match content.first() {
+        None => None,
+        Some(0) => Some(hex::encode(&content[1..])),
+        Some(_) => parse_dna_hex_from_content_text(std::str::from_utf8(content).ok()?),
+    }
+}
+
+fn parse_dna_hex_from_content_text(content_text: &str) -> Option<String> {
     let trimmed = content_text.trim();
     if trimmed.is_empty() {
         return None;
@@ -428,18 +451,17 @@ fn format_json_value(value: &Value) -> String {
     }
 }
 
-fn parse_le_modulo(bytes: &[u8], modulo: usize) -> usize {
-    if modulo == 0 {
-        return 0;
+/// Decode a DNA segment exactly as the official dob0 decoders' `parse_u64`
+/// does: only 1..=8-byte segments are valid (zero-padded little-endian);
+/// anything else — including an exhausted, empty segment — is
+/// `DecodeUnexpectedDNASegment` in the decoder and `None` here.
+fn parse_dna_segment_u64(segment: &[u8]) -> Option<u64> {
+    if segment.is_empty() || segment.len() > 8 {
+        return None;
     }
-    let m = modulo as u128;
-    let mut acc: u128 = 0;
-    let mut factor: u128 = 1 % m;
-    for b in bytes {
-        acc = (acc + (((*b as u128 % m) * factor) % m)) % m;
-        factor = (factor * 256) % m;
-    }
-    acc as usize
+    let mut buf = [0u8; 8];
+    buf[..segment.len()].copy_from_slice(segment);
+    Some(u64::from_le_bytes(buf))
 }
 
 fn parse_le_u128(bytes: &[u8]) -> Option<u128> {
@@ -593,28 +615,32 @@ fn decode_dob0_trait_value(pattern: &Dob0PatternElement, dna_slice: &[u8]) -> Va
                 if options.is_empty() {
                     return Value::Null;
                 }
-                let idx = parse_le_modulo(dna_slice, options.len());
+                let Some(offset) = parse_dna_segment_u64(dna_slice) else {
+                    return Value::Null;
+                };
+                let idx = (offset % options.len() as u64) as usize;
                 return options[idx].clone();
             }
             Value::Null
         }
         "range" => {
+            // Official decoders (v0/v2/v3): exactly two unsigned bounds,
+            // upper strictly greater than lower, EXCLUSIVE width:
+            // value = lower + offset % (upper - lower).
             if let Some(Value::Array(args)) = &pattern.trait_args {
-                if args.len() < 2 {
+                if args.len() != 2 {
                     return Value::Null;
                 }
-                let min = args[0].as_i64();
-                let max = args[1].as_i64();
-                if let (Some(a), Some(b)) = (min, max) {
-                    let lo = a.min(b);
-                    let hi = a.max(b);
-                    if let Some(width) = hi.checked_sub(lo).and_then(|d| d.checked_add(1)) {
-                        if let Ok(width_usize) = usize::try_from(width) {
-                            let offset = parse_le_modulo(dna_slice, width_usize) as i64;
-                            return Value::from(lo + offset);
-                        }
-                    }
+                let (Some(lower), Some(upper)) = (args[0].as_u64(), args[1].as_u64()) else {
+                    return Value::Null;
+                };
+                if upper <= lower {
+                    return Value::Null;
                 }
+                let Some(offset) = parse_dna_segment_u64(dna_slice) else {
+                    return Value::Null;
+                };
+                return Value::from(lower + offset % (upper - lower));
             }
             Value::Null
         }
@@ -650,20 +676,34 @@ fn decode_dob0_trait_value(pattern: &Dob0PatternElement, dna_slice: &[u8]) -> Va
     }
 }
 
-fn selector_matches_exact(selector: &Value, trait_value: &str) -> bool {
+/// Whether a dob1 options selector matches a trait value, following the
+/// official spore-dob-1 renderer (`get_dob1_value_by_dob0_value`):
+/// - a number selector matches by numeric equality;
+/// - a string selector matches literally (a bare "*" string is NOT a
+///   wildcard — it only matches a trait value that is literally "*");
+/// - an array selector whose FIRST element is "*" is the wildcard and
+///   matches anything (the form real clusters use, e.g. `[["*"],""]`);
+/// - any other array selector is a two-element numeric [start, end] range,
+///   inclusive on both ends.
+fn dob1_selector_matches(selector: &Value, trait_value: &str) -> bool {
     match selector {
-        Value::String(s) => s != "*" && s == trait_value,
-        Value::Array(items) => items
-            .iter()
-            .any(|item| selector_matches_exact(item, trait_value)),
-        _ => format_json_value(selector) == trait_value,
-    }
-}
-
-fn selector_contains_wildcard(selector: &Value) -> bool {
-    match selector {
-        Value::String(s) => s == "*",
-        Value::Array(items) => items.iter().any(selector_contains_wildcard),
+        Value::String(s) => s == trait_value,
+        Value::Number(_) => format_json_value(selector) == trait_value,
+        Value::Array(items) => {
+            if items.first().and_then(|v| v.as_str()) == Some("*") {
+                return true;
+            }
+            if items.len() != 2 {
+                return false;
+            }
+            let (Some(start), Some(end)) = (items[0].as_u64(), items[1].as_u64()) else {
+                return false;
+            };
+            let Ok(value) = trait_value.parse::<u64>() else {
+                return false;
+            };
+            start <= value && value <= end
+        }
         _ => false,
     }
 }
@@ -684,7 +724,9 @@ fn resolve_dob1_snippet(
         return None;
     }
 
-    let mut wildcard: Option<String> = None;
+    // Official renderer semantics: options are evaluated IN ORDER and the
+    // first matching selector wins — including the wildcard when it is
+    // reached first. No exact-match-anywhere preference.
     let trait_value = traits.get(&pattern.trait_name).cloned().unwrap_or_default();
     let options = pattern.trait_args.as_ref()?.as_array()?;
     for option in options {
@@ -694,20 +736,14 @@ fn resolve_dob1_snippet(
         if pair.len() < 2 {
             continue;
         }
-        let selector = &pair[0];
-        let snippet = if let Some(v) = pair[1].as_str() {
-            v
-        } else {
+        let Some(snippet) = pair[1].as_str() else {
             continue;
         };
-        if selector_contains_wildcard(selector) {
-            wildcard = Some(snippet.to_string());
-        }
-        if selector_matches_exact(selector, &trait_value) {
+        if dob1_selector_matches(&pair[0], &trait_value) {
             return Some(snippet.to_string());
         }
     }
-    wildcard
+    None
 }
 
 pub fn build_dob1_svg(
@@ -819,23 +855,155 @@ mod tests {
             .any(|source| source.uri.contains("btcfs://goodasseti0")));
     }
 
-    #[test]
-    fn dob_options_prefers_exact_selector_over_wildcard_even_when_wildcard_comes_first() {
-        let pattern = Dob1PatternElement {
+    fn dob1_options_pattern(args: serde_json::Value) -> Dob1PatternElement {
+        Dob1PatternElement {
             image_name: "IMAGE.0".to_string(),
             svg_fields: "elements".to_string(),
             trait_name: "Background".to_string(),
             pattern_type: "options".to_string(),
-            trait_args: Some(serde_json::json!([
-                ["*", "<image href='http://fallback.example/fallback.png' />"],
-                ["rare", "<image href='btcfs://rareasseti0' />"]
-            ])),
-        };
-        let mut traits = HashMap::new();
-        traits.insert("Background".to_string(), "rare".to_string());
+            trait_args: Some(args),
+        }
+    }
 
-        let snippet = resolve_dob1_snippet(&pattern, &traits).unwrap();
+    fn background_traits(value: &str) -> HashMap<String, String> {
+        let mut traits = HashMap::new();
+        traits.insert("Background".to_string(), value.to_string());
+        traits
+    }
+
+    /// Official spore-dob-1 renderer (`get_dob1_value_by_dob0_value`):
+    /// options are evaluated IN ORDER and the first matching selector wins —
+    /// the wildcard (an array selector whose first element is "*", as used by
+    /// real clusters, e.g. `[["*"],""]` in "dob1-basic-shape") matches
+    /// unconditionally when reached. A later exact match must NOT override an
+    /// earlier wildcard.
+    #[test]
+    fn dob_options_first_match_in_order_wins_including_wildcard() {
+        let pattern = dob1_options_pattern(serde_json::json!([
+            [
+                ["*"],
+                "<image href='http://fallback.example/fallback.png' />"
+            ],
+            ["rare", "<image href='btcfs://rareasseti0' />"]
+        ]));
+        let snippet = resolve_dob1_snippet(&pattern, &background_traits("rare")).unwrap();
+        assert!(
+            snippet.contains("http://fallback.example/fallback.png"),
+            "wildcard listed first must win in order, got: {snippet}"
+        );
+
+        // ... and an exact match listed before the wildcard still wins.
+        let pattern = dob1_options_pattern(serde_json::json!([
+            ["rare", "<image href='btcfs://rareasseti0' />"],
+            [
+                ["*"],
+                "<image href='http://fallback.example/fallback.png' />"
+            ]
+        ]));
+        let snippet = resolve_dob1_snippet(&pattern, &background_traits("rare")).unwrap();
         assert!(snippet.contains("btcfs://rareasseti0"));
+    }
+
+    /// Official selector semantics: a bare "*" STRING selector is a literal
+    /// comparison (only the array form `["*"]` is the wildcard), and a
+    /// two-element numeric array selector is an inclusive [start, end] range.
+    #[test]
+    fn dob_options_selector_semantics_follow_official_renderer() {
+        // Bare "*" string: literal, not a wildcard.
+        let pattern = dob1_options_pattern(serde_json::json!([
+            ["*", "<g id='star-literal'/>"],
+            ["x", "<g id='x'/>"]
+        ]));
+        assert_eq!(
+            resolve_dob1_snippet(&pattern, &background_traits("x")).as_deref(),
+            Some("<g id='x'/>")
+        );
+        assert_eq!(
+            resolve_dob1_snippet(&pattern, &background_traits("*")).as_deref(),
+            Some("<g id='star-literal'/>")
+        );
+
+        // Numeric [start, end] selector matches by inclusive range.
+        let pattern = dob1_options_pattern(serde_json::json!([
+            [[3, 7], "<g id='mid'/>"],
+            [["*"], "<g id='other'/>"]
+        ]));
+        assert_eq!(
+            resolve_dob1_snippet(&pattern, &background_traits("5")).as_deref(),
+            Some("<g id='mid'/>")
+        );
+        assert_eq!(
+            resolve_dob1_snippet(&pattern, &background_traits("7")).as_deref(),
+            Some("<g id='mid'/>")
+        );
+        assert_eq!(
+            resolve_dob1_snippet(&pattern, &background_traits("8")).as_deref(),
+            Some("<g id='other'/>")
+        );
+
+        // No option matches and no wildcard: no snippet.
+        let pattern = dob1_options_pattern(serde_json::json!([["a", "<g id='a'/>"]]));
+        assert_eq!(
+            resolve_dob1_snippet(&pattern, &background_traits("b")),
+            None
+        );
+    }
+
+    fn dob0_pattern(pattern_type: &str, args: Option<serde_json::Value>) -> Dob0PatternElement {
+        Dob0PatternElement {
+            trait_name: "T".to_string(),
+            dna_offset: 0,
+            dna_length: 1,
+            pattern_type: pattern_type.to_string(),
+            trait_args: args,
+            dob_type: Some("Number".to_string()),
+        }
+    }
+
+    /// Official dob0 decoders (v0/v2/v3 alike): range width is EXCLUSIVE —
+    /// `lower + offset % (upper - lower)` — and `upper <= lower` is a decode
+    /// error, with unsigned bounds. The old re-implementation used an
+    /// inclusive `hi - lo + 1` width and silently reordered/accepted signed
+    /// bounds.
+    #[test]
+    fn dob0_range_width_is_exclusive_per_official_decoder() {
+        // Segment 0xFA = 250, range [0, 100]: 250 % 100 = 50 (inclusive width
+        // would give 250 % 101 = 48).
+        let pattern = dob0_pattern("range", Some(serde_json::json!([0, 100])));
+        assert_eq!(
+            decode_dob0_trait_value(&pattern, &[0xFA]),
+            Value::from(50u64)
+        );
+
+        // upper <= lower is invalid — must not be silently reordered.
+        let pattern = dob0_pattern("range", Some(serde_json::json!([100, 0])));
+        assert_eq!(decode_dob0_trait_value(&pattern, &[0x05]), Value::Null);
+        let pattern = dob0_pattern("range", Some(serde_json::json!([5, 5])));
+        assert_eq!(decode_dob0_trait_value(&pattern, &[0x05]), Value::Null);
+
+        // Bounds are unsigned in every official decoder.
+        let pattern = dob0_pattern("range", Some(serde_json::json!([-5, 5])));
+        assert_eq!(decode_dob0_trait_value(&pattern, &[0x03]), Value::Null);
+    }
+
+    /// Official `parse_u64` accepts only 1..=8-byte DNA segments; anything
+    /// else is DecodeUnexpectedDNASegment. The old modular-arithmetic helper
+    /// happily consumed arbitrarily long segments.
+    #[test]
+    fn dob0_segments_outside_1_to_8_bytes_are_invalid() {
+        let nine_bytes = [1u8, 0, 0, 0, 0, 0, 0, 0, 0];
+
+        let mut options = dob0_pattern("options", Some(serde_json::json!(["a", "b", "c"])));
+        options.dna_length = 9;
+        assert_eq!(decode_dob0_trait_value(&options, &nine_bytes), Value::Null);
+
+        let mut range = dob0_pattern("range", Some(serde_json::json!([0, 100])));
+        range.dna_length = 9;
+        assert_eq!(decode_dob0_trait_value(&range, &nine_bytes), Value::Null);
+
+        // An exhausted (empty) segment is a decode error too.
+        let options = dob0_pattern("options", Some(serde_json::json!(["a", "b"])));
+        assert_eq!(decode_dob0_trait_value(&options, &[]), Value::Null);
     }
 
     #[test]
@@ -934,6 +1102,82 @@ mod tests {
         let profile = analyze_spore_media_profile("dob/0", b"00", Some(&metadata), false);
         assert_eq!(profile.tier, CompositionTier::DecentralizedMixture);
         assert!(profile.sources.iter().any(|s| s.scheme == "ipfs"));
+    }
+
+    /// Real testnet spore content of `0x9ca1e7fc9a89254d5438fb32d99aadce1c24cd
+    /// 1d4a49b735be9c13d8ceae9c9c` ("Forgily Characters", cluster `0x288433dc
+    /// cb8a5f13602f3c63d7f7e6b3f4d401bc8e7fd4c0055ce1ee2e5d86d1`): the raw-
+    /// binary DNA form — first content byte 0x00, DNA = remaining raw bytes.
+    const FORGILY_RAW_BINARY_CONTENT_HEX: &str = "0001034764640000f2761adf8466504b02a91a95abaecebf6cc43599c5fcbf2db8973d7b91fcc30c68747470733a2f2f6172746966616374732e666f7267696c792e636f6d2f696d6167655f6172746966616374732f65353832343962342d626136302d346231622d626231312d6662316133333935346666632e706e6700000000000000000000";
+
+    /// Real on-chain cluster description of the Forgily Characters cluster.
+    const FORGILY_CLUSTER_DESCRIPTION: &str = r##"{"description":"Forgily Characters — AI-forged collectible characters, each provably one-of-a-kind. Every character is generated once, never duplicated, and signed with C2PA content credentials at creation. The on-chain DNA (135 bytes) encodes: rarity tier (Common/Rare/Epic/Legendary/Genesis), VNS novelty scores — Visual, Narrative, Signature (0-100, measured against every character ever forged), lineage generation, a SHA-256 commitment to the character's full C2PA-signed off-chain record, and its portrait. The CKB locked in each cell is the character's redeemable floor value, held by its owner alone. Verify any character: recompute the SHA-256 of its published record and compare with the on-chain Provenance trait — no trust in Forgily required. Forge your own at https://forgily.com","dob":{"ver":0,"decoder":{"type":"code_hash","hash":"0x13cac78ad8482202f18f9df4ea707611c35f994375fa03ae79121312dda9925c"},"pattern":[["Tier","String",1,1,"options",["Common","Rare","Epic","Legendary","Genesis"]],["Visual Novelty","Number",2,1,"rawNumber"],["Narrative Novelty","Number",3,1,"rawNumber"],["Signature Novelty","Number",4,1,"rawNumber"],["Generation","Number",5,2,"rawNumber"],["Provenance","String",7,32,"rawString"],["prev.type","String",0,1,"options",["image"]],["prev.bg","String",39,96,"utf8"],["prev.bgcolor","String",1,1,"options",["#64748B","#3B82F6","#A855F7","#F59E0B","#(135deg, #22D3EE, #A855F7, #F59E0B)"]]]}}"##;
+
+    #[test]
+    fn dob_raw_binary_content_form_extracts_dna_and_media_sources() {
+        // Official spec (dob-decoder-standalone-server decode_spore_content):
+        // content[0] == 0x00 → DNA is the hex of the remaining raw bytes. The
+        // Forgily DNA carries the portrait URL in its utf8 `prev.bg` trait, so
+        // a working DNA extraction must surface that media source.
+        let content = hex::decode(FORGILY_RAW_BINARY_CONTENT_HEX).unwrap();
+        let profile = analyze_spore_media_profile(
+            "dob/0",
+            &content,
+            Some(FORGILY_CLUSTER_DESCRIPTION),
+            false,
+        );
+        assert!(
+            profile.issues.is_empty(),
+            "raw-binary DNA form must not be reported as invalid: {:?}",
+            profile.issues
+        );
+        assert!(
+            profile.sources.iter().any(|s| s.uri
+                == "https://artifacts.forgily.com/image_artifacts/e58249b4-ba60-4b1b-bb11-fb1a33954ffc.png"),
+            "prev.bg trait URL must be extracted from the raw-binary DNA, got {:?}",
+            profile.sources
+        );
+        assert_eq!(profile.tier, CompositionTier::CentralizedMixture);
+    }
+
+    #[test]
+    fn parse_dna_hex_from_content_supports_all_official_content_forms() {
+        // Raw-binary form (real Forgily testnet vector above).
+        let binary_content = hex::decode(FORGILY_RAW_BINARY_CONTENT_HEX).unwrap();
+        assert_eq!(
+            parse_dna_hex_from_content(&binary_content).as_deref(),
+            Some(&FORGILY_RAW_BINARY_CONTENT_HEX[2..]),
+            "content[0] == 0x00 must yield the hex of the remaining raw bytes"
+        );
+        // Negative control: the pre-fix text-only path (lossy UTF-8 decode of
+        // the raw bytes) cannot extract this DNA — the byte branch above is
+        // load-bearing, not redundant.
+        assert_eq!(
+            parse_dna_hex_from_content_text(&String::from_utf8_lossy(&binary_content)),
+            None
+        );
+
+        // JSON-object form — real mainnet spore 0x041e9872a9972ab578ff153103
+        // 5614338efbebe1cc55148cb382d8a7561f1e37 content, byte-identical
+        // regression for the existing text path.
+        assert_eq!(
+            parse_dna_hex_from_content(br#"{"id":2730,"dna":"72b50189f616a0143cdc035e924f5b58"}"#)
+                .as_deref(),
+            Some("72b50189f616a0143cdc035e924f5b58")
+        );
+
+        // JSON-string form — real mainnet spore 0xdf555ebe39a6c844d6a444a82b
+        // 438a84ba1f8992c0706f4a4d37f018535fed40 content ("Chinese Mahjong").
+        let json_string_dna = "62746366733a2f2f6338343632616635623736356338633830376265353433393463373034336535653534653739363163386533366438666230373638373063373763376339643669300009df209dc570666f72676566d1471b94ae9fd8a610f70d";
+        let json_string_content = format!("\"{json_string_dna}\"");
+        assert_eq!(
+            parse_dna_hex_from_content(json_string_content.as_bytes()).as_deref(),
+            Some(json_string_dna)
+        );
+
+        // Empty content is invalid (the official server would panic here; we
+        // must reject it instead of indexing garbage).
+        assert_eq!(parse_dna_hex_from_content(b""), None);
     }
 
     #[test]

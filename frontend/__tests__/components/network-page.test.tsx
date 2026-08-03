@@ -2,11 +2,10 @@ import { render, screen } from '@testing-library/react';
 import { describe, it, expect, vi } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { http, HttpResponse } from 'msw';
-import { DEFAULT_API_BASE } from '@/lib/runtime-config';
 import { server } from '../msw/server';
 import { NetworkClientPage } from '@/app/network/client-page';
 
-const API_BASE = DEFAULT_API_BASE;
+const API_BASE = '/api/:network/v1';
 
 // Isolate the page from the global chrome (mirrors chart-page.test.tsx).
 vi.mock('@/components/layout/header', () => ({
@@ -38,6 +37,8 @@ describe('NetworkClientPage', () => {
     // How to enable it.
     expect(screen.getByText('How to enable')).toBeInTheDocument();
     expect(screen.getByText(/enabled = true/)).toBeInTheDocument();
+    expect(screen.getByText(/this network's config\.toml/i)).toBeInTheDocument();
+    expect(screen.queryByText(/ckbadger\.toml/i)).not.toBeInTheDocument();
   });
 
   it('shows a waiting message when enabled but the first round has not finished', async () => {

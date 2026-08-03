@@ -92,6 +92,26 @@ describe('ActivityEventGroup', () => {
     expect(screen.getAllByText(/SEAL Transfer/).length).toBeGreaterThan(0);
   });
 
+  it('marks token amounts as raw when decimals are unknown', () => {
+    render(
+      <ActivityEventGroup
+        activity={makeActivity({
+          itemDeltas: [
+            {
+              kind: 'token',
+              typeScriptHash: '0xtoken',
+              delta: '1200',
+              symbol: 'MYST',
+              decimals: null,
+            },
+          ],
+        })}
+        formatTimeAgo={mockFormatTimeAgo}
+      />
+    );
+    expect(screen.getAllByText(/\(raw\)/).length).toBeGreaterThan(0);
+  });
+
   it('renders generic type script call label', () => {
     render(
       <ActivityEventGroup

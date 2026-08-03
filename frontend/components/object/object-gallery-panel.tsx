@@ -11,6 +11,7 @@ import { Badge } from '@/components/ui/page-header';
 import { HexDisplay } from '@/components/ui/hex-display';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { formatNumber } from '@/lib/utils';
+import { getIdentityItemDetailHref } from '@/lib/detail-routes';
 import { CellLife, CellLifePlaceholder } from '@/components/object/cell-life';
 
 export const GALLERY_PAGE_SIZE = 18;
@@ -53,24 +54,27 @@ function getContentTypeIcon(contentType: string | null | undefined): string {
 
 /* ---------- Object Card (CollectionItem) ---------- */
 
+function isIdentityStandard(standard: string): boolean {
+  const normalized = standard.toLowerCase();
+  return (
+    normalized === 'dotbit' ||
+    normalized === 'did_ckb' ||
+    normalized === 'did:ckb' ||
+    normalized === 'bit_cell' ||
+    normalized === 'bit-cell'
+  );
+}
+
 function objectDetailHref(item: CollectionItem): string | null {
   const std = item.standard.toLowerCase();
   if (std === 'm-nft') return `/objects/mnft/${item.nftId}`;
-  if (std === 'did_ckb' || std === 'did:ckb')
-    return `/identities/did/${encodeURIComponent(item.nftId)}`;
-  if (std === 'dotbit') return `/identities/dotbit/${encodeURIComponent(item.nftId)}`;
+  if (isIdentityStandard(std)) return getIdentityItemDetailHref(std, item.nftId);
   return null;
 }
 
 function inactiveStatusLabel(item: CollectionItem): string {
-  const std = item.standard.toLowerCase();
-  if (std === 'did_ckb' || std === 'did:ckb' || std === 'dotbit') return 'Recycled';
+  if (isIdentityStandard(item.standard)) return 'Recycled';
   return 'Burned';
-}
-
-function isIdentityStandard(standard: string): boolean {
-  const std = standard.toLowerCase();
-  return std === 'did_ckb' || std === 'did:ckb' || std === 'dotbit';
 }
 
 function ObjectCard({

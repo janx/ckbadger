@@ -75,7 +75,7 @@ const TESTNET_HARDFORKS: &[HardforkSpec] = &[
         short_name: "Mirana",
         edition_year: 2021,
         activation_epoch: 3113,
-        activation_date: "2021-11-24",
+        activation_date: "2021-10-24",
         summary: "CKB-VM v1 activation, extension field, and consensus patch bundle.",
         resources: MIRANA_RESOURCES,
     },
@@ -119,6 +119,27 @@ mod tests {
         assert_eq!(normalize_network("testnet"), Some("testnet"));
         assert_eq!(normalize_network("pudge"), Some("testnet"));
         assert_eq!(normalize_network("devnet"), None);
+    }
+
+    #[test]
+    fn activation_dates_match_chain_timestamps() {
+        // Chain-verified activation values (2026-07-29 audit): each edition's
+        // activation epoch and the calendar date of that epoch's start block.
+        let expect = [
+            ("mainnet", "mirana-2021", 5414, "2022-05-10"),
+            ("mainnet", "meepo-2024", 12293, "2025-07-01"),
+            ("testnet", "mirana-2021", 3113, "2021-10-24"),
+            ("testnet", "meepo-2024", 9690, "2024-10-25"),
+        ];
+        for (network, id, epoch, date) in expect {
+            let spec = hardforks_for_network(network)
+                .expect("network hardfork list")
+                .iter()
+                .find(|s| s.id == id)
+                .expect("hardfork id present");
+            assert_eq!(spec.activation_epoch, epoch, "{network}/{id} epoch");
+            assert_eq!(spec.activation_date, date, "{network}/{id} date");
+        }
     }
 
     #[test]

@@ -9,6 +9,7 @@ vi.mock('@/lib/api', () => ({
     getForks: vi.fn(),
   },
   isWarmupPendingError: vi.fn(() => false),
+  isNetworkInitializingError: vi.fn(() => false),
 }));
 
 vi.mock('@/components/layout/header', () => ({
@@ -58,7 +59,10 @@ describe('ForksPage', () => {
       expect(screen.getAllByText('DEEP_FORK').length).toBeGreaterThan(0);
     });
 
-    expect(screen.getAllByRole('link', { name: '#98' })[0]).toHaveAttribute('href', '/blocks/98');
+    expect(screen.getAllByRole('link', { name: '#98' })[0]).toHaveAttribute(
+      'href',
+      '/mainnet/blocks/98'
+    );
     expect(screen.getAllByText('2 blocks')[0]).toBeInTheDocument();
     expect(
       document.querySelector(

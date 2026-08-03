@@ -1,11 +1,12 @@
 use std::borrow::Cow;
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 
 use super::facts::{
     DaoCellState, DaoCompensationArs, FactsArena, ResolvedInputFacts, ResolvedTxFacts,
 };
-use super::live_cells::{ConsumeContext, LiveCellOwner, LiveCellSlot};
+use super::interner::IdentityLiveness;
+use super::live_cells::{ConsumeContext, LiveCellExtras, LiveCellOwner, LiveCellSlot};
 
 #[derive(Debug, Default)]
 pub(crate) struct BulkSequencer {
@@ -16,6 +17,22 @@ impl BulkSequencer {
     pub(crate) fn resolve<'a>(
         &mut self,
         arena: &'a FactsArena,
+    ) -> Result<Vec<ResolvedTxFacts<'a>>> {
+        self.resolve_inner(arena, None)
+    }
+
+    pub(crate) fn resolve_with_liveness<'a>(
+        &mut self,
+        arena: &'a FactsArena,
+        liveness: &mut IdentityLiveness,
+    ) -> Result<Vec<ResolvedTxFacts<'a>>> {
+        self.resolve_inner(arena, Some(liveness))
+    }
+
+    fn resolve_inner<'a>(
+        &mut self,
+        arena: &'a FactsArena,
+        mut liveness: Option<&mut IdentityLiveness>,
     ) -> Result<Vec<ResolvedTxFacts<'a>>> {
         let mut resolved_txs = Vec::with_capacity(arena.txs.len());
 
@@ -32,7 +49,7 @@ impl BulkSequencer {
                             input_position
                         )
                     })?;
-                    resolved_inputs.push(self.live_cells.consume(
+                    let resolved = self.live_cells.consume(
                         outpoint,
                         &ConsumeContext {
                             block_number: tx.block_number,
@@ -40,7 +57,21 @@ impl BulkSequencer {
                             tx_index: tx.tx_index,
                             input_index,
                         },
-                    )?);
+                    )?;
+                    if let Some(liveness) = liveness.as_deref_mut() {
+                        release_input_identities(liveness, &resolved).with_context(|| {
+                            format!(
+                                "failed to release consumed live-cell identities: block={} tx=0x{} tx_index={} input_index={} outpoint=0x{}:{}",
+                                tx.block_number,
+                                hex::encode(tx.hash),
+                                tx.tx_index,
+                                input_index,
+                                hex::encode(outpoint.tx_hash),
+                                outpoint.index,
+                            )
+                        })?;
+                    }
+                    resolved_inputs.push(resolved);
                 }
             }
 
@@ -65,9 +96,22 @@ impl BulkSequencer {
                 tx.block_dao_ar,
             )?;
             for (output_pos, cell) in outputs.iter().enumerate() {
+                if let Some(liveness) = liveness.as_deref_mut() {
+                    retain_cell_identities(liveness, cell).with_context(|| {
+                        format!(
+                            "failed to retain created live-cell identities: block={} tx=0x{} tx_index={} outpoint=0x{}:{}",
+                            tx.block_number,
+                            hex::encode(tx.hash),
+                            tx.tx_index,
+                            hex::encode(cell.outpoint.tx_hash),
+                            cell.outpoint.index,
+                        )
+                    })?;
+                }
                 self.live_cells.insert_created(
-                    LiveCellSlot::from_cell_facts(cell)
-                        .with_dao_compensation_ars(request_output_ars[output_pos]),
+                    cell.outpoint,
+                    LiveCellSlot::from_cell_facts(cell)?,
+                    LiveCellExtras::from_cell_facts(cell, request_output_ars[output_pos]),
                     cell.protocol_facts.clone(),
                 )?;
             }
@@ -92,13 +136,53 @@ impl BulkSequencer {
         self.live_cells.live_count()
     }
 
-    pub(crate) fn live_slots(&self) -> impl Iterator<Item = &super::live_cells::LiveCellSlot> {
+    pub(crate) fn live_slots(
+        &self,
+    ) -> impl Iterator<Item = (&super::facts::OutPointKey, &super::live_cells::LiveCellSlot)> {
         self.live_cells.live_slots()
     }
 
     pub(crate) fn live_cells_bytes(&self) -> u64 {
         self.live_cells.estimated_bytes()
     }
+}
+
+fn retain_cell_identities(
+    liveness: &mut IdentityLiveness,
+    cell: &super::facts::CellFacts,
+) -> Result<()> {
+    liveness.retain(cell.lock_script_hash_id)?;
+    liveness.retain(cell.lock_code_hash_id)?;
+    liveness.retain(cell.lock_args_id)?;
+    if let Some(id) = cell.type_script_hash_id {
+        liveness.retain(id)?;
+    }
+    if let Some(id) = cell.type_code_hash_id {
+        liveness.retain(id)?;
+    }
+    if let Some(id) = cell.type_args_id {
+        liveness.retain(id)?;
+    }
+    Ok(())
+}
+
+fn release_input_identities(
+    liveness: &mut IdentityLiveness,
+    input: &ResolvedInputFacts,
+) -> Result<()> {
+    liveness.release(input.lock_script_hash_id)?;
+    liveness.release(input.lock_code_hash_id)?;
+    liveness.release(input.lock_args_id)?;
+    if let Some(id) = input.type_script_hash_id {
+        liveness.release(id)?;
+    }
+    if let Some(id) = input.type_code_hash_id {
+        liveness.release(id)?;
+    }
+    if let Some(id) = input.type_args_id {
+        liveness.release(id)?;
+    }
+    Ok(())
 }
 
 /// Resolve DAO compensation AR values for withdraw-request outputs.
@@ -181,6 +265,7 @@ mod tests {
     use crate::sync::bulk_build::facts::{
         BlockFacts, CellFacts, CellSemanticTag, FactsArena, OutPointKey, TxFacts,
     };
+    use crate::sync::bulk_build::interner::IdentityLiveness;
     use crate::sync::types::InternId;
 
     fn build_sample_facts_arena() -> FactsArena {
@@ -196,6 +281,8 @@ mod tests {
                 dao: [0x00; 32],
                 compact_target: 0x1a08a97e,
                 uncles_count: 0,
+                proposals_count: 0,
+                miner_lock_hash: None,
                 transactions_count: 2,
                 tx_range: 0..2,
             }],
@@ -250,7 +337,7 @@ mod tests {
                     occupied_capacity: 61_00000000,
                     data_size: 0,
                     data: Vec::new(),
-                    data_hash: None,
+                    data_hash: Some([0x31; 32]),
                     udt_amount: None,
                     semantic_tag: CellSemanticTag::Plain,
                     dao_state: None,
@@ -272,7 +359,7 @@ mod tests {
                     occupied_capacity: 61_00000000,
                     data_size: 0,
                     data: Vec::new(),
-                    data_hash: None,
+                    data_hash: Some([0x32; 32]),
                     udt_amount: None,
                     semantic_tag: CellSemanticTag::Plain,
                     dao_state: None,
@@ -308,12 +395,38 @@ mod tests {
     }
 
     #[test]
+    fn sequencer_tracks_only_end_of_batch_live_identity_references() {
+        let arena = build_sample_facts_arena();
+        let mut sequencer = BulkSequencer::default();
+        let mut liveness = IdentityLiveness::default();
+        liveness.ensure_slots(5);
+
+        let resolved = sequencer
+            .resolve_with_liveness(&arena, &mut liveness)
+            .expect("resolve with liveness");
+        drop(resolved);
+
+        assert_eq!(liveness.live_refs(InternId::new(0)), Some(0));
+        assert_eq!(liveness.live_refs(InternId::new(1)), Some(0));
+        assert_eq!(liveness.live_refs(InternId::new(2)), Some(1));
+        assert_eq!(liveness.live_refs(InternId::new(3)), Some(1));
+        assert_eq!(liveness.live_refs(InternId::new(4)), Some(1));
+
+        let mut reclaimable = liveness
+            .drain_zero_candidates()
+            .into_iter()
+            .map(InternId::as_usize)
+            .collect::<Vec<_>>();
+        reclaimable.sort_unstable();
+        assert_eq!(reclaimable, vec![0, 1]);
+    }
+
+    #[test]
     fn sequencer_preserves_protocol_facts_on_resolved_inputs() {
         let mut arena = build_sample_facts_arena();
         arena.cells[0].protocol_facts = Some(super::super::facts::CellProtocolFacts::Spore(
             super::super::facts::SporeProtocolFacts {
                 spore_id: [0x44; 32],
-                is_did: false,
                 content_type: "image/png".to_string(),
                 content: b"payload".to_vec(),
                 cluster_id: Some([0x55; 32]),

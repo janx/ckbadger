@@ -9,6 +9,7 @@ vi.mock('@/lib/api', () => ({
     getTransactions: vi.fn(),
   },
   isWarmupPendingError: vi.fn(() => false),
+  isNetworkInitializingError: vi.fn(() => false),
 }));
 
 vi.mock('@/components/layout/header', () => ({
@@ -57,7 +58,7 @@ describe('TransactionsPage', () => {
     expect(
       screen
         .getAllByRole('link', { name: '#123,456' })
-        .every((link) => link.getAttribute('href') === '/blocks/123456')
+        .every((link) => link.getAttribute('href') === '/mainnet/blocks/123456')
     ).toBe(true);
 
     expect(screen.getAllByTitle(/Click to copy: 0xaaaaaaaa/i)).toHaveLength(2);
@@ -67,7 +68,7 @@ describe('TransactionsPage', () => {
         .every(
           (hashDisplay) =>
             hashDisplay.closest('a')?.getAttribute('href') ===
-            '/tx/0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+            '/mainnet/tx/0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
         )
     ).toBe(true);
     expect(screen.getAllByText('2')).toHaveLength(2);

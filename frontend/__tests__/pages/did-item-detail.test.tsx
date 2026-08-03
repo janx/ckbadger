@@ -12,6 +12,7 @@ vi.mock('@/lib/api', () => ({
     getAddress: vi.fn(),
   },
   isWarmupPendingError: vi.fn(() => false),
+  isNetworkInitializingError: vi.fn(() => false),
 }));
 
 vi.mock('@/components/layout/header', () => ({
@@ -92,7 +93,7 @@ describe('DidCkbItemDetailPage', () => {
 
     expect(screen.getByRole('link', { name: /Back to did:ckb Collection/ })).toHaveAttribute(
       'href',
-      '/identities/did:ckb'
+      '/mainnet/identities/did:ckb'
     );
     expect(screen.getByText('did:ckb Name')).toBeInTheDocument();
     expect(screen.getByText('DID ID')).toBeInTheDocument();

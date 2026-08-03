@@ -13,6 +13,7 @@ anyhow = { workspace = true }
 chrono = { workspace = true }
 hex = { workspace = true }
 blake2b-rs = { workspace = true }
+bech32 = "0.11"
 ckb-types = { workspace = true }
 ckb-jsonrpc-types = { workspace = true }
 ckb-hash = { workspace = true }

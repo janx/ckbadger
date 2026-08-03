@@ -39,6 +39,7 @@ futures = { workspace = true }
 dashmap = "6.1"
 rayon = { workspace = true }
 rustc-hash = { workspace = true }
+hashbrown = { workspace = true }
 async-trait = { workspace = true }
 uuid = { workspace = true }
 
@@ -64,6 +65,9 @@ ckb-hash = { workspace = true }
 rocksdb = { workspace = true }
 bincode = { workspace = true }
 libc = { workspace = true }
+
+[target.'cfg(all(not(target_env = "msvc"), not(target_os = "macos")))'.dependencies]
+jemalloc-ctl = { workspace = true }
 
 [build-dependencies]
 serde = { version = "1", features = ["derive"] }

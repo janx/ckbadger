@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use ckbadger_common::{
     format_duration_smart, BackgroundTaskEntry, BackgroundTasksData, BulkBuildProgressData,
     MemoryStatsData, PipelineProgressData, SyncProgressData, SyncStatusData,
@@ -8,7 +8,7 @@ use ckbadger_store::{
 };
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use std::time::Instant;
 
@@ -165,7 +165,7 @@ fn sync_progress_is_stale(progress: &SyncProgressData, now_ts: i64) -> bool {
 }
 
 pub struct TuiDb {
-    store: Option<Arc<CkbadgerStore>>,
+    store: RwLock<Option<Arc<CkbadgerStore>>>,
     api_url: String,
     supervisor_socket_path: Option<PathBuf>,
     service_log_dir: Option<PathBuf>,
@@ -177,6 +177,15 @@ pub struct TuiDb {
     domain_data_path: PathBuf,
     append_only_data_path: PathBuf,
     store_runtime_config: StoreRuntimeConfig,
+    /// Latest store-lifecycle event observed DURING the event loop (secondary
+    /// reopened, refresh failed), for the UI to render.
+    ///
+    /// These used to be `eprintln!`s. Once the TUI has entered the alternate
+    /// screen, anything written to stderr lands on top of the rendered frame and
+    /// corrupts it — and the refresh-failure ones repeated on every ~1s tick.
+    /// Construction-time messages still print, because they happen before raw
+    /// mode is entered.
+    store_notice: RwLock<Option<String>>,
 }
 
 pub struct TuiPathConfig<'a> {
@@ -289,7 +298,7 @@ impl TuiDb {
             .unwrap_or_default();
 
         Self {
-            store,
+            store: RwLock::new(store),
             api_url: api_url.to_string(),
             supervisor_socket_path: supervisor_socket_path.map(PathBuf::from),
             service_log_dir: service_log_dir.map(PathBuf::from),
@@ -301,31 +310,94 @@ impl TuiDb {
             domain_data_path: PathBuf::from(path_config.domain_data_path),
             append_only_data_path: PathBuf::from(path_config.append_only_data_path),
             store_runtime_config,
+            store_notice: RwLock::new(None),
         }
     }
 
-    /// Refresh the secondary store to catch up with the primary.
-    fn refresh_store(&self) {
-        if let Some(ref store) = self.store {
-            if let Err(e) = store.refresh() {
-                eprintln!("TUI: store refresh failed: {e}");
+    fn store_handle(&self) -> Option<Arc<CkbadgerStore>> {
+        self.store
+            .read()
+            .expect("TUI store handle lock poisoned")
+            .clone()
+    }
+
+    /// The latest store-lifecycle notice, for the UI to render. `None` once
+    /// nothing noteworthy has happened since the last state change.
+    pub fn store_notice(&self) -> Option<String> {
+        self.store_notice
+            .read()
+            .expect("TUI store notice lock poisoned")
+            .clone()
+    }
+
+    fn set_store_notice(&self, notice: Option<String>) {
+        *self
+            .store_notice
+            .write()
+            .expect("TUI store notice lock poisoned") = notice;
+    }
+
+    /// Refresh the secondary store to catch up with the primary. If the TUI
+    /// started before the indexer created RocksDB, open the secondary as soon as
+    /// the primary's `CURRENT` marker appears.
+    fn refresh_store(&self) -> Result<()> {
+        if let Some(store) = self.store_handle() {
+            if let Err(error) = store.refresh() {
+                let mut slot = self.store.write().expect("TUI store handle lock poisoned");
+                if slot
+                    .as_ref()
+                    .is_some_and(|current| Arc::ptr_eq(current, &store))
+                {
+                    *slot = None;
+                }
+                return Err(error).context("failed to refresh TUI domain-store secondary");
             }
+            return Ok(());
         }
+
+        if !self.domain_data_path.join("CURRENT").is_file() {
+            return Ok(());
+        }
+
+        let mut slot = self.store.write().expect("TUI store handle lock poisoned");
+        if slot.is_some() {
+            return Ok(());
+        }
+        let secondary_path = secondary_store_path(&self.domain_data_path, SecondaryStoreOwner::Tui);
+        let store = CkbadgerStore::open_domain_secondary_with_runtime(
+            &self.domain_data_path,
+            &secondary_path,
+            self.store_runtime_config,
+        )
+        .with_context(|| {
+            format!(
+                "failed to open newly-created domain store {} for TUI",
+                self.domain_data_path.display()
+            )
+        })?;
+        // State, not stderr: this runs inside a refresh tick, long after
+        // EnterAlternateScreen.
+        self.set_store_notice(Some(format!(
+            "opened newly-created domain store (secondary) at {}",
+            self.domain_data_path.display()
+        )));
+        *slot = Some(Arc::new(store));
+        Ok(())
     }
 
     pub async fn get_sync_status(&self) -> Result<SyncStatusRow> {
-        self.refresh_store();
+        self.refresh_store()?;
         self.get_sync_status_without_refresh()
     }
 
     fn get_sync_progress_from_store(&self) -> Option<SyncProgressData> {
-        let store = self.store.as_ref()?;
+        let store = self.store_handle()?;
         let bytes = store.get_sync_progress().ok()??;
         serde_json::from_slice(&bytes).ok()
     }
 
     fn get_sync_status_from_store(&self) -> Option<SyncStatusData> {
-        let store = self.store.as_ref()?;
+        let store = self.store_handle()?;
         let sync = store.get_sync_status().ok()?;
         let tip = sync.tip_block_number;
         let total_tx = sync.total_transactions;
@@ -458,12 +530,18 @@ impl TuiDb {
     }
 
     pub async fn get_memory_stats(&self) -> Option<MemoryStatsData> {
-        self.refresh_store();
+        if let Err(error) = self.refresh_store() {
+            self.set_store_notice(Some(format!("store refresh failed: {error:#}")));
+            return None;
+        }
         self.get_memory_stats_without_refresh()
     }
 
     pub async fn get_runtime_diag(&self) -> Option<RuntimeDiagData> {
-        self.refresh_store();
+        if let Err(error) = self.refresh_store() {
+            self.set_store_notice(Some(format!("store refresh failed: {error:#}")));
+            return None;
+        }
         self.get_runtime_diag_without_refresh()
     }
 
@@ -475,11 +553,16 @@ impl TuiDb {
         Option<RuntimeDiagData>,
         Option<BackgroundTasksData>,
     ) {
-        self.refresh_store();
+        if let Err(error) = self.refresh_store() {
+            // The error is also returned, which the Overview renders as this
+            // network's `error:` row; the notice keeps the most recent message
+            // available for detail views.
+            self.set_store_notice(Some(format!("store refresh failed: {error:#}")));
+            return (Err(error), None, None, None);
+        }
         let bg_tasks = self
-            .store
-            .as_ref()
-            .and_then(|s| s.get_background_tasks().ok());
+            .store_handle()
+            .and_then(|store| store.get_background_tasks().ok());
         (
             self.get_sync_status_without_refresh(),
             self.get_memory_stats_without_refresh(),
@@ -509,7 +592,7 @@ impl TuiDb {
     }
 
     fn get_memory_stats_without_refresh(&self) -> Option<MemoryStatsData> {
-        let store = self.store.as_ref()?;
+        let store = self.store_handle()?;
         let bytes = store.get_memory_stats().ok()??;
         let mut mem: MemoryStatsData = serde_json::from_slice(&bytes).ok()?;
 
@@ -525,7 +608,7 @@ impl TuiDb {
     }
 
     fn get_runtime_diag_without_refresh(&self) -> Option<RuntimeDiagData> {
-        let store = self.store.as_ref()?;
+        let store = self.store_handle()?;
         let status = store.get_runtime_status().ok()?;
         let heartbeat_age_secs = if status.last_heartbeat_at > 0 {
             Some((chrono::Utc::now().timestamp() - status.last_heartbeat_at).max(0))
@@ -595,59 +678,74 @@ impl TuiDb {
 
     pub async fn get_supervisor_services(&self) -> Option<Vec<SupervisorServiceData>> {
         let socket_path = self.supervisor_socket_path.as_ref()?;
-        if !socket_path.exists() {
-            return None;
-        }
-
-        let request = ckbadger_ipc::IpcRequest::GetServiceStatus;
-        let response = tokio::time::timeout(
-            Duration::from_millis(400),
-            ckbadger_ipc::ipc_request(socket_path, &request),
-        )
-        .await
-        .ok()?
-        .ok()?;
-
-        let ckbadger_ipc::IpcResponse::ServiceStatus { services } = response else {
-            return None;
-        };
-
-        Some(
-            services
-                .into_iter()
-                .map(|service| SupervisorServiceData {
-                    name: service.name,
-                    pid: service.pid,
-                    status: service.status.to_string(),
-                    uptime_secs: service.uptime_secs,
-                })
-                .collect(),
-        )
+        fetch_supervisor_services(socket_path).await
     }
 
     pub async fn get_service_log_tails(&self) -> Option<Vec<ServiceLogTailData>> {
         let log_dir = self.service_log_dir.as_ref()?;
-        if !log_dir.exists() {
-            return None;
-        }
-
-        let entries = std::fs::read_dir(log_dir).ok()?;
-        let mut tails = Vec::new();
-        for entry in entries {
-            let entry = entry.ok()?;
-            let path = entry.path();
-            if path.extension().and_then(|ext| ext.to_str()) != Some("log") {
-                continue;
-            }
-            let service = path.file_stem()?.to_str()?.to_string();
-            if let Some(last_line) = read_last_non_empty_line(&path) {
-                tails.push(ServiceLogTailData { service, last_line });
-            }
-        }
-
-        tails.sort_by(|a, b| a.service.cmp(&b.service));
-        Some(tails)
+        fetch_service_log_tails(log_dir).await
     }
+}
+
+/// Query the supervisor's single IPC socket for service status. Standalone so the
+/// multi-network aggregator can call it with the shared root socket (the per-network
+/// `TuiDb`s carry no socket of their own).
+pub(crate) async fn fetch_supervisor_services(
+    socket_path: &Path,
+) -> Option<Vec<SupervisorServiceData>> {
+    if !socket_path.exists() {
+        return None;
+    }
+
+    let request = ckbadger_ipc::IpcRequest::GetServiceStatus;
+    let response = tokio::time::timeout(
+        Duration::from_millis(400),
+        ckbadger_ipc::ipc_request(socket_path, &request),
+    )
+    .await
+    .ok()?
+    .ok()?;
+
+    let ckbadger_ipc::IpcResponse::ServiceStatus { services } = response else {
+        return None;
+    };
+
+    Some(
+        services
+            .into_iter()
+            .map(|service| SupervisorServiceData {
+                name: service.name,
+                pid: service.pid,
+                status: service.status.to_string(),
+                uptime_secs: service.uptime_secs,
+            })
+            .collect(),
+    )
+}
+
+/// Tail every `*.log` in a directory (last non-empty line each), sorted by service.
+/// Standalone so the aggregator can call it with the shared root log dir.
+pub(crate) async fn fetch_service_log_tails(log_dir: &Path) -> Option<Vec<ServiceLogTailData>> {
+    if !log_dir.exists() {
+        return None;
+    }
+
+    let entries = std::fs::read_dir(log_dir).ok()?;
+    let mut tails = Vec::new();
+    for entry in entries {
+        let entry = entry.ok()?;
+        let path = entry.path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("log") {
+            continue;
+        }
+        let service = path.file_stem()?.to_str()?.to_string();
+        if let Some(last_line) = read_last_non_empty_line(&path) {
+            tails.push(ServiceLogTailData { service, last_line });
+        }
+    }
+
+    tails.sort_by(|a, b| a.service.cmp(&b.service));
+    Some(tails)
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -972,6 +1070,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn tui_db_opens_store_created_after_tui_startup() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let domain_path = dir.path().join("domain");
+        let append_path = dir.path().join("append-only");
+        let db = TuiDb::new(
+            "http://127.0.0.1:3001/api/v1",
+            domain_path.to_str().unwrap(),
+            append_path.to_str().unwrap(),
+        )
+        .await;
+        assert!(db.get_sync_status().await.is_err());
+
+        let store = CkbadgerStore::open_domain(&domain_path).unwrap();
+        store
+            .set_sync_status(&ckbadger_store::types::SyncStatus {
+                tip_block_number: 42,
+                tip_block_hash: vec![0x42; 32],
+                total_transactions: 10,
+                total_cells_created: 20,
+                total_cells_consumed: 5,
+                last_synced_at: chrono::Utc::now().timestamp(),
+                sync_started_at: Some(1_700_000_000),
+                sync_started_block: 0,
+                sync_ema_rate: Some(12.0),
+                bulk_sync_completed_at: None,
+                bulk_sync_completed_block: None,
+                deep_fork_detected: false,
+                deep_fork_info: None,
+            })
+            .unwrap();
+
+        let sync = db.get_sync_status().await.unwrap();
+        assert_eq!(sync.tip_block, 42);
+    }
+
+    #[tokio::test]
     async fn tui_sync_status_progress_uses_persisted_elapsed_time() {
         let test_id = format!(
             "{}-{}",
@@ -1023,6 +1157,74 @@ mod tests {
         assert_eq!(sync.elapsed_time.as_deref(), Some("1m 30s"));
 
         cleanup_tui_temp_stores(&domain_path, &append_path);
+    }
+
+    #[tokio::test]
+    async fn store_notice_starts_empty_and_records_a_late_secondary_open() {
+        // The reopen notice used to be an `eprintln!` fired from inside a refresh
+        // tick — i.e. after EnterAlternateScreen — which paints over the rendered
+        // frame. It is now state the UI can render.
+        let test_id = format!(
+            "{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let domain_path = std::env::temp_dir().join(format!("ckbadger-tui-{test_id}-domain"));
+        let append_path = std::env::temp_dir().join(format!("ckbadger-tui-{test_id}-append"));
+
+        // No store on disk yet: the TUI starts with no handle and no notice.
+        let db = TuiDb::new(
+            "http://127.0.0.1:3001/api/v1",
+            domain_path.to_str().unwrap(),
+            append_path.to_str().unwrap(),
+        )
+        .await;
+        assert_eq!(db.store_notice(), None, "nothing noteworthy has happened");
+
+        // A refresh with no primary is a no-op, not a notice.
+        db.refresh_store().unwrap();
+        assert_eq!(db.store_notice(), None);
+
+        // The indexer creates the store; the next refresh opens the secondary
+        // and records WHY the UI's state changed.
+        let _primary = CkbadgerStore::open_domain(&domain_path).unwrap();
+        db.refresh_store().unwrap();
+        let notice = db.store_notice().expect("late open is recorded");
+        assert!(
+            notice.contains("opened newly-created domain store"),
+            "{notice}"
+        );
+        assert!(notice.contains(domain_path.to_str().unwrap()), "{notice}");
+
+        cleanup_tui_temp_stores(&domain_path, &append_path);
+    }
+
+    #[tokio::test]
+    async fn store_refresh_failure_is_recorded_as_state_not_written_to_the_screen() {
+        // The failure-path notices repeated on every ~1s refresh tick; as
+        // `eprintln!`s they corrupted the frame once per second.
+        let db = TuiDb::new(
+            "http://127.0.0.1:3001/api/v1",
+            "/nonexistent-ckbadger-tui/domain",
+            "/nonexistent-ckbadger-tui/append",
+        )
+        .await;
+        assert_eq!(db.store_notice(), None);
+
+        // No store and no `CURRENT`: refresh succeeds as a no-op, so a healthy
+        // pre-start TUI never accumulates a scary notice.
+        assert!(db.get_memory_stats().await.is_none());
+        assert_eq!(db.store_notice(), None);
+
+        // A genuine refresh failure is recorded verbatim for the UI.
+        db.set_store_notice(Some("store refresh failed: boom".to_string()));
+        assert_eq!(
+            db.store_notice().as_deref(),
+            Some("store refresh failed: boom")
+        );
     }
 
     #[tokio::test]
@@ -1311,5 +1513,32 @@ mod tests {
         assert_eq!(tails[1].last_line, "2026-01-01 pipeline mismatch");
 
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn fetch_service_log_tails_reads_dot_log_files() {
+        use super::fetch_service_log_tails;
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("mainnet-indexer.log"),
+            "line one\nlast line\n",
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("ignore.txt"), "not a log\n").unwrap();
+
+        let tails = fetch_service_log_tails(dir.path())
+            .await
+            .expect("some tails");
+        assert_eq!(tails.len(), 1, "only .log files are tailed");
+        assert_eq!(tails[0].service, "mainnet-indexer");
+        assert_eq!(tails[0].last_line, "last line");
+    }
+
+    #[tokio::test]
+    async fn fetch_supervisor_services_missing_socket_is_none() {
+        use super::fetch_supervisor_services;
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("nope.sock");
+        assert!(fetch_supervisor_services(&missing).await.is_none());
     }
 }

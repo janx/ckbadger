@@ -61,13 +61,17 @@ pub struct BatchSample {
     pub history_ms: f64,
     pub address_reduce_ms: f64,
     pub activity_stats_ms: f64,
+    pub interner_gc_ms: f64,
+    pub memory_accounting_ms: f64,
     pub flush_ms: f64,
     pub prepare_ms: f64,
     pub flush_wait_ms: f64,
     pub flush_channel_depth: u64,
     pub flush_channel_pending: u64,
+    pub flush_reserved_bytes: u64,
     pub prefetch_recv_ms: f64,
     pub prefetch_depth: u64,
+    pub prefetch_retained_block_bytes: u64,
     pub facts_par_iter_ms: f64,
     pub facts_merge_ms: f64,
     pub facts_serial_equivalent_ms: f64,
@@ -80,6 +84,30 @@ pub struct BatchSample {
     pub timestamp_utc: String,
     pub load_avg_1m: f64,
     pub mem_available_mb: u64,
+    pub process_committed_bytes: u64,
+    pub process_rss_bytes: u64,
+    pub process_rss_anon_bytes: u64,
+    pub process_rss_file_bytes: u64,
+    pub process_rss_shmem_bytes: u64,
+    pub process_swap_bytes: u64,
+    pub process_high_water_rss_bytes: u64,
+    pub jemalloc_stats_available: bool,
+    pub jemalloc_allocated_bytes: u64,
+    pub jemalloc_active_bytes: u64,
+    pub jemalloc_resident_bytes: u64,
+    pub jemalloc_mapped_bytes: u64,
+    pub jemalloc_retained_bytes: u64,
+    pub jemalloc_metadata_bytes: u64,
+    pub rocksdb_domain_memtable_bytes: u64,
+    pub rocksdb_append_only_memtable_bytes: u64,
+    pub rocksdb_shared_block_cache_bytes: u64,
+    pub rocksdb_domain_table_readers_bytes: u64,
+    pub rocksdb_append_only_table_readers_bytes: u64,
+    pub rocksdb_total_memory_bytes: u64,
+    pub rocksdb_domain_compaction_pending_bytes: u64,
+    pub rocksdb_append_only_compaction_pending_bytes: u64,
+    pub rocksdb_shared_wbm_usage_bytes: u64,
+    pub rocksdb_shared_wbm_budget_bytes: u64,
     pub disk_read_mb: f64,
     pub disk_write_mb: f64,
     pub disk_read_mb_s: Option<f64>,
@@ -92,6 +120,7 @@ pub struct BatchSample {
     pub disk_in_flight: Option<u64>,
     pub disk_state: Option<String>,
     pub owner_memory_bytes: HashMap<String, u64>,
+    pub accounted_retained_bytes: u64,
     pub live_cell_count: u64,
     pub cumulative_history_rows: u64,
     pub cumulative_sealed_rows: u64,
@@ -137,13 +166,17 @@ impl BatchSample {
             history_ms: 0.0,
             activity_stats_ms: 0.0,
             address_reduce_ms: 0.0,
+            interner_gc_ms: 0.0,
+            memory_accounting_ms: 0.0,
             flush_ms: 0.0,
             prepare_ms: 0.0,
             flush_wait_ms: 0.0,
             flush_channel_depth: 0,
             flush_channel_pending: 0,
+            flush_reserved_bytes: 0,
             prefetch_recv_ms: 0.0,
             prefetch_depth: 0,
+            prefetch_retained_block_bytes: 0,
             facts_par_iter_ms: 0.0,
             facts_merge_ms: 0.0,
             facts_serial_equivalent_ms: 0.0,
@@ -156,6 +189,30 @@ impl BatchSample {
             timestamp_utc,
             load_avg_1m,
             mem_available_mb,
+            process_committed_bytes: 0,
+            process_rss_bytes: 0,
+            process_rss_anon_bytes: 0,
+            process_rss_file_bytes: 0,
+            process_rss_shmem_bytes: 0,
+            process_swap_bytes: 0,
+            process_high_water_rss_bytes: 0,
+            jemalloc_stats_available: false,
+            jemalloc_allocated_bytes: 0,
+            jemalloc_active_bytes: 0,
+            jemalloc_resident_bytes: 0,
+            jemalloc_mapped_bytes: 0,
+            jemalloc_retained_bytes: 0,
+            jemalloc_metadata_bytes: 0,
+            rocksdb_domain_memtable_bytes: 0,
+            rocksdb_append_only_memtable_bytes: 0,
+            rocksdb_shared_block_cache_bytes: 0,
+            rocksdb_domain_table_readers_bytes: 0,
+            rocksdb_append_only_table_readers_bytes: 0,
+            rocksdb_total_memory_bytes: 0,
+            rocksdb_domain_compaction_pending_bytes: 0,
+            rocksdb_append_only_compaction_pending_bytes: 0,
+            rocksdb_shared_wbm_usage_bytes: 0,
+            rocksdb_shared_wbm_budget_bytes: 0,
             disk_read_mb,
             disk_write_mb,
             disk_read_mb_s: None,
@@ -168,6 +225,7 @@ impl BatchSample {
             disk_in_flight: None,
             disk_state: None,
             owner_memory_bytes: HashMap::new(),
+            accounted_retained_bytes: 0,
             live_cell_count: 0,
             cumulative_history_rows: 0,
             cumulative_sealed_rows: 0,
@@ -1108,6 +1166,8 @@ impl BulkSyncPerfRun {
         let reduce = sum_ms(|s| s.reduce_ms);
         let addr_reduce = sum_ms(|s| s.address_reduce_ms);
         let activity_stats = sum_ms(|s| s.activity_stats_ms);
+        let interner_gc = sum_ms(|s| s.interner_gc_ms);
+        let memory_accounting = sum_ms(|s| s.memory_accounting_ms);
         let history = sum_ms(|s| s.history_ms);
         let flush = sum_ms(|s| s.flush_ms);
 
@@ -1138,6 +1198,12 @@ impl BulkSyncPerfRun {
         }
         if activity_stats > 0.01 {
             phases.push(("activity_stats", activity_stats));
+        }
+        if interner_gc > 0.01 {
+            phases.push(("interner_gc", interner_gc));
+        }
+        if memory_accounting > 0.01 {
+            phases.push(("memory_accounting", memory_accounting));
         }
         if history > 0.01 {
             phases.push(("history", history));
@@ -2260,6 +2326,54 @@ mod tests {
     }
 
     #[test]
+    fn test_batch_samples_keep_pipeline_retained_byte_accounting() {
+        let dir = TempDir::new().unwrap();
+        let mut run =
+            BulkSyncPerfRun::start_for_test(dir.path(), "run-1", TEST_BUILD_VERSION).unwrap();
+        let mut sample = test_batch_sample(10, 1.0, 40.0, 100, 4, 1);
+        sample.prefetch_retained_block_bytes = 11;
+        sample.flush_reserved_bytes = 22;
+        sample.accounted_retained_bytes = 33;
+        run.record_batch_sample(sample).unwrap();
+
+        let samples = std::fs::read_to_string(dir.path().join("run-1/samples.jsonl")).unwrap();
+        assert!(samples.contains("\"prefetch_retained_block_bytes\":11"));
+        assert!(samples.contains("\"flush_reserved_bytes\":22"));
+        assert!(samples.contains("\"accounted_retained_bytes\":33"));
+    }
+
+    #[test]
+    fn test_batch_samples_persist_process_allocator_and_store_memory_attribution() {
+        let dir = TempDir::new().unwrap();
+        let mut run =
+            BulkSyncPerfRun::start_for_test(dir.path(), "run-1", TEST_BUILD_VERSION).unwrap();
+        let mut sample = test_batch_sample(10, 1.0, 40.0, 100, 4, 1);
+        sample.process_committed_bytes = 11;
+        sample.process_rss_bytes = 12;
+        sample.process_swap_bytes = 13;
+        sample.jemalloc_stats_available = true;
+        sample.jemalloc_allocated_bytes = 14;
+        sample.jemalloc_resident_bytes = 15;
+        sample.rocksdb_domain_memtable_bytes = 16;
+        sample.rocksdb_append_only_memtable_bytes = 17;
+        sample.rocksdb_shared_block_cache_bytes = 18;
+        sample.rocksdb_shared_wbm_usage_bytes = 19;
+        run.record_batch_sample(sample).unwrap();
+
+        let samples = std::fs::read_to_string(dir.path().join("run-1/samples.jsonl")).unwrap();
+        assert!(samples.contains("\"process_committed_bytes\":11"));
+        assert!(samples.contains("\"process_rss_bytes\":12"));
+        assert!(samples.contains("\"process_swap_bytes\":13"));
+        assert!(samples.contains("\"jemalloc_stats_available\":true"));
+        assert!(samples.contains("\"jemalloc_allocated_bytes\":14"));
+        assert!(samples.contains("\"jemalloc_resident_bytes\":15"));
+        assert!(samples.contains("\"rocksdb_domain_memtable_bytes\":16"));
+        assert!(samples.contains("\"rocksdb_append_only_memtable_bytes\":17"));
+        assert!(samples.contains("\"rocksdb_shared_block_cache_bytes\":18"));
+        assert!(samples.contains("\"rocksdb_shared_wbm_usage_bytes\":19"));
+    }
+
+    #[test]
     fn test_metrics_and_report_do_not_aggregate_batch_breakdown_fields() {
         let dir = TempDir::new().unwrap();
         let mut run =
@@ -2998,6 +3112,8 @@ mod tests {
         sample.facts_ms = 120.0;
         sample.resolve_ms = 30.0;
         sample.reduce_ms = 200.0;
+        sample.interner_gc_ms = 25.0;
+        sample.memory_accounting_ms = 0.5;
         sample.flush_ms = 80.0;
         sample.live_cell_count = 5000;
         sample.cumulative_history_rows = 100;
@@ -3011,6 +3127,8 @@ mod tests {
         assert!(samples.contains("\"facts_ms\":120.0"));
         assert!(samples.contains("\"resolve_ms\":30.0"));
         assert!(samples.contains("\"reduce_ms\":200.0"));
+        assert!(samples.contains("\"interner_gc_ms\":25.0"));
+        assert!(samples.contains("\"memory_accounting_ms\":0.5"));
         assert!(samples.contains("\"flush_ms\":80.0"));
         assert!(samples.contains("\"live_cell_count\":5000"));
         assert!(samples.contains("\"cumulative_history_rows\":100"));
@@ -3054,6 +3172,8 @@ mod tests {
         assert_eq!(sample.facts_ms, 0.0);
         assert_eq!(sample.resolve_ms, 0.0);
         assert_eq!(sample.reduce_ms, 0.0);
+        assert_eq!(sample.interner_gc_ms, 0.0);
+        assert_eq!(sample.memory_accounting_ms, 0.0);
         assert_eq!(sample.flush_ms, 0.0);
         assert_eq!(sample.live_cell_count, 0);
         assert_eq!(sample.cumulative_history_rows, 0);
@@ -3073,6 +3193,8 @@ mod tests {
         sample.facts_ms = 150.0;
         sample.resolve_ms = 50.0;
         sample.reduce_ms = 400.0;
+        sample.interner_gc_ms = 25.0;
+        sample.memory_accounting_ms = 15.0;
         sample.history_ms = 100.0;
         sample.flush_ms = 500.0;
         run.record_batch_sample(sample).unwrap();
@@ -3082,6 +3204,8 @@ mod tests {
         assert!(report.contains("## Wall Clock Breakdown"));
         assert!(report.contains("| fetch |"));
         assert!(report.contains("| facts+resolve |"));
+        assert!(report.contains("| interner_gc |"));
+        assert!(report.contains("| memory_accounting |"));
         assert!(report.contains("| reduce |"));
         assert!(report.contains("| history |"));
         assert!(report.contains("| flush |"));

@@ -8,6 +8,11 @@ use ckbadger_store::types::DaoDepositCacheEntry;
 use ckbadger_store::CkbadgerStore;
 use std::sync::Arc;
 
+/// Real mainnet cellbase first witness (block 12,000,000): block parsing
+/// requires every non-genesis cellbase to carry a valid RFC-0022
+/// `CellbaseWitness`.
+const TEST_CELLBASE_WITNESS: &str = "0x7a0000000c00000055000000490000001000000030000000310000009bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce801140000008211f1b938a107cd53b6302cc752a6fc3965638d210000000000000020302e3131332e3020283832383731613320323032342d30312d303929";
+
 fn setup_store() -> Arc<CkbadgerStore> {
     let dir = tempfile::tempdir().unwrap();
     let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
@@ -68,7 +73,7 @@ fn bulk_build_dao_fixture() -> Vec<BlockResponseWithCycles> {
             type_: Some(dao_type.clone()),
         }],
         outputs_data: vec![format!("0x{}", "00".repeat(8))],
-        witnesses: vec!["0x".to_string()],
+        witnesses: vec![TEST_CELLBASE_WITNESS.to_string()],
     };
 
     let request_tx = TransactionView {
@@ -89,7 +94,7 @@ fn bulk_build_dao_fixture() -> Vec<BlockResponseWithCycles> {
             type_: Some(dao_type),
         }],
         outputs_data: vec![format!("0x{}", hex::encode(100u64.to_le_bytes()))],
-        witnesses: vec!["0x".to_string()],
+        witnesses: vec![TEST_CELLBASE_WITNESS.to_string()],
     };
 
     let completion_tx = TransactionView {
@@ -110,7 +115,7 @@ fn bulk_build_dao_fixture() -> Vec<BlockResponseWithCycles> {
             type_: None,
         }],
         outputs_data: vec!["0x".to_string()],
-        witnesses: vec!["0x".to_string()],
+        witnesses: vec![TEST_CELLBASE_WITNESS.to_string()],
     };
 
     vec![
@@ -152,6 +157,7 @@ fn test_dao_deposit_creation() {
     let outpoint_key = ckbadger_store::keys::encode_outpoint(&[0xaa; 32], 0);
     let entry = DaoDepositCacheEntry {
         capacity: 100_000_000_000,
+        occupied_capacity: 102_00000000,
         deposit_block_number: 5000,
         deposit_timestamp: 0,
         lock_script_hash: vec![0x11; 32],
@@ -163,6 +169,7 @@ fn test_dao_deposit_creation() {
         withdraw_request_ar: None,
         withdraw_block: None,
         withdraw_tx: None,
+        withdraw_request_occupied_capacity: None,
         withdraw_to_output_index: None,
         compensation: None,
     };
@@ -191,6 +198,7 @@ fn test_dao_withdraw_request() {
     let outpoint_key = ckbadger_store::keys::encode_outpoint(&[0xbb; 32], 0);
     let entry = DaoDepositCacheEntry {
         capacity: 200_000_000_000,
+        occupied_capacity: 102_00000000,
         deposit_block_number: 6000,
         deposit_timestamp: 0,
         lock_script_hash: vec![0x22; 32],
@@ -202,6 +210,7 @@ fn test_dao_withdraw_request() {
         withdraw_request_ar: None,
         withdraw_block: None,
         withdraw_tx: None,
+        withdraw_request_occupied_capacity: None,
         withdraw_to_output_index: None,
         compensation: None,
     };
@@ -214,6 +223,7 @@ fn test_dao_withdraw_request() {
     // Then, update to withdraw-requested
     let updated_entry = DaoDepositCacheEntry {
         capacity: 200_000_000_000,
+        occupied_capacity: 102_00000000,
         deposit_block_number: 6000,
         deposit_timestamp: 0,
         lock_script_hash: vec![0x22; 32],
@@ -225,6 +235,7 @@ fn test_dao_withdraw_request() {
         withdraw_request_ar: Some(10_200_000_000),
         withdraw_block: None,
         withdraw_tx: None,
+        withdraw_request_occupied_capacity: Some(102_00000000),
         withdraw_to_output_index: None,
         compensation: None,
     };
@@ -249,6 +260,7 @@ fn test_dao_put_twice_in_same_batch_keeps_secondary_indexes_consistent() {
     let outpoint_key = ckbadger_store::keys::encode_outpoint(&[0xbc; 32], 0);
     let first_entry = DaoDepositCacheEntry {
         capacity: 210_000_000_000,
+        occupied_capacity: 102_00000000,
         deposit_block_number: 6000,
         deposit_timestamp: 0,
         lock_script_hash: vec![0x31; 32],
@@ -260,11 +272,13 @@ fn test_dao_put_twice_in_same_batch_keeps_secondary_indexes_consistent() {
         withdraw_request_ar: None,
         withdraw_block: None,
         withdraw_tx: None,
+        withdraw_request_occupied_capacity: None,
         withdraw_to_output_index: None,
         compensation: None,
     };
     let second_entry = DaoDepositCacheEntry {
         capacity: 210_000_000_000,
+        occupied_capacity: 102_00000000,
         deposit_block_number: 6001,
         deposit_timestamp: 0,
         lock_script_hash: vec![0x32; 32],
@@ -276,6 +290,7 @@ fn test_dao_put_twice_in_same_batch_keeps_secondary_indexes_consistent() {
         withdraw_request_ar: Some(10_200_000_000),
         withdraw_block: None,
         withdraw_tx: None,
+        withdraw_request_occupied_capacity: None,
         withdraw_to_output_index: None,
         compensation: None,
     };
@@ -320,6 +335,7 @@ fn test_dao_withdrawal_completion() {
     let outpoint_key = ckbadger_store::keys::encode_outpoint(&[0xdd; 32], 0);
     let entry = DaoDepositCacheEntry {
         capacity: 300_000_000_000,
+        occupied_capacity: 102_00000000,
         deposit_block_number: 8000,
         deposit_timestamp: 0,
         lock_script_hash: vec![0x33; 32],
@@ -331,6 +347,7 @@ fn test_dao_withdrawal_completion() {
         withdraw_request_ar: Some(10_300_000_000),
         withdraw_block: Some(9000),
         withdraw_tx: Some(vec![0xff; 32]),
+        withdraw_request_occupied_capacity: Some(102_00000000),
         withdraw_to_output_index: Some(0),
         compensation: Some(1_500_000_000),
     };
@@ -373,6 +390,7 @@ fn test_list_dao_deposits() {
     for (key, status, capacity) in &entries {
         let entry = DaoDepositCacheEntry {
             capacity: *capacity,
+            occupied_capacity: 102_00000000,
             deposit_block_number: 1000,
             deposit_timestamp: 0,
             lock_script_hash: vec![0x44; 32],
@@ -384,6 +402,7 @@ fn test_list_dao_deposits() {
             withdraw_request_ar: None,
             withdraw_block: None,
             withdraw_tx: None,
+            withdraw_request_occupied_capacity: None,
             withdraw_to_output_index: None,
             compensation: None,
         };
@@ -410,6 +429,7 @@ fn test_list_active_dao_deposits() {
     // Active deposit (status=0)
     let active_entry = DaoDepositCacheEntry {
         capacity: 500_000_000_000,
+        occupied_capacity: 102_00000000,
         deposit_block_number: 2000,
         deposit_timestamp: 0,
         lock_script_hash: vec![0x55; 32],
@@ -421,6 +441,7 @@ fn test_list_active_dao_deposits() {
         withdraw_request_ar: None,
         withdraw_block: None,
         withdraw_tx: None,
+        withdraw_request_occupied_capacity: None,
         withdraw_to_output_index: None,
         compensation: None,
     };
@@ -428,6 +449,7 @@ fn test_list_active_dao_deposits() {
     // Withdraw-requested deposit (status=1)
     let requested_entry = DaoDepositCacheEntry {
         capacity: 600_000_000_000,
+        occupied_capacity: 102_00000000,
         deposit_block_number: 2500,
         deposit_timestamp: 0,
         lock_script_hash: vec![0x66; 32],
@@ -439,6 +461,7 @@ fn test_list_active_dao_deposits() {
         withdraw_request_ar: Some(10_100_000_000),
         withdraw_block: None,
         withdraw_tx: None,
+        withdraw_request_occupied_capacity: Some(102_00000000),
         withdraw_to_output_index: None,
         compensation: None,
     };
@@ -446,6 +469,7 @@ fn test_list_active_dao_deposits() {
     // Withdrawn deposit (status=2)
     let withdrawn_entry = DaoDepositCacheEntry {
         capacity: 700_000_000_000,
+        occupied_capacity: 102_00000000,
         deposit_block_number: 3000,
         deposit_timestamp: 0,
         lock_script_hash: vec![0x88; 32],
@@ -457,6 +481,7 @@ fn test_list_active_dao_deposits() {
         withdraw_request_ar: Some(10_200_000_000),
         withdraw_block: Some(4000),
         withdraw_tx: Some(vec![0xaa; 32]),
+        withdraw_request_occupied_capacity: Some(102_00000000),
         withdraw_to_output_index: Some(0),
         compensation: Some(1_000_000_000),
     };
@@ -496,7 +521,11 @@ fn bulk_build_dao_owner_materializes_final_deposit_status_and_indexes_without_db
     assert_eq!(entry.withdraw_request_tx, Some(vec![0xa2; 32]));
     assert_eq!(entry.withdraw_request_output_index, Some(0));
     assert_eq!(entry.withdraw_request_block, Some(101));
-    assert_eq!(entry.withdraw_request_ar, None);
+    assert_eq!(
+        entry.withdraw_request_ar,
+        Some(12_000),
+        "completed bulk entries retain request AR for phase-2 rollback"
+    );
     assert_eq!(entry.withdraw_block, Some(102));
     assert_eq!(entry.withdraw_tx, Some(vec![0xa3; 32]));
     assert_eq!(entry.withdraw_to_output_index, Some(0));

@@ -1,7 +1,8 @@
 'use client';
 
 import { create } from 'zustand';
-import { resolveWsUrl } from '@/lib/runtime-config';
+import { wsUrlFor } from '@/lib/active-network';
+import { useActiveNetwork } from '@/hooks/useActiveNetwork';
 import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useCallback } from 'react';
 
@@ -30,8 +31,6 @@ interface Block {
   epochNumber: number;
   epochIndex: number;
   epochLength: number;
-  avgBlockTime: string;
-  estimatedEpochTime: string;
   syncStatus: SyncStatus;
 }
 
@@ -56,6 +55,7 @@ interface RealtimeState {
   setConnected: (connected: boolean) => void;
   setLatestBlock: (block: Block) => void;
   setLatestTx: (tx: Transaction) => void;
+  reset: () => void;
 }
 
 export const useRealtimeStore = create<RealtimeState>((set) => ({
@@ -65,9 +65,13 @@ export const useRealtimeStore = create<RealtimeState>((set) => ({
   setConnected: (connected) => set({ isConnected: connected }),
   setLatestBlock: (block) => set({ latestBlock: block }),
   setLatestTx: (tx) => set({ latestTx: tx }),
+  reset: () => set({ isConnected: false, latestBlock: null, latestTx: null }),
 }));
 
 let wsInstance: WebSocket | null = null;
+// The network the current socket targets, so we can detect a network switch and
+// reconnect instead of silently streaming the wrong network's data.
+let wsNetwork: string | null = null;
 let wsSubscribers = 0;
 let reconnectAttempts = 0;
 let reconnectTimeout: NodeJS.Timeout | null = null;
@@ -77,10 +81,26 @@ const RECONNECT_INTERVAL = 3000;
 type MessageHandler = (message: WebSocketMessage) => void;
 const messageHandlers = new Set<MessageHandler>();
 
-function connectWebSocket() {
-  if (wsInstance?.readyState === WebSocket.OPEN) return;
+function connectWebSocket(network: string) {
+  // Already connected to the right network — nothing to do.
+  if (wsInstance?.readyState === WebSocket.OPEN && wsNetwork === network) return;
 
-  const wsUrl = resolveWsUrl();
+  // A socket exists but targets a different network (or is stale): tear it down
+  // WITHOUT letting its onclose auto-reconnect to the old network.
+  if (wsInstance) {
+    wsInstance.onclose = null;
+    wsInstance.onerror = null;
+    wsInstance.close();
+    wsInstance = null;
+  }
+  if (reconnectTimeout) {
+    clearTimeout(reconnectTimeout);
+    reconnectTimeout = null;
+  }
+  reconnectAttempts = 0;
+  wsNetwork = network;
+
+  const wsUrl = wsUrlFor(network);
 
   try {
     wsInstance = new WebSocket(wsUrl);
@@ -108,7 +128,7 @@ function connectWebSocket() {
       if (wsSubscribers > 0 && reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
         reconnectTimeout = setTimeout(() => {
           reconnectAttempts++;
-          connectWebSocket();
+          connectWebSocket(network);
         }, RECONNECT_INTERVAL);
       }
     };
@@ -127,12 +147,22 @@ function disconnectWebSocket() {
     reconnectTimeout = null;
   }
   reconnectAttempts = MAX_RECONNECT_ATTEMPTS;
-  wsInstance?.close();
-  wsInstance = null;
+  if (wsInstance) {
+    // `close()` delivers `onclose` asynchronously, so a still-attached handler
+    // would run AFTER a new socket exists: it would null `wsInstance` (orphaning
+    // the new socket while its handlers keep feeding `messageHandlers`) and
+    // schedule a reconnect to the closure-captured old network. Detach first.
+    wsInstance.onclose = null;
+    wsInstance.onerror = null;
+    wsInstance.close();
+    wsInstance = null;
+  }
+  wsNetwork = null;
 }
 
 export function useRealtimeData() {
   const queryClient = useQueryClient();
+  const network = useActiveNetwork();
   const { isConnected, latestBlock, latestTx, setLatestBlock, setLatestTx } = useRealtimeStore();
   const handlerRef = useRef<MessageHandler | null>(null);
 
@@ -152,6 +182,10 @@ export function useRealtimeData() {
           };
         });
 
+        // Only what this block itself states. `avgBlockTime` and
+        // `estimatedEpochTime` are rolling window averages owned by
+        // /statistics/network — overwriting them here replaced that average
+        // with whatever a single block-to-block interval happened to be.
         queryClient.setQueryData(
           ['network-stats'],
           (
@@ -160,8 +194,6 @@ export function useRealtimeData() {
                   latestBlock: number;
                   syncStatus?: SyncStatus;
                   epoch?: string;
-                  estimatedEpochTime?: string;
-                  avgBlockTime?: string;
                 }
               | undefined
           ) => {
@@ -173,8 +205,6 @@ export function useRealtimeData() {
               ...old,
               latestBlock: blockData.number,
               epoch: epochString,
-              avgBlockTime: blockData.avgBlockTime,
-              estimatedEpochTime: blockData.estimatedEpochTime,
               syncStatus: blockData.syncStatus ?? old.syncStatus,
             };
           }
@@ -213,7 +243,7 @@ export function useRealtimeData() {
     wsSubscribers++;
     handlerRef.current = handleMessage;
     messageHandlers.add(handleMessage);
-    connectWebSocket();
+    connectWebSocket(network);
 
     return () => {
       wsSubscribers--;
@@ -224,7 +254,7 @@ export function useRealtimeData() {
         disconnectWebSocket();
       }
     };
-  }, [handleMessage]);
+  }, [handleMessage, network]);
 
   return { isConnected, latestBlock, latestTx };
 }

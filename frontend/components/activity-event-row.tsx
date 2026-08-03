@@ -9,7 +9,7 @@ import {
   getTokenDetailHref,
 } from '@/lib/detail-routes';
 import { formatCkbAmount, truncateHash, cn } from '@/lib/utils';
-import { formatTokenBalance } from '@/lib/format-asset';
+import { formatTokenBalanceWithRawMarker } from '@/lib/format-asset';
 import type {
   Activity,
   GlobalActivity,
@@ -160,7 +160,7 @@ function getItemDeltaEventParts(item: ItemDelta): EventParts {
       const isZero = delta === BigInt(0);
       const prefix = isZero ? '' : isPositive ? '+' : '-';
       const absDelta = item.delta.startsWith('-') ? item.delta.slice(1) : item.delta;
-      const formatted = formatTokenBalance(absDelta, item.decimals ?? 0);
+      const formatted = formatTokenBalanceWithRawMarker(absDelta, item.decimals ?? null);
       const color = isZero ? 'text-text-dim' : isPositive ? 'text-positive' : 'text-negative';
       const symbol = item.symbol?.trim();
       const label = symbol || truncateHash(item.typeScriptHash, 8, 6);
@@ -524,7 +524,7 @@ function InlineItemDelta({ item }: { item: ItemDelta }) {
       const delta = BigInt(item.delta);
       const prefix = delta > BigInt(0) ? '+' : delta < BigInt(0) ? '-' : '';
       const absDelta = item.delta.startsWith('-') ? item.delta.slice(1) : item.delta;
-      const formatted = formatTokenBalance(absDelta, item.decimals ?? 0);
+      const formatted = formatTokenBalanceWithRawMarker(absDelta, item.decimals ?? null);
       const label = item.symbol?.trim() || truncateHash(item.typeScriptHash, 8, 6);
       const color =
         delta > BigInt(0) ? 'text-positive' : delta < BigInt(0) ? 'text-negative' : 'text-text-dim';

@@ -1,7 +1,3 @@
-use std::sync::LazyLock;
-
-use crate::rpc::parse_hex_to_bytes;
-
 // Stable++ Asset (type script) — xudt_compatible
 pub const ASSET_CODE_HASH_MAINNET: &str =
     "0x26a33e0815888a4a0614a0b7d09fa951e0993ff21e55905510104a0b1312032b";
@@ -16,35 +12,40 @@ pub const POOL_CODE_HASH_MAINNET: &str =
 pub const INTENT_LOCK_CODE_HASH_MAINNET: &str =
     "0x56fb632a13abdad7308d2e034baae1cb049e8e8ff23cc7c0b69449f617549733";
 
-// Stable++ Vault Lock (lock script)
+// Stable++ Vault Lock (lock script).
+// NOTE: this const holds the OLD pool-guard value (0xff35…) that was mistakenly
+// registered as the vault lock. Detection is now registry-backed and maps the
+// CORRECTED vault code_hash (0x4ed68fcb…); this const is retained only for
+// historical reference and negative-case tests — it no longer drives detection.
 pub const VAULT_LOCK_CODE_HASH_MAINNET: &str =
     "0xff352022029a6ecf03e8a838b979a46e1231f05f9a3df9b4198f7eeb4afc2e67";
 
-static ASSET_MAINNET: LazyLock<Vec<u8>> =
-    LazyLock::new(|| parse_hex_to_bytes(ASSET_CODE_HASH_MAINNET));
-static ASSET_TESTNET: LazyLock<Vec<u8>> =
-    LazyLock::new(|| parse_hex_to_bytes(ASSET_CODE_HASH_TESTNET));
-static POOL_MAINNET: LazyLock<Vec<u8>> =
-    LazyLock::new(|| parse_hex_to_bytes(POOL_CODE_HASH_MAINNET));
-static INTENT_MAINNET: LazyLock<Vec<u8>> =
-    LazyLock::new(|| parse_hex_to_bytes(INTENT_LOCK_CODE_HASH_MAINNET));
-static VAULT_MAINNET: LazyLock<Vec<u8>> =
-    LazyLock::new(|| parse_hex_to_bytes(VAULT_LOCK_CODE_HASH_MAINNET));
-
 pub fn is_stablepp_asset(code_hash: &[u8]) -> bool {
-    code_hash == ASSET_MAINNET.as_slice() || code_hash == ASSET_TESTNET.as_slice()
+    crate::parser::registry::PROTOCOL_REGISTRY.is(
+        code_hash,
+        crate::parser::registry::ProtocolScript::StablePpAsset,
+    )
 }
 
 pub fn is_stablepp_pool(code_hash: &[u8]) -> bool {
-    code_hash == POOL_MAINNET.as_slice()
+    crate::parser::registry::PROTOCOL_REGISTRY.is(
+        code_hash,
+        crate::parser::registry::ProtocolScript::StablePpPool,
+    )
 }
 
 pub fn is_stablepp_intent_lock(code_hash: &[u8]) -> bool {
-    code_hash == INTENT_MAINNET.as_slice()
+    crate::parser::registry::PROTOCOL_REGISTRY.is(
+        code_hash,
+        crate::parser::registry::ProtocolScript::StablePpIntent,
+    )
 }
 
 pub fn is_stablepp_vault_lock(code_hash: &[u8]) -> bool {
-    code_hash == VAULT_MAINNET.as_slice()
+    crate::parser::registry::PROTOCOL_REGISTRY.is(
+        code_hash,
+        crate::parser::registry::ProtocolScript::StablePpVault,
+    )
 }
 
 pub fn is_stablepp_script(code_hash: &[u8]) -> bool {
@@ -109,10 +110,17 @@ mod tests {
 
     // --- is_stablepp_vault_lock tests ---
 
+    /// Vault-bug regression: the CORRECTED vault code_hash (0x4ed68fcb…) is
+    /// detected as the vault lock, while the old pool-guard value (0xff35…,
+    /// still held by VAULT_LOCK_CODE_HASH_MAINNET) is NOT — it was never a vault.
     #[test]
-    fn test_is_stablepp_vault_lock_mainnet() {
-        let code_hash = parse_hex_to_bytes(VAULT_LOCK_CODE_HASH_MAINNET);
-        assert!(is_stablepp_vault_lock(&code_hash));
+    fn vault_lock_is_the_corrected_hash_not_the_pool_lock() {
+        let vault = parse_hex_to_bytes(
+            "0x4ed68fcb7eaa4ff78d46a2fad88a32ce9caffd4b96a0a4bba96ff4871f018675",
+        );
+        let old_pool = parse_hex_to_bytes(VAULT_LOCK_CODE_HASH_MAINNET);
+        assert!(is_stablepp_vault_lock(&vault));
+        assert!(!is_stablepp_vault_lock(&old_pool));
     }
 
     #[test]
@@ -143,7 +151,10 @@ mod tests {
 
     #[test]
     fn test_is_stablepp_script_matches_vault() {
-        let code_hash = parse_hex_to_bytes(VAULT_LOCK_CODE_HASH_MAINNET);
+        // The corrected vault code_hash composes into is_stablepp_script.
+        let code_hash = parse_hex_to_bytes(
+            "0x4ed68fcb7eaa4ff78d46a2fad88a32ce9caffd4b96a0a4bba96ff4871f018675",
+        );
         assert!(is_stablepp_script(&code_hash));
     }
 

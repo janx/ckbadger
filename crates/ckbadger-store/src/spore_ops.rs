@@ -179,8 +179,17 @@ impl CkbadgerStore {
     ) -> anyhow::Result<Option<Vec<u8>>> {
         let key = keys::encode_spore_outpoint_key(tx_hash, output_index);
         match self.get_cf(self.cf_stats_spore(), &key)? {
-            Some(value) if value.len() >= 32 => Ok(Some(value[..32].to_vec())),
-            _ => Ok(None),
+            // The value is the item id verbatim, at its natural width: 32 bytes
+            // for spores and `.bit Cell`, 20 or 32 for did:ckb. Truncating to a
+            // fixed 32 bytes would drop shorter ids on the floor, and the live
+            // consume path resolves an item through exactly this lookup.
+            Some(value) if !value.is_empty() => Ok(Some(value.to_vec())),
+            Some(_) => Err(anyhow::anyhow!(
+                "empty spore outpoint value in get_spore_id_by_outpoint: tx_hash=0x{}, output_index={}",
+                bytes_to_hex(tx_hash),
+                output_index
+            )),
+            None => Ok(None),
         }
     }
 
@@ -202,15 +211,18 @@ impl CkbadgerStore {
             let (tx_hash, idx) = outpoints[i];
             match value_result {
                 Ok(Some(value)) => {
-                    if value.len() < 32 {
+                    // Item ids are stored verbatim at their natural width
+                    // (32 bytes for spores/`.bit Cell`, 20 or 32 for did:ckb).
+                    if value.is_empty() || value.len() > keys::SPORE_OUTPOINT_BY_ID_MAX_ID_LEN {
                         return Err(anyhow::anyhow!(
-                            "invalid spore outpoint value length in get_spore_ids_by_outpoints_batch: tx_hash=0x{}, output_index={}, value_len={}",
+                            "invalid spore outpoint value length in get_spore_ids_by_outpoints_batch: tx_hash=0x{}, output_index={}, value_len={}, allowed=1..={}",
                             bytes_to_hex(tx_hash),
                             idx,
-                            value.len()
+                            value.len(),
+                            keys::SPORE_OUTPOINT_BY_ID_MAX_ID_LEN
                         ));
                     }
-                    results.push((tx_hash.to_vec(), idx, value[..32].to_vec()));
+                    results.push((tx_hash.to_vec(), idx, value.to_vec()));
                 }
                 Ok(None) => {}
                 Err(e) => {
@@ -226,13 +238,19 @@ impl CkbadgerStore {
         Ok(results)
     }
 
-    /// List all historical spore outpoints recorded for a spore ID.
-    /// Uses the reverse index (spore_id → outpoints) for O(log N) prefix scan.
+    /// List all historical outpoints recorded for a spore/identity ID.
+    /// Uses the reverse index (id → outpoints) for O(log N) prefix scan.
+    ///
+    /// Ids are variable-width (see [`keys::spore_outpoint_by_id_key_len`]), so
+    /// a longer id starting with these same bytes shares the scan prefix and
+    /// its rows can sort between this id's rows. Foreign lengths are therefore
+    /// skipped, never treated as the end of the scan.
     pub fn list_spore_outpoints_by_spore_id(
         &self,
         spore_id: &[u8],
     ) -> anyhow::Result<Vec<(Vec<u8>, i16)>> {
         let prefix = keys::encode_spore_outpoint_by_id_prefix(spore_id);
+        let expected_key_len = keys::spore_outpoint_by_id_key_len(spore_id.len());
         let iter = self.prefix_iterator_cf(self.cf_stats_spore(), &prefix);
         let mut outpoints = Vec::new();
 
@@ -243,11 +261,12 @@ impl CkbadgerStore {
                     e
                 )
             })?;
-            if key.len() != keys::SPORE_OUTPOINT_BY_ID_KEY_SIZE
-                || key[0] != keys::STATS_PREFIX_SPORE_OUTPOINT_BY_ID
-                || &key[1..33] != spore_id
-            {
+            if !key.starts_with(&prefix) {
                 break;
+            }
+            if key.len() != expected_key_len {
+                // A different id that happens to start with these bytes.
+                continue;
             }
             outpoints.push(keys::decode_spore_outpoint_by_id_key(&key));
         }
@@ -502,6 +521,117 @@ mod tests {
         (dir, store)
     }
 
+    /// Non-aliasing, both directions: a 20-byte item id whose bytes are a
+    /// prefix of a 32-byte item id shares the scan prefix, so neither id may
+    /// ever see the other's outpoints. Real shapes: did:ckb ids are the
+    /// type-script args verbatim (both widths occur on live testnet), while
+    /// spores and `.bit Cell` are always 32 bytes.
+    #[test]
+    fn test_list_spore_outpoints_does_not_alias_between_short_and_long_ids() {
+        use crate::batch::StoreBatch;
+
+        let (_dir, store) = test_store();
+
+        let short_id = vec![0x11u8; 20];
+        let mut long_id = short_id.clone();
+        long_id.extend_from_slice(&[0x11u8; 12]);
+        assert_eq!(long_id.len(), 32);
+        assert!(long_id.starts_with(&short_id));
+
+        let short_tx = [0xA1u8; 32];
+        let long_tx = [0xB2u8; 32];
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_spore_outpoint(&short_tx, 0, &short_id);
+        batch.put_spore_outpoint(&short_tx, 1, &short_id);
+        batch.put_spore_outpoint(&long_tx, 0, &long_id);
+        batch.commit().unwrap();
+
+        let short_outpoints = store.list_spore_outpoints_by_spore_id(&short_id).unwrap();
+        assert_eq!(
+            short_outpoints,
+            vec![(short_tx.to_vec(), 0), (short_tx.to_vec(), 1)],
+            "20-byte id must see exactly its own outpoints"
+        );
+
+        let long_outpoints = store.list_spore_outpoints_by_spore_id(&long_id).unwrap();
+        assert_eq!(
+            long_outpoints,
+            vec![(long_tx.to_vec(), 0)],
+            "32-byte id must see exactly its own outpoints"
+        );
+    }
+
+    /// The aliasing hazard is order-sensitive: a longer id's rows can sort
+    /// *between* a shorter id's rows, so a scan that stops at the first
+    /// foreign key would silently truncate real results.
+    #[test]
+    fn test_list_spore_outpoints_skips_interleaved_longer_id_rows() {
+        use crate::batch::StoreBatch;
+
+        let (_dir, store) = test_store();
+
+        let short_id = vec![0x22u8; 20];
+        // Long id shares the 20-byte prefix and its 21st byte (0x00) sorts
+        // BEFORE the first outpoint byte (0xF0) of the short id's second row,
+        // placing the long id's key inside the short id's key range.
+        let mut long_id = short_id.clone();
+        long_id.extend_from_slice(&[0x00u8; 12]);
+
+        let low_tx = [0x0Fu8; 32];
+        let high_tx = [0xF0u8; 32];
+        let long_tx = [0x77u8; 32];
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_spore_outpoint(&low_tx, 0, &short_id);
+        batch.put_spore_outpoint(&high_tx, 0, &short_id);
+        batch.put_spore_outpoint(&long_tx, 0, &long_id);
+        batch.commit().unwrap();
+
+        let short_outpoints = store.list_spore_outpoints_by_spore_id(&short_id).unwrap();
+        assert_eq!(
+            short_outpoints,
+            vec![(low_tx.to_vec(), 0), (high_tx.to_vec(), 0)],
+            "an interleaved longer-id row must be skipped, not truncate the scan"
+        );
+        assert_eq!(
+            store.list_spore_outpoints_by_spore_id(&long_id).unwrap(),
+            vec![(long_tx.to_vec(), 0)]
+        );
+    }
+
+    /// Spore and `.bit Cell` ids are always 32 bytes; widening the index key
+    /// must not change what a 32-byte id sees.
+    #[test]
+    fn test_list_spore_outpoints_for_32_byte_ids_is_unchanged() {
+        use crate::batch::StoreBatch;
+
+        let (_dir, store) = test_store();
+        let spore_id = vec![0x33u8; 32];
+        let other_id = vec![0x44u8; 32];
+        let tx_a = [0xC1u8; 32];
+        let tx_b = [0xC2u8; 32];
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_spore_outpoint(&tx_a, 0, &spore_id);
+        batch.put_spore_outpoint(&tx_b, 2, &spore_id);
+        batch.put_spore_outpoint(&tx_a, 1, &other_id);
+        batch.commit().unwrap();
+
+        assert_eq!(
+            store.list_spore_outpoints_by_spore_id(&spore_id).unwrap(),
+            vec![(tx_a.to_vec(), 0), (tx_b.to_vec(), 2)]
+        );
+        assert_eq!(
+            store.list_spore_outpoints_by_spore_id(&other_id).unwrap(),
+            vec![(tx_a.to_vec(), 1)]
+        );
+        assert!(store
+            .list_spore_outpoints_by_spore_id(&[0x55u8; 32])
+            .unwrap()
+            .is_empty());
+    }
+
     #[test]
     fn test_dob_outcome_read_write_and_undecoded_skip() {
         use crate::batch::StoreBatch;
@@ -635,22 +765,53 @@ mod tests {
         assert_eq!(spore_outpoints[0], (tx_a.to_vec(), 1));
     }
 
+    /// Item ids are stored verbatim at their natural width, so a shorter id is
+    /// valid data — only widths outside the indexable range are corruption.
     #[test]
-    fn test_get_spore_ids_by_outpoints_batch_fails_on_short_value() {
+    fn test_get_spore_ids_by_outpoints_batch_fails_on_unindexable_value_width() {
         let (_dir, store) = test_store();
-        let tx_a = [0xA1u8; 32];
-        let key = keys::encode_spore_outpoint_key(&tx_a, 1);
-        store
-            .put_cf(store.cf_stats_spore(), &key, &[0x11; 31])
-            .unwrap();
 
-        let outpoints: Vec<(&[u8], i16)> = vec![(&tx_a, 1)];
-        let err = store
-            .get_spore_ids_by_outpoints_batch(&outpoints)
-            .unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("invalid spore outpoint value length in get_spore_ids_by_outpoints_batch"));
+        for (tx_byte, bad_value) in [(0xA1u8, Vec::new()), (0xA2u8, vec![0x11u8; 33])] {
+            let tx = [tx_byte; 32];
+            let key = keys::encode_spore_outpoint_key(&tx, 1);
+            store
+                .put_cf(store.cf_stats_spore(), &key, &bad_value)
+                .unwrap();
+
+            let outpoints: Vec<(&[u8], i16)> = vec![(&tx, 1)];
+            let err = store
+                .get_spore_ids_by_outpoints_batch(&outpoints)
+                .unwrap_err();
+            assert!(err.to_string().contains(
+                "invalid spore outpoint value length in get_spore_ids_by_outpoints_batch"
+            ));
+        }
+    }
+
+    /// A 20-byte did:ckb item id must survive the outpoint lookup verbatim —
+    /// truncating or dropping it would break live-sync item resolution.
+    #[test]
+    fn test_spore_outpoint_lookups_return_20_byte_ids_verbatim() {
+        use crate::batch::StoreBatch;
+
+        let (_dir, store) = test_store();
+        let tx = [0xD1u8; 32];
+        let short_id = vec![0x5Au8; 20];
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_spore_outpoint(&tx, 0, &short_id);
+        batch.commit().unwrap();
+
+        assert_eq!(
+            store.get_spore_id_by_outpoint(&tx, 0).unwrap(),
+            Some(short_id.clone())
+        );
+
+        let outpoints: Vec<(&[u8], i16)> = vec![(&tx, 0)];
+        assert_eq!(
+            store.get_spore_ids_by_outpoints_batch(&outpoints).unwrap(),
+            vec![(tx.to_vec(), 0, short_id)]
+        );
     }
 
     #[test]

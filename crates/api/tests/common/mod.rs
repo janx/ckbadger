@@ -40,6 +40,23 @@ pub fn test_store() -> Arc<CkbadgerStore> {
     store
 }
 
+/// Seed a synced-chain genesis economic baseline into a domain store.
+///
+/// The indexer always derives this at block 0. Read-only handlers that report
+/// genesis-derived economics (circulating supply, and the genesis burn-cell
+/// tagging in the cell/tx builders) fail-fast if it is absent, so any test
+/// whose endpoint touches those paths must seed it first. Values mirror mainnet
+/// genesis: 33.6B issued, 8.4B burnt, 6/10 occupied ratio == 504e15 shannons.
+pub fn seed_genesis_baseline(store: &Arc<CkbadgerStore>) {
+    store
+        .set_genesis_baseline(&ckbadger_store::GenesisBaseline {
+            total_issuance: 3_360_000_000_000_000_000,
+            burnt: 840_000_000_000_000_000,
+            virtual_occupied: 504_000_000_000_000_000,
+        })
+        .unwrap();
+}
+
 pub fn test_append_only_store() -> Arc<CkbadgerStore> {
     let dir = tempfile::tempdir().unwrap();
     let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
@@ -152,6 +169,97 @@ pub fn create_router_without_warmup(config: AppConfig) -> axum::Router {
         .with_state(state)
 }
 
+/// A CKB-node-format RocksDB seeded with real blocks. Feed `path`/`cleanup` into
+/// [`test_config_with_ckb_db_path`] so `create_router` opens it exactly the way
+/// production does.
+pub struct TestCkbChain {
+    pub path: String,
+    pub cleanup: Arc<CleanupPathGuard>,
+}
+
+/// Write `blocks` into a throwaway RocksDB laid out exactly like a CKB node's own
+/// database, so the production `CkbChainReader` can read them back.
+///
+/// Column families mirror `ckb-db-schema`: `0` = index (number <-> hash), `1` =
+/// block header (`packed::HeaderView`), `2` = block body (`packed::TransactionView`
+/// keyed by `block_hash || tx_index_be`), `3` = block uncles
+/// (`packed::UncleBlockVecView`), `5` = transaction info (`packed::TransactionInfo`
+/// keyed by tx hash — what `get_transaction` resolves through), `7` = block
+/// proposal ids (`packed::ProposalShortIdVec`). Storing the *packed view* forms
+/// (not the bare `Header`/`UncleBlock`/`Transaction`) is what the node does and
+/// what the reader parses back — in particular the body's stored `hash` field is
+/// the hash the reader hands out, so a fixture may fake it to a real mainnet tx
+/// hash.
+pub fn seed_ckb_chain(blocks: &[ckb_types::core::BlockView]) -> TestCkbChain {
+    use ckb_types::prelude::*;
+
+    let db_path =
+        std::env::temp_dir().join(format!("ckbadger-api-test-ckb-chain-{}", Uuid::new_v4()));
+    let mut db_opts = Options::default();
+    db_opts.create_if_missing(true);
+    db_opts.create_missing_column_families(true);
+    let cf_descriptors: Vec<ColumnFamilyDescriptor> = (0..=18)
+        .map(|index| ColumnFamilyDescriptor::new(index.to_string(), Options::default()))
+        .collect();
+
+    {
+        let db = DB::open_cf_descriptors(&db_opts, &db_path, cf_descriptors).unwrap();
+        let cf_index = db.cf_handle("0").unwrap();
+        let cf_header = db.cf_handle("1").unwrap();
+        let cf_body = db.cf_handle("2").unwrap();
+        let cf_uncle = db.cf_handle("3").unwrap();
+        let cf_tx_info = db.cf_handle("5").unwrap();
+        let cf_proposals = db.cf_handle("7").unwrap();
+        for block in blocks {
+            let hash: [u8; 32] = block.hash().unpack();
+            let number = block.number();
+            db.put_cf(&cf_index, number.to_le_bytes(), hash).unwrap();
+            db.put_cf(&cf_index, hash, number.to_le_bytes()).unwrap();
+            db.put_cf(&cf_header, hash, block.header().pack().as_slice())
+                .unwrap();
+            db.put_cf(&cf_uncle, hash, block.uncles().pack().as_slice())
+                .unwrap();
+            db.put_cf(&cf_proposals, hash, block.data().proposals().as_slice())
+                .unwrap();
+            for (index, tx) in block.transactions().iter().enumerate() {
+                let mut key = Vec::with_capacity(36);
+                key.extend_from_slice(&hash);
+                key.extend_from_slice(&(index as u32).to_be_bytes());
+                db.put_cf(&cf_body, key, tx.pack().as_slice()).unwrap();
+
+                // `packed::TransactionInfo` is a 52-byte molecule struct laid
+                // out as raw concatenation: block_number (u64 LE) + block_epoch
+                // (u64 LE) + TransactionKey (block_hash 32 + index u32 BE) —
+                // exactly what `get_transaction_with_block_number` parses back.
+                let mut info = Vec::with_capacity(52);
+                info.extend_from_slice(&number.to_le_bytes());
+                info.extend_from_slice(&block.epoch().full_value().to_le_bytes());
+                info.extend_from_slice(&hash);
+                info.extend_from_slice(&(index as u32).to_be_bytes());
+                let tx_hash: [u8; 32] = tx.hash().unpack();
+                db.put_cf(&cf_tx_info, tx_hash, info).unwrap();
+            }
+        }
+        // The reader attaches as a secondary instance, so everything must be in SST
+        // files before it opens.
+        for cf in [
+            &cf_index,
+            &cf_header,
+            &cf_body,
+            &cf_uncle,
+            &cf_tx_info,
+            &cf_proposals,
+        ] {
+            db.flush_cf(cf).unwrap();
+        }
+    }
+
+    TestCkbChain {
+        path: db_path.to_string_lossy().to_string(),
+        cleanup: Arc::new(CleanupPathGuard::new(db_path)),
+    }
+}
+
 /// Issue a GET against the router and parse the JSON body.
 /// `path` is relative to the `/api/v1` mount (e.g. `/network/summary`).
 /// Mirrors the inline `oneshot` + `to_bytes` + `from_slice` idiom used across `api_*.rs`.
@@ -261,6 +369,9 @@ pub fn insert_committed_transaction(store: &Arc<CkbadgerStore>, tx_hash: &[u8]) 
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         },
     );
@@ -326,6 +437,107 @@ pub fn make_test_participant(
         used_delta: 0,
         item_deltas: vec![],
         tags,
+    }
+}
+
+/// Seed a script family with two type-form member references resolving to one
+/// version, mirroring the production rollup shape: family record + name index +
+/// version (with family_id) + version-by-family index + reference->version
+/// mappings + per-form reference counters + per-reference ScriptInfos.
+///
+/// `r_main` carries the family name as its ScriptInfo label; `r_alt` carries
+/// `alt_label` (the USDI-style separately-labeled member). Usage sums:
+/// r_main type 200/120, r_alt type 100/60, version and family 300/180.
+pub fn seed_two_reference_script_family(
+    store: &Arc<CkbadgerStore>,
+    family_name: &str,
+    family_id: &str,
+    version_hash: &[u8],
+    r_main: &[u8],
+    r_alt: &[u8],
+    alt_label: &str,
+) {
+    store
+        .put_script_family_direct(
+            family_id,
+            &ScriptFamilyInfo {
+                family_id: family_id.to_string(),
+                name: family_name.to_string(),
+                versions_count: 1,
+                live_cells_count: 3,
+                cells_count: 3,
+                type_cells_count: 3,
+                owned_capacity_sum: 300,
+                owned_knowledge_sum: 180,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    store
+        .put_script_family_name_direct(family_name, family_id)
+        .unwrap();
+    store
+        .put_script_version(
+            version_hash,
+            &ScriptVersionInfo {
+                version_hash: version_hash.to_vec(),
+                name: Some(family_name.to_string()),
+                family_id: Some(family_id.to_string()),
+                type_cells_count: 3,
+                type_live_cells_count: 3,
+                type_capacity_sum: 300,
+                type_owned_capacity_sum: 300,
+                type_used_capacity_sum: 180,
+                type_owned_knowledge_sum: 180,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    store
+        .put_script_version_by_family_direct(family_id, version_hash)
+        .unwrap();
+
+    for (reference_hash, label, cells, capacity, knowledge) in [
+        (r_main, family_name, 2i64, 200i128, 120i128),
+        (r_alt, alt_label, 1i64, 100i128, 60i128),
+    ] {
+        store
+            .put_script_reference_to_version_direct(1, reference_hash, version_hash)
+            .unwrap();
+        store
+            .put_script_reference_info_direct(
+                1,
+                reference_hash,
+                &ScriptReferenceInfo {
+                    reference_hash: reference_hash.to_vec(),
+                    hash_type: 1,
+                    type_cells_count: cells,
+                    type_live_cells_count: cells,
+                    type_capacity_sum: capacity,
+                    type_owned_capacity_sum: capacity,
+                    type_used_capacity_sum: knowledge,
+                    type_owned_knowledge_sum: knowledge,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        store
+            .put_script_info_direct(
+                reference_hash,
+                &ScriptInfo {
+                    code_hash: reference_hash.to_vec(),
+                    hash_type: 1,
+                    name: Some(label.to_string()),
+                    type_cells_count: cells,
+                    type_live_cells_count: cells,
+                    type_capacity_sum: capacity,
+                    type_owned_capacity_sum: capacity,
+                    type_used_capacity_sum: knowledge,
+                    type_owned_knowledge_sum: knowledge,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
     }
 }
 

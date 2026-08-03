@@ -25,6 +25,7 @@ vi.mock('@/lib/api', () => ({
     getSporeCluster: vi.fn(),
   },
   isWarmupPendingError: vi.fn(() => false),
+  isNetworkInitializingError: vi.fn(() => false),
 }));
 
 vi.mock('@/components/layout/header', () => ({
@@ -307,6 +308,54 @@ describe('Tokens Inventory Page', () => {
     });
   });
 
+  it('marks total supply as raw when token decimals are unknown', async () => {
+    // An unknown-decimals token must never render like a real 0-decimals
+    // token: 1000000 base units is not "1,000,000 tokens".
+    vi.mocked(api.getAssets).mockResolvedValue({
+      ...mockTokenAssets,
+      data: [{ ...mockTokenAssets.data[0], decimals: null, totalSupply: '1000000' }],
+    });
+
+    render(<TokensPage />);
+
+    await waitFor(() => {
+      expect(screen.getAllByText(/1,000,000 \(raw\)/).length).toBeGreaterThan(0);
+    });
+  });
+
+  it('scales total supply exactly for decimals beyond double precision', async () => {
+    // decimals is the raw, unvalidated first byte of the xUDT Unique Cell, so
+    // >= 23 is reachable. A BigInt(10 ** 24) divisor rendered 10^24 base units
+    // as "1.000000000000000016777216".
+    vi.mocked(api.getAssets).mockResolvedValue({
+      ...mockTokenAssets,
+      data: [
+        { ...mockTokenAssets.data[0], decimals: 24, totalSupply: '1000000000000000000000000' },
+      ],
+    });
+
+    render(<TokensPage />);
+
+    await waitFor(() => {
+      expect(screen.getAllByTitle('Total Circulation: 1').length).toBeGreaterThan(0);
+    });
+    expect(screen.queryByText(/1\.000000000000000016777216/)).toBeNull();
+  });
+
+  it('does not mark total supply for genuine 0-decimals tokens', async () => {
+    vi.mocked(api.getAssets).mockResolvedValue({
+      ...mockTokenAssets,
+      data: [{ ...mockTokenAssets.data[0], decimals: 0, totalSupply: '1000000' }],
+    });
+
+    render(<TokensPage />);
+
+    await waitFor(() => {
+      expect(screen.getAllByText('1,000,000').length).toBeGreaterThan(0);
+    });
+    expect(screen.queryByText(/\(raw\)/)).toBeNull();
+  });
+
   it('uses type-hash fallback name for tokens without symbol and name', async () => {
     const typeHash = '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef';
     vi.mocked(api.getAssets).mockResolvedValue({
@@ -470,7 +519,7 @@ describe('Objects Inventory Page', () => {
         links.some(
           (link) =>
             link.getAttribute('href') ===
-            '/clusters/0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890'
+            '/mainnet/clusters/0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890'
         )
       ).toBe(true);
     });
@@ -567,13 +616,13 @@ describe('Identities Inventory Page', () => {
       {
         assets: mockDotbitIdentityAssets,
         linkName: /\.bit/i,
-        href: '/identities/dotbit',
+        href: '/mainnet/identities/dotbit',
         standard: 'DOTBIT',
       },
       {
         assets: mockDidCkbIdentityAssets,
         linkName: /did:ckb/i,
-        href: '/identities/did:ckb',
+        href: '/mainnet/identities/did:ckb',
         standard: 'did:ckb',
       },
     ];

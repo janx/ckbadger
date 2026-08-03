@@ -16,6 +16,7 @@ import {
   MostUtilizedScriptsChartResponse,
   StackedAreaChartResponse,
 } from '@/lib/api';
+import { useActiveNetwork } from '@/hooks/useActiveNetwork';
 
 function ChartDataWarning({ show }: { show: boolean }) {
   if (!show) return null;
@@ -143,7 +144,9 @@ function MinerDistributionPreview({
   const pieData = data
     ? (() => {
         const items = data.data.slice(0, 8).map((m) => ({
-          label: m.minerName || `${m.address.slice(0, 8)}...${m.address.slice(-6)}`,
+          label:
+            m.minerName ||
+            `${(m.address ?? m.minerLockHash).slice(0, 8)}...${(m.address ?? m.minerLockHash).slice(-6)}`,
           value: parseFloat(m.percentage),
         }));
         const othersPercentage = data.data
@@ -376,9 +379,10 @@ export default function ChartsPage() {
     queryFn: () => api.getCkbVolumeChart(),
   });
 
+  const network = useActiveNetwork();
   const { data: hardforkTimeline } = useQuery({
     queryKey: ['hardforks-for-charts'],
-    queryFn: () => api.getHardforks(),
+    queryFn: () => api.getHardforks({ network }),
     staleTime: 60_000,
   });
 

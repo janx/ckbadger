@@ -14,7 +14,7 @@ describe('SiteFooter', () => {
 
     const footer = screen.getByRole('contentinfo');
     const hardforksLink = within(footer).getByRole('link', { name: 'Hardforks' });
-    expect(hardforksLink).toHaveAttribute('href', '/hardforks');
+    expect(hardforksLink).toHaveAttribute('href', '/mainnet/hardforks');
     const versionLink = within(footer).getByRole('link', {
       name: '0.1.0+feature/foo@abcdef123456',
     });

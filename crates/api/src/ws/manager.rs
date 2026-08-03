@@ -7,6 +7,15 @@ pub use crate::response::SyncStatusResponse as SyncStatus;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "data")]
 pub enum BroadcastMessage {
+    /// A block that just entered the store. Carries only facts read off that
+    /// block plus the sync status.
+    ///
+    /// Rolling network statistics (average block time, epoch ETA) are
+    /// deliberately absent: they are windowed aggregates anchored at the chain
+    /// tip, not properties of a block, and `/statistics/network` is their single
+    /// computation path. Deriving them per pushed block once produced a
+    /// single-interval value (3.5s..33.2s block to block) that overwrote the
+    /// window average in the client cache.
     #[serde(rename = "new_block", rename_all = "camelCase")]
     NewBlock {
         number: i64,
@@ -16,8 +25,6 @@ pub enum BroadcastMessage {
         epoch_number: i64,
         epoch_index: i32,
         epoch_length: i32,
-        avg_block_time: String,
-        estimated_epoch_time: String,
         sync_status: Box<SyncStatus>,
     },
     #[serde(rename = "new_transaction", rename_all = "camelCase")]

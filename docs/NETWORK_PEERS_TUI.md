@@ -1,6 +1,9 @@
 # Network Peers TUI — Design Spec
 
-_Date: 2026-07-03 · Status: Approved (design) · Depends on: `docs/NETWORK_PEER_CRAWLER.md` (Plan 1) + `docs/NETWORK_PEERS_UI.md` (Plan 2), both merged_
+_Date: 2026-07-03 · Status: Implemented (design record) · Depends on: `docs/NETWORK_PEER_CRAWLER.md` + `docs/NETWORK_PEERS_UI.md`_
+
+> Plan boundaries and “what next” notes are retained as historical rationale. Current TUI
+> ownership and entry points live in `docs/ARCHITECTURE_MAP.md`.
 
 Add a **"Peers" tab** to the monitoring TUI (`crates/tui`) that surfaces the p2p crawler's operational
 health and the discovered-network snapshot, by fetching the Plan-2 `/network/*` API over the TUI's
@@ -120,7 +123,9 @@ trend on short terminals):
 1. **Status block** (~3–5 lines) — a labeled stat grid from `summary.last_round`:
    - Crawler: on/off · `#round_id` · last-round age (from `finished`, e.g. "3m ago") · a bright
      **PARTIAL** marker when `!frontier_drained`.
-   - Discovered: `total_known` · `reachable` · `unreachable`.
+   - Discovered: `total_known` · `reachable`; `lastRound.unreachable` is failed address probes,
+     not `total_known - reachable`. The current compact label abbreviates it as "unreachable" and
+     should be renamed to make that unit explicit.
    - This round: `dialed` · `new_nodes` · `foreign_dropped`.
 2. **Distributions** (two side-by-side bar charts via `render_bar_chart`):
    - Left: version top-N (`distributions.versions`).
@@ -131,14 +136,17 @@ trend on short terminals):
    `reachable` segment + an `unreachable` segment, synthesized by zipping `total_history` and
    `reachable_history` on `ts`, where `unreachable = total.scalar - reachable.scalar`. `reachable ≤
 total` holds by construction (same-round aggregate); a bucket where `reachable > total` is an
-   upstream invariant violation — **skip that bucket** (surface a gap) rather than mask it with
-   `saturating_sub` or panic in a read-only monitor. Buckets present in only one series are also
-   skipped. Shows network size + reachability over the recent window.
+   upstream invariant violation. The current helper skips that bucket and surfaces a gap; buckets
+   present in only one series are also skipped. This describes the implementation but is a known
+   deviation from ckbadger's fail-fast invariant policy: a correctness fix should return an
+   explicit error and select the Peers error view, not silently omit the point or clamp it with
+   `saturating_sub`. The chart otherwise shows network size + reachability over the recent window.
 
 ### Off / waiting / error states (replace the charts with a centered message)
 
 - `error.is_some()` ⇒ an error line at the top (reuse the api-health error style).
-- `summary.enabled == false` ⇒ "Crawler disabled — set `[crawler].enabled = true` in ckbadger.toml".
+- `summary.enabled == false` ⇒ "Crawler disabled — set `[crawler].enabled = true` in this
+  network's config.toml".
 - `enabled == true && has_data == false` ⇒ "Crawler enabled — waiting for the first round…".
 
 ---
@@ -149,10 +157,9 @@ total` holds by construction (same-round aggregate); a bucket where `reachable >
   parse from canned API JSON (assert camelCase mapping, `lastRound: null` → `None`, populated case).
 - **Tab cycling** (`ui.rs`): `MainTab::next()`/`prev()` include `Peers` in the correct cycle
   (Overview→Sync→System→Peers→Overview and reverse).
-- **Pure helpers**: last-round age formatting; `frontier_drained=false` → PARTIAL; the trend
-  zip/synthesis (`total`,`reachable` → `(reachable, unreachable)` per hour, skipping buckets where
-  `reachable > total` or a series is missing — NO `saturating_sub`); the state selector (error vs
-  disabled vs waiting vs dashboard) as a small pure function over `PeersData`.
+- **Pure helpers**: last-round age formatting; `frontier_drained=false` → PARTIAL; the current trend
+  zip/synthesis behavior (`total`,`reachable` → `(reachable, unreachable)` per hour); the state
+  selector (error vs disabled vs waiting vs dashboard) as a small pure function over `PeersData`.
 - **Render** (only if the crate already uses ratatui `TestBackend` — the implementer confirms and
   mirrors the existing UI test approach): render `render_peers_tab` to a buffer and assert key text —
   status labels + a version/country bar label when `hasData`; the "Crawler disabled" text when
@@ -167,10 +174,6 @@ total` holds by construction (same-round aggregate); a bucket where `reachable >
   trend, fetched from the Plan-2 `/network/*` API. No change to the crawler, API, or other tabs'
   behavior; opt-in-aware (shows a disabled/waiting message until the crawler runs).
 - **Re-sync required** — **No** (read-only monitoring via HTTP).
-- **What to do next** — this completes the peers-monitoring surfaces (web dashboard + TUI). Remaining
-  broader items are unchanged: Plan 3 (topology graph) and the pre-enable crawler follow-ups in
-  `docs/NETWORK_PEER_CRAWLER.md` (concurrency, live `crawl --once`, etc.).
-
-```
-
-```
+- **What to do next** — keep the TUI as a thin HTTP reader of the API's single network-data
+  calculation path and make invalid trend buckets select an explicit error state. A topology graph
+  remains outside the current TUI scope.

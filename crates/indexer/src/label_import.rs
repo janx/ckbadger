@@ -3,12 +3,12 @@ use ckbadger_common::{LabelImportConfig, LabelImportResult};
 use ckbadger_store::CkbadgerStore;
 use serde::Deserialize;
 use std::path::Path;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use crate::parser::script::ScriptParser;
 use crate::rpc::Script;
 
-mod bundled {
+pub(crate) mod bundled {
     use super::*;
 
     const BUNDLED_UDT_LABELS: &[u8] =
@@ -178,13 +178,67 @@ impl<'de> Deserialize<'de> for ValidatedHashType {
 }
 
 #[derive(Debug, Clone)]
-enum ImportDeployment {
+pub(crate) enum ImportDeployment {
     Version(ScriptDeploymentEntry),
     Pseudo(PseudoScriptDeployment),
 }
 
+/// What a version entry's `version_hash` field attaches to.
+///
+/// A version is a deployment's bytecode identity — the code cell's data hash.
+/// The chain-side usage rollup attributes reference stats to versions by the
+/// live code cell's actual data hash, so a label attached to anything else
+/// decorates a version that will never receive usage while the real one stays
+/// unlabeled (the failure that zeroed the Fiber families).
+enum VersionAttachment {
+    /// A plausible bytecode identity to attach the label to.
+    Attachable(Vec<u8>),
+    /// Legacy all-zero sentinel: the entry declares no version.
+    NoVersion,
+    /// The declared identity is provably not a bytecode data hash; the reason
+    /// explains why. Attaching it would silently misattribute the family.
+    Invalid(String),
+}
+
+/// THE single computation deciding whether an entry's version identity is
+/// attachable. Both the family `versions_count` and the version-write path go
+/// through here so they can never disagree.
+fn version_attachment(entry: &ScriptDeploymentEntry) -> Result<VersionAttachment> {
+    let version_hash = decode_hex(&entry.version_hash)
+        .map_err(|e| anyhow::anyhow!("invalid version_hash `{}`: {}", entry.version_hash, e))?;
+    if version_hash.iter().all(|&b| b == 0) {
+        return Ok(VersionAttachment::NoVersion);
+    }
+    let reference_hash = decode_hex(&entry.canonical_ref_hash).map_err(|e| {
+        anyhow::anyhow!(
+            "invalid canonical_ref_hash `{}`: {}",
+            entry.canonical_ref_hash,
+            e
+        )
+    })?;
+    match entry.canonical_hash_type.as_str() {
+        // A type-script hash is never a bytecode data hash, so an entry that
+        // copies the reference into version_hash is a placeholder.
+        "type" if version_hash == reference_hash => Ok(VersionAttachment::Invalid(
+            "version_hash equals canonical_ref_hash for a type-referenced deployment; \
+             a type-script hash is never the bytecode's data hash (set version_hash \
+             to the code cell's data hash)"
+                .to_string(),
+        )),
+        // For data forms the reference IS the bytecode data hash.
+        "data" | "data1" | "data2" if version_hash != reference_hash => {
+            Ok(VersionAttachment::Invalid(
+                "version_hash differs from canonical_ref_hash for a data-form \
+                 deployment; the data-form reference IS the bytecode's data hash"
+                    .to_string(),
+            ))
+        }
+        _ => Ok(VersionAttachment::Attachable(version_hash)),
+    }
+}
+
 impl ScriptNetworkMetadata {
-    fn import_deployments(&self) -> Vec<ImportDeployment> {
+    pub(crate) fn import_deployments(&self) -> Vec<ImportDeployment> {
         if let Some(pseudo) = &self.pseudo {
             return vec![ImportDeployment::Pseudo(pseudo.clone())];
         }
@@ -194,6 +248,67 @@ impl ScriptNetworkMetadata {
             .map(ImportDeployment::Version)
             .collect()
     }
+}
+
+/// Describe the fields where the stored token row contradicts what another
+/// source asserts about the same token. `None` when they agree, when the store
+/// has no value yet, or when the other source asserts nothing (`None` argument).
+///
+/// This is the one comparison used by every token-metadata observation point:
+/// label import (label vs. store) and the sync write path (chain vs. store).
+/// Keeping a single implementation is what makes "the bundled label disagrees
+/// with the chain" a detectable event rather than a matter of which observer
+/// happened to be written most recently.
+pub(crate) fn token_metadata_divergence(
+    existing: &ckbadger_store::types::TokenInfo,
+    asserted_name: Option<&str>,
+    asserted_symbol: Option<&str>,
+    asserted_decimals: Option<i32>,
+) -> Option<String> {
+    let mut parts = Vec::new();
+    if let (Some(name), Some(asserted)) = (existing.name.as_deref(), asserted_name) {
+        if name != asserted {
+            parts.push(format!("name {name:?} -> {asserted:?}"));
+        }
+    }
+    if let (Some(symbol), Some(asserted)) = (existing.symbol.as_deref(), asserted_symbol) {
+        if symbol != asserted {
+            parts.push(format!("symbol {symbol:?} -> {asserted:?}"));
+        }
+    }
+    if let (Some(decimals), Some(asserted)) = (existing.decimals, asserted_decimals) {
+        if decimals != asserted {
+            parts.push(format!("decimals {decimals} -> {asserted}"));
+        }
+    }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join(", "))
+    }
+}
+
+/// Describe label fields that would overwrite a *different* pre-existing
+/// value (chain-derived on-chain info or an earlier label). Returns None when
+/// the label agrees with, or only fills, the existing metadata.
+///
+/// This observer only sees what is already in the store when the indexer
+/// starts. It can therefore never see a chain value that the store does not
+/// yet hold — for tokens whose only on-chain metadata binding is the issuance
+/// co-occurrence heuristic, the stored value at startup *is* this same label,
+/// so nothing diverges. Detecting label-vs-chain disagreement is the job of
+/// the sync write path, which is the only place both values coexist; see
+/// `crate::db::writer::udt::apply_onchain_token_info`.
+fn label_override_conflicts(
+    existing: &ckbadger_store::types::TokenInfo,
+    label: &TokenMetadata,
+) -> Option<String> {
+    token_metadata_divergence(
+        existing,
+        Some(&label.name),
+        Some(&label.symbol),
+        Some(i32::from(label.decimals)),
+    )
 }
 
 fn compute_type_hash(deployment: &TokenDeployment) -> Result<Vec<u8>> {
@@ -393,16 +508,25 @@ fn upsert_token_label(
                 name: None,
                 symbol: None,
                 decimals: None,
-                total_supply: Some(0),
                 max_supply: None,
-                holders_count: 0,
                 first_seen_block: 0,
                 icon_url: None,
                 description: None,
                 transfers_count: 0,
             });
 
-    // Update label fields (preserve indexer-maintained stats like holders_count, total_supply).
+    if let Some(conflict) = label_override_conflicts(&info, token) {
+        warn!(
+            type_hash = %format!("0x{}", hex::encode(&type_hash)),
+            label = %token.symbol,
+            %conflict,
+            "token label overrides differing pre-existing metadata (labels take \
+             precedence by design; if the previous value is chain-derived, fix \
+             the upstream token-labels entry)"
+        );
+    }
+
+    // Update label fields while preserving chain-derived metadata.
     info.name = Some(token.name.clone());
     info.symbol = Some(token.symbol.clone());
     info.decimals = Some(token.decimals as i32);
@@ -514,7 +638,6 @@ fn upsert_script_label(
                             version_info.website = None;
                             version_info.canonical_reference_hash = None;
                             version_info.canonical_hash_type = None;
-                            version_info.associated_code_hash = None;
                             store.put_script_version(&data_hash, &version_info)?;
                         }
                     }
@@ -549,10 +672,19 @@ fn upsert_script_family(
     family.description = script.description.clone();
     family.website = script.website.clone();
     family.category = script.category.clone();
-    family.versions_count = active_deployments
-        .iter()
-        .filter(|deployment| matches!(deployment, ImportDeployment::Version(_)))
-        .count() as i64;
+    // Count unique attachable bytecode versions: one binary deployed under
+    // several references (e.g. RGB++ signet + BTC-testnet3) is ONE version,
+    // and an entry whose version identity is invalid attaches nothing, so the
+    // family must not claim it.
+    let mut attachable_versions: std::collections::HashSet<Vec<u8>> = Default::default();
+    for deployment in active_deployments {
+        if let ImportDeployment::Version(version) = deployment {
+            if let VersionAttachment::Attachable(version_hash) = version_attachment(version)? {
+                attachable_versions.insert(version_hash);
+            }
+        }
+    }
+    family.versions_count = attachable_versions.len() as i64;
     store.put_script_family_direct(family_id, &family)?;
     store.put_script_family_name_direct(&script.name, family_id)?;
     Ok(())
@@ -604,19 +736,33 @@ fn import_single_deployment(
     // Pseudo-scripts (Type ID, Zero Lock) have no deployed code cell and therefore
     // no meaningful version_hash — skip the version-write; code_hash-level metadata
     // was already persisted above.
+    //
+    // A version entry whose declared identity is provably not a bytecode data
+    // hash (see [`version_attachment`]) is skipped LOUDLY: attaching it would
+    // label a version that no chain rollup will ever attribute usage to, while
+    // the real deployed version stays unlabeled — the family then reads zero
+    // against thousands of live cells on chain. The reference-level label
+    // written above is kept; the canonical reference hash itself is real chain
+    // vocabulary.
     let version_hash = match deployment {
-        ImportDeployment::Version(version) => {
-            let decoded = decode_hex(&version.version_hash).ok();
-            let is_zero = decoded
-                .as_ref()
-                .map(|h| h.iter().all(|&b| b == 0))
-                .unwrap_or(true);
-            if is_zero {
-                None
-            } else {
-                decoded
+        ImportDeployment::Version(version) => match version_attachment(version)? {
+            VersionAttachment::Attachable(version_hash) => Some(version_hash),
+            VersionAttachment::NoVersion => None,
+            VersionAttachment::Invalid(reason) => {
+                warn!(
+                    family = family_id,
+                    script = %script.name,
+                    version_hash = %version.version_hash,
+                    canonical_ref_hash = %version.canonical_ref_hash,
+                    canonical_hash_type = version.canonical_hash_type.as_str(),
+                    %reason,
+                    "skipping script version attachment: fix the version_hash in \
+                     docs/metadata/scripts/{}.toml",
+                    family_id,
+                );
+                return Ok(());
             }
-        }
+        },
         ImportDeployment::Pseudo(_) => None,
     };
     let Some(version_hash) = version_hash else {
@@ -650,7 +796,6 @@ fn import_single_deployment(
     version_info.category = script.category.clone();
     version_info.description = script.description.clone();
     version_info.website = script.website.clone();
-    version_info.associated_code_hash = Some(code_hash.clone());
     if let ImportDeployment::Version(version) = deployment {
         version_info.canonical_reference_hash = Some(code_hash.clone());
         version_info.canonical_hash_type = Some(ScriptParser::parse_hash_type(
@@ -661,6 +806,65 @@ fn import_single_deployment(
     store.insert_script_version_by_label(&script.name, &version_hash)?;
     store.put_script_version_by_family_direct(family_id, &version_hash)?;
     Ok(())
+}
+
+/// Capture the tracing output a piece of production code emits.
+///
+/// The surface for "a curated label contradicts the chain" is a warning, so
+/// the only honest assertion is on the log line the production path actually
+/// writes. Tests that assert on a hand-rolled copy of the comparison would
+/// pass even if the comparison were never wired up — which is exactly the
+/// failure mode being guarded against here.
+#[cfg(test)]
+pub(crate) mod test_log_capture {
+    use std::io::Write;
+    use std::sync::{Arc, Mutex};
+
+    #[derive(Clone, Default)]
+    pub(crate) struct SharedBuffer(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for SharedBuffer {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0
+                .lock()
+                .expect("log capture buffer poisoned")
+                .extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for SharedBuffer {
+        type Writer = SharedBuffer;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    /// Run `f` with a thread-local subscriber capturing WARN and above, and
+    /// return its result together with everything that was logged.
+    pub(crate) fn capture_warnings<T>(f: impl FnOnce() -> T) -> (T, String) {
+        let buffer = SharedBuffer::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(buffer.clone())
+            .with_max_level(tracing::Level::WARN)
+            .with_ansi(false)
+            .finish();
+        let value = tracing::subscriber::with_default(subscriber, f);
+        let logged = buffer
+            .0
+            .lock()
+            .expect("log capture buffer poisoned")
+            .clone();
+        (
+            value,
+            String::from_utf8(logged).expect("tracing output must be UTF-8"),
+        )
+    }
 }
 
 #[cfg(test)]
@@ -1047,10 +1251,6 @@ disabled = true
                 )
                 .unwrap()),
                 canonical_hash_type: Some(ScriptParser::parse_hash_type("type")),
-                associated_code_hash: Some(hex::decode(
-                    "9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8"
-                )
-                .unwrap()),
                 ..Default::default()
             }
         );
@@ -1403,9 +1603,7 @@ canonical_hash_type = "data1"
                     name: None,
                     symbol: None,
                     decimals: None,
-                    total_supply: Some(0),
                     max_supply: Some(1_000_000),
-                    holders_count: 0,
                     first_seen_block: 0,
                     icon_url: None,
                     description: None,
@@ -1441,7 +1639,6 @@ canonical_hash_type = "data1"
         // The original type_hash entry with max_supply should still be intact
         let original = store.get_token(&type_hash).unwrap().unwrap();
         assert_eq!(original.max_supply, Some(1_000_000));
-        assert_eq!(original.total_supply, Some(0));
     }
 
     #[test]
@@ -1571,12 +1768,732 @@ canonical_hash_type = "data1"
 
         let version_info = store.get_script_version(&version_hash).unwrap().unwrap();
         assert_eq!(version_info.name.as_deref(), Some("Shared Version"));
-        assert_eq!(version_info.associated_code_hash, Some(mainnet_code_hash));
+        assert_eq!(
+            version_info.canonical_reference_hash,
+            Some(mainnet_code_hash)
+        );
         assert_eq!(
             store
                 .list_script_version_hashes_by_label("Shared Version")
                 .unwrap(),
             vec![version_hash]
         );
+    }
+}
+
+#[cfg(test)]
+mod label_override_conflict_tests {
+    use super::{label_override_conflicts, TokenDeployment, TokenMetadata};
+
+    fn token_info(
+        name: Option<&str>,
+        symbol: Option<&str>,
+        decimals: Option<i32>,
+    ) -> ckbadger_store::types::TokenInfo {
+        ckbadger_store::types::TokenInfo {
+            type_code_hash: vec![0u8; 32],
+            hash_type: 1,
+            type_args: vec![],
+            standard: "xudt".to_string(),
+            name: name.map(str::to_string),
+            symbol: symbol.map(str::to_string),
+            decimals,
+            max_supply: None,
+            first_seen_block: 0,
+            icon_url: None,
+            description: None,
+            transfers_count: 0,
+        }
+    }
+
+    fn label(name: &str, symbol: &str, decimals: i16) -> TokenMetadata {
+        TokenMetadata {
+            name: name.to_string(),
+            symbol: symbol.to_string(),
+            decimals,
+            standard: "xudt".to_string(),
+            icon: None,
+            description: None,
+            disabled: false,
+            mainnet: None::<TokenDeployment>,
+            testnet: None::<TokenDeployment>,
+        }
+    }
+
+    #[test]
+    fn reports_differing_chain_derived_symbol() {
+        // The RGB++ case: chain info cell says "RGB++", the bundled TOML says
+        // "RGB++ Protocol" — the override must be surfaced, not silent.
+        let existing = token_info(Some("RGB++ Protocol"), Some("RGB++"), Some(8));
+        let conflict =
+            label_override_conflicts(&existing, &label("RGB++ Protocol", "RGB++ Protocol", 8))
+                .expect("differing symbol must be reported");
+        assert!(conflict.contains("symbol"), "got: {conflict}");
+        assert!(!conflict.contains("name"), "got: {conflict}");
+    }
+
+    #[test]
+    fn silent_when_label_agrees_or_fills_gaps() {
+        assert!(
+            label_override_conflicts(&token_info(None, None, None), &label("Seal", "SEAL", 8))
+                .is_none()
+        );
+        assert!(label_override_conflicts(
+            &token_info(Some("Seal"), Some("SEAL"), Some(8)),
+            &label("Seal", "SEAL", 8)
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn reports_decimals_divergence() {
+        let conflict =
+            label_override_conflicts(&token_info(None, None, Some(6)), &label("USDI", "USDI", 8))
+                .expect("decimals divergence must be reported");
+        assert!(conflict.contains("decimals 6 -> 8"), "got: {conflict}");
+    }
+}
+
+#[cfg(test)]
+mod bundled_label_chain_consistency_tests {
+    use super::test_log_capture::capture_warnings;
+    use super::{bundled, compute_type_hash, TokenDeployment, TokenMetadata};
+    use crate::db::writer::udt::apply_onchain_token_info;
+    use crate::sync::token_helpers::{
+        parse_unique_cell_token_info, OnchainInfoBinding, OnchainTokenInfo, UniqueTokenInfo,
+    };
+    use ckbadger_store::types::TokenInfo;
+    use ckbadger_store::CkbadgerStore;
+    use std::collections::HashSet;
+    use tempfile::TempDir;
+
+    /// Real mainnet Unique Cell payload from the RGB++ Protocol issuance
+    /// (tx 0xd088a128…, output 0) — the same vector the parser test uses.
+    const RGBPP_UNIQUE_CELL_DATA_HEX: &str = "080e5247422b2b2050726f746f636f6c055247422b2b";
+    const RGBPP_MAINNET_ARGS: &str =
+        "0x08875c56644d39dd9629d291357d3026debc5d22fa88d924d60ce8f16dd50e70";
+
+    /// Every network a bundled token can deploy to. The corpus guard runs over
+    /// all of them, so no bundled row sits outside the check.
+    const NETWORKS: [&str; 2] = ["mainnet", "testnet"];
+
+    fn deployment_for<'a>(token: &'a TokenMetadata, network: &str) -> Option<&'a TokenDeployment> {
+        match network {
+            "mainnet" => token.mainnet.as_ref(),
+            "testnet" => token.testnet.as_ref(),
+            other => panic!("unhandled network in the bundled-label guard: {other}"),
+        }
+    }
+
+    /// Every token row the bundled labels produce for `network`, read back out
+    /// of a real label import rather than reconstructed from the TOML — this
+    /// is the state the sync write path meets on a fresh database.
+    fn stored_label_rows(store: &CkbadgerStore, network: &str) -> Vec<(Vec<u8>, TokenInfo)> {
+        let mut rows = Vec::new();
+        let mut seen = HashSet::new();
+        for token in bundled::udt_labels() {
+            if token.disabled {
+                continue;
+            }
+            let Some(deployment) = deployment_for(&token, network) else {
+                continue;
+            };
+            let type_hash = compute_type_hash(deployment).expect("bundled deployment must hash");
+            if !seen.insert(type_hash.clone()) {
+                continue;
+            }
+            let info = store
+                .get_token(&type_hash)
+                .expect("token read must succeed")
+                .unwrap_or_else(|| {
+                    panic!(
+                        "label import must have written token {} (0x{})",
+                        token.symbol,
+                        hex::encode(&type_hash)
+                    )
+                });
+            rows.push((type_hash, info));
+        }
+        rows
+    }
+
+    /// Import the bundled labels for `network` into a throwaway store and hand
+    /// the resulting rows to `check`.
+    fn with_imported_labels(network: &str, check: impl FnOnce(&[(Vec<u8>, TokenInfo)])) {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path().to_str().unwrap()).unwrap();
+        super::run_label_import_bundled(&store, network).unwrap();
+        check(&stored_label_rows(&store, network));
+    }
+
+    /// The guard only means something if it reaches the whole corpus. Every
+    /// enabled bundled token must deploy to a network the loop below imports;
+    /// a token outside that set would be unchecked exactly the way 1469 rows
+    /// were unchecked when only one vector was pinned.
+    #[test]
+    fn the_bundled_corpus_is_fully_reachable_by_the_guard() {
+        let labels = bundled::udt_labels();
+        assert!(labels.len() > 1000, "corpus shrank to {}", labels.len());
+        let unreachable: Vec<&str> = labels
+            .iter()
+            .filter(|token| !token.disabled)
+            .filter(|token| {
+                !NETWORKS
+                    .iter()
+                    .any(|network| deployment_for(token, network).is_some())
+            })
+            .map(|token| token.symbol.as_str())
+            .collect();
+        assert!(
+            unreachable.is_empty(),
+            "{} bundled tokens deploy to no checked network: {:?}",
+            unreachable.len(),
+            &unreachable[..unreachable.len().min(5)]
+        );
+    }
+
+    /// A Unique Cell observation that says exactly what the stored row says.
+    fn agreeing_observation(stored: &TokenInfo, binding: OnchainInfoBinding) -> OnchainTokenInfo {
+        OnchainTokenInfo {
+            info: UniqueTokenInfo {
+                decimal: stored
+                    .decimals
+                    .map(|d| u8::try_from(d).expect("bundled decimals must fit a Unique Cell byte"))
+                    .expect("label import writes decimals for every bundled token"),
+                name: stored.name.clone().unwrap_or_default(),
+                symbol: stored.symbol.clone().unwrap_or_default(),
+                total_supply: None,
+            },
+            binding,
+        }
+    }
+
+    /// A Unique Cell observation that contradicts the stored row.
+    fn contradicting_observation(
+        stored: &TokenInfo,
+        binding: OnchainInfoBinding,
+    ) -> OnchainTokenInfo {
+        let mut observation = agreeing_observation(stored, binding);
+        observation.info.name = format!("{}~chain", observation.info.name);
+        observation.info.symbol = format!("{}~chain", observation.info.symbol);
+        observation
+    }
+
+    /// Pull the `token_type_hash` field out of every captured warning.
+    fn warned_type_hashes(logs: &str) -> HashSet<String> {
+        const FIELD: &str = "token_type_hash=";
+        let mut found = HashSet::new();
+        for line in logs.lines() {
+            let Some(rest) = line.split(FIELD).nth(1) else {
+                continue;
+            };
+            let hash: String = rest.chars().take_while(char::is_ascii_hexdigit).collect();
+            if !hash.is_empty() {
+                found.insert(hash);
+            }
+        }
+        found
+    }
+
+    /// The corpus-wide guard. A bundled label is written before the first
+    /// block is indexed and (for the issuance co-occurrence binding) keeps
+    /// winning forever, so a label that contradicts the chain would otherwise
+    /// be discoverable only by a human noticing the wrong symbol in the UI —
+    /// which is exactly how the RGB++ row was found.
+    ///
+    /// Pinning one known-good vector guards one row out of ~1470. This walks
+    /// every bundled label on every network through the real write path and
+    /// requires the contradiction to be reported for each one, under both
+    /// binding kinds, so no label can be silently authoritative.
+    #[test]
+    fn every_bundled_label_is_checked_against_the_chain_at_write_time() {
+        let mut total = 0usize;
+        for network in NETWORKS {
+            with_imported_labels(network, |stored| {
+                assert!(
+                    !stored.is_empty(),
+                    "no bundled labels imported for {network}"
+                );
+                total += stored.len();
+
+                for binding in [
+                    OnchainInfoBinding::IssuanceCooccurrence,
+                    OnchainInfoBinding::XudtExtension,
+                ] {
+                    let (_, logs) = capture_warnings(|| {
+                        for (type_hash, info) in stored {
+                            let mut row = info.clone();
+                            let observed = contradicting_observation(info, binding);
+                            apply_onchain_token_info(type_hash, &mut row, Some(&observed));
+                        }
+                    });
+
+                    let warned = warned_type_hashes(&logs);
+                    let silent: Vec<String> = stored
+                        .iter()
+                        .map(|(type_hash, _)| hex::encode(type_hash))
+                        .filter(|type_hash| !warned.contains(type_hash))
+                        .collect();
+                    assert!(
+                        silent.is_empty(),
+                        "{} of {} bundled {network} labels silently outrank contradicting \
+                         on-chain metadata under {:?}; first few: {:?}",
+                        silent.len(),
+                        stored.len(),
+                        binding,
+                        &silent[..silent.len().min(5)]
+                    );
+                }
+            });
+        }
+        assert!(
+            total >= bundled::udt_labels().len(),
+            "the two networks must cover at least one row per bundled token, got {total}"
+        );
+    }
+
+    /// The other half of the same guard: agreement must stay quiet, or the
+    /// warning is noise and gets ignored. Runs over the whole corpus so real
+    /// label shapes (empty strings, unicode symbols, 0 and 255 decimals) are
+    /// covered, not just a hand-picked row.
+    #[test]
+    fn bundled_labels_that_agree_with_the_chain_are_not_reported() {
+        for network in NETWORKS {
+            with_imported_labels(network, |stored| {
+                for binding in [
+                    OnchainInfoBinding::IssuanceCooccurrence,
+                    OnchainInfoBinding::XudtExtension,
+                ] {
+                    let (_, logs) = capture_warnings(|| {
+                        for (type_hash, info) in stored {
+                            let mut row = info.clone();
+                            let observed = agreeing_observation(info, binding);
+                            apply_onchain_token_info(type_hash, &mut row, Some(&observed));
+                        }
+                    });
+                    assert!(
+                        warned_type_hashes(&logs).is_empty(),
+                        "agreeing on-chain metadata must not be reported \
+                         ({network}, {binding:?}): {logs}"
+                    );
+                }
+            });
+        }
+    }
+
+    /// The one row backed by genuine chain bytes rather than a synthesized
+    /// observation, driven through the same production path: decode the real
+    /// mainnet Unique Cell and require the imported RGB++ row to agree with
+    /// it. Regressing the bundled TOML re-fires the warning and fails here.
+    #[test]
+    fn bundled_rgbpp_label_matches_the_on_chain_info_cell() {
+        let chain = parse_unique_cell_token_info(&hex::decode(RGBPP_UNIQUE_CELL_DATA_HEX).unwrap())
+            .expect("RGB++ mainnet Unique Cell vector must parse");
+
+        let label = bundled::udt_labels()
+            .into_iter()
+            .find(|t| {
+                t.mainnet
+                    .as_ref()
+                    .is_some_and(|d| d.args.eq_ignore_ascii_case(RGBPP_MAINNET_ARGS))
+            })
+            .expect("bundled labels must contain the RGB++ Protocol mainnet deployment");
+        let deployment = label.mainnet.as_ref().expect("mainnet deployment");
+        let type_hash = compute_type_hash(deployment).unwrap();
+
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path().to_str().unwrap()).unwrap();
+        super::run_label_import_bundled(&store, "mainnet").unwrap();
+        let mut row = store
+            .get_token(&type_hash)
+            .unwrap()
+            .expect("RGB++ label row must be imported");
+
+        // RGB++ carries a plain owner-lock-hash in its xUDT args, so the chain
+        // binds its Unique Cell by issuance co-occurrence.
+        let observed = OnchainTokenInfo {
+            info: chain.clone(),
+            binding: OnchainInfoBinding::IssuanceCooccurrence,
+        };
+        let (_, logs) = capture_warnings(|| {
+            apply_onchain_token_info(&type_hash, &mut row, Some(&observed));
+        });
+
+        assert!(
+            warned_type_hashes(&logs).is_empty(),
+            "bundled RGB++ label must agree with the on-chain info cell: {logs}"
+        );
+        assert_eq!(row.symbol.as_deref(), Some(chain.symbol.as_str()));
+        assert_eq!(row.name.as_deref(), Some(chain.name.as_str()));
+        assert_eq!(row.decimals, Some(i32::from(chain.decimal)));
+    }
+}
+
+/// Guards on the TOML `version_hash` field: a version is a deployment's
+/// bytecode identity (the code cell's data hash). For a type-referenced
+/// deployment the reference hash is a type-script hash and can never be the
+/// bytecode's data hash, so `version_hash == canonical_ref_hash` under
+/// `canonical_hash_type = "type"` is a placeholder that would label a
+/// nonexistent version while the real one accumulates usage unlabeled — the
+/// exact failure that zeroed the Fiber families.
+#[cfg(test)]
+mod version_identity_tests {
+    use super::test_log_capture::capture_warnings;
+    use super::*;
+    use ckbadger_store::batch::StoreBatch;
+    use ckbadger_store::types::{LiveCellInfo, ScriptReferenceInfo};
+    use tempfile::TempDir;
+
+    fn type_entry(version_hash: &str, canonical_ref_hash: &str) -> ScriptDeploymentEntry {
+        ScriptDeploymentEntry {
+            version_hash: version_hash.to_string(),
+            canonical_ref_hash: canonical_ref_hash.to_string(),
+            canonical_hash_type: ValidatedHashType::new("type".to_string(), "canonical_hash_type")
+                .unwrap(),
+            deprecated: false,
+        }
+    }
+
+    fn script_with_mainnet_versions(
+        slug: &str,
+        name: &str,
+        versions: Vec<ScriptDeploymentEntry>,
+    ) -> ScriptMetadata {
+        ScriptMetadata {
+            metadata_slug: Some(slug.to_string()),
+            name: name.to_string(),
+            description: Some("test".to_string()),
+            website: None,
+            category: Some("lock".to_string()),
+            disabled: false,
+            mainnet: Some(ScriptNetworkMetadata {
+                versions,
+                pseudo: None,
+            }),
+            testnet: None,
+        }
+    }
+
+    #[test]
+    fn test_placeholder_type_version_hash_warns_and_skips_version_attachment() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path().to_str().unwrap()).unwrap();
+
+        let placeholder = "0x1111111111111111111111111111111111111111111111111111111111111111";
+        let script = script_with_mainnet_versions(
+            "placeholder-family",
+            "Placeholder Lock",
+            vec![type_entry(placeholder, placeholder)],
+        );
+
+        let (result, logs) = capture_warnings(|| upsert_script_label(&store, &script, "mainnet"));
+        result.unwrap();
+
+        assert!(
+            logs.contains("placeholder-family") && logs.contains("version_hash"),
+            "placeholder version_hash must be reported loudly with the family id, got: {logs}"
+        );
+        assert!(
+            logs.contains(&placeholder[2..]),
+            "warning must name the offending hash, got: {logs}"
+        );
+
+        let placeholder_bytes = decode_hex(placeholder).unwrap();
+        assert!(
+            store
+                .get_script_version(&placeholder_bytes)
+                .unwrap()
+                .is_none(),
+            "a placeholder version_hash must not create a version row"
+        );
+        assert!(
+            store
+                .list_script_version_hashes_by_family("placeholder-family")
+                .unwrap()
+                .is_empty(),
+            "placeholder must not be indexed under the family"
+        );
+        assert!(
+            store
+                .list_script_version_hashes_by_label("Placeholder Lock")
+                .unwrap()
+                .is_empty(),
+            "placeholder must not be indexed under the label"
+        );
+
+        let family = store
+            .get_script_family("placeholder-family")
+            .unwrap()
+            .expect("family row is still created for the reference-level label");
+        assert_eq!(
+            family.versions_count, 0,
+            "family must not claim a version that was never attached"
+        );
+
+        // The canonical reference itself is real chain vocabulary — its
+        // reference-level label survives so the deployment is still named.
+        let info = store
+            .get_script_info(&placeholder_bytes)
+            .unwrap()
+            .expect("reference-level script info should be labeled");
+        assert_eq!(info.name.as_deref(), Some("Placeholder Lock"));
+    }
+
+    #[test]
+    fn test_data_form_version_hash_mismatch_warns_and_skips_version_attachment() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path().to_str().unwrap()).unwrap();
+
+        let version = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let reference = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        let script = ScriptMetadata {
+            metadata_slug: Some("data-mismatch".to_string()),
+            name: "Data Mismatch".to_string(),
+            description: None,
+            website: None,
+            category: None,
+            disabled: false,
+            mainnet: Some(ScriptNetworkMetadata {
+                versions: vec![ScriptDeploymentEntry {
+                    version_hash: version.to_string(),
+                    canonical_ref_hash: reference.to_string(),
+                    canonical_hash_type: ValidatedHashType::new(
+                        "data1".to_string(),
+                        "canonical_hash_type",
+                    )
+                    .unwrap(),
+                    deprecated: false,
+                }],
+                pseudo: None,
+            }),
+            testnet: None,
+        };
+
+        let (result, logs) = capture_warnings(|| upsert_script_label(&store, &script, "mainnet"));
+        result.unwrap();
+
+        assert!(
+            logs.contains("data-mismatch"),
+            "a data-form entry whose version_hash differs from its reference must warn, got: {logs}"
+        );
+        assert!(
+            store
+                .get_script_version(&decode_hex(version).unwrap())
+                .unwrap()
+                .is_none(),
+            "mismatched data-form version must not be attached"
+        );
+        assert_eq!(
+            store
+                .get_script_family("data-mismatch")
+                .unwrap()
+                .unwrap()
+                .versions_count,
+            0
+        );
+    }
+
+    #[test]
+    fn test_shared_bytecode_version_entries_count_once_in_family_versions_count() {
+        // The RGB++ testnet shape: two type-id deployments (signet + testnet3)
+        // of the SAME bytecode are two TOML entries with one version_hash. The
+        // family has one version, not two.
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path().to_str().unwrap()).unwrap();
+
+        let shared_version = "0x7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e";
+        let script = script_with_mainnet_versions(
+            "shared-bytecode",
+            "Shared Bytecode",
+            vec![
+                type_entry(
+                    shared_version,
+                    "0xd0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0",
+                ),
+                type_entry(
+                    shared_version,
+                    "0x6161616161616161616161616161616161616161616161616161616161616161",
+                ),
+            ],
+        );
+
+        let (result, logs) = capture_warnings(|| upsert_script_label(&store, &script, "mainnet"));
+        result.unwrap();
+        assert!(
+            logs.is_empty(),
+            "two references sharing one real bytecode version are valid metadata, got: {logs}"
+        );
+
+        let family = store
+            .get_script_family("shared-bytecode")
+            .unwrap()
+            .expect("family should be imported");
+        assert_eq!(
+            family.versions_count, 1,
+            "one bytecode version deployed under two references is ONE version"
+        );
+        assert_eq!(
+            store
+                .list_script_version_hashes_by_family("shared-bytecode")
+                .unwrap(),
+            vec![decode_hex(shared_version).unwrap()]
+        );
+
+        // Both references carry the label.
+        for reference in [
+            "0xd0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0",
+            "0x6161616161616161616161616161616161616161616161616161616161616161",
+        ] {
+            let info = store
+                .get_script_info(&decode_hex(reference).unwrap())
+                .unwrap()
+                .expect("reference label should be written");
+            assert_eq!(info.name.as_deref(), Some("Shared Bytecode"));
+        }
+    }
+
+    /// Corpus guard: NO bundled script label may carry a version identity the
+    /// import path would refuse. Pinning individual families guards those
+    /// families; this walks every bundled entry on every network so a future
+    /// TOML cannot reintroduce a placeholder and silently zero a family the
+    /// way fiber-funding-lock, fiber-commitment-lock and rgb[testnet] were.
+    #[test]
+    fn no_bundled_script_label_carries_an_unattachable_version_identity() {
+        let mut checked = 0usize;
+        let mut offenders: Vec<String> = Vec::new();
+
+        for script in bundled::script_labels() {
+            if script.disabled {
+                continue;
+            }
+            let family = script.metadata_slug.clone().unwrap_or_else(|| {
+                panic!(
+                    "bundled script label without metadata_slug: {}",
+                    script.name
+                )
+            });
+            for (network, metadata) in [
+                ("mainnet", script.mainnet.as_ref()),
+                ("testnet", script.testnet.as_ref()),
+            ] {
+                let Some(metadata) = metadata else { continue };
+                for entry in &metadata.versions {
+                    checked += 1;
+                    match version_attachment(entry).expect("bundled hashes must decode") {
+                        VersionAttachment::Attachable(_) | VersionAttachment::NoVersion => {}
+                        VersionAttachment::Invalid(reason) => offenders.push(format!(
+                            "{family}.toml [{network}] version_hash={} ref={}: {reason}",
+                            entry.version_hash, entry.canonical_ref_hash
+                        )),
+                    }
+                }
+            }
+        }
+
+        assert!(
+            checked > 50,
+            "the guard must reach the whole bundled corpus, only saw {checked} version entries"
+        );
+        assert!(
+            offenders.is_empty(),
+            "{} bundled script version entries would be skipped by label import \
+             (their families would read zero usage): {:#?}",
+            offenders.len(),
+            offenders
+        );
+    }
+
+    /// End-to-end with the real bundled metadata: the testnet Fiber funding
+    /// lock label must land on the version the chain actually resolves — the
+    /// live code cell's bytecode data hash (node-verified vector) — so the
+    /// usage rollup carries the family's numbers.
+    #[test]
+    fn test_bundled_fiber_funding_labels_attach_to_the_live_code_cell_version() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        super::run_label_import_bundled(&store, "testnet").unwrap();
+
+        // Chain truth (testnet node, verified 2026-08-03): type reference
+        // 0x6c67887f... resolves to the live code cell at
+        // 0x12c569a2...:1 whose bytecode data hash is 0x17b1910f....
+        let funding_ref =
+            hex::decode("6c67887fe201ee0c7853f1682c0b77c0e6214044c156c7558269390a8afa6d7c")
+                .unwrap();
+        let funding_version =
+            hex::decode("17b1910fbcfdfc146ee2ed05587f0e862b799d33ca3c8e1c52d18f2f67716e47")
+                .unwrap();
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_cell(
+            &[0xcc; 32],
+            1,
+            &LiveCellInfo {
+                capacity: 100_00000000,
+                lock_script_hash: vec![0x11; 32],
+                lock_code_hash: vec![0x22; 32],
+                lock_hash_type: 1,
+                lock_args: vec![],
+                type_script_hash: Some(funding_ref.clone()),
+                type_code_hash: Some(vec![0x33; 32]),
+                type_hash_type: Some(1),
+                type_args: Some(vec![]),
+                data_size: 128,
+                occupied_capacity: 61_00000000,
+                udt_amount: None,
+                data_hash: Some(funding_version.clone()),
+            },
+            5,
+        );
+        batch.put_cell_by_type(&funding_ref, 5, &[0xcc; 32], 1);
+        batch.put_cell_by_data_hash(&funding_version, 5, &[0xcc; 32], 1);
+        batch.put_script_reference_info(
+            1,
+            &funding_ref,
+            &ScriptReferenceInfo {
+                reference_hash: funding_ref.clone(),
+                hash_type: 1,
+                lock_cells_count: 6000,
+                lock_live_cells_count: 5021,
+                lock_capacity_sum: 17_000_000_000_000_000,
+                lock_owned_capacity_sum: 16_131_558_405_032_860,
+                lock_used_capacity_sum: 40_000_000_000_000,
+                lock_owned_knowledge_sum: 39_182_700_000_000,
+                ..Default::default()
+            },
+        );
+        batch.commit().unwrap();
+
+        let rollups =
+            crate::db::writer::collect_current_script_reference_rollup_state(&store, &store)
+                .unwrap();
+
+        let version = rollups
+            .versions
+            .iter()
+            .find(|(hash, _)| hash == &funding_version)
+            .map(|(_, info)| info)
+            .expect("the live funding bytecode version row must exist");
+        assert_eq!(
+            version.name.as_deref(),
+            Some("Fiber Funding Lock"),
+            "the label must be attached to the version the chain resolves"
+        );
+        assert_eq!(version.family_id.as_deref(), Some("fiber-funding-lock"));
+        assert_eq!(version.lock_live_cells_count, 5021);
+        assert_eq!(version.lock_owned_capacity_sum, 16_131_558_405_032_860);
+
+        let family = rollups
+            .families
+            .iter()
+            .find(|(id, _)| id == "fiber-funding-lock")
+            .map(|(_, info)| info)
+            .expect("fiber-funding-lock family must exist");
+        assert_eq!(
+            family.live_cells_count, 5021,
+            "family usage must carry the reference's rollup, not zero"
+        );
+        assert_eq!(family.owned_capacity_sum, 16_131_558_405_032_860);
+        assert_eq!(family.owned_knowledge_sum, 39_182_700_000_000);
+        assert_eq!(family.versions_count, 1);
     }
 }

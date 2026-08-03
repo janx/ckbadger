@@ -9,6 +9,7 @@ vi.mock('@/lib/api', () => ({
     getDaoTotalDepositChart: vi.fn(),
   },
   isWarmupPendingError: vi.fn(() => false),
+  isNetworkInitializingError: vi.fn(() => false),
 }));
 
 function mockDaoStatistics(overrides: Partial<DaoStatistics> = {}): DaoStatistics {

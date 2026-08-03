@@ -37,54 +37,6 @@ impl StartupContinuityProbe {
 }
 
 impl BatchWriter {
-    pub async fn update_sync_status(
-        &self,
-        block_number: i64,
-        block_hash: &[u8],
-        tx_count: i64,
-        cells_created: i64,
-        cells_consumed: i64,
-        new_addresses: i64,
-        ema_rate: Option<f64>,
-        refresh_dao_statistics: bool,
-    ) -> Result<()> {
-        // Persist sync status in RocksDB for restart/recovery paths.
-        self.store.update_sync_status(|status| {
-            status.tip_block_number = block_number;
-            status.tip_block_hash = block_hash.to_vec();
-            status.total_transactions += tx_count;
-            status.total_cells_created += cells_created;
-            status.total_cells_consumed += cells_consumed;
-            let now = chrono::Utc::now().timestamp();
-            status.last_synced_at = now;
-            if let Some(rate) = ema_rate {
-                status.sync_ema_rate = Some(rate);
-            }
-        })?;
-
-        if refresh_dao_statistics {
-            self.refresh_latest_dao_statistics()?;
-        }
-
-        if let Some(cache) = &self.cache_invalidator {
-            let hash_hex = format!("0x{}", hex::encode(block_hash));
-            cache
-                .update_sync_status(|status| {
-                    status.update_batch(
-                        block_number,
-                        &hash_hex,
-                        tx_count,
-                        cells_created,
-                        cells_consumed,
-                        new_addresses,
-                        ema_rate,
-                    );
-                })
-                .await;
-        }
-        Ok(())
-    }
-
     pub fn find_last_consistent_block(&self) -> Result<Option<i64>> {
         // Get max block from block_headers CF
         let max_block = self.store.get_sync_tip_block()?.map(|(num, _)| num);
@@ -490,6 +442,17 @@ mod tests {
         let store = Arc::new(CkbadgerStore::open_domain(dir.path().join("domain")).unwrap());
         let append_store =
             Arc::new(CkbadgerStore::open_append_only(dir.path().join("append")).unwrap());
+        // The indexer always derives the genesis baseline at block 0 before any
+        // stats refresh runs; seed the mainnet values so the estimated-APC path
+        // (which reads GenesisBaseline::total_issuance) can compute.
+        store
+            .set_genesis_baseline(&ckbadger_store::GenesisBaseline {
+                // Exact mainnet genesis DAO `C` (not the rounded 33.6B).
+                total_issuance: 3_360_000_145_238_488_200,
+                burnt: 840_000_000_000_000_000,
+                virtual_occupied: 504_000_000_000_000_000,
+            })
+            .unwrap();
         let writer = BatchWriter::new(store.clone(), store.clone());
         (dir, store, append_store, writer)
     }
@@ -505,6 +468,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         }
     }
@@ -736,34 +702,6 @@ mod tests {
         assert_eq!(status.total_transactions, 1);
         assert_eq!(status.total_cells_created, 2);
         assert_eq!(status.total_cells_consumed, 1);
-    }
-
-    #[test]
-    fn test_update_sync_status_persists_sync_meta_in_store() {
-        let (_dir, store, _append_store, writer) = setup();
-        let first_hash = vec![0xAB; 32];
-        let second_hash = vec![0xCD; 32];
-
-        let runtime = tokio::runtime::Runtime::new().unwrap();
-        runtime.block_on(async {
-            writer
-                .update_sync_status(42, &first_hash, 10, 20, 4, 1, Some(123.0), false)
-                .await
-                .unwrap();
-            writer
-                .update_sync_status(43, &second_hash, 3, 8, 2, 1, None, false)
-                .await
-                .unwrap();
-        });
-
-        let status = store.get_sync_status().unwrap();
-        assert_eq!(status.tip_block_number, 43);
-        assert_eq!(status.tip_block_hash, second_hash);
-        assert_eq!(status.total_transactions, 13);
-        assert_eq!(status.total_cells_created, 28);
-        assert_eq!(status.total_cells_consumed, 6);
-        assert_eq!(status.sync_ema_rate, Some(123.0));
-        assert!(status.last_synced_at > 0);
     }
 
     #[test]

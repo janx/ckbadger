@@ -1,5 +1,4 @@
-use anyhow::Result;
-use std::sync::atomic::Ordering;
+use anyhow::{Context, Result};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tracing::{info, warn};
@@ -10,6 +9,12 @@ use ckbadger_store::{types::SyncStatus, CkbadgerStore, RuntimeStatus, StoreRunti
 use crate::cycles_worker::spawn_cycles_worker;
 use crate::db::Repository;
 use crate::label_import::run_label_import as label_import_run;
+use crate::lifecycle::{
+    annotate_rebuild_required, fail_fast_if_bulk_build_session_incomplete, is_rebuild_required,
+    StoreLocation, REBUILD_REQUIRED_EXIT_CODE,
+};
+use crate::network_guard::{establish_db_network_identity, verify_genesis_hash};
+use crate::rpc::CkbRpcClient;
 use crate::runtime_diag::{generate_run_id, read_cgroup_memory_snapshot};
 use crate::sync::Indexer;
 use crate::Config;
@@ -35,6 +40,7 @@ pub struct IndexerServiceConfig {
     pub network: String,
     pub poll_interval_ms: u64,
     pub bulk_sync_threshold: u64,
+    pub bulk_memory_budget_gb: Option<u64>,
     pub store_runtime_config: StoreRuntimeConfig,
     pub decoder_cache_path: String,
     pub dob_decode_dir: String,
@@ -52,6 +58,7 @@ impl From<IndexerServiceConfig> for Config {
             poll_interval_ms: svc.poll_interval_ms,
             start_block: None,
             bulk_sync_threshold: svc.bulk_sync_threshold,
+            bulk_memory_budget_gb: svc.bulk_memory_budget_gb,
             fast_sync_mode: true,
             ckb_db_path: svc.ckb_db_path,
             metadata_path: svc.metadata_path,
@@ -127,6 +134,23 @@ async fn run_startup_label_import(store: Arc<CkbadgerStore>, config: &Config) ->
 pub async fn run_indexer_sync(mut config: Config) -> Result<()> {
     config.validate()?;
 
+    // Every rebuild-required error raised below is annotated with this, so the
+    // operator is told WHICH network's stores to delete. Under the multi-network
+    // orchestrator a bare "delete RocksDB" is ambiguous.
+    let store_location = store_location_from_config(&config);
+
+    info!("Connecting to CKB node: {}", config.ckb_rpc_url);
+
+    // Resolve the node's chain before opening or mutating either chain store.
+    // The same validated client is reused for the genesis economic baseline.
+    let guard_rpc = CkbRpcClient::new(&config.ckb_rpc_url);
+    let node_genesis = guard_rpc
+        .get_block_hash(0)
+        .await
+        .context("failed to fetch genesis hash from CKB node")?
+        .ok_or_else(|| anyhow::anyhow!("CKB node returned no genesis block (block 0)"))?;
+    verify_genesis_hash(&config.network, &node_genesis)?;
+
     // Use VectorRep memtable (O(1) insert) for the indexer. The indexer is
     // the sole writer — no concurrent memtable access. Sort deferred to
     // background memtable→SST flush. Safe for both bulk sync and live sync
@@ -141,6 +165,18 @@ pub async fn run_indexer_sync(mut config: Config) -> Result<()> {
         &config.domain_data_path,
         config.store_runtime_config,
     )?);
+
+    // A partial bulk artifact is never a supported startup state. Check it
+    // before network tagging, sync-status repair, runtime markers, or labels
+    // can mutate the domain store.
+    fail_fast_if_bulk_build_session_incomplete(store.as_ref())
+        .map_err(|error| annotate_rebuild_required(error, &store_location))?;
+
+    // This is the first domain-store mutation on startup. Existing tagged DBs
+    // must match; old untagged DBs must prove their chain through persisted
+    // block 0 before the canonical identity is written.
+    establish_db_network_identity(&store, &config.network, &node_genesis)?;
+
     info!(
         "Opening ckbadger append-only store at: {}",
         config.append_only_data_path
@@ -299,7 +335,78 @@ pub async fn run_indexer_sync(mut config: Config) -> Result<()> {
         info!("Resuming sync from block {}", db_tip);
     }
 
-    info!("Connecting to CKB node: {}", config.ckb_rpc_url);
+    // --- genesis economic baseline (derive once from block 0) ---
+    // Runs on the shared startup path (same place as the Plan-1 guards, before
+    // `Indexer::new` and the sync loop), so it covers both bulk and live sync.
+    // Reuses `guard_rpc` (the local client the guards built). Idempotent: the
+    // `is_none()` check makes re-runs a no-op once the baseline is persisted.
+    if store.get_genesis_baseline()?.is_none() {
+        use crate::genesis_baseline::{compute_genesis_baseline, GenesisCell};
+        use crate::parser::{block::BlockParser, cell::CellParser};
+
+        let genesis = guard_rpc
+            .get_block_by_number(0)
+            .await
+            .context("failed to fetch genesis block for economic baseline")?
+            .ok_or_else(|| anyhow::anyhow!("CKB node returned no genesis block (block 0)"))?;
+
+        let parsed = BlockParser::parse(&genesis.block).context("failed to parse genesis block")?;
+        let mut cells: Vec<GenesisCell> = Vec::new();
+        for tx in &genesis.block.transactions {
+            for pc in CellParser::parse_outputs(tx)
+                .context("failed to parse genesis transaction outputs")?
+            {
+                cells.push(GenesisCell {
+                    capacity: pc.capacity,
+                    lock_args: pc.lock_args,
+                });
+            }
+        }
+
+        let baseline = compute_genesis_baseline(
+            &parsed.dao,
+            &cells,
+            ckbadger_common::burn_policy::burn_policy(&config.network).as_ref(),
+        )?;
+        info!(
+            network = %config.network,
+            total_issuance = %baseline.total_issuance,
+            burnt = %baseline.burnt,
+            virtual_occupied = %baseline.virtual_occupied,
+            "derived genesis economic baseline"
+        );
+        store.set_genesis_baseline(&baseline)?;
+    }
+
+    // --- consensus secondary issuance per epoch ---
+    // Required by the per-block miner secondary split
+    // `floor(s_i * U_{i-1} / C_{i-1})` (RFC-0023). Re-read from the node on
+    // every start and persisted, so a node/network mismatch surfaces here
+    // rather than as silently wrong economics.
+    {
+        let secondary_epoch_reward = guard_rpc
+            .get_secondary_epoch_reward()
+            .await
+            .context("failed to fetch consensus secondary_epoch_reward")?;
+        if let Some(existing) = store.get_secondary_epoch_reward()? {
+            if existing != secondary_epoch_reward {
+                anyhow::bail!(
+                    "consensus secondary_epoch_reward changed for this database: persisted={}, node={}; \
+                     the DAO economics series was built with the persisted value — re-sync from genesis",
+                    existing,
+                    secondary_epoch_reward
+                );
+            }
+        } else {
+            info!(
+                network = %config.network,
+                secondary_epoch_reward,
+                "persisted consensus secondary epoch reward"
+            );
+            store.set_secondary_epoch_reward(secondary_epoch_reward)?;
+        }
+    }
+
     run_startup_label_import(store.clone(), &config).await?;
 
     let indexer = Indexer::new(
@@ -435,8 +542,19 @@ pub async fn run_indexer_sync(mut config: Config) -> Result<()> {
             info!(
                 run_id = %indexer_for_progress.run_id(),
                 memtable_mb = memory_stats.rocksdb_memtable_bytes / (1024 * 1024),
+                domain_memtable_mb =
+                    memory_stats.rocksdb_domain_memtable_bytes / (1024 * 1024),
+                append_only_memtable_mb =
+                    memory_stats.rocksdb_append_only_memtable_bytes / (1024 * 1024),
                 block_cache_mb = memory_stats.rocksdb_block_cache_bytes / (1024 * 1024),
+                table_readers_mb = memory_stats.rocksdb_table_readers_bytes / (1024 * 1024),
+                wbm_usage_mb = memory_stats.wbm_usage_bytes / (1024 * 1024),
+                wbm_budget_mb = memory_stats.wbm_budget_bytes / (1024 * 1024),
                 compaction_pending_mb = memory_stats.compaction_pending_bytes / (1024 * 1024),
+                domain_compaction_pending_mb =
+                    memory_stats.domain_compaction_pending_bytes / (1024 * 1024),
+                append_only_compaction_pending_mb =
+                    memory_stats.append_only_compaction_pending_bytes / (1024 * 1024),
                 running_compactions = memory_stats.num_running_compactions,
                 l0_files = memory_stats.l0_files_count,
                 l0_max = memory_stats.l0_files_max,
@@ -668,9 +786,7 @@ pub async fn run_indexer_sync(mut config: Config) -> Result<()> {
                     reason,
                     "Received shutdown signal, requesting graceful shutdown..."
                 );
-                indexer_for_shutdown
-                    .shutdown_flag()
-                    .store(true, Ordering::SeqCst);
+                indexer_for_shutdown.request_shutdown();
             }
             Err(e) => {
                 tracing::error!("Failed to listen for shutdown signal: {}", e);
@@ -700,10 +816,26 @@ pub async fn run_indexer_sync(mut config: Config) -> Result<()> {
             }
             tracing::error!("Indexer terminated with error: {}", e);
             indexer.finalize_bulk_sync_perf_failed();
-            indexer.mark_runtime_shutdown("run_error", 1);
+            if is_rebuild_required(e) {
+                indexer.mark_runtime_shutdown(
+                    "rebuild_required",
+                    i32::from(REBUILD_REQUIRED_EXIT_CODE),
+                );
+            } else {
+                indexer.mark_runtime_shutdown("run_error", 1);
+            }
         }
     }
-    run_result
+    run_result.map_err(|error| annotate_rebuild_required(error, &store_location))
+}
+
+/// Identity of the chain stores this indexer process owns.
+fn store_location_from_config(config: &Config) -> StoreLocation {
+    StoreLocation::new(
+        config.network.as_str(),
+        config.domain_data_path.as_str(),
+        config.append_only_data_path.as_str(),
+    )
 }
 
 /// Run label import from a service config.
@@ -1035,6 +1167,61 @@ async fn wait_for_shutdown_signal() -> std::io::Result<&'static str> {
 mod tests {
     use super::*;
 
+    fn testnet_config() -> Config {
+        serde_json::from_str(
+            r#"{
+                "domain_data_path": "/srv/ckbadger/testnet/domain",
+                "append_only_data_path": "/srv/ckbadger/testnet/append-only",
+                "build_version": "test",
+                "ckb_rpc_url": "http://127.0.0.1:8114",
+                "ckb_db_path": "/srv/ckb/testnet/data/db",
+                "network": "testnet"
+            }"#,
+        )
+        .expect("test config must deserialize")
+    }
+
+    #[test]
+    fn store_location_names_the_network_and_both_chain_stores() {
+        let location = store_location_from_config(&testnet_config()).to_string();
+
+        assert!(location.contains("network=testnet"), "{location}");
+        assert!(
+            location.contains("domain_store=/srv/ckbadger/testnet/domain"),
+            "{location}"
+        );
+        assert!(
+            location.contains("append_only_store=/srv/ckbadger/testnet/append-only"),
+            "{location}"
+        );
+    }
+
+    /// A rebuild-required error leaving `run_indexer_sync` must tell the operator
+    /// WHICH network's stores to delete — bare "delete RocksDB" is ambiguous once
+    /// the orchestrator runs several indexers side by side.
+    #[test]
+    fn annotated_rebuild_required_error_names_the_network_and_stores() {
+        let location = store_location_from_config(&testnet_config());
+        let error = anyhow::Error::new(crate::lifecycle::RebuildRequiredError::new(
+            "startup fail-fast: detected incomplete bulk build session",
+        ));
+
+        let annotated = annotate_rebuild_required(error, &location);
+
+        assert!(is_rebuild_required(&annotated));
+        let rendered = format!("{annotated:#}");
+        assert!(rendered.contains("network=testnet"), "{rendered}");
+        assert!(
+            rendered.contains("domain_store=/srv/ckbadger/testnet/domain"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("append_only_store=/srv/ckbadger/testnet/append-only"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("re-sync from genesis"), "{rendered}");
+    }
+
     #[test]
     fn test_queue_fill_pct() {
         assert_eq!(queue_fill_pct(Some(5), Some(10)), Some(50.0));
@@ -1355,6 +1542,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
         let header2 = CachedBlockHeader {
@@ -1367,6 +1557,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
         let live_cell = LiveCellInfo {
@@ -1468,10 +1661,12 @@ mod tests {
             network: "mainnet".to_string(),
             poll_interval_ms: 500,
             bulk_sync_threshold: 100,
+            bulk_memory_budget_gb: Some(20),
             store_runtime_config: StoreRuntimeConfig {
                 memory_budget_gb: Some(24),
                 direct_io_reads: false,
                 vector_memtable: false,
+                network_count: std::num::NonZeroUsize::MIN,
             },
             decoder_cache_path: "/data/decoder-cache".to_string(),
             dob_decode_dir: "/workdir/media".to_string(),
@@ -1489,6 +1684,7 @@ mod tests {
         assert_eq!(config.network, "mainnet");
         assert_eq!(config.poll_interval_ms, 500);
         assert_eq!(config.bulk_sync_threshold, 100);
+        assert_eq!(config.bulk_memory_budget_gb, Some(20));
         assert!(config.fast_sync_mode);
         assert!(!config.force_startup_cleanup);
         assert!(config.start_block.is_none());

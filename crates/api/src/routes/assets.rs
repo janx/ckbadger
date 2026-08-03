@@ -3,10 +3,11 @@ use axum::{
     routing::get,
     Json, Router,
 };
+use ckbadger_common::TokenBalance;
 use ckbadger_store::{
     types::{
-        MnftCollectionAggregate, ObjectCollectionActivityEntry, DID_CKB_SENTINEL_COLLECTION,
-        DOTBIT_SENTINEL_COLLECTION,
+        IdentityStandard, MnftCollectionAggregate, ObjectCollectionActivityEntry,
+        BIT_CELL_SENTINEL_COLLECTION, DID_CKB_SENTINEL_COLLECTION, DOTBIT_SENTINEL_COLLECTION,
     },
     CkbadgerStore,
 };
@@ -22,45 +23,71 @@ use crate::response::{
     default_limit, ok, ApiError, ApiResult, ApiRouteError, CursorPaginatedResponse,
 };
 use crate::utils::{
-    apply_owned_capacity_delta, date_keys_inclusive, parse_chart_date_range,
-    resolve_collection_standard, resolve_object_collection_composition_tier_override,
-    resolve_object_collection_name,
+    apply_owned_capacity_delta, date_keys_inclusive, parse_asset_id_max32, parse_block_tx_cursor,
+    parse_chart_date_range, resolve_collection_standard,
+    resolve_object_collection_composition_tier_override, resolve_object_collection_name,
 };
 use crate::warmup::CachedAssetEntry;
 use crate::AppState;
 
 fn is_identity_sentinel(collection_id: &[u8]) -> bool {
-    collection_id == DOTBIT_SENTINEL_COLLECTION || collection_id == DID_CKB_SENTINEL_COLLECTION
+    collection_id == DOTBIT_SENTINEL_COLLECTION
+        || collection_id == BIT_CELL_SENTINEL_COLLECTION
+        || collection_id == DID_CKB_SENTINEL_COLLECTION
+}
+
+/// Which store a collection's aggregate — and therefore its item rows — comes
+/// from. Resolved once by [`get_collection_aggregate`] so callers never have
+/// to re-derive the collection type from the normalised aggregate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ObjectCollectionSource {
+    /// `CF_IDENTITY_AGG` (.bit / bit-cell / did:ckb sentinels).
+    Identity,
+    /// `CF_MNFT_COLLECTION_AGG` (mNFT classes).
+    Mnft,
+    /// `CF_CLUSTER_AGG` (Spore/DOB clusters).
+    SporeCluster,
+}
+
+/// A collection aggregate together with the store it was resolved from.
+pub(super) struct ResolvedCollection {
+    pub(super) source: ObjectCollectionSource,
+    pub(super) aggregate: MnftCollectionAggregate,
 }
 
 /// Read the collection aggregate from the correct CF (identity vs object).
 ///
 /// Identity sentinel collections store aggregates in `CF_IDENTITY_AGG`;
-/// all other collections use `CF_MNFT_COLLECTION_AGG`.  The returned
-/// [`MnftCollectionAggregate`] is a normalised view so callers don't
-/// need to branch on the collection type.
+/// mNFT collections use `CF_MNFT_COLLECTION_AGG`; Spore/DOB clusters use
+/// `CF_CLUSTER_AGG`.  The returned [`MnftCollectionAggregate`] is a normalised
+/// view, and the accompanying [`ObjectCollectionSource`] tells callers which
+/// row source belongs to it.
 fn get_collection_aggregate(
     store: &CkbadgerStore,
     collection_id: &[u8],
-) -> anyhow::Result<Option<MnftCollectionAggregate>> {
+) -> anyhow::Result<Option<ResolvedCollection>> {
     if is_identity_sentinel(collection_id) {
         let opt = store.get_identity_collection_aggregate(collection_id)?;
         return Ok(opt.map(|id_agg| {
             use ckbadger_store::types::ObjectStandard;
-            MnftCollectionAggregate {
-                name: id_agg.name,
-                // ObjectStandard has no DotBit/DidCkb variants; Spore is a
-                // placeholder.  Display-level standard is resolved by
-                // resolve_collection_standard() using collection_id, not this field.
-                standard: match id_agg.standard {
-                    ckbadger_store::types::IdentityStandard::DotBit => ObjectStandard::Spore,
-                    ckbadger_store::types::IdentityStandard::DidCkb => ObjectStandard::Spore,
+            ResolvedCollection {
+                source: ObjectCollectionSource::Identity,
+                aggregate: MnftCollectionAggregate {
+                    name: id_agg.name,
+                    // ObjectStandard has no DotBit/DidCkb variants; Spore is a
+                    // placeholder.  Display-level standard is resolved by
+                    // resolve_collection_standard() using collection_id, not this field.
+                    standard: match id_agg.standard {
+                        ckbadger_store::types::IdentityStandard::DotBit => ObjectStandard::Spore,
+                        ckbadger_store::types::IdentityStandard::BitCell => ObjectStandard::Spore,
+                        ckbadger_store::types::IdentityStandard::DidCkb => ObjectStandard::Spore,
+                    },
+                    total_count: id_agg.total_count,
+                    live_count: id_agg.live_count,
+                    holders_count: id_agg.holders_count,
+                    activities_count: id_agg.activities_count,
+                    ..Default::default()
                 },
-                total_count: id_agg.total_count,
-                live_count: id_agg.live_count,
-                holders_count: id_agg.holders_count,
-                activities_count: id_agg.activities_count,
-                ..Default::default()
             }
         }));
     }
@@ -69,24 +96,30 @@ fn get_collection_aggregate(
     // The unified /assets list includes both sources, so the detail endpoint
     // must be able to resolve IDs from either CF.
     if let Some(agg) = store.get_mnft_collection_aggregate(collection_id)? {
-        return Ok(Some(agg));
+        return Ok(Some(ResolvedCollection {
+            source: ObjectCollectionSource::Mnft,
+            aggregate: agg,
+        }));
     }
 
     // Fallback: Spore/DOB cluster from CF_CLUSTER_AGG
     if let Some(cluster) = store.get_cluster_aggregate(collection_id)? {
         use ckbadger_store::types::ObjectStandard;
-        return Ok(Some(MnftCollectionAggregate {
-            name: cluster.name,
-            standard: ObjectStandard::Spore,
-            total_count: cluster.total_count,
-            live_count: cluster.live_count,
-            holders_count: cluster.owner_count,
-            activities_count: 0,
-            btc_ckb_count: cluster.btc_ckb_count,
-            pure_ckb_count: cluster.pure_ckb_count,
-            decentralized_mixture_count: cluster.decentralized_mixture_count,
-            centralized_mixture_count: cluster.centralized_mixture_count,
-            unknown_count: cluster.unknown_count,
+        return Ok(Some(ResolvedCollection {
+            source: ObjectCollectionSource::SporeCluster,
+            aggregate: MnftCollectionAggregate {
+                name: cluster.name,
+                standard: ObjectStandard::Spore,
+                total_count: cluster.total_count,
+                live_count: cluster.live_count,
+                holders_count: cluster.owner_count,
+                activities_count: 0,
+                btc_ckb_count: cluster.btc_ckb_count,
+                pure_ckb_count: cluster.pure_ckb_count,
+                decentralized_mixture_count: cluster.decentralized_mixture_count,
+                centralized_mixture_count: cluster.centralized_mixture_count,
+                unknown_count: cluster.unknown_count,
+            },
         }));
     }
 
@@ -96,6 +129,9 @@ fn get_collection_aggregate(
 const NFT_ACTIVITY_SCAN_CHUNK_SIZE: usize = 128;
 const NFT_ACTIVITY_COUNT_CACHE_TTL: Duration = Duration::from_secs(300);
 const NFT_HOLDER_LIST_CACHE_TTL: Duration = Duration::from_secs(30);
+
+type CellOutpoint = (Vec<u8>, i16);
+pub(super) type LiveBitCellOutpoints = HashMap<Vec<u8>, CellOutpoint>;
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
@@ -537,17 +573,23 @@ fn fetch_assets_cached(
     all_cached
         .sort_by(|a, b| compare_asset_entries(a, b, request.sort_key, request.sort_direction));
 
-    // Apply cursor-based pagination: skip items up to and including the cursor item
-    if let Some(cursor_str) = request.cursor {
-        if let Some((c_type, c_id)) = parse_asset_cursor(cursor_str) {
-            // Find the cursor item by its unique (id, asset_type) and skip past it
-            if let Some(pos) = all_cached
-                .iter()
-                .position(|e| e.id == c_id && e.asset_type == c_type)
-            {
-                all_cached = all_cached.split_off(pos + 1);
-            }
-        }
+    // Apply cursor-based pagination: skip items up to and including the cursor
+    // item. A cursor that names no row in this result set is an error, not a
+    // silent restart at page 1 — the row it named is gone (or the filters
+    // changed under it), and re-serving page 1 would hand the client rows it
+    // has already seen and never terminate. This is the same answer `/tokens`
+    // gives for its own missing-row cursor.
+    if let Some((c_type, c_id)) = parse_optional_asset_cursor(request.cursor)? {
+        let pos = all_cached
+            .iter()
+            .position(|e| e.id == c_id && e.asset_type == c_type)
+            .ok_or_else(|| {
+                ApiError::bad_request(format!(
+                    "Invalid asset cursor: {c_type}:{c_id} names no asset in this result set; \
+                     drop the cursor to restart from the first page"
+                ))
+            })?;
+        all_cached = all_cached.split_off(pos + 1);
     }
 
     all_cached.truncate((request.limit + 1) as usize);
@@ -595,24 +637,57 @@ fn normalize_assets_composition_tier(
     }
 }
 
-/// Parse cursor string.
-/// Current format: "asset_type:id"
-fn parse_asset_cursor(cursor: &str) -> Option<(String, String)> {
-    let normalize_type = |asset_type: &str| match asset_type {
-        "token" => Some("token"),
-        "object" => Some("object"),
-        "identity" => Some("identity"),
-        _ => None,
+/// Parse an `"<asset_type>:<id>"` `/assets` pagination cursor.
+///
+/// Returns `Result`, not `Option`. The `Option` form combined with the caller's
+/// nested `if let Some(..)` made an unparseable cursor indistinguishable from
+/// "no cursor", so `?cursor=zzzz` answered 200 with page 1 again and a client
+/// resending its corrupted cursor paged forever on the first page — while
+/// `/tokens?cursor=zzzz` correctly answered 400. This is the same shape
+/// `parse_cell_cursor` and `parse_by_script_cursor` were converted away from;
+/// `/assets` was the one that got missed.
+///
+/// The three asset types are the complete set `warmup` can emit (`token`, and
+/// `object`/`identity` split by collection standard), so an unknown type is a
+/// corrupt cursor rather than a forward-compatible one.
+///
+/// Splitting on the *first* colon only is load-bearing: identity ids such as
+/// `did:ckb` contain one.
+fn parse_asset_cursor(cursor: &str) -> Result<(&'static str, &str), ApiRouteError> {
+    let invalid = |detail: String| {
+        ApiError::bad_request(format!(
+            "Invalid asset cursor: expected \"<token|object|identity>:<id>\", {detail}"
+        ))
     };
 
-    let parts: Vec<&str> = cursor.splitn(2, ':').collect();
-    if parts.len() == 2 {
-        if let Some(asset_type) = normalize_type(parts[0]) {
-            return Some((asset_type.to_string(), parts[1].to_string()));
-        }
+    let (asset_type, id) = cursor
+        .split_once(':')
+        .ok_or_else(|| invalid(format!("got {cursor:?}")))?;
+
+    let asset_type = match asset_type {
+        "token" => "token",
+        "object" => "object",
+        "identity" => "identity",
+        other => return Err(invalid(format!("got an unknown asset type {other:?}"))),
+    };
+    if id.is_empty() {
+        return Err(invalid(format!("got an empty id in {cursor:?}")));
     }
 
-    None
+    Ok((asset_type, id))
+}
+
+/// Parse an optional `/assets` cursor.
+///
+/// Same contract as the cursors in [`crate::utils::params`]: absent and empty
+/// both mean page 1, present-but-malformed is an error.
+fn parse_optional_asset_cursor(
+    cursor: Option<&str>,
+) -> Result<Option<(&'static str, &str)>, ApiRouteError> {
+    match cursor {
+        None | Some("") => Ok(None),
+        Some(cursor) => Ok(Some(parse_asset_cursor(cursor)?)),
+    }
 }
 
 fn apply_direction(ordering: Ordering, direction: SortDirection) -> Ordering {
@@ -629,6 +704,24 @@ fn parse_i128_opt(value: Option<&str>) -> Option<i128> {
 fn compare_optional_i128(
     left: Option<i128>,
     right: Option<i128>,
+    direction: SortDirection,
+) -> Ordering {
+    match (left, right) {
+        (None, None) => Ordering::Equal,
+        (None, Some(_)) => Ordering::Greater,
+        (Some(_), None) => Ordering::Less,
+        (Some(l), Some(r)) => apply_direction(l.cmp(&r), direction),
+    }
+}
+
+/// Parse an exact aggregate token balance for the `total_supply` sort column.
+fn parse_token_balance_opt(value: Option<&str>) -> Option<TokenBalance> {
+    value?.parse::<TokenBalance>().ok()
+}
+
+fn compare_optional_token_balance(
+    left: Option<TokenBalance>,
+    right: Option<TokenBalance>,
     direction: SortDirection,
 ) -> Ordering {
     match (left, right) {
@@ -809,9 +902,9 @@ fn compare_asset_entries(
             direction,
         ),
         AssetSortKey::Type => apply_direction(left.standard.cmp(&right.standard), direction),
-        AssetSortKey::Supply => compare_optional_i128(
-            parse_i128_opt(left.total_supply.as_deref()),
-            parse_i128_opt(right.total_supply.as_deref()),
+        AssetSortKey::Supply => compare_optional_token_balance(
+            parse_token_balance_opt(left.total_supply.as_deref()),
+            parse_token_balance_opt(right.total_supply.as_deref()),
             direction,
         ),
         AssetSortKey::Transfers24h => {
@@ -873,42 +966,34 @@ fn decode_object_collection_id(
     if normalized == "did:ckb" || normalized == "did_ckb" {
         return Ok(DID_CKB_SENTINEL_COLLECTION.to_vec());
     }
-    hex::decode(raw.strip_prefix("0x").unwrap_or(raw))
-        .map_err(|_| ApiError::bad_request("Invalid object collection ID"))
+    if matches!(normalized.as_str(), "bit_cell" | "bit-cell" | ".bit-cell") {
+        return Ok(BIT_CELL_SENTINEL_COLLECTION.to_vec());
+    }
+    parse_asset_id_max32(raw, "object collection ID")
 }
 
 pub(crate) fn decode_object_item_cursor(
     raw: &str,
 ) -> Result<Vec<u8>, (axum::http::StatusCode, Json<ApiError>)> {
-    hex::decode(raw.strip_prefix("0x").unwrap_or(raw))
-        .map_err(|_| ApiError::bad_request("Invalid object items cursor"))
+    parse_asset_id_max32(raw, "object items cursor (expected an item ID)")
 }
 
 pub(super) fn decode_item_id(
     raw: &str,
 ) -> Result<Vec<u8>, (axum::http::StatusCode, Json<ApiError>)> {
-    hex::decode(raw.strip_prefix("0x").unwrap_or(raw))
-        .map_err(|_| ApiError::bad_request("Invalid item ID"))
+    parse_asset_id_max32(raw, "item ID")
 }
 
+/// Activity cursor for the asset, identity and spore item/collection feeds.
+///
+/// These handlers build the seek key on the axum task itself rather than inside
+/// `spawn_blocking`, so a value that trips a key encoder's assert unwinds
+/// straight out of the handler — not even wrapped in a 500. All validation
+/// therefore lives in the shared parser.
 pub(crate) fn decode_activity_cursor(
     raw: &str,
 ) -> Result<(i64, i32), (axum::http::StatusCode, Json<ApiError>)> {
-    let mut parts = raw.split(':');
-    let block = parts
-        .next()
-        .ok_or_else(|| ApiError::bad_request("Invalid activity cursor"))?
-        .parse::<i64>()
-        .map_err(|_| ApiError::bad_request("Invalid activity cursor"))?;
-    let tx_index = parts
-        .next()
-        .ok_or_else(|| ApiError::bad_request("Invalid activity cursor"))?
-        .parse::<i32>()
-        .map_err(|_| ApiError::bad_request("Invalid activity cursor"))?;
-    if parts.next().is_some() {
-        return Err(ApiError::bad_request("Invalid activity cursor"));
-    }
-    Ok((block, tx_index))
+    parse_block_tx_cursor(raw, "activity cursor")
 }
 
 fn decode_object_collection_holders_cursor(
@@ -1555,6 +1640,7 @@ async fn get_object_item_detail(
 pub(super) enum NftLifecycleStandard {
     MnftToken,
     DotBit,
+    BitCell,
     DidCkb,
     Spore,
 }
@@ -1573,7 +1659,9 @@ fn collect_nft_item_lifecycle_actions(
             .store
             .list_dotbit_account_outpoints_by_account_id(nft_id_bytes)
             .map_err(|e| ApiError::internal(e.to_string()))?,
-        NftLifecycleStandard::DidCkb | NftLifecycleStandard::Spore => state
+        NftLifecycleStandard::BitCell
+        | NftLifecycleStandard::DidCkb
+        | NftLifecycleStandard::Spore => state
             .store
             .list_spore_outpoints_by_spore_id(nft_id_bytes)
             .map_err(|e| ApiError::internal(e.to_string()))?,
@@ -1728,6 +1816,15 @@ async fn list_mnft_item_activities(
     let limit = params.limit.clamp(1, 100);
     let action_filter = normalize_activity_action_filter(params.action.as_deref())?;
     let object_id_bytes = decode_item_id(&object_id)?;
+    // Validated before the existence lookup: request shape is a boundary
+    // concern, so whether a malformed cursor is reported must not depend on
+    // whether the item happens to exist.
+    let cursor = params
+        .cursor
+        .as_deref()
+        .map(decode_activity_cursor)
+        .transpose()?;
+
     let entry = state
         .store
         .get_mnft(&object_id_bytes)
@@ -1742,11 +1839,6 @@ async fn list_mnft_item_activities(
         ));
     }
 
-    let cursor = params
-        .cursor
-        .as_deref()
-        .map(decode_activity_cursor)
-        .transpose()?;
     let response = build_nft_item_activities_response(
         &state,
         &object_id_bytes,
@@ -1766,7 +1858,9 @@ async fn get_object_collection(
 
     let agg = get_collection_aggregate(state.store.as_ref(), &collection_id_bytes)
         .map_err(|e| ApiError::internal(e.to_string()))?;
-    let agg = agg.ok_or_else(|| ApiError::not_found("Object collection not found"))?;
+    let agg = agg
+        .ok_or_else(|| ApiError::not_found("Object collection not found"))?
+        .aggregate;
 
     let daily = state
         .store
@@ -1926,10 +2020,11 @@ async fn get_object_collection(
     })
 }
 
-pub(crate) fn fetch_did_collection_entries_by_ids(
+fn fetch_identity_collection_entries_by_ids(
     store: &CkbadgerStore,
     collection_id_bytes: &[u8],
     nft_ids: &[Vec<u8>],
+    expected_standard: IdentityStandard,
 ) -> Result<Vec<(Vec<u8>, ckbadger_store::types::IdentityEntry)>, ApiRouteError> {
     let mut out = Vec::with_capacity(nft_ids.len());
 
@@ -1939,16 +2034,18 @@ pub(crate) fn fetch_did_collection_entries_by_ids(
             .map_err(|e| ApiError::internal(e.to_string()))?
             .ok_or_else(|| {
                 ApiError::internal(format!(
-                    "nft_by_collection index points to missing identity_data did:ckb entry: collection_id=0x{}, nft_id=0x{}",
+                    "identity_by_collection index points to missing identity_data entry: collection_id=0x{}, nft_id=0x{}, expected_standard={}",
                     hex::encode(collection_id_bytes),
-                    hex::encode(nft_id)
+                    hex::encode(nft_id),
+                    expected_standard.as_str()
                 ))
             })?;
-        if entry.standard != ckbadger_store::types::IdentityStandard::DidCkb {
+        if entry.standard != expected_standard {
             return Err(ApiError::internal(format!(
-                "did:ckb collection index mismatch: collection_id=0x{}, nft_id=0x{}, entry_standard={}",
+                "identity collection index mismatch: collection_id=0x{}, nft_id=0x{}, expected_standard={}, entry_standard={}",
                 hex::encode(collection_id_bytes),
                 hex::encode(nft_id),
+                expected_standard.as_str(),
                 entry.standard.as_str()
             )));
         }
@@ -1958,36 +2055,59 @@ pub(crate) fn fetch_did_collection_entries_by_ids(
     Ok(out)
 }
 
-pub(crate) fn fetch_dotbit_collection_entries_by_ids(
+pub(super) fn get_live_bit_cell_outpoints_by_identity_ids(
     store: &CkbadgerStore,
-    collection_id_bytes: &[u8],
-    nft_ids: &[Vec<u8>],
-) -> Result<Vec<(Vec<u8>, ckbadger_store::types::IdentityEntry)>, ApiRouteError> {
-    let mut out = Vec::with_capacity(nft_ids.len());
-
-    for nft_id in nft_ids {
-        let entry = store
-            .get_identity(nft_id)
-            .map_err(|e| ApiError::internal(e.to_string()))?
-            .ok_or_else(|| {
-                ApiError::internal(format!(
-                    "nft_by_collection index points to missing identity_data dotbit entry: collection_id=0x{}, nft_id=0x{}",
-                    hex::encode(collection_id_bytes),
-                    hex::encode(nft_id)
-                ))
-            })?;
-        if entry.standard != ckbadger_store::types::IdentityStandard::DotBit {
-            return Err(ApiError::internal(format!(
-                "dotbit collection index mismatch: collection_id=0x{}, nft_id=0x{}, entry_standard={}",
-                hex::encode(collection_id_bytes),
-                hex::encode(nft_id),
-                entry.standard.as_str()
-            )));
+    append_only_store: &CkbadgerStore,
+    identity_ids: &[Vec<u8>],
+) -> Result<LiveBitCellOutpoints, ApiRouteError> {
+    let mut identity_by_outpoint: HashMap<CellOutpoint, Vec<u8>> = HashMap::new();
+    for identity_id in identity_ids {
+        let outpoints = store
+            .list_spore_outpoints_by_spore_id(identity_id)
+            .map_err(|e| ApiError::internal(e.to_string()))?;
+        for outpoint in outpoints {
+            if identity_by_outpoint
+                .insert(outpoint.clone(), identity_id.clone())
+                .is_some()
+            {
+                return Err(ApiError::internal(format!(
+                    ".bit Cell outpoint belongs to multiple identities: outpoint=0x{}:{}",
+                    hex::encode(&outpoint.0),
+                    outpoint.1
+                )));
+            }
         }
-        out.push((nft_id.clone(), entry));
     }
 
-    Ok(out)
+    let outpoint_refs = identity_by_outpoint
+        .keys()
+        .map(|(tx_hash, output_index)| (tx_hash.as_slice(), *output_index))
+        .collect::<Vec<_>>();
+    let live_cells = store
+        .get_cells_batch(&outpoint_refs, append_only_store)
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let mut result = HashMap::with_capacity(identity_ids.len());
+    for ((tx_hash, output_index), _cell) in live_cells {
+        let identity_id = identity_by_outpoint
+            .get(&(tx_hash.clone(), output_index))
+            .ok_or_else(|| {
+                ApiError::internal(format!(
+                    "live .bit Cell outpoint missing reverse lookup: outpoint=0x{}:{}",
+                    hex::encode(&tx_hash),
+                    output_index
+                ))
+            })?;
+        if let Some(previous) = result.insert(identity_id.clone(), (tx_hash, output_index)) {
+            return Err(ApiError::internal(format!(
+                ".bit Cell identity has multiple live outpoints: identity_id=0x{}, first=0x{}:{}, second_output_index={}",
+                hex::encode(identity_id),
+                hex::encode(previous.0),
+                previous.1,
+                output_index
+            )));
+        }
+    }
+    Ok(result)
 }
 
 fn fetch_nft_collection_entries_by_ids(
@@ -2042,7 +2162,17 @@ pub(crate) fn list_identity_items_inner(
     status_filter: NftItemStatusFilter,
     agg: &MnftCollectionAggregate,
 ) -> ApiResult<CursorPaginatedResponse<CollectionItemResponse>> {
-    let is_dotbit = collection_id_bytes == DOTBIT_SENTINEL_COLLECTION;
+    let identity_standard = match collection_id_bytes {
+        id if id == DOTBIT_SENTINEL_COLLECTION => IdentityStandard::DotBit,
+        id if id == BIT_CELL_SENTINEL_COLLECTION => IdentityStandard::BitCell,
+        id if id == DID_CKB_SENTINEL_COLLECTION => IdentityStandard::DidCkb,
+        _ => {
+            return Err(ApiError::internal(format!(
+                "unsupported identity collection sentinel: collection_id=0x{}",
+                hex::encode(collection_id_bytes)
+            )))
+        }
+    };
 
     let mut matched_items: Vec<(Vec<u8>, ckbadger_store::types::IdentityEntry)> =
         Vec::with_capacity((limit + 1) as usize);
@@ -2064,11 +2194,12 @@ pub(crate) fn list_identity_items_inner(
                 break;
             }
 
-            let entries = if is_dotbit {
-                fetch_dotbit_collection_entries_by_ids(store, collection_id_bytes, &nft_ids)?
-            } else {
-                fetch_did_collection_entries_by_ids(store, collection_id_bytes, &nft_ids)?
-            };
+            let entries = fetch_identity_collection_entries_by_ids(
+                store,
+                collection_id_bytes,
+                &nft_ids,
+                identity_standard,
+            )?;
 
             for (nft_id, entry) in entries {
                 let status_match = match status_filter {
@@ -2115,11 +2246,12 @@ pub(crate) fn list_identity_items_inner(
             )
             .map_err(|e| ApiError::internal(e.to_string()))?;
 
-        let entries = if is_dotbit {
-            fetch_dotbit_collection_entries_by_ids(store, collection_id_bytes, &nft_ids)?
-        } else {
-            fetch_did_collection_entries_by_ids(store, collection_id_bytes, &nft_ids)?
-        };
+        let entries = fetch_identity_collection_entries_by_ids(
+            store,
+            collection_id_bytes,
+            &nft_ids,
+            identity_standard,
+        )?;
         matched_items.extend(entries);
     }
 
@@ -2129,7 +2261,7 @@ pub(crate) fn list_identity_items_inner(
 
     let mut rows = Vec::with_capacity(page_items.len());
 
-    if is_dotbit {
+    if identity_standard == IdentityStandard::DotBit {
         // Resolve live outpoints for dotbit accounts
         let live_account_ids: Vec<Vec<u8>> = page_items
             .iter()
@@ -2185,9 +2317,71 @@ pub(crate) fn list_identity_items_inner(
                 output_index,
             });
         }
+    } else if identity_standard == IdentityStandard::BitCell {
+        let live_identity_ids: Vec<Vec<u8>> = page_items
+            .iter()
+            .filter(|(_, entry)| entry.is_live)
+            .map(|(identity_id, _)| identity_id.clone())
+            .collect();
+        let live_outpoints = get_live_bit_cell_outpoints_by_identity_ids(
+            store,
+            append_only_store,
+            &live_identity_ids,
+        )?;
+
+        for (identity_id, entry) in &page_items {
+            let expired_at = match &entry.extra {
+                ckbadger_store::types::IdentityExtra::BitCell { expired_at, .. } => {
+                    Some(*expired_at)
+                }
+                _ => {
+                    return Err(ApiError::internal(format!(
+                        ".bit Cell identity has wrong extra variant: identity_id=0x{}",
+                        hex::encode(identity_id)
+                    )))
+                }
+            };
+            let (tx_hash, output_index) = if entry.is_live {
+                let (tx_hash, output_index) = live_outpoints.get(identity_id).ok_or_else(|| {
+                    ApiError::internal(format!(
+                        "live .bit Cell identity missing outpoint index: identity_id=0x{}",
+                        hex::encode(identity_id)
+                    ))
+                })?;
+                (
+                    Some(format!("0x{}", hex::encode(tx_hash))),
+                    Some(*output_index),
+                )
+            } else {
+                (None, None)
+            };
+
+            rows.push(CollectionItemResponse {
+                nft_id: format!("0x{}", hex::encode(identity_id)),
+                name: entry.name.clone(),
+                standard: IdentityStandard::BitCell.asset_standard().to_string(),
+                owner_lock_hash: entry
+                    .owner_lock_hash
+                    .as_ref()
+                    .map(|h| format!("0x{}", hex::encode(h))),
+                is_live: entry.is_live,
+                created_at_block: entry.created_at_block,
+                expired_at,
+                registered_at: None,
+                status: None,
+                tx_hash,
+                output_index,
+            });
+        }
     } else {
         // did:ckb — no outpoint resolution needed
         for (nft_id, entry) in &page_items {
+            if !matches!(entry.extra, ckbadger_store::types::IdentityExtra::DidCkb) {
+                return Err(ApiError::internal(format!(
+                    "did:ckb identity has wrong extra variant: identity_id=0x{}",
+                    hex::encode(nft_id)
+                )));
+            }
             rows.push(CollectionItemResponse {
                 nft_id: format!("0x{}", hex::encode(nft_id)),
                 name: entry.name.clone(),
@@ -2215,14 +2409,13 @@ pub(crate) fn list_identity_items_inner(
         None
     };
 
-    // For dotbit, compute status-aware total; for did:ckb use total_count directly.
     if search_lower.is_some() {
         ok(CursorPaginatedResponse::without_total(
             rows,
             limit,
             next_cursor,
         ))
-    } else if is_dotbit {
+    } else {
         let total = match status_filter {
             NftItemStatusFilter::All => agg.total_count,
             NftItemStatusFilter::Live => agg.live_count,
@@ -2231,7 +2424,7 @@ pub(crate) fn list_identity_items_inner(
                     .checked_sub(agg.live_count)
                     .ok_or_else(|| {
                         ApiError::internal(format!(
-                            "invalid dotbit collection aggregate counts: collection_id=0x{}, total_count={}, live_count={}",
+                            "invalid identity collection aggregate counts: collection_id=0x{}, total_count={}, live_count={}",
                             hex::encode(collection_id_bytes),
                             agg.total_count,
                             agg.live_count
@@ -2245,13 +2438,136 @@ pub(crate) fn list_identity_items_inner(
             limit,
             next_cursor,
         ))
+    }
+}
+
+/// Item rows of a Spore/DOB cluster collection.
+///
+/// Rows come from [`super::spore::select_cluster_spore_page`] — the same
+/// source `/spore/clusters/{id}/spores` serves — so rows and the
+/// cluster-aggregate totals reported next to them always describe the same
+/// set of member spores.
+///
+/// This endpoint's cursor contract is a bare item id (shared with the mNFT
+/// and identity branches), so the cursor is resolved to its position in the
+/// cluster's `(created_at_block DESC, id ASC)` order before paging. A cursor
+/// naming an item that is not a member of this collection is a client error,
+/// not a silent page-one restart.
+fn list_spore_cluster_items(
+    state: &AppState,
+    collection_id: &[u8],
+    limit: i64,
+    cursor_bytes: Option<Vec<u8>>,
+    search_lower: Option<&str>,
+    status_filter: NftItemStatusFilter,
+    agg: &MnftCollectionAggregate,
+) -> ApiResult<CursorPaginatedResponse<CollectionItemResponse>> {
+    let guard = super::spore::load_spore_cache(state)?;
+    let cache = guard
+        .as_ref()
+        .as_ref()
+        .expect("load_spore_cache returns Err when the cache is absent");
+
+    let cursor_position = match cursor_bytes.as_deref() {
+        None => None,
+        Some(item_id) => Some(
+            super::spore::find_cluster_spore_position(cache, collection_id, item_id).ok_or_else(
+                || {
+                    ApiError::bad_request(format!(
+                        "Invalid object items cursor: item 0x{} is not in collection 0x{}",
+                        hex::encode(item_id),
+                        hex::encode(collection_id)
+                    ))
+                },
+            )?,
+        ),
+    };
+
+    let selected = super::spore::select_cluster_spore_page(
+        cache,
+        collection_id,
+        limit as usize,
+        cursor_position.as_ref(),
+        |spore_id, entry| {
+            nft_item_matches_status(status_filter, entry)
+                && nft_item_matches_search(search_lower, spore_id, entry)
+        },
+    );
+
+    let has_more = selected.len() as i64 > limit;
+    let page_items: Vec<_> = selected.into_iter().take(limit as usize).collect();
+
+    let rows: Vec<CollectionItemResponse> = page_items
+        .iter()
+        .map(|(spore_id, entry)| CollectionItemResponse {
+            nft_id: format!("0x{}", hex::encode(spore_id)),
+            name: entry.name.clone(),
+            standard: entry.standard.asset_standard().to_string(),
+            owner_lock_hash: entry
+                .owner_lock_hash
+                .as_ref()
+                .map(|h| format!("0x{}", hex::encode(h))),
+            is_live: entry.is_live,
+            created_at_block: entry.created_at_block,
+            expired_at: None,
+            registered_at: None,
+            status: None,
+            // Spores carry their creation outpoint's tx hash, exactly like
+            // /spore/clusters/{id}/spores; ObjectEntry has no output_index.
+            tx_hash: Some(format!("0x{}", hex::encode(&entry.created_at_tx))),
+            output_index: None,
+        })
+        .collect();
+
+    let next_cursor = if has_more {
+        page_items
+            .last()
+            .map(|(spore_id, _)| format!("0x{}", hex::encode(spore_id)))
     } else {
-        ok(CursorPaginatedResponse::new(
+        None
+    };
+
+    if search_lower.is_some() {
+        return ok(CursorPaginatedResponse::without_total(
             rows,
-            agg.total_count,
             limit,
             next_cursor,
-        ))
+        ));
+    }
+
+    let total = collection_total_for_status(status_filter, agg, collection_id)?;
+    ok(CursorPaginatedResponse::new(
+        rows,
+        total,
+        limit,
+        next_cursor,
+    ))
+}
+
+/// Total item count reported alongside a status-filtered item page.
+///
+/// `recycled` is `total - live`; a negative result means the aggregate itself
+/// is corrupt, which is reported rather than clamped.
+fn collection_total_for_status(
+    status_filter: NftItemStatusFilter,
+    agg: &MnftCollectionAggregate,
+    collection_id: &[u8],
+) -> Result<i64, ApiRouteError> {
+    match status_filter {
+        NftItemStatusFilter::All => Ok(agg.total_count),
+        NftItemStatusFilter::Live => Ok(agg.live_count),
+        NftItemStatusFilter::Recycled => agg
+            .total_count
+            .checked_sub(agg.live_count)
+            .filter(|recycled| *recycled >= 0)
+            .ok_or_else(|| {
+                ApiError::internal(format!(
+                    "invalid object collection aggregate counts: collection_id=0x{}, total_count={}, live_count={}",
+                    hex::encode(collection_id),
+                    agg.total_count,
+                    agg.live_count
+                ))
+            }),
     }
 }
 
@@ -2270,21 +2586,38 @@ async fn list_object_collection_items(
         .map(decode_object_item_cursor)
         .transpose()?;
 
-    let agg = get_collection_aggregate(state.store.as_ref(), &collection_id_bytes)
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-    let agg = agg.ok_or_else(|| ApiError::not_found("Object collection not found"))?;
+    let resolved = get_collection_aggregate(state.store.as_ref(), &collection_id_bytes)
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .ok_or_else(|| ApiError::not_found("Object collection not found"))?;
+    let agg = resolved.aggregate;
 
-    if is_identity_sentinel(&collection_id_bytes) {
-        return list_identity_items_inner(
-            state.store.as_ref(),
-            state.append_only_store.as_ref(),
-            &collection_id_bytes,
-            limit,
-            cursor_bytes,
-            search_lower.as_deref(),
-            status_filter,
-            &agg,
-        );
+    // Item rows must come from the row source that owns this collection's
+    // members — the same source its aggregate/total came from.
+    match resolved.source {
+        ObjectCollectionSource::Identity => {
+            return list_identity_items_inner(
+                state.store.as_ref(),
+                state.append_only_store.as_ref(),
+                &collection_id_bytes,
+                limit,
+                cursor_bytes,
+                search_lower.as_deref(),
+                status_filter,
+                &agg,
+            );
+        }
+        ObjectCollectionSource::SporeCluster => {
+            return list_spore_cluster_items(
+                &state,
+                &collection_id_bytes,
+                limit,
+                cursor_bytes,
+                search_lower.as_deref(),
+                status_filter,
+                &agg,
+            );
+        }
+        ObjectCollectionSource::Mnft => {}
     }
 
     let mut matched_items: Vec<(Vec<u8>, ckbadger_store::types::ObjectEntry)> =
@@ -2425,22 +2758,7 @@ async fn list_object_collection_items(
             next_cursor,
         ))
     } else {
-        let total = match status_filter {
-            NftItemStatusFilter::All => agg.total_count,
-            NftItemStatusFilter::Live => agg.live_count,
-            NftItemStatusFilter::Recycled => {
-                agg.total_count
-                    .checked_sub(agg.live_count)
-                    .ok_or_else(|| {
-                        ApiError::internal(format!(
-                            "invalid object collection aggregate counts: collection_id=0x{}, total_count={}, live_count={}",
-                            hex::encode(&collection_id_bytes),
-                            agg.total_count,
-                            agg.live_count
-                        ))
-                    })?
-            }
-        };
+        let total = collection_total_for_status(status_filter, &agg, &collection_id_bytes)?;
         ok(CursorPaginatedResponse::new(
             rows,
             total,
@@ -2524,7 +2842,8 @@ async fn list_object_collection_holders(
 
     let agg = get_collection_aggregate(state.store.as_ref(), &collection_id_bytes)
         .map_err(|e| ApiError::internal(e.to_string()))?
-        .ok_or_else(|| ApiError::not_found("Object collection not found"))?;
+        .ok_or_else(|| ApiError::not_found("Object collection not found"))?
+        .aggregate;
     if agg.holders_count < 0 {
         return Err(ApiError::internal(format!(
             "invalid object collection aggregate holders_count: collection_id=0x{}, holders_count={}",
@@ -2662,7 +2981,9 @@ async fn get_object_collection_capacity_chart(
 
     let agg = get_collection_aggregate(state.store.as_ref(), &collection_id_bytes)
         .map_err(|e| ApiError::internal(e.to_string()))?;
-    let agg = agg.ok_or_else(|| ApiError::not_found("Object collection not found"))?;
+    let agg = agg
+        .ok_or_else(|| ApiError::not_found("Object collection not found"))?
+        .aggregate;
 
     let daily = state
         .store
@@ -2724,6 +3045,47 @@ mod tests {
     use ckbadger_store::batch::StoreBatch;
     use ckbadger_store::types::{AssetAction, CachedBlockHeader, TxIndexEntry};
 
+    /// Identity ids contain a colon, so only the first one separates the type.
+    #[test]
+    fn test_parse_asset_cursor_keeps_colons_inside_the_id() {
+        assert_eq!(
+            parse_asset_cursor("identity:did:ckb").unwrap(),
+            ("identity", "did:ckb")
+        );
+    }
+
+    /// Each of these used to be swallowed into "no cursor" and answered with
+    /// page 1.
+    #[test]
+    fn test_parse_asset_cursor_rejects_malformed_shapes() {
+        let long = format!("0x{}", "ab".repeat(600));
+        for raw in [
+            "zzzz",
+            "-1",
+            "-1:0",
+            "99999999999999999999999999:0",
+            &long,
+            "token:",
+            "spore:0xdeadbeef",
+            "",
+            ":0xabcd",
+        ] {
+            let err = parse_asset_cursor(raw).unwrap_err();
+            assert_eq!(err.0, axum::http::StatusCode::BAD_REQUEST, "raw={raw:?}");
+        }
+    }
+
+    #[test]
+    fn test_parse_optional_asset_cursor_distinguishes_absent_from_malformed() {
+        assert_eq!(parse_optional_asset_cursor(None).unwrap(), None);
+        assert_eq!(parse_optional_asset_cursor(Some("")).unwrap(), None);
+        assert_eq!(
+            parse_optional_asset_cursor(Some("token:0x01")).unwrap(),
+            Some(("token", "0x01"))
+        );
+        assert!(parse_optional_asset_cursor(Some("zzzz")).is_err());
+    }
+
     fn make_header(hash_byte: u8) -> CachedBlockHeader {
         CachedBlockHeader {
             hash: vec![hash_byte; 32],
@@ -2735,6 +3097,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         }
     }
@@ -2753,23 +3118,26 @@ mod tests {
         }
     }
 
+    /// Unchanged cases, restated against the `Result` API: the shapes that were
+    /// accepted are still accepted and the shapes that were `None` are now the
+    /// 400 they always should have been.
     #[test]
     fn test_parse_asset_cursor_accepts_only_current_format() {
         assert_eq!(
-            parse_asset_cursor("token:0xabc"),
-            Some(("token".to_string(), "0xabc".to_string()))
+            parse_asset_cursor("token:0xabc").unwrap(),
+            ("token", "0xabc")
         );
         assert_eq!(
-            parse_asset_cursor("object:0xabc"),
-            Some(("object".to_string(), "0xabc".to_string()))
+            parse_asset_cursor("object:0xabc").unwrap(),
+            ("object", "0xabc")
         );
         assert_eq!(
-            parse_asset_cursor("identity:0xabc"),
-            Some(("identity".to_string(), "0xabc".to_string()))
+            parse_asset_cursor("identity:0xabc").unwrap(),
+            ("identity", "0xabc")
         );
-        assert_eq!(parse_asset_cursor("nft:0xdef"), None);
-        assert_eq!(parse_asset_cursor("dob:0xdef"), None);
-        assert_eq!(parse_asset_cursor("1:2:3:nft"), None);
+        assert!(parse_asset_cursor("nft:0xdef").is_err());
+        assert!(parse_asset_cursor("dob:0xdef").is_err());
+        assert!(parse_asset_cursor("1:2:3:nft").is_err());
     }
 
     #[test]

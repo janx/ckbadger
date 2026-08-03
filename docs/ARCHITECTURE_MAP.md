@@ -4,49 +4,75 @@ Quick navigation map for humans and agents working in `ckbadger`.
 
 ## Runtime Data Flow
 
-1. `crates/indexer` fetches blocks and transactions from CKB RPC.
-2. `crates/indexer/src/parser/` converts raw chain data into domain models.
-3. `crates/indexer/src/db/writer/` writes indexed data into `crates/ckbadger-store` (RocksDB).
-4. `crates/api` serves REST and WebSocket data from RocksDB (secondary read-only mode).
-5. `frontend` consumes `/api/v1` + `/ws` and renders explorer pages.
+1. `crates/cli` reads either a single-network `config.toml` or an orchestrator
+   `ckbadger.toml` whose `[[network]]` entries point at per-network work directories.
+2. In orchestrator mode, one supervisor starts every API, every enabled crawler, and one shared
+   frontend immediately. Indexers are admitted in `[[network]]` order so only one fresh network
+   performs bulk sync at a time.
+3. Each indexer validates its configured network against the CKB node, derives the exact
+   `GenesisBaseline` from block 0 when absent, fetches chain data, parses it, and writes its own
+   domain and append-only RocksDB stores.
+4. Each API opens those two chain stores as read-only secondaries. A direct per-network API serves
+   `/api/v1/*` and `/ws`.
+5. The shared frontend serves pages under `/{network}/...` and proxies
+   `/api/{network}/v1/*` → that network's `/api/v1/*`, plus
+   `/ws/{network}` → that network's `/ws`.
+6. The opt-in crawler observes the selected CKB p2p network and is the sole writer of that
+   network's separate, TTL-retained network store. The API reads it as a secondary.
+
+## Store Ownership
+
+| Store       | Sole writer         | Readers                   | Contents                                                                  |
+| ----------- | ------------------- | ------------------------- | ------------------------------------------------------------------------- |
+| Domain      | Per-network indexer | API/TUI secondary readers | Mutable canonical chain state, indexes, aggregates, sync metadata         |
+| Append-only | Per-network indexer | API secondary reader      | Immutable cell payloads keyed by outpoint                                 |
+| Network     | Per-network crawler | API secondary reader      | Non-chain p2p observations; TTL-retained and not rebuildable from genesis |
 
 ## Module Map
 
-| Layer                    | Entry Points                                              | Core Files                                                                                                                                                                                   | Tests                                                                                     |
-| ------------------------ | --------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| Indexer                  | `crates/indexer/src/main.rs`, `crates/indexer/src/lib.rs` | `crates/indexer/src/sync/indexer.rs`, `crates/indexer/src/sync/bulk_build/mod.rs`, `crates/indexer/src/parser/*.rs`, `crates/indexer/src/db/writer/*.rs`, `crates/indexer/src/verify/mod.rs` | `cargo test -p ckbadger-indexer` + inline `#[cfg(test)]`                                  |
-| Store                    | `crates/ckbadger-store/src/lib.rs`                        | `crates/ckbadger-store/src/store.rs`, `crates/ckbadger-store/src/types.rs`, `crates/ckbadger-store/src/keys.rs`, `crates/ckbadger-store/src/*_ops.rs`                                        | `cargo test -p ckbadger-store` + inline `#[cfg(test)]`                                    |
-| API                      | `crates/api/src/main.rs`, `crates/api/src/lib.rs`         | `crates/api/src/routes/mod.rs`, `crates/api/src/routes/*.rs`, `crates/api/src/ws/*.rs`, `crates/api/src/response.rs`                                                                         | `cargo test -p ckbadger-api`, `crates/api/tests/api_*.rs`                                 |
-| Shared types             | `crates/common/src/lib.rs`                                | `crates/common/src/types.rs`, `crates/common/src/sync.rs`, `crates/common/src/dao.rs`                                                                                                        | `cargo test -p ckbadger-common`                                                           |
-| Optional direct CKB read | `crates/ckb-store-reader/src/lib.rs`                      | `crates/ckb-store-reader/src/convert.rs`                                                                                                                                                     | `cargo test -p ckb-store-reader`                                                          |
-| DOB decoder              | `crates/dob-decoder/src/lib.rs`                           | `crates/dob-decoder/src/vm.rs`, `crates/dob-decoder/src/cache.rs`, `crates/dob-decoder/src/fetch.rs`, `crates/dob-decoder/src/types.rs`                                                      | `cargo test -p ckbadger-dob-decoder`                                                      |
-| Frontend                 | `frontend/src/main.tsx`, `frontend/src/routes/router.tsx` | `frontend/app/**/page.tsx`, `frontend/lib/api.ts`, `frontend/components/**/*.tsx`                                                                                                            | `cd frontend && pnpm build`, `cd frontend && pnpm test`, `cd frontend && pnpm type-check` |
+| Layer                    | Entry points                                              | Core files                                                                                             | Tests                                                     |
+| ------------------------ | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ | --------------------------------------------------------- |
+| CLI / supervisor         | `crates/cli/src/main.rs`                                  | `supervisor.rs`, `sequencer.rs`                                                                        | `cargo test -p ckbadger`                                  |
+| Configuration            | `crates/config/src/lib.rs`                                | `orchestrator.rs`                                                                                      | `cargo test -p ckbadger-config`                           |
+| Indexer library          | `crates/indexer/src/lib.rs`, `entry.rs`                   | `network_guard.rs`, `genesis_baseline.rs`, `lifecycle.rs`, `sync/`, `parser/`, `db/writer/`, `verify/` | `cargo test -p ckbadger-indexer`                          |
+| Store                    | `crates/ckbadger-store/src/lib.rs`                        | `store.rs`, `types.rs`, `keys.rs`, `*_ops.rs`, `network_*`                                             | `cargo test -p ckbadger-store`                            |
+| API / frontend server    | `crates/api/src/lib.rs`, `entry.rs`                       | `routes/`, `ws/`, `frontend_proxy.rs`, `embedded_frontend.rs`, `response.rs`                           | `cargo test -p ckbadger-api`, `crates/api/tests/api_*.rs` |
+| Crawler                  | `crates/crawler/src/lib.rs`                               | round engine, p2p prober, network-store writer                                                         | `cargo test -p ckbadger-crawler`                          |
+| TUI                      | `crates/tui/src/lib.rs`                                   | `multi.rs`, service/sync/memory/network panels                                                         | `cargo test -p ckbadger-tui`                              |
+| Shared domain logic      | `crates/common/src/lib.rs`                                | `network.rs`, `burn_policy.rs`, `dao.rs`, `token.rs`, `types/`                                         | `cargo test -p ckbadger-common`                           |
+| Optional direct CKB read | `crates/ckb-store-reader/src/lib.rs`                      | `convert.rs`                                                                                           | `cargo test -p ckb-store-reader`                          |
+| DOB decoder              | `crates/dob-decoder/src/lib.rs`                           | `vm.rs`, `cache.rs`, `fetch.rs`, `types.rs`                                                            | `cargo test -p ckbadger-dob-decoder`                      |
+| Frontend                 | `frontend/src/main.tsx`, `frontend/src/routes/router.tsx` | `frontend/app/`, `frontend/lib/api.ts`, `frontend/lib/active-network.ts`, `frontend/components/`       | `cd frontend && pnpm type-check && pnpm test`             |
+
+## Canonical Detection Metadata
+
+Protocol detection starts from `docs/metadata/scripts/*.toml`. The indexer build bundles that
+metadata, and `crates/indexer/src/parser/registry.rs` constructs one fail-fast,
+network-agnostic `ProtocolRegistry` keyed by `code_hash`. Parser, bulk-build, activity, and API
+classification paths must consume that shared registry or a single derived lookup; do not add a
+second hardcoded protocol-hash list.
 
 ## Common Change Entry Points
 
-| Task                            | Start Here                                                                                                      | Also Update                                                                                                                                                                       |
-| ------------------------------- | --------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Storage/key design change       | `crates/ckbadger-store/src/types.rs`, `crates/ckbadger-store/src/keys.rs`, `crates/ckbadger-store/src/*_ops.rs` | `crates/indexer/src/db/writer/*.rs`, API readers in `crates/api/src/routes/*.rs`                                                                                                  |
-| Script reference/version change | `docs/SCRIPTS_CODE_CELLS_AND_REFS.md`, `crates/ckbadger-store/src/types.rs`, `crates/indexer/src/sync/*.rs`     | `crates/indexer/src/db/writer/addresses.rs`, `crates/api/src/utils/script_resolution.rs`, `crates/api/src/routes/scripts.rs`, `frontend/app/script/**`, `frontend/app/scripts/**` |
-| Bulk-build engine change        | `crates/indexer/src/sync/bulk_build/mod.rs`                                                                     | Reducers in `crates/indexer/src/sync/bulk_build/owners/*.rs`, `live_cells.rs`, `materialize.rs`                                                                                   |
-| New parser capability           | `crates/indexer/src/parser/*.rs`                                                                                | Writer modules in `crates/indexer/src/db/writer/*.rs`, inline parser tests                                                                                                        |
-| New API endpoint                | `crates/api/src/routes/*.rs`                                                                                    | `crates/api/src/routes/mod.rs`, `frontend/lib/api.ts`, `crates/api/tests/api_*.rs`                                                                                                |
-| Frontend page or data view      | `frontend/src/routes/router.tsx`, `frontend/app/**/page.tsx`                                                    | `frontend/components/**`, `frontend/lib/api.ts`, `frontend/__tests__/**`                                                                                                          |
-| DOB decoder or CKB-VM changes   | `crates/dob-decoder/src/lib.rs`, `crates/dob-decoder/src/vm.rs`                                                 | `crates/indexer/src/sync/indexer.rs` (worker spawn), `crates/api/src/routes/spore.rs` (read path)                                                                                 |
-| Verification logic              | `crates/indexer/src/verify/*.rs`                                                                                | `crates/indexer/src/verify/mod.rs`, report formatting in `crates/indexer/src/verify/report.rs`                                                                                    |
+| Task                           | Start here                                                                                   | Also update                                                                                             |
+| ------------------------------ | -------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| Orchestrator/network behavior  | `crates/config/src/orchestrator.rs`, `crates/cli/src/main.rs`, `crates/cli/src/sequencer.rs` | `crates/api/src/frontend_proxy.rs`, `frontend/lib/active-network.ts`, README/config docs                |
+| Storage/key design change      | `crates/ckbadger-store/src/types.rs`, `keys.rs`, `*_ops.rs`                                  | Indexer owning writer, API readers, `docs/STORE_SCHEMA.md`; state logical store and re-sync requirement |
+| Script/protocol detection      | `docs/metadata/scripts/*.toml`, `crates/indexer/src/parser/registry.rs`                      | Relevant parsers/writers, activity builder, metadata tests                                              |
+| Script reference/version model | `docs/SCRIPTS_CODE_CELLS_AND_REFS.md`, store types/keys                                      | `db/writer/addresses.rs`, API script resolution/routes, frontend script pages                           |
+| Bulk-build engine              | `docs/prompts/BULK_SYNC.md`, `crates/indexer/src/sync/bulk_build/mod.rs`                     | `bulk_build/owners/`, `live_cells.rs`, `materialize.rs`, memory/perf tests                              |
+| Parser capability              | `crates/indexer/src/parser/*.rs`                                                             | Writer/bulk owner, parser registry when protocol-bound, inline parser tests                             |
+| API endpoint                   | `crates/api/src/routes/*.rs`                                                                 | `routes/mod.rs`, `frontend/lib/api.ts`, API/frontend tests, `docs/API.md`, agent discovery files        |
+| Frontend route/view            | `frontend/src/routes/router.tsx`, `frontend/app/`                                            | components, API client, network-aware route helpers, frontend tests                                     |
+| Verification logic             | `crates/indexer/src/verify/*.rs`                                                             | registration tests and `docs/TESTING.md` counts                                                         |
 
 ## Fast Validation Shortcuts
 
 ```bash
-# Rust core
 cargo check
 cargo test -p ckbadger-indexer
 cargo test -p ckbadger-api
-
-# Frontend
-cd frontend && pnpm type-check
-cd frontend && pnpm test
-
-# Data integrity
+pnpm --dir frontend type-check
+pnpm --dir frontend test
 ckbadger verify --depth fast
 ```

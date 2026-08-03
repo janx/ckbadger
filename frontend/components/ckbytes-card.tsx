@@ -55,9 +55,34 @@ export function CKBytesCard({ stats }: CKBytesCardProps) {
   }
 
   const circulating = shannonsToCkb(stats.circulatingSupply);
+  // Common Knowledge Size as /statistics/network now reports it: DAO `U` minus
+  // the genesis virtual occupied capacity, the same quantity
+  // /charts/knowledge-size plots. Raw `U` overstated this segment by the
+  // network's virtual occupied capacity (5.04B CKB on mainnet), stealing that
+  // much from Free.
   const knowledge = shannonsToCkb(stats.knowledgeSize);
   const dao = shannonsToCkb(stats.daoLocked);
-  const free = Math.max(0, circulating - knowledge - dao);
+  // Exact remainder — never clamped. A negative remainder means the three
+  // API values contradict each other, which must be visible, not painted over
+  // with a plausible-looking bar.
+  const free = circulating - knowledge - dao;
+
+  if (free < 0) {
+    return (
+      <div className="rounded-lg p-4">
+        <div className="text-text-dim mb-3 font-mono text-xs uppercase tracking-wider">
+          CKBytes Circulation
+        </div>
+        <div
+          data-testid="ckbytes-allocation-error"
+          className="border-negative/40 text-negative rounded border px-3 py-2 font-mono text-xs"
+        >
+          Inconsistent supply data: knowledge {formatCkbPrecise(knowledge)} CKB + DAO{' '}
+          {formatCkbPrecise(dao)} CKB exceed circulating {formatCkbPrecise(circulating)} CKB.
+        </div>
+      </div>
+    );
+  }
 
   const segments: Segment[] = [
     {

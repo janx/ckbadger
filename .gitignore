@@ -54,6 +54,7 @@ ckbadger.toml
 *.sqlite
 *.sqlite3
 temp/
+work/
 data/
 
 # DOB decoder cache

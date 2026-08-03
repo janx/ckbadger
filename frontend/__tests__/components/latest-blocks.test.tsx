@@ -8,6 +8,7 @@ vi.mock('@/lib/api', () => ({
     getBlocks: vi.fn(),
   },
   isWarmupPendingError: vi.fn(() => false),
+  isNetworkInitializingError: vi.fn(() => false),
 }));
 
 function mockBlock(number: number): Block {
@@ -73,11 +74,11 @@ describe('LatestBlocks', () => {
     expect(screen.queryByTestId('latest-block-hardfork-8775639')).not.toBeInTheDocument();
     expect(screen.getByRole('link', { name: /#\s*8,775,638/i })).toHaveAttribute(
       'href',
-      '/blocks/8775638'
+      '/mainnet/blocks/8775638'
     );
     expect(screen.getByRole('link', { name: /#\s*8,775,639/i })).toHaveAttribute(
       'href',
-      '/blocks/8775639'
+      '/mainnet/blocks/8775639'
     );
   });
 });

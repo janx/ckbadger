@@ -36,6 +36,9 @@ async fn test_address_activities_reads_from_store() {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         },
     );
@@ -117,6 +120,9 @@ async fn test_address_activities_returns_protocol_metadata() {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         },
     );
@@ -270,6 +276,9 @@ async fn test_address_activities_return_type_calls_and_support_type_call_filter(
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         },
     );
@@ -381,6 +390,9 @@ async fn test_latest_activities_return_type_calls() {
             dao: vec![0; 32],
             transactions_count: 2,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         },
     );
@@ -448,6 +460,9 @@ async fn test_global_activities_basic() {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         },
     );
@@ -553,4 +568,264 @@ async fn test_address_transactions_reads_from_derived_store() {
     let data = json["data"].as_array().unwrap();
     assert_eq!(data.len(), 1);
     assert_eq!(data[0]["txHash"], format!("0x{}", hex::encode(&tx_hash)));
+}
+
+// ---------------------------------------------------------------------------
+// R4-G item 3: `/addresses/{addr}/activities` declared `total` from
+// `AddressBalance.txs_count` — the address's TRANSACTION count. Activities are
+// a different set: cellbase rows are deliberately never persisted in
+// CF_TX_ACTIONS, and `is_canonical_activity` drops more. Measured on mainnet
+// (block 12000000's cellbase-output address): declared total 4,727,769 against
+// 1,682 rows enumerated to exhaustion — a total the endpoint can never reach.
+// No per-address activity count is stored, so the honest contract is no total.
+// ---------------------------------------------------------------------------
+
+/// Seed one canonical activity for `lock_hash` plus an `AddressBalance` whose
+/// `txs_count` deliberately disagrees with it (the shape a miner address has:
+/// many cellbase transactions, few activities).
+fn seed_activity_with_txs_count(
+    store: &Arc<CkbadgerStore>,
+    lock_hash: &[u8],
+    txs_count: i64,
+) -> Vec<u8> {
+    let tx_hash = vec![0xa1; 32];
+    let block_hash = vec![0xb1; 32];
+
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_tx_hash_map(&tx_hash, 10, 0);
+    batch.put_tx_index(
+        10,
+        0,
+        &TxIndexEntry {
+            is_cellbase: false,
+            timestamp: 1_700_000_000_000,
+            inputs_count: 1,
+            outputs_count: 1,
+            fee: 0,
+            tx_size: 100,
+            cycles: None,
+            semantic_tags: 0,
+        },
+    );
+    batch.put_block_header(
+        10,
+        &CachedBlockHeader {
+            hash: block_hash.clone(),
+            parent_hash: vec![0u8; 32],
+            timestamp: 1_700_000_000_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+            uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
+            cycles: None,
+        },
+    );
+    let actions = make_test_tx_actions(lock_hash, &tx_hash, &block_hash, 10, 0, 100, 0);
+    batch.put_tx_actions(&actions);
+    batch.put_addr_tx(
+        lock_hash,
+        10,
+        0,
+        &tx_hash,
+        &AddrTxValue::new(0, false, true, 0),
+    );
+    batch.commit().unwrap();
+
+    store
+        .put_addr_balance_direct(
+            lock_hash,
+            &ckbadger_store::types::AddressBalance {
+                balance: 100,
+                used_capacity: 0,
+                live_cells_count: 1,
+                total_cells_count: 1,
+                txs_count,
+                first_seen_block: 10,
+                first_seen_tx: tx_hash.clone(),
+                last_activity_block: 10,
+                last_activity_tx: tx_hash.clone(),
+            },
+        )
+        .unwrap();
+    store
+        .update_sync_status(|s| {
+            s.tip_block_number = 10;
+        })
+        .unwrap();
+
+    tx_hash
+}
+
+#[tokio::test]
+async fn test_address_activities_declares_no_unreachable_total() {
+    let (core_store, append_only_store) = split_test_stores();
+    let lock_hash = vec![0x71; 32];
+    // 4_727_769 transactions, exactly 1 of which is an activity.
+    seed_activity_with_txs_count(&core_store, &lock_hash, 4_727_769);
+
+    let config = test_config_with_append_only(core_store.clone(), append_only_store);
+    let app = create_router(config).await;
+    let (status, json) = get_json(
+        &app,
+        &format!("/addresses/0x{}/activities", hex::encode(&lock_hash)),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json["data"].as_array().unwrap().len(), 1);
+    assert_eq!(json["hasMore"], false);
+    assert_eq!(
+        json.get("total"),
+        None,
+        "the endpoint enumerates 1 activity; it must not declare a transaction count it can never reach, got {json}"
+    );
+}
+
+#[tokio::test]
+async fn test_address_activities_omits_total_for_missing_addr_balance() {
+    // An address with activities but no `AddressBalance` row used to report
+    // `total: 0` through `.ok().flatten().map(...).unwrap_or(0)` — a silent
+    // default-zero on a correctness path, and self-contradictory next to a
+    // non-empty page.
+    let (core_store, append_only_store) = split_test_stores();
+    let lock_hash = vec![0x72; 32];
+    let tx_hash = vec![0xa1; 32];
+    let block_hash = vec![0xb1; 32];
+
+    let mut batch = StoreBatch::new(core_store.as_ref());
+    batch.put_tx_hash_map(&tx_hash, 10, 0);
+    batch.put_tx_index(
+        10,
+        0,
+        &TxIndexEntry {
+            is_cellbase: false,
+            timestamp: 1_700_000_000_000,
+            inputs_count: 1,
+            outputs_count: 1,
+            fee: 0,
+            tx_size: 100,
+            cycles: None,
+            semantic_tags: 0,
+        },
+    );
+    batch.put_block_header(
+        10,
+        &CachedBlockHeader {
+            hash: block_hash.clone(),
+            parent_hash: vec![0u8; 32],
+            timestamp: 1_700_000_000_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+            uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
+            cycles: None,
+        },
+    );
+    let actions = make_test_tx_actions(&lock_hash, &tx_hash, &block_hash, 10, 0, 100, 0);
+    batch.put_tx_actions(&actions);
+    batch.put_addr_tx(
+        &lock_hash,
+        10,
+        0,
+        &tx_hash,
+        &AddrTxValue::new(0, false, true, 0),
+    );
+    batch.commit().unwrap();
+    core_store
+        .update_sync_status(|s| {
+            s.tip_block_number = 10;
+        })
+        .unwrap();
+
+    let config = test_config_with_append_only(core_store.clone(), append_only_store);
+    let app = create_router(config).await;
+    let (status, json) = get_json(
+        &app,
+        &format!("/addresses/0x{}/activities", hex::encode(&lock_hash)),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json["data"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        json.get("total"),
+        None,
+        "a missing balance row must not be rendered as `total: 0` next to a non-empty page, got {json}"
+    );
+}
+
+#[tokio::test]
+async fn test_address_activities_filtered_page_still_omits_total() {
+    // Control (passes on both revisions): the filtered branch already used
+    // `without_total`. Both branches now agree.
+    let (core_store, append_only_store) = split_test_stores();
+    let lock_hash = vec![0x73; 32];
+    seed_activity_with_txs_count(&core_store, &lock_hash, 4_727_769);
+
+    let config = test_config_with_append_only(core_store.clone(), append_only_store);
+    let app = create_router(config).await;
+    let (status, json) = get_json(
+        &app,
+        &format!(
+            "/addresses/0x{}/activities?filter=ckb",
+            hex::encode(&lock_hash)
+        ),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json.get("total"), None);
+}
+
+// ---------------------------------------------------------------------------
+// Audited bug (2026-08-01 night, agent E): all-uppercase bech32m addresses are
+// legal per the bech32 case rules, but every address entry point routed them
+// into the hex-hash branch (the activities handler even had its own inline
+// lowercase-only prefix check) and answered a misleading 400 about hex hashes.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_address_activities_accepts_uppercase_address() {
+    let (core_store, append_only_store) = split_test_stores();
+
+    // Mainnet burn lock (secp sighash, args = 20 zero bytes); its canonical
+    // bech32m encoding is the audit vector below.
+    let burn_address = "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqgqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq5m759c";
+    let code_hash =
+        hex::decode("9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8").unwrap();
+    let lock_hash = compute_script_hash(&code_hash, 1, &[0u8; 20]);
+    seed_activity_with_txs_count(&core_store, &lock_hash, 1);
+
+    let config = test_config_with_append_only(core_store.clone(), append_only_store);
+    let app = create_router(config).await;
+
+    let (status_lower, lower) =
+        get_json(&app, &format!("/addresses/{burn_address}/activities")).await;
+    assert_eq!(status_lower, StatusCode::OK, "got {lower}");
+    assert_eq!(lower["data"].as_array().unwrap().len(), 1);
+
+    let (status_upper, upper) = get_json(
+        &app,
+        &format!("/addresses/{}/activities", burn_address.to_uppercase()),
+    )
+    .await;
+    assert_eq!(
+        status_upper,
+        StatusCode::OK,
+        "uppercase bech32m must route to the address branch, got {upper}"
+    );
+    assert_eq!(
+        upper, lower,
+        "uppercase input must enumerate the identical activities"
+    );
 }

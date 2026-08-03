@@ -586,6 +586,74 @@ Test by wiping database and re-syncing from genesis.
 
 ---
 
+### STATS-007: Home hashRate overstated ~20% after every epoch difficulty step
+
+**Date**: 2026-08-01
+
+**Symptom**: `/statistics/network` `hashRate` read 87.98 PH/s while the exact
+windowed value was 73.54 PH/s, right after an epoch difficulty increase; the
+error decayed over the next ~600 blocks and recurred at every epoch boundary.
+
+**Root Cause**: `hash_rate = tip_epoch_difficulty / avg_block_time` applied the
+tip epoch's difficulty to a 600-gap window that still consisted mostly of
+previous-epoch (lower-difficulty) blocks — mixing one epoch's difficulty with
+another epoch's block rate.
+
+**Fix**: Estimate from actual work in the window:
+`Σ per-block compact_to_difficulty(compact_target) / window span seconds`,
+excluding the oldest boundary block's work (it predates the span). The
+displayed `difficulty` field stays tip-epoch difficulty.
+
+**Lesson**: A rate derived from difficulty is only valid over blocks mined at
+that difficulty. Any window crossing an epoch boundary must sum per-block
+work, not scale a point difficulty.
+
+---
+
+### STATS-008: Asset-ecosystem capacity breakdown mixed units (DAO showed 161%)
+
+**Date**: 2026-08-01
+
+**Symptom**: `/statistics/asset-ecosystem` `capacityBreakdown` reported DAO at
+161.01% and the categories summed to 162.6%; `other` was silently clamped to 0.
+
+**Root Cause**: Numerators were full cell capacities (DAO `total_deposited`,
+token/object owned capacity) but the denominator was the DAO snapshot's
+`occupied_capacity` (knowledge size — occupied bytes only, where a DAO cell
+contributes ~102 CKB, not its deposit). `other = clamp(total - categorized, 0)`
+masked the structural violation as a "transient warmup skew".
+
+**Fix**: Denominator is total live capacity `C − S` from the tip header's DAO
+field (every issued-but-live shannon sits in a cell); response adds
+`totalLiveCapacityCkb`; `other` is the exact remainder and a negative remainder
+is a hard error naming all four numbers. `totalKnowledgeSizeCkb` remains as a
+standalone stat.
+
+**Lesson**: Every ratio needs numerator and denominator in the same unit, and a
+`clamp(…, 0)` on a derived remainder is a bug mask, not robustness.
+
+---
+
+### STATS-009: recent-blocks silently truncated the 24h window at 10,000 blocks
+
+**Date**: 2026-08-01
+
+**Symptom**: `/statistics/recent-blocks` fetched `list_blocks_desc(None, 10000)`
+then filtered by cutoff; 2026-07-30 (UTC+8) had 10,141 mainnet blocks in 24h,
+so peak days silently lost the oldest ~24 minutes of the window.
+
+**Root Cause**: A one-shot fetch sized by the ~8,640-block estimate treated an
+estimate as a bound.
+
+**Fix**: Cursor-paginate until the first block at or before the cutoff (or
+store exhaustion), with a generous safety bound that returns an explicit error
+instead of truncating.
+
+**Lesson**: Never bound a time-window query by an estimated row count; page
+until the boundary condition is actually seen, and make any safety cap loud.
+
+---
+
 ## Category: Docker & Build
 
 ### BUILD-001: Rust version compatibility (0ebb92c, 3d5e392, 2dc515e)
@@ -646,23 +714,23 @@ Test by wiping database and re-syncing from genesis.
 
 ## Quick Reference: Common Pitfalls
 
-| Area        | Pitfall                             | Prevention                                               |
-| ----------- | ----------------------------------- | -------------------------------------------------------- |
-| CKB Scripts | Confusing code_hash vs script_hash  | code_hash = script type, script_hash = instance identity |
-| CKB Scripts | Hardcoded hashes                    | Verify against chain, reference RFC-0024                 |
-| DAO         | Multi-phase tracking                | Map full lifecycle before implementing                   |
-| DAO         | Compensation formula                | Follow RFC-0023 exactly, use free_capacity               |
-| DAO         | DAO field parsing                   | 32 bytes, 4 x u64 LE, check byte offsets                 |
-| DAO         | APC calculation                     | Estimated = issuance/supply; Nominal = AR growth         |
-| DAO         | Point-in-time aggregations          | Filter out withdrawn deposits for historical snapshots   |
-| DAO         | Phase 2 withdrawal lookup           | Match by `withdraw_request_tx`, not `tx_hash`            |
-| Supply      | Using total_issuance as circulating | Subtract 8.4B genesis burnt + secondary burnt            |
-| Supply      | Confusing issuance vs circulating   | Read `docs/DAO_CALCULATIONS.md` supply model             |
-| Indexer     | Fields not in batch sync            | Ensure both real-time AND batch sync populate all fields |
-| Frontend    | Percentage double-multiply          | Establish API contract: ratio (0-1) or percent (0-100)   |
-| Docker      | Missing files                       | Verify all runtime deps are COPY'd                       |
-| Docker      | Network isolation                   | Use host network or proper bridging                      |
-| Charts      | Incomplete data                     | Exclude current incomplete period                        |
+| Area        | Pitfall                             | Prevention                                                                                  |
+| ----------- | ----------------------------------- | ------------------------------------------------------------------------------------------- |
+| CKB Scripts | Confusing code_hash vs script_hash  | code_hash = script type, script_hash = instance identity                                    |
+| CKB Scripts | Hardcoded hashes                    | Verify against chain, reference RFC-0024                                                    |
+| DAO         | Multi-phase tracking                | Map full lifecycle before implementing                                                      |
+| DAO         | Compensation formula                | Follow RFC-0023 exactly, use free_capacity                                                  |
+| DAO         | DAO field parsing                   | 32 bytes, 4 x u64 LE, check byte offsets                                                    |
+| DAO         | APC calculation                     | Keep estimated and nominal models distinct; both use the persisted network genesis baseline |
+| DAO         | Point-in-time aggregations          | Filter out withdrawn deposits for historical snapshots                                      |
+| DAO         | Phase 2 withdrawal lookup           | Resolve the request outpoint through `dao_by_withdraw_tx`                                   |
+| Supply      | Using total_issuance as circulating | Use exact `C - GenesisBaseline.burnt - S`                                                   |
+| Supply      | Confusing issuance vs circulating   | Read `docs/DAO_CALCULATIONS.md` supply model                                                |
+| Indexer     | Fields not in batch sync            | Ensure both real-time AND batch sync populate all fields                                    |
+| Frontend    | Percentage double-multiply          | Establish API contract: ratio (0-1) or percent (0-100)                                      |
+| Docker      | Missing files                       | Verify all runtime deps are COPY'd                                                          |
+| Docker      | Network isolation                   | Use host network or proper bridging                                                         |
+| Charts      | Incomplete data                     | Exclude current incomplete period                                                           |
 
 ---
 
@@ -671,26 +739,34 @@ Test by wiping database and re-syncing from genesis.
 ```rust
 // DAO
 const DAO_CODE_HASH: &str = "0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e";
-const DAO_OCCUPIED_CAPACITY: u64 = 102_00000000; // 102 CKB in shannons
-
-// Supply model (in shannons)
-const GENESIS_BURNT: u64 = 8_400_000_000_00000000;          // 8.4B CKB burnt at genesis
 const SECONDARY_ISSUANCE_PER_YEAR: u64 = 1_344_000_000_00000000; // 1.344B CKB/year
 
 // DAO field extraction (32 bytes total)
 fn extract_total_issuance(dao: &[u8]) -> u64 { u64::from_le_bytes(dao[0..8]) }
 fn extract_ar(dao: &[u8]) -> u64 { u64::from_le_bytes(dao[8..16]) }
 
-// Compensation formula
-let free = capacity - DAO_OCCUPIED_CAPACITY;
+// Compensation formula: 102 CKB is only the standard secp DAO-cell case.
+// Persist and use the deposit cell's exact occupied capacity.
+let free = capacity - exact_occupied_capacity;
 let compensation = free * ar_withdraw / ar_deposit - free;
 
-// Circulating supply (NOT same as total_issuance!)
-let circulating = total_issuance - GENESIS_BURNT - secondary_burnt;
+// GenesisBaseline is derived from block 0 and persisted per network.
+let baseline = store.get_genesis_baseline()?.expect("required invariant");
 
-// APC formulas
-let estimated_apc = (SECONDARY_ISSUANCE_PER_YEAR as f64 / total_issuance as f64) * 100.0;
-let nominal_apc = ((ar_current as f64 / ar_past as f64).powf(1.0 / years) - 1.0) * 100.0;
+// Protocol circulating supply (NOT the same as total_issuance).
+let circulating = total_issuance - baseline.burnt - secondary_pool_s;
+
+// Estimated APC: explorer-compatible continuous-compounding model,
+// seeded with baseline.total_issuance.
+let estimated_apc = calculate_estimated_apc(
+    epoch_number,
+    epoch_index,
+    epoch_length,
+    baseline.total_issuance,
+);
+
+// Nominal chart: separate theoretical supply curve, seeded with exact genesis circulation.
+let nominal_genesis_supply = baseline.total_issuance - baseline.burnt;
 ```
 
 ---
@@ -1176,4 +1252,838 @@ re-sync from genesis.
 
 ---
 
-_Last updated: 2026-04-10_
+### DAO-022: Testnet DAO compensation diverges from protocol free-capacity accounting
+
+**Date**: 2026-07-23
+
+**Symptom**: Testnet verification reported cumulative DAO compensation up to
+14.23% above the official explorer, with smaller daily-series drift around the
+same aggregate.
+
+**Root cause**:
+
+1. The secondary-issuance split used each DAO cell's full capacity. RFC-0023
+   compensation accrues only to free capacity, so the mandatory 102 CKB
+   occupied capacity of every live DAO cell was incorrectly treated as
+   interest-bearing.
+2. The split paired the pre-block deposit state with block N's C/U values.
+   Protocol block N uses C/U at the end of block N-1, so all three inputs did
+   not describe the same point in chain history.
+3. Negative S-field corrections at protocol boundaries were skipped while the
+   baseline advanced. The following rebound was then counted again, breaking
+   exact telescoping across the boundary (a regression of DAO-018).
+
+**Fix**:
+
+- Added one shared exact split in `ckbadger-common` and routed live sync, bulk
+  build, and reorg snapshot recomputation through it.
+- Track protocol DAO free capacity as `capacity - 102 CKB` per live DAO cell,
+  while retaining full capacity for user-facing locked-capacity statistics.
+- Carry the complete previous `(C, S, U)` header state and use previous C/U
+  with the pre-block free-capacity state.
+- Preserve negative S corrections entirely in treasury so miner and DAO
+  compensation remain monotonic while `DAO + treasury` telescopes exactly.
+
+**Tests Added/Updated**:
+
+- Shared free-capacity, signed-delta, positive-split, and negative-S tests.
+- Live/bulk DAO lifecycle coverage for the 102 CKB occupied-capacity exclusion.
+- Regression coverage proving block N uses block N-1 C/U, including reorg
+  snapshot recomputation.
+
+**Re-sync required**: Yes. Historical DAO snapshots were written by the wrong
+calculation path; fix the writer, purge the chain stores, and re-sync from
+genesis rather than backfilling or patching persisted aggregates.
+
+**Follow-up**: DAO-025 records why this proportional aggregate split remained
+insufficient even after its free-capacity correction.
+
+---
+
+### DAO-023: Circulating supply included unissued DAO interest
+
+**Date**: 2026-07-24
+
+**Symptom**: Mainnet `explorer_circulating_supply` failed by about 1.69%
+(roughly 833.1M CKB), while the burnt-supply comparison still passed.
+`explorer_knowledge_size` also reported a one-day 232 CKB transition mismatch.
+
+**Root cause**:
+
+1. API circulation paths subtracted genesis burn and treasury
+   (`S - unmade_dao_interests`) from DAO `C`. This left
+   `unmade_dao_interests` in circulation even though RFC-0023 defines all of
+   `S` as unissued secondary issuance.
+2. The same supply formula was duplicated across statistics, DAO ratio, and
+   chart handlers, including a fallback to `cum_treasury`.
+3. The knowledge-size verifier compared ckbadger's DAO-U-derived
+   `knowledge_size` with the explorer's independently indexed
+   `occupied_capacity`. The latter carried a historical live-cell projection
+   correction. The explorer's own DAO-U-derived `knowledge_size` matched
+   ckbadger exactly.
+
+**Fix**:
+
+- Added one fail-fast API supply calculation:
+  `circulating = C - genesis_burnt - S`,
+  `treasury = S - unmade_dao_interests`, and
+  `liquid = circulating - active_dao_principal`.
+- Routed the total-supply chart, network hero metric, circulation-ratio chart,
+  knowledge utilization, and treasury chart through that calculation.
+- Removed the legacy `cum_treasury` fallback.
+- Changed X5 to compare against explorer `knowledge_size`, preserving exact
+  daily DAO-U transition validation.
+
+**Tests Added/Updated**:
+
+- Verifier HTTP regression proving X5 requests `knowledge_size`.
+- Shared supply arithmetic and invariant tests.
+- DAO, statistics, and network-response circulation regressions.
+
+**Re-sync required**: No. The persisted DAO `C`, `S`, and unmade-interest
+snapshots are correct; this was an API read-path and verifier-source bug.
+
+---
+
+### DAO-024: Explorer circulation check compared different policy scopes
+
+**Date**: 2026-07-24
+
+**Symptom**: After DAO-023 corrected the protocol supply formula,
+`explorer_circulating_supply` still failed for all 30 days by about 0.2094%,
+or 103,000,770 CKB. The new API values proved that the larger 833.1M CKB error
+was fixed.
+
+**Root cause**:
+
+1. ckbadger circulation is chain-native: `C - genesis_burnt - S`.
+2. The official explorer additionally subtracts policy-classified capacity:
+   historical vesting allocations and the live balance of its labelled Bug
+   Bounty address. After the vesting schedules ended, the latter accounted for
+   the complete residual difference.
+3. X11 directly compared these different definitions. Its 0.2% tolerance had
+   previously hidden the semantic mismatch until the Bug Bounty balance crossed
+   that relative threshold.
+
+**Fix**:
+
+- X11 now fetches the explorer's separately published `locked_capacity` and
+  exactly adds it back to `circulating_supply` before comparison.
+- Kept the ckbadger API on its CKB-native calculation instead of importing an
+  off-chain address label into the supply definition.
+- Limited normalization to X11's requested 30-day window. Explorer has old
+  BigDecimal rows with sub-shannon fractions outside that window.
+- Added an exact decimal parser that accepts integer-valued forms such as
+  `4918812917022796752.0` but rejects non-zero sub-shannon fractions.
+- Replaced floating-point/filtering stacked-series summation with checked exact
+  shannon arithmetic, and made the 0.2% decision an exact `i128` ratio check.
+- Did not widen the verification tolerance.
+
+**Tests Added**:
+
+- HTTP regression proving X11 requests both explorer series, ignores unrelated
+  legacy fractional rows, accepts current integer-valued decimal rows, and
+  restores policy locked capacity before comparison.
+
+**Re-sync required**: No. This was a verifier semantic-normalization bug; no
+stored chain or derived data changed.
+
+---
+
+### DAO-025: Aggregate secondary split was not exact DAO compensation
+
+**Date**: 2026-07-24
+
+**Symptom**: After DAO-022's free-capacity correction and a rebuild, testnet
+daily `deposit_compensation` remained about 13.96% above the official explorer;
+the latest NervosDAO check was about 14.03% high.
+
+**Root cause**:
+
+1. Historical `cum_dao_compensation` was still reconstructed by multiplying
+   each block's aggregate secondary-pool delta by aggregate DAO principal.
+   That is not equivalent to RFC-0023's per-deposit AR calculation. Deposits
+   have different AR start values and integer flooring, and phase-1 requests
+   freeze at their request AR.
+2. DAO-022 subtracted a fixed 102 CKB occupied capacity per deposit. That value
+   describes a standard secp256k1 DAO cell, not every possible lock script.
+   Compensation must use the original cell's exact occupied capacity.
+3. The testnet explorer's daily `deposit_compensation` series has a historical
+   constant baseline gap. Full chain replay showed that recent daily changes
+   match the exact lifecycle result, while absolute levels retain the old gap.
+4. The explorer NervosDAO response mixes a daily-statistics
+   `deposit_compensation` field with live `claimed_compensation` and
+   `unclaimed_compensation` fields. Its live components sum to the comparable
+   current value.
+
+**Fix**:
+
+- Persist the original DAO deposit cell's exact occupied capacity in the
+  domain-store lifecycle entry.
+- Make exact per-deposit lifecycle accounting the single compensation path:
+  active deposits use the observation AR, phase-1 deposits use the frozen
+  request AR, and completed deposits contribute their stored claimed amount.
+- Retain request AR after phase-2 and validate stored claimed compensation
+  against the exact request-AR calculation, so a rollback to phase-1 remains
+  computable and corrupted lifecycle entries fail immediately.
+- Materialize bulk daily snapshots through an event-ordered timeline that
+  advances deposits, requests, and completions exactly. Live latest statistics
+  and reorg repair use the same lifecycle arithmetic.
+- Restrict aggregate `C/S/U` arithmetic to miner secondary issuance. Treasury
+  remains the direct `S - active_unmade` derivation.
+- Compare testnet daily compensation changes with the existing 0.2% tolerance,
+  preserving the explorer's constant historical offset without hiding bad
+  transitions.
+- Compare the latest value with explorer
+  `claimed_compensation + unclaimed_compensation`, using checked exact integer
+  arithmetic.
+
+**Tests Added/Updated**:
+
+- Actual occupied-capacity compensation regression.
+- Active → frozen phase-1 → claimed phase-2 lifecycle regressions in store and
+  bulk materialization.
+- Phase-2 rollback regression proving request AR survives and frozen
+  compensation is reproduced exactly.
+- Bulk event-timeline historical reconstruction regression.
+- Exact rational daily-delta verifier tests for constant baseline and bad
+  transition cases.
+- Latest Explorer live-component sum regression.
+- DAO rollback and API fixtures updated for the new persisted schema.
+
+**Re-sync required**: Yes. `DaoDepositCacheEntry` now contains exact occupied
+capacity, and historical DAO daily snapshots were written by the invalid
+aggregate calculation. Purge the chain stores and sync from genesis; do not
+backfill or patch the old aggregates.
+
+---
+
+### DAO-026: Cross-day live batch left completed compensation snapshot stale
+
+**Date**: 2026-07-25
+
+**Symptom**: Mainnet `explorer_deposit_compensation` failed only for the most
+recent completed day. The 2026-07-23→2026-07-24 change was short by about
+7,836.9 CKB. Reading the domain store showed a persisted July 24 cumulative
+value of `155184037017868168`; exact lifecycle recomputation at that day's last
+block produced `155184820689222572`.
+
+**Root cause**:
+
+1. Live snapshot construction shares the atomic domain batch with DAO lifecycle
+   mutations, so compensation fields are intentionally staged from the
+   pre-commit lifecycle state.
+2. After the domain batch committed, `refresh_latest_dao_statistics` replaced
+   the staged fields only in the lexicographically latest daily snapshot.
+3. When one live batch crossed the UTC+8 day boundary, the batch wrote both the
+   just-completed date and the new current date. The post-commit refresh fixed
+   only the new date, permanently leaving the completed date at the preceding
+   batch's cumulative compensation.
+
+**Fix**:
+
+- Carry every completed date and its last block from the live batch into the
+  post-commit DAO refresh.
+- Validate each boundary against the canonical block header and the first block
+  of the following date, then run the one exact per-deposit lifecycle
+  calculation at that boundary's AR.
+- Materialize completed-date and live-tip compensation fields together in one
+  domain-store DAO statistics batch.
+- Keep bulk materialization and append-only storage unchanged.
+
+**Tests Added**:
+
+- Cross-day regression proving the completed snapshot is evaluated at its own
+  final block/AR while the current snapshot is evaluated at the live tip.
+- Boundary-selection and missing-end-block fail-fast tests.
+
+**Re-sync required**: Yes. A completed daily snapshot already written by the
+old live path remains incorrect. Fix the indexer, purge the chain stores, and
+sync from genesis; do not add a repair/backfill workflow.
+
+---
+
+### DAO-027: Inflation chart rejected legitimate testnet blockless days
+
+**Date**: 2026-07-31
+
+**Symptom**: Testnet `chart_inflation_rate_sane` failed because
+`/charts/inflation-rate` returned 500 for a DAO snapshot jump from 2020-05-12
+to 2020-05-22.
+
+**Root cause**:
+
+1. The realized-inflation read path assumed persisted DAO snapshot dates were
+   a dense calendar series and classified every missing date as corruption.
+2. DAO snapshots are intentionally materialized only for dates containing
+   blocks. Testnet block 0 is dated 2020-05-12, while consecutive block 1 is
+   dated 2020-05-22, so the intervening nine complete dates have no blocks and
+   correctly have no persisted snapshots.
+3. The API regression fixture fabricated all 366 daily rows and therefore did
+   not exercise the real testnet genesis-to-first-block timestamp gap.
+
+**Fix**:
+
+- Validate every observed snapshot gap against canonical block headers.
+- If the first canonical block after a gap belongs to the next snapshot date,
+  carry the previous state through each blockless day exactly for the
+  trailing-365-calendar-day calculation.
+- If any canonical block belongs to a missing snapshot date, retain the
+  fail-fast 500 with the missing date and first affected block.
+- Keep the densification on the API read path; no RocksDB rows are synthesized
+  or written by the API.
+
+**Tests Added**:
+
+- Real testnet block-0/block-1 timestamps prove blockless days are filled and
+  produce continuous trailing-year chart points.
+- A block-bearing missing date still fails with canonical block context.
+
+**Re-sync required**: No. The sparse persisted snapshots are correct; purging
+and replaying the same chain would reproduce the same legitimate date gap.
+
+---
+
+## Category: API Read Path
+
+### API-001: Lazy cycles executed historical scripts on the wrong VM version
+
+**Date**: 2026-08-01
+
+**Symptom**: `/transactions/{hash}/cycles` returned 1,644,449 for an epoch-264
+secp transfer whose consensus-true count is 1,709,221. Every pre-Meepo
+transaction with a `hash_type: "type"` script group was affected.
+
+**Root Cause**: The lazy path shells out to `ckb-debugger` without any epoch
+context; the debugger defaults to `--script-version 2`, so `hash_type: "type"`
+groups always ran on the newest VM. Consensus pins VM selection to the commit
+block's epoch (RFC0032 → VM1, RFC0049 → VM2).
+
+**Fix**: `calculate_cycles` now requires a committed tx, derives the epoch from
+the commit header, maps it to a script version using activation epochs fetched
+from the node's `get_consensus` (`rfc "0032"` / `"0049"`; absent or null = never
+activated — no hardcoded per-network tables), and passes `--script-version` for
+every group. `--script-version` is a consensus _ceiling_: `data*` groups stay
+pinned by their hash_type, so one per-tx value reproduces consensus exactly.
+Already-persisted wrong values heal on re-sync (bulk sync stores node-reported
+cycles only when present; the lazy path recomputes the rest with fixed logic).
+
+**Lesson**: Replaying historical execution requires the historical rule set.
+Any re-execution tool must be pinned to the consensus parameters of the block
+being replayed — and "matches the official explorer" is not validation for
+pre-Mirana history: the explorer's own cycles for that era are VM1 replays,
+wrong the same way.
+
+---
+
+### API-002: Spore cursor pagination irrecoverably skipped same-block groups
+
+**Date**: 2026-08-01
+
+**Symptom**: Walking `/spore/objects` to exhaustion returned 31,975 of 37,291
+live spores (15.6% missing). All 5,806 missing ids shared `createdAtBlock` with
+a page-boundary cursor.
+
+**Root Cause**: The cursor was `created_at_block` alone with a strict
+`created_at_block < cursor` resume, so any entries of the cursor's block not
+consumed by the previous page were skipped forever. Blocks hold up to 181
+spores while the page limit caps at 100, so some blocks could never be fully
+listed. The same design existed in the clusters list, per-cluster spores, and
+per-owner spores paths.
+
+**Fix**: Composite cursor `{block}:{0x-id}` over an explicit total order
+`(created_at_block DESC, id ASC)`, one strict parser shared by all four
+endpoints (malformed or legacy numeric cursors → 400).
+
+**Lesson**: A pagination cursor must name a unique position in a total order.
+If the sort key isn't unique, the cursor needs a tiebreaker — and the same
+cursor bug rarely lives in only one endpoint.
+
+---
+
+### API-003: Cluster cells leaked into the spore objects list as dead links
+
+**Date**: 2026-08-01
+
+**Symptom**: All 490 live cluster cells appeared as rows in `/spore/objects`
+(and per-owner lists) with empty contentType; their `/spore/objects/{id}`
+detail returned 404.
+
+**Root Cause**: The spore store CF holds spores and clusters together;
+`SporeCache::build` filtered clusters out of `by_cluster`/`name_index` but not
+out of `live_indices`/`by_owner`, while the detail handler rejects clusters.
+
+**Fix**: Exclude cluster entries from both list indexes; clusters remain served
+by their own list/detail endpoints.
+
+**Lesson**: When one CF stores two kinds, every index built over it must state
+which kind it serves; a filter applied to some indexes and not others is a
+latent inconsistency.
+
+---
+
+### API-004: Cluster sporesCount mixed ever-minted and live semantics
+
+**Date**: 2026-08-01
+
+**Symptom**: `/spore/clusters/{id}` showed `sporesCount: 97` beside live-based
+holders (10), items (10), and composition (10) for a cluster with 87 melted
+spores; 197 of 490 clusters were affected, including one showing 20 spores
+with 0 items and 0 holders.
+
+**Root Cause**: The detail and list paths read `agg.total_count` (ever minted,
+including melted) for a field displayed among live-based figures; the list
+additionally consumed it through a cached field named `transfers_count`.
+
+**Fix**: All spore-count fields on the spore surfaces read `agg.live_count`
+(single path shared by list and detail); cluster existence is judged by store
+presence so fully-melted clusters still resolve. The ever-minted total remains
+available as `totalCount` on the `/assets` surface, which was already correct.
+
+**Lesson**: When a response mixes counters, every counter must state its
+population (live vs ever). A cached field whose name doesn't match its content
+(`transfers_count` = mint total) will eventually be consumed as its name.
+
+---
+
+### API-005: One name, two quantities — "Knowledge Size" on the hero vs the chart
+
+**Date**: 2026-08-02
+
+**Symptom**: `/statistics/network` reported `knowledgeSize` 519,967,746,700,000,000
+shannon — bit-identical to the node's raw DAO header `U` — while
+`/charts/knowledge-size`, which the homepage tile links to, plotted
+159,659,096 CKB for the same moment. The same named concept differed by 32.6×.
+`/statistics/asset-ecosystem`'s `totalKnowledgeSizeCkb` had the identical defect.
+The frontend compounded it: `ckbytes-card` computed
+`free = circulating − knowledge − dao` from the raw-`U` value, misallocating
+~5.04B CKB in the circulation bar, and hid the impossible result behind a
+`Math.max(0, …)` clamp.
+
+**Root Cause**: Both handlers passed `DaoDailySnapshot.occupied_capacity`
+(documented as the DAO header `U`) straight through, without subtracting the
+network's `GenesisBaseline.virtual_occupied`. The chart series applies that
+subtraction at write time, so two surfaces carried two quantities under one
+name. The adjacent `circulating_supply` in the very same handler already read
+`genesis_baseline()` correctly, which is what made the divergence invisible.
+
+**Fix**: One `common_knowledge_size(snapshot, virtual_occupied)` helper shared
+by `/statistics/network`, `/statistics/asset-ecosystem` and the chart path; a
+result below zero is a hard error naming the date, `U` and `virtual_occupied`.
+The frontend clamp is replaced by a labelled allocation-error box.
+
+**Lesson**: A derived quantity needs one function, not one formula repeated at
+each call site — repetition is how two call sites end up implementing two
+different definitions of the same word. When a UI clamps a value to keep a bar
+renderable, the clamp is hiding the arithmetic that proves the value wrong.
+
+---
+
+### API-006: Silent default-empty plus a full-scan fallback hid a post-reorg gap
+
+**Date**: 2026-08-02
+
+**Symptom**: For ~35-40 seconds after every reorg, `/dao/top-depositors`
+returned HTTP 200 with an empty leaderboard. Captured live on testnet across
+three reorgs in one evening.
+
+**Root Cause**: Rollback deleted the DAO singleton rows, and the indexer
+re-derived them only after that batch committed — a real ~6s window with no
+row. The handler masked the absence with
+`unwrap_or_else(|| DaoTopDepositors { depositors: vec![], .. })`, then cached
+that empty response for the full 30s TTL. `/dao/statistics` hid the same state
+behind a silent full-scan recompute — a fallback chain that had additionally
+_drifted_ from the indexer's own treasury/compensation formulas, so the two
+paths would have disagreed had anyone compared them.
+
+**Fix**: Rollback no longer deletes the singletons (they are tip-scoped rows
+the indexer rewrites wholesale right after every rollback, every batch commit,
+and unconditionally at startup, so deleting them bought nothing); the read path
+fails fast when a singleton is genuinely missing at a synced tip and reports
+`initializing` before the first block; absent/failed states are never cached;
+the `/dao/statistics` recompute fallback is deleted.
+
+**Lesson**: A silent default-empty turns a transient write-path gap into a
+plausible-looking answer, and a fallback recompute keeps it invisible while
+quietly drifting from the path it shadows. Both are the forbidden pattern; the
+gap itself is the bug to close.
+
+---
+
+### API-007: Proposal scans ignored uncle proposal zones
+
+**Date**: 2026-08-02
+
+**Symptom**: `/transactions/{hash}/lifecycle` returned `proposedIn: null` and
+`commitmentDistance: null` for consensus-valid committed transactions, so the
+tx page silently dropped the "Proposed" step of two-step commitment. Measured
+at 33 of 58,687 committed txs (~0.05-0.07%) in uncle-bearing eras.
+
+**Root Cause**: The `[commit−10, commit−2]` window scan read only
+`block.data().proposals()` for each main-chain block and never
+`block.uncles()[i].proposals()` — even though CKB consensus counts uncle
+proposal zones and the uncle data already travelled inside the very block
+objects the loop had fetched. `/graph/proposals/{block_number}` had the same
+defect.
+
+**Fix**: Both scans walk embedded uncles. `proposedIn` reports the
+**containing main-chain block** (the block whose proposal zone the uncle
+contributes to, and the block the commitment window is measured against), so
+`commitmentDistance` stays consensus-meaningful; uncle identity is surfaced as
+an explicit additional field.
+
+**Lesson**: Consensus rules that admit two sources for one fact (main
+proposals ∪ uncle proposals) need both sources read, and the derived field
+must stay anchored to the entity the rule is measured against — reporting the
+uncle's own number would have produced a distance corresponding to no rule.
+
+---
+
+### API-008: Address resolution that depended on having a live cell
+
+**Date**: 2026-08-02
+
+**Symptom**: `/addresses/{lock_hash}` returned `address: null` with no
+`lockScript` for any fully-spent address (completed DAO withdrawers, emptied
+wallets) despite showing a non-zero transaction count, while
+`/dao/deposits?status=2` resolved the very same locks to full addresses.
+Separately, `/tokens/{type_hash}/holders` returned `address: null` for every
+holder.
+
+**Root Cause**: Two divergent resolution paths. The address handler derived the
+lock script from _one live cell_ instead of `get_lock_script`, so it degraded
+to null exactly when an address had no live cells. The holders handler simply
+hardcoded `address: None` while the module's own `resolve_lock_addresses` —
+used by the sibling transfers/activities handlers — sat unused.
+
+**Fix**: Both handlers use the stored lock script and the shared resolver;
+`CF_LOCK_SCRIPTS` is written by both sync paths from the same fields the old
+code read off the cell and is never deleted, so the resolution is exact and
+outlives the cells. The `_ => "data"` hash-type fallback is replaced by a
+fail-fast conversion.
+
+**Lesson**: Deriving a durable fact from a transient artifact (a live cell)
+gives an answer that disappears with the artifact. When one module already has
+a resolver, a second call site that returns null is not a missing feature — it
+is a second path that will drift.
+
+---
+
+### API-009: Failed script replays were harvested as authoritative cycle counts
+
+**Date**: 2026-08-02
+
+**Symptom**: Every Nervos DAO phase-1 and phase-2 transaction served wrong
+cycles as `status: done`. Example: phase-2
+`0x6fa94cb21df82144505c5a9e5d3197e431ea0296a09c55a3e83e669f9ac01ab9` served
+3,374,403 against a consensus-true 3,380,228. Genesis transactions served
+15,511 for a run that had in fact failed.
+
+**Root Cause**: Two composed defects. The mock transaction carried no header
+association, so the DAO type script's `load_header(source=Input)` hit
+ItemMissing and the group aborted after ~8k cycles. And the runner never
+checked the child exit code or the `Run result:` line, so the aborted group's
+partial count was summed into the total and persisted as a completed value —
+which no later request would recompute.
+
+**Fix**: `MockInput`/`MockCellDep` carry a required committing-block hash
+(an unresolvable one is an invariant violation, not a `None`), and a group is
+accepted only when `Run result: 0` _and_ exit code 0; anything else is an
+error, which the existing worker persists as the `-1` failed marker.
+
+**Lesson**: An external verifier's exit status is part of its answer. Parsing
+its stdout for a number while ignoring "this run failed" converts an error into
+a fact — and persisting that fact as `done` makes it permanent. Note the fix
+does not heal stored values: they clear on re-sync.
+
+---
+
+### API-010: Three more unvalidated block numbers aborted the whole process
+
+**Date**: 2026-08-02
+
+**Symptom**: `GET /api/v1/blocks?limit=2&cursor=0` dropped the connection and
+took the entire mainnet API down — every endpoint, every client — until the
+supervisor restarted it (~40-60s). Verified live: `?cursor=1` answered 200,
+`?cursor=0` made the listening PID vanish. Two sibling vectors were found by
+sweeping the class: `/dao/calculator?deposit_block=-1` and
+`/transactions?block_number=-1`.
+
+**Root Cause**: An unvalidated negative reaches `keys::encode_block_num`, whose
+`assert!(n >= 0)` is a correct internal invariant — but the release profile
+sets `panic = "abort"` and the API has no catch-panic layer, so the assert
+kills the process instead of the request. `/blocks` computed `cursor - 1`
+(so `cursor = 0` produced `-1`, and `i64::MIN` wrapped to `i64::MAX` in
+release, silently serving the newest page); `/dao/calculator` only compared
+`withdraw < deposit`, which `-1` passes; `/transactions` did call
+`validate_block_number` — 21 lines _after_ it had already looked the header up.
+
+**Why a green test did not protect `/transactions`**: its regression test
+asserted 400 and passed for months. Under the test profile a panic unwinds,
+and the handler swallowed the result twice (`get_block_header(..).ok()` inside
+a `spawn_blocking` whose `JoinError` was `.unwrap_or(0)`-ed), so control
+reached the later validation and returned a reassuring 400 — while the release
+binary was already dead. The fix therefore validates first _and_ deletes the
+swallowing, so an ordering regression now surfaces as a 500 rather than a
+passing test.
+
+**Fix**: One validating parser at the boundary for the `/blocks` cursor
+(returning the resolved scan start, so no caller can hold a value that could
+go below genesis), `validate_block_number` hoisted above every store access in
+the other two handlers, and the silent guards that laundered the panic removed.
+The `keys.rs` assert is deliberately untouched.
+
+**Lesson**: An internal `assert!` plus `panic = "abort"` makes every missing
+boundary check a remote denial of service, so the boundary sweep has to be
+exhaustive by construction rather than by memory — this is the third round in
+which this family resurfaced, each time in the one shape the previous sweep's
+tests did not cover (path params, then hash lengths, now bare integer query
+params). And a test that asserts on a response cannot prove a panic did not
+happen: if the code under test swallows failures, the test profile will hide
+the crash the release profile takes.
+
+---
+
+### API-011: A checksum variant accepted, then echoed back as canonical
+
+**Date**: 2026-08-03
+
+**Symptom**: `/addresses/{addr}` answered 200 with full balance and cell counts
+for an address whose checksum is invalid under RFC-0021 (the burn payload
+carrying a legacy Bech32 checksum where the 0x00 full format mandates
+Bech32m), and returned that invalid string back to the caller in the response's
+`address` field. The official explorer 404s the same string. Separately,
+an all-uppercase address — legal per the bech32 case rules — fell through to
+the hex-hash branch and produced a 400 complaining about a 32-byte hex hash.
+
+**Root Cause**: `bech32::decode` is checksum-variant agnostic, so the parser
+verified only that the payload's format byte was 0x00, never that the encoding
+that carried it was the one the format requires. The response then preferred
+the caller's raw input over re-encoding the resolved lock script, so a rejected
+string became a published one.
+
+**Fix**: Decode explicitly under Bech32m for the full format, rejecting the
+legacy variant with an error naming the reason; accept either case as the spec
+allows; and always render `address` from the resolved lock script on the
+serving network, never from the input.
+
+**Lesson**: Echoing input into a response field makes the API an authority on
+a string it never validated. The canonical form has to be derived from the
+decoded value, which incidentally makes the wrong-checksum bug impossible to
+reintroduce quietly — the derived form simply would not match.
+
+### API-012: Two endpoints, one fact, one of them silent
+
+**Date**: 2026-08-03
+
+**Symptom**: `/blocks/{id}/proposals` reported `committedTxHash: null` for all
+1,500 proposals of block 11988763, of which 1,410 were in fact committed within
+the commit window, while `/graph/proposals/{block_number}` resolved those very
+commitments for the same block.
+
+**Root Cause**: The proposals handler hardcoded the field to `None` pending "a
+dedicated proposal-to-tx reverse index", but the sibling graph endpoint already
+answered the question by scanning the commit window. Consumers could not tell
+"never committed" from "not computed".
+
+**Fix**: The window scan was extracted into one helper used by both endpoints,
+with the graph endpoint's matching semantics pinned by a test first so the
+extraction provably changed nothing there. A proposal with no match in the
+available window stays null, which is now an honest answer rather than a
+placeholder.
+
+**Lesson**: A field that is always null is indistinguishable from data, and
+the justification for it ("no index exists") went stale the moment a sibling
+handler computed the same thing a different way. Documented omissions need a
+periodic check that they are still omissions.
+
+### API-013: An empty array where there was no answer
+
+**Date**: 2026-08-03
+
+**Symptom**: `/transactions/{hash}/cell-deps` returned 200 with an empty array
+both when the transaction did not exist and when the CKB store backing the
+lookup was unavailable — the same response a transaction with genuinely no
+cell deps would produce.
+
+**Root Cause**: The handler mapped both failure paths to `ok(vec![])`.
+
+**Fix**: A missing transaction is a 404 and an unavailable data source is a
+500 naming what is missing; a reader that lags behind a node that reports the
+transaction as committed also fails loudly rather than reporting absence.
+
+**Lesson**: The empty collection is a legitimate answer for one question only —
+"what are this transaction's cell deps" — so using it for "I could not tell"
+destroys the distinction at exactly the point a client would have retried.
+
+## Category: Ecosystem Protocol Detection
+
+### PROTO-001: One payload layout applied to every UTXOSwap intent type
+
+**Date**: 2026-08-03
+
+**Symptom**: Roughly 23% of mainnet UTXOSwap protocol metadata (and 28% of
+testnet) recorded amounts around 1.7e38 — add-liquidity and remove-liquidity
+actions showed `amountIn: 170141183460469231731687303715884144673` where the
+transaction had moved 9,969,978 shannons.
+
+**Root Cause**: `parse_intent_args` had one catch-all branch that applied the
+swap layout (`args[57]` index, `args[58..74]` and `args[74..90]` as u128s) to
+every intent type that was not CreatePool. On chain the payload is per-type:
+AddLiquidity is 121 bytes of four u128s, RemoveLiquidity 105 bytes of three,
+and only the two swap types match the assumed shape. Reading a u128 one byte
+late swallows the next field's low byte as its own high byte, which is why
+every wrong value was `2^127 + (true_value >> 8)`.
+
+**Fix**: Per-type decoding in a single decoder hoisted into `ckbadger-common`
+and shared by the indexer parser and the API's live lock-args display, which
+had carried its own copy of the same bug. Field names now describe what each
+type actually holds; an unknown type or a length mismatch records a typed
+`Unparsed` marker instead of borrowing another type's layout.
+
+**Lesson**: A catch-all match arm over a protocol's message types is a claim
+that every unlisted variant shares one layout — a claim no one verified here.
+The field identities were confirmed against what the transactions actually
+produce (the intent cell's own capacity and paired UDT amount), not inferred
+from plausible-looking byte patterns.
+
+### PROTO-002: Per-participant inference presented as transaction-level fact
+
+**Date**: 2026-08-03
+
+**Symptom**: One Stable++ transaction was labeled `borrow`, `adjust` and
+`repay` at once; every one of the 68 vault closures in mainnet history also
+carried `liquidation`; and about 89.5% of transactions labeled `redemption`
+were ordinary RUSD transfers or DEX swaps that never touched a vault.
+
+**Root Cause**: The detector ran once per participating owner and derived the
+action from that owner's own balance deltas, so a transaction with several
+participants emitted several mutually exclusive labels for one on-chain event.
+The truth table also mapped any nonzero RUSD delta without a vault to
+"redemption", and an `input_capacity == 0` early return skipped pure-receiver
+owners, which is exactly the borrower in a borrow.
+
+**Fix**: Classification is computed once per transaction from transaction-level
+facts (vault cells in and out, intent cells consumed, RUSD supply delta). A
+transaction that touches no vault, pool, or intent cell now emits no Stable++
+action at all. `liquidation` was removed rather than repaired: all 68 closures
+consume an intent belonging to the closing vault's own owner, so no chain
+discriminator for a forced liquidation exists, and a label that fires on every
+closure carries no information. `redemption` now requires RUSD actually
+destroyed against a consumed intent, which currently fires zero times.
+
+**Lesson**: When the thing being described is a property of the transaction,
+computing it from one participant's view guarantees contradictions the moment
+a second participant exists. And an emitted label must have a chain fact that
+distinguishes it — inventing "liquidation" from the shape of a normal close
+made the data actively misleading rather than merely incomplete.
+
+### PROTO-003: A protocol pipeline nothing could reach
+
+**Date**: 2026-08-03
+
+**Symptom**: 421 live testnet and 32 live mainnet did:ckb identity cells were
+absent from every surface — `/assets/identities/did_ckb` returned 404, item
+detail 404, search empty — while the store schema, writer paths, aggregates
+and API routes for exactly that data all existed and compiled.
+
+**Root Cause**: The script registry mapped the `did-ckb` metadata slug to
+`ProtocolScript::DidCkb`, but every detection site tested
+`ProtocolScript::SporeDid`, a legacy variant no slug maps to. The predicate
+was therefore permanently false and the entire downstream pipeline — insert,
+consume, aggregate emit, live sentinels, writer paths — was unreachable code.
+
+**Fix**: A dedicated `DidCkbParser` resolving the real registry variant, wired
+symmetrically through the live and bulk paths. Wiring it exposed a second
+defect the dormant code had hidden: 31 of the 421 cells carry 20-byte type
+args, and both the outpoint reverse index and the forward map assumed exactly
+32 bytes, so the reverse index key became variable-width (ids stay verbatim;
+scans filter on exact key length and exact id bytes) and the forward map
+stopped silently returning `None` for shorter ids.
+
+**Lesson**: Dead code does not merely fail to run, it fails to be tested
+against reality — this pipeline had never met a real cell, so its fixed-width
+assumption survived unchallenged until classification was switched on. A
+protocol is only integrated when something asserts its cells are indexed;
+until then, shipped routes and schema are evidence of intent, not of function.
+
+### PROTO-004: Curated labels attached to a hash the chain never resolves
+
+**Date**: 2026-08-03
+
+**Symptom**: The Fiber Funding and Commitment lock families reported zero
+cells against 5,021 live funding cells on testnet, and `/scripts/lookup` for
+the RGB++ BTC-testnet3 deployment answered with the signet deployment's
+numbers (680 cells instead of 12,486) including signet's code cell.
+
+**Root Cause**: Two independent faults that compound. In the metadata, ten
+entries set a version's identity to the canonical reference hash — a type
+script hash, which can never equal a code cell's bytecode data hash — while
+the usage rollup attributes a reference to a version by reading the live code
+cell's actual data hash, so the labeled version received nothing. In the API,
+a version carried a single `associated_code_hash` slot used to redirect stats
+lookups, but one bytecode is deployed under several independent references, so
+the last label written (signet) answered for all of them.
+
+**Fix**: The single-slot redirect is deleted rather than re-keyed, since no
+one slot can express a one-to-many relation and the per-reference rollup
+already holds the answer. Label import now validates a declared version
+against the shapes a version hash can actually take, naming the offending TOML
+and skipping the attachment instead of silently zeroing a family. The ten
+metadata entries were corrected against code cells read from the node.
+
+**Lesson**: Curated metadata is an input that can be wrong, so the code that
+consumes it needs the same fail-loud posture as any other untrusted input —
+here a placeholder silently produced a plausible zero, which reads as "this
+script is unused" rather than "this label never matched anything".
+
+### PROTO-005: Endianness copied from a fixture instead of the contract
+
+**Date**: 2026-08-03
+
+**Symptom**: mNFT item #1 displayed as token index 16777216 across all 5,209
+classes; the official explorer showed 0, 1, 2 for the same items.
+
+**Root Cause**: The parser read the 4-byte token index little-endian while the
+official contract's `parse_type_args_id` reads it big-endian. The parser's own
+test fixtures constructed args with `to_le_bytes`, so the tests agreed with
+the bug and would have kept agreeing forever.
+
+**Fix**: Big-endian in both parse paths, with the fixtures rebuilt from the
+contract's definition, in the bulk-build tests as well.
+
+**Lesson**: A test that builds its input with the same assumption as the code
+under test asserts only self-consistency. For a format defined by someone
+else, the fixture has to come from the external definition — the contract
+source or bytes captured from the chain — or it is not a test of correctness.
+
+### PROTO-006: An unsupported encoding recorded as a permanent failure
+
+**Date**: 2026-08-03
+
+**Symptom**: 24 of 40 sampled testnet DOB clusters failed to decode entirely
+("failed to extract DNA hex from spore content"), and the failures were
+persisted as deterministic so nothing would ever retry them.
+
+**Root Cause**: The DOB spec defines a raw-binary DNA form (content byte zero
+is `0x00`, DNA is the remaining bytes); the extractor only handled the text
+and JSON forms, running the content through a lossy UTF-8 conversion first.
+A related dispatch defect chose the protocol version from the spore's
+`content_type` with a silent `unwrap_or(0)` default, where the reference
+implementation dispatches on the cluster's declared `dob.ver`.
+
+**Fix**: One shared extractor that handles all three content forms, and
+cluster `dob.ver` as the dispatch authority with an undeclared version now a
+typed failure rather than a silent version 0. Three read-path
+re-implementations of decoder rules (range width, segment modulo, option
+selector precedence) were also brought to the reference behavior; one existing
+unit test had encoded the nonconforming precedence and was replaced.
+
+**Lesson**: Classifying a decode failure as deterministic is a statement that
+the input, not the decoder, is at fault — so it must not be reachable by an
+input shape the decoder simply does not implement, or the classification turns
+a missing feature into permanent data loss that a rebuild alone cannot heal.
+
+---
+
+_Last updated: 2026-08-03_

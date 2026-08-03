@@ -5,6 +5,7 @@ import IdentityCollectionPage from '@/app/identities/[collectionId]/client-page'
 import { api } from '@/lib/api';
 const DOTBIT_COLLECTION_ID = '0x646f746269745f636f6c6c656374696f6e5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f';
 const DID_CKB_COLLECTION_ID = '0x6469645f636b625f636f6c6c656374696f6e5f5f5f5f5f5f5f5f5f5f5f5f5f5f';
+const BIT_CELL_COLLECTION_ID = '0x6269745f63656c6c5f636f6c6c656374696f6e5f5f5f5f5f5f5f5f5f5f5f5f5f';
 
 vi.mock('@/lib/api', () => ({
   api: {
@@ -14,6 +15,7 @@ vi.mock('@/lib/api', () => ({
     getIdentityCollectionActivities: vi.fn(),
   },
   isWarmupPendingError: vi.fn(() => false),
+  isNetworkInitializingError: vi.fn(() => false),
 }));
 
 vi.mock('@/components/layout/header', () => ({
@@ -197,7 +199,46 @@ describe('IdentityCollectionPage', () => {
     await waitFor(() => {
       const link = screen.getByRole('link', { name: 'alice.bit' });
       expect(link).toBeInTheDocument();
-      expect(link).toHaveAttribute('href', '/identities/dotbit/0x1111');
+      expect(link).toHaveAttribute('href', '/mainnet/identities/dotbit/0x1111');
+    });
+  });
+
+  it('links .bit Cell identity cards to their detail route', async () => {
+    mockCollectionId = 'bit-cell';
+    vi.mocked(api.getIdentityCollection).mockResolvedValue({
+      ...mockIdentityCollection,
+      collectionId: BIT_CELL_COLLECTION_ID,
+      standard: 'bit_cell',
+      name: '.bit Cell',
+    });
+    vi.mocked(api.getIdentityCollectionItems).mockResolvedValue({
+      data: [
+        {
+          nftId: '0x3333',
+          name: 'alice.bit-cell',
+          standard: 'bit_cell',
+          ownerLockHash: null,
+          isLive: true,
+          createdAtBlock: 200,
+          expiredAt: 1800000000,
+          txHash: '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+          outputIndex: 3,
+        },
+      ],
+      total: 1,
+      limit: 50,
+      hasMore: false,
+      nextCursor: null,
+    });
+
+    render(<IdentityCollectionPage collectionId={mockCollectionId} />);
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Search .bit Cell')).toBeInTheDocument();
+      expect(screen.getByRole('link', { name: 'alice.bit-cell' })).toHaveAttribute(
+        'href',
+        '/mainnet/identities/bit-cell/0x3333'
+      );
     });
   });
 

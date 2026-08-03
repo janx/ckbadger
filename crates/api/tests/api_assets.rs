@@ -88,9 +88,7 @@ async fn test_assets_list_supports_standard_filter_for_tokens_and_nfts() {
                     name: Some(format!("{symbol} Token")),
                     symbol: Some(symbol.to_string()),
                     decimals: Some(8),
-                    total_supply: Some(1000),
                     max_supply: None,
-                    holders_count: 10,
                     first_seen_block: 1,
                     icon_url: None,
                     description: None,
@@ -382,9 +380,7 @@ async fn test_assets_list_defaults_to_capacity_sort_and_supports_cursor_paginati
                 name: Some("Alpha Token".to_string()),
                 symbol: Some("ALPHA".to_string()),
                 decimals: Some(8),
-                total_supply: Some(1000),
                 max_supply: None,
-                holders_count: 10,
                 first_seen_block: 1,
                 icon_url: None,
                 description: None,
@@ -403,9 +399,7 @@ async fn test_assets_list_defaults_to_capacity_sort_and_supports_cursor_paginati
                 name: Some("Beta Token".to_string()),
                 symbol: Some("BETA".to_string()),
                 decimals: Some(8),
-                total_supply: Some(2000),
                 max_supply: None,
-                holders_count: 20,
                 first_seen_block: 1,
                 icon_url: None,
                 description: None,
@@ -479,6 +473,104 @@ async fn test_assets_list_defaults_to_capacity_sort_and_supports_cursor_paginati
 }
 
 #[tokio::test]
+async fn test_assets_supply_sort_orders_aggregate_beyond_u128() {
+    // Sorting uses the exact aggregate domain, including values beyond u128.
+    let store = test_store();
+    let token_small = [0x51u8; 32];
+    let token_huge = [0x52u8; 32];
+
+    let amount = 200u128 << 120;
+
+    store
+        .put_token_direct(
+            &token_small,
+            &TokenInfo {
+                type_code_hash: vec![0xAA; 32],
+                hash_type: 1,
+                type_args: vec![0x01; 20],
+                standard: "xudt".to_string(),
+                name: Some("Small Supply".to_string()),
+                symbol: Some("SMALL".to_string()),
+                decimals: Some(8),
+                max_supply: None,
+                first_seen_block: 1,
+                icon_url: None,
+                description: None,
+                transfers_count: 0,
+            },
+        )
+        .unwrap();
+    store
+        .put_token_direct(
+            &token_huge,
+            &TokenInfo {
+                type_code_hash: vec![0xBB; 32],
+                hash_type: 1,
+                type_args: vec![0x02; 20],
+                standard: "xudt".to_string(),
+                name: Some("Huge Supply".to_string()),
+                symbol: Some("HUGE".to_string()),
+                decimals: Some(8),
+                max_supply: None,
+                first_seen_block: 1,
+                icon_url: None,
+                description: None,
+                transfers_count: 0,
+            },
+        )
+        .unwrap();
+
+    let mut batch = StoreBatch::new(&store);
+    batch.put_token_holder(&token_small, &[0x01; 32], 1_000u128);
+    batch.put_token_holder(&token_huge, &[0x02; 32], amount);
+    batch.put_token_holder(&token_huge, &[0x03; 32], amount);
+    batch.commit().unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    // Descending by supply: the > u128::MAX token must come first.
+    let request = Request::builder()
+        .uri("/api/v1/assets?type=token&sort_key=supply&sort_direction=desc")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        json["data"][0]["id"],
+        format!("0x{}", hex::encode(token_huge))
+    );
+    assert_eq!(
+        json["data"][0]["totalSupply"],
+        "531691198313966349161522824112137830400"
+    );
+    assert_eq!(
+        json["data"][1]["id"],
+        format!("0x{}", hex::encode(token_small))
+    );
+
+    // Ascending by supply: the small token must come first.
+    let request = Request::builder()
+        .uri("/api/v1/assets?type=token&sort_key=supply&sort_direction=asc")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        json["data"][0]["id"],
+        format!("0x{}", hex::encode(token_small))
+    );
+    assert_eq!(
+        json["data"][1]["id"],
+        format!("0x{}", hex::encode(token_huge))
+    );
+}
+
+#[tokio::test]
 async fn test_assets_list_token_errors_when_daily_deltas_invalid() {
     let store = test_store();
     let healthy_token = [0x31u8; 32];
@@ -499,9 +591,7 @@ async fn test_assets_list_token_errors_when_daily_deltas_invalid() {
                     name: Some(name.to_string()),
                     symbol: Some(symbol.to_string()),
                     decimals: Some(8),
-                    total_supply: Some(1000),
                     max_supply: None,
-                    holders_count: 10,
                     first_seen_block: 1,
                     icon_url: None,
                     description: None,
@@ -964,6 +1054,161 @@ async fn test_assets_nft_collection_accepts_did_ckb_aliases() {
 }
 
 #[tokio::test]
+async fn test_assets_did_ckb_item_detail_supports_20_byte_item_ids() {
+    let store = test_store();
+    // Real live-testnet did:ckb item id (type-script args verbatim, 20 bytes):
+    // cell 0x1d43c10b...:0. 31 of 421 live testnet did:ckb cells carry
+    // 20-byte args, so the detail route must accept non-32-byte item ids.
+    let did_id = hex::decode("00ee044b93fab31c060417d159f9678b7cc154d4").unwrap();
+    assert_eq!(did_id.len(), 20);
+
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_identity(
+        &did_id,
+        &IdentityEntry {
+            standard: IdentityStandard::DidCkb,
+            owner_lock_hash: Some(vec![0x31; 32]),
+            name: None,
+            is_live: true,
+            created_at_block: 21_080_336,
+            created_at_tx: vec![0x91; 32],
+            extra: IdentityExtra::DidCkb,
+        },
+    );
+    batch.commit().unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/assets/identities/did/items/0x{}",
+            hex::encode(&did_id)
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["nftId"], format!("0x{}", hex::encode(&did_id)));
+    assert_eq!(json["standard"], "did_ckb");
+    assert_eq!(json["isLive"], true);
+    assert_eq!(json["createdAtBlock"], 21_080_336);
+}
+
+/// The item lifecycle feed resolves through the outpoint reverse index, whose
+/// id component is variable-width. A real 20-byte did:ckb item id must produce
+/// its real mint/transfer history, not an empty feed.
+#[tokio::test]
+async fn test_assets_did_ckb_20_byte_item_activities_resolve() {
+    let store = test_store();
+    // Real live-testnet did:ckb item id (type-script args verbatim, 20 bytes).
+    let did_id = hex::decode("00ee044b93fab31c060417d159f9678b7cc154d4").unwrap();
+    assert_eq!(did_id.len(), 20);
+    let mint_tx = vec![0x93; 32];
+    let transfer_tx = vec![0x94; 32];
+
+    {
+        let mut batch = StoreBatch::new(store.as_ref());
+        batch.put_identity(
+            &did_id,
+            &IdentityEntry {
+                standard: IdentityStandard::DidCkb,
+                owner_lock_hash: Some(vec![0x31; 32]),
+                name: None,
+                is_live: true,
+                created_at_block: 300,
+                created_at_tx: mint_tx.clone(),
+                extra: IdentityExtra::DidCkb,
+            },
+        );
+        batch.commit().unwrap();
+    }
+
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_spore_outpoint(&mint_tx, 0, &did_id);
+    batch.put_spore_outpoint(&transfer_tx, 0, &did_id);
+    batch.put_consumed_cell_with_consumer(
+        &mint_tx,
+        0,
+        &LiveCellInfo {
+            capacity: 521_00000000,
+            lock_script_hash: vec![0x41; 32],
+            lock_code_hash: vec![0x51; 32],
+            lock_hash_type: 1,
+            lock_args: vec![0x61; 22],
+            type_script_hash: Some(vec![0x71; 32]),
+            type_code_hash: Some(vec![0x81; 32]),
+            type_hash_type: Some(1),
+            type_args: Some(did_id.clone()),
+            data_size: 205,
+            occupied_capacity: 61_00000000,
+            udt_amount: None,
+            data_hash: None,
+        },
+        300,
+        400,
+        Some(&transfer_tx),
+    );
+    batch.put_tx_hash_map(&mint_tx, 300, 0);
+    batch.put_tx_index(
+        300,
+        0,
+        &TxIndexEntry {
+            is_cellbase: false,
+            timestamp: 1_753_000_000,
+            inputs_count: 0,
+            outputs_count: 1,
+            fee: 0,
+            tx_size: 180,
+            cycles: None,
+            semantic_tags: 0,
+        },
+    );
+    batch.put_tx_hash_map(&transfer_tx, 400, 0);
+    batch.put_tx_index(
+        400,
+        0,
+        &TxIndexEntry {
+            is_cellbase: false,
+            timestamp: 1_753_000_100,
+            inputs_count: 1,
+            outputs_count: 1,
+            fee: 0,
+            tx_size: 200,
+            cycles: None,
+            semantic_tags: 0,
+        },
+    );
+    batch.commit().unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/assets/identities/did/items/0x{}/activities?limit=20",
+            hex::encode(&did_id)
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        json["data"].as_array().unwrap().len(),
+        2,
+        "20-byte item id must resolve its lifecycle rows"
+    );
+    assert_eq!(json["data"][0]["blockNumber"], 400);
+    assert_eq!(json["data"][0]["actions"][0], "transfer");
+    assert_eq!(json["data"][1]["blockNumber"], 300);
+    assert_eq!(json["data"][1]["actions"][0], "mint");
+}
+
+#[tokio::test]
 async fn test_assets_did_ckb_item_detail_and_activities() {
     let store = test_store();
     let did_id = [0xB7u8; 32];
@@ -1312,6 +1557,261 @@ async fn test_assets_nft_collection_items_dotbit_human_readable_and_pagination()
     assert_eq!(json["isLive"], true);
     assert_eq!(json["txHash"], format!("0x{}", hex::encode(&nft_a_tx_hash)));
     assert_eq!(json["outputIndex"], nft_a_output_index);
+}
+
+/// The `.bit Cell` item activities route had no coverage at all, so nothing
+/// pinned that it resolves the identity, enforces the standard, or orders and
+/// filters the lifecycle actions the way its dotbit/did siblings do.
+#[tokio::test]
+async fn test_assets_bit_cell_item_activities() {
+    let store = test_store();
+    let identity_id =
+        hex::decode("81d34cd1dfc27716073d1018a63712926d8e3ab36345847129d0cc4135d1ffd4").unwrap();
+    let account_id = hex::decode("81d34cd1dfc27716073d1018a63712926d8e3ab3").unwrap();
+    let mint_tx = vec![0xc1; 32];
+    let transfer_tx = vec![0xc2; 32];
+
+    {
+        let mut batch = StoreBatch::new(store.as_ref());
+        batch.put_identity(
+            &identity_id,
+            &IdentityEntry {
+                standard: IdentityStandard::BitCell,
+                owner_lock_hash: Some(vec![0x31; 32]),
+                name: Some("20240507.bit".to_string()),
+                is_live: true,
+                created_at_block: 100,
+                created_at_tx: mint_tx.clone(),
+                extra: IdentityExtra::BitCell {
+                    account_id,
+                    expired_at: 1_778_140_699,
+                },
+            },
+        );
+        batch.commit().unwrap();
+    }
+
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_spore_outpoint(&mint_tx, 0, &identity_id);
+    batch.put_spore_outpoint(&transfer_tx, 0, &identity_id);
+    batch.put_consumed_cell_with_consumer(
+        &mint_tx,
+        0,
+        &LiveCellInfo {
+            capacity: 200_00000000,
+            lock_script_hash: vec![0x31; 32],
+            lock_code_hash: vec![0x41; 32],
+            lock_hash_type: 1,
+            lock_args: vec![0x51; 20],
+            type_script_hash: Some(vec![0x61; 32]),
+            type_code_hash: Some(vec![0x71; 32]),
+            type_hash_type: Some(1),
+            type_args: Some(identity_id.clone()),
+            data_size: 72,
+            occupied_capacity: 158_00000000,
+            udt_amount: None,
+            data_hash: None,
+        },
+        100,
+        200,
+        Some(&transfer_tx),
+    );
+    batch.put_tx_hash_map(&mint_tx, 100, 0);
+    batch.put_tx_index(
+        100,
+        0,
+        &TxIndexEntry {
+            is_cellbase: false,
+            timestamp: 1_700_000_100,
+            inputs_count: 0,
+            outputs_count: 1,
+            fee: 0,
+            tx_size: 180,
+            cycles: None,
+            semantic_tags: 0,
+        },
+    );
+    batch.put_tx_hash_map(&transfer_tx, 200, 0);
+    batch.put_tx_index(
+        200,
+        0,
+        &TxIndexEntry {
+            is_cellbase: false,
+            timestamp: 1_700_000_200,
+            inputs_count: 1,
+            outputs_count: 1,
+            fee: 0,
+            tx_size: 200,
+            cycles: None,
+            semantic_tags: 0,
+        },
+    );
+    batch.commit().unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    // Newest lifecycle action first, each carrying its own block.
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/assets/identities/bit-cell/items/0x{}/activities?limit=20",
+            hex::encode(&identity_id)
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["data"].as_array().unwrap().len(), 2);
+    assert_eq!(json["data"][0]["blockNumber"], 200);
+    assert_eq!(json["data"][0]["actions"][0], "transfer");
+    assert_eq!(
+        json["data"][0]["txHash"],
+        format!("0x{}", hex::encode(&transfer_tx))
+    );
+    assert_eq!(json["data"][1]["blockNumber"], 100);
+    assert_eq!(json["data"][1]["actions"][0], "mint");
+    assert_eq!(
+        json["data"][1]["txHash"],
+        format!("0x{}", hex::encode(&mint_tx))
+    );
+
+    // The action filter narrows to a single lifecycle step.
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/assets/identities/bit-cell/items/0x{}/activities?limit=20&action=mint",
+            hex::encode(&identity_id)
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["data"].as_array().unwrap().len(), 1);
+    assert_eq!(json["data"][0]["actions"][0], "mint");
+    assert_eq!(json["data"][0]["blockNumber"], 100);
+
+    // An unknown identity is a 404, not an empty page.
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/assets/identities/bit-cell/items/0x{}/activities",
+            hex::encode([0xEEu8; 32])
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["error"], "not_found");
+    assert!(json["message"]
+        .as_str()
+        .unwrap()
+        .contains(".bit Cell identity not found"));
+}
+
+#[tokio::test]
+async fn test_assets_bit_cell_collection_and_detail_keep_independent_identity() {
+    let store = test_store();
+    let collection_id = b"bit_cell_collection_____________".to_vec();
+    let identity_id =
+        hex::decode("81d34cd1dfc27716073d1018a63712926d8e3ab36345847129d0cc4135d1ffd4").unwrap();
+    let account_id = hex::decode("81d34cd1dfc27716073d1018a63712926d8e3ab3").unwrap();
+    let tx_hash = vec![0xc1; 32];
+    let output_index = 1_i16;
+
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_identity_collection_aggregate(
+        &collection_id,
+        &IdentityCollectionAggregate {
+            name: Some(".bit Cell".to_string()),
+            standard: IdentityStandard::BitCell,
+            total_count: 1,
+            live_count: 1,
+            holders_count: 1,
+            activities_count: 1,
+        },
+    );
+    batch.put_identity(
+        &identity_id,
+        &IdentityEntry {
+            standard: IdentityStandard::BitCell,
+            owner_lock_hash: Some(vec![0x31; 32]),
+            name: Some("20240507.bit".to_string()),
+            is_live: true,
+            created_at_block: 13_184_726,
+            created_at_tx: tx_hash.clone(),
+            extra: IdentityExtra::BitCell {
+                account_id,
+                expired_at: 1_778_140_699,
+            },
+        },
+    );
+    batch.put_identity_by_collection(&collection_id, &identity_id);
+    batch.put_cell(
+        &tx_hash,
+        output_index,
+        &LiveCellInfo {
+            capacity: 200_00000000,
+            lock_script_hash: vec![0x31; 32],
+            lock_code_hash: vec![0x41; 32],
+            lock_hash_type: 1,
+            lock_args: vec![0x51; 20],
+            type_script_hash: Some(vec![0x61; 32]),
+            type_code_hash: Some(vec![0x71; 32]),
+            type_hash_type: Some(1),
+            type_args: Some(Vec::new()),
+            data_size: 72,
+            occupied_capacity: 158_00000000,
+            udt_amount: None,
+            data_hash: None,
+        },
+        13_184_726,
+    );
+    batch.put_spore_outpoint(&tx_hash, output_index, &identity_id);
+    batch.commit().unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri("/api/v1/assets/identities/bit_cell/items?limit=20")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["total"], 1);
+    assert_eq!(
+        json["data"][0]["nftId"],
+        format!("0x{}", hex::encode(&identity_id))
+    );
+    assert_eq!(json["data"][0]["standard"], "bit_cell");
+    assert_eq!(json["data"][0]["name"], "20240507.bit");
+    assert_eq!(json["data"][0]["expiredAt"], 1_778_140_699u64);
+    assert_eq!(
+        json["data"][0]["txHash"],
+        format!("0x{}", hex::encode(&tx_hash))
+    );
+    assert_eq!(json["data"][0]["outputIndex"], output_index);
+
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/assets/identities/bit-cell/items/0x{}",
+            hex::encode(&identity_id)
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["standard"], "bit_cell");
+    assert_eq!(json["name"], "20240507.bit");
+    assert_eq!(json["txHash"], format!("0x{}", hex::encode(tx_hash)));
 }
 
 #[tokio::test]
@@ -1841,6 +2341,9 @@ async fn test_assets_nft_collection_activities_supports_action_filter() {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         },
     );
@@ -1856,6 +2359,9 @@ async fn test_assets_nft_collection_activities_supports_action_filter() {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         },
     );
@@ -1871,6 +2377,9 @@ async fn test_assets_nft_collection_activities_supports_action_filter() {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         },
     );
@@ -2574,4 +3083,330 @@ async fn test_assets_nft_item_activities_dotbit_recycled_has_burn_history() {
     assert_eq!(json["data"][0]["actions"][0], "burn");
     assert_eq!(json["data"][1]["actions"][0], "transfer");
     assert_eq!(json["data"][2]["actions"][0], "mint");
+}
+
+// ---------------------------------------------------------------------------
+// `/assets` cursor strictness — the silent-page-1 family.
+// ---------------------------------------------------------------------------
+
+/// Seed two tokens so `/assets` has a stable two-row, one-page-per-row list.
+fn seed_two_assets_for_cursor_tests() -> (Arc<CkbadgerStore>, [u8; 32], [u8; 32]) {
+    let store = test_store();
+    let token_a = [0x11u8; 32];
+    let token_b = [0x22u8; 32];
+
+    for (id, code_hash, arg, name, symbol) in [
+        (&token_a, 0xAAu8, 0x01u8, "Alpha Token", "ALPHA"),
+        (&token_b, 0xBBu8, 0x02u8, "Beta Token", "BETA"),
+    ] {
+        store
+            .put_token_direct(
+                id,
+                &TokenInfo {
+                    type_code_hash: vec![code_hash; 32],
+                    hash_type: 1,
+                    type_args: vec![arg; 20],
+                    standard: "xudt".to_string(),
+                    name: Some(name.to_string()),
+                    symbol: Some(symbol.to_string()),
+                    decimals: Some(8),
+                    max_supply: None,
+                    first_seen_block: 1,
+                    icon_url: None,
+                    description: None,
+                    transfers_count: 1,
+                },
+            )
+            .unwrap();
+    }
+
+    store
+        .put_token_daily_delta(
+            &token_a,
+            20240115,
+            &TokenDailyDelta {
+                owned_capacity_delta: 100,
+                owned_knowledge_delta: 60,
+            },
+        )
+        .unwrap();
+    store
+        .put_token_daily_delta(
+            &token_b,
+            20240115,
+            &TokenDailyDelta {
+                owned_capacity_delta: 300,
+                owned_knowledge_delta: 120,
+            },
+        )
+        .unwrap();
+
+    (store, token_a, token_b)
+}
+
+/// A cursor `/assets` cannot parse must be a 400, not page 1 again.
+///
+/// `parse_asset_cursor` returned `Option` and the caller consumed it as nested
+/// `if let Some(..)`, so an unparseable cursor and a cursor naming no row both
+/// fell through to "skip nothing". Verified live: `?limit=2&cursor=zzzz`
+/// answered 200 with rows byte-identical to page 1, so a client paging with a
+/// corrupted cursor loops on page 1 forever instead of learning it broke —
+/// while `/tokens?limit=2&cursor=zzzz` correctly answered 400.
+#[tokio::test]
+async fn test_assets_reject_unparseable_cursor_instead_of_reserving_page_one() {
+    let (store, _, _) = seed_two_assets_for_cursor_tests();
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let long_hex = format!("0x{}", "ab".repeat(600));
+    for cursor in [
+        "zzzz",                         // no separator at all
+        "-1",                           // no separator, numeric
+        "-1:0",                         // separator, but not an asset type
+        "99999999999999999999999999:0", // separator, but not an asset type
+        &long_hex,                      // 1200 hex chars, no separator
+        "token:",                       // known type, empty id
+        "spore:0xdeadbeef",             // unknown asset type
+    ] {
+        let (status, body) = get_json(&app, &format!("/assets?limit=2&cursor={cursor}")).await;
+        assert_eq!(
+            status,
+            StatusCode::BAD_REQUEST,
+            "GET /api/v1/assets?cursor={cursor} must reject an unparseable cursor with 400 \
+             instead of silently re-serving page 1, got {status} body={body}"
+        );
+    }
+}
+
+/// A well-formed cursor naming a row that is not in the current result set is
+/// also a 400 — same answer `/tokens` already gives (`tokens.rs` maps a missing
+/// `position(..)` to `bad_request("Invalid token cursor")`). Resuming at page 1
+/// would hand the client rows it has already seen and never terminate.
+#[tokio::test]
+async fn test_assets_reject_well_formed_cursor_that_names_no_row() {
+    let (store, _, _) = seed_two_assets_for_cursor_tests();
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let unknown = format!("token:0x{}", "de".repeat(32));
+    let (status, body) = get_json(&app, &format!("/assets?limit=2&cursor={unknown}")).await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "GET /api/v1/assets?cursor={unknown} names no row in the result set and must be \
+         rejected rather than restarting pagination, got {status} body={body}"
+    );
+}
+
+/// The strictness must not break the cursor the endpoint itself emits, and
+/// `?cursor=` must stay page 1 like every other list route.
+#[tokio::test]
+async fn test_assets_round_trip_their_own_cursor_and_treat_empty_as_page_one() {
+    let (store, token_a, token_b) = seed_two_assets_for_cursor_tests();
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let (status, page1) = get_json(&app, "/assets?type=token&limit=1&cursor=").await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "an empty cursor must mean page 1, got {status} body={page1}"
+    );
+    assert_eq!(
+        page1["data"][0]["id"],
+        format!("0x{}", hex::encode(token_b))
+    );
+
+    let next = page1["nextCursor"]
+        .as_str()
+        .expect("page 1 has a next cursor");
+    let (status, page2) =
+        get_json(&app, &format!("/assets?type=token&limit=1&cursor={next}")).await;
+    assert_eq!(status, StatusCode::OK, "body={page2}");
+    assert_eq!(
+        page2["data"][0]["id"],
+        format!("0x{}", hex::encode(token_a))
+    );
+    assert!(page2["nextCursor"].is_null());
+}
+
+/// Regression (Bug: spore-cluster ids accepted with permanently empty rows):
+/// /assets/objects/{collection_id}/items resolves spore clusters for its
+/// aggregate/total (CF_CLUSTER_AGG fallback) but sourced rows only from
+/// list_mnft_ids_by_collection, so a spore cluster returned correct totals
+/// with zero rows forever (live mainnet: "Chinese Mahjong"
+/// 0xc22de62b3933f741e203714a189a2f468779e384fa33307fb9902d11aa648080,
+/// total 138 / live 98 / recycled 40, data always []). Rows must come from
+/// the same source as /spore/clusters/{id}/spores and agree with totals.
+#[tokio::test]
+async fn test_object_collection_items_serves_spore_cluster_rows_matching_totals() {
+    let store = test_store();
+    let cluster_id = [0xC2u8; 32];
+    let cluster_id_hex = format!("0x{}", hex::encode(cluster_id));
+
+    store
+        .put_spore_direct(
+            &cluster_id,
+            &ObjectEntry {
+                standard: ObjectStandard::SporeCluster,
+                collection_id: None,
+                token_id: None,
+                owner_lock_hash: Some(vec![0x11; 32]),
+                name: Some("Test Mahjong".to_string()),
+                description: None,
+                is_live: true,
+                created_at_block: 100,
+                created_at_tx: vec![0x10; 32],
+                extra: ObjectExtra::SporeCluster,
+            },
+        )
+        .unwrap();
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_cluster_aggregate(
+        &cluster_id,
+        &ClusterAggregate {
+            total_count: 3,
+            live_count: 2,
+            owner_count: 2,
+            pure_ckb_count: 2,
+            ..Default::default()
+        },
+    );
+    batch.commit().unwrap();
+
+    // Three member spores: two live, one melted; distinct creation blocks so
+    // the (created_at_block DESC, id ASC) order is observable.
+    for (id_byte, block, is_live, name) in [
+        (0xA1u8, 300i64, true, "tile-one"),
+        (0xA2, 250, false, "tile-two"),
+        (0xA3, 200, true, "tile-three"),
+    ] {
+        store
+            .put_spore_direct(
+                &[id_byte; 32],
+                &ObjectEntry {
+                    standard: ObjectStandard::Spore,
+                    collection_id: Some(cluster_id.to_vec()),
+                    token_id: None,
+                    owner_lock_hash: Some(vec![id_byte; 32]),
+                    name: Some(name.to_string()),
+                    description: None,
+                    is_live,
+                    created_at_block: block,
+                    created_at_tx: vec![id_byte ^ 0xFF; 32],
+                    extra: ObjectExtra::Spore {
+                        content_type: "dob/0".to_string(),
+                        content_length: 8,
+                        media_profile: SporeMediaProfile {
+                            tier: CompositionTier::PureCkb,
+                            sources: vec![],
+                            issues: vec![],
+                        },
+                    },
+                },
+            )
+            .unwrap();
+    }
+
+    let app = create_router(test_config(store)).await;
+
+    // All items: rows must exist and agree with the aggregate total.
+    let (status, json) = get_json(
+        &app,
+        &format!("/assets/objects/{cluster_id_hex}/items?limit=20"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json["total"], 3);
+    let rows = json["data"].as_array().unwrap();
+    assert_eq!(
+        rows.len(),
+        3,
+        "spore-cluster rows must match the reported total, got {json}"
+    );
+    // Same order as /spore/clusters/{id}/spores: created_at_block DESC, id ASC.
+    assert_eq!(rows[0]["nftId"], format!("0x{}", hex::encode([0xA1u8; 32])));
+    assert_eq!(rows[1]["nftId"], format!("0x{}", hex::encode([0xA2u8; 32])));
+    assert_eq!(rows[2]["nftId"], format!("0x{}", hex::encode([0xA3u8; 32])));
+    assert_eq!(rows[0]["standard"], "spore");
+    assert_eq!(rows[0]["name"], "tile-one");
+    assert_eq!(rows[0]["isLive"], true);
+    assert_eq!(rows[1]["isLive"], false);
+    assert_eq!(
+        rows[0]["txHash"],
+        format!("0x{}", hex::encode([0xA1u8 ^ 0xFF; 32])),
+        "spore rows carry the creation tx like the spore endpoints"
+    );
+
+    // Status filters: rows and totals stay in agreement.
+    let (status, live) = get_json(
+        &app,
+        &format!("/assets/objects/{cluster_id_hex}/items?limit=20&status=live"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{live}");
+    assert_eq!(live["total"], 2);
+    assert_eq!(live["data"].as_array().unwrap().len(), 2);
+
+    let (status, recycled) = get_json(
+        &app,
+        &format!("/assets/objects/{cluster_id_hex}/items?limit=20&status=recycled"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{recycled}");
+    assert_eq!(recycled["total"], 1);
+    assert_eq!(recycled["data"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        recycled["data"][0]["nftId"],
+        format!("0x{}", hex::encode([0xA2u8; 32]))
+    );
+
+    // Search narrows rows (count-less response like the mNFT branch).
+    let (status, searched) = get_json(
+        &app,
+        &format!("/assets/objects/{cluster_id_hex}/items?limit=20&search=tile-three"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{searched}");
+    assert_eq!(searched["data"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        searched["data"][0]["nftId"],
+        format!("0x{}", hex::encode([0xA3u8; 32]))
+    );
+
+    // Pagination walks every row exactly once via the returned cursor.
+    let mut seen = Vec::new();
+    let mut cursor: Option<String> = None;
+    for _ in 0..10 {
+        let path = match &cursor {
+            Some(c) => format!("/assets/objects/{cluster_id_hex}/items?limit=1&cursor={c}"),
+            None => format!("/assets/objects/{cluster_id_hex}/items?limit=1"),
+        };
+        let (status, page) = get_json(&app, &path).await;
+        assert_eq!(status, StatusCode::OK, "{page}");
+        for row in page["data"].as_array().unwrap() {
+            seen.push(row["nftId"].as_str().unwrap().to_string());
+        }
+        match page["nextCursor"].as_str() {
+            Some(next) => cursor = Some(next.to_string()),
+            None => break,
+        }
+    }
+    assert_eq!(
+        seen,
+        vec![
+            format!("0x{}", hex::encode([0xA1u8; 32])),
+            format!("0x{}", hex::encode([0xA2u8; 32])),
+            format!("0x{}", hex::encode([0xA3u8; 32])),
+        ],
+        "cursor pagination must walk all spore rows exactly once"
+    );
+
+    // A malformed cursor on the spore branch is a 400, never an empty page 1.
+    let (status, _) = get_json(
+        &app,
+        &format!("/assets/objects/{cluster_id_hex}/items?limit=1&cursor=abc"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
 }

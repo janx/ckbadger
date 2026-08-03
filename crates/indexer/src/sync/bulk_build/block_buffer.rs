@@ -8,8 +8,10 @@
 //! `VecDeque` so the build loop can peek ahead and drain by a bytes budget.
 
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use tokio::sync::mpsc::Receiver;
 
 use super::binary_facts::RawCkbBlock;
@@ -44,25 +46,88 @@ pub(crate) struct BlockBufferHandle {
     local: VecDeque<BufferedBlock>,
     local_bytes: usize,
     pub(crate) local_cells: u64,
+    remote_block_bytes: Option<Arc<AtomicU64>>,
 }
 
 impl BlockBufferHandle {
+    #[cfg(test)]
     pub(crate) fn new(chunk_rx: Receiver<Result<Vec<BufferedBlock>>>) -> Self {
         Self {
             chunk_rx,
             local: VecDeque::new(),
             local_bytes: 0,
             local_cells: 0,
+            remote_block_bytes: None,
+        }
+    }
+
+    pub(crate) fn new_with_remote_bytes(
+        chunk_rx: Receiver<Result<Vec<BufferedBlock>>>,
+        remote_block_bytes: Arc<AtomicU64>,
+    ) -> Self {
+        Self {
+            chunk_rx,
+            local: VecDeque::new(),
+            local_bytes: 0,
+            local_cells: 0,
+            remote_block_bytes: Some(remote_block_bytes),
         }
     }
 
     /// Absorb a chunk of blocks into the local buffer.
-    fn absorb(&mut self, chunk: Vec<BufferedBlock>) {
-        for block in chunk {
-            self.local_bytes += block.block_bytes;
-            self.local_cells += block.cell_count;
-            self.local.push_back(block);
+    fn absorb(&mut self, chunk: Vec<BufferedBlock>) -> Result<()> {
+        let chunk_bytes = chunk.iter().try_fold(0usize, |total, block| {
+            total.checked_add(block.block_bytes).ok_or_else(|| {
+                anyhow!(
+                    "prefetch chunk byte count overflow while absorbing: accumulated_bytes={} block_bytes={}",
+                    total,
+                    block.block_bytes
+                )
+            })
+        })?;
+        let chunk_cells = chunk.iter().try_fold(0u64, |total, block| {
+            total.checked_add(block.cell_count).ok_or_else(|| {
+                anyhow!(
+                    "prefetch chunk cell count overflow while absorbing: accumulated_cells={} block_cells={}",
+                    total,
+                    block.cell_count
+                )
+            })
+        })?;
+        let new_local_bytes = self.local_bytes.checked_add(chunk_bytes).ok_or_else(|| {
+            anyhow!(
+                "local prefetch block byte count overflow: local_bytes={} chunk_bytes={}",
+                self.local_bytes,
+                chunk_bytes
+            )
+        })?;
+        let new_local_cells = self.local_cells.checked_add(chunk_cells).ok_or_else(|| {
+            anyhow!(
+                "local prefetch cell count overflow: local_cells={} chunk_cells={}",
+                self.local_cells,
+                chunk_cells
+            )
+        })?;
+
+        if let Some(remote_block_bytes) = &self.remote_block_bytes {
+            let chunk_bytes = u64::try_from(chunk_bytes)
+                .map_err(|_| anyhow!("prefetch chunk bytes exceed u64: bytes={chunk_bytes}"))?;
+            remote_block_bytes
+                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                    current.checked_sub(chunk_bytes)
+                })
+                .map_err(|current| {
+                    anyhow!(
+                        "remote prefetch block byte accounting underflow: retained_bytes={} absorbed_bytes={}",
+                        current,
+                        chunk_bytes
+                    )
+                })?;
         }
+        self.local_bytes = new_local_bytes;
+        self.local_cells = new_local_cells;
+        self.local.extend(chunk);
+        Ok(())
     }
 
     /// Pull enough blocks so the local buffer has at least `target_bytes`.
@@ -80,14 +145,14 @@ impl BlockBufferHandle {
         // Ensure at least one chunk is available.
         if self.local.is_empty() {
             match self.chunk_rx.recv().await {
-                Some(result) => self.absorb(result?),
+                Some(result) => self.absorb(result?)?,
                 None => return Ok(false),
             }
         }
         // Non-blocking: pull more chunks until budget is met.
         while (self.local_bytes as u64) < target_bytes {
             match self.chunk_rx.try_recv() {
-                Ok(result) => self.absorb(result?),
+                Ok(result) => self.absorb(result?)?,
                 Err(_) => break,
             }
         }
@@ -109,7 +174,7 @@ impl BlockBufferHandle {
         // Ensure at least one chunk so cell_density() has real data.
         if self.local.is_empty() {
             match self.chunk_rx.recv().await {
-                Some(result) => self.absorb(result?),
+                Some(result) => self.absorb(result?)?,
                 None => return Ok(false),
             }
         }
@@ -127,7 +192,7 @@ impl BlockBufferHandle {
         // Non-blocking: pull more chunks until budget is met.
         while (self.local_bytes as u64) < target_bytes {
             match self.chunk_rx.try_recv() {
-                Ok(result) => self.absorb(result?),
+                Ok(result) => self.absorb(result?)?,
                 Err(_) => break,
             }
         }
@@ -168,6 +233,29 @@ impl BlockBufferHandle {
     /// have not yet been absorbed into the local buffer.
     pub(crate) fn channel_len(&self) -> usize {
         self.chunk_rx.len()
+    }
+
+    /// Serialized block bytes retained by the prefetch worker/channel and the
+    /// local build buffer. Moving a chunk into `local` transfers, rather than
+    /// duplicates, its accounting.
+    pub(crate) fn retained_block_bytes(&self) -> Result<u64> {
+        let local_bytes = u64::try_from(self.local_bytes).map_err(|_| {
+            anyhow!(
+                "local prefetch block byte count exceeds u64: bytes={}",
+                self.local_bytes
+            )
+        })?;
+        let remote_bytes = match &self.remote_block_bytes {
+            Some(bytes) => bytes.load(Ordering::Relaxed),
+            None => 0,
+        };
+        local_bytes.checked_add(remote_bytes).ok_or_else(|| {
+            anyhow!(
+                "total prefetch block byte count overflow: local_bytes={} remote_bytes={}",
+                local_bytes,
+                remote_bytes
+            )
+        })
     }
 
     /// Take up to `n` blocks from the front of the local buffer.
@@ -275,6 +363,23 @@ mod tests {
     }
 
     #[test]
+    fn retained_block_bytes_track_remote_and_local_without_double_counting() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        use std::sync::Arc;
+
+        let (_tx, rx) = mpsc::channel::<Result<Vec<BufferedBlock>>>(8);
+        let remote_bytes = Arc::new(AtomicU64::new(3_000));
+        let mut handle = BlockBufferHandle::new_with_remote_bytes(rx, Arc::clone(&remote_bytes));
+
+        handle
+            .absorb(vec![make_buffered_block(1_000), make_buffered_block(2_000)])
+            .expect("absorb accounted prefetch chunk");
+
+        assert_eq!(remote_bytes.load(Ordering::Relaxed), 0);
+        assert_eq!(handle.retained_block_bytes().unwrap(), 3_000);
+    }
+
+    #[test]
     fn cell_density_computes_cells_per_byte() {
         let (tx, rx) = mpsc::channel::<Result<Vec<BufferedBlock>>>(8);
         drop(tx);
@@ -286,7 +391,7 @@ mod tests {
             make_buffered_block_with_cells(1000, 50),
             make_buffered_block_with_cells(3000, 150),
         ];
-        handle.absorb(chunk);
+        handle.absorb(chunk).unwrap();
         assert!(
             (handle.cell_density() - 0.05).abs() < 1e-10,
             "200 cells / 4000 bytes = 0.05, got {}",
@@ -453,7 +558,7 @@ mod tests {
             make_buffered_block_with_cells(100, 50),
             make_buffered_block_with_cells(200, 75),
         ];
-        handle.absorb(chunk);
+        handle.absorb(chunk).unwrap();
         assert_eq!(handle.local_cells, 125);
 
         let drained = handle.drain(1);

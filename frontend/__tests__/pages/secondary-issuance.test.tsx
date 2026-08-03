@@ -11,6 +11,7 @@ vi.mock('@/lib/api', () => ({
     getSecondaryIssuanceChart: vi.fn(),
   },
   isWarmupPendingError: vi.fn(() => false),
+  isNetworkInitializingError: vi.fn(() => false),
 }));
 
 vi.mock('@/components/layout/header', () => ({
@@ -41,7 +42,7 @@ describe('SecondaryIssuancePage', () => {
     expect(screen.getByText('Secondary Issuance')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /Back to Charts/i })).toHaveAttribute(
       'href',
-      '/charts'
+      '/mainnet/charts'
     );
 
     await waitFor(() => {

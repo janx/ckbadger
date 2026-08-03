@@ -13,14 +13,7 @@ use ckbadger_store::types::{
     TAG_LOCK_CALL, TAG_OBJECT, TAG_PROTOCOL, TAG_TOKEN, TAG_TYPE_CALL,
 };
 
-use crate::parser::udt::UdtParser;
-
-mod bundled_udt {
-    pub const EXTRA_UDT_CODE_HASHES: &[u8] = include_bytes!(concat!(
-        env!("OUT_DIR"),
-        "/bundled_udt_script_code_hashes.json"
-    ));
-}
+use crate::parser::{bit_cell::BitCellParser, dotbit::DotbitParser, udt::UdtParser};
 
 static CODE_HASHES: OnceLock<CodeHashes> = OnceLock::new();
 
@@ -33,11 +26,12 @@ fn code_hashes() -> &'static CodeHashes {
 enum AssetKind {
     Udt,
     Dao,
-    SporeDid,
+    DidCkb,
     Spore,
     Cluster,
     MnftToken,
     Dotbit,
+    BitCell,
 }
 
 /// Pre-computed code hashes for asset detection via HashMap lookup.
@@ -48,44 +42,38 @@ struct CodeHashes {
 
 impl CodeHashes {
     fn new() -> Self {
-        use crate::parser::dao::DAO_CODE_HASH;
-        use crate::parser::dotbit::DOTBIT_ACCOUNT_CELL_TYPE_ID;
-        use crate::parser::mnft::MNFT_TOKEN_CODE_HASH;
-        use crate::parser::spore::{
-            CLUSTER_CODE_HASH_MAINNET_V2, CLUSTER_CODE_HASH_TESTNET_V1,
-            CLUSTER_CODE_HASH_TESTNET_V2, SPORE_CODE_HASH_MAINNET_DID, SPORE_CODE_HASH_MAINNET_V2,
-            SPORE_CODE_HASH_TESTNET_V1, SPORE_CODE_HASH_TESTNET_V2,
-        };
-        use crate::parser::udt::{SUDT_CODE_HASH, XUDT_CODE_HASH_DATA1, XUDT_CODE_HASH_TYPE};
+        use crate::parser::registry::{ProtocolScript, PROTOCOL_REGISTRY};
         use crate::rpc::parse_hex_to_bytes;
 
-        let entries: &[(&str, AssetKind)] = &[
-            (SUDT_CODE_HASH, AssetKind::Udt),
-            (XUDT_CODE_HASH_DATA1, AssetKind::Udt),
-            (XUDT_CODE_HASH_TYPE, AssetKind::Udt),
-            (DAO_CODE_HASH, AssetKind::Dao),
-            (SPORE_CODE_HASH_MAINNET_DID, AssetKind::SporeDid),
-            (SPORE_CODE_HASH_MAINNET_V2, AssetKind::Spore),
-            (SPORE_CODE_HASH_TESTNET_V2, AssetKind::Spore),
-            (SPORE_CODE_HASH_TESTNET_V1, AssetKind::Spore),
-            (CLUSTER_CODE_HASH_MAINNET_V2, AssetKind::Cluster),
-            (CLUSTER_CODE_HASH_TESTNET_V2, AssetKind::Cluster),
-            (CLUSTER_CODE_HASH_TESTNET_V1, AssetKind::Cluster),
-            (MNFT_TOKEN_CODE_HASH, AssetKind::MnftToken),
-            (DOTBIT_ACCOUNT_CELL_TYPE_ID, AssetKind::Dotbit),
-        ];
-
-        let mut type_lookup: HashMap<Vec<u8>, AssetKind> = entries
-            .iter()
-            .map(|(hex, kind)| (parse_hex_to_bytes(hex), *kind))
-            .collect();
-
-        // Extend with xudt_compatible scripts from bundled script labels (decoderType "udt").
-        let extra: Vec<String> = serde_json::from_slice(bundled_udt::EXTRA_UDT_CODE_HASHES)
-            .expect("bundled UDT script code hashes JSON is invalid — build.rs bug");
-        for hex_str in &extra {
-            let bytes = parse_hex_to_bytes(hex_str);
-            type_lookup.entry(bytes).or_insert(AssetKind::Udt);
+        // Build the type-script → AssetKind lookup from the bundled protocol
+        // registry (a network-agnostic union of mainnet + testnet code_hashes),
+        // replacing the previous hardcoded parser-const list. This is what lets
+        // testnet assets (e.g. testnet sUDT / mNFT token) classify in activities.
+        //
+        // Only the asset-bearing protocols below receive an AssetKind. `.bit
+        // Cell`, AccountCell, Spore, and the Web5 did:ckb contract are distinct
+        // protocol identities and must not share lifecycle calculations. Every
+        // other registry protocol — mNFT issuer/class, all locks, and the
+        // fiber/stablepp/utxoswap scripts — is skipped via the `_` arm.
+        // UDTs use UdtParser's shared classifier below so activity, live sync,
+        // and bulk sync cannot disagree about xUDT-compatible deployments.
+        let mut type_lookup: HashMap<Vec<u8>, AssetKind> = HashMap::new();
+        for (code_hash, protocol) in PROTOCOL_REGISTRY.iter() {
+            let kind = match protocol {
+                ProtocolScript::Sudt | ProtocolScript::Xudt => continue,
+                ProtocolScript::Dao => AssetKind::Dao,
+                ProtocolScript::DidCkb => AssetKind::DidCkb,
+                // Legacy variant: no metadata slug maps to it, and did:ckb has
+                // its own identity above — it must never classify here.
+                ProtocolScript::SporeDid => continue,
+                ProtocolScript::SporeNft => AssetKind::Spore,
+                ProtocolScript::Cluster => AssetKind::Cluster,
+                ProtocolScript::MnftToken => AssetKind::MnftToken,
+                ProtocolScript::DotbitAccount => AssetKind::Dotbit,
+                ProtocolScript::BitCell => AssetKind::BitCell,
+                _ => continue,
+            };
+            type_lookup.insert(code_hash.clone(), kind);
         }
 
         // Standard lock code_hashes (access-control only, no protocol semantics)
@@ -136,7 +124,10 @@ impl CodeHashes {
     }
 
     fn classify(&self, code_hash: &[u8]) -> Option<AssetKind> {
-        self.type_lookup.get(code_hash).copied()
+        self.type_lookup
+            .get(code_hash)
+            .copied()
+            .or_else(|| UdtParser::is_udt_code_hash_bytes(code_hash, 0).map(|_| AssetKind::Udt))
     }
 
     fn is_standard_lock(&self, code_hash: &[u8]) -> bool {
@@ -147,6 +138,8 @@ impl CodeHashes {
 /// Input cell info needed for activity building.
 #[derive(Clone, Copy)]
 pub struct InputCellView<'a> {
+    pub previous_tx_hash: &'a [u8],
+    pub previous_output_index: u32,
     pub lock_script_hash: &'a [u8],
     pub lock_code_hash: &'a [u8],
     pub lock_hash_type: i16,
@@ -158,6 +151,9 @@ pub struct InputCellView<'a> {
     pub type_script_hash: Option<&'a [u8]>,
     pub type_args: Option<&'a [u8]>,
     pub udt_amount: Option<u128>,
+    /// Pre-parsed `.bit Cell` identity ID carried by the bulk live-cell arena.
+    /// Live sync leaves this unset because it retains the input cell data.
+    pub bit_cell_identity_id: Option<&'a [u8]>,
     pub data: &'a [u8],
     pub is_dao_withdraw_request: bool,
     pub dao_compensation: Option<i64>,
@@ -211,6 +207,11 @@ pub(crate) trait ProtocolDetector: Send + Sync {
     /// without allocating or building data structures.
     fn might_apply(&self, tx: &TxView<'_>) -> bool;
 
+    /// Detect protocol actions for one owner of `tx`.
+    ///
+    /// Returns `Err` when the transaction violates a protocol invariant the
+    /// detector cannot honestly summarise — that halts the batch rather than
+    /// silently dropping the action.
     fn detect(
         &self,
         tx: &TxView<'_>,
@@ -219,7 +220,7 @@ pub(crate) trait ProtocolDetector: Send + Sync {
         item_deltas: &[ItemDelta],
         type_calls: &[TypeCallEntry],
         lock_calls: &[LockCallEntry],
-    ) -> Vec<ProtocolAction>;
+    ) -> Result<Vec<ProtocolAction>>;
 }
 
 /// Build `TxActions` for all transactions in a block (no protocol detectors).
@@ -249,8 +250,9 @@ pub(crate) struct OwnerAccum<'a> {
     pub(crate) output_capacity: i128,
     pub(crate) input_used: i64,
     pub(crate) output_used: i64,
-    /// UDT: type_script_hash -> (input_amount, output_amount)
-    pub(crate) udt_deltas: HashMap<&'a [u8], (i128, i128)>,
+    /// UDT: type_script_hash -> (input_amount, output_amount). u128 amounts (per the
+    /// sUDT/xUDT standard); the signed net delta is derived at emit time.
+    pub(crate) udt_deltas: HashMap<&'a [u8], (u128, u128)>,
     /// DAO deposits (output cells with DAO type and data == 0x00..00)
     pub(crate) dao_deposits: Vec<i64>,
     /// DAO withdraw requests (output cells with DAO type and non-zero deposit block)
@@ -270,6 +272,10 @@ pub(crate) struct OwnerAccum<'a> {
     pub(crate) dotbit_inputs: Vec<Vec<u8>>,
     /// DotBit IDs seen as outputs
     pub(crate) dotbit_outputs: Vec<Vec<u8>>,
+    /// `.bit Cell` identity IDs seen as inputs
+    pub(crate) bit_cell_inputs: Vec<Vec<u8>>,
+    /// `.bit Cell` identity IDs seen as outputs
+    pub(crate) bit_cell_outputs: Vec<Vec<u8>>,
     /// did:ckb IDs seen as inputs
     pub(crate) did_ckb_inputs: Vec<&'a [u8]>,
     /// did:ckb IDs seen as outputs
@@ -283,9 +289,6 @@ pub(crate) struct OwnerAccum<'a> {
     /// Non-standard lock scripts seen on output cells in this tx, keyed by (code_hash, hash_type, args)
     pub(crate) unrecognized_lock_calls: BTreeSet<(&'a [u8], i16, &'a [u8])>,
 }
-
-const DOTBIT_TYPE_ARGS_LEN: usize = 20;
-const DOTBIT_DATA_HASH_PREFIX_LEN: usize = 32;
 
 fn record_owner_lock_script<'a>(
     accum: &mut OwnerAccum<'a>,
@@ -373,6 +376,7 @@ fn build_tx_actions<'a>(
                 input.type_script_hash,
                 input.type_args,
                 input.udt_amount,
+                input.bit_cell_identity_id,
                 input.data,
                 input.is_dao_withdraw_request,
                 input.dao_compensation,
@@ -450,7 +454,15 @@ fn build_tx_actions<'a>(
         .collect();
 
     // --- Phase 1: Per-owner item deltas and DAO protocol actions ---
+    // `all_protocol_actions` holds per-CELL DAO actions (deposit/withdraw_request/
+    // withdraw_complete below) and must keep every legitimate repeat — one tx can
+    // create/consume N cells with identical capacity for one lock, and each is a
+    // distinct on-chain event. Detector-derived actions are collected separately
+    // in `detector_protocol_actions` because those are emitted once per
+    // participating OWNER for the same tx-level event and must be deduped before
+    // joining the final list (see the dedup call below).
     let mut all_protocol_actions: Vec<ProtocolAction> = Vec::new();
+    let mut detector_protocol_actions: Vec<ProtocolAction> = Vec::new();
     let mut tx_type_calls: BTreeSet<(&[u8], i16, &[u8])> = BTreeSet::new();
     let mut tx_lock_calls: BTreeSet<(&[u8], i16, &[u8])> = BTreeSet::new();
     let mut participants = Vec::with_capacity(owner_hashes.len());
@@ -465,16 +477,22 @@ fn build_tx_actions<'a>(
         // Build item deltas
         let mut item_deltas = Vec::new();
 
-        // UDT changes → ItemDelta (token)
+        // UDT changes → ItemDelta (token). Net-difference (u128, no intermediate overflow).
         for (type_script_hash, (input_amt, output_amt)) in &accum.udt_deltas {
-            let delta = *output_amt - *input_amt;
-            if delta != 0 {
-                item_deltas.push(ItemDelta {
-                    item_id: type_script_hash.to_vec(),
-                    kind: ITEM_KIND_TOKEN,
-                    delta,
-                });
+            if output_amt == input_amt {
+                continue;
             }
+            let (magnitude, negative) = if output_amt >= input_amt {
+                (output_amt - input_amt, false)
+            } else {
+                (input_amt - output_amt, true)
+            };
+            item_deltas.push(ItemDelta {
+                item_id: type_script_hash.to_vec(),
+                kind: ITEM_KIND_TOKEN,
+                magnitude,
+                negative,
+            });
         }
 
         // Spore/DOB changes → ItemDelta (object, +1/-1)
@@ -487,6 +505,13 @@ fn build_tx_actions<'a>(
         emit_identity_item_deltas(
             &accum.dotbit_inputs,
             &accum.dotbit_outputs,
+            &mut item_deltas,
+        );
+
+        // `.bit Cell` changes → independent identity ItemDelta.
+        emit_identity_item_deltas(
+            &accum.bit_cell_inputs,
+            &accum.bit_cell_outputs,
             &mut item_deltas,
         );
 
@@ -566,21 +591,22 @@ fn build_tx_actions<'a>(
             })
             .collect();
 
-        // Run detectors per-owner, collect at TX level
-        let detector_actions: Vec<ProtocolAction> = applicable_detectors
-            .iter()
-            .flat_map(|d| {
-                d.detect(
-                    tx,
-                    lock_hash,
-                    accum,
-                    &item_deltas,
-                    &owner_type_calls,
-                    &owner_lock_calls,
-                )
-            })
-            .collect();
-        all_protocol_actions.extend(detector_actions);
+        // Run detectors per-owner, collect at TX level. Detector actions are
+        // gathered into their own vec (not `all_protocol_actions`) so the
+        // per-owner dedup below never touches the per-cell DAO actions pushed
+        // earlier in this loop. A detector that reports an invariant violation
+        // aborts the batch rather than contributing a partial action set.
+        for detector in &applicable_detectors {
+            let detector_actions = detector.detect(
+                tx,
+                lock_hash,
+                accum,
+                &item_deltas,
+                &owner_type_calls,
+                &owner_lock_calls,
+            )?;
+            detector_protocol_actions.extend(detector_actions);
+        }
 
         // Compute tags bitmask
         let mut tags: u16 = 0;
@@ -615,8 +641,14 @@ fn build_tx_actions<'a>(
         });
     }
 
-    // Deduplicate protocol actions by (protocol, action, metadata)
-    dedup_protocol_actions(&mut all_protocol_actions);
+    // Deduplicate detector-derived actions only: the same detector re-derives
+    // one tx-level event per participating owner (utxoswap/stablepp/fiber/
+    // rgbpp), so owner-duplicates must collapse to one. Per-cell DAO actions in
+    // `all_protocol_actions` are NOT deduped — they are emitted once per cell
+    // and legitimately repeat (e.g. one tx creating six equal-capacity DAO
+    // deposits for one lock must keep all six `dao:deposit` actions).
+    dedup_protocol_actions(&mut detector_protocol_actions);
+    all_protocol_actions.extend(detector_protocol_actions);
 
     // If any protocol_actions exist, set TAG_PROTOCOL on all participants
     if !all_protocol_actions.is_empty() {
@@ -659,6 +691,12 @@ fn build_tx_actions<'a>(
 }
 
 /// Deduplicate protocol actions by (protocol, action, metadata_raw).
+///
+/// Callers must only pass detector-derived actions here (see `build_tx_actions`):
+/// a detector re-derives the same tx-level event once per participating owner,
+/// so owner-duplicates need collapsing. Per-cell DAO actions (deposit/
+/// withdraw_request/withdraw_complete) must never pass through this function —
+/// they are emitted once per cell and legitimately repeat within one tx.
 fn dedup_protocol_actions(actions: &mut Vec<ProtocolAction>) {
     let mut seen = HashSet::new();
     actions.retain(|a| {
@@ -678,6 +716,7 @@ fn classify_input<'a>(
     type_script_hash: Option<&'a [u8]>,
     type_args: Option<&'a [u8]>,
     udt_amount: Option<u128>,
+    bit_cell_identity_id: Option<&[u8]>,
     data: &'a [u8],
     is_dao_withdraw_request: bool,
     dao_compensation: Option<i64>,
@@ -690,7 +729,12 @@ fn classify_input<'a>(
             if let Some(tsh) = type_script_hash {
                 if let Some(amount) = udt_amount {
                     let entry = accum.udt_deltas.entry(tsh).or_insert((0, 0));
-                    entry.0 += amount as i128;
+                    entry.0 = entry.0.checked_add(amount).ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "udt input delta overflow: type_hash=0x{}",
+                            hex::encode(tsh)
+                        )
+                    })?;
                 }
             }
         }
@@ -705,7 +749,7 @@ fn classify_input<'a>(
                 accum.dao_withdraw_completes.push((capacity, compensation));
             }
         }
-        Some(AssetKind::SporeDid) => {
+        Some(AssetKind::DidCkb) => {
             if let Some(args) = type_args {
                 if !args.is_empty() {
                     accum.did_ckb_inputs.push(args);
@@ -727,9 +771,35 @@ fn classify_input<'a>(
             }
         }
         Some(AssetKind::Dotbit) => {
-            if let Some(account_id) = resolve_dotbit_account_id(type_args, data) {
+            if let Some(account_id) =
+                DotbitParser::resolve_account_id(type_code_hash, type_args, data)
+            {
                 accum.dotbit_inputs.push(account_id);
             }
+        }
+        Some(AssetKind::BitCell) => {
+            let identity_id = if let Some(identity_id) = bit_cell_identity_id {
+                if identity_id.len() != 32 || identity_id.iter().all(|byte| *byte == 0) {
+                    bail!(
+                        "invalid pre-parsed .bit Cell input identity ID: code_hash=0x{}, identity_id_len={}, identity_id=0x{}",
+                        hex::encode(type_code_hash),
+                        identity_id.len(),
+                        hex::encode(identity_id)
+                    );
+                }
+                identity_id.to_vec()
+            } else {
+                BitCellParser::parse_identity_id_from_data(type_code_hash, type_args, data)
+                    .ok_or_else(|| {
+                        anyhow!(
+                            "failed to parse .bit Cell input identity ID: code_hash=0x{}, type_args_len={}, data_len={}",
+                            hex::encode(type_code_hash),
+                            type_args.map_or(0, <[u8]>::len),
+                            data.len()
+                        )
+                    })?
+            };
+            accum.bit_cell_inputs.push(identity_id);
         }
         None => {
             record_script_call(accum, type_code_hash, type_hash_type, type_args)?;
@@ -754,7 +824,12 @@ fn classify_output<'a>(
             if let Some(tsh) = type_script_hash {
                 if let Some(amount) = UdtParser::parse_amount(cell_data) {
                     let entry = accum.udt_deltas.entry(tsh).or_insert((0, 0));
-                    entry.1 += amount as i128;
+                    entry.1 = entry.1.checked_add(amount).ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "udt output delta overflow: type_hash=0x{}",
+                            hex::encode(tsh)
+                        )
+                    })?;
                 }
             }
         }
@@ -782,7 +857,7 @@ fn classify_output<'a>(
                 }
             }
         }
-        Some(AssetKind::SporeDid) => {
+        Some(AssetKind::DidCkb) => {
             if let Some(args) = type_args {
                 if !args.is_empty() {
                     accum.did_ckb_outputs.push(args);
@@ -804,9 +879,27 @@ fn classify_output<'a>(
             }
         }
         Some(AssetKind::Dotbit) => {
-            if let Some(account_id) = resolve_dotbit_account_id(type_args, cell_data) {
+            if let Some(account_id) =
+                DotbitParser::resolve_account_id(type_code_hash, type_args, cell_data)
+            {
                 accum.dotbit_outputs.push(account_id);
             }
+        }
+        Some(AssetKind::BitCell) => {
+            let identity_id = BitCellParser::parse_identity_id_from_data(
+                type_code_hash,
+                type_args,
+                cell_data,
+            )
+            .ok_or_else(|| {
+                anyhow!(
+                    "failed to resolve .bit Cell output identity ID: code_hash=0x{}, type_args_len={}, data_len={}",
+                    hex::encode(type_code_hash),
+                    type_args.map_or(0, <[u8]>::len),
+                    cell_data.len()
+                )
+            })?;
+            accum.bit_cell_outputs.push(identity_id);
         }
         None => {
             record_script_call(accum, type_code_hash, type_hash_type, type_args)?;
@@ -839,35 +932,6 @@ fn record_script_call<'a>(
     Ok(())
 }
 
-fn resolve_dotbit_account_id(type_args: Option<&[u8]>, cell_data: &[u8]) -> Option<Vec<u8>> {
-    if let Some(args) = type_args {
-        // Normal case: .bit account_id comes from type args.
-        if args.len() == DOTBIT_TYPE_ARGS_LEN && !args.iter().all(|&b| b == 0) {
-            return Some(args.to_vec());
-        }
-        if !args.is_empty() {
-            return Some(args.to_vec());
-        }
-    }
-
-    // Compatibility path for old .bit layouts: account_id in cell data.
-    // Accepts both full cell data (≥52 bytes: 32-byte prefix + 20-byte id)
-    // and a pre-resolved account_id (exactly 20 bytes, from DB lookup for
-    // consumed inputs whose raw cell data is unavailable).
-    let min_len = DOTBIT_DATA_HASH_PREFIX_LEN + DOTBIT_TYPE_ARGS_LEN;
-    let account_id = if cell_data.len() >= min_len {
-        &cell_data[DOTBIT_DATA_HASH_PREFIX_LEN..DOTBIT_DATA_HASH_PREFIX_LEN + DOTBIT_TYPE_ARGS_LEN]
-    } else if cell_data.len() == DOTBIT_TYPE_ARGS_LEN {
-        cell_data
-    } else {
-        return None;
-    };
-    if account_id.iter().all(|&b| b == 0) {
-        return None;
-    }
-    Some(account_id.to_vec())
-}
-
 /// Emit object ItemDeltas by comparing input vs output ID sets.
 ///
 /// - Output-only IDs → delta +1 (arrived)
@@ -885,7 +949,8 @@ fn emit_object_item_deltas<T: AsRef<[u8]>>(
             item_deltas.push(ItemDelta {
                 item_id: id.to_vec(),
                 kind: ITEM_KIND_OBJECT,
-                delta: 1,
+                magnitude: 1,
+                negative: false,
             });
         }
     }
@@ -896,7 +961,8 @@ fn emit_object_item_deltas<T: AsRef<[u8]>>(
             item_deltas.push(ItemDelta {
                 item_id: id.to_vec(),
                 kind: ITEM_KIND_OBJECT,
-                delta: -1,
+                magnitude: 1,
+                negative: true,
             });
         }
     }
@@ -917,7 +983,8 @@ fn emit_identity_item_deltas<T: AsRef<[u8]>>(
             item_deltas.push(ItemDelta {
                 item_id: id.to_vec(),
                 kind: ITEM_KIND_IDENTITY,
-                delta: 1,
+                magnitude: 1,
+                negative: false,
             });
         }
     }
@@ -928,7 +995,8 @@ fn emit_identity_item_deltas<T: AsRef<[u8]>>(
             item_deltas.push(ItemDelta {
                 item_id: id.to_vec(),
                 kind: ITEM_KIND_IDENTITY,
-                delta: -1,
+                magnitude: 1,
+                negative: true,
             });
         }
     }
@@ -1013,6 +1081,8 @@ mod tests {
     impl OwnedInput {
         fn view(&self) -> InputCellView<'_> {
             InputCellView {
+                previous_tx_hash: &[0u8; 32],
+                previous_output_index: 0,
                 lock_script_hash: &self.lock_script_hash,
                 lock_code_hash: &self.lock_code_hash,
                 lock_hash_type: 1,
@@ -1024,6 +1094,7 @@ mod tests {
                 type_script_hash: self.type_script_hash.as_deref(),
                 type_args: self.type_args.as_deref(),
                 udt_amount: self.udt_amount,
+                bit_cell_identity_id: None,
                 data: &self.data,
                 is_dao_withdraw_request: self.is_dao_withdraw_request,
                 dao_compensation: self.dao_compensation,
@@ -1328,7 +1399,8 @@ mod tests {
             .iter()
             .find(|d| d.kind == ITEM_KIND_TOKEN)
             .expect("alice should have token item delta");
-        assert_eq!(alice_token.delta, -1000);
+        assert_eq!(alice_token.magnitude, 1000);
+        assert!(alice_token.negative);
         assert_eq!(alice_token.item_id, type_script_hash);
 
         let bob_p = find_participant(actions, bob);
@@ -1337,7 +1409,53 @@ mod tests {
             .iter()
             .find(|d| d.kind == ITEM_KIND_TOKEN)
             .expect("bob should have token item delta");
-        assert_eq!(bob_token.delta, 1000);
+        assert_eq!(bob_token.magnitude, 1000);
+        assert!(!bob_token.negative);
+    }
+
+    #[test]
+    fn udt_item_delta_above_i128_max_is_not_wrapped() {
+        // Regression: an activity-feed token delta for a valid sUDT amount > i128::MAX must
+        // not wrap. On-chain: block 4743232 sUDT amount 0x00…704ea6403c0ca7 (LE) = 2.22e38.
+        // Under the old `delta: i128` / `amount as i128` code this stored a wrapped-negative
+        // delta (~-1.18e38); now it must be magnitude = big, negative = false.
+        let big: u128 = 222_044_604_925_031_325_468_940_491_728_862_838_784;
+        let bob = 0xBB;
+        let sudt_code_hash = crate::rpc::parse_hex_to_bytes(crate::parser::udt::SUDT_CODE_HASH);
+        let type_script_hash = vec![0xDD; 32];
+
+        // Plain (non-UDT) funding input; a single sUDT mint output of `big` to bob.
+        let alice_input = make_input(0xAA, 300_00000000, 61_00000000);
+        let outputs = vec![make_output(
+            bob,
+            142_00000000,
+            Some(sudt_code_hash),
+            Some(type_script_hash.clone()),
+            Some(vec![0xEE; 20]),
+            big.to_le_bytes().to_vec(),
+        )];
+
+        let tx = TxView {
+            tx_hash: &[0x06; 32],
+            block_hash: &[0xA6; 32],
+            tx_index: 1,
+            block_number: 4_743_232,
+            timestamp: 1_700_000_000,
+            is_cellbase: false,
+            inputs: vec![alice_input.view()],
+            outputs: outputs.iter().map(|o| o.view()).collect(),
+        };
+
+        let actions_list = build_tx_actions_for_block_no_detectors(&[tx]).unwrap();
+        let actions = &actions_list[0];
+        let bob_p = find_participant(actions, bob);
+        let bob_token = bob_p
+            .item_deltas
+            .iter()
+            .find(|d| d.kind == ITEM_KIND_TOKEN)
+            .expect("bob should have token item delta");
+        assert_eq!(bob_token.magnitude, big);
+        assert!(!bob_token.negative);
     }
 
     #[test]
@@ -1391,7 +1509,8 @@ mod tests {
             .iter()
             .find(|d| d.kind == ITEM_KIND_TOKEN)
             .expect("alice should have token item delta");
-        assert_eq!(alice_token.delta, -1000);
+        assert_eq!(alice_token.magnitude, 1000);
+        assert!(alice_token.negative);
     }
 
     #[test]
@@ -1440,23 +1559,29 @@ mod tests {
             .find(|d| d.kind == ITEM_KIND_IDENTITY)
             .expect("dotbit identity item delta should be present");
         assert_eq!(identity_delta.item_id, account_id);
-        assert_eq!(identity_delta.delta, 1); // output-only = +1
+        assert_eq!(identity_delta.magnitude, 1); // output-only = +1
+        assert!(!identity_delta.negative);
     }
 
     #[test]
-    fn test_did_ckb_changes_are_labeled_as_identity() {
+    fn test_bit_cell_changes_are_labeled_as_independent_identity() {
         let owner = 0xBB;
-        let did_code_hash =
-            crate::rpc::parse_hex_to_bytes(crate::parser::spore::SPORE_CODE_HASH_MAINNET_DID);
-        let did_id = vec![0x6b; 32];
+        let bit_cell_code_hash =
+            crate::rpc::parse_hex_to_bytes(crate::parser::bit_cell::BIT_CELL_CODE_HASH_TESTNET);
+        let identity_id = crate::rpc::parse_hex_to_bytes(
+            "0x81d34cd1dfc27716073d1018a63712926d8e3ab36345847129d0cc4135d1ffd4",
+        );
+        let bit_cell_data = crate::rpc::parse_hex_to_bytes(
+            "0x000000003c00000010000000240000002c000000a7d4860aaf1dc83daedf75d6022811d2c2ae250b1b46fc69000000000c00000032303234303530372e626974",
+        );
 
         let outputs = vec![make_output(
             owner,
             100_00000000,
-            Some(did_code_hash),
+            Some(bit_cell_code_hash),
             Some(vec![0x22; 32]),
-            Some(did_id.clone()),
-            vec![0u8; 16],
+            Some(Vec::new()),
+            bit_cell_data,
         )];
 
         let tx = TxView {
@@ -1478,9 +1603,57 @@ mod tests {
             .item_deltas
             .iter()
             .find(|d| d.kind == ITEM_KIND_IDENTITY)
-            .expect("did_ckb identity item delta should be present");
-        assert_eq!(identity_delta.item_id, did_id);
-        assert_eq!(identity_delta.delta, 1); // output-only = +1
+            .expect(".bit identity item delta should be present");
+        assert_eq!(identity_delta.item_id, identity_id);
+        assert_eq!(identity_delta.magnitude, 1); // output-only = +1
+        assert!(!identity_delta.negative);
+    }
+
+    #[test]
+    fn test_did_ckb_changes_are_labeled_as_identity() {
+        use crate::parser::test_helpers::real_did_ckb;
+
+        let owner = 0xCD;
+        let did_code_hash = crate::rpc::parse_hex_to_bytes(real_did_ckb::TYPE_CODE_HASH_TESTNET);
+        // Item id = the full type-script args of the real audited testnet cell.
+        let item_id = crate::rpc::parse_hex_to_bytes(real_did_ckb::CELL_32_ARGS);
+        let did_data = crate::rpc::parse_hex_to_bytes(real_did_ckb::CELL_32_DATA);
+
+        let outputs = vec![make_output(
+            owner,
+            350_00000000,
+            Some(did_code_hash),
+            Some(vec![0x33; 32]),
+            Some(item_id.clone()),
+            did_data,
+        )];
+
+        let tx = TxView {
+            tx_hash: &[0x09; 32],
+            block_hash: &[0xA9; 32],
+            tx_index: 0,
+            block_number: 125,
+            timestamp: 1_700_000_200,
+            is_cellbase: false,
+            inputs: vec![],
+            outputs: outputs.iter().map(|o| o.view()).collect(),
+        };
+
+        let actions_list = build_tx_actions_for_block_no_detectors(&[tx]).unwrap();
+        assert_eq!(actions_list.len(), 1);
+        let owner_p = find_participant(&actions_list[0], owner);
+        assert!(
+            owner_p.tags & TAG_IDENTITY != 0,
+            "did:ckb output must tag the participant as identity"
+        );
+        let identity_delta = owner_p
+            .item_deltas
+            .iter()
+            .find(|d| d.kind == ITEM_KIND_IDENTITY)
+            .expect("did:ckb identity item delta should be present");
+        assert_eq!(identity_delta.item_id, item_id);
+        assert_eq!(identity_delta.magnitude, 1); // output-only = +1
+        assert!(!identity_delta.negative);
     }
 
     #[test]
@@ -1520,6 +1693,254 @@ mod tests {
         let meta = dao_action.metadata_value().unwrap();
         assert_eq!(meta["capacity"], 102_00000000i64);
         assert_eq!(meta["compensation"], 5_00000000i64);
+    }
+
+    #[test]
+    fn test_dao_deposit_multiplicity_preserved_for_repeated_identical_outputs() {
+        // Regression: mainnet tx
+        // 0x2ee6d00a2840ff050336bc1e412c7ca2f0d73c3669596006897d9525fa3c880a
+        // (block 19841165) creates SIX identical nervos-dao deposit outputs for
+        // one lock — same capacity, same lock hash. `dedup_protocol_actions`
+        // used to run over the whole TX-level action list (including these
+        // per-cell DAO actions) and collapsed the six legitimate deposits down
+        // to one, silently depressing DailyActivityStats.dao_deposit_count and
+        // contradicting the owner's ckbDelta (which reflects all six deposits
+        // leaving the account).
+        let dao_code_hash = crate::rpc::parse_hex_to_bytes(crate::parser::dao::DAO_CODE_HASH);
+        let owner_lock_hash = crate::rpc::parse_hex_to_bytes(
+            "0xb73b6ab39d79390c6de90a09c96b290c331baf1798ed6f97aed02590929734e8",
+        );
+        let tx_hash = crate::rpc::parse_hex_to_bytes(
+            "0x2ee6d00a2840ff050336bc1e412c7ca2f0d73c3669596006897d9525fa3c880a",
+        );
+        let deposit_capacity: i64 = 12_001_863_105_591;
+
+        let mut outputs: Vec<OwnedOutput> = Vec::new();
+        for _ in 0..6 {
+            let mut output = make_output(
+                0xAA,
+                deposit_capacity,
+                Some(dao_code_hash.clone()),
+                None,
+                None,
+                vec![0u8; 8], // 8 zero bytes: deposit_block == 0 => deposit
+            );
+            output.lock_script_hash = owner_lock_hash.clone();
+            outputs.push(output);
+        }
+
+        let tx = TxView {
+            tx_hash: &tx_hash,
+            block_hash: &[0xD1; 32],
+            tx_index: 1,
+            block_number: 19_841_165,
+            timestamp: 1_700_300_000,
+            is_cellbase: false,
+            inputs: vec![],
+            outputs: outputs.iter().map(|o| o.view()).collect(),
+        };
+
+        let actions_list = build_tx_actions_for_block_no_detectors(&[tx]).unwrap();
+        assert_eq!(actions_list.len(), 1);
+        let actions = &actions_list[0];
+
+        let deposit_actions: Vec<_> = actions
+            .protocol_actions
+            .iter()
+            .filter(|a| a.protocol == "dao" && a.action == "deposit")
+            .collect();
+        assert_eq!(
+            deposit_actions.len(),
+            6,
+            "six identical DAO deposit outputs for one owner must produce six \
+             dao:deposit protocol actions, not be collapsed by dedup"
+        );
+        for action in &deposit_actions {
+            let meta = action.metadata_value().unwrap();
+            assert_eq!(meta["capacity"], deposit_capacity);
+            assert_eq!(
+                meta["lockHash"].as_str().unwrap(),
+                hex::encode(&owner_lock_hash)
+            );
+        }
+    }
+
+    #[test]
+    fn test_dao_withdraw_request_multiplicity_preserved_for_repeated_identical_outputs() {
+        // Same legitimate-repeat shape as the deposit case above: a single tx
+        // can create multiple withdraw-request cells with identical
+        // capacity/deposit-block for one lock (e.g. splitting one big deposit
+        // into several requests). Each is a distinct on-chain cell and must
+        // produce its own protocol action.
+        let dao_code_hash = crate::rpc::parse_hex_to_bytes(crate::parser::dao::DAO_CODE_HASH);
+        let owner = 0xAA;
+        let capacity: i64 = 12_001_863_105_591;
+        let deposit_block: u64 = 19_800_000;
+
+        let mut outputs: Vec<OwnedOutput> = Vec::new();
+        for _ in 0..3 {
+            outputs.push(make_output(
+                owner,
+                capacity,
+                Some(dao_code_hash.clone()),
+                None,
+                None,
+                deposit_block.to_le_bytes().to_vec(),
+            ));
+        }
+
+        let tx = TxView {
+            tx_hash: &[0x51; 32],
+            block_hash: &[0xD2; 32],
+            tx_index: 1,
+            block_number: 19_841_200,
+            timestamp: 1_700_300_100,
+            is_cellbase: false,
+            inputs: vec![],
+            outputs: outputs.iter().map(|o| o.view()).collect(),
+        };
+
+        let actions_list = build_tx_actions_for_block_no_detectors(&[tx]).unwrap();
+        let actions = &actions_list[0];
+
+        let requests: Vec<_> = actions
+            .protocol_actions
+            .iter()
+            .filter(|a| a.protocol == "dao" && a.action == "withdraw_request")
+            .collect();
+        assert_eq!(
+            requests.len(),
+            3,
+            "three identical DAO withdraw_request outputs for one owner must produce \
+             three dao:withdraw_request protocol actions, not be collapsed by dedup"
+        );
+        for action in &requests {
+            let meta = action.metadata_value().unwrap();
+            assert_eq!(meta["capacity"], capacity);
+            assert_eq!(meta["depositBlock"], deposit_block as i64);
+        }
+    }
+
+    #[test]
+    fn test_dao_withdraw_complete_multiplicity_preserved_for_repeated_identical_inputs() {
+        // Same legitimate-repeat shape on the input side: a tx can complete
+        // several withdraw-request cells with identical capacity/compensation
+        // for one lock in a single transaction. Each consumed cell is a
+        // distinct withdrawal and must produce its own protocol action.
+        let dao_code_hash = crate::rpc::parse_hex_to_bytes(crate::parser::dao::DAO_CODE_HASH);
+        let owner = 0xAA;
+        let capacity: i64 = 12_001_863_105_591;
+        let compensation: i64 = 5_00000000;
+
+        let mut inputs: Vec<OwnedInput> = Vec::new();
+        for _ in 0..4 {
+            let mut input = make_input(owner, capacity, capacity);
+            input.type_code_hash = Some(dao_code_hash.clone());
+            input.is_dao_withdraw_request = true;
+            input.dao_compensation = Some(compensation);
+            inputs.push(input);
+        }
+
+        let tx = TxView {
+            tx_hash: &[0x52; 32],
+            block_hash: &[0xD3; 32],
+            tx_index: 1,
+            block_number: 19_841_300,
+            timestamp: 1_700_300_200,
+            is_cellbase: false,
+            inputs: inputs.iter().map(|i| i.view()).collect(),
+            outputs: vec![],
+        };
+
+        let actions_list = build_tx_actions_for_block_no_detectors(&[tx]).unwrap();
+        let actions = &actions_list[0];
+
+        let completes: Vec<_> = actions
+            .protocol_actions
+            .iter()
+            .filter(|a| a.protocol == "dao" && a.action == "withdraw_complete")
+            .collect();
+        assert_eq!(
+            completes.len(),
+            4,
+            "four identical DAO withdraw_complete inputs for one owner must produce \
+             four dao:withdraw_complete protocol actions, not be collapsed by dedup"
+        );
+        for action in &completes {
+            let meta = action.metadata_value().unwrap();
+            assert_eq!(meta["capacity"], capacity);
+            assert_eq!(meta["compensation"], compensation);
+        }
+    }
+
+    #[test]
+    fn test_detector_actions_dedup_across_owners_still_collapses() {
+        // Regression guard for the DAO-dedup fix above: detector-derived
+        // actions represent ONE tx-level event that gets re-derived once per
+        // participating owner (see `applicable_detectors` in
+        // `build_tx_actions`), so owner-duplicates must still collapse to a
+        // single action — this must keep working even though per-cell DAO
+        // actions now bypass dedup entirely.
+        struct ConstantActionDetector;
+
+        impl ProtocolDetector for ConstantActionDetector {
+            fn might_apply(&self, _tx: &TxView<'_>) -> bool {
+                true
+            }
+
+            fn detect(
+                &self,
+                _tx: &TxView<'_>,
+                _owner_lock_hash: &[u8],
+                _accum: &OwnerAccum<'_>,
+                _item_deltas: &[ItemDelta],
+                _type_calls: &[TypeCallEntry],
+                _lock_calls: &[LockCallEntry],
+            ) -> anyhow::Result<Vec<ProtocolAction>> {
+                Ok(vec![ProtocolAction::new(
+                    "mock",
+                    "shared_event",
+                    serde_json::json!({ "txScoped": true }),
+                )])
+            }
+        }
+
+        let alice = 0xAA;
+        let bob = 0xBB;
+
+        let outputs = vec![
+            make_output(bob, 100_00000000, None, None, None, vec![]),
+            make_output(alice, 200_00000000, None, None, None, vec![]),
+        ];
+
+        let alice_input_owned = make_input(alice, 300_00000000, 61_00000000);
+        let tx = TxView {
+            tx_hash: &[0x53; 32],
+            block_hash: &[0xD4; 32],
+            tx_index: 1,
+            block_number: 3000,
+            timestamp: 1_700_400_000,
+            is_cellbase: false,
+            inputs: vec![alice_input_owned.view()],
+            outputs: outputs.iter().map(|o| o.view()).collect(),
+        };
+
+        let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(ConstantActionDetector)];
+        let actions_list = build_tx_actions_for_block(&[tx], &detectors).unwrap();
+        assert_eq!(actions_list.len(), 1);
+        let actions = &actions_list[0];
+
+        let mock_actions: Vec<_> = actions
+            .protocol_actions
+            .iter()
+            .filter(|a| a.protocol == "mock" && a.action == "shared_event")
+            .collect();
+        assert_eq!(
+            mock_actions.len(),
+            1,
+            "the same detector action re-derived for 2 different owners must dedup to \
+             exactly one"
+        );
     }
 
     #[test]
@@ -1699,6 +2120,105 @@ mod tests {
 
         // Random unknown code_hash should still be None
         assert_eq!(hashes.classify(&[0x99; 32]), None);
+    }
+
+    #[test]
+    fn test_registry_preserves_exact_old_asset_coverage() {
+        // Regression guard: every code_hash the pre-registry const `entries`
+        // array covered must still classify to the *exact same* AssetKind after
+        // the migration to PROTOCOL_REGISTRY. If the bundled registry ever drops
+        // one of these hashes (or a slug remaps), this fails loudly instead of
+        // silently regressing activity classification.
+        use crate::parser::bit_cell::BIT_CELL_CODE_HASH_MAINNET;
+        use crate::parser::dao::DAO_CODE_HASH;
+        use crate::parser::dotbit::DOTBIT_ACCOUNT_CELL_TYPE_ID;
+        use crate::parser::mnft::MNFT_TOKEN_CODE_HASH;
+        use crate::parser::spore::{
+            CLUSTER_CODE_HASH_MAINNET_V2, CLUSTER_CODE_HASH_TESTNET_V1,
+            CLUSTER_CODE_HASH_TESTNET_V2, SPORE_CODE_HASH_MAINNET_V2, SPORE_CODE_HASH_TESTNET_V1,
+            SPORE_CODE_HASH_TESTNET_V2,
+        };
+        use crate::parser::udt::{SUDT_CODE_HASH, XUDT_CODE_HASH_DATA1, XUDT_CODE_HASH_TYPE};
+        use crate::rpc::parse_hex_to_bytes;
+
+        let hashes = CodeHashes::new();
+        let expected: &[(&str, AssetKind)] = &[
+            (SUDT_CODE_HASH, AssetKind::Udt),
+            (XUDT_CODE_HASH_DATA1, AssetKind::Udt),
+            (XUDT_CODE_HASH_TYPE, AssetKind::Udt),
+            (DAO_CODE_HASH, AssetKind::Dao),
+            (BIT_CELL_CODE_HASH_MAINNET, AssetKind::BitCell),
+            (SPORE_CODE_HASH_MAINNET_V2, AssetKind::Spore),
+            (SPORE_CODE_HASH_TESTNET_V2, AssetKind::Spore),
+            (SPORE_CODE_HASH_TESTNET_V1, AssetKind::Spore),
+            (CLUSTER_CODE_HASH_MAINNET_V2, AssetKind::Cluster),
+            (CLUSTER_CODE_HASH_TESTNET_V2, AssetKind::Cluster),
+            (CLUSTER_CODE_HASH_TESTNET_V1, AssetKind::Cluster),
+            (MNFT_TOKEN_CODE_HASH, AssetKind::MnftToken),
+            (DOTBIT_ACCOUNT_CELL_TYPE_ID, AssetKind::Dotbit),
+        ];
+        for (hex, kind) in expected {
+            assert_eq!(
+                hashes.classify(&parse_hex_to_bytes(hex)),
+                Some(*kind),
+                "old-const code_hash {hex} must still classify as {kind:?}"
+            );
+        }
+
+        // Negative coverage must also hold: mNFT issuer/class and lock scripts
+        // were NOT asset-classified by the old map and must stay unclassified.
+        assert_eq!(
+            hashes.classify(&parse_hex_to_bytes(
+                crate::parser::mnft::MNFT_ISSUER_CODE_HASH
+            )),
+            None,
+            "mNFT issuer must not be classified as an asset"
+        );
+        assert_eq!(
+            hashes.classify(&parse_hex_to_bytes(
+                crate::parser::mnft::MNFT_CLASS_CODE_HASH
+            )),
+            None,
+            "mNFT class must not be classified as an asset"
+        );
+    }
+
+    #[test]
+    fn test_testnet_sudt_classifies_as_udt() {
+        use crate::rpc::parse_hex_to_bytes;
+        let hashes = CodeHashes::new();
+        // Testnet sUDT code_hash — absent from the old mainnet-only const map,
+        // now classified via the network-agnostic ProtocolRegistry.
+        let testnet_sudt = parse_hex_to_bytes(
+            "0xc5e5dcf215925f7ef4dfaf5f4b4f105bc321c02776d6e7d52a1db3fcd9d011a4",
+        );
+        assert_eq!(
+            hashes.classify(&testnet_sudt),
+            Some(AssetKind::Udt),
+            "testnet sUDT should classify as Udt via the registry"
+        );
+        // Sanity: this is the testnet hash, distinct from the mainnet sUDT const.
+        assert_ne!(
+            testnet_sudt,
+            parse_hex_to_bytes(crate::parser::udt::SUDT_CODE_HASH),
+            "testnet sUDT must differ from mainnet sUDT"
+        );
+    }
+
+    #[test]
+    fn test_testnet_mnft_token_classifies_as_mnft_token() {
+        use crate::rpc::parse_hex_to_bytes;
+        let hashes = CodeHashes::new();
+        // Testnet mNFT token code_hash — mainnet-only in the old const map,
+        // now classified via the registry.
+        let testnet_mnft = parse_hex_to_bytes(
+            "0xb1837b5ad01a88558731953062d1f5cb547adf89ece01e8934a9f0aeed2d959f",
+        );
+        assert_eq!(
+            hashes.classify(&testnet_mnft),
+            Some(AssetKind::MnftToken),
+            "testnet mNFT token should classify as MnftToken via the registry"
+        );
     }
 
     #[test]
@@ -1945,7 +2465,7 @@ mod tests {
             outputs: outputs.iter().map(|o| o.view()).collect(),
         };
 
-        let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(RgbppDetector::new(true))];
+        let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(RgbppDetector::new())];
         let actions_list = build_tx_actions_for_block(&[tx], &detectors).unwrap();
 
         assert_eq!(actions_list.len(), 1);
@@ -2015,7 +2535,7 @@ mod tests {
             outputs: outputs.iter().map(|o| o.view()).collect(),
         };
 
-        let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(RgbppDetector::new(true))];
+        let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(RgbppDetector::new())];
         let actions_list = build_tx_actions_for_block(&[tx], &detectors).unwrap();
 
         assert_eq!(actions_list.len(), 1);
@@ -2079,7 +2599,7 @@ mod tests {
             outputs: outputs.iter().map(|o| o.view()).collect(),
         };
 
-        let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(RgbppDetector::new(true))];
+        let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(RgbppDetector::new())];
         let actions_list = build_tx_actions_for_block(&[tx], &detectors).unwrap();
 
         assert_eq!(actions_list.len(), 1);
@@ -2106,6 +2626,8 @@ mod tests {
 
         // Build a TxView with plain lock code_hash on input and output (no protocol scripts)
         let input = InputCellView {
+            previous_tx_hash: &[0u8; 32],
+            previous_output_index: 0,
             lock_script_hash: &input_lock_hash,
             lock_code_hash: &plain_lock,
             lock_hash_type: 1,
@@ -2117,6 +2639,7 @@ mod tests {
             type_script_hash: None,
             type_args: None,
             udt_amount: None,
+            bit_cell_identity_id: None,
             data: &input_data,
             is_dao_withdraw_request: false,
             dao_compensation: None,
@@ -2148,7 +2671,7 @@ mod tests {
             outputs: vec![output],
         };
 
-        let rgbpp = RgbppDetector::new(true);
+        let rgbpp = RgbppDetector::new();
         let fiber = FiberDetector::new(true);
         let stablepp = StableppDetector::new(true);
         let utxoswap = UtxoSwapDetector::new(true);
@@ -2182,7 +2705,7 @@ mod tests {
         let empty_locks: HashSet<[u8; 32]> = HashSet::new();
         let empty_types: HashSet<[u8; 32]> = HashSet::new();
 
-        let rgbpp = RgbppDetector::new(true);
+        let rgbpp = RgbppDetector::new();
         let fiber = FiberDetector::new(true);
         let stablepp = StableppDetector::new(true);
         let utxoswap = UtxoSwapDetector::new(true);
@@ -2201,7 +2724,6 @@ mod tests {
         use super::super::utxoswap_detector::UtxoSwapDetector;
         use crate::parser::fiber::FUNDING_LOCK_CODE_HASH_MAINNET;
         use crate::parser::rgbpp::RGBPP_LOCK_CODE_HASH_MAINNET;
-        use crate::parser::stablepp::VAULT_LOCK_CODE_HASH_MAINNET as STABLEPP_VAULT;
         use crate::parser::utxoswap::INTENT_LOCK_CODE_HASH_MAINNET;
         use crate::rpc::parse_hex_to_bytes;
         use std::collections::HashSet;
@@ -2214,7 +2736,7 @@ mod tests {
         let mut h = [0u8; 32];
         h.copy_from_slice(&rgbpp_hash);
         locks.insert(h);
-        let rgbpp = RgbppDetector::new(true);
+        let rgbpp = RgbppDetector::new();
         assert!(rgbpp.might_apply_batch(&locks, &empty_types));
 
         // FiberDetector should match when funding lock code_hash is in the set
@@ -2226,8 +2748,10 @@ mod tests {
         let fiber = FiberDetector::new(true);
         assert!(fiber.might_apply_batch(&locks, &empty_types));
 
-        // StableppDetector should match when vault lock code_hash is in the set
-        let stablepp_hash = parse_hex_to_bytes(STABLEPP_VAULT);
+        // StableppDetector should match when the corrected vault lock code_hash is in the set
+        let stablepp_hash = parse_hex_to_bytes(
+            "0x4ed68fcb7eaa4ff78d46a2fad88a32ce9caffd4b96a0a4bba96ff4871f018675",
+        );
         let mut locks: HashSet<[u8; 32]> = HashSet::new();
         let mut h = [0u8; 32];
         h.copy_from_slice(&stablepp_hash);
@@ -2260,7 +2784,7 @@ mod tests {
         let mut types: HashSet<[u8; 32]> = HashSet::new();
         types.insert(unrelated);
 
-        assert!(!RgbppDetector::new(true).might_apply_batch(&locks, &types));
+        assert!(!RgbppDetector::new().might_apply_batch(&locks, &types));
         assert!(!FiberDetector::new(true).might_apply_batch(&locks, &types));
         assert!(!StableppDetector::new(true).might_apply_batch(&locks, &types));
         assert!(!UtxoSwapDetector::new(true).might_apply_batch(&locks, &types));

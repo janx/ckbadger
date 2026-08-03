@@ -10,12 +10,15 @@ use std::collections::{HashMap, HashSet};
 
 use anyhow::{anyhow, bail, Result};
 use chrono::NaiveDate;
+use ckbadger_common::dao::calculate_miner_secondary_issuance;
 
 use ckbadger_store::types::{AddressBalance, PositionedCellInfo};
 
-pub(crate) use ckbadger_store::types::{DID_CKB_SENTINEL_COLLECTION, DOTBIT_SENTINEL_COLLECTION};
+pub(crate) use ckbadger_store::types::{
+    BIT_CELL_SENTINEL_COLLECTION, DID_CKB_SENTINEL_COLLECTION, DOTBIT_SENTINEL_COLLECTION,
+};
 
-use crate::parser::{DaoParser, DotbitParser, MnftParser, SporeParser};
+use crate::parser::{BitCellParser, DaoParser, DidCkbParser, DotbitParser, MnftParser};
 
 use super::helpers::{checked_usize_to_i16, parsed_input_outpoint_index_i16};
 use super::types::TxData;
@@ -50,12 +53,7 @@ pub(crate) struct BatchStats {
     pub(crate) dao_daily_depositing_addresses: HashMap<NaiveDate, HashSet<Vec<u8>>>,
     /// Block numbers per date (for counting daily depositors from store).
     pub(crate) dao_block_numbers_by_date: HashMap<NaiveDate, Vec<i64>>,
-    pub(crate) daily_secondary_non_miner_delta: HashMap<NaiveDate, i128>,
     pub(crate) daily_secondary_miner_delta: HashMap<NaiveDate, i128>,
-    /// Per-block accumulated dao compensation share of secondary issuance.
-    pub(crate) daily_secondary_dao_delta: HashMap<NaiveDate, i128>,
-    /// Per-block accumulated treasury (burnt) share of secondary issuance.
-    pub(crate) daily_secondary_treasury_delta: HashMap<NaiveDate, i128>,
     /// Set to true after the DAO delta computation code path runs, even if no
     /// DAO transactions were found.  This distinguishes "genuinely zero deltas"
     /// from "deltas never computed" (e.g. stale DB from an older indexer).
@@ -132,7 +130,10 @@ pub(crate) fn classify_object_collection_id(
     if DotbitParser::is_account_cell_type_script(type_code_hash) {
         return Some(DOTBIT_SENTINEL_COLLECTION.to_vec());
     }
-    if SporeParser::is_did_type_script(type_code_hash) {
+    if BitCellParser::is_type_script(type_code_hash) {
+        return Some(BIT_CELL_SENTINEL_COLLECTION.to_vec());
+    }
+    if DidCkbParser::is_type_script(type_code_hash) {
         return Some(DID_CKB_SENTINEL_COLLECTION.to_vec());
     }
     None
@@ -216,15 +217,11 @@ pub(crate) fn occupied_capacity_shannons_i128(
     type_args_len: Option<usize>,
     data_size: i32,
 ) -> i128 {
-    if data_size < 0 {
-        panic!(
-            "negative cell data_size while computing occupied capacity: {}",
-            data_size
-        );
-    }
-    let lock_script_size = 33_i128 + lock_args_len as i128;
-    let type_script_size = type_args_len.map(|len| 33_i128 + len as i128).unwrap_or(0);
-    (8_i128 + lock_script_size + type_script_size + i128::from(data_size)) * 100_000_000_i128
+    i128::from(occupied_capacity_shannons_i64(
+        lock_args_len,
+        type_args_len,
+        data_size,
+    ))
 }
 
 pub(crate) fn occupied_capacity_shannons_i64(
@@ -232,15 +229,21 @@ pub(crate) fn occupied_capacity_shannons_i64(
     type_args_len: Option<usize>,
     data_size: i32,
 ) -> i64 {
-    i64::try_from(occupied_capacity_shannons_i128(
+    let data_size = usize::try_from(data_size).unwrap_or_else(|_| {
+        panic!(
+            "negative cell data_size while computing occupied capacity: {}",
+            data_size
+        )
+    });
+    ckbadger_common::dao::occupied_capacity_shannons(
+        data_size,
         lock_args_len,
         type_args_len,
-        data_size,
-    ))
-    .unwrap_or_else(|_| {
+    )
+    .unwrap_or_else(|error| {
         panic!(
-            "occupied capacity exceeds i64: lock_args_len={}, type_args_len={:?}, data_size={}",
-            lock_args_len, type_args_len, data_size
+            "failed to compute occupied capacity: lock_args_len={}, type_args_len={:?}, data_size={}, error={}",
+            lock_args_len, type_args_len, data_size, error
         )
     })
 }
@@ -280,90 +283,6 @@ pub(crate) fn dao_csu_for_snapshot_date(
             field.len()
         )
     })
-}
-
-// ---------------------------------------------------------------------------
-// Secondary issuance split
-// ---------------------------------------------------------------------------
-
-pub(crate) fn split_secondary_issuance(
-    total_issuance: i128,
-    occupied_capacity: i128,
-    total_deposited: i128,
-    non_miner_secondary: i128,
-) -> Result<(i128, i128, i128)> {
-    if non_miner_secondary <= 0 {
-        return Ok((0, 0, 0));
-    }
-
-    if total_issuance < 0 || occupied_capacity < 0 || total_deposited < 0 {
-        bail!(
-            "negative input in secondary issuance split: total_issuance={}, occupied_capacity={}, total_deposited={}, non_miner_secondary={}",
-            total_issuance,
-            occupied_capacity,
-            total_deposited,
-            non_miner_secondary
-        );
-    }
-
-    if total_issuance <= occupied_capacity {
-        bail!(
-            "invalid DAO C/U relationship: total_issuance={}, occupied_capacity={}, non_miner_secondary={}",
-            total_issuance,
-            occupied_capacity,
-            non_miner_secondary
-        );
-    }
-
-    let denom = total_issuance - occupied_capacity;
-    if total_deposited > denom {
-        bail!(
-            "dao deposited exceeds liquid supply: total_deposited={}, liquid_supply={}, total_issuance={}, occupied_capacity={}",
-            total_deposited,
-            denom,
-            total_issuance,
-            occupied_capacity
-        );
-    }
-
-    let miner = non_miner_secondary * occupied_capacity / denom;
-    let dao = non_miner_secondary * total_deposited / denom;
-    let treasury = non_miner_secondary - dao;
-
-    if miner < 0 || dao < 0 || treasury < 0 {
-        bail!(
-            "secondary issuance split produced negative component: miner={}, dao={}, treasury={}, non_miner_secondary={}",
-            miner,
-            dao,
-            treasury,
-            non_miner_secondary
-        );
-    }
-
-    Ok((miner, dao, treasury))
-}
-
-// ---------------------------------------------------------------------------
-// Non-miner secondary delta resolution
-// ---------------------------------------------------------------------------
-
-#[cfg(test)]
-pub(crate) fn resolve_non_miner_secondary_delta_for_snapshot(
-    date: NaiveDate,
-    daily_non_miner_delta: Option<i128>,
-) -> Result<i128> {
-    if let Some(delta) = daily_non_miner_delta {
-        if delta < 0 {
-            bail!(
-                "negative daily non-miner secondary issuance delta while building DAO daily snapshot: date={}, delta={}",
-                date,
-                delta
-            );
-        }
-        return Ok(delta);
-    }
-
-    Ok(0)
 }
 
 // ---------------------------------------------------------------------------
@@ -572,103 +491,90 @@ pub(crate) fn accumulate_dao_snapshot_deltas_for_txs(
 }
 
 // ---------------------------------------------------------------------------
-// Secondary issuance delta accumulation (per-block)
+// Miner secondary issuance accumulation (per-block)
 // ---------------------------------------------------------------------------
 
+/// Accumulate block `block_number`'s exact miner secondary issuance into the
+/// daily series: `floor(s_i * U_{i-1} / C_{i-1})` per RFC-0023, where `s_i`
+/// comes from the epoch schedule (header epoch position + the consensus
+/// `secondary_epoch_reward`) and `U`/`C` come from the PARENT block's DAO
+/// header field carried in `prev_dao_cu`.
+///
+/// This is the protocol's own direct split — the value the node reports as
+/// `miner_reward.secondary`. It is deliberately independent of DAO
+/// claimed-compensation recognition; claimed compensation feeds only the
+/// compensation aggregates.
+///
+/// Genesis: block 0 carries its own primary+secondary share inside the
+/// genesis DAO `C` field and its full secondary share `s_0` enters the
+/// genesis `S` pool — the node defines no miner reward for block 0 — so
+/// block 0 only seeds the parent C/U state.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn accumulate_secondary_issuance_deltas_from_csu(
+pub(crate) fn accumulate_miner_secondary_for_block(
     stats: &mut BatchStats,
     block_number: i64,
     block_date: NaiveDate,
+    epoch_index: i64,
+    epoch_length: i64,
     c: i128,
-    s: i128,
     u: i128,
-    claimed_compensation_in_block: i128,
-    running_deposited: i128,
-    prev_dao_cs: &mut Option<(i128, i128)>,
+    secondary_epoch_reward: u64,
+    prev_dao_cu: &mut Option<(i128, i128)>,
 ) -> Result<()> {
-    if claimed_compensation_in_block < 0 {
-        bail!(
-            "negative claimed DAO compensation while accumulating secondary issuance: block={}, date={}, claimed_compensation={}",
-            block_number,
-            block_date,
-            claimed_compensation_in_block
-        );
-    }
-
-    if let Some((prev_c, prev_s)) = *prev_dao_cs {
-        let _c_delta = c - prev_c;
-        let s_delta = s - prev_s;
-        let non_miner_delta = s_delta
-            .checked_add(claimed_compensation_in_block)
-            .ok_or_else(|| {
-                anyhow!(
-                    "secondary issuance delta overflow while adding claimed compensation: block={}, date={}, s_delta={}, claimed_compensation={}",
-                    block_number,
-                    block_date,
-                    s_delta,
-                    claimed_compensation_in_block
-                )
-            })?;
-        // CKB's on-chain S field can physically decrease at protocol upgrade
-        // boundaries (see POSTMORTEM DAO-018). Skip negative deltas — only
-        // accumulate positive non-miner secondary issuance growth.
-        if non_miner_delta > 0 {
-            *stats
-                .daily_secondary_non_miner_delta
-                .entry(block_date)
-                .or_default() += non_miner_delta;
-            // Per-block split using the deposited amount at this block.
-            // This is exact (matching CKB protocol) rather than the previous
-            // daily-aggregated split which used end-of-day deposited.
-            let (miner, dao, treasury) =
-                split_secondary_issuance(c, u, running_deposited, non_miner_delta)?;
+    if block_number > 0 {
+        let (prev_c, prev_u) = prev_dao_cu.ok_or_else(|| {
+            anyhow!(
+                "missing parent DAO C/U while accumulating miner secondary issuance: block={}, date={}",
+                block_number,
+                block_date
+            )
+        })?;
+        let secondary_issuance = ckbadger_common::dao::secondary_block_issuance(
+            epoch_index,
+            epoch_length,
+            secondary_epoch_reward,
+        )
+        .map_err(|error| anyhow!("{error}: block={}, date={}", block_number, block_date))?;
+        let miner = calculate_miner_secondary_issuance(secondary_issuance, prev_c, prev_u)
+            .map_err(|error| anyhow!("{error}: block={}, date={}", block_number, block_date))?;
+        if miner != 0 {
             *stats
                 .daily_secondary_miner_delta
                 .entry(block_date)
                 .or_default() += miner;
-            *stats
-                .daily_secondary_dao_delta
-                .entry(block_date)
-                .or_default() += dao;
-            *stats
-                .daily_secondary_treasury_delta
-                .entry(block_date)
-                .or_default() += treasury;
         }
     }
 
-    *prev_dao_cs = Some((c, s));
+    *prev_dao_cu = Some((c, u));
     Ok(())
 }
 
-pub(crate) fn accumulate_secondary_issuance_deltas(
+pub(crate) fn accumulate_miner_secondary(
     stats: &mut BatchStats,
     parsed: &crate::parser::block::ParsedBlock,
     block_date: NaiveDate,
-    claimed_compensation_in_block: i128,
-    running_deposited: i128,
-    prev_dao_cs: &mut Option<(i128, i128)>,
+    secondary_epoch_reward: u64,
+    prev_dao_cu: &mut Option<(i128, i128)>,
 ) -> Result<()> {
-    let (c, s, u) = extract_dao_csu(&parsed.dao).ok_or_else(|| {
+    let (c, _s, u) = extract_dao_csu(&parsed.dao).ok_or_else(|| {
         anyhow!(
-            "invalid DAO field bytes while accumulating secondary issuance: block={}, date={}, dao_len={}",
+            "invalid DAO field bytes while accumulating miner secondary issuance: block={}, date={}, dao_len={}",
             parsed.number,
             block_date,
             parsed.dao.len()
         )
     })?;
 
-    accumulate_secondary_issuance_deltas_from_csu(
+    accumulate_miner_secondary_for_block(
         stats,
         parsed.number,
         block_date,
+        i64::from(parsed.epoch_index),
+        i64::from(parsed.epoch_length),
         c,
-        s,
         u,
-        claimed_compensation_in_block,
-        running_deposited,
-        prev_dao_cs,
+        secondary_epoch_reward,
+        prev_dao_cu,
     )
 }
 
@@ -759,6 +665,7 @@ mod tests {
             transactions_count: 0,
             proposals_count: 0,
             uncles_count: 0,
+            miner_lock_hash: None,
             epoch_number,
             epoch_index: 0,
             epoch_length,
@@ -1001,12 +908,12 @@ mod tests {
     }
 
     #[test]
-    fn test_classify_object_collection_id_did_ckb_uses_sentinel_collection() {
-        let did_code_hash =
-            crate::rpc::parse_hex_to_bytes(crate::parser::spore::SPORE_CODE_HASH_MAINNET_DID);
-        let collection_id = classify_object_collection_id(&did_code_hash, &[0x99; 32])
-            .expect("did:ckb type should map to sentinel collection");
-        assert_eq!(collection_id, DID_CKB_SENTINEL_COLLECTION.to_vec());
+    fn test_classify_object_collection_id_bit_cell_uses_own_sentinel_collection() {
+        let bit_cell_code_hash =
+            crate::rpc::parse_hex_to_bytes(crate::parser::bit_cell::BIT_CELL_CODE_HASH_MAINNET);
+        let collection_id = classify_object_collection_id(&bit_cell_code_hash, &[0x99; 32])
+            .expect(".bit Cell type should map to sentinel collection");
+        assert_eq!(collection_id, BIT_CELL_SENTINEL_COLLECTION.to_vec());
     }
 
     #[test]
@@ -1115,45 +1022,6 @@ mod tests {
         assert_eq!(parsed, ar as i64);
     }
 
-    // -- split_secondary_issuance -------------------------------------------
-
-    #[test]
-    fn test_split_secondary_issuance_errors_on_negative_inputs() {
-        let err = split_secondary_issuance(1000, 100, -1, 10).unwrap_err();
-        assert!(err.to_string().contains("negative input"));
-    }
-
-    #[test]
-    fn test_split_secondary_issuance_errors_when_deposited_exceeds_liquid_supply() {
-        let err = split_secondary_issuance(1000, 900, 200, 10).unwrap_err();
-        assert!(err.to_string().contains("exceeds liquid supply"));
-    }
-
-    // -- resolve_non_miner_secondary_delta_for_snapshot ---------------------
-
-    #[test]
-    fn test_resolve_non_miner_secondary_delta_for_snapshot_prefers_precomputed_delta() {
-        let date = chrono::NaiveDate::from_ymd_opt(2026, 2, 18).unwrap();
-        let resolved = resolve_non_miner_secondary_delta_for_snapshot(date, Some(123)).unwrap();
-        assert_eq!(resolved, 123);
-    }
-
-    #[test]
-    fn test_resolve_non_miner_secondary_delta_for_snapshot_errors_on_negative_precomputed_delta() {
-        let date = chrono::NaiveDate::from_ymd_opt(2026, 2, 18).unwrap();
-        let err = resolve_non_miner_secondary_delta_for_snapshot(date, Some(-1)).unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("negative daily non-miner secondary issuance delta"));
-    }
-
-    #[test]
-    fn test_resolve_non_miner_secondary_delta_for_snapshot_defaults_missing_delta_to_zero() {
-        let date = chrono::NaiveDate::from_ymd_opt(2026, 2, 18).unwrap();
-        let delta = resolve_non_miner_secondary_delta_for_snapshot(date, None).unwrap();
-        assert_eq!(delta, 0);
-    }
-
     // -- derive_running_depositors ------------------------------------------
 
     #[test]
@@ -1169,104 +1037,265 @@ mod tests {
         assert!(err.to_string().contains("dao snapshot depositor underflow"));
     }
 
-    // -- accumulate_secondary_issuance_deltas -------------------------------
+    // -- accumulate_miner_secondary -----------------------------------------
 
+    /// Consensus secondary issuance per epoch shared by mainnet and testnet
+    /// (verified against both nodes' `get_consensus`).
+    const SECONDARY_EPOCH_REWARD: u64 = 61_369_863_013_698;
+
+    /// Real mainnet vector, block 1600000 (2020-04, epoch 977 idx 202 len 1797).
+    ///
+    /// Node `get_block_economic_state`: issuance.secondary = 34151287153,
+    /// miner_reward.secondary = 4781307093. The per-block miner secondary is
+    /// the protocol's direct split `floor(s_i * U_{i-1} / C_{i-1})`
+    /// (RFC-0023); reconstructing it from the S-pool delta instead
+    /// (`(dS + claimed) * U / (C - U)`) carries an inherent flooring drift —
+    /// on this block it yields 4781307094, one shannon high.
     #[test]
-    fn test_accumulate_secondary_issuance_deltas_tracks_exact_miner_and_non_miner() {
+    fn test_miner_secondary_is_direct_protocol_split_block_1600000() {
         let mut stats = BatchStats::default();
-        let prev_c = 10_000_000_000_000_i128;
-        let prev_s = 5_000_i128;
-        let c = prev_c + 1_000;
-        let s = prev_s + 600;
-        let u = 2_000_i128;
-        let denom = c - u;
-        let expected_miner = 600 * u / denom;
-        let mut prev = Some((prev_c, prev_s));
-        let block = dummy_parsed_block(build_dao_field(c as u64, s as u64, u as u64), 0, 1000);
-        let date = ckbadger_common::block_date(block.timestamp);
+        // Parent = block 1599999 header DAO field (mainnet).
+        let prev_c = 3_607_356_675_738_101_574_i128;
+        let prev_u = 505_043_338_100_000_000_i128;
+        // Block 1600000 header DAO field (mainnet); epoch 977, index 202,
+        // length 1797.
+        let c = 3_607_356_816_612_161_080_i128;
+        let u = 505_043_344_200_000_000_i128;
+        let date = chrono::NaiveDate::from_ymd_opt(2020, 4, 29).unwrap();
+        let mut prev = Some((prev_c, prev_u));
 
-        accumulate_secondary_issuance_deltas(&mut stats, &block, date, 0, 0, &mut prev).unwrap();
+        accumulate_miner_secondary_for_block(
+            &mut stats,
+            1_600_000,
+            date,
+            202,
+            1797,
+            c,
+            u,
+            SECONDARY_EPOCH_REWARD,
+            &mut prev,
+        )
+        .unwrap();
 
-        assert_eq!(stats.daily_secondary_non_miner_delta.get(&date), Some(&600));
         assert_eq!(
             stats.daily_secondary_miner_delta.get(&date),
-            Some(&expected_miner)
+            Some(&4_781_307_093_i128),
+            "block 1600000 miner secondary must equal the node's \
+             miner_reward.secondary (floor(s*U/C) = floor(34151287153 * \
+             505043338100000000 / 3607356675738101574))"
+        );
+        assert_eq!(prev, Some((c, u)), "parent C/U baseline must advance");
+    }
+
+    /// Real mainnet vector, block 6299887 (2022-01, epoch 4727 idx 948 len
+    /// 1063): a 2.34M-CKB phase-2 claim block where the S-pool delta is
+    /// negative (-234220781096391).
+    ///
+    /// Node `get_block_economic_state`: issuance.secondary = 57732702741,
+    /// miner_reward.secondary = 6461319527. The miner series must NOT depend
+    /// on claimed-compensation recognition: when a claim is missed by the
+    /// lifecycle map, the reconstruction path sees only the negative dS,
+    /// clamps to zero, and silently drops the whole 6461319527-shannon miner
+    /// delta — exactly the audited −59.81 CKB identity-violation signature.
+    #[test]
+    fn test_miner_secondary_is_independent_of_claimed_recognition_block_6299887() {
+        let mut stats = BatchStats::default();
+        // Parent = block 6299886 header DAO field (mainnet).
+        let prev_c = 4_556_869_051_405_297_678_i128;
+        let prev_u = 509_994_952_400_000_000_i128;
+        // Block 6299887 header DAO field (mainnet); epoch 4727, index 948,
+        // length 1063. The block's phase-2 claims total 234272052479605
+        // shannons and its S-pool delta is NEGATIVE (-234220781096391) — the
+        // exact signature the old reconstruction clamped to zero whenever a
+        // claim was missed, silently dropping the whole miner delta.
+        let c = 4_556_869_289_552_696_484_i128;
+        let u = 509_994_950_300_000_000_i128;
+        let date = chrono::NaiveDate::from_ymd_opt(2022, 1, 15).unwrap();
+        let mut prev = Some((prev_c, prev_u));
+
+        // The miner series takes no claimed-compensation input at all: the
+        // exact per-block value derives from the schedule and parent C/U.
+        accumulate_miner_secondary_for_block(
+            &mut stats,
+            6_299_887,
+            date,
+            948,
+            1063,
+            c,
+            u,
+            SECONDARY_EPOCH_REWARD,
+            &mut prev,
+        )
+        .unwrap();
+
+        assert_eq!(
+            stats.daily_secondary_miner_delta.get(&date),
+            Some(&6_461_319_527_i128),
+            "block 6299887 miner secondary must equal the node's \
+             miner_reward.secondary regardless of claimed-compensation \
+             recognition"
         );
     }
 
     #[test]
-    fn test_accumulate_secondary_issuance_deltas_adds_claimed_compensation_back_to_negative_s_delta(
-    ) {
+    fn test_accumulate_miner_secondary_wrapper_reads_header_epoch_and_dao() {
+        // The ParsedBlock wrapper must take C/U from the block's DAO field
+        // (advancing the parent baseline) and the epoch position from the
+        // header. dummy_parsed_block has number=1, epoch_index=0.
         let mut stats = BatchStats::default();
-        let mut prev = Some((20_000_000_000_000_i128, 8_000_i128));
-        let c = 20_000_000_000_500_i128;
-        let s = 7_900_i128;
-        let u = 1_000_i128;
-        let claimed_compensation = 150_i128;
-        let block = dummy_parsed_block(build_dao_field(c as u64, s as u64, u as u64), 0, 1000);
+        let prev_c = 10_000_000_000_000_i128;
+        let prev_u = 1_000_000_000_000_i128;
+        let mut prev = Some((prev_c, prev_u));
+        let c = 10_000_100_000_000_u64;
+        let u = 1_000_000_000_000_u64;
+        let block = dummy_parsed_block(build_dao_field(c, 5_000, u), 0, 1000);
         let date = ckbadger_common::block_date(block.timestamp);
-        let expected_non_miner = 50_i128;
-        let expected_miner = expected_non_miner * u / (c - u);
 
-        accumulate_secondary_issuance_deltas(
-            &mut stats,
-            &block,
-            date,
-            claimed_compensation,
-            0,
-            &mut prev,
-        )
-        .unwrap();
-        assert_eq!(
-            stats.daily_secondary_non_miner_delta.get(&date),
-            Some(&expected_non_miner)
-        );
+        // Epoch length 1000: base = 61369863013, remainder = 698, so index 0
+        // receives base + 1 = 61369863014.
+        let expected_s = 61_369_863_014_i128;
+        let expected_miner = expected_s * prev_u / prev_c;
+
+        accumulate_miner_secondary(&mut stats, &block, date, SECONDARY_EPOCH_REWARD, &mut prev)
+            .unwrap();
+
         assert_eq!(
             stats.daily_secondary_miner_delta.get(&date),
             Some(&expected_miner)
         );
         assert_eq!(
             prev,
-            Some((c, s)),
-            "previous DAO C/S baseline must still advance to the latest block"
+            Some((c as i128, u as i128)),
+            "parent C/U baseline must advance to the current block"
         );
     }
 
     #[test]
-    fn test_accumulate_secondary_issuance_deltas_same_day_drop_then_growth_tracks_exact_total() {
+    fn test_accumulate_miner_secondary_genesis_seeds_parent_state_without_delta() {
+        // Genesis (block 0) has no parent to split against: its own secondary
+        // share enters the genesis S pool in full (the node defines no miner
+        // reward for block 0). It must only seed the parent C/U baseline.
+        // Real mainnet genesis: C = 3360000145238488200 (33.6B + block 0's
+        // own p_0+s_0 = 145238488200), U = 504120308900000000.
         let mut stats = BatchStats::default();
-        let mut prev = Some((30_000_000_000_000_i128, 10_000_i128));
-        let date = chrono::NaiveDate::from_ymd_opt(2026, 2, 18).unwrap();
+        let mut prev: Option<(i128, i128)> = None;
+        let date = chrono::NaiveDate::from_ymd_opt(2019, 11, 16).unwrap();
+        let genesis_c = 3_360_000_145_238_488_200_i128;
+        let genesis_u = 504_120_308_900_000_000_i128;
 
-        let block_drop =
-            dummy_parsed_block(build_dao_field(30_000_000_000_500, 9_950, 100), 0, 1000);
-        accumulate_secondary_issuance_deltas(&mut stats, &block_drop, date, 120, 0, &mut prev)
-            .unwrap();
+        accumulate_miner_secondary_for_block(
+            &mut stats,
+            0,
+            date,
+            0,
+            1743,
+            genesis_c,
+            genesis_u,
+            SECONDARY_EPOCH_REWARD,
+            &mut prev,
+        )
+        .unwrap();
 
-        let block_growth =
-            dummy_parsed_block(build_dao_field(30_000_000_001_000, 10_020, 100), 1, 2000);
-        accumulate_secondary_issuance_deltas(&mut stats, &block_growth, date, 0, 0, &mut prev)
-            .unwrap();
+        assert!(
+            stats.daily_secondary_miner_delta.is_empty(),
+            "genesis must contribute no miner secondary"
+        );
+        assert_eq!(prev, Some((genesis_c, genesis_u)));
+
+        // Block 1 then splits against the genesis state: node-verified
+        // miner_reward.secondary = 5282660055 (s_1 = 35209330473, epoch 0
+        // index 1 length 1743).
+        accumulate_miner_secondary_for_block(
+            &mut stats,
+            1,
+            date,
+            1,
+            1743,
+            3_360_000_290_476_976_400_i128,
+            genesis_u,
+            SECONDARY_EPOCH_REWARD,
+            &mut prev,
+        )
+        .unwrap();
+        assert_eq!(
+            stats.daily_secondary_miner_delta.get(&date),
+            Some(&5_282_660_055_i128)
+        );
+    }
+
+    #[test]
+    fn test_accumulate_miner_secondary_same_day_blocks_sum_exactly() {
+        // Two consecutive same-day blocks accumulate the exact sum of their
+        // per-block splits (block 1 + block 2 real mainnet vectors:
+        // 5282660055 + 5282659827).
+        let mut stats = BatchStats::default();
+        let date = chrono::NaiveDate::from_ymd_opt(2019, 11, 16).unwrap();
+        let genesis_u = 504_120_308_900_000_000_i128;
+        let mut prev = Some((3_360_000_145_238_488_200_i128, genesis_u));
+
+        accumulate_miner_secondary_for_block(
+            &mut stats,
+            1,
+            date,
+            1,
+            1743,
+            3_360_000_290_476_976_400_i128,
+            genesis_u,
+            SECONDARY_EPOCH_REWARD,
+            &mut prev,
+        )
+        .unwrap();
+        accumulate_miner_secondary_for_block(
+            &mut stats,
+            2,
+            date,
+            2,
+            1743,
+            3_360_000_435_715_464_600_i128,
+            genesis_u,
+            SECONDARY_EPOCH_REWARD,
+            &mut prev,
+        )
+        .unwrap();
 
         assert_eq!(
-            stats.daily_secondary_non_miner_delta.get(&date),
-            Some(&140),
-            "daily delta should include both block-level non-miner issuance contributions"
-        );
-        assert!(
-            stats
-                .daily_secondary_miner_delta
-                .get(&date)
-                .copied()
-                .unwrap_or_default()
-                >= 0
+            stats.daily_secondary_miner_delta.get(&date),
+            Some(&(5_282_660_055_i128 + 5_282_659_827_i128))
         );
     }
 
     #[test]
-    fn test_accumulate_secondary_issuance_deltas_errors_on_invalid_dao_field() {
+    fn test_accumulate_miner_secondary_bails_without_parent_state() {
+        // A non-genesis block with no parent C/U baseline is an invariant
+        // violation (silently skipping it would drop that block's miner
+        // secondary) — it must fail with block context.
         let mut stats = BatchStats::default();
-        let mut prev = Some((30_000_000_000_000_i128, 10_000_i128));
+        let mut prev: Option<(i128, i128)> = None;
+        let date = chrono::NaiveDate::from_ymd_opt(2026, 2, 18).unwrap();
+
+        let err = accumulate_miner_secondary_for_block(
+            &mut stats,
+            42,
+            date,
+            0,
+            1800,
+            30_000_000_000_000,
+            100,
+            SECONDARY_EPOCH_REWARD,
+            &mut prev,
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("missing parent DAO C/U"),
+            "unexpected error: {err}"
+        );
+        assert!(err.to_string().contains("block=42"));
+    }
+
+    #[test]
+    fn test_accumulate_miner_secondary_errors_on_invalid_dao_field() {
+        let mut stats = BatchStats::default();
+        let mut prev = Some((30_000_000_000_000_i128, 0_i128));
         let date = chrono::NaiveDate::from_ymd_opt(2026, 2, 18).unwrap();
         // ParsedBlock.dao is now [u8; 32], so extract_dao_csu always succeeds on it.
         // Test the underlying helper directly with a short slice to cover the error path.
@@ -1275,31 +1304,8 @@ mod tests {
         // Verify the happy path doesn't error with a valid progressing DAO field.
         let block = dummy_parsed_block(build_dao_field(30_000_000_000_100, 10_000, 0), 0, 1000);
         let result =
-            accumulate_secondary_issuance_deltas(&mut stats, &block, date, 0, 0, &mut prev);
+            accumulate_miner_secondary(&mut stats, &block, date, SECONDARY_EPOCH_REWARD, &mut prev);
         assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_accumulate_secondary_issuance_deltas_protocol_upgrade_s_drop_skipped() {
-        // CKB's S field can physically decrease at protocol upgrade boundaries.
-        // Verify we skip (not crash) when non_miner_delta < 0.
-        let mut stats = BatchStats::default();
-        let mut prev = Some((20_000_000_000_000_i128, 10_000_i128));
-        let date = chrono::NaiveDate::from_ymd_opt(2026, 2, 18).unwrap();
-
-        // S drops from 10_000 to 9_000 — simulates protocol upgrade boundary.
-        let block = dummy_parsed_block(build_dao_field(20_000_000_000_500, 9_000, 100), 0, 1000);
-        let result =
-            accumulate_secondary_issuance_deltas(&mut stats, &block, date, 0, 0, &mut prev);
-        assert!(
-            result.is_ok(),
-            "negative S delta should not crash: {result:?}"
-        );
-        // Negative delta should NOT be accumulated.
-        assert_eq!(stats.daily_secondary_non_miner_delta.get(&date), None);
-        assert_eq!(stats.daily_secondary_miner_delta.get(&date), None);
-        // prev_dao_cs must still advance to the current block's values.
-        assert_eq!(prev, Some((20_000_000_000_500, 9_000)));
     }
 
     // -- accumulate_dao_snapshot_deltas_for_txs -----------------------------
@@ -1322,7 +1328,7 @@ mod tests {
                 previous_output_index: 0,
                 since: 0,
             }],
-            vec![dummy_dao_cell(9_900_000_000, false)],
+            vec![dummy_dao_cell(20_000_000_000, false)],
             vec![],
             vec!["0x0100000000000000".to_string()],
         );
@@ -1333,7 +1339,7 @@ mod tests {
             DaoConsumedRow {
                 tx_hash: vec![],
                 output_index: 0,
-                capacity_str: "10000000000".to_string(),
+                capacity_str: "20000000000".to_string(),
                 deposit_block: 0,
                 status: 0,
                 lock_script_hash: vec![0xAA; 32],
@@ -1346,7 +1352,7 @@ mod tests {
         let mut batch_cell_infos: HashMap<(Vec<u8>, i16), PositionedCellInfo> = HashMap::new();
         batch_cell_infos.insert(
             (vec![0x11; 32], 0),
-            dummy_positioned_info(10_000_000_000, 0, lock_hash.clone()),
+            dummy_positioned_info(20_000_000_000, 0, lock_hash.clone()),
         );
         let mut active_deposit_counts_by_lock: HashMap<Vec<u8>, i64> = HashMap::new();
         // Lock 0xAA has one active deposit so the phase-1 decrement can succeed.
@@ -1382,7 +1388,7 @@ mod tests {
         // Phase-1 subtracts capacity from daily_active_delta.
         assert_eq!(
             daily_active_delta.get(&block_date),
-            Some(&-10_000_000_000),
+            Some(&-20_000_000_000),
             "phase-1 must subtract capacity from daily_active_delta"
         );
         assert!(daily_gross_deposit_delta.is_empty());
@@ -1721,8 +1727,8 @@ mod tests {
             false,
             vec![],
             vec![
-                dummy_dao_cell_with_lock(100_00000000, true, lock_hash.clone()),
                 dummy_dao_cell_with_lock(200_00000000, true, lock_hash.clone()),
+                dummy_dao_cell_with_lock(300_00000000, true, lock_hash.clone()),
             ],
             vec![],
             vec![],
@@ -1737,7 +1743,7 @@ mod tests {
                 previous_output_index: 0,
                 since: 0,
             }],
-            vec![dummy_dao_cell(9_900_000_000, false)],
+            vec![dummy_dao_cell(200_00000000, false)],
             vec![],
             vec!["0x0100000000000000".to_string()],
         );
@@ -1763,7 +1769,7 @@ mod tests {
             DaoConsumedRow {
                 tx_hash: vec![],
                 output_index: 0,
-                capacity_str: "10000000000".to_string(),
+                capacity_str: "20000000000".to_string(),
                 deposit_block: 0,
                 status: 1,
                 lock_script_hash: lock_hash.clone(),
@@ -1782,11 +1788,11 @@ mod tests {
         let mut batch_cell_infos: HashMap<(Vec<u8>, i16), PositionedCellInfo> = HashMap::new();
         batch_cell_infos.insert(
             (deposit_tx_hash.to_vec(), 0),
-            dummy_positioned_info(100_00000000, 100, lock_hash.clone()),
+            dummy_positioned_info(200_00000000, 100, lock_hash.clone()),
         );
         batch_cell_infos.insert(
             (deposit_tx_hash.to_vec(), 1),
-            dummy_positioned_info(200_00000000, 100, lock_hash.clone()),
+            dummy_positioned_info(300_00000000, 100, lock_hash.clone()),
         );
 
         // After deposit: 2 active deposits, 1 unique depositor.
@@ -1822,7 +1828,7 @@ mod tests {
             DaoConsumedRow {
                 tx_hash: vec![],
                 output_index: 0,
-                capacity_str: "10000000000".to_string(),
+                capacity_str: "20000000000".to_string(),
                 deposit_block: 0,
                 status: 0,
                 lock_script_hash: lock_hash.clone(),

@@ -22,7 +22,7 @@ use crate::parser::transaction::TransactionParser;
 use crate::parser::udt::UdtStandard;
 use crate::parser::{
     dotbit::{may_contain_das_witness, parse_dotbit_witness_bundle, DotbitWitnessBundle},
-    DotbitParser, MnftParser, SporeParser, UdtParser,
+    BitCellParser, DidCkbParser, DotbitParser, MnftParser, SporeParser, UdtParser,
 };
 use crate::rpc::BlockResponseWithCycles;
 use ckbadger_store::types::{DOTBIT_SENTINEL_COLLECTION, SOLE_SPORES_SENTINEL_COLLECTION};
@@ -60,10 +60,73 @@ impl ParserPrecomputePhaseMetrics {
     }
 }
 
+/// Parser-stage Pass 2: resolve every non-cellbase input against the
+/// prefetched cell info, accumulate `total_input_capacity`, and set the
+/// parser-stage fee via `checked_tx_fee`.
+///
+/// For DAO withdrawal-completion (phase-2) transactions the DAO compensation
+/// is unknown at parse time, so `checked_tx_fee` yields a placeholder (0 when
+/// outputs exceed raw inputs) or an undercounted value (when extra plain
+/// inputs keep raw inputs >= outputs). `write_parsed_batch` MUST correct the
+/// fee for every tx that consumes a withdraw-request outpoint BEFORE
+/// serializing `TxIndexEntry` (see `correct_dao_withdrawal_fees`).
+pub(crate) fn compute_parser_input_capacities_and_fees(
+    all_tx_data: &mut [TxData],
+    input_cell_info: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
+    batch_cell_infos: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
+) -> Result<()> {
+    for tx_data in all_tx_data.iter_mut() {
+        if tx_data.is_cellbase {
+            continue;
+        }
+        let mut has_dao_input = false;
+        for input in &tx_data.inputs {
+            let output_index =
+                parsed_input_outpoint_index_i16(input.previous_output_index, "sync_indexer")?;
+            let key = (input.previous_tx_hash.to_vec(), output_index);
+            if let Some(info) = input_cell_info
+                .get(&key)
+                .or_else(|| batch_cell_infos.get(&key))
+            {
+                tx_data.total_input_capacity += info.capacity;
+                if info
+                    .type_code_hash
+                    .as_deref()
+                    .is_some_and(DaoParser::is_dao_code_hash)
+                {
+                    has_dao_input = true;
+                }
+            }
+        }
+        tx_data.fee = checked_tx_fee(
+            tx_data.total_input_capacity,
+            tx_data.total_output_capacity,
+            has_dao_input,
+            &tx_data.hash,
+            tx_data.block_number,
+        )?;
+    }
+    Ok(())
+}
+
 #[derive(Debug, Default, Clone, Copy)]
 struct ParserBatchPerfSample {
     parse_ms: f64,
     precompute_ms: f64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BatchWriteFailurePolicy {
+    FailFastPreCommitInvariant,
+    CleanupAndRetry,
+}
+
+fn classify_batch_write_failure(error: &anyhow::Error) -> BatchWriteFailurePolicy {
+    if error.downcast_ref::<PreCommitInvariantError>().is_some() {
+        BatchWriteFailurePolicy::FailFastPreCommitInvariant
+    } else {
+        BatchWriteFailurePolicy::CleanupAndRetry
+    }
 }
 
 pub(crate) fn classify_bulk_cell_semantic_tag(cell: &ParsedCell) -> CellSemanticTag {
@@ -88,6 +151,10 @@ pub(crate) fn classify_bulk_cell_semantic_tag(cell: &ParsedCell) -> CellSemantic
         return CellSemanticTag::Dotbit;
     }
 
+    if BitCellParser::is_type_script(type_code_hash) {
+        return CellSemanticTag::BitCell;
+    }
+
     if MnftParser::is_issuer_type_script(type_code_hash)
         || MnftParser::is_class_type_script(type_code_hash)
         || MnftParser::is_token_type_script(type_code_hash)
@@ -99,7 +166,11 @@ pub(crate) fn classify_bulk_cell_semantic_tag(cell: &ParsedCell) -> CellSemantic
         return CellSemanticTag::Cluster;
     }
 
-    if SporeParser::is_spore_type_script(type_code_hash) {
+    if DidCkbParser::is_type_script(type_code_hash) {
+        return CellSemanticTag::DidCkb;
+    }
+
+    if SporeParser::is_spore_nft_type_script(type_code_hash) {
         return CellSemanticTag::Spore;
     }
 
@@ -129,6 +200,10 @@ pub(crate) fn classify_live_cell_semantic_tag(cell: &LiveCellInfo) -> CellSemant
         return CellSemanticTag::Dotbit;
     }
 
+    if BitCellParser::is_type_script(type_code_hash) {
+        return CellSemanticTag::BitCell;
+    }
+
     if MnftParser::is_issuer_type_script(type_code_hash)
         || MnftParser::is_class_type_script(type_code_hash)
         || MnftParser::is_token_type_script(type_code_hash)
@@ -140,7 +215,11 @@ pub(crate) fn classify_live_cell_semantic_tag(cell: &LiveCellInfo) -> CellSemant
         return CellSemanticTag::Cluster;
     }
 
-    if SporeParser::is_spore_type_script(type_code_hash) {
+    if DidCkbParser::is_type_script(type_code_hash) {
+        return CellSemanticTag::DidCkb;
+    }
+
+    if SporeParser::is_spore_nft_type_script(type_code_hash) {
         return CellSemanticTag::Spore;
     }
 
@@ -531,6 +610,20 @@ fn parse_single_block(
             )
         })?,
         uncles_count: parsed_block.uncles_count,
+        proposals_count: parsed_block.proposals_count,
+        miner_lock_hash: parsed_block
+            .miner_lock_hash
+            .as_deref()
+            .map(|h| {
+                h.try_into().map_err(|_| {
+                    anyhow!(
+                        "miner lock hash length mismatch: block={} len={}",
+                        parsed_block.number,
+                        h.len()
+                    )
+                })
+            })
+            .transpose()?,
         transactions_count: parsed_block.transactions_count,
         // Placeholder tx_range; remapped in the merge phase.
         tx_range: 0..local_txs.len(),
@@ -650,7 +743,7 @@ impl Indexer {
             address_balance_changes: HashMap<Vec<u8>, AddressBalanceDelta>,
             script_usage_changes: ScriptUsageChanges,
             script_reference_usage_changes: ScriptReferenceUsageChanges,
-            script_daily_changes: HashMap<(Vec<u8>, bool, u32), (i128, i128)>,
+            script_daily_changes: HashMap<(Vec<u8>, u8, bool, u32), (i128, i128)>,
             token_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)>,
             spore_type_index_changes: HashMap<Vec<u8>, SporeTypeIndex>,
             spore_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)>,
@@ -1387,75 +1480,23 @@ impl Indexer {
 
                 // Pass 2: Compute input capacity + fee
                 let compute_fee_started = Instant::now();
-                let dao_code_hash =
-                    crate::rpc::parse_hex_to_bytes(crate::parser::dao::DAO_CODE_HASH);
-                for tx_data in &mut all_tx_data {
-                    if !tx_data.is_cellbase {
-                        let mut has_dao_input = false;
-                        for input in &tx_data.inputs {
-                            let output_index = match parsed_input_outpoint_index_i16(
-                                input.previous_output_index,
-                                "sync_indexer",
-                            ) {
-                                Ok(v) => v,
-                                Err(e) => {
-                                    record_worker_exit_reason(
-                                        &parser_exit_reason_for_parser,
-                                        format!(
-                                            "parsed_input_outpoint_index_i16 failed for range {}-{}: {}",
-                                            start_block, end_block, e
-                                        ),
-                                    );
-                                    return;
-                                }
-                            };
-                            let key = (input.previous_tx_hash.to_vec(), output_index);
-                            if let Some(info) = input_cell_info.get(&key) {
-                                tx_data.total_input_capacity += info.capacity;
-                                if info.type_code_hash.as_deref() == Some(dao_code_hash.as_slice())
-                                {
-                                    has_dao_input = true;
-                                }
-                            } else if let Some(info) = batch_cell_infos.get(&key) {
-                                tx_data.total_input_capacity += info.capacity;
-                                if info.type_code_hash.as_deref() == Some(dao_code_hash.as_slice())
-                                {
-                                    has_dao_input = true;
-                                }
-                            }
-                        }
-                        tx_data.fee = match checked_tx_fee(
-                            tx_data.total_input_capacity,
-                            tx_data.total_output_capacity,
-                            has_dao_input,
-                            &tx_data.hash,
-                            tx_data.block_number,
-                        ) {
-                            Ok(fee) => fee,
-                            Err(err) => {
-                                error!(
-                                    start_block,
-                                    end_block,
-                                    tx_hash = %hex::encode(tx_data.hash),
-                                    block_number = tx_data.block_number,
-                                    "Parser: invalid tx fee accounting: {}",
-                                    err
-                                );
-                                record_worker_exit_reason(
-                                    &parser_exit_reason_for_parser,
-                                    format!(
-                                        "invalid tx fee accounting: range {}-{}, block={}, tx=0x{}, error={}",
-                                        start_block,
-                                        end_block,
-                                        tx_data.block_number,
-                                        hex::encode(tx_data.hash),
-                                        err
-                                    ),
-                                );
-                                return;
-                            }
-                        };
-                    }
+                if let Err(err) = compute_parser_input_capacities_and_fees(
+                    &mut all_tx_data,
+                    &input_cell_info,
+                    &batch_cell_infos,
+                ) {
+                    error!(
+                        start_block,
+                        end_block, "Parser: invalid tx fee accounting: {}", err
+                    );
+                    record_worker_exit_reason(
+                        &parser_exit_reason_for_parser,
+                        format!(
+                            "invalid tx fee accounting: range {}-{}, error={}",
+                            start_block, end_block, err
+                        ),
+                    );
+                    return;
                 }
                 precompute_phase_metrics.compute_fee_ms =
                     compute_fee_started.elapsed().as_secs_f64() * 1000.0;
@@ -1467,7 +1508,7 @@ impl Indexer {
                 let mut script_usage_changes: ScriptUsageChanges = HashMap::new();
                 let mut script_reference_usage_changes: ScriptReferenceUsageChanges =
                     HashMap::new();
-                let mut script_daily_changes: HashMap<(Vec<u8>, bool, u32), (i128, i128)> =
+                let mut script_daily_changes: HashMap<(Vec<u8>, u8, bool, u32), (i128, i128)> =
                     HashMap::new();
                 let mut token_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)> = HashMap::new();
                 let mut spore_type_index_changes: HashMap<Vec<u8>, SporeTypeIndex> = HashMap::new();
@@ -1602,7 +1643,12 @@ impl Indexer {
                         entry.4 += i128::from(cell_occupied);
                         entry.5 += i128::from(cell_occupied);
                         let daily_entry = script_daily_changes
-                            .entry((cell.lock_code_hash.clone(), false, date_yyyymmdd))
+                            .entry((
+                                cell.lock_code_hash.clone(),
+                                lock_hash_type,
+                                false,
+                                date_yyyymmdd,
+                            ))
                             .or_insert((0, 0));
                         daily_entry.0 += i128::from(cell.capacity);
                         daily_entry.1 += i128::from(cell_occupied);
@@ -1660,7 +1706,12 @@ impl Indexer {
                             entry.4 += i128::from(cell_occupied);
                             entry.5 += i128::from(cell_occupied);
                             let daily_entry = script_daily_changes
-                                .entry((type_code_hash.clone(), true, date_yyyymmdd))
+                                .entry((
+                                    type_code_hash.clone(),
+                                    type_hash_type,
+                                    true,
+                                    date_yyyymmdd,
+                                ))
                                 .or_insert((0, 0));
                             daily_entry.0 += i128::from(cell.capacity);
                             daily_entry.1 += i128::from(cell_occupied);
@@ -1813,7 +1864,12 @@ impl Indexer {
                                 entry.3 -= i128::from(info.capacity);
                                 entry.5 -= i128::from(info.occupied_capacity);
                                 let daily_entry = script_daily_changes
-                                    .entry((info.lock_code_hash.clone(), false, date_yyyymmdd))
+                                    .entry((
+                                        info.lock_code_hash.clone(),
+                                        lock_hash_type,
+                                        false,
+                                        date_yyyymmdd,
+                                    ))
                                     .or_insert((0, 0));
                                 daily_entry.0 -= i128::from(info.capacity);
                                 daily_entry.1 -= i128::from(info.occupied_capacity);
@@ -1865,7 +1921,12 @@ impl Indexer {
                                     entry.3 -= i128::from(info.capacity);
                                     entry.5 -= i128::from(info.occupied_capacity);
                                     let daily_entry = script_daily_changes
-                                        .entry((type_code_hash.clone(), true, date_yyyymmdd))
+                                        .entry((
+                                            type_code_hash.clone(),
+                                            type_hash_type,
+                                            true,
+                                            date_yyyymmdd,
+                                        ))
                                         .or_insert((0, 0));
                                     daily_entry.0 -= i128::from(info.capacity);
                                     daily_entry.1 -= i128::from(info.occupied_capacity);
@@ -1942,16 +2003,14 @@ impl Indexer {
                                     }
                                     if DotbitParser::is_account_cell_type_script(type_code_hash)
                                         || MnftParser::is_token_type_script(type_code_hash)
-                                        || SporeParser::is_did_type_script(type_code_hash)
+                                        || DidCkbParser::is_type_script(type_code_hash)
                                     {
                                         let collection_id =
                                             if DotbitParser::is_account_cell_type_script(
                                                 type_code_hash,
                                             ) {
                                                 Some(DOTBIT_SENTINEL_COLLECTION.to_vec())
-                                            } else if SporeParser::is_did_type_script(
-                                                type_code_hash,
-                                            ) {
+                                            } else if DidCkbParser::is_type_script(type_code_hash) {
                                                 Some(DID_CKB_SENTINEL_COLLECTION.to_vec())
                                             } else if let Some(cached) =
                                                 object_type_index_cache.get(type_script_hash)
@@ -2194,7 +2253,7 @@ impl Indexer {
         let mut disk_tracker = crate::sys_info::DiskStatsTracker::new(disk_device);
 
         loop {
-            if self.shutdown_requested.load(Ordering::SeqCst) {
+            if self.is_shutdown_requested() {
                 info!(run_id = %self.run_id, "Shutdown requested, aborting pipeline");
                 fetcher.abort();
                 parser.abort();
@@ -2574,8 +2633,17 @@ impl Indexer {
                     {
                         Ok(metrics) => metrics,
                         Err(e) => {
+                            let failure_policy = classify_batch_write_failure(&e);
+                            let incident_reason = match failure_policy {
+                                BatchWriteFailurePolicy::FailFastPreCommitInvariant => {
+                                    "pipeline_precommit_invariant_failed"
+                                }
+                                BatchWriteFailurePolicy::CleanupAndRetry => {
+                                    "pipeline_batch_write_failed"
+                                }
+                            };
                             let incident_id = self.report_incident(
-                                "pipeline_batch_write_failed",
+                                incident_reason,
                                 format!(
                                     "start_block={} end_block={} chain_tip={} error={:?}",
                                     start_block, end_block, chain_tip, e
@@ -2590,6 +2658,15 @@ impl Indexer {
                                 error = ?e,
                                 "Sync error while writing parsed batch"
                             );
+                            if failure_policy == BatchWriteFailurePolicy::FailFastPreCommitInvariant
+                            {
+                                return Err(e).with_context(|| {
+                                    format!(
+                                        "live sync fail-fast for deterministic pre-commit invariant in range {}-{} (chain_tip={}): no domain batch was committed; rollback cleanup and retry are disabled",
+                                        start_block, end_block, chain_tip
+                                    )
+                                });
+                            }
                             let bulk_sync_mode = is_effective_bulk_sync_batch(
                                 chain_tip,
                                 end_block,
@@ -3075,6 +3152,68 @@ mod tests {
         BlockResponseWithCycles, BlockView, CellInput, CellOutput, HeaderView, OutPoint, Script,
         TransactionView,
     };
+    use crate::sync::TEST_CELLBASE_WITNESS;
+
+    #[test]
+    fn bulk_semantic_tag_classifies_real_did_ckb_cells() {
+        use crate::parser::cell::CellParser;
+        use crate::parser::dotbit::DotbitWitnessBundle;
+        use crate::parser::test_helpers::real_did_ckb;
+        use crate::rpc::parse_hex_to_bytes;
+        use crate::sync::bulk_build::facts::parse_protocol_facts;
+
+        // Real captured testnet did:ckb cells (32-byte and 20-byte args) must
+        // receive the DidCkb classification in bulk facts extraction; `Plain`
+        // means the whole identity pipeline is unreachable for them.
+        for ((output, data_hex), expected_args) in [
+            (real_did_ckb::cell_32(), real_did_ckb::CELL_32_ARGS),
+            (real_did_ckb::cell_20(), real_did_ckb::CELL_20_ARGS),
+        ] {
+            let cell = CellParser::parse_output(&output, data_hex).expect("parsed cell");
+            let tag = classify_bulk_cell_semantic_tag(&cell);
+            assert_eq!(
+                tag,
+                CellSemanticTag::DidCkb,
+                "real did:ckb cell must classify as DidCkb"
+            );
+
+            let facts =
+                parse_protocol_facts(&cell, tag, &DotbitWitnessBundle::default(), &[0u8; 32], 0)
+                    .expect("protocol facts")
+                    .expect("did:ckb cell must produce protocol facts");
+            match facts {
+                CellProtocolFacts::DidCkb(did) => {
+                    assert_eq!(
+                        did.did_id,
+                        parse_hex_to_bytes(expected_args),
+                        "bulk facts must carry the exact args item id"
+                    );
+                }
+                other => panic!("expected DidCkb facts, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn test_precommit_invariant_failure_policy_is_fail_fast() {
+        let error = anyhow::Error::new(PreCommitInvariantError::new(
+            "fiber lifecycle",
+            anyhow!("missing staged channel"),
+        ));
+        assert_eq!(
+            classify_batch_write_failure(&error),
+            BatchWriteFailurePolicy::FailFastPreCommitInvariant
+        );
+    }
+
+    #[test]
+    fn test_unclassified_batch_write_failure_retains_cleanup_policy() {
+        let error = anyhow!("atomic domain commit failed");
+        assert_eq!(
+            classify_batch_write_failure(&error),
+            BatchWriteFailurePolicy::CleanupAndRetry
+        );
+    }
 
     fn create_lock_script() -> Script {
         Script {
@@ -3301,7 +3440,7 @@ mod tests {
                 type_: None,
             }],
             outputs_data: vec!["0x".to_string()],
-            witnesses: vec!["0x".to_string()],
+            witnesses: vec![TEST_CELLBASE_WITNESS.to_string()],
         };
         let tx1 = TransactionView {
             hash: format!("0x{}", "bb".repeat(32)),
@@ -3370,6 +3509,8 @@ mod tests {
                         | CellSemanticTag::Sudt
                         | CellSemanticTag::Xudt
                         | CellSemanticTag::Dotbit
+                        | CellSemanticTag::BitCell
+                        | CellSemanticTag::DidCkb
                         | CellSemanticTag::Mnft
                         | CellSemanticTag::Spore
                         | CellSemanticTag::Cluster
@@ -3426,7 +3567,7 @@ mod tests {
                                 "cluster description"
                             ))
                         )],
-                        witnesses: vec!["0x".to_string()],
+                        witnesses: vec![TEST_CELLBASE_WITNESS.to_string()],
                     },
                     TransactionView {
                         hash: format!("0x{}", "a2".repeat(32)),
@@ -3526,7 +3667,6 @@ mod tests {
                 assert_eq!(spore.cluster_id, Some(cluster_id));
                 assert_eq!(spore.content_type, "image/png");
                 assert_eq!(spore.content, b"spore-content");
-                assert!(!spore.is_did);
             }
             other => panic!("expected spore facts, got {other:?}"),
         }
@@ -3635,7 +3775,7 @@ mod tests {
                         }],
                         outputs: vec![],
                         outputs_data: vec![],
-                        witnesses: vec![],
+                        witnesses: vec![TEST_CELLBASE_WITNESS.to_string()],
                     },
                     // tx1: regular tx
                     TransactionView {
@@ -3758,7 +3898,7 @@ mod tests {
                     }],
                     // Only 10 bytes of data — far below the 52-byte minimum
                     outputs_data: vec![format!("0x{}", hex::encode([0xffu8; 10]))],
-                    witnesses: vec!["0x".to_string()],
+                    witnesses: vec![TEST_CELLBASE_WITNESS.to_string()],
                 }],
                 proposals: vec![],
             },

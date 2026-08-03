@@ -1,0 +1,16 @@
+name = "USDI"
+symbol = "USDI"
+decimals = 6
+standard = "xudt_compatible"
+description = "Stablecoin issued by InterpayStellar (https://www.interpaystellar.com/)"
+
+# InterPay USDI issued via the dedicated USDI Asset script
+# (see docs/metadata/scripts/usdi-asset.toml). The upstream token-labels
+# entry usdi-0cae1430.toml only labels a plain-xUDT token on mainnet;
+# this entry labels the actively used issuance (type hash
+# 0x7f3fba3fb8d6e000176f7e1ae22e8cd02841dec6a8341dc69aeef46387a20664).
+# Its testnet counterpart is already covered by usdi-0cae1430.toml.
+[mainnet]
+code_hash = "0xbfa35a9c38a676682b65ade8f02be164d48632281477e36f8dc2f41f79e56bfc"
+hash_type = "type"
+args = "0xd591ebdc69626647e056e13345fd830c8b876bb06aa07ba610479eb77153ea9f"

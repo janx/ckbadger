@@ -64,8 +64,10 @@ pub fn bytes_to_hex(bytes: &[u8]) -> String {
 }
 
 pub use batch::{merge_write_batches, StoreBatch};
+pub use dao_ops::dao_compensation_for_entry_at;
 pub use network_types::*;
 pub use reorg_ops::RollbackResult;
+pub use stats_ops::{activity_addr_set_count, decode_activity_addr_set, encode_activity_addr_set};
 pub use store::{
     cf_write_policy, is_append_only_cf_name, known_append_only_secondary_store_paths,
     known_domain_secondary_store_paths, secondary_store_path, CfWritePolicy, CkbadgerStore,

@@ -11,6 +11,7 @@ vi.mock('@/lib/api', () => ({
     getTotalSupplyChart: vi.fn(),
   },
   isWarmupPendingError: vi.fn(() => false),
+  isNetworkInitializingError: vi.fn(() => false),
 }));
 
 vi.mock('@/components/layout/header', () => ({
@@ -41,7 +42,7 @@ describe('TotalSupplyPage', () => {
     expect(screen.getByText('Total Supply')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /Back to Charts/i })).toHaveAttribute(
       'href',
-      '/charts'
+      '/mainnet/charts'
     );
 
     await waitFor(() => {

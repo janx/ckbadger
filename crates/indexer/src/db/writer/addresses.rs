@@ -1346,7 +1346,7 @@ impl BatchWriter {
 
     pub fn update_script_daily_deltas_batch(
         &self,
-        changes: &HashMap<(Vec<u8>, bool, u32), (i128, i128)>,
+        changes: &HashMap<(Vec<u8>, u8, bool, u32), (i128, i128)>,
         batch: &mut StoreBatch,
     ) -> Result<()> {
         if changes.is_empty() {
@@ -1354,14 +1354,17 @@ impl BatchWriter {
         }
 
         let mut keyed_changes: Vec<(Vec<u8>, i128, i128)> = Vec::with_capacity(changes.len());
-        for ((code_hash, is_type, date_yyyymmdd), (owned_cap_delta, owned_knowledge_delta)) in
-            changes
+        for (
+            (code_hash, hash_type, is_type, date_yyyymmdd),
+            (owned_cap_delta, owned_knowledge_delta),
+        ) in changes
         {
             if *owned_cap_delta == 0 && *owned_knowledge_delta == 0 {
                 continue;
             }
             keyed_changes.push((
-                keys::encode_script_daily_key(code_hash, *is_type, *date_yyyymmdd).to_vec(),
+                keys::encode_script_daily_key(code_hash, *hash_type, *is_type, *date_yyyymmdd)
+                    .to_vec(),
                 *owned_cap_delta,
                 *owned_knowledge_delta,
             ));
@@ -1450,7 +1453,7 @@ mod tests {
         let date = 20240115u32;
 
         let mut first = HashMap::new();
-        first.insert((code_hash.clone(), false, date), (100i128, 60i128));
+        first.insert((code_hash.clone(), 1u8, false, date), (100i128, 60i128));
         let mut batch = StoreBatch::new(&store);
         writer
             .update_script_daily_deltas_batch(&first, &mut batch)
@@ -1458,7 +1461,7 @@ mod tests {
         batch.commit().unwrap();
 
         let mut second = HashMap::new();
-        second.insert((code_hash.clone(), false, date), (-20i128, -10i128));
+        second.insert((code_hash.clone(), 1u8, false, date), (-20i128, -10i128));
         let mut batch = StoreBatch::new(&store);
         writer
             .update_script_daily_deltas_batch(&second, &mut batch)
@@ -1466,14 +1469,14 @@ mod tests {
         batch.commit().unwrap();
 
         let delta = store
-            .get_script_daily_delta(&code_hash, false, date)
+            .get_script_daily_delta(&code_hash, 1, false, date)
             .unwrap()
             .unwrap();
         assert_eq!(delta.owned_capacity_delta, 80);
         assert_eq!(delta.owned_knowledge_delta, 50);
 
         let mut third = HashMap::new();
-        third.insert((code_hash.clone(), false, date), (-80i128, -50i128));
+        third.insert((code_hash.clone(), 1u8, false, date), (-80i128, -50i128));
         let mut batch = StoreBatch::new(&store);
         writer
             .update_script_daily_deltas_batch(&third, &mut batch)
@@ -1481,9 +1484,43 @@ mod tests {
         batch.commit().unwrap();
 
         let delta = store
-            .get_script_daily_delta(&code_hash, false, date)
+            .get_script_daily_delta(&code_hash, 1, false, date)
             .unwrap();
         assert!(delta.is_none());
+    }
+
+    #[test]
+    fn test_update_script_daily_deltas_batch_keeps_hash_type_forms_separate() {
+        // Regression (B8 root cause): deltas of two hash_type forms sharing
+        // the same code_hash bytes must land in independent rows.
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone(), store.clone());
+        let code_hash = vec![0x9B; 32];
+        let date = 20240115u32;
+
+        let mut changes = HashMap::new();
+        changes.insert((code_hash.clone(), 1u8, false, date), (500i128, 300i128));
+        changes.insert((code_hash.clone(), 0u8, false, date), (98i128, 98i128));
+        let mut batch = StoreBatch::new(&store);
+        writer
+            .update_script_daily_deltas_batch(&changes, &mut batch)
+            .unwrap();
+        batch.commit().unwrap();
+
+        let type_form = store
+            .get_script_daily_delta(&code_hash, 1, false, date)
+            .unwrap()
+            .unwrap();
+        assert_eq!(type_form.owned_capacity_delta, 500);
+        assert_eq!(type_form.owned_knowledge_delta, 300);
+
+        let data_form = store
+            .get_script_daily_delta(&code_hash, 0, false, date)
+            .unwrap()
+            .unwrap();
+        assert_eq!(data_form.owned_capacity_delta, 98);
+        assert_eq!(data_form.owned_knowledge_delta, 98);
     }
 
     #[test]

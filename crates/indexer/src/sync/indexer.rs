@@ -17,10 +17,14 @@ use crate::config::Config;
 use crate::db::writer::cell_distribution::CellDistributionTracker;
 use crate::db::writer::hodl_wave::HodlWaveTracker;
 use crate::db::{BatchWriter, Repository};
+#[cfg(test)]
+use crate::lifecycle::fail_fast_if_bulk_build_session_incomplete;
 use ckb_store_reader::CkbChainReader;
 
 use crate::rpc::CkbRpcClient;
-use crate::runtime_diag::{generate_incident_id, read_cgroup_memory_snapshot, FlightRecorder};
+use crate::runtime_diag::{
+    aggregate_chain_store_memory, generate_incident_id, read_cgroup_memory_snapshot, FlightRecorder,
+};
 
 use ckbadger_dob_decoder::cache::DecoderBinaryCache;
 
@@ -29,6 +33,7 @@ use super::bulk_build::BulkBuildEngine;
 use super::diagnostics::*;
 use super::dob_decode_worker::DobDecodeWorker;
 use super::helpers::*;
+use super::shutdown::ShutdownSignal;
 use super::sync_mode::*;
 use super::types::{CachedCellInfo, CachedUdtCellInfo};
 use super::SyncProgress;
@@ -296,26 +301,6 @@ fn startup_header_gap_fail_fast_message(
     )
 }
 
-fn incomplete_bulk_build_session_fail_fast_message(
-    marker: &ckbadger_store::types::BulkBuildSessionMarker,
-) -> String {
-    format!(
-        "startup fail-fast: detected incomplete bulk build session (run_id={}, started_at={}, start_block={}). \
-         bulk sync is single-shot rebuild only; delete RocksDB and re-sync from genesis",
-        marker.run_id, marker.started_at, marker.start_block
-    )
-}
-
-fn fail_fast_if_bulk_build_session_incomplete(store: &CkbadgerStore) -> Result<()> {
-    if let Some(marker) = store.get_bulk_build_session_marker()? {
-        bail!(
-            "{}",
-            incomplete_bulk_build_session_fail_fast_message(&marker)
-        );
-    }
-    Ok(())
-}
-
 pub(crate) fn finalize_bulk_stage_handoff_state(
     bulk_sync_allowed: &AtomicBool,
     was_bulk_sync_active: &AtomicBool,
@@ -390,7 +375,7 @@ pub struct Indexer {
     pub(crate) repeated_warning_tracker: RepeatedWarningTracker,
     pub(crate) incident_dir: PathBuf,
     pub(crate) bulk_sync_perf_run: std::sync::Mutex<Option<BulkSyncPerfRun>>,
-    pub(crate) shutdown_requested: Arc<AtomicBool>,
+    pub(crate) shutdown: ShutdownSignal,
     /// Set when the sync hits an unrecoverable, non-retryable condition (e.g. a
     /// cross-store inconsistency: a live-cell marker with no append-only
     /// payload). Read at the process boundary to exit with
@@ -503,7 +488,7 @@ impl Indexer {
             repeated_warning_tracker: RepeatedWarningTracker::default(),
             incident_dir,
             bulk_sync_perf_run: std::sync::Mutex::new(None),
-            shutdown_requested: Arc::new(AtomicBool::new(false)),
+            shutdown: ShutdownSignal::default(),
             unrecoverable_exit: Arc::new(AtomicBool::new(false)),
             ckb_store,
             hodl_tracker: std::sync::Mutex::new(hodl_tracker),
@@ -528,7 +513,19 @@ impl Indexer {
     }
 
     pub fn shutdown_flag(&self) -> Arc<AtomicBool> {
-        Arc::clone(&self.shutdown_requested)
+        self.shutdown.flag()
+    }
+
+    pub fn request_shutdown(&self) {
+        self.shutdown.request();
+    }
+
+    pub(crate) fn is_shutdown_requested(&self) -> bool {
+        self.shutdown.is_requested()
+    }
+
+    pub(crate) async fn shutdown_cancelled(&self) {
+        self.shutdown.cancelled().await;
     }
 
     /// Handle to the unrecoverable-exit flag, for the parser to set on a hard
@@ -990,7 +987,12 @@ impl Indexer {
     }
 
     pub fn get_memory_stats(&self) -> ckbadger_common::MemoryStatsData {
-        let stats = self.writer.store().memory_stats();
+        let domain_stats = self.writer.store().memory_stats();
+        let append_only_stats = self.append_only_store.memory_stats();
+        let chain_store_memory = aggregate_chain_store_memory(&domain_stats, &append_only_stats)
+            .unwrap_or_else(|err| {
+                panic!("failed to aggregate domain and append-only memory stats: {err}")
+            });
         let sync_status = self.writer.store().get_sync_status().unwrap_or_else(|e| {
             panic!(
                 "failed to read sync_status while collecting memory stats: {}",
@@ -998,34 +1000,42 @@ impl Indexer {
             )
         });
         ckbadger_common::MemoryStatsData {
-            live_cells_count: stats.live_cells_count as u64,
-            consumed_cells_count: stats.consumed_cells_count as u64,
-            consumed_cells_bytes: stats.consumed_cells_bytes as u64,
-            consumed_cells_bytes_source: stats.consumed_cells_bytes_source.to_string(),
-            rocksdb_memtable_bytes: stats.memtable_bytes as u64,
-            rocksdb_block_cache_bytes: stats.block_cache_bytes as u64,
-            rocksdb_table_readers_bytes: stats.table_readers_bytes as u64,
-            rocksdb_total_bytes: stats.memory_bytes as u64,
-            block_headers_count: stats.block_headers_count as u64,
+            live_cells_count: domain_stats.live_cells_count as u64,
+            consumed_cells_count: domain_stats.consumed_cells_count as u64,
+            consumed_cells_bytes: domain_stats.consumed_cells_bytes as u64,
+            consumed_cells_bytes_source: domain_stats.consumed_cells_bytes_source.to_string(),
+            rocksdb_memtable_bytes: chain_store_memory.total_memtable_bytes,
+            rocksdb_block_cache_bytes: chain_store_memory.shared_block_cache_bytes,
+            rocksdb_table_readers_bytes: chain_store_memory.total_table_readers_bytes,
+            rocksdb_total_bytes: chain_store_memory.total_memory_bytes,
+            rocksdb_domain_memtable_bytes: chain_store_memory.domain_memtable_bytes,
+            rocksdb_append_only_memtable_bytes: chain_store_memory.append_only_memtable_bytes,
+            rocksdb_domain_table_readers_bytes: chain_store_memory.domain_table_readers_bytes,
+            rocksdb_append_only_table_readers_bytes: chain_store_memory
+                .append_only_table_readers_bytes,
+            block_headers_count: domain_stats.block_headers_count as u64,
             bulk_sync_cell_cache_enabled: false,
             bulk_sync_mode: self.is_bulk_sync_active(),
-            compaction_pending_bytes: stats.compaction_pending_bytes,
-            num_running_compactions: stats.num_running_compactions,
-            sst_files_size: stats.sst_files_size,
-            l0_files_count: stats.l0_files_count,
-            l0_files_max: stats.l0_files_max,
-            l0_worst_cf: stats.l0_worst_cf,
-            immutable_memtables: stats.immutable_memtables,
-            top_cf_sizes: stats.top_cf_sizes,
-            wbm_usage_bytes: stats.wbm_usage_bytes as u64,
-            wbm_budget_bytes: stats.wbm_budget_bytes as u64,
+            compaction_pending_bytes: chain_store_memory.total_compaction_pending_bytes,
+            domain_compaction_pending_bytes: chain_store_memory.domain_compaction_pending_bytes,
+            append_only_compaction_pending_bytes: chain_store_memory
+                .append_only_compaction_pending_bytes,
+            num_running_compactions: chain_store_memory.num_running_compactions,
+            sst_files_size: chain_store_memory.sst_files_size,
+            l0_files_count: chain_store_memory.l0_files_count,
+            l0_files_max: chain_store_memory.l0_files_max,
+            l0_worst_cf: chain_store_memory.l0_worst_cf,
+            immutable_memtables: chain_store_memory.immutable_memtables,
+            top_cf_sizes: chain_store_memory.top_cf_sizes,
+            wbm_usage_bytes: chain_store_memory.shared_wbm_usage_bytes,
+            wbm_budget_bytes: chain_store_memory.shared_wbm_budget_bytes,
             total_transactions: sync_status.total_transactions,
             total_cells: sync_status.total_cells_created,
             total_live_cells: sync_status.total_cells_created - sync_status.total_cells_consumed,
-            total_addresses: i64::try_from(stats.addr_balance_count).unwrap_or_else(|_| {
+            total_addresses: i64::try_from(domain_stats.addr_balance_count).unwrap_or_else(|_| {
                 panic!(
                     "addr_balance_count over i64 range in memory stats: {}",
-                    stats.addr_balance_count
+                    domain_stats.addr_balance_count
                 )
             }),
             updated_at: chrono::Utc::now().timestamp(),
@@ -1084,8 +1094,6 @@ impl Indexer {
                 "Existing sync tip detected; bulk sync is disabled for non-fresh DB, running live catch-up mode"
             );
         }
-
-        fail_fast_if_bulk_build_session_incomplete(self.writer.store().as_ref())?;
 
         ensure_bulk_sync_fresh_start(
             bulk_sync_mode,
@@ -1281,7 +1289,7 @@ impl Indexer {
             let dob_store = Arc::clone(self.writer.store());
             let dob_append_only = Arc::clone(&self.append_only_store);
             let dob_rpc_url = self.config.ckb_rpc_url.clone();
-            let dob_shutdown = Arc::clone(&self.shutdown_requested);
+            let dob_shutdown = self.shutdown.flag();
             let dob_progress = Arc::clone(&self.progress);
             let dob_threshold = self.config.bulk_sync_threshold;
             let dob_cache_path = self.config.decoder_cache_path.clone();
@@ -1416,6 +1424,10 @@ mod tests {
         assert!(msg.contains("incomplete bulk build session"));
         assert!(msg.contains("run-bulk-1"));
         assert!(msg.contains("delete RocksDB and re-sync from genesis"));
+        assert!(
+            crate::lifecycle::is_rebuild_required(&err),
+            "incomplete bulk state must be classified as a permanent rebuild requirement"
+        );
     }
 
     #[test]
@@ -1423,6 +1435,24 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         fail_fast_if_bulk_build_session_incomplete(&store).unwrap();
+    }
+
+    #[tokio::test]
+    async fn shutdown_signal_wakes_a_blocked_bulk_waiter() {
+        let signal = ShutdownSignal::default();
+        let waiter_signal = signal.clone();
+        let waiter = tokio::spawn(async move {
+            waiter_signal.cancelled().await;
+        });
+
+        tokio::task::yield_now().await;
+        signal.request();
+
+        tokio::time::timeout(Duration::from_secs(1), waiter)
+            .await
+            .expect("shutdown waiter did not wake")
+            .expect("shutdown waiter task panicked");
+        assert!(signal.is_requested());
     }
 
     #[test]

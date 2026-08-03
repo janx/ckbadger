@@ -10,6 +10,7 @@ vi.mock('@/lib/api', () => ({
     getGlobalActivities: vi.fn(),
   },
   isWarmupPendingError: vi.fn(() => false),
+  isNetworkInitializingError: vi.fn(() => false),
   TAG_TOKEN: 1,
   TAG_OBJECT: 2,
   TAG_IDENTITY: 4,
@@ -325,7 +326,7 @@ describe('ActivitiesStreamExplorer', () => {
     expect(
       within(row)
         .getAllByRole('link')
-        .some((link) => link.getAttribute('href')?.startsWith('/address/'))
+        .some((link) => link.getAttribute('href')?.startsWith('/mainnet/address/'))
     ).toBe(true);
     expect(row.className).toContain('py-4');
     expect(row.className).not.toContain('grid-cols-[0.625rem_minmax(0,1fr)]');

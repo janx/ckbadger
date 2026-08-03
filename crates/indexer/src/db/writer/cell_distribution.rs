@@ -198,6 +198,13 @@ impl CellDistributionTracker {
 
     /// Check if a day boundary was crossed. If so, compute and return a snapshot
     /// for the previous day along with its date.
+    ///
+    /// The snapshot is the tracker's state *right now*, labelled with the
+    /// previous day, so it must be taken before `current_date`'s block is
+    /// applied — otherwise day D's row silently gains the first block of D+1.
+    /// Both sync paths go through `sync::reorg::begin_cell_distribution_block`,
+    /// which enforces that ordering; call this directly only where that ordering
+    /// is already guaranteed.
     pub fn maybe_snapshot(
         &mut self,
         current_date: NaiveDate,

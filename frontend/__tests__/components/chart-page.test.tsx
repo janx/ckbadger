@@ -14,6 +14,7 @@ vi.mock('@/lib/api', () => ({
     getNetworkStats: vi.fn(),
   },
   isWarmupPendingError: vi.fn(() => false),
+  isNetworkInitializingError: vi.fn(() => false),
 }));
 
 vi.mock('@/components/layout/header', () => ({
@@ -93,7 +94,7 @@ describe('ChartPage', () => {
     expect(queryFn).toHaveBeenCalledTimes(1);
     expect(screen.getByRole('link', { name: /Back to Charts/i })).toHaveAttribute(
       'href',
-      '/charts'
+      '/mainnet/charts'
     );
     expect(screen.getByText('Cell Size Distribution')).toBeInTheDocument();
     expect(screen.getByText('Count')).toBeInTheDocument();

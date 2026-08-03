@@ -6,14 +6,15 @@ Site purpose:
 
 Markdown output convention:
 
-- Any page URL can be requested as markdown by appending `.md`.
+- Explorer pages are scoped by network: `/{network}/...`.
+- Any supported network-scoped page URL can be requested as markdown by appending `.md`.
 - Response content-type: `text/markdown`.
 - Markdown YAML frontmatter includes `buildVersion`.
 - Examples:
-  - `/blocks.md`
-  - `/blocks/123.md`
-  - `/tx/0xabc...def.md`
-  - `/charts/transaction-count.md`
+  - `/mainnet/blocks.md`
+  - `/mainnet/blocks/123.md`
+  - `/testnet/tx/0xabc...def.md`
+  - `/mainnet/charts/transaction-count.md`
 
 Raw output convention:
 
@@ -23,11 +24,12 @@ Raw output convention:
   - accept: `application/vnd.ckbadger.raw+json`
 - Negotiation priority: `query.format` > `path suffix` > `Accept` header.
 - Raw profile is selected with query param: `profile=default|debugger`
-- Current raw routes:
+- Current raw routes (shown relative to `/{network}`):
   - `/blocks/{id}.raw` (profile: `default`)
   - `/cell/{outpoint}.raw` (profile: `default`)
   - `/identities/dotbit/{identityId}.raw` (profile: `default`)
   - `/identities/did/{identityId}.raw` (profile: `default`)
+  - `/identities/bit-cell/{identityId}.raw` (profile: `default`)
   - `/objects/mnft/{objectId}.raw` (profile: `default`)
   - `/tx/{hash}.raw` (profiles: `default`, `debugger`)
 - `profile=debugger` includes `data.txDebugger.mockTransaction`, compatible with `ckb-debugger --tx-file`.
@@ -35,9 +37,10 @@ Raw output convention:
 - Raw `meta` includes `buildVersion`.
 - Raw responses include headers: `x-ckbadger-format`, `x-ckbadger-profile`, `x-ckbadger-schema`.
 
-Known markdown page routes:
+Known markdown page routes (shown relative to `/{network}`):
 
 - `/`
+- `/activities`
 - `/address/{addr}`
 - `/inventory/tokens`
 - `/inventory/objects`
@@ -47,15 +50,20 @@ Known markdown page routes:
 - `/cell/{outpoint}`
 - `/charts`
 - `/charts/{slug}`
+- `/classes/{classId}`
 - `/clusters/{clusterId}`
 - `/dao`
 - `/dao/charts`
 - `/forks`
 - `/forks/{id}`
+- `/fiber/channels`
+- `/fiber/channels/{channelId}`
 - `/hardforks`
+- `/network`
 - `/identities/{collectionId}`
 - `/identities/dotbit/{identityId}`
 - `/identities/did/{identityId}`
+- `/identities/bit-cell/{identityId}`
 - `/objects`
 - `/objects/{sporeId}`
 - `/objects/mnft/{objectId}`
@@ -97,12 +105,15 @@ Chart slugs:
 
 API:
 
-- Base URL: `/api/v1`
-- JSON API supports blocks, transactions, cells, scripts, tokens, charts, DAO, forks, hardfork timeline.
+- Shared frontend base: `/api/{network}/v1`
+- Direct per-network API base: `/api/v1` on that API's configured port
+- JSON API supports blocks, transactions, cells, scripts, tokens, assets/identities, charts, DAO,
+  forks, hardfork timeline, and optional crawler network observations.
 - Capability descriptor: `/capabilities` (formats, profiles, route matrix, and strict error codes).
 
 Notes for agents:
 
 - Prefer markdown pages for narrative + tabular summaries.
-- Prefer `/api/v1` for structured machine extraction and full-fidelity fields.
+- Prefer `/api/{network}/v1` on the shared origin for structured machine extraction and
+  full-fidelity fields.
 - Use markdown page query params for pagination when supported: `limit`, `cursor`.

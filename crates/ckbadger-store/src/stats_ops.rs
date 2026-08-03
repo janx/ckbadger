@@ -5,6 +5,64 @@ use crate::store::CkbadgerStore;
 use crate::types::*;
 
 use crate::bytes_to_hex;
+use ckbadger_common::dao::{calculate_miner_secondary_issuance, secondary_block_issuance};
+
+// ---------------------------------------------------------------------------
+// Activity address-set rows (ACTIVITY_DAILY_ADDR_SET / ACTIVITY_HOURLY_ADDR_SET)
+//
+// The persistent per-bucket address set is the dedup memory behind
+// `DailyActivityStats::unique_address_count`. Its on-disk form and its count
+// derivation have exactly one implementation — these functions — shared by the
+// live write path (`BatchWriter::merge_persistent_addr_set`) and by reorg
+// rollback repair (`reorg_ops`). Set and count must never be derived
+// independently, or a rollback can leave them disagreeing forever.
+// ---------------------------------------------------------------------------
+
+/// Canonical on-disk encoding of an activity address-set row: the bucket's
+/// 32-byte lock hashes, deduplicated and sorted, concatenated.
+pub fn encode_activity_addr_set<I: IntoIterator<Item = [u8; 32]>>(addrs: I) -> Vec<u8> {
+    let mut sorted: Vec<[u8; 32]> = addrs.into_iter().collect();
+    sorted.sort_unstable();
+    sorted.dedup();
+    sorted.into_iter().flatten().collect()
+}
+
+/// Decode a persisted activity address-set row.
+///
+/// A length that is not a whole number of 32-byte hashes means the row was
+/// written by something other than `encode_activity_addr_set` — fail with the
+/// bucket rather than silently dropping the trailing partial hash, which would
+/// undercount `unique_address_count` forever.
+pub fn decode_activity_addr_set(
+    raw: &[u8],
+    bucket: &str,
+) -> anyhow::Result<std::collections::HashSet<[u8; 32]>> {
+    if !raw.len().is_multiple_of(32) {
+        anyhow::bail!(
+            "corrupt activity addr set row: bucket={}, len={} (not a multiple of 32)",
+            bucket,
+            raw.len()
+        );
+    }
+    let mut set = std::collections::HashSet::with_capacity(raw.len() / 32);
+    for chunk in raw.chunks_exact(32) {
+        let mut hash = [0u8; 32];
+        hash.copy_from_slice(chunk);
+        set.insert(hash);
+    }
+    Ok(set)
+}
+
+/// Derive `unique_address_count` from an address-set size.
+pub fn activity_addr_set_count(len: usize, bucket: &str) -> anyhow::Result<u32> {
+    u32::try_from(len).map_err(|_| {
+        anyhow::anyhow!(
+            "unique_address_count exceeds u32: bucket={}, count={}",
+            bucket,
+            len
+        )
+    })
+}
 
 impl CkbadgerStore {
     // ---- Daily stats ----
@@ -197,6 +255,97 @@ impl CkbadgerStore {
                     e
                 )
             })?;
+            results.push(stats);
+        }
+        Ok(results)
+    }
+
+    /// List UTC+8 daily miner rows in the inclusive `YYYYMMDD` range.
+    ///
+    /// The date remains part of the key rather than the value, so range
+    /// filtering belongs here in the store's single read path. Every row is
+    /// checked against the key's miner hash to surface corrupted aggregates
+    /// instead of silently attributing blocks to the serialized value.
+    pub fn list_miner_stats_in_date_range(
+        &self,
+        from_yyyymmdd: &str,
+        to_yyyymmdd: &str,
+    ) -> anyhow::Result<Vec<MinerStats>> {
+        let parse_date = |value: &str, field: &str| {
+            let parsed = chrono::NaiveDate::parse_from_str(value, "%Y%m%d")
+                .map_err(|e| anyhow::anyhow!("invalid miner stats {} '{}': {}", field, value, e))?;
+            if parsed.format("%Y%m%d").to_string() != value {
+                anyhow::bail!(
+                    "non-canonical miner stats {} '{}': expected YYYYMMDD",
+                    field,
+                    value
+                );
+            }
+            Ok(parsed)
+        };
+        let from_date = parse_date(from_yyyymmdd, "from date")?;
+        let to_date = parse_date(to_yyyymmdd, "to date")?;
+        if from_date > to_date {
+            anyhow::bail!(
+                "invalid miner stats date range: from={} is after to={}",
+                from_yyyymmdd,
+                to_yyyymmdd
+            );
+        }
+
+        let start_key = keys::encode_stats_key(stats_prefix::MINER, from_yyyymmdd.as_bytes());
+        let iter = self.iterator_cf(
+            self.cf_stats_chain(),
+            rocksdb::IteratorMode::From(&start_key, rocksdb::Direction::Forward),
+        );
+        let mut results = Vec::new();
+
+        for item in iter {
+            let (key, value) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate stats_chain in list_miner_stats_in_date_range: {}",
+                    e
+                )
+            })?;
+            if key.first().copied() != Some(stats_prefix::MINER) {
+                break;
+            }
+            if key.len() != 1 + 8 + 32 {
+                anyhow::bail!(
+                    "invalid miner stats key length in date range: key=0x{}, len={}",
+                    bytes_to_hex(&key),
+                    key.len()
+                );
+            }
+            let date_bytes = &key[1..9];
+            let date_str = std::str::from_utf8(date_bytes).map_err(|error| {
+                anyhow::anyhow!(
+                    "invalid UTF-8 miner stats date in key: key=0x{}, error={}",
+                    bytes_to_hex(&key),
+                    error
+                )
+            })?;
+            parse_date(date_str, "stored date")?;
+            if date_bytes > to_yyyymmdd.as_bytes() {
+                break;
+            }
+
+            let stats: MinerStats = bincode::deserialize(&value).map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to deserialize miner stats in date range: key=0x{}, error={}",
+                    bytes_to_hex(&key),
+                    e
+                )
+            })?;
+            let key_miner_hash = &key[9..41];
+            if stats.miner_lock_hash != key_miner_hash {
+                anyhow::bail!(
+                    "miner stats key/value hash mismatch: date={}, key_hash=0x{}, value_hash=0x{}",
+                    date_str,
+                    bytes_to_hex(key_miner_hash),
+                    bytes_to_hex(&stats.miner_lock_hash)
+                );
+            }
             results.push(stats);
         }
         Ok(results)
@@ -705,10 +854,11 @@ impl CkbadgerStore {
     pub fn get_script_daily_delta(
         &self,
         code_hash: &[u8],
+        hash_type: u8,
         is_type: bool,
         date_yyyymmdd: u32,
     ) -> anyhow::Result<Option<ScriptDailyDelta>> {
-        let key = keys::encode_script_daily_key(code_hash, is_type, date_yyyymmdd);
+        let key = keys::encode_script_daily_key(code_hash, hash_type, is_type, date_yyyymmdd);
         match self.get_cf(self.cf_stats_script(), &key)? {
             Some(value) => Ok(Some(bincode::deserialize(&value)?)),
             None => Ok(None),
@@ -718,11 +868,12 @@ impl CkbadgerStore {
     pub fn put_script_daily_delta(
         &self,
         code_hash: &[u8],
+        hash_type: u8,
         is_type: bool,
         date_yyyymmdd: u32,
         delta: &ScriptDailyDelta,
     ) -> anyhow::Result<()> {
-        let key = keys::encode_script_daily_key(code_hash, is_type, date_yyyymmdd);
+        let key = keys::encode_script_daily_key(code_hash, hash_type, is_type, date_yyyymmdd);
         let value = bincode::serialize(delta)?;
         self.put_cf(self.cf_stats_script(), &key, &value)
     }
@@ -730,21 +881,24 @@ impl CkbadgerStore {
     pub fn list_script_daily_deltas(
         &self,
         code_hash: &[u8],
+        hash_type: u8,
         is_type: bool,
     ) -> anyhow::Result<Vec<(u32, ScriptDailyDelta)>> {
-        self.list_script_daily_deltas_in_range(code_hash, is_type, None, None)
+        self.list_script_daily_deltas_in_range(code_hash, hash_type, is_type, None, None)
     }
 
     pub fn list_script_daily_deltas_in_range(
         &self,
         code_hash: &[u8],
+        hash_type: u8,
         is_type: bool,
         from_date_yyyymmdd: Option<u32>,
         to_date_yyyymmdd: Option<u32>,
     ) -> anyhow::Result<Vec<(u32, ScriptDailyDelta)>> {
-        let prefix = keys::encode_script_daily_prefix(code_hash, is_type);
+        let prefix = keys::encode_script_daily_prefix(code_hash, hash_type, is_type);
         let start_key = keys::encode_script_daily_key(
             code_hash,
+            hash_type,
             is_type,
             from_date_yyyymmdd.unwrap_or(u32::MIN),
         );
@@ -767,7 +921,7 @@ impl CkbadgerStore {
             if key.len() != keys::SCRIPT_DAILY_KEY_SIZE {
                 continue;
             }
-            let (_, _, date) = keys::decode_script_daily_key(&key);
+            let (_, _, _, date) = keys::decode_script_daily_key(&key);
             if let Some(to_date) = to_date_yyyymmdd {
                 if date > to_date {
                     break;
@@ -775,14 +929,60 @@ impl CkbadgerStore {
             }
             let delta: ScriptDailyDelta = bincode::deserialize(&value).map_err(|e| {
                 anyhow::anyhow!(
-                    "failed to deserialize script daily delta in list_script_daily_deltas_in_range: code_hash=0x{}, is_type={}, date={}, error={}",
+                    "failed to deserialize script daily delta in list_script_daily_deltas_in_range: code_hash=0x{}, hash_type={}, is_type={}, date={}, error={}",
                     bytes_to_hex(code_hash),
+                    hash_type,
                     is_type,
                     date,
                     e
                 )
             })?;
             results.push((date, delta));
+        }
+
+        Ok(results)
+    }
+
+    /// List every script daily row of a code_hash across all hash_type forms
+    /// and script kinds. Returns ((hash_type, is_type, date), delta) rows in
+    /// key order.
+    #[allow(clippy::type_complexity)]
+    pub fn list_script_daily_deltas_by_code_hash(
+        &self,
+        code_hash: &[u8],
+    ) -> anyhow::Result<Vec<((u8, bool, u32), ScriptDailyDelta)>> {
+        let prefix = keys::encode_script_daily_code_hash_prefix(code_hash);
+        let iter = self.iterator_cf(
+            self.cf_stats_script(),
+            rocksdb::IteratorMode::From(&prefix, rocksdb::Direction::Forward),
+        );
+        let mut results = Vec::new();
+
+        for item in iter {
+            let (key, value) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate stats_script in list_script_daily_deltas_by_code_hash: {}",
+                    e
+                )
+            })?;
+            if !key.starts_with(&prefix) {
+                break;
+            }
+            if key.len() != keys::SCRIPT_DAILY_KEY_SIZE {
+                continue;
+            }
+            let (_, hash_type, is_type, date) = keys::decode_script_daily_key(&key);
+            let delta: ScriptDailyDelta = bincode::deserialize(&value).map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to deserialize script daily delta in list_script_daily_deltas_by_code_hash: code_hash=0x{}, hash_type={}, is_type={}, date={}, error={}",
+                    bytes_to_hex(code_hash),
+                    hash_type,
+                    is_type,
+                    date,
+                    e
+                )
+            })?;
+            results.push(((hash_type, is_type, date), delta));
         }
 
         Ok(results)
@@ -1012,11 +1212,8 @@ impl CkbadgerStore {
             mut running_withdrawals,
             mut running_cumulative_deposit,
             mut running_cum_miner,
-            mut running_cum_dao,
-            mut running_cum_treasury,
             mut running_total_depositors,
             mut running_cumulative_depositors,
-            mut prev_s,
         ) = match prev_snap.as_ref() {
             Some(p) => (
                 p.total_deposited,
@@ -1025,15 +1222,46 @@ impl CkbadgerStore {
                 p.withdrawals,
                 p.cumulative_deposit_amount,
                 p.cum_miner_secondary,
-                p.cum_dao_compensation,
-                p.cum_treasury,
                 p.depositors_count,
                 p.cumulative_depositors,
-                p.secondary_pool,
             ),
-            None => (
-                0i128, 0i128, 0i64, 0i64, 0i128, 0i128, 0i128, 0i128, 0i64, 0i64, 0i128,
-            ),
+            None => (0i128, 0i128, 0i64, 0i64, 0i128, 0i128, 0i64, 0i64),
+        };
+
+        // The per-block miner secondary split needs the consensus secondary
+        // issuance per epoch. It is persisted from the node's `get_consensus`
+        // at indexer startup; a store without it cannot produce exact values.
+        let secondary_epoch_reward = self.get_secondary_epoch_reward()?.ok_or_else(|| {
+            anyhow::anyhow!(
+                "missing consensus secondary_epoch_reward while recomputing DAO snapshot: target_date={}, end_block_inclusive={}",
+                date,
+                end_block_inclusive
+            )
+        })?;
+
+        // RFC-0023 defines block N's issuance distribution from the DAO state
+        // at the end of block N-1. Read that header directly instead of using
+        // the previous daily snapshot as an approximate boundary value.
+        let mut prev_dao_cu = if day_start_block > 0 {
+            let previous_block = day_start_block - 1;
+            let header = self.get_block_header(previous_block)?.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "missing previous block header during DAO snapshot recompute: target_date={}, previous_block={}",
+                    date,
+                    previous_block
+                )
+            })?;
+            let (prev_c, _prev_s, prev_u) = extract_dao_csu(&header.dao).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "invalid previous DAO field during snapshot recompute: target_date={}, previous_block={}, dao_len={}",
+                    date,
+                    previous_block,
+                    header.dao.len()
+                )
+            })?;
+            Some((prev_c, prev_u))
+        } else {
+            None
         };
 
         // 4. Scan dao_deposits CF once. Group entries by (deposit_block_number,
@@ -1187,17 +1415,9 @@ impl CkbadgerStore {
             }
 
             // 5c. Phase-2 (withdraw completion) in this block. Increment withdrawals
-            //     count, subtract from protocol_deposited, and accumulate claimed
-            //     compensation for the secondary-issuance split.
-            let claimed_compensation_in_block: i128 = by_phase2_block
-                .get(&block_num)
-                .map(|v| {
-                    v.iter()
-                        .filter_map(|e| e.compensation)
-                        .map(i128::from)
-                        .sum()
-                })
-                .unwrap_or(0);
+            //     count and subtract from protocol_deposited. Claimed compensation
+            //     feeds only the compensation aggregates (step 6), never the
+            //     miner series.
             if let Some(phase2s) = by_phase2_block.get(&block_num) {
                 for p in phase2s {
                     running_protocol_deposited = running_protocol_deposited
@@ -1214,58 +1434,73 @@ impl CkbadgerStore {
                 }
             }
 
-            // 5d. Secondary issuance delta for this block.
-            let s_delta = s.checked_sub(prev_s).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "secondary_pool s_delta overflow during recompute: block_num={}",
-                    block_num
-                )
-            })?;
-            let non_miner_delta = s_delta
-                .checked_add(claimed_compensation_in_block)
-                .ok_or_else(|| {
+            // 5d. Exact miner portion for this block: the protocol's own
+            // direct split `floor(s_i * U_{i-1} / C_{i-1})` (RFC-0023), where
+            // `s_i` comes from the epoch schedule and C/U come from the end of
+            // block N-1. Deliberately independent of DAO claimed compensation,
+            // which has its own exact per-deposit lifecycle path below.
+            // Genesis carries its own share inside the genesis DAO `C` and has
+            // no parent to split against.
+            if block_num > 0 {
+                let (prev_c, prev_u) = prev_dao_cu.ok_or_else(|| {
                     anyhow::anyhow!(
-                        "non_miner_delta overflow during recompute: block_num={}",
-                        block_num
+                        "missing parent DAO C/U during recompute: block_num={}, target_date={}",
+                        block_num,
+                        date
                     )
                 })?;
-            if non_miner_delta > 0 {
-                let (miner, dao_share, treasury) = split_secondary_issuance_for_recompute(
-                    c,
-                    u,
-                    running_protocol_deposited,
-                    non_miner_delta,
-                )?;
+                let secondary_issuance = secondary_block_issuance(
+                    i64::from(header.epoch_index),
+                    i64::from(header.epoch_length),
+                    secondary_epoch_reward,
+                )
+                .map_err(|error| {
+                    anyhow::anyhow!("{error}: block_num={}, target_date={}", block_num, date)
+                })?;
+                let miner = calculate_miner_secondary_issuance(secondary_issuance, prev_c, prev_u)
+                    .map_err(|error| {
+                        anyhow::anyhow!("{error}: block_num={}, target_date={}", block_num, date)
+                    })?;
                 running_cum_miner = running_cum_miner.checked_add(miner).ok_or_else(|| {
                     anyhow::anyhow!(
                         "cum_miner_secondary overflow during recompute: block_num={}",
                         block_num
                     )
                 })?;
-                running_cum_dao = running_cum_dao.checked_add(dao_share).ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "cum_dao_compensation overflow during recompute: block_num={}",
-                        block_num
-                    )
-                })?;
-                running_cum_treasury =
-                    running_cum_treasury.checked_add(treasury).ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "cum_treasury overflow during recompute: block_num={}",
-                            block_num
-                        )
-                    })?;
             }
-            prev_s = s;
+            prev_dao_cu = Some((c, u));
         }
 
-        // 6. End-of-day unmade DAO interests: uses the last block's AR over all
-        //    currently-active deposits in dao_deposits CF (already normalized).
-        let unmade_dao_interests = if last_header_ar > 0 {
-            self.compute_unmade_dao_interests(last_header_ar)?
+        // 6. Exact end-of-day compensation from the normalized DAO lifecycle.
+        let compensation = if last_header_ar > 0 {
+            self.compute_dao_compensation_breakdown_at(day_end_block, last_header_ar)?
         } else {
-            0
+            crate::types::DaoCompensationBreakdown::default()
         };
+        let total_compensation = compensation.total().ok_or_else(|| {
+            anyhow::anyhow!(
+                "DAO total compensation overflow during recompute: target_date={}, claimed={}, unclaimed={}",
+                date,
+                compensation.claimed,
+                compensation.unclaimed
+            )
+        })?;
+        let cumulative_treasury = last_header_s
+            .checked_sub(compensation.active_unmade)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "DAO treasury subtraction overflow during recompute: target_date={}",
+                    date
+                )
+            })?;
+        if cumulative_treasury < 0 {
+            anyhow::bail!(
+                "active DAO interests exceed secondary pool during recompute: target_date={}, secondary_pool={}, active_unmade={}",
+                date,
+                last_header_s,
+                compensation.active_unmade
+            );
+        }
 
         // 7. Write the rebuilt snapshot.
         let snapshot = DaoDailySnapshot {
@@ -1274,16 +1509,16 @@ impl CkbadgerStore {
             depositors_count: running_total_depositors,
             new_deposits: running_new_deposits,
             withdrawals: running_withdrawals,
-            compensation: running_cum_dao,
+            compensation: compensation.claimed,
             cumulative_deposit_amount: running_cumulative_deposit,
             total_issuance: last_header_c,
             secondary_pool: last_header_s,
             occupied_capacity: last_header_u,
             cum_miner_secondary: running_cum_miner,
-            cum_dao_compensation: running_cum_dao,
-            cum_treasury: running_cum_treasury,
-            unmade_dao_interests,
-            unclaimed_compensation: 0, // refreshed by refresh_latest_dao_statistics post-reorg
+            cum_dao_compensation: total_compensation,
+            cum_treasury: cumulative_treasury,
+            unmade_dao_interests: compensation.active_unmade,
+            unclaimed_compensation: compensation.unclaimed,
             cumulative_depositors: running_cumulative_depositors,
             daily_depositor_addresses: daily_depositor_locks.len() as i64,
             protocol_deposited: Some(running_protocol_deposited),
@@ -1294,37 +1529,6 @@ impl CkbadgerStore {
         );
         batch.put_stats(&key, &bincode::serialize(&snapshot)?);
         Ok(())
-    }
-
-    /// Binary-search `block_headers` to find the first block whose timestamp
-    /// is >= `ms`. Returns None if no such block exists.
-    fn find_first_block_at_or_after_ms(&self, ms: i64) -> anyhow::Result<Option<i64>> {
-        let (tip, _) = match self.get_sync_tip_block()? {
-            Some(x) => x,
-            None => return Ok(None),
-        };
-        let mut lo: i64 = 0;
-        let mut hi: i64 = tip;
-        let mut result: Option<i64> = None;
-        while lo <= hi {
-            let mid = lo + (hi - lo) / 2;
-            match self.get_block_header(mid)? {
-                Some(h) => {
-                    if h.timestamp >= ms {
-                        result = Some(mid);
-                        hi = mid - 1;
-                    } else {
-                        lo = mid + 1;
-                    }
-                }
-                None => {
-                    // Hole in block_headers — search above (higher blocks may
-                    // still exist for dense CF).
-                    lo = mid + 1;
-                }
-            }
-        }
-        Ok(result)
     }
 }
 
@@ -1345,53 +1549,64 @@ fn extract_dao_ar(dao: &[u8]) -> Option<u64> {
     Some(u64::from_le_bytes(dao[8..16].try_into().ok()?))
 }
 
-/// Split a positive `non_miner_secondary` amount into (miner, dao, treasury).
-/// Mirrors `crates/indexer/src/sync/dao_helpers.rs::split_secondary_issuance`
-/// but lives here to avoid a cross-crate dep from store → indexer.
-fn split_secondary_issuance_for_recompute(
-    total_issuance: i128,
-    occupied_capacity: i128,
-    total_deposited: i128,
-    non_miner_secondary: i128,
-) -> anyhow::Result<(i128, i128, i128)> {
-    if non_miner_secondary <= 0 {
-        return Ok((0, 0, 0));
-    }
-    if total_issuance < 0 || occupied_capacity < 0 || total_deposited < 0 {
-        anyhow::bail!(
-            "negative input in secondary issuance split during recompute: total_issuance={}, occupied_capacity={}, total_deposited={}",
-            total_issuance, occupied_capacity, total_deposited
-        );
-    }
-    if total_issuance <= occupied_capacity {
-        anyhow::bail!(
-            "invalid DAO C/U relationship during recompute: total_issuance={}, occupied_capacity={}",
-            total_issuance, occupied_capacity
-        );
-    }
-    let denom = total_issuance - occupied_capacity;
-    if total_deposited > denom {
-        anyhow::bail!(
-            "dao deposited exceeds liquid supply during recompute: total_deposited={}, liquid_supply={}",
-            total_deposited, denom
-        );
-    }
-    let miner = non_miner_secondary * occupied_capacity / denom;
-    let dao = non_miner_secondary * total_deposited / denom;
-    let treasury = non_miner_secondary - dao;
-    if miner < 0 || dao < 0 || treasury < 0 {
-        anyhow::bail!(
-            "secondary issuance split produced negative component during recompute: miner={}, dao={}, treasury={}",
-            miner, dao, treasury
-        );
-    }
-    Ok((miner, dao, treasury))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::CkbadgerStore;
+
+    #[test]
+    fn test_activity_addr_set_encode_decode_roundtrip() {
+        let addrs = std::collections::HashSet::from([[0xC3u8; 32], [0xA1u8; 32], [0xB2u8; 32]]);
+        let encoded = encode_activity_addr_set(addrs.iter().copied());
+        assert_eq!(encoded.len(), 96);
+        // Deterministic sorted layout, regardless of iteration order.
+        assert_eq!(&encoded[0..32], &[0xA1u8; 32]);
+        assert_eq!(&encoded[32..64], &[0xB2u8; 32]);
+        assert_eq!(&encoded[64..96], &[0xC3u8; 32]);
+        let decoded = decode_activity_addr_set(&encoded, "20260210").unwrap();
+        assert_eq!(decoded, addrs);
+        assert_eq!(
+            activity_addr_set_count(decoded.len(), "20260210").unwrap(),
+            3
+        );
+    }
+
+    #[test]
+    fn test_activity_addr_set_encode_dedups_repeats() {
+        let encoded = encode_activity_addr_set([[0xA1u8; 32], [0xA1u8; 32], [0xB2u8; 32]]);
+        assert_eq!(
+            encoded.len(),
+            64,
+            "repeated hashes must collapse to one row"
+        );
+        assert_eq!(
+            decode_activity_addr_set(&encoded, "2026021015")
+                .unwrap()
+                .len(),
+            2
+        );
+    }
+
+    #[test]
+    fn test_activity_addr_set_decode_rejects_partial_hash() {
+        let mut raw = vec![0xA1u8; 32];
+        raw.extend_from_slice(&[0xB2u8; 7]); // truncated trailing hash
+        let err = decode_activity_addr_set(&raw, "20260210").unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("corrupt activity addr set row")
+                && msg.contains("20260210")
+                && msg.contains("39"),
+            "decode must fail fast with bucket + length context, got: {}",
+            msg
+        );
+    }
+
+    #[test]
+    fn test_activity_addr_set_count_rejects_overflow() {
+        let err = activity_addr_set_count(u32::MAX as usize + 1, "20260210").unwrap_err();
+        assert!(err.to_string().contains("unique_address_count exceeds u32"));
+    }
 
     #[test]
     fn test_hodl_wave_put_get_roundtrip() {
@@ -1516,29 +1731,77 @@ mod tests {
             owned_knowledge_delta: -120_000_000_000,
         };
         store
-            .put_script_daily_delta(&code_hash, false, 20240115, &d1)
+            .put_script_daily_delta(&code_hash, 1, false, 20240115, &d1)
             .unwrap();
         store
-            .put_script_daily_delta(&code_hash, false, 20240116, &d2)
+            .put_script_daily_delta(&code_hash, 1, false, 20240116, &d2)
             .unwrap();
 
         let loaded = store
-            .get_script_daily_delta(&code_hash, false, 20240115)
+            .get_script_daily_delta(&code_hash, 1, false, 20240115)
             .unwrap()
             .unwrap();
         assert_eq!(loaded.owned_capacity_delta, d1.owned_capacity_delta);
         assert_eq!(loaded.owned_knowledge_delta, d1.owned_knowledge_delta);
 
-        let listed = store.list_script_daily_deltas(&code_hash, false).unwrap();
+        let listed = store
+            .list_script_daily_deltas(&code_hash, 1, false)
+            .unwrap();
         assert_eq!(listed.len(), 2);
         assert_eq!(listed[0].0, 20240115);
         assert_eq!(listed[1].0, 20240116);
 
         let ranged = store
-            .list_script_daily_deltas_in_range(&code_hash, false, Some(20240116), Some(20240116))
+            .list_script_daily_deltas_in_range(&code_hash, 1, false, Some(20240116), Some(20240116))
             .unwrap();
         assert_eq!(ranged.len(), 1);
         assert_eq!(ranged[0].0, 20240116);
+    }
+
+    #[test]
+    fn test_script_daily_delta_rows_are_independent_per_hash_type() {
+        // Regression (B8 root cause): two references sharing the same
+        // code_hash bytes but using different hash_types must produce
+        // independent daily rows — junk data-form deltas must not merge into
+        // the type-form timeline.
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path().to_str().unwrap()).unwrap();
+        let code_hash = vec![0x9B; 32];
+
+        let type_form = ScriptDailyDelta {
+            owned_capacity_delta: 500,
+            owned_knowledge_delta: 300,
+        };
+        let data_form = ScriptDailyDelta {
+            owned_capacity_delta: 98,
+            owned_knowledge_delta: 98,
+        };
+        store
+            .put_script_daily_delta(&code_hash, 1, false, 20240115, &type_form)
+            .unwrap();
+        store
+            .put_script_daily_delta(&code_hash, 0, false, 20240115, &data_form)
+            .unwrap();
+
+        let type_rows = store
+            .list_script_daily_deltas(&code_hash, 1, false)
+            .unwrap();
+        assert_eq!(type_rows.len(), 1);
+        assert_eq!(type_rows[0].1.owned_capacity_delta, 500);
+
+        let data_rows = store
+            .list_script_daily_deltas(&code_hash, 0, false)
+            .unwrap();
+        assert_eq!(data_rows.len(), 1);
+        assert_eq!(data_rows[0].1.owned_capacity_delta, 98);
+
+        let all_rows = store
+            .list_script_daily_deltas_by_code_hash(&code_hash)
+            .unwrap();
+        assert_eq!(all_rows.len(), 2);
+        let keys: Vec<(u8, bool, u32)> = all_rows.iter().map(|(key, _)| *key).collect();
+        assert!(keys.contains(&(0, false, 20240115)));
+        assert!(keys.contains(&(1, false, 20240115)));
     }
 
     #[test]
@@ -1850,100 +2113,6 @@ mod tests {
     }
 
     #[test]
-    fn test_dao_snapshot_negative_s_delta_protocol_upgrade() {
-        // CKB's on-chain S field can decrease at protocol upgrade boundaries.
-        // For user-facing cumulative charts, negative deltas are ignored to
-        // keep miner/dao/treasury monotonic and avoid artificial drops.
-        let c: i128 = 4_000_000_000_000_000_000; // 40B CKB
-        let u: i128 = 400_000_000_000_000_000; // 4B CKB
-        let deposited: i128 = 50_000_000_000_000;
-        let denom = (c - u).max(1);
-
-        // S values: day 1 = +100, day 2 = -30 (upgrade drop), day 3 = +100
-        let s0: i128 = 10_000_000_000_000;
-        let s1: i128 = 10_100_000_000_000; // +100 CKB
-        let s2: i128 = 10_070_000_000_000; // -30 CKB (protocol upgrade drop)
-        let s3: i128 = 10_170_000_000_000; // +100 CKB
-
-        let s_values = [s1, s2, s3];
-        let mut prev_s = s0;
-        let mut cum_miner: i128 = 0;
-        let mut cum_dao: i128 = 0;
-        let mut cum_treasury: i128 = 0;
-
-        for &s in &s_values {
-            let s_delta = s - prev_s;
-            if s_delta > 0 {
-                let miner = s_delta * u / denom;
-                let dao = s_delta * deposited / denom;
-                let treasury = s_delta - dao;
-                cum_miner += miner;
-                cum_dao += dao;
-                cum_treasury += treasury;
-            }
-            prev_s = s;
-        }
-
-        let positive_s_change = (s1 - s0) + (s3 - s2); // only positive deltas
-        let cum_non_miner = cum_dao + cum_treasury;
-
-        // Non-miner tracks only positive S growth.
-        assert_eq!(
-            cum_non_miner, positive_s_change,
-            "cum_dao + cum_treasury must equal sum(positive s_delta)"
-        );
-
-        // Miner and dao must be non-negative (monotonic).
-        assert!(cum_miner >= 0, "cum_miner must be non-negative");
-        assert!(cum_dao >= 0, "cum_dao must be non-negative");
-    }
-
-    #[test]
-    fn test_dao_snapshot_negative_s_delta_batch_boundary() {
-        // Regression test: negative S deltas are ignored even across batch
-        // boundaries, while positive deltas still accumulate normally.
-        let c: i128 = 4_000_000_000_000_000_000;
-        let u: i128 = 400_000_000_000_000_000;
-        let deposited: i128 = 50_000_000_000_000;
-
-        let s_prev_day: i128 = 10_000_000_000_000; // end of previous day
-        let s_batch_end: i128 = 9_980_000_000_000; // mid-day after S drop (batch boundary)
-        let s_day_end: i128 = 10_080_000_000_000; // actual end of day
-
-        // Batch N processes partial day: s_delta = s_batch_end - s_prev_day < 0
-        let s_delta_batch_n = s_batch_end - s_prev_day; // -20
-        assert!(s_delta_batch_n < 0);
-
-        let (miner_n, dao_n, treas_n) = (0i128, 0i128, 0i128);
-
-        // Batch N+1 processes rest of day: s_delta = s_day_end - s_batch_end > 0
-        let s_delta_batch_n1 = s_day_end - s_batch_end; // +100
-        assert!(s_delta_batch_n1 > 0);
-        let denom = (c - u).max(1);
-        let miner_n1 = s_delta_batch_n1 * u / denom;
-        let dao_n1 = s_delta_batch_n1 * deposited / denom;
-        let treas_n1 = s_delta_batch_n1 - dao_n1;
-
-        // Total for the day
-        let total_miner = miner_n + miner_n1;
-        let total_dao = dao_n + dao_n1;
-        let total_treas = treas_n + treas_n1;
-        let total_non_miner = total_dao + total_treas;
-
-        // Negative segment is ignored; only positive segment contributes.
-        let actual_positive_change = s_delta_batch_n1; // +100
-        assert_eq!(
-            total_non_miner, actual_positive_change,
-            "batch-split non-miner must equal positive segment: got {} expected {}",
-            total_non_miner, actual_positive_change
-        );
-
-        // Miner should only account for the positive portion
-        assert!(total_miner >= 0);
-        assert!(total_dao >= 0);
-    }
-
-    #[test]
     fn test_dao_top_depositors_roundtrip() {
         let dir = tempfile::tempdir().unwrap();
         let store = CkbadgerStore::open_test_unified(dir.path().to_str().unwrap()).unwrap();
@@ -2240,5 +2409,323 @@ mod cell_distribution_tests {
             [1000, 2000, 3000, 4000, 5000, 6000]
         );
         assert_eq!(retrieved.last_snapshot_date, Some("20240102".to_string()));
+    }
+}
+
+#[cfg(test)]
+mod dao_daily_snapshot_recompute_tests {
+    use super::*;
+    use crate::CkbadgerStore;
+
+    /// Build a 32-byte DAO header field: C | AR | S | U, little-endian u64s.
+    fn dao_field(c: u64, ar: u64, s: u64, u: u64) -> Vec<u8> {
+        let mut dao = vec![0u8; 32];
+        dao[0..8].copy_from_slice(&c.to_le_bytes());
+        dao[8..16].copy_from_slice(&ar.to_le_bytes());
+        dao[16..24].copy_from_slice(&s.to_le_bytes());
+        dao[24..32].copy_from_slice(&u.to_le_bytes());
+        dao
+    }
+
+    /// UTC millis for a UTC+8 wall-clock time on `date`.
+    fn utc8_ms(date: chrono::NaiveDate, hour: u32, minute: u32) -> i64 {
+        use chrono::{FixedOffset, TimeZone};
+        FixedOffset::east_opt(ckbadger_common::CKB_UTC8_OFFSET)
+            .unwrap()
+            .from_local_datetime(&date.and_hms_opt(hour, minute, 0).unwrap())
+            .single()
+            .unwrap()
+            .timestamp_millis()
+    }
+
+    fn header_with_dao(block: i64, timestamp: i64, dao: Vec<u8>) -> CachedBlockHeader {
+        CachedBlockHeader {
+            hash: vec![block as u8; 32],
+            parent_hash: vec![block.saturating_sub(1) as u8; 32],
+            timestamp,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1800,
+            dao,
+            transactions_count: 1,
+            uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
+            cycles: None,
+        }
+    }
+
+    fn active_dao_deposit(
+        capacity: i64,
+        occupied_capacity: i64,
+        deposit_block_number: i64,
+        deposit_ar: i64,
+        lock_script_hash: Vec<u8>,
+    ) -> DaoDepositCacheEntry {
+        DaoDepositCacheEntry {
+            capacity,
+            occupied_capacity,
+            deposit_block_number,
+            deposit_timestamp: 0,
+            lock_script_hash,
+            deposit_ar,
+            status: 0,
+            withdraw_request_tx: None,
+            withdraw_request_output_index: None,
+            withdraw_request_block: None,
+            withdraw_request_ar: None,
+            withdraw_block: None,
+            withdraw_tx: None,
+            withdraw_request_occupied_capacity: None,
+            withdraw_to_output_index: None,
+            compensation: None,
+        }
+    }
+
+    const TEST_C: u64 = 100_000_000_000_000;
+    const TEST_U: u64 = 20_000_000_000;
+    /// Real consensus `secondary_epoch_reward` (mainnet and testnet agree).
+    const TEST_SECONDARY_EPOCH_REWARD: u64 = 61_369_863_013_698;
+
+    /// Expected per-block miner secondary for a block at `epoch_index` of an
+    /// epoch of `epoch_length`, splitting against the TEST_C/TEST_U parent
+    /// state: `floor(s_i * U / C)` per RFC-0023.
+    fn expected_miner_secondary(epoch_index: i64, epoch_length: i64) -> i128 {
+        let s = secondary_block_issuance(epoch_index, epoch_length, TEST_SECONDARY_EPOCH_REWARD)
+            .unwrap();
+        calculate_miner_secondary_issuance(s, i128::from(TEST_C), i128::from(TEST_U)).unwrap()
+    }
+
+    #[test]
+    fn test_recompute_dao_daily_snapshot_for_date_handles_day_start_block_zero() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path().to_str().unwrap()).unwrap();
+
+        let date = chrono::NaiveDate::from_ymd_opt(2026, 3, 10).unwrap();
+        let ar_deposit: u64 = 10_000_000_000_000_000;
+        let ar_end: u64 = 10_100_000_000_000_000;
+        let s: u64 = 50_000_000_000;
+
+        store
+            .set_secondary_epoch_reward(TEST_SECONDARY_EPOCH_REWARD)
+            .unwrap();
+
+        // The whole day starts at block 0. Genesis carries its own share
+        // inside the genesis DAO `C` and has no parent to split against, so
+        // it contributes nothing; blocks 1 and 2 split against their parents.
+        let mut batch = crate::batch::StoreBatch::new(&store);
+        batch.put_block_header(
+            0,
+            &header_with_dao(
+                0,
+                utc8_ms(date, 0, 10),
+                dao_field(TEST_C, ar_deposit, s, TEST_U),
+            ),
+        );
+        batch.put_block_header(
+            1,
+            &header_with_dao(
+                1,
+                utc8_ms(date, 12, 0),
+                dao_field(TEST_C, ar_deposit, s, TEST_U),
+            ),
+        );
+        batch.put_block_header(
+            2,
+            &header_with_dao(
+                2,
+                utc8_ms(date, 23, 50),
+                dao_field(TEST_C, ar_end, s, TEST_U),
+            ),
+        );
+        let capacity = 100_000_000_000i64;
+        let occupied = 10_200_000_000i64;
+        batch.put_dao_deposit(
+            &keys::encode_outpoint(&[0xAA; 32], 0),
+            &active_dao_deposit(capacity, occupied, 1, ar_deposit as i64, vec![0xA1; 32]),
+        );
+        batch.commit().unwrap();
+        store
+            .set_sync_status(&SyncStatus {
+                tip_block_number: 2,
+                tip_block_hash: vec![2u8; 32],
+                ..Default::default()
+            })
+            .unwrap();
+
+        let mut recompute = crate::batch::StoreBatch::new(&store);
+        store
+            .recompute_dao_daily_snapshot_for_date(date, 2, &mut recompute)
+            .unwrap();
+        recompute.commit().unwrap();
+
+        let snapshot = store.get_dao_daily_snapshot("20260310").unwrap().unwrap();
+        let expected_unclaimed = i128::from(
+            ckbadger_common::dao::calculate_dao_compensation_from_ar(
+                capacity, occupied, ar_deposit, ar_end,
+            )
+            .unwrap(),
+        );
+
+        assert_eq!(snapshot.date, "2026-03-10");
+        assert_eq!(snapshot.total_deposited, i128::from(capacity));
+        assert_eq!(snapshot.protocol_deposited, Some(i128::from(capacity)));
+        assert_eq!(snapshot.new_deposits, 1);
+        assert_eq!(snapshot.withdrawals, 0);
+        assert_eq!(snapshot.depositors_count, 1);
+        assert_eq!(snapshot.cumulative_depositors, 1);
+        assert_eq!(snapshot.daily_depositor_addresses, 1);
+        assert_eq!(snapshot.total_issuance, i128::from(TEST_C));
+        assert_eq!(snapshot.secondary_pool, i128::from(s));
+        assert_eq!(snapshot.occupied_capacity, i128::from(TEST_U));
+        // Genesis contributes nothing; blocks 1 and 2 each split their own
+        // scheduled secondary issuance against their parent's C/U. The split
+        // is independent of the S-field delta (S is constant across this day,
+        // which under the old reconstruction wrongly produced zero).
+        let per_block_miner = expected_miner_secondary(0, 1800);
+        assert!(per_block_miner > 0);
+        assert_eq!(snapshot.cum_miner_secondary, 2 * per_block_miner);
+        assert_eq!(snapshot.compensation, 0);
+        assert_eq!(snapshot.unclaimed_compensation, expected_unclaimed);
+        assert_eq!(snapshot.unmade_dao_interests, expected_unclaimed);
+        assert_eq!(snapshot.cum_dao_compensation, expected_unclaimed);
+        assert_eq!(
+            snapshot.cum_treasury,
+            i128::from(s) - expected_unclaimed,
+            "treasury must be the end-of-day S minus active unmade interests"
+        );
+    }
+
+    #[test]
+    fn test_recompute_dao_daily_snapshot_for_date_uses_previous_block_cu_for_miner_split() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path().to_str().unwrap()).unwrap();
+        store
+            .set_secondary_epoch_reward(TEST_SECONDARY_EPOCH_REWARD)
+            .unwrap();
+
+        let prev_date = chrono::NaiveDate::from_ymd_opt(2026, 3, 9).unwrap();
+        let date = chrono::NaiveDate::from_ymd_opt(2026, 3, 10).unwrap();
+        let ar_deposit: u64 = 10_000_000_000_000_000;
+        let ar_end: u64 = 10_100_000_000_000_000;
+        let s0: u64 = 50_000_000_000;
+        let s1: u64 = s0 + 3_000_000;
+        let s2: u64 = s1 + 5_000_000;
+
+        let mut batch = crate::batch::StoreBatch::new(&store);
+        // Block 0 lives on the previous date: it is the C/S/U baseline used by
+        // block 1, not part of this day's walk.
+        batch.put_block_header(
+            0,
+            &header_with_dao(
+                0,
+                utc8_ms(prev_date, 23, 50),
+                dao_field(TEST_C, ar_deposit, s0, TEST_U),
+            ),
+        );
+        batch.put_block_header(
+            1,
+            &header_with_dao(
+                1,
+                utc8_ms(date, 0, 10),
+                dao_field(TEST_C, ar_deposit, s1, TEST_U),
+            ),
+        );
+        batch.put_block_header(
+            2,
+            &header_with_dao(
+                2,
+                utc8_ms(date, 12, 0),
+                dao_field(TEST_C, ar_end, s2, TEST_U),
+            ),
+        );
+        let capacity = 100_000_000_000i64;
+        let occupied = 10_200_000_000i64;
+        batch.put_dao_deposit(
+            &keys::encode_outpoint(&[0xBB; 32], 0),
+            &active_dao_deposit(capacity, occupied, 1, ar_deposit as i64, vec![0xB1; 32]),
+        );
+        batch.commit().unwrap();
+        store
+            .set_sync_status(&SyncStatus {
+                tip_block_number: 2,
+                tip_block_hash: vec![2u8; 32],
+                ..Default::default()
+            })
+            .unwrap();
+
+        let mut recompute = crate::batch::StoreBatch::new(&store);
+        store
+            .recompute_dao_daily_snapshot_for_date(date, 2, &mut recompute)
+            .unwrap();
+        recompute.commit().unwrap();
+
+        let snapshot = store.get_dao_daily_snapshot("20260310").unwrap().unwrap();
+
+        // Blocks 1 and 2 each split their own scheduled secondary issuance
+        // against their parent's C/U (block 0 and block 1 respectively). The
+        // differing S deltas (s1-s0 vs s2-s1) must NOT change the result —
+        // the miner series is independent of the S-pool delta.
+        let per_block_miner = expected_miner_secondary(0, 1800);
+        assert!(per_block_miner > 0);
+        assert_eq!(snapshot.cum_miner_secondary, 2 * per_block_miner);
+        assert_eq!(snapshot.secondary_pool, i128::from(s2));
+        assert_eq!(snapshot.total_deposited, i128::from(capacity));
+
+        let expected_unclaimed = i128::from(
+            ckbadger_common::dao::calculate_dao_compensation_from_ar(
+                capacity, occupied, ar_deposit, ar_end,
+            )
+            .unwrap(),
+        );
+        assert_eq!(snapshot.unclaimed_compensation, expected_unclaimed);
+        assert_eq!(snapshot.cum_dao_compensation, expected_unclaimed);
+        assert_eq!(snapshot.cum_treasury, i128::from(s2) - expected_unclaimed);
+    }
+
+    #[test]
+    fn test_recompute_dao_daily_snapshot_for_date_fails_when_previous_block_header_is_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path().to_str().unwrap()).unwrap();
+
+        let date = chrono::NaiveDate::from_ymd_opt(2026, 3, 10).unwrap();
+        let ar: u64 = 10_000_000_000_000_000;
+        let s: u64 = 50_000_000_000;
+
+        // No block 0: the day starts at block 1 and its C/S/U baseline is
+        // unavailable. This is the fail-fast the rollback caller must not hit.
+        let mut batch = crate::batch::StoreBatch::new(&store);
+        batch.put_block_header(
+            1,
+            &header_with_dao(1, utc8_ms(date, 0, 10), dao_field(TEST_C, ar, s, TEST_U)),
+        );
+        batch.put_block_header(
+            2,
+            &header_with_dao(2, utc8_ms(date, 12, 0), dao_field(TEST_C, ar, s, TEST_U)),
+        );
+        batch.commit().unwrap();
+        store
+            .set_sync_status(&SyncStatus {
+                tip_block_number: 2,
+                tip_block_hash: vec![2u8; 32],
+                ..Default::default()
+            })
+            .unwrap();
+
+        store
+            .set_secondary_epoch_reward(TEST_SECONDARY_EPOCH_REWARD)
+            .unwrap();
+
+        let mut recompute = crate::batch::StoreBatch::new(&store);
+        let error = store
+            .recompute_dao_daily_snapshot_for_date(date, 2, &mut recompute)
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("missing previous block header during DAO snapshot recompute"),
+            "unexpected error: {error}"
+        );
     }
 }

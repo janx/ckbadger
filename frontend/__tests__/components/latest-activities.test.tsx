@@ -9,6 +9,7 @@ vi.mock('@/lib/api', () => ({
     getLatestActivities: vi.fn(),
   },
   isWarmupPendingError: vi.fn(() => false),
+  isNetworkInitializingError: vi.fn(() => false),
   TAG_TOKEN: 1,
   TAG_OBJECT: 2,
   TAG_IDENTITY: 4,
@@ -75,7 +76,7 @@ describe('LatestActivities stream', () => {
     await waitFor(() => {
       const addressLinks = screen
         .getAllByRole('link')
-        .filter((link) => link.getAttribute('href')?.startsWith('/address/'));
+        .filter((link) => link.getAttribute('href')?.startsWith('/mainnet/address/'));
       expect(addressLinks).toHaveLength(2);
     });
   });
@@ -165,21 +166,21 @@ describe('LatestActivities stream', () => {
         .find(
           (link) =>
             link.getAttribute('href') ===
-            '/tx/0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef'
+            '/mainnet/tx/0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef'
         );
       const blockLink = screen
         .getAllByRole('link')
-        .find((link) => link.getAttribute('href') === '/blocks/12345');
+        .find((link) => link.getAttribute('href') === '/mainnet/blocks/12345');
       const addressLink = screen
         .getAllByRole('link')
         .find(
           (link) =>
             link.getAttribute('href') ===
-            '/address/ckb1qtoken1111111111111111111111111111111111111111111'
+            '/mainnet/address/ckb1qtoken1111111111111111111111111111111111111111111'
         );
       const tokenLink = screen
         .getAllByRole('link')
-        .find((link) => link.getAttribute('href') === '/tokens/0xtoken');
+        .find((link) => link.getAttribute('href') === '/mainnet/tokens/0xtoken');
 
       expect(txLink).toBeTruthy();
       expect(blockLink).toBeTruthy();
@@ -350,7 +351,7 @@ describe('LatestActivities stream', () => {
     await waitFor(() => {
       const addressLinks = screen
         .getAllByRole('link')
-        .filter((link) => link.getAttribute('href')?.startsWith('/address/'));
+        .filter((link) => link.getAttribute('href')?.startsWith('/mainnet/address/'));
       expect(addressLinks).toHaveLength(20);
     });
   });

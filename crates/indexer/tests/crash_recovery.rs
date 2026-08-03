@@ -38,6 +38,9 @@ fn make_header(block_num: i64) -> CachedBlockHeader {
         dao: vec![0u8; 32],
         transactions_count: 3,
         uncles_count: 0,
+        proposals_count: 0,
+        compact_target: 0,
+        miner_lock_hash: None,
         cycles: None,
     }
 }
@@ -57,6 +60,7 @@ fn make_tx_entry(is_cellbase: bool) -> TxIndexEntry {
 
 /// Insert a complete block: header + transaction index entries.
 fn insert_complete_block(store: &CkbadgerStore, block_num: i64) {
+    seed_epoch_row_through(store, block_num);
     let header = make_header(block_num);
     let cellbase = make_tx_entry(true);
     let tx1 = make_tx_entry(false);
@@ -93,6 +97,33 @@ fn insert_header_only(store: &CkbadgerStore, block_num: i64) {
     let mut batch = StoreBatch::new(store);
     batch.put_block_header(block_num, &header);
     batch.commit().unwrap();
+    seed_epoch_row_through(store, block_num);
+}
+
+/// Keep the epoch stats row consistent with headers 1..=`tip` (real write
+/// paths persist epoch rows atomically with their blocks; rollback fails fast
+/// when a mid-epoch row is missing).
+fn seed_epoch_row_through(store: &CkbadgerStore, tip: i64) {
+    let epoch = tip / 1800;
+    let start_block = (epoch * 1800).max(1);
+    store
+        .put_epoch_stats(
+            epoch,
+            &ckbadger_store::types::EpochStats {
+                epoch_number: epoch,
+                start_block,
+                end_block: Some(tip),
+                blocks_count: (tip - start_block + 1) as i32,
+                length: 1800,
+                start_timestamp: chrono::DateTime::from_timestamp_millis(
+                    1_000_000 + start_block * 1000,
+                )
+                .unwrap(),
+                end_timestamp: None,
+                transactions_count: ((tip - start_block + 1) * 3) as i32,
+            },
+        )
+        .unwrap();
 }
 
 #[test]

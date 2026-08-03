@@ -4,6 +4,10 @@ export interface CkbadgerRuntimeConfig {
   ckbNetwork?: string;
   ckbRpcUrl?: string;
   buildVersion?: string;
+  networks?: { name: string }[];
+  defaultNetwork?: string;
+  apiBasePattern?: string;
+  wsUrlPattern?: string;
 }
 
 declare global {
@@ -54,4 +58,29 @@ export function resolveBuildVersion(
 ) {
   const configured = config.buildVersion?.trim();
   return configured && configured.length > 0 ? configured : DEFAULT_BUILD_VERSION;
+}
+
+export function resolveNetworks(
+  config: CkbadgerRuntimeConfig = runtimeConfigFromWindow() ?? {}
+): string[] {
+  const list = config.networks?.map((n) => n.name).filter(Boolean);
+  return list && list.length > 0 ? list : [DEFAULT_CKB_NETWORK];
+}
+
+export function resolveDefaultNetwork(
+  config: CkbadgerRuntimeConfig = runtimeConfigFromWindow() ?? {}
+): string {
+  return config.defaultNetwork?.trim() || resolveNetworks(config)[0] || DEFAULT_CKB_NETWORK;
+}
+
+export function resolveApiBasePattern(
+  config: CkbadgerRuntimeConfig = runtimeConfigFromWindow() ?? {}
+): string {
+  return config.apiBasePattern?.trim() || `/api/{network}/v1`;
+}
+
+export function resolveWsUrlPattern(
+  config: CkbadgerRuntimeConfig = runtimeConfigFromWindow() ?? {}
+): string {
+  return config.wsUrlPattern?.trim() || `/ws/{network}`;
 }

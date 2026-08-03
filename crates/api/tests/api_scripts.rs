@@ -606,6 +606,170 @@ async fn test_script_lookup_and_code_cells_allow_unlabeled_resolved_type_referen
 }
 
 #[tokio::test]
+async fn test_code_cell_endpoints_resolve_exact_form_when_hash_type_given() {
+    // Mainnet secp scenario: the type form (0x9b..) maps to the real bytecode
+    // version (0x70..) whose code cell exists, while a junk data-form
+    // self-mapping exists for the same reference bytes with no code cell
+    // carrying that data hash. With an explicit hash_type the endpoints must
+    // resolve exactly that one form instead of the whole family.
+    let store = test_store();
+
+    let version_hash = vec![0x70; 32];
+    let type_hash = vec![0x9b; 32];
+    let code_cell_tx_hash = vec![0xe2; 32];
+    let code_cell_output_index = 1i16;
+
+    store
+        .put_script_reference_to_version_direct(1, &type_hash, &version_hash)
+        .unwrap();
+    // Garbage data-form self-mapping written from junk usage of the same bytes.
+    store
+        .put_script_reference_to_version_direct(0, &type_hash, &type_hash)
+        .unwrap();
+
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_script_version(
+        &version_hash,
+        &ScriptVersionInfo {
+            version_hash: version_hash.clone(),
+            name: Some("SECP256K1_BLAKE160".to_string()),
+            ..Default::default()
+        },
+    );
+    batch.put_cell(
+        &code_cell_tx_hash,
+        code_cell_output_index,
+        &LiveCellInfo {
+            capacity: 100_00000000,
+            lock_script_hash: vec![0x11; 32],
+            lock_code_hash: vec![0x22; 32],
+            lock_hash_type: 1,
+            lock_args: vec![],
+            type_script_hash: Some(type_hash.clone()),
+            type_code_hash: Some(vec![0x33; 32]),
+            type_hash_type: Some(1),
+            type_args: Some(vec![]),
+            data_size: 32,
+            occupied_capacity: 61_00000000,
+            udt_amount: None,
+            data_hash: Some(version_hash.clone()),
+        },
+        123,
+    );
+    batch.put_cell_by_type(&type_hash, 123, &code_cell_tx_hash, code_cell_output_index);
+    batch.put_cell_by_data_hash(
+        &version_hash,
+        123,
+        &code_cell_tx_hash,
+        code_cell_output_index,
+    );
+    batch.commit().unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let type_hash_hex = format!("0x{}", hex::encode(&type_hash));
+    let version_hash_hex = format!("0x{}", hex::encode(&version_hash));
+    let code_cell_tx_hash_hex = format!("0x{}", hex::encode(&code_cell_tx_hash));
+
+    // hash_type=type resolves through the persisted type mapping to the real
+    // code cell.
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/scripts/code-cell?code_hash={}&hash_type=type",
+            type_hash_hex
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["txHash"], code_cell_tx_hash_hex);
+    assert_eq!(json["outputIndex"], 1);
+
+    // hash_type=data asks for the binary whose data hash IS 0x9b.. -- no such
+    // code cell exists, so the exact form must NOT fall back to the family.
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/scripts/code-cell?code_hash={}&hash_type=data",
+            type_hash_hex
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["txHash"], serde_json::Value::Null);
+    assert_eq!(json["outputIndex"], serde_json::Value::Null);
+
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/scripts/code-cells?code_hash={}&hash_type=data",
+            type_hash_hex
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["codeCells"], serde_json::json!([]));
+    assert_eq!(json["totalCount"], 0);
+    assert_eq!(json["resolvedVersionHash"], serde_json::Value::Null);
+
+    // The bytecode hash queried as its own data form still resolves.
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/scripts/code-cells?code_hash={}&hash_type=data",
+            version_hash_hex
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["resolvedVersionHash"], version_hash_hex);
+    assert_eq!(json["codeCells"][0]["txHash"], code_cell_tx_hash_hex);
+
+    // Without hash_type the whole-reference family resolution is unchanged.
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/scripts/code-cell?code_hash={}",
+            type_hash_hex
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["txHash"], code_cell_tx_hash_hex);
+
+    // Invalid hash_type values are a bad request on both endpoints.
+    for uri in [
+        format!(
+            "/api/v1/scripts/code-cell?code_hash={}&hash_type=bogus",
+            type_hash_hex
+        ),
+        format!(
+            "/api/v1/scripts/code-cells?code_hash={}&hash_type=bogus",
+            type_hash_hex
+        ),
+    ] {
+        let request = Request::builder().uri(&uri).body(Body::empty()).unwrap();
+        let response = app.clone().oneshot(request).await.unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::BAD_REQUEST,
+            "uri={uri} must reject invalid hash_type"
+        );
+    }
+}
+
+#[tokio::test]
 async fn test_scripts_list_merges_unknown_reference_into_known_deployment() {
     let store = test_store();
 
@@ -971,6 +1135,9 @@ async fn test_script_lookup_and_code_cells_surface_type_reference_ambiguity() {
 #[tokio::test]
 async fn test_cells_by_script_resolves_reference_hash_type_alias() {
     let store = test_store();
+    // The cells-by-script listing reads the genesis baseline once per request
+    // (fail-fast if absent) for burn-cell tagging.
+    seed_genesis_baseline(&store);
 
     let data_hash = vec![0x70; 32];
     let type_hash = vec![0x9b; 32];
@@ -1001,6 +1168,25 @@ async fn test_cells_by_script_resolves_reference_hash_type_alias() {
             },
         )
         .unwrap();
+    // Per-form reference counters (production invariant: written for every
+    // observed reference form; the endpoint total reads them).
+    store
+        .put_script_reference_info_direct(
+            1,
+            &type_hash,
+            &ScriptReferenceInfo {
+                reference_hash: type_hash.clone(),
+                hash_type: 1,
+                lock_cells_count: 1,
+                lock_live_cells_count: 1,
+                lock_capacity_sum: 100_00000000,
+                lock_owned_capacity_sum: 100_00000000,
+                lock_used_capacity_sum: 61_00000000,
+                lock_owned_knowledge_sum: 61_00000000,
+                ..Default::default()
+            },
+        )
+        .unwrap();
 
     let mut batch = StoreBatch::new(store.as_ref());
     batch.put_cell(
@@ -1023,7 +1209,7 @@ async fn test_cells_by_script_resolves_reference_hash_type_alias() {
         },
         123,
     );
-    batch.put_cell_by_lock_code(&type_hash, 123, &tx_hash, 0);
+    batch.put_cell_by_lock_code(&type_hash, 1, 123, &tx_hash, 0);
     batch.commit().unwrap();
 
     let config = test_config(store);
@@ -1051,6 +1237,9 @@ async fn test_cells_by_script_resolves_reference_hash_type_alias() {
 #[tokio::test]
 async fn test_cells_by_script_type_request_returns_empty_for_data_only_deployment() {
     let store = test_store();
+    // The cells-by-script listing reads the genesis baseline once per request
+    // (fail-fast if absent) for burn-cell tagging.
+    seed_genesis_baseline(&store);
 
     let data_hash = vec![0x70; 32];
     let tx_hash = vec![0xab; 32];
@@ -1062,6 +1251,25 @@ async fn test_cells_by_script_type_request_returns_empty_for_data_only_deploymen
                 code_hash: data_hash.clone(),
                 hash_type: 0,
                 lock_live_cells_count: 1,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    // Per-form reference counters (production invariant: written for every
+    // observed reference form; the endpoint total reads them).
+    store
+        .put_script_reference_info_direct(
+            0,
+            &data_hash,
+            &ScriptReferenceInfo {
+                reference_hash: data_hash.clone(),
+                hash_type: 0,
+                lock_cells_count: 1,
+                lock_live_cells_count: 1,
+                lock_capacity_sum: 100_00000000,
+                lock_owned_capacity_sum: 100_00000000,
+                lock_used_capacity_sum: 61_00000000,
+                lock_owned_knowledge_sum: 61_00000000,
                 ..Default::default()
             },
         )
@@ -1088,7 +1296,7 @@ async fn test_cells_by_script_type_request_returns_empty_for_data_only_deploymen
         },
         123,
     );
-    batch.put_cell_by_lock_code(&data_hash, 123, &tx_hash, 0);
+    batch.put_cell_by_lock_code(&data_hash, 0, 123, &tx_hash, 0);
     batch.commit().unwrap();
 
     let config = test_config(store);
@@ -1128,6 +1336,169 @@ async fn test_cells_by_script_type_request_returns_empty_for_data_only_deploymen
 }
 
 #[tokio::test]
+async fn test_cells_by_script_hash_type_filters_rows_strictly() {
+    // Mixed-form fixture: two live cells share the same lock code_hash bytes
+    // but use different hash_types (type vs data). The hash_type query
+    // parameter must strictly filter rows, and total must match the filtered
+    // row universe (per-form reference counters), not the cross-form counters.
+    let store = test_store();
+    seed_genesis_baseline(&store);
+
+    let code_hash = vec![0x9b; 32];
+    let tx_type_form = vec![0xa1; 32];
+    let tx_data_form = vec![0xa2; 32];
+
+    store
+        .put_script_info_direct(
+            &code_hash,
+            &ScriptInfo {
+                code_hash: code_hash.clone(),
+                hash_type: 1,
+                name: Some("Default Lock".to_string()),
+                lock_cells_count: 2,
+                lock_live_cells_count: 2,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    store
+        .put_script_reference_info_direct(
+            1,
+            &code_hash,
+            &ScriptReferenceInfo {
+                reference_hash: code_hash.clone(),
+                hash_type: 1,
+                lock_cells_count: 1,
+                lock_live_cells_count: 1,
+                lock_capacity_sum: 100_00000000,
+                lock_owned_capacity_sum: 100_00000000,
+                lock_used_capacity_sum: 61_00000000,
+                lock_owned_knowledge_sum: 61_00000000,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    store
+        .put_script_reference_info_direct(
+            0,
+            &code_hash,
+            &ScriptReferenceInfo {
+                reference_hash: code_hash.clone(),
+                hash_type: 0,
+                lock_cells_count: 1,
+                lock_live_cells_count: 1,
+                lock_capacity_sum: 61_00000000,
+                lock_owned_capacity_sum: 61_00000000,
+                lock_used_capacity_sum: 61_00000000,
+                lock_owned_knowledge_sum: 61_00000000,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_cell(
+        &tx_type_form,
+        0,
+        &LiveCellInfo {
+            capacity: 100_00000000,
+            lock_script_hash: vec![0x11; 32],
+            lock_code_hash: code_hash.clone(),
+            lock_hash_type: 1,
+            lock_args: vec![],
+            type_script_hash: None,
+            type_code_hash: None,
+            type_hash_type: None,
+            type_args: None,
+            data_size: 0,
+            occupied_capacity: 61_00000000,
+            udt_amount: None,
+            data_hash: None,
+        },
+        10,
+    );
+    batch.put_cell_by_lock_code(&code_hash, 1, 10, &tx_type_form, 0);
+    batch.put_cell(
+        &tx_data_form,
+        0,
+        &LiveCellInfo {
+            capacity: 61_00000000,
+            lock_script_hash: vec![0x22; 32],
+            lock_code_hash: code_hash.clone(),
+            lock_hash_type: 0,
+            lock_args: vec![],
+            type_script_hash: None,
+            type_code_hash: None,
+            type_hash_type: None,
+            type_args: None,
+            data_size: 0,
+            occupied_capacity: 61_00000000,
+            udt_amount: None,
+            data_hash: None,
+        },
+        11,
+    );
+    batch.put_cell_by_lock_code(&code_hash, 0, 11, &tx_data_form, 0);
+    batch.commit().unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+    let code_hash_hex = format!("0x{}", hex::encode(&code_hash));
+
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/cells/by-script?code_hash={}&hash_type=type&script_kind=lock&limit=20",
+            code_hash_hex
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let data = json["data"].as_array().unwrap();
+    assert_eq!(
+        data.len(),
+        1,
+        "hash_type=type must exclude the data-form cell"
+    );
+    assert_eq!(
+        data[0]["txHash"],
+        format!("0x{}", hex::encode(&tx_type_form))
+    );
+    assert_eq!(
+        json["total"], 1,
+        "total must match the filtered row universe"
+    );
+
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/cells/by-script?code_hash={}&hash_type=data&script_kind=lock&limit=20",
+            code_hash_hex
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let data = json["data"].as_array().unwrap();
+    assert_eq!(
+        data.len(),
+        1,
+        "hash_type=data must exclude the type-form cell"
+    );
+    assert_eq!(
+        data[0]["txHash"],
+        format!("0x{}", hex::encode(&tx_data_form))
+    );
+    assert_eq!(
+        json["total"], 1,
+        "total must match the filtered row universe"
+    );
+}
+
+#[tokio::test]
 async fn test_get_script_returns_versions_sorted_by_deployed_at() {
     let store = test_store();
     let name = "SECP256K1_BLAKE160".to_string();
@@ -1161,6 +1532,9 @@ async fn test_get_script_returns_versions_sorted_by_deployed_at() {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         },
     );
@@ -1176,6 +1550,9 @@ async fn test_get_script_returns_versions_sorted_by_deployed_at() {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         },
     );
@@ -1191,6 +1568,9 @@ async fn test_get_script_returns_versions_sorted_by_deployed_at() {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         },
     );
@@ -1676,32 +2056,61 @@ async fn test_script_capacity_chart_aggregates_deployments() {
 
     let code_hash_a = vec![0x11; 32];
     let code_hash_b = vec![0x22; 32];
+    let version_a = vec![0xA1; 32];
+    let version_b = vec![0xB1; 32];
     let name = "SECP256K1_BLAKE160".to_string();
+    let family_id = "family:secp";
 
+    // Family-shaped fixture: the {name} chart aggregates the family's member
+    // reference forms (same membership computation as the usage counters).
     store
-        .put_script_info_direct(
-            &code_hash_a,
-            &ScriptInfo {
-                code_hash: code_hash_a.clone(),
-                name: Some(name.clone()),
+        .put_script_family_direct(
+            family_id,
+            &ScriptFamilyInfo {
+                family_id: family_id.to_string(),
+                name: name.clone(),
+                versions_count: 2,
                 ..Default::default()
             },
         )
         .unwrap();
     store
-        .put_script_info_direct(
-            &code_hash_b,
-            &ScriptInfo {
-                code_hash: code_hash_b.clone(),
-                name: Some(name.clone()),
-                ..Default::default()
-            },
-        )
+        .put_script_family_name_direct(&name, family_id)
         .unwrap();
+    for (version_hash, reference_hash) in [(&version_a, &code_hash_a), (&version_b, &code_hash_b)] {
+        store
+            .put_script_version(
+                version_hash,
+                &ScriptVersionInfo {
+                    version_hash: (*version_hash).clone(),
+                    family_id: Some(family_id.to_string()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        store
+            .put_script_version_by_family_direct(family_id, version_hash)
+            .unwrap();
+        store
+            .put_script_reference_to_version_direct(1, reference_hash, version_hash)
+            .unwrap();
+        store
+            .put_script_reference_info_direct(
+                1,
+                reference_hash,
+                &ScriptReferenceInfo {
+                    reference_hash: (*reference_hash).clone(),
+                    hash_type: 1,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+    }
 
     store
         .put_script_daily_delta(
             &code_hash_a,
+            1,
             false,
             20240115,
             &ScriptDailyDelta {
@@ -1713,6 +2122,7 @@ async fn test_script_capacity_chart_aggregates_deployments() {
     store
         .put_script_daily_delta(
             &code_hash_a,
+            1,
             false,
             20240117,
             &ScriptDailyDelta {
@@ -1724,6 +2134,7 @@ async fn test_script_capacity_chart_aggregates_deployments() {
     store
         .put_script_daily_delta(
             &code_hash_b,
+            1,
             false,
             20240115,
             &ScriptDailyDelta {
@@ -1735,6 +2146,7 @@ async fn test_script_capacity_chart_aggregates_deployments() {
     store
         .put_script_daily_delta(
             &code_hash_b,
+            1,
             false,
             20240117,
             &ScriptDailyDelta {
@@ -1757,6 +2169,9 @@ async fn test_script_capacity_chart_aggregates_deployments() {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         },
     );
@@ -1804,6 +2219,106 @@ async fn test_script_capacity_chart_aggregates_deployments() {
 }
 
 #[tokio::test]
+async fn test_script_capacity_history_chart_aggregates_family_member_references() {
+    // The family capacity chart must aggregate the SAME reference set the
+    // usage counters are built from: every observed reference form resolving
+    // to a family version — including members whose ScriptInfo label differs
+    // from the family name (the USDI-inside-xUDT case).
+    let store = test_store();
+
+    let version_hash = vec![0x1c; 32];
+    let r_main = vec![0x2a; 32];
+    let r_alt = vec![0x2b; 32];
+    seed_two_reference_script_family(
+        &store,
+        "xUDT",
+        "family:xudt",
+        &version_hash,
+        &r_main,
+        &r_alt,
+        "USDI",
+    );
+
+    store
+        .put_script_daily_delta(
+            &r_main,
+            1,
+            true,
+            20240115,
+            &ScriptDailyDelta {
+                owned_capacity_delta: 200,
+                owned_knowledge_delta: 120,
+            },
+        )
+        .unwrap();
+    store
+        .put_script_daily_delta(
+            &r_alt,
+            1,
+            true,
+            20240115,
+            &ScriptDailyDelta {
+                owned_capacity_delta: 100,
+                owned_knowledge_delta: 60,
+            },
+        )
+        .unwrap();
+
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_block_header(
+        300,
+        &CachedBlockHeader {
+            hash: vec![0x03; 32],
+            parent_hash: vec![0u8; 32],
+            timestamp: 1_705_536_000_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+            uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
+            cycles: None,
+        },
+    );
+    batch.commit().unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri("/api/v1/scripts/xUDT/charts/capacity-history")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let data = json["data"].as_array().unwrap();
+    assert!(!data.is_empty(), "family chart must have history");
+    assert_eq!(data[0]["date"], "2024-01-15");
+    let last = data.last().unwrap();
+    // Family counters: owned 300 / knowledge 180 -> used 180, unused 120.
+    // The chart end state must equal the family/usage counters exactly.
+    assert_eq!(last["values"]["used"], "180");
+    assert_eq!(last["values"]["unused"], "120");
+
+    // Same-source lock: the usage endpoint totals must match the chart end state.
+    let request = Request::builder()
+        .uri("/api/v1/scripts/xUDT/usage")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let usage: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(usage["ownedCapacitySum"], "300");
+    assert_eq!(usage["ownedKnowledgeSum"], "180");
+}
+
+#[tokio::test]
 async fn test_script_capacity_chart_by_code_hash_with_kind_filter() {
     let store = test_store();
     let code_hash = vec![0x33; 32];
@@ -1812,6 +2327,7 @@ async fn test_script_capacity_chart_by_code_hash_with_kind_filter() {
     store
         .put_script_daily_delta(
             &code_hash,
+            1,
             false,
             20240115,
             &ScriptDailyDelta {
@@ -1823,6 +2339,7 @@ async fn test_script_capacity_chart_by_code_hash_with_kind_filter() {
     store
         .put_script_daily_delta(
             &code_hash,
+            1,
             true,
             20240115,
             &ScriptDailyDelta {
@@ -1845,6 +2362,9 @@ async fn test_script_capacity_chart_by_code_hash_with_kind_filter() {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         },
     );
@@ -1881,6 +2401,7 @@ async fn test_script_capacity_chart_by_code_hash_extends_to_latest_complete_ckb_
     store
         .put_script_daily_delta(
             &code_hash,
+            1,
             false,
             20240115,
             &ScriptDailyDelta {
@@ -1903,6 +2424,9 @@ async fn test_script_capacity_chart_by_code_hash_extends_to_latest_complete_ckb_
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         },
     );
@@ -2032,4 +2556,250 @@ async fn test_lookup_scripts_accepts_tx_hash_parameter() {
 
     let response = app.oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
+}
+
+/// Two type-id deployments sharing one bytecode version (the RGB++ testnet
+/// signet/testnet3 shape). Each lookup must serve the QUERIED reference's own
+/// usage stats and its own deployment code cell — never the sibling
+/// deployment's. Regression for the associated_code_hash single-slot redirect
+/// that served the signet deployment's numbers for the testnet3 reference.
+#[tokio::test]
+async fn test_script_lookup_serves_queried_references_own_stats_for_shared_bytecode() {
+    let store = test_store();
+
+    // Shared bytecode version (data hash of the code cells).
+    let version_hash = vec![0x7e; 32];
+    // Two independent type-id deployments of the same binary.
+    let ref_signet = vec![0xd0; 32];
+    let ref_testnet3 = vec![0x61; 32];
+    let signet_code_cell_tx = vec![0xaa; 32];
+    let testnet3_code_cell_tx = vec![0xbb; 32];
+
+    // Labeled version row, as label import writes it for the family.
+    store
+        .put_script_version(
+            &version_hash,
+            &ScriptVersionInfo {
+                version_hash: version_hash.clone(),
+                name: Some("RGB++".to_string()),
+                description: Some("RGB++ Lock".to_string()),
+                canonical_reference_hash: Some(ref_signet.clone()),
+                canonical_hash_type: Some(1),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+    // Both references resolve to the shared version.
+    store
+        .put_script_reference_to_version_direct(1, &ref_signet, &version_hash)
+        .unwrap();
+    store
+        .put_script_reference_to_version_direct(1, &ref_testnet3, &version_hash)
+        .unwrap();
+
+    // Per-reference usage truth (audit numbers from the live testnet capture).
+    store
+        .put_script_info_direct(
+            &ref_signet,
+            &ScriptInfo {
+                code_hash: ref_signet.clone(),
+                hash_type: 1,
+                name: Some("RGB++".to_string()),
+                lock_cells_count: 1337,
+                lock_live_cells_count: 680,
+                lock_capacity_sum: 20_000_000_000_000,
+                lock_owned_capacity_sum: 17_587_097_961_011,
+                lock_used_capacity_sum: 12_000_000_000_000,
+                lock_owned_knowledge_sum: 11_771_100_000_000,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    store
+        .put_script_info_direct(
+            &ref_testnet3,
+            &ScriptInfo {
+                code_hash: ref_testnet3.clone(),
+                hash_type: 1,
+                name: Some("RGB++".to_string()),
+                lock_cells_count: 21009,
+                lock_live_cells_count: 12486,
+                lock_capacity_sum: 480_000_000_000_000,
+                lock_owned_capacity_sum: 475_592_296_325_729,
+                lock_used_capacity_sum: 280_000_000_000_000,
+                lock_owned_knowledge_sum: 279_292_400_000_000,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+    // Each deployment's own code cell carries the same bytecode.
+    let mut batch = StoreBatch::new(store.as_ref());
+    for (tx_hash, type_hash, block) in [
+        (&signet_code_cell_tx, &ref_signet, 100i64),
+        (&testnet3_code_cell_tx, &ref_testnet3, 200i64),
+    ] {
+        batch.put_cell(
+            tx_hash,
+            0,
+            &LiveCellInfo {
+                capacity: 100_00000000,
+                lock_script_hash: vec![0x11; 32],
+                lock_code_hash: vec![0x22; 32],
+                lock_hash_type: 1,
+                lock_args: vec![],
+                type_script_hash: Some(type_hash.clone()),
+                type_code_hash: Some(vec![0x33; 32]),
+                type_hash_type: Some(1),
+                type_args: Some(vec![]),
+                data_size: 64,
+                occupied_capacity: 61_00000000,
+                udt_amount: None,
+                data_hash: Some(version_hash.clone()),
+            },
+            block,
+        );
+        batch.put_cell_by_type(type_hash, block, tx_hash, 0);
+        batch.put_cell_by_data_hash(&version_hash, block, tx_hash, 0);
+    }
+    batch.commit().unwrap();
+
+    let app = create_router(test_config(store)).await;
+    let ref_signet_hex = format!("0x{}", hex::encode(&ref_signet));
+    let ref_testnet3_hex = format!("0x{}", hex::encode(&ref_testnet3));
+
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/v1/scripts/lookup")
+        .header("content-type", "application/json")
+        .body(Body::from(format!(
+            r#"{{"codeHashes":["{}","{}"]}}"#,
+            ref_signet_hex, ref_testnet3_hex
+        )))
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    // The testnet3 reference serves ITS OWN stats and ITS OWN code cell.
+    assert_eq!(json[&ref_testnet3_hex]["name"], "RGB++");
+    assert_eq!(json[&ref_testnet3_hex]["liveCellsCount"], 12486);
+    assert_eq!(
+        json[&ref_testnet3_hex]["ownedCapacitySum"],
+        "475592296325729"
+    );
+    assert_eq!(
+        json[&ref_testnet3_hex]["ownedKnowledgeSum"],
+        "279292400000000"
+    );
+    assert_eq!(
+        json[&ref_testnet3_hex]["codeCellTxHash"],
+        format!("0x{}", hex::encode(&testnet3_code_cell_tx))
+    );
+    assert_eq!(json[&ref_testnet3_hex]["codeCellsTotal"], 1);
+    assert_eq!(json[&ref_testnet3_hex]["codeCellsLiveCount"], 1);
+
+    // The signet reference likewise serves only its own deployment.
+    assert_eq!(json[&ref_signet_hex]["liveCellsCount"], 680);
+    assert_eq!(json[&ref_signet_hex]["ownedCapacitySum"], "17587097961011");
+    assert_eq!(json[&ref_signet_hex]["ownedKnowledgeSum"], "11771100000000");
+    assert_eq!(
+        json[&ref_signet_hex]["codeCellTxHash"],
+        format!("0x{}", hex::encode(&signet_code_cell_tx))
+    );
+    assert_eq!(json[&ref_signet_hex]["codeCellsTotal"], 1);
+}
+
+/// An ambiguous type reference (two live bytecode versions) still describes
+/// the queried reference itself: a deprecated flag recorded for the reference
+/// must surface instead of a hardcoded `false`.
+#[tokio::test]
+async fn test_script_lookup_ambiguous_reference_reports_reference_deprecated() {
+    let store = test_store();
+
+    let reference_hash = vec![0x66; 32];
+    let version_a = vec![0x67; 32];
+    let version_b = vec![0x68; 32];
+
+    store
+        .put_script_info_direct(
+            &reference_hash,
+            &ScriptInfo {
+                code_hash: reference_hash.clone(),
+                hash_type: 1,
+                name: Some("Old Deprecated Lock".to_string()),
+                deprecated: true,
+                lock_cells_count: 5,
+                lock_live_cells_count: 2,
+                lock_capacity_sum: 1_000,
+                lock_owned_capacity_sum: 500,
+                lock_used_capacity_sum: 800,
+                lock_owned_knowledge_sum: 400,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+    let mut batch = StoreBatch::new(store.as_ref());
+    for (tx_hash, data_hash, block) in [
+        (vec![0xa1; 32], &version_a, 10i64),
+        (vec![0xa2; 32], &version_b, 11i64),
+    ] {
+        batch.put_cell(
+            &tx_hash,
+            0,
+            &LiveCellInfo {
+                capacity: 100_00000000,
+                lock_script_hash: vec![0x11; 32],
+                lock_code_hash: vec![0x22; 32],
+                lock_hash_type: 1,
+                lock_args: vec![],
+                type_script_hash: Some(reference_hash.clone()),
+                type_code_hash: Some(vec![0x33; 32]),
+                type_hash_type: Some(1),
+                type_args: Some(vec![]),
+                data_size: 64,
+                occupied_capacity: 61_00000000,
+                udt_amount: None,
+                data_hash: Some(data_hash.clone()),
+            },
+            block,
+        );
+        batch.put_cell_by_type(&reference_hash, block, &tx_hash, 0);
+        batch.put_cell_by_data_hash(data_hash, block, &tx_hash, 0);
+    }
+    batch.commit().unwrap();
+
+    let app = create_router(test_config(store)).await;
+    let reference_hash_hex = format!("0x{}", hex::encode(&reference_hash));
+
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/v1/scripts/lookup")
+        .header("content-type", "application/json")
+        .body(Body::from(format!(
+            r#"{{"codeHashes":["{}"]}}"#,
+            reference_hash_hex
+        )))
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(json[&reference_hash_hex]["resolutionState"], "ambiguous");
+    assert_eq!(json[&reference_hash_hex]["name"], "Old Deprecated Lock");
+    assert_eq!(
+        json[&reference_hash_hex]["deprecated"], true,
+        "the queried reference is marked deprecated in the store; the ambiguous fallback record must not hardcode false"
+    );
+    assert_eq!(
+        json[&reference_hash_hex]["ambiguity"]["versionHashes"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
 }

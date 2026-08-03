@@ -11,7 +11,7 @@ describe('ObjectActivityCard', () => {
     );
 
     const blockLink = screen.getByRole('link', { name: '#456' });
-    expect(blockLink).toHaveAttribute('href', '/blocks/456');
+    expect(blockLink).toHaveAttribute('href', '/mainnet/blocks/456');
 
     expect(screen.getByText('transfer, mint')).toBeInTheDocument();
   });

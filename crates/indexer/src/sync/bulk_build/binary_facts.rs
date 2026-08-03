@@ -6,17 +6,15 @@
 //!
 //! The output is byte-identical to `parse_single_block()` in `pipeline.rs`.
 
-use std::collections::HashMap;
-use std::sync::LazyLock;
-
 use anyhow::{anyhow, Result};
 use ckb_types::prelude::*;
 
 use crate::parser::cell::ParsedCell;
 use crate::parser::dao::{DaoParser, DaoState};
 use crate::parser::dotbit::DotbitWitnessBundle;
+use crate::parser::registry::{ProtocolScript, PROTOCOL_REGISTRY};
 use crate::parser::script::ScriptParser;
-use crate::parser::udt::UdtParser;
+use crate::parser::udt::{UdtParser, UdtStandard};
 use crate::sync::dao_helpers::occupied_capacity_shannons_i64;
 
 use super::facts::{BlockFacts, CellFacts, CellSemanticTag, DaoCellState, OutPointKey, TxFacts};
@@ -127,6 +125,52 @@ pub(crate) fn parse_block_to_facts(
             raw.block.uncle_hashes().len()
         )
     })?;
+    let proposals_len = raw.block.data().proposals().len();
+    let proposals_count = i32::try_from(proposals_len).map_err(|_| {
+        anyhow!(
+            "binary facts proposals count exceeds i32 range: block={} proposals={}",
+            block_number,
+            proposals_len
+        )
+    })?;
+
+    // Miner attribution: the cellbase witness lock is the block's own miner
+    // (RFC-0022). Genesis is not mined; every other block must carry a valid
+    // CellbaseWitness in its cellbase first witness.
+    let miner_lock_hash: Option<[u8; 32]> = if block_number == 0 {
+        None
+    } else {
+        let cellbase = raw.block.transactions().first().cloned().ok_or_else(|| {
+            anyhow!(
+                "binary facts block {} has no cellbase transaction",
+                block_number
+            )
+        })?;
+        let witness = cellbase.witnesses().get(0).ok_or_else(|| {
+            anyhow!(
+                "binary facts block {} cellbase has no witness",
+                block_number
+            )
+        })?;
+        let witness_bytes = witness.raw_data();
+        let reader = ckb_types::packed::CellbaseWitnessReader::from_slice(&witness_bytes)
+            .map_err(|e| {
+                anyhow!(
+                    "binary facts block {} cellbase witness is not a valid CellbaseWitness molecule: {}",
+                    block_number,
+                    e
+                )
+            })?;
+        let hash: [u8; 32] = reader
+            .to_entity()
+            .lock()
+            .calc_script_hash()
+            .raw_data()
+            .as_ref()
+            .try_into()
+            .expect("script hash is 32 bytes");
+        Some(hash)
+    };
 
     let block_dao_ar = DaoParser::extract_ar_from_dao_field(&dao).ok_or_else(|| {
         anyhow!(
@@ -302,10 +346,14 @@ pub(crate) fn parse_block_to_facts(
                 )
             })?;
 
-            // -- Semantic tag (O(1) lookup from raw code_hash bytes) -----------
+            // -- Semantic tag (registry lookup from raw code_hash bytes) -------
 
-            let semantic_tag =
-                classify_semantic_tag_from_code_hash(type_code_hash_bytes.as_ref(), type_hash_type);
+            let semantic_tag = match type_code_hash_bytes.as_ref() {
+                Some(code_hash) => {
+                    code_hash_to_semantic_tag(code_hash, type_hash_type.unwrap_or(-1))
+                }
+                None => CellSemanticTag::Plain,
+            };
 
             // -- Occupied capacity -------------------------------------------
 
@@ -365,7 +413,8 @@ pub(crate) fn parse_block_to_facts(
                 CellSemanticTag::Spore
                 | CellSemanticTag::Cluster
                 | CellSemanticTag::Mnft
-                | CellSemanticTag::Dotbit => {
+                | CellSemanticTag::Dotbit
+                | CellSemanticTag::BitCell => {
                     let parsed_cell = ParsedCell {
                         capacity,
                         lock_code_hash: lock_code_hash_bytes.to_vec(),
@@ -461,6 +510,8 @@ pub(crate) fn parse_block_to_facts(
         dao,
         compact_target,
         uncles_count,
+        proposals_count,
+        miner_lock_hash,
         transactions_count,
         // Placeholder tx_range; remapped in the merge phase.
         tx_range: 0..local_txs.len(),
@@ -578,125 +629,34 @@ fn parse_binary_dotbit_witnesses(witnesses: &ckb_types::packed::BytesVec) -> Dot
 }
 
 // ---------------------------------------------------------------------------
-// O(1) semantic tag lookup table
+// Semantic tag classification (via the shared protocol registry)
 // ---------------------------------------------------------------------------
 
-/// Raw code_hash tag before hash_type refinement.
-#[derive(Debug, Clone, Copy)]
-enum CodeHashTag {
-    Dao,
-    Sudt,      // requires hash_type == 1
-    XudtData1, // requires hash_type == 2
-    XudtType,  // requires hash_type == 1
-    Dotbit,
-    MnftIssuer,
-    MnftClass,
-    MnftToken,
-    SporeNft,
-    SporeDid,
-    Cluster,
-}
+/// Classify a cell's semantic tag from its type-script `code_hash` bytes and
+/// `hash_type`, keyed on the network-agnostic `PROTOCOL_REGISTRY`.
+///
+/// UDT classification delegates to `UdtParser`, the single source for standard
+/// and bundled xUDT-compatible deployments. Every other protocol classifies on
+/// `code_hash` through the registry.
+fn code_hash_to_semantic_tag(code_hash: &[u8], hash_type: i16) -> CellSemanticTag {
+    if let Some(standard) = UdtParser::is_udt_code_hash_bytes(code_hash, hash_type) {
+        return match standard {
+            UdtStandard::Sudt => CellSemanticTag::Sudt,
+            UdtStandard::Xudt => CellSemanticTag::Xudt,
+        };
+    }
 
-fn parse_code_hash_32(hex_str: &str) -> [u8; 32] {
-    let bytes = crate::rpc::parse_hex_to_bytes(hex_str);
-    bytes.try_into().expect("code hash must be 32 bytes")
-}
-
-static CODE_HASH_TAG_MAP: LazyLock<HashMap<[u8; 32], CodeHashTag>> = LazyLock::new(|| {
-    use crate::parser::dao::DAO_CODE_HASH;
-    use crate::parser::dotbit::DOTBIT_ACCOUNT_CELL_TYPE_ID;
-    use crate::parser::mnft::{MNFT_CLASS_CODE_HASH, MNFT_ISSUER_CODE_HASH, MNFT_TOKEN_CODE_HASH};
-    use crate::parser::spore::{
-        CLUSTER_CODE_HASH_MAINNET_V2, CLUSTER_CODE_HASH_TESTNET_V1, CLUSTER_CODE_HASH_TESTNET_V2,
-        SPORE_CODE_HASH_MAINNET_DID, SPORE_CODE_HASH_MAINNET_V2, SPORE_CODE_HASH_TESTNET_V1,
-        SPORE_CODE_HASH_TESTNET_V2,
-    };
-    use crate::parser::udt::{SUDT_CODE_HASH, XUDT_CODE_HASH_DATA1, XUDT_CODE_HASH_TYPE};
-
-    let mut m = HashMap::with_capacity(16);
-    m.insert(parse_code_hash_32(DAO_CODE_HASH), CodeHashTag::Dao);
-    m.insert(parse_code_hash_32(SUDT_CODE_HASH), CodeHashTag::Sudt);
-    m.insert(
-        parse_code_hash_32(XUDT_CODE_HASH_DATA1),
-        CodeHashTag::XudtData1,
-    );
-    m.insert(
-        parse_code_hash_32(XUDT_CODE_HASH_TYPE),
-        CodeHashTag::XudtType,
-    );
-    m.insert(
-        parse_code_hash_32(DOTBIT_ACCOUNT_CELL_TYPE_ID),
-        CodeHashTag::Dotbit,
-    );
-    m.insert(
-        parse_code_hash_32(MNFT_ISSUER_CODE_HASH),
-        CodeHashTag::MnftIssuer,
-    );
-    m.insert(
-        parse_code_hash_32(MNFT_CLASS_CODE_HASH),
-        CodeHashTag::MnftClass,
-    );
-    m.insert(
-        parse_code_hash_32(MNFT_TOKEN_CODE_HASH),
-        CodeHashTag::MnftToken,
-    );
-    m.insert(
-        parse_code_hash_32(SPORE_CODE_HASH_MAINNET_V2),
-        CodeHashTag::SporeNft,
-    );
-    m.insert(
-        parse_code_hash_32(SPORE_CODE_HASH_MAINNET_DID),
-        CodeHashTag::SporeDid,
-    );
-    m.insert(
-        parse_code_hash_32(SPORE_CODE_HASH_TESTNET_V2),
-        CodeHashTag::SporeNft,
-    );
-    m.insert(
-        parse_code_hash_32(SPORE_CODE_HASH_TESTNET_V1),
-        CodeHashTag::SporeNft,
-    );
-    m.insert(
-        parse_code_hash_32(CLUSTER_CODE_HASH_MAINNET_V2),
-        CodeHashTag::Cluster,
-    );
-    m.insert(
-        parse_code_hash_32(CLUSTER_CODE_HASH_TESTNET_V2),
-        CodeHashTag::Cluster,
-    );
-    m.insert(
-        parse_code_hash_32(CLUSTER_CODE_HASH_TESTNET_V1),
-        CodeHashTag::Cluster,
-    );
-    m
-});
-
-/// Classify a cell's semantic tag from raw code_hash bytes and hash_type.
-/// O(1) HashMap lookup replaces the sequential if-chain.
-fn classify_semantic_tag_from_code_hash(
-    type_code_hash: Option<&[u8; 32]>,
-    type_hash_type: Option<i16>,
-) -> CellSemanticTag {
-    let Some(code_hash) = type_code_hash else {
-        return CellSemanticTag::Plain;
-    };
-    let Some(&raw_tag) = CODE_HASH_TAG_MAP.get(code_hash) else {
-        return CellSemanticTag::Plain;
-    };
-    let hash_type = type_hash_type.unwrap_or(-1);
-    match raw_tag {
-        // DAO does not enforce hash_type — matches existing behavior in classify_bulk_cell_semantic_tag
-        CodeHashTag::Dao => CellSemanticTag::Dao,
-        CodeHashTag::Sudt if hash_type == 1 => CellSemanticTag::Sudt,
-        CodeHashTag::XudtData1 if hash_type == 2 => CellSemanticTag::Xudt,
-        CodeHashTag::XudtType if hash_type == 1 => CellSemanticTag::Xudt,
-        CodeHashTag::Dotbit => CellSemanticTag::Dotbit,
-        CodeHashTag::MnftIssuer | CodeHashTag::MnftClass | CodeHashTag::MnftToken => {
-            CellSemanticTag::Mnft
-        }
-        CodeHashTag::SporeNft | CodeHashTag::SporeDid => CellSemanticTag::Spore,
-        CodeHashTag::Cluster => CellSemanticTag::Cluster,
-        // hash_type mismatch for UDT entries
+    match PROTOCOL_REGISTRY.get(code_hash) {
+        // DAO does not enforce hash_type — matches historical behavior.
+        Some(ProtocolScript::Dao) => CellSemanticTag::Dao,
+        Some(ProtocolScript::DotbitAccount) => CellSemanticTag::Dotbit,
+        Some(ProtocolScript::BitCell) => CellSemanticTag::BitCell,
+        Some(
+            ProtocolScript::MnftIssuer | ProtocolScript::MnftClass | ProtocolScript::MnftToken,
+        ) => CellSemanticTag::Mnft,
+        Some(ProtocolScript::SporeNft | ProtocolScript::SporeDid) => CellSemanticTag::Spore,
+        Some(ProtocolScript::Cluster) => CellSemanticTag::Cluster,
+        // Unregistered code_hash or a non-cell protocol.
         _ => CellSemanticTag::Plain,
     }
 }
@@ -719,15 +679,21 @@ fn parse_binary_udt_amount(
 ) -> Result<Option<u128>> {
     match semantic_tag {
         CellSemanticTag::Sudt => {
-            let amount = UdtParser::parse_amount(data).ok_or_else(|| {
-                anyhow!(
-                    "failed to parse sUDT amount in binary facts: tx=0x{}, output_index={}, data_len={}",
-                    hex::encode(tx_hash),
+            let amount = UdtParser::parse_amount(data);
+            if amount.is_none() {
+                // A cell tagged sUDT but with data too short for a u128 amount is a
+                // non-standard on-chain cell (the real sUDT type script with malformed
+                // data — seen on testnet). Record no amount rather than fail-fasting
+                // the whole bulk sync; matches the xUDT branch below (identical amount
+                // encoding). Logged, not silently dropped, so it stays visible.
+                tracing::warn!(
+                    tx = %format!("0x{}", hex::encode(tx_hash)),
                     output_index,
-                    data.len()
-                )
-            })?;
-            Ok(Some(amount))
+                    data_len = data.len(),
+                    "sUDT cell amount data too short (<16 bytes); recording no amount"
+                );
+            }
+            Ok(amount)
         }
         CellSemanticTag::Xudt => Ok(UdtParser::parse_amount(data)),
         _ => Ok(None),
@@ -1001,23 +967,20 @@ mod tests {
     }
 
     #[test]
-    fn classify_plain_cell_without_type_script() {
+    fn classify_unregistered_code_hash_is_plain() {
+        // The historical "no type script" case reduces to Plain at the call site;
+        // the classifier itself maps any unregistered code_hash to Plain.
         assert_eq!(
-            classify_semantic_tag_from_code_hash(None, None),
+            code_hash_to_semantic_tag(&[0u8; 32], -1),
             CellSemanticTag::Plain
         );
     }
 
     #[test]
     fn classify_dao_cell() {
-        let dao_code_hash =
-            hex::decode("82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e")
-                .unwrap();
-        let hash: [u8; 32] = dao_code_hash.try_into().unwrap();
-        assert_eq!(
-            classify_semantic_tag_from_code_hash(Some(&hash), Some(1)),
-            CellSemanticTag::Dao
-        );
+        let hash = hex::decode("82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e")
+            .unwrap();
+        assert_eq!(code_hash_to_semantic_tag(&hash, 1), CellSemanticTag::Dao);
     }
 
     // -----------------------------------------------------------------------
@@ -1046,10 +1009,13 @@ mod tests {
     }
 
     #[test]
-    fn parse_binary_udt_amount_sudt_short_data_errors() {
+    fn parse_binary_udt_amount_sudt_short_data_returns_none() {
+        // A cell tagged sUDT but with data too short for a u128 amount (a non-standard
+        // on-chain cell, e.g. testnet ~block 988318) must be tolerated, not fail-fast
+        // the whole bulk sync — matching the xUDT branch above.
         let data = vec![0u8; 8];
-        let result = parse_binary_udt_amount(CellSemanticTag::Sudt, &data, &[0xAA; 32], 0);
-        assert!(result.is_err());
+        let result = parse_binary_udt_amount(CellSemanticTag::Sudt, &data, &[0xAA; 32], 0).unwrap();
+        assert_eq!(result, None);
     }
 
     #[test]
@@ -1117,123 +1083,199 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // classify_semantic_tag_from_code_hash tests
+    // code_hash_to_semantic_tag tests
     // -----------------------------------------------------------------------
 
     #[test]
     fn classify_from_code_hash_plain_without_type() {
+        // A cell whose code_hash is not in the registry classifies as Plain.
         assert_eq!(
-            classify_semantic_tag_from_code_hash(None, None),
-            CellSemanticTag::Plain,
+            code_hash_to_semantic_tag(&[0u8; 32], 1),
+            CellSemanticTag::Plain
         );
     }
 
     #[test]
     fn classify_from_code_hash_dao() {
-        let hash = parse_code_hash_32(crate::parser::dao::DAO_CODE_HASH);
-        assert_eq!(
-            classify_semantic_tag_from_code_hash(Some(&hash), Some(1)),
-            CellSemanticTag::Dao,
-        );
+        let hash = crate::rpc::parse_hex_to_bytes(crate::parser::dao::DAO_CODE_HASH);
+        assert_eq!(code_hash_to_semantic_tag(&hash, 1), CellSemanticTag::Dao);
     }
 
     #[test]
     fn classify_from_code_hash_sudt() {
-        let hash = parse_code_hash_32(crate::parser::udt::SUDT_CODE_HASH);
-        // hash_type 1 → Sudt
-        assert_eq!(
-            classify_semantic_tag_from_code_hash(Some(&hash), Some(1)),
-            CellSemanticTag::Sudt,
-        );
-        // hash_type 0 → Plain (mismatch)
-        assert_eq!(
-            classify_semantic_tag_from_code_hash(Some(&hash), Some(0)),
-            CellSemanticTag::Plain,
-        );
+        let hash = crate::rpc::parse_hex_to_bytes(crate::parser::udt::SUDT_CODE_HASH);
+        assert_eq!(code_hash_to_semantic_tag(&hash, 1), CellSemanticTag::Sudt);
+        assert_eq!(code_hash_to_semantic_tag(&hash, 0), CellSemanticTag::Sudt);
     }
 
     #[test]
     fn classify_from_code_hash_xudt_data1() {
-        let hash = parse_code_hash_32(crate::parser::udt::XUDT_CODE_HASH_DATA1);
-        // hash_type 2 → Xudt
-        assert_eq!(
-            classify_semantic_tag_from_code_hash(Some(&hash), Some(2)),
-            CellSemanticTag::Xudt,
-        );
-        // hash_type 1 → Plain (mismatch)
-        assert_eq!(
-            classify_semantic_tag_from_code_hash(Some(&hash), Some(1)),
-            CellSemanticTag::Plain,
-        );
+        let hash = crate::rpc::parse_hex_to_bytes(crate::parser::udt::XUDT_CODE_HASH_DATA1);
+        // hash_type 2 (data1) → Xudt
+        assert_eq!(code_hash_to_semantic_tag(&hash, 2), CellSemanticTag::Xudt);
+        // Registry migration trusts each xUDT code_hash's on-chain hash_type, so
+        // hash_type 1 on the data1 code_hash is also accepted (was Plain before).
+        assert_eq!(code_hash_to_semantic_tag(&hash, 1), CellSemanticTag::Xudt);
+        assert_eq!(code_hash_to_semantic_tag(&hash, 0), CellSemanticTag::Xudt);
     }
 
     #[test]
     fn classify_from_code_hash_xudt_type() {
-        let hash = parse_code_hash_32(crate::parser::udt::XUDT_CODE_HASH_TYPE);
-        assert_eq!(
-            classify_semantic_tag_from_code_hash(Some(&hash), Some(1)),
-            CellSemanticTag::Xudt,
-        );
+        let hash = crate::rpc::parse_hex_to_bytes(crate::parser::udt::XUDT_CODE_HASH_TYPE);
+        assert_eq!(code_hash_to_semantic_tag(&hash, 1), CellSemanticTag::Xudt);
+    }
+
+    #[test]
+    fn classify_testnet_xudt_compatible_assets_as_xudt() {
+        // These deployments back the USDI and RUSD verification failures. They
+        // use the xUDT amount encoding but have application-specific type-script
+        // code hashes declared as UDTs in the bundled script metadata.
+        for code_hash in [
+            "0xcc9dc33ef234e14bc788c43a4848556a5fb16401a04662fc55db9bb201987037",
+            "0x1142755a044bf2ee358cba9f2da187ce928c91cd4dc8692ded0337efa677d21a",
+        ] {
+            let hash = crate::rpc::parse_hex_to_bytes(code_hash);
+            assert_eq!(
+                code_hash_to_semantic_tag(&hash, 1),
+                CellSemanticTag::Xudt,
+                "xUDT-compatible deployment {code_hash} must reach the bulk token owner"
+            );
+        }
     }
 
     #[test]
     fn classify_from_code_hash_spore_mainnet_v2() {
-        let hash = parse_code_hash_32(crate::parser::spore::SPORE_CODE_HASH_MAINNET_V2);
+        let hash = crate::rpc::parse_hex_to_bytes(crate::parser::spore::SPORE_CODE_HASH_MAINNET_V2);
+        assert_eq!(code_hash_to_semantic_tag(&hash, 1), CellSemanticTag::Spore);
+    }
+
+    #[test]
+    fn classify_from_code_hash_bit_cell_independently() {
+        let hash = crate::rpc::parse_hex_to_bytes(
+            "0xcfba73b58b6f30e70caed8a999748781b164ef9a1e218424a6fb55ebf641cb33",
+        );
         assert_eq!(
-            classify_semantic_tag_from_code_hash(Some(&hash), Some(1)),
-            CellSemanticTag::Spore,
+            code_hash_to_semantic_tag(&hash, 1),
+            CellSemanticTag::BitCell
         );
     }
 
     #[test]
-    fn classify_from_code_hash_spore_did() {
-        let hash = parse_code_hash_32(
-            "0xcfba73b58b6f30e70caed8a999748781b164ef9a1e218424a6fb55ebf641cb33",
+    fn binary_facts_parse_legacy_testnet_bit_cell_from_failed_sync_transaction() {
+        use ckb_types::{bytes::Bytes, packed};
+
+        let code_hash = packed::Byte32::from_slice(&crate::rpc::parse_hex_to_bytes(
+            crate::parser::bit_cell::BIT_CELL_CODE_HASH_TESTNET,
+        ))
+        .unwrap();
+        let type_script = packed::Script::new_builder()
+            .code_hash(code_hash)
+            .hash_type(packed::Byte::new(1))
+            .args(Bytes::new().pack())
+            .build();
+        let output = packed::CellOutput::new_builder()
+            .capacity(packed::Uint64::from_slice(&200_00000000u64.to_le_bytes()).unwrap())
+            .lock(
+                packed::Script::new_builder()
+                    .code_hash(packed::Byte32::default())
+                    .hash_type(packed::Byte::new(1))
+                    .args(Bytes::new().pack())
+                    .build(),
+            )
+            .type_(Some(type_script).pack())
+            .build();
+        let data = crate::rpc::parse_hex_to_bytes(
+            "0x000000003c00000010000000240000002c000000a7d4860aaf1dc83daedf75d6022811d2c2ae250b1b46fc69000000000c00000032303234303530372e626974",
         );
+        let tx = packed::Transaction::new_builder()
+            .raw(
+                packed::RawTransaction::new_builder()
+                    .outputs(packed::CellOutputVec::new_builder().push(output).build())
+                    .outputs_data(
+                        packed::BytesVec::new_builder()
+                            .push(Bytes::from(data).pack())
+                            .build(),
+                    )
+                    .build(),
+            )
+            .build();
+        let block = packed::Block::new_builder()
+            .header(
+                packed::Header::new_builder()
+                    .raw(packed::RawHeader::new_builder().build())
+                    .build(),
+            )
+            .transactions(packed::TransactionVec::new_builder().push(tx).build())
+            .build();
+        let raw = RawCkbBlock {
+            block: block.into_view(),
+            cycles: Vec::new(),
+        };
+
+        let (_, _, cells) = parse_block_to_facts(&raw, &IdentityInterner::default())
+            .expect("production binary facts path must parse the legacy testnet .bit Cell");
+        assert_eq!(cells.len(), 1);
+        assert_eq!(cells[0].semantic_tag, CellSemanticTag::BitCell);
+        let crate::sync::bulk_build::facts::CellProtocolFacts::BitCell(bit_cell) = cells[0]
+            .protocol_facts
+            .as_ref()
+            .expect(".bit Cell protocol facts")
+        else {
+            panic!("expected independent .bit Cell facts");
+        };
+        assert_eq!(bit_cell.account, "20240507.bit");
+        assert_eq!(bit_cell.expired_at, 1_778_140_699);
         assert_eq!(
-            classify_semantic_tag_from_code_hash(Some(&hash), Some(1)),
-            CellSemanticTag::Spore,
+            hex::encode(bit_cell.identity_id),
+            "81d34cd1dfc27716073d1018a63712926d8e3ab36345847129d0cc4135d1ffd4"
         );
     }
 
     #[test]
     fn classify_from_code_hash_cluster() {
-        let hash = parse_code_hash_32(crate::parser::spore::CLUSTER_CODE_HASH_MAINNET_V2);
+        let hash =
+            crate::rpc::parse_hex_to_bytes(crate::parser::spore::CLUSTER_CODE_HASH_MAINNET_V2);
         assert_eq!(
-            classify_semantic_tag_from_code_hash(Some(&hash), Some(1)),
-            CellSemanticTag::Cluster,
+            code_hash_to_semantic_tag(&hash, 1),
+            CellSemanticTag::Cluster
         );
     }
 
     #[test]
     fn classify_from_code_hash_dotbit() {
-        let hash = parse_code_hash_32(
+        let hash = crate::rpc::parse_hex_to_bytes(
             "0x4f170a048198408f4f4d36bdbcddcebe7a0ae85244d3ab08fd40a80cbfc70918",
         );
-        assert_eq!(
-            classify_semantic_tag_from_code_hash(Some(&hash), Some(1)),
-            CellSemanticTag::Dotbit,
-        );
+        assert_eq!(code_hash_to_semantic_tag(&hash, 1), CellSemanticTag::Dotbit);
     }
 
     #[test]
     fn classify_from_code_hash_mnft_issuer() {
-        let hash = parse_code_hash_32(
+        let hash = crate::rpc::parse_hex_to_bytes(
             "0x24b04faf80ded836efc05247778eec4ec02548dab6e2012c0107374aa3f68b81",
         );
-        assert_eq!(
-            classify_semantic_tag_from_code_hash(Some(&hash), Some(1)),
-            CellSemanticTag::Mnft,
-        );
+        assert_eq!(code_hash_to_semantic_tag(&hash, 1), CellSemanticTag::Mnft);
     }
 
     #[test]
     fn classify_from_code_hash_unknown_type_is_plain() {
         let hash = [0xFF; 32];
-        assert_eq!(
-            classify_semantic_tag_from_code_hash(Some(&hash), Some(1)),
-            CellSemanticTag::Plain,
+        assert_eq!(code_hash_to_semantic_tag(&hash, 1), CellSemanticTag::Plain);
+    }
+
+    /// Testnet regression: testnet sUDT + testnet mNFT token classify in bulk
+    /// sync via the registry. Under the old mainnet-only static lookup table
+    /// these code_hashes were absent and silently fell through to `Plain`.
+    #[test]
+    fn classifies_testnet_sudt_and_mnft() {
+        let sudt_t = crate::rpc::parse_hex_to_bytes(
+            "0xc5e5dcf215925f7ef4dfaf5f4b4f105bc321c02776d6e7d52a1db3fcd9d011a4",
         );
+        assert_eq!(code_hash_to_semantic_tag(&sudt_t, 1), CellSemanticTag::Sudt);
+        let mnft_t = crate::rpc::parse_hex_to_bytes(
+            "0xb1837b5ad01a88558731953062d1f5cb547adf89ece01e8934a9f0aeed2d959f",
+        );
+        assert_eq!(code_hash_to_semantic_tag(&mnft_t, 1), CellSemanticTag::Mnft);
     }
 
     // -----------------------------------------------------------------------

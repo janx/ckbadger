@@ -31,8 +31,6 @@ describe('useRealtimeStore', () => {
         epochNumber: 100,
         epochIndex: 450,
         epochLength: 1800,
-        avgBlockTime: '10.50s',
-        estimatedEpochTime: '3h 45m',
         syncStatus: {
           isSyncing: false,
           syncedBlock: 12345,
@@ -66,6 +64,34 @@ describe('useRealtimeStore', () => {
 
       setLatestTx(tx);
       expect(useRealtimeStore.getState().latestTx).toEqual(tx);
+    });
+
+    it('reset clears connection state and latest block/tx', () => {
+      const { setConnected, setLatestTx, reset } = useRealtimeStore.getState();
+      setConnected(true);
+      setLatestTx({
+        hash: '0xdef456',
+        blockNumber: 12345,
+        inputsCount: 2,
+        outputsCount: 3,
+        fee: '1000',
+        timestamp: '2024-01-01T00:00:00Z',
+      });
+      useRealtimeStore.setState({
+        latestBlock: {
+          number: 12345,
+          hash: '0xabc',
+          timestamp: '2024-01-01T00:00:00Z',
+          transactionsCount: 1,
+        } as never,
+      });
+
+      reset();
+
+      const state = useRealtimeStore.getState();
+      expect(state.isConnected).toBe(false);
+      expect(state.latestBlock).toBeNull();
+      expect(state.latestTx).toBeNull();
     });
   });
 
@@ -251,8 +277,6 @@ describe('useRealtimeStore', () => {
         epochNumber: 100,
         epochIndex: 450,
         epochLength: 1800,
-        avgBlockTime: '10.50s',
-        estimatedEpochTime: '3h 45m',
         syncStatus: {
           isSyncing: false,
           syncedBlock: 12345,
@@ -273,14 +297,18 @@ describe('useRealtimeStore', () => {
       expect(epochString).toBe('100(450/1800)');
     });
 
-    it('updates network-stats with avgBlockTime and estimatedEpochTime from block', () => {
+    // Mirrors the cache merge in useRealtimeData: block-derived facts advance,
+    // window-averaged network statistics stay untouched (they belong to
+    // /statistics/network). The behavioural test drives the real hook in
+    // useRealtimeData.test.tsx.
+    it('merges only block-derived facts into network-stats', () => {
       const queryClient = new QueryClient();
 
       const oldStats = {
         latestBlock: 12340,
         epoch: '100(445/1800)',
-        avgBlockTime: '10.00s',
-        estimatedEpochTime: '4h 0m',
+        avgBlockTime: '9.62s',
+        estimatedEpochTime: '3h 36m',
         syncStatus: {
           isSyncing: false,
           syncedBlock: 12345,
@@ -304,8 +332,6 @@ describe('useRealtimeStore', () => {
         epochNumber: 100,
         epochIndex: 450,
         epochLength: 1800,
-        avgBlockTime: '10.50s',
-        estimatedEpochTime: '3h 45m',
         syncStatus: {
           isSyncing: false,
           syncedBlock: 12345,
@@ -329,8 +355,6 @@ describe('useRealtimeStore', () => {
             | {
                 latestBlock: number;
                 epoch?: string;
-                avgBlockTime?: string;
-                estimatedEpochTime?: string;
               }
             | undefined
         ) => {
@@ -340,8 +364,6 @@ describe('useRealtimeStore', () => {
             ...old,
             latestBlock: blockData.number,
             epoch: epochString,
-            avgBlockTime: blockData.avgBlockTime,
-            estimatedEpochTime: blockData.estimatedEpochTime,
             syncStatus: blockData.syncStatus ?? old,
           };
         }
@@ -356,8 +378,8 @@ describe('useRealtimeStore', () => {
 
       expect(updatedStats.latestBlock).toBe(12345);
       expect(updatedStats.epoch).toBe('100(450/1800)');
-      expect(updatedStats.avgBlockTime).toBe('10.50s');
-      expect(updatedStats.estimatedEpochTime).toBe('3h 45m');
+      expect(updatedStats.avgBlockTime).toBe('9.62s');
+      expect(updatedStats.estimatedEpochTime).toBe('3h 36m');
     });
   });
 });

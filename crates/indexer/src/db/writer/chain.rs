@@ -20,6 +20,13 @@ impl BatchWriter {
         }
 
         for block in blocks {
+            let compact_target = u32::try_from(block.compact_target).map_err(|_| {
+                anyhow::anyhow!(
+                    "block compact_target out of u32 range: block={}, compact_target={}",
+                    block.number,
+                    block.compact_target
+                )
+            })?;
             let header = CachedBlockHeader {
                 hash: block.hash.clone(),
                 parent_hash: block.parent_hash.clone(),
@@ -30,6 +37,9 @@ impl BatchWriter {
                 dao: block.dao.to_vec(),
                 transactions_count: block.transactions_count,
                 uncles_count: block.uncles_count,
+                proposals_count: block.proposals_count,
+                compact_target,
+                miner_lock_hash: block.miner_lock_hash.clone(),
                 cycles: None,
             };
             batch.put_block_header(block.number, &header);

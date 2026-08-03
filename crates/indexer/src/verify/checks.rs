@@ -21,6 +21,8 @@ impl std::fmt::Display for CheckTier {
 
 /// Context shared with every check. All data comes via HTTP — no store dependency.
 pub struct CheckContext {
+    /// Canonical CKB network name (`mainnet` or `testnet`).
+    pub network: &'static str,
     pub api_url: String,
     pub rpc_url: Option<String>,
     pub explorer_url: Option<String>,

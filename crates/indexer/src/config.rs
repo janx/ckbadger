@@ -24,6 +24,10 @@ pub struct Config {
     pub start_block: Option<u64>,
     #[serde(default = "default_bulk_sync_threshold")]
     pub bulk_sync_threshold: u64,
+    /// Whole-process hard budget used by bulk build. `None` resolves to the
+    /// store memory profile's per-network system RAM share.
+    #[serde(default)]
+    pub bulk_memory_budget_gb: Option<u64>,
     #[serde(default = "default_fast_sync_mode")]
     pub fast_sync_mode: bool,
     /// Resolved path to the CKB node RocksDB directory for direct reads.
@@ -95,6 +99,9 @@ impl Config {
         if self.store_runtime_config.memory_budget_gb == Some(0) {
             bail!("config: store.memory_budget_gb must be > 0 when set");
         }
+        if self.bulk_memory_budget_gb == Some(0) {
+            bail!("config: indexer.bulk_memory_budget_gb must be > 0 when set");
+        }
         Ok(())
     }
 }
@@ -135,6 +142,7 @@ mod tests {
             poll_interval_ms: 1000,
             start_block: None,
             bulk_sync_threshold: 72,
+            bulk_memory_budget_gb: None,
             fast_sync_mode: true,
             ckb_db_path: "/var/lib/ckb/data/db".to_string(),
             metadata_path: None,
@@ -168,6 +176,16 @@ mod tests {
         assert!(err
             .to_string()
             .contains("store.memory_budget_gb must be > 0"));
+    }
+
+    #[test]
+    fn test_validate_rejects_zero_bulk_process_memory_budget() {
+        let mut config = make_valid_config();
+        config.bulk_memory_budget_gb = Some(0);
+        let err = config.validate().unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("indexer.bulk_memory_budget_gb must be > 0"));
     }
 
     #[test]

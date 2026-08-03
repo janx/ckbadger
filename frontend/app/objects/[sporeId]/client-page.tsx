@@ -6,11 +6,17 @@ import { usePathname, useRouter, useSearchParams } from '@/src/navigation';
 import { Header } from '@/components/layout/header';
 import {
   api,
+  isNotFoundApiError,
   type CollectionActivity,
   type CollectionHolder,
   type ItemStatusFilter,
   type MnftItemActivity,
 } from '@/lib/api';
+import {
+  isDidCkbCollectionAlias,
+  isDotbitCollectionAlias,
+  resolveObjectRouteTarget,
+} from '@/lib/detail-routes';
 import {
   TerminalPanel,
   TerminalPanelHeader,
@@ -33,26 +39,6 @@ import {
   previewPanelStyle,
 } from '@/components/object/storage-tier';
 import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
-const DOTBIT_COLLECTION_ID = '0x646f746269745f636f6c6c656374696f6e5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f';
-const DID_CKB_COLLECTION_ID = '0x6469645f636b625f636f6c6c656374696f6e5f5f5f5f5f5f5f5f5f5f5f5f5f5f';
-
-function isDotbitAlias(assetId: string): boolean {
-  const normalized = assetId.toLowerCase();
-  return normalized === 'dotbit' || normalized === '.bit' || normalized === DOTBIT_COLLECTION_ID;
-}
-
-function isDidCkbAlias(assetId: string): boolean {
-  const normalized = assetId.toLowerCase();
-  return (
-    normalized === 'did:ckb' || normalized === 'did_ckb' || normalized === DID_CKB_COLLECTION_ID
-  );
-}
-
-function normalizeObjectAssetId(assetId: string): string {
-  if (isDotbitAlias(assetId)) return DOTBIT_COLLECTION_ID;
-  if (isDidCkbAlias(assetId)) return DID_CKB_COLLECTION_ID;
-  return assetId;
-}
 import { formatNumber, truncateHash } from '@/lib/utils';
 import { formatActivityTimestamp, formatCompositionTier } from '@/lib/asset-utils';
 import { getCapacityRangeParams, CapacityRangeKey } from '@/lib/capacity-range';
@@ -70,9 +56,6 @@ import { ObjectGalleryPanel, GALLERY_PAGE_SIZE } from '@/components/object/objec
 type CollectionSectionTab = 'activities' | 'holders';
 function isCollectionSectionTab(value: string | null): value is CollectionSectionTab {
   return value === 'activities' || value === 'holders';
-}
-function isNotFoundError(error: unknown): boolean {
-  return error instanceof Error && error.message.includes('404');
 }
 
 function MediaItemRow({
@@ -283,20 +266,17 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
   const { reset: resetCollectionHoldersPagination } = collectionHoldersPagination;
   const { reset: resetCollectionActivitiesPagination } = collectionActivitiesPagination;
   const capacityRangeParams = getCapacityRangeParams(capacityRange);
-  const isDotbitCollection = isDotbitAlias(rawAssetId);
-  const isDidCkbCollection = isDidCkbAlias(rawAssetId);
-  const assetId = normalizeObjectAssetId(rawAssetId);
-  // Redirect identity collection aliases to /identities/ routes
+  // What the URL identifier denotes is decided from the identifier itself: an
+  // mNFT class ID is 24 bytes and a Spore object ID is 32, so the page never
+  // probes an endpoint and reads its failure status as a routing signal.
+  const objectRoute = useMemo(() => resolveObjectRouteTarget(rawAssetId), [rawAssetId]);
+  const assetId = objectRoute.kind === 'spore-object' ? objectRoute.assetId : rawAssetId;
+  const redirectHref = objectRoute.kind === 'redirect' ? objectRoute.href : null;
   useEffect(() => {
-    if (isDotbitCollection) {
-      router.replace('/identities/dotbit');
-    } else if (isDidCkbCollection) {
-      router.replace('/identities/did:ckb');
+    if (redirectHref) {
+      router.replace(redirectHref);
     }
-  }, [isDotbitCollection, isDidCkbCollection, router]);
-  if (isDotbitCollection || isDidCkbCollection) {
-    return null; // redirecting
-  }
+  }, [redirectHref, router]);
   useEffect(() => {
     const timeout = window.setTimeout(() => {
       setSearchKeyword(searchInput.trim());
@@ -306,12 +286,14 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
   const sporeQuery = useQuery({
     queryKey: ['spore', rawAssetId],
     queryFn: () => api.getSporeObject(assetId),
-    enabled: !isDotbitCollection && !isDidCkbCollection,
+    enabled: objectRoute.kind === 'spore-object',
     retry: false,
   });
   const spore = sporeQuery.data;
+  // A 32-byte ID addresses two namespaces: a Spore object and a 32-byte object
+  // collection. Only "the object does not exist" (404) moves on to the second.
   const shouldQueryCollection =
-    isDotbitCollection || isDidCkbCollection || (!spore && isNotFoundError(sporeQuery.error));
+    objectRoute.kind === 'spore-object' && !spore && isNotFoundApiError(sporeQuery.error);
   const collectionQuery = useQuery({
     queryKey: ['object-collection', assetId],
     queryFn: () => api.getObjectCollection(assetId),
@@ -319,18 +301,16 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
     retry: false,
   });
   const collection = collectionQuery.data;
-  const isMnftCollection = !!collection && collection.standard.toLowerCase() === 'm-nft';
   const collectionAssetId = collection?.collectionId ?? assetId;
   const isDotbitCollectionView =
-    isDotbitCollection ||
-    (!!collection &&
-      (isDotbitAlias(collection.collectionId) || collection.standard.toLowerCase() === 'dotbit'));
+    !!collection &&
+    (isDotbitCollectionAlias(collection.collectionId) ||
+      collection.standard.toLowerCase() === 'dotbit');
   const isDidCkbCollectionView =
-    isDidCkbCollection ||
-    (!!collection &&
-      (isDidCkbAlias(collection.collectionId) ||
-        collection.standard.toLowerCase() === 'did_ckb' ||
-        collection.standard.toLowerCase() === 'did:ckb'));
+    !!collection &&
+    (isDidCkbCollectionAlias(collection.collectionId) ||
+      collection.standard.toLowerCase() === 'did_ckb' ||
+      collection.standard.toLowerCase() === 'did:ckb');
   const supportsCollectionFilters = isDotbitCollectionView || isDidCkbCollectionView;
   const collectionSearchKeyword = supportsCollectionFilters ? searchKeyword : '';
   const collectionStatusFilter = supportsCollectionFilters ? collectionStatusSelection : 'all';
@@ -521,16 +501,17 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
     [objectStandard, decodedTraits]
   );
   const hasDecodedTraits = displayableTraits.length > 0;
-  useEffect(() => {
-    if (isMnftCollection && collection) {
-      router.replace(`/classes/${collection.collectionId}`);
-    }
-  }, [isMnftCollection, collection, router]);
   const isPageLoading =
     sporeQuery.isLoading || (shouldQueryCollection && collectionQuery.isLoading);
   const hasTerminalError =
-    (!spore && !collection && !isPageLoading && !shouldQueryCollection) ||
-    (!spore && shouldQueryCollection && collectionQuery.isError);
+    objectRoute.kind === 'unroutable' ||
+    (objectRoute.kind === 'spore-object' &&
+      !spore &&
+      ((!collection && !isPageLoading && !shouldQueryCollection) ||
+        (shouldQueryCollection && collectionQuery.isError)));
+  if (redirectHref) {
+    return null; // redirecting
+  }
   if (isPageLoading) {
     return (
       <div className="bg-base-bg min-h-screen">
@@ -560,9 +541,6 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
     );
   }
   if (collection) {
-    if (isMnftCollection) {
-      return null; // redirecting to /classes/[classId]
-    }
     return (
       <div className="bg-base-bg min-h-screen">
         <Header />

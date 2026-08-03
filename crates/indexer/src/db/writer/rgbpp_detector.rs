@@ -22,13 +22,14 @@ struct TypeGroupCell {
     lock_args: Vec<u8>,
 }
 
-pub(crate) struct RgbppDetector {
-    is_mainnet: bool,
-}
+/// Detection is registry-backed and network-agnostic, so the detector carries
+/// no per-network state.
+#[derive(Default)]
+pub(crate) struct RgbppDetector;
 
 impl RgbppDetector {
-    pub fn new(is_mainnet: bool) -> Self {
-        Self { is_mainnet }
+    pub fn new() -> Self {
+        Self
     }
 
     /// Determine the RGB++ action from the lock transitions within a type-group,
@@ -144,16 +145,14 @@ impl ProtocolDetector for RgbppDetector {
     ) -> bool {
         lock_code_hashes
             .iter()
-            .any(|h| RgbppParser::detect_lock_type(h, self.is_mainnet) != RgbppLockType::Other)
+            .any(|h| RgbppParser::detect_lock_type(h) != RgbppLockType::Other)
     }
 
     fn might_apply(&self, tx: &TxView<'_>) -> bool {
         tx.inputs.iter().any(|input| {
-            RgbppParser::detect_lock_type(input.lock_code_hash, self.is_mainnet)
-                != RgbppLockType::Other
+            RgbppParser::detect_lock_type(input.lock_code_hash) != RgbppLockType::Other
         }) || tx.outputs.iter().any(|output| {
-            RgbppParser::detect_lock_type(output.lock_code_hash, self.is_mainnet)
-                != RgbppLockType::Other
+            RgbppParser::detect_lock_type(output.lock_code_hash) != RgbppLockType::Other
         })
     }
 
@@ -165,7 +164,7 @@ impl ProtocolDetector for RgbppDetector {
         _item_deltas: &[ckbadger_store::types::ItemDelta],
         _type_calls: &[ckbadger_store::types::TypeCallEntry],
         _lock_calls: &[ckbadger_store::types::LockCallEntry],
-    ) -> Vec<ProtocolAction> {
+    ) -> anyhow::Result<Vec<ProtocolAction>> {
         // Group cells by type_script identity (type_code_hash + type_args).
         // Skip cells without type scripts.
         use std::collections::BTreeMap;
@@ -177,8 +176,7 @@ impl ProtocolDetector for RgbppDetector {
         for input in &tx.inputs {
             if let (Some(type_code_hash), Some(type_args)) = (input.type_code_hash, input.type_args)
             {
-                let lock_type =
-                    RgbppParser::detect_lock_type(input.lock_code_hash, self.is_mainnet);
+                let lock_type = RgbppParser::detect_lock_type(input.lock_code_hash);
                 let key = (type_code_hash.to_vec(), type_args.to_vec());
                 type_groups.entry(key).or_default().push(TypeGroupCell {
                     side: CellSide::Input,
@@ -194,8 +192,7 @@ impl ProtocolDetector for RgbppDetector {
             if let (Some(type_code_hash), Some(type_args)) =
                 (output.type_code_hash, output.type_args)
             {
-                let lock_type =
-                    RgbppParser::detect_lock_type(output.lock_code_hash, self.is_mainnet);
+                let lock_type = RgbppParser::detect_lock_type(output.lock_code_hash);
                 let key = (type_code_hash.to_vec(), type_args.to_vec());
                 type_groups.entry(key).or_default().push(TypeGroupCell {
                     side: CellSide::Output,
@@ -212,6 +209,6 @@ impl ProtocolDetector for RgbppDetector {
             actions.extend(self.classify_action(cells, owner_lock_hash));
         }
 
-        actions
+        Ok(actions)
     }
 }

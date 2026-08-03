@@ -1,6 +1,9 @@
 # Network Peers UI — Design Spec (Plan 2: Surfacing)
 
-_Date: 2026-07-02 · Status: Approved (design) · Depends on: `docs/NETWORK_PEER_CRAWLER.md` (Plan 1, merged)_
+_Date: 2026-07-02 · Status: Implemented (design record) · Depends on: `docs/NETWORK_PEER_CRAWLER.md`_
+
+> Plan boundaries and “what next” notes are retained as historical rationale. Current route and
+> response contracts live in `docs/API.md`.
 
 Surface the whole-network CKB L1 peer-crawler data (the `network` store built in Plan 1) as a
 read-only `/network` API and a frontend **"Peers"** dashboard: summary, distributions, historical
@@ -67,14 +70,16 @@ secondary)` guarded by a path-exists check; failure to open (absent/locked) ⇒ 
   - New page `frontend/app/network/` (`page.tsx` wrapper + `client-page.tsx` client component),
     matching the codebase's dynamic-route split.
   - New methods on the `api` object in `frontend/lib/api.ts` + `camelCase` response types.
-  - TanStack Query v5 with a poll interval (30–60s). Nav label **"Peers"** (see Naming below).
+  - TanStack Query v5 with a poll interval (30–60s). The page and command-palette label is
+    **"Peers"** (see Naming below).
 
 ### Naming
 
 The frontend already uses "**Network**" for **chain** health (`NetworkHealth` widget: tip/tps). To
-avoid confusion, the new page's nav/UI label is **"Peers"** (the p2p node network), while the backend
-stays at `/network/*` and the `network` store name (already shipped). This is a label choice only; no
-backend rename.
+avoid confusion, the page/command label is **"Peers"** (the p2p node network), while the backend
+stays at `/network/*` and the `network` store name (already shipped). The page is available through
+the `g p` shortcut and command palette rather than a permanent navbar item. This is a label choice
+only; no backend rename.
 
 ---
 
@@ -99,6 +104,10 @@ LatestStatus {
 }
 ```
 
+`lastRound.reachable` is the post-round reachable node count, but `lastRound.unreachable` is the
+number of address probes that returned no same-network Identify. For node-level reachability, use
+`/network/distributions`, whose `unreachable` is exactly `totalKnown - reachable`.
+
 ### `GET /network/distributions`
 
 Single calculation path: scan `CF_NET_NODES`, aggregate in-memory (node count is small).
@@ -109,7 +118,7 @@ NetworkDistributions {
   versions:  [{ label, count }],               // top-N by count, desc
   countries: [{ label, count }],               // geo=None OR empty country ("") both grouped as "Unknown"
   asns:      [{ label, count }],               // label "AS{num} {org}"; asn=None ⇒ "Unknown"
-  protocols: [{ label, count }]                // per advertised protocol
+  protocols: [{ label, count }]                // per successfully opened probe protocol
 }
 ```
 
@@ -159,13 +168,15 @@ agent-friendliness (llms.txt ethos); cut it if undesired.
 - **`enabled=false` OR `hasData=false` → Onboarding empty state.** A panel that explains the peer
   crawler (whole-network CKB L1 node discovery; local-first — you run it, the data is yours), states
   the honesty caveat (**discoverable/reachable nodes only**, not the full hidden network), and shows
-  how to enable it: set `[crawler].enabled = true` in `ckbadger.toml` (+ optional `geoip_city_path` /
-  `geoip_asn_path` for geo/ASN), noting it does outbound whole-network crawling. When `enabled=true`
-  but `hasData=false`, a "crawler enabled — waiting for the first round" variant.
+  how to enable it: set `[crawler].enabled = true` in that network's `config.toml` (+ optional
+  `geoip_city_path` / `geoip_asn_path` for geo/ASN), noting it does outbound whole-network
+  crawling. When `enabled=true` but `hasData=false`, a "crawler enabled — waiting for the first
+  round" variant.
 - **`hasData=true` → Dashboard**:
-  1. **Summary cards** (from `lastRound`): discovered reachable / unreachable / total known /
-     last-round age; a **"partial round"** badge when `!frontierDrained`. Honest labels — "discovered
-     reachable nodes", never "total network nodes".
+  1. **Summary cards** (from `lastRound`): discovered reachable / failed probe addresses / total
+     known / last-round age; a **"partial round"** badge when `!frontierDrained`. The current
+     failed-probe card is abbreviated as "Unreachable"; rename it to keep the unit distinct from
+     the node-level distribution. Honest labels use "discovered", never "total network nodes".
   2. **Distributions** (from `/distributions`): version (bar/pie), country (bar/list — no map),
      ASN top-N (bar), protocol support, reachable-vs-unreachable. Reuse existing chart components
      (`frontend/components/ui/`).
@@ -176,8 +187,9 @@ agent-friendliness (llms.txt ethos); cut it if undesired.
      peerId (truncated), address, version, country, ASN, reachable badge, last-seen (relative), RTT.
      No row-detail route.
 
-- **Nav**: an always-visible "Peers" entry (the empty state covers the no-data case). **MaxMind
-  attribution** in the page footer whenever GeoLite2-derived geo/ASN is shown.
+- **Discovery**: no permanent navbar entry; the `g p` shortcut and command palette open the
+  **"Peers"** page (the empty state covers the no-data case). **MaxMind attribution** appears in the
+  page footer whenever GeoLite2-derived geo/ASN is shown.
 
 ### States & error handling
 
@@ -192,18 +204,18 @@ agent-friendliness (llms.txt ethos); cut it if undesired.
 
 - **API** — `crates/api/tests/api_network.rs` (per-resource convention; shared helpers in
   `crates/api/tests/common/mod.rs`):
-  - A test helper to open + seed a network secondary (extend the existing domain+append test
-    harness) — put a few `NodeRecord`s + a `LatestStatus` + history buckets.
-  - Per endpoint: happy path (seeded) asserting shape + aggregation correctness (e.g. reachable
-    count, top-N ordering, current-day excluded); **empty store** (`hasData:false`, empty
-    distributions/nodes/history — not errors); `nodes/{peerId}` not-found.
-  - Boundary test: the network handle is opened **secondary/read-only** (no write path in the API).
+  - The shared harness opens and seeds an isolated test network store with two `NodeRecord`s, a
+    `LatestStatus`, and history buckets, then injects that handle into the read-only API state.
+  - Endpoint tests cover seeded and empty states, aggregation, current-day exclusion, filters,
+    pagination, point lookup, malformed peer IDs, and not-found behavior.
+  - The production secondary-open/read-only boundary is enforced by the API entry path; a dedicated
+    integration test for that boundary remains useful follow-up coverage.
 - **Frontend** — `frontend/__tests__/`:
-  - Renders onboarding when `hasData:false` / `enabled:false`; renders dashboard sections when
-    `hasData:true`; node-table rows + filter interaction; trend chart excludes the incomplete current
-    day; honest labels present; MaxMind attribution shown when geo present.
-  - MSW handlers for `/network/*` (`frontend/__tests__/msw/handlers.ts`).
-- **lib/api.ts** method tests if the codebase tests API methods (mirror existing coverage).
+  - Tests cover onboarding and per-network configuration guidance, first-round waiting, dashboard
+    summary/partial status, distributions, trend query boundaries, node rows and reachability
+    filtering, shortcut/command discovery, and conditional MaxMind attribution.
+  - MSW handlers for `/network/*` live in `frontend/__tests__/msw/handlers.ts`; API method coverage
+    lives in `frontend/__tests__/lib/network-api.test.ts`.
 
 ---
 
@@ -213,7 +225,6 @@ agent-friendliness (llms.txt ethos); cut it if undesired.
   distributions, trends, node table) surfacing the crawler's `network` store. Opt-in-aware: shows
   onboarding until the crawler runs. No change to the crawler, chain indexer, or chain API.
 - **Re-sync required** — **No** (read-only surfacing of existing data).
-- **What to do next** — **Plan 3**: the topology (reachability/gossip) graph — react-force-graph via
-  `frontend/lib/dynamic-client.tsx`, a `/network/graph` endpoint over `known_peers`, honest
-  "non-authoritative" caption, node/degree caps, and a country choropleth map. Also the pre-enable
-  crawler follow-ups from `docs/NETWORK_PEER_CRAWLER.md` (concurrency, live `crawl --once`, etc.).
+- **What to do next** — a future topology (reachability/gossip) graph would require a new,
+  explicitly non-authoritative API/UX contract; it is not part of the current implementation. Add a
+  production-path integration test that proves the API opens the network store secondary/read-only.

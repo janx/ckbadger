@@ -1,10 +1,14 @@
 //! Sync status operations.
 
 use anyhow::anyhow;
+use rocksdb::{Direction, IteratorMode};
 
-use crate::keys::sync_meta_keys;
+use crate::keys::{self, sync_meta_keys};
 use crate::store::CkbadgerStore;
-use crate::types::{BulkBuildSessionMarker, DeepForkInfo, ReorgEvent, RuntimeStatus, SyncStatus};
+use crate::types::{
+    BulkBuildSessionMarker, DeepForkInfo, GenesisBaseline, ReorgEvent, ReorgEventRecord,
+    RuntimeStatus, SyncStatus,
+};
 
 impl CkbadgerStore {
     pub fn get_bulk_build_session_marker(&self) -> anyhow::Result<Option<BulkBuildSessionMarker>> {
@@ -329,6 +333,70 @@ impl CkbadgerStore {
         self.get_cf(self.cf_sync_meta(), sync_meta_keys::SYNC_PROGRESS)
     }
 
+    /// Read the chain-network tag persisted at first sync, if any.
+    pub fn get_network_identity(&self) -> anyhow::Result<Option<String>> {
+        match self.get_cf(self.cf_sync_meta(), sync_meta_keys::NETWORK_IDENTITY)? {
+            Some(bytes) => Ok(Some(String::from_utf8(bytes).map_err(|e| {
+                anyhow!("network_identity record is not valid UTF-8: {e}")
+            })?)),
+            None => Ok(None),
+        }
+    }
+
+    /// Persist the chain-network tag (idempotent overwrite at storage layer).
+    pub fn set_network_identity(&self, network: &str) -> anyhow::Result<()> {
+        self.put_cf(
+            self.cf_sync_meta(),
+            sync_meta_keys::NETWORK_IDENTITY,
+            network.as_bytes(),
+        )
+    }
+
+    /// Read the genesis economic baseline, if it has been derived+persisted.
+    pub fn get_genesis_baseline(&self) -> anyhow::Result<Option<GenesisBaseline>> {
+        match self.get_cf(self.cf_sync_meta(), sync_meta_keys::GENESIS_BASELINE)? {
+            Some(value) => Ok(Some(bincode::deserialize(&value)?)),
+            None => Ok(None),
+        }
+    }
+
+    /// Persist the genesis economic baseline (write-once at first sync).
+    pub fn set_genesis_baseline(&self, baseline: &GenesisBaseline) -> anyhow::Result<()> {
+        let value = bincode::serialize(baseline)?;
+        self.put_cf(
+            self.cf_sync_meta(),
+            sync_meta_keys::GENESIS_BASELINE,
+            &value,
+        )
+    }
+
+    /// Read the consensus secondary issuance per epoch (shannons), persisted
+    /// from the node's `get_consensus` at indexer startup.
+    pub fn get_secondary_epoch_reward(&self) -> anyhow::Result<Option<u64>> {
+        match self.get_cf(self.cf_sync_meta(), sync_meta_keys::SECONDARY_EPOCH_REWARD)? {
+            Some(value) => {
+                let bytes: [u8; 8] = value.as_slice().try_into().map_err(|_| {
+                    anyhow::anyhow!(
+                        "corrupt secondary_epoch_reward value in sync meta: expected 8 bytes, got {}",
+                        value.len()
+                    )
+                })?;
+                Ok(Some(u64::from_le_bytes(bytes)))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Persist the consensus secondary issuance per epoch (write-once at
+    /// indexer startup, verified against the node on every restart).
+    pub fn set_secondary_epoch_reward(&self, shannons: u64) -> anyhow::Result<()> {
+        self.put_cf(
+            self.cf_sync_meta(),
+            sync_meta_keys::SECONDARY_EPOCH_REWARD,
+            &shannons.to_le_bytes(),
+        )
+    }
+
     /// Store memory stats data (JSON serialized, ephemeral monitoring).
     pub fn put_memory_stats(&self, data: &[u8]) -> anyhow::Result<()> {
         self.put_cf(self.cf_sync_meta(), sync_meta_keys::MEMORY_STATS, data)
@@ -339,20 +407,127 @@ impl CkbadgerStore {
         self.get_cf(self.cf_sync_meta(), sync_meta_keys::MEMORY_STATS)
     }
 
-    pub fn get_latest_reorg_event(&self) -> anyhow::Result<Option<ReorgEvent>> {
-        if let Some(value) = self.get_cf(self.cf_sync_meta(), sync_meta_keys::REORG_LATEST_EVENT)? {
-            let event: ReorgEvent = bincode::deserialize(&value).map_err(|e| {
-                anyhow!(
-                    "failed to deserialize latest reorg event marker in sync_meta: key={}, error={}",
-                    std::str::from_utf8(sync_meta_keys::REORG_LATEST_EVENT).unwrap_or("reorg_latest_event"),
-                    e
-                )
-            })?;
-            return Ok(Some(event));
+    /// Page through the persisted reorg-event history, newest first.
+    ///
+    /// This is the only read path for reorg events: "the latest event" is the
+    /// first row of this scan, not a separately maintained marker that could
+    /// disagree with the history. `cursor_key_exclusive` is a full history key
+    /// and the page continues strictly below it.
+    pub fn list_reorg_events(
+        &self,
+        limit: usize,
+        cursor_key_exclusive: Option<&[u8]>,
+    ) -> anyhow::Result<Vec<ReorgEventRecord>> {
+        if let Some(cursor_key) = cursor_key_exclusive {
+            // Rejects a cursor that is not a well-formed history key, so a
+            // bad cursor cannot silently start the page somewhere else.
+            keys::decode_reorg_event_key(cursor_key)?;
         }
+        let mut rows = Vec::with_capacity(limit.min(1024));
+        if limit == 0 {
+            return Ok(rows);
+        }
+        let start = cursor_key_exclusive.unwrap_or(keys::REORG_EVENT_KEY_PREFIX_END);
+        let iter = self.iterator_cf(
+            self.cf_sync_meta(),
+            IteratorMode::From(start, Direction::Reverse),
+        );
 
-        Ok(None)
+        for item in iter {
+            let (key, value) = item
+                .map_err(|e| anyhow!("failed to iterate sync_meta in list_reorg_events: {}", e))?;
+            if !key.starts_with(keys::REORG_EVENT_KEY_PREFIX) {
+                break;
+            }
+            if Some(key.as_ref()) == cursor_key_exclusive {
+                continue;
+            }
+            rows.push(decode_reorg_event_record(&key, &value)?);
+            if rows.len() == limit {
+                break;
+            }
+        }
+        Ok(rows)
     }
+
+    /// Exact number of persisted reorg events.
+    pub fn count_reorg_events(&self) -> anyhow::Result<i64> {
+        let iter = self.iterator_cf(
+            self.cf_sync_meta(),
+            IteratorMode::From(keys::REORG_EVENT_KEY_PREFIX, Direction::Forward),
+        );
+        let mut total = 0i64;
+        for item in iter {
+            let (key, _) = item
+                .map_err(|e| anyhow!("failed to iterate sync_meta in count_reorg_events: {}", e))?;
+            if !key.starts_with(keys::REORG_EVENT_KEY_PREFIX) {
+                break;
+            }
+            keys::decode_reorg_event_key(&key)?;
+            total += 1;
+        }
+        Ok(total)
+    }
+
+    /// Look one reorg event up by its detection millisecond, which is the
+    /// public event id.
+    pub fn get_reorg_event(&self, detected_at_ms: i64) -> anyhow::Result<Option<ReorgEventRecord>> {
+        let prefix = keys::reorg_event_key_ms_prefix(detected_at_ms)?;
+        let iter = self.iterator_cf(
+            self.cf_sync_meta(),
+            IteratorMode::From(prefix.as_bytes(), Direction::Forward),
+        );
+        let mut found: Option<ReorgEventRecord> = None;
+        for item in iter {
+            let (key, value) =
+                item.map_err(|e| anyhow!("failed to iterate sync_meta in get_reorg_event: {}", e))?;
+            if !key.starts_with(prefix.as_bytes()) {
+                break;
+            }
+            let record = decode_reorg_event_record(&key, &value)?;
+            if let Some(previous) = &found {
+                // The uuid segment exists to keep same-millisecond events
+                // distinct in the history; it also means the millisecond alone
+                // stops being a unique id, so report the collision instead of
+                // picking one arbitrarily.
+                return Err(anyhow!(
+                    "ambiguous reorg event id {}: keys {} and {} share the same millisecond",
+                    detected_at_ms,
+                    previous.key,
+                    record.key
+                ));
+            }
+            found = Some(record);
+        }
+        Ok(found)
+    }
+
+    /// The most recent persisted reorg event, if any.
+    pub fn get_latest_reorg_event(&self) -> anyhow::Result<Option<ReorgEventRecord>> {
+        Ok(self.list_reorg_events(1, None)?.into_iter().next())
+    }
+}
+
+fn decode_reorg_event_record(key: &[u8], value: &[u8]) -> anyhow::Result<ReorgEventRecord> {
+    let detected_at_ms = keys::decode_reorg_event_key(key)?;
+    let event: ReorgEvent = bincode::deserialize(value).map_err(|e| {
+        anyhow!(
+            "failed to deserialize reorg event in sync_meta: key=0x{}, error={}",
+            crate::bytes_to_hex(key),
+            e
+        )
+    })?;
+    Ok(ReorgEventRecord {
+        key: String::from_utf8(key.to_vec()).map_err(|e| {
+            anyhow!(
+                "reorg event key is not valid UTF-8: key=0x{}, error={}",
+                crate::bytes_to_hex(key),
+                e
+            )
+        })?,
+        detected_at_ms,
+        event,
+    })
 }
 
 pub(crate) fn checked_rollback_total(
@@ -556,62 +731,193 @@ mod tests {
         assert!(store.get_bulk_build_session_marker().unwrap().is_none());
     }
 
-    #[test]
-    fn test_get_latest_reorg_event_returns_none_without_latest_marker() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
-        let latest = store.get_latest_reorg_event().unwrap();
-        assert!(latest.is_none());
+    fn seed_reorg_event(store: &CkbadgerStore, detected_at_ms: i64, fork_point: i64, seq: u8) {
+        let event = ReorgEvent {
+            detected_at: detected_at_ms / 1000,
+            kind: crate::types::ReorgEventKind::Automatic,
+            fork_point,
+            fork_point_hash: vec![seq; 32],
+            old_tip: fork_point + 3,
+            old_tip_hash: vec![seq; 32],
+            new_tip: fork_point + 4,
+            new_tip_hash: vec![seq; 32],
+            depth: 3,
+            orphaned_blocks: 3,
+            orphaned_txs: 6,
+        };
+        let key = keys::encode_reorg_event_key(detected_at_ms, &[seq; 16]).unwrap();
+        store
+            .put_cf(
+                store.cf_sync_meta(),
+                key.as_bytes(),
+                &bincode::serialize(&event).unwrap(),
+            )
+            .unwrap();
     }
 
     #[test]
-    fn test_get_latest_reorg_event_uses_latest_marker_when_present() {
+    fn test_get_latest_reorg_event_returns_none_without_history() {
         let dir = tempfile::tempdir().unwrap();
         let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
-        let latest_event = ReorgEvent {
-            detected_at: 999,
-            rollback_from: 21,
-            rollback_to: 20,
-            depth: 1,
-        };
+        assert!(store.get_latest_reorg_event().unwrap().is_none());
+        assert_eq!(store.count_reorg_events().unwrap(), 0);
+    }
 
-        // Legacy-style keys no longer participate in reads.
-        store
-            .put_cf(
-                store.cf_sync_meta(),
-                b"reorg:bad-ts:1",
-                &bincode::serialize(&latest_event).unwrap(),
-            )
+    #[test]
+    fn test_list_reorg_events_is_newest_first_and_pages_by_cursor() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        seed_reorg_event(&store, 1_700_000_000_000, 100, 0x01);
+        seed_reorg_event(&store, 1_700_000_060_000, 200, 0x02);
+        seed_reorg_event(&store, 1_700_000_120_000, 300, 0x03);
+        // Other sync_meta keys must not leak into the history range.
+        store.set_network_identity("testnet").unwrap();
+
+        assert_eq!(store.count_reorg_events().unwrap(), 3);
+
+        let page1 = store.list_reorg_events(2, None).unwrap();
+        assert_eq!(page1.len(), 2);
+        assert_eq!(page1[0].event.fork_point, 300);
+        assert_eq!(page1[0].detected_at_ms, 1_700_000_120_000);
+        assert_eq!(page1[1].event.fork_point, 200);
+
+        let page2 = store
+            .list_reorg_events(2, Some(page1[1].key.as_bytes()))
             .unwrap();
-        store
-            .put_cf(
-                store.cf_sync_meta(),
-                sync_meta_keys::REORG_LATEST_EVENT,
-                &bincode::serialize(&latest_event).unwrap(),
-            )
-            .unwrap();
+        assert_eq!(page2.len(), 1, "cursor row itself must be excluded");
+        assert_eq!(page2[0].event.fork_point, 100);
 
         let latest = store.get_latest_reorg_event().unwrap().unwrap();
-        assert_eq!(latest.detected_at, 999);
-        assert_eq!(latest.rollback_from, 21);
+        assert_eq!(latest.event.fork_point, 300);
     }
 
     #[test]
-    fn test_get_latest_reorg_event_fails_on_malformed_latest_marker() {
+    fn test_get_reorg_event_by_detection_millisecond() {
         let dir = tempfile::tempdir().unwrap();
         let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        seed_reorg_event(&store, 1_700_000_000_000, 100, 0x01);
+        seed_reorg_event(&store, 1_700_000_060_000, 200, 0x02);
+
+        let found = store.get_reorg_event(1_700_000_060_000).unwrap().unwrap();
+        assert_eq!(found.event.fork_point, 200);
+        assert!(store.get_reorg_event(1_700_000_030_000).unwrap().is_none());
+    }
+
+    #[test]
+    fn test_get_reorg_event_fails_on_same_millisecond_collision() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        seed_reorg_event(&store, 1_700_000_000_000, 100, 0x01);
+        seed_reorg_event(&store, 1_700_000_000_000, 101, 0x02);
+
+        let err = store.get_reorg_event(1_700_000_000_000).unwrap_err();
+        assert!(
+            err.to_string().contains("ambiguous reorg event id"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_list_reorg_events_rejects_malformed_cursor() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        let err = store.list_reorg_events(10, Some(b"reorg:1:x")).unwrap_err();
+        assert!(
+            err.to_string().contains("malformed reorg event key"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_list_reorg_events_fails_on_malformed_history_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        seed_reorg_event(&store, 1_700_000_000_000, 100, 0x01);
+        // A key inside the history range that breaks the ordering invariant.
+        store
+            .put_cf(store.cf_sync_meta(), b"reorg:bad-ts:1", b"whatever")
+            .unwrap();
+
+        let err = store.list_reorg_events(10, None).unwrap_err();
+        assert!(
+            err.to_string().contains("malformed reorg event key"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn network_identity_roundtrip_and_absent_default() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+
+        // Absent before first write.
+        assert_eq!(store.get_network_identity().unwrap(), None);
+
+        store.set_network_identity("testnet").unwrap();
+        assert_eq!(
+            store.get_network_identity().unwrap(),
+            Some("testnet".to_string())
+        );
+
+        // Overwrite is allowed at the storage layer (policy enforced above it).
+        store.set_network_identity("mainnet").unwrap();
+        assert_eq!(
+            store.get_network_identity().unwrap(),
+            Some("mainnet".to_string())
+        );
+    }
+
+    #[test]
+    fn genesis_baseline_roundtrip_and_absent_none() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+
+        assert_eq!(store.get_genesis_baseline().unwrap(), None);
+
+        let baseline = GenesisBaseline {
+            total_issuance: 3_360_000_145_238_488_200,
+            burnt: 840_000_000_000_000_000,
+            virtual_occupied: 504_000_000_000_000_000,
+        };
+        store.set_genesis_baseline(&baseline).unwrap();
+        assert_eq!(store.get_genesis_baseline().unwrap(), Some(baseline));
+    }
+
+    #[test]
+    fn network_identity_non_utf8_fails_fast() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+
+        // Write a raw non-UTF-8 payload directly under the identity key.
         store
             .put_cf(
                 store.cf_sync_meta(),
-                sync_meta_keys::REORG_LATEST_EVENT,
-                b"invalid-payload",
+                sync_meta_keys::NETWORK_IDENTITY,
+                &[0xff, 0xfe],
             )
+            .unwrap();
+
+        let err = store.get_network_identity().unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("network_identity record is not valid UTF-8"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_get_latest_reorg_event_fails_on_malformed_payload() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        let key = keys::encode_reorg_event_key(1_700_000_000_000, &[0x07; 16]).unwrap();
+        store
+            .put_cf(store.cf_sync_meta(), key.as_bytes(), b"invalid-payload")
             .unwrap();
 
         let err = store.get_latest_reorg_event().unwrap_err();
         assert!(
             err.to_string()
-                .contains("failed to deserialize latest reorg event marker"),
+                .contains("failed to deserialize reorg event in sync_meta"),
             "unexpected error: {err}"
         );
     }

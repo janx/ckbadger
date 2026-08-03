@@ -9,7 +9,8 @@ use ckbadger_store::types::{
     ClusterAggregate, ClusterDailyDelta, CompositionTier, IdentityCollectionAggregate,
     IdentityEntry, IdentityExtra, IdentityStandard, MnftCollectionAggregate, MnftDailyDelta,
     MnftTypeIndex, ObjectEntry, ObjectExtra, ObjectStandard, SporeDailyDelta, SporeTypeIndex,
-    DID_CKB_SENTINEL_COLLECTION, DOTBIT_SENTINEL_COLLECTION, SOLE_SPORES_SENTINEL_COLLECTION,
+    BIT_CELL_SENTINEL_COLLECTION, DID_CKB_SENTINEL_COLLECTION, DOTBIT_SENTINEL_COLLECTION,
+    SOLE_SPORES_SENTINEL_COLLECTION,
 };
 use ckbadger_store::{
     CkbadgerStore, CF_CLUSTER_AGG, CF_IDENTITY_AGG, CF_IDENTITY_DATA, CF_MNFT_COLLECTION_AGG,
@@ -37,6 +38,7 @@ pub(crate) struct ObjectOwner {
     object_collection_aggs: BTreeMap<Vec<u8>, MnftCollectionAggregate>,
     did_agg: Option<IdentityCollectionAggregate>,
     dotbit_agg: Option<IdentityCollectionAggregate>,
+    bit_cell_agg: Option<IdentityCollectionAggregate>,
     identity_by_collection: BTreeSet<Vec<u8>>,
     spore_by_cluster: BTreeSet<Vec<u8>>,
     stats_spore_rows: BTreeMap<Vec<u8>, Vec<u8>>,
@@ -49,6 +51,7 @@ pub(crate) struct ObjectOwner {
     spore_hourly_transfers: BTreeMap<Vec<u8>, i64>,
     did_owner_counts: BTreeMap<Vec<u8>, i64>,
     dotbit_owner_counts: BTreeMap<Vec<u8>, i64>,
+    bit_cell_owner_counts: BTreeMap<Vec<u8>, i64>,
     dotbit_outpoints: BTreeMap<Vec<u8>, Vec<u8>>,
     dotbit_outpoints_by_account: BTreeSet<Vec<u8>>,
     dotbit_hourly_transfers: BTreeMap<Vec<u8>, i64>,
@@ -62,11 +65,9 @@ pub(crate) struct ObjectOwner {
 
 impl BulkReducer for ObjectOwner {
     fn flush_sealed(&mut self, materializer: &mut Materializer<'_>) -> Result<()> {
-        let sealed_rows = self.build_sealed_rows();
-        if !sealed_rows.is_empty() {
-            materializer.stream_sealed_aggregate_rows(&sealed_rows)?;
-        }
-        Ok(())
+        materializer.stream_sealed_aggregate_rows_bounded(|sink| {
+            self.emit_sealed_rows(|row| sink.push(row))
+        })
     }
 
     fn apply_tx(&mut self, tx: &ResolvedTxFacts<'_>, ctx: &ReducerContext<'_>) -> Result<()> {
@@ -111,15 +112,13 @@ impl BulkReducer for ObjectOwner {
                 entry.1 -= i128::from(input.occupied_capacity);
             }
             if let Some(CellProtocolFacts::Spore(spore)) = input.protocol_facts.as_ref() {
-                if !spore.is_did {
-                    self.record_spore_daily_delta(
-                        spore.spore_id.as_slice(),
-                        spore.cluster_id.as_ref().map(|id| id.as_slice()),
-                        date_yyyymmdd,
-                        -i128::from(input.capacity),
-                        -i128::from(input.occupied_capacity),
-                    );
-                }
+                self.record_spore_daily_delta(
+                    spore.spore_id.as_slice(),
+                    spore.cluster_id.as_ref().map(|id| id.as_slice()),
+                    date_yyyymmdd,
+                    -i128::from(input.capacity),
+                    -i128::from(input.occupied_capacity),
+                );
             }
             self.apply_input(input)?;
         }
@@ -135,15 +134,13 @@ impl BulkReducer for ObjectOwner {
                 entry.1 += i128::from(cell.occupied_capacity);
             }
             if let Some(CellProtocolFacts::Spore(spore)) = cell.protocol_facts.as_ref() {
-                if !spore.is_did {
-                    self.record_spore_daily_delta(
-                        spore.spore_id.as_slice(),
-                        spore.cluster_id.as_ref().map(|id| id.as_slice()),
-                        date_yyyymmdd,
-                        i128::from(cell.capacity),
-                        i128::from(cell.occupied_capacity),
-                    );
-                }
+                self.record_spore_daily_delta(
+                    spore.spore_id.as_slice(),
+                    spore.cluster_id.as_ref().map(|id| id.as_slice()),
+                    date_yyyymmdd,
+                    i128::from(cell.capacity),
+                    i128::from(cell.occupied_capacity),
+                );
             }
             self.apply_output(
                 cell,
@@ -159,215 +156,266 @@ impl BulkReducer for ObjectOwner {
     }
 
     fn materialize_final(&self, materializer: &mut Materializer<'_>) -> Result<()> {
-        let final_rows = self.build_snapshot_rows()?;
-        materializer.materialize_final_snapshot(&final_rows)
+        materializer.materialize_final_snapshot_bounded(|sink| {
+            self.emit_snapshot_rows(|row| sink.push(row))
+        })
     }
 }
 
 impl ObjectOwner {
-    fn build_sealed_rows(&self) -> Vec<MaterializedRow> {
-        let mut sealed_rows: Vec<MaterializedRow> = self
-            .stats_spore_rows
-            .iter()
-            .map(|(key, value)| MaterializedRow::new(CF_STATS_SPORE, key.clone(), value.clone()))
-            .collect();
-        sealed_rows.extend(self.spore_hourly_transfers.iter().map(|(key, count)| {
-            MaterializedRow::new(CF_STATS_SPORE, key.clone(), count.to_le_bytes().to_vec())
-        }));
-        sealed_rows.extend(
-            self.mnft_class_outpoints.iter().map(|(key, value)| {
-                MaterializedRow::new(CF_STATS_MNFT, key.clone(), value.clone())
-            }),
-        );
-        sealed_rows.extend(
-            self.mnft_token_outpoints.iter().map(|(key, value)| {
-                MaterializedRow::new(CF_STATS_MNFT, key.clone(), value.clone())
-            }),
-        );
-        sealed_rows.extend(self.mnft_type_indexes.iter().map(|(type_hash, index)| {
-            MaterializedRow::new(
+    pub(crate) fn emit_sealed_rows<F>(&self, mut emit: F) -> Result<()>
+    where
+        F: FnMut(MaterializedRow) -> Result<()>,
+    {
+        for (key, value) in &self.stats_spore_rows {
+            emit(MaterializedRow::new(
+                CF_STATS_SPORE,
+                key.clone(),
+                value.clone(),
+            ))?;
+        }
+        for (key, count) in &self.spore_hourly_transfers {
+            emit(MaterializedRow::new(
+                CF_STATS_SPORE,
+                key.clone(),
+                count.to_le_bytes().to_vec(),
+            ))?;
+        }
+        for (key, value) in &self.mnft_class_outpoints {
+            emit(MaterializedRow::new(
+                CF_STATS_MNFT,
+                key.clone(),
+                value.clone(),
+            ))?;
+        }
+        for (key, value) in &self.mnft_token_outpoints {
+            emit(MaterializedRow::new(
+                CF_STATS_MNFT,
+                key.clone(),
+                value.clone(),
+            ))?;
+        }
+        for (type_hash, index) in &self.mnft_type_indexes {
+            emit(MaterializedRow::new(
                 CF_STATS_MNFT,
                 keys::encode_object_type_index_key(type_hash).to_vec(),
-                bincode::serialize(index).expect("object type index serialization must succeed"),
-            )
-        }));
-        sealed_rows.extend(self.mnft_hourly_transfers.iter().map(|(key, count)| {
-            MaterializedRow::new(CF_STATS_MNFT, key.clone(), count.to_le_bytes().to_vec())
-        }));
-        sealed_rows.extend(
-            self.dotbit_outpoints.iter().map(|(key, value)| {
-                MaterializedRow::new(CF_STATS_MNFT, key.clone(), value.clone())
-            }),
-        );
-        sealed_rows.extend(
-            self.dotbit_outpoints_by_account
-                .iter()
-                .map(|key| MaterializedRow::new(CF_STATS_MNFT, key.clone(), Vec::new())),
-        );
-        sealed_rows.extend(self.dotbit_hourly_transfers.iter().map(|(key, count)| {
-            MaterializedRow::new(CF_STATS_MNFT, key.clone(), count.to_le_bytes().to_vec())
-        }));
-        sealed_rows.extend(
-            self.object_daily_deltas
-                .iter()
-                .filter(|(_, (cap, know))| *cap != 0 || *know != 0)
-                .map(|((collection_id, date), (cap_delta, know_delta))| {
-                    MaterializedRow::new(
-                        CF_STATS_MNFT,
-                        keys::encode_object_daily_key(collection_id, *date).to_vec(),
-                        bincode::serialize(&MnftDailyDelta {
-                            owned_capacity_delta: *cap_delta,
-                            owned_knowledge_delta: *know_delta,
-                        })
-                        .expect("serialize MnftDailyDelta"),
-                    )
-                }),
-        );
-        sealed_rows.extend(
-            self.spore_daily_deltas
-                .iter()
-                .filter(|(_, (cap, know))| *cap != 0 || *know != 0)
-                .map(|((spore_id, date), (cap_delta, know_delta))| {
-                    MaterializedRow::new(
-                        CF_STATS_SPORE,
-                        keys::encode_spore_daily_key(spore_id, *date).to_vec(),
-                        bincode::serialize(&SporeDailyDelta {
-                            owned_capacity_delta: *cap_delta,
-                            owned_knowledge_delta: *know_delta,
-                        })
-                        .expect("serialize SporeDailyDelta"),
-                    )
-                }),
-        );
-        sealed_rows.extend(
-            self.cluster_daily_deltas
-                .iter()
-                .filter(|(_, (cap, know))| *cap != 0 || *know != 0)
-                .map(|((cluster_id, date), (cap_delta, know_delta))| {
-                    MaterializedRow::new(
-                        CF_STATS_SPORE,
-                        keys::encode_cluster_daily_key(cluster_id, *date).to_vec(),
-                        bincode::serialize(&ClusterDailyDelta {
-                            owned_capacity_delta: *cap_delta,
-                            owned_knowledge_delta: *know_delta,
-                        })
-                        .expect("serialize ClusterDailyDelta"),
-                    )
-                }),
-        );
-        sealed_rows.extend(
-            self.mnft_owner_counts
-                .iter()
-                .filter(|(_, count)| **count > 0)
-                .map(|((class_id, lock_hash), count)| {
-                    MaterializedRow::new(
-                        CF_STATS_MNFT,
-                        keys::encode_object_collection_owner_key(class_id, lock_hash).to_vec(),
-                        count.to_le_bytes().to_vec(),
-                    )
-                }),
-        );
-        sealed_rows
+                bincode::serialize(index)?,
+            ))?;
+        }
+        for (key, count) in &self.mnft_hourly_transfers {
+            emit(MaterializedRow::new(
+                CF_STATS_MNFT,
+                key.clone(),
+                count.to_le_bytes().to_vec(),
+            ))?;
+        }
+        for (key, value) in &self.dotbit_outpoints {
+            emit(MaterializedRow::new(
+                CF_STATS_MNFT,
+                key.clone(),
+                value.clone(),
+            ))?;
+        }
+        for key in &self.dotbit_outpoints_by_account {
+            emit(MaterializedRow::new(CF_STATS_MNFT, key.clone(), Vec::new()))?;
+        }
+        for (key, count) in &self.dotbit_hourly_transfers {
+            emit(MaterializedRow::new(
+                CF_STATS_MNFT,
+                key.clone(),
+                count.to_le_bytes().to_vec(),
+            ))?;
+        }
+        for ((collection_id, date), (cap_delta, know_delta)) in &self.object_daily_deltas {
+            if *cap_delta == 0 && *know_delta == 0 {
+                continue;
+            }
+            emit(MaterializedRow::new(
+                CF_STATS_MNFT,
+                keys::encode_object_daily_key(collection_id, *date).to_vec(),
+                bincode::serialize(&MnftDailyDelta {
+                    owned_capacity_delta: *cap_delta,
+                    owned_knowledge_delta: *know_delta,
+                })?,
+            ))?;
+        }
+        for ((spore_id, date), (cap_delta, know_delta)) in &self.spore_daily_deltas {
+            if *cap_delta == 0 && *know_delta == 0 {
+                continue;
+            }
+            emit(MaterializedRow::new(
+                CF_STATS_SPORE,
+                keys::encode_spore_daily_key(spore_id, *date).to_vec(),
+                bincode::serialize(&SporeDailyDelta {
+                    owned_capacity_delta: *cap_delta,
+                    owned_knowledge_delta: *know_delta,
+                })?,
+            ))?;
+        }
+        for ((cluster_id, date), (cap_delta, know_delta)) in &self.cluster_daily_deltas {
+            if *cap_delta == 0 && *know_delta == 0 {
+                continue;
+            }
+            emit(MaterializedRow::new(
+                CF_STATS_SPORE,
+                keys::encode_cluster_daily_key(cluster_id, *date).to_vec(),
+                bincode::serialize(&ClusterDailyDelta {
+                    owned_capacity_delta: *cap_delta,
+                    owned_knowledge_delta: *know_delta,
+                })?,
+            ))?;
+        }
+        for ((class_id, lock_hash), count) in &self.mnft_owner_counts {
+            if *count <= 0 {
+                continue;
+            }
+            emit(MaterializedRow::new(
+                CF_STATS_MNFT,
+                keys::encode_object_collection_owner_key(class_id, lock_hash).to_vec(),
+                count.to_le_bytes().to_vec(),
+            ))?;
+        }
+        Ok(())
     }
 
-    fn build_snapshot_rows(&self) -> Result<Vec<MaterializedRow>> {
-        let mut final_rows = Vec::new();
+    #[cfg(test)]
+    fn build_sealed_rows(&self) -> Result<Vec<MaterializedRow>> {
+        let mut rows = Vec::new();
+        self.emit_sealed_rows(|row| {
+            rows.push(row);
+            Ok(())
+        })?;
+        Ok(rows)
+    }
+
+    pub(crate) fn emit_snapshot_rows<F>(&self, mut emit: F) -> Result<()>
+    where
+        F: FnMut(MaterializedRow) -> Result<()>,
+    {
         for (id, entry) in &self.spore_entries {
-            final_rows.push(MaterializedRow::new(
+            emit(MaterializedRow::new(
                 CF_SPORE_DATA,
                 id.clone(),
                 bincode::serialize(entry)?,
-            ));
+            ))?;
         }
         for key in &self.spore_by_cluster {
-            final_rows.push(MaterializedRow::new(
+            emit(MaterializedRow::new(
                 CF_SPORE_BY_CLUSTER,
                 key.clone(),
                 Vec::new(),
-            ));
+            ))?;
         }
         for (id, entry) in &self.mnft_entries {
-            final_rows.push(MaterializedRow::new(
+            emit(MaterializedRow::new(
                 CF_MNFT_DATA,
                 id.clone(),
                 bincode::serialize(entry)?,
-            ));
+            ))?;
         }
         for key in &self.mnft_by_collection {
-            final_rows.push(MaterializedRow::new(
+            emit(MaterializedRow::new(
                 CF_MNFT_BY_COLLECTION,
                 key.clone(),
                 Vec::new(),
-            ));
+            ))?;
         }
         for (id, entry) in &self.identities {
-            final_rows.push(MaterializedRow::new(
+            emit(MaterializedRow::new(
                 CF_IDENTITY_DATA,
                 id.clone(),
                 bincode::serialize(entry)?,
-            ));
+            ))?;
         }
         for key in &self.identity_by_collection {
-            final_rows.push(MaterializedRow::new(
+            emit(MaterializedRow::new(
                 CF_IDENTITY_BY_COLLECTION,
                 key.clone(),
                 Vec::new(),
-            ));
+            ))?;
         }
         if let Some(agg) = &self.did_agg {
-            final_rows.push(MaterializedRow::new(
+            emit(MaterializedRow::new(
                 CF_IDENTITY_AGG,
                 DID_CKB_SENTINEL_COLLECTION.to_vec(),
                 bincode::serialize(agg)?,
-            ));
+            ))?;
         }
         if let Some(agg) = &self.dotbit_agg {
-            final_rows.push(MaterializedRow::new(
+            emit(MaterializedRow::new(
                 CF_IDENTITY_AGG,
                 DOTBIT_SENTINEL_COLLECTION.to_vec(),
                 bincode::serialize(agg)?,
-            ));
+            ))?;
+        }
+        if let Some(agg) = &self.bit_cell_agg {
+            emit(MaterializedRow::new(
+                CF_IDENTITY_AGG,
+                BIT_CELL_SENTINEL_COLLECTION.to_vec(),
+                bincode::serialize(agg)?,
+            ))?;
         }
         for (cluster_id, agg) in &self.cluster_aggs {
-            final_rows.push(MaterializedRow::new(
+            emit(MaterializedRow::new(
                 CF_CLUSTER_AGG,
                 cluster_id.clone(),
                 bincode::serialize(agg)?,
-            ));
+            ))?;
         }
         for (class_id, agg) in &self.object_collection_aggs {
-            final_rows.push(MaterializedRow::new(
+            emit(MaterializedRow::new(
                 CF_MNFT_COLLECTION_AGG,
                 class_id.clone(),
                 bincode::serialize(agg)?,
-            ));
+            ))?;
         }
         for (lock_hash, count) in &self.did_owner_counts {
             if *count <= 0 {
                 continue;
             }
-            final_rows.push(MaterializedRow::new(
+            emit(MaterializedRow::new(
                 CF_STATS_IDENTITY,
                 keys::encode_identity_owner_key(&DID_CKB_SENTINEL_COLLECTION, lock_hash).to_vec(),
                 count.to_le_bytes().to_vec(),
-            ));
+            ))?;
         }
         for (lock_hash, count) in &self.dotbit_owner_counts {
             if *count <= 0 {
                 continue;
             }
-            final_rows.push(MaterializedRow::new(
+            emit(MaterializedRow::new(
                 CF_STATS_IDENTITY,
                 keys::encode_identity_owner_key(&DOTBIT_SENTINEL_COLLECTION, lock_hash).to_vec(),
                 count.to_le_bytes().to_vec(),
-            ));
+            ))?;
         }
-        Ok(final_rows)
+        for (lock_hash, count) in &self.bit_cell_owner_counts {
+            if *count <= 0 {
+                continue;
+            }
+            emit(MaterializedRow::new(
+                CF_STATS_IDENTITY,
+                keys::encode_identity_owner_key(&BIT_CELL_SENTINEL_COLLECTION, lock_hash).to_vec(),
+                count.to_le_bytes().to_vec(),
+            ))?;
+        }
+        Ok(())
     }
 
+    #[cfg(test)]
+    fn build_snapshot_rows(&self) -> Result<Vec<MaterializedRow>> {
+        let mut rows = Vec::new();
+        self.emit_snapshot_rows(|row| {
+            rows.push(row);
+            Ok(())
+        })?;
+        Ok(rows)
+    }
+
+    #[cfg(test)]
     pub(crate) fn build_final_rows(&self) -> Result<super::super::materialize::OwnerFinalRows> {
         Ok(super::super::materialize::OwnerFinalRows {
-            sealed_rows: self.build_sealed_rows(),
+            sealed_rows: self.build_sealed_rows()?,
             snapshot_rows: self.build_snapshot_rows()?,
         })
     }
@@ -386,6 +434,10 @@ impl ObjectOwner {
                 .map_or(0, crate::sync::bulk_build::accounting::serialized_bytes)
             + self
                 .dotbit_agg
+                .as_ref()
+                .map_or(0, crate::sync::bulk_build::accounting::serialized_bytes)
+            + self
+                .bit_cell_agg
                 .as_ref()
                 .map_or(0, crate::sync::bulk_build::accounting::serialized_bytes)
             + crate::sync::bulk_build::accounting::btree_set_serialized_bytes(
@@ -423,6 +475,9 @@ impl ObjectOwner {
             )
             + crate::sync::bulk_build::accounting::btree_map_serialized_bytes(
                 &self.dotbit_owner_counts,
+            )
+            + crate::sync::bulk_build::accounting::btree_map_serialized_bytes(
+                &self.bit_cell_owner_counts,
             )
             + crate::sync::bulk_build::accounting::btree_map_serialized_bytes(
                 &self.dotbit_outpoints,
@@ -471,6 +526,15 @@ impl ObjectOwner {
                         .get_or_insert_with(|| IdentityCollectionAggregate {
                             name: Some(".bit".to_string()),
                             standard: IdentityStandard::DotBit,
+                            ..IdentityCollectionAggregate::default()
+                        }),
+                ),
+                x if x == BIT_CELL_SENTINEL_COLLECTION => (
+                    ".bit Cell",
+                    self.bit_cell_agg
+                        .get_or_insert_with(|| IdentityCollectionAggregate {
+                            name: Some(".bit Cell".to_string()),
+                            standard: IdentityStandard::BitCell,
                             ..IdentityCollectionAggregate::default()
                         }),
                 ),
@@ -541,15 +605,14 @@ impl ObjectOwner {
         };
 
         match protocol {
-            CellProtocolFacts::Spore(spore) if spore.is_did => {
-                self.consume_did(spore.spore_id.as_slice())
-            }
+            CellProtocolFacts::DidCkb(did) => self.consume_did(did.did_id.as_slice()),
             CellProtocolFacts::Spore(spore) => self.consume_spore(spore.spore_id.as_slice()),
             CellProtocolFacts::MnftIssuer(issuer) => self.consume_mnft_issuer(&issuer.issuer_id),
             CellProtocolFacts::MnftClass(class) => self.consume_mnft_class(&class.class_id),
             CellProtocolFacts::MnftToken(token) => self.consume_mnft_token(&token.token_id),
             CellProtocolFacts::Cluster(cluster) => self.consume_cluster(&cluster.cluster_id),
             CellProtocolFacts::Dotbit(dotbit) => self.consume_dotbit(&dotbit.account_id),
+            CellProtocolFacts::BitCell(bit_cell) => self.consume_bit_cell(&bit_cell.identity_id),
         }
     }
 
@@ -568,9 +631,7 @@ impl ObjectOwner {
 
         match protocol {
             CellProtocolFacts::Cluster(cluster) => self.insert_cluster(cluster, cell, ctx, tx),
-            CellProtocolFacts::Spore(spore) if spore.is_did => {
-                self.insert_did(spore, cell, ctx, tx)
-            }
+            CellProtocolFacts::DidCkb(did) => self.insert_did(did, cell, ctx, tx),
             CellProtocolFacts::Spore(spore) => self.insert_spore(
                 spore,
                 cell,
@@ -596,6 +657,7 @@ impl ObjectOwner {
                     .get(dotbit.account_id.as_slice())
                     .map(Vec::as_slice),
             ),
+            CellProtocolFacts::BitCell(bit_cell) => self.insert_bit_cell(bit_cell, cell, ctx, tx),
         }
     }
 
@@ -667,12 +729,27 @@ impl ObjectOwner {
 
     fn insert_did(
         &mut self,
-        did: &crate::sync::bulk_build::facts::SporeProtocolFacts,
+        did: &crate::sync::bulk_build::facts::DidCkbProtocolFacts,
         cell: &CellFacts,
         ctx: &ReducerContext<'_>,
         tx: &ResolvedTxFacts<'_>,
     ) -> Result<()> {
-        let did_id = did.spore_id.to_vec();
+        let did_id = did.did_id.clone();
+        // Same guard as the live writer, checked before any state mutation so
+        // live and bulk cannot disagree about which cells are indexable.
+        let output_index = i16::try_from(cell.outpoint.index).map_err(|_| {
+            anyhow!(
+                "did:ckb outpoint index exceeds i16: outpoint=0x{}:{}",
+                hex::encode(cell.outpoint.tx_hash),
+                cell.outpoint.index
+            )
+        })?;
+        crate::db::writer::ensure_outpoint_indexable_item_id(
+            &did_id,
+            "did:ckb",
+            &cell.outpoint.tx_hash,
+            output_index,
+        )?;
         let owner_lock = ctx.resolve_identity(cell.lock_script_hash_id).to_vec();
         let existing = self.identities.get(&did_id).cloned();
         let was_live = existing.as_ref().is_some_and(|entry| entry.is_live);
@@ -1456,6 +1533,119 @@ impl ObjectOwner {
         Ok(())
     }
 
+    fn insert_bit_cell(
+        &mut self,
+        bit_cell: &crate::sync::bulk_build::facts::BitCellProtocolFacts,
+        cell: &CellFacts,
+        ctx: &ReducerContext<'_>,
+        tx: &ResolvedTxFacts<'_>,
+    ) -> Result<()> {
+        let identity_id = bit_cell.identity_id.to_vec();
+        let owner_lock = ctx.resolve_identity(cell.lock_script_hash_id).to_vec();
+        let existing = self.identities.get(&identity_id).cloned();
+        if existing
+            .as_ref()
+            .is_some_and(|entry| entry.standard != IdentityStandard::BitCell)
+        {
+            bail!(
+                ".bit Cell identity ID collides with another identity standard: identity_id=0x{} block={}",
+                hex::encode(&identity_id),
+                tx.block_number
+            );
+        }
+
+        let was_live = existing.as_ref().is_some_and(|entry| entry.is_live);
+        let old_owner = if was_live {
+            existing
+                .as_ref()
+                .and_then(|entry| entry.owner_lock_hash.clone())
+        } else {
+            None
+        };
+        if was_live && old_owner.is_none() {
+            bail!(
+                ".bit Cell live identity missing owner_lock_hash during transfer: identity_id=0x{} block={}",
+                hex::encode(&identity_id),
+                tx.block_number
+            );
+        }
+
+        self.identities.insert(
+            identity_id.clone(),
+            IdentityEntry {
+                standard: IdentityStandard::BitCell,
+                owner_lock_hash: Some(owner_lock.clone()),
+                name: Some(bit_cell.account.clone()),
+                is_live: true,
+                created_at_block: existing
+                    .as_ref()
+                    .map(|entry| entry.created_at_block)
+                    .unwrap_or(tx.block_number),
+                created_at_tx: existing
+                    .as_ref()
+                    .map(|entry| entry.created_at_tx.clone())
+                    .unwrap_or_else(|| tx.tx_hash.to_vec()),
+                extra: IdentityExtra::BitCell {
+                    account_id: bit_cell.account_id.to_vec(),
+                    expired_at: bit_cell.expired_at,
+                },
+            },
+        );
+
+        if existing.is_none() {
+            self.identity_by_collection.insert(
+                keys::encode_identity_by_collection_key(
+                    &BIT_CELL_SENTINEL_COLLECTION,
+                    &identity_id,
+                )
+                .to_vec(),
+            );
+        }
+
+        let owner_counts = &mut self.bit_cell_owner_counts;
+        let agg = self
+            .bit_cell_agg
+            .get_or_insert_with(|| IdentityCollectionAggregate {
+                name: Some(".bit Cell".to_string()),
+                standard: IdentityStandard::BitCell,
+                ..IdentityCollectionAggregate::default()
+            });
+        if existing.is_none() {
+            agg.total_count = checked_next_i64(
+                agg.total_count,
+                1,
+                ".bit Cell total_count",
+                &identity_id,
+                tx.block_number,
+            )?;
+            agg.live_count = checked_next_i64(
+                agg.live_count,
+                1,
+                ".bit Cell live_count",
+                &identity_id,
+                tx.block_number,
+            )?;
+        } else if !was_live {
+            agg.live_count = checked_next_i64(
+                agg.live_count,
+                1,
+                ".bit Cell live_count reactivate",
+                &identity_id,
+                tx.block_number,
+            )?;
+        }
+
+        Self::apply_identity_owner_transition(
+            owner_counts,
+            old_owner.as_deref(),
+            Some(owner_lock.as_slice()),
+            agg,
+            ".bit Cell",
+        )?;
+        self.insert_spore_outpoint_rows(&identity_id, cell)?;
+        Ok(())
+    }
+
     fn consume_did(&mut self, did_id: &[u8]) -> Result<()> {
         let entry = self.identities.get_mut(did_id).ok_or_else(|| {
             anyhow!(
@@ -1739,6 +1929,114 @@ impl ObjectOwner {
             None,
             agg,
         )
+    }
+
+    fn consume_bit_cell(&mut self, identity_id: &[u8; 32]) -> Result<()> {
+        let entry = self
+            .identities
+            .get_mut(identity_id.as_slice())
+            .ok_or_else(|| {
+                anyhow!(
+                    "missing .bit Cell identity during consume: identity_id=0x{}",
+                    hex::encode(identity_id)
+                )
+            })?;
+        if entry.standard != IdentityStandard::BitCell {
+            bail!(
+                "consume_bit_cell expected BitCell identity entry, found {:?}: identity_id=0x{}",
+                entry.standard,
+                hex::encode(identity_id)
+            );
+        }
+        if !entry.is_live {
+            bail!(
+                ".bit Cell identity already consumed: identity_id=0x{}",
+                hex::encode(identity_id)
+            );
+        }
+        let old_owner = entry.owner_lock_hash.clone().ok_or_else(|| {
+            anyhow!(
+                ".bit Cell live identity missing owner_lock_hash during consume: identity_id=0x{}",
+                hex::encode(identity_id)
+            )
+        })?;
+        entry.is_live = false;
+        entry.owner_lock_hash = None;
+
+        let owner_counts = &mut self.bit_cell_owner_counts;
+        let agg = self
+            .bit_cell_agg
+            .get_or_insert_with(|| IdentityCollectionAggregate {
+                name: Some(".bit Cell".to_string()),
+                standard: IdentityStandard::BitCell,
+                ..IdentityCollectionAggregate::default()
+            });
+        agg.live_count = checked_next_i64(
+            agg.live_count,
+            -1,
+            ".bit Cell live_count consume",
+            identity_id,
+            0,
+        )?;
+        Self::apply_identity_owner_transition(
+            owner_counts,
+            Some(old_owner.as_slice()),
+            None,
+            agg,
+            ".bit Cell",
+        )
+    }
+
+    fn apply_identity_owner_transition(
+        owner_counts: &mut BTreeMap<Vec<u8>, i64>,
+        old_owner: Option<&[u8]>,
+        new_owner: Option<&[u8]>,
+        agg: &mut IdentityCollectionAggregate,
+        label: &str,
+    ) -> Result<()> {
+        if old_owner == new_owner {
+            return Ok(());
+        }
+
+        if let Some(old_owner) = old_owner {
+            let current = *owner_counts.get(old_owner).unwrap_or(&0);
+            if current <= 0 {
+                bail!(
+                    "{} owner count underflow: lock_hash=0x{}, current={}",
+                    label,
+                    hex::encode(old_owner),
+                    current
+                );
+            }
+            if current == 1 {
+                owner_counts.remove(old_owner);
+                agg.holders_count = checked_next_i64(
+                    agg.holders_count,
+                    -1,
+                    &format!("{} holders_count remove", label),
+                    old_owner,
+                    0,
+                )?;
+            } else {
+                owner_counts.insert(old_owner.to_vec(), current - 1);
+            }
+        }
+
+        if let Some(new_owner) = new_owner {
+            let current = *owner_counts.get(new_owner).unwrap_or(&0);
+            if current == 0 {
+                agg.holders_count = checked_next_i64(
+                    agg.holders_count,
+                    1,
+                    &format!("{} holders_count add", label),
+                    new_owner,
+                    0,
+                )?;
+            }
+            owner_counts.insert(new_owner.to_vec(), current + 1);
+        }
+
+        Ok(())
     }
 
     fn apply_did_owner_transition(
@@ -2036,8 +2334,7 @@ impl ObjectOwner {
             spore_id.to_vec(),
         );
         self.stats_spore_rows.insert(
-            keys::encode_spore_outpoint_by_id_key(spore_id, &cell.outpoint.tx_hash, output_index)
-                .to_vec(),
+            keys::encode_spore_outpoint_by_id_key(spore_id, &cell.outpoint.tx_hash, output_index),
             Vec::new(),
         );
         Ok(())
@@ -2169,9 +2466,8 @@ fn classify_nft_collection_from_protocol(
     match protocol_facts.as_ref()? {
         CellProtocolFacts::MnftToken(token) => Some(token.class_id.clone()),
         CellProtocolFacts::Dotbit(_) => Some(DOTBIT_SENTINEL_COLLECTION.to_vec()),
-        CellProtocolFacts::Spore(spore) if spore.is_did => {
-            Some(DID_CKB_SENTINEL_COLLECTION.to_vec())
-        }
+        CellProtocolFacts::BitCell(_) => Some(BIT_CELL_SENTINEL_COLLECTION.to_vec()),
+        CellProtocolFacts::DidCkb(_) => Some(DID_CKB_SENTINEL_COLLECTION.to_vec()),
         _ => None,
     }
 }
@@ -2215,10 +2511,14 @@ pub struct ObjectStateSnapshot {
     pub cluster_aggs: HashMap<Vec<u8>, ClusterAggregate>,
     pub object_collection_aggs: HashMap<Vec<u8>, MnftCollectionAggregate>,
     pub did_agg: Option<IdentityCollectionAggregate>,
+    pub dotbit_agg: Option<IdentityCollectionAggregate>,
+    pub bit_cell_agg: Option<IdentityCollectionAggregate>,
     pub identities_by_collection: HashMap<Vec<u8>, Vec<Vec<u8>>>,
     pub spores_by_cluster: HashMap<Vec<u8>, Vec<Vec<u8>>>,
     pub objects_by_collection: HashMap<Vec<u8>, Vec<Vec<u8>>>,
     pub did_owner_counts: HashMap<Vec<u8>, i64>,
+    pub dotbit_owner_counts: HashMap<Vec<u8>, i64>,
+    pub bit_cell_owner_counts: HashMap<Vec<u8>, i64>,
     pub cluster_owner_counts: HashMap<Vec<u8>, HashMap<Vec<u8>, i64>>,
     pub object_owner_counts: HashMap<Vec<u8>, HashMap<Vec<u8>, i64>>,
     pub spore_outpoints: HashMap<Vec<u8>, Vec<(Vec<u8>, i16)>>,
@@ -2283,16 +2583,23 @@ pub(crate) fn materialize_object_state_for_test(
             .collect::<HashMap<_, _>>();
         let did_agg =
             domain_store.get_identity_collection_aggregate(&DID_CKB_SENTINEL_COLLECTION)?;
+        let dotbit_agg =
+            domain_store.get_identity_collection_aggregate(&DOTBIT_SENTINEL_COLLECTION)?;
+        let bit_cell_agg =
+            domain_store.get_identity_collection_aggregate(&BIT_CELL_SENTINEL_COLLECTION)?;
 
         let mut identities_by_collection = HashMap::new();
-        let mut did_ids = domain_store.list_identity_ids_by_collection(
+        for collection_id in [
             &DID_CKB_SENTINEL_COLLECTION,
-            None,
-            usize::MAX,
-        )?;
-        did_ids.sort();
-        if !did_ids.is_empty() {
-            identities_by_collection.insert(DID_CKB_SENTINEL_COLLECTION.to_vec(), did_ids);
+            &DOTBIT_SENTINEL_COLLECTION,
+            &BIT_CELL_SENTINEL_COLLECTION,
+        ] {
+            let mut identity_ids =
+                domain_store.list_identity_ids_by_collection(collection_id, None, usize::MAX)?;
+            identity_ids.sort();
+            if !identity_ids.is_empty() {
+                identities_by_collection.insert(collection_id.to_vec(), identity_ids);
+            }
         }
 
         let mut spores_by_cluster = HashMap::new();
@@ -2379,6 +2686,14 @@ pub(crate) fn materialize_object_state_for_test(
 
         let did_owner_counts = domain_store
             .list_identity_owner_counts(&DID_CKB_SENTINEL_COLLECTION)?
+            .into_iter()
+            .collect::<HashMap<_, _>>();
+        let dotbit_owner_counts = domain_store
+            .list_identity_owner_counts(&DOTBIT_SENTINEL_COLLECTION)?
+            .into_iter()
+            .collect::<HashMap<_, _>>();
+        let bit_cell_owner_counts = domain_store
+            .list_identity_owner_counts(&BIT_CELL_SENTINEL_COLLECTION)?
             .into_iter()
             .collect::<HashMap<_, _>>();
 
@@ -2511,10 +2826,14 @@ pub(crate) fn materialize_object_state_for_test(
             cluster_aggs,
             object_collection_aggs,
             did_agg,
+            dotbit_agg,
+            bit_cell_agg,
             identities_by_collection,
             spores_by_cluster,
             objects_by_collection,
             did_owner_counts,
+            dotbit_owner_counts,
+            bit_cell_owner_counts,
             cluster_owner_counts,
             object_owner_counts,
             spore_outpoints,
@@ -2542,12 +2861,14 @@ mod tests {
     };
     use crate::sync::bulk_build::build_object_collection_activity_rows;
     use crate::sync::bulk_build::facts::{
-        CellFacts, CellProtocolFacts, CellSemanticTag, ClusterProtocolFacts, DotbitProtocolFacts,
-        MnftClassProtocolFacts, MnftIssuerProtocolFacts, MnftTokenProtocolFacts, OutPointKey,
-        ResolvedInputFacts, ResolvedTxFacts, SporeProtocolFacts,
+        CellFacts, CellProtocolFacts, CellSemanticTag, ClusterProtocolFacts, DidCkbProtocolFacts,
+        DotbitProtocolFacts, MnftClassProtocolFacts, MnftIssuerProtocolFacts,
+        MnftTokenProtocolFacts, OutPointKey, ResolvedInputFacts, ResolvedTxFacts,
+        SporeProtocolFacts,
     };
     use crate::sync::bulk_build::unique_temp_test_dir;
     use crate::sync::types::InternId;
+    use crate::sync::TEST_CELLBASE_WITNESS;
 
     macro_rules! cell_facts {
         ($($body:tt)*) => {
@@ -2606,7 +2927,7 @@ mod tests {
 
     fn create_mnft_class_type_script(issuer_id: &[u8; 20], class_index: u32) -> Script {
         let mut args = issuer_id.to_vec();
-        args.extend_from_slice(&class_index.to_le_bytes());
+        args.extend_from_slice(&class_index.to_be_bytes());
         Script {
             code_hash: MNFT_CLASS_CODE_HASH.to_string(),
             hash_type: "type".to_string(),
@@ -2616,7 +2937,8 @@ mod tests {
 
     fn create_mnft_token_type_script(class_id: &[u8], token_index: u32) -> Script {
         let mut args = class_id.to_vec();
-        args.extend_from_slice(&token_index.to_le_bytes());
+        // Big-endian, matching the official contract's parse_type_args_id.
+        args.extend_from_slice(&token_index.to_be_bytes());
         Script {
             code_hash: MNFT_TOKEN_CODE_HASH.to_string(),
             hash_type: "type".to_string(),
@@ -2665,7 +2987,7 @@ mod tests {
     fn bulk_build_mnft_object_fixture() -> Vec<BlockResponseWithCycles> {
         let issuer_id = [0x44; 20];
         let mut class_id = issuer_id.to_vec();
-        class_id.extend_from_slice(&7u32.to_le_bytes());
+        class_id.extend_from_slice(&7u32.to_be_bytes());
         let issuer_type_id = format!("0x{}", "ab".repeat(32));
 
         let create_tx = TransactionView {
@@ -2721,7 +3043,7 @@ mod tests {
                     hex::encode(create_mnft_token_data(&[1, 2, 3, 4, 5, 6, 7, 8], 1, 0))
                 ),
             ],
-            witnesses: vec!["0x".to_string()],
+            witnesses: vec![TEST_CELLBASE_WITNESS.to_string()],
         };
 
         let transfer_tx = TransactionView {
@@ -2745,7 +3067,9 @@ mod tests {
                 "0x{}",
                 hex::encode(create_mnft_token_data(&[1, 2, 3, 4, 5, 6, 7, 8], 1, 0))
             )],
-            witnesses: vec!["0x".to_string()],
+            // First tx of its fixture block: block parsing requires a valid
+            // CellbaseWitness in transactions[0].witnesses[0].
+            witnesses: vec![TEST_CELLBASE_WITNESS.to_string()],
         };
 
         let consume_tx = TransactionView {
@@ -2762,7 +3086,8 @@ mod tests {
             }],
             outputs: vec![],
             outputs_data: vec![],
-            witnesses: vec!["0x".to_string()],
+            // First tx of its fixture block (see transfer_tx note).
+            witnesses: vec![TEST_CELLBASE_WITNESS.to_string()],
         };
 
         vec![
@@ -2794,6 +3119,109 @@ mod tests {
                 cycles: None,
             },
         ]
+    }
+
+    /// Build a one-output did:ckb transaction carrying `did_id` as its item id.
+    fn did_ckb_tx_facts(
+        did_id: Vec<u8>,
+        tx_hash: [u8; 32],
+        lock: InternId,
+    ) -> ResolvedTxFacts<'static> {
+        ResolvedTxFacts {
+            tx_hash,
+            block_number: 21_080_336,
+            block_hash: [0x80; 32],
+            timestamp_ms: 1_753_100_000_000,
+            block_dao_ar: 0,
+            tx_index: 0,
+            dotbit_action: None,
+            resolved_inputs: Vec::new(),
+            cells: vec![cell_facts! {
+                outpoint: OutPointKey::new(tx_hash, 0),
+                created_at_block: 21_080_336,
+                capacity: 521_00000000,
+                lock_script_hash_id: lock,
+                lock_code_hash_id: InternId::new(16),
+                lock_hash_type: 1,
+                lock_args_id: InternId::new(17),
+                type_script_hash_id: Some(InternId::new(18)),
+                type_code_hash_id: Some(InternId::new(19)),
+                type_hash_type: Some(1),
+                type_args_id: Some(InternId::new(20)),
+                occupied_capacity: 61_00000000,
+                data_size: 205,
+                data: Vec::new(),
+                data_hash: None,
+                udt_amount: None,
+                semantic_tag: CellSemanticTag::DidCkb,
+                dao_state: None,
+                protocol_facts: Some(CellProtocolFacts::DidCkb(DidCkbProtocolFacts { did_id })),
+            }]
+            .into(),
+        }
+    }
+
+    /// Live/bulk parity: a real-shaped 20-byte did:ckb item id indexes in the
+    /// bulk reducer exactly as it does in the live writer, id kept verbatim.
+    #[test]
+    fn object_owner_indexes_real_20_byte_did_ckb_item_id() {
+        use crate::parser::test_helpers::real_did_ckb;
+
+        let interner = IdentityInterner::default();
+        let lock = interner.intern_bytes(vec![0xcc; 32]);
+        let frozen = interner.snapshot_for_reads();
+        let ctx = ReducerContext::new(&frozen);
+
+        let did_id = crate::rpc::parse_hex_to_bytes(real_did_ckb::CELL_20_ARGS);
+        assert_eq!(did_id.len(), 20);
+        let tx_hash: [u8; 32] = crate::rpc::parse_hex_to_bytes(real_did_ckb::CELL_20_TX_HASH)
+            .try_into()
+            .expect("32-byte tx hash");
+
+        let tx = did_ckb_tx_facts(did_id.clone(), tx_hash, lock);
+        let mut owner = ObjectOwner::default();
+        owner
+            .apply_tx(&tx, &ctx)
+            .expect("20-byte did:ckb must index");
+
+        let entry = owner
+            .identities
+            .get(&did_id)
+            .expect("identity entry keyed by the verbatim 20-byte id");
+        assert_eq!(entry.standard, IdentityStandard::DidCkb);
+        assert!(entry.is_live);
+        assert_eq!(
+            owner.did_agg.as_ref().expect("did aggregate").total_count,
+            1
+        );
+        // Outpoint rows are keyed by the same verbatim id.
+        assert!(owner
+            .stats_spore_rows
+            .contains_key(&keys::encode_spore_outpoint_by_id_key(&did_id, &tx_hash, 0)));
+    }
+
+    /// Live/bulk parity for the width guard: only genuinely unindexable ids
+    /// (outside 1..=32 bytes) are rejected, with the same actionable context.
+    #[test]
+    fn object_owner_rejects_did_ckb_item_id_outside_indexable_width() {
+        let interner = IdentityInterner::default();
+        let lock = interner.intern_bytes(vec![0xcc; 32]);
+        let frozen = interner.snapshot_for_reads();
+        let ctx = ReducerContext::new(&frozen);
+
+        for bad_id in [Vec::new(), vec![0x01u8; 33]] {
+            let tx = did_ckb_tx_facts(bad_id.clone(), [0x7A; 32], lock);
+            let mut owner = ObjectOwner::default();
+            let err = owner
+                .apply_tx(&tx, &ctx)
+                .expect_err("bulk reducer must fail fast on an unindexable item id");
+            let message = err.to_string();
+            assert!(
+                message.contains("item id width is not indexable"),
+                "error must name the constraint: {message}"
+            );
+            assert!(owner.identities.is_empty(), "no partial state on rejection");
+        }
     }
 
     #[test]
@@ -2879,7 +3307,6 @@ mod tests {
                     dao_state: None,
                     protocol_facts: Some(CellProtocolFacts::Spore(SporeProtocolFacts {
                         spore_id,
-                        is_did: false,
                         content_type: "image/png".to_string(),
                         content: b"spore-content".to_vec(),
                         cluster_id: Some(cluster_id),
@@ -2902,14 +3329,10 @@ mod tests {
                     data: Vec::new(),
                     data_hash: None,
                     udt_amount: None,
-                    semantic_tag: CellSemanticTag::Spore,
+                    semantic_tag: CellSemanticTag::DidCkb,
                     dao_state: None,
-                    protocol_facts: Some(CellProtocolFacts::Spore(SporeProtocolFacts {
-                        spore_id: did_id,
-                        is_did: true,
-                        content_type: String::new(),
-                        content: Vec::new(),
-                        cluster_id: None,
+                    protocol_facts: Some(CellProtocolFacts::DidCkb(DidCkbProtocolFacts {
+                        did_id: did_id.to_vec(),
                     })),
                 },
             ]
@@ -2942,7 +3365,6 @@ mod tests {
                 dao_state: None,
                 protocol_facts: Some(CellProtocolFacts::Spore(SporeProtocolFacts {
                     spore_id,
-                    is_did: false,
                     content_type: "image/png".to_string(),
                     content: b"spore-content".to_vec(),
                     cluster_id: Some(cluster_id),
@@ -2969,7 +3391,6 @@ mod tests {
                 dao_state: None,
                 protocol_facts: Some(CellProtocolFacts::Spore(SporeProtocolFacts {
                     spore_id,
-                    is_did: false,
                     content_type: "image/png".to_string(),
                     content: b"spore-content".to_vec(),
                     cluster_id: Some(cluster_id),
@@ -3000,14 +3421,10 @@ mod tests {
                 type_code_hash_id: Some(InternId::new(18)),
                 type_hash_type: Some(1),
                 type_args_id: Some(InternId::new(19)),
-                semantic_tag: CellSemanticTag::Spore,
+                semantic_tag: CellSemanticTag::DidCkb,
                 dao_state: None,
-                protocol_facts: Some(CellProtocolFacts::Spore(SporeProtocolFacts {
-                    spore_id: did_id,
-                    is_did: true,
-                    content_type: String::new(),
-                    content: Vec::new(),
-                    cluster_id: None,
+                protocol_facts: Some(CellProtocolFacts::DidCkb(DidCkbProtocolFacts {
+                    did_id: did_id.to_vec(),
                 })),
             }],
             cells: Vec::new().into(),
@@ -3135,7 +3552,7 @@ mod tests {
     fn object_owner_real_mnft_blocks_apply_activity_count_deltas() {
         let issuer_id = [0x44; 20];
         let mut class_id = issuer_id.to_vec();
-        class_id.extend_from_slice(&7u32.to_le_bytes());
+        class_id.extend_from_slice(&7u32.to_be_bytes());
 
         let blocks = bulk_build_mnft_object_fixture();
         let interner = IdentityInterner::default();
@@ -3219,9 +3636,9 @@ mod tests {
 
         let issuer_id = [0x11; 20];
         let mut class_id = issuer_id.to_vec();
-        class_id.extend_from_slice(&7u32.to_le_bytes());
+        class_id.extend_from_slice(&7u32.to_be_bytes());
         let mut token_id = class_id.clone();
-        token_id.extend_from_slice(&9u32.to_le_bytes());
+        token_id.extend_from_slice(&9u32.to_be_bytes());
 
         let tx0 = ResolvedTxFacts {
             tx_hash: [0x21; 32],

@@ -19,6 +19,7 @@ use crate::response::{
     CursorPaginatedResponse,
 };
 use crate::utils::address::{address_to_lock_script_hash, compute_script_hash, script_to_address};
+use crate::utils::{is_ckb_address, parse_hash32, parse_optional_block_tx_cursor};
 use crate::AppState;
 
 /// Resolve a lock_hash to a CKB address using the persistent lock script mapping.
@@ -176,35 +177,42 @@ fn convert_item_delta(
     item: &ItemDelta,
     token_cache: &mut HashMap<Vec<u8>, Option<(Option<String>, Option<u8>)>>,
     store: &CkbadgerStore,
-) -> ItemDeltaResponse {
+) -> anyhow::Result<ItemDeltaResponse> {
     match item.kind {
         ITEM_KIND_TOKEN => {
             let (symbol, decimals) = lookup_token_info(store, token_cache, &item.item_id);
-            ItemDeltaResponse::Token {
+            Ok(ItemDeltaResponse::Token {
                 type_script_hash: format!("0x{}", hex::encode(&item.item_id)),
-                delta: item.delta.to_string(),
+                delta: format!("{}{}", if item.negative { "-" } else { "" }, item.magnitude),
                 symbol,
                 decimals,
-            }
+            })
         }
-        ITEM_KIND_OBJECT => ItemDeltaResponse::Object {
+        ITEM_KIND_OBJECT => Ok(ItemDeltaResponse::Object {
             object_id: format!("0x{}", hex::encode(&item.item_id)),
-            delta: item.delta as i8,
-        },
-        ITEM_KIND_IDENTITY => ItemDeltaResponse::Identity {
+            delta: discrete_item_delta(item)?,
+        }),
+        ITEM_KIND_IDENTITY => Ok(ItemDeltaResponse::Identity {
             identity_id: format!("0x{}", hex::encode(&item.item_id)),
-            delta: item.delta as i8,
-        },
-        _ => {
-            // Unknown kind — treat as token for forward compatibility
-            ItemDeltaResponse::Token {
-                type_script_hash: format!("0x{}", hex::encode(&item.item_id)),
-                delta: item.delta.to_string(),
-                symbol: None,
-                decimals: None,
-            }
-        }
+            delta: discrete_item_delta(item)?,
+        }),
+        kind => anyhow::bail!(
+            "unknown activity item kind {kind} for item 0x{}",
+            hex::encode(&item.item_id)
+        ),
     }
+}
+
+fn discrete_item_delta(item: &ItemDelta) -> anyhow::Result<i8> {
+    if item.magnitude != 1 {
+        anyhow::bail!(
+            "activity discrete-item invariant violated: kind={} item=0x{} magnitude={} (expected 1)",
+            item.kind,
+            hex::encode(&item.item_id),
+            item.magnitude
+        );
+    }
+    Ok(if item.negative { -1 } else { 1 })
 }
 
 /// Look up token symbol and decimals from CF_TOKENS, caching results.
@@ -421,28 +429,14 @@ fn decode_fiber_commitment_lock_args(args: &[u8]) -> Option<serde_json::Value> {
     Some(obj)
 }
 
+/// Decodes UTXOSwap intent lock args for live display.
+///
+/// Both the field layout and the field names come from the single shared
+/// decoder in `ckbadger-common`, so this display can never drift from the
+/// metadata the indexer persists. Only the `protocol` tag is added here.
 fn decode_utxoswap_intent_args(args: &[u8]) -> Option<serde_json::Value> {
-    use ckbadger_indexer::parser::utxoswap::parse_intent_args;
-
-    let parsed = parse_intent_args(args)?;
-
-    let mut result = serde_json::json!({
-        "protocol": "utxoswap",
-        "intentType": parsed.intent_type.display_name(),
-        "poolTypeHash": format!("0x{}", hex::encode(parsed.pool_type_hash)),
-        "amountIn": parsed.amount_in.to_string(),
-        "amountOutMin": parsed.amount_out_min.to_string(),
-        "assetInIndex": parsed.asset_in_index,
-    });
-
-    if let Some(extra) = &parsed.create_pool_extra {
-        result["assetX"] = serde_json::json!(format!("0x{}", hex::encode(extra.asset_x)));
-        result["assetY"] = serde_json::json!(format!("0x{}", hex::encode(extra.asset_y)));
-        result["amountX"] = serde_json::json!(extra.amount_x.to_string());
-        result["amountY"] = serde_json::json!(extra.amount_y.to_string());
-        result["totalFeeRate"] = serde_json::json!(extra.total_fee_rate);
-    }
-
+    let mut result = ckbadger_common::utxoswap::parse_intent_args(args)?.metadata_json();
+    result["protocol"] = serde_json::json!("utxoswap");
     Some(result)
 }
 
@@ -522,7 +516,7 @@ pub(crate) fn build_activity_response(
         .item_deltas
         .iter()
         .map(|item| convert_item_delta(item, token_cache, store))
-        .collect();
+        .collect::<anyhow::Result<Vec<_>>>()?;
 
     let participants = actions
         .participants
@@ -574,16 +568,16 @@ pub(crate) fn build_global_activity_response(
                 .item_deltas
                 .iter()
                 .map(|item| convert_item_delta(item, &mut token_cache, store))
-                .collect();
-            ParticipantResponse {
+                .collect::<anyhow::Result<Vec<_>>>()?;
+            Ok(ParticipantResponse {
                 address,
                 ckb_delta: p.ckb_delta.to_string(),
                 used_delta: p.used_delta.to_string(),
                 item_deltas,
                 tags: p.tags,
-            }
+            })
         })
-        .collect();
+        .collect::<anyhow::Result<Vec<_>>>()?;
 
     Ok(GlobalActivityResponse {
         tx_hash: format!("0x{}", hex::encode(&actions.tx_hash)),
@@ -636,15 +630,6 @@ fn validate_global_activity_filter(filter: Option<&str>) -> Result<(), ApiRouteE
         }
     }
     Ok(())
-}
-
-fn parse_activity_cursor(value: &str) -> Option<(i64, i32)> {
-    let parts: Vec<&str> = value.split(':').collect();
-    match parts.as_slice() {
-        // Current format: block_num:tx_idx
-        [block_num, tx_idx] => Some((block_num.parse::<i64>().ok()?, tx_idx.parse::<i32>().ok()?)),
-        _ => None,
-    }
 }
 
 /// Check if an addr_tx entry is canonical using the same logic as
@@ -821,29 +806,23 @@ async fn get_address_activities(
     Query(params): Query<ActivityParams>,
 ) -> ApiResult<CursorPaginatedResponse<ActivityResponse>> {
     validate_activity_filter(params.filter.as_deref())?;
-    let lock_hash = if addr.starts_with("ckb1") || addr.starts_with("ckt1") {
+    // Routing via the shared `is_ckb_address` (not an inline prefix check) so
+    // every address entry point shares one case-handling rule.
+    let lock_hash = if is_ckb_address(&addr) {
         address_to_lock_script_hash(&addr)
             .map_err(|e| ApiError::bad_request(format!("Invalid address: {}", e)))?
     } else {
-        hex::decode(addr.strip_prefix("0x").unwrap_or(&addr))
-            .map_err(|_| ApiError::bad_request("Invalid lock script hash"))?
+        parse_hash32(&addr, "address/lock script hash")?
     };
 
     let limit = params.limit.clamp(1, 100) as usize;
 
-    let cursor = match params.cursor.as_deref() {
-        None | Some("") => None,
-        Some(c) => Some(
-            parse_activity_cursor(c)
-                .ok_or_else(|| ApiError::bad_request("invalid cursor format"))?,
-        ),
-    };
+    let cursor = parse_optional_block_tx_cursor(params.cursor.as_deref(), "activity cursor")?;
 
     let filter = params.filter.clone();
     let store = state.store.clone();
     let ao_store = state.append_only_store.clone();
     let network = state.ckb_network.clone();
-    let lock_hash_for_total = lock_hash.clone();
     let lock_hash_clone = lock_hash.clone();
     let (next_cursor, activities) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
         let results = list_canonical_activities_page(
@@ -893,28 +872,22 @@ async fn get_address_activities(
     .map_err(|e| ApiError::internal(e.to_string()))?
     .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    // Total is only meaningful without a filter (pre-computed == unfiltered txs_count).
-    if params.filter.is_none() {
-        let total = state
-            .store
-            .get_addr_balance(&lock_hash_for_total)
-            .ok()
-            .flatten()
-            .map(|ab| ab.txs_count)
-            .unwrap_or(0);
-        ok(CursorPaginatedResponse::new(
-            activities,
-            total,
-            limit as i64,
-            next_cursor,
-        ))
-    } else {
-        ok(CursorPaginatedResponse::without_total(
-            activities,
-            limit as i64,
-            next_cursor,
-        ))
-    }
+    // No total: an activity count per address is not stored anywhere, and the
+    // one count that is — `AddressBalance.txs_count` — counts *transactions*.
+    // Activities are a strictly different set: cellbase rows are deliberately
+    // never persisted in CF_TX_ACTIONS, and `is_canonical_activity` drops more
+    // still. Reporting txs_count therefore declared a total this endpoint can
+    // never page to (mainnet block 12000000's cellbase-output address: 4_727_769
+    // declared against 1_682 rows enumerated to exhaustion). Deriving a real one
+    // means the full canonical scan `list_canonical_activities_page` performs,
+    // over the whole address — unbounded exactly where it matters most.
+    // `has_more`/`next_cursor` remain the honest bound, as they already are for
+    // the filtered case and for /tokens.
+    ok(CursorPaginatedResponse::without_total(
+        activities,
+        limit as i64,
+        next_cursor,
+    ))
 }
 
 async fn get_global_activities(
@@ -924,13 +897,7 @@ async fn get_global_activities(
     validate_global_activity_filter(params.filter.as_deref())?;
 
     let limit = params.limit.clamp(1, 100) as usize;
-    let cursor = match params.cursor.as_deref() {
-        None | Some("") => None,
-        Some(value) => Some(
-            parse_activity_cursor(value)
-                .ok_or_else(|| ApiError::bad_request("invalid cursor format"))?,
-        ),
-    };
+    let cursor = parse_optional_block_tx_cursor(params.cursor.as_deref(), "activity cursor")?;
 
     let store = state.store.clone();
     let ao_store = state.append_only_store.clone();
@@ -1035,6 +1002,32 @@ mod tests {
     use super::*;
 
     #[test]
+    fn discrete_item_delta_requires_exact_unit_magnitude() {
+        let item = ItemDelta {
+            item_id: vec![0xAA; 32],
+            kind: ITEM_KIND_OBJECT,
+            magnitude: 2,
+            negative: false,
+        };
+        let err = discrete_item_delta(&item).unwrap_err().to_string();
+        assert!(err.contains("magnitude=2"));
+        assert!(err.contains("expected 1"));
+    }
+
+    #[test]
+    fn discrete_item_delta_preserves_sign() {
+        let mut item = ItemDelta {
+            item_id: vec![0xBB; 32],
+            kind: ITEM_KIND_IDENTITY,
+            magnitude: 1,
+            negative: false,
+        };
+        assert_eq!(discrete_item_delta(&item).unwrap(), 1);
+        item.negative = true;
+        assert_eq!(discrete_item_delta(&item).unwrap(), -1);
+    }
+
+    #[test]
     fn test_validate_activity_filter_rejects_unknown() {
         let err = validate_activity_filter(Some("tok")).unwrap_err();
         assert_eq!(err.0, axum::http::StatusCode::BAD_REQUEST);
@@ -1060,13 +1053,6 @@ mod tests {
         assert!(validate_global_activity_filter(Some("script")).is_ok());
         assert!(validate_global_activity_filter(Some("protocol")).is_ok());
         assert!(validate_global_activity_filter(Some("nft")).is_err());
-    }
-
-    #[test]
-    fn test_parse_activity_cursor_format() {
-        assert_eq!(parse_activity_cursor("100:2"), Some((100, 2)));
-        assert_eq!(parse_activity_cursor("100:2:7"), None);
-        assert_eq!(parse_activity_cursor("100"), None);
     }
 
     // Integration tests for activities are in crates/api/tests/api_activities.rs
@@ -1228,51 +1214,107 @@ mod tests {
         assert!(LOCK_ARGS_DECODERS.contains_key(&commitment_mainnet));
     }
 
+    /// Real mainnet swap intent args (tx 0x44f659be…, block 13,845,652).
+    const REAL_SWAP_INTENT_ARGS: &str = "0xbefc0a6053441e9bcba6d3f6c1599c37a1d8187a235edb927fc68f446e06f2e677fb52aa7f158ae800000000000000000000000000000000030180ea822b000000000000000000000000324f4251220000000000000000000000";
+
+    /// Real mainnet AddLiquidity intent args (tx 0x18d1b37e…, block 14,046,271).
+    const REAL_ADD_LIQUIDITY_INTENT_ARGS: &str = "0x0001d85947f67df16556a1caef3b7f939a69fb2329273406698f36e9bdf46db404176859b0ba3a6b00000000000000000000000000000000013a219800000000000000000000000000805e9700000000000000000000000000506c0300000000000000000000000000ee670300000000000000000000000000";
+
+    /// Real mainnet RemoveLiquidity intent args (tx 0x416ed0a3…, block 20,003,047).
+    const REAL_REMOVE_LIQUIDITY_INTENT_ARGS: &str = "0xc41696293f5b16b471f9116631da82a4102c5b01b82e9073fee07b9caf625f0be45d3ec061be221200000000000000000100000000000000025b4ff3776d2f00000000000000000000b7d95acc3505000000000000000000001b35f86b53d501000000000000000000";
+
     #[test]
     fn test_decode_utxoswap_intent_swap() {
-        let mut args = vec![0u8; 90];
-        args[0..20].fill(0xAA);
-        args[20..40].fill(0xBB);
-        args[56] = 3; // SwapExactInputForOutput
-        args[57] = 1; // asset_in_index
-        args[58..74].copy_from_slice(&1_000_000u128.to_le_bytes());
-        args[74..90].copy_from_slice(&500_000u128.to_le_bytes());
-
+        let args = parse_hex_code_hash(REAL_SWAP_INTENT_ARGS);
         let result = decode_utxoswap_intent_args(&args).unwrap();
         assert_eq!(result["protocol"], "utxoswap");
         assert_eq!(result["intentType"], "SwapExactInputForOutput");
+        assert_eq!(
+            result["poolTypeHash"],
+            "0x235edb927fc68f446e06f2e677fb52aa7f158ae8"
+        );
         assert_eq!(result["assetInIndex"], 1);
-        assert_eq!(result["amountIn"], "1000000");
-        assert_eq!(result["amountOutMin"], "500000");
+        assert_eq!(result["amountIn"], "730000000");
+        assert_eq!(result["amountOutMin"], "147392188210");
         assert!(result.get("assetX").is_none());
+    }
+
+    /// The API's live display used to re-implement the decode and carried the
+    /// identical bug: the 90-byte swap layout applied to a 121-byte
+    /// AddLiquidity payload, yielding 2^127-scale amounts. It now shares the
+    /// one decoder in `ckbadger-common`.
+    #[test]
+    fn test_decode_utxoswap_intent_add_liquidity() {
+        let args = parse_hex_code_hash(REAL_ADD_LIQUIDITY_INTENT_ARGS);
+        let result = decode_utxoswap_intent_args(&args).unwrap();
+        assert_eq!(result["protocol"], "utxoswap");
+        assert_eq!(result["intentType"], "AddLiquidity");
+        assert_eq!(result["desiredX"], "9969978");
+        assert_eq!(result["minX"], "9920128");
+        assert_eq!(result["desiredY"], "224336");
+        assert_eq!(result["minY"], "223214");
+
+        assert!(result.get("amountIn").is_none());
+        assert!(result.get("amountOutMin").is_none());
+        assert!(result.get("assetInIndex").is_none());
+        assert!(
+            !result
+                .to_string()
+                .contains("170141183460469231731687303715884144673"),
+            "old 2^127-scale garbage resurfaced: {result}"
+        );
+    }
+
+    #[test]
+    fn test_decode_utxoswap_intent_remove_liquidity() {
+        let args = parse_hex_code_hash(REAL_REMOVE_LIQUIDITY_INTENT_ARGS);
+        let result = decode_utxoswap_intent_args(&args).unwrap();
+        assert_eq!(result["intentType"], "RemoveLiquidity");
+        assert_eq!(result["lpAmount"], "52147210375003");
+        assert_eq!(result["minX"], "5728619911607");
+        assert_eq!(result["minY"], "516029247141147");
+        assert!(result.get("amountIn").is_none());
     }
 
     #[test]
     fn test_decode_utxoswap_intent_create_pool() {
-        let mut args = vec![0u8; 154];
-        args[0..20].fill(0xAA);
-        args[20..40].fill(0xBB);
-        args[56] = 0; // CreatePool
-        args[57] = 30; // total_fee_rate
-        args[58..90].fill(0xCC);
-        args[90..122].fill(0xDD);
-        args[122..138].copy_from_slice(&5_000u128.to_le_bytes());
-        args[138..154].copy_from_slice(&10_000u128.to_le_bytes());
+        // Real mainnet CreatePool intent args (tx 0xdd8b76a8…, block 13,372,041).
+        let args = parse_hex_code_hash("0x4d93a976fd4eb7a6349c020fadc3ef65834701dc000000000000000000000000000000000000000000000000000000000100000000000000001e000000000000000000000000000000000000000000000000000000000000000061bd91b121e5b7bbf9ccb4bc46c3106ac69c2dfd7b1c1143c4b4fdb33fd6182600e40b5402000000000000000000000000e40b54020000000000000000000000");
 
         let result = decode_utxoswap_intent_args(&args).unwrap();
         assert_eq!(result["protocol"], "utxoswap");
         assert_eq!(result["intentType"], "CreatePool");
         assert_eq!(result["totalFeeRate"], 30);
-        assert_eq!(result["amountX"], "5000");
-        assert_eq!(result["amountY"], "10000");
-        assert!(result["assetX"].as_str().unwrap().starts_with("0x"));
-        assert!(result["assetY"].as_str().unwrap().starts_with("0x"));
+        assert_eq!(result["amountX"], "10000000000");
+        assert_eq!(result["amountY"], "10000000000");
+        assert_eq!(
+            result["assetY"],
+            "0x61bd91b121e5b7bbf9ccb4bc46c3106ac69c2dfd7b1c1143c4b4fdb33fd61826"
+        );
+        // CreatePool no longer carries bogus zero-valued swap fields.
+        assert!(result.get("amountIn").is_none());
+        assert!(result.get("assetInIndex").is_none());
     }
 
     #[test]
     fn test_decode_utxoswap_intent_too_short() {
-        let args = vec![0u8; 89];
+        // Below the 57-byte shared header there is nothing trustworthy to read.
+        let args = vec![0u8; 56];
         assert!(decode_utxoswap_intent_args(&args).is_none());
+    }
+
+    /// A recognised type with an unexpected payload length must be reported as
+    /// unparsed rather than decoded with some other type's layout.
+    #[test]
+    fn test_decode_utxoswap_intent_unexpected_length_is_unparsed() {
+        let mut args = parse_hex_code_hash(REAL_SWAP_INTENT_ARGS);
+        args[56] = 1; // claim AddLiquidity on a 90-byte payload
+        let result = decode_utxoswap_intent_args(&args).unwrap();
+        assert_eq!(result["intentType"], "AddLiquidity");
+        assert_eq!(result["payloadUnparsed"], true);
+        assert_eq!(result["argsLen"], 90);
+        assert!(result.get("amountIn").is_none());
+        assert!(result.get("desiredX").is_none());
     }
 
     #[test]
@@ -1332,6 +1374,25 @@ mod tests {
         assert!(
             json.contains("\"kind\":\"identity\""),
             "missing kind: {}",
+            json
+        );
+
+        // A token delta > i128::MAX must render as its exact decimal string. This is the
+        // exact expression convert_item_delta uses for a token (`format!("{sign}{magnitude}")`),
+        // proving no truncation at the API/JSON boundary. (The indexer-side regression test
+        // pins that `magnitude` reaches here un-wrapped.)
+        let magnitude: u128 = 222_044_604_925_031_325_468_940_491_728_862_838_784; // 2.22e38
+        let negative = false;
+        let big_token = ItemDeltaResponse::Token {
+            type_script_hash: "0xdd".to_string(),
+            delta: format!("{}{}", if negative { "-" } else { "" }, magnitude),
+            symbol: None,
+            decimals: None,
+        };
+        let json = serde_json::to_string(&big_token).unwrap();
+        assert!(
+            json.contains("\"222044604925031325468940491728862838784\""),
+            "big token delta must serialize as exact decimal string: {}",
             json
         );
     }

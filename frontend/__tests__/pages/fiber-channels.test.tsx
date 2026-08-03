@@ -11,14 +11,14 @@ vi.mock('@/components/layout/header', () => ({
 describe('FiberChannelsPage', () => {
   beforeEach(() => {
     server.use(
-      http.get('*/api/v1/fiber/stats', () =>
+      http.get('/api/:network/v1/fiber/stats', () =>
         HttpResponse.json({
           totalChannels: 42,
           openChannels: 10,
           totalCapacityLocked: '500000000000',
         })
       ),
-      http.get('*/api/v1/fiber/channels', () =>
+      http.get('/api/:network/v1/fiber/channels', () =>
         HttpResponse.json({
           data: [],
           total: 0,

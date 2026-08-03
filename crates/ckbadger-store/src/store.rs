@@ -1,8 +1,9 @@
 //! Core RocksDB store.
 
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 use tracing::{error, info, warn};
 
 use rocksdb::{
@@ -20,6 +21,36 @@ pub type KvResult = Result<(Box<[u8]>, Box<[u8]>), rocksdb::Error>;
 const GB: u64 = 1024 * 1024 * 1024;
 const MB: u64 = 1024 * 1024;
 
+/// Process-wide RocksDB `Cache` + `WriteBufferManager`, shared by every store this
+/// process opens.
+///
+/// RocksDB budgets are per-PROCESS, not per-DB: both objects are designed to be
+/// handed to every DB a process opens. Minting a fresh pair per open gave each
+/// store its own full budget, so an indexer (domain + append-only) provisioned
+/// `2 x budget` and N co-resident networks provisioned N x the host — the
+/// over-commit that got bulk sync OOM-killed. Sharing one pair makes `budget` mean
+/// what it says, so `MemoryProfile`'s arithmetic holds however many stores a
+/// process opens.
+///
+/// Sized ONCE, from the first open's profile; later opens reuse that pair. This is
+/// correct because a process's opens are homogeneous in budget by construction: the
+/// indexer opens only primaries, and each single-network stack (indexer or API)
+/// opens its domain + append-only stores with the same runtime config. The one case
+/// where opens differ is a read-only multi-network monitor (`ckbadger tui` /
+/// `ckbadger status`), which opens several networks' domain secondaries in one
+/// process — possibly with different per-network `[store].memory_budget_gb`. They
+/// share the first network's cap, which is harmless: a secondary block cache is a
+/// lazily-filled LRU capacity, so one shared cap across N read-only monitors uses
+/// less RAM, not more. So the invariant is "homogeneous per single-network stack",
+/// which every writer process satisfies exactly.
+static SHARED_BUDGET: OnceLock<(rocksdb::Cache, WriteBufferManager)> = OnceLock::new();
+
+/// Serde default for `StoreRuntimeConfig::network_count`, applied when the field
+/// is absent. `NonZeroUsize` has no `Default`, so this must be named explicitly.
+fn default_network_count() -> NonZeroUsize {
+    NonZeroUsize::MIN
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StoreRuntimeConfig {
     pub memory_budget_gb: Option<u64>,
@@ -29,6 +60,16 @@ pub struct StoreRuntimeConfig {
     /// and no concurrent memtable readers. Set at DB open time and persists
     /// for the lifetime of the process (cannot be changed at runtime).
     pub vector_memtable: bool,
+    /// Number of network stacks co-resident on this host (see
+    /// `ckbadger_config::co_resident_network_count`). The detected host RAM is
+    /// divided by this so N networks' budgets sum to one network's share instead
+    /// of N times it, which otherwise over-commits the host and gets bulk sync
+    /// OOM-killed. 1 yields the full detected RAM.
+    ///
+    /// At very large N the divided budget can hit `compute`'s 2 GB floor, so the
+    /// sum would exceed the intended share; realistic N (2-4) is unaffected.
+    #[serde(default = "default_network_count")]
+    pub network_count: NonZeroUsize,
 }
 
 impl Default for StoreRuntimeConfig {
@@ -37,6 +78,7 @@ impl Default for StoreRuntimeConfig {
             memory_budget_gb: None,
             direct_io_reads: true,
             vector_memtable: false,
+            network_count: NonZeroUsize::MIN,
         }
     }
 }
@@ -54,6 +96,7 @@ pub enum SecondaryStoreOwner {
     Api,
     Tui,
     Cli,
+    Supervisor,
 }
 
 impl SecondaryStoreOwner {
@@ -62,6 +105,7 @@ impl SecondaryStoreOwner {
             Self::Api => "api-secondary",
             Self::Tui => "tui-secondary",
             Self::Cli => "cli-secondary",
+            Self::Supervisor => "supervisor-secondary",
         }
     }
 }
@@ -75,12 +119,13 @@ pub fn secondary_store_path<P: AsRef<Path>>(
     PathBuf::from(path)
 }
 
-pub fn known_domain_secondary_store_paths<P: AsRef<Path>>(primary_path: P) -> [PathBuf; 3] {
+pub fn known_domain_secondary_store_paths<P: AsRef<Path>>(primary_path: P) -> [PathBuf; 4] {
     let primary_path = primary_path.as_ref();
     [
         secondary_store_path(primary_path, SecondaryStoreOwner::Api),
         secondary_store_path(primary_path, SecondaryStoreOwner::Tui),
         secondary_store_path(primary_path, SecondaryStoreOwner::Cli),
+        secondary_store_path(primary_path, SecondaryStoreOwner::Supervisor),
     ]
 }
 
@@ -264,26 +309,58 @@ fn read_cgroup_memory_limit() -> Option<u64> {
     None
 }
 
+/// RAM budget this store may size itself against.
+///
+/// Precedence: an explicit `memory_budget_gb` override wins and is used as-is —
+/// never divided, because it is already the operator's per-network value.
+/// Otherwise the detected host RAM is split across the co-resident networks.
+/// `network_count == 1` yields the full detected RAM, so the single-network path
+/// is this same expression rather than a separate branch.
+///
+/// `detect` is lazy so an explicit override skips detection entirely.
+fn effective_ram_bytes(
+    memory_budget_gb: Option<u64>,
+    network_count: NonZeroUsize,
+    detect: impl FnOnce() -> u64,
+) -> u64 {
+    match memory_budget_gb {
+        Some(gb) if gb > 0 => gb * GB,
+        _ => detect() / network_count.get() as u64,
+    }
+}
+
 /// Returns (ram_bytes, physical_cores, logical_cores).
 fn detect_system_resources(runtime_config: StoreRuntimeConfig) -> (u64, usize, usize) {
-    let ram = if let Some(gb) = runtime_config.memory_budget_gb {
-        if gb > 0 {
-            info!(gb, "Using explicit RocksDB memory_budget_gb override");
-            gb * GB
-        } else {
-            warn!("Ignoring zero memory_budget_gb override, falling back to detection");
+    match runtime_config.memory_budget_gb {
+        Some(gb) if gb > 0 => info!(gb, "Using explicit RocksDB memory_budget_gb override"),
+        Some(_) => warn!("Ignoring zero memory_budget_gb override, falling back to detection"),
+        None => {}
+    }
+
+    let ram = effective_ram_bytes(
+        runtime_config.memory_budget_gb,
+        runtime_config.network_count,
+        || {
+            // Logged from inside the detection closure on purpose: it runs only on
+            // the non-override path, which is exactly the path that divides. An
+            // explicit memory_budget_gb short-circuits before this and is never
+            // divided, so it must not claim division happened. Gating on the override
+            // here instead would restate that precedence where it could drift from
+            // `effective_ram_bytes`.
+            if runtime_config.network_count > NonZeroUsize::MIN {
+                info!(
+                    network_count = runtime_config.network_count.get(),
+                    "Dividing detected RAM across co-resident network stacks"
+                );
+            }
             read_system_memory()
                 .or_else(read_cgroup_memory_limit)
-                .unwrap_or(32 * GB)
-        }
-    } else {
-        read_system_memory()
-            .or_else(read_cgroup_memory_limit)
-            .unwrap_or_else(|| {
-                warn!("Could not detect system RAM, defaulting to 32 GB");
-                32 * GB
-            })
-    };
+                .unwrap_or_else(|| {
+                    warn!("Could not detect system RAM, defaulting to 32 GB");
+                    32 * GB
+                })
+        },
+    );
 
     let physical = num_cpus::get_physical().max(1);
     let logical = std::thread::available_parallelism()
@@ -351,7 +428,6 @@ pub const CF_IDENTITY_COLLECTION_ACTIVITIES: &str = "identity_collection_activit
 pub const CF_PENDING_PROPOSALS: &str = "pending_proposals";
 pub const CF_FIBER_CHANNELS: &str = "fiber_channels";
 pub const CF_FIBER_CHANNEL_BY_COMMITMENT: &str = "fiber_channel_by_commitment";
-pub const CF_FIBER_CHANNEL_BY_FUNDING_ARGS: &str = "fiber_channel_by_funding_args";
 pub const CF_ADDR_FIBER_CHANNELS: &str = "addr_fiber_channels";
 pub const CF_DOB_DECODED: &str = "dob_decoded";
 pub const CF_LOCK_SCRIPTS: &str = "lock_scripts";
@@ -437,7 +513,6 @@ const CF_WRITE_POLICY_FINAL_SNAPSHOT: &[&str] = &[
     CF_IDENTITY_AGG,
     CF_FIBER_CHANNELS,
     CF_FIBER_CHANNEL_BY_COMMITMENT,
-    CF_FIBER_CHANNEL_BY_FUNDING_ARGS,
     CF_ADDR_FIBER_CHANNELS,
     // Network crawler CFs use the normal mutable (final-snapshot) write policy,
     // never append-only. They live in the separate network store.
@@ -541,7 +616,6 @@ pub const ALL_CFS: &[&str] = &[
     CF_PENDING_PROPOSALS,
     CF_FIBER_CHANNELS,
     CF_FIBER_CHANNEL_BY_COMMITMENT,
-    CF_FIBER_CHANNEL_BY_FUNDING_ARGS,
     CF_ADDR_FIBER_CHANNELS,
     CF_DOB_DECODED,
     CF_LOCK_SCRIPTS,
@@ -606,7 +680,6 @@ pub const DOMAIN_CFS: &[&str] = &[
     CF_PENDING_PROPOSALS,
     CF_FIBER_CHANNELS,
     CF_FIBER_CHANNEL_BY_COMMITMENT,
-    CF_FIBER_CHANNEL_BY_FUNDING_ARGS,
     CF_ADDR_FIBER_CHANNELS,
     CF_DOB_DECODED,
     CF_LOCK_SCRIPTS,
@@ -1047,21 +1120,53 @@ impl CkbadgerStore {
         )
     }
 
-    /// Open the standalone network crawler store (read-write, primary).
+    /// Open the standalone network crawler store (read-write, primary) with the
+    /// default (single-network, undivided) runtime config.
+    ///
+    /// Prefer [`Self::open_network_with_runtime`] anywhere a per-network config
+    /// exists: RocksDB budgets are per-PROCESS and the shared cache /
+    /// WriteBufferManager are pinned by whichever open lands first, so a
+    /// `default()` open in a real deployment provisions from UNDIVIDED host RAM.
     pub fn open_network<P: AsRef<Path>>(path: P) -> anyhow::Result<Self> {
-        Self::open_with_class(path, StoreClass::Network, StoreRuntimeConfig::default())
+        Self::open_network_with_runtime(path, StoreRuntimeConfig::default())
     }
 
-    /// Open the network crawler store as a read-only secondary.
+    /// Open the standalone network crawler store (read-write, primary) with an
+    /// explicit runtime config — the crawler's only store open, so this is what
+    /// keeps N co-resident crawlers from budgeting N x the host's RAM.
+    pub fn open_network_with_runtime<P: AsRef<Path>>(
+        path: P,
+        runtime_config: StoreRuntimeConfig,
+    ) -> anyhow::Result<Self> {
+        Self::open_with_class(path, StoreClass::Network, runtime_config)
+    }
+
+    /// Open the network crawler store as a read-only secondary with the default
+    /// (single-network, undivided) runtime config. See [`Self::open_network`] for
+    /// why [`Self::open_network_secondary_with_runtime`] is preferred.
     pub fn open_network_secondary<P: AsRef<Path>>(
         primary_path: P,
         secondary_path: P,
+    ) -> anyhow::Result<Self> {
+        Self::open_network_secondary_with_runtime(
+            primary_path,
+            secondary_path,
+            StoreRuntimeConfig::default(),
+        )
+    }
+
+    /// Open the network crawler store as a read-only secondary with an explicit
+    /// runtime config.
+    pub fn open_network_secondary_with_runtime<P: AsRef<Path>>(
+        primary_path: P,
+        secondary_path: P,
+        runtime_config: StoreRuntimeConfig,
     ) -> anyhow::Result<Self> {
         Self::open_secondary_with_class(
             primary_path,
             secondary_path,
             StoreClass::Network,
-            StoreRuntimeConfig::default(),
+            runtime_config,
         )
     }
 
@@ -1214,18 +1319,27 @@ impl CkbadgerStore {
             opts.set_unordered_write(true);
         }
 
-        let block_cache = rocksdb::Cache::new_lru_cache(profile.block_cache_normal_bytes);
-        let block_opts = Self::default_block_options(&block_cache);
-        opts.set_block_based_table_factory(&block_opts);
-
         // Global WriteBufferManager: controls total memtable memory across all CFs.
         // With many CFs, per-CF memtable limits cause unpredictable flush storms.
         // WBM replaces that with a global budget — flush only happens when total
         // memtable usage crosses the threshold, giving predictable flush behavior.
+        //
+        // Shared per process (see SHARED_BUDGET): cache_normal + wbm_normal == budget,
+        // so one shared pair means a process provisions exactly `budget` no matter how
+        // many stores it opens.
+        //
         // allow_stall=true: stall writes when memtable memory exceeds budget rather
-        // than OOM; the adaptive batch controller will detect stalls and reduce batch size.
-        let write_buffer_manager =
-            WriteBufferManager::new_write_buffer_manager(profile.wbm_normal_bytes, true);
+        // than OOM; the adaptive batch controller detects stalls and reduces batch size.
+        let (block_cache, write_buffer_manager) = SHARED_BUDGET
+            .get_or_init(|| {
+                (
+                    rocksdb::Cache::new_lru_cache(profile.block_cache_normal_bytes),
+                    WriteBufferManager::new_write_buffer_manager(profile.wbm_normal_bytes, true),
+                )
+            })
+            .clone();
+        let block_opts = Self::default_block_options(&block_cache);
+        opts.set_block_based_table_factory(&block_opts);
         opts.set_write_buffer_manager(&write_buffer_manager);
 
         (opts, block_cache, write_buffer_manager)
@@ -1481,9 +1595,6 @@ impl CkbadgerStore {
     }
     pub fn cf_fiber_channel_by_commitment(&self) -> &ColumnFamily {
         self.cf(CF_FIBER_CHANNEL_BY_COMMITMENT)
-    }
-    pub fn cf_fiber_channel_by_funding_args(&self) -> &ColumnFamily {
-        self.cf(CF_FIBER_CHANNEL_BY_FUNDING_ARGS)
     }
     pub fn cf_addr_fiber_channels(&self) -> &ColumnFamily {
         self.cf(CF_ADDR_FIBER_CHANNELS)
@@ -2355,7 +2466,7 @@ impl CkbadgerStore {
     ///
     /// `num_running_flushes` is DB-wide; the per-CF counters are summed
     /// over all CFs in this store. With atomic_flush enabled, flushes
-    /// fan out across all 60 CFs simultaneously, so summing is
+    /// fan out across all 59 CFs simultaneously, so summing is
     /// representative of total flush pressure.
     pub fn flush_stats(&self) -> FlushStats {
         let num_running_flushes = self
@@ -2423,6 +2534,12 @@ mod tests {
         for cf_name in ALL_CFS {
             let _ = store.cf(cf_name);
         }
+    }
+
+    #[test]
+    fn test_domain_schema_has_no_ambiguous_fiber_funding_args_index() {
+        assert_eq!(DOMAIN_CFS.len(), 59);
+        assert!(!DOMAIN_CFS.contains(&"fiber_channel_by_funding_args"));
     }
 
     #[test]
@@ -2601,7 +2718,7 @@ mod tests {
                 b"hodl",
             ),
             (
-                crate::keys::encode_script_daily_key(&[0xAB; 32], false, 20240201).to_vec(),
+                crate::keys::encode_script_daily_key(&[0xAB; 32], 1, false, 20240201).to_vec(),
                 b"script",
             ),
             (
@@ -2738,6 +2855,7 @@ mod tests {
             memory_budget_gb: Some(12),
             direct_io_reads: false,
             vector_memtable: false,
+            network_count: NonZeroUsize::MIN,
         };
 
         let store = CkbadgerStore::open_domain_with_runtime(dir.path(), runtime_config).unwrap();
@@ -3095,6 +3213,30 @@ mod tests {
     }
 
     #[test]
+    fn supervisor_secondary_owner_is_distinct() {
+        use super::{secondary_store_path, SecondaryStoreOwner};
+        assert_eq!(
+            SecondaryStoreOwner::Supervisor.suffix(),
+            "supervisor-secondary"
+        );
+        let owners = [
+            SecondaryStoreOwner::Api,
+            SecondaryStoreOwner::Tui,
+            SecondaryStoreOwner::Cli,
+            SecondaryStoreOwner::Supervisor,
+        ];
+        for i in 0..owners.len() {
+            for j in (i + 1)..owners.len() {
+                assert_ne!(owners[i].suffix(), owners[j].suffix());
+                assert_ne!(
+                    secondary_store_path("/x/domain", owners[i]),
+                    secondary_store_path("/x/domain", owners[j]),
+                );
+            }
+        }
+    }
+
+    #[test]
     fn test_memory_profile_accessor() {
         let dir = TempDir::new().unwrap();
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();
@@ -3341,9 +3483,199 @@ mod tests {
     }
 
     #[test]
+    fn network_store_open_divides_ram_by_the_forwarded_network_count() {
+        // Guards the wiring, not the arithmetic (the `effective_ram_*` and
+        // `detect_system_resources` tests own that). `open_network` used to
+        // hardcode `StoreRuntimeConfig::default()`, and the crawler's ONLY store
+        // open goes through it — so N co-resident crawlers each provisioned
+        // cache/WBM caps from UNDIVIDED host RAM, an N x over-commit. That single
+        // forwarded argument is all that stands between this fix and being inert.
+        //
+        // Host-independent: both opens detect the same RAM R in this process, and
+        // (R / 1) / 2 == R / 2 exactly for u64. The per-store MemoryProfile is
+        // computed from the runtime config (unlike the process-wide SHARED_BUDGET,
+        // which the first open in the process pins), so it is deterministic here.
+        let one_dir = tempfile::tempdir().unwrap();
+        let two_dir = tempfile::tempdir().unwrap();
+
+        let one = CkbadgerStore::open_network_with_runtime(
+            one_dir.path(),
+            StoreRuntimeConfig {
+                network_count: NonZeroUsize::MIN,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let two = CkbadgerStore::open_network_with_runtime(
+            two_dir.path(),
+            StoreRuntimeConfig {
+                network_count: NonZeroUsize::new(2).unwrap(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(two.runtime_config().network_count.get(), 2);
+        assert_eq!(
+            two.memory_profile().wbm_normal_bytes,
+            one.memory_profile().wbm_normal_bytes / 2,
+            "the network store's budget must be the network's RAM share, not the host's"
+        );
+    }
+
+    #[test]
+    fn open_network_keeps_its_default_runtime_config_for_test_callers() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_network(dir.path()).unwrap();
+        assert_eq!(
+            store.runtime_config().network_count,
+            NonZeroUsize::MIN,
+            "the thin wrapper must stay the single-network default"
+        );
+    }
+
+    #[test]
     fn network_cfs_are_not_append_only() {
         // Network store is mutable/domain-like; it must NOT be classified append-only.
         assert!(!is_append_only_cf_name(CF_NET_NODES));
         assert!(!is_append_only_cf_name(CF_NET_STATS));
+    }
+
+    #[test]
+    fn effective_ram_explicit_override_wins_and_is_never_divided() {
+        // memory_budget_gb is already the operator's per-network value: dividing it
+        // by N would silently halve what they asked for. The closure must not run.
+        let ram = effective_ram_bytes(Some(40), NonZeroUsize::new(2).unwrap(), || {
+            panic!("must not detect when overridden")
+        });
+        assert_eq!(ram, 40 * GB);
+    }
+
+    #[test]
+    fn effective_ram_single_network_is_the_full_detected_ram() {
+        // N=1 is the degenerate case of the same expression, not a special branch.
+        let ram = effective_ram_bytes(None, NonZeroUsize::MIN, || 93 * GB);
+        assert_eq!(ram, 93 * GB);
+    }
+
+    #[test]
+    fn effective_ram_divides_detected_ram_across_co_resident_networks() {
+        let ram = effective_ram_bytes(None, NonZeroUsize::new(2).unwrap(), || 93 * GB);
+        assert_eq!(ram, 93 * GB / 2);
+    }
+
+    #[test]
+    fn effective_ram_zero_override_falls_back_to_divided_detection() {
+        let ram = effective_ram_bytes(Some(0), NonZeroUsize::new(2).unwrap(), || 64 * GB);
+        assert_eq!(ram, 32 * GB);
+    }
+
+    #[test]
+    fn detect_system_resources_divides_detected_ram_by_the_configured_network_count() {
+        // Guards the wiring, not the arithmetic: the `effective_ram_*` tests call the
+        // helper directly, so they stay green even if the call site stops forwarding
+        // `runtime_config.network_count` and passes a literal 1. That single argument
+        // is all that stands between this fix and being silently inert, so pin it
+        // through the real (private) entry point that the store actually opens with.
+        //
+        // Host-independent: both calls detect the same RAM R in this process, and
+        // (R / 1) / 2 == R / 2 exactly for u64 — same floor, no truncation drift.
+        let one = detect_system_resources(StoreRuntimeConfig {
+            network_count: NonZeroUsize::MIN,
+            ..Default::default()
+        })
+        .0;
+        let two = detect_system_resources(StoreRuntimeConfig {
+            network_count: NonZeroUsize::new(2).unwrap(),
+            ..Default::default()
+        })
+        .0;
+        assert_eq!(two, one / 2);
+    }
+
+    #[test]
+    fn store_runtime_config_defaults_to_one_network() {
+        // A default-constructed config is the standalone single-network opener, so it
+        // must resolve to the full detected RAM rather than a fraction of it.
+        assert_eq!(
+            StoreRuntimeConfig::default().network_count,
+            NonZeroUsize::MIN
+        );
+    }
+
+    #[test]
+    fn network_count_deserializes_to_one_when_absent() {
+        // Guards the serde attribute itself, which the Default-impl test above cannot:
+        // without it the field is REQUIRED and this payload — the shape every opener
+        // predating the field still sends — fails to parse outright.
+        let cfg: StoreRuntimeConfig = serde_json::from_str(
+            r#"{"memory_budget_gb":null,"direct_io_reads":true,"vector_memtable":false}"#,
+        )
+        .unwrap();
+        assert_eq!(cfg.network_count, NonZeroUsize::MIN);
+    }
+
+    #[test]
+    fn store_runtime_config_rejects_a_zero_network_count() {
+        // 0 must be unrepresentable, not clamped: a clamped 0 resolves to the FULL
+        // detected RAM per network, which is the over-commit this division prevents.
+        // NonZeroUsize makes serde reject it at parse time, with no runtime guard.
+        let err = serde_json::from_str::<StoreRuntimeConfig>(
+            r#"{"memory_budget_gb":null,"direct_io_reads":true,"vector_memtable":false,"network_count":0}"#,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("zero"), "got: {err}");
+    }
+
+    #[test]
+    fn configured_options_shares_one_budget_across_opens_in_a_process() {
+        // RocksDB budgets are per-process. Minting a fresh Cache/WBM per open gave a
+        // process that opens two stores (domain + append-only) twice its intended
+        // budget, and N co-resident networks N x the host -- the over-commit that got
+        // bulk sync OOM-killed. Two opens must hand back the same shared objects.
+        //
+        // The two profiles deliberately differ: if the pair were re-minted per open,
+        // the handles would report different buffer sizes. This asserts only that the
+        // two handles AGREE, never an absolute size -- another test in this process may
+        // have initialized SHARED_BUDGET first, which is exactly the sharing intended.
+        // (The Cache is built in the same get_or_init closure, so it shares by
+        // construction; rocksdb exposes no Cache capacity getter to assert on.)
+        let profile_a = MemoryProfile::compute(64 * GB, 4, 8, false);
+        let profile_b = MemoryProfile::compute(8 * GB, 4, 8, false);
+        assert_ne!(
+            profile_a.wbm_normal_bytes, profile_b.wbm_normal_bytes,
+            "profiles must differ or this test proves nothing"
+        );
+
+        let (_, _, wbm_a) =
+            CkbadgerStore::configured_options(&profile_a, StoreRuntimeConfig::default());
+        let (_, _, wbm_b) =
+            CkbadgerStore::configured_options(&profile_b, StoreRuntimeConfig::default());
+
+        // Prove wbm_a and wbm_b are handles to the SAME shared WriteBufferManager.
+        //
+        // The soundest proof is pointer identity, but rocksdb 0.24's
+        // `WriteBufferManager(pub(crate) Arc<WriteBufferManagerWrapper>)` keeps both
+        // the Arc and the wrapper's `NonNull` pointer behind `pub(crate)` fields —
+        // unreachable from this crate without forking rocksdb — so we prove identity
+        // by observed buffer size instead.
+        //
+        // Robustness to concurrent mutation: sibling tests in this binary call
+        // `set_buffer_size` on the shared WBM (set_bulk_sync_compaction_options /
+        // apply_normal_compaction_options), so a single a-vs-b read can disagree
+        // transiently when a mutation lands between the two reads (the flake this
+        // guards against). But profile_a and profile_b differ (assert_ne above), so in
+        // the BROKEN mint-per-open path wbm_a and wbm_b are DISTINCT objects with
+        // distinct, stable sizes that can never be equal; in the shared path they
+        // alias one object and read equal whenever no mutation straddles the pair.
+        // Hence observing equality even once proves sharing: retry a bounded number of
+        // times to skip transient mutation windows, and fail if they never agree (the
+        // broken path never agrees, so this still fails fast on a regression).
+        let shares_one_wbm = (0..256).any(|_| wbm_a.get_buffer_size() == wbm_b.get_buffer_size());
+        assert!(
+            shares_one_wbm,
+            "configured_options returned two different WriteBufferManager objects; \
+             the per-process SHARED_BUDGET is not being shared across opens"
+        );
     }
 }

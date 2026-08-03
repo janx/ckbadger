@@ -15,6 +15,7 @@ vi.mock('@/lib/api', () => ({
       (error as { code?: string; status?: number }).code === 'warmup_pending' &&
       (error as { code?: string; status?: number }).status === 503
     ),
+  isNetworkInitializingError: vi.fn(() => false),
 }));
 
 vi.mock('@/components/layout/header', () => ({
@@ -222,7 +223,7 @@ describe('ScriptsPage', () => {
     expect(screen.getAllByText(unknownScriptRefDisplay)[0]).toBeInTheDocument();
     expect(screen.getAllByRole('link', { name: unknownScriptRefLabel })[0]).toHaveAttribute(
       'href',
-      `/script/${encodeURIComponent(unknownCodeHash)}?hashType=type&kind=type`
+      `/mainnet/script/${encodeURIComponent(unknownCodeHash)}?hashType=type&kind=type`
     );
     expect(screen.getAllByRole('link', { name: unknownScriptRefLabel })[0]).toHaveAttribute(
       'title',

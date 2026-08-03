@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '../utils/test-utils';
 import { Header } from '@/components/layout/header';
 import { useHomeScrollStore } from '@/hooks/useHomeScrollStore';
@@ -12,6 +12,8 @@ const searchBarMock = vi.fn(({ variant }: { variant?: 'default' | 'compact' | 'h
 
 vi.mock('@/src/navigation', () => ({
   usePathname: () => usePathnameMock(),
+  useSearchAndHash: () => '',
+  useRouter: () => ({ push: vi.fn() }),
 }));
 
 vi.mock('@/components/command-palette', () => ({
@@ -37,6 +39,10 @@ describe('Header', () => {
     useHomeScrollStore.setState({ heroVisible: true });
   });
 
+  afterEach(() => {
+    delete window.__CKBADGER_RUNTIME_CONFIG__;
+  });
+
   it('uses compact search variant on home page', () => {
     usePathnameMock.mockReturnValue('/');
     render(<Header />);
@@ -53,30 +59,33 @@ describe('Header', () => {
     expect(screen.getByTestId('search-bar')).toBeInTheDocument();
     expect(screen.getByTestId('global-stats-bar')).toBeInTheDocument();
     expect(searchBarMock.mock.calls.some(([props]) => props.variant === 'compact')).toBeTruthy();
-    expect(screen.getAllByRole('link', { name: 'DAO' }).at(0)).toHaveAttribute('href', '/dao');
+    expect(screen.getAllByRole('link', { name: 'DAO' }).at(0)).toHaveAttribute(
+      'href',
+      '/mainnet/dao'
+    );
     expect(screen.getAllByRole('link', { name: 'Activities' }).at(0)).toHaveAttribute(
       'href',
-      '/activities'
+      '/mainnet/activities'
     );
     expect(screen.getAllByRole('link', { name: 'Tokens' }).at(0)).toHaveAttribute(
       'href',
-      '/inventory/tokens'
+      '/mainnet/inventory/tokens'
     );
     expect(screen.getAllByRole('link', { name: 'Objects' }).at(0)).toHaveAttribute(
       'href',
-      '/inventory/objects'
+      '/mainnet/inventory/objects'
     );
     expect(screen.getAllByRole('link', { name: 'Identities' }).at(0)).toHaveAttribute(
       'href',
-      '/inventory/identities'
+      '/mainnet/inventory/identities'
     );
     expect(screen.getAllByRole('link', { name: 'Scripts' }).at(0)).toHaveAttribute(
       'href',
-      '/scripts'
+      '/mainnet/scripts'
     );
     expect(screen.getAllByRole('link', { name: 'Charts' }).at(0)).toHaveAttribute(
       'href',
-      '/charts'
+      '/mainnet/charts'
     );
     expect(screen.queryByRole('link', { name: 'Fiber' })).not.toBeInTheDocument();
   });
@@ -100,5 +109,33 @@ describe('Header', () => {
     fireEvent.click(toggleMenu);
 
     expect(screen.getAllByRole('link', { name: 'DAO' })).toHaveLength(1);
+  });
+
+  it('separates the network context selector from navbar links', () => {
+    usePathnameMock.mockReturnValue('/');
+    window.__CKBADGER_RUNTIME_CONFIG__ = {
+      networks: [{ name: 'mainnet' }, { name: 'testnet' }],
+      defaultNetwork: 'mainnet',
+    };
+    render(<Header />);
+
+    const switcher = screen.getByTestId('network-switcher');
+    const daoLink = screen.getAllByRole('link', { name: 'DAO' })[0];
+    const networkTrigger = screen.getByRole('button', { name: 'Select network' });
+    const inventoryTrigger = screen.getByRole('button', { name: 'Inventory' });
+
+    expect(networkTrigger.className).not.toBe(inventoryTrigger.className);
+    expect(networkTrigger.className).toContain('py-1.5');
+    expect(networkTrigger.className).not.toContain('min-h-11');
+    expect(switcher).toHaveAttribute('data-control', 'network-context');
+    expect(switcher.className).toContain('md:border-r');
+    expect(switcher.nextElementSibling).toBe(daoLink);
+  });
+
+  it('hides the network switcher for single-network deployments', () => {
+    usePathnameMock.mockReturnValue('/');
+    render(<Header />);
+
+    expect(screen.queryByTestId('network-switcher')).not.toBeInTheDocument();
   });
 });

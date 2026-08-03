@@ -16,6 +16,11 @@ fn setup_store() -> Arc<CkbadgerStore> {
     let dir = tempfile::tempdir().unwrap();
     let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
     std::mem::forget(dir);
+    // Real consensus secondary_epoch_reward (mainnet and testnet agree). The
+    // DAO snapshot recompute needs it for the per-block miner secondary split.
+    store
+        .set_secondary_epoch_reward(61_369_863_013_698)
+        .unwrap();
     store
 }
 
@@ -34,6 +39,33 @@ fn outpoint_bytes(tx_hash: &[u8], output_index: i16) -> Vec<u8> {
     k.extend_from_slice(tx_hash);
     k.extend_from_slice(&output_index.to_be_bytes());
     k
+}
+
+/// Seed epoch stats rows matching this file's fixture layout (block 99 in
+/// epoch 1; blocks 100+ in epoch 2). Real write paths persist epoch rows
+/// atomically with their blocks; rollback fails fast when the boundary
+/// epoch row is missing.
+fn seed_epoch_rows_for_dao_fixture(store: &CkbadgerStore) {
+    for (epoch, start_block, end_block) in [(1i64, 1i64, 99i64), (2, 100, 101)] {
+        store
+            .put_epoch_stats(
+                epoch,
+                &ckbadger_store::types::EpochStats {
+                    epoch_number: epoch,
+                    start_block,
+                    end_block: Some(end_block),
+                    blocks_count: (end_block - start_block + 1) as i32,
+                    length: 1800,
+                    start_timestamp: chrono::DateTime::from_timestamp_millis(
+                        1_775_577_600_000 - 1000,
+                    )
+                    .unwrap(),
+                    end_timestamp: None,
+                    transactions_count: 1000,
+                },
+            )
+            .unwrap();
+    }
 }
 
 /// Partial-day rollback: blocks 100 and 101 are both on 2026-04-08.
@@ -70,6 +102,9 @@ fn test_partial_day_rollback_recomputes_dao_snapshot() {
             ),
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         },
     );
@@ -88,10 +123,13 @@ fn test_partial_day_rollback_recomputes_dao_snapshot() {
                 1_100_000_000_000_000_000, // C
                 10_050_000_000_000_000,    // AR
                 5_000_000,                 // S
-                110_000_000_000_000_000,   // U
+                330_000_000_000_000_000,   // U (different ratio from block 99)
             ),
             transactions_count: 2,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         },
     );
@@ -114,6 +152,9 @@ fn test_partial_day_rollback_recomputes_dao_snapshot() {
             ),
             transactions_count: 2,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         },
     );
@@ -174,6 +215,7 @@ fn test_partial_day_rollback_recomputes_dao_snapshot() {
 
     let entry_100 = DaoDepositCacheEntry {
         capacity: 100_00000000,
+        occupied_capacity: 100_00000000,
         deposit_block_number: 100,
         deposit_timestamp: day_0408_t1_ms,
         lock_script_hash: vec![0xB0; 32],
@@ -185,11 +227,13 @@ fn test_partial_day_rollback_recomputes_dao_snapshot() {
         withdraw_request_ar: None,
         withdraw_block: None,
         withdraw_tx: None,
+        withdraw_request_occupied_capacity: None,
         withdraw_to_output_index: None,
         compensation: None,
     };
     let entry_101 = DaoDepositCacheEntry {
         capacity: 100_00000000,
+        occupied_capacity: 100_00000000,
         deposit_block_number: 101,
         deposit_timestamp: day_0408_t2_ms,
         lock_script_hash: vec![0xB1; 32], // distinct lock hash
@@ -201,6 +245,7 @@ fn test_partial_day_rollback_recomputes_dao_snapshot() {
         withdraw_request_ar: None,
         withdraw_block: None,
         withdraw_tx: None,
+        withdraw_request_occupied_capacity: None,
         withdraw_to_output_index: None,
         compensation: None,
     };
@@ -217,6 +262,7 @@ fn test_partial_day_rollback_recomputes_dao_snapshot() {
         .unwrap();
 
     // ACT: partial-day rollback to block 100 (drops block 101 only).
+    seed_epoch_rows_for_dao_fixture(&store);
     store.rollback_to_block(100).unwrap();
 
     // ASSERT: snapshot for 2026-04-08 should now reflect block 100's deposit
@@ -254,12 +300,20 @@ fn test_partial_day_rollback_recomputes_dao_snapshot() {
         "total_issuance must match block 100 DAO field C"
     );
     assert_eq!(
-        repaired.occupied_capacity, 110_000_000_000_000_000,
+        repaired.occupied_capacity, 330_000_000_000_000_000,
         "occupied_capacity must match block 100 DAO field U"
     );
     assert_eq!(
         repaired.secondary_pool, 5_000_000,
         "secondary_pool must match block 100 DAO field S"
+    );
+    // Block 100 is at epoch index 0 of a 1800-block epoch, so its scheduled
+    // secondary issuance is 34_094_368_341 shannons. RFC-0023 splits it
+    // against the PARENT (block 99) state, whose U/C is 0.1 — block 100's own
+    // U/C is 0.3, which would give 10_228_310_502 instead.
+    assert_eq!(
+        repaired.cum_miner_secondary, 3_409_436_834,
+        "block 100 miner split must use block 99 C/U, not block 100 C/U"
     );
 }
 
@@ -268,7 +322,7 @@ fn test_partial_day_rollback_recomputes_dao_snapshot() {
 /// range). Pre-reorg, the entry has status=1 (phase-1 requested).
 /// After rollback to block 100, the entry should be normalized back to status=0
 /// by repair_and_rebuild_dao_indexes. The recomputed 2026-04-08 snapshot should
-/// show the deposit as still active (total_deposited = 100 CKB, 0 withdrawals).
+/// show the deposit as still active (total_deposited = 200 CKB, 0 withdrawals).
 #[test]
 fn test_rollback_of_phase1_withdraw_keeps_deposit_active() {
     let store = setup_store();
@@ -279,6 +333,31 @@ fn test_rollback_of_phase1_withdraw_keeps_deposit_active() {
     let day_0408_late_ms: i64 = 1_775_577_600_000 + 60_000;
 
     let mut batch = StoreBatch::new(&store);
+
+    // Block 98: exact N-1 DAO state for the first block of the target date.
+    batch.put_block_header(
+        98,
+        &CachedBlockHeader {
+            hash: vec![0x62; 32],
+            parent_hash: vec![0x61; 32],
+            timestamp: day_0408_start_ms - 11_000,
+            epoch_number: 1,
+            epoch_index: 1799,
+            epoch_length: 1800,
+            dao: dao_field(
+                1_000_000_000_000_000_000,
+                10_000_000_000_000_000,
+                0,
+                100_000_000_000_000_000,
+            ),
+            transactions_count: 1,
+            uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
+            cycles: None,
+        },
+    );
 
     // Block 99: earlier in 2026-04-08, the deposit-creating block.
     batch.put_block_header(
@@ -298,6 +377,9 @@ fn test_rollback_of_phase1_withdraw_keeps_deposit_active() {
             ),
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         },
     );
@@ -319,6 +401,9 @@ fn test_rollback_of_phase1_withdraw_keeps_deposit_active() {
             ),
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         },
     );
@@ -340,6 +425,9 @@ fn test_rollback_of_phase1_withdraw_keeps_deposit_active() {
             ),
             transactions_count: 2,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         },
     );
@@ -379,7 +467,7 @@ fn test_rollback_of_phase1_withdraw_keeps_deposit_active() {
         new_deposits: 1,
         withdrawals: 0, // phase-1 doesn't count as completed withdrawal
         compensation: 0,
-        cumulative_deposit_amount: 100_00000000,
+        cumulative_deposit_amount: 200_00000000,
         total_issuance: 1_200_000_000_000_000_000,
         secondary_pool: 10_000_000,
         occupied_capacity: 120_000_000_000_000_000,
@@ -390,7 +478,7 @@ fn test_rollback_of_phase1_withdraw_keeps_deposit_active() {
         unclaimed_compensation: 0,
         cumulative_depositors: 1,
         daily_depositor_addresses: 1,
-        protocol_deposited: Some(100_00000000),
+        protocol_deposited: Some(200_00000000),
     };
     batch.put_stats(&s_key, &bincode::serialize(&pre_snap).unwrap());
 
@@ -398,7 +486,10 @@ fn test_rollback_of_phase1_withdraw_keeps_deposit_active() {
     let tx_hash: Vec<u8> = vec![0xA0; 32];
     let outpoint = outpoint_bytes(&tx_hash, 0);
     let entry = DaoDepositCacheEntry {
-        capacity: 100_00000000,
+        capacity: 200_00000000,
+        // This synthetic rollback fixture isolates lifecycle counts; using
+        // zero free capacity keeps compensation out of the assertion surface.
+        occupied_capacity: 200_00000000,
         deposit_block_number: 99,
         deposit_timestamp: day_0408_start_ms,
         lock_script_hash: vec![0xB0; 32],
@@ -410,6 +501,7 @@ fn test_rollback_of_phase1_withdraw_keeps_deposit_active() {
         withdraw_request_ar: Some(10_100_000_000_000_000),
         withdraw_block: None,
         withdraw_tx: None,
+        withdraw_request_occupied_capacity: Some(200_00000000),
         withdraw_to_output_index: None,
         compensation: None,
     };
@@ -424,6 +516,7 @@ fn test_rollback_of_phase1_withdraw_keeps_deposit_active() {
         .unwrap();
 
     // ACT: rollback to block 100 — phase-1 at block 101 is undone.
+    seed_epoch_rows_for_dao_fixture(&store);
     store.rollback_to_block(100).unwrap();
 
     // ASSERT: after recompute, the deposit should be active again.
@@ -434,7 +527,7 @@ fn test_rollback_of_phase1_withdraw_keeps_deposit_active() {
     let repaired: DaoDailySnapshot = bincode::deserialize(&raw).unwrap();
 
     assert_eq!(
-        repaired.total_deposited, 100_00000000,
+        repaired.total_deposited, 200_00000000,
         "deposit should be active again after rolling back its phase-1 withdraw request, got {}",
         repaired.total_deposited
     );
@@ -446,7 +539,7 @@ fn test_rollback_of_phase1_withdraw_keeps_deposit_active() {
     assert_eq!(repaired.depositors_count, 1, "one active depositor");
     assert_eq!(
         repaired.protocol_deposited,
-        Some(100_00000000),
+        Some(200_00000000),
         "protocol_deposited includes the now-active deposit"
     );
 }
@@ -486,6 +579,9 @@ fn test_cross_day_rollback_rebuilds_cutoff_date_snapshot() {
             ),
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         },
     );
@@ -507,6 +603,9 @@ fn test_cross_day_rollback_rebuilds_cutoff_date_snapshot() {
             ),
             transactions_count: 2,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         },
     );
@@ -528,6 +627,9 @@ fn test_cross_day_rollback_rebuilds_cutoff_date_snapshot() {
             ),
             transactions_count: 2,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         },
     );
@@ -584,6 +686,7 @@ fn test_cross_day_rollback_rebuilds_cutoff_date_snapshot() {
     // Two DAO deposit entries on blocks 101 and 102.
     let entry_101 = DaoDepositCacheEntry {
         capacity: 100_00000000,
+        occupied_capacity: 100_00000000,
         deposit_block_number: 101,
         deposit_timestamp: day_0408_t1_ms,
         lock_script_hash: vec![0xB0; 32],
@@ -595,11 +698,13 @@ fn test_cross_day_rollback_rebuilds_cutoff_date_snapshot() {
         withdraw_request_ar: None,
         withdraw_block: None,
         withdraw_tx: None,
+        withdraw_request_occupied_capacity: None,
         withdraw_to_output_index: None,
         compensation: None,
     };
     let entry_102 = DaoDepositCacheEntry {
         capacity: 100_00000000,
+        occupied_capacity: 100_00000000,
         deposit_block_number: 102,
         deposit_timestamp: day_0408_t2_ms,
         lock_script_hash: vec![0xB1; 32],
@@ -611,6 +716,7 @@ fn test_cross_day_rollback_rebuilds_cutoff_date_snapshot() {
         withdraw_request_ar: None,
         withdraw_block: None,
         withdraw_tx: None,
+        withdraw_request_occupied_capacity: None,
         withdraw_to_output_index: None,
         compensation: None,
     };
@@ -626,6 +732,7 @@ fn test_cross_day_rollback_rebuilds_cutoff_date_snapshot() {
         .unwrap();
 
     // ACT: rollback to block 100 — drops ALL of 2026-04-08.
+    seed_epoch_rows_for_dao_fixture(&store);
     store.rollback_to_block(100).unwrap();
 
     // ASSERT: after recompute, the 2026-04-08 snapshot should show zero
@@ -703,6 +810,9 @@ fn test_rollback_preserves_cumulative_depositors_with_repeat_lock() {
             ),
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         },
     );
@@ -724,6 +834,9 @@ fn test_rollback_preserves_cumulative_depositors_with_repeat_lock() {
             ),
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         },
     );
@@ -745,6 +858,9 @@ fn test_rollback_preserves_cumulative_depositors_with_repeat_lock() {
             ),
             transactions_count: 2,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         },
     );
@@ -827,6 +943,7 @@ fn test_rollback_preserves_cumulative_depositors_with_repeat_lock() {
     // Use 200 CKB (>= DAO_OCCUPIED_CAPACITY of 102 CKB) to satisfy validation.
     let entry_99 = DaoDepositCacheEntry {
         capacity: 200_00000000,
+        occupied_capacity: 200_00000000,
         deposit_block_number: 99,
         deposit_timestamp: day_0407_late_ms,
         lock_script_hash: vec![0xB0; 32],
@@ -838,11 +955,13 @@ fn test_rollback_preserves_cumulative_depositors_with_repeat_lock() {
         withdraw_request_ar: None,
         withdraw_block: None,
         withdraw_tx: None,
+        withdraw_request_occupied_capacity: None,
         withdraw_to_output_index: None,
         compensation: None,
     };
     let entry_101 = DaoDepositCacheEntry {
         capacity: 200_00000000,
+        occupied_capacity: 200_00000000,
         deposit_block_number: 101,
         deposit_timestamp: day_0408_t2_ms,
         lock_script_hash: vec![0xB0; 32], // SAME lock
@@ -854,6 +973,7 @@ fn test_rollback_preserves_cumulative_depositors_with_repeat_lock() {
         withdraw_request_ar: None,
         withdraw_block: None,
         withdraw_tx: None,
+        withdraw_request_occupied_capacity: None,
         withdraw_to_output_index: None,
         compensation: None,
     };
@@ -870,6 +990,7 @@ fn test_rollback_preserves_cumulative_depositors_with_repeat_lock() {
 
     // ACT: rollback to block 100 — drops block 101 only.
     // fork_point_date = cutoff_date = 2026-04-08, so only 2026-04-08 is recomputed.
+    seed_epoch_rows_for_dao_fixture(&store);
     store.rollback_to_block(100).unwrap();
 
     // ASSERT: 2026-04-07 snapshot is NOT recomputed (fork_point is on 2026-04-08).

@@ -12,6 +12,23 @@ use crate::types::{
 use crate::bytes_to_hex;
 use crate::types::{LockScriptEntry, TokenCellStats};
 
+/// Which script slot a cell-by-code index row refers to. Used to verify the
+/// index row against the loaded cell payload (fail fast on index corruption).
+#[derive(Clone, Copy)]
+enum CodeIndexSide {
+    Lock,
+    Type,
+}
+
+impl CodeIndexSide {
+    fn name(self) -> &'static str {
+        match self {
+            CodeIndexSide::Lock => "lock",
+            CodeIndexSide::Type => "type",
+        }
+    }
+}
+
 impl CkbadgerStore {
     /// Look up lock script components by lock_hash.
     pub fn get_lock_script(&self, lock_hash: &[u8]) -> anyhow::Result<Option<LockScriptEntry>> {
@@ -633,55 +650,69 @@ impl CkbadgerStore {
         Ok(results)
     }
 
-    /// List live cells by lock code hash (prefix scan on cell_by_lock_code).
-    /// `after_key` is the full 74-byte cell index key of the last returned entry (for pagination).
+    /// List live cells of one script reference form `(code_hash, hash_type)`
+    /// via a prefix scan on `cell_by_lock_code`.
+    /// `after_key` is the full 75-byte cell-by-code index key of the last
+    /// returned entry (for pagination).
     pub fn list_cells_by_lock_code_hash(
         &self,
         code_hash: &[u8],
+        hash_type: u8,
         limit: usize,
         after_key: Option<&[u8]>,
         cells_store: &CkbadgerStore,
     ) -> anyhow::Result<Vec<(Vec<u8>, i16, PositionedCellInfo)>> {
         self.list_cells_by_code_hash_cf(
             self.cf_cell_by_lock_code(),
+            CodeIndexSide::Lock,
             code_hash,
+            hash_type,
             limit,
             after_key,
             cells_store,
         )
     }
 
-    /// List live cells by type code hash (prefix scan on cell_by_type_code).
-    /// `after_key` is the full 74-byte cell index key of the last returned entry (for pagination).
+    /// List live cells of one script reference form `(code_hash, hash_type)`
+    /// via a prefix scan on `cell_by_type_code`.
+    /// `after_key` is the full 75-byte cell-by-code index key of the last
+    /// returned entry (for pagination).
     pub fn list_cells_by_type_code_hash(
         &self,
         code_hash: &[u8],
+        hash_type: u8,
         limit: usize,
         after_key: Option<&[u8]>,
         cells_store: &CkbadgerStore,
     ) -> anyhow::Result<Vec<(Vec<u8>, i16, PositionedCellInfo)>> {
         self.list_cells_by_code_hash_cf(
             self.cf_cell_by_type_code(),
+            CodeIndexSide::Type,
             code_hash,
+            hash_type,
             limit,
             after_key,
             cells_store,
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn list_cells_by_code_hash_cf(
         &self,
         cf: &rocksdb::ColumnFamily,
+        side: CodeIndexSide,
         code_hash: &[u8],
+        hash_type: u8,
         limit: usize,
         after_key: Option<&[u8]>,
         cells_store: &CkbadgerStore,
     ) -> anyhow::Result<Vec<(Vec<u8>, i16, PositionedCellInfo)>> {
         let mut results = Vec::new();
 
+        let prefix = keys::encode_cell_code_index_prefix(code_hash, hash_type);
         let start_key = after_key
             .map(|k| k.to_vec())
-            .unwrap_or_else(|| code_hash.to_vec());
+            .unwrap_or_else(|| prefix.clone());
 
         let iter = self.iterator_cf(
             cf,
@@ -696,7 +727,7 @@ impl CkbadgerStore {
                     e
                 )
             })?;
-            if !key.starts_with(code_hash) {
+            if !key.starts_with(&prefix) {
                 break;
             }
             // Skip the cursor key itself (already returned on the previous page)
@@ -706,14 +737,41 @@ impl CkbadgerStore {
                     continue;
                 }
             }
-            // Key: code_hash(32) + block_num(8) + outpoint(34) = 74
-            if key.len() >= 74 {
-                let (tx_hash, output_index) = keys::decode_outpoint(&key[40..74]);
-                if let Some(cell) = self.get_cell(&tx_hash, output_index, cells_store)? {
-                    results.push((tx_hash, output_index, cell));
-                    if results.len() >= limit {
-                        break;
+            // Key: code_hash(32) + hash_type(1) + block_num(8) + outpoint(34) = 75
+            if key.len() != keys::CELL_CODE_INDEX_KEY_SIZE {
+                anyhow::bail!(
+                    "malformed cell-by-{}-code index key: key=0x{}, len={}, expected={}",
+                    side.name(),
+                    hex::encode(&key),
+                    key.len(),
+                    keys::CELL_CODE_INDEX_KEY_SIZE
+                );
+            }
+            let (tx_hash, output_index) = keys::decode_outpoint(&key[41..75]);
+            if let Some(cell) = self.get_cell(&tx_hash, output_index, cells_store)? {
+                let payload_matches = match side {
+                    CodeIndexSide::Lock => {
+                        cell.lock_code_hash.as_slice() == &code_hash[..32]
+                            && cell.lock_hash_type == i16::from(hash_type)
                     }
+                    CodeIndexSide::Type => {
+                        cell.type_code_hash.as_deref() == Some(&code_hash[..32])
+                            && cell.type_hash_type == Some(i16::from(hash_type))
+                    }
+                };
+                if !payload_matches {
+                    anyhow::bail!(
+                        "cell-by-{}-code index row disagrees with cell payload: code_hash=0x{}, hash_type={}, outpoint=0x{}:{}",
+                        side.name(),
+                        hex::encode(&code_hash[..32]),
+                        hash_type,
+                        hex::encode(&tx_hash),
+                        output_index
+                    );
+                }
+                results.push((tx_hash, output_index, cell));
+                if results.len() >= limit {
+                    break;
                 }
             }
         }
@@ -847,6 +905,225 @@ mod tests {
         store
             .put_cf(store.cf_cell_by_type(), &idx_key, &[])
             .unwrap();
+    }
+
+    /// Insert a live cell plus its cell-by-lock-code / cell-by-type-code index
+    /// rows, exactly as the indexer write path does.
+    fn insert_code_indexed_cell(
+        store: &CkbadgerStore,
+        tx_hash: &[u8],
+        output_index: i16,
+        created_at_block: i64,
+        cell: &LiveCellInfo,
+    ) {
+        let mut batch = StoreBatch::new(store);
+        batch.put_cell(tx_hash, output_index, cell, created_at_block);
+        batch.put_cell_by_lock_code(
+            &cell.lock_code_hash,
+            cell.lock_hash_type as u8,
+            created_at_block,
+            tx_hash,
+            output_index,
+        );
+        if let (Some(type_code_hash), Some(type_hash_type)) =
+            (&cell.type_code_hash, cell.type_hash_type)
+        {
+            batch.put_cell_by_type_code(
+                type_code_hash,
+                type_hash_type as u8,
+                created_at_block,
+                tx_hash,
+                output_index,
+            );
+        }
+        batch.commit().unwrap();
+    }
+
+    fn code_form_cell(lock_code_hash: &[u8], lock_hash_type: i16) -> LiveCellInfo {
+        LiveCellInfo {
+            capacity: 100_00000000,
+            lock_script_hash: vec![0xAA; 32],
+            lock_code_hash: lock_code_hash.to_vec(),
+            lock_hash_type,
+            lock_args: vec![],
+            type_script_hash: None,
+            type_code_hash: None,
+            type_hash_type: None,
+            type_args: None,
+            data_size: 0,
+            occupied_capacity: 61_00000000,
+            udt_amount: None,
+            data_hash: None,
+        }
+    }
+
+    #[test]
+    fn test_list_cells_by_lock_code_hash_never_scans_a_sibling_form() {
+        // Same code_hash bytes, two hash_type forms: a dense `type` form and a
+        // sparse `data` form. Each query must see only its own form's rows.
+        let (_dir, store) = test_store();
+        let code_hash = [0x9b; 32];
+
+        for i in 0..8u8 {
+            let tx_hash = [0x10 + i; 32];
+            insert_code_indexed_cell(
+                &store,
+                &tx_hash,
+                0,
+                100 + i as i64,
+                &code_form_cell(&code_hash, 1),
+            );
+        }
+        let data_form_tx = [0xd1; 32];
+        insert_code_indexed_cell(
+            &store,
+            &data_form_tx,
+            0,
+            200,
+            &code_form_cell(&code_hash, 0),
+        );
+
+        let data_rows = store
+            .list_cells_by_lock_code_hash(&code_hash, 0, 100, None, &store)
+            .unwrap();
+        assert_eq!(data_rows.len(), 1, "data form has exactly one live cell");
+        assert_eq!(data_rows[0].0, data_form_tx.to_vec());
+        assert!(data_rows
+            .iter()
+            .all(|(_, _, info)| info.cell.lock_hash_type == 0));
+
+        let type_rows = store
+            .list_cells_by_lock_code_hash(&code_hash, 1, 100, None, &store)
+            .unwrap();
+        assert_eq!(type_rows.len(), 8, "type form has exactly eight live cells");
+        assert!(type_rows
+            .iter()
+            .all(|(_, _, info)| info.cell.lock_hash_type == 1));
+
+        // An unobserved form is empty without touching the sibling forms.
+        let data1_rows = store
+            .list_cells_by_lock_code_hash(&code_hash, 2, 100, None, &store)
+            .unwrap();
+        assert!(data1_rows.is_empty());
+    }
+
+    #[test]
+    fn test_list_cells_by_lock_code_hash_paginates_within_one_form() {
+        // Paging a form must enumerate its rows exactly once, and must not
+        // spill into the sibling form when the form is exhausted.
+        let (_dir, store) = test_store();
+        let code_hash = [0x9b; 32];
+
+        let mut expected = Vec::new();
+        for i in 0..5u8 {
+            let tx_hash = [0x20 + i; 32];
+            insert_code_indexed_cell(
+                &store,
+                &tx_hash,
+                0,
+                300 + i as i64,
+                &code_form_cell(&code_hash, 1),
+            );
+            expected.push(tx_hash.to_vec());
+        }
+        // Sibling data-form rows sort before the type-form rows and must never
+        // appear in a type-form page.
+        for i in 0..3u8 {
+            insert_code_indexed_cell(
+                &store,
+                &[0xe0 + i; 32],
+                0,
+                301 + i as i64,
+                &code_form_cell(&code_hash, 0),
+            );
+        }
+
+        let mut seen: Vec<Vec<u8>> = Vec::new();
+        let mut cursor: Option<Vec<u8>> = None;
+        loop {
+            let page = store
+                .list_cells_by_lock_code_hash(&code_hash, 1, 2, cursor.as_deref(), &store)
+                .unwrap();
+            if page.is_empty() {
+                break;
+            }
+            for (tx_hash, output_index, info) in &page {
+                assert_eq!(info.cell.lock_hash_type, 1);
+                seen.push(tx_hash.clone());
+                cursor = Some(keys::encode_cell_code_index_key(
+                    &code_hash,
+                    1,
+                    info.created_at_block,
+                    tx_hash,
+                    *output_index,
+                ));
+            }
+            if page.len() < 2 {
+                break;
+            }
+        }
+
+        assert_eq!(seen, expected, "each type-form row appears exactly once");
+    }
+
+    #[test]
+    fn test_list_cells_by_type_code_hash_isolates_forms() {
+        let (_dir, store) = test_store();
+        let type_code_hash = [0x77; 32];
+
+        let mut typed = code_form_cell(&[0xBB; 32], 1);
+        typed.type_script_hash = Some(vec![0x55; 32]);
+        typed.type_code_hash = Some(type_code_hash.to_vec());
+        typed.type_hash_type = Some(1);
+        typed.type_args = Some(vec![]);
+        insert_code_indexed_cell(&store, &[0x31; 32], 0, 400, &typed);
+
+        let mut data_typed = typed.clone();
+        data_typed.type_hash_type = Some(0);
+        insert_code_indexed_cell(&store, &[0x32; 32], 0, 401, &data_typed);
+
+        let type_rows = store
+            .list_cells_by_type_code_hash(&type_code_hash, 1, 100, None, &store)
+            .unwrap();
+        assert_eq!(type_rows.len(), 1);
+        assert_eq!(type_rows[0].0, vec![0x31; 32]);
+
+        let data_rows = store
+            .list_cells_by_type_code_hash(&type_code_hash, 0, 100, None, &store)
+            .unwrap();
+        assert_eq!(data_rows.len(), 1);
+        assert_eq!(data_rows[0].0, vec![0x32; 32]);
+    }
+
+    #[test]
+    fn test_list_cells_by_lock_code_hash_rejects_index_payload_disagreement() {
+        // A cell-by-code row filed under a hash_type its payload does not use
+        // is index corruption; the read path must fail fast, not return the row.
+        let (_dir, store) = test_store();
+        let code_hash = [0x9b; 32];
+        let tx_hash = [0x41; 32];
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_cell(&tx_hash, 0, &code_form_cell(&code_hash, 1), 500);
+        batch.commit().unwrap();
+        // Hand-written row under the wrong form.
+        store
+            .put_cf(
+                store.cf_cell_by_lock_code(),
+                &keys::encode_cell_code_index_key(&code_hash, 0, 500, &tx_hash, 0),
+                &[],
+            )
+            .unwrap();
+
+        let err = store
+            .list_cells_by_lock_code_hash(&code_hash, 0, 10, None, &store)
+            .expect_err("index/payload disagreement must fail fast");
+        let message = err.to_string();
+        assert!(
+            message.contains("index row disagrees with cell payload"),
+            "unexpected error: {message}"
+        );
+        assert!(message.contains(&hex::encode(tx_hash)));
     }
 
     #[test]

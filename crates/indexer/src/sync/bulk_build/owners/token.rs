@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use anyhow::{anyhow, bail, Result};
+use ckbadger_common::TokenBalance;
 use ckbadger_store::keys;
 use ckbadger_store::{
     CkbadgerStore, TokenDailyDelta, TokenInfo, CF_ADDR_TOKENS_BY_BALANCE, CF_STATS_TOKEN,
@@ -8,7 +9,6 @@ use ckbadger_store::{
 };
 use rocksdb::IteratorMode;
 use rustc_hash::FxHashMap;
-use serde::Serialize;
 
 use super::{BulkReducer, ReducerContext};
 use crate::parser::{ParsedUdtCell, UdtParser};
@@ -25,11 +25,11 @@ use crate::sync::pipeline::build_bulk_facts_arena_from_blocks;
 pub(crate) struct TokenOwner {
     tokens: FxHashMap<Vec<u8>, TokenAccum>,
     /// On-chain max_supply observations collected from omnilock supply info cells.
-    max_supply_observations: FxHashMap<Vec<u8>, i128>,
+    max_supply_observations: FxHashMap<Vec<u8>, u128>,
     /// On-chain token info collected from xUDT Unique Cells (keyed by unique type_args, 20 bytes).
     unique_cell_info: FxHashMap<Vec<u8>, crate::sync::token_helpers::UniqueTokenInfo>,
     /// Resolved on-chain token info (keyed by token type_hash).
-    token_onchain_info: FxHashMap<Vec<u8>, crate::sync::token_helpers::UniqueTokenInfo>,
+    token_onchain_info: FxHashMap<Vec<u8>, crate::sync::token_helpers::OnchainTokenInfo>,
 }
 
 impl TokenOwner {
@@ -51,9 +51,9 @@ impl TokenOwner {
             |k, v| {
                 crate::sync::bulk_build::accounting::bytes_vec_bytes(k)
                     + 1
-                    + v.name.len() as u64
-                    + v.symbol.len() as u64
-                    + 17
+                    + v.info.name.len() as u64
+                    + v.info.symbol.len() as u64
+                    + 18
             },
         )
     }
@@ -135,10 +135,98 @@ impl TokenOwner {
                 continue;
             }
             if let Some(info) = self.unique_cell_info.get(&ext.args) {
-                self.token_onchain_info
-                    .insert(token_type_hash.to_vec(), info.clone());
+                // Unconditional: an extension binding displaces any earlier
+                // co-occurrence binding for the same token.
+                self.token_onchain_info.insert(
+                    token_type_hash.to_vec(),
+                    crate::sync::token_helpers::OnchainTokenInfo {
+                        info: info.clone(),
+                        binding: crate::sync::token_helpers::OnchainInfoBinding::XudtExtension,
+                    },
+                );
             }
         }
+    }
+
+    /// Same-tx issuance co-occurrence binding (RGB++-style issuance:
+    /// `[unique info cell, xudt cells…]` with plain owner-hash xUDT args, so
+    /// the extension path cannot see the association).
+    ///
+    /// Safety rules: the tx must contain at least one output typed with the
+    /// deployed Unique Cell type script, all parseable unique outputs must
+    /// agree on exactly one info, and the tx must mint exactly one xUDT type
+    /// (an amount-carrying xUDT output whose type is absent from the resolved
+    /// inputs). A co-occurrence binding never displaces an extension binding,
+    /// and the snapshot writer never overwrites already-known metadata.
+    fn resolve_unique_info_by_issuance_cooccurrence(
+        &mut self,
+        tx: &ResolvedTxFacts<'_>,
+        ctx: &ReducerContext<'_>,
+    ) {
+        // Exactly one distinct parsed info among Unique-Cell-typed outputs.
+        let mut unique_info: Option<crate::sync::token_helpers::UniqueTokenInfo> = None;
+        for cell in tx.cells.iter() {
+            let Some(type_code_hash_id) = cell.type_code_hash_id else {
+                continue;
+            };
+            if !crate::sync::token_helpers::is_unique_cell_code_hash(
+                ctx.resolve_identity(type_code_hash_id),
+            ) {
+                continue;
+            }
+            let Some(info) = crate::sync::token_helpers::parse_unique_cell_token_info(&cell.data)
+            else {
+                continue;
+            };
+            match &unique_info {
+                None => unique_info = Some(info),
+                Some(existing) if *existing == info => {}
+                Some(_) => return, // ambiguous: multiple distinct infos
+            }
+        }
+        let Some(unique_info) = unique_info else {
+            return;
+        };
+
+        // Types carried by the resolved inputs veto a "mint" of the same type.
+        let input_types: std::collections::HashSet<&[u8]> = tx
+            .resolved_inputs
+            .iter()
+            .filter_map(|input| input.type_script_hash_id.map(|id| ctx.resolve_identity(id)))
+            .collect();
+
+        // Exactly one minted xUDT type among amount-carrying outputs.
+        let mut minted: Option<&[u8]> = None;
+        for cell in tx.cells.iter() {
+            if !matches!(cell.semantic_tag, CellSemanticTag::Xudt) {
+                continue;
+            }
+            if cell.udt_amount.is_none() {
+                continue;
+            }
+            let Some(type_hash_id) = cell.type_script_hash_id else {
+                continue;
+            };
+            let token_type_hash = ctx.resolve_identity(type_hash_id);
+            if input_types.contains(token_type_hash) {
+                continue; // moved within the tx: a transfer, not a mint
+            }
+            match minted {
+                None => minted = Some(token_type_hash),
+                Some(existing) if existing == token_type_hash => {}
+                Some(_) => return, // more than one minted type: ambiguous
+            }
+        }
+        let Some(minted) = minted else {
+            return;
+        };
+
+        self.token_onchain_info.entry(minted.to_vec()).or_insert(
+            crate::sync::token_helpers::OnchainTokenInfo {
+                info: unique_info,
+                binding: crate::sync::token_helpers::OnchainInfoBinding::IssuanceCooccurrence,
+            },
+        );
     }
 }
 
@@ -190,10 +278,12 @@ impl BulkReducer for TokenOwner {
         for cell in tx.cells.iter() {
             self.observe_unique_cell_from_output(cell, ctx);
         }
-        // Resolve unique cell → token associations
+        // Resolve unique cell → token associations (extension-script path)
         for cell in tx.cells.iter() {
             self.resolve_unique_cell_for_xudt(cell, ctx);
         }
+        // Same-tx issuance co-occurrence binding (no extension flags)
+        self.resolve_unique_info_by_issuance_cooccurrence(tx, ctx);
 
         for transfer in UdtParser::build_transfers_from_cells(&parsed_inputs, &parsed_outputs) {
             let token = self
@@ -215,22 +305,24 @@ impl BulkReducer for TokenOwner {
     }
 
     fn flush_sealed(&mut self, materializer: &mut Materializer<'_>) -> Result<()> {
-        let rows = self.build_sealed_rows()?;
-        if rows.is_empty() {
-            return Ok(());
-        }
-        materializer.stream_sealed_aggregate_rows(&rows)
+        materializer.stream_sealed_aggregate_rows_bounded(|sink| {
+            self.emit_sealed_rows(|row| sink.push(row))
+        })
     }
 
     fn materialize_final(&self, materializer: &mut Materializer<'_>) -> Result<()> {
-        let rows = self.build_snapshot_rows(materializer.domain_store())?;
-        materializer.materialize_final_snapshot(&rows)
+        let domain_store = materializer.domain_store();
+        materializer.materialize_final_snapshot_bounded(|sink| {
+            self.emit_snapshot_rows(domain_store, |row| sink.push(row))
+        })
     }
 }
 
 impl TokenOwner {
-    fn build_sealed_rows(&self) -> Result<Vec<MaterializedRow>> {
-        let mut rows = Vec::new();
+    pub(crate) fn emit_sealed_rows<F>(&self, mut emit: F) -> Result<()>
+    where
+        F: FnMut(MaterializedRow) -> Result<()>,
+    {
         let mut type_hashes: Vec<&Vec<u8>> = self.tokens.keys().collect();
         type_hashes.sort();
 
@@ -239,20 +331,20 @@ impl TokenOwner {
                 .tokens
                 .get(type_hash)
                 .expect("sorted token type hash must exist");
-            rows.push(MaterializedRow::new(
+            emit(MaterializedRow::new(
                 CF_STATS_TOKEN,
                 keys::encode_token_transfers_key(type_hash),
                 token.transfers_count.to_le_bytes().to_vec(),
-            ));
+            ))?;
 
             let mut hour_buckets = token.hourly_transfers.iter().collect::<Vec<_>>();
             hour_buckets.sort_by_key(|(hour_bucket, _)| *hour_bucket);
             for (hour_bucket, count) in hour_buckets {
-                rows.push(MaterializedRow::new(
+                emit(MaterializedRow::new(
                     CF_STATS_TOKEN,
                     keys::encode_token_hourly_key(type_hash, *hour_bucket),
                     count.to_le_bytes().to_vec(),
-                ));
+                ))?;
             }
 
             let mut daily_dates = token.daily_deltas.iter().collect::<Vec<_>>();
@@ -261,18 +353,35 @@ impl TokenOwner {
                 if delta.owned_capacity_delta == 0 && delta.owned_knowledge_delta == 0 {
                     continue;
                 }
-                rows.push(MaterializedRow::new(
+                emit(MaterializedRow::new(
                     CF_STATS_TOKEN,
                     keys::encode_token_daily_key(type_hash, *date).to_vec(),
                     bincode::serialize(delta)?,
-                ));
+                ))?;
             }
         }
 
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn build_sealed_rows(&self) -> Result<Vec<MaterializedRow>> {
+        let mut rows = Vec::new();
+        self.emit_sealed_rows(|row| {
+            rows.push(row);
+            Ok(())
+        })?;
         Ok(rows)
     }
 
-    fn build_snapshot_rows(&self, domain_store: &CkbadgerStore) -> Result<Vec<MaterializedRow>> {
+    pub(crate) fn emit_snapshot_rows<F>(
+        &self,
+        domain_store: &CkbadgerStore,
+        mut emit: F,
+    ) -> Result<()>
+    where
+        F: FnMut(MaterializedRow) -> Result<()>,
+    {
         let all_type_hashes: Vec<Vec<u8>> = self.tokens.keys().cloned().collect();
         let existing_tokens: FxHashMap<Vec<u8>, TokenInfo> = domain_store
             .get_tokens_batch(&all_type_hashes)?
@@ -280,7 +389,6 @@ impl TokenOwner {
             .filter_map(|(k, v)| v.map(|info| (k, info)))
             .collect();
 
-        let mut rows = Vec::new();
         let mut type_hashes: Vec<&Vec<u8>> = self.tokens.keys().collect();
         type_hashes.sort();
 
@@ -291,25 +399,14 @@ impl TokenOwner {
                 .expect("sorted token type hash must exist");
             let mut info = token.to_info(type_hash.clone());
 
-            // Apply on-chain max_supply observations (omnilock supply info cells)
-            if let Some(&observed) = self.max_supply_observations.get(type_hash) {
-                info.max_supply = Some(observed);
-            }
-
-            // Apply on-chain token info from Unique Cells
-            if let Some(onchain) = self.token_onchain_info.get(type_hash) {
-                if !onchain.name.is_empty() {
-                    info.name = Some(onchain.name.clone());
-                }
-                if !onchain.symbol.is_empty() {
-                    info.symbol = Some(onchain.symbol.clone());
-                }
-                info.decimals = Some(onchain.decimal as i32);
-            }
-
-            // Preserve label fields from existing store data (written by label import)
-            if let Some(existing) = existing_tokens.get(type_hash) {
-                // Display fields: store values unconditionally win (includes TOML label data)
+            // Start from what the store already holds. Label import runs
+            // before the first block is indexed, so on a fresh database this
+            // is the curated label; on a restart it is whatever the previous
+            // run stored. Live sync reads exactly this row before merging the
+            // chain observation, so seeding it here is what lets both modes
+            // share one merge rule instead of each inventing a precedence.
+            let existing = existing_tokens.get(type_hash);
+            if let Some(existing) = existing {
                 if existing.name.is_some() {
                     info.name = existing.name.clone();
                 }
@@ -325,47 +422,69 @@ impl TokenOwner {
                 if existing.description.is_some() {
                     info.description = existing.description.clone();
                 }
-                // max_supply: only fill gaps (on-chain observations are canonical)
-                if info.max_supply.is_none() {
-                    info.max_supply = existing.max_supply;
-                }
             }
 
-            rows.push(MaterializedRow::new(
+            // max_supply: an on-chain observation (omnilock supply info cell)
+            // is canonical, the stored value only fills the gap.
+            if let Some(&observed) = self.max_supply_observations.get(type_hash) {
+                info.max_supply = Some(observed);
+            } else if let Some(existing) = existing {
+                info.max_supply = existing.max_supply;
+            }
+
+            // Name/symbol/decimals from the token's Unique Cell, merged by the
+            // single shared rule (see the helper's docs for precedence) so a
+            // rebuild from genesis cannot store different metadata than live
+            // sync would, and so a label that contradicts the chain is
+            // reported on this path too.
+            crate::db::writer::udt::apply_onchain_token_info(
+                type_hash,
+                &mut info,
+                self.token_onchain_info.get(type_hash),
+            );
+
+            emit(MaterializedRow::new(
                 CF_TOKENS,
                 type_hash.clone(),
                 bincode::serialize(&info)?,
-            ));
+            ))?;
 
-            let mut holders: Vec<(&Vec<u8>, &i128)> = token
-                .holders
-                .iter()
-                .filter(|(_, balance)| **balance > 0)
-                .collect();
-            holders.sort_by(|(lock_a, _), (lock_b, _)| lock_a.cmp(lock_b));
-
-            for (lock_hash, balance) in holders {
-                rows.push(MaterializedRow::new(
+            for (lock_hash, balance) in token.holders.iter() {
+                if balance.is_zero() {
+                    continue;
+                }
+                emit(MaterializedRow::new(
                     CF_TOKEN_HOLDERS,
                     keys::encode_token_holder_key(type_hash, lock_hash).to_vec(),
-                    balance.to_le_bytes().to_vec(),
-                ));
-                rows.push(MaterializedRow::new(
+                    balance.to_be_bytes().to_vec(),
+                ))?;
+                emit(MaterializedRow::new(
                     CF_TOKEN_HOLDERS_BY_BALANCE,
-                    keys::encode_token_holder_balance_key(type_hash, *balance, lock_hash).to_vec(),
+                    keys::encode_token_holder_balance_key(type_hash, balance, lock_hash).to_vec(),
                     Vec::new(),
-                ));
-                rows.push(MaterializedRow::new(
+                ))?;
+                emit(MaterializedRow::new(
                     CF_ADDR_TOKENS_BY_BALANCE,
-                    keys::encode_addr_token_balance_key(lock_hash, *balance, type_hash).to_vec(),
+                    keys::encode_addr_token_balance_key(lock_hash, balance, type_hash).to_vec(),
                     Vec::new(),
-                ));
+                ))?;
             }
         }
 
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn build_snapshot_rows(&self, domain_store: &CkbadgerStore) -> Result<Vec<MaterializedRow>> {
+        let mut rows = Vec::new();
+        self.emit_snapshot_rows(domain_store, |row| {
+            rows.push(row);
+            Ok(())
+        })?;
         Ok(rows)
     }
 
+    #[cfg(test)]
     pub(crate) fn build_final_rows(
         &self,
         domain_store: &CkbadgerStore,
@@ -377,15 +496,14 @@ impl TokenOwner {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone)]
 struct TokenAccum {
     type_code_hash: Vec<u8>,
     hash_type: u8,
     type_args: Vec<u8>,
     standard: &'static str,
     first_seen_block: i64,
-    live_supply: i128,
-    holders: FxHashMap<Vec<u8>, i128>,
+    holders: FxHashMap<Vec<u8>, TokenBalance>,
     transfers_count: i64,
     hourly_transfers: FxHashMap<i64, i64>,
     daily_deltas: FxHashMap<u32, TokenDailyDelta>,
@@ -415,7 +533,6 @@ impl TokenAccum {
             type_args: view.type_args.clone(),
             standard: view.standard,
             first_seen_block,
-            live_supply: 0,
             holders: FxHashMap::default(),
             transfers_count: 0,
             hourly_transfers: FxHashMap::default(),
@@ -425,23 +542,19 @@ impl TokenAccum {
 
     fn apply_input(&mut self, view: &TokenCellView, tx: &ResolvedTxFacts<'_>) -> Result<()> {
         self.ensure_metadata(view, tx)?;
-        self.live_supply = checked_next_i128(
-            self.live_supply,
-            -(view.amount as i128),
-            "token live_supply",
-            &view.type_hash,
-            tx,
-        )?;
-
-        let current = *self.holders.get(&view.lock_hash).unwrap_or(&0);
-        let next = checked_next_i128(
-            current,
-            -(view.amount as i128),
+        let current = self
+            .holders
+            .get(&view.lock_hash)
+            .cloned()
+            .unwrap_or_else(TokenBalance::zero);
+        let next = checked_sub_balance(
+            &current,
+            &TokenBalance::from(view.amount),
             "token holder balance",
             &view.type_hash,
             tx,
         )?;
-        if next == 0 {
+        if next.is_zero() {
             self.holders.remove(&view.lock_hash);
         } else {
             self.holders.insert(view.lock_hash.clone(), next);
@@ -463,18 +576,14 @@ impl TokenAccum {
         if tx.block_number < self.first_seen_block {
             self.first_seen_block = tx.block_number;
         }
-        self.live_supply = checked_next_i128(
-            self.live_supply,
-            view.amount as i128,
-            "token live_supply",
-            &view.type_hash,
-            tx,
-        )?;
-
-        let current = *self.holders.get(&view.lock_hash).unwrap_or(&0);
-        let next = checked_next_i128(
-            current,
-            view.amount as i128,
+        let current = self
+            .holders
+            .get(&view.lock_hash)
+            .cloned()
+            .unwrap_or_else(TokenBalance::zero);
+        let next = checked_add_balance(
+            &current,
+            &TokenBalance::from(view.amount),
             "token holder balance",
             &view.type_hash,
             tx,
@@ -568,9 +677,7 @@ impl TokenAccum {
             name: None,
             symbol: None,
             decimals: None,
-            total_supply: Some(self.live_supply),
             max_supply: None,
-            holders_count: i64::try_from(self.holders.len()).expect("holders count exceeds i64"),
             first_seen_block: self.first_seen_block,
             icon_url: None,
             description: None,
@@ -665,16 +772,14 @@ impl TokenCellView {
         };
 
         let Some(amount) = udt_amount else {
-            if matches!(semantic_tag, CellSemanticTag::Xudt) {
-                return Ok(None);
-            }
-            bail!(
-                "missing UDT amount for fungible token cell: block={}, tx=0x{}, tx_index={}, {}",
-                tx.block_number,
-                hex::encode(tx.tx_hash),
-                tx.tx_index,
-                location
-            );
+            // Owner-mode / non-standard fungible cells (both sUDT and xUDT) can carry
+            // payloads too short for a u128 amount. The type script skips amount
+            // validation in owner mode, so these are legitimate on-chain cells with no
+            // trackable fungible amount — skip them as token owners rather than
+            // fail-fast the whole sync. The parse layer (binary_facts / token_helpers)
+            // already warned when it recorded the missing amount; consistent with the
+            // bulk_build/mod.rs token-transfer path and the parse layers.
+            return Ok(None);
         };
 
         let type_hash = ctx
@@ -762,39 +867,46 @@ impl TokenCellView {
     }
 }
 
-fn checked_next_i128(
-    current: i128,
-    delta: i128,
+fn checked_add_balance(
+    current: &TokenBalance,
+    amount: &TokenBalance,
     metric: &str,
     type_hash: &[u8],
     tx: &ResolvedTxFacts<'_>,
-) -> Result<i128> {
-    let next = current.checked_add(delta).ok_or_else(|| {
+) -> Result<TokenBalance> {
+    current.checked_add(amount).ok_or_else(|| {
         anyhow!(
-            "{} overflow: type_hash=0x{}, current={}, delta={}, block={}, tx=0x{}, tx_index={}",
+            "{} overflow: type_hash=0x{}, current={}, amount={}, block={}, tx=0x{}, tx_index={}",
             metric,
             hex::encode(type_hash),
             current,
-            delta,
+            amount,
             tx.block_number,
             hex::encode(tx.tx_hash),
             tx.tx_index
         )
-    })?;
-    if next < 0 {
-        bail!(
-            "{} underflow: type_hash=0x{}, current={}, delta={}, next={}, block={}, tx=0x{}, tx_index={}",
+    })
+}
+
+fn checked_sub_balance(
+    current: &TokenBalance,
+    amount: &TokenBalance,
+    metric: &str,
+    type_hash: &[u8],
+    tx: &ResolvedTxFacts<'_>,
+) -> Result<TokenBalance> {
+    current.checked_sub(amount).ok_or_else(|| {
+        anyhow!(
+            "{} underflow: type_hash=0x{}, current={}, amount={}, block={}, tx=0x{}, tx_index={}",
             metric,
             hex::encode(type_hash),
             current,
-            delta,
-            next,
+            amount,
             tx.block_number,
             hex::encode(tx.tx_hash),
             tx.tx_index
-        );
-    }
-    Ok(next)
+        )
+    })
 }
 
 fn checked_next_i64(
@@ -857,8 +969,8 @@ fn checked_signed_i128(
 #[derive(Debug, Default, Clone)]
 pub struct TokenStateSnapshot {
     pub tokens: HashMap<Vec<u8>, TokenInfo>,
-    pub token_holders: HashMap<Vec<u8>, HashMap<Vec<u8>, i128>>,
-    pub addr_tokens: HashMap<Vec<u8>, HashMap<Vec<u8>, i128>>,
+    pub token_holders: HashMap<Vec<u8>, HashMap<Vec<u8>, TokenBalance>>,
+    pub addr_tokens: HashMap<Vec<u8>, HashMap<Vec<u8>, TokenBalance>>,
     pub token_transfer_counts: HashMap<Vec<u8>, i64>,
     pub token_hourly_transfers: HashMap<Vec<u8>, HashMap<i64, i64>>,
     pub token_daily_deltas: HashMap<Vec<u8>, HashMap<u32, TokenDailyDelta>>,
@@ -899,7 +1011,7 @@ pub(crate) fn materialize_token_state_for_test(
             .into_iter()
             .collect::<HashMap<_, _>>();
 
-        let mut token_holders: HashMap<Vec<u8>, HashMap<Vec<u8>, i128>> = HashMap::new();
+        let mut token_holders: HashMap<Vec<u8>, HashMap<Vec<u8>, TokenBalance>> = HashMap::new();
         let mut token_transfer_counts = HashMap::new();
         let mut token_hourly_transfers = HashMap::new();
         let mut token_daily_deltas = HashMap::new();
@@ -968,7 +1080,7 @@ pub(crate) fn materialize_token_state_for_test(
             }
         }
 
-        let mut addr_tokens: HashMap<Vec<u8>, HashMap<Vec<u8>, i128>> = HashMap::new();
+        let mut addr_tokens: HashMap<Vec<u8>, HashMap<Vec<u8>, TokenBalance>> = HashMap::new();
         let iter = domain_store.iterator_cf(
             domain_store.cf_addr_tokens_by_balance(),
             IteratorMode::Start,
@@ -1009,7 +1121,7 @@ mod tests {
     use crate::sync::types::InternId;
 
     #[test]
-    fn token_owner_reduces_live_supply_and_holder_removal() {
+    fn token_owner_reduces_live_balances_and_removes_empty_holder() {
         let interner = IdentityInterner::default();
         let lock_a = interner.intern_bytes(vec![0xaa; 32]);
         let lock_b = interner.intern_bytes(vec![0xbb; 32]);
@@ -1196,10 +1308,93 @@ mod tests {
         owner.apply_tx(&tx2, &ctx).expect("apply tx2");
 
         let token = owner.tokens.get(&vec![0xcc; 32]).expect("token");
-        assert_eq!(token.live_supply, 1000);
         assert_eq!(token.holders.len(), 1);
-        assert_eq!(token.holders.get(&vec![0xbb; 32]), Some(&1000));
+        assert_eq!(
+            token.holders.get(&vec![0xbb; 32]),
+            Some(&TokenBalance::from(1000))
+        );
         assert!(!token.holders.contains_key(&vec![0xaa; 32]));
+    }
+
+    #[test]
+    fn token_owner_supports_supply_above_u128() {
+        // Exact regression for the testnet bulk-sync failure: every cell amount is a valid
+        // u128, while two live cells make both the token supply and aggregate domain wider.
+        let amount = 200u128 << 120;
+        let interner = IdentityInterner::default();
+        let lock_a = interner.intern_bytes(vec![0xaa; 32]);
+        let lock_b = interner.intern_bytes(vec![0xbb; 32]);
+        let type_hash_id = interner.intern_bytes(vec![0xcc; 32]);
+        let type_code_hash_id =
+            interner.intern_bytes(hex::decode(&crate::parser::udt::SUDT_CODE_HASH[2..]).unwrap());
+        let type_args_id = interner.intern_bytes(vec![0x12; 32]);
+        for i in interner.len()..=100 {
+            interner.intern_bytes(vec![0xf0, (i >> 8) as u8, i as u8]);
+        }
+        let frozen = interner.snapshot_for_reads();
+        let ctx = ReducerContext::new(&frozen);
+
+        let cell_a = CellFacts {
+            outpoint: OutPointKey::new([0x70; 32], 1),
+            created_at_block: 6_019_278,
+            created_by_block_dao_ar: 1,
+            capacity: 200_00000000,
+            lock_script_hash_id: lock_a,
+            lock_code_hash_id: InternId::new(99),
+            lock_hash_type: 1,
+            lock_args_id: InternId::new(98),
+            type_script_hash_id: Some(type_hash_id),
+            type_code_hash_id: Some(type_code_hash_id),
+            type_hash_type: Some(1),
+            type_args_id: Some(type_args_id),
+            occupied_capacity: 142_00000000,
+            data_size: 16,
+            data: Vec::new(),
+            data_hash: None,
+            udt_amount: Some(amount),
+            semantic_tag: CellSemanticTag::Sudt,
+            dao_state: None,
+            protocol_facts: None,
+        };
+        let mut cell_b = cell_a.clone();
+        cell_b.outpoint = OutPointKey::new([0x70; 32], 2);
+        cell_b.lock_script_hash_id = lock_b;
+
+        // Issuance: no UDT inputs, two sUDT outputs whose exact sum exceeds u128.
+        let tx0 = ResolvedTxFacts {
+            tx_hash: [0x70; 32],
+            block_number: 6_019_278,
+            block_hash: [0x03; 32],
+            timestamp_ms: 1_700_000_000_000,
+            block_dao_ar: 1,
+            tx_index: 1,
+            dotbit_action: None,
+            resolved_inputs: Vec::new(),
+            cells: vec![cell_a, cell_b].into(),
+        };
+
+        let mut owner = TokenOwner::default();
+        owner
+            .apply_tx(&tx0, &ctx)
+            .expect("aggregate supply above u128 must remain exact");
+        let token = owner.tokens.get(&vec![0xcc; 32]).expect("token");
+        assert_eq!(token.holders.len(), 2);
+        assert_eq!(
+            token.holders.get(&vec![0xaa; 32]),
+            Some(&TokenBalance::from(amount))
+        );
+        assert_eq!(
+            token.holders.get(&vec![0xbb; 32]),
+            Some(&TokenBalance::from(amount))
+        );
+        let total = token
+            .holders
+            .values()
+            .try_fold(TokenBalance::zero(), |sum, balance| {
+                sum.checked_add(balance)
+            })
+            .expect("test aggregate must fit TokenBalance");
+        assert_eq!(total.to_string(), "531691198313966349161522824112137830400");
     }
 
     #[test]
@@ -1254,5 +1449,670 @@ mod tests {
             .expect_err("invalid hash_type should fail fast");
         assert!(err.to_string().contains("out of u8 range"));
         assert!(err.to_string().contains("type_hash"));
+    }
+
+    #[test]
+    fn token_owner_tolerates_sudt_cell_without_amount() {
+        // Owner-mode / non-standard sUDT cells can carry data too short for a u128
+        // amount. The sUDT type script skips amount validation in owner mode, so such
+        // cells are legitimate on-chain state (seen live on testnet:
+        // tx=0x6deec710afc17a2a8071879d0eabe9dda84b5715c55053fac450fe8df56ef7d8,
+        // block=1001688, 5-byte data). The parse layer records `udt_amount=None`;
+        // the reducer must skip such cells as token owners, not fail-fast the whole
+        // sync — consistent with the xUDT branch and bulk_build/mod.rs token-transfer.
+        let interner = IdentityInterner::default();
+        let lock_hash_id = interner.intern_bytes(vec![0xaa; 32]);
+        let type_hash_id = interner.intern_bytes(vec![0xbb; 32]);
+        let type_code_hash_id =
+            interner.intern_bytes(hex::decode(&crate::parser::udt::SUDT_CODE_HASH[2..]).unwrap());
+        let type_args_id = interner.intern_bytes(vec![0x11; 32]);
+        let lock_code_hash_id = interner.intern_bytes(vec![0x22; 32]);
+        let lock_args_id = interner.intern_bytes(vec![0x33; 20]);
+        let frozen = interner.snapshot_for_reads();
+        let ctx = ReducerContext::new(&frozen);
+
+        let tx = ResolvedTxFacts {
+            tx_hash: [0x6d; 32],
+            block_number: 1_001_688,
+            block_hash: [0x66; 32],
+            timestamp_ms: 1_700_000_000_000,
+            block_dao_ar: 1,
+            tx_index: 1,
+            dotbit_action: None,
+            resolved_inputs: Vec::new(),
+            cells: vec![CellFacts {
+                outpoint: OutPointKey::new([0x6d; 32], 0),
+                created_at_block: 1_001_688,
+                created_by_block_dao_ar: 1,
+                capacity: 200_00000000,
+                lock_script_hash_id: lock_hash_id,
+                lock_code_hash_id,
+                lock_hash_type: 1,
+                lock_args_id,
+                type_script_hash_id: Some(type_hash_id),
+                type_code_hash_id: Some(type_code_hash_id),
+                type_hash_type: Some(1),
+                type_args_id: Some(type_args_id),
+                occupied_capacity: 142_00000000,
+                data_size: 5,
+                data: Vec::new(),
+                data_hash: None,
+                udt_amount: None,
+                semantic_tag: CellSemanticTag::Sudt,
+                dao_state: None,
+                protocol_facts: None,
+            }]
+            .into(),
+        };
+
+        let mut owner = TokenOwner::default();
+        owner
+            .apply_tx(&tx, &ctx)
+            .expect("sUDT cell without amount must be tolerated, not fail-fast");
+        // The amount-less cell is skipped entirely: no token accumulator is created.
+        assert!(!owner.tokens.contains_key(&vec![0xbb; 32]));
+    }
+
+    // -- issuance co-occurrence binding tests -----------------------------------
+
+    /// Real mainnet vector: RGB++ Protocol issuance
+    /// (tx 0xd088a12852664145773257eb1467cb0feca0d1d478968ce90b7f29bce24e2a4a,
+    /// block 12,654,045), out[0] Unique Cell data:
+    /// decimal=8, name="RGB++ Protocol", symbol="RGB++".
+    const RGBPP_UNIQUE_CELL_DATA_HEX: &str = "080e5247422b2b2050726f746f636f6c055247422b2b";
+    const UNIQUE_CELL_CODE_HASH_MAINNET_HEX: &str =
+        "0x2c8c11c985da60b0a330c61a85507416d6382c130ba67f0c47ab071e00aec628";
+
+    struct CooccurrenceInterns {
+        frozen: crate::sync::bulk_build::interner::FrozenIdentityView,
+        lock_hash: InternId,
+        lock_code_hash: InternId,
+        lock_args: InternId,
+        unique_code_hash: InternId,
+        unique_args: InternId,
+        unique_type_hash: InternId,
+        xudt_code_hash: InternId,
+        xudt_args: InternId,
+        xudt_type_hash: InternId,
+    }
+
+    fn cooccurrence_interns() -> CooccurrenceInterns {
+        let interner = IdentityInterner::default();
+        let lock_hash = interner.intern_bytes(vec![0xaa; 32]);
+        let lock_code_hash = interner.intern_bytes(vec![0x22; 32]);
+        let lock_args = interner.intern_bytes(vec![0x33; 20]);
+        let unique_code_hash =
+            interner.intern_bytes(hex::decode(&UNIQUE_CELL_CODE_HASH_MAINNET_HEX[2..]).unwrap());
+        let unique_args = interner.intern_bytes(vec![0x98; 20]);
+        let unique_type_hash = interner.intern_bytes(vec![0x50; 32]);
+        let xudt_code_hash = interner
+            .intern_bytes(hex::decode(&crate::parser::udt::XUDT_CODE_HASH_DATA1[2..]).unwrap());
+        let xudt_args = interner.intern_bytes(vec![0x08; 32]);
+        let xudt_type_hash = interner.intern_bytes(vec![0x91; 32]);
+        let frozen = interner.snapshot_for_reads();
+        CooccurrenceInterns {
+            frozen,
+            lock_hash,
+            lock_code_hash,
+            lock_args,
+            unique_code_hash,
+            unique_args,
+            unique_type_hash,
+            xudt_code_hash,
+            xudt_args,
+            xudt_type_hash,
+        }
+    }
+
+    fn unique_info_cell_facts(ids: &CooccurrenceInterns, outpoint: OutPointKey) -> CellFacts {
+        let data = hex::decode(RGBPP_UNIQUE_CELL_DATA_HEX).unwrap();
+        CellFacts {
+            outpoint,
+            created_at_block: 12_654_045,
+            created_by_block_dao_ar: 1,
+            capacity: 200_00000000,
+            lock_script_hash_id: ids.lock_hash,
+            lock_code_hash_id: ids.lock_code_hash,
+            lock_hash_type: 1,
+            lock_args_id: ids.lock_args,
+            type_script_hash_id: Some(ids.unique_type_hash),
+            type_code_hash_id: Some(ids.unique_code_hash),
+            type_hash_type: Some(2),
+            type_args_id: Some(ids.unique_args),
+            occupied_capacity: 142_00000000,
+            data_size: data.len() as i32,
+            data,
+            data_hash: None,
+            udt_amount: None,
+            semantic_tag: CellSemanticTag::Plain,
+            dao_state: None,
+            protocol_facts: None,
+        }
+    }
+
+    fn xudt_output_cell_facts(ids: &CooccurrenceInterns, outpoint: OutPointKey) -> CellFacts {
+        CellFacts {
+            outpoint,
+            created_at_block: 12_654_045,
+            created_by_block_dao_ar: 1,
+            capacity: 200_00000000,
+            lock_script_hash_id: ids.lock_hash,
+            lock_code_hash_id: ids.lock_code_hash,
+            lock_hash_type: 1,
+            lock_args_id: ids.lock_args,
+            type_script_hash_id: Some(ids.xudt_type_hash),
+            type_code_hash_id: Some(ids.xudt_code_hash),
+            type_hash_type: Some(2),
+            type_args_id: Some(ids.xudt_args),
+            occupied_capacity: 142_00000000,
+            data_size: 16,
+            data: Vec::new(),
+            data_hash: None,
+            udt_amount: Some(1000),
+            semantic_tag: CellSemanticTag::Xudt,
+            dao_state: None,
+            protocol_facts: None,
+        }
+    }
+
+    #[test]
+    fn token_owner_binds_unique_info_by_issuance_cooccurrence() {
+        // RGB++ issuance shape: a Unique-Cell-typed output plus exactly one
+        // minted xUDT type (pure 32-byte owner-hash args, no extension flags).
+        // The extension path cannot bind this; same-tx co-occurrence must.
+        let ids = cooccurrence_interns();
+        let ctx = ReducerContext::new(&ids.frozen);
+
+        let tx = ResolvedTxFacts {
+            tx_hash: [0xd0; 32],
+            block_number: 12_654_045,
+            block_hash: [0x03; 32],
+            timestamp_ms: 1_700_000_000_000,
+            block_dao_ar: 1,
+            tx_index: 1,
+            dotbit_action: None,
+            resolved_inputs: Vec::new(),
+            cells: vec![
+                unique_info_cell_facts(&ids, OutPointKey::new([0xd0; 32], 0)),
+                xudt_output_cell_facts(&ids, OutPointKey::new([0xd0; 32], 1)),
+            ]
+            .into(),
+        };
+
+        let mut owner = TokenOwner::default();
+        owner.apply_tx(&tx, &ctx).expect("apply issuance tx");
+
+        assert!(
+            owner.token_onchain_info.contains_key(&vec![0x91; 32]),
+            "single-mint issuance tx with a Unique Cell output must bind token info"
+        );
+    }
+
+    #[test]
+    fn token_owner_cooccurrence_skips_transfer_shaped_tx() {
+        // The same xUDT type appears among the resolved inputs: a transfer, not
+        // an issuance — must not bind.
+        let ids = cooccurrence_interns();
+        let ctx = ReducerContext::new(&ids.frozen);
+
+        // Prior mint (no unique cell) so the transfer's input balance exists.
+        let mint_tx = ResolvedTxFacts {
+            tx_hash: [0xd1; 32],
+            block_number: 12_654_045,
+            block_hash: [0x03; 32],
+            timestamp_ms: 1_700_000_000_000,
+            block_dao_ar: 1,
+            tx_index: 1,
+            dotbit_action: None,
+            resolved_inputs: Vec::new(),
+            cells: vec![xudt_output_cell_facts(
+                &ids,
+                OutPointKey::new([0xd1; 32], 0),
+            )]
+            .into(),
+        };
+
+        let tx = ResolvedTxFacts {
+            tx_hash: [0xd2; 32],
+            block_number: 12_654_050,
+            block_hash: [0x03; 32],
+            timestamp_ms: 1_700_000_000_000,
+            block_dao_ar: 1,
+            tx_index: 1,
+            dotbit_action: None,
+            resolved_inputs: vec![ResolvedInputFacts {
+                outpoint: OutPointKey::new([0xd1; 32], 0),
+                created_at_block: 12_654_045,
+                created_by_block_dao_ar: 1,
+                capacity: 200_00000000,
+                occupied_capacity: 142_00000000,
+                data_size: 16,
+                data_hash: None,
+                udt_amount: Some(1000),
+                lock_script_hash_id: ids.lock_hash,
+                lock_code_hash_id: ids.lock_code_hash,
+                lock_hash_type: 1,
+                lock_args_id: ids.lock_args,
+                type_script_hash_id: Some(ids.xudt_type_hash),
+                type_code_hash_id: Some(ids.xudt_code_hash),
+                type_hash_type: Some(2),
+                type_args_id: Some(ids.xudt_args),
+                semantic_tag: CellSemanticTag::Xudt,
+                dao_state: None,
+                dao_compensation_ars: None,
+                protocol_facts: None,
+            }],
+            cells: vec![
+                unique_info_cell_facts(&ids, OutPointKey::new([0xd2; 32], 0)),
+                xudt_output_cell_facts(&ids, OutPointKey::new([0xd2; 32], 1)),
+            ]
+            .into(),
+        };
+
+        let mut owner = TokenOwner::default();
+        owner.apply_tx(&mint_tx, &ctx).expect("apply mint tx");
+        owner.apply_tx(&tx, &ctx).expect("apply transfer tx");
+
+        assert!(
+            !owner.token_onchain_info.contains_key(&vec![0x91; 32]),
+            "a transfer-shaped tx must not be treated as an issuance"
+        );
+    }
+
+    #[test]
+    fn token_owner_cooccurrence_requires_single_minted_type() {
+        // Two distinct xUDT types minted alongside one unique cell: ambiguous,
+        // must bind neither.
+        let interner = IdentityInterner::default();
+        let lock_hash = interner.intern_bytes(vec![0xaa; 32]);
+        let lock_code_hash = interner.intern_bytes(vec![0x22; 32]);
+        let lock_args = interner.intern_bytes(vec![0x33; 20]);
+        let unique_code_hash =
+            interner.intern_bytes(hex::decode(&UNIQUE_CELL_CODE_HASH_MAINNET_HEX[2..]).unwrap());
+        let unique_args = interner.intern_bytes(vec![0x98; 20]);
+        let unique_type_hash = interner.intern_bytes(vec![0x50; 32]);
+        let xudt_code_hash = interner
+            .intern_bytes(hex::decode(&crate::parser::udt::XUDT_CODE_HASH_DATA1[2..]).unwrap());
+        let xudt_args_a = interner.intern_bytes(vec![0x0a; 32]);
+        let xudt_type_hash_a = interner.intern_bytes(vec![0x94; 32]);
+        let xudt_args_b = interner.intern_bytes(vec![0x0b; 32]);
+        let xudt_type_hash_b = interner.intern_bytes(vec![0x95; 32]);
+        let frozen = interner.snapshot_for_reads();
+        let ctx = ReducerContext::new(&frozen);
+
+        let data = hex::decode(RGBPP_UNIQUE_CELL_DATA_HEX).unwrap();
+        let unique_cell = CellFacts {
+            outpoint: OutPointKey::new([0xd3; 32], 0),
+            created_at_block: 12_654_045,
+            created_by_block_dao_ar: 1,
+            capacity: 200_00000000,
+            lock_script_hash_id: lock_hash,
+            lock_code_hash_id: lock_code_hash,
+            lock_hash_type: 1,
+            lock_args_id: lock_args,
+            type_script_hash_id: Some(unique_type_hash),
+            type_code_hash_id: Some(unique_code_hash),
+            type_hash_type: Some(2),
+            type_args_id: Some(unique_args),
+            occupied_capacity: 142_00000000,
+            data_size: data.len() as i32,
+            data,
+            data_hash: None,
+            udt_amount: None,
+            semantic_tag: CellSemanticTag::Plain,
+            dao_state: None,
+            protocol_facts: None,
+        };
+        let mut xudt_a = unique_cell.clone();
+        xudt_a.outpoint = OutPointKey::new([0xd3; 32], 1);
+        xudt_a.type_script_hash_id = Some(xudt_type_hash_a);
+        xudt_a.type_code_hash_id = Some(xudt_code_hash);
+        xudt_a.type_args_id = Some(xudt_args_a);
+        xudt_a.data = Vec::new();
+        xudt_a.data_size = 16;
+        xudt_a.udt_amount = Some(1000);
+        xudt_a.semantic_tag = CellSemanticTag::Xudt;
+        let mut xudt_b = xudt_a.clone();
+        xudt_b.outpoint = OutPointKey::new([0xd3; 32], 2);
+        xudt_b.type_script_hash_id = Some(xudt_type_hash_b);
+        xudt_b.type_args_id = Some(xudt_args_b);
+
+        let tx = ResolvedTxFacts {
+            tx_hash: [0xd3; 32],
+            block_number: 12_654_045,
+            block_hash: [0x03; 32],
+            timestamp_ms: 1_700_000_000_000,
+            block_dao_ar: 1,
+            tx_index: 1,
+            dotbit_action: None,
+            resolved_inputs: Vec::new(),
+            cells: vec![unique_cell, xudt_a, xudt_b].into(),
+        };
+
+        let mut owner = TokenOwner::default();
+        owner.apply_tx(&tx, &ctx).expect("apply multi-mint tx");
+
+        assert!(!owner.token_onchain_info.contains_key(&vec![0x94; 32]));
+        assert!(!owner.token_onchain_info.contains_key(&vec![0x95; 32]));
+    }
+
+    #[test]
+    fn token_owner_cooccurrence_never_displaces_extension_binding() {
+        // A pre-existing extension-script binding (cryptographic) must survive a
+        // later co-occurrence-shaped issuance tx carrying different info.
+        let ids = cooccurrence_interns();
+        let ctx = ReducerContext::new(&ids.frozen);
+
+        let mut owner = TokenOwner::default();
+        owner.token_onchain_info.insert(
+            vec![0x91; 32],
+            crate::sync::token_helpers::OnchainTokenInfo {
+                info: crate::sync::token_helpers::UniqueTokenInfo {
+                    decimal: 4,
+                    name: "Ext".to_string(),
+                    symbol: "EXT".to_string(),
+                    total_supply: None,
+                },
+                binding: crate::sync::token_helpers::OnchainInfoBinding::XudtExtension,
+            },
+        );
+
+        let tx = ResolvedTxFacts {
+            tx_hash: [0xd6; 32],
+            block_number: 12_654_046,
+            block_hash: [0x03; 32],
+            timestamp_ms: 1_700_000_000_000,
+            block_dao_ar: 1,
+            tx_index: 1,
+            dotbit_action: None,
+            resolved_inputs: Vec::new(),
+            cells: vec![
+                unique_info_cell_facts(&ids, OutPointKey::new([0xd6; 32], 0)),
+                xudt_output_cell_facts(&ids, OutPointKey::new([0xd6; 32], 1)),
+            ]
+            .into(),
+        };
+        owner.apply_tx(&tx, &ctx).expect("apply issuance tx");
+
+        let bound = owner.token_onchain_info.get(&vec![0x91; 32]).unwrap();
+        assert_eq!(
+            bound.binding,
+            crate::sync::token_helpers::OnchainInfoBinding::XudtExtension
+        );
+        assert_eq!(bound.info.name, "Ext");
+    }
+
+    #[test]
+    fn token_owner_materializes_cooccurrence_info_end_to_end() {
+        // Full bulk pipeline on the real RGB++ issuance shape: cellbase creates
+        // the owner's plain cell, the issuance tx spends it and creates
+        // [unique info cell, xUDT cell]. The materialized TokenInfo must carry
+        // the on-chain metadata even though the xUDT args are a pure 32-byte
+        // owner hash (no extension flags).
+        use crate::rpc::{
+            BlockResponseWithCycles, BlockView, CellInput, CellOutput, HeaderView, OutPoint,
+            Script, TransactionView,
+        };
+        use crate::sync::TEST_CELLBASE_WITNESS;
+
+        let secp_lock = Script {
+            code_hash: "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8"
+                .to_string(),
+            hash_type: "type".to_string(),
+            args: format!("0x{}", "07".repeat(20)),
+        };
+        let unique_type = Script {
+            code_hash: UNIQUE_CELL_CODE_HASH_MAINNET_HEX.to_string(),
+            hash_type: "data1".to_string(),
+            args: "0x98f5f2cb2782811ff64f7723c7d0a70e931296ac".to_string(),
+        };
+        let xudt_type = Script {
+            code_hash: crate::parser::udt::XUDT_CODE_HASH_DATA1.to_string(),
+            hash_type: "data1".to_string(),
+            args: "0x08875c56644d39dd9629d291357d3026debc5d22fa88d924d60ce8f16dd50e70".to_string(),
+        };
+
+        let cellbase = TransactionView {
+            hash: format!("0x{}", "aa".repeat(32)),
+            version: "0x0".to_string(),
+            cell_deps: vec![],
+            header_deps: vec![],
+            inputs: vec![CellInput {
+                since: "0x0".to_string(),
+                previous_output: OutPoint {
+                    tx_hash: format!("0x{}", "00".repeat(32)),
+                    index: "0xffffffff".to_string(),
+                },
+            }],
+            outputs: vec![CellOutput {
+                capacity: format!("0x{:x}", 2000_00000000u64),
+                lock: secp_lock.clone(),
+                type_: None,
+            }],
+            outputs_data: vec!["0x".to_string()],
+            witnesses: vec![TEST_CELLBASE_WITNESS.to_string()],
+        };
+
+        let issuance = TransactionView {
+            hash: format!("0x{}", "d0".repeat(32)),
+            version: "0x0".to_string(),
+            cell_deps: vec![],
+            header_deps: vec![],
+            inputs: vec![CellInput {
+                since: "0x0".to_string(),
+                previous_output: OutPoint {
+                    tx_hash: cellbase.hash.clone(),
+                    index: "0x0".to_string(),
+                },
+            }],
+            outputs: vec![
+                CellOutput {
+                    capacity: format!("0x{:x}", 300_00000000u64),
+                    lock: secp_lock.clone(),
+                    type_: Some(unique_type),
+                },
+                CellOutput {
+                    capacity: format!("0x{:x}", 300_00000000u64),
+                    lock: secp_lock,
+                    type_: Some(xudt_type.clone()),
+                },
+            ],
+            outputs_data: vec![
+                format!("0x{RGBPP_UNIQUE_CELL_DATA_HEX}"),
+                "0x00800eb4e0eb0e000000000000000000".to_string(),
+            ],
+            witnesses: vec!["0x".to_string()],
+        };
+
+        let block = BlockResponseWithCycles {
+            block: BlockView {
+                header: HeaderView {
+                    version: "0x0".to_string(),
+                    compact_target: "0x1a08a97e".to_string(),
+                    timestamp: "0x18c7b3b2b00".to_string(),
+                    number: format!("0x{:x}", 12_654_045u64),
+                    epoch: "0x7080006000028".to_string(),
+                    parent_hash: format!("0x{}", "11".repeat(32)),
+                    transactions_root: format!("0x{}", "22".repeat(32)),
+                    proposals_hash: format!("0x{}", "33".repeat(32)),
+                    extra_hash: format!("0x{}", "44".repeat(32)),
+                    dao: format!("0x{}", "00".repeat(32)),
+                    nonce: "0x1".to_string(),
+                    hash: format!("0x{}", "99".repeat(32)),
+                },
+                uncles: vec![],
+                transactions: vec![cellbase, issuance],
+                proposals: vec![],
+            },
+            cycles: None,
+        };
+
+        let snapshot = materialize_token_state_for_test(&[block]).expect("materialize");
+        let type_hash = crate::parser::script::ScriptParser::compute_script_hash(&xudt_type);
+        let token = snapshot
+            .tokens
+            .get(&type_hash)
+            .expect("xUDT token must be indexed");
+        assert_eq!(
+            token.name.as_deref(),
+            Some("RGB++ Protocol"),
+            "co-occurrence issuance binding must fill on-chain name"
+        );
+        assert_eq!(token.symbol.as_deref(), Some("RGB++"));
+        assert_eq!(token.decimals, Some(8));
+    }
+
+    fn labelled_token_row() -> TokenInfo {
+        TokenInfo {
+            type_code_hash: vec![0x11; 32],
+            hash_type: 1,
+            type_args: vec![0x22; 32],
+            standard: "xudt".to_string(),
+            name: Some("Labelled".to_string()),
+            symbol: Some("LBL".to_string()),
+            decimals: Some(4),
+            max_supply: None,
+            first_seen_block: 7,
+            icon_url: Some("logo.png".to_string()),
+            description: Some("curated".to_string()),
+            transfers_count: 0,
+        }
+    }
+
+    /// Bulk sync and live sync must store the same token metadata for the same
+    /// chain data.
+    ///
+    /// They did not: `emit_snapshot_rows` overlaid the existing store row (the
+    /// label written before the first block was indexed) on top of every
+    /// on-chain observation without ever reading `OnchainInfoBinding`, while
+    /// the live writer let a cryptographic extension binding win. The same
+    /// token therefore ended up with a different name/symbol/decimals
+    /// depending on whether its issuance block arrived during bulk or live
+    /// sync — and a rebuild from genesis silently changed the answer.
+    #[test]
+    fn bulk_and_live_agree_on_onchain_token_metadata_precedence() {
+        let dir = tempfile::tempdir().unwrap();
+        let domain_store = CkbadgerStore::open_domain(dir.path()).unwrap();
+
+        let type_hash = vec![0x7a; 32];
+        let labelled = labelled_token_row();
+        domain_store
+            .put_token_direct(&type_hash, &labelled)
+            .unwrap();
+
+        for binding in [
+            crate::sync::token_helpers::OnchainInfoBinding::XudtExtension,
+            crate::sync::token_helpers::OnchainInfoBinding::IssuanceCooccurrence,
+        ] {
+            let observed = crate::sync::token_helpers::OnchainTokenInfo {
+                info: crate::sync::token_helpers::UniqueTokenInfo {
+                    decimal: 8,
+                    name: "OnChain".to_string(),
+                    symbol: "OC".to_string(),
+                    total_supply: None,
+                },
+                binding,
+            };
+
+            let mut owner = TokenOwner::default();
+            owner.tokens.insert(
+                type_hash.clone(),
+                TokenAccum {
+                    type_code_hash: labelled.type_code_hash.clone(),
+                    hash_type: labelled.hash_type,
+                    type_args: labelled.type_args.clone(),
+                    standard: "xudt",
+                    first_seen_block: labelled.first_seen_block,
+                    holders: FxHashMap::default(),
+                    transfers_count: 0,
+                    hourly_transfers: FxHashMap::default(),
+                    daily_deltas: FxHashMap::default(),
+                },
+            );
+            owner
+                .token_onchain_info
+                .insert(type_hash.clone(), observed.clone());
+
+            let rows = owner.build_snapshot_rows(&domain_store).unwrap();
+            let row = rows
+                .iter()
+                .find(|row| row.cf_name == CF_TOKENS && row.key == type_hash)
+                .expect("bulk snapshot must emit the token row");
+            let bulk: TokenInfo = bincode::deserialize(&row.value).unwrap();
+
+            let mut live = labelled.clone();
+            crate::db::writer::udt::apply_onchain_token_info(
+                &type_hash,
+                &mut live,
+                Some(&observed),
+            );
+
+            assert_eq!(
+                (bulk.name.as_deref(), bulk.symbol.as_deref(), bulk.decimals),
+                (live.name.as_deref(), live.symbol.as_deref(), live.decimals),
+                "bulk and live must store identical token metadata for {binding:?}"
+            );
+            // Curated fields the chain never carries survive in both modes.
+            assert_eq!(bulk.icon_url, labelled.icon_url);
+            assert_eq!(bulk.description, labelled.description);
+        }
+    }
+
+    /// The bulk snapshot writer must surface a curated label that contradicts
+    /// the token's own Unique Cell, exactly as the live writer does. Bulk is
+    /// the path a rebuild from genesis takes, so detection that only exists in
+    /// live sync never runs for a historically issued token.
+    #[test]
+    fn bulk_snapshot_reports_a_label_that_contradicts_the_chain() {
+        let dir = tempfile::tempdir().unwrap();
+        let domain_store = CkbadgerStore::open_domain(dir.path()).unwrap();
+
+        let type_hash = vec![0x7b; 32];
+        let labelled = labelled_token_row();
+        domain_store
+            .put_token_direct(&type_hash, &labelled)
+            .unwrap();
+
+        let mut owner = TokenOwner::default();
+        owner.tokens.insert(
+            type_hash.clone(),
+            TokenAccum {
+                type_code_hash: labelled.type_code_hash.clone(),
+                hash_type: labelled.hash_type,
+                type_args: labelled.type_args.clone(),
+                standard: "xudt",
+                first_seen_block: labelled.first_seen_block,
+                holders: FxHashMap::default(),
+                transfers_count: 0,
+                hourly_transfers: FxHashMap::default(),
+                daily_deltas: FxHashMap::default(),
+            },
+        );
+        owner.token_onchain_info.insert(
+            type_hash.clone(),
+            crate::sync::token_helpers::OnchainTokenInfo {
+                info: crate::sync::token_helpers::UniqueTokenInfo {
+                    decimal: 8,
+                    name: "OnChain".to_string(),
+                    symbol: "OC".to_string(),
+                    total_supply: None,
+                },
+                binding: crate::sync::token_helpers::OnchainInfoBinding::IssuanceCooccurrence,
+            },
+        );
+
+        let (rows, logs) = crate::label_import::test_log_capture::capture_warnings(|| {
+            owner.build_snapshot_rows(&domain_store).unwrap()
+        });
+
+        assert!(
+            logs.contains(&hex::encode(&type_hash)),
+            "bulk must identify the contradicted token: {logs}"
+        );
+        assert!(
+            logs.contains("LBL") && logs.contains("OC"),
+            "bulk must show both the stored and the on-chain value: {logs}"
+        );
+        assert!(rows.iter().any(|row| row.cf_name == CF_TOKENS));
     }
 }

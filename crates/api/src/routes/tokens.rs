@@ -7,6 +7,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use ckbadger_common::TokenBalance;
+use ckbadger_store::CkbadgerStore;
+
 use super::statistics::{StackedAreaChartResponse, StackedAreaDataPoint, StackedAreaSeries};
 use crate::response::{
     default_limit, hash_type_to_str, ok, ApiError, ApiResult, ApiRouteError,
@@ -14,7 +17,7 @@ use crate::response::{
 };
 use crate::utils::{
     accumulate_owned_capacity, apply_owned_capacity_delta, date_keys_inclusive,
-    parse_chart_date_range,
+    parse_chart_date_range, parse_hash32, parse_optional_block_tx_cursor, script_to_address,
 };
 use crate::warmup::CachedAssetEntry;
 use crate::AppState;
@@ -71,7 +74,9 @@ pub struct TokenResponse {
     pub standard: String,
     pub name: Option<String>,
     pub symbol: Option<String>,
-    pub decimals: i16,
+    /// None when unknown (no TOML label and no on-chain info cell) — never a
+    /// fabricated 0, which would be indistinguishable from true 0 decimals.
+    pub decimals: Option<i16>,
     pub description: Option<String>,
     pub icon_url: Option<String>,
     pub published: bool,
@@ -84,7 +89,7 @@ pub struct TokenResponse {
     pub total_supply: String,
     pub maximum_supply: Option<String>,
     pub maximum_supply_status: String,
-    pub holders_count: i32,
+    pub holders_count: i64,
     pub transfers_count: i64,
     pub transfers_24h: i64,
     pub cells_count: Option<i64>,
@@ -117,7 +122,7 @@ pub struct TokenTransferResponse {
 }
 
 struct TokenDerivedStats {
-    total_supply: i128,
+    total_supply: TokenBalance,
     holders_count: i64,
     transfers_count: i64,
     transfers_24h: i64,
@@ -149,7 +154,7 @@ fn token_info_to_response(
         standard: info.standard.clone(),
         name: info.name.clone(),
         symbol: info.symbol.clone(),
-        decimals: info.decimals.unwrap_or(0) as i16,
+        decimals: info.decimals.map(|d| d as i16),
         description: info.description.clone(),
         icon_url: info.icon_url.clone(),
         published: false,
@@ -167,7 +172,7 @@ fn token_info_to_response(
         )
         .to_string(),
         maximum_supply,
-        holders_count: derived.holders_count as i32,
+        holders_count: derived.holders_count,
         transfers_count: derived.transfers_count,
         transfers_24h: derived.transfers_24h,
         cells_count: None,
@@ -214,19 +219,6 @@ fn max_supply_status(
     }
 }
 
-fn parse_block_tx_cursor(cursor: &str) -> Result<(i64, i32), ApiRouteError> {
-    let (block_str, tx_str) = cursor
-        .split_once(':')
-        .ok_or_else(|| ApiError::bad_request("invalid cursor format"))?;
-    let block_num = block_str
-        .parse::<i64>()
-        .map_err(|_| ApiError::bad_request("invalid cursor format"))?;
-    let tx_idx = tx_str
-        .parse::<i32>()
-        .map_err(|_| ApiError::bad_request("invalid cursor format"))?;
-    Ok((block_num, tx_idx))
-}
-
 fn parse_token_list_cursor(cursor: &str) -> Result<(i64, &str), ApiRouteError> {
     let (holders_count, token_id) = cursor
         .split_once(':')
@@ -240,12 +232,12 @@ fn parse_token_list_cursor(cursor: &str) -> Result<(i64, &str), ApiRouteError> {
     Ok((holders_count, token_id))
 }
 
-fn parse_token_holder_cursor(cursor: &str) -> Result<(i128, Vec<u8>), ApiRouteError> {
+fn parse_token_holder_cursor(cursor: &str) -> Result<(TokenBalance, Vec<u8>), ApiRouteError> {
     let (balance, lock_hash_hex) = cursor
         .split_once(':')
         .ok_or_else(|| ApiError::bad_request("Invalid token holders cursor"))?;
     let balance = balance
-        .parse::<i128>()
+        .parse::<TokenBalance>()
         .map_err(|_| ApiError::bad_request("Invalid token holders cursor"))?;
     let lock_hash = hex::decode(lock_hash_hex.strip_prefix("0x").unwrap_or(lock_hash_hex))
         .map_err(|_| ApiError::bad_request("Invalid token holders cursor"))?;
@@ -348,7 +340,7 @@ fn serve_tokens_from_cache(
                 standard: entry.standard.clone(),
                 name: entry.name.clone(),
                 symbol: entry.symbol.clone(),
-                decimals: entry.decimals.unwrap_or(0),
+                decimals: entry.decimals,
                 description: entry.description.clone(),
                 icon_url: entry.icon_url.clone(),
                 published: false,
@@ -366,7 +358,7 @@ fn serve_tokens_from_cache(
                     decoded_type_args.as_deref(),
                 )
                 .to_string(),
-                holders_count: entry.holders_count as i32,
+                holders_count: entry.holders_count,
                 transfers_count: entry.transfers_count,
                 transfers_24h: entry.transfers_24h,
                 cells_count: None,
@@ -387,8 +379,7 @@ async fn get_token(
     State(state): State<Arc<AppState>>,
     Path(type_hash): Path<String>,
 ) -> ApiResult<TokenResponse> {
-    let hash = hex::decode(type_hash.strip_prefix("0x").unwrap_or(&type_hash))
-        .map_err(|_| ApiError::bad_request("Invalid type script hash"))?;
+    let hash = parse_hash32(&type_hash, "type_hash")?;
 
     let store = state.store.clone();
     let hash_c = hash.clone();
@@ -458,8 +449,7 @@ async fn get_token_holders(
     Path(type_hash): Path<String>,
     Query(params): Query<HolderParams>,
 ) -> ApiResult<CursorPaginatedResponse<TokenHolderResponse>> {
-    let hash = hex::decode(type_hash.strip_prefix("0x").unwrap_or(&type_hash))
-        .map_err(|_| ApiError::bad_request("Invalid type script hash"))?;
+    let hash = parse_hash32(&type_hash, "type_hash")?;
 
     let limit = params.limit.clamp(1, 100) as usize;
     let cursor = params
@@ -471,14 +461,22 @@ async fn get_token_holders(
 
     let store = state.store.clone();
     let hash_c = hash.clone();
-    let (_token, holders_count, mut page) =
+    let network = state.ckb_network.clone();
+    let (_token, holders_count, mut page, addresses) =
         tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
             let token = store
                 .get_token(&hash_c)?
                 .ok_or_else(|| anyhow::anyhow!("not_found"))?;
             let (holders_count, _) = store.aggregate_token_holder_stats(&hash_c)?;
             let page = store.list_token_holders_by_balance(&hash_c, limit + 1, cursor)?;
-            Ok((token, holders_count, page))
+            // Resolve only the rendered rows: the `limit + 1`-th row exists solely to
+            // detect `has_more` and is truncated away below.
+            let addresses = resolve_lock_addresses(
+                &store,
+                &network,
+                page.iter().take(limit).map(|(lock, _)| lock.as_slice()),
+            )?;
+            Ok((token, holders_count, page, addresses))
         })
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?
@@ -518,8 +516,8 @@ async fn get_token_holders(
     let holders: Vec<TokenHolderResponse> = page
         .into_iter()
         .map(|(lock_script_hash, balance)| TokenHolderResponse {
+            address: addresses.get(&lock_script_hash).cloned(),
             lock_script_hash: format!("0x{}", hex::encode(lock_script_hash)),
-            address: None,
             balance: balance.to_string(),
         })
         .collect();
@@ -562,29 +560,67 @@ pub struct ActivityParams {
     cursor: Option<String>,
 }
 
+/// Resolve lock hashes to CKB addresses through the single existing path:
+/// `CF_LOCK_SCRIPTS` (`get_lock_script`) + the shared `script_to_address`
+/// encoder. Lock hashes with no stored script (or an unencodable script) are
+/// simply absent from the map and render as null — never guessed.
+fn resolve_lock_addresses<'a>(
+    store: &CkbadgerStore,
+    network: &str,
+    lock_hashes: impl Iterator<Item = &'a [u8]>,
+) -> anyhow::Result<HashMap<Vec<u8>, String>> {
+    let mut addresses: HashMap<Vec<u8>, String> = HashMap::new();
+    for lock_hash in lock_hashes {
+        if lock_hash.is_empty() || addresses.contains_key(lock_hash) {
+            continue;
+        }
+        let Some(entry) = store.get_lock_script(lock_hash)? else {
+            continue;
+        };
+        let Ok(address) =
+            script_to_address(&entry.code_hash, entry.hash_type, &entry.args, network)
+        else {
+            continue;
+        };
+        addresses.insert(lock_hash.to_vec(), address);
+    }
+    Ok(addresses)
+}
+
 async fn get_token_activities(
     State(state): State<Arc<AppState>>,
     Path(type_hash): Path<String>,
     Query(params): Query<ActivityParams>,
 ) -> ApiResult<CursorPaginatedResponse<TokenActivityResponse>> {
-    let hash = hex::decode(type_hash.strip_prefix("0x").unwrap_or(&type_hash))
-        .map_err(|_| ApiError::bad_request("Invalid type script hash"))?;
+    let hash = parse_hash32(&type_hash, "type_hash")?;
 
     let limit = params.limit.clamp(1, 100) as usize;
 
-    let cursor = match params.cursor.as_deref() {
-        None | Some("") => None,
-        Some(c) => Some(parse_block_tx_cursor(c)?),
-    };
+    let cursor = parse_optional_block_tx_cursor(params.cursor.as_deref(), "token activity cursor")?;
 
     let store = state.store.clone();
     let hash_c = hash.clone();
-    let results = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+    let network = state.ckb_network.clone();
+    let (results, addresses) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
         let token_exists = store.get_token(&hash_c)?.is_some();
         if !token_exists {
             return Err(anyhow::anyhow!("not_found"));
         }
-        store.list_token_activities(&hash_c, limit + 1, cursor)
+        let results = store.list_token_activities(&hash_c, limit + 1, cursor)?;
+        let addresses = resolve_lock_addresses(
+            &store,
+            &network,
+            results.iter().flat_map(|(_, _, entry)| {
+                entry.transfers.iter().flat_map(|transfer| {
+                    transfer
+                        .from_lock_hash
+                        .as_deref()
+                        .into_iter()
+                        .chain(std::iter::once(transfer.to_lock_hash.as_slice()))
+                })
+            }),
+        )?;
+        Ok((results, addresses))
     })
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?
@@ -630,9 +666,12 @@ async fn get_token_activities(
                         .from_lock_hash
                         .as_ref()
                         .map(|h| format!("0x{}", hex::encode(h))),
-                    from_address: None,
+                    from_address: t
+                        .from_lock_hash
+                        .as_ref()
+                        .and_then(|h| addresses.get(h.as_slice()).cloned()),
                     to_lock_hash: format!("0x{}", hex::encode(&t.to_lock_hash)),
-                    to_address: None,
+                    to_address: addresses.get(t.to_lock_hash.as_slice()).cloned(),
                     amount: t.amount.to_string(),
                     is_mint: t.is_mint,
                     is_burn: t.is_burn,
@@ -662,25 +701,32 @@ async fn get_token_transfers(
     Path(type_hash): Path<String>,
     Query(params): Query<TransferParams>,
 ) -> ApiResult<CursorPaginatedResponse<TokenTransferResponse>> {
-    let hash = hex::decode(type_hash.strip_prefix("0x").unwrap_or(&type_hash))
-        .map_err(|_| ApiError::bad_request("Invalid type script hash"))?;
+    let hash = parse_hash32(&type_hash, "type_hash")?;
 
     let limit = params.limit.clamp(1, 100) as usize;
 
-    // Parse cursor: "block_num:tx_idx"
-    let cursor = match params.cursor.as_deref() {
-        None | Some("") => None,
-        Some(c) => Some(parse_block_tx_cursor(c)?),
-    };
+    let cursor = parse_optional_block_tx_cursor(params.cursor.as_deref(), "token transfer cursor")?;
 
     let store = state.store.clone();
     let hash_c = hash.clone();
-    let (info, results) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+    let network = state.ckb_network.clone();
+    let (info, results, addresses) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
         let info = store
             .get_token(&hash_c)?
             .ok_or_else(|| anyhow::anyhow!("not_found"))?;
         let results = store.list_token_transfers(&hash_c, limit + 1, cursor)?;
-        Ok((info, results))
+        let addresses = resolve_lock_addresses(
+            &store,
+            &network,
+            results.iter().flat_map(|(_, _, record)| {
+                record
+                    .from_lock_hash
+                    .as_deref()
+                    .into_iter()
+                    .chain(std::iter::once(record.to_lock_hash.as_slice()))
+            }),
+        )?;
+        Ok((info, results, addresses))
     })
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?
@@ -711,9 +757,12 @@ async fn get_token_transfers(
                 .from_lock_hash
                 .as_ref()
                 .map(|h| format!("0x{}", hex::encode(h))),
-            from_address: None,
+            from_address: record
+                .from_lock_hash
+                .as_ref()
+                .and_then(|h| addresses.get(h.as_slice()).cloned()),
             to_lock_hash: format!("0x{}", hex::encode(&record.to_lock_hash)),
-            to_address: None,
+            to_address: addresses.get(record.to_lock_hash.as_slice()).cloned(),
             amount: record.amount.to_string(),
             is_mint: record.is_mint,
             is_burn: record.is_burn,
@@ -739,8 +788,7 @@ async fn get_token_capacity_chart(
     Path(type_hash): Path<String>,
     Query(params): Query<ChartRangeParams>,
 ) -> ApiResult<StackedAreaChartResponse> {
-    let hash = hex::decode(type_hash.strip_prefix("0x").unwrap_or(&type_hash))
-        .map_err(|_| ApiError::bad_request("Invalid type script hash"))?;
+    let hash = parse_hash32(&type_hash, "type_hash")?;
 
     let (from_date, to_date) = parse_chart_date_range(params.from.as_deref(), params.to.as_deref())
         .map_err(|msg| ApiError::bad_request(&msg))?;
@@ -1194,7 +1242,69 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_token_holder_cursor_accepts_balance_above_u128() {
+        let cursor = format!(
+            "531691198313966349161522824112137830400:{}",
+            "aa".repeat(32)
+        );
+        let (balance, _) = super::parse_token_holder_cursor(&cursor).unwrap();
+        assert_eq!(
+            balance.to_string(),
+            "531691198313966349161522824112137830400"
+        );
+    }
+
+    #[test]
     fn test_parse_token_holder_cursor_rejects_wrong_length_hash() {
         assert!(super::parse_token_holder_cursor("100:aabbcc").is_err());
+    }
+
+    #[test]
+    fn test_serve_tokens_from_cache_unknown_decimals_serialize_as_null() {
+        // B5: a token with no label and no on-chain info has unknown decimals.
+        // The list endpoint must surface null, not a fabricated 0.
+        let cached = vec![CachedAssetEntry {
+            id: "0x0a".to_string(),
+            asset_type: "token".to_string(),
+            standard: "xudt".to_string(),
+            name: None,
+            symbol: None,
+            icon_url: None,
+            holders_count: 1,
+            transfers_count: 1,
+            transfers_24h: 0,
+            decimals: None,
+            total_supply: Some("500".to_string()),
+            maximum_supply: None,
+            content_type: None,
+            content_size: None,
+            cluster_id: None,
+            cluster_name: None,
+            owned_capacity: None,
+            owned_knowledge: None,
+            composition_tier: None,
+            onchain_ratio: None,
+            onchain_count: None,
+            type_code_hash: Some("0xaaa".to_string()),
+            type_hash_type: Some("type".to_string()),
+            type_args: Some("0x11".to_string()),
+            description: None,
+        }];
+
+        let params = super::ListParams {
+            limit: 20,
+            standard: None,
+            cursor: None,
+            search: None,
+        };
+
+        let axum::Json(resp) = super::serve_tokens_from_cache(cached, &params, 20).unwrap();
+        let json = serde_json::to_value(&resp.data[0]).unwrap();
+        assert_eq!(
+            json["decimals"],
+            serde_json::Value::Null,
+            "unknown decimals must serialize as null, got {}",
+            json["decimals"]
+        );
     }
 }

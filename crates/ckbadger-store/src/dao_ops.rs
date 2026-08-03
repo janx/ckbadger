@@ -1,6 +1,7 @@
 //! DAO operations.
 
 use rocksdb::{IteratorMode, Snapshot};
+use std::collections::HashMap;
 #[cfg(test)]
 use std::sync::{Mutex, OnceLock};
 
@@ -8,13 +9,322 @@ use ckbadger_common::dao::calculate_dao_compensation_from_ar;
 
 use crate::keys;
 use crate::store::CkbadgerStore;
-use crate::types::DaoDepositCacheEntry;
+use crate::types::{DaoCompensationBreakdown, DaoDepositCacheEntry};
 
 const DAO_BY_BLOCK_OUTPOINT_OFFSET: usize = 8;
 const DAO_BY_STATUS_OUTPOINT_OFFSET: usize = 10;
 const DAO_BY_LOCK_OUTPOINT_OFFSET: usize = 40;
 
 use crate::bytes_to_hex;
+
+/// Post-batch DAO deposit entries staged in an uncommitted batch, keyed by
+/// deposit outpoint. Covers new deposits and phase-1 withdraw requests, whose
+/// full post-batch entry the writer already materializes.
+pub type StagedDaoEntries = HashMap<Vec<u8>, DaoDepositCacheEntry>;
+
+/// Phase-2 completions staged in an uncommitted batch, keyed by deposit
+/// outpoint, valued by `(withdraw_block, withdraw_tx_hash)`. Kept separate from
+/// [`StagedDaoEntries`] so the caller never has to reconstruct the completed
+/// entry — and therefore never duplicates the compensation calculation.
+pub type StagedDaoCompletions = HashMap<Vec<u8>, (i64, Vec<u8>)>;
+
+/// Compensation frozen at a deposit's phase-1 withdraw-request AR.
+///
+/// This is the single definition of the frozen value. `dao_compensation_for_entry_at`
+/// uses it for both phase-1 and completed deposits (validating any stored
+/// compensation against it), and pre-commit snapshot construction uses it when
+/// projecting a staged phase-2 completion.
+fn dao_frozen_request_compensation(entry: &DaoDepositCacheEntry) -> anyhow::Result<i64> {
+    let deposit_ar = u64::try_from(entry.deposit_ar).map_err(|_| {
+        anyhow::anyhow!(
+            "negative DAO deposit AR: deposit_block={}, deposit_ar={}",
+            entry.deposit_block_number,
+            entry.deposit_ar
+        )
+    })?;
+    let request_ar = entry.withdraw_request_ar.ok_or_else(|| {
+        anyhow::anyhow!(
+            "DAO deposit missing withdraw request AR: deposit_block={}, request_block={:?}",
+            entry.deposit_block_number,
+            entry.withdraw_request_block
+        )
+    })?;
+    let request_ar = u64::try_from(request_ar).map_err(|_| {
+        anyhow::anyhow!(
+            "negative DAO withdraw request AR: deposit_block={}, request_block={}, withdraw_request_ar={}",
+            entry.deposit_block_number,
+            entry.withdraw_request_block.unwrap_or_default(),
+            request_ar
+        )
+    })?;
+    // RFC-0023 derives `counted_capacity` from the WITHDRAWING cell — the
+    // phase-1 request cell — not from the original deposit cell. The DAO type
+    // script does not enforce lock preservation, so a request may carry a
+    // different lock and therefore a different occupied capacity.
+    let request_occupied_capacity =
+        entry.withdraw_request_occupied_capacity.ok_or_else(|| {
+            anyhow::anyhow!(
+                "DAO deposit missing withdraw request occupied capacity: deposit_block={}, request_block={:?}, status={}",
+                entry.deposit_block_number,
+                entry.withdraw_request_block,
+                entry.status
+            )
+        })?;
+    calculate_dao_compensation_from_ar(
+        entry.capacity,
+        request_occupied_capacity,
+        deposit_ar,
+        request_ar,
+    )
+}
+
+/// Project a committed phase-1 deposit forward through a phase-2 completion
+/// that is staged in an uncommitted batch.
+///
+/// Read-only projection for pre-commit snapshot construction: the persisted
+/// entry is written by the indexer's DAO writer, never by this function. The
+/// claimed amount is the frozen request-AR value, so the projected entry
+/// satisfies the same validation `dao_compensation_for_entry_at` applies to a
+/// committed completed deposit.
+fn dao_entry_with_staged_completion(
+    entry: &DaoDepositCacheEntry,
+    withdraw_block: i64,
+    withdraw_tx: &[u8],
+) -> anyhow::Result<DaoDepositCacheEntry> {
+    if entry.status != 1 {
+        anyhow::bail!(
+            "staged DAO completion applied to a non phase-1 deposit: deposit_block={}, status={}, withdraw_block={}",
+            entry.deposit_block_number,
+            entry.status,
+            withdraw_block
+        );
+    }
+    let request_block = entry.withdraw_request_block.ok_or_else(|| {
+        anyhow::anyhow!(
+            "staged DAO completion on a deposit without a withdraw request block: deposit_block={}, withdraw_block={}",
+            entry.deposit_block_number,
+            withdraw_block
+        )
+    })?;
+    if withdraw_block <= request_block {
+        anyhow::bail!(
+            "staged DAO completion block is not after the withdraw request: deposit_block={}, request_block={}, withdraw_block={}",
+            entry.deposit_block_number,
+            request_block,
+            withdraw_block
+        );
+    }
+    let compensation = dao_frozen_request_compensation(entry)?;
+    Ok(DaoDepositCacheEntry {
+        status: 2,
+        withdraw_block: Some(withdraw_block),
+        withdraw_tx: Some(withdraw_tx.to_vec()),
+        compensation: Some(compensation),
+        ..entry.clone()
+    })
+}
+
+pub fn dao_compensation_for_entry_at(
+    entry: &DaoDepositCacheEntry,
+    end_block: i64,
+    end_ar: u64,
+) -> anyhow::Result<DaoCompensationBreakdown> {
+    if entry.capacity < 0 || entry.occupied_capacity < 0 || entry.occupied_capacity > entry.capacity
+    {
+        anyhow::bail!(
+            "invalid DAO deposit capacity in compensation lifecycle: deposit_block={}, capacity={}, occupied_capacity={}, observation_block={}",
+            entry.deposit_block_number,
+            entry.capacity,
+            entry.occupied_capacity,
+            end_block
+        );
+    }
+    match entry.status {
+        0 => {
+            if entry.withdraw_request_tx.is_some()
+                || entry.withdraw_request_output_index.is_some()
+                || entry.withdraw_request_block.is_some()
+                || entry.withdraw_request_ar.is_some()
+                || entry.withdraw_block.is_some()
+                || entry.withdraw_tx.is_some()
+                || entry.compensation.is_some()
+            {
+                anyhow::bail!(
+                    "status-0 DAO deposit has lifecycle fields: deposit_block={}, observation_block={}",
+                    entry.deposit_block_number,
+                    end_block
+                );
+            }
+        }
+        1 | 2 => {
+            let request_block = entry.withdraw_request_block.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "DAO status-{} deposit missing withdraw request block: deposit_block={}, observation_block={}",
+                    entry.status,
+                    entry.deposit_block_number,
+                    end_block
+                )
+            })?;
+            if request_block < entry.deposit_block_number
+                || entry.withdraw_request_tx.is_none()
+                || entry.withdraw_request_output_index.is_none()
+                || entry.withdraw_request_ar.is_none()
+            {
+                anyhow::bail!(
+                    "invalid DAO status-{} request lifecycle: deposit_block={}, request_block={}, has_request_tx={}, has_request_output={}, has_request_ar={}, observation_block={}",
+                    entry.status,
+                    entry.deposit_block_number,
+                    request_block,
+                    entry.withdraw_request_tx.is_some(),
+                    entry.withdraw_request_output_index.is_some(),
+                    entry.withdraw_request_ar.is_some(),
+                    end_block
+                );
+            }
+            if entry.status == 1
+                && (entry.withdraw_block.is_some()
+                    || entry.withdraw_tx.is_some()
+                    || entry.compensation.is_some())
+            {
+                anyhow::bail!(
+                    "status-1 DAO deposit has completion fields: deposit_block={}, request_block={}, observation_block={}",
+                    entry.deposit_block_number,
+                    request_block,
+                    end_block
+                );
+            }
+            if entry.status == 2 {
+                let withdraw_block = entry.withdraw_block.ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "completed DAO deposit missing withdraw block: deposit_block={}, request_block={}, observation_block={}",
+                        entry.deposit_block_number,
+                        request_block,
+                        end_block
+                    )
+                })?;
+                if withdraw_block <= request_block
+                    || entry.withdraw_tx.is_none()
+                    || entry.compensation.is_none()
+                {
+                    anyhow::bail!(
+                        "invalid completed DAO lifecycle: deposit_block={}, request_block={}, withdraw_block={}, has_withdraw_tx={}, has_compensation={}, observation_block={}",
+                        entry.deposit_block_number,
+                        request_block,
+                        withdraw_block,
+                        entry.withdraw_tx.is_some(),
+                        entry.compensation.is_some(),
+                        end_block
+                    );
+                }
+            }
+        }
+        status => {
+            anyhow::bail!(
+                "unknown DAO deposit status in compensation lifecycle: status={}, deposit_block={}, observation_block={}",
+                status,
+                entry.deposit_block_number,
+                end_block
+            );
+        }
+    }
+
+    let deposit_ar = u64::try_from(entry.deposit_ar).map_err(|_| {
+        anyhow::anyhow!(
+            "negative DAO deposit AR: deposit_block={}, deposit_ar={}, observation_block={}",
+            entry.deposit_block_number,
+            entry.deposit_ar,
+            end_block
+        )
+    })?;
+
+    if entry.deposit_block_number > end_block {
+        return Ok(DaoCompensationBreakdown::default());
+    }
+
+    let frozen_compensation = || -> anyhow::Result<i64> {
+        dao_frozen_request_compensation(entry)
+            .map_err(|error| anyhow::anyhow!("{} (observation_block={})", error, end_block))
+    };
+
+    if entry.withdraw_block.is_some_and(|block| block <= end_block) {
+        let claimed = entry.compensation.ok_or_else(|| {
+            anyhow::anyhow!(
+                "completed DAO deposit missing compensation: deposit_block={}, withdraw_block={}, observation_block={}",
+                entry.deposit_block_number,
+                entry.withdraw_block.unwrap_or_default(),
+                end_block
+            )
+        })?;
+        if claimed < 0 {
+            anyhow::bail!(
+                "completed DAO deposit has negative compensation: deposit_block={}, withdraw_block={}, compensation={}",
+                entry.deposit_block_number,
+                entry.withdraw_block.unwrap_or_default(),
+                claimed
+            );
+        }
+        let expected = frozen_compensation()?;
+        if claimed != expected {
+            anyhow::bail!(
+                "stored DAO compensation differs from exact request-AR calculation: deposit_block={}, request_block={}, withdraw_block={}, stored={}, expected={}",
+                entry.deposit_block_number,
+                entry.withdraw_request_block.unwrap_or_default(),
+                entry.withdraw_block.unwrap_or_default(),
+                claimed,
+                expected
+            );
+        }
+        return Ok(DaoCompensationBreakdown {
+            claimed: i128::from(claimed),
+            ..Default::default()
+        });
+    }
+
+    let request_has_happened = entry
+        .withdraw_request_block
+        .is_some_and(|block| block <= end_block);
+    let compensation = if request_has_happened {
+        let expected = frozen_compensation()?;
+        if let Some(stored) = entry.compensation {
+            if stored < 0 {
+                anyhow::bail!(
+                    "phase-1 DAO deposit has negative stored compensation: deposit_block={}, request_block={}, compensation={}",
+                    entry.deposit_block_number,
+                    entry.withdraw_request_block.unwrap_or_default(),
+                    stored
+                );
+            }
+            if stored != expected {
+                anyhow::bail!(
+                    "stored DAO compensation differs from exact request-AR calculation: deposit_block={}, request_block={}, stored={}, expected={}, observation_block={}",
+                    entry.deposit_block_number,
+                    entry.withdraw_request_block.unwrap_or_default(),
+                    stored,
+                    expected,
+                    end_block
+                );
+            }
+        }
+        expected
+    } else {
+        calculate_dao_compensation_from_ar(
+            entry.capacity,
+            entry.occupied_capacity,
+            deposit_ar,
+            end_ar,
+        )?
+    };
+
+    Ok(DaoCompensationBreakdown {
+        unclaimed: i128::from(compensation),
+        active_unmade: if request_has_happened {
+            0
+        } else {
+            i128::from(compensation)
+        },
+        ..Default::default()
+    })
+}
 
 #[cfg(test)]
 type DaoStatusPaginationHook = Box<dyn Fn(&CkbadgerStore, &[u8]) + Send + Sync + 'static>;
@@ -204,30 +514,154 @@ impl CkbadgerStore {
         Ok(())
     }
 
-    /// Sum AR-based compensation for all status-0 deposits using the given AR.
+    /// Sum exact lifecycle compensation for deposits still active at the
+    /// observation block.
+    ///
+    /// The observation block is required so this path shares the same
+    /// historical lifecycle calculation as daily snapshots and latest stats.
     /// Returns the total unmade DAO interests in shannons.
-    pub fn compute_unmade_dao_interests(&self, ar: u64) -> anyhow::Result<i128> {
+    pub fn compute_unmade_dao_interests(
+        &self,
+        end_block: i64,
+        end_ar: u64,
+    ) -> anyhow::Result<i128> {
         let mut total: i128 = 0;
         self.scan_dao_deposits(|_, entry| {
             if entry.status == 0 {
-                let ar_deposit = u64::try_from(entry.deposit_ar).map_err(|_| {
-                    anyhow::anyhow!(
-                        "invalid negative DAO deposit AR in compute_unmade_dao_interests: deposit_block={}, deposit_ar={}",
+                let contribution = dao_compensation_for_entry_at(entry, end_block, end_ar)?;
+                if contribution.claimed != 0
+                    || contribution.unclaimed != contribution.active_unmade
+                {
+                    anyhow::bail!(
+                        "status-0 DAO entry produced non-active compensation: deposit_block={}, observation_block={}, contribution={:?}",
                         entry.deposit_block_number,
-                        entry.deposit_ar
-                    )
-                })?;
-                if ar_deposit > 0 && ar > ar_deposit {
-                    let compensation = calculate_dao_compensation_from_ar(
-                        entry.capacity,
-                        ar_deposit,
-                        ar,
-                    )?;
-                    total += compensation as i128;
+                        end_block,
+                        contribution
+                    );
                 }
+                total = total
+                    .checked_add(contribution.active_unmade)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "unmade DAO compensation overflow: deposit_block={}, observation_block={}, observation_ar={}",
+                            entry.deposit_block_number,
+                            end_block,
+                            end_ar
+                        )
+                    })?;
             }
             Ok(())
         })?;
+        Ok(total)
+    }
+
+    /// Compute exact lifecycle-based DAO compensation at a historical block.
+    ///
+    /// Completed withdrawals contribute claimed compensation, phase-1 cells
+    /// contribute compensation frozen at their request AR, and status-0 cells
+    /// use the observation block's AR.
+    pub fn compute_dao_compensation_breakdown_at(
+        &self,
+        end_block: i64,
+        end_ar: u64,
+    ) -> anyhow::Result<DaoCompensationBreakdown> {
+        self.compute_dao_compensation_breakdown_at_with_staged(
+            end_block,
+            end_ar,
+            &StagedDaoEntries::new(),
+            &StagedDaoCompletions::new(),
+        )
+    }
+
+    /// Exact lifecycle-based DAO compensation at a historical block, observing
+    /// deposit mutations staged in an uncommitted batch.
+    ///
+    /// Staged rows shadow their committed counterparts, so a live-sync batch can
+    /// materialize a completed day's snapshot from the same lifecycle state it
+    /// is about to commit, inside the one atomic write — instead of writing a
+    /// placeholder and correcting it after the commit.
+    ///
+    /// This is the single summation path: `compute_dao_compensation_breakdown_at`
+    /// is this function with empty overlays.
+    pub fn compute_dao_compensation_breakdown_at_with_staged(
+        &self,
+        end_block: i64,
+        end_ar: u64,
+        staged_entries: &StagedDaoEntries,
+        staged_completions: &StagedDaoCompletions,
+    ) -> anyhow::Result<DaoCompensationBreakdown> {
+        let mut total = DaoCompensationBreakdown::default();
+        let mut accumulate = |entry: &DaoDepositCacheEntry| -> anyhow::Result<()> {
+            let contribution = dao_compensation_for_entry_at(entry, end_block, end_ar)?;
+            total.claimed = total
+                .claimed
+                .checked_add(contribution.claimed)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "claimed DAO compensation overflow at observation block {}",
+                        end_block
+                    )
+                })?;
+            total.unclaimed = total
+                .unclaimed
+                .checked_add(contribution.unclaimed)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "unclaimed DAO compensation overflow at observation block {}",
+                        end_block
+                    )
+                })?;
+            total.active_unmade = total
+                .active_unmade
+                .checked_add(contribution.active_unmade)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "active unmade DAO compensation overflow at observation block {}",
+                        end_block
+                    )
+                })?;
+            Ok(())
+        };
+
+        // The NervosDAO lock period puts at least 180 epochs between a withdraw
+        // request and its completion, so no deposit can appear in both overlays.
+        for outpoint_key in staged_completions.keys() {
+            if staged_entries.contains_key(outpoint_key) {
+                let (tx_hash, output_index) = keys::decode_outpoint(outpoint_key);
+                anyhow::bail!(
+                    "DAO deposit staged as both entry and completion in one batch: outpoint=0x{}:{}, observation_block={}",
+                    bytes_to_hex(&tx_hash),
+                    output_index,
+                    end_block
+                );
+            }
+        }
+
+        let mut completions_observed = 0usize;
+        self.scan_dao_deposits(|key, entry| {
+            if staged_entries.contains_key(key) {
+                // Shadowed by a staged entry; folded in below.
+                return Ok(());
+            }
+            if let Some((withdraw_block, withdraw_tx)) = staged_completions.get(key) {
+                completions_observed += 1;
+                let completed =
+                    dao_entry_with_staged_completion(entry, *withdraw_block, withdraw_tx)?;
+                return accumulate(&completed);
+            }
+            accumulate(entry)
+        })?;
+        if completions_observed != staged_completions.len() {
+            anyhow::bail!(
+                "staged DAO completion refers to an uncommitted deposit: observed={}, staged={}, observation_block={}",
+                completions_observed,
+                staged_completions.len(),
+                end_block
+            );
+        }
+        for entry in staged_entries.values() {
+            accumulate(entry)?;
+        }
         Ok(total)
     }
 
@@ -755,6 +1189,139 @@ mod tests {
     use anyhow::Context;
     use tempfile::TempDir;
 
+    fn lifecycle_entry() -> DaoDepositCacheEntry {
+        DaoDepositCacheEntry {
+            capacity: 300_00000000,
+            occupied_capacity: 142_00000000,
+            deposit_block_number: 10,
+            deposit_timestamp: 0,
+            lock_script_hash: vec![0x11; 32],
+            deposit_ar: 10_000,
+            status: 2,
+            withdraw_request_tx: Some(vec![0x22; 32]),
+            withdraw_request_output_index: Some(0),
+            withdraw_request_block: Some(20),
+            withdraw_request_ar: Some(11_000),
+            withdraw_block: Some(30),
+            withdraw_tx: Some(vec![0x33; 32]),
+            withdraw_request_occupied_capacity: Some(142_00000000),
+            withdraw_to_output_index: Some(0),
+            compensation: Some(15_80000000),
+        }
+    }
+
+    /// Real mainnet vector: deposit consumed by phase-1 at block 6012563,
+    /// completed at block 6201594. The depositor changed lock at phase-1 —
+    /// the deposit cell carried a 33-byte-args lock (occupied 115 CKB) while
+    /// the withdraw-request cell carries a standard 20-byte-args secp lock
+    /// (occupied 102 CKB).
+    ///
+    /// Per RFC-0023 the protocol computes `counted_capacity` from the
+    /// WITHDRAWING (phase-1 request) cell's occupied capacity, so the exact
+    /// compensation is 2358516107 shannons. Using the deposit cell's
+    /// occupied capacity instead yields 2357681847 — 834260 shannons short.
+    ///
+    /// Request outpoint:
+    /// 0x5e883663a8e985f96102da878bc0e1c8fb9b39e194d911e542bdc0961407609b:0
+    #[test]
+    fn frozen_compensation_uses_the_withdraw_request_cells_occupied_capacity() {
+        let entry = DaoDepositCacheEntry {
+            capacity: 3_685_398_922_674,
+            // Deposit cell: 8 + 33 + 33 (lock args) + 33 + 0 + 8 = 115 bytes.
+            occupied_capacity: 115_00000000,
+            deposit_block_number: 5_954_003,
+            deposit_timestamp: 0,
+            lock_script_hash: vec![0x11; 32],
+            deposit_ar: 10_724_098_007_765_377,
+            status: 1,
+            withdraw_request_tx: Some(vec![0x22; 32]),
+            withdraw_request_output_index: Some(0),
+            withdraw_request_block: Some(6_012_563),
+            withdraw_request_ar: Some(10_730_980_072_768_430),
+            // Request cell: 8 + 33 + 20 (lock args) + 33 + 0 + 8 = 102 bytes.
+            withdraw_request_occupied_capacity: Some(102_00000000),
+            withdraw_block: None,
+            withdraw_tx: None,
+            withdraw_to_output_index: None,
+            compensation: None,
+        };
+
+        assert_eq!(
+            dao_frozen_request_compensation(&entry).unwrap(),
+            2_358_516_107,
+            "frozen compensation must use the withdraw-request cell's \
+             occupied capacity (102 CKB), not the deposit cell's (115 CKB)"
+        );
+    }
+
+    /// A phase-1/phase-2 entry without the request cell's occupied capacity
+    /// cannot produce the protocol's exact compensation — it must fail loudly
+    /// with lifecycle context rather than silently falling back to the
+    /// deposit cell's occupied capacity.
+    #[test]
+    fn frozen_compensation_requires_the_request_occupied_capacity() {
+        let mut entry = lifecycle_entry();
+        entry.withdraw_request_occupied_capacity = None;
+
+        let err = dao_frozen_request_compensation(&entry).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("missing withdraw request occupied capacity"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn compensation_breakdown_follows_deposit_request_completion_lifecycle() {
+        let entry = lifecycle_entry();
+
+        assert_eq!(
+            dao_compensation_for_entry_at(&entry, 15, 10_500).unwrap(),
+            DaoCompensationBreakdown {
+                claimed: 0,
+                unclaimed: 7_90000000,
+                active_unmade: 7_90000000,
+            }
+        );
+        assert_eq!(
+            dao_compensation_for_entry_at(&entry, 25, 99_999).unwrap(),
+            DaoCompensationBreakdown {
+                claimed: 0,
+                unclaimed: 15_80000000,
+                active_unmade: 0,
+            }
+        );
+        assert_eq!(
+            dao_compensation_for_entry_at(&entry, 30, 99_999).unwrap(),
+            DaoCompensationBreakdown {
+                claimed: 15_80000000,
+                unclaimed: 0,
+                active_unmade: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn compensation_breakdown_rejects_negative_claimed_compensation() {
+        let mut entry = lifecycle_entry();
+        entry.compensation = Some(-1);
+
+        let error = dao_compensation_for_entry_at(&entry, 30, 99_999).unwrap_err();
+        assert!(error.to_string().contains("negative compensation"));
+    }
+
+    #[test]
+    fn compensation_breakdown_rejects_stored_value_that_differs_from_request_ar() {
+        let mut entry = lifecycle_entry();
+        entry.compensation = Some(15_80000001);
+
+        let error = dao_compensation_for_entry_at(&entry, 30, 99_999).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("differs from exact request-AR calculation"));
+        assert!(error.to_string().contains("expected=1580000000"));
+    }
+
     #[test]
     fn test_list_dao_deposits_fails_on_invalid_payload() {
         let dir = TempDir::new().unwrap();
@@ -777,6 +1344,7 @@ mod tests {
         let outpoint = keys::encode_outpoint(&[0xAB; 32], 1);
         let entry = DaoDepositCacheEntry {
             capacity: 42,
+            occupied_capacity: 0,
             deposit_block_number: 100,
             deposit_timestamp: 0,
             lock_script_hash: vec![0xCD; 32],
@@ -788,6 +1356,7 @@ mod tests {
             withdraw_request_ar: None,
             withdraw_block: None,
             withdraw_tx: None,
+            withdraw_request_occupied_capacity: None,
             withdraw_to_output_index: None,
             compensation: None,
         };
@@ -821,6 +1390,7 @@ mod tests {
                 &keys::encode_outpoint(&tx, 0),
                 &DaoDepositCacheEntry {
                     capacity: 100,
+                    occupied_capacity: 0,
                     deposit_block_number: block,
                     deposit_timestamp: 0,
                     lock_script_hash: vec![0x11; 32],
@@ -832,6 +1402,7 @@ mod tests {
                     withdraw_request_ar: None,
                     withdraw_block: None,
                     withdraw_tx: None,
+                    withdraw_request_occupied_capacity: None,
                     withdraw_to_output_index: None,
                     compensation: None,
                 },
@@ -868,6 +1439,7 @@ mod tests {
             &keys::encode_outpoint(&[0xA1; 32], 0),
             &DaoDepositCacheEntry {
                 capacity: 100,
+                occupied_capacity: 0,
                 deposit_block_number: 30,
                 deposit_timestamp: 0,
                 lock_script_hash: vec![0x11; 32],
@@ -879,6 +1451,7 @@ mod tests {
                 withdraw_request_ar: None,
                 withdraw_block: None,
                 withdraw_tx: None,
+                withdraw_request_occupied_capacity: None,
                 withdraw_to_output_index: None,
                 compensation: None,
             },
@@ -887,6 +1460,7 @@ mod tests {
             &keys::encode_outpoint(&[0xA2; 32], 0),
             &DaoDepositCacheEntry {
                 capacity: 100,
+                occupied_capacity: 0,
                 deposit_block_number: 20,
                 deposit_timestamp: 0,
                 lock_script_hash: vec![0x11; 32],
@@ -898,6 +1472,7 @@ mod tests {
                 withdraw_request_ar: Some(2),
                 withdraw_block: None,
                 withdraw_tx: None,
+                withdraw_request_occupied_capacity: Some(0),
                 withdraw_to_output_index: None,
                 compensation: None,
             },
@@ -928,6 +1503,7 @@ mod tests {
             &outpoint,
             &DaoDepositCacheEntry {
                 capacity: 100,
+                occupied_capacity: 0,
                 deposit_block_number: 30,
                 deposit_timestamp: 0,
                 lock_script_hash: vec![0x11; 32],
@@ -939,6 +1515,7 @@ mod tests {
                 withdraw_request_ar: None,
                 withdraw_block: None,
                 withdraw_tx: None,
+                withdraw_request_occupied_capacity: None,
                 withdraw_to_output_index: None,
                 compensation: None,
             },
@@ -989,6 +1566,7 @@ mod tests {
             &keys::encode_outpoint(&[0xA1; 32], 0),
             &DaoDepositCacheEntry {
                 capacity: 1,
+                occupied_capacity: 0,
                 deposit_block_number: 10,
                 deposit_timestamp: 0,
                 lock_script_hash: lock_a.clone(),
@@ -1000,6 +1578,7 @@ mod tests {
                 withdraw_request_ar: None,
                 withdraw_block: None,
                 withdraw_tx: None,
+                withdraw_request_occupied_capacity: None,
                 withdraw_to_output_index: None,
                 compensation: None,
             },
@@ -1008,6 +1587,7 @@ mod tests {
             &keys::encode_outpoint(&[0xA2; 32], 0),
             &DaoDepositCacheEntry {
                 capacity: 1,
+                occupied_capacity: 0,
                 deposit_block_number: 20,
                 deposit_timestamp: 0,
                 lock_script_hash: lock_b,
@@ -1019,6 +1599,7 @@ mod tests {
                 withdraw_request_ar: None,
                 withdraw_block: None,
                 withdraw_tx: None,
+                withdraw_request_occupied_capacity: None,
                 withdraw_to_output_index: None,
                 compensation: None,
             },
@@ -1044,6 +1625,7 @@ mod tests {
 
         let mut entry = DaoDepositCacheEntry {
             capacity: 42,
+            occupied_capacity: 0,
             deposit_block_number: 100,
             deposit_timestamp: 0,
             lock_script_hash: vec![0xCD; 32],
@@ -1055,6 +1637,7 @@ mod tests {
             withdraw_request_ar: None,
             withdraw_block: None,
             withdraw_tx: None,
+            withdraw_request_occupied_capacity: None,
             withdraw_to_output_index: None,
             compensation: None,
         };
@@ -1087,6 +1670,7 @@ mod tests {
             &keys::encode_outpoint(&[0xA1; 32], 0),
             &DaoDepositCacheEntry {
                 capacity: 1,
+                occupied_capacity: 0,
                 deposit_block_number: 10,
                 deposit_timestamp: 0,
                 lock_script_hash: vec![0x11; 32],
@@ -1098,6 +1682,7 @@ mod tests {
                 withdraw_request_ar: None,
                 withdraw_block: None,
                 withdraw_tx: None,
+                withdraw_request_occupied_capacity: None,
                 withdraw_to_output_index: None,
                 compensation: None,
             },
@@ -1106,6 +1691,7 @@ mod tests {
             &keys::encode_outpoint(&[0xA2; 32], 0),
             &DaoDepositCacheEntry {
                 capacity: 1,
+                occupied_capacity: 0,
                 deposit_block_number: 20,
                 deposit_timestamp: 0,
                 lock_script_hash: vec![0x11; 32],
@@ -1117,6 +1703,7 @@ mod tests {
                 withdraw_request_ar: Some(2),
                 withdraw_block: Some(30),
                 withdraw_tx: Some(vec![0xCC; 32]),
+                withdraw_request_occupied_capacity: Some(0),
                 withdraw_to_output_index: Some(0),
                 compensation: Some(5),
             },
@@ -1140,6 +1727,7 @@ mod tests {
                 &keys::encode_outpoint(&tx, 0),
                 &DaoDepositCacheEntry {
                     capacity: 100,
+                    occupied_capacity: 0,
                     deposit_block_number: block,
                     deposit_timestamp: 0,
                     lock_script_hash: lock.clone(),
@@ -1151,6 +1739,7 @@ mod tests {
                     withdraw_request_ar: None,
                     withdraw_block: None,
                     withdraw_tx: None,
+                    withdraw_request_occupied_capacity: None,
                     withdraw_to_output_index: None,
                     compensation: None,
                 },
@@ -1218,6 +1807,7 @@ mod tests {
                 &keys::encode_outpoint(&tx, output_index),
                 &DaoDepositCacheEntry {
                     capacity: 100,
+                    occupied_capacity: 0,
                     deposit_block_number: block,
                     deposit_timestamp: 0,
                     lock_script_hash: vec![0x55; 32],
@@ -1229,6 +1819,7 @@ mod tests {
                     withdraw_request_ar: None,
                     withdraw_block: None,
                     withdraw_tx: None,
+                    withdraw_request_occupied_capacity: None,
                     withdraw_to_output_index: None,
                     compensation: None,
                 },

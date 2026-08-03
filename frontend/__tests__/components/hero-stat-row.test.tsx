@@ -36,9 +36,13 @@ function mockStats(overrides: Partial<NetworkStats> = {}): NetworkStats {
       chainTip: null,
       forkPoint: null,
     },
-    knowledgeSize: '19850000000000000000',
-    circulatingSupply: '4380000000000000000',
-    daoLocked: '1120000000000000000',
+    // Mainnet magnitudes: Common Knowledge Size is DAO `U` minus the genesis
+    // virtual occupied capacity (159,690,777 CKB ⇒ 159.7 MB of chain state),
+    // the same quantity /charts/knowledge-size plots — NOT raw `U` (5.2B CKB),
+    // which rendered as "5.2 GB" and contradicted the chart 32.6×.
+    knowledgeSize: '15969077700000000',
+    circulatingSupply: '4934584507700000000',
+    daoLocked: '837119516300000000',
     ...overrides,
   };
 }
@@ -48,6 +52,9 @@ describe('HeroStatRow', () => {
     render(<HeroStatRow stats={mockStats()} />);
 
     expect(screen.getByText('Knowledge Size')).toBeInTheDocument();
+    expect(screen.getByText('159.7 MB')).toBeInTheDocument();
+    expect(screen.getByText('49.35B CKB')).toBeInTheDocument();
+    expect(screen.getByText('8.37B CKB')).toBeInTheDocument();
     expect(screen.getByText('Circulating')).toBeInTheDocument();
     expect(screen.getByText('DAO Locked')).toBeInTheDocument();
     expect(screen.getByText('Block Height')).toBeInTheDocument();
@@ -56,23 +63,23 @@ describe('HeroStatRow', () => {
     expect(screen.getByText('#8,234')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /Knowledge Size/i })).toHaveAttribute(
       'href',
-      '/charts/knowledge-size'
+      '/mainnet/charts/knowledge-size'
     );
     expect(screen.getByRole('link', { name: /Circulating/i })).toHaveAttribute(
       'href',
-      '/charts/total-supply'
+      '/mainnet/charts/total-supply'
     );
     expect(screen.getByRole('link', { name: /DAO Locked/i })).toHaveAttribute(
       'href',
-      '/nervos-dao'
+      '/mainnet/nervos-dao'
     );
     expect(screen.getByRole('link', { name: /Block Height/i })).toHaveAttribute(
       'href',
-      '/blocks/14235678'
+      '/mainnet/blocks/14235678'
     );
     expect(screen.getByRole('link', { name: /Epoch/i })).toHaveAttribute(
       'href',
-      '/charts/epoch-time-length'
+      '/mainnet/charts/epoch-time-length'
     );
   });
 

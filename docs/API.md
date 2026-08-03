@@ -2,7 +2,7 @@
 
 This is an auto-generated skeleton of every endpoint exposed by `ckbadger-api`,
 derived from the `routes()` functions in `crates/api/src/routes/*.rs` and the
-nesting in `crates/api/src/lib.rs:384` (`.nest("/api/v1", routes::api_routes())`).
+nesting in `crates/api/src/lib.rs:453` (`.nest("/api/v1", routes::api_routes())`).
 
 **Source of truth.** The Rust code is authoritative. Each handler's `Query<T>`,
 `Path<T>`, and `Json<T>` types — together with the `Serialize` response struct
@@ -11,7 +11,12 @@ details that aren't reproduced here.
 
 ## Conventions
 
-- **Base path.** All endpoints in this document are nested under `/api/v1`.
+- **Canonical backend path.** All inventory paths below are nested under `/api/v1` on a direct
+  per-network API port, for example `http://127.0.0.1:8101/api/v1`.
+- **Shared-frontend path.** In orchestrator mode, use
+  `/api/{network}/v1` on the shared frontend origin, for example
+  `http://127.0.0.1:8100/api/testnet/v1`. The proxy removes `{network}` before forwarding to the
+  selected backend. WebSockets similarly use direct `/ws` or shared `/ws/{network}`.
 - **Path syntax.** Axum 0.8: path params use `{id}` form.
 - **Casing.** Response structs use `#[serde(rename_all = "camelCase")]`. Query
   params decode from snake_case (`lock_script_hash`, `type_script_hash`, etc.).
@@ -19,24 +24,25 @@ details that aren't reproduced here.
   `ApiError::{not_found, bad_request, internal, warmup_pending}` map to
   appropriate HTTP statuses.
 - **Pagination.** Listing endpoints return
-  `CursorPaginatedResponse<T> = { data: Vec<T>, total, limit, nextCursor? }`.
+  `CursorPaginatedResponse<T> = { data: Vec<T>, total?, limit, hasMore, nextCursor }`.
   The cursor is opaque; pass the previous response's `nextCursor` back as
   `?cursor=`. Address-cell cursors encode `script_hash + block_num + tx_hash +
-output_index`; activity cursors encode `block_num:tx_idx:seq`.
+output_index`; activity cursors encode `block_num:tx_idx`; spore/cluster list cursors
+  encode `block_num:0x<32-byte-id>` over a `(block DESC, id ASC)` order.
 - **Address inputs.** Any `lock_script_hash` parameter accepts either a CKB
   address (auto-decoded) or a 0x-prefixed lock hash. `type_script_hash` accepts
   only the 0x-prefixed 32-byte hash.
 - **Non-JSON responses.** A few spore endpoints return raw binary or SVG; they
   are flagged in the inventory below.
-- **WebSocket.** Real-time subscriptions live under `crates/api/src/ws/` and
-  are not part of this REST inventory.
+- **WebSocket.** Real-time subscriptions live under `crates/api/src/ws/` and are not part of this
+  REST inventory.
 - **Page-level routes.** `/llms.txt`, `/llms-full.txt`, `/capabilities`, and
-  `.md`/`.raw` page suffixes are served by the frontend layer (see
-  `frontend/public/llms.txt`), not by `/api/v1`.
+  network-scoped `.md`/`.raw` page suffixes are served by the frontend layer (see
+  `frontend/public/llms.txt`), not by either API base path.
 
 ## Modules
 
-`api_routes()` (`crates/api/src/routes/mod.rs:25`) merges 17 modules.
+`api_routes()` (`crates/api/src/routes/mod.rs:26`) merges 18 modules.
 `tx_lookup.rs` is a helper imported by `transactions.rs` and is not mounted.
 
 ---
@@ -101,16 +107,18 @@ output_index`; activity cursors encode `block_num:tx_idx:seq`.
 
 ### identities (crates/api/src/routes/identities.rs)
 
-| Method | Path                                                              | Handler                               | Purpose                                                          |
-| ------ | ----------------------------------------------------------------- | ------------------------------------- | ---------------------------------------------------------------- |
-| GET    | `/api/v1/assets/identities/dotbit/items/{identity_id}`            | `get_dotbit_item_detail`              | Get .bit account item detail (expired_at, registered_at, status) |
-| GET    | `/api/v1/assets/identities/dotbit/items/{identity_id}/activities` | `list_dotbit_item_activities`         | List .bit item activities (cursor, optional `action`)            |
-| GET    | `/api/v1/assets/identities/did/items/{identity_id}`               | `get_did_ckb_item_detail`             | Get did:ckb item detail                                          |
-| GET    | `/api/v1/assets/identities/did/items/{identity_id}/activities`    | `list_did_ckb_item_activities`        | List did:ckb item activities (cursor, optional `action`)         |
-| GET    | `/api/v1/assets/identities/{collection_id}`                       | `get_identity_collection`             | Get identity collection aggregate (dotbit/did:ckb only)          |
-| GET    | `/api/v1/assets/identities/{collection_id}/holders`               | `list_identity_collection_holders`    | List ranked holders of an identity collection                    |
-| GET    | `/api/v1/assets/identities/{collection_id}/activities`            | `list_identity_collection_activities` | List identity collection activities (cursor, optional `action`)  |
-| GET    | `/api/v1/assets/identities/{collection_id}/items`                 | `list_identity_collection_items`      | List identity items in a collection (search/status/cursor)       |
+| Method | Path                                                                | Handler                               | Purpose                                                          |
+| ------ | ------------------------------------------------------------------- | ------------------------------------- | ---------------------------------------------------------------- |
+| GET    | `/api/v1/assets/identities/dotbit/items/{identity_id}`              | `get_dotbit_item_detail`              | Get .bit AccountCell item detail                                 |
+| GET    | `/api/v1/assets/identities/dotbit/items/{identity_id}/activities`   | `list_dotbit_item_activities`         | List .bit AccountCell activities                                 |
+| GET    | `/api/v1/assets/identities/did/items/{identity_id}`                 | `get_did_ckb_item_detail`             | Get did:ckb item detail                                          |
+| GET    | `/api/v1/assets/identities/did/items/{identity_id}/activities`      | `list_did_ckb_item_activities`        | List did:ckb item activities                                     |
+| GET    | `/api/v1/assets/identities/bit-cell/items/{identity_id}`            | `get_bit_cell_item_detail`            | Get independent .bit Cell identity detail                        |
+| GET    | `/api/v1/assets/identities/bit-cell/items/{identity_id}/activities` | `list_bit_cell_item_activities`       | List .bit Cell identity activities                               |
+| GET    | `/api/v1/assets/identities/{collection_id}`                         | `get_identity_collection`             | Get .bit AccountCell, .bit Cell, or did:ckb collection aggregate |
+| GET    | `/api/v1/assets/identities/{collection_id}/holders`                 | `list_identity_collection_holders`    | List ranked holders of an identity collection                    |
+| GET    | `/api/v1/assets/identities/{collection_id}/activities`              | `list_identity_collection_activities` | List identity collection activities (cursor, optional `action`)  |
+| GET    | `/api/v1/assets/identities/{collection_id}/items`                   | `list_identity_collection_items`      | List identity items in a collection (search/status/cursor)       |
 
 **Params**
 
@@ -149,7 +157,11 @@ output_index`; activity cursors encode `block_num:tx_idx:seq`.
 - `CursorPaginatedResponse<BlockResponse>` — block metadata + miner/hardfork activation
 - `BlockResponse` — single block
 - `BlockFeeStatsResponse` — total_size, total_cycles, fee-rate stats, `cycles_pending`
-- `Vec<BlockProposal>` — proposal_id + committed_tx info
+- `Vec<BlockProposal>` — `proposalIndex`, `proposalId`, `committedTxHash`, `committedBlockNumber`.
+  Commitments are resolved through the shared NC-Max commit-window scan (`+2..=+10`, first matching
+  tx in chain order wins — the same `resolve_committed_txs` path `/graph/proposals` uses). A
+  proposal not committed within the window blocks that exist (e.g. tip-adjacent windows) reports
+  both fields as `null`.
 
 ---
 
@@ -174,7 +186,9 @@ output_index`; activity cursors encode `block_num:tx_idx:seq`.
 
 - `CursorPaginatedResponse<TransactionResponse>` / `TransactionResponse` — hash, block_number, fee, cycles
 - `TransactionDetailResponse` — full detail with `inputs`, `outputs`, witnesses, fee rate, confirmations
-- `Vec<CellDepResponse>` — out_point + dep_type
+- `Vec<CellDepResponse>` — out_point + dep_type. Fail-fast: `500` when the CKB RocksDB reader is
+  unavailable (the endpoint's only data source), `400` for a pending/proposed mempool tx, `404`
+  when the tx exists nowhere — never a silent `200 []` for those states
 - `CyclesStatusResponse` (from `crate::cycles`) — status, cycles, error
 - `TransactionLifecycleResponse` — phase, proposal_id, `proposed_in`/`committed_in`, commitment_distance, `commitment_window: CommitmentWindow`
 
@@ -198,6 +212,23 @@ output_index`; activity cursors encode `block_num:tx_idx:seq`.
 - `ListCellsParams` — `limit`, `lock_script_hash`, `type_script_hash`, `type_code_hash`, `cursor`
 - `ListCellsByScriptParams` — `limit`, `code_hash`, `hash_type`, `script_kind` (default `both`), `cursor`
 - `TopAddressesParams` — `limit` (default 100)
+
+**`/cells/by-script` behavior**
+
+- Rows are the live cells of exactly one script reference form `(code_hash, hash_type)`, read
+  directly from that form's contiguous range in `cell_by_lock_code` / `cell_by_type_code`.
+- `cursor` is opaque and form-scoped. For `script_kind=lock|type` it is the hex-encoded 75-byte
+  cell-by-code index key of the last returned row; for `script_kind=both` it is phase-composite —
+  `lock:<hex>` or `type:<hex>`. Replaying a cursor against a different `code_hash`/`hash_type` form,
+  or a bare key in `both` mode, is a `400`.
+- `script_kind=both` enumerates the deduplicated union across pages: the lock form is exhausted
+  first, then type-form rows whose lock script is not already the same form. Each cell appears
+  exactly once.
+- `total` is the per-form reference counter for `script_kind=lock|type`. For `script_kind=both` it
+  is **omitted**: the deduplicated union count is not available from the per-form counters, and
+  `lock + type` would double-count cells matching on both sides.
+- Each row carries `matchedScriptKind` (`lock` | `type`) — which index enumerated it, and the phase
+  a client would use when building a `both` cursor from that row.
 - `ActiveAddressesParams` — `limit` (default 100), `days` (default 7)
 - `AddressTxParams` — `limit`, `cursor`
 - `AddressTokensParams` — `limit`, `cursor`
@@ -207,7 +238,17 @@ output_index`; activity cursors encode `block_num:tx_idx:seq`.
 
 - `CursorPaginatedResponse<CellResponse>` — cell summary
 - `CellDetailResponse` — full cell detail with `lock`/`type_script` (`ScriptResponse`), `data`, `data_analysis`, `dep_group_items`, `code_cell_of: Vec<CodeCellScript>`, `dao_info: Option<DaoInfo>`, `used_capacity_breakdown: OccupiedCapacityBreakdown`
-- `AddressResponse` — lock_script_hash, balance, used_capacity, lock_script (`ScriptResponse`) + `lock_script_info: LockScriptInfo`
+- `AddressResponse` — lock_script_hash, balance, used_capacity, lock_script (`ScriptResponse`) + `lock_script_info: LockScriptInfo` (`deprecated` reflects the stored script record, e.g. an address on a superseded ACP deployment reports `true`).
+  `address` is always the canonical lowercase RFC-0021 encoding of the lock script on the serving
+  network — never the raw input echoed back
+
+**Address inputs (`{addr}`, all address endpoints)**
+
+- One shared parser (`parse_address_to_script`): RFC-0021 full format (`0x00`) only, Bech32m
+  checksum enforced (the legacy Bech32 checksum is a `400` naming the reason), `hash_type` must be
+  `0x00|0x01|0x02|0x04`.
+- Case follows the bech32 spec: all-lowercase and ALL-UPPERCASE both accepted, mixed case rejected.
+- A 64-hex-char lock script hash (optional `0x`) is accepted everywhere an address is.
 - `Vec<TopAddressResponse>` / `Vec<ActiveAddressResponse>`
 - `CursorPaginatedResponse<AddressTransactionResponse>` — tx_type, capacity_change, script_labels
 - `CursorPaginatedResponse<AddressTokenResponse>` — per-address token balance
@@ -216,36 +257,36 @@ output_index`; activity cursors encode `block_num:tx_idx:seq`.
 
 ### statistics (crates/api/src/routes/statistics.rs)
 
-| Method | Path                                          | Handler                                  | Purpose                                                                            |
-| ------ | --------------------------------------------- | ---------------------------------------- | ---------------------------------------------------------------------------------- |
-| GET    | `/api/v1/statistics/network`                  | `get_network_stats`                      | Network stats (tip, hash rate, difficulty, TPS, DAO totals, sync/deep-fork status) |
-| GET    | `/api/v1/statistics/tx-stats`                 | `get_tx_stats`                           | Hourly + daily transaction-count timeseries (24h + 14d)                            |
-| GET    | `/api/v1/statistics/recent-blocks`            | `get_recent_blocks`                      | Recent 24h blocks (timestamp + tx count)                                           |
-| GET    | `/api/v1/charts/transaction-count`            | `get_transaction_count_chart`            | Daily transaction count chart                                                      |
-| GET    | `/api/v1/charts/cell-count`                   | `get_cell_count_chart`                   | Cell count chart (all/live/dead stacked area)                                      |
-| GET    | `/api/v1/charts/knowledge-size`               | `get_knowledge_size_chart`               | Common-knowledge-size chart with utilization%                                      |
-| GET    | `/api/v1/charts/common-knowledge-composition` | `get_common_knowledge_composition_chart` | Stacked area: transfer / DAO / UDT / NFT-Spore / other contracts                   |
-| GET    | `/api/v1/charts/capacity-turnover-ratio`      | `get_capacity_turnover_ratio_chart`      | Daily + weekly capacity turnover chart                                             |
-| GET    | `/api/v1/charts/cell-size-distribution`       | `get_cell_size_distribution_chart`       | Cell-size histogram chart                                                          |
-| GET    | `/api/v1/charts/address-cohort-retention`     | `get_address_cohort_retention_chart`     | Address cohort retention chart                                                     |
-| GET    | `/api/v1/charts/most-utilized-scripts`        | `get_most_utilized_scripts_chart`        | Top scripts share charts (used + capacity)                                         |
-| GET    | `/api/v1/charts/most-utilized-assets`         | `get_most_utilized_assets_chart`         | Top assets share charts (used + capacity)                                          |
-| GET    | `/api/v1/charts/block-time-distribution`      | `get_block_time_distribution_chart`      | Block time distribution histogram (last 42 epochs)                                 |
-| GET    | `/api/v1/charts/epoch-time-distribution`      | `get_epoch_time_distribution_chart`      | Epoch duration histogram                                                           |
-| GET    | `/api/v1/charts/epoch-time-length`            | `get_epoch_time_length_chart`            | Per-epoch length (hours) + blocks                                                  |
-| GET    | `/api/v1/charts/average-block-time`           | `get_average_block_time_chart`           | Daily average block time                                                           |
-| GET    | `/api/v1/charts/hash-rate`                    | `get_hash_rate_chart`                    | Daily hash-rate chart                                                              |
-| GET    | `/api/v1/charts/difficulty`                   | `get_difficulty_chart`                   | Daily difficulty chart                                                             |
-| GET    | `/api/v1/charts/uncle-rate`                   | `get_uncle_rate_chart`                   | Daily uncle-rate chart                                                             |
-| GET    | `/api/v1/charts/miner-address-distribution`   | `get_miner_address_distribution_chart`   | Top miner address distribution                                                     |
-| GET    | `/api/v1/charts/total-supply`                 | `get_total_supply_chart`                 | Total supply (circulating / DAO-locked / burnt) stacked area                       |
-| GET    | `/api/v1/charts/nominal-apc`                  | `get_nominal_apc_chart`                  | Synthesized nominal APC curve (no DB read)                                         |
-| GET    | `/api/v1/charts/secondary-issuance`           | `get_secondary_issuance_chart`           | Secondary issuance breakdown (compensation/mining/burnt)                           |
-| GET    | `/api/v1/charts/inflation-rate`               | `get_inflation_rate_chart`               | Synthesized nominal & real inflation curves (no DB read)                           |
-| GET    | `/api/v1/charts/hodl-wave`                    | `get_hodl_wave_chart`                    | HODL-wave bands (24h…>3y) + holder_count                                           |
-| GET    | `/api/v1/stats/daily-activities`              | `get_daily_activity_stats`               | Per-day activity breakdown by tx-type and script (param: `days`, default 30)       |
-| GET    | `/api/v1/stats/activity-summary-24h`          | `get_activity_summary_24h`               | Rolling 24h activity summary aggregated from hourly buckets                        |
-| GET    | `/api/v1/statistics/asset-ecosystem`          | `get_asset_ecosystem`                    | Top tokens + capacity-category breakdown (tokens/objects/DAO/other)                |
+| Method | Path                                          | Handler                                  | Purpose                                                                                                    |
+| ------ | --------------------------------------------- | ---------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| GET    | `/api/v1/statistics/network`                  | `get_network_stats`                      | Network stats (tip, hash rate, difficulty, TPS, DAO totals, sync/deep-fork status)                         |
+| GET    | `/api/v1/statistics/tx-stats`                 | `get_tx_stats`                           | Hourly + daily transaction-count timeseries (24h + 14d)                                                    |
+| GET    | `/api/v1/statistics/recent-blocks`            | `get_recent_blocks`                      | Recent 24h blocks (timestamp + tx count)                                                                   |
+| GET    | `/api/v1/charts/transaction-count`            | `get_transaction_count_chart`            | Daily transaction count chart                                                                              |
+| GET    | `/api/v1/charts/cell-count`                   | `get_cell_count_chart`                   | Cell count chart (all/live/dead stacked area)                                                              |
+| GET    | `/api/v1/charts/knowledge-size`               | `get_knowledge_size_chart`               | Common-knowledge-size chart with utilization%                                                              |
+| GET    | `/api/v1/charts/common-knowledge-composition` | `get_common_knowledge_composition_chart` | Stacked area: transfer / DAO / UDT / NFT-Spore / other contracts                                           |
+| GET    | `/api/v1/charts/capacity-turnover-ratio`      | `get_capacity_turnover_ratio_chart`      | Daily + weekly capacity turnover chart                                                                     |
+| GET    | `/api/v1/charts/cell-size-distribution`       | `get_cell_size_distribution_chart`       | Cell-size histogram chart                                                                                  |
+| GET    | `/api/v1/charts/address-cohort-retention`     | `get_address_cohort_retention_chart`     | Address cohort retention chart                                                                             |
+| GET    | `/api/v1/charts/most-utilized-scripts`        | `get_most_utilized_scripts_chart`        | Top scripts share charts (used + capacity)                                                                 |
+| GET    | `/api/v1/charts/most-utilized-assets`         | `get_most_utilized_assets_chart`         | Top assets share charts (used + capacity)                                                                  |
+| GET    | `/api/v1/charts/block-time-distribution`      | `get_block_time_distribution_chart`      | Block time distribution histogram (last 42 epochs)                                                         |
+| GET    | `/api/v1/charts/epoch-time-distribution`      | `get_epoch_time_distribution_chart`      | Epoch duration histogram                                                                                   |
+| GET    | `/api/v1/charts/epoch-time-length`            | `get_epoch_time_length_chart`            | Per-epoch length (hours) + blocks                                                                          |
+| GET    | `/api/v1/charts/average-block-time`           | `get_average_block_time_chart`           | Daily average block time                                                                                   |
+| GET    | `/api/v1/charts/hash-rate`                    | `get_hash_rate_chart`                    | Daily hash-rate chart                                                                                      |
+| GET    | `/api/v1/charts/difficulty`                   | `get_difficulty_chart`                   | Daily difficulty chart                                                                                     |
+| GET    | `/api/v1/charts/uncle-rate`                   | `get_uncle_rate_chart`                   | Daily uncle-rate chart                                                                                     |
+| GET    | `/api/v1/charts/miner-address-distribution`   | `get_miner_address_distribution_chart`   | Miner distribution for the last 7 complete UTC+8 days                                                      |
+| GET    | `/api/v1/charts/total-supply`                 | `get_total_supply_chart`                 | Total supply (circulating / DAO-locked / burnt) stacked area                                               |
+| GET    | `/api/v1/charts/nominal-apc`                  | `get_nominal_apc_chart`                  | Synthesized nominal APC curve (no DB read)                                                                 |
+| GET    | `/api/v1/charts/secondary-issuance`           | `get_secondary_issuance_chart`           | Secondary issuance breakdown (compensation/mining/burnt)                                                   |
+| GET    | `/api/v1/charts/inflation-rate`               | `get_inflation_rate_chart`               | Exact trailing-365-day nominal & real inflation from DAO snapshots                                         |
+| GET    | `/api/v1/charts/hodl-wave`                    | `get_hodl_wave_chart`                    | HODL-wave bands (24h…>3y) + holder_count                                                                   |
+| GET    | `/api/v1/stats/daily-activities`              | `get_daily_activity_stats`               | Per-day activity breakdown by tx-type and script (param: `days`, default 30)                               |
+| GET    | `/api/v1/stats/activity-summary-24h`          | `get_activity_summary_24h`               | Rolling 24h activity summary aggregated from hourly buckets                                                |
+| GET    | `/api/v1/statistics/asset-ecosystem`          | `get_asset_ecosystem`                    | Top tokens + capacity-category breakdown (tokens/objects/DAO/other, shares of total live capacity `C - S`) |
 
 **Params**
 
@@ -260,7 +301,9 @@ output_index`; activity cursors encode `block_num:tx_idx:seq`.
 - `ChartResponse` — `data: Vec<ChartDataPoint>`, `title`, axis labels (from `crate::response`)
 - `StackedAreaChartResponse` — `data: Vec<StackedAreaDataPoint>`, `series: Vec<StackedAreaSeries>`, `title`
 - `MostUtilizedScriptsChartResponse` / `MostUtilizedAssetsChartResponse` — pair of stacked-area share charts
-- `MinerDistributionResponse` — `data: Vec<MinerDistributionDataPoint>`
+- `MinerDistributionResponse` — `data: Vec<MinerDistributionDataPoint>`, explicit
+  `windowDays`/`fromDate`/`toDate`; each row exposes the canonical
+  `minerLockHash` and an optional resolvable CKB `address`
 - `Vec<DailyActivityStatsResponse>` / `ActivitySummary24hResponse` — per-day or 24h activity counts + `script_counts: Vec<ScriptCountEntry>`
 - `AssetEcosystemResponse` — `top_tokens: Vec<TopTokenEntry>` + `capacity_breakdown: Vec<CapacityCategory>`
 
@@ -402,26 +445,42 @@ output_index`; activity cursors encode `block_num:tx_idx:seq`.
 - `Vec<FiberChannelResponse>` for address listing
 - `FiberStatsResponse` — totals
 
+**Field semantics**
+
+- `capacity` — the funding cell's CKB capacity in shannons, for every channel. `totalCapacityLocked`
+  in `FiberStatsResponse` sums this over open channels and is therefore always a CKB figure, never
+  a UDT amount.
+- `udtTypeHash` / `udtAmount` — set together when the funding cell carries a type script: the type
+  script hash identifying the token, and the token amount held by the funding cell (decimal string,
+  `u128`). Both are `null` for plain-CKB channels. A UDT-funded channel still reports its CKB
+  `capacity` alongside these.
+- `participants` — the funding transaction's non-fiber owners. The funding and commitment locks
+  that implement the channel are never listed as participants.
+- `delayEpoch` / `commitmentOutputIndex` — the revocation delay encoded in the commitment lock args
+  and the index of the commitment output, both taken from the commitment cell of the most recent
+  force-close or commitment-revocation event. `null` while a channel is open or cooperatively
+  closed (no commitment cell exists).
+
 ---
 
 ### spore (crates/api/src/routes/spore.rs)
 
 | Method | Path                                                          | Handler                      | Purpose                                                                                        |
 | ------ | ------------------------------------------------------------- | ---------------------------- | ---------------------------------------------------------------------------------------------- |
-| GET    | `/api/v1/spore/clusters`                                      | `list_clusters`              | List Spore clusters from warmup cache (cursor by block)                                        |
+| GET    | `/api/v1/spore/clusters`                                      | `list_clusters`              | List Spore clusters from warmup cache (cursor `block:0x<id>`)                                  |
 | GET    | `/api/v1/spore/clusters/{cluster_id}`                         | `get_cluster`                | Get cluster detail (supports `sole-spores` alias)                                              |
 | GET    | `/api/v1/spore/clusters/{cluster_id}/charts/capacity-history` | `get_cluster_capacity_chart` | Cluster capacity history (stacked area, date range)                                            |
 | GET    | `/api/v1/spore/clusters/{cluster_id}/holders`                 | `get_cluster_holders`        | List ranked cluster holders (cursor)                                                           |
 | GET    | `/api/v1/spore/clusters/{cluster_id}/activities`              | `get_cluster_activities`     | List cluster activities (cursor, optional `action` mint/transfer/burn)                         |
-| GET    | `/api/v1/spore/clusters/{cluster_id}/spores`                  | `get_spores_by_cluster`      | List spores in a cluster (cursor by block, from in-memory cache)                               |
-| GET    | `/api/v1/spore/objects`                                       | `list_spores`                | List all live spores (cursor by block, from in-memory cache)                                   |
+| GET    | `/api/v1/spore/clusters/{cluster_id}/spores`                  | `get_spores_by_cluster`      | List spores in a cluster (cursor `block:0x<id>`, from in-memory cache)                         |
+| GET    | `/api/v1/spore/objects`                                       | `list_spores`                | List all live spores (cursor `block:0x<id>`, from in-memory cache)                             |
 | GET    | `/api/v1/spore/objects/{spore_id}`                            | `get_spore`                  | Get spore detail (with cumulative owned capacity from daily deltas)                            |
 | GET    | `/api/v1/spore/objects/{spore_id}/activities`                 | `list_spore_item_activities` | Per-spore activities (cursor, optional `action`)                                               |
 | GET    | `/api/v1/spore/objects/{spore_id}/decode`                     | `decode_spore`               | DOB-decoded traits + media (with on-the-fly SVG render URL when applicable)                    |
 | GET    | `/api/v1/spore/objects/{spore_id}/media/{hash}`               | `serve_media`                | **Binary** content-addressed media blob (raw bytes, CSP/no-sniff headers)                      |
 | GET    | `/api/v1/spore/objects/{spore_id}/render`                     | `render_spore_svg`           | **Raw SVG** rendered on-the-fly from decoded traits or cluster DOB1 patterns (`image/svg+xml`) |
 | GET    | `/api/v1/spore/objects/{spore_id}/charts/capacity-history`    | `get_spore_capacity_chart`   | Single-spore capacity history (stacked area, date range)                                       |
-| GET    | `/api/v1/spore/owner/{lock_hash}`                             | `get_spores_by_owner`        | List spores owned by a lock_hash (cursor by block)                                             |
+| GET    | `/api/v1/spore/owner/{lock_hash}`                             | `get_spores_by_owner`        | List spores owned by a lock_hash (cursor `block:0x<id>`)                                       |
 
 **Params**
 
@@ -466,6 +525,42 @@ output_index`; activity cursors encode `block_num:tx_idx:seq`.
 
 ---
 
+### network (crates/api/src/routes/network.rs)
+
+These endpoints read the optional, non-chain network store written by `ckbadger-crawler`.
+
+| Method | Path                              | Handler         | Purpose                                                      |
+| ------ | --------------------------------- | --------------- | ------------------------------------------------------------ |
+| GET    | `/api/v1/network/summary`         | `summary`       | Crawler enabled/data state and latest completed round        |
+| GET    | `/api/v1/network/distributions`   | `distributions` | Reachability, client, country, ASN, and protocol histograms  |
+| GET    | `/api/v1/network/history`         | `history`       | Hour/day time series for node counts and distribution shares |
+| GET    | `/api/v1/network/nodes`           | `nodes`         | Filterable cursor-paginated discovered-node list             |
+| GET    | `/api/v1/network/nodes/{peer_id}` | `node_by_id`    | Full detail for one hex-encoded peer ID                      |
+
+**Params**
+
+- `HistoryQuery` — required `metric` (`totalNodes`, `reachableNodes`, `versionShare`,
+  `countryShare`) and `granularity` (`hour`, `day`), plus optional inclusive Unix-second `from`
+  and `to`
+- `NodesQuery` — optional `cursor`, `limit` (default 50, maximum 500), `reachable`, `country`,
+  and exact `version`
+- `Path(peer_id): Path<String>` — raw peer ID encoded as hexadecimal
+
+**Responses**
+
+- `NetworkSummary` — `enabled`, `hasData`, optional `lastRound`
+- `NetworkDistributions` — total/reachable counts plus sorted label/count buckets
+- `NetworkHistory` — requested metric/granularity and ascending points; daily data excludes the
+  incomplete current day
+- `NetworkNodesPage` — `items` and optional `nextCursor`
+- `NodeDetailResponse` — addresses, version, flags, protocols, observation times, reachability,
+  geo/ASN, RTT, and known-peer count
+
+When the crawler/store is disabled, summary and aggregate/list endpoints return an honest
+disabled or empty state. A point lookup still returns not found.
+
+---
+
 ### scripts (crates/api/src/routes/scripts.rs)
 
 | Method | Path                                             | Handler                                          | Purpose                                                                                             |
@@ -483,7 +578,10 @@ output_index`; activity cursors encode `block_num:tx_idx:seq`.
 
 - `ListParams` — `limit`, `cursor`, `network`, `decoder_type` (unused), `search`, `sort_key`, `sort_direction`
 - `LookupScriptsRequest` (POST body via `Json<>`) — `code_hashes: Vec<String>`, optional `tx_hash`
-- `CodeCellQuery` — `code_hash`, `hash_type` (unused alias)
+- `CodeCellQuery` — `code_hash`, optional `hash_type` (`data` \| `type` \| `data1` \| `data2`). With
+  `hash_type` the lookup resolves the exact observed reference form (a data-family form only
+  resolves when a code cell with that data hash exists on chain); without it the whole deployment
+  family is resolved. An unrecognized `hash_type` is a 400.
 - `ScriptCapacityHistoryQuery` — `code_hash` (Option), `script_kind`, `from`, `to` (used with `{name}` path)
 - `ScriptCapacityHistoryByCodeHashQuery` — required `code_hash`, plus `script_kind`/`from`/`to`
 - `Path(name): Path<String>`
@@ -491,7 +589,14 @@ output_index`; activity cursors encode `block_num:tx_idx:seq`.
 **Responses**
 
 - `CursorPaginatedResponse<ScriptFamilyListItemResponse>` — script family listing (from `crate::response`)
-- `HashMap<String, ScriptLookupInfo>` — keyed by reference hash; each entry has resolution_state (`resolved`/`ambiguous`) and optional `ambiguity: ScriptResolutionAmbiguityResponse`
+- `HashMap<String, ScriptLookupInfo>` — keyed by reference hash; each entry has resolution_state (`resolved`/`ambiguous`) and optional `ambiguity: ScriptResolutionAmbiguityResponse`.
+  Every deployment-scoped field describes **the queried reference**, never a sibling deployment
+  that happens to share the same bytecode: `liveCellsCount`/`ownedCapacitySum`/`ownedKnowledgeSum`
+  and `scriptKind` come from the queried reference's own usage rollup (zero when the reference has
+  no indexed usage), and `codeCellTxHash`/`codeCellOutputIndex`/`codeCellsLiveCount`/`codeCellsTotal`
+  cover only the code cells deployed under that reference. `codeHash` remains the resolved bytecode
+  version hash, which two deployments of one binary legitimately share. `deprecated` is reported for
+  ambiguous references too, from the reference's own record.
 - `CodeCellResponse` — `tx_hash`, `output_index` (option of either)
 - `CodeCellsResponse` — `code_cells: Vec<CodeCellEntry>`, counts, optional `resolved_version_hash`, optional ambiguity
 - `ScriptFamilyDetailResponse` — family + `versions` (from `crate::response`)
@@ -521,6 +626,6 @@ output_index`; activity cursors encode `block_num:tx_idx:seq`.
 
 ---
 
-**Total endpoints: 103** across 17 modules. Confirm against
+**Total endpoints: 127** across 18 modules. Confirm against
 `crates/api/src/routes/*.rs` for any field-level question; this skeleton is
 intentionally name-and-purpose only.

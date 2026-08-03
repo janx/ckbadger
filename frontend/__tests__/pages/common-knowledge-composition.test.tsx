@@ -11,6 +11,7 @@ vi.mock('@/lib/api', () => ({
     getCommonKnowledgeCompositionChart: vi.fn(),
   },
   isWarmupPendingError: vi.fn(() => false),
+  isNetworkInitializingError: vi.fn(() => false),
 }));
 
 vi.mock('@/components/layout/header', () => ({
@@ -49,7 +50,7 @@ describe('CommonKnowledgeCompositionPage', () => {
     expect(screen.getByText('Common Knowledge Bytes Composition')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /Back to Charts/i })).toHaveAttribute(
       'href',
-      '/charts'
+      '/mainnet/charts'
     );
 
     await waitFor(() => {

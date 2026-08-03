@@ -13,6 +13,7 @@ vi.mock('@/src/navigation', () => ({
 vi.mock('@/lib/api', () => ({
   api: { getAssets: vi.fn() },
   isWarmupPendingError: vi.fn(() => false),
+  isNetworkInitializingError: vi.fn(() => false),
 }));
 
 describe('AssetsRedirectPage', () => {

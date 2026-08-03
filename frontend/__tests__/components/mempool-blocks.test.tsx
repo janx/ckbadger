@@ -230,7 +230,7 @@ describe('MempoolBlocks', () => {
     const tooltip = await screen.findByTestId('tx-bubble-tooltip');
     expect(tooltip).toHaveClass('fixed');
 
-    const minedBlockLink = document.querySelector('a[href="/blocks/100"]');
+    const minedBlockLink = document.querySelector('a[href="/mainnet/blocks/100"]');
     expect(minedBlockLink).toBeTruthy();
     fireEvent.mouseEnter(minedBlockLink as Element, { clientX: 320, clientY: 260 });
 

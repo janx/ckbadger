@@ -1,7 +1,10 @@
 import { http, HttpResponse } from 'msw';
-import { DEFAULT_API_BASE } from '@/lib/runtime-config';
 
-const API_BASE = DEFAULT_API_BASE;
+// API calls are now same-origin and network-scoped (`/api/<network>/v1/*`), served by the
+// Rust proxy in production. A relative handler base with a `:network` path param matches the
+// relative fetch regardless of which network the active URL selects (MSW resolves the
+// relative path against jsdom's location).
+const API_BASE = '/api/:network/v1';
 
 export const handlers = [
   http.get(`${API_BASE}/blocks`, ({ request }) => {

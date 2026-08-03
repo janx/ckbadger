@@ -28,7 +28,7 @@ import { ActivityEventGroup } from '@/components/activity-event-row';
 import { useParams } from '@/src/navigation';
 import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
 import { formatTimeAgo, formatCkbAmount, formatCkbCompact } from '@/lib/utils';
-import { formatTokenBalance } from '@/lib/format-asset';
+import { formatTokenBalanceWithRawMarker, RAW_AMOUNT_TITLE } from '@/lib/format-asset';
 export default function AddressDetailPage() {
   const params = useParams();
   const addr = params.addr as string;
@@ -567,8 +567,11 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                             <Badge variant="gray">{token.standard}</Badge>
                           </div>
                           <div className="w-44 shrink-0 text-right">
-                            <span className="text-text-bright font-mono">
-                              {formatTokenBalance(token.balance, token.decimals)}
+                            <span
+                              className="text-text-bright font-mono"
+                              title={token.decimals == null ? RAW_AMOUNT_TITLE : undefined}
+                            >
+                              {formatTokenBalanceWithRawMarker(token.balance, token.decimals)}
                             </span>
                           </div>
                         </div>
@@ -602,7 +605,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                             </div>
                           </div>
                           <div className="text-text-bright text-right font-mono text-sm">
-                            {formatTokenBalance(token.balance, token.decimals)}
+                            {formatTokenBalanceWithRawMarker(token.balance, token.decimals)}
                           </div>
                         </div>
                       </TerminalRow>
@@ -867,9 +870,14 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                     {(activities?.hasMore || activitiesPagination.hasPrevious) && (
                       <TerminalPanelFooter className="flex justify-center">
                         <CursorPagination
-                          total={activityFilter === 'all' ? address.transactionsCount : undefined}
+                          // Activities exclude cellbase, so the address's
+                          // transaction count is not a total this list can page
+                          // to. Render whatever total the API declares — none,
+                          // today — and show the enumerated range instead.
+                          total={activities?.total ?? undefined}
                           totalLabel="activities"
                           pageSize={DEFAULT_PAGE_SIZE}
+                          currentCount={activities?.data?.length ?? 0}
                           hasMore={activities?.hasMore ?? false}
                           hasPrevious={activitiesPagination.hasPrevious}
                           page={activitiesPagination.page}
@@ -992,7 +1000,10 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                                   <div className="bg-gold/10 border-gold-dim/30 rounded border px-2 py-1.5">
                                     <div className="flex items-center justify-between text-sm">
                                       <span className="text-warning-dim font-mono">
-                                        {formatTokenBalance(cell.udtAmount, cellToken.decimals)}
+                                        {formatTokenBalanceWithRawMarker(
+                                          cell.udtAmount,
+                                          cellToken.decimals
+                                        )}
                                       </span>
                                       <span className="text-warning text-xs">
                                         {tokenDisplayName(cellToken)}
@@ -1003,8 +1014,11 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                                 {!cellToken && !cellIsDao && cell.udtAmount && (
                                   <div className="border-base-border bg-base-elevated/50 rounded border px-2 py-1.5">
                                     <div className="flex items-center justify-between text-sm">
-                                      <span className="text-text font-mono">
-                                        {formatTokenBalance(cell.udtAmount, 0)}
+                                      <span
+                                        className="text-text font-mono"
+                                        title={RAW_AMOUNT_TITLE}
+                                      >
+                                        {formatTokenBalanceWithRawMarker(cell.udtAmount, null)}
                                       </span>
                                       {cell.typeScriptHash ? (
                                         <Link

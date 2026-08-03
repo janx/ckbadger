@@ -1,4 +1,4 @@
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use chrono::{DateTime, Duration, NaiveDate, Utc};
 use rocksdb::{Direction, IteratorMode};
 use std::collections::{HashMap, HashSet};
@@ -82,9 +82,56 @@ pub struct DaoSnapshotInput {
     pub protocol_deposited: Option<i128>,
 }
 
-use ckbadger_common::dao::calculate_dao_compensation_from_ar;
+/// Boundary of a calendar day that a batch has fully written: the date and the
+/// final block on it. Completed days are evaluated at this block's AR.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct DaoSnapshotBoundary {
+    pub(crate) date: NaiveDate,
+    pub(crate) end_block: i64,
+}
+
+/// Exact per-deposit DAO lifecycle result at one observation point.
+///
+/// The same value materializes a completed day's snapshot (evaluated at that
+/// day's final block and AR, inside the atomic batch that writes the day) and
+/// the live tip's snapshot (evaluated at the sync tip after that commit).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ExactDaoSnapshotCompensation {
+    breakdown: DaoCompensationBreakdown,
+    total: i128,
+    treasury: i128,
+    secondary_pool: i128,
+}
+
+impl ExactDaoSnapshotCompensation {
+    fn apply_to(self, snapshot: &mut DaoDailySnapshot) {
+        snapshot.compensation = self.breakdown.claimed;
+        snapshot.cum_dao_compensation = self.total;
+        snapshot.unclaimed_compensation = self.breakdown.unclaimed;
+        snapshot.unmade_dao_interests = self.breakdown.active_unmade;
+        snapshot.secondary_pool = self.secondary_pool;
+        snapshot.cum_treasury = self.treasury;
+    }
+
+    fn apply_to_input(self, input: &mut DaoSnapshotInput) {
+        input.total_compensation = self.breakdown.claimed;
+        input.cum_dao_compensation = self.total;
+        input.unclaimed_compensation = self.breakdown.unclaimed;
+        input.unmade_dao_interests = self.breakdown.active_unmade;
+        input.secondary_pool = self.secondary_pool;
+        input.cum_treasury = self.treasury;
+    }
+}
 
 impl BatchWriter {
+    /// Upsert one chain-level hourly stats bucket.
+    ///
+    /// `hour` is the UTC-truncated hour start; the row key is its **UTC**
+    /// `%Y%m%d%H` string (`stats_prefix::HOURLY` convention — activity hourly
+    /// buckets use UTC+8 keys instead) and `HourlyStats.hour` is its epoch
+    /// seconds. `transactions_count` includes the cellbase. Reorg rollback
+    /// cutoffs and the bulk-build `ChainStatsAccumulator` mirror exactly
+    /// these semantics.
     pub fn update_hourly_statistics(
         &self,
         hour: DateTime<Utc>,
@@ -128,6 +175,32 @@ impl BatchWriter {
         let value = bincode::serialize(&stats)?;
         batch.put_stats(&key, &value);
         Ok(())
+    }
+
+    /// Fetch the genesis-derived virtual occupied capacity (the knowledge-size
+    /// burn adjustment) from the persisted `GenesisBaseline`.
+    ///
+    /// Fail-fast if the baseline has not been derived yet: knowledge_size has a
+    /// single calculation path and must never silently fall back to a hardcoded
+    /// mainnet constant. The indexer derives the baseline at startup (block 0)
+    /// before any block — and therefore any daily-stats row — is written.
+    fn genesis_virtual_occupied(&self) -> Result<i128> {
+        Ok(self
+            .store
+            .get_genesis_baseline()?
+            .ok_or_else(|| anyhow!("genesis baseline not derived; cannot compute knowledge_size"))?
+            .virtual_occupied)
+    }
+
+    /// Exact genesis total issuance (DAO `C` of block 0) from the persisted
+    /// per-network baseline. Seeds the APC model's theoretical cumulative
+    /// issuance instead of a hardcoded 33.6B approximation.
+    fn genesis_total_issuance(&self) -> Result<i128> {
+        Ok(self
+            .store
+            .get_genesis_baseline()?
+            .ok_or_else(|| anyhow!("genesis baseline not derived; cannot compute estimated APC"))?
+            .total_issuance)
     }
 
     /// Update daily statistics for a given date. Returns the final DailyStats
@@ -191,14 +264,21 @@ impl BatchWriter {
                 s.total_all_cells += cells_created as i64;
                 s.total_data_size += data_size_added - data_size_consumed;
                 if let Some(dao) = dao_field {
-                    if let Some(ks) = calculate_knowledge_size(dao) {
+                    let virtual_occupied = self.genesis_virtual_occupied()?;
+                    if let Some(ks) = calculate_knowledge_size(dao, virtual_occupied) {
                         s.knowledge_size = Some(ks);
                     }
                 }
                 s
             }
             None => {
-                let knowledge_size = dao_field.and_then(calculate_knowledge_size);
+                let knowledge_size = match dao_field {
+                    Some(dao) => {
+                        let virtual_occupied = self.genesis_virtual_occupied()?;
+                        calculate_knowledge_size(dao, virtual_occupied)
+                    }
+                    None => None,
+                };
 
                 // Carry forward cumulative totals from the previous day.
                 // Prefer in-memory stats (from same batch) over DB to handle
@@ -319,8 +399,6 @@ impl BatchWriter {
                 avg_difficulty,
                 block_count,
                 total_uncles,
-                block_time_sum_ms: 0,
-                block_time_count: 0,
             },
         };
 
@@ -329,6 +407,12 @@ impl BatchWriter {
         Ok(())
     }
 
+    /// Upsert one per-miner daily bucket.
+    ///
+    /// `date` is the UTC+8 calendar day (`block_date` convention shared by
+    /// all date-scoped stats keys); `lock_script_hash` is the cellbase
+    /// WITNESS miner (RFC-0022). The bulk-build `ChainStatsAccumulator`
+    /// mirrors exactly these semantics.
     pub fn update_miner_statistics_batch(
         &self,
         lock_script_hash: &[u8],
@@ -406,21 +490,18 @@ impl BatchWriter {
             s.transactions_count += transactions_count;
             s
         } else {
-            let blocks_count = (end_block - start_block + 1) as i32;
-            EpochStats {
+            // A mid-epoch batch (is_new=false) requires an existing row: epoch
+            // rows are written atomically with their blocks, and reorg
+            // rollback truncates (never deletes) the boundary epoch row.
+            // Fabricating a row here would stamp the batch start as the epoch
+            // start, corrupting epoch timing (see F1 postmortem: reorg replay
+            // used to do exactly that).
+            anyhow::bail!(
+                "epoch stats row missing for mid-epoch batch: epoch={}, blocks={}..={} (epoch row must exist before non-initial blocks; re-sync required if store predates epoch rows)",
                 epoch_number,
                 start_block,
-                end_block: Some(end_block),
-                blocks_count,
-                length: epoch_length,
-                start_timestamp,
-                end_timestamp: if blocks_count >= epoch_length {
-                    Some(end_timestamp)
-                } else {
-                    None
-                },
-                transactions_count,
-            }
+                end_block
+            );
         };
 
         let value = bincode::serialize(&stats)?;
@@ -672,6 +753,9 @@ impl BatchWriter {
     /// Load an existing persistent address set from CF_STATS_CHAIN, merge in
     /// new addresses from the current batch, store back, and return the total
     /// unique address count as u32.
+    ///
+    /// Row encoding and count derivation come from the shared store-level
+    /// helpers, so reorg rollback repair rebuilds byte-identical rows.
     fn merge_persistent_addr_set(
         &self,
         prefix: u8,
@@ -680,31 +764,15 @@ impl BatchWriter {
         batch: &mut StoreBatch,
     ) -> Result<u32> {
         let set_key = keys::encode_stats_key(prefix, bucket);
+        let bucket_label = String::from_utf8_lossy(bucket).into_owned();
         let mut addrs: HashSet<[u8; 32]> = match self.store.get_stats_key(&set_key)? {
-            Some(raw) => {
-                let mut set = HashSet::with_capacity(raw.len() / 32);
-                for chunk in raw.chunks_exact(32) {
-                    let mut hash = [0u8; 32];
-                    hash.copy_from_slice(chunk);
-                    set.insert(hash);
-                }
-                set
-            }
+            Some(raw) => ckbadger_store::decode_activity_addr_set(&raw, &bucket_label)?,
             None => HashSet::new(),
         };
         addrs.extend(batch_addrs);
-        // Serialize as sorted flat bytes for deterministic storage.
-        let mut sorted: Vec<[u8; 32]> = addrs.iter().copied().collect();
-        sorted.sort_unstable();
-        let flat: Vec<u8> = sorted.iter().flat_map(|h| h.iter().copied()).collect();
+        let flat = ckbadger_store::encode_activity_addr_set(addrs.iter().copied());
         batch.put_stats(&set_key, &flat);
-        u32::try_from(sorted.len()).map_err(|_| {
-            anyhow::anyhow!(
-                "unique_address_count exceeds u32: bucket=0x{}, count={}",
-                hex::encode(bucket),
-                sorted.len()
-            )
-        })
+        ckbadger_store::activity_addr_set_count(addrs.len(), &bucket_label)
     }
 
     pub fn refresh_token_24h_transfers(&self) -> Result<u64> {
@@ -852,7 +920,109 @@ impl BatchWriter {
         Ok(best.map(|(_, epoch_number, ts)| (epoch_number, ts)))
     }
 
+    /// Materialize a completed day's exact DAO lifecycle values into the
+    /// snapshot input, before the batch that writes that day commits.
+    ///
+    /// `staged_entries` / `staged_completions` are the batch's own uncommitted
+    /// DAO mutations, so the day is evaluated against exactly the lifecycle
+    /// state this commit is about to persist. That removes the window in which
+    /// a completed day's row existed with carried-forward placeholder
+    /// cumulative values (DAO-026) and makes the completion marker — the sync
+    /// tip — land in the same write as the values it certifies (IDX-001).
+    pub(crate) fn apply_exact_completed_dao_snapshot(
+        &self,
+        boundary: DaoSnapshotBoundary,
+        end_ar: u64,
+        secondary_pool: i128,
+        staged_entries: &HashMap<Vec<u8>, DaoDepositCacheEntry>,
+        staged_completions: &HashMap<Vec<u8>, (i64, Vec<u8>)>,
+        input: &mut DaoSnapshotInput,
+    ) -> Result<()> {
+        let exact = self
+            .exact_dao_snapshot_compensation_with_staged(
+                boundary.end_block,
+                end_ar,
+                secondary_pool,
+                staged_entries,
+                staged_completions,
+            )
+            .with_context(|| {
+                format!(
+                    "failed to materialize exact DAO snapshot for completed date {} at block {}",
+                    boundary.date, boundary.end_block
+                )
+            })?;
+        exact.apply_to_input(input);
+        Ok(())
+    }
+
+    /// Exact DAO lifecycle values at `observation_block`, observing deposit
+    /// mutations staged in an uncommitted batch. Post-commit callers pass empty
+    /// overlays.
+    fn exact_dao_snapshot_compensation_with_staged(
+        &self,
+        observation_block: i64,
+        observation_ar: u64,
+        secondary_pool: i128,
+        staged_entries: &HashMap<Vec<u8>, DaoDepositCacheEntry>,
+        staged_completions: &HashMap<Vec<u8>, (i64, Vec<u8>)>,
+    ) -> Result<ExactDaoSnapshotCompensation> {
+        let breakdown = self
+            .store
+            .compute_dao_compensation_breakdown_at_with_staged(
+                observation_block,
+                observation_ar,
+                staged_entries,
+                staged_completions,
+            )?;
+        let total = breakdown.total().ok_or_else(|| {
+            anyhow!(
+                "DAO total compensation overflow at observation block {}: claimed={}, unclaimed={}",
+                observation_block,
+                breakdown.claimed,
+                breakdown.unclaimed
+            )
+        })?;
+        let treasury = secondary_pool
+            .checked_sub(breakdown.active_unmade)
+            .ok_or_else(|| {
+                anyhow!(
+                    "DAO treasury subtraction overflow at observation block {}: secondary_pool={}, active_unmade={}",
+                    observation_block,
+                    secondary_pool,
+                    breakdown.active_unmade
+                )
+            })?;
+        if treasury < 0 {
+            bail!(
+                "active DAO interests exceed secondary pool at observation block {}: secondary_pool={}, active_unmade={}",
+                observation_block,
+                secondary_pool,
+                breakdown.active_unmade
+            );
+        }
+
+        Ok(ExactDaoSnapshotCompensation {
+            breakdown,
+            total,
+            treasury,
+            secondary_pool,
+        })
+    }
+
+    /// Re-derive the DAO singleton statistics and patch the live tip's daily
+    /// snapshot from the committed lifecycle state.
+    ///
+    /// Completed days are NOT touched here: they are materialized exact inside
+    /// the atomic batch that writes them (see
+    /// `exact_dao_snapshot_compensation_with_staged`). This pass only owns the
+    /// incomplete tip day, which every subsequent batch rewrites anyway, plus
+    /// the tip-scoped `DaoLatestStatistics` / `DaoTopDepositors` singletons.
     pub fn refresh_latest_dao_statistics(&self) -> Result<()> {
+        self.refresh_dao_statistics()
+    }
+
+    fn refresh_dao_statistics(&self) -> Result<()> {
         let Some((tip_block_number, header)) = self.store.get_sync_tip_block()? else {
             return Ok(());
         };
@@ -877,101 +1047,61 @@ impl BatchWriter {
         let mut pending_withdrawal_capacity: i128 = 0;
         let mut unique_depositors: HashSet<Vec<u8>> = HashSet::new();
         let mut active_deposits = 0i32;
-        let mut total_compensation_paid: i128 = 0;
-        let mut unclaimed_compensation: i128 = 0;
         let mut depositor_map: HashMap<Vec<u8>, (i128, i32, f64)> = HashMap::new();
-        let mut unmade_active_compensation: u128 = 0;
         let mut weighted_deposit_days: f64 = 0.0;
         let mut avg_total_capacity: i128 = 0;
         let mut status1_for_avg: Vec<(i64, i64, i64)> = Vec::new();
 
         for scan_status in [0i16, 1] {
-            self.store.scan_dao_deposits_by_status(scan_status, |_, entry| {
-                active_deposits += 1;
+            self.store
+                .scan_dao_deposits_by_status(scan_status, |_, entry| {
+                    active_deposits += 1;
 
-                // Status-specific accounting
-                if entry.status == 1 {
-                    pending_withdrawal_capacity += entry.capacity as i128;
-                    if let Some(request_block) = entry.withdraw_request_block {
-                        status1_for_avg.push((
-                            entry.capacity,
-                            entry.deposit_timestamp,
-                            request_block,
-                        ));
+                    // Status-specific accounting
+                    if entry.status == 1 {
+                        pending_withdrawal_capacity += entry.capacity as i128;
+                        if let Some(request_block) = entry.withdraw_request_block {
+                            status1_for_avg.push((
+                                entry.capacity,
+                                entry.deposit_timestamp,
+                                request_block,
+                            ));
+                        }
+                    } else {
+                        // Only status=0 deposits count toward total_deposited,
+                        // unique_depositors, depositor_map, and avg deposit time —
+                        // matching CKB explorer convention which subtracts from
+                        // total_deposit at phase-1 withdrawal.
+                        total_deposited += entry.capacity as i128;
+                        unique_depositors.insert(entry.lock_script_hash.clone());
+
+                        let dm = depositor_map
+                            .entry(entry.lock_script_hash.clone())
+                            .or_insert((0, 0, 0.0));
+                        dm.0 += entry.capacity as i128;
+                        dm.1 += 1;
+                        dm.2 += (tip_timestamp - entry.deposit_timestamp) as f64;
+
+                        let held_ms = tip_timestamp - entry.deposit_timestamp;
+                        let days_held = held_ms as f64 / 86_400_000.0;
+                        weighted_deposit_days += entry.capacity as f64 * days_held;
+                        avg_total_capacity += entry.capacity as i128;
                     }
-                } else {
-                    // Only status=0 deposits count toward total_deposited,
-                    // unique_depositors, depositor_map, and avg deposit time —
-                    // matching CKB explorer convention which subtracts from
-                    // total_deposit at phase-1 withdrawal.
-                    total_deposited += entry.capacity as i128;
-                    unique_depositors.insert(entry.lock_script_hash.clone());
 
-                    let dm = depositor_map
-                        .entry(entry.lock_script_hash.clone())
-                        .or_insert((0, 0, 0.0));
-                    dm.0 += entry.capacity as i128;
-                    dm.1 += 1;
-                    dm.2 += (tip_timestamp - entry.deposit_timestamp) as f64;
-
-                    let held_ms = tip_timestamp - entry.deposit_timestamp;
-                    let days_held = held_ms as f64 / 86_400_000.0;
-                    weighted_deposit_days += entry.capacity as f64 * days_held;
-                    avg_total_capacity += entry.capacity as i128;
-                }
-
-                // Compensation accrues for both status=0 and status=1 deposits
-                // (both are still locked in the DAO contract).
-                let ar_deposit = u64::try_from(entry.deposit_ar).map_err(|_| {
-                    anyhow!(
-                        "invalid negative DAO deposit AR while refreshing latest dao statistics: deposit_block={}, lock_script_hash=0x{}, deposit_ar={}",
-                        entry.deposit_block_number,
-                        hex::encode(&entry.lock_script_hash),
-                        entry.deposit_ar
-                    )
+                    Ok(())
                 })?;
-                // Per RFC-0023, status=1 compensation is locked at withdraw_request_ar;
-                // status=0 continues to accrue at tip_ar.
-                let effective_ar = if entry.status == 1 {
-                    let ar_i64 = entry.withdraw_request_ar.ok_or_else(|| {
-                        anyhow!(
-                            "status=1 deposit missing withdraw_request_ar: deposit_block={}, lock_hash=0x{}",
-                            entry.deposit_block_number,
-                            hex::encode(&entry.lock_script_hash)
-                        )
-                    })?;
-                    u64::try_from(ar_i64).map_err(|_| {
-                        anyhow!(
-                            "status=1 deposit withdraw_request_ar exceeds u64: deposit_block={}, ar={}",
-                            entry.deposit_block_number,
-                            ar_i64
-                        )
-                    })?
-                } else {
-                    tip_ar
-                };
-                if ar_deposit > 0 && effective_ar > ar_deposit {
-                    let compensation = calculate_dao_compensation_from_ar(
-                        entry.capacity,
-                        ar_deposit,
-                        effective_ar,
-                    )?;
-                    unclaimed_compensation += compensation as i128;
-                    if entry.status == 0 {
-                        unmade_active_compensation += compensation as u128;
-                    }
-                }
-
-                Ok(())
-            })?;
         }
 
-        self.store.scan_dao_deposits_by_status(2, |_, entry| {
-            if let Some(comp) = entry.compensation {
-                total_compensation_paid += comp as i128;
-            }
-            Ok(())
-        })?;
+        let exact_tip = self.exact_dao_snapshot_compensation_with_staged(
+            tip_block_number,
+            tip_ar,
+            i128::from(tip_s),
+            &HashMap::new(),
+            &HashMap::new(),
+        )?;
+        let total_compensation_paid = exact_tip.breakdown.claimed;
+        let unclaimed_compensation = exact_tip.breakdown.unclaimed;
+        let deposit_compensation_total = exact_tip.total;
 
         // Resolve status-1 deposit timestamps from block headers for capacity-weighted average.
         for &(capacity, deposit_ts, request_block) in &status1_for_avg {
@@ -984,40 +1114,33 @@ impl BatchWriter {
             }
         }
 
-        let latest_snapshot = self.store.get_latest_dao_daily_snapshot()?;
-        let estimated_apc = estimated_apc_from_header(&header).unwrap_or_default();
-        let (mining_reward, deposit_compensation, burnt) = if let Some(s) = latest_snapshot.as_ref()
-        {
-            if s.cum_miner_secondary < 0 {
+        let latest_snapshot = match self.store.get_latest_dao_daily_snapshot()? {
+            Some(snapshot) => snapshot,
+            None if tip_block_number == 0 => {
+                // Startup cleanup can leave only the canonical genesis header.
+                // No post-genesis DAO snapshot exists yet; the first forward
+                // batch creates it before this refresh is required.
+                return Ok(());
+            }
+            None => {
                 bail!(
-                    "negative cum_miner_secondary in dao_daily_snapshots while refreshing latest dao statistics for {}: {}",
-                    s.date,
-                    s.cum_miner_secondary
+                    "missing DAO daily snapshot while refreshing latest statistics: tip_block={}",
+                    tip_block_number
                 );
             }
-            if s.cum_dao_compensation < 0 {
-                bail!(
-                    "negative cum_dao_compensation in dao_daily_snapshots while refreshing latest dao statistics for {}: {}",
-                    s.date,
-                    s.cum_dao_compensation
-                );
-            }
-            // Use tip S-field and live unmade computation for explorer-compatible treasury.
-            let treasury_from_s = tip_s as i128 - unmade_active_compensation as i128;
-            if treasury_from_s < 0 {
-                bail!(
-                    "negative treasury_from_s in latest dao statistics: tip_s={}, unmade_active_compensation={}, block={}",
-                    tip_s, unmade_active_compensation, tip_block_number
-                );
-            }
-            (
-                s.cum_miner_secondary,
-                s.cum_dao_compensation,
-                treasury_from_s,
-            )
-        } else {
-            (0, 0, 0)
         };
+        let estimated_apc =
+            estimated_apc_from_header(&header, self.genesis_total_issuance()?).unwrap_or_default();
+        if latest_snapshot.cum_miner_secondary < 0 {
+            bail!(
+                "negative cum_miner_secondary in dao_daily_snapshots while refreshing latest dao statistics for {}: {}",
+                latest_snapshot.date,
+                latest_snapshot.cum_miner_secondary
+            );
+        }
+        let burnt = exact_tip.treasury;
+        let mining_reward = latest_snapshot.cum_miner_secondary;
+        let deposit_compensation = deposit_compensation_total;
 
         let avg_days = if avg_total_capacity > 0 {
             weighted_deposit_days / avg_total_capacity as f64
@@ -1079,22 +1202,17 @@ impl BatchWriter {
             dao_batch.put_stats(&top_key, &top_value);
         }
 
-        // Update today's dao daily snapshot with the latest unclaimed compensation
-        // and unmade_dao_interests.  The snapshot's unmade_dao_interests was computed
-        // by scanning the store BEFORE the batch commit, so it lags by one batch.
-        // Patching it here (post-commit) ensures the chart's treasury computation
-        // (secondary_pool - unmade_dao_interests) matches the stats endpoint's
-        // live computation (tip_s - unmade_active_compensation).
-        if let Some(mut today_snapshot) = self.store.get_latest_dao_daily_snapshot()? {
-            today_snapshot.unclaimed_compensation = unclaimed_compensation;
-            today_snapshot.unmade_dao_interests = unmade_active_compensation as i128;
-            today_snapshot.secondary_pool = tip_s as i128;
-            let date_key = today_snapshot.date.replace('-', "");
-            let snap_key =
-                keys::encode_stats_key(keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT, date_key.as_bytes());
-            let snap_value = bincode::serialize(&today_snapshot)?;
-            dao_batch.put_stats(&snap_key, &snap_value);
-        }
+        // Re-evaluate the incomplete tip day at the committed sync tip. The tip
+        // day is still accumulating, so every subsequent batch rewrites it; when
+        // it finally completes, the batch that crosses the day boundary writes
+        // its exact end-of-day values atomically and this pass never revisits it.
+        let mut today_snapshot = latest_snapshot;
+        exact_tip.apply_to(&mut today_snapshot);
+        let date_key = today_snapshot.date.replace('-', "");
+        let snap_key =
+            keys::encode_stats_key(keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT, date_key.as_bytes());
+        let snap_value = bincode::serialize(&today_snapshot)?;
+        dao_batch.put_stats(&snap_key, &snap_value);
 
         dao_batch.commit()?;
 
@@ -1110,11 +1228,16 @@ fn extract_ar_from_dao_field(dao: &[u8]) -> Option<u64> {
     Some(u64::from_le_bytes(bytes))
 }
 
-fn estimated_apc_from_header(header: &CachedBlockHeader) -> Option<String> {
+fn estimated_apc_from_header(header: &CachedBlockHeader, genesis_issuance: i128) -> Option<String> {
     if header.epoch_length == 0 {
         return None;
     }
-    let apc = calculate_estimated_apc(header.epoch_number, header.epoch_index, header.epoch_length);
+    let apc = calculate_estimated_apc(
+        header.epoch_number,
+        header.epoch_index,
+        header.epoch_length,
+        genesis_issuance,
+    );
     (apc > 0.0).then(|| format!("{:.2}", apc))
 }
 
@@ -1129,13 +1252,17 @@ fn format_days(days: f64) -> String {
 }
 
 /// Calculates knowledge_size from DAO field bytes.
-pub fn calculate_knowledge_size(dao_field: &[u8]) -> Option<i128> {
-    const BURN_ADJUSTMENT: i128 = 504_000_000_000_000_000;
-
+///
+/// `virtual_occupied` is the genesis-derived burn adjustment sourced from the
+/// persisted `GenesisBaseline` (`GenesisBaseline::virtual_occupied`). It is
+/// subtracted from the DAO `U` field so mainnet and testnet share one single
+/// calculation path with a network-correct constant instead of a hardcoded
+/// mainnet-only literal.
+pub fn calculate_knowledge_size(dao_field: &[u8], virtual_occupied: i128) -> Option<i128> {
     if dao_field.len() >= 32 {
         let bytes: [u8; 8] = dao_field[24..32].try_into().ok()?;
         let u_field = u64::from_le_bytes(bytes) as i128;
-        Some(u_field - BURN_ADJUSTMENT)
+        Some(u_field - virtual_occupied)
     } else {
         None
     }
@@ -1150,13 +1277,27 @@ mod tests {
 
     const BURN_ADJUSTMENT: i128 = 504_000_000_000_000_000;
 
+    /// Seed the genesis baseline the indexer always derives at block 0. Refresh
+    /// paths that compute estimated APC read `GenesisBaseline::total_issuance`,
+    /// so tests exercising them must seed it first. Values mirror mainnet genesis.
+    fn seed_test_genesis_baseline(store: &Arc<CkbadgerStore>) {
+        store
+            .set_genesis_baseline(&ckbadger_store::GenesisBaseline {
+                // Exact mainnet genesis DAO `C` (not the rounded 33.6B).
+                total_issuance: 3_360_000_145_238_488_200,
+                burnt: 840_000_000_000_000_000,
+                virtual_occupied: 504_000_000_000_000_000,
+            })
+            .unwrap();
+    }
+
     #[test]
     fn test_calculate_knowledge_size_extracts_u_field() {
         let mut dao = vec![0u8; 32];
         let u_value: u64 = 600_000_000_000_000_000;
         dao[24..32].copy_from_slice(&u_value.to_le_bytes());
 
-        let result = calculate_knowledge_size(&dao);
+        let result = calculate_knowledge_size(&dao, BURN_ADJUSTMENT);
         assert!(result.is_some());
         let expected = u_value as i128 - BURN_ADJUSTMENT;
         assert_eq!(result.unwrap(), expected);
@@ -1166,10 +1307,10 @@ mod tests {
     #[test]
     fn test_calculate_knowledge_size_returns_none_for_short_dao() {
         let short_dao = vec![0u8; 24];
-        assert!(calculate_knowledge_size(&short_dao).is_none());
+        assert!(calculate_knowledge_size(&short_dao, BURN_ADJUSTMENT).is_none());
 
         let empty_dao: Vec<u8> = vec![];
-        assert!(calculate_knowledge_size(&empty_dao).is_none());
+        assert!(calculate_knowledge_size(&empty_dao, BURN_ADJUSTMENT).is_none());
     }
 
     #[test]
@@ -1178,7 +1319,7 @@ mod tests {
         let u_value: u64 = BURN_ADJUSTMENT as u64;
         dao[24..32].copy_from_slice(&u_value.to_le_bytes());
 
-        let result = calculate_knowledge_size(&dao);
+        let result = calculate_knowledge_size(&dao, BURN_ADJUSTMENT);
         assert_eq!(result, Some(0));
     }
 
@@ -1195,6 +1336,7 @@ mod tests {
                 &outpoint_a,
                 &DaoDepositCacheEntry {
                     capacity: 100,
+                    occupied_capacity: 0,
                     deposit_block_number: 10,
                     deposit_timestamp: 0,
                     lock_script_hash: vec![0xAA; 32],
@@ -1206,6 +1348,7 @@ mod tests {
                     withdraw_request_ar: Some(2),
                     withdraw_block: Some(25),
                     withdraw_tx: Some(vec![0x02; 32]),
+                    withdraw_request_occupied_capacity: Some(0),
                     withdraw_to_output_index: Some(0),
                     compensation: Some(1),
                 },
@@ -1219,6 +1362,7 @@ mod tests {
                 &outpoint_b,
                 &DaoDepositCacheEntry {
                     capacity: 200,
+                    occupied_capacity: 0,
                     deposit_block_number: 15,
                     deposit_timestamp: 0,
                     lock_script_hash: vec![0xBB; 32],
@@ -1230,6 +1374,7 @@ mod tests {
                     withdraw_request_ar: None,
                     withdraw_block: None,
                     withdraw_tx: None,
+                    withdraw_request_occupied_capacity: None,
                     withdraw_to_output_index: None,
                     compensation: None,
                 },
@@ -1273,6 +1418,7 @@ mod tests {
     fn test_refresh_latest_dao_statistics_persists_latest_entry() {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        seed_test_genesis_baseline(&store);
         let writer = BatchWriter::new(store.clone(), store.clone());
 
         // AR = 2, S = 130 CKB.
@@ -1294,6 +1440,9 @@ mod tests {
                 dao,
                 transactions_count: 1,
                 uncles_count: 0,
+                proposals_count: 0,
+                compact_target: 0,
+                miner_lock_hash: None,
                 cycles: None,
             },
         );
@@ -1301,6 +1450,7 @@ mod tests {
             &keys::encode_outpoint(&[0xAA; 32], 0),
             &DaoDepositCacheEntry {
                 capacity: 200_00000000,
+                occupied_capacity: 102_00000000,
                 deposit_block_number: 10,
                 deposit_timestamp: 1_700_000_000_000, // same as tip => 0 days held
                 lock_script_hash: vec![0x01; 32],
@@ -1312,6 +1462,7 @@ mod tests {
                 withdraw_request_ar: None,
                 withdraw_block: None,
                 withdraw_tx: None,
+                withdraw_request_occupied_capacity: None,
                 withdraw_to_output_index: None,
                 compensation: None,
             },
@@ -1320,19 +1471,21 @@ mod tests {
             &keys::encode_outpoint(&[0xBB; 32], 0),
             &DaoDepositCacheEntry {
                 capacity: 300_00000000,
-                deposit_block_number: 9,
+                occupied_capacity: 102_00000000,
+                deposit_block_number: 5,
                 deposit_timestamp: 1_699_999_000_000,
                 lock_script_hash: vec![0x02; 32],
                 deposit_ar: 1,
                 status: 2,
                 withdraw_request_tx: Some(vec![0x03; 32]),
                 withdraw_request_output_index: Some(0),
-                withdraw_request_block: Some(10),
+                withdraw_request_block: Some(8),
                 withdraw_request_ar: Some(2),
-                withdraw_block: Some(10),
+                withdraw_block: Some(9),
                 withdraw_tx: Some(vec![0x04; 32]),
+                withdraw_request_occupied_capacity: Some(102_00000000),
                 withdraw_to_output_index: Some(0),
-                compensation: Some(123_00000000),
+                compensation: Some(198_00000000),
             },
         );
 
@@ -1369,25 +1522,396 @@ mod tests {
         assert_eq!(latest.total_deposited, 200_00000000);
         assert_eq!(latest.total_depositors, 1);
         assert_eq!(latest.active_deposits, 1);
-        assert_eq!(latest.total_compensation_paid, 123_00000000);
+        assert_eq!(latest.total_compensation_paid, 198_00000000);
         assert_eq!(latest.unclaimed_compensation, 98_00000000);
         assert_eq!(latest.average_deposit_days, "0 days");
         assert!(!latest.estimated_apc.is_empty());
         assert_eq!(latest.mining_reward, 10_00000000);
-        assert_eq!(latest.deposit_compensation, 20_00000000);
+        assert_eq!(latest.deposit_compensation, 296_00000000);
         assert_eq!(latest.burnt, 32_00000000);
 
         // Verify snapshot's unmade_dao_interests and secondary_pool were patched
         // to the live tip values, ensuring chart and stats agree.
         let patched_snapshot = store.get_latest_dao_daily_snapshot().unwrap().unwrap();
+        assert_eq!(patched_snapshot.compensation, 198_00000000);
+        assert_eq!(patched_snapshot.cum_dao_compensation, 296_00000000);
         assert_eq!(patched_snapshot.unmade_dao_interests, 98_00000000);
         assert_eq!(patched_snapshot.secondary_pool, 130_00000000); // tip_s
+    }
+
+    #[test]
+    fn test_cross_day_refresh_finalizes_previous_snapshot_exactly() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        seed_test_genesis_baseline(&store);
+        let writer = BatchWriter::new(store.clone(), store.clone());
+
+        let previous_date = NaiveDate::from_ymd_opt(2026, 7, 24).unwrap();
+        let tip_date = previous_date + Duration::days(1);
+        let previous_timestamp = DateTime::parse_from_rfc3339("2026-07-24T15:59:59Z")
+            .unwrap()
+            .timestamp_millis();
+        let tip_timestamp = DateTime::parse_from_rfc3339("2026-07-24T16:00:08Z")
+            .unwrap()
+            .timestamp_millis();
+
+        let dao_field = |ar: u64, secondary_pool: u64| {
+            let mut dao = vec![0u8; 32];
+            dao[8..16].copy_from_slice(&ar.to_le_bytes());
+            dao[16..24].copy_from_slice(&secondary_pool.to_le_bytes());
+            dao
+        };
+        let header = |number: i64, timestamp: i64, dao: Vec<u8>| CachedBlockHeader {
+            hash: vec![u8::try_from(number).unwrap(); 32],
+            parent_hash: vec![0u8; 32],
+            timestamp,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao,
+            transactions_count: 1,
+            uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
+            cycles: None,
+        };
+        let snapshot = |date: NaiveDate| DaoDailySnapshot {
+            date: date.format("%Y-%m-%d").to_string(),
+            total_deposited: 202_00000000,
+            depositors_count: 1,
+            new_deposits: 1,
+            withdrawals: 0,
+            compensation: 0,
+            cumulative_deposit_amount: 202_00000000,
+            total_issuance: 9_000_000_000i128 * 100_000_000i128,
+            secondary_pool: 0,
+            occupied_capacity: 0,
+            cum_miner_secondary: 0,
+            cum_dao_compensation: 0,
+            cum_treasury: 0,
+            unclaimed_compensation: 0,
+            unmade_dao_interests: 0,
+            cumulative_depositors: 1,
+            daily_depositor_addresses: 0,
+            protocol_deposited: Some(202_00000000),
+        };
+
+        let mut seed = StoreBatch::new(&store);
+        seed.put_block_header(
+            10,
+            &header(10, previous_timestamp, dao_field(200, 300_00000000)),
+        );
+        seed.put_block_header(11, &header(11, tip_timestamp, dao_field(300, 500_00000000)));
+        seed.put_dao_deposit(
+            &keys::encode_outpoint(&[0xAA; 32], 0),
+            &DaoDepositCacheEntry {
+                capacity: 202_00000000,
+                occupied_capacity: 102_00000000,
+                deposit_block_number: 1,
+                deposit_timestamp: previous_timestamp - 86_400_000,
+                lock_script_hash: vec![0x01; 32],
+                deposit_ar: 100,
+                status: 0,
+                withdraw_request_tx: None,
+                withdraw_request_output_index: None,
+                withdraw_request_block: None,
+                withdraw_request_ar: None,
+                withdraw_block: None,
+                withdraw_tx: None,
+                withdraw_request_occupied_capacity: None,
+                withdraw_to_output_index: None,
+                compensation: None,
+            },
+        );
+        for date in [previous_date, tip_date] {
+            let key = keys::encode_stats_key(
+                keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT,
+                date.format("%Y%m%d").to_string().as_bytes(),
+            );
+            seed.put_stats(&key, &bincode::serialize(&snapshot(date)).unwrap());
+        }
+        seed.commit().unwrap();
+
+        // One atomic batch, exactly as the live cross-day path builds it: the
+        // completed day is materialized from the exact lifecycle before the
+        // commit, the tip day keeps its carried-forward placeholders.
+        let mut batch = StoreBatch::new(&store);
+        let mut completed_input = placeholder_snapshot_input();
+        writer
+            .apply_exact_completed_dao_snapshot(
+                DaoSnapshotBoundary {
+                    date: previous_date,
+                    end_block: 10,
+                },
+                200,
+                300_00000000,
+                &HashMap::new(),
+                &HashMap::new(),
+                &mut completed_input,
+            )
+            .unwrap();
+        writer
+            .update_dao_daily_snapshot(previous_date, &completed_input, &mut batch)
+            .unwrap();
+        writer
+            .update_dao_daily_snapshot(tip_date, &placeholder_snapshot_input(), &mut batch)
+            .unwrap();
+        batch.commit().unwrap();
+
+        // No separate refresh step has run: the completed day must already be
+        // exact the instant its row exists.
+        let previous = store.get_dao_daily_snapshot("20260724").unwrap().unwrap();
+        assert_eq!(
+            previous.cum_dao_compensation, 100_00000000,
+            "the completed day must be exact in the same commit that writes it"
+        );
+        assert_eq!(previous.unclaimed_compensation, 100_00000000);
+        assert_eq!(previous.unmade_dao_interests, 100_00000000);
+        assert_eq!(previous.cum_treasury, 200_00000000);
+        assert_eq!(previous.secondary_pool, 300_00000000);
+
+        writer.refresh_latest_dao_statistics().unwrap();
+
+        let latest = store.get_dao_daily_snapshot("20260725").unwrap().unwrap();
+        assert_eq!(
+            latest.cum_dao_compensation, 200_00000000,
+            "the current day must still be refreshed at the live tip"
+        );
+
+        let previous_after_refresh = store.get_dao_daily_snapshot("20260724").unwrap().unwrap();
+        assert_eq!(
+            bincode::serialize(&previous_after_refresh).unwrap(),
+            bincode::serialize(&previous).unwrap(),
+            "the tip refresh must not revisit a completed day"
+        );
+    }
+
+    #[test]
+    fn test_completed_dao_snapshot_observes_deposits_staged_in_the_same_batch() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        seed_test_genesis_baseline(&store);
+        let writer = BatchWriter::new(store.clone(), store.clone());
+
+        let completed_date = NaiveDate::from_ymd_opt(2026, 7, 24).unwrap();
+
+        // A deposit created by the very batch that closes this day is not in the
+        // committed store yet, so a pre-commit store scan alone would miss it.
+        let staged_deposit = DaoDepositCacheEntry {
+            capacity: 202_00000000,
+            occupied_capacity: 102_00000000,
+            deposit_block_number: 7,
+            deposit_timestamp: 0,
+            lock_script_hash: vec![0x01; 32],
+            deposit_ar: 100,
+            status: 0,
+            withdraw_request_tx: None,
+            withdraw_request_output_index: None,
+            withdraw_request_block: None,
+            withdraw_request_ar: None,
+            withdraw_block: None,
+            withdraw_tx: None,
+            withdraw_request_occupied_capacity: None,
+            withdraw_to_output_index: None,
+            compensation: None,
+        };
+        let mut staged_entries = HashMap::new();
+        staged_entries.insert(
+            keys::encode_outpoint(&[0xAA; 32], 0).to_vec(),
+            staged_deposit,
+        );
+
+        let mut without_overlay = placeholder_snapshot_input();
+        writer
+            .apply_exact_completed_dao_snapshot(
+                DaoSnapshotBoundary {
+                    date: completed_date,
+                    end_block: 10,
+                },
+                200,
+                300_00000000,
+                &HashMap::new(),
+                &HashMap::new(),
+                &mut without_overlay,
+            )
+            .unwrap();
+        assert_eq!(
+            without_overlay.cum_dao_compensation, 0,
+            "sanity: the committed store holds no DAO deposits in this fixture"
+        );
+
+        let mut with_overlay = placeholder_snapshot_input();
+        writer
+            .apply_exact_completed_dao_snapshot(
+                DaoSnapshotBoundary {
+                    date: completed_date,
+                    end_block: 10,
+                },
+                200,
+                300_00000000,
+                &staged_entries,
+                &HashMap::new(),
+                &mut with_overlay,
+            )
+            .unwrap();
+
+        // free = 202 - 102 = 100 CKB; compensation = 100 * 200/100 - 100 = 100 CKB.
+        assert_eq!(with_overlay.cum_dao_compensation, 100_00000000);
+        assert_eq!(with_overlay.unclaimed_compensation, 100_00000000);
+        assert_eq!(with_overlay.unmade_dao_interests, 100_00000000);
+        assert_eq!(with_overlay.cum_treasury, 200_00000000);
+        assert_eq!(with_overlay.total_compensation, 0);
+    }
+
+    #[test]
+    fn test_completed_dao_snapshot_claims_completions_staged_in_the_same_batch() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        seed_test_genesis_baseline(&store);
+        let writer = BatchWriter::new(store.clone(), store.clone());
+
+        let completed_date = NaiveDate::from_ymd_opt(2026, 7, 24).unwrap();
+        let deposit_outpoint = keys::encode_outpoint(&[0xBB; 32], 0);
+
+        // Committed phase-1 deposit: frozen at request AR 200.
+        // free = 202 - 102 = 100 CKB; frozen = 100 * 200/100 - 100 = 100 CKB.
+        let mut seed = StoreBatch::new(&store);
+        seed.put_dao_deposit(
+            &deposit_outpoint,
+            &DaoDepositCacheEntry {
+                capacity: 202_00000000,
+                occupied_capacity: 102_00000000,
+                deposit_block_number: 1,
+                deposit_timestamp: 0,
+                lock_script_hash: vec![0x02; 32],
+                deposit_ar: 100,
+                status: 1,
+                withdraw_request_tx: Some(vec![0x03; 32]),
+                withdraw_request_output_index: Some(0),
+                withdraw_request_block: Some(5),
+                withdraw_request_ar: Some(200),
+                withdraw_block: None,
+                withdraw_tx: None,
+                withdraw_request_occupied_capacity: Some(102_00000000),
+                withdraw_to_output_index: None,
+                compensation: None,
+            },
+        );
+        seed.commit().unwrap();
+
+        // Without the staged completion the frozen value is still unclaimed.
+        let mut pending = placeholder_snapshot_input();
+        writer
+            .apply_exact_completed_dao_snapshot(
+                DaoSnapshotBoundary {
+                    date: completed_date,
+                    end_block: 10,
+                },
+                400,
+                300_00000000,
+                &HashMap::new(),
+                &HashMap::new(),
+                &mut pending,
+            )
+            .unwrap();
+        assert_eq!(pending.unclaimed_compensation, 100_00000000);
+        assert_eq!(pending.total_compensation, 0);
+        assert_eq!(pending.cum_dao_compensation, 100_00000000);
+
+        // The same batch stages the phase-2 completion at block 8, so by the end
+        // of this day the frozen value is claimed, not unclaimed.
+        let mut staged_completions = HashMap::new();
+        staged_completions.insert(deposit_outpoint.to_vec(), (8i64, vec![0x04; 32]));
+
+        let mut claimed = placeholder_snapshot_input();
+        writer
+            .apply_exact_completed_dao_snapshot(
+                DaoSnapshotBoundary {
+                    date: completed_date,
+                    end_block: 10,
+                },
+                400,
+                300_00000000,
+                &HashMap::new(),
+                &staged_completions,
+                &mut claimed,
+            )
+            .unwrap();
+        assert_eq!(
+            claimed.total_compensation, 100_00000000,
+            "a completion staged in this batch must be claimed by the day it closes"
+        );
+        assert_eq!(claimed.unclaimed_compensation, 0);
+        assert_eq!(claimed.unmade_dao_interests, 0);
+        assert_eq!(
+            claimed.cum_dao_compensation, 100_00000000,
+            "the cumulative total is unchanged by the claimed/unclaimed split"
+        );
+        assert_eq!(claimed.cum_treasury, 300_00000000);
+    }
+
+    #[test]
+    fn test_completed_dao_snapshot_fails_fast_on_a_completion_without_a_committed_deposit() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        seed_test_genesis_baseline(&store);
+        let writer = BatchWriter::new(store.clone(), store.clone());
+
+        let mut staged_completions = HashMap::new();
+        staged_completions.insert(
+            keys::encode_outpoint(&[0xCC; 32], 0).to_vec(),
+            (8i64, vec![0x04; 32]),
+        );
+
+        let mut input = placeholder_snapshot_input();
+        let error = writer
+            .apply_exact_completed_dao_snapshot(
+                DaoSnapshotBoundary {
+                    date: NaiveDate::from_ymd_opt(2026, 7, 24).unwrap(),
+                    end_block: 10,
+                },
+                200,
+                300_00000000,
+                &HashMap::new(),
+                &staged_completions,
+                &mut input,
+            )
+            .unwrap_err();
+        assert!(
+            format!("{error:#}").contains("staged DAO completion refers to an uncommitted deposit"),
+            "unexpected error: {error:#}"
+        );
+    }
+
+    /// The carried-forward values a batch stages before any exact evaluation.
+    fn placeholder_snapshot_input() -> DaoSnapshotInput {
+        DaoSnapshotInput {
+            total_deposited: 202_00000000,
+            depositors_count: 1,
+            total_deposit_count: 1,
+            total_withdrawal_count: 0,
+            total_compensation: 0,
+            cumulative_deposit_amount: 202_00000000,
+            total_issuance: 9_000_000_000i128 * 100_000_000i128,
+            secondary_pool: 0,
+            occupied_capacity: 0,
+            cum_miner_secondary: 0,
+            cum_dao_compensation: 0,
+            cum_treasury: 0,
+            unmade_dao_interests: 0,
+            unclaimed_compensation: 0,
+            cumulative_depositors: 1,
+            daily_depositor_addresses: 0,
+            protocol_deposited: Some(202_00000000),
+        }
     }
 
     #[test]
     fn test_refresh_dao_statistics_excludes_status1_from_explorer_totals() {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        seed_test_genesis_baseline(&store);
         let writer = BatchWriter::new(store.clone(), store.clone());
 
         // Tip block: AR=4, S=200 CKB, timestamp = day 10
@@ -1408,6 +1932,9 @@ mod tests {
                 dao,
                 transactions_count: 1,
                 uncles_count: 0,
+                proposals_count: 0,
+                compact_target: 0,
+                miner_lock_hash: None,
                 cycles: None,
             },
         );
@@ -1425,6 +1952,9 @@ mod tests {
                 dao: vec![0u8; 32],
                 transactions_count: 1,
                 uncles_count: 0,
+                proposals_count: 0,
+                compact_target: 0,
+                miner_lock_hash: None,
                 cycles: None,
             },
         );
@@ -1437,6 +1967,7 @@ mod tests {
             &keys::encode_outpoint(&[0xAA; 32], 0),
             &DaoDepositCacheEntry {
                 capacity: 200_00000000,
+                occupied_capacity: 102_00000000,
                 deposit_block_number: 50,
                 deposit_timestamp: tip_timestamp - two_days_ms,
                 lock_script_hash: vec![0x01; 32],
@@ -1448,6 +1979,7 @@ mod tests {
                 withdraw_request_ar: None,
                 withdraw_block: None,
                 withdraw_tx: None,
+                withdraw_request_occupied_capacity: None,
                 withdraw_to_output_index: None,
                 compensation: None,
             },
@@ -1461,6 +1993,7 @@ mod tests {
             &keys::encode_outpoint(&[0xBB; 32], 0),
             &DaoDepositCacheEntry {
                 capacity: 300_00000000,
+                occupied_capacity: 102_00000000,
                 deposit_block_number: 20,
                 deposit_timestamp: tip_timestamp - five_days_ms,
                 lock_script_hash: vec![0x02; 32],
@@ -1472,16 +2005,19 @@ mod tests {
                 withdraw_request_ar: Some(3),
                 withdraw_block: None,
                 withdraw_tx: None,
+                withdraw_request_occupied_capacity: Some(102_00000000),
                 withdraw_to_output_index: None,
                 compensation: None,
             },
         );
 
-        // A completed deposit (status=2) for total_compensation_paid
+        // A completed deposit (status=2) for total_compensation_paid:
+        // free=48 CKB, request/deposit AR=2, so exact compensation=48 CKB.
         seed.put_dao_deposit(
             &keys::encode_outpoint(&[0xCC; 32], 0),
             &DaoDepositCacheEntry {
                 capacity: 150_00000000,
+                occupied_capacity: 102_00000000,
                 deposit_block_number: 5,
                 deposit_timestamp: tip_timestamp - 10 * 86_400_000,
                 lock_script_hash: vec![0x03; 32],
@@ -1493,8 +2029,9 @@ mod tests {
                 withdraw_request_ar: Some(2),
                 withdraw_block: Some(40),
                 withdraw_tx: Some(vec![0x05; 32]),
+                withdraw_request_occupied_capacity: Some(102_00000000),
                 withdraw_to_output_index: Some(0),
-                compensation: Some(50_00000000),
+                compensation: Some(48_00000000),
             },
         );
 
@@ -1535,10 +2072,11 @@ mod tests {
         // 1 unique depositor (only status=0 lock hash 0x01)
         assert_eq!(latest.total_depositors, 1);
         // compensation_paid from the status=2 deposit
-        assert_eq!(latest.total_compensation_paid, 50_00000000);
+        assert_eq!(latest.total_compensation_paid, 48_00000000);
         // unclaimed_compensation: status=0 (tip_ar=4) + status=1 (withdraw_request_ar=3)
         // = 98_00000000 + 99_00000000 = 197_00000000
         assert_eq!(latest.unclaimed_compensation, 197_00000000);
+        assert_eq!(latest.deposit_compensation, 245_00000000);
         // pending_withdrawal_capacity = status=1: 300_00000000
         assert_eq!(latest.pending_withdrawal_capacity, 300_00000000);
         // Capacity-weighted average: status-0 (200 CKB * 2 days) + status-1 (300 CKB * 4 days frozen)
@@ -1635,6 +2173,9 @@ mod tests {
                 dao: vec![0; 32],
                 transactions_count: 1,
                 uncles_count: 0,
+                proposals_count: 0,
+                compact_target: 0,
+                miner_lock_hash: None,
                 cycles: None,
             },
         );
@@ -2016,6 +2557,37 @@ mod epoch_stats_tests {
             "complete epoch must have end_timestamp after update"
         );
     }
+
+    /// Regression (F1): a mid-epoch batch whose epoch row is missing is an
+    /// invariant violation. The writer used to silently fabricate a row whose
+    /// start_block/start_timestamp pointed at the batch start (e.g. a reorg
+    /// replay start), corrupting epoch timing data. It must fail fast instead.
+    #[test]
+    fn mid_epoch_upsert_without_existing_row_fails_fast() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone(), store.clone());
+
+        let mut batch = StoreBatch::new(&store);
+        let err = writer
+            .upsert_epoch_statistics_batch(
+                10,
+                150,
+                160,
+                1800,
+                ts(1_700_000_000),
+                ts(1_700_000_100),
+                10,
+                false,
+                &mut batch,
+            )
+            .expect_err("mid-epoch upsert with no existing row must error");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("epoch") && msg.contains("10"),
+            "error must identify the epoch: {msg}"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -2156,7 +2728,8 @@ mod activity_stats_tests {
                 p.item_deltas = vec![ItemDelta {
                     item_id: vec![0xAA; 32],
                     kind: ITEM_KIND_TOKEN,
-                    delta: 1000,
+                    magnitude: 1000,
+                    negative: false,
                 }];
                 p
             }],
@@ -2178,7 +2751,8 @@ mod activity_stats_tests {
                 p.item_deltas = vec![ItemDelta {
                     item_id: vec![0xBB; 32],
                     kind: ITEM_KIND_OBJECT,
-                    delta: 1,
+                    magnitude: 1,
+                    negative: false,
                 }];
                 p
             }],
@@ -2200,7 +2774,8 @@ mod activity_stats_tests {
                 p.item_deltas = vec![ItemDelta {
                     item_id: vec![0xCC; 32],
                     kind: ITEM_KIND_IDENTITY,
-                    delta: 1,
+                    magnitude: 1,
+                    negative: false,
                 }];
                 p
             }],
@@ -2222,7 +2797,8 @@ mod activity_stats_tests {
                 p.item_deltas = vec![ItemDelta {
                     item_id: vec![0xAA; 32],
                     kind: ITEM_KIND_TOKEN,
-                    delta: 1000,
+                    magnitude: 1000,
+                    negative: false,
                 }];
                 p
             }],

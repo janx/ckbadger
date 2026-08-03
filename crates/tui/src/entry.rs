@@ -1,5 +1,4 @@
 use anyhow::Result;
-use ckbadger_store::StoreRuntimeConfig;
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind},
     execute,
@@ -9,39 +8,26 @@ use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io;
 use std::time::Duration;
 
-use crate::db::{TuiDb, TuiPathConfig};
+use crate::multi::{MultiNetworkDb, TuiNetwork};
 use crate::ui::{self, App};
 
 /// Configuration for starting the TUI.
 /// This is the interface the CLI binary uses to start the TUI.
+#[derive(Debug)]
 pub struct TuiServiceConfig {
-    pub domain_data_path: String,
-    pub append_only_data_path: String,
-    pub ckbadger_workdir: String,
-    pub ckb_workdir: String,
-    pub ckb_db_path: String,
-    pub api_url: String,
+    pub networks: Vec<TuiNetwork>,
     pub refresh_ms: u64,
     pub supervisor_socket_path: Option<String>,
     pub service_log_dir: Option<String>,
-    pub store_runtime_config: StoreRuntimeConfig,
     pub build_version: String,
 }
 
 /// Run the TUI. Blocks until user exits.
 pub async fn run_tui(config: TuiServiceConfig) -> Result<()> {
-    let db = TuiDb::new_with_monitoring(
-        &config.api_url,
-        TuiPathConfig {
-            domain_data_path: &config.domain_data_path,
-            append_only_data_path: &config.append_only_data_path,
-            ckbadger_workdir: &config.ckbadger_workdir,
-            ckb_workdir: &config.ckb_workdir,
-            ckb_db_path: &config.ckb_db_path,
-        },
-        config.supervisor_socket_path.as_deref(),
-        config.service_log_dir.as_deref(),
-        config.store_runtime_config,
+    let db = MultiNetworkDb::new(
+        config.networks,
+        config.supervisor_socket_path,
+        config.service_log_dir,
     )
     .await;
 
@@ -109,6 +95,8 @@ async fn run_app<B: ratatui::backend::Backend>(
                         KeyCode::Char('v') => app.cycle_diagnostics_view_mode(),
                         KeyCode::Char('R') => app.refresh().await,
                         KeyCode::Char('e') => app.toggle_build_subphases(),
+                        KeyCode::Char(']') => app.select_next_network().await,
+                        KeyCode::Char('[') => app.select_prev_network().await,
                         _ => {}
                     }
                 }
@@ -124,35 +112,36 @@ async fn run_app<B: ratatui::backend::Backend>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ckbadger_store::StoreRuntimeConfig;
 
     #[test]
     fn test_tui_service_config_fields() {
         let config = TuiServiceConfig {
-            domain_data_path: "/data/domain".to_string(),
-            append_only_data_path: "/data/append".to_string(),
-            ckbadger_workdir: "/workdir/ckbadger".to_string(),
-            ckb_workdir: "/workdir/ckb".to_string(),
-            ckb_db_path: "/workdir/ckb/data/db".to_string(),
-            api_url: "http://localhost:3001/api/v1".to_string(),
+            networks: vec![TuiNetwork {
+                name: "mainnet".to_string(),
+                domain_data_path: "/data/domain".to_string(),
+                append_only_data_path: "/data/append".to_string(),
+                ckbadger_workdir: "/workdir/ckbadger".to_string(),
+                ckb_workdir: "/workdir/ckb".to_string(),
+                ckb_db_path: "/workdir/ckb/data/db".to_string(),
+                api_url: "http://localhost:3001/api/v1".to_string(),
+                store_runtime_config: StoreRuntimeConfig::default(),
+            }],
             refresh_ms: 500,
             supervisor_socket_path: Some("/run/indexer.sock".to_string()),
             service_log_dir: Some("/run/logs".to_string()),
-            store_runtime_config: StoreRuntimeConfig::default(),
             build_version: "0.1.0@abc123".to_string(),
         };
 
-        assert_eq!(config.domain_data_path, "/data/domain");
-        assert_eq!(config.append_only_data_path, "/data/append");
-        assert_eq!(config.ckbadger_workdir, "/workdir/ckbadger");
-        assert_eq!(config.ckb_workdir, "/workdir/ckb");
-        assert_eq!(config.ckb_db_path, "/workdir/ckb/data/db");
-        assert_eq!(config.api_url, "http://localhost:3001/api/v1");
+        assert_eq!(config.networks.len(), 1);
+        assert_eq!(config.networks[0].name, "mainnet");
+        assert_eq!(config.networks[0].domain_data_path, "/data/domain");
+        assert_eq!(config.networks[0].api_url, "http://localhost:3001/api/v1");
         assert_eq!(config.refresh_ms, 500);
         assert_eq!(
             config.supervisor_socket_path.as_deref(),
             Some("/run/indexer.sock")
         );
         assert_eq!(config.service_log_dir.as_deref(), Some("/run/logs"));
-        assert_eq!(config.store_runtime_config, StoreRuntimeConfig::default());
     }
 }

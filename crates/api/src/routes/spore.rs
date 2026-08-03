@@ -14,7 +14,7 @@ use ckbadger_indexer::parser::{build_dob1_svg, extract_dob1_pattern};
 
 use super::assets::{
     build_nft_item_activities_response, count_nft_collection_activities_cached,
-    decode_activity_cursor, decode_item_id, list_canonical_nft_collection_activities_page,
+    decode_activity_cursor, list_canonical_nft_collection_activities_page,
     normalize_activity_action_filter, MnftItemActivitiesParams, MnftItemActivityResponse,
     NftLifecycleStandard,
 };
@@ -22,7 +22,11 @@ use super::statistics::{StackedAreaChartResponse, StackedAreaDataPoint, StackedA
 use crate::response::{
     default_limit, ok, ApiError, ApiResult, ApiRouteError, CursorPaginatedResponse,
 };
-use crate::utils::{apply_owned_capacity_delta, date_keys_inclusive, parse_chart_date_range};
+use crate::utils::params::parse_optional_block_id_cursor;
+use crate::utils::{
+    apply_owned_capacity_delta, date_keys_inclusive, parse_block_tx_cursor, parse_chart_date_range,
+    parse_hash32,
+};
 use crate::warmup::{CachedAssetEntry, SporeCache};
 use crate::AppState;
 use ckbadger_store::types::SOLE_SPORES_SENTINEL_COLLECTION;
@@ -67,7 +71,32 @@ pub fn routes() -> Router<Arc<AppState>> {
 pub struct ListParams {
     #[serde(default = "default_limit")]
     limit: i64,
-    cursor: Option<i64>,
+    /// Composite `"{created_at_block}:{0x-id}"` cursor
+    /// (see [`parse_optional_block_id_cursor`]).
+    cursor: Option<String>,
+}
+
+/// Decoded position cursor for the spore/cluster lists, which page over
+/// `(created_at_block DESC, id ASC)`.
+pub(super) type BlockIdCursor = (i64, Vec<u8>);
+
+/// One row of the spore cache: `(spore_id, entry)`.
+pub(super) type SporeCacheRow = (Vec<u8>, ckbadger_store::ObjectEntry);
+
+/// Whether the row at `(block, id)` comes strictly after `cursor` in
+/// `(created_at_block DESC, id ASC)` order — i.e. belongs to the next page.
+///
+/// Same-block rows with a greater id are kept: this is exactly what the old
+/// numeric block cursor's strict `created_at_block < cursor` comparison lost,
+/// making blocks with more spores than the page limit impossible to list.
+fn is_after_block_id_cursor(block: i64, id: &[u8], cursor: &BlockIdCursor) -> bool {
+    block < cursor.0 || (block == cursor.0 && id > cursor.1.as_slice())
+}
+
+/// Encode the `nextCursor` naming a row of a `(created_at_block DESC, id ASC)`
+/// list; round-trips through [`parse_optional_block_id_cursor`].
+fn encode_block_id_cursor(block: i64, id: &[u8]) -> String {
+    format!("{}:0x{}", block, hex::encode(id))
 }
 
 #[derive(Debug, Deserialize)]
@@ -117,21 +146,7 @@ fn decode_cluster_holders_cursor(
 fn decode_cluster_activity_cursor(
     raw: &str,
 ) -> Result<(i64, i32), (axum::http::StatusCode, axum::Json<ApiError>)> {
-    let mut parts = raw.split(':');
-    let block = parts
-        .next()
-        .ok_or_else(|| ApiError::bad_request("Invalid cluster activities cursor"))?
-        .parse::<i64>()
-        .map_err(|_| ApiError::bad_request("Invalid cluster activities cursor"))?;
-    let tx_index = parts
-        .next()
-        .ok_or_else(|| ApiError::bad_request("Invalid cluster activities cursor"))?
-        .parse::<i32>()
-        .map_err(|_| ApiError::bad_request("Invalid cluster activities cursor"))?;
-    if parts.next().is_some() {
-        return Err(ApiError::bad_request("Invalid cluster activities cursor"));
-    }
-    Ok((block, tx_index))
+    parse_block_tx_cursor(raw, "cluster activities cursor")
 }
 
 fn normalize_cluster_activity_action_filter(
@@ -152,19 +167,6 @@ fn normalize_cluster_activity_action_filter(
     }
 }
 
-fn parse_fixed_len_hex(
-    raw: &str,
-    expected_len: usize,
-    err_msg: &'static str,
-) -> Result<Vec<u8>, (axum::http::StatusCode, axum::Json<ApiError>)> {
-    let bytes = hex::decode(raw.strip_prefix("0x").unwrap_or(raw))
-        .map_err(|_| ApiError::bad_request(err_msg))?;
-    if bytes.len() != expected_len {
-        return Err(ApiError::bad_request(err_msg));
-    }
-    Ok(bytes)
-}
-
 /// Parse a cluster_id URL parameter. Accepts "sole-spores" alias
 /// or a 32-byte hex string.
 fn parse_cluster_id_param(
@@ -173,11 +175,7 @@ fn parse_cluster_id_param(
     if raw.eq_ignore_ascii_case("sole-spores") {
         return Ok(SOLE_SPORES_SENTINEL_COLLECTION.to_vec());
     }
-    parse_fixed_len_hex(
-        raw,
-        32,
-        "Invalid cluster ID (expected 32-byte hex or 'sole-spores')",
-    )
+    parse_hash32(raw, "cluster ID (expected 32-byte hex or 'sole-spores')")
 }
 
 fn is_sole_spores_sentinel(id: &[u8]) -> bool {
@@ -567,11 +565,11 @@ async fn list_clusters(
     Query(params): Query<ListParams>,
 ) -> ApiResult<CursorPaginatedResponse<ClusterResponse>> {
     let limit = params.limit.clamp(1, 100) as usize;
-    let cursor_block = params.cursor.unwrap_or(i64::MAX);
+    let cursor = parse_optional_block_id_cursor(params.cursor.as_deref(), "cluster list cursor")?;
 
     // Try cached object assets first (Spore entries carry cluster grouping)
     if let Some(cached_objects) = state.load_object_cache() {
-        return serve_clusters_from_cache(cached_objects, cursor_block, limit, &state);
+        return serve_clusters_from_cache(cached_objects, cursor, limit, &state);
     }
 
     Err(state.asset_cache_unavailable("cluster cache unavailable; warmup in progress"))
@@ -579,7 +577,7 @@ async fn list_clusters(
 
 fn serve_clusters_from_cache(
     cached: Vec<CachedAssetEntry>,
-    cursor_block: i64,
+    cursor: Option<BlockIdCursor>,
     limit: usize,
     state: &Arc<AppState>,
 ) -> ApiResult<CursorPaginatedResponse<ClusterResponse>> {
@@ -612,24 +610,29 @@ fn serve_clusters_from_cache(
     let clusters =
         build_cluster_responses_from_cached_entries(cached, &spore_map, &cluster_agg_map);
 
-    let filtered: Vec<_> = clusters
-        .iter()
-        .filter(|c| c.created_at_block < cursor_block)
-        .take(limit + 1)
-        .cloned()
-        .collect();
+    // clusters follow (created_at_block DESC, id ASC); resume strictly after
+    // the cursor row so same-block groups larger than the limit stay listable.
+    let start = match &cursor {
+        None => 0,
+        Some(cur) => clusters
+            .iter()
+            .position(|(id, c)| is_after_block_id_cursor(c.created_at_block, id, cur))
+            .unwrap_or(clusters.len()),
+    };
 
-    let has_more = filtered.len() > limit;
-    let page: Vec<_> = filtered.into_iter().take(limit).collect();
+    let remaining = &clusters[start..];
+    let has_more = remaining.len() > limit;
+    let page = &remaining[..remaining.len().min(limit)];
 
     let next_cursor = if has_more {
-        page.last().map(|c| c.created_at_block.to_string())
+        page.last()
+            .map(|(id, c)| encode_block_id_cursor(c.created_at_block, id))
     } else {
         None
     };
 
     ok(CursorPaginatedResponse::without_total(
-        page,
+        page.iter().map(|(_, c)| c.clone()).collect(),
         limit as i64,
         next_cursor,
     ))
@@ -654,11 +657,13 @@ fn unique_cluster_ids_from_cached_entries(cached: &[CachedAssetEntry]) -> Vec<Ve
     unique_ids
 }
 
+/// Build `(cluster_id_bytes, response)` rows in `(created_at_block DESC,
+/// id ASC)` order — the order the composite pagination cursor resumes in.
 fn build_cluster_responses_from_cached_entries(
     cached: Vec<CachedAssetEntry>,
     spore_map: &HashMap<Vec<u8>, ckbadger_store::ObjectEntry>,
     cluster_agg_map: &HashMap<Vec<u8>, ckbadger_store::ClusterAggregate>,
-) -> Vec<ClusterResponse> {
+) -> Vec<(Vec<u8>, ClusterResponse)> {
     let mut clusters = Vec::new();
 
     for entry in cached {
@@ -671,8 +676,11 @@ fn build_cluster_responses_from_cached_entries(
         let created_at_block = cluster_entry.map(|e| e.created_at_block).unwrap_or(0);
         let description = cluster_entry.and_then(|e| e.description.clone());
         let owner_lock_hash = cluster_entry.and_then(|e| e.owner_lock_hash.clone());
+        // Live count, matching the live-based holders/composition next to it.
+        // The ever-minted total lives on the /assets aggregate surface.
+        let spores_count = cluster_aggregate.map(|a| a.live_count).unwrap_or(0);
 
-        clusters.push(ClusterResponse {
+        let response = ClusterResponse {
             cluster_id: entry.id,
             name: entry.name,
             description,
@@ -681,24 +689,26 @@ fn build_cluster_responses_from_cached_entries(
                 .map(|h| format!("0x{}", hex::encode(h)))
                 .unwrap_or_default(),
             owner_address: None,
-            spores_count: entry.transfers_count as i32, // transfers_count holds spore count for DOB
+            spores_count: spores_count as i32,
             holders_count: cluster_aggregate.map(|a| a.owner_count).unwrap_or(0),
             activities_count: 0,
             created_at_block,
             owned_capacity: None,
             owned_knowledge: None,
-            composition: cluster_composition_from_aggregate(
-                cluster_aggregate,
-                entry.transfers_count,
-            ),
-        });
+            composition: cluster_composition_from_aggregate(cluster_aggregate, spores_count),
+        };
+        clusters.push((cluster_id, response));
     }
 
-    clusters.sort_by(|a, b| b.created_at_block.cmp(&a.created_at_block));
+    clusters.sort_by(|a, b| {
+        b.1.created_at_block
+            .cmp(&a.1.created_at_block)
+            .then_with(|| a.0.cmp(&b.0))
+    });
     clusters
 }
 
-fn load_spore_cache(
+pub(super) fn load_spore_cache(
     state: &AppState,
 ) -> Result<arc_swap::Guard<Arc<Option<SporeCache>>>, ApiRouteError> {
     let guard = state.spore_cache.load();
@@ -862,6 +872,59 @@ async fn get_cluster_activities(
     ))
 }
 
+/// Page over a cluster's member spores — the single row source shared by
+/// `/spore/clusters/{id}/spores` and `/assets/objects/{id}/items`.
+///
+/// `by_cluster` indices follow the cache's `(created_at_block DESC, id ASC)`
+/// total order and cover every member spore regardless of liveness. Resume
+/// happens strictly after the cursor row over the *full* index list (the
+/// resume point is a position, independent of any filter), and `matches` then
+/// selects the rows the caller wants. Returns up to `limit + 1` rows so the
+/// caller can detect "has more" and mint the next cursor.
+pub(super) fn select_cluster_spore_page<'a>(
+    cache: &'a SporeCache,
+    cluster_id: &[u8],
+    limit: usize,
+    cursor: Option<&BlockIdCursor>,
+    matches: impl Fn(&[u8], &ckbadger_store::ObjectEntry) -> bool,
+) -> Vec<&'a SporeCacheRow> {
+    let Some(indices) = cache.by_cluster.get(cluster_id) else {
+        return Vec::new();
+    };
+
+    let start = match cursor {
+        None => 0,
+        Some(cur) => indices
+            .iter()
+            .position(|&i| {
+                let (spore_id, entry) = &cache.all[i];
+                is_after_block_id_cursor(entry.created_at_block, spore_id, cur)
+            })
+            .unwrap_or(indices.len()),
+    };
+
+    indices[start..]
+        .iter()
+        .map(|&i| &cache.all[i])
+        .filter(|(spore_id, entry)| matches(spore_id, entry))
+        .take(limit + 1)
+        .collect()
+}
+
+/// Position key of a cluster member named by its spore id, for callers whose
+/// own cursor contract is a bare item id (`/assets/objects/{id}/items`).
+/// `None` means the id is not a member of this cluster.
+pub(super) fn find_cluster_spore_position(
+    cache: &SporeCache,
+    cluster_id: &[u8],
+    spore_id: &[u8],
+) -> Option<BlockIdCursor> {
+    cache.by_cluster.get(cluster_id)?.iter().find_map(|&i| {
+        let (id, entry) = &cache.all[i];
+        (id.as_slice() == spore_id).then(|| (entry.created_at_block, id.clone()))
+    })
+}
+
 /// Get spores by cluster — served from in-memory SporeCache (zero RocksDB reads).
 async fn get_spores_by_cluster(
     State(state): State<Arc<AppState>>,
@@ -871,35 +934,20 @@ async fn get_spores_by_cluster(
     let id = parse_cluster_id_param(&cluster_id)?;
 
     let limit = params.limit.clamp(1, 100) as usize;
-    let cursor_block = params.cursor.unwrap_or(i64::MAX);
+    let cursor = parse_optional_block_id_cursor(params.cursor.as_deref(), "cluster spores cursor")?;
 
     let guard = load_spore_cache(&state)?;
     let cache = guard.as_ref().as_ref().unwrap();
 
-    // by_cluster indices are already sorted by created_at_block desc (insertion order).
-    // Filter to live spores with created_at_block < cursor_block.
-    let selected: Vec<_> = cache
-        .by_cluster
-        .get(&id)
-        .map(|indices| {
-            indices
-                .iter()
-                .filter(|&&i| {
-                    let entry = &cache.all[i].1;
-                    entry.is_live && entry.created_at_block < cursor_block
-                })
-                .take(limit + 1)
-                .map(|&i| &cache.all[i])
-                .collect()
-        })
-        .unwrap_or_default();
+    let selected =
+        select_cluster_spore_page(cache, &id, limit, cursor.as_ref(), |_, entry| entry.is_live);
 
     let has_more = selected.len() > limit;
     let page: Vec<_> = selected.into_iter().take(limit).collect();
 
     let next_cursor = if has_more {
         page.last()
-            .map(|(_, entry)| entry.created_at_block.to_string())
+            .map(|(spore_id, entry)| encode_block_id_cursor(entry.created_at_block, spore_id))
     } else {
         None
     };
@@ -937,15 +985,25 @@ async fn get_cluster(
         .map_err(|e| ApiError::internal(e.to_string()))?
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    // Read counts from pre-computed aggregate (zero RocksDB scans).
-    let spores_count = cluster_aggregate
-        .as_ref()
-        .map(|agg| agg.total_count)
-        .unwrap_or(0);
-
-    if spores_count == 0 && cluster_entry.is_none() && !is_sole_spores_sentinel(&id) {
+    // Existence is judged on ever-minted history: a fully-melted cluster
+    // still exists, it just has zero live spores.
+    let cluster_exists = cluster_entry.is_some()
+        || cluster_aggregate
+            .as_ref()
+            .is_some_and(|agg| agg.total_count > 0);
+    if !cluster_exists && !is_sole_spores_sentinel(&id) {
         return Err(ApiError::not_found("Cluster not found"));
     }
+
+    // Read counts from pre-computed aggregate (zero RocksDB scans). The
+    // displayed count is the LIVE count: every neighbouring field (items list,
+    // holders, composition) is live-based, and presenting the ever-minted
+    // total here contradicted them. The total remains available on the
+    // /assets aggregate surface as totalCount.
+    let spores_count = cluster_aggregate
+        .as_ref()
+        .map(|agg| agg.live_count)
+        .unwrap_or(0);
 
     let holders_count = cluster_aggregate
         .as_ref()
@@ -1009,16 +1067,25 @@ async fn list_spores(
     Query(params): Query<ListParams>,
 ) -> ApiResult<CursorPaginatedResponse<SporeResponse>> {
     let limit = params.limit.clamp(1, 100) as usize;
-    let cursor_block = params.cursor.unwrap_or(i64::MAX);
+    let cursor = parse_optional_block_id_cursor(params.cursor.as_deref(), "spore list cursor")?;
 
     let guard = load_spore_cache(&state)?;
     let cache = guard.as_ref().as_ref().unwrap();
 
-    let start = cache
-        .live_indices
-        .iter()
-        .position(|&i| cache.all[i].1.created_at_block < cursor_block)
-        .unwrap_or(cache.live_indices.len());
+    // live_indices follow (created_at_block DESC, id ASC); resume strictly
+    // after the cursor row so same-block groups larger than the limit stay
+    // fully listable.
+    let start = match &cursor {
+        None => 0,
+        Some(cur) => cache
+            .live_indices
+            .iter()
+            .position(|&i| {
+                let (spore_id, entry) = &cache.all[i];
+                is_after_block_id_cursor(entry.created_at_block, spore_id, cur)
+            })
+            .unwrap_or(cache.live_indices.len()),
+    };
 
     let selected: Vec<_> = cache.live_indices[start..]
         .iter()
@@ -1031,7 +1098,7 @@ async fn list_spores(
 
     let next_cursor = if has_more {
         page.last()
-            .map(|(_, entry)| entry.created_at_block.to_string())
+            .map(|(spore_id, entry)| encode_block_id_cursor(entry.created_at_block, spore_id))
     } else {
         None
     };
@@ -1052,8 +1119,7 @@ async fn get_spore(
     State(state): State<Arc<AppState>>,
     Path(spore_id): Path<String>,
 ) -> ApiResult<SporeResponse> {
-    let id = hex::decode(spore_id.strip_prefix("0x").unwrap_or(&spore_id))
-        .map_err(|_| ApiError::bad_request("Invalid spore ID"))?;
+    let id = parse_hash32(&spore_id, "spore ID")?;
 
     let store = state.store.clone();
     let id_c = id.clone();
@@ -1099,7 +1165,15 @@ async fn list_spore_item_activities(
 ) -> ApiResult<CursorPaginatedResponse<MnftItemActivityResponse>> {
     let limit = params.limit.clamp(1, 100);
     let action_filter = normalize_activity_action_filter(params.action.as_deref())?;
-    let spore_id_bytes = decode_item_id(&spore_id)?;
+    let spore_id_bytes = parse_hash32(&spore_id, "spore ID")?;
+    // Validated before the existence lookup: request shape is a boundary
+    // concern, so whether a malformed cursor is reported must not depend on
+    // whether the spore happens to exist.
+    let cursor = params
+        .cursor
+        .as_deref()
+        .map(decode_activity_cursor)
+        .transpose()?;
 
     // Verify the spore exists and is not a cluster
     let entry = state
@@ -1111,11 +1185,6 @@ async fn list_spore_item_activities(
         return Err(ApiError::not_found("Spore not found"));
     }
 
-    let cursor = params
-        .cursor
-        .as_deref()
-        .map(decode_activity_cursor)
-        .transpose()?;
     let response = build_nft_item_activities_response(
         &state,
         &spore_id_bytes,
@@ -1131,8 +1200,7 @@ async fn decode_spore(
     State(state): State<Arc<AppState>>,
     Path(spore_id): Path<String>,
 ) -> ApiResult<SporeDobDecodeResponse> {
-    let id = hex::decode(spore_id.strip_prefix("0x").unwrap_or(&spore_id))
-        .map_err(|_| ApiError::bad_request("Invalid spore ID"))?;
+    let id = parse_hash32(&spore_id, "spore ID")?;
 
     let store = state.store.clone();
     let id_c = id.clone();
@@ -1292,8 +1360,7 @@ async fn serve_media(
         ));
     }
 
-    let id = hex::decode(spore_id.strip_prefix("0x").unwrap_or(&spore_id))
-        .map_err(|_| ApiError::bad_request("Invalid spore ID hex"))?;
+    let id = parse_hash32(&spore_id, "spore ID")?;
 
     // 2. Load decoded entry to validate hash membership
     let store = state.store.clone();
@@ -1383,8 +1450,7 @@ async fn render_spore_svg(
     State(state): State<Arc<AppState>>,
     Path(spore_id): Path<String>,
 ) -> Result<Response, (StatusCode, axum::Json<ApiError>)> {
-    let id = hex::decode(spore_id.strip_prefix("0x").unwrap_or(&spore_id))
-        .map_err(|_| ApiError::bad_request("Invalid spore ID hex"))?;
+    let id = parse_hash32(&spore_id, "spore ID")?;
 
     // Load decoded traits
     let store = state.store.clone();
@@ -1568,8 +1634,7 @@ async fn get_spore_capacity_chart(
     let (from_date, to_date) = parse_chart_date_range(params.from.as_deref(), params.to.as_deref())
         .map_err(|msg| ApiError::bad_request(&msg))?;
 
-    let id = hex::decode(spore_id.strip_prefix("0x").unwrap_or(&spore_id))
-        .map_err(|_| ApiError::bad_request("Invalid spore ID"))?;
+    let id = parse_hash32(&spore_id, "spore ID")?;
 
     let store = state.store.clone();
     let id_c = id.clone();
@@ -1636,23 +1701,30 @@ async fn get_spores_by_owner(
     Path(lock_hash): Path<String>,
     Query(params): Query<ListParams>,
 ) -> ApiResult<CursorPaginatedResponse<SporeResponse>> {
-    let hash = hex::decode(lock_hash.strip_prefix("0x").unwrap_or(&lock_hash))
-        .map_err(|_| ApiError::bad_request("Invalid lock script hash"))?;
+    let hash = parse_hash32(&lock_hash, "lock_hash")?;
 
     let limit = params.limit.clamp(1, 100) as usize;
-    let cursor_block = params.cursor.unwrap_or(i64::MAX);
+    let cursor = parse_optional_block_id_cursor(params.cursor.as_deref(), "owner spores cursor")?;
 
     let guard = load_spore_cache(&state)?;
     let cache = guard.as_ref().as_ref().unwrap();
 
+    // by_owner indices follow (created_at_block DESC, id ASC); resume
+    // strictly after the cursor row.
     let selected: Vec<_> = cache
         .by_owner
         .get(&hash)
         .map(|indices| {
-            let start = indices
-                .iter()
-                .position(|&i| cache.all[i].1.created_at_block < cursor_block)
-                .unwrap_or(indices.len());
+            let start = match &cursor {
+                None => 0,
+                Some(cur) => indices
+                    .iter()
+                    .position(|&i| {
+                        let (spore_id, entry) = &cache.all[i];
+                        is_after_block_id_cursor(entry.created_at_block, spore_id, cur)
+                    })
+                    .unwrap_or(indices.len()),
+            };
 
             indices[start..]
                 .iter()
@@ -1667,7 +1739,7 @@ async fn get_spores_by_owner(
 
     let next_cursor = if has_more {
         page.last()
-            .map(|(_, entry)| entry.created_at_block.to_string())
+            .map(|(spore_id, entry)| encode_block_id_cursor(entry.created_at_block, spore_id))
     } else {
         None
     };
@@ -1727,21 +1799,44 @@ mod tests {
 
         assert_eq!(cache.live_indices, vec![0, 2]);
 
-        let cursor_block = i64::MAX;
-        let limit = 1;
+        // Resume strictly after the first live row via the composite cursor.
+        let cursor: BlockIdCursor = (300, vec![0x01; 32]);
         let start = cache
             .live_indices
             .iter()
-            .position(|&i| cache.all[i].1.created_at_block < cursor_block)
+            .position(|&i| {
+                let (spore_id, entry) = &cache.all[i];
+                is_after_block_id_cursor(entry.created_at_block, spore_id, &cursor)
+            })
             .unwrap_or(cache.live_indices.len());
         let selected: Vec<_> = cache.live_indices[start..]
             .iter()
-            .take(limit + 1)
             .map(|&i| &cache.all[i])
             .collect();
-        assert_eq!(selected.len(), 2);
-        assert_eq!(selected[0].1.created_at_block, 300);
-        assert_eq!(selected[1].1.created_at_block, 100);
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].1.created_at_block, 100);
+    }
+
+    #[test]
+    fn test_is_after_block_id_cursor_orders_block_desc_id_asc() {
+        let cursor: BlockIdCursor = (100, vec![0x05; 32]);
+        // Same block, greater id -> next page (the case the old numeric
+        // cursor lost).
+        assert!(is_after_block_id_cursor(100, &[0x06; 32], &cursor));
+        // The cursor row itself and same-block earlier ids are consumed.
+        assert!(!is_after_block_id_cursor(100, &[0x05; 32], &cursor));
+        assert!(!is_after_block_id_cursor(100, &[0x04; 32], &cursor));
+        // Older block -> next page; newer block -> already consumed.
+        assert!(is_after_block_id_cursor(99, &[0x00; 32], &cursor));
+        assert!(!is_after_block_id_cursor(101, &[0xFF; 32], &cursor));
+    }
+
+    #[test]
+    fn test_encode_block_id_cursor_roundtrips_through_parser() {
+        let encoded = encode_block_id_cursor(123, &[0xAB; 32]);
+        assert_eq!(encoded, format!("123:0x{}", "ab".repeat(32)));
+        let parsed = crate::utils::params::parse_block_id_cursor(&encoded, "cursor").unwrap();
+        assert_eq!(parsed, (123, vec![0xAB; 32]));
     }
 
     #[test]
@@ -1865,6 +1960,8 @@ mod tests {
             first_cluster.clone(),
             ckbadger_store::ClusterAggregate {
                 owner_count: 12,
+                total_count: 9,
+                live_count: 4,
                 ..Default::default()
             },
         );
@@ -1872,6 +1969,8 @@ mod tests {
             second_cluster.clone(),
             ckbadger_store::ClusterAggregate {
                 owner_count: 34,
+                total_count: 3,
+                live_count: 3,
                 ..Default::default()
             },
         );
@@ -1879,24 +1978,96 @@ mod tests {
         let clusters =
             build_cluster_responses_from_cached_entries(cached, &spore_map, &cluster_agg_map);
         assert_eq!(clusters.len(), 2);
+        assert_eq!(clusters[0].0, second_cluster);
         assert_eq!(
-            clusters[0].cluster_id,
+            clusters[0].1.cluster_id,
             format!("0x{}", hex::encode(&second_cluster))
         );
-        assert_eq!(clusters[0].created_at_block, 200);
-        assert_eq!(clusters[0].holders_count, 34);
+        assert_eq!(clusters[0].1.created_at_block, 200);
+        assert_eq!(clusters[0].1.holders_count, 34);
+        assert_eq!(clusters[0].1.spores_count, 3);
+        assert_eq!(clusters[1].0, first_cluster);
         assert_eq!(
-            clusters[1].cluster_id,
+            clusters[1].1.cluster_id,
             format!("0x{}", hex::encode(&first_cluster))
         );
-        assert_eq!(clusters[1].created_at_block, 100);
-        assert_eq!(clusters[1].holders_count, 12);
+        assert_eq!(clusters[1].1.created_at_block, 100);
+        assert_eq!(clusters[1].1.holders_count, 12);
+        // The list row count is the LIVE count (4), never the cached
+        // transfers_count masquerade (7) or the ever-minted total (9).
+        assert_eq!(clusters[1].1.spores_count, 4);
+    }
+
+    /// Clusters created in the same block sort by id ascending — the tiebreak
+    /// the composite pagination cursor requires.
+    #[test]
+    fn test_build_cluster_responses_breaks_same_block_ties_by_id() {
+        let cluster_hi = vec![0x22; 32];
+        let cluster_lo = vec![0x11; 32];
+        let cached: Vec<CachedAssetEntry> = [&cluster_hi, &cluster_lo]
+            .iter()
+            .map(|id| CachedAssetEntry {
+                id: format!("0x{}", hex::encode(id)),
+                asset_type: "object".to_string(),
+                standard: "spore".to_string(),
+                name: None,
+                symbol: None,
+                icon_url: None,
+                holders_count: 0,
+                transfers_count: 1,
+                transfers_24h: 0,
+                decimals: None,
+                total_supply: None,
+                maximum_supply: None,
+                content_type: None,
+                content_size: None,
+                cluster_id: None,
+                cluster_name: None,
+                owned_capacity: None,
+                owned_knowledge: None,
+                composition_tier: None,
+                onchain_ratio: None,
+                onchain_count: None,
+                type_code_hash: None,
+                type_hash_type: None,
+                type_args: None,
+                description: None,
+            })
+            .collect();
+
+        let mut spore_map = HashMap::new();
+        for id in [&cluster_hi, &cluster_lo] {
+            spore_map.insert(
+                id.clone(),
+                ckbadger_store::ObjectEntry {
+                    standard: ckbadger_store::ObjectStandard::SporeCluster,
+                    collection_id: None,
+                    token_id: None,
+                    owner_lock_hash: None,
+                    name: None,
+                    description: None,
+                    is_live: true,
+                    created_at_block: 500,
+                    created_at_tx: vec![0xAA; 32],
+                    extra: ckbadger_store::ObjectExtra::SporeCluster,
+                },
+            );
+        }
+
+        let clusters =
+            build_cluster_responses_from_cached_entries(cached, &spore_map, &HashMap::new());
+        assert_eq!(clusters.len(), 2);
+        assert_eq!(clusters[0].0, cluster_lo);
+        assert_eq!(clusters[1].0, cluster_hi);
     }
 
     #[test]
-    fn test_parse_fixed_len_hex_rejects_non_32_bytes() {
-        let err = parse_fixed_len_hex("0x1234", 32, "Invalid cluster ID").unwrap_err();
-        assert_eq!(err.0, axum::http::StatusCode::BAD_REQUEST);
+    fn test_parse_cluster_id_param_rejects_non_32_bytes() {
+        for raw in ["0x1234", &"ab".repeat(31), &"ab".repeat(33)] {
+            let err = parse_cluster_id_param(raw).unwrap_err();
+            assert_eq!(err.0, axum::http::StatusCode::BAD_REQUEST, "raw={raw}");
+            assert!(err.1 .0.message.contains("cluster ID"), "raw={raw}");
+        }
     }
 
     #[test]

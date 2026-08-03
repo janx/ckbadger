@@ -12,6 +12,11 @@ use ckbadger_store::AddressBalance;
 use ckbadger_store::CkbadgerStore;
 use std::sync::Arc;
 
+/// Real mainnet cellbase first witness (block 12,000,000): block parsing
+/// requires every non-genesis cellbase to carry a valid RFC-0022
+/// `CellbaseWitness`.
+const TEST_CELLBASE_WITNESS: &str = "0x7a0000000c00000055000000490000001000000030000000310000009bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce801140000008211f1b938a107cd53b6302cc752a6fc3965638d210000000000000020302e3131332e3020283832383731613320323032342d30312d303929";
+
 fn setup_store() -> Arc<CkbadgerStore> {
     let dir = tempfile::tempdir().unwrap();
     let store = Arc::new(CkbadgerStore::open_domain(dir.path().to_str().unwrap()).unwrap());
@@ -65,7 +70,9 @@ fn bulk_build_address_fixture() -> BlockResponseWithCycles {
             type_: None,
         }],
         outputs_data: vec!["0x".to_string()],
-        witnesses: vec!["0x".to_string()],
+        // Block parsing requires a valid CellbaseWitness in the first tx's
+        // first witness (real mainnet block 12,000,000 vector).
+        witnesses: vec![TEST_CELLBASE_WITNESS.to_string()],
     };
 
     let split_tx = TransactionView {

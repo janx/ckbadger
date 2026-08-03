@@ -3,12 +3,25 @@ description = "RGB++ Lock"
 
 [mainnet]
 [[mainnet.versions]]
+# Code cell 0xcb4d9f9726e66306bfda6359d39d3bea8b4e5345d0f95f26a3e51626ebe82a63:0
+# (node-verified 2026-08-03).
 canonical_ref_hash = "0xbc6c568a1a0d0a09f6844dc9d74ddb4343c32143ff25f727c59edf4fb72d6936"
 version_hash = "0x1c629e18b5b072b44c8befe045ce78ea662bac8dafe614e89629e6b688601324"
 canonical_hash_type = "type"
 
+# The two testnet deployments (BTC Signet and BTC Testnet3) are independent
+# type-id references carrying the SAME bytecode, so both entries share one
+# version_hash (node-verified 2026-08-03: signet code cell
+# 0x61efdedd...:0 and testnet3 code cell 0xf1de59e9...:0 both hash to it).
 [testnet]
 [[testnet.versions]]
+# BTC Signet deployment.
 canonical_ref_hash = "0xd07598deec7ce7b5665310386b4abd06a6d48843e953c5cc2112ad0d5a220364"
+version_hash = "0x7e458568bc12ba00bfb10ec1805a485ee1c14b16f4a6930ce1498e2e36e6374a"
+canonical_hash_type = "type"
+
+[[testnet.versions]]
+# BTC Testnet3 deployment (registry previously had only the Signet variant).
+canonical_ref_hash = "0x61ca7a4796a4eb19ca4f0d065cb9b10ddcf002f10f7cbb810c706cb6bb5c3248"
 version_hash = "0x7e458568bc12ba00bfb10ec1805a485ee1c14b16f4a6930ce1498e2e36e6374a"
 canonical_hash_type = "type"

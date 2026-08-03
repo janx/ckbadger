@@ -11,6 +11,8 @@ use ckbadger_store::types::PositionedCellInfo;
 
 use crate::cache::CacheInvalidator;
 use crate::config::DEEP_FORK_DEPTH;
+use crate::db::writer::cell_distribution::CellDistributionTracker;
+use crate::db::writer::hodl_wave::HodlWaveTracker;
 use crate::rpc::CkbRpcClient;
 
 use super::checked_tx_count;
@@ -21,6 +23,49 @@ use super::indexer::{
     Indexer,
 };
 use super::types::{ReorgAction, TxData};
+
+/// Open a block on the cell-distribution tracker: seal the previous day if this
+/// block starts a new one, then record the block→date transition.
+///
+/// MUST run **before** the block's transactions are applied. A snapshot labelled
+/// day D is the tracker state at the *end* of day D, and the block that triggers
+/// it is the first block of D+1 — its cells belong to D+1's snapshot, not D's.
+/// Sealing after application dated every snapshot one block too late (mainnet
+/// 2026-07-31 gained the 00:00:21 cellbase of 2026-08-01).
+///
+/// The address cohort is sealed here too: it is the same instant of the same
+/// tracker, so the two rows can never drift apart.
+///
+/// Live sync and bulk build share this function; a divergence between them would
+/// make a rebuilt database disagree with an incrementally synced one.
+pub(crate) fn begin_cell_distribution_block(
+    tracker: &mut CellDistributionTracker,
+    block_number: i64,
+    block_date: chrono::NaiveDate,
+) -> Option<(
+    chrono::NaiveDate,
+    ckbadger_store::DailyCellDistribution,
+    ckbadger_store::DailyAddressCohort,
+)> {
+    let sealed = tracker
+        .maybe_snapshot(block_date)
+        .map(|(date, distribution)| (date, distribution, tracker.cohort_snapshot()));
+    tracker.record_block_date(block_number, block_date);
+    sealed
+}
+
+/// Open a block on the HODL wave tracker, with the same end-of-day contract as
+/// [`begin_cell_distribution_block`]: seal first, then record, then apply the
+/// block's transactions.
+pub(crate) fn begin_hodl_wave_block(
+    tracker: &mut HodlWaveTracker,
+    block_number: i64,
+    block_date: chrono::NaiveDate,
+) -> Option<(chrono::NaiveDate, ckbadger_store::DailyHodlWave)> {
+    let sealed = tracker.maybe_snapshot(block_date);
+    tracker.record_block_date(block_number, block_date);
+    sealed
+}
 
 impl Indexer {
     pub(crate) fn reconcile_hodl_tracker_with_tip(&self, tip_block: i64) -> Result<()> {
@@ -35,8 +80,10 @@ impl Indexer {
     /// Prepare HODL wave tracker updates into the provided domain batch.
     ///
     /// Holder count and cell age changes are applied per-tx within the per-block
-    /// loop so that day-boundary snapshots reflect only the state up to that
-    /// block, not the entire batch (matching bulk-build behavior).
+    /// loop, and each block opens with [`begin_hodl_wave_block`], so a
+    /// day-boundary snapshot holds exactly that day's blocks — neither the rest
+    /// of the batch nor the first block of the next day (matching bulk-build
+    /// behavior).
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn prepare_hodl_wave_batch(
         &self,
@@ -58,7 +105,12 @@ impl Indexer {
         let mut block_tx_idx = 0usize;
         for parsed in all_parsed_blocks {
             let block_date = ckbadger_common::block_date(parsed.timestamp);
-            tracker.record_block_date(parsed.number, block_date);
+            if let Some((snapshot_date, snapshot)) =
+                begin_hodl_wave_block(&mut tracker, parsed.number, block_date)
+            {
+                let date_str = snapshot_date.format("%Y%m%d").to_string();
+                batch.put_hodl_wave(&date_str, &snapshot);
+            }
 
             let tx_count = checked_tx_count(parsed.transactions_count, parsed.number)?;
             let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count];
@@ -125,12 +177,6 @@ impl Indexer {
                     tracker.cell_created(block_date, cell.capacity);
                 }
             }
-
-            // Check for day boundary and write snapshot
-            if let Some((snapshot_date, snapshot)) = tracker.maybe_snapshot(block_date) {
-                let date_str = snapshot_date.format("%Y%m%d").to_string();
-                batch.put_hodl_wave(&date_str, &snapshot);
-            }
         }
 
         batch.put_hodl_tracker_state(&tracker.to_state());
@@ -148,9 +194,10 @@ impl Indexer {
 
     /// Prepare cell distribution tracker updates into the provided domain batch.
     ///
-    /// Cohort deltas are applied per-tx within the per-block loop so that
-    /// day-boundary snapshots reflect only the state up to that block, not
-    /// the entire batch (matching bulk-build behavior).
+    /// Cohort deltas are applied per-tx within the per-block loop, and each block
+    /// opens with [`begin_cell_distribution_block`], so a day-boundary snapshot
+    /// holds exactly that day's blocks — neither the rest of the batch nor the
+    /// first block of the next day (matching bulk-build behavior).
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn prepare_cell_distribution_batch(
         &self,
@@ -174,7 +221,13 @@ impl Indexer {
         let mut block_tx_idx = 0usize;
         for parsed in all_parsed_blocks {
             let block_date = ckbadger_common::block_date(parsed.timestamp);
-            tracker.record_block_date(parsed.number, block_date);
+            if let Some((snapshot_date, snapshot, cohort)) =
+                begin_cell_distribution_block(&mut tracker, parsed.number, block_date)
+            {
+                let date_str = snapshot_date.format("%Y%m%d").to_string();
+                batch.put_cell_distribution(&date_str, &snapshot);
+                batch.put_address_cohort(&date_str, &cohort);
+            }
 
             let tx_count = checked_tx_count(parsed.transactions_count, parsed.number)?;
             let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count];
@@ -243,16 +296,6 @@ impl Indexer {
                         .unwrap_or(parsed.number);
                     tracker.apply_cohort_delta(first_seen_block, *used_delta, *balance_delta)?;
                 }
-            }
-
-            // Check for day boundary and write snapshot
-            if let Some((snapshot_date, snapshot)) = tracker.maybe_snapshot(block_date) {
-                let date_str = snapshot_date.format("%Y%m%d").to_string();
-                batch.put_cell_distribution(&date_str, &snapshot);
-
-                // Materialize address cohort snapshot from incremental accumulator
-                let cohort = tracker.cohort_snapshot();
-                batch.put_address_cohort(&date_str, &cohort);
             }
         }
 
@@ -576,5 +619,95 @@ impl Indexer {
         cache_invalidator
             .cleanup_expired_proposals(last_block_number)
             .await;
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::inconsistent_digit_grouping)]
+mod tests {
+    use super::*;
+    use chrono::NaiveDate;
+
+    fn jan(day: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(2024, 1, day).expect("valid date")
+    }
+
+    #[test]
+    fn cell_distribution_day_boundary_seals_before_the_new_days_block_is_applied() {
+        let mut tracker = CellDistributionTracker::new();
+
+        // First block ever: nothing to seal, only the date is recorded.
+        assert!(begin_cell_distribution_block(&mut tracker, 100, jan(15)).is_none());
+        tracker.cell_created(61_00000000);
+        tracker
+            .apply_cohort_delta(100, 61_00000000, 140_00000000)
+            .unwrap();
+
+        // First block of the next day: the seal happens here, and only then are
+        // this block's cells applied.
+        let (date, distribution, cohort) =
+            begin_cell_distribution_block(&mut tracker, 200, jan(16)).expect("sealed day");
+        tracker.cell_created(61_00000000);
+        tracker
+            .apply_cohort_delta(200, 61_00000000, 140_00000000)
+            .unwrap();
+
+        assert_eq!(date, jan(15));
+        assert_eq!(distribution.size_bucket_counts, [1, 0, 0, 0, 0, 0]);
+        assert_eq!(
+            distribution.size_bucket_capacities,
+            [61_00000000, 0, 0, 0, 0, 0]
+        );
+        assert_eq!(cohort.cohorts.len(), 1);
+        assert_eq!(cohort.cohorts[0].used_capacity, 61_00000000);
+        assert_eq!(cohort.cohorts[0].total_balance, 140_00000000);
+
+        // The next day carries both cells forward.
+        let (date, distribution, _) =
+            begin_cell_distribution_block(&mut tracker, 300, jan(17)).expect("sealed day");
+        assert_eq!(date, jan(16));
+        assert_eq!(distribution.size_bucket_counts, [2, 0, 0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn hodl_wave_day_boundary_seals_before_the_new_days_block_is_applied() {
+        let mut tracker = HodlWaveTracker::new();
+
+        assert!(begin_hodl_wave_block(&mut tracker, 100, jan(15)).is_none());
+        tracker.update_holder_count(0, 1).unwrap();
+        tracker.cell_created(jan(15), 140_00000000);
+
+        let (date, wave) = begin_hodl_wave_block(&mut tracker, 200, jan(16)).expect("sealed day");
+        tracker.update_holder_count(0, 1).unwrap();
+        tracker.cell_created(jan(16), 61_00000000);
+
+        assert_eq!(date, jan(15));
+        assert_eq!(wave.holder_count, 1);
+        assert_eq!(wave.band_24h, 140_00000000);
+        // A cell minted on 2024-01-16 would be "-1 day old" against a
+        // 2024-01-15 snapshot and land in the oldest band.
+        assert_eq!(wave.band_gt_3y, 0);
+
+        let (date, wave) = begin_hodl_wave_block(&mut tracker, 300, jan(17)).expect("sealed day");
+        assert_eq!(date, jan(16));
+        assert_eq!(wave.holder_count, 2);
+        assert_eq!(wave.band_24h, 61_00000000);
+        assert_eq!(wave.band_1d_1w, 140_00000000);
+    }
+
+    #[test]
+    fn day_boundary_helpers_record_every_block_date_for_cohort_lookups() {
+        let mut tracker = CellDistributionTracker::new();
+
+        begin_cell_distribution_block(&mut tracker, 100, jan(15));
+        begin_cell_distribution_block(&mut tracker, 101, jan(15));
+        begin_cell_distribution_block(&mut tracker, 200, jan(16));
+
+        // An address first seen in this very block must resolve to its cohort
+        // month, which requires the transition to be recorded before the block's
+        // transactions are applied.
+        assert_eq!(tracker.block_number_to_date(100), Some(jan(15)));
+        assert_eq!(tracker.block_number_to_date(150), Some(jan(15)));
+        assert_eq!(tracker.block_number_to_date(200), Some(jan(16)));
     }
 }

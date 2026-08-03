@@ -11,6 +11,7 @@ vi.mock('@/lib/api', () => ({
     getCyclesStatus: vi.fn(),
   },
   isWarmupPendingError: vi.fn(() => false),
+  isNetworkInitializingError: vi.fn(() => false),
 }));
 
 function createWrapper() {

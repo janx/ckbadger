@@ -1,12 +1,11 @@
 import { describe, it, expect, vi } from 'vitest';
 import { http, HttpResponse } from 'msw';
-import { DEFAULT_API_BASE } from '@/lib/runtime-config';
 import { render, screen } from '../utils/test-utils';
 import { server } from '../msw/server';
 import { Header } from '@/components/layout/header';
 import { NetworkClientPage } from '@/app/network/client-page';
 
-const API_BASE = DEFAULT_API_BASE;
+const API_BASE = '/api/:network/v1';
 
 // Mirror header.test.tsx: stub the header's heavy sub-widgets and the pathname hook so the real
 // nav (and the real Header rendered inside the Peers page) mounts without Router/stats plumbing.

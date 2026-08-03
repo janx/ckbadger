@@ -24,6 +24,7 @@ import {
   normalizeScriptRefHashType,
   type ScriptRefHashType,
 } from '@/lib/script-ref';
+import { formatCapacity } from '@/lib/utils';
 type RelationshipView = 'lifecycle' | 'graph';
 const DATA_PREVIEW_LIMIT_BYTES = 1024;
 const DATA_BYTES_PER_ROW = 24;
@@ -753,15 +754,19 @@ export default function CellDetailPage() {
                   <div className="text-warning text-sm font-medium">Genesis Special Burn Cell</div>
                   <div className="text-text mt-2 text-sm">
                     <p>
-                      This cell contains 8.4B CKB burnt at genesis (25% of 33.6B initial issuance).
-                      For secondary issuance calculation,{' '}
-                      <strong className="text-warning">5.04B CKB (60%)</strong> is treated as common
-                      knowledge size, ensuring miners receive secondary rewards.
+                      This is the genesis special burn cell: its capacity of{' '}
+                      <strong className="text-warning">{formatCapacity(cell.capacity)}</strong> was
+                      burnt at genesis. A portion is treated as common-knowledge size so miners
+                      still receive secondary-issuance rewards.
                     </p>
-                    <p className="mt-2">
-                      <span className="text-text-dim">Virtual Common Knowledge Size: </span>
-                      <span className="text-warning font-mono">5,040,000,000 CKB</span>
-                    </p>
+                    {cell.virtualCommonKnowledgeSize && (
+                      <p className="mt-2">
+                        <span className="text-text-dim">Virtual Common Knowledge Size: </span>
+                        <span className="text-warning font-mono">
+                          {formatCapacity(cell.virtualCommonKnowledgeSize)}
+                        </span>
+                      </p>
+                    )}
                   </div>
                 </div>
               )}

@@ -35,7 +35,7 @@ describe('api', () => {
 
     it('builds query params for getBlocks with cursor', async () => {
       server.use(
-        http.get('*/api/v1/blocks', ({ request }) => {
+        http.get('/api/:network/v1/blocks', ({ request }) => {
           const url = new URL(request.url);
           expect(url.searchParams.get('cursor')).toBe('test-cursor');
           expect(url.searchParams.get('limit')).toBe('25');
@@ -54,7 +54,7 @@ describe('api', () => {
 
     it('builds query params for getTransactions with blockNumber', async () => {
       server.use(
-        http.get('*/api/v1/transactions', ({ request }) => {
+        http.get('/api/:network/v1/transactions', ({ request }) => {
           const url = new URL(request.url);
           expect(url.searchParams.get('block_number')).toBe('12345');
           return HttpResponse.json({
@@ -72,7 +72,7 @@ describe('api', () => {
 
     it('builds query params for getLiveCells with filters', async () => {
       server.use(
-        http.get('*/api/v1/cells/live', ({ request }) => {
+        http.get('/api/:network/v1/cells/live', ({ request }) => {
           const url = new URL(request.url);
           expect(url.searchParams.get('lock_script_hash')).toBe('0xabc123');
           expect(url.searchParams.get('type_script_hash')).toBe('0xdef456');
@@ -91,7 +91,7 @@ describe('api', () => {
 
     it('builds query params for getTokens with search', async () => {
       server.use(
-        http.get('*/api/v1/tokens', ({ request }) => {
+        http.get('/api/:network/v1/tokens', ({ request }) => {
           const url = new URL(request.url);
           expect(url.searchParams.get('search')).toBe('USDT');
           expect(url.searchParams.get('standard')).toBe('sudt');
@@ -110,7 +110,7 @@ describe('api', () => {
 
     it('builds query params for getDaoDeposits with status', async () => {
       server.use(
-        http.get('*/api/v1/dao/deposits', ({ request }) => {
+        http.get('/api/:network/v1/dao/deposits', ({ request }) => {
           const url = new URL(request.url);
           expect(url.searchParams.get('status')).toBe('1');
           return HttpResponse.json({
@@ -128,7 +128,7 @@ describe('api', () => {
 
     it('getAddressDaoSummary fetches DAO summary for address', async () => {
       server.use(
-        http.get('*/api/v1/dao/summary/0xabc123', () => {
+        http.get('/api/:network/v1/dao/summary/0xabc123', () => {
           return HttpResponse.json({
             hasDaoActivity: true,
             activeDepositsCount: 3,
@@ -154,7 +154,7 @@ describe('api', () => {
 
     it('builds query params for calculateDaoCompensation', async () => {
       server.use(
-        http.get('*/api/v1/dao/calculator', ({ request }) => {
+        http.get('/api/:network/v1/dao/calculator', ({ request }) => {
           const url = new URL(request.url);
           expect(url.searchParams.get('capacity')).toBe('10000000000');
           expect(url.searchParams.get('deposit_block')).toBe('1000');
@@ -178,7 +178,7 @@ describe('api', () => {
 
     it('builds query params for getScripts with filters', async () => {
       server.use(
-        http.get('*/api/v1/scripts', ({ request }) => {
+        http.get('/api/:network/v1/scripts', ({ request }) => {
           const url = new URL(request.url);
           expect(url.searchParams.get('network')).toBe('mainnet');
           expect(url.searchParams.get('decoder_type')).toBe('lock');
@@ -198,7 +198,7 @@ describe('api', () => {
 
     it('maps script family list responses into known script rows', async () => {
       server.use(
-        http.get('*/api/v1/scripts', () => {
+        http.get('/api/:network/v1/scripts', () => {
           return HttpResponse.json({
             data: [
               {
@@ -238,7 +238,7 @@ describe('api', () => {
 
     it('flattens script family detail into version deployment entries and preserves observed refs', async () => {
       server.use(
-        http.get('*/api/v1/scripts/:name', ({ params }) => {
+        http.get('/api/:network/v1/scripts/:name', ({ params }) => {
           expect(params.name).toBe('Default Lock');
           return HttpResponse.json({
             familyId: 'default-lock',
@@ -356,7 +356,7 @@ describe('api', () => {
 
     it('builds query params for getAssets with sorting', async () => {
       server.use(
-        http.get('*/api/v1/assets', ({ request }) => {
+        http.get('/api/:network/v1/assets', ({ request }) => {
           const url = new URL(request.url);
           expect(url.searchParams.get('type')).toBe('token');
           expect(url.searchParams.get('sort_key')).toBe('transfers_24h');
@@ -376,7 +376,7 @@ describe('api', () => {
 
     it('builds query params for getAssets with standard filter', async () => {
       server.use(
-        http.get('*/api/v1/assets', ({ request }) => {
+        http.get('/api/:network/v1/assets', ({ request }) => {
           const url = new URL(request.url);
           expect(url.searchParams.get('type')).toBe('object');
           expect(url.searchParams.get('standard')).toBe('spore');
@@ -395,7 +395,7 @@ describe('api', () => {
 
     it('fetches script capacity chart by script name', async () => {
       server.use(
-        http.get('*/api/v1/scripts/:name/charts/capacity-history', ({ params }) => {
+        http.get('/api/:network/v1/scripts/:name/charts/capacity-history', ({ params }) => {
           expect(params.name).toBe('SECP256K1_BLAKE160');
           return HttpResponse.json({
             title: 'SECP256K1_BLAKE160 Capacity History',
@@ -411,7 +411,7 @@ describe('api', () => {
 
     it('normalizes fiber stats from the backend response shape', async () => {
       server.use(
-        http.get('*/api/v1/fiber/stats', () => {
+        http.get('/api/:network/v1/fiber/stats', () => {
           return HttpResponse.json({
             totalChannels: 42,
             openChannels: 10,
@@ -432,17 +432,20 @@ describe('api', () => {
 
     it('builds date range query params for script capacity chart by name', async () => {
       server.use(
-        http.get('*/api/v1/scripts/:name/charts/capacity-history', ({ request, params }) => {
-          expect(params.name).toBe('SECP256K1_BLAKE160');
-          const url = new URL(request.url);
-          expect(url.searchParams.get('from')).toBe('2024-01-01');
-          expect(url.searchParams.get('to')).toBe('2024-01-31');
-          return HttpResponse.json({
-            title: 'SECP256K1_BLAKE160 Capacity History',
-            data: [],
-            series: [],
-          });
-        })
+        http.get(
+          '/api/:network/v1/scripts/:name/charts/capacity-history',
+          ({ request, params }) => {
+            expect(params.name).toBe('SECP256K1_BLAKE160');
+            const url = new URL(request.url);
+            expect(url.searchParams.get('from')).toBe('2024-01-01');
+            expect(url.searchParams.get('to')).toBe('2024-01-31');
+            return HttpResponse.json({
+              title: 'SECP256K1_BLAKE160 Capacity History',
+              data: [],
+              series: [],
+            });
+          }
+        )
       );
 
       const chart = await api.getScriptCapacityChart('SECP256K1_BLAKE160', {
@@ -454,7 +457,7 @@ describe('api', () => {
 
     it('builds query params for script capacity chart by code hash', async () => {
       server.use(
-        http.get('*/api/v1/scripts/charts/capacity-history', ({ request }) => {
+        http.get('/api/:network/v1/scripts/charts/capacity-history', ({ request }) => {
           const url = new URL(request.url);
           expect(url.searchParams.get('code_hash')).toBe('0x1234');
           expect(url.searchParams.get('script_kind')).toBe('type');
@@ -472,7 +475,7 @@ describe('api', () => {
 
     it('fetches token capacity chart by type hash', async () => {
       server.use(
-        http.get('*/api/v1/tokens/:typeHash/charts/capacity-history', ({ params }) => {
+        http.get('/api/:network/v1/tokens/:typeHash/charts/capacity-history', ({ params }) => {
           expect(params.typeHash).toBe('0x1234');
           return HttpResponse.json({
             title: 'TEST Capacity History',
@@ -488,17 +491,20 @@ describe('api', () => {
 
     it('builds date range query params for token capacity chart', async () => {
       server.use(
-        http.get('*/api/v1/tokens/:typeHash/charts/capacity-history', ({ request, params }) => {
-          expect(params.typeHash).toBe('0x1234');
-          const url = new URL(request.url);
-          expect(url.searchParams.get('from')).toBe('2024-01-10');
-          expect(url.searchParams.get('to')).toBe('2024-01-20');
-          return HttpResponse.json({
-            title: 'TEST Capacity History',
-            data: [],
-            series: [],
-          });
-        })
+        http.get(
+          '/api/:network/v1/tokens/:typeHash/charts/capacity-history',
+          ({ request, params }) => {
+            expect(params.typeHash).toBe('0x1234');
+            const url = new URL(request.url);
+            expect(url.searchParams.get('from')).toBe('2024-01-10');
+            expect(url.searchParams.get('to')).toBe('2024-01-20');
+            return HttpResponse.json({
+              title: 'TEST Capacity History',
+              data: [],
+              series: [],
+            });
+          }
+        )
       );
 
       const chart = await api.getTokenCapacityChart('0x1234', {
@@ -510,14 +516,17 @@ describe('api', () => {
 
     it('fetches spore cluster capacity chart', async () => {
       server.use(
-        http.get('*/api/v1/spore/clusters/:clusterId/charts/capacity-history', ({ params }) => {
-          expect(params.clusterId).toBe('0xabcd');
-          return HttpResponse.json({
-            title: 'My Cluster Capacity History',
-            data: [],
-            series: [],
-          });
-        })
+        http.get(
+          '/api/:network/v1/spore/clusters/:clusterId/charts/capacity-history',
+          ({ params }) => {
+            expect(params.clusterId).toBe('0xabcd');
+            return HttpResponse.json({
+              title: 'My Cluster Capacity History',
+              data: [],
+              series: [],
+            });
+          }
+        )
       );
 
       const chart = await api.getSporeClusterCapacityChart('0xabcd');
@@ -526,14 +535,17 @@ describe('api', () => {
 
     it('fetches spore object capacity chart', async () => {
       server.use(
-        http.get('*/api/v1/spore/objects/:sporeId/charts/capacity-history', ({ params }) => {
-          expect(params.sporeId).toBe('0x9999');
-          return HttpResponse.json({
-            title: 'Spore Capacity History',
-            data: [],
-            series: [],
-          });
-        })
+        http.get(
+          '/api/:network/v1/spore/objects/:sporeId/charts/capacity-history',
+          ({ params }) => {
+            expect(params.sporeId).toBe('0x9999');
+            return HttpResponse.json({
+              title: 'Spore Capacity History',
+              data: [],
+              series: [],
+            });
+          }
+        )
       );
 
       const chart = await api.getSporeObjectCapacityChart('0x9999');
@@ -542,7 +554,7 @@ describe('api', () => {
 
     it('fetches spore dob decoded result', async () => {
       server.use(
-        http.get('*/api/v1/spore/objects/:sporeId/decode', ({ params }) => {
+        http.get('/api/:network/v1/spore/objects/:sporeId/decode', ({ params }) => {
           expect(params.sporeId).toBe('0x9999');
           return HttpResponse.json({
             status: 'ok',
@@ -563,7 +575,7 @@ describe('api', () => {
 
     it('fetches object collection detail', async () => {
       server.use(
-        http.get('*/api/v1/assets/objects/:collectionId', ({ params }) => {
+        http.get('/api/:network/v1/assets/objects/:collectionId', ({ params }) => {
           expect(params.collectionId).toBe('0xcollection');
           return HttpResponse.json({
             collectionId: '0xcollection',
@@ -586,7 +598,7 @@ describe('api', () => {
 
     it('fetches dotbit identity collection detail', async () => {
       server.use(
-        http.get('*/api/v1/assets/identities/:collectionId', ({ params }) => {
+        http.get('/api/:network/v1/assets/identities/:collectionId', ({ params }) => {
           expect(params.collectionId).toBe('dotbit');
           return HttpResponse.json({
             collectionId: DOTBIT_COLLECTION_ID,
@@ -606,7 +618,7 @@ describe('api', () => {
 
     it('fetches did:ckb identity collection detail', async () => {
       server.use(
-        http.get('*/api/v1/assets/identities/:collectionId', ({ params }) => {
+        http.get('/api/:network/v1/assets/identities/:collectionId', ({ params }) => {
           expect(params.collectionId).toBe('did:ckb');
           return HttpResponse.json({
             collectionId: DID_CKB_COLLECTION_ID,
@@ -626,14 +638,17 @@ describe('api', () => {
 
     it('fetches object collection capacity chart', async () => {
       server.use(
-        http.get('*/api/v1/assets/objects/:collectionId/charts/capacity-history', ({ params }) => {
-          expect(params.collectionId).toBe('0xcollection');
-          return HttpResponse.json({
-            title: 'Test Collection Capacity History',
-            data: [],
-            series: [],
-          });
-        })
+        http.get(
+          '/api/:network/v1/assets/objects/:collectionId/charts/capacity-history',
+          ({ params }) => {
+            expect(params.collectionId).toBe('0xcollection');
+            return HttpResponse.json({
+              title: 'Test Collection Capacity History',
+              data: [],
+              series: [],
+            });
+          }
+        )
       );
 
       const chart = await api.getObjectCollectionCapacityChart('0xcollection');
@@ -642,14 +657,17 @@ describe('api', () => {
 
     it('fetches object collection capacity chart by collection id', async () => {
       server.use(
-        http.get('*/api/v1/assets/objects/:collectionId/charts/capacity-history', ({ params }) => {
-          expect(params.collectionId).toBe('0xcollection2');
-          return HttpResponse.json({
-            title: 'Collection Capacity History',
-            data: [],
-            series: [],
-          });
-        })
+        http.get(
+          '/api/:network/v1/assets/objects/:collectionId/charts/capacity-history',
+          ({ params }) => {
+            expect(params.collectionId).toBe('0xcollection2');
+            return HttpResponse.json({
+              title: 'Collection Capacity History',
+              data: [],
+              series: [],
+            });
+          }
+        )
       );
 
       const chart = await api.getObjectCollectionCapacityChart('0xcollection2');
@@ -658,20 +676,23 @@ describe('api', () => {
 
     it('builds query params for identity collection items search', async () => {
       server.use(
-        http.get('*/api/v1/assets/identities/:collectionId/items', ({ request, params }) => {
-          const url = new URL(request.url);
-          expect(params.collectionId).toBe('dotbit');
-          expect(url.searchParams.get('limit')).toBe('20');
-          expect(url.searchParams.get('cursor')).toBe('abc');
-          expect(url.searchParams.get('search')).toBe('alice');
-          expect(url.searchParams.get('status')).toBe('live');
-          return HttpResponse.json({
-            data: [],
-            limit: 20,
-            hasMore: false,
-            nextCursor: null,
-          });
-        })
+        http.get(
+          '/api/:network/v1/assets/identities/:collectionId/items',
+          ({ request, params }) => {
+            const url = new URL(request.url);
+            expect(params.collectionId).toBe('dotbit');
+            expect(url.searchParams.get('limit')).toBe('20');
+            expect(url.searchParams.get('cursor')).toBe('abc');
+            expect(url.searchParams.get('search')).toBe('alice');
+            expect(url.searchParams.get('status')).toBe('live');
+            return HttpResponse.json({
+              data: [],
+              limit: 20,
+              hasMore: false,
+              nextCursor: null,
+            });
+          }
+        )
       );
 
       const result = await api.getIdentityCollectionItems('dotbit', {
@@ -685,19 +706,22 @@ describe('api', () => {
 
     it('builds query params for identity collection holders', async () => {
       server.use(
-        http.get('*/api/v1/assets/identities/:collectionId/holders', ({ request, params }) => {
-          const url = new URL(request.url);
-          expect(params.collectionId).toBe('dotbit');
-          expect(url.searchParams.get('limit')).toBe('20');
-          expect(url.searchParams.get('cursor')).toBe('2:abcd');
-          return HttpResponse.json({
-            data: [],
-            total: 0,
-            limit: 20,
-            hasMore: false,
-            nextCursor: null,
-          });
-        })
+        http.get(
+          '/api/:network/v1/assets/identities/:collectionId/holders',
+          ({ request, params }) => {
+            const url = new URL(request.url);
+            expect(params.collectionId).toBe('dotbit');
+            expect(url.searchParams.get('limit')).toBe('20');
+            expect(url.searchParams.get('cursor')).toBe('2:abcd');
+            return HttpResponse.json({
+              data: [],
+              total: 0,
+              limit: 20,
+              hasMore: false,
+              nextCursor: null,
+            });
+          }
+        )
       );
 
       const result = await api.getIdentityCollectionHolders('dotbit', {
@@ -709,19 +733,22 @@ describe('api', () => {
 
     it('builds query params for identity collection activities', async () => {
       server.use(
-        http.get('*/api/v1/assets/identities/:collectionId/activities', ({ request, params }) => {
-          const url = new URL(request.url);
-          expect(params.collectionId).toBe('dotbit');
-          expect(url.searchParams.get('limit')).toBe('20');
-          expect(url.searchParams.get('cursor')).toBe('300:1');
-          expect(url.searchParams.get('action')).toBe('transfer');
-          return HttpResponse.json({
-            data: [],
-            limit: 20,
-            hasMore: false,
-            nextCursor: null,
-          });
-        })
+        http.get(
+          '/api/:network/v1/assets/identities/:collectionId/activities',
+          ({ request, params }) => {
+            const url = new URL(request.url);
+            expect(params.collectionId).toBe('dotbit');
+            expect(url.searchParams.get('limit')).toBe('20');
+            expect(url.searchParams.get('cursor')).toBe('300:1');
+            expect(url.searchParams.get('action')).toBe('transfer');
+            return HttpResponse.json({
+              data: [],
+              limit: 20,
+              hasMore: false,
+              nextCursor: null,
+            });
+          }
+        )
       );
 
       const result = await api.getIdentityCollectionActivities('dotbit', {
@@ -734,7 +761,7 @@ describe('api', () => {
 
     it('builds query params for spore cluster holders', async () => {
       server.use(
-        http.get('*/api/v1/spore/clusters/:clusterId/holders', ({ request, params }) => {
+        http.get('/api/:network/v1/spore/clusters/:clusterId/holders', ({ request, params }) => {
           const url = new URL(request.url);
           expect(params.clusterId).toBe('0xcluster');
           expect(url.searchParams.get('limit')).toBe('20');
@@ -758,7 +785,7 @@ describe('api', () => {
 
     it('builds query params for spore cluster activities', async () => {
       server.use(
-        http.get('*/api/v1/spore/clusters/:clusterId/activities', ({ request, params }) => {
+        http.get('/api/:network/v1/spore/clusters/:clusterId/activities', ({ request, params }) => {
           const url = new URL(request.url);
           expect(params.clusterId).toBe('0xcluster');
           expect(url.searchParams.get('limit')).toBe('20');
@@ -783,7 +810,7 @@ describe('api', () => {
 
     it('fetches dotbit item detail', async () => {
       server.use(
-        http.get('*/api/v1/assets/identities/dotbit/items/:nftId', ({ params }) => {
+        http.get('/api/:network/v1/assets/identities/dotbit/items/:nftId', ({ params }) => {
           expect(params.nftId).toBe('0xabc');
           return HttpResponse.json({
             nftId: '0xabc',
@@ -808,7 +835,7 @@ describe('api', () => {
     it('fetches dotbit item activities with query params', async () => {
       server.use(
         http.get(
-          '*/api/v1/assets/identities/dotbit/items/:nftId/activities',
+          '/api/:network/v1/assets/identities/dotbit/items/:nftId/activities',
           ({ request, params }) => {
             const url = new URL(request.url);
             expect(params.nftId).toBe('0xabc');
@@ -844,7 +871,7 @@ describe('api', () => {
 
     it('fetches did:ckb item detail', async () => {
       server.use(
-        http.get('*/api/v1/assets/identities/did/items/:nftId', ({ params }) => {
+        http.get('/api/:network/v1/assets/identities/did/items/:nftId', ({ params }) => {
           expect(params.nftId).toBe('0xdid');
           return HttpResponse.json({
             nftId: '0xdid',
@@ -869,7 +896,7 @@ describe('api', () => {
     it('fetches did:ckb item activities with query params', async () => {
       server.use(
         http.get(
-          '*/api/v1/assets/identities/did/items/:nftId/activities',
+          '/api/:network/v1/assets/identities/did/items/:nftId/activities',
           ({ request, params }) => {
             const url = new URL(request.url);
             expect(params.nftId).toBe('0xdid');
@@ -903,9 +930,61 @@ describe('api', () => {
       expect(activities.data[0].actions[0]).toBe('transfer');
     });
 
+    it('fetches .bit Cell item detail', async () => {
+      server.use(
+        http.get('/api/:network/v1/assets/identities/bit-cell/items/:nftId', ({ params }) => {
+          expect(params.nftId).toBe('0xbitcell');
+          return HttpResponse.json({
+            nftId: '0xbitcell',
+            name: 'alice.bit-cell',
+            standard: 'bit_cell',
+            ownerLockHash: '0xowner',
+            isLive: true,
+            createdAtBlock: 456,
+            expiredAt: 1800000000,
+            txHash: '0xtx',
+            outputIndex: 3,
+          });
+        })
+      );
+
+      const detail = await api.getBitCellItemDetail('0xbitcell');
+      expect(detail.nftId).toBe('0xbitcell');
+      expect(detail.standard).toBe('bit_cell');
+      expect(detail.outputIndex).toBe(3);
+    });
+
+    it('fetches .bit Cell item activities with query params', async () => {
+      server.use(
+        http.get(
+          '/api/:network/v1/assets/identities/bit-cell/items/:nftId/activities',
+          ({ request, params }) => {
+            const url = new URL(request.url);
+            expect(params.nftId).toBe('0xbitcell');
+            expect(url.searchParams.get('limit')).toBe('20');
+            expect(url.searchParams.get('cursor')).toBe('456:0');
+            expect(url.searchParams.get('action')).toBe('transfer');
+            return HttpResponse.json({
+              data: [],
+              limit: 20,
+              hasMore: false,
+              nextCursor: null,
+            });
+          }
+        )
+      );
+
+      const activities = await api.getBitCellItemActivities('0xbitcell', {
+        limit: 20,
+        cursor: '456:0',
+        action: 'transfer',
+      });
+      expect(activities.data).toEqual([]);
+    });
+
     it('fetches mnft item detail', async () => {
       server.use(
-        http.get('*/api/v1/assets/objects/items/:nftId', ({ params }) => {
+        http.get('/api/:network/v1/assets/objects/items/:nftId', ({ params }) => {
           expect(params.nftId).toBe('0xmnfttoken');
           return HttpResponse.json({
             nftId: '0xmnfttoken',
@@ -949,27 +1028,30 @@ describe('api', () => {
 
     it('fetches mnft item activities with query params', async () => {
       server.use(
-        http.get('*/api/v1/assets/objects/items/:nftId/activities', ({ request, params }) => {
-          const url = new URL(request.url);
-          expect(params.nftId).toBe('0xmnfttoken');
-          expect(url.searchParams.get('limit')).toBe('20');
-          expect(url.searchParams.get('cursor')).toBe('300:0');
-          expect(url.searchParams.get('action')).toBe('transfer');
-          return HttpResponse.json({
-            data: [
-              {
-                txHash: '0xtx',
-                blockNumber: 300,
-                txIndex: 0,
-                timestamp: '1700000300',
-                actions: ['transfer'],
-              },
-            ],
-            limit: 20,
-            hasMore: false,
-            nextCursor: null,
-          });
-        })
+        http.get(
+          '/api/:network/v1/assets/objects/items/:nftId/activities',
+          ({ request, params }) => {
+            const url = new URL(request.url);
+            expect(params.nftId).toBe('0xmnfttoken');
+            expect(url.searchParams.get('limit')).toBe('20');
+            expect(url.searchParams.get('cursor')).toBe('300:0');
+            expect(url.searchParams.get('action')).toBe('transfer');
+            return HttpResponse.json({
+              data: [
+                {
+                  txHash: '0xtx',
+                  blockNumber: 300,
+                  txIndex: 0,
+                  timestamp: '1700000300',
+                  actions: ['transfer'],
+                },
+              ],
+              limit: 20,
+              hasMore: false,
+              nextCursor: null,
+            });
+          }
+        )
       );
 
       const activities = await api.getMnftItemActivities('0xmnfttoken', {
@@ -982,7 +1064,7 @@ describe('api', () => {
 
     it('builds query params for getAddressTokens', async () => {
       server.use(
-        http.get('*/api/v1/addresses/:addr/tokens', ({ request }) => {
+        http.get('/api/:network/v1/addresses/:addr/tokens', ({ request }) => {
           const url = new URL(request.url);
           expect(url.searchParams.get('limit')).toBe('50');
           expect(url.searchParams.get('cursor')).toBe('test-cursor');
@@ -1015,7 +1097,7 @@ describe('api', () => {
   describe('error handling', () => {
     it('throws error for non-ok responses', async () => {
       server.use(
-        http.get('*/api/v1/blocks/999999', () => {
+        http.get('/api/:network/v1/blocks/999999', () => {
           return new HttpResponse(null, { status: 404 });
         })
       );
@@ -1025,7 +1107,7 @@ describe('api', () => {
 
     it('throws error for server errors', async () => {
       server.use(
-        http.get('*/api/v1/statistics/network', () => {
+        http.get('/api/:network/v1/statistics/network', () => {
           return new HttpResponse(null, { status: 500 });
         })
       );
@@ -1035,7 +1117,7 @@ describe('api', () => {
 
     it('includes backend error message when present', async () => {
       server.use(
-        http.get('*/api/v1/statistics/network', () => {
+        http.get('/api/:network/v1/statistics/network', () => {
           return HttpResponse.json(
             { error: 'internal_error', message: 'negative live capacity in list scripts' },
             { status: 500 }
@@ -1050,7 +1132,7 @@ describe('api', () => {
 
     it('preserves structured warmup_pending error details', async () => {
       server.use(
-        http.get('*/api/v1/statistics/network', () => {
+        http.get('/api/:network/v1/statistics/network', () => {
           return HttpResponse.json(
             { error: 'warmup_pending', message: 'script cache unavailable; warmup in progress' },
             { status: 503 }
@@ -1077,7 +1159,7 @@ describe('api', () => {
       };
 
       server.use(
-        http.get('*/api/v1/blocks/12345', () => {
+        http.get('/api/:network/v1/blocks/12345', () => {
           return HttpResponse.json(mockBlock);
         })
       );
@@ -1096,7 +1178,7 @@ describe('api', () => {
       };
 
       server.use(
-        http.get('*/api/v1/transactions/0x123/detail', () => {
+        http.get('/api/:network/v1/transactions/0x123/detail', () => {
           return HttpResponse.json(mockTxDetail);
         })
       );
@@ -1112,7 +1194,7 @@ describe('api', () => {
       };
 
       server.use(
-        http.get('*/api/v1/search', ({ request }) => {
+        http.get('/api/:network/v1/search', ({ request }) => {
           const url = new URL(request.url);
           expect(url.searchParams.get('q')).toBe('12345');
           return HttpResponse.json(mockSearchResult);
@@ -1126,7 +1208,7 @@ describe('api', () => {
 
     it('lookupScripts sends POST request', async () => {
       server.use(
-        http.post('*/api/v1/scripts/lookup', async ({ request }) => {
+        http.post('/api/:network/v1/scripts/lookup', async ({ request }) => {
           const body = (await request.json()) as { codeHashes: string[] };
           expect(body.codeHashes).toContain('0xabc');
           return HttpResponse.json({
@@ -1151,7 +1233,7 @@ describe('api', () => {
 
     it('getCodeCell sends request with code_hash and hash_type', async () => {
       server.use(
-        http.get('*/api/v1/scripts/code-cell', ({ request }) => {
+        http.get('/api/:network/v1/scripts/code-cell', ({ request }) => {
           const url = new URL(request.url);
           expect(url.searchParams.get('code_hash')).toBe('0xabc123');
           expect(url.searchParams.get('hash_type')).toBe('type');
@@ -1169,7 +1251,7 @@ describe('api', () => {
 
     it('getCodeCell returns null values when not found', async () => {
       server.use(
-        http.get('*/api/v1/scripts/code-cell', () => {
+        http.get('/api/:network/v1/scripts/code-cell', () => {
           return HttpResponse.json({
             txHash: null,
             outputIndex: null,
@@ -1184,7 +1266,7 @@ describe('api', () => {
 
     it('triggerCyclesCalculation sends POST request', async () => {
       server.use(
-        http.post('*/api/v1/transactions/0x123/calculate-cycles', () => {
+        http.post('/api/:network/v1/transactions/0x123/calculate-cycles', () => {
           return HttpResponse.json({ status: 'queued', cycles: null, error: null });
         })
       );
@@ -1197,7 +1279,7 @@ describe('api', () => {
   describe('graph endpoints', () => {
     it('getCellGraph with custom depth', async () => {
       server.use(
-        http.get('*/api/v1/graph/cell/0xabc/0', ({ request }) => {
+        http.get('/api/:network/v1/graph/cell/0xabc/0', ({ request }) => {
           const url = new URL(request.url);
           expect(url.searchParams.get('depth')).toBe('3');
           return HttpResponse.json({ nodes: [], links: [] });
@@ -1209,7 +1291,7 @@ describe('api', () => {
 
     it('getTransactionGraph with default depth', async () => {
       server.use(
-        http.get('*/api/v1/graph/transaction/0x123', ({ request }) => {
+        http.get('/api/:network/v1/graph/transaction/0x123', ({ request }) => {
           const url = new URL(request.url);
           expect(url.searchParams.get('depth')).toBe('2');
           return HttpResponse.json({ nodes: [], links: [] });
@@ -1223,7 +1305,7 @@ describe('api', () => {
   describe('fork endpoints', () => {
     it('getForks returns paginated list', async () => {
       server.use(
-        http.get('*/api/v1/forks', ({ request }) => {
+        http.get('/api/:network/v1/forks', ({ request }) => {
           const url = new URL(request.url);
           expect(url.searchParams.get('limit')).toBe('10');
           return HttpResponse.json({
@@ -1254,7 +1336,7 @@ describe('api', () => {
 
     it('getForkDetail returns event with orphaned data', async () => {
       server.use(
-        http.get('*/api/v1/forks/1', () => {
+        http.get('/api/:network/v1/forks/1', () => {
           return HttpResponse.json({
             event: {
               id: 1,
@@ -1275,7 +1357,7 @@ describe('api', () => {
 
     it('getRecentReorg returns deep fork status', async () => {
       server.use(
-        http.get('*/api/v1/forks/recent', () => {
+        http.get('/api/:network/v1/forks/recent', () => {
           return HttpResponse.json({
             hasRecentReorg: true,
             reorg: {

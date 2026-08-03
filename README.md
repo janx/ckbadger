@@ -61,7 +61,7 @@ Just try it and feel.
 ### Prerequisites
 
 - A running CKB node with RPC accessible (default: `http://127.0.0.1:8114`)
-- ~60GB harddisk space
+- ~60GB disk space per fully indexed network (actual usage depends on chain and enabled data)
 
 If you can run a CKB node, you can run CKBadger. If you don't know how to run CKB — no worries, agents can do that for you.
 
@@ -74,30 +74,40 @@ If you can run a CKB node, you can run CKBadger. If you don't know how to run CK
 ### Usage
 
 ```bash
-# Initialize work directory, without -C it will use the current dir
+# Initialize a work directory (creates an orchestrator + a mainnet stack).
+# Without -C it uses the current dir; add --with-testnet to run testnet too.
 ckbadger init -C workdir
 
-# Start all services (indexer + API + frontend server)
-ckbadger run
+# Start all services (one indexer + API per network, plus a shared frontend)
+ckbadger -C workdir run
 
-# Access the explorer
+# Access the explorer (switch networks from the header)
 open http://localhost:8100
 ```
 
 ### Subcommands
 
 ```bash
-ckbadger init             # Initialize work directory (ckbadger.toml, data/, run/, perf/)
-ckbadger run              # Supervisor: start indexer + api + frontend-server
-ckbadger run --only X     # Start specific services (indexer, api, frontend)
-ckbadger tui              # Terminal monitoring UI
-ckbadger status           # Lightweight sync/service status query
-ckbadger verify           # Data integrity checks
-ckbadger label-import     # Import token/script labels
-ckbadger purge --confirm  # Delete derived data, keep config + perf history
+ckbadger init                 # Initialize orchestrator (ckbadger.toml) + a mainnet work dir
+ckbadger init --with-testnet  # ... plus a testnet stack alongside mainnet
+ckbadger run                  # Supervisor: start indexer + api per network + shared frontend
+ckbadger tui                  # Terminal monitoring UI
+ckbadger status               # Lightweight sync/service status query
+ckbadger verify               # Data integrity checks
+ckbadger label-import         # Import token/script labels
+ckbadger purge --confirm      # Delete chain/cache/run/bench data; keep config, metadata, perf, network observations
 ```
 
 All subcommands accept `-C <path>` to specify work directory (default: current directory).
+
+`run --only` is a single-network command. Point `-C` at a network subdirectory and select
+`indexer`, `api`, `frontend-server`, or `crawler`, for example:
+
+```bash
+ckbadger -C workdir/testnet run --only indexer,api
+```
+
+An orchestrator root rejects `--only` because the target network would be ambiguous.
 
 `ckbadger tui` is pretty fun — watching the stats while CKBadger bulk-syncs is one of my favourite entertainments, see if you can identify the bottlenecks on your machine.
 
@@ -109,7 +119,10 @@ For a fresh db, `ckbadger run` will kick off bulk-sync mode, read data from the 
 
 ### Agent-Friendly Page Output
 
-Every page supports `.md` (markdown summary) and `.raw` (structured JSON) formats for agent consumption. See [docs/AI_FORMATS.md](docs/AI_FORMATS.md) for format negotiation, raw profiles, debugger workflow, and examples.
+Every supported explorer page exposes `.md` (markdown summary) and `.raw` (structured JSON)
+formats for agent consumption. In orchestrator mode, page paths start with the network
+(`/<network>/...`). See [docs/AI_FORMATS.md](docs/AI_FORMATS.md) for format negotiation, raw
+profiles, debugger workflow, and examples.
 
 ## Dive Deeper
 
@@ -120,35 +133,23 @@ Documents under `docs/prompts/` are manually marinated texts capturing the ideas
 ### Architecture
 
 ```
-                    ckbadger run (supervisor)
-                    ┌──────────────────────────────────────────┐
-                    │  ┌──────────┐ ┌─────┐ ┌───────────────┐  │
-                    │  │ Indexer  │ │ API │ │Frontend Server│  │
-                    │  └────┬─────┘ └──┬──┘ └───────┬───────┘  │
-                    │       │          │            │          │
-                    │       │   Unix Socket IPC     │          │
-                    │       │          │            │          │
-                    │  ┌────┴──────────┴────┐   ┌───┴───────┐  │
-                    │  │      RocksDB       │   │   SPA     │  │
-                    │  │  Domain + Append   │   │  Assets   │  │
-                    │  └────────────────────┘   └───────────┘  │
-                    └──────────────────────────────────────────┘
-                                │
-                                ▼
-                    ┌──────────────────────┐
-                    │      CKB Node        │
-                    │   (File read / RPC)  │
-                    └──────────────────────┘
+ckbadger run (orchestrator supervisor)
+├── Shared frontend + network-aware reverse proxy (:8100)
+│   └── /api/{network}/v1 + /ws/{network} ──▶ matching per-network API
+└── Per-network stack (mainnet, testnet, …)
+    ├── CKB node / RPC ──▶ indexer ──▶ domain + append-only stores ──┐
+    ├── CKB p2p network ──▶ crawler (opt-in) ──▶ network store ──────┤
+    └── API (read-only) ◀────────────────────────────────────────────┘
 ```
 
 ### Services
 
-| Service    | Description                                                             | Port |
-| ---------- | ----------------------------------------------------------------------- | ---- |
-| `indexer`  | Blockchain sync daemon                                                  | -    |
-| `api`      | REST/WebSocket API server                                               | 8101 |
-| `frontend` | Static file HTTP server (SPA)                                           | 8100 |
-| `crawler`  | Opt-in whole-network CKB L1 p2p peer crawler (writes the network store) | -    |
+| Service           | Description                                                            | Default port               |
+| ----------------- | ---------------------------------------------------------------------- | -------------------------- |
+| `indexer`         | Per-network blockchain sync daemon                                     | -                          |
+| `api`             | Per-network REST/WebSocket API server                                  | mainnet 8101, testnet 8102 |
+| `frontend-server` | Shared SPA server and network-aware reverse proxy                      | 8100                       |
+| `crawler`         | Opt-in per-network CKB L1 peer crawler (writes only the network store) | outbound p2p only          |
 
 ### Tech Stack
 
@@ -160,7 +161,7 @@ Documents under `docs/prompts/` are manually marinated texts capturing the ideas
 | **Visualization** | react-force-graph-2d, D3.js                                         | Cell relationship graphs         |
 | **API**           | Rust (Axum)                                                         | High-performance REST/WebSocket  |
 | **Indexer**       | Rust (3-stage pipeline)                                             | Block parsing, cell tracking     |
-| **Storage**       | RocksDB (60 domain + 1 append-only + 2 network CFs, ckbadger-store) | Embedded three-store data engine |
+| **Storage**       | RocksDB (59 domain + 1 append-only + 2 network CFs, ckbadger-store) | Embedded three-store data engine |
 | **Cache**         | In-memory LRU                                                       | API response cache               |
 | **IPC**           | Unix domain sockets                                                 | Inter-process communication      |
 
@@ -170,33 +171,60 @@ CKBadger is designed local-first, but the architecture doesn't lock you in. The 
 
 ### Work Directory Structure
 
+`ckbadger init` sets up an **orchestrator root**: a top-level `ckbadger.toml` plus one work directory per network. Each network subdirectory is a self-contained single-network work dir.
+
 ```
-./
-├── ckbadger.toml              # Sole configuration file
-├── metadata/                  # Optional: local metadata overrides
-├── data/
-│   ├── domain/                # Mutable canonical state (RocksDB)
-│   ├── append-only/           # Immutable cell payloads (RocksDB)
-│   └── network/               # Opt-in crawler p2p observations (RocksDB; exempt from rebuild-from-genesis)
-├── media/                     # Content-addressed decoded media blobs (DOB artwork)
-├── run/                       # Runtime state (gitignored)
-│   ├── supervisor.pid
-│   ├── indexer.sock           # Indexer IPC socket
-│   └── logs/                  # Process logs
-└── perf/
-    └── bulk-sync/             # Auto-generated bulk-sync perf artifacts + latest baseline
+./                             # Orchestrator root
+├── ckbadger.toml              # Orchestrator config: [[network]] list + shared [frontend]/[log]
+├── mainnet/                   # A standard single-network work directory
+│   ├── config.toml            #   this network's config ([ckb] node, [api] port, [store], …)
+│   ├── metadata/              #   Optional: local metadata overrides
+│   ├── data/
+│   │   ├── domain/            #   Mutable canonical state (RocksDB)
+│   │   ├── append-only/       #   Immutable cell payloads (RocksDB)
+│   │   └── network/           #   Opt-in crawler p2p observations (exempt from rebuild-from-genesis)
+│   ├── media/                 #   Content-addressed decoded media blobs (DOB artwork)
+│   ├── run/                   #   Runtime state — supervisor.pid, indexer.sock, logs/ (gitignored)
+│   └── perf/                  #   Auto-generated bulk-sync perf artifacts + latest baseline
+└── testnet/                   # With --with-testnet: a second network, same layout
+    └── …
 ```
+
+A bare work directory containing only `config.toml` (no `ckbadger.toml`) runs as a single standalone network — the orchestrator is just one-stack-per-network on top of that.
 
 ### Configuration
 
-All configuration lives in a single `ckbadger.toml` file. Priority: **CLI args > ckbadger.toml > defaults**. No `.env` files. No environment variables. If you don't know what a config key means, ask Claude Code or Codex.
+`ckbadger init` writes two kinds of config:
+
+- **Orchestrator** — `ckbadger.toml` at the root: a `[[network]]` list plus the shared `[frontend]` (default `127.0.0.1:8100`) and `[log]`. `ckbadger run` here launches one indexer + API per network and one shared frontend.
+- **Per-network** — `<network>/config.toml`: a standard single-network config (`[ckb]` node +
+  `[api]` port + `[store]` …). Each network gets its own API port (mainnet `8101`, testnet `8102`)
+  and its own data directory. Before `ckbadger run`, set the required `[ckb].workdir` and the
+  matching `[ckb].rpc_url` in every network config. Generated configs use port `8114` as a
+  placeholder for both networks; co-resident CKB nodes normally need distinct RPC ports.
+  Startup validates the configured network against the node rather than indexing the wrong chain.
+
+Priority: **CLI args > config.toml > defaults**. No `.env` files. No environment variables. If you don't know what a config key means, ask Claude Code or Codex.
+
+### Multiple networks (mainnet + testnet)
+
+`ckbadger init --with-testnet` runs mainnet and testnet side by side behind **one** explorer at `http://localhost:8100`:
+
+- The frontend reverse-proxies `/api/<network>/v1/*` and `/ws/<network>` to each network's API port — single origin, no CORS; the per-network API servers stay unaware.
+- The active network lives in the URL path (`/mainnet/…`, `/testnet/…`); a header switcher flips between the live networks, and deep links like `/testnet/tx/0x…` preserve the network when shared.
+- Each network reads its own CKB node, configured by `[ckb].workdir` and `[ckb].rpc_url` in that
+  network's `config.toml`.
+- APIs, enabled crawlers, and the shared frontend start immediately. Indexers are admitted in
+  `[[network]]` order so only one network performs fresh-store bulk sync at a time. Once an
+  indexer reaches the near-tip threshold, the next network starts; live sync then proceeds
+  independently.
 
 ### Testing
 
 Three testing systems: data integrity verification, per-endpoint benchmarking, and concurrent load stress testing. See [docs/TESTING.md](docs/TESTING.md) for full details.
 
 ```bash
-ckbadger verify --depth fast                       # Data integrity (6 checks, seconds)
+ckbadger verify --depth fast                       # Data integrity (7 checks, seconds)
 make bench                                         # Per-endpoint latency baseline
 make stress STRESS_ARGS="--scenario api --auto-ramp"  # Find API breaking point
 ```

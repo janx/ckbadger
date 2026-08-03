@@ -38,7 +38,7 @@ describe('ObjectCollectionStatCards', () => {
     expect(screen.getByText('Total Spores')).toBeInTheDocument();
     expect(screen.getByText('Created At')).toBeInTheDocument();
     const blockLink = screen.getByRole('link', { name: /#1,000,000/ });
-    expect(blockLink).toHaveAttribute('href', '/blocks/1000000');
+    expect(blockLink).toHaveAttribute('href', '/mainnet/blocks/1000000');
   });
 
   it('hides optional cards when optional props are missing', () => {

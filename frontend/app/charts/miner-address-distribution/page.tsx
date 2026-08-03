@@ -27,12 +27,12 @@ function MinerRow({
   rank: number;
   color: string;
 }) {
-  const isCkbAddress = miner.address.startsWith('ckb1') || miner.address.startsWith('ckt1');
-  const addressPath = isCkbAddress
+  const identity = miner.address ?? miner.minerLockHash;
+  const addressPath = miner.address
     ? miner.address
-    : miner.address.startsWith('0x')
-      ? miner.address.slice(2)
-      : miner.address;
+    : miner.minerLockHash.startsWith('0x')
+      ? miner.minerLockHash.slice(2)
+      : miner.minerLockHash;
 
   return (
     <TerminalRow>
@@ -47,7 +47,7 @@ function MinerRow({
               </span>
             )}
             <span className="group-hover:text-emphasis text-text-dim font-mono text-sm transition-colors">
-              {miner.address.slice(0, 10)}...{miner.address.slice(-8)}
+              {identity.slice(0, 10)}...{identity.slice(-8)}
             </span>
           </Link>
         </div>
@@ -85,7 +85,9 @@ export default function MinerAddressDistributionPage() {
 
   const pieData =
     data?.data.slice(0, 10).map((m) => ({
-      label: m.minerName || `${m.address.slice(0, 8)}...${m.address.slice(-6)}`,
+      label:
+        m.minerName ||
+        `${(m.address ?? m.minerLockHash).slice(0, 8)}...${(m.address ?? m.minerLockHash).slice(-6)}`,
       value: parseFloat(m.percentage),
     })) || [];
 
@@ -111,10 +113,10 @@ export default function MinerAddressDistributionPage() {
         <TerminalPanel className="mb-6">
           <TerminalPanelHeader indicator="active">
             <div className="flex items-center gap-4">
-              <span>Miner Address Distribution</span>
+              <span>{data?.title ?? 'Miner Distribution'}</span>
               {data && (
                 <span className="text-text-dim text-sm font-normal">
-                  Total Blocks: {formatNumber(data.totalBlocks)}
+                  {data.fromDate}–{data.toDate} · Total Blocks: {formatNumber(data.totalBlocks)}
                 </span>
               )}
             </div>
@@ -160,13 +162,13 @@ export default function MinerAddressDistributionPage() {
               <>
                 <div className="border-base-border bg-base-surface/50 text-text-dim flex border-b px-4 py-2 font-mono text-xs uppercase tracking-wider">
                   <div className="w-12">Rank</div>
-                  <div className="flex-1">Miner Address</div>
+                  <div className="flex-1">Miner / Lock Hash</div>
                   <div className="w-28 text-right">Blocks Mined</div>
                   <div className="w-40 text-right">Share</div>
                 </div>
                 {data.data.map((miner, index) => (
                   <MinerRow
-                    key={miner.address}
+                    key={miner.minerLockHash}
                     miner={miner}
                     rank={index + 1}
                     color={COLORS[index % COLORS.length]}

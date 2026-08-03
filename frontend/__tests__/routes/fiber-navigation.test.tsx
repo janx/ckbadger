@@ -57,19 +57,19 @@ describe('fiber navigation', () => {
 
   it('renders the fiber channels route instead of the 404 page', async () => {
     render(
-      <MemoryRouter initialEntries={['/fiber/channels']}>
+      <MemoryRouter initialEntries={['/mainnet/fiber/channels']}>
         <AppHarness />
       </MemoryRouter>
     );
 
     expect(await screen.findByText('fiber channels page')).toBeInTheDocument();
-    expect(screen.getByTestId('pathname')).toHaveTextContent('/fiber/channels');
+    expect(screen.getByTestId('pathname')).toHaveTextContent('/mainnet/fiber/channels');
     expect(screen.queryByText('not found page')).not.toBeInTheDocument();
   });
 
   it('does not expose a stale Fiber header link after the nav refresh', async () => {
     render(
-      <MemoryRouter initialEntries={['/']}>
+      <MemoryRouter initialEntries={['/mainnet']}>
         <AppHarness />
       </MemoryRouter>
     );
@@ -78,6 +78,9 @@ describe('fiber navigation', () => {
     await waitFor(() => {
       expect(screen.queryByRole('link', { name: 'Fiber' })).not.toBeInTheDocument();
     });
-    expect(screen.getByRole('link', { name: 'Activities' })).toHaveAttribute('href', '/activities');
+    expect(screen.getByRole('link', { name: 'Activities' })).toHaveAttribute(
+      'href',
+      '/mainnet/activities'
+    );
   });
 });

@@ -1,4 +1,5 @@
 mod common;
+use ckbadger_common::TokenBalance;
 use common::*;
 
 #[tokio::test]
@@ -36,9 +37,7 @@ async fn test_tokens_list_includes_maximum_supply_status() {
                 name: Some("Limited XUDT".to_string()),
                 symbol: Some("CAP".to_string()),
                 decimals: Some(8),
-                total_supply: Some(500),
                 max_supply: Some(1000),
-                holders_count: 50,
                 first_seen_block: 0,
                 icon_url: None,
                 description: None,
@@ -55,9 +54,7 @@ async fn test_tokens_list_includes_maximum_supply_status() {
                 name: Some("Plain XUDT".to_string()),
                 symbol: Some("PX".to_string()),
                 decimals: Some(8),
-                total_supply: Some(500),
                 max_supply: None,
-                holders_count: 40,
                 first_seen_block: 0,
                 icon_url: None,
                 description: None,
@@ -74,9 +71,7 @@ async fn test_tokens_list_includes_maximum_supply_status() {
                 name: Some("Extended XUDT".to_string()),
                 symbol: Some("EX".to_string()),
                 decimals: Some(8),
-                total_supply: Some(500),
                 max_supply: None,
-                holders_count: 30,
                 first_seen_block: 0,
                 icon_url: None,
                 description: None,
@@ -93,9 +88,7 @@ async fn test_tokens_list_includes_maximum_supply_status() {
                 name: Some("Plain SUDT".to_string()),
                 symbol: Some("SD".to_string()),
                 decimals: Some(8),
-                total_supply: Some(500),
                 max_supply: None,
-                holders_count: 20,
                 first_seen_block: 0,
                 icon_url: None,
                 description: None,
@@ -169,9 +162,7 @@ async fn test_get_token_includes_maximum_supply() {
                 name: Some("Cap Token".to_string()),
                 symbol: Some("CAP".to_string()),
                 decimals: Some(8),
-                total_supply: Some(500_00000000),
                 max_supply: Some(100_000_000_000),
-                holders_count: 0,
                 first_seen_block: 0,
                 icon_url: None,
                 description: None,
@@ -206,6 +197,69 @@ async fn test_get_token_includes_maximum_supply() {
 }
 
 #[tokio::test]
+async fn test_get_token_supply_exceeding_u128_serializes_as_decimal_string() {
+    // Per-cell UDT amounts are u128, while the exact sum across live holders can exceed
+    // u128 and must still serialize through the API's decimal-string contract.
+    let store = test_store();
+    let type_hash = vec![0x7c; 32];
+    let type_hash_hex = format!("0x{}", hex::encode(&type_hash));
+    let holder_a = [0x13; 32];
+    let holder_b = [0x14; 32];
+
+    let amount = 200u128 << 120;
+    // u128::MAX == 340282366920938463463374607431768211455.
+    let huge_max_supply: u128 = u128::MAX;
+
+    store
+        .put_token_direct(
+            &type_hash,
+            &TokenInfo {
+                type_code_hash: vec![0x55; 32],
+                hash_type: 1,
+                type_args: vec![0x66; 20],
+                standard: "xudt".to_string(),
+                name: Some("Huge Supply".to_string()),
+                symbol: Some("HUGE".to_string()),
+                decimals: Some(8),
+                max_supply: Some(huge_max_supply),
+                first_seen_block: 0,
+                icon_url: None,
+                description: None,
+                transfers_count: 0,
+            },
+        )
+        .unwrap();
+
+    let mut batch = StoreBatch::new(&store);
+    batch.put_token_holder(&type_hash, &holder_a, amount);
+    batch.put_token_holder(&type_hash, &holder_b, amount);
+    batch.commit().unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri(format!("/api/v1/tokens/{}", type_hash_hex))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        json["totalSupply"],
+        "531691198313966349161522824112137830400"
+    );
+    assert_eq!(
+        json["maximumSupply"],
+        "340282366920938463463374607431768211455"
+    );
+    assert_eq!(json["maximumSupply"], huge_max_supply.to_string());
+    assert_eq!(json["maximumSupplyStatus"], "limited");
+}
+
+#[tokio::test]
 async fn test_get_token_returns_store_backed_detail_when_filtered_from_warmup_cache() {
     let store = test_store();
     let type_hash = vec![0x78; 32];
@@ -223,9 +277,7 @@ async fn test_get_token_returns_store_backed_detail_when_filtered_from_warmup_ca
                 name: None,
                 symbol: None,
                 decimals: Some(8),
-                total_supply: Some(500_00000000),
                 max_supply: None,
-                holders_count: 0,
                 first_seen_block: 0,
                 icon_url: None,
                 description: Some("Store-backed token detail".to_string()),
@@ -275,9 +327,7 @@ async fn test_get_token_derives_stats_from_holder_and_stats_cfs_when_token_row_i
                 name: Some("Placeholder Label".to_string()),
                 symbol: Some("PLH".to_string()),
                 decimals: Some(8),
-                total_supply: Some(0),
                 max_supply: None,
-                holders_count: 0,
                 first_seen_block: 0,
                 icon_url: Some("logo.png".to_string()),
                 description: Some("label metadata only".to_string()),
@@ -358,9 +408,7 @@ async fn test_get_token_holders_preserves_equal_balance_pagination() {
                 name: Some("Paged Holders".to_string()),
                 symbol: Some("PH".to_string()),
                 decimals: Some(8),
-                total_supply: Some(300),
                 max_supply: None,
-                holders_count: 3,
                 first_seen_block: 0,
                 icon_url: None,
                 description: None,
@@ -438,6 +486,92 @@ async fn test_get_token_holders_preserves_equal_balance_pagination() {
 }
 
 #[tokio::test]
+async fn test_get_token_holders_paginates_balance_above_u128() {
+    let store = test_store();
+    let type_hash = vec![0x7d; 32];
+    store
+        .put_token_direct(
+            &type_hash,
+            &TokenInfo {
+                type_code_hash: vec![0x55; 32],
+                hash_type: 1,
+                type_args: vec![0x66; 20],
+                standard: "sudt".to_string(),
+                name: Some("Wide Holder".to_string()),
+                symbol: Some("WIDE".to_string()),
+                decimals: Some(8),
+                max_supply: None,
+                first_seen_block: 0,
+                icon_url: None,
+                description: None,
+                transfers_count: 0,
+            },
+        )
+        .unwrap();
+
+    let amount = TokenBalance::from(200u128 << 120);
+    let above_u128 = amount.checked_add(&amount).unwrap();
+    let at_u128_max = TokenBalance::from(u128::MAX);
+    let lock_high = [0x01; 32];
+    let lock_next = [0x02; 32];
+    let mut batch = StoreBatch::new(&store);
+    batch.put_token_holder(&type_hash, &lock_high, &above_u128);
+    batch.put_token_holder(&type_hash, &lock_next, &at_u128_max);
+    batch.put_token_holder_by_balance(&type_hash, &lock_high, &above_u128);
+    batch.put_token_holder_by_balance(&type_hash, &lock_next, &at_u128_max);
+    batch.commit().unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+    let type_hash_hex = format!("0x{}", hex::encode(&type_hash));
+    let first_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/v1/tokens/{type_hash_hex}/holders?limit=1"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(first_response.status(), StatusCode::OK);
+    let first_body = first_response
+        .into_body()
+        .collect()
+        .await
+        .unwrap()
+        .to_bytes();
+    let first_json: serde_json::Value = serde_json::from_slice(&first_body).unwrap();
+    assert_eq!(
+        first_json["data"][0]["balance"],
+        "531691198313966349161522824112137830400"
+    );
+    let next_cursor = first_json["nextCursor"].as_str().unwrap();
+    assert!(next_cursor.starts_with("531691198313966349161522824112137830400:"));
+
+    let second_response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/api/v1/tokens/{type_hash_hex}/holders?limit=1&cursor={next_cursor}"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(second_response.status(), StatusCode::OK);
+    let second_body = second_response
+        .into_body()
+        .collect()
+        .await
+        .unwrap()
+        .to_bytes();
+    let second_json: serde_json::Value = serde_json::from_slice(&second_body).unwrap();
+    assert_eq!(second_json["data"][0]["balance"], u128::MAX.to_string());
+}
+
+#[tokio::test]
 async fn test_get_address_tokens_uses_store_backed_pagination_without_warmup_cache() {
     let store = test_store();
     let lock_hash = vec![0x88; 32];
@@ -455,9 +589,7 @@ async fn test_get_address_tokens_uses_store_backed_pagination_without_warmup_cac
                 name: Some("Alpha".to_string()),
                 symbol: Some("ALP".to_string()),
                 decimals: Some(8),
-                total_supply: Some(500),
                 max_supply: None,
-                holders_count: 1,
                 first_seen_block: 0,
                 icon_url: None,
                 description: None,
@@ -476,9 +608,7 @@ async fn test_get_address_tokens_uses_store_backed_pagination_without_warmup_cac
                 name: Some("Beta".to_string()),
                 symbol: Some("BET".to_string()),
                 decimals: Some(4),
-                total_supply: Some(300),
                 max_supply: None,
-                holders_count: 1,
                 first_seen_block: 0,
                 icon_url: None,
                 description: None,
@@ -568,9 +698,7 @@ async fn test_get_token_maximum_supply_status_without_cap() {
                 name: Some("Plain sUDT".to_string()),
                 symbol: Some("SUDT".to_string()),
                 decimals: Some(8),
-                total_supply: Some(123),
                 max_supply: None,
-                holders_count: 0,
                 first_seen_block: 0,
                 icon_url: None,
                 description: None,
@@ -593,9 +721,7 @@ async fn test_get_token_maximum_supply_status_without_cap() {
                 name: Some("Extensible Token".to_string()),
                 symbol: Some("XUDT".to_string()),
                 decimals: Some(8),
-                total_supply: Some(456),
                 max_supply: None,
-                holders_count: 0,
                 first_seen_block: 0,
                 icon_url: None,
                 description: None,
@@ -618,9 +744,7 @@ async fn test_get_token_maximum_supply_status_without_cap() {
                 name: Some("Plain XUDT".to_string()),
                 symbol: Some("PXUDT".to_string()),
                 decimals: Some(8),
-                total_supply: Some(789),
                 max_supply: None,
-                holders_count: 0,
                 first_seen_block: 0,
                 icon_url: None,
                 description: None,
@@ -701,9 +825,7 @@ async fn test_token_capacity_chart_returns_cumulative_series() {
                 name: Some("Test Token".to_string()),
                 symbol: Some("TEST".to_string()),
                 decimals: Some(8),
-                total_supply: Some(0),
                 max_supply: None,
-                holders_count: 0,
                 first_seen_block: 0,
                 icon_url: None,
                 description: None,
@@ -797,9 +919,7 @@ async fn test_token_capacity_chart_reads_daily_deltas_from_derived_store() {
                 name: Some("Derived Delta Token".to_string()),
                 symbol: Some("DDT".to_string()),
                 decimals: Some(8),
-                total_supply: Some(0),
                 max_supply: None,
-                holders_count: 0,
                 first_seen_block: 0,
                 icon_url: None,
                 description: None,
@@ -858,9 +978,7 @@ async fn test_token_capacity_chart_rejects_invalid_date_range() {
                 name: Some("Test Token".to_string()),
                 symbol: Some("TEST".to_string()),
                 decimals: Some(8),
-                total_supply: Some(0),
                 max_supply: None,
-                holders_count: 0,
                 first_seen_block: 0,
                 icon_url: None,
                 description: None,
@@ -882,4 +1000,356 @@ async fn test_token_capacity_chart_rejects_invalid_date_range() {
 
     let response = app.oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+// ---------------------------------------------------------------------------
+// B5: unknown decimals must surface as null — never a fabricated 0.
+// A token with no TOML label and no on-chain info cell (e.g. USDI) has
+// `decimals: None` in the store; flattening it to 0 makes amounts
+// indistinguishable from a genuine 0-decimals token.
+// ---------------------------------------------------------------------------
+
+fn placeholder_token_without_metadata() -> TokenInfo {
+    TokenInfo {
+        type_code_hash: vec![0x55; 32],
+        hash_type: 1,
+        type_args: vec![0x66; 32],
+        standard: "xudt".to_string(),
+        name: None,
+        symbol: None,
+        decimals: None,
+        max_supply: None,
+        first_seen_block: 0,
+        icon_url: None,
+        description: None,
+        transfers_count: 0,
+    }
+}
+
+#[tokio::test]
+async fn test_get_token_unknown_decimals_serialize_as_null() {
+    let store = test_store();
+    let type_hash = vec![0x5D; 32];
+    store
+        .put_token_direct(&type_hash, &placeholder_token_without_metadata())
+        .unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri(format!("/api/v1/tokens/0x{}", hex::encode(&type_hash)))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        json["decimals"],
+        serde_json::Value::Null,
+        "unknown decimals must be null, got {}",
+        json["decimals"]
+    );
+}
+
+#[tokio::test]
+async fn test_get_address_tokens_unknown_decimals_serialize_as_null() {
+    let store = test_store();
+    let lock_hash = vec![0x89; 32];
+    let type_hash = vec![0x8A; 32];
+    store
+        .put_token_direct(&type_hash, &placeholder_token_without_metadata())
+        .unwrap();
+
+    let mut batch = StoreBatch::new(&store);
+    batch.put_token_holder(&type_hash, &lock_hash, 500);
+    batch.put_token_holder_by_balance(&type_hash, &lock_hash, 500);
+    batch.put_addr_token_by_balance(&lock_hash, &type_hash, 500);
+    batch.commit().unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/addresses/0x{}/tokens",
+            hex::encode(&lock_hash)
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        json["data"][0]["typeScriptHash"],
+        format!("0x{}", hex::encode(&type_hash))
+    );
+    assert_eq!(
+        json["data"][0]["decimals"],
+        serde_json::Value::Null,
+        "unknown decimals must be null, got {}",
+        json["data"][0]["decimals"]
+    );
+}
+
+// ---------------------------------------------------------------------------
+// B10: /tokens/{h}/transfers (and the activity detail rows) must resolve
+// from/to lock hashes to addresses via CF_LOCK_SCRIPTS when the script is
+// known, and keep null (never guess) when it is not.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_token_transfers_and_activities_resolve_addresses_from_lock_scripts() {
+    let store = test_store();
+    let type_hash = vec![0x7A; 32];
+    let mut token = placeholder_token_without_metadata();
+    token.transfers_count = 1;
+    store.put_token_direct(&type_hash, &token).unwrap();
+
+    let secp_code_hash =
+        hex::decode("9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8").unwrap();
+    let to_lock_args = vec![0x11; 20];
+    let to_lock_hash = vec![0xB1; 32];
+    // The sender's lock script is NOT in CF_LOCK_SCRIPTS: address must stay null.
+    let from_lock_hash = vec![0xA1; 32];
+
+    let mut batch = StoreBatch::new(&store);
+    batch.put_lock_script(
+        &to_lock_hash,
+        &ckbadger_store::types::LockScriptEntry {
+            code_hash: secp_code_hash.clone(),
+            hash_type: 1,
+            args: to_lock_args.clone(),
+        },
+    );
+    batch.put_token_transfer(
+        &type_hash,
+        100,
+        0,
+        &ckbadger_store::types::TokenTransferRecord {
+            tx_hash: vec![0xCC; 32],
+            block_number: 100,
+            from_lock_hash: Some(from_lock_hash.clone()),
+            to_lock_hash: to_lock_hash.clone(),
+            amount: 5,
+            is_mint: false,
+            is_burn: false,
+            timestamp: 1_700_000_000_000,
+        },
+    );
+    batch.commit().unwrap();
+
+    let expected_to_address =
+        ckbadger_common::script_to_address(&secp_code_hash, 1, &to_lock_args, "mainnet").unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+    let type_hash_hex = format!("0x{}", hex::encode(&type_hash));
+
+    // /transfers
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/v1/tokens/{type_hash_hex}/transfers"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let row = &json["data"][0];
+    assert_eq!(
+        row["toAddress"],
+        serde_json::Value::String(expected_to_address.clone()),
+        "resolvable lock hash must produce an address, got {}",
+        row["toAddress"]
+    );
+    assert_eq!(
+        row["fromAddress"],
+        serde_json::Value::Null,
+        "unresolvable lock hash must stay null, got {}",
+        row["fromAddress"]
+    );
+
+    // /activities embeds the same transfer rows
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/v1/tokens/{type_hash_hex}/activities"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let transfer = &json["data"][0]["transfers"][0];
+    assert_eq!(
+        transfer["toAddress"],
+        serde_json::Value::String(expected_to_address),
+        "activity transfer toAddress must resolve, got {}",
+        transfer["toAddress"]
+    );
+    assert_eq!(transfer["fromAddress"], serde_json::Value::Null);
+}
+
+// ---------------------------------------------------------------------------
+// R4-E bug 1: /tokens/{h}/holders must resolve each holder's lock hash to its
+// CKB address through the same CF_LOCK_SCRIPTS path the transfer/activity
+// handlers already use — the handler used to hardcode `address: None`.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_get_token_holders_resolve_addresses_from_lock_scripts() {
+    let store = test_store();
+    let type_hash = vec![0x7C; 32];
+    store
+        .put_token_direct(&type_hash, &placeholder_token_without_metadata())
+        .unwrap();
+
+    // Externally verified vector (see crates/api/src/utils/address.rs tests):
+    // secp256k1_blake160_sighash_all + hash_type "type" + these args.
+    let secp_code_hash =
+        hex::decode("9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8").unwrap();
+    let known_args = hex::decode("b39bbc0b3673c7d36450bc14cfcdad2d559c6c64").unwrap();
+    let known_address = "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqdnnw7qkdnnclfkg59uzn8umtfd2kwxceqxwquc4";
+    let known_lock_hash = compute_script_hash(&secp_code_hash, 1, &known_args);
+    // Second holder has no CF_LOCK_SCRIPTS row: its address must stay null, never guessed.
+    let unknown_lock_hash = vec![0xE7; 32];
+
+    let mut batch = StoreBatch::new(&store);
+    batch.put_lock_script(
+        &known_lock_hash,
+        &ckbadger_store::types::LockScriptEntry {
+            code_hash: secp_code_hash.clone(),
+            hash_type: 1,
+            args: known_args.clone(),
+        },
+    );
+    batch.put_token_holder(&type_hash, &known_lock_hash, 900);
+    batch.put_token_holder(&type_hash, &unknown_lock_hash, 100);
+    batch.put_token_holder_by_balance(&type_hash, &known_lock_hash, 900);
+    batch.put_token_holder_by_balance(&type_hash, &unknown_lock_hash, 100);
+    batch.put_addr_token_by_balance(&known_lock_hash, &type_hash, 900);
+    batch.put_addr_token_by_balance(&unknown_lock_hash, &type_hash, 100);
+    batch.commit().unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+    let type_hash_hex = format!("0x{}", hex::encode(&type_hash));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/v1/tokens/{type_hash_hex}/holders?limit=10"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(json["total"], 2);
+    assert_eq!(
+        json["data"][0]["lockScriptHash"],
+        format!("0x{}", hex::encode(&known_lock_hash))
+    );
+    assert_eq!(
+        json["data"][0]["address"],
+        serde_json::Value::String(known_address.to_string()),
+        "holder address must resolve from CF_LOCK_SCRIPTS, got {}",
+        json["data"][0]["address"]
+    );
+    assert_eq!(json["data"][0]["balance"], "900");
+    assert_eq!(
+        json["data"][1]["lockScriptHash"],
+        format!("0x{}", hex::encode(&unknown_lock_hash))
+    );
+    assert_eq!(
+        json["data"][1]["address"],
+        serde_json::Value::Null,
+        "unknown lock script must stay null, never guessed"
+    );
+}
+
+#[tokio::test]
+async fn test_get_token_holders_resolve_addresses_per_page_only() {
+    // Address resolution must not change cursor/total semantics: page 1 and page 2
+    // each carry exactly their own holder's resolved address.
+    let store = test_store();
+    let type_hash = vec![0x7E; 32];
+    store
+        .put_token_direct(&type_hash, &placeholder_token_without_metadata())
+        .unwrap();
+
+    let secp_code_hash =
+        hex::decode("9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8").unwrap();
+    let first_args = vec![0x11; 20];
+    let second_args = vec![0x22; 20];
+    let first_lock_hash = compute_script_hash(&secp_code_hash, 1, &first_args);
+    let second_lock_hash = compute_script_hash(&secp_code_hash, 1, &second_args);
+    let first_address =
+        ckbadger_common::script_to_address(&secp_code_hash, 1, &first_args, "mainnet").unwrap();
+    let second_address =
+        ckbadger_common::script_to_address(&secp_code_hash, 1, &second_args, "mainnet").unwrap();
+
+    let mut batch = StoreBatch::new(&store);
+    for (lock_hash, args, balance) in [
+        (&first_lock_hash, &first_args, 200u128),
+        (&second_lock_hash, &second_args, 100u128),
+    ] {
+        batch.put_lock_script(
+            lock_hash,
+            &ckbadger_store::types::LockScriptEntry {
+                code_hash: secp_code_hash.clone(),
+                hash_type: 1,
+                args: args.clone(),
+            },
+        );
+        batch.put_token_holder(&type_hash, lock_hash, balance);
+        batch.put_token_holder_by_balance(&type_hash, lock_hash, balance);
+        batch.put_addr_token_by_balance(lock_hash, &type_hash, balance);
+    }
+    batch.commit().unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+    let type_hash_hex = format!("0x{}", hex::encode(&type_hash));
+
+    let (status, first_json) =
+        get_json(&app, &format!("/tokens/{type_hash_hex}/holders?limit=1")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(first_json["total"], 2);
+    assert_eq!(first_json["hasMore"], true);
+    assert_eq!(first_json["data"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        first_json["data"][0]["address"],
+        serde_json::Value::String(first_address)
+    );
+    let next_cursor = first_json["nextCursor"]
+        .as_str()
+        .expect("first page should have next cursor")
+        .to_string();
+
+    let (status, second_json) = get_json(
+        &app,
+        &format!("/tokens/{type_hash_hex}/holders?limit=1&cursor={next_cursor}"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        second_json["data"][0]["address"],
+        serde_json::Value::String(second_address)
+    );
+    assert_eq!(second_json["hasMore"], false);
 }

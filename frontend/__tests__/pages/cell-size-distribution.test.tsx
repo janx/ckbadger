@@ -7,6 +7,7 @@ vi.mock('@/lib/api', () => ({
     getCellSizeDistributionChart: vi.fn(),
   },
   isWarmupPendingError: vi.fn(() => false),
+  isNetworkInitializingError: vi.fn(() => false),
 }));
 
 vi.mock('@/components/charts/chart-page', () => ({

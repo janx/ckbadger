@@ -33,9 +33,16 @@ Primitive Truth: blocks, transactions, cells, already stored in ckb node rocksdb
 
 Derived Truth: various indices and aggregations on blocks, transactions, cells for fast queries
 
-3 rocksdb for reading: ckb node rocksdb, ckbadger rocksdb 'domain', ckbadger rocksdb 'append-only'
+Deterministic chain reads use 3 RocksDB instances: CKB node RocksDB, ckbadger domain store, and
+ckbadger append-only store.
 
-2 rocksdb for writing: ckbadger rocksdb 'domain', ckbadger rocksdb 'append-only'
+Deterministic chain writes use 2 RocksDB instances: ckbadger domain and append-only stores, both
+written only by the indexer.
+
+The opt-in p2p crawler owns a separate network store. It is not chain truth: it contains
+non-deterministic, TTL-retained observations, is written only by the crawler, and is the sole
+store exempt from rebuild-from-genesis. Do not mix network observations into either chain store
+or use them to derive consensus-facing values.
 
 # Principles
 

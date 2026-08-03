@@ -75,8 +75,8 @@ function PeersOnboarding({ enabled }: { enabled: boolean }) {
 
         <h3 className="text-text-bright mb-2 font-mono text-sm font-bold">How to enable</h3>
         <p className="text-text-dim mb-2 text-sm">
-          Set the crawler to enabled in <code className="text-aqua">ckbadger.toml</code> and
-          restart:
+          Set the crawler to enabled in{' '}
+          <code className="text-aqua">this network&apos;s config.toml</code> and restart:
         </p>
         <pre className="border-base-border bg-base-bg text-text overflow-x-auto rounded border p-3 font-mono text-xs">
           {`[crawler]

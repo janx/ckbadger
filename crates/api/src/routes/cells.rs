@@ -6,79 +6,67 @@ use axum::{
     routing::get,
     Router,
 };
-use ckbadger_common::dao::{
-    is_genesis_special_burn_cell, GENESIS_SPECIAL_BURN_CELL_VIRTUAL_OCCUPIED,
-};
-
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::{Arc, LazyLock};
+use std::sync::Arc;
+
+use ckbadger_common::TokenBalance;
 
 use crate::cache::{CacheKeys, CacheTtl};
 use crate::response::{
-    decode_cursor, default_limit, encode_cursor, ok, ApiError, ApiResult, CursorPaginatedResponse,
-    ScriptResponse,
+    default_limit, encode_cursor, hash_type_to_str, ok, ApiError, ApiResult, ApiRouteError,
+    CursorPaginatedResponse, ScriptResponse,
 };
+use crate::utils::address::compute_script_hash;
 use crate::utils::{
     address_to_lock_script_hash, deployment_key_for_script, deployment_reference_hashes,
-    is_ckb_address, is_known_script_name, merge_script_info_for_reference,
+    is_ckb_address, is_known_script_name, merge_script_info_for_reference, parse_address_to_script,
+    parse_hash32, parse_optional_block_tx_cursor, parse_output_index,
     resolve_code_hash_for_hash_type, script_to_address, shannon_to_ckb,
 };
 use crate::warmup::{
     CachedAddressEntry, CACHE_KEY_ADDRESSES_ACTIVE, CACHE_KEY_ADDRESSES_TOP, CACHE_KEY_SCRIPTS_ALL,
 };
 use crate::AppState;
+use ckbadger_indexer::parser::registry::{ProtocolScript, PROTOCOL_REGISTRY};
 use ckbadger_store::{keys, CkbadgerStore};
 
 const SHANNONS_PER_CKB: i64 = 100_000_000;
+// All protocol detection (DAO / sUDT / xUDT / .bit-account / mNFT issuer·class·token /
+// Spore NFT / Spore Cluster) is delegated to the shared network-agnostic
+// `ckbadger_indexer::parser::registry::PROTOCOL_REGISTRY`, which covers mainnet + testnet.
+// The string consts below survive only as TEST fixtures that construct cells whose
+// type_code_hash matches a known protocol; they are compiled under `cfg(test)` so the
+// library build carries no dead detection constants.
+#[cfg(test)]
 const DAO_CODE_HASH: &str = "0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e";
+#[cfg(test)]
 const SUDT_CODE_HASH: &str = "0x5e7a36a77e68eecc013dfa2fe6a23f3b6c344b04005808694ae6dd45eea4cfd5";
-const XUDT_CODE_HASH_DATA1: &str =
-    "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95";
-const XUDT_CODE_HASH_TYPE: &str =
-    "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb";
+#[cfg(test)]
 const DOTBIT_ACCOUNT_CELL_TYPE_ID: &str =
     "0x4f170a048198408f4f4d36bdbcddcebe7a0ae85244d3ab08fd40a80cbfc70918";
+#[cfg(test)]
 const MNFT_ISSUER_CODE_HASH: &str =
     "0x24b04faf80ded836efc05247778eec4ec02548dab6e2012c0107374aa3f68b81";
+#[cfg(test)]
 const MNFT_CLASS_CODE_HASH: &str =
     "0xd51e6eaf48124c601f41abe173f1da550b4cbca9c6a166781906a287abbb3d9a";
+#[cfg(test)]
 const MNFT_TOKEN_CODE_HASH: &str =
     "0x2b24f0d644ccbdd77bbf86b27c8cca02efa0ad051e447c212636d9ee7acaaec9";
-const SPORE_CODE_HASHES: [&str; 4] = [
+#[cfg(test)]
+const SPORE_CODE_HASHES: [&str; 3] = [
     "0x4a4dce1df3dffff7f8b2cd7dff7303df3b6150c9788cb75dcf6747247132b9f5",
-    "0xcfba73b58b6f30e70caed8a999748781b164ef9a1e218424a6fb55ebf641cb33",
     "0x685a60219309029d01310311dba953d67029170ca4848a4ff638e57002130a0d",
     "0xbbad126377d45f90a8ee120da988a2d7332c78ba8fd679aab478a19d6c133494",
 ];
+#[cfg(test)]
 const CLUSTER_CODE_HASHES: [&str; 3] = [
     "0x7366a61534fa7c7e6225ecc0d828ea3b5366adec2b58206f2ee84995fe030075",
     "0x0bbe768b519d8ea7b96d58f1182eb7e6ef96c541fbd9526975077ee09f049058",
     "0x598d793defef36e2eeba54a9b45130e4ca92822e1d193671f490950c3b856080",
 ];
 const ADDR_TX_SCAN_CHUNK_SIZE: usize = 128;
-
-/// Decode a hex string constant (with or without "0x" prefix) into a 32-byte array at init time.
-fn decode_code_hash_bytes(hex_str: &str) -> Vec<u8> {
-    hex::decode(hex_str.strip_prefix("0x").unwrap_or(hex_str))
-        .expect("invalid hex constant in code hash definition")
-}
-
-// Pre-decoded byte arrays for code hash comparisons (avoids per-call hex encoding allocations).
-static DAO_CODE_HASH_BYTES: LazyLock<Vec<u8>> =
-    LazyLock::new(|| decode_code_hash_bytes(DAO_CODE_HASH));
-static DOTBIT_ACCOUNT_CELL_TYPE_ID_BYTES: LazyLock<Vec<u8>> =
-    LazyLock::new(|| decode_code_hash_bytes(DOTBIT_ACCOUNT_CELL_TYPE_ID));
-static MNFT_ISSUER_CODE_HASH_BYTES: LazyLock<Vec<u8>> =
-    LazyLock::new(|| decode_code_hash_bytes(MNFT_ISSUER_CODE_HASH));
-static MNFT_CLASS_CODE_HASH_BYTES: LazyLock<Vec<u8>> =
-    LazyLock::new(|| decode_code_hash_bytes(MNFT_CLASS_CODE_HASH));
-static MNFT_TOKEN_CODE_HASH_BYTES: LazyLock<Vec<u8>> =
-    LazyLock::new(|| decode_code_hash_bytes(MNFT_TOKEN_CODE_HASH));
-static SPORE_CODE_HASH_BYTES: LazyLock<[Vec<u8>; 4]> =
-    LazyLock::new(|| SPORE_CODE_HASHES.map(decode_code_hash_bytes));
-static CLUSTER_CODE_HASH_BYTES: LazyLock<[Vec<u8>; 3]> =
-    LazyLock::new(|| CLUSTER_CODE_HASHES.map(decode_code_hash_bytes));
 
 /// Convert a `semantic_tags` bitmap into human-readable script label strings.
 /// Returns an empty vec when no bits are set (including legacy `0` values).
@@ -105,6 +93,9 @@ fn script_labels_from_semantic_tags(semantic_tags: u16) -> Vec<String> {
     }
     if semantic_tags & st::CLUSTER != 0 {
         labels.push("Spore Cluster".to_string());
+    }
+    if semantic_tags & st::DID_CKB != 0 {
+        labels.push("did:ckb".to_string());
     }
     labels
 }
@@ -220,35 +211,31 @@ pub(crate) fn parse_dep_group(data: &[u8], data_size: i32) -> DepGroupParseResul
 }
 
 fn is_spore_type_code_hash(code_hash: &[u8]) -> bool {
-    SPORE_CODE_HASH_BYTES
-        .iter()
-        .any(|h| h.as_slice() == code_hash)
+    PROTOCOL_REGISTRY.is(code_hash, ProtocolScript::SporeNft)
 }
 
 fn is_cluster_type_code_hash(code_hash: &[u8]) -> bool {
-    CLUSTER_CODE_HASH_BYTES
-        .iter()
-        .any(|h| h.as_slice() == code_hash)
+    PROTOCOL_REGISTRY.is(code_hash, ProtocolScript::Cluster)
 }
 
 fn is_dotbit_account_type_code_hash(code_hash: &[u8]) -> bool {
-    code_hash == DOTBIT_ACCOUNT_CELL_TYPE_ID_BYTES.as_slice()
+    PROTOCOL_REGISTRY.is(code_hash, ProtocolScript::DotbitAccount)
 }
 
 fn is_dao_type_code_hash(code_hash: &[u8]) -> bool {
-    code_hash == DAO_CODE_HASH_BYTES.as_slice()
+    PROTOCOL_REGISTRY.is(code_hash, ProtocolScript::Dao)
 }
 
 fn is_mnft_issuer_type_code_hash(code_hash: &[u8]) -> bool {
-    code_hash == MNFT_ISSUER_CODE_HASH_BYTES.as_slice()
+    PROTOCOL_REGISTRY.is(code_hash, ProtocolScript::MnftIssuer)
 }
 
 fn is_mnft_class_type_code_hash(code_hash: &[u8]) -> bool {
-    code_hash == MNFT_CLASS_CODE_HASH_BYTES.as_slice()
+    PROTOCOL_REGISTRY.is(code_hash, ProtocolScript::MnftClass)
 }
 
 fn is_mnft_token_type_code_hash(code_hash: &[u8]) -> bool {
-    code_hash == MNFT_TOKEN_CODE_HASH_BYTES.as_slice()
+    PROTOCOL_REGISTRY.is(code_hash, ProtocolScript::MnftToken)
 }
 
 fn read_molecule_bytes_field(
@@ -816,14 +803,11 @@ fn maybe_parse_dao_decode(
 }
 
 fn detect_udt_standard_from_code_hash(code_hash: &[u8]) -> Option<&'static str> {
-    let code_hash_hex = format!("0x{}", hex::encode(code_hash));
-    if code_hash_hex == SUDT_CODE_HASH {
-        return Some("sudt");
+    match PROTOCOL_REGISTRY.get(code_hash) {
+        Some(ProtocolScript::Sudt) => Some("sudt"),
+        Some(ProtocolScript::Xudt) => Some("xudt"),
+        _ => None,
     }
-    if code_hash_hex == XUDT_CODE_HASH_DATA1 || code_hash_hex == XUDT_CODE_HASH_TYPE {
-        return Some("xudt");
-    }
-    None
 }
 
 fn maybe_parse_udt_decode(
@@ -1452,6 +1436,11 @@ pub struct CellResponse {
     pub virtual_used_capacity: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub udt_amount: Option<String>,
+    /// `cells/by-script` only: which index enumerated this row (`lock` or
+    /// `type`). In `script_kind=both` this is the phase of the composite
+    /// cursor a client would build from this row.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub matched_script_kind: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1649,19 +1638,21 @@ pub struct AddressTokenResponse {
     pub standard: String,
     pub name: Option<String>,
     pub symbol: Option<String>,
-    pub decimals: i16,
+    /// None when unknown (no TOML label and no on-chain info cell) — never a
+    /// fabricated 0, which would be indistinguishable from true 0 decimals.
+    pub decimals: Option<i16>,
     pub icon_url: Option<String>,
     pub balance: String,
 }
 
 fn parse_address_token_cursor(
     cursor: &str,
-) -> Result<(i128, Vec<u8>), (axum::http::StatusCode, axum::Json<ApiError>)> {
+) -> Result<(TokenBalance, Vec<u8>), (axum::http::StatusCode, axum::Json<ApiError>)> {
     let (balance, type_hash_hex) = cursor
         .split_once(':')
         .ok_or_else(|| ApiError::bad_request("Invalid address token cursor"))?;
     let balance = balance
-        .parse::<i128>()
+        .parse::<TokenBalance>()
         .map_err(|_| ApiError::bad_request("Invalid address token cursor"))?;
     let type_hash = hex::decode(type_hash_hex.strip_prefix("0x").unwrap_or(type_hash_hex))
         .map_err(|_| ApiError::bad_request("Invalid address token cursor"))?;
@@ -1672,12 +1663,20 @@ fn parse_address_token_cursor(
 }
 
 /// Helper to convert a LiveCellInfo into a CellResponse.
+///
+/// `network` selects the per-network genesis burn policy and `virtual_occupied`
+/// is the derived `baseline.virtual_occupied` (shannons) reported for genesis
+/// burn cells; both are read once per request in the handler and threaded in.
 fn cell_info_to_response(
     tx_hash: &[u8],
     output_index: i16,
     info: &ckbadger_store::PositionedCellInfo,
+    network: &str,
+    virtual_occupied: i128,
 ) -> CellResponse {
-    let is_special_burn = is_genesis_special_burn_cell(&info.lock_args, info.created_at_block);
+    let is_special_burn = info.created_at_block == 0
+        && ckbadger_common::burn_policy::burn_policy(network)
+            .is_some_and(|p| info.lock_args.as_slice() == p.lock_args);
     CellResponse {
         tx_hash: format!("0x{}", hex::encode(tx_hash)),
         output_index: output_index as i32,
@@ -1699,11 +1698,12 @@ fn cell_info_to_response(
             None
         },
         virtual_used_capacity: if is_special_burn {
-            Some(GENESIS_SPECIAL_BURN_CELL_VIRTUAL_OCCUPIED.to_string())
+            Some(virtual_occupied.to_string())
         } else {
             None
         },
         udt_amount: info.udt_amount.map(|amount| amount.to_string()),
+        matched_script_kind: None,
     }
 }
 
@@ -1729,9 +1729,35 @@ fn estimated_occupied_capacity_breakdown(
     }
 }
 
-/// Decode a cell cursor (hex-encoded full cell index key).
-fn decode_cell_cursor(cursor: &str) -> Option<Vec<u8>> {
-    hex::decode(cursor.strip_prefix("0x").unwrap_or(cursor)).ok()
+/// A cell index key: script_hash(32B) + block_num(8B BE) + outpoint(34B).
+/// Mirrors what `keys::encode_cell_index_key` builds.
+const CELL_INDEX_KEY_LEN: usize = 32 + 8 + keys::OUTPOINT_KEY_SIZE;
+
+/// Decode a cell cursor (hex-encoded full cell index key) for a scan over
+/// `expected_prefix`.
+///
+/// Validated rather than best-effort, on the model of `parse_by_script_cursor`.
+/// The unchecked version returned `Option` and was consumed with `.and_then`,
+/// which produced two silent wrong answers: non-hex became "no cursor" so the
+/// client got page 1 again and paginated forever, and a well-formed but
+/// wrong-length or foreign-prefix cursor was handed to RocksDB verbatim as a
+/// seek key, landing outside the scanned range so the `starts_with` break
+/// returned an empty page that reads as "end of results".
+fn parse_cell_cursor(cursor: &str, expected_prefix: &[u8]) -> Result<Vec<u8>, ApiRouteError> {
+    let key = hex::decode(cursor.strip_prefix("0x").unwrap_or(cursor))
+        .map_err(|_| ApiError::bad_request("Invalid cursor: not a hex-encoded cell index key"))?;
+    if key.len() != CELL_INDEX_KEY_LEN {
+        return Err(ApiError::bad_request(format!(
+            "Invalid cursor: expected a {CELL_INDEX_KEY_LEN}-byte cell index key, got {} bytes",
+            key.len()
+        )));
+    }
+    if !key.starts_with(expected_prefix) {
+        return Err(ApiError::bad_request(
+            "Invalid cursor: key belongs to a different script than the one being listed",
+        ));
+    }
+    Ok(key)
 }
 
 /// Encode a cell cursor from the last result's components.
@@ -1745,191 +1771,212 @@ fn encode_cell_cursor(
     hex::encode(key)
 }
 
+/// Which prefix-scannable index `list_live_cells` enumerates.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LiveCellIndex {
+    Lock,
+    Type,
+}
+
+/// One `list_live_cells` page request against a prefix-scannable index.
+struct LiveCellScan<'a> {
+    index: LiveCellIndex,
+    index_hash: &'a [u8],
+    needed: usize,
+    after_key: Option<Vec<u8>>,
+    /// Whether `keep` can reject rows. Drives read sizing only.
+    post_filtered: bool,
+}
+
+/// Enumerate one live-cell index, keeping only rows that satisfy `keep`.
+///
+/// This is the single scan path for `list_live_cells`. It previously existed as
+/// three near-copies of the same continuation loop selected by a
+/// `match (&lock_hash, &type_hash)`, and only one of them consulted
+/// `type_code_hash` — so a validated filter was silently dropped on the other
+/// branches and the caller got rows that did not match what it asked for.
+/// With the predicate passed in, a new filter cannot be honoured on one branch
+/// and forgotten on another.
+///
+/// The loop exists because post-filtering can discard most of a batch; it reads
+/// further batches until the page is full or the index is exhausted, rather
+/// than over-reading by a fixed multiplier and silently truncating the page.
+fn scan_live_cells(
+    store: &ckbadger_store::CkbadgerStore,
+    append_only_store: &ckbadger_store::CkbadgerStore,
+    scan: LiveCellScan<'_>,
+    keep: impl Fn(&ckbadger_store::PositionedCellInfo) -> bool,
+) -> anyhow::Result<Vec<(Vec<u8>, i16, ckbadger_store::PositionedCellInfo)>> {
+    let LiveCellScan {
+        index,
+        index_hash,
+        needed,
+        after_key,
+        post_filtered,
+    } = scan;
+
+    // With no post-filter every row counts, so one exact-size read suffices.
+    let batch_size = if post_filtered {
+        needed * 2 + 1
+    } else {
+        needed
+    };
+    const MAX_ITERATIONS: usize = 50;
+
+    let mut results = Vec::with_capacity(needed);
+    let mut current_after_key = after_key;
+
+    for _ in 0..MAX_ITERATIONS {
+        let batch = match index {
+            LiveCellIndex::Lock => store.list_cells_by_lock(
+                index_hash,
+                batch_size,
+                current_after_key.as_deref(),
+                append_only_store,
+            )?,
+            LiveCellIndex::Type => store.list_cells_by_type(
+                index_hash,
+                batch_size,
+                current_after_key.as_deref(),
+                append_only_store,
+            )?,
+        };
+        let scan_exhausted = batch.len() < batch_size;
+
+        for (tx_hash, output_index, info) in batch {
+            current_after_key = Some(keys::encode_cell_index_key(
+                index_hash,
+                info.created_at_block,
+                &tx_hash,
+                output_index,
+            ));
+            if keep(&info) {
+                results.push((tx_hash, output_index, info));
+                if results.len() >= needed {
+                    break;
+                }
+            }
+        }
+
+        if results.len() >= needed || scan_exhausted {
+            break;
+        }
+    }
+
+    Ok(results)
+}
+
 async fn list_live_cells(
     State(state): State<Arc<AppState>>,
     Query(params): Query<ListCellsParams>,
 ) -> ApiResult<CursorPaginatedResponse<CellResponse>> {
     let limit = params.limit.clamp(1, 100) as usize;
 
-    let after_key = params.cursor.as_deref().and_then(decode_cell_cursor);
-
     let lock_hash_bytes = if let Some(ref lock_hash) = params.lock_script_hash {
         Some(if is_ckb_address(lock_hash) {
             address_to_lock_script_hash(lock_hash)
                 .map_err(|e| ApiError::bad_request(format!("Invalid CKB address: {}", e)))?
         } else {
-            hex::decode(lock_hash.strip_prefix("0x").unwrap_or(lock_hash))
-                .map_err(|_| ApiError::bad_request("Invalid lock script hash"))?
+            parse_hash32(lock_hash, "lock_script_hash")?
         })
     } else {
         None
     };
 
     let type_hash_bytes = if let Some(ref type_hash) = params.type_script_hash {
-        Some(
-            hex::decode(type_hash.strip_prefix("0x").unwrap_or(type_hash))
-                .map_err(|_| ApiError::bad_request("Invalid type script hash"))?,
-        )
+        Some(parse_hash32(type_hash, "type_script_hash")?)
     } else {
         None
     };
 
-    let _type_code_hash_bytes = if let Some(ref code_hash) = params.type_code_hash {
-        Some(
-            hex::decode(code_hash.strip_prefix("0x").unwrap_or(code_hash))
-                .map_err(|_| ApiError::bad_request("Invalid type code hash"))?,
-        )
+    let type_code_hash_bytes = if let Some(ref code_hash) = params.type_code_hash {
+        Some(parse_hash32(code_hash, "type_code_hash")?)
     } else {
         None
     };
 
-    // Fetch cells from the store based on available filters.
-    // The store supports listing by lock hash or type hash via prefix scans.
-    // When post-filtering is needed (lock+type or lock+type_code_hash), we use a
-    // continuation loop to avoid silently skipping data with a fixed multiplier.
-    let raw_cells: Vec<(Vec<u8>, i16, ckbadger_store::PositionedCellInfo)> =
-        match (&lock_hash_bytes, &type_hash_bytes) {
-            (Some(lock_bytes), Some(type_bytes)) => {
-                // Filter by lock first, then post-filter by type hash.
-                // Loop in batches until we have enough results or the lock scan is exhausted.
-                let needed = limit + 1;
-                let batch_size = limit * 2 + 1;
-                const MAX_ITERATIONS: usize = 50;
-                let mut results = Vec::with_capacity(needed);
-                let mut current_after_key: Option<Vec<u8>> = after_key.clone();
-                for _ in 0..MAX_ITERATIONS {
-                    let batch = state
-                        .store
-                        .list_cells_by_lock(
-                            lock_bytes,
-                            batch_size,
-                            current_after_key.as_deref(),
-                            &state.append_only_store,
-                        )
-                        .map_err(|e| ApiError::internal(e.to_string()))?;
-                    let scan_exhausted = batch.len() < batch_size;
-                    for (tx_hash, output_index, info) in batch {
-                        // Build the full index key for cursor advancement
-                        let cell_key = keys::encode_cell_index_key(
-                            lock_bytes,
-                            info.created_at_block,
-                            &tx_hash,
-                            output_index,
-                        );
-                        current_after_key = Some(cell_key);
-                        if info
-                            .type_script_hash
-                            .as_ref()
-                            .map(|h| h == type_bytes)
-                            .unwrap_or(false)
-                        {
-                            results.push((tx_hash, output_index, info));
-                            if results.len() >= needed {
-                                break;
-                            }
-                        }
-                    }
-                    if results.len() >= needed || scan_exhausted {
-                        break;
-                    }
-                }
-                results
-            }
-            (Some(lock_bytes), None) => {
-                // For type_code_hash filtering, list by lock then post-filter.
-                // Uses the same continuation loop pattern for correctness.
-                if let Some(ref tch) = _type_code_hash_bytes {
-                    let needed = limit + 1;
-                    let batch_size = limit * 2 + 1;
-                    const MAX_ITERATIONS: usize = 50;
-                    let mut results = Vec::with_capacity(needed);
-                    let mut current_after_key: Option<Vec<u8>> = after_key.clone();
-                    for _ in 0..MAX_ITERATIONS {
-                        let batch = state
-                            .store
-                            .list_cells_by_lock(
-                                lock_bytes,
-                                batch_size,
-                                current_after_key.as_deref(),
-                                &state.append_only_store,
-                            )
-                            .map_err(|e| ApiError::internal(e.to_string()))?;
-                        let scan_exhausted = batch.len() < batch_size;
-                        for (tx_hash, output_index, info) in batch {
-                            let cell_key = keys::encode_cell_index_key(
-                                lock_bytes,
-                                info.created_at_block,
-                                &tx_hash,
-                                output_index,
-                            );
-                            current_after_key = Some(cell_key);
-                            if info
-                                .type_code_hash
-                                .as_ref()
-                                .map(|h| h == tch)
-                                .unwrap_or(false)
-                            {
-                                results.push((tx_hash, output_index, info));
-                                if results.len() >= needed {
-                                    break;
-                                }
-                            }
-                        }
-                        if results.len() >= needed || scan_exhausted {
-                            break;
-                        }
-                    }
-                    results
-                } else {
-                    state
-                        .store
-                        .list_cells_by_lock(
-                            lock_bytes,
-                            limit + 1,
-                            after_key.as_deref(),
-                            &state.append_only_store,
-                        )
-                        .map_err(|e| ApiError::internal(e.to_string()))?
-                }
-            }
-            (None, Some(type_bytes)) => state
-                .store
-                .list_cells_by_type(
-                    type_bytes,
-                    limit + 1,
-                    after_key.as_deref(),
-                    &state.append_only_store,
-                )
-                .map_err(|e| ApiError::internal(e.to_string()))?,
-            (None, None) => {
-                // No filter: not practical for RocksDB full scan, return empty.
-                // The old PG query scanned the whole table; in RocksDB we can't
-                // efficiently paginate the full live_cells CF without a secondary index.
-                Vec::new()
-            }
-        };
+    // Only the lock and type *script hash* indexes are prefix-scannable here, so
+    // one of them has to anchor the scan. Everything else narrows it afterwards.
+    let (index, index_hash) = match (&lock_hash_bytes, &type_hash_bytes) {
+        (Some(lock_bytes), _) => (LiveCellIndex::Lock, lock_bytes.as_slice()),
+        (None, Some(type_bytes)) => (LiveCellIndex::Type, type_bytes.as_slice()),
+        (None, None) => {
+            // Answering this would mean a full scan of the live-cell CF. Saying
+            // so is required: the previous code returned an empty page, which a
+            // client cannot distinguish from "no such cells exist".
+            let detail = if type_code_hash_bytes.is_some() {
+                "type_code_hash alone is not a scannable index; add lock_script_hash or \
+                 type_script_hash, or use /cells/by-script?code_hash=..&hash_type=.. which \
+                 reads the cell-by-code index directly"
+            } else {
+                "provide lock_script_hash or type_script_hash"
+            };
+            return Err(ApiError::bad_request(format!(
+                "Listing live cells requires a filter that selects an index: {detail}"
+            )));
+        }
+    };
+
+    // Filters the scanned index does not already enforce.
+    let post_type_hash = match index {
+        LiveCellIndex::Lock => type_hash_bytes.as_deref(),
+        LiveCellIndex::Type => None,
+    };
+    let post_type_code_hash = type_code_hash_bytes.as_deref();
+    let post_filtered = post_type_hash.is_some() || post_type_code_hash.is_some();
+
+    let after_key = match params.cursor.as_deref() {
+        None | Some("") => None,
+        Some(cursor) => Some(parse_cell_cursor(cursor, index_hash)?),
+    };
+
+    let raw_cells = scan_live_cells(
+        &state.store,
+        &state.append_only_store,
+        LiveCellScan {
+            index,
+            index_hash,
+            needed: limit + 1,
+            after_key,
+            post_filtered,
+        },
+        |info| {
+            post_type_hash.is_none_or(|want| info.type_script_hash.as_deref() == Some(want))
+                && post_type_code_hash
+                    .is_none_or(|want| info.type_code_hash.as_deref() == Some(want))
+        },
+    )
+    .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let has_more = raw_cells.len() > limit;
     let raw_cells: Vec<_> = raw_cells.into_iter().take(limit).collect();
 
-    // Determine which script hash was used as the index prefix for cursor encoding
-    let index_hash = lock_hash_bytes.as_deref().or(type_hash_bytes.as_deref());
-
+    // The cursor resumes the index that was actually scanned, so it is prefixed
+    // with the same hash `parse_cell_cursor` will check on the next request.
     let next_cursor = if has_more {
-        raw_cells.last().and_then(|(tx_hash, output_index, info)| {
-            index_hash.map(|h| encode_cell_cursor(h, info.created_at_block, tx_hash, *output_index))
+        raw_cells.last().map(|(tx_hash, output_index, info)| {
+            encode_cell_cursor(index_hash, info.created_at_block, tx_hash, *output_index)
         })
     } else {
         None
     };
 
+    let virtual_occupied = state.genesis_baseline()?.virtual_occupied;
     let cells: Vec<CellResponse> = raw_cells
         .iter()
-        .map(|(tx_hash, output_index, info)| cell_info_to_response(tx_hash, *output_index, info))
+        .map(|(tx_hash, output_index, info)| {
+            cell_info_to_response(
+                tx_hash,
+                *output_index,
+                info,
+                &state.ckb_network,
+                virtual_occupied,
+            )
+        })
         .collect();
 
     // Return pre-computed total when filtering by lock_script_hash only.
-    let total = match (&lock_hash_bytes, &type_hash_bytes, &_type_code_hash_bytes) {
+    let total = match (&lock_hash_bytes, &type_hash_bytes, &type_code_hash_bytes) {
         (Some(lock_bytes), None, None) => state
             .store
             .get_addr_balance(lock_bytes)
@@ -1974,23 +2021,188 @@ fn load_script_infos_cached(
         .ok_or_else(|| ApiError::warmup_pending("script cache unavailable; warmup in progress"))
 }
 
+/// Which cell-by-code index a by-script row was enumerated from. In
+/// `script_kind=both` the lock index is exhausted before the type index
+/// starts, so the phase plus the row's raw index key resumes pagination
+/// exactly.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ByScriptPhase {
+    Lock,
+    Type,
+}
+
+impl ByScriptPhase {
+    fn as_str(self) -> &'static str {
+        match self {
+            ByScriptPhase::Lock => "lock",
+            ByScriptPhase::Type => "type",
+        }
+    }
+}
+
+/// One by-script result row: enumeration phase + outpoint + cell payload.
+type ByScriptRow = (
+    ByScriptPhase,
+    Vec<u8>,
+    i16,
+    ckbadger_store::PositionedCellInfo,
+);
+
+/// Parse a `cells/by-script` cursor.
+///
+/// For `script_kind=lock|type` the cursor is the hex-encoded 75-byte
+/// cell-by-code index key of the last returned row. For `script_kind=both` it
+/// is phase-composite: `lock:<hex>` or `type:<hex>`. The key must belong to
+/// the requested `(code_hash, hash_type)` form — anything else is a client
+/// error, not a silent empty page.
+fn parse_by_script_cursor(
+    cursor: &str,
+    script_kind: &str,
+    expected_prefix: &[u8],
+) -> Result<(ByScriptPhase, Vec<u8>), ApiRouteError> {
+    let (phase, key_hex) = match script_kind {
+        "lock" => (ByScriptPhase::Lock, cursor),
+        "type" => (ByScriptPhase::Type, cursor),
+        _ => match cursor.split_once(':') {
+            Some(("lock", rest)) => (ByScriptPhase::Lock, rest),
+            Some(("type", rest)) => (ByScriptPhase::Type, rest),
+            _ => return Err(ApiError::bad_request(
+                "Invalid cursor for script_kind=both: expected \"lock:<hex>\" or \"type:<hex>\"",
+            )),
+        },
+    };
+    let key = hex::decode(key_hex.strip_prefix("0x").unwrap_or(key_hex))
+        .map_err(|_| ApiError::bad_request("Invalid cursor: not a hex-encoded cell index key"))?;
+    if key.len() != keys::CELL_CODE_INDEX_KEY_SIZE || !key.starts_with(expected_prefix) {
+        return Err(ApiError::bad_request(
+            "Invalid cursor: key does not match the requested code_hash/hash_type form",
+        ));
+    }
+    Ok((phase, key))
+}
+
+/// Collect up to `fetch_limit` live cells of the reference form
+/// `(code_hash, hash_type)` for one `script_kind`, resuming from `cursor`.
+///
+/// Each form is a contiguous key range in the cell-by-code indexes, so this
+/// reads rows directly — no cross-form scanning or post-filtering. In `both`
+/// mode the lock index is enumerated to exhaustion first, then the type index;
+/// type-phase rows whose lock script also uses this exact form are skipped
+/// because the lock phase already emitted them.
+fn collect_by_script_rows(
+    store: &ckbadger_store::CkbadgerStore,
+    append_only_store: &ckbadger_store::CkbadgerStore,
+    script_kind: &str,
+    code_hash: &[u8],
+    hash_type: u8,
+    fetch_limit: usize,
+    cursor: Option<(ByScriptPhase, Vec<u8>)>,
+) -> anyhow::Result<Vec<ByScriptRow>> {
+    let mut rows: Vec<ByScriptRow> = Vec::new();
+    match script_kind {
+        "lock" => {
+            let after = cursor.as_ref().map(|(_, key)| key.as_slice());
+            for (tx_hash, output_index, info) in store.list_cells_by_lock_code_hash(
+                code_hash,
+                hash_type,
+                fetch_limit,
+                after,
+                append_only_store,
+            )? {
+                rows.push((ByScriptPhase::Lock, tx_hash, output_index, info));
+            }
+        }
+        "type" => {
+            let after = cursor.as_ref().map(|(_, key)| key.as_slice());
+            for (tx_hash, output_index, info) in store.list_cells_by_type_code_hash(
+                code_hash,
+                hash_type,
+                fetch_limit,
+                after,
+                append_only_store,
+            )? {
+                rows.push((ByScriptPhase::Type, tx_hash, output_index, info));
+            }
+        }
+        "both" => {
+            let (start_phase, after_key) = match cursor {
+                Some((phase, key)) => (phase, Some(key)),
+                None => (ByScriptPhase::Lock, None),
+            };
+            if start_phase == ByScriptPhase::Lock {
+                for (tx_hash, output_index, info) in store.list_cells_by_lock_code_hash(
+                    code_hash,
+                    hash_type,
+                    fetch_limit,
+                    after_key.as_deref(),
+                    append_only_store,
+                )? {
+                    rows.push((ByScriptPhase::Lock, tx_hash, output_index, info));
+                }
+            }
+            if rows.len() < fetch_limit {
+                // Lock phase exhausted (or resuming inside the type phase).
+                let mut type_after: Option<Vec<u8>> = match start_phase {
+                    ByScriptPhase::Type => after_key,
+                    ByScriptPhase::Lock => None,
+                };
+                loop {
+                    let need = fetch_limit - rows.len();
+                    let page = store.list_cells_by_type_code_hash(
+                        code_hash,
+                        hash_type,
+                        need,
+                        type_after.as_deref(),
+                        append_only_store,
+                    )?;
+                    let page_len = page.len();
+                    for (tx_hash, output_index, info) in page {
+                        type_after = Some(keys::encode_cell_code_index_key(
+                            code_hash,
+                            hash_type,
+                            info.created_at_block,
+                            &tx_hash,
+                            output_index,
+                        ));
+                        // A cell whose lock script also uses this exact form
+                        // was already emitted by the exhausted lock phase.
+                        let lock_also_matches = info.cell.lock_code_hash.as_slice() == code_hash
+                            && info.cell.lock_hash_type == i16::from(hash_type);
+                        if lock_also_matches {
+                            continue;
+                        }
+                        rows.push((ByScriptPhase::Type, tx_hash, output_index, info));
+                    }
+                    if rows.len() >= fetch_limit || page_len < need {
+                        break;
+                    }
+                }
+            }
+        }
+        other => anyhow::bail!("unsupported script_kind in collect_by_script_rows: {other}"),
+    }
+    Ok(rows)
+}
+
 async fn list_cells_by_script(
     State(state): State<Arc<AppState>>,
     Query(params): Query<ListCellsByScriptParams>,
 ) -> ApiResult<CursorPaginatedResponse<CellResponse>> {
     let limit = params.limit.clamp(1, 100) as usize;
 
-    let code_hash_bytes = hex::decode(
-        params
-            .code_hash
-            .strip_prefix("0x")
-            .unwrap_or(&params.code_hash),
-    )
-    .map_err(|_| ApiError::bad_request("Invalid code_hash hex"))?;
+    let code_hash_bytes = parse_hash32(&params.code_hash, "code_hash")?;
 
     let hash_type_num = parse_hash_type(&params.hash_type).ok_or_else(|| {
         ApiError::bad_request("Invalid hash_type. Must be one of: data, type, data1, data2")
     })?;
+
+    let script_kind = params.script_kind.as_str();
+    if !matches!(script_kind, "lock" | "type" | "both") {
+        return Err(ApiError::bad_request(
+            "Invalid script_kind. Must be one of: lock, type, both",
+        ));
+    }
+    let is_both = script_kind == "both";
 
     let all_script_infos: Vec<ckbadger_store::ScriptInfo> = load_script_infos_cached(&state)?;
 
@@ -2000,12 +2212,20 @@ async fn list_cells_by_script(
         if let Some(info) = merge_script_info_for_reference(&all_script_infos, &code_hash_bytes) {
             let (type_ref, _) = deployment_reference_hashes(&info);
             if type_ref.is_none() {
-                return ok(CursorPaginatedResponse::new(
-                    Vec::new(),
-                    0,
-                    limit as i64,
-                    None,
-                ));
+                return if is_both {
+                    ok(CursorPaginatedResponse::without_total(
+                        Vec::new(),
+                        limit as i64,
+                        None,
+                    ))
+                } else {
+                    ok(CursorPaginatedResponse::new(
+                        Vec::new(),
+                        0,
+                        limit as i64,
+                        None,
+                    ))
+                };
             }
         }
     }
@@ -2014,114 +2234,123 @@ async fn list_cells_by_script(
         resolve_code_hash_for_hash_type(&all_script_infos, &code_hash_bytes, &params.hash_type)
             .unwrap_or_else(|| code_hash_bytes.clone());
 
-    let script_kind = params.script_kind.as_str();
-
-    // Look up script info from the resolved reference hash to get count.
-    let script_info = all_script_infos
-        .iter()
-        .find(|info| info.code_hash == resolved_code_hash);
-
-    let total: i64 = match (script_kind, script_info) {
-        ("lock", Some(si)) => si.lock_live_cells_count,
-        ("type", Some(si)) => si.type_live_cells_count,
-        (_, Some(si)) => si.lock_live_cells_count + si.type_live_cells_count,
-        (_, None) => 0,
-    };
-
-    // Parse cursor for pagination
-    let after_key = params.cursor.as_deref().and_then(decode_cell_cursor);
-    let after_key_ref = after_key.as_deref();
+    let expected_prefix = keys::encode_cell_code_index_prefix(&resolved_code_hash, hash_type_num);
+    let cursor = params
+        .cursor
+        .as_deref()
+        .map(|cursor| parse_by_script_cursor(cursor, script_kind, &expected_prefix))
+        .transpose()?;
+    let is_first_page = cursor.is_none();
 
     // Fetch limit+1 to detect has_more
     let fetch_limit = limit + 1;
 
-    // Use code_hash indexes for efficient prefix scans
-    let results: Vec<(Vec<u8>, i16, ckbadger_store::PositionedCellInfo)> = match script_kind {
-        "lock" => state
-            .store
-            .list_cells_by_lock_code_hash(
-                &resolved_code_hash,
-                fetch_limit,
-                after_key_ref,
-                &state.append_only_store,
+    // Store reads run on the blocking pool: the prefix scans and per-row
+    // payload loads are synchronous RocksDB I/O.
+    let store = state.store.clone();
+    let append_only_store = state.append_only_store.clone();
+    let script_kind_owned = script_kind.to_string();
+    let resolved_code_hash_blocking = resolved_code_hash.clone();
+    let (rows, total) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+        // Total comes from the per-form reference counters — the same universe
+        // as the rows (live cells whose lock/type script is exactly
+        // {resolved_code_hash, hash_type}). For `both` the deduplicated union
+        // has no cheap exact counter, so total is omitted rather than wrong.
+        let total: Option<i64> = if script_kind_owned == "both" {
+            None
+        } else {
+            let reference_info =
+                store.get_script_reference_info(hash_type_num, &resolved_code_hash_blocking)?;
+            Some(
+                match (script_kind_owned.as_str(), reference_info.as_ref()) {
+                    ("lock", Some(info)) => info.lock_live_cells_count,
+                    ("type", Some(info)) => info.type_live_cells_count,
+                    _ => 0,
+                },
             )
-            .map_err(|e| ApiError::internal(e.to_string()))?,
-        "type" => state
-            .store
-            .list_cells_by_type_code_hash(
-                &resolved_code_hash,
-                fetch_limit,
-                after_key_ref,
-                &state.append_only_store,
-            )
-            .map_err(|e| ApiError::internal(e.to_string()))?,
-        _ => {
-            // "both": merge results from lock and type indexes.
-            // Cursor pagination is not supported for "both" mode because the cursor
-            // from one CF is not valid in the other, causing missing items.
-            if after_key_ref.is_some() {
-                return Err(ApiError::bad_request(
-                    "Cursor pagination is not supported for script_kind=both. Use script_kind=lock or script_kind=type for paginated results.",
-                ));
-            }
-            let mut merged = state
-                .store
-                .list_cells_by_lock_code_hash(
-                    &resolved_code_hash,
-                    fetch_limit,
-                    None,
-                    &state.append_only_store,
-                )
-                .map_err(|e| ApiError::internal(e.to_string()))?;
-            let type_results = state
-                .store
-                .list_cells_by_type_code_hash(
-                    &resolved_code_hash,
-                    fetch_limit,
-                    None,
-                    &state.append_only_store,
-                )
-                .map_err(|e| ApiError::internal(e.to_string()))?;
-            for r in type_results {
-                if merged.len() >= fetch_limit {
-                    break;
-                }
-                // Deduplicate: a cell could match both lock and type
-                if !merged.iter().any(|(h, i, _)| h == &r.0 && *i == r.1) {
-                    merged.push(r);
-                }
-            }
-            merged
-        }
-    };
+        };
+        let rows = collect_by_script_rows(
+            &store,
+            &append_only_store,
+            &script_kind_owned,
+            &resolved_code_hash_blocking,
+            hash_type_num,
+            fetch_limit,
+            cursor,
+        )?;
+        Ok((rows, total))
+    })
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?
+    .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    let has_more = results.len() > limit;
-    let results: Vec<_> = results.into_iter().take(limit).collect();
+    // Rows and total share one universe (live cells of exactly this reference
+    // form). A first page larger than the per-form counter means the counter
+    // is missing or wrong — fail fast instead of reporting a bogus total.
+    if let Some(total) = total {
+        if is_first_page && rows.len() as i64 > total {
+            return Err(ApiError::internal(format!(
+                "cells/by-script rows exceed the per-form reference counter: code_hash=0x{}, hash_type={}, script_kind={}, rows={}, total={}",
+                hex::encode(&resolved_code_hash),
+                hash_type_num,
+                script_kind,
+                rows.len(),
+                total
+            )));
+        }
+    }
+
+    let has_more = rows.len() > limit;
+    let rows: Vec<ByScriptRow> = rows.into_iter().take(limit).collect();
 
     let next_cursor = if has_more {
-        results.last().map(|(tx_hash, output_index, info)| {
-            encode_cell_cursor(
+        rows.last().map(|(phase, tx_hash, output_index, info)| {
+            let key = keys::encode_cell_code_index_key(
                 &resolved_code_hash,
+                hash_type_num,
                 info.created_at_block,
                 tx_hash,
                 *output_index,
-            )
+            );
+            if is_both {
+                format!("{}:{}", phase.as_str(), hex::encode(key))
+            } else {
+                hex::encode(key)
+            }
         })
     } else {
         None
     };
 
-    let cells: Vec<CellResponse> = results
+    let virtual_occupied = state.genesis_baseline()?.virtual_occupied;
+    let cells: Vec<CellResponse> = rows
         .iter()
-        .map(|(tx_hash, output_index, info)| cell_info_to_response(tx_hash, *output_index, info))
+        .map(|(phase, tx_hash, output_index, info)| {
+            let mut cell = cell_info_to_response(
+                tx_hash,
+                *output_index,
+                info,
+                &state.ckb_network,
+                virtual_occupied,
+            );
+            cell.matched_script_kind = Some(phase.as_str().to_string());
+            cell
+        })
         .collect();
 
-    ok(CursorPaginatedResponse::new(
-        cells,
-        total,
-        limit as i64,
-        next_cursor,
-    ))
+    match total {
+        Some(total) => ok(CursorPaginatedResponse::new(
+            cells,
+            total,
+            limit as i64,
+            next_cursor,
+        )),
+        None => ok(CursorPaginatedResponse::without_total(
+            cells,
+            limit as i64,
+            next_cursor,
+        )),
+    }
 }
 
 async fn get_address(
@@ -2134,13 +2363,25 @@ async fn get_address(
         return ok(cached);
     }
 
-    let (lock_hash, input_address) = if is_ckb_address(&addr) {
-        let hash = address_to_lock_script_hash(&addr)
+    let (lock_hash, canonical_input_address) = if is_ckb_address(&addr) {
+        let script = parse_address_to_script(&addr)
             .map_err(|e| ApiError::bad_request(format!("Invalid CKB address: {}", e)))?;
-        (hash, Some(addr.clone()))
+        let hash = compute_script_hash(&script.code_hash, script.hash_type, &script.args);
+        // The response `address` is always the canonical encoding of the lock
+        // script on the serving network — computed through the same
+        // `script_to_address` path as every other handler, never the raw input
+        // echoed back (uppercase input canonicalizes to lowercase, a
+        // foreign-HRP input to this network's HRP).
+        let canonical = script_to_address(
+            &script.code_hash,
+            script.hash_type as i16,
+            &script.args,
+            &state.ckb_network,
+        )
+        .map_err(|e| ApiError::bad_request(format!("Invalid CKB address: {}", e)))?;
+        (hash, Some(canonical))
     } else {
-        let hash = hex::decode(addr.strip_prefix("0x").unwrap_or(&addr))
-            .map_err(|_| ApiError::bad_request("Invalid address/lock script hash"))?;
+        let hash = parse_hash32(&addr, "address/lock script hash")?;
         (hash, None)
     };
 
@@ -2162,66 +2403,77 @@ async fn get_address(
         None => ("0".to_string(), "0".to_string(), 0, 0),
     };
 
-    // Try to find a cell for this lock hash to get the lock script details
+    // Resolve the lock script through the single canonical path: `CF_LOCK_SCRIPTS`
+    // (written once per lock at cell creation, never deleted). Deriving it from a
+    // live cell instead would lose the script the moment an address is fully spent
+    // (completed DAO withdrawers, emptied wallets), which is exactly the state the
+    // rest of the response still describes.
     let store = state.store.clone();
-    let ao_store = state.append_only_store.clone();
     let lock_hash_c = lock_hash.clone();
-    let cells_for_script = tokio::task::spawn_blocking(move || {
-        store.list_cells_by_lock(&lock_hash_c, 1, None, &ao_store)
-    })
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?
-    .map_err(|e| ApiError::internal(e.to_string()))?;
+    let lock_script_entry =
+        tokio::task::spawn_blocking(move || store.get_lock_script(&lock_hash_c))
+            .await
+            .map_err(|e| ApiError::internal(e.to_string()))?
+            .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    let (lock_script, lock_script_info, address) = if let Some((_, _, info)) =
-        cells_for_script.first()
-    {
+    let (lock_script, lock_script_info, address) = if let Some(entry) = lock_script_entry {
         let store = state.store.clone();
-        let code_hash_c = info.lock_code_hash.clone();
+        let code_hash_c = entry.code_hash.clone();
         let script_info = tokio::task::spawn_blocking(move || store.get_script_info(&code_hash_c))
             .await
             .map_err(|e| ApiError::internal(e.to_string()))?
             .map_err(|e| ApiError::internal(e.to_string()))?;
 
-        // Use the cell's own stored lock_hash_type (not script_info canonical default)
-        let hash_type_num = info.lock_hash_type;
-
-        let hash_type_str = match hash_type_num {
-            0 => "data",
-            1 => "type",
-            2 => "data1",
-            4 => "data2",
-            _ => "data",
-        };
+        // The stored per-lock hash_type is authoritative (never a script_info
+        // canonical default). Only 0/1/2/4 are valid on chain, so anything else is
+        // upstream store corruption and must be reported, not rendered as a guess.
+        let hash_type_str = hash_type_to_str(entry.hash_type).ok_or_else(|| {
+            ApiError::internal(format!(
+                "invalid stored lock hash_type: lock_hash=0x{}, hash_type={}",
+                hex::encode(&lock_hash),
+                entry.hash_type
+            ))
+        })?;
 
         let script = ScriptResponse {
-            code_hash: format!("0x{}", hex::encode(&info.lock_code_hash)),
+            code_hash: format!("0x{}", hex::encode(&entry.code_hash)),
             hash_type: hash_type_str.to_string(),
-            args: format!("0x{}", hex::encode(&info.lock_args)),
+            args: format!("0x{}", hex::encode(&entry.args)),
         };
 
-        let addr = input_address.or_else(|| {
+        // Canonical encoding from the stored lock script (identical to the
+        // input-derived script when the query was an address: equal lock
+        // hashes imply equal scripts).
+        let addr = Some(
             script_to_address(
-                &info.lock_code_hash,
-                hash_type_num,
-                &info.lock_args,
+                &entry.code_hash,
+                entry.hash_type,
+                &entry.args,
                 &state.ckb_network,
             )
-            .ok()
-        });
+            .map_err(|e| {
+                ApiError::internal(format!(
+                    "failed to encode address: lock_hash=0x{}, error={}",
+                    hex::encode(&lock_hash),
+                    e
+                ))
+            })?,
+        );
 
         let script_info_response = script_info.map(|si| LockScriptInfo {
             code_hash: format!("0x{}", hex::encode(&si.code_hash)),
             name: si.name.unwrap_or_else(|| "Unknown".to_string()),
             script_kind: Some("lock".to_string()),
-            deprecated: false,
+            deprecated: si.deprecated,
         });
 
         (Some(script), script_info_response, addr)
     } else {
-        // No live cells found, also check consumed cells for script info.
-        // For now, just return what we have.
-        (None, None, input_address)
+        // No cell with this lock has ever been indexed, so the store knows no
+        // script components: report no guessed `lockScript`. When the query
+        // itself was an address, its decoded lock script still yields the
+        // canonical encoding (same `script_to_address` path as above).
+        (None, None, canonical_input_address)
     };
 
     let recent_activities_count = transactions_count;
@@ -2407,10 +2659,11 @@ async fn get_cell(
     State(state): State<Arc<AppState>>,
     axum::extract::Path((tx_hash, output_index)): axum::extract::Path<(String, i32)>,
 ) -> ApiResult<CellDetailResponse> {
-    let hash_bytes = hex::decode(tx_hash.strip_prefix("0x").unwrap_or(&tx_hash))
-        .map_err(|_| ApiError::bad_request("Invalid transaction hash"))?;
+    let hash_bytes = parse_hash32(&tx_hash, "tx_hash")?;
 
-    let output_idx = output_index as i16;
+    // The old `as i16` wrapped: output 65536 became output 0 and this handler
+    // served output 0's body as the requested outpoint.
+    let output_idx = parse_output_index(output_index, "output index")?;
 
     // Try live cells first, then consumed
     let store = state.store.clone();
@@ -2444,23 +2697,38 @@ async fn get_cell(
     };
 
     // Use the cell's own stored hash_type (not from script_info, which is a canonical
-    // default and may differ from the actual per-cell hash_type).
+    // default and may differ from the actual per-cell hash_type). Only 0/1/2/4 are
+    // valid on chain, so anything else is upstream store corruption and must be
+    // reported, not rendered as a guess — the same rule `get_address` applies, via
+    // the same `hash_type_to_str` so this module keeps one conversion path.
+    let outpoint = format!("0x{}:{}", hex::encode(&hash_bytes), output_idx);
     let lock_hash_type_num: i16 = info.lock_hash_type;
-
-    let hash_type_str = |ht: i16| match ht {
-        0 => "data",
-        1 => "type",
-        2 => "data1",
-        4 => "data2",
-        _ => "data",
-    };
+    let lock_hash_type_str = hash_type_to_str(lock_hash_type_num).ok_or_else(|| {
+        ApiError::internal(format!(
+            "invalid stored lock hash_type: outpoint={}, hash_type={}",
+            outpoint, lock_hash_type_num
+        ))
+    })?;
 
     let type_script = if let Some(code_hash) = info.type_code_hash.as_ref() {
-        // Use the cell's own stored type_hash_type (not script_info canonical default)
-        let type_hash_type_num: i16 = info.type_hash_type.unwrap_or(1);
+        // Use the cell's own stored type_hash_type (not script_info canonical
+        // default). A cell that has a type code_hash always had a hash_type on
+        // chain, so a missing one is an incomplete indexer write, not a default.
+        let type_hash_type_num: i16 = info.type_hash_type.ok_or_else(|| {
+            ApiError::internal(format!(
+                "cell has a type script code_hash but no stored type hash_type: outpoint={}",
+                outpoint
+            ))
+        })?;
+        let type_hash_type_str = hash_type_to_str(type_hash_type_num).ok_or_else(|| {
+            ApiError::internal(format!(
+                "invalid stored type hash_type: outpoint={}, hash_type={}",
+                outpoint, type_hash_type_num
+            ))
+        })?;
         Some(ScriptResponse {
             code_hash: format!("0x{}", hex::encode(code_hash)),
-            hash_type: hash_type_str(type_hash_type_num).to_string(),
+            hash_type: type_hash_type_str.to_string(),
             args: format!(
                 "0x{}",
                 info.type_args
@@ -2472,13 +2740,22 @@ async fn get_cell(
         None
     };
 
-    let address = script_to_address(
-        &info.lock_code_hash,
-        lock_hash_type_num,
-        &info.lock_args,
-        &state.ckb_network,
-    )
-    .ok();
+    // Every cell has a lock, so it always has an address. Swallowing the encoder
+    // error rendered `address: null`, indistinguishable from a cell that has none.
+    let address = Some(
+        script_to_address(
+            &info.lock_code_hash,
+            lock_hash_type_num,
+            &info.lock_args,
+            &state.ckb_network,
+        )
+        .map_err(|e| {
+            ApiError::internal(format!(
+                "failed to encode address: outpoint={}, error={}",
+                outpoint, e
+            ))
+        })?,
+    );
 
     // For cell data (e.g. dep groups), read from CKB direct store if available
     let cell_data = state.ckb_store.as_ref().and_then(|ckb| {
@@ -2528,11 +2805,14 @@ async fn get_cell(
             .saturating_mul(SHANNONS_PER_CKB)
     };
 
-    let is_satoshi = is_genesis_special_burn_cell(&info.lock_args, info.created_at_block);
+    let is_satoshi = info.created_at_block == 0
+        && ckbadger_common::burn_policy::burn_policy(&state.ckb_network)
+            .is_some_and(|p| info.lock_args.as_slice() == p.lock_args);
     let (cell_type, virtual_occupied_capacity) = if is_satoshi {
+        let virtual_occupied = state.genesis_baseline()?.virtual_occupied;
         (
             Some("genesis_special_burn".to_string()),
-            Some(GENESIS_SPECIAL_BURN_CELL_VIRTUAL_OCCUPIED.to_string()),
+            Some(virtual_occupied.to_string()),
         )
     } else {
         (None, None)
@@ -2568,7 +2848,7 @@ async fn get_cell(
         consumed_by_tx,
         lock: ScriptResponse {
             code_hash: format!("0x{}", hex::encode(&info.lock_code_hash)),
-            hash_type: hash_type_str(lock_hash_type_num).to_string(),
+            hash_type: lock_hash_type_str.to_string(),
             args: format!("0x{}", hex::encode(&info.lock_args)),
         },
         type_script,
@@ -2730,13 +3010,12 @@ async fn get_address_transactions(
         address_to_lock_script_hash(&addr)
             .map_err(|e| ApiError::bad_request(format!("Invalid CKB address: {}", e)))?
     } else {
-        hex::decode(addr.strip_prefix("0x").unwrap_or(&addr))
-            .map_err(|_| ApiError::bad_request("Invalid address/lock script hash"))?
+        parse_hash32(&addr, "address/lock script hash")?
     };
 
     let limit = params.limit.clamp(1, 100) as usize;
 
-    let cursor = params.cursor.as_ref().and_then(|c| decode_cursor(c));
+    let cursor = parse_optional_block_tx_cursor(params.cursor.as_deref(), "cursor")?;
 
     // Fetch canonical recent transactions for this address (newest first).
     // Each row now includes the materialized AddrTxValue with capacity_change and tx_type.
@@ -2882,8 +3161,7 @@ async fn get_address_tokens(
         address_to_lock_script_hash(&addr)
             .map_err(|e| ApiError::bad_request(format!("Invalid CKB address: {}", e)))?
     } else {
-        hex::decode(addr.strip_prefix("0x").unwrap_or(&addr))
-            .map_err(|_| ApiError::bad_request("Invalid address/lock script hash"))?
+        parse_hash32(&addr, "address/lock script hash")?
     };
 
     let limit = params.limit.clamp(1, 100) as usize;
@@ -2948,7 +3226,7 @@ async fn get_address_tokens(
                 standard: token_info.standard.clone(),
                 name: token_info.name.clone(),
                 symbol: token_info.symbol.clone(),
-                decimals: token_info.decimals.unwrap_or(0) as i16,
+                decimals: token_info.decimals.map(|d| d as i16),
                 icon_url: token_info.icon_url.clone(),
                 balance: balance.to_string(),
             })
@@ -3023,6 +3301,10 @@ mod tests {
         out.extend_from_slice(bytes);
         out
     }
+
+    /// The mainnet-derived `baseline.virtual_occupied` (shannons): the genesis
+    /// burnt capacity (8.4B CKB) times the 6/10 occupied ratio == 504e15.
+    const VIRTUAL_OCCUPIED_MAINNET: i128 = 504_000_000_000_000_000;
 
     fn make_payload() -> LiveCellInfo {
         LiveCellInfo {
@@ -3099,7 +3381,7 @@ mod tests {
     fn test_cell_info_to_response_normal() {
         let info = make_info();
         let tx_hash = vec![3u8; 32];
-        let resp = cell_info_to_response(&tx_hash, 0, &info);
+        let resp = cell_info_to_response(&tx_hash, 0, &info, "mainnet", VIRTUAL_OCCUPIED_MAINNET);
         assert_eq!(resp.output_index, 0);
         assert_eq!(resp.capacity, "10000000000");
         assert!(resp.cell_type.is_none());
@@ -3115,8 +3397,66 @@ mod tests {
         };
         let info = positioned(info);
         let tx_hash = vec![4u8; 32];
-        let resp = cell_info_to_response(&tx_hash, 1, &info);
+        let resp = cell_info_to_response(&tx_hash, 1, &info, "mainnet", VIRTUAL_OCCUPIED_MAINNET);
         assert_eq!(resp.udt_amount.as_deref(), Some("12345"));
+    }
+
+    /// A genesis (block 0) output whose lock args equal the Satoshi dead-address
+    /// pubkey hash is tagged `genesis_special_burn` and reports the network's
+    /// derived `baseline.virtual_occupied` as `virtualUsedCapacity`.
+    #[test]
+    fn test_cell_info_to_response_genesis_satoshi_burn_tagged() {
+        use ckbadger_common::dao::SATOSHI_PUBKEY_HASH;
+        let payload = LiveCellInfo {
+            lock_args: SATOSHI_PUBKEY_HASH.to_vec(),
+            ..make_payload()
+        };
+        // created_at_block == 0 -> genesis output
+        let info = ckbadger_store::PositionedCellInfo::new(payload, 0);
+        let tx_hash = vec![5u8; 32];
+        let resp = cell_info_to_response(&tx_hash, 0, &info, "mainnet", VIRTUAL_OCCUPIED_MAINNET);
+        assert_eq!(resp.cell_type.as_deref(), Some("genesis_special_burn"));
+        assert_eq!(
+            resp.virtual_used_capacity.as_deref(),
+            Some("504000000000000000")
+        );
+    }
+
+    /// A Satoshi-args output that is NOT at genesis (block > 0) is not tagged;
+    /// nor is a genesis output with non-Satoshi lock args.
+    #[test]
+    fn test_cell_info_to_response_non_genesis_or_non_satoshi_not_tagged() {
+        use ckbadger_common::dao::SATOSHI_PUBKEY_HASH;
+        // Satoshi args but block 100 -> not a genesis burn cell.
+        let satoshi_non_genesis = ckbadger_store::PositionedCellInfo::new(
+            LiveCellInfo {
+                lock_args: SATOSHI_PUBKEY_HASH.to_vec(),
+                ..make_payload()
+            },
+            100,
+        );
+        let tx_hash = vec![6u8; 32];
+        let resp = cell_info_to_response(
+            &tx_hash,
+            0,
+            &satoshi_non_genesis,
+            "mainnet",
+            VIRTUAL_OCCUPIED_MAINNET,
+        );
+        assert!(resp.cell_type.is_none());
+        assert!(resp.virtual_used_capacity.is_none());
+
+        // Genesis (block 0) but non-Satoshi args -> not tagged.
+        let genesis_non_satoshi = ckbadger_store::PositionedCellInfo::new(make_payload(), 0);
+        let resp = cell_info_to_response(
+            &tx_hash,
+            0,
+            &genesis_non_satoshi,
+            "mainnet",
+            VIRTUAL_OCCUPIED_MAINNET,
+        );
+        assert!(resp.cell_type.is_none());
+        assert!(resp.virtual_used_capacity.is_none());
     }
 
     #[test]
@@ -3176,6 +3516,38 @@ mod tests {
         assert_eq!(deterministic.segments[0].human_value, "42");
     }
 
+    // Testnet sUDT type-script code_hash. Distinct from the mainnet SUDT_CODE_HASH,
+    // it is only classifiable because detection now flows through the shared
+    // network-agnostic PROTOCOL_REGISTRY instead of mainnet-only local consts.
+    const TESTNET_SUDT_CODE_HASH: &str =
+        "0xc5e5dcf215925f7ef4dfaf5f4b4f105bc321c02776d6e7d52a1db3fcd9d011a4";
+
+    #[test]
+    fn test_analyze_cell_data_detects_testnet_udt_amount_segments() {
+        let info = LiveCellInfo {
+            type_code_hash: Some(
+                hex::decode(TESTNET_SUDT_CODE_HASH.trim_start_matches("0x")).unwrap(),
+            ),
+            type_script_hash: Some(vec![0x11; 32]),
+            data_size: 16,
+            ..make_payload()
+        };
+        let info = positioned(info);
+        let mut data = vec![0u8; 16];
+        data[0] = 0x2a;
+
+        let analysis = analyze_cell_data(&info, &data, 16);
+        let deterministic = analysis
+            .deterministic
+            .expect("testnet sUDT must classify as UDT via the registry");
+        assert_eq!(deterministic.kind, "udt_amount");
+        assert_eq!(deterministic.segments.len(), 1);
+        assert_eq!(deterministic.segments[0].label, "amount");
+        assert_eq!(deterministic.segments[0].start, 0);
+        assert_eq!(deterministic.segments[0].end, 16);
+        assert_eq!(deterministic.segments[0].human_value, "42");
+    }
+
     #[test]
     fn test_analyze_cell_data_detects_spore_segments() {
         let info = LiveCellInfo {
@@ -3203,6 +3575,17 @@ mod tests {
         assert!(deterministic.segments.iter().any(|s| {
             s.label == "cluster_id" && s.human_value == format!("0x{}", hex::encode(&cluster_id))
         }));
+    }
+
+    #[test]
+    fn test_bit_cell_is_not_classified_as_spore() {
+        for code_hash in [
+            "0xcfba73b58b6f30e70caed8a999748781b164ef9a1e218424a6fb55ebf641cb33",
+            "0x0b1f412fbae26853ff7d082d422c2bdd9e2ff94ee8aaec11240a5b34cc6e890f",
+        ] {
+            let bytes = hex::decode(code_hash.trim_start_matches("0x")).unwrap();
+            assert!(!is_spore_type_code_hash(&bytes));
+        }
     }
 
     #[test]
@@ -3366,6 +3749,39 @@ mod tests {
             .segments
             .iter()
             .any(|s| s.label == "state" && s.human_value == "0x04"));
+    }
+
+    // Testnet mNFT token code_hash (m-nft.toml `[testnet]`). Proves the registry-backed
+    // `is_mnft_token_type_code_hash` classifies testnet cells — the mainnet-only local
+    // const could not, which is exactly the testnet gap this migration closes.
+    const TESTNET_MNFT_TOKEN_CODE_HASH: &str =
+        "0xb1837b5ad01a88558731953062d1f5cb547adf89ece01e8934a9f0aeed2d959f";
+
+    #[test]
+    fn test_analyze_cell_data_detects_testnet_mnft_token_segments() {
+        let info = LiveCellInfo {
+            type_code_hash: Some(
+                hex::decode(TESTNET_MNFT_TOKEN_CODE_HASH.trim_start_matches("0x")).unwrap(),
+            ),
+            type_script_hash: Some(vec![0x24; 32]),
+            ..make_payload()
+        };
+        let info = positioned(info);
+        let mut data = Vec::new();
+        data.push(3); // version
+        data.extend_from_slice(&[0xde, 0xad, 0xbe, 0xef, 0x00, 0x11, 0x22, 0x33]); // characteristic
+        data.push(0x00); // configure
+        data.push(0x00); // state
+
+        let analysis = analyze_cell_data(&info, &data, data.len() as i32);
+        let deterministic = analysis
+            .deterministic
+            .expect("testnet mNFT token must classify via the registry");
+        assert_eq!(deterministic.kind, "mnft_token_cell");
+        assert!(deterministic
+            .segments
+            .iter()
+            .any(|s| s.label == "characteristic" && s.human_value == "0xdeadbeef00112233"));
     }
 
     #[test]
@@ -3675,10 +4091,25 @@ mod tests {
         let labels = script_labels_from_semantic_tags(st::DAO | st::XUDT | st::CLUSTER);
         assert_eq!(labels, vec!["NervosDAO", "xUDT", "Spore Cluster"]);
 
+        // did:ckb is an independent identity protocol with its own tag/label.
+        assert_eq!(
+            script_labels_from_semantic_tags(st::DID_CKB),
+            vec!["did:ckb"]
+        );
+        assert_ne!(st::DID_CKB, st::SPORE);
+        assert_ne!(st::DID_CKB, st::BIT_CELL);
+
         // All bits set.
-        let all = st::DAO | st::SUDT | st::XUDT | st::DOTBIT | st::MNFT | st::SPORE | st::CLUSTER;
+        let all = st::DAO
+            | st::SUDT
+            | st::XUDT
+            | st::DOTBIT
+            | st::MNFT
+            | st::SPORE
+            | st::CLUSTER
+            | st::DID_CKB;
         let labels = script_labels_from_semantic_tags(all);
-        assert_eq!(labels.len(), 7);
+        assert_eq!(labels.len(), 8);
     }
 
     #[test]
@@ -3795,6 +4226,19 @@ mod tests {
         let (balance, type_hash) = super::parse_address_token_cursor(&cursor).unwrap();
         assert_eq!(balance, 200);
         assert_eq!(type_hash, vec![0xBB; 32]);
+    }
+
+    #[test]
+    fn test_parse_address_token_cursor_accepts_balance_above_u128() {
+        let cursor = format!(
+            "531691198313966349161522824112137830400:{}",
+            "bb".repeat(32)
+        );
+        let (balance, _) = super::parse_address_token_cursor(&cursor).unwrap();
+        assert_eq!(
+            balance.to_string(),
+            "531691198313966349161522824112137830400"
+        );
     }
 
     #[test]

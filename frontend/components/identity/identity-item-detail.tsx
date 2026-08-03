@@ -36,7 +36,7 @@ import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
 import { formatNumber } from '@/lib/utils';
 
 export interface IdentityItemDetailConfig {
-  standard: 'dotbit' | 'did_ckb';
+  standard: 'dotbit' | 'did_ckb' | 'bit_cell';
   fetchDetail: (identityId: string) => Promise<CollectionItem>;
   fetchActivities: (
     identityId: string,

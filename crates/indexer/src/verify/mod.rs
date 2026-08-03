@@ -19,6 +19,10 @@ use checks::{execute_check, Check, CheckContext, CheckTier, CompletedCheck, Prog
 /// CLI arguments for the verify subcommand.
 #[derive(clap::Args, Debug)]
 pub struct VerifyArgs {
+    /// CKB network whose data is being verified.
+    #[arg(long, default_value = "mainnet")]
+    pub network: String,
+
     /// ckbadger API base URL.
     #[arg(long, default_value = "http://localhost:3001/api/v1")]
     pub api_url: String,
@@ -123,6 +127,8 @@ pub fn run(args: VerifyArgs) -> anyhow::Result<()> {
     } else {
         Some(args.explorer_url.clone())
     };
+    let network = ckbadger_common::hardfork::normalize_network(&args.network)
+        .ok_or_else(|| anyhow::anyhow!("unsupported verify network '{}'", args.network))?;
 
     let cache_dir = args.cache_dir.as_ref().map(PathBuf::from).or_else(|| {
         // Default cache dir next to working directory
@@ -130,6 +136,7 @@ pub fn run(args: VerifyArgs) -> anyhow::Result<()> {
     });
 
     let ctx = CheckContext {
+        network,
         api_url: args.api_url.clone(),
         rpc_url: args.rpc_url.clone(),
         explorer_url,

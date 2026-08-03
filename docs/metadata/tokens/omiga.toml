@@ -1,3 +1,9 @@
+# The canonical OMIGA inscription token (post-rebase). Node-verified
+# 2026-08-03: type hash 0xbc48f995eee8f5c2a5610985a5cc02d5d01f08b1a5c42230716191fca29afb76,
+# 1 live cell, supply 100000000000000000; matches CKB Explorer's omiga registry
+# entry (udt_type omiga_inscription, mint_status rebase_start, decimal 8).
+# The previous args 0x4750dcbc… decorated an unrelated 1-cell deployment
+# (type hash 0xdf7d1cab…, supply 2.1e23) absent from the omiga registry.
 name = "OMIGA"
 symbol = "OMIGA"
 decimals = 8
@@ -6,4 +12,4 @@ standard = "xudt"
 [mainnet]
 code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
 hash_type = "data1"
-args = "0x4750dcbc2e79f5ee9fb49537937efba45254ff0a79cc76b049d988d6d782a9b3"
+args = "0x584089c75f490d84306fd055629a4db773b75b057c8dccf3231e12a6b8c66e5c"

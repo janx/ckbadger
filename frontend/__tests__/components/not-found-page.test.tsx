@@ -28,13 +28,16 @@ describe('NotFoundPage', () => {
     expect(screen.getByText(/cell_not_found/)).toBeInTheDocument();
 
     // Header nav links still present
-    expect(screen.getByRole('link', { name: 'DAO' })).toHaveAttribute('href', '/dao');
+    expect(screen.getByRole('link', { name: 'DAO' })).toHaveAttribute('href', '/mainnet/dao');
     expect(screen.getByRole('link', { name: 'Tokens' })).toHaveAttribute(
       'href',
-      '/inventory/tokens'
+      '/mainnet/inventory/tokens'
     );
-    expect(screen.getByRole('link', { name: 'Scripts' })).toHaveAttribute('href', '/scripts');
-    expect(screen.getByRole('link', { name: 'Charts' })).toHaveAttribute('href', '/charts');
+    expect(screen.getByRole('link', { name: 'Scripts' })).toHaveAttribute(
+      'href',
+      '/mainnet/scripts'
+    );
+    expect(screen.getByRole('link', { name: 'Charts' })).toHaveAttribute('href', '/mainnet/charts');
 
     // No debug UI
     expect(screen.queryByText('Ocean Tuning')).not.toBeInTheDocument();

@@ -52,6 +52,8 @@ pub enum ServiceStatus {
     Stopped,
     /// Service is being restarted after a crash.
     Restarting,
+    /// Service hit a persistent state that requires operator action.
+    Blocked,
 }
 
 impl std::fmt::Display for ServiceStatus {
@@ -60,6 +62,7 @@ impl std::fmt::Display for ServiceStatus {
             Self::Running => write!(f, "running"),
             Self::Stopped => write!(f, "stopped"),
             Self::Restarting => write!(f, "restarting"),
+            Self::Blocked => write!(f, "blocked"),
         }
     }
 }
@@ -151,6 +154,12 @@ mod tests {
                     status: ServiceStatus::Stopped,
                     uptime_secs: 0,
                 },
+                ServiceInfo {
+                    name: "testnet/indexer".to_string(),
+                    pid: 0,
+                    status: ServiceStatus::Blocked,
+                    uptime_secs: 0,
+                },
             ],
         };
 
@@ -158,13 +167,15 @@ mod tests {
         let parsed: IpcResponse = serde_json::from_str(&json).unwrap();
         match parsed {
             IpcResponse::ServiceStatus { services } => {
-                assert_eq!(services.len(), 2);
+                assert_eq!(services.len(), 3);
                 assert_eq!(services[0].name, "indexer");
                 assert_eq!(services[0].pid, 1000);
                 assert_eq!(services[0].status, ServiceStatus::Running);
                 assert_eq!(services[0].uptime_secs, 120);
                 assert_eq!(services[1].name, "api");
                 assert_eq!(services[1].status, ServiceStatus::Stopped);
+                assert_eq!(services[2].name, "testnet/indexer");
+                assert_eq!(services[2].status, ServiceStatus::Blocked);
             }
             _ => panic!("expected ServiceStatus"),
         }
@@ -175,5 +186,6 @@ mod tests {
         assert_eq!(format!("{}", ServiceStatus::Running), "running");
         assert_eq!(format!("{}", ServiceStatus::Stopped), "stopped");
         assert_eq!(format!("{}", ServiceStatus::Restarting), "restarting");
+        assert_eq!(format!("{}", ServiceStatus::Blocked), "blocked");
     }
 }

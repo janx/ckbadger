@@ -3,23 +3,28 @@ use chrono::Utc;
 use tracing::info;
 
 use ckbadger_store::batch::StoreBatch;
-use ckbadger_store::keys::sync_meta_keys;
-use ckbadger_store::types::{DeepForkInfo, ReorgEvent};
+use ckbadger_store::keys::{self, sync_meta_keys};
+use ckbadger_store::types::{DeepForkInfo, ReorgEvent, ReorgEventKind};
 use ckbadger_store::CkbadgerStore;
 
 use super::BatchWriter;
 
-fn next_reorg_event_key() -> String {
-    let ts_ms = Utc::now().timestamp_millis();
-    let uuid_hex = hex::encode(uuid::Uuid::new_v4().as_bytes());
-    format!("reorg:{}:{}", ts_ms, uuid_hex)
+/// Build the history key for an event detected now.
+///
+/// The millisecond field orders the history and the uuid keeps two events
+/// detected in the same millisecond distinct.
+fn next_reorg_event_key() -> Result<String> {
+    keys::encode_reorg_event_key(
+        Utc::now().timestamp_millis(),
+        uuid::Uuid::new_v4().as_bytes(),
+    )
 }
 
 impl BatchWriter {
     pub fn record_deep_fork(
         &self,
         fork_point: i64,
-        _fork_hash: &[u8],
+        fork_hash: &[u8],
         db_tip: i64,
         db_tip_hash: &[u8],
         chain_tip: i64,
@@ -31,11 +36,20 @@ impl BatchWriter {
             .map_err(|_| anyhow!("reorg depth exceeds i32 range: depth={}", depth))?;
         let event = ReorgEvent {
             detected_at: Utc::now().timestamp(),
-            rollback_from: fork_point + 1,
-            rollback_to: fork_point,
+            kind: ReorgEventKind::Deep,
+            fork_point,
+            fork_point_hash: fork_hash.to_vec(),
+            old_tip: db_tip,
+            old_tip_hash: db_tip_hash.to_vec(),
+            new_tip: chain_tip,
+            new_tip_hash: chain_tip_hash.to_vec(),
             depth: depth_i32,
+            // A deep fork pauses sync instead of rolling back, so nothing is
+            // orphaned yet.
+            orphaned_blocks: 0,
+            orphaned_txs: 0,
         };
-        let event_key = next_reorg_event_key();
+        let event_key = next_reorg_event_key()?;
         let event_bytes = bincode::serialize(&event)?;
         let mut status = self.store.get_sync_status()?;
         status.deep_fork_detected = true;
@@ -51,7 +65,6 @@ impl BatchWriter {
 
         let mut batch = StoreBatch::new(self.store.as_ref());
         batch.put_sync_meta(event_key.as_bytes(), &event_bytes);
-        batch.put_sync_meta(sync_meta_keys::REORG_LATEST_EVENT, &event_bytes);
         batch.put_sync_meta(sync_meta_keys::SYNC_STATUS, &status_bytes);
         batch.commit()?;
 
@@ -64,9 +77,9 @@ impl BatchWriter {
         fork_point: i64,
         fork_hash: &[u8],
         old_tip: i64,
-        _old_tip_hash: &[u8],
-        _new_tip: i64,
-        _new_tip_hash: &[u8],
+        old_tip_hash: &[u8],
+        new_tip: i64,
+        new_tip_hash: &[u8],
     ) -> Result<ReorgResult> {
         let depth = i32::try_from(old_tip - fork_point).map_err(|_| {
             anyhow!(
@@ -85,7 +98,7 @@ impl BatchWriter {
         let undo_result = self.store.rollback_via_undo_log(append_store, fork_point)?;
         // Domain rollback for canonical mutable state (cells, blocks, stats,
         // aggregates rebuilt from now-correct entity data).
-        self.store.rollback_to_block_with_tx_contexts(
+        let rollback = self.store.rollback_to_block_with_tx_contexts(
             fork_point,
             Some(append_store),
             undo_result.tx_contexts,
@@ -97,18 +110,39 @@ impl BatchWriter {
         append_store.flush_all_memtables()?;
         // Re-derive script version/family rollups from the corrected reference info.
         self.refresh_script_reference_rollups()?;
-        // Re-derive DAO singleton stats (latest stats + top depositors) which were
-        // deleted during rollback by should_delete_stats_for_replay().
+        // Advance the DAO singleton stats (latest stats + top depositors) to the
+        // post-rollback tip. Rollback deliberately leaves the pre-rollback row
+        // in place — it is never deleted — so the read path always has a value
+        // and this refresh overwrites it rather than filling a gap.
         self.refresh_latest_dao_statistics()?;
 
         // Record reorg event and clear deep fork flag in one sync_meta batch.
+        let orphaned_blocks = i64::try_from(rollback.blocks_removed).map_err(|_| {
+            anyhow!(
+                "rolled-back block count exceeds i64 range: blocks_removed={}",
+                rollback.blocks_removed
+            )
+        })?;
+        let orphaned_txs = i64::try_from(rollback.txs_removed).map_err(|_| {
+            anyhow!(
+                "rolled-back transaction count exceeds i64 range: txs_removed={}",
+                rollback.txs_removed
+            )
+        })?;
         let event = ReorgEvent {
             detected_at: Utc::now().timestamp(),
-            rollback_from: fork_point + 1,
-            rollback_to: fork_point,
+            kind: ReorgEventKind::Automatic,
+            fork_point,
+            fork_point_hash: fork_hash.to_vec(),
+            old_tip,
+            old_tip_hash: old_tip_hash.to_vec(),
+            new_tip,
+            new_tip_hash: new_tip_hash.to_vec(),
             depth,
+            orphaned_blocks,
+            orphaned_txs,
         };
-        let event_key = next_reorg_event_key();
+        let event_key = next_reorg_event_key()?;
         let event_bytes = bincode::serialize(&event)?;
         let mut status = self.store.get_sync_status()?;
         status.deep_fork_detected = false;
@@ -116,7 +150,6 @@ impl BatchWriter {
         let status_bytes = bincode::serialize(&status)?;
         let mut batch = StoreBatch::new(self.store.as_ref());
         batch.put_sync_meta(event_key.as_bytes(), &event_bytes);
-        batch.put_sync_meta(sync_meta_keys::REORG_LATEST_EVENT, &event_bytes);
         batch.put_sync_meta(sync_meta_keys::SYNC_STATUS, &status_bytes);
         batch.commit()?;
 
@@ -133,13 +166,18 @@ impl BatchWriter {
         }
 
         info!(
-            "Reorg completed: fork_point={}, depth={}",
-            fork_point, depth
+            "Reorg completed: fork_point={}, depth={}, orphaned_blocks={}, orphaned_txs={}",
+            fork_point, depth, orphaned_blocks, orphaned_txs
         );
 
         Ok(ReorgResult {
             depth,
-            orphaned_blocks: depth,
+            orphaned_blocks: i32::try_from(orphaned_blocks).map_err(|_| {
+                anyhow!(
+                    "rolled-back block count exceeds i32 range: orphaned_blocks={}",
+                    orphaned_blocks
+                )
+            })?,
         })
     }
 }
@@ -155,6 +193,7 @@ mod tests {
 
     use ckbadger_store::keys;
     use ckbadger_store::store::CkbadgerStore;
+    use ckbadger_store::types::ReorgEventKind;
 
     use crate::db::writer::BatchWriter;
 
@@ -164,14 +203,14 @@ mod tests {
         store
             .iterator_cf(store.cf_sync_meta(), rocksdb::IteratorMode::Start)
             .flatten()
-            .filter(|(key, _)| key.starts_with(b"reorg:"))
+            .filter(|(key, _)| key.starts_with(keys::REORG_EVENT_KEY_PREFIX))
             .count()
     }
 
     #[test]
     fn test_next_reorg_event_key_is_unique() {
-        let first = next_reorg_event_key();
-        let second = next_reorg_event_key();
+        let first = next_reorg_event_key().unwrap();
+        let second = next_reorg_event_key().unwrap();
         assert_ne!(first, second);
         assert!(first.starts_with("reorg:"));
         assert!(second.starts_with("reorg:"));
@@ -179,18 +218,33 @@ mod tests {
 
     #[test]
     fn test_next_reorg_event_key_contains_uuid_segment() {
-        let key = next_reorg_event_key();
+        let key = next_reorg_event_key().unwrap();
         assert!(key.starts_with("reorg:"));
         let parts: Vec<&str> = key.splitn(3, ':').collect();
         assert_eq!(parts.len(), 3, "expected format reorg:timestamp:uuid");
+        assert_eq!(
+            parts[1].len(),
+            keys::REORG_EVENT_MS_DIGITS,
+            "millisecond field must be fixed width so key order is chronological"
+        );
+        assert!(parts[1].chars().all(|c| c.is_ascii_digit()));
         assert_eq!(parts[2].len(), 32, "UUID segment should be 32 hex chars");
         assert!(parts[2].chars().all(|c| c.is_ascii_hexdigit()));
     }
 
+    /// Fixed-width millisecond fields mean lexicographic key order is
+    /// chronological order, which is what the history listing pages on.
+    #[test]
+    fn test_reorg_event_keys_sort_chronologically() {
+        let early = keys::encode_reorg_event_key(999_999_999_999, &[0xFF; 16]).unwrap();
+        let late = keys::encode_reorg_event_key(1_700_000_000_000, &[0x00; 16]).unwrap();
+        assert!(early < late, "{early} should sort before {late}");
+    }
+
     #[test]
     fn test_next_reorg_event_key_no_collision_across_simulated_restarts() {
-        let key1 = next_reorg_event_key();
-        let key2 = next_reorg_event_key();
+        let key1 = next_reorg_event_key().unwrap();
+        let key2 = next_reorg_event_key().unwrap();
         assert_ne!(key1, key2);
     }
 
@@ -201,21 +255,23 @@ mod tests {
         let writer = BatchWriter::new(store.clone(), store.clone());
 
         writer
-            .record_deep_fork(100, &[], 120, &[0x11; 32], 130, &[0x22; 32], 20)
+            .record_deep_fork(100, &[0x33; 32], 120, &[0x11; 32], 130, &[0x22; 32], 20)
             .unwrap();
 
         assert_eq!(reorg_event_count(store.as_ref()), 1);
         let latest = store
-            .get_cf(
-                store.cf_sync_meta(),
-                keys::sync_meta_keys::REORG_LATEST_EVENT,
-            )
+            .get_latest_reorg_event()
             .unwrap()
-            .expect("latest reorg marker should exist");
-        let latest_event: ckbadger_store::types::ReorgEvent =
-            bincode::deserialize(&latest).unwrap();
-        assert_eq!(latest_event.rollback_to, 100);
-        assert_eq!(latest_event.depth, 20);
+            .expect("latest reorg event should exist");
+        assert_eq!(latest.event.kind, ReorgEventKind::Deep);
+        assert_eq!(latest.event.fork_point, 100);
+        assert_eq!(latest.event.fork_point_hash, vec![0x33; 32]);
+        assert_eq!(latest.event.old_tip, 120);
+        assert_eq!(latest.event.old_tip_hash, vec![0x11; 32]);
+        assert_eq!(latest.event.new_tip, 130);
+        assert_eq!(latest.event.new_tip_hash, vec![0x22; 32]);
+        assert_eq!(latest.event.depth, 20);
+        assert_eq!(latest.event.orphaned_blocks, 0);
 
         let status = store.get_sync_status().unwrap();
         assert!(status.deep_fork_detected);

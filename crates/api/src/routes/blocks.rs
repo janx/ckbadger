@@ -6,6 +6,7 @@ use axum::{
     Router,
 };
 use ckb_store_reader::CkbChainReader;
+use ckb_types::utilities::compact_to_difficulty;
 use ckbadger_common::hardforks_for_network;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -14,7 +15,10 @@ use std::sync::Arc;
 use crate::cache::{CacheBackend, CacheKeys, CacheTtl};
 use crate::response::{default_limit, ok, ApiError, ApiResult, CursorPaginatedResponse};
 use crate::routes::hardforks::HardforkResourceResponse;
-use crate::utils::script_to_address;
+use crate::routes::transactions::tx_serialized_size_in_block;
+use crate::utils::{
+    parse_block_number, parse_hash32, parse_optional_block_cursor_start, script_to_address,
+};
 use crate::AppState;
 
 pub fn routes() -> Router<Arc<AppState>> {
@@ -29,7 +33,11 @@ pub fn routes() -> Router<Arc<AppState>> {
 pub struct ListParams {
     #[serde(default = "default_limit")]
     limit: i64,
-    cursor: Option<i64>,
+    /// Exclusive upper-bound block number
+    /// (see [`parse_optional_block_cursor_start`]). A string, not an `i64`, so
+    /// that every rejection comes from the one parser and answers in this
+    /// API's error envelope instead of axum's raw deserialization message.
+    cursor: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -75,8 +83,14 @@ async fn list_blocks(
 ) -> ApiResult<CursorPaginatedResponse<BlockResponse>> {
     let limit = params.limit.clamp(1, 100);
 
+    // `list_blocks_desc` scans backwards from `from_block` inclusive while the
+    // cursor is the exclusive upper bound, so the scan starts one block below
+    // it. The parser owns that subtraction because it is the check that keeps
+    // the result at or above genesis — `encode_block_num` asserts it.
+    let from_block = parse_optional_block_cursor_start(params.cursor.as_deref(), "block cursor")?;
+
     let cache_key = format!("{}:{}", CacheKeys::LATEST_BLOCKS, limit);
-    let is_first_page = params.cursor.is_none();
+    let is_first_page = from_block.is_none();
     if is_first_page {
         if let Some(cached) = state
             .cache
@@ -93,11 +107,6 @@ async fn list_blocks(
         .map_err(|e| ApiError::internal(format!("sync status unavailable: {}", e)))?;
     let total = sync.tip_block_number + 1;
 
-    // Use from_block: for cursor pagination, we want blocks with number < cursor
-    // list_blocks_desc takes from_block as the starting point (inclusive in scan, but we want exclusive)
-    // Since list_blocks_desc starts from `from_block` and goes backwards, we pass cursor - 1
-    // or if no cursor, None (which starts from the end)
-    let from_block = params.cursor.map(|c| c - 1);
     let fetch_limit = (limit + 1) as usize;
     let network = state.ckb_network.clone();
 
@@ -224,25 +233,18 @@ fn cached_header_to_block_response(
     extra: BlockExtra,
 ) -> BlockResponse {
     let parent_hash = format!("0x{}", hex::encode(&header.parent_hash));
-    let (nonce, transactions_root, version, compact_target, difficulty) = match header_info {
-        Some(ref info) => {
-            // We don't have compact_target in BlockHeaderInfo, default to "0x0"
-            (
-                format!("0x{}", hex::encode(info.nonce.to_le_bytes())),
-                format!("0x{}", hex::encode(info.transactions_root)),
-                info.version as i32,
-                "0x0".to_string(),
-                "0".to_string(),
-            )
-        }
-        None => (
-            "0x0".to_string(),
-            "0x".to_string(),
-            0,
-            "0x0".to_string(),
-            "0".to_string(),
+    let (nonce, transactions_root, version) = match header_info {
+        Some(ref info) => (
+            format!("{:#x}", info.nonce),
+            format!("0x{}", hex::encode(info.transactions_root)),
+            info.version as i32,
         ),
+        None => ("0x0".to_string(), "0x".to_string(), 0),
     };
+    // Difficulty is derived from the header's stored compact_target — the
+    // single source of truth for per-block PoW difficulty.
+    let compact_target = format!("{:#x}", header.compact_target);
+    let difficulty = compact_to_difficulty(header.compact_target).to_string();
 
     // Format timestamp from millis to RFC3339
     let timestamp = chrono::DateTime::from_timestamp_millis(header.timestamp)
@@ -255,8 +257,8 @@ fn cached_header_to_block_response(
         parent_hash,
         timestamp,
         transactions_count: header.transactions_count,
-        proposals_count: 0, // Not stored in CachedBlockHeader; unavailable without RPC
-        uncles_count: 0,    // Not stored in CachedBlockHeader; unavailable without RPC
+        proposals_count: header.proposals_count,
+        uncles_count: header.uncles_count,
         epoch: format!("{}/{}", header.epoch_index, header.epoch_length),
         epoch_number: header.epoch_number,
         epoch_index: header.epoch_index,
@@ -331,8 +333,7 @@ async fn get_block(
     let ckb_store = state.ckb_store.clone();
 
     let block_result: Option<(i64, ckbadger_store::CachedBlockHeader)> = if id.starts_with("0x") {
-        let hash = hex::decode(id.strip_prefix("0x").unwrap_or(&id))
-            .map_err(|_| ApiError::bad_request("Invalid block hash"))?;
+        let hash = parse_hash32(&id, "block hash")?;
 
         let store_c = store.clone();
         let hash_c = hash.clone();
@@ -348,9 +349,7 @@ async fn get_block(
         .map_err(|e| ApiError::internal(e.to_string()))?
         .map_err(|e| ApiError::internal(e.to_string()))?
     } else {
-        let number: i64 = id
-            .parse()
-            .map_err(|_| ApiError::bad_request("Invalid block number"))?;
+        let number = parse_block_number(&id, "block number")?;
 
         let store_c = store.clone();
         tokio::task::spawn_blocking(move || -> Result<_, anyhow::Error> {
@@ -375,9 +374,13 @@ async fn get_block(
                 s.get_miner_message(&hash)
             });
 
-            // Get miner address from cellbase output (tx_index=0, output_index=0)
-            let miner_address =
-                get_miner_address_from_store(&ckb_store, &header.hash, &state.ckb_network);
+            // The block's own miner, from the cellbase witness lock.
+            let miner_address = get_miner_address_from_store(
+                &ckb_store,
+                block_num,
+                &header.hash,
+                &state.ckb_network,
+            );
 
             let reward_info = get_mining_reward(
                 &state.ckb_rpc_url,
@@ -427,12 +430,21 @@ async fn get_block(
     }
 }
 
-/// Get miner address from the cellbase transaction output in CKB's RocksDB.
+/// Get the block's own miner address from its cellbase witness in CKB's
+/// RocksDB. Per RFC-0022 the first cellbase witness is a `CellbaseWitness`
+/// molecule whose `lock` identifies the block's miner. (The cellbase OUTPUT
+/// lock instead pays the finalized reward of the block 11 confirmations back —
+/// using it here mis-attributed every block to the N-11 miner.)
 fn get_miner_address_from_store(
     ckb_store: &Option<Arc<CkbChainReader>>,
+    block_num: i64,
     block_hash: &[u8],
     network: &str,
 ) -> Option<String> {
+    // The genesis block is not mined; its witness carries the zero script.
+    if block_num == 0 {
+        return None;
+    }
     let store = ckb_store.as_ref()?;
     if block_hash.len() != 32 {
         return None;
@@ -440,11 +452,7 @@ fn get_miner_address_from_store(
     let mut hash = [0u8; 32];
     hash.copy_from_slice(block_hash);
 
-    let block = store.get_block(&hash)?;
-    let txs = block.transactions();
-    let cellbase = txs.first()?;
-    let output = cellbase.output(0)?;
-    let lock = output.lock();
+    let (lock, _message) = store.get_cellbase_witness(&hash)?;
 
     let code_hash: Vec<u8> = lock.code_hash().raw_data().to_vec();
     let hash_type_byte = lock.hash_type().as_bytes()[0];
@@ -455,7 +463,7 @@ fn get_miner_address_from_store(
         4 => 4,
         _ => {
             tracing::error!(
-                "unknown hash_type byte {} in miner lock script for block 0x{}",
+                "unknown hash_type byte {} in miner witness lock script for block 0x{}",
                 hash_type_byte,
                 hex::encode(block_hash)
             );
@@ -628,8 +636,7 @@ async fn get_block_fee_stats(
     let store = state.store.clone();
 
     let block_number: i64 = if id.starts_with("0x") {
-        let hash = hex::decode(id.strip_prefix("0x").unwrap_or(&id))
-            .map_err(|_| ApiError::bad_request("Invalid block hash"))?;
+        let hash = parse_hash32(&id, "block hash")?;
 
         let store_c = store.clone();
         tokio::task::spawn_blocking(move || store_c.get_block_number_by_hash(&hash))
@@ -638,8 +645,7 @@ async fn get_block_fee_stats(
             .map_err(|e| ApiError::internal(e.to_string()))?
             .ok_or_else(|| ApiError::not_found("Block not found"))?
     } else {
-        id.parse()
-            .map_err(|_| ApiError::bad_request("Invalid block number"))?
+        parse_block_number(&id, "block number")?
     };
 
     // Try to read pre-computed cycles from block header first
@@ -689,7 +695,8 @@ async fn get_block_fee_stats(
             non_cellbase_count += 1;
             total_size += entry.tx_size as i64;
             if entry.tx_size > 0 {
-                let fee_rate = (entry.fee as f64 * 1000.0) / entry.tx_size as f64;
+                let fee_rate =
+                    (entry.fee as f64 * 1000.0) / tx_serialized_size_in_block(entry.tx_size) as f64;
                 fee_rates.push(fee_rate);
             }
         }
@@ -709,7 +716,8 @@ async fn get_block_fee_stats(
                 Some(_) | None => any_missing = true,
             }
             if entry.tx_size > 0 {
-                let fee_rate = (entry.fee as f64 * 1000.0) / entry.tx_size as f64;
+                let fee_rate =
+                    (entry.fee as f64 * 1000.0) / tx_serialized_size_in_block(entry.tx_size) as f64;
                 fee_rates.push(fee_rate);
             }
         }
@@ -764,8 +772,7 @@ async fn get_block_proposals(
     let store = state.store.clone();
 
     let block_number: i64 = if id.starts_with("0x") {
-        let hash = hex::decode(id.strip_prefix("0x").unwrap_or(&id))
-            .map_err(|_| ApiError::bad_request("Invalid block hash"))?;
+        let hash = parse_hash32(&id, "block hash")?;
 
         let store_c = store.clone();
         tokio::task::spawn_blocking(move || store_c.get_block_number_by_hash(&hash))
@@ -774,8 +781,7 @@ async fn get_block_proposals(
             .map_err(|e| ApiError::internal(e.to_string()))?
             .ok_or_else(|| ApiError::not_found("Block not found"))?
     } else {
-        id.parse()
-            .map_err(|_| ApiError::bad_request("Invalid block number"))?
+        parse_block_number(&id, "block number")?
     };
 
     // Read proposals from CKB node's RocksDB (raw block data)
@@ -792,23 +798,33 @@ async fn get_block_proposals(
                 let mut hash = [0u8; 32];
                 hash.copy_from_slice(&h.hash);
                 if let Some(block) = ckb_store.get_block(&hash) {
-                    block
+                    // CKB proposal IDs are 10-byte tx hash prefixes; resolve
+                    // each to its committing transaction through the shared
+                    // commit-window helper (the same path /graph/proposals
+                    // uses). Proposals not committed within the window blocks
+                    // that exist stay null — honest data near the tip.
+                    let short_ids: Vec<Vec<u8>> = block
                         .data()
                         .proposals()
                         .into_iter()
+                        .map(|proposal_id| proposal_id.raw_data().to_vec())
+                        .collect();
+                    let commitments = crate::routes::proposal_window::resolve_committed_txs(
+                        ckb_store,
+                        block_number,
+                        &short_ids,
+                    );
+                    short_ids
+                        .into_iter()
+                        .zip(commitments)
                         .enumerate()
-                        .map(|(i, proposal_id)| {
-                            let proposal_bytes: Vec<u8> = proposal_id.raw_data().to_vec();
-                            BlockProposal {
-                                proposal_index: i as i16,
-                                proposal_id: format!("0x{}", hex::encode(&proposal_bytes)),
-                                // CKB proposal IDs are 10-byte tx hash prefixes.
-                                // Resolving committed_tx would require a prefix scan of
-                                // tx_hash_map, so it remains omitted until a dedicated
-                                // proposal->tx reverse index exists.
-                                committed_tx_hash: None,
-                                committed_block_number: None,
-                            }
+                        .map(|(i, (proposal_bytes, commitment))| BlockProposal {
+                            proposal_index: i as i16,
+                            proposal_id: format!("0x{}", hex::encode(&proposal_bytes)),
+                            committed_tx_hash: commitment
+                                .as_ref()
+                                .map(|(tx_hash, _)| format!("0x{}", hex::encode(tx_hash))),
+                            committed_block_number: commitment.map(|(_, number)| number),
                         })
                         .collect()
                 } else {
@@ -827,6 +843,87 @@ async fn get_block_proposals(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Regression: block responses must expose the header's real compact_target,
+    /// exact difficulty, and proposals/uncles counts (previously hardcoded to 0).
+    /// Vector: mainnet block 12,000,000 — compact_target 0x190df964, explorer
+    /// difficulty 1320058941807520729.
+    #[test]
+    fn test_block_response_uses_real_header_fields() {
+        let header = ckbadger_store::CachedBlockHeader {
+            hash: vec![0x22; 32],
+            parent_hash: vec![0x11; 32],
+            timestamp: 1_705_733_626_764,
+            epoch_number: 9128,
+            epoch_index: 909,
+            epoch_length: 1691,
+            dao: vec![0; 32],
+            transactions_count: 1,
+            uncles_count: 2,
+            proposals_count: 3,
+            compact_target: 0x190d_f964,
+            miner_lock_hash: None,
+            cycles: None,
+        };
+        let resp = cached_header_to_block_response(
+            12_000_000,
+            header,
+            None,
+            BlockExtra {
+                miner_address: None,
+                miner_message: None,
+                mining_reward: None,
+                mining_reward_tx_hash: None,
+                hardfork_activation: None,
+            },
+        );
+        assert_eq!(resp.compact_target, "0x190df964");
+        assert_eq!(resp.difficulty, "1320058941807520729");
+        assert_eq!(resp.proposals_count, 3);
+        assert_eq!(resp.uncles_count, 2);
+    }
+
+    /// Regression: nonce is a numeric JSON-RPC quantity. Encoding the u128's
+    /// little-endian memory bytes reverses the displayed value.
+    #[test]
+    fn test_block_response_formats_nonce_as_numeric_hex() {
+        let header = ckbadger_store::CachedBlockHeader {
+            hash: vec![0x22; 32],
+            parent_hash: vec![0x11; 32],
+            timestamp: 1_705_733_626_764,
+            epoch_number: 9128,
+            epoch_index: 909,
+            epoch_length: 1691,
+            dao: vec![0; 32],
+            transactions_count: 1,
+            uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0x190d_f964,
+            miner_lock_hash: None,
+            cycles: None,
+        };
+        let header_info = ckb_store_reader::BlockHeaderInfo {
+            parent_hash: [0x11; 32],
+            nonce: 0x8a4c_8eb5_1d72_599e_0000_0001_2028_0402_u128,
+            transactions_root: [0x33; 32],
+            version: 0,
+        };
+
+        let response = cached_header_to_block_response(
+            20_008_000,
+            header,
+            Some(header_info),
+            BlockExtra {
+                miner_address: None,
+                miner_message: None,
+                mining_reward: None,
+                mining_reward_tx_hash: None,
+                hardfork_activation: None,
+            },
+        );
+
+        assert_eq!(response.nonce, "0x8a4c8eb51d72599e0000000120280402");
+    }
 
     /// Convert compact target to difficulty string (in human-readable format like "1.49 EH")
     fn compact_target_to_difficulty(compact: u32) -> String {

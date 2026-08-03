@@ -12,6 +12,7 @@ vi.mock('@/lib/api', () => ({
     getAddress: vi.fn(),
   },
   isWarmupPendingError: vi.fn(() => false),
+  isNetworkInitializingError: vi.fn(() => false),
 }));
 
 vi.mock('@/components/layout/header', () => ({
@@ -94,7 +95,7 @@ describe('DotbitItemDetailPage', () => {
 
     expect(screen.getByRole('link', { name: /Back to \.bit Collection/ })).toHaveAttribute(
       'href',
-      '/identities/dotbit'
+      '/mainnet/identities/dotbit'
     );
     expect(screen.getByText('Identity & Ownership')).toBeInTheDocument();
     expect(screen.getByText('Cell Status')).toBeInTheDocument();
@@ -140,9 +141,14 @@ describe('DotbitItemDetailPage', () => {
       expect(screen.getAllByText('recycled, transfer').length).toBeGreaterThan(0);
     });
     expect(screen.getByText(/2023/)).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: '#456' })).toHaveAttribute('href', '/blocks/456');
+    expect(screen.getByRole('link', { name: '#456' })).toHaveAttribute(
+      'href',
+      '/mainnet/blocks/456'
+    );
     expect(
-      screen.getAllByRole('link').some((link) => link.getAttribute('href') === '/tx/0xacttx')
+      screen
+        .getAllByRole('link')
+        .some((link) => link.getAttribute('href') === '/mainnet/tx/0xacttx')
     ).toBe(true);
   });
 
@@ -233,7 +239,7 @@ describe('DotbitItemDetailPage', () => {
 
     await waitFor(() => {
       const links = screen.getAllByRole('link');
-      expect(links.some((link) => link.getAttribute('href') === '/cell/0xtx-2')).toBe(true);
+      expect(links.some((link) => link.getAttribute('href') === '/mainnet/cell/0xtx-2')).toBe(true);
     });
   });
 

@@ -8,6 +8,7 @@ vi.mock('@/lib/api', () => ({
     getGlobalActivities: vi.fn(),
   },
   isWarmupPendingError: vi.fn(() => false),
+  isNetworkInitializingError: vi.fn(() => false),
 }));
 
 vi.mock('@/components/layout/header', () => ({
@@ -46,13 +47,13 @@ describe('activities navigation', () => {
 
   it('renders the activities route instead of the 404 page', async () => {
     render(
-      <MemoryRouter initialEntries={['/activities']}>
+      <MemoryRouter initialEntries={['/mainnet/activities']}>
         <AppHarness />
       </MemoryRouter>
     );
 
     expect(await screen.findByText('Activities')).toBeInTheDocument();
-    expect(screen.getByTestId('pathname')).toHaveTextContent('/activities');
+    expect(screen.getByTestId('pathname')).toHaveTextContent('/mainnet/activities');
     expect(screen.queryByText('not found page')).not.toBeInTheDocument();
   });
 });

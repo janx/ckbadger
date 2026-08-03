@@ -33,6 +33,21 @@ impl ApiError {
         )
     }
 
+    /// A state that only exists while the indexer is still starting up, and that
+    /// resolves on its own as sync progresses (e.g. the genesis baseline or the
+    /// first daily snapshot has not been written yet).
+    ///
+    /// Must stay 503 + `initializing`: that pair is the contract the pre-sync
+    /// router serves and the one the SPA's `isNetworkInitializingError` keys its
+    /// retry-with-banner UX on. A 500 here reads as a server fault and gets the
+    /// error screen instead.
+    pub fn initializing(message: impl Into<String>) -> (StatusCode, Json<Self>) {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(Self::new("initializing", message)),
+        )
+    }
+
     pub fn warmup_pending(message: impl Into<String>) -> (StatusCode, Json<Self>) {
         (
             StatusCode::SERVICE_UNAVAILABLE,
@@ -93,17 +108,6 @@ impl<T: Serialize + Clone> CursorPaginatedResponse<T> {
 /// Encode cursor from block_number and index (for transactions, cells, etc.)
 pub fn encode_cursor(block_number: i64, index: i32) -> String {
     format!("{}:{}", block_number, index)
-}
-
-/// Decode cursor to block_number and index
-pub fn decode_cursor(cursor: &str) -> Option<(i64, i32)> {
-    let parts: Vec<&str> = cursor.split(':').collect();
-    if parts.len() != 2 {
-        return None;
-    }
-    let block_number = parts[0].parse().ok()?;
-    let index = parts[1].parse().ok()?;
-    Some((block_number, index))
 }
 
 /// Encode cursor from single i64 value (for tables with simple id ordering)
@@ -317,20 +321,15 @@ mod tests {
         assert_eq!(json["total"], 42);
     }
 
+    /// `encode_cursor` writes the shape that `utils::params::parse_block_tx_cursor`
+    /// reads. Rejection cases live with that parser; what matters here is that
+    /// the two halves still agree.
     #[test]
-    fn test_encode_decode_cursor_roundtrip() {
+    fn test_encode_cursor_roundtrips_through_the_shared_parser() {
         let cursor = encode_cursor(12345, 7);
-        let (block, idx) = decode_cursor(&cursor).unwrap();
+        let (block, idx) = crate::utils::parse_block_tx_cursor(&cursor, "cursor").unwrap();
         assert_eq!(block, 12345);
         assert_eq!(idx, 7);
-    }
-
-    #[test]
-    fn test_decode_cursor_invalid() {
-        assert_eq!(decode_cursor("invalid"), None);
-        assert_eq!(decode_cursor(""), None);
-        assert_eq!(decode_cursor("1:2:3"), None);
-        assert_eq!(decode_cursor("abc:def"), None);
     }
 
     #[test]

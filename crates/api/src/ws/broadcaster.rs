@@ -8,7 +8,6 @@ use tracing::{debug, error, info};
 
 use super::manager::{BroadcastMessage, SyncStatus, WsManager};
 use crate::routes::activities::build_global_activity_response;
-use crate::utils::format_duration;
 
 pub(crate) const FAST_SYNC_THRESHOLD: i64 = 100;
 
@@ -109,8 +108,6 @@ pub async fn start_block_broadcaster(
 
         if sync_mode == SyncMode::FastSync {
             let sync_status = build_sync_status(&store, tip_block);
-            let (avg_block_time, estimated_epoch_time) =
-                calculate_epoch_stats(&store, number, epoch_index, epoch_length);
 
             let timestamp_ms = header.timestamp;
             let timestamp_str = chrono::DateTime::from_timestamp(timestamp_ms / 1000, 0)
@@ -125,8 +122,6 @@ pub async fn start_block_broadcaster(
                 epoch_number,
                 epoch_index,
                 epoch_length,
-                avg_block_time,
-                estimated_epoch_time,
                 sync_status: Box::new(sync_status),
             };
             debug!(
@@ -150,8 +145,6 @@ pub async fn start_block_broadcaster(
 
             for (num, hdr) in new_blocks {
                 let sync_status = build_sync_status(&store, tip_block);
-                let (avg_block_time, estimated_epoch_time) =
-                    calculate_epoch_stats(&store, num, hdr.epoch_index, hdr.epoch_length);
 
                 let timestamp_str = chrono::DateTime::from_timestamp(hdr.timestamp / 1000, 0)
                     .map(|dt| dt.to_rfc3339())
@@ -165,8 +158,6 @@ pub async fn start_block_broadcaster(
                     epoch_number: hdr.epoch_number,
                     epoch_index: hdr.epoch_index,
                     epoch_length: hdr.epoch_length,
-                    avg_block_time,
-                    estimated_epoch_time,
                     sync_status: Box::new(sync_status),
                 };
                 info!("Broadcasting new block: {}", num);
@@ -299,36 +290,6 @@ fn broadcast_latest_activities(
         }
         _ => {}
     }
-}
-
-fn calculate_epoch_stats(
-    store: &CkbadgerStore,
-    latest_block: i64,
-    epoch_index: i32,
-    epoch_length: i32,
-) -> (String, String) {
-    let avg_time = if latest_block > 0 {
-        let prev_header = store.get_block_header(latest_block - 1).ok().flatten();
-        let curr_header = store.get_block_header(latest_block).ok().flatten();
-
-        match (prev_header, curr_header) {
-            (Some(prev), Some(curr)) => {
-                let diff_ms = curr.timestamp - prev.timestamp;
-                (diff_ms as f64 / 1000.0).max(1.0)
-            }
-            _ => 10.0,
-        }
-    } else {
-        10.0
-    };
-
-    let avg_block_time = format!("{:.2}s", avg_time);
-
-    let remaining_blocks = epoch_length - epoch_index;
-    let estimated_seconds = (remaining_blocks as f64 * avg_time) as u64;
-    let estimated_epoch_time = format_duration(estimated_seconds);
-
-    (avg_block_time, estimated_epoch_time)
 }
 
 fn build_sync_status(store: &CkbadgerStore, tip_block: i64) -> SyncStatus {
@@ -549,6 +510,51 @@ pub async fn start_reorg_broadcaster(store: Arc<CkbadgerStore>, ws_manager: Arc<
 mod tests {
     use super::*;
 
+    /// A `new_block` push must never carry rolling network statistics. Pushing
+    /// them meant a second computation path: the broadcaster derived the
+    /// "average" block time from the newest block pair alone, so the client
+    /// cache traded `/statistics/network`'s window average for single-interval
+    /// noise (and a fabricated 10.00s whenever a header was missing) on every
+    /// block.
+    #[test]
+    fn new_block_push_carries_no_rolling_network_statistics() {
+        let msg = BroadcastMessage::NewBlock {
+            number: 20_022_562,
+            hash: format!("0x{}", "ab".repeat(32)),
+            timestamp: "2026-08-01T00:00:21+08:00".to_string(),
+            transactions_count: 1,
+            epoch_number: 12_345,
+            epoch_index: 900,
+            epoch_length: 1800,
+            sync_status: Box::new(SyncStatus {
+                is_syncing: false,
+                synced_block: 20_022_562,
+                tip_block: 20_022_562,
+                progress: 100.0,
+                estimated_time: None,
+                chart_data_may_be_incomplete: false,
+                blocks_per_second: None,
+                ema_blocks_per_second: None,
+                txs_per_second: None,
+                ema_txs_per_second: None,
+                sync_mode: "synced".to_string(),
+                started_at: None,
+                elapsed_time: None,
+                total_time: None,
+            }),
+        };
+
+        let json = serde_json::to_value(&msg).expect("serialize new_block push");
+        let data = json["data"].as_object().expect("new_block data object");
+
+        assert!(!data.contains_key("avgBlockTime"));
+        assert!(!data.contains_key("estimatedEpochTime"));
+        // The block's own facts still travel with the push.
+        assert_eq!(data["number"], 20_022_562);
+        assert_eq!(data["epochIndex"], 900);
+        assert_eq!(data["epochLength"], 1800);
+    }
+
     #[test]
     fn test_determine_sync_mode_fast_sync_when_far_behind() {
         assert_eq!(determine_sync_mode(1000, 2000), SyncMode::FastSync);
@@ -566,36 +572,6 @@ mod tests {
     fn test_determine_sync_mode_boundary() {
         assert_eq!(determine_sync_mode(1000, 1100), SyncMode::Realtime);
         assert_eq!(determine_sync_mode(1000, 1101), SyncMode::FastSync);
-    }
-
-    #[test]
-    fn test_format_duration_seconds() {
-        assert_eq!(format_duration(0), "0s");
-        assert_eq!(format_duration(30), "30s");
-        assert_eq!(format_duration(59), "59s");
-    }
-
-    #[test]
-    fn test_format_duration_minutes() {
-        assert_eq!(format_duration(60), "1m");
-        assert_eq!(format_duration(120), "2m");
-        assert_eq!(format_duration(3599), "59m");
-    }
-
-    #[test]
-    fn test_format_duration_hours() {
-        assert_eq!(format_duration(3600), "1h");
-        assert_eq!(format_duration(3660), "1h 1m");
-        assert_eq!(format_duration(7200), "2h");
-        assert_eq!(format_duration(86399), "23h 59m");
-    }
-
-    #[test]
-    fn test_format_duration_days() {
-        assert_eq!(format_duration(86400), "1d");
-        assert_eq!(format_duration(90000), "1d 1h");
-        assert_eq!(format_duration(172800), "2d");
-        assert_eq!(format_duration(259200), "3d");
     }
 
     #[test]

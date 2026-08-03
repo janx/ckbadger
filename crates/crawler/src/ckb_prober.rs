@@ -32,6 +32,9 @@ use async_trait::async_trait;
 
 use ckb_network::{extract_peer_id, SupportProtocols};
 use ckb_types::{packed, prelude::*};
+use ckbadger_common::network::{
+    MAINNET_GENESIS_HASH, MAINNET_SPEC_ID, TESTNET_GENESIS_HASH, TESTNET_SPEC_ID,
+};
 use ckbadger_config::CrawlerConfig;
 use p2p::{
     builder::ServiceBuilder,
@@ -50,16 +53,10 @@ use p2p::{
 use crate::prober::{ProbeOutcome, Prober};
 
 // ---------------------------------------------------------------------------
-// Network identifiers + built-in bootnodes (from the CKB v0.119.0 chain specs
-// and `resource/ckb.toml`). identify_name = `/{spec_id}/{genesis_hash[..8]}`.
+// Built-in bootnodes (from the CKB v0.119.0 `resource/ckb.toml`). The per-network
+// spec ids and genesis hashes used to build identify_name = `/{spec_id}/{genesis_hash[..8]}`
+// are the single source of truth in `ckbadger_common::network` (imported above).
 // ---------------------------------------------------------------------------
-
-const MAINNET_SPEC_ID: &str = "ckb";
-const MAINNET_GENESIS_HASH: &str =
-    "92b197aa1fba0f63633922c61c92375c9c074a93e85963554f5499fe1450d0e5";
-const TESTNET_SPEC_ID: &str = "ckb_testnet";
-const TESTNET_GENESIS_HASH: &str =
-    "10639e0895502b5688a6be8cf69460d76541bfa4821629d86d62ba0aae3f9606";
 
 /// Built-in mainnet bootnodes (CKB v0.119.0 `resource/ckb.toml`).
 const MAINNET_BOOTNODES: &[&str] = &[

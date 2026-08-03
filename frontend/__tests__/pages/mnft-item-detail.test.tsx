@@ -12,6 +12,7 @@ vi.mock('@/lib/api', () => ({
     getMnftItemActivities: vi.fn(),
   },
   isWarmupPendingError: vi.fn(() => false),
+  isNetworkInitializingError: vi.fn(() => false),
 }));
 
 vi.mock('@/components/layout/header', () => ({
@@ -108,7 +109,7 @@ describe('MnftItemDetailPage', () => {
     expect(breadcrumb).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /^Objects$/ })).toHaveAttribute(
       'href',
-      '/inventory/objects'
+      '/mainnet/inventory/objects'
     );
     // Properties panel: state & configure
     expect(screen.getByText('locked')).toBeInTheDocument();
@@ -120,13 +121,19 @@ describe('MnftItemDetailPage', () => {
 
     // Links: created at block, cell outpoint, class
     expect(
-      screen.getAllByRole('link').some((link) => link.getAttribute('href') === '/blocks/123')
+      screen
+        .getAllByRole('link')
+        .some((link) => link.getAttribute('href') === '/mainnet/blocks/123')
     ).toBe(true);
     expect(
-      screen.getAllByRole('link').some((link) => link.getAttribute('href') === '/cell/0xtx-4')
+      screen
+        .getAllByRole('link')
+        .some((link) => link.getAttribute('href') === '/mainnet/cell/0xtx-4')
     ).toBe(true);
     expect(
-      screen.getAllByRole('link').some((link) => link.getAttribute('href') === '/classes/0xclass')
+      screen
+        .getAllByRole('link')
+        .some((link) => link.getAttribute('href') === '/mainnet/classes/0xclass')
     ).toBe(true);
 
     // Payload Data hex viewer

@@ -10,6 +10,12 @@ canonical_hash_type = "type"
 
 [testnet]
 [[testnet.versions]]
+canonical_ref_hash = "0x48dbf59b4c7ee1547238021b4869bceedf4eea6b43772e5d66ef8865b6ae7212"
+version_hash = "0x48dbf59b4c7ee1547238021b4869bceedf4eea6b43772e5d66ef8865b6ae7212"
+canonical_hash_type = "data"
+deprecated = true
+
+[[testnet.versions]]
 canonical_ref_hash = "0xc5e5dcf215925f7ef4dfaf5f4b4f105bc321c02776d6e7d52a1db3fcd9d011a4"
 version_hash = "0xe1e354d6d643ad42724d40967e334984534e0367405c5ae42a9d7d63d77df419"
 canonical_hash_type = "type"

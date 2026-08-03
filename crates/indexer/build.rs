@@ -218,7 +218,7 @@ fn main() {
     // --- UDT-compatible script code_hashes ---
     // Extract code_hashes from scripts with category "udt", excluding the 3
     // well-known UDT code_hashes (SUDT, xUDT data1, xUDT type) that are already
-    // hardcoded in the activity builder.
+    // recognized by the shared protocol registry.
     let excluded_udt_code_hashes: HashSet<&str> = [
         "0x5e7a36a77e68eecc013dfa2fe6a23f3b6c344b04005808694ae6dd45eea4cfd5", // SUDT
         "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95", // xUDT data1

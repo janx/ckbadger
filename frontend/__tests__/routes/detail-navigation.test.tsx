@@ -10,6 +10,7 @@ vi.mock('@/lib/api', () => ({
     getScripts: vi.fn(),
   },
   isWarmupPendingError: vi.fn(() => false),
+  isNetworkInitializingError: vi.fn(() => false),
 }));
 
 vi.mock('@/components/layout/header', () => ({
@@ -22,6 +23,12 @@ vi.mock('@/app/script/[codeHash]/client-page', () => ({
 
 vi.mock('@/app/scripts/[name]/client-page', () => ({
   default: ({ name }: { name: string }) => <div>named script detail {name}</div>,
+}));
+
+vi.mock('@/app/identities/bit-cell/[identityId]/client-page', () => ({
+  default: ({ identityId }: { identityId: string }) => (
+    <div>.bit Cell identity detail {identityId}</div>
+  ),
 }));
 
 const mockScriptsResponse = {
@@ -76,7 +83,7 @@ describe('detail navigation', () => {
     const user = userEvent.setup();
 
     render(
-      <MemoryRouter initialEntries={['/scripts']}>
+      <MemoryRouter initialEntries={['/mainnet/scripts']}>
         <RouterHarness />
       </MemoryRouter>
     );
@@ -95,8 +102,22 @@ describe('detail navigation', () => {
     await user.click(links[0]);
 
     await waitFor(() => {
-      expect(screen.getByTestId('pathname')).toHaveTextContent('/scripts/SECP256K1_BLAKE160');
+      expect(screen.getByTestId('pathname')).toHaveTextContent(
+        '/mainnet/scripts/SECP256K1_BLAKE160'
+      );
       expect(screen.getByText('named script detail SECP256K1_BLAKE160')).toBeInTheDocument();
     });
+  });
+
+  it('routes .bit Cell identity cards to the item detail page', async () => {
+    render(
+      <MemoryRouter initialEntries={['/mainnet/identities/bit-cell/0xbitcell']}>
+        <RouterHarness />
+      </MemoryRouter>
+    );
+
+    expect(
+      await screen.findByText('.bit Cell identity detail 0xbitcell', {}, { timeout: 3000 })
+    ).toBeInTheDocument();
   });
 });

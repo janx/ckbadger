@@ -1,8 +1,13 @@
-import { resolveApiBase } from '@/lib/runtime-config';
 import type { ScriptRefHashType } from '@/lib/script-ref';
+import { apiBaseFor, resolveActiveNetwork } from '@/lib/active-network';
 export { resolveApiBase } from '@/lib/runtime-config';
 
-const API_BASE = resolveApiBase();
+// The active network is derived from the URL path per call (not module-init): the
+// network can change as the user navigates, so the API base must be recomputed each
+// request rather than frozen at import time.
+function activeApiBase(): string {
+  return apiBaseFor(resolveActiveNetwork());
+}
 
 interface ApiErrorPayload {
   error?: unknown;
@@ -60,6 +65,25 @@ export function isWarmupPendingError(error: unknown): error is ApiRequestError {
   }
   const candidate = error as Partial<ApiRequestError>;
   return candidate.code === 'warmup_pending' && candidate.status === 503;
+}
+
+export function isNetworkInitializingError(error: unknown): error is ApiRequestError {
+  if (!error || typeof error !== 'object') {
+    return false;
+  }
+  const candidate = error as Partial<ApiRequestError>;
+  return candidate.code === 'initializing' && candidate.status === 503;
+}
+
+/**
+ * "The resource does not exist", read from the HTTP status the API answered
+ * with — never from the rendered message text, which is prose and changes.
+ */
+export function isNotFoundApiError(error: unknown): error is ApiRequestError {
+  if (!error || typeof error !== 'object') {
+    return false;
+  }
+  return (error as Partial<ApiRequestError>).status === 404;
 }
 
 interface PaginatedResponse<T> {
@@ -424,6 +448,8 @@ interface Cell {
   virtualCommonKnowledgeSize?: string;
   udtAmount?: string;
   daoInfo?: CellDaoInfo;
+  /** `/cells/by-script` only: which index enumerated this row. */
+  matchedScriptKind?: 'lock' | 'type';
 }
 
 interface CellDep {
@@ -485,7 +511,8 @@ interface AddressToken {
   standard: string;
   name: string | null;
   symbol: string | null;
-  decimals: number;
+  /** null when unknown (no label and no on-chain info cell) */
+  decimals: number | null;
   iconUrl: string | null;
   balance: string;
 }
@@ -515,7 +542,13 @@ interface AssetTransferParams {
 }
 
 type ItemDelta =
-  | { kind: 'token'; typeScriptHash: string; delta: string; symbol?: string; decimals?: number }
+  | {
+      kind: 'token';
+      typeScriptHash: string;
+      delta: string;
+      symbol?: string;
+      decimals?: number | null;
+    }
   | { kind: 'object'; objectId: string; delta: number }
   | { kind: 'identity'; identityId: string; delta: number };
 
@@ -718,7 +751,8 @@ interface Token {
   standard: string;
   name: string | null;
   symbol: string | null;
-  decimals: number;
+  /** null when unknown (no label and no on-chain info cell) */
+  decimals: number | null;
   description: string | null;
   iconUrl: string | null;
   published: boolean;
@@ -749,9 +783,9 @@ interface TokenTransfer {
   txHash: string;
   blockNumber: number;
   fromLockHash: string | null;
-  fromAddress?: string | null;
+  fromAddress: string | null;
   toLockHash: string;
-  toAddress?: string;
+  toAddress: string | null;
   amount: string;
   isMint: boolean;
   isBurn: boolean;
@@ -1198,7 +1232,8 @@ interface RecentBlocksResponse {
 }
 
 interface MinerDistributionDataPoint {
-  address: string;
+  minerLockHash: string;
+  address: string | null;
   minerName: string | null;
   blocksMined: number;
   percentage: string;
@@ -1208,6 +1243,9 @@ interface MinerDistributionResponse {
   data: MinerDistributionDataPoint[];
   title: string;
   totalBlocks: number;
+  windowDays: number;
+  fromDate: string;
+  toDate: string;
 }
 
 interface StackedAreaDataPoint {
@@ -1576,7 +1614,7 @@ interface TransactionLifecycle {
 }
 
 async function fetchApi<T>(endpoint: string): Promise<T> {
-  return fetchJson(`${API_BASE}${endpoint}`);
+  return fetchJson(`${activeApiBase()}${endpoint}`);
 }
 
 interface TopTokenEntry {
@@ -1595,7 +1633,9 @@ interface CapacityCategory {
 
 interface AssetEcosystemResponse {
   topTokens: TopTokenEntry[];
+  /** Shares of total live capacity (C − S at the tip), not of knowledge size. */
   capacityBreakdown: CapacityCategory[];
+  totalLiveCapacityCkb: string;
   totalKnowledgeSizeCkb: string;
 }
 
@@ -1604,7 +1644,12 @@ type FiberChannelState = 'open' | 'cooperativelyClosed' | 'forceClosed' | 'settl
 interface FiberChannel {
   channelId: string;
   state: FiberChannelState;
+  /** Funding cell CKB capacity in shannons — always CKB, even for UDT-funded channels. */
   capacity: string;
+  /** Type script hash of the funding token; null for plain-CKB channels. */
+  udtTypeHash: string | null;
+  /** Token amount held by the funding cell (u128 decimal); null for plain-CKB channels. */
+  udtAmount: string | null;
   fundingTxHash: string;
   fundingOutputIndex: number;
   openBlock: number;
@@ -1612,9 +1657,13 @@ interface FiberChannel {
   closeBlock: number | null;
   closeTimestamp: string | null;
   closeTxHash: string | null;
+  commitmentTxHash: string | null;
+  /** Revocation delay from the commitment lock args; null unless force-closed. */
+  delayEpoch: number | null;
   settlementBlock: number | null;
   settlementTimestamp: string | null;
   settlementTxHash: string | null;
+  /** Non-fiber owners of the funding tx; the fiber locks are never participants. */
   participants: string[];
 }
 
@@ -2403,6 +2452,24 @@ export const api = {
     );
   },
 
+  getBitCellItemDetail: (nftId: string): Promise<CollectionItem> => {
+    return fetchApi(`/assets/identities/bit-cell/items/${encodeURIComponent(nftId)}`);
+  },
+
+  getBitCellItemActivities: (
+    nftId: string,
+    params: MnftItemActivitiesParams = {}
+  ): Promise<CursorPaginatedResponse<MnftItemActivity>> => {
+    const query = new URLSearchParams();
+    if (params.limit) query.set('limit', String(params.limit));
+    if (params.cursor) query.set('cursor', params.cursor);
+    if (params.action) query.set('action', params.action);
+    const suffix = query.toString();
+    return fetchApi(
+      `/assets/identities/bit-cell/items/${encodeURIComponent(nftId)}/activities${suffix ? `?${suffix}` : ''}`
+    );
+  },
+
   getMnftItemDetail: (nftId: string): Promise<MnftItemDetail> => {
     return fetchApi(`/assets/objects/items/${encodeURIComponent(nftId)}`);
   },
@@ -2628,7 +2695,7 @@ export const api = {
     if (codeHashes.length === 0) return {};
     const body: Record<string, unknown> = { codeHashes };
     if (txHash) body.txHash = txHash;
-    return fetchJson(`${API_BASE}/scripts/lookup`, {
+    return fetchJson(`${activeApiBase()}/scripts/lookup`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
@@ -2657,7 +2724,7 @@ export const api = {
   },
 
   triggerCyclesCalculation: async (hash: string): Promise<CyclesStatusResponse> => {
-    return fetchJson(`${API_BASE}/transactions/${hash}/calculate-cycles`, {
+    return fetchJson(`${activeApiBase()}/transactions/${hash}/calculate-cycles`, {
       method: 'POST',
     });
   },

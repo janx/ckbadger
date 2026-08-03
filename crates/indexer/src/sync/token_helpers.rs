@@ -45,7 +45,32 @@ pub(crate) const UNIQUE_TYPE_ARGS_LEN: usize = 20;
 const TOKEN_INFO_TAG_TOTAL_SUPPLY: u32 = 1;
 const TOKEN_INFO_TOTAL_SUPPLY_DATA_LEN: usize = 16;
 
+/// Unique Cell type script code hashes (one per network deployment; detection
+/// keys on code_hash alone, same as the protocol registry). Values mirror the
+/// bundled `docs/metadata/scripts/unique-cell.toml` and were verified against
+/// live chain data: mainnet via the RGB++ Protocol issuance
+/// (tx 0xd088a12852664145773257eb1467cb0feca0d1d478968ce90b7f29bce24e2a4a,
+/// block 12,654,045, out[0]), testnet via live unique cells carrying the same
+/// token-info layout.
+pub(crate) const UNIQUE_CELL_CODE_HASH_MAINNET: &str =
+    "0x2c8c11c985da60b0a330c61a85507416d6382c130ba67f0c47ab071e00aec628"; // data1
+pub(crate) const UNIQUE_CELL_CODE_HASH_TESTNET: &str =
+    "0x8e341bcfec6393dcd41e635733ff2dca00a6af546949f70c57a706c0f344df8b"; // type
+
 static OMNILOCK_CODE_HASHES: OnceLock<Vec<Vec<u8>>> = OnceLock::new();
+static UNIQUE_CELL_CODE_HASHES: OnceLock<Vec<Vec<u8>>> = OnceLock::new();
+
+pub(crate) fn is_unique_cell_code_hash(code_hash: &[u8]) -> bool {
+    UNIQUE_CELL_CODE_HASHES
+        .get_or_init(|| {
+            [UNIQUE_CELL_CODE_HASH_MAINNET, UNIQUE_CELL_CODE_HASH_TESTNET]
+                .iter()
+                .map(|h| crate::rpc::parse_hex_to_bytes(h))
+                .collect()
+        })
+        .iter()
+        .any(|known| known.as_slice() == code_hash)
+}
 
 // ---------------------------------------------------------------------------
 // Omnilock functions
@@ -102,7 +127,7 @@ pub(crate) fn extract_omnilock_supply_info_type_hash(lock_args: &[u8]) -> Option
     Some(hash)
 }
 
-pub(crate) fn parse_omnilock_supply_info_cell_data(data: &[u8]) -> Option<(i128, [u8; 32])> {
+pub(crate) fn parse_omnilock_supply_info_cell_data(data: &[u8]) -> Option<(u128, [u8; 32])> {
     if data.len() < OMNILOCK_SUPPLY_INFO_CELL_MIN_DATA_LEN {
         return None;
     }
@@ -117,13 +142,10 @@ pub(crate) fn parse_omnilock_supply_info_cell_data(data: &[u8]) -> Option<(i128,
     if current_supply > max_supply {
         return None;
     }
-    if max_supply > i128::MAX as u128 {
-        return None;
-    }
 
     let mut token_type_hash = [0u8; 32];
     token_type_hash.copy_from_slice(&data[33..65]);
-    Some((max_supply as i128, token_type_hash))
+    Some((max_supply, token_type_hash))
 }
 
 // ---------------------------------------------------------------------------
@@ -336,7 +358,7 @@ pub(crate) struct UniqueTokenInfo {
     pub decimal: u8,
     pub name: String,
     pub symbol: String,
-    pub total_supply: Option<i128>,
+    pub total_supply: Option<u128>,
 }
 
 /// Parse all fields from a Unique Cell's data:
@@ -384,10 +406,8 @@ pub(crate) fn parse_unique_cell_token_info(data: &[u8]) -> Option<UniqueTokenInf
         let value = &data[index..index + data_len];
         if tag == TOKEN_INFO_TAG_TOTAL_SUPPLY && data_len == TOKEN_INFO_TOTAL_SUPPLY_DATA_LEN {
             let raw = u128::from_le_bytes(value.try_into().ok()?);
-            if raw <= i128::MAX as u128 {
-                total_supply = Some(raw as i128);
-                break;
-            }
+            total_supply = Some(raw);
+            break;
         }
         index += data_len;
     }
@@ -400,13 +420,13 @@ pub(crate) fn parse_unique_cell_token_info(data: &[u8]) -> Option<UniqueTokenInf
     })
 }
 
-pub(crate) fn parse_token_info_total_supply(data: &[u8]) -> Option<i128> {
+pub(crate) fn parse_token_info_total_supply(data: &[u8]) -> Option<u128> {
     parse_unique_cell_token_info(data)?.total_supply
 }
 
 pub(crate) fn collect_unique_cell_total_supply_by_type_args(
     cells: &[crate::parser::cell::ParsedCell],
-) -> HashMap<Vec<u8>, i128> {
+) -> HashMap<Vec<u8>, u128> {
     let mut totals = HashMap::new();
     for cell in cells {
         let Some(type_args) = cell.type_args.as_ref() else {
@@ -445,66 +465,236 @@ pub(crate) fn collect_unique_cell_token_info(
     infos
 }
 
+/// How an on-chain token-info observation was bound to a token type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OnchainInfoBinding {
+    /// The xUDT's extension script points at the Unique Cell — a cryptographic
+    /// binding, applied like any on-chain metadata update.
+    XudtExtension,
+    /// The Unique Cell was co-created in the token's single-type issuance
+    /// (mint) transaction — a heuristic binding that must never overwrite
+    /// already-known metadata.
+    IssuanceCooccurrence,
+}
+
+/// A Unique Cell token-info observation together with how it was bound.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct OnchainTokenInfo {
+    pub info: UniqueTokenInfo,
+    pub binding: OnchainInfoBinding,
+}
+
+/// Type script hash by outpoint — a borrowed view over cells the caller has
+/// already resolved, used to answer "does this input carry type X?" without
+/// resolving anything again.
+///
+/// Two such views are needed to cover every input of a batch: outputs created
+/// inside the batch, and inputs created earlier and prefetched from the store.
+pub(crate) type OutpointTypeHashes<'a> = HashMap<(&'a [u8], i32), &'a [u8]>;
+
 /// Resolve Unique Cell token info to xUDT token type_hashes.
-/// For each xUDT output cell with extension scripts pointing to a Unique Cell,
-/// maps the xUDT's type_script_hash to the Unique Cell's token info.
+///
+/// Two binding paths, in priority order:
+/// 1. Extension scripts: each xUDT output whose extension scripts point at a
+///    Unique Cell in the same tx maps the xUDT's type_script_hash to that
+///    Unique Cell's token info (cryptographic binding).
+/// 2. Issuance co-occurrence: the ecosystem-standard issuance shape
+///    (RGB++-style `[unique info cell, xudt cells…]`) where the xUDT args are
+///    a plain owner lock hash without extension flags. Bound only when the tx
+///    contains at least one output typed with the deployed Unique Cell type
+///    script (all parseable ones agreeing on a single info) AND mints exactly
+///    one xUDT type. An extension binding is never displaced by a
+///    co-occurrence binding.
+///
+/// `persisted_input_types` carries the types of inputs created before this
+/// batch; without it a transfer of an already-issued token would look like a
+/// mint (see [`collect_issuance_cooccurrence_binding`]).
 pub(crate) fn collect_token_onchain_info(
     all_tx_data: &[TxData],
-) -> HashMap<Vec<u8>, UniqueTokenInfo> {
-    let mut result = HashMap::new();
+    persisted_input_types: &OutpointTypeHashes<'_>,
+) -> HashMap<Vec<u8>, OnchainTokenInfo> {
+    let mut result: HashMap<Vec<u8>, OnchainTokenInfo> = HashMap::new();
+
+    // Outpoint → type_script_hash for outputs created in this batch. Used
+    // together with `persisted_input_types` to screen transfers out of the
+    // issuance co-occurrence rule (an input carrying the candidate type means
+    // the tx moves, not mints it).
+    let mut batch_output_types: OutpointTypeHashes<'_> = HashMap::new();
+    for tx_data in all_tx_data {
+        for (output_index, cell) in tx_data.cells.iter().enumerate() {
+            let Some(type_script_hash) = cell.type_script_hash.as_ref() else {
+                continue;
+            };
+            let Ok(output_index) = i32::try_from(output_index) else {
+                continue;
+            };
+            batch_output_types.insert((tx_data.hash.as_slice(), output_index), type_script_hash);
+        }
+    }
 
     for tx_data in all_tx_data {
+        // -- 1. extension-script binding (cryptographic) --------------------
         let unique_infos = collect_unique_cell_token_info(&tx_data.cells);
-        if unique_infos.is_empty() {
-            continue;
-        }
-
-        for cell in &tx_data.cells {
-            let Some(type_code_hash) = cell.type_code_hash.as_ref() else {
-                continue;
-            };
-            let Some(type_hash_type) = cell.type_hash_type else {
-                continue;
-            };
-            if !matches!(
-                crate::parser::UdtParser::is_udt_code_hash_bytes(type_code_hash, type_hash_type),
-                Some(crate::parser::udt::UdtStandard::Xudt)
-            ) {
-                continue;
-            }
-
-            let Some(type_args) = cell.type_args.as_ref() else {
-                continue;
-            };
-            let Some(token_type_hash) = cell.type_script_hash.as_ref() else {
-                continue;
-            };
-
-            let Some(extension_scripts) =
-                extract_xudt_extension_scripts(type_args, &tx_data.witnesses)
-            else {
-                continue;
-            };
-
-            for extension in extension_scripts {
-                if extension.args.len() != UNIQUE_TYPE_ARGS_LEN {
+        if !unique_infos.is_empty() {
+            for cell in &tx_data.cells {
+                let Some(type_code_hash) = cell.type_code_hash.as_ref() else {
+                    continue;
+                };
+                let Some(type_hash_type) = cell.type_hash_type else {
+                    continue;
+                };
+                if !matches!(
+                    crate::parser::UdtParser::is_udt_code_hash_bytes(
+                        type_code_hash,
+                        type_hash_type
+                    ),
+                    Some(crate::parser::udt::UdtStandard::Xudt)
+                ) {
                     continue;
                 }
-                if let Some(info) = unique_infos.get(&extension.args) {
-                    result.insert(token_type_hash.clone(), info.clone());
+
+                let Some(type_args) = cell.type_args.as_ref() else {
+                    continue;
+                };
+                let Some(token_type_hash) = cell.type_script_hash.as_ref() else {
+                    continue;
+                };
+
+                let Some(extension_scripts) =
+                    extract_xudt_extension_scripts(type_args, &tx_data.witnesses)
+                else {
+                    continue;
+                };
+
+                for extension in extension_scripts {
+                    if extension.args.len() != UNIQUE_TYPE_ARGS_LEN {
+                        continue;
+                    }
+                    if let Some(info) = unique_infos.get(&extension.args) {
+                        // Unconditional: an extension binding displaces any
+                        // earlier co-occurrence binding for the same token.
+                        result.insert(
+                            token_type_hash.clone(),
+                            OnchainTokenInfo {
+                                info: info.clone(),
+                                binding: OnchainInfoBinding::XudtExtension,
+                            },
+                        );
+                    }
                 }
             }
+        }
+
+        // -- 2. issuance co-occurrence binding (heuristic) ------------------
+        if let Some((token_type_hash, info)) = collect_issuance_cooccurrence_binding(
+            tx_data,
+            &batch_output_types,
+            persisted_input_types,
+        ) {
+            result.entry(token_type_hash).or_insert(OnchainTokenInfo {
+                info,
+                binding: OnchainInfoBinding::IssuanceCooccurrence,
+            });
         }
     }
 
     result
 }
 
+/// Detect the single-type issuance co-occurrence shape in one transaction and
+/// return the `(token type_hash, unique info)` pair to bind, if any.
+///
+/// Safety rules (see `collect_token_onchain_info`): at least one output typed
+/// with the deployed Unique Cell type script, all parseable unique outputs
+/// agreeing on exactly one info, and exactly one minted xUDT type — an
+/// amount-carrying xUDT output whose type is present on no input of the
+/// transaction.
+///
+/// The input veto set is the union of two disjoint provenances that together
+/// cover every input: cells created by this batch (`batch_output_types`) and
+/// cells created earlier and resolved from the store
+/// (`persisted_input_types`). This mirrors the bulk reducer, which vetoes on
+/// `ResolvedTxFacts::resolved_inputs`; both paths must classify mints
+/// identically or the same chain yields different stored metadata.
+fn collect_issuance_cooccurrence_binding(
+    tx_data: &TxData,
+    batch_output_types: &OutpointTypeHashes<'_>,
+    persisted_input_types: &OutpointTypeHashes<'_>,
+) -> Option<(Vec<u8>, UniqueTokenInfo)> {
+    // Exactly one distinct parsed info among Unique-Cell-typed outputs.
+    let mut unique_info: Option<UniqueTokenInfo> = None;
+    for cell in &tx_data.cells {
+        let Some(type_code_hash) = cell.type_code_hash.as_ref() else {
+            continue;
+        };
+        if !is_unique_cell_code_hash(type_code_hash) {
+            continue;
+        }
+        let Some(info) = parse_unique_cell_token_info(&cell.data) else {
+            continue;
+        };
+        match &unique_info {
+            None => unique_info = Some(info),
+            Some(existing) if *existing == info => {}
+            Some(_) => return None, // ambiguous: multiple distinct infos
+        }
+    }
+    let unique_info = unique_info?;
+
+    // Types carried by this transaction's inputs, whichever side they were
+    // resolved from (same-batch outputs or persisted store state).
+    let mut input_types: HashSet<&[u8]> = HashSet::new();
+    for input in &tx_data.inputs {
+        let key = (
+            input.previous_tx_hash.as_slice(),
+            input.previous_output_index,
+        );
+        if let Some(type_hash) = batch_output_types
+            .get(&key)
+            .or_else(|| persisted_input_types.get(&key))
+        {
+            input_types.insert(type_hash);
+        }
+    }
+
+    // Exactly one minted xUDT type among amount-carrying outputs.
+    let mut minted: Option<&Vec<u8>> = None;
+    for cell in &tx_data.cells {
+        let (Some(type_code_hash), Some(type_hash_type)) =
+            (cell.type_code_hash.as_ref(), cell.type_hash_type)
+        else {
+            continue;
+        };
+        if !matches!(
+            crate::parser::UdtParser::is_udt_code_hash_bytes(type_code_hash, type_hash_type),
+            Some(crate::parser::udt::UdtStandard::Xudt)
+        ) {
+            continue;
+        }
+        if crate::parser::UdtParser::parse_amount(&cell.data).is_none() {
+            continue;
+        }
+        let Some(token_type_hash) = cell.type_script_hash.as_ref() else {
+            continue;
+        };
+        if input_types.contains(token_type_hash.as_slice()) {
+            continue; // moved within the tx: a transfer, not a mint
+        }
+        match minted {
+            None => minted = Some(token_type_hash),
+            Some(existing) if existing == token_type_hash => {}
+            Some(_) => return None, // more than one minted type: ambiguous
+        }
+    }
+
+    minted.map(|token_type_hash| (token_type_hash.clone(), unique_info))
+}
+
 pub(crate) fn observe_max_supply(
-    observations: &mut HashMap<Vec<u8>, i128>,
+    observations: &mut HashMap<Vec<u8>, u128>,
     tx_hash: &[u8; 32],
     token_type_hash: Vec<u8>,
-    max_supply: i128,
+    max_supply: u128,
     source: &str,
 ) {
     if let Some(existing) = observations.get(&token_type_hash) {
@@ -526,7 +716,7 @@ pub(crate) fn observe_max_supply(
 
 pub(crate) fn collect_token_max_supply_observations(
     all_tx_data: &[TxData],
-) -> HashMap<Vec<u8>, i128> {
+) -> HashMap<Vec<u8>, u128> {
     let mut observations = HashMap::new();
 
     for tx_data in all_tx_data {
@@ -701,17 +891,23 @@ pub(crate) fn parse_parsed_cell_udt_amount(
     let type_code_hash = cell.type_code_hash.as_deref().unwrap_or(&[]);
 
     let Some(amount) = crate::parser::UdtParser::parse_amount(&cell.data) else {
-        // xUDT-compatible cells can carry non-amount payloads (for example owner-mode cells).
-        // They should not be indexed as fungible UDT balances/transfers.
+        // xUDT-compatible cells can carry non-amount payloads (for example owner-mode
+        // cells). They should not be indexed as fungible UDT balances/transfers —
+        // common and expected, tolerated silently.
         if matches!(standard, crate::parser::UdtStandard::Xudt) {
             return Ok(None);
         }
-        return Err(anyhow!(
-            "failed to parse UDT amount from parsed output data: outpoint=0x{}:{}, type_code_hash=0x{}",
-            hex::encode(tx_hash),
-            output_index,
-            hex::encode(type_code_hash)
-        ));
+        // A cell using the sUDT type script but with data too short for a u128 amount is
+        // a rare non-standard on-chain cell (seen on testnet). Record no amount rather
+        // than fail-fasting the whole sync (consistent with the bulk-build binary_facts
+        // path); logged since it is unexpected for sUDT.
+        tracing::warn!(
+            outpoint = %format!("0x{}:{}", hex::encode(tx_hash), output_index),
+            type_code_hash = %format!("0x{}", hex::encode(type_code_hash)),
+            data_len = cell.data.len(),
+            "sUDT cell amount data too short (<16 bytes); recording no amount"
+        );
+        return Ok(None);
     };
     Ok(Some(amount))
 }
@@ -923,9 +1119,7 @@ mod tests {
             name: Some("FallbackName".to_string()),
             symbol: symbol.map(|s| s.to_string()),
             decimals,
-            total_supply: Some(0),
             max_supply: None,
-            holders_count: 0,
             first_seen_block: 0,
             icon_url: None,
             description: None,
@@ -947,7 +1141,11 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_parsed_cell_udt_amount_rejects_invalid_sudt_payload() {
+    fn test_parse_parsed_cell_udt_amount_tolerates_invalid_sudt_payload() {
+        // A cell using the sUDT type script but with data too short for a u128 amount
+        // (a non-standard on-chain cell, e.g. testnet) is tolerated — recorded as no
+        // amount rather than fail-fasting the sync (consistent with the bulk-build path
+        // and the xUDT branch), so one junk cell can't halt the whole index.
         let sudt_code_hash = crate::rpc::parse_hex_to_bytes(crate::parser::udt::SUDT_CODE_HASH);
         let cell = crate::parser::cell::ParsedCell {
             capacity: 100_00000000,
@@ -965,9 +1163,8 @@ mod tests {
         };
 
         let tx_hash = [0x82; 32];
-        let err = parse_parsed_cell_udt_amount(&cell, &tx_hash, 7, None).unwrap_err();
-        assert!(err.to_string().contains("failed to parse UDT amount"));
-        assert!(err.to_string().contains("0x8282828282828282"));
+        let amount = parse_parsed_cell_udt_amount(&cell, &tx_hash, 7, None).unwrap();
+        assert_eq!(amount, None);
     }
 
     #[test]
@@ -1094,7 +1291,7 @@ mod tests {
         let observations = collect_token_max_supply_observations(&[tx]);
         assert_eq!(
             observations.get(token_type_hash.as_slice()),
-            Some(&(total_supply as i128))
+            Some(&total_supply)
         );
     }
 
@@ -1125,7 +1322,7 @@ mod tests {
         let observations = collect_token_max_supply_observations(&[tx]);
         assert_eq!(
             observations.get(token_type_hash.as_slice()),
-            Some(&(total_supply as i128))
+            Some(&total_supply)
         );
     }
 
@@ -1309,12 +1506,13 @@ mod tests {
             vec![],
         );
 
-        let infos = collect_token_onchain_info(&[tx]);
-        let info = infos.get(token_type_hash.as_slice()).unwrap();
-        assert_eq!(info.name, "Token");
-        assert_eq!(info.symbol, "TKN");
-        assert_eq!(info.decimal, 8);
-        assert_eq!(info.total_supply, Some(42_000));
+        let infos = collect_token_onchain_info(&[tx], &HashMap::new());
+        let bound = infos.get(token_type_hash.as_slice()).unwrap();
+        assert_eq!(bound.binding, OnchainInfoBinding::XudtExtension);
+        assert_eq!(bound.info.name, "Token");
+        assert_eq!(bound.info.symbol, "TKN");
+        assert_eq!(bound.info.decimal, 8);
+        assert_eq!(bound.info.total_supply, Some(42_000));
     }
 
     #[test]
@@ -1324,7 +1522,250 @@ mod tests {
         let xudt_cell = dummy_xudt_cell(token_type_hash, type_args);
         let tx = dummy_tx_data([0xF1; 32], false, vec![], vec![xudt_cell], vec![], vec![]);
 
-        let infos = collect_token_onchain_info(&[tx]);
+        let infos = collect_token_onchain_info(&[tx], &HashMap::new());
         assert!(infos.is_empty());
+    }
+
+    // -- issuance co-occurrence binding tests -----------------------------------
+
+    /// Real mainnet vector: RGB++ Protocol issuance
+    /// (tx 0xd088a12852664145773257eb1467cb0feca0d1d478968ce90b7f29bce24e2a4a,
+    /// block 12,654,045), out[0] Unique Cell data.
+    const RGBPP_UNIQUE_CELL_DATA_HEX: &str = "080e5247422b2b2050726f746f636f6c055247422b2b";
+
+    fn rgbpp_unique_cell_data() -> Vec<u8> {
+        hex::decode(RGBPP_UNIQUE_CELL_DATA_HEX).unwrap()
+    }
+
+    /// A Unique Cell output carrying token info, typed with an explicit
+    /// (network-deployed) Unique Cell code hash.
+    fn dummy_unique_info_cell_with_code_hash(
+        type_code_hash: Vec<u8>,
+        type_args: Vec<u8>,
+        data: Vec<u8>,
+    ) -> crate::parser::cell::ParsedCell {
+        crate::parser::cell::ParsedCell {
+            capacity: 100_00000000,
+            lock_code_hash: vec![0x10; 32],
+            lock_hash_type: 1,
+            lock_args: vec![0x20; 20],
+            lock_script_hash: vec![0x30; 32],
+            type_code_hash: Some(type_code_hash),
+            type_hash_type: Some(2),
+            type_args: Some(type_args),
+            type_script_hash: Some(vec![0x50; 32]),
+            data_hash: [0x60; 32],
+            data_size: data.len() as i32,
+            data,
+        }
+    }
+
+    fn mainnet_unique_code_hash() -> Vec<u8> {
+        crate::rpc::parse_hex_to_bytes(
+            "0x2c8c11c985da60b0a330c61a85507416d6382c130ba67f0c47ab071e00aec628",
+        )
+    }
+
+    #[test]
+    fn test_parse_unique_cell_token_info_rgbpp_mainnet_vector() {
+        let info = parse_unique_cell_token_info(&rgbpp_unique_cell_data()).unwrap();
+        assert_eq!(info.decimal, 8);
+        assert_eq!(info.name, "RGB++ Protocol");
+        assert_eq!(info.symbol, "RGB++");
+        assert_eq!(info.total_supply, None);
+    }
+
+    #[test]
+    fn test_collect_token_onchain_info_binds_issuance_cooccurrence() {
+        // RGB++ issuance shape: out[0] = Unique Cell (by code hash), out[1] = xUDT
+        // whose args are a pure 32-byte owner lock hash (no flags) — the extension
+        // path cannot bind this; the same-tx co-occurrence rule must.
+        let token_type_hash = [0x91; 32];
+        let unique_cell = dummy_unique_info_cell_with_code_hash(
+            mainnet_unique_code_hash(),
+            vec![0x98; UNIQUE_TYPE_ARGS_LEN],
+            rgbpp_unique_cell_data(),
+        );
+        let xudt_cell = dummy_xudt_cell(token_type_hash, vec![0x08; 32]);
+        let tx = dummy_tx_data(
+            [0xD0; 32],
+            false,
+            vec![],
+            vec![unique_cell, xudt_cell],
+            vec![],
+            vec![],
+        );
+
+        let infos = collect_token_onchain_info(&[tx], &HashMap::new());
+        let bound = infos
+            .get(token_type_hash.as_slice())
+            .expect("single-mint issuance tx with a Unique Cell output must bind token info");
+        assert_eq!(bound.binding, OnchainInfoBinding::IssuanceCooccurrence);
+        assert_eq!(bound.info.name, "RGB++ Protocol");
+        assert_eq!(bound.info.symbol, "RGB++");
+        assert_eq!(bound.info.decimal, 8);
+    }
+
+    #[test]
+    fn test_collect_token_onchain_info_cooccurrence_skips_same_batch_transfer() {
+        // tx1 mints T (no unique cell). tx2 spends tx1's T output — a transfer,
+        // not an issuance — while also creating a unique-typed cell. The
+        // co-occurrence rule must not bind: T is not minted by tx2.
+        let token_type_hash = [0x93; 32];
+        let tx1_hash = [0xD1; 32];
+        let tx1 = dummy_tx_data(
+            tx1_hash,
+            false,
+            vec![],
+            vec![dummy_xudt_cell(token_type_hash, vec![0x09; 32])],
+            vec![],
+            vec![],
+        );
+        let tx2 = dummy_tx_data(
+            [0xD2; 32],
+            false,
+            vec![crate::parser::transaction::ParsedInput {
+                previous_tx_hash: tx1_hash,
+                previous_output_index: 0,
+                since: 0,
+            }],
+            vec![
+                dummy_unique_info_cell_with_code_hash(
+                    mainnet_unique_code_hash(),
+                    vec![0x97; UNIQUE_TYPE_ARGS_LEN],
+                    rgbpp_unique_cell_data(),
+                ),
+                dummy_xudt_cell(token_type_hash, vec![0x09; 32]),
+            ],
+            vec![],
+            vec![],
+        );
+
+        let infos = collect_token_onchain_info(&[tx1, tx2], &HashMap::new());
+        assert!(
+            !infos.contains_key(token_type_hash.as_slice()),
+            "a same-batch transfer must not be treated as an issuance"
+        );
+    }
+
+    #[test]
+    fn test_collect_token_onchain_info_cooccurrence_skips_persisted_transfer_input() {
+        // The token was issued in an earlier batch, so its input resolves from
+        // the store rather than from this batch's outputs. It is still a
+        // transfer, not an issuance, and must not adopt the Unique Cell info.
+        let token_type_hash = [0x9C; 32];
+        let previous_tx_hash = [0xE1; 32];
+        let tx = dummy_tx_data(
+            [0xE2; 32],
+            false,
+            vec![crate::parser::transaction::ParsedInput {
+                previous_tx_hash,
+                previous_output_index: 0,
+                since: 0,
+            }],
+            vec![
+                dummy_unique_info_cell_with_code_hash(
+                    mainnet_unique_code_hash(),
+                    vec![0x9D; UNIQUE_TYPE_ARGS_LEN],
+                    rgbpp_unique_cell_data(),
+                ),
+                dummy_xudt_cell(token_type_hash, vec![0x0C; 32]),
+            ],
+            vec![],
+            vec![],
+        );
+
+        // The consumed cell was created before this batch, so its type reaches
+        // the rule through the persisted (prefetched) input view.
+        let mut persisted_input_types: OutpointTypeHashes<'_> = HashMap::new();
+        persisted_input_types.insert((previous_tx_hash.as_slice(), 0), token_type_hash.as_slice());
+
+        let infos = collect_token_onchain_info(&[tx], &persisted_input_types);
+        assert!(
+            !infos.contains_key(token_type_hash.as_slice()),
+            "an input resolved from persisted store state must veto the mint classification"
+        );
+    }
+
+    #[test]
+    fn test_collect_token_onchain_info_cooccurrence_requires_single_minted_type() {
+        // Two distinct xUDT types minted alongside one unique cell: ambiguous,
+        // must bind neither.
+        let token_a = [0x94; 32];
+        let token_b = [0x95; 32];
+        let tx = dummy_tx_data(
+            [0xD3; 32],
+            false,
+            vec![],
+            vec![
+                dummy_unique_info_cell_with_code_hash(
+                    mainnet_unique_code_hash(),
+                    vec![0x96; UNIQUE_TYPE_ARGS_LEN],
+                    rgbpp_unique_cell_data(),
+                ),
+                dummy_xudt_cell(token_a, vec![0x0A; 32]),
+                dummy_xudt_cell(token_b, vec![0x0B; 32]),
+            ],
+            vec![],
+            vec![],
+        );
+
+        let infos = collect_token_onchain_info(&[tx], &HashMap::new());
+        assert!(!infos.contains_key(token_a.as_slice()));
+        assert!(!infos.contains_key(token_b.as_slice()));
+    }
+
+    #[test]
+    fn test_collect_token_onchain_info_extension_binding_not_displaced_by_cooccurrence() {
+        // tx1 binds T via the cryptographic extension-script path ("Token"/"TKN").
+        // tx2 is a co-occurrence-shaped tx for the same T with different unique
+        // info; the heuristic binding must never displace the extension binding.
+        let token_type_hash = [0x9A; 32];
+        let unique_type_args = vec![0xAB; UNIQUE_TYPE_ARGS_LEN];
+        let script_vec = encode_script_vec_with_unique_args(&unique_type_args);
+        let ext_type_args = build_xudt_type_args_with_extension_in_args([0x01; 32], &script_vec);
+
+        let tx1 = dummy_tx_data(
+            [0xD4; 32],
+            false,
+            vec![],
+            vec![
+                dummy_unique_token_info_cell(unique_type_args, 42_000),
+                dummy_xudt_cell(token_type_hash, ext_type_args.clone()),
+            ],
+            vec![],
+            vec![],
+        );
+
+        let mut other_info = Vec::new();
+        other_info.push(9u8); // decimal
+        other_info.push(5u8);
+        other_info.extend_from_slice(b"Other");
+        other_info.push(3u8);
+        other_info.extend_from_slice(b"OTH");
+        let tx2 = dummy_tx_data(
+            [0xD5; 32],
+            false,
+            vec![],
+            vec![
+                dummy_unique_info_cell_with_code_hash(
+                    mainnet_unique_code_hash(),
+                    vec![0x9B; UNIQUE_TYPE_ARGS_LEN],
+                    other_info,
+                ),
+                dummy_xudt_cell(token_type_hash, ext_type_args),
+            ],
+            vec![],
+            vec![],
+        );
+
+        let infos = collect_token_onchain_info(&[tx1, tx2], &HashMap::new());
+        let bound = infos
+            .get(token_type_hash.as_slice())
+            .expect("extension binding must be present");
+        assert_eq!(bound.binding, OnchainInfoBinding::XudtExtension);
+        assert_eq!(bound.info.name, "Token");
+        assert_eq!(bound.info.symbol, "TKN");
+        assert_eq!(bound.info.decimal, 8);
     }
 }

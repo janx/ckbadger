@@ -2,26 +2,41 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { render } from '../utils/test-utils';
 import SporeDetailPage from '@/app/objects/[sporeId]/client-page';
-import { api } from '@/lib/api';
+import { api, ApiRequestError } from '@/lib/api';
 
-vi.mock('@/lib/api', () => ({
-  api: {
-    getSporeObject: vi.fn(),
-    getSporeCluster: vi.fn(),
-    getSporeObjectDecoded: vi.fn(),
-    getSporeObjectCapacityChart: vi.fn(),
-    getAddress: vi.fn(),
-    getTransactionDetail: vi.fn(),
-    getCell: vi.fn(),
-    getObjectCollection: vi.fn(),
-    getObjectCollectionCapacityChart: vi.fn(),
-    getObjectCollectionItems: vi.fn(),
-    getObjectCollectionHolders: vi.fn(),
-    getObjectCollectionActivities: vi.fn(),
-  },
-  resolveApiBase: vi.fn(() => 'http://localhost:8101/api/v1'),
-  isWarmupPendingError: vi.fn(() => false),
-}));
+// Only `api` is stubbed: the error types and error guards are the real ones, so
+// tests reject with the exact `ApiRequestError` the fetch layer builds from a
+// real API response instead of a hand-rolled `Error('API error: 404')` that
+// cannot go stale with the backend.
+vi.mock('@/lib/api', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/api')>('@/lib/api');
+  return {
+    ...actual,
+    api: {
+      getSporeObject: vi.fn(),
+      getSporeCluster: vi.fn(),
+      getSporeObjectDecoded: vi.fn(),
+      getSporeObjectCapacityChart: vi.fn(),
+      getAddress: vi.fn(),
+      getTransactionDetail: vi.fn(),
+      getCell: vi.fn(),
+      getObjectCollection: vi.fn(),
+      getObjectCollectionCapacityChart: vi.fn(),
+      getObjectCollectionItems: vi.fn(),
+      getObjectCollectionHolders: vi.fn(),
+      getObjectCollectionActivities: vi.fn(),
+      getSporeItemActivities: vi.fn(),
+    },
+    isWarmupPendingError: vi.fn(() => false),
+    isNetworkInitializingError: vi.fn(() => false),
+  };
+});
+
+/** What `GET /spore/objects/{id}` answers for a well-formed but absent 32-byte ID. */
+const sporeNotFound = () => new ApiRequestError(404, 'not_found', 'Spore not found');
+/** What `GET /assets/objects/{id}` answers for an absent collection ID. */
+const collectionNotFound = () =>
+  new ApiRequestError(404, 'not_found', 'Object collection not found');
 
 vi.mock('@/components/layout/header', () => ({
   Header: () => <div data-testid="header">Header</div>,
@@ -134,7 +149,7 @@ describe('SporeDetailPage', () => {
       liveCellsCount: 0,
       transactionsCount: 0,
     } as any);
-    vi.mocked(api.getSporeObjectDecoded).mockRejectedValue(new Error('API error: 404'));
+    vi.mocked(api.getSporeObjectDecoded).mockRejectedValue(sporeNotFound());
     vi.mocked(api.getTransactionDetail).mockResolvedValue({
       hash: mockSpore.txHash,
       status: 'committed',
@@ -202,6 +217,13 @@ describe('SporeDetailPage', () => {
       hasMore: false,
       nextCursor: null,
     } as any);
+    vi.mocked(api.getSporeItemActivities).mockResolvedValue({
+      data: [],
+      total: 0,
+      limit: 50,
+      hasMore: false,
+      nextCursor: null,
+    } as any);
   });
 
   it('renders spore overview panels and back link', async () => {
@@ -215,7 +237,7 @@ describe('SporeDetailPage', () => {
 
     expect(screen.getByRole('link', { name: '← Back to Objects' })).toHaveAttribute(
       'href',
-      '/inventory/objects'
+      '/mainnet/inventory/objects'
     );
     expect(screen.getByText('Spore Asset (0x1234...cdef)')).toBeInTheDocument();
     expect(screen.getByText('Spore Overview')).toBeInTheDocument();
@@ -301,7 +323,10 @@ describe('SporeDetailPage', () => {
       { timeout: 3000 }
     );
     expect(ownerLink).toBeInTheDocument();
-    expect(ownerLink).toHaveAttribute('href', '/address/ckb1qyqszqgpqyqszqgpqyqszqgpqyqszqgp9f0v3');
+    expect(ownerLink).toHaveAttribute(
+      'href',
+      '/mainnet/address/ckb1qyqszqgpqyqszqgpqyqszqgpqyqszqgp9f0v3'
+    );
   });
 
   it('renders decoded traits panel for DOB spores', async () => {
@@ -420,10 +445,7 @@ describe('SporeDetailPage', () => {
     render(<SporeDetailPage sporeId={mockParams.sporeId} />);
 
     const previewImage = await screen.findByAltText('Spore decoded media preview');
-    expect(previewImage).toHaveAttribute(
-      'src',
-      'http://localhost:8101/api/v1/spore/objects/0x1/render'
-    );
+    expect(previewImage).toHaveAttribute('src', '/api/mainnet/v1/spore/objects/0x1/render');
     expect(previewImage).toHaveClass('h-80');
     expect(previewImage).toHaveClass('w-80');
   });
@@ -498,7 +520,7 @@ describe('SporeDetailPage', () => {
   });
 
   it('falls back to object collection detail when spore lookup returns 404', async () => {
-    vi.mocked(api.getSporeObject).mockRejectedValue(new Error('API error: 404'));
+    vi.mocked(api.getSporeObject).mockRejectedValue(sporeNotFound());
     vi.mocked(api.getObjectCollection).mockResolvedValue(mockCollection);
     vi.mocked(api.getObjectCollectionItems).mockResolvedValue({
       data: [
@@ -547,7 +569,7 @@ describe('SporeDetailPage', () => {
 
   it('hydrates collection tab from query params', async () => {
     mockSearchParamsString = 'tab=holders';
-    vi.mocked(api.getSporeObject).mockRejectedValue(new Error('API error: 404'));
+    vi.mocked(api.getSporeObject).mockRejectedValue(sporeNotFound());
     vi.mocked(api.getObjectCollection).mockResolvedValue(mockCollection);
 
     render(<SporeDetailPage sporeId={mockParams.sporeId} />);
@@ -563,7 +585,7 @@ describe('SporeDetailPage', () => {
 
   it('falls back to Activities tab when tab query is invalid', async () => {
     mockSearchParamsString = 'tab=invalid';
-    vi.mocked(api.getSporeObject).mockRejectedValue(new Error('API error: 404'));
+    vi.mocked(api.getSporeObject).mockRejectedValue(sporeNotFound());
     vi.mocked(api.getObjectCollection).mockResolvedValue(mockCollection);
 
     render(<SporeDetailPage sporeId={mockParams.sporeId} />);
@@ -574,7 +596,7 @@ describe('SporeDetailPage', () => {
   });
 
   it('updates tab query param when switching collection tabs', async () => {
-    vi.mocked(api.getSporeObject).mockRejectedValue(new Error('API error: 404'));
+    vi.mocked(api.getSporeObject).mockRejectedValue(sporeNotFound());
     vi.mocked(api.getObjectCollection).mockResolvedValue(mockCollection);
 
     render(<SporeDetailPage sporeId={mockParams.sporeId} />);
@@ -626,8 +648,62 @@ describe('SporeDetailPage', () => {
     await assertAliasRedirect('did:ckb', '/identities/did:ckb');
   });
 
+  it('routes a 24-byte mNFT class ID straight to the class page', async () => {
+    // An mNFT class ID is 24 bytes and can never be a 32-byte Spore object ID,
+    // so /objects/<class id> is decided by the identifier itself — the page must
+    // not probe /spore/objects and read the answer's status code. The backend
+    // rejects a 24-byte spore ID with 400 (not 404), which is exactly what broke
+    // the old probe-then-guess flow.
+    const classId = '0x1234567890abcdef1234567890abcdef1234567890abcdef';
+    mockParams = { sporeId: classId };
+    vi.mocked(api.getSporeObject).mockRejectedValue(
+      new ApiRequestError(400, 'bad_request', 'Invalid spore ID: expected 32 bytes, got 24')
+    );
+    vi.mocked(api.getObjectCollection).mockResolvedValue({
+      ...mockCollection,
+      collectionId: classId,
+      standard: 'm-nft',
+    });
+
+    render(<SporeDetailPage sporeId={classId} />);
+
+    await waitFor(() => {
+      expect(mockReplace).toHaveBeenCalledWith(`/classes/${classId}`);
+    });
+    expect(api.getSporeObject).not.toHaveBeenCalled();
+    expect(screen.queryByText('Asset not found')).toBeNull();
+  });
+
+  it('shows Asset not found for a 32-byte ID that is neither object nor collection', async () => {
+    vi.mocked(api.getSporeObject).mockRejectedValue(sporeNotFound());
+    vi.mocked(api.getObjectCollection).mockRejectedValue(collectionNotFound());
+
+    render(<SporeDetailPage sporeId={mockParams.sporeId} />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Asset not found')).toBeInTheDocument();
+    });
+    expect(api.getSporeObject).toHaveBeenCalledWith(mockParams.sporeId);
+    expect(api.getObjectCollection).toHaveBeenCalledWith(mockParams.sporeId);
+  });
+
+  it('shows Asset not found for an identifier of no known object class', async () => {
+    // 12 bytes is neither a Spore object ID nor an mNFT class ID: nothing to
+    // look up, so the page must fail fast without issuing a request.
+    const bogusId = '0x1234567890abcdef12345678';
+    mockParams = { sporeId: bogusId };
+
+    render(<SporeDetailPage sporeId={bogusId} />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Asset not found')).toBeInTheDocument();
+    });
+    expect(api.getSporeObject).not.toHaveBeenCalled();
+    expect(api.getObjectCollection).not.toHaveBeenCalled();
+  });
+
   it('links mnft collection item to mnft asset detail page', async () => {
-    vi.mocked(api.getSporeObject).mockRejectedValue(new Error('API error: 404'));
+    vi.mocked(api.getSporeObject).mockRejectedValue(sporeNotFound());
     vi.mocked(api.getObjectCollection).mockResolvedValue(mockCollection);
     vi.mocked(api.getObjectCollectionItems).mockResolvedValue({
       data: [
@@ -656,12 +732,20 @@ describe('SporeDetailPage', () => {
       { timeout: 3000 }
     );
 
-    // mNFT item should link to its detail page
-    const link = screen
-      .getAllByRole('link')
-      .find(
-        (el) => el.getAttribute('href') === '/objects/mnft/0x1111' && el.textContent === '0x1111'
-      );
-    expect(link).toBeDefined();
+    // The items grid is fed by a SEPARATE query from the collection header, so
+    // it can still be pending when the header renders — poll for the link.
+    await waitFor(
+      () => {
+        const link = screen
+          .getAllByRole('link')
+          .find(
+            (el) =>
+              el.getAttribute('href') === '/mainnet/objects/mnft/0x1111' &&
+              el.textContent === '0x1111'
+          );
+        expect(link).toBeDefined();
+      },
+      { timeout: 3000 }
+    );
   });
 });

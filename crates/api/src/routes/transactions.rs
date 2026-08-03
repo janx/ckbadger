@@ -3,10 +3,8 @@ use axum::{
     routing::{get, post},
     Router,
 };
+use ckb_types::packed;
 use ckbadger_common::cycles_task::{CyclesTaskResult, CyclesTaskStatus};
-use ckbadger_common::dao::{
-    is_genesis_special_burn_cell, GENESIS_SPECIAL_BURN_CELL_VIRTUAL_OCCUPIED,
-};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Duration as StdDuration;
@@ -15,11 +13,13 @@ use tokio::time::{sleep, Instant};
 use crate::cache::InMemoryCache;
 use crate::cycles::{CyclesStatus, CyclesStatusResponse};
 use crate::response::{
-    decode_cursor, default_limit, encode_cursor, hash_type_to_str, ok, ApiError, ApiResult,
-    ApiRouteError, CursorPaginatedResponse, ScriptResponse,
+    default_limit, encode_cursor, hash_type_to_str, ok, ApiError, ApiResult, ApiRouteError,
+    CursorPaginatedResponse, ScriptResponse,
 };
 use crate::routes::tx_lookup::{fetch_transaction_lookup, pending_transaction_resource_error};
-use crate::utils::script_to_address;
+use crate::utils::{
+    parse_hash32, parse_optional_block_tx_cursor, script_to_address, validate_block_number,
+};
 use crate::AppState;
 use tracing::instrument;
 
@@ -32,7 +32,6 @@ type TxIoBundle = (
     u128,
     u128,
     u128,
-    Option<u128>, // computed_fee: None when unavailable (e.g., DAO withdrawal)
     Vec<String>,
     bool,
 );
@@ -52,6 +51,22 @@ struct PendingTxIoBundle {
 const DAO_TYPE_CODE_HASH_HEX: &str =
     "82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e";
 const TX_BLOCK_HASHES_CACHE_TTL: StdDuration = StdDuration::from_secs(30);
+
+/// Fee-rate denominator: fee rates divide by the transaction's serialized
+/// size in block — molecule size plus the 4-byte offset slot the transaction
+/// occupies in the block's transactions table — matching the node, explorer,
+/// and wallet convention. The `size`/`txSize` response fields themselves stay
+/// molecule-sized. This is the single denominator definition for every
+/// fee-rate the API serves (transaction detail, pending detail, block
+/// fee-stats).
+pub(crate) fn tx_serialized_size_in_block(molecule_size: i32) -> u128 {
+    u128::try_from(i64::from(molecule_size) + 4).unwrap_or_else(|_| {
+        panic!(
+            "fee-rate call sites guard molecule_size > 0, got {}",
+            molecule_size
+        )
+    })
+}
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
@@ -169,19 +184,30 @@ async fn list_transactions(
 ) -> ApiResult<CursorPaginatedResponse<TransactionResponse>> {
     let limit = params.limit.clamp(1, 100);
 
+    // Validate before any store access: `get_block_header` encodes the number
+    // into a store key, and a negative one trips an assert that aborts the
+    // process under `panic = "abort"`.
+    let block_number = params
+        .block_number
+        .map(|bn| validate_block_number(bn, "block_number"))
+        .transpose()?;
+
     // Get total count
-    let total: i64 = if let Some(block_number) = params.block_number {
+    let total: i64 = if let Some(block_number) = block_number {
         let store = state.store.clone();
-        tokio::task::spawn_blocking(move || -> i64 {
+        tokio::task::spawn_blocking(move || {
             store
                 .get_block_header(block_number)
-                .ok()
-                .flatten()
-                .map(|h| h.transactions_count as i64)
-                .unwrap_or(0)
+                .map(|header| header.map(|h| h.transactions_count as i64).unwrap_or(0))
         })
         .await
-        .unwrap_or(0)
+        .map_err(|e| ApiError::internal(format!("block header lookup failed: {}", e)))?
+        .map_err(|e| {
+            ApiError::internal(format!(
+                "block header unavailable for block_number={}: {}",
+                block_number, e
+            ))
+        })?
     } else {
         state
             .store
@@ -194,9 +220,9 @@ async fn list_transactions(
     let ckb_store = state.ckb_store.clone();
     let mem_cache = state.mem_cache.clone();
 
-    if let Some(block_number) = params.block_number {
+    if let Some(block_number) = block_number {
         // List transactions for a specific block (ascending order)
-        let cursor = params.cursor.as_ref().and_then(|c| decode_cursor(c));
+        let cursor = parse_optional_block_tx_cursor(params.cursor.as_deref(), "cursor")?;
         // Cursor is the tx_idx of the last item on the previous page.
         // We want txs AFTER that index. Use -1 for first page (returns from idx 0).
         let after_tx_idx = cursor.map(|(_, idx)| idx).unwrap_or(-1);
@@ -269,7 +295,7 @@ async fn list_transactions(
         ok(CursorPaginatedResponse::new(txs, total, limit, next_cursor))
     } else {
         // List latest transactions (DESC order across blocks)
-        let cursor = params.cursor.as_ref().and_then(|c| decode_cursor(c));
+        let cursor = parse_optional_block_tx_cursor(params.cursor.as_deref(), "cursor")?;
         let (cursor_block, cursor_index) = cursor.unwrap_or((i64::MAX, i32::MAX));
 
         let store_c = store.clone();
@@ -378,8 +404,7 @@ async fn get_transaction(
     State(state): State<Arc<AppState>>,
     Path(hash): Path<String>,
 ) -> ApiResult<TransactionResponse> {
-    let hash_bytes = hex::decode(hash.strip_prefix("0x").unwrap_or(&hash))
-        .map_err(|_| ApiError::bad_request("Invalid transaction hash"))?;
+    let hash_bytes = parse_hash32(&hash, "transaction hash")?;
 
     let store = state.store.clone();
     let hash_c = hash_bytes.clone();
@@ -584,6 +609,12 @@ fn is_dao_type_code_hash_hex(code_hash: &str) -> bool {
 
 /// Compute transaction fee from input/output capacities.
 ///
+/// PENDING (mempool) transactions only: they have no indexed `TxIndexEntry`,
+/// so when the node RPC omits the pool fee this is the only source.
+/// Committed transactions always serve the stored fee — the indexer write
+/// path is the single calculation path and already accounts for DAO phase-2
+/// compensation.
+///
 /// Returns `None` for DAO phase-2 withdrawals where outputs > inputs due to
 /// compensation (the compensation amount is not available here, so the fee
 /// cannot be computed from I/O alone).
@@ -681,8 +712,7 @@ async fn get_transaction_detail(
     State(state): State<Arc<AppState>>,
     Path(hash): Path<String>,
 ) -> ApiResult<TransactionDetailResponse> {
-    let hash_bytes = hex::decode(hash.strip_prefix("0x").unwrap_or(&hash))
-        .map_err(|_| ApiError::bad_request("Invalid transaction hash"))?;
+    let hash_bytes = parse_hash32(&hash, "transaction hash")?;
 
     let store = state.store.clone();
     let hash_c = hash_bytes.clone();
@@ -722,6 +752,7 @@ async fn get_transaction_detail(
             &state.store,
             &state.ckb_network,
             0,
+            state.genesis_baseline()?.virtual_occupied,
         )?;
 
         let pending_since = tx_lookup.time_added_to_pool.and_then(|timestamp| {
@@ -744,7 +775,7 @@ async fn get_transaction_detail(
                 return None;
             }
             let fee_value: u128 = fee.parse().ok()?;
-            Some(((fee_value * 1000) / size as u128).to_string())
+            Some(((fee_value * 1000) / tx_serialized_size_in_block(size)).to_string())
         });
 
         let pool_cycles = tx_lookup.cycles.map(|value| value as i64);
@@ -832,7 +863,6 @@ async fn get_transaction_detail(
         outputs_capacity,
         inputs_occupied_capacity,
         outputs_occupied_capacity,
-        computed_fee,
         witnesses,
         witnesses_available,
     ) = if let Some(ref ckb_store) = state.ckb_store {
@@ -848,6 +878,7 @@ async fn get_transaction_detail(
                     &state.store,
                     &state.ckb_network,
                     block_number,
+                    state.genesis_baseline()?.virtual_occupied,
                 )?
             } else {
                 empty_inputs_outputs()
@@ -859,21 +890,21 @@ async fn get_transaction_detail(
         empty_inputs_outputs()
     };
 
-    // Use computed fee from inputs/outputs if available, otherwise use stored fee
-    let fee = match computed_fee {
-        Some(f) if f > 0 => f.to_string(),
-        _ => entry.fee.to_string(),
-    };
+    // The fee persisted by the indexer is the single source of truth; the
+    // write path already accounts for DAO phase-2 compensation, so there is
+    // no read-time recomputation from inputs/outputs.
+    let fee_value = u128::try_from(entry.fee).map_err(|_| {
+        ApiError::internal(format!(
+            "negative stored fee for committed tx 0x{} at block {}: {}",
+            hex::encode(&hash_bytes),
+            block_number,
+            entry.fee
+        ))
+    })?;
+    let fee = fee_value.to_string();
 
-    let fee_rate = final_tx_size.map(|size| {
-        if size > 0 {
-            let fee_val: u128 = fee.parse().unwrap_or(0);
-            let rate = (fee_val * 1000) / (size as u128);
-            rate.to_string()
-        } else {
-            "0".to_string()
-        }
-    });
+    let fee_rate = final_tx_size
+        .map(|size| ((fee_value * 1000) / tx_serialized_size_in_block(size)).to_string());
 
     ok(TransactionDetailResponse {
         hash: tx_hash_hex,
@@ -904,7 +935,7 @@ async fn get_transaction_detail(
 }
 
 fn empty_inputs_outputs() -> TxIoBundle {
-    (vec![], vec![], 0, 0, 0, 0, None, vec![], false)
+    (vec![], vec![], 0, 0, 0, 0, vec![], false)
 }
 
 fn build_inputs_outputs_from_rpc_pending(
@@ -914,6 +945,7 @@ fn build_inputs_outputs_from_rpc_pending(
     store: &ckbadger_store::CkbadgerStore,
     network: &str,
     block_number: i64,
+    virtual_occupied: i128,
 ) -> Result<PendingTxIoBundle, ApiRouteError> {
     if rpc_tx.outputs.len() != rpc_tx.outputs_data.len() {
         return Err(ApiError::internal(format!(
@@ -1151,11 +1183,13 @@ fn build_inputs_outputs_from_rpc_pending(
                 let occ = occupied_capacity_bytes(args_bytes.len(), type_args_len, data_size);
                 outputs_occupied_capacity += occ as u128;
 
-                let is_satoshi = is_genesis_special_burn_cell(&args_bytes, block_number);
+                let is_satoshi = block_number == 0
+                    && ckbadger_common::burn_policy::burn_policy(network)
+                        .is_some_and(|p| args_bytes.as_slice() == p.lock_args);
                 let (cell_type, virtual_occupied_capacity) = if is_satoshi {
                     (
                         Some("genesis_special_burn".to_string()),
-                        Some(GENESIS_SPECIAL_BURN_CELL_VIRTUAL_OCCUPIED.to_string()),
+                        Some(virtual_occupied.to_string()),
                     )
                 } else {
                     (None, None)
@@ -1208,6 +1242,7 @@ fn build_inputs_outputs_from_rpc_pending(
 }
 
 /// Build inputs/outputs from CKB node's RocksDB transaction view.
+#[allow(clippy::too_many_arguments)]
 fn build_inputs_outputs_from_ckb(
     tx_view: &ckb_types::core::TransactionView,
     ckb_store: &ckb_store_reader::CkbChainReader,
@@ -1216,13 +1251,13 @@ fn build_inputs_outputs_from_ckb(
     store: &ckbadger_store::CkbadgerStore,
     network: &str,
     block_number: i64,
+    virtual_occupied: i128,
 ) -> Result<TxIoBundle, ApiRouteError> {
     let rpc_tx = ckb_store_reader::convert_transaction_view(tx_view);
     let witnesses = rpc_tx.witnesses.clone();
 
     let mut inputs_capacity: u128 = 0;
     let mut inputs_occupied_capacity: u128 = 0;
-    let mut has_dao_type_input = false;
 
     let inputs: Vec<TransactionInputResponse> = rpc_tx
         .inputs
@@ -1342,13 +1377,6 @@ fn build_inputs_outputs_from_ckb(
                 }
             };
 
-            if type_script
-                .as_ref()
-                .is_some_and(|script| is_dao_type_code_hash_hex(&script.code_hash))
-            {
-                has_dao_type_input = true;
-            }
-
             Ok(TransactionInputResponse {
                 previous_output: Some(PreviousOutput {
                     tx_hash: prev_tx_hash_hex.clone(),
@@ -1441,11 +1469,13 @@ fn build_inputs_outputs_from_ckb(
                 let occ = occupied_capacity_bytes(args_bytes.len(), type_args_len, data_size);
                 outputs_occupied_capacity += occ as u128;
 
-                let is_satoshi = is_genesis_special_burn_cell(&args_bytes, block_number);
+                let is_satoshi = block_number == 0
+                    && ckbadger_common::burn_policy::burn_policy(network)
+                        .is_some_and(|p| args_bytes.as_slice() == p.lock_args);
                 let (cell_type, virtual_occupied_capacity) = if is_satoshi {
                     (
                         Some("genesis_special_burn".to_string()),
-                        Some(GENESIS_SPECIAL_BURN_CELL_VIRTUAL_OCCUPIED.to_string()),
+                        Some(virtual_occupied.to_string()),
                     )
                 } else {
                     (None, None)
@@ -1464,21 +1494,6 @@ fn build_inputs_outputs_from_ckb(
         )
         .collect::<Result<Vec<_>, _>>()?;
 
-    let is_cellbase = rpc_tx.inputs.first().is_some_and(|input| {
-        input.previous_output.tx_hash
-            == "0x0000000000000000000000000000000000000000000000000000000000000000"
-    });
-
-    // DAO phase-2 withdrawals may legitimately have outputs > inputs due to compensation.
-    let computed_fee = compute_tx_fee_from_io(
-        inputs_capacity,
-        outputs_capacity,
-        is_cellbase,
-        has_dao_type_input,
-        block_number,
-        tx_view.hash().raw_data().as_ref(),
-    )?;
-
     Ok((
         inputs,
         outputs,
@@ -1486,10 +1501,17 @@ fn build_inputs_outputs_from_ckb(
         outputs_capacity,
         inputs_occupied_capacity,
         outputs_occupied_capacity,
-        computed_fee,
         witnesses,
         true,
     ))
+}
+
+/// Parse an out-point index as served by the CKB store reader (hex, usually
+/// `0x`-prefixed). The value is node-derived, so a parse failure means
+/// corrupted upstream data and must surface as an error, never as index 0.
+fn parse_out_point_index(raw: &str) -> Result<i32, String> {
+    let idx_str = raw.strip_prefix("0x").unwrap_or(raw);
+    i32::from_str_radix(idx_str, 16).map_err(|e| e.to_string())
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1504,60 +1526,67 @@ async fn get_cell_deps(
     State(state): State<Arc<AppState>>,
     Path(hash): Path<String>,
 ) -> ApiResult<Vec<CellDepResponse>> {
-    let hash_bytes = hex::decode(hash.strip_prefix("0x").unwrap_or(&hash))
-        .map_err(|_| ApiError::bad_request("Invalid transaction hash"))?;
+    let hash_bytes = parse_hash32(&hash, "transaction hash")?;
+    let mut tx_hash = [0u8; 32];
+    tx_hash.copy_from_slice(&hash_bytes);
 
-    // Read cell_deps directly from CKB's RocksDB
-    if let Some(ref store) = state.ckb_store {
-        if hash_bytes.len() == 32 {
-            let mut tx_hash = [0u8; 32];
-            tx_hash.copy_from_slice(&hash_bytes);
-            if let Some(tx_view) = store.get_transaction(&tx_hash) {
-                let rpc_tx = ckb_store_reader::convert_transaction_view(&tx_view);
-                let cell_deps: Vec<CellDepResponse> = rpc_tx
-                    .cell_deps
-                    .into_iter()
-                    .map(|dep| CellDepResponse {
-                        out_point_tx_hash: dep.out_point.tx_hash,
-                        out_point_index: {
-                            let idx_str = dep
-                                .out_point
-                                .index
-                                .strip_prefix("0x")
-                                .unwrap_or(&dep.out_point.index);
-                            i32::from_str_radix(idx_str, 16).unwrap_or(0)
-                        },
-                        dep_type: dep.dep_type,
-                    })
-                    .collect();
-                return ok(cell_deps);
-            }
-        }
+    // Cell deps are read from the CKB node's own RocksDB. Without that reader
+    // the endpoint has no data source at all, so fail loudly instead of
+    // shipping a silent `[]` that is indistinguishable from "no deps".
+    let Some(store) = state.ckb_store.as_ref() else {
+        return Err(ApiError::internal(format!(
+            "cell deps for {} unavailable: CKB RocksDB reader is not open; check the configured CKB db path",
+            hash
+        )));
+    };
+
+    if let Some(tx_view) = store.get_transaction(&tx_hash) {
+        let rpc_tx = ckb_store_reader::convert_transaction_view(&tx_view);
+        let cell_deps: Vec<CellDepResponse> = rpc_tx
+            .cell_deps
+            .into_iter()
+            .map(|dep| {
+                let out_point_index = parse_out_point_index(&dep.out_point.index).map_err(|e| {
+                    ApiError::internal(format!(
+                        "malformed cell dep out_point index {:?} in tx {}: {}",
+                        dep.out_point.index, hash, e
+                    ))
+                })?;
+                Ok(CellDepResponse {
+                    out_point_tx_hash: dep.out_point.tx_hash,
+                    out_point_index,
+                    dep_type: dep.dep_type,
+                })
+            })
+            .collect::<Result<_, crate::response::ApiRouteError>>()?;
+        return ok(cell_deps);
     }
 
-    if let Some(tx_lookup) = fetch_transaction_lookup(&state.ckb_rpc_url, &hash)
+    // Not in the node's chain data: either still in the mempool, or nonexistent.
+    match fetch_transaction_lookup(&state.ckb_rpc_url, &hash)
         .await
         .map_err(ApiError::internal)?
     {
-        if tx_lookup.is_pending_like() {
-            return Err(ApiError::bad_request(pending_transaction_resource_error(
-                &hash,
-                tx_lookup.status_str(),
-                "Cell deps",
-            )));
+        Some(tx_lookup) if tx_lookup.is_pending_like() => Err(ApiError::bad_request(
+            pending_transaction_resource_error(&hash, tx_lookup.status_str(), "Cell deps"),
+        )),
+        Some(tx_lookup) if tx_lookup.is_committed() => {
+            // The node RPC sees the tx committed but the secondary reader does
+            // not: catch-up lag or a stale reader path. A 404 would be a lie.
+            Err(ApiError::internal(format!(
+                "transaction {} is committed per node RPC but missing from the CKB RocksDB reader; reader catch-up lag or stale CKB db path",
+                hash
+            )))
         }
+        _ => Err(ApiError::not_found("Transaction not found")),
     }
-
-    // Fallback: RocksDB not available or tx not found
-    ok(vec![])
 }
 
 async fn get_cycles_status(
     State(state): State<Arc<AppState>>,
     Path(hash): Path<String>,
 ) -> ApiResult<CyclesStatusResponse> {
-    let hash_bytes = hex::decode(hash.strip_prefix("0x").unwrap_or(&hash))
-        .map_err(|_| ApiError::bad_request("Invalid transaction hash"))?;
+    let hash_bytes = parse_hash32(&hash, "transaction hash")?;
 
     let (db_cycles, is_cellbase) = match load_tx_cycles_state(&state, &hash_bytes).await? {
         Some(state) => state,
@@ -1619,8 +1648,7 @@ async fn trigger_cycles_calculation(
     State(state): State<Arc<AppState>>,
     Path(hash): Path<String>,
 ) -> ApiResult<CyclesStatusResponse> {
-    let hash_bytes = hex::decode(hash.strip_prefix("0x").unwrap_or(&hash))
-        .map_err(|_| ApiError::bad_request("Invalid transaction hash"))?;
+    let hash_bytes = parse_hash32(&hash, "transaction hash")?;
 
     let (db_cycles, is_cellbase) = match load_tx_cycles_state(&state, &hash_bytes).await? {
         Some(state) => state,
@@ -1835,12 +1863,40 @@ pub struct TransactionLifecycleResponse {
     pub hash: String,
     pub phase: LifecyclePhase,
     pub proposal_id: String,
+    /// Main-chain block whose proposal zone carried this transaction's short id.
+    /// For a proposal that arrived through an embedded uncle this is still the
+    /// containing main-chain block — that is the block the commitment window is
+    /// measured against — and `proposed_in_uncle` names the uncle itself.
     pub proposed_in: Option<LifecycleBlockInfo>,
+    /// The embedded uncle that actually listed the short id, when the containing
+    /// block's own proposal zone did not. `None` for directly proposed txs.
+    pub proposed_in_uncle: Option<LifecycleUncleInfo>,
     pub committed_in: Option<LifecycleBlockInfo>,
     pub commitment_distance: Option<i64>,
     pub commitment_window: CommitmentWindow,
     pub is_cellbase: bool,
     pub confirmations: Option<i64>,
+}
+
+/// Identity of an uncle block that carried a transaction's proposal.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LifecycleUncleInfo {
+    /// The uncle's own header block number (not the containing block's).
+    pub block_number: i64,
+    pub block_hash: String,
+}
+
+/// Where a committed transaction's proposal was found inside the
+/// `[commit - 10, commit - 2]` window.
+struct ProposalWindowHit {
+    /// Main-chain block whose proposal zone (own or uncle-borne) carried the short id.
+    block_number: i64,
+    block_hash: Vec<u8>,
+    timestamp: i64,
+    /// `(uncle block number, uncle block hash)` when the short id came from an
+    /// uncle embedded in `block_number`.
+    uncle: Option<(i64, Vec<u8>)>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1861,8 +1917,7 @@ async fn get_transaction_lifecycle(
     State(state): State<Arc<AppState>>,
     Path(hash): Path<String>,
 ) -> ApiResult<TransactionLifecycleResponse> {
-    let hash_bytes = hex::decode(hash.strip_prefix("0x").unwrap_or(&hash))
-        .map_err(|_| ApiError::bad_request("Invalid transaction hash"))?;
+    let hash_bytes = parse_hash32(&hash, "transaction hash")?;
 
     let short_hash = if hash_bytes.len() >= 10 {
         hash_bytes[..10].to_vec()
@@ -1898,6 +1953,7 @@ async fn get_transaction_lifecycle(
                 phase: LifecyclePhase::Pending,
                 proposal_id: format!("0x{}", hex::encode(&short_hash)),
                 proposed_in: None,
+                proposed_in_uncle: None,
                 committed_in: None,
                 commitment_distance: None,
                 commitment_window: CommitmentWindow::default(),
@@ -1953,6 +2009,7 @@ async fn get_transaction_lifecycle(
             phase: LifecyclePhase::Committed,
             proposal_id: proposal_id_hex,
             proposed_in: None,
+            proposed_in_uncle: None,
             committed_in: Some(LifecycleBlockInfo {
                 block_number: commit_block_number,
                 block_hash: format!("0x{}", hex::encode(&commit_block_hash)),
@@ -1971,7 +2028,7 @@ async fn get_transaction_lifecycle(
         let store_c = state.store.clone();
         let ckb_store_c = ckb_store.clone();
         let short_hash_c = short_hash.clone();
-        tokio::task::spawn_blocking(move || -> Option<(i64, Vec<u8>, i64)> {
+        tokio::task::spawn_blocking(move || -> Option<ProposalWindowHit> {
             if commit_block_number < 2 {
                 return None;
             }
@@ -1985,18 +2042,42 @@ async fn get_transaction_lifecycle(
                 return None;
             }
             for bn in start..=end {
-                if let Ok(Some(header)) = store_c.get_block_header(bn) {
-                    if header.hash.len() == 32 {
-                        let mut hash = [0u8; 32];
-                        hash.copy_from_slice(&header.hash);
-                        if let Some(block) = ckb_store_c.get_block(&hash) {
-                            for proposal_id in block.data().proposals().into_iter() {
-                                let proposal_bytes: Vec<u8> = proposal_id.raw_data().to_vec();
-                                if proposal_bytes == short_hash_c {
-                                    return Some((bn, header.hash.clone(), header.timestamp));
-                                }
-                            }
-                        }
+                let Ok(Some(header)) = store_c.get_block_header(bn) else {
+                    continue;
+                };
+                if header.hash.len() != 32 {
+                    continue;
+                }
+                let mut hash = [0u8; 32];
+                hash.copy_from_slice(&header.hash);
+                let Some(block) = ckb_store_c.get_block(&hash) else {
+                    continue;
+                };
+                let contains_short_id = |proposals: packed::ProposalShortIdVec| {
+                    proposals
+                        .into_iter()
+                        .any(|id| id.raw_data().to_vec() == short_hash_c)
+                };
+                // The block's own proposal zone owns the attribution when both it and
+                // one of its uncles carry the short id.
+                if contains_short_id(block.data().proposals()) {
+                    return Some(ProposalWindowHit {
+                        block_number: bn,
+                        block_hash: header.hash.clone(),
+                        timestamp: header.timestamp,
+                        uncle: None,
+                    });
+                }
+                // CKB consensus counts the proposal zones of the uncles a block
+                // embeds, so a tx can legitimately be proposed only inside an uncle.
+                for uncle in block.uncles() {
+                    if contains_short_id(uncle.data().proposals()) {
+                        return Some(ProposalWindowHit {
+                            block_number: bn,
+                            block_hash: header.hash.clone(),
+                            timestamp: header.timestamp,
+                            uncle: Some((uncle.number() as i64, uncle.hash().raw_data().to_vec())),
+                        });
                     }
                 }
             }
@@ -2008,21 +2089,26 @@ async fn get_transaction_lifecycle(
         None
     };
 
-    let (proposed_in_info, commitment_distance) = match proposed_in {
-        Some((proposal_block, proposal_hash, proposal_ts)) => {
-            let ts = chrono::DateTime::from_timestamp_millis(proposal_ts)
+    let (proposed_in_info, proposed_in_uncle, commitment_distance) = match proposed_in {
+        Some(hit) => {
+            let ts = chrono::DateTime::from_timestamp_millis(hit.timestamp)
                 .map(|dt| dt.to_rfc3339())
                 .unwrap_or_default();
             (
                 Some(LifecycleBlockInfo {
-                    block_number: proposal_block,
-                    block_hash: format!("0x{}", hex::encode(&proposal_hash)),
+                    block_number: hit.block_number,
+                    block_hash: format!("0x{}", hex::encode(&hit.block_hash)),
                     timestamp: ts,
                 }),
-                Some(commit_block_number - proposal_block),
+                hit.uncle
+                    .map(|(uncle_number, uncle_hash)| LifecycleUncleInfo {
+                        block_number: uncle_number,
+                        block_hash: format!("0x{}", hex::encode(&uncle_hash)),
+                    }),
+                Some(commit_block_number - hit.block_number),
             )
         }
-        None => (None, None),
+        None => (None, None, None),
     };
 
     ok(TransactionLifecycleResponse {
@@ -2030,6 +2116,7 @@ async fn get_transaction_lifecycle(
         phase: LifecyclePhase::Committed,
         proposal_id: proposal_id_hex,
         proposed_in: proposed_in_info,
+        proposed_in_uncle,
         committed_in: Some(LifecycleBlockInfo {
             block_number: commit_block_number,
             block_hash: format!("0x{}", hex::encode(&commit_block_hash)),
@@ -2048,6 +2135,18 @@ mod tests {
     use ckbadger_common::cycles_task::{CyclesTaskResult, CyclesTaskStatus};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+
+    #[test]
+    fn test_parse_out_point_index_valid_and_malformed() {
+        assert_eq!(parse_out_point_index("0x0"), Ok(0));
+        assert_eq!(parse_out_point_index("0x2"), Ok(2));
+        assert_eq!(parse_out_point_index("0xff"), Ok(255));
+        assert_eq!(parse_out_point_index("5"), Ok(5));
+        // Malformed node-derived data must error, never default to index 0.
+        assert!(parse_out_point_index("0xzz").is_err());
+        assert!(parse_out_point_index("").is_err());
+        assert!(parse_out_point_index("0x").is_err());
+    }
 
     #[test]
     fn test_transaction_response_serialization() {
@@ -2394,5 +2493,26 @@ mod tests {
         let err = compute_tx_fee_from_io(1_000, 1_100, false, false, 10, &[0x33; 32]).unwrap_err();
         assert_eq!(err.0, axum::http::StatusCode::INTERNAL_SERVER_ERROR);
         assert!(err.1 .0.message.contains("inputs/outputs invariant broken"));
+    }
+
+    /// A script replay that failed is persisted as the `-1` marker and must be
+    /// served as `failed` — never as a `done` cycle count. Guards the surface
+    /// that reported an aborted Nervos DAO script group as an authoritative
+    /// total.
+    #[test]
+    fn test_derive_cycles_status_never_reports_failed_replay_as_done() {
+        assert_eq!(
+            derive_cycles_status(Some(-1), false),
+            Some("failed".to_string())
+        );
+        // Not yet calculated stays pending, so the worker can pick it up.
+        assert_eq!(
+            derive_cycles_status(None, false),
+            Some("pending".to_string())
+        );
+        // A successful replay is the only case that reports a number.
+        assert_eq!(derive_cycles_status(Some(3_380_228), false), None);
+        // Cellbase transactions run no scripts; consensus counts them as 0.
+        assert_eq!(derive_cycles_status(Some(0), true), None);
     }
 }

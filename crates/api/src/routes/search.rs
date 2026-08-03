@@ -10,8 +10,8 @@ use std::sync::Arc;
 use crate::response::{ok, ApiError, ApiResult};
 use crate::routes::tx_lookup::fetch_transaction_lookup;
 use crate::utils::{
-    address_to_lock_script_hash, is_ckb_address, is_known_script_name, resolve_script_by_hash,
-    CurrentScriptVersionResolution,
+    address_to_lock_script_hash, is_ckb_address, is_known_script_name, is_valid_block_number,
+    resolve_script_by_hash, CurrentScriptVersionResolution,
 };
 use crate::warmup::{CachedAssetEntry, CachedScriptEntry, CACHE_KEY_SCRIPTS_NAMED};
 use crate::AppState;
@@ -82,7 +82,7 @@ fn cached_cluster_match(entry: &CachedAssetEntry, pattern: &str) -> Option<(Stri
 fn cached_object_collection_match(
     entry: &CachedAssetEntry,
     pattern: &str,
-) -> Option<(String, String, i64)> {
+) -> Option<(String, String, String, i64)> {
     if entry.standard == "spore" {
         return None;
     }
@@ -90,7 +90,32 @@ fn cached_object_collection_match(
     if !name.to_ascii_lowercase().contains(pattern) {
         return None;
     }
-    Some((entry.id.clone(), name, entry.holders_count))
+    Some((
+        entry.id.clone(),
+        name,
+        object_collection_href(&entry.standard, &entry.id),
+        entry.holders_count,
+    ))
+}
+
+/// The page that owns an object-collection hit.
+///
+/// A search result's `url` must be the canonical page for the resource, not a
+/// URL that happens to redirect. `/objects/{id}` serves 32-byte Spore object
+/// IDs; an mNFT class ID is 24 bytes and belongs to `/classes/{id}`, and the
+/// identity standards have their own pages. Emitting `/objects/{id}` for all of
+/// them sent an mNFT class hit to an endpoint that cannot address it.
+///
+/// Mirrors `getIdentityCollectionHref` / `getMnftClassDetailHref` in
+/// `frontend/lib/detail-routes.ts`.
+fn object_collection_href(standard: &str, collection_hex: &str) -> String {
+    match standard {
+        "dotbit" => "/identities/dotbit".to_string(),
+        "did_ckb" => "/identities/did:ckb".to_string(),
+        "bit_cell" => format!("/identities/{}", collection_hex),
+        "m-nft" => format!("/classes/{}", collection_hex),
+        _ => format!("/objects/{}", collection_hex),
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -263,7 +288,14 @@ async fn search(
 
     // 1) Block number lookup
     if scope_allows(scope, &[SearchScope::Block]) {
-        if let Ok(block_num) = scoped_query.parse::<i64>() {
+        // Free text, so a value that is not a block number simply is not a
+        // block hit — but it must be filtered here rather than handed to the
+        // store, whose key encoder asserts non-negative and aborts the process.
+        if let Some(block_num) = scoped_query
+            .parse::<i64>()
+            .ok()
+            .filter(|n| is_valid_block_number(*n))
+        {
             let store = state.store.clone();
             let block = tokio::task::spawn_blocking(move || store.get_block_header(block_num))
                 .await
@@ -687,20 +719,20 @@ async fn search(
             let cached = cached_objects.as_ref().ok_or_else(|| {
                 state.asset_cache_unavailable("object cache unavailable; warmup in progress")
             })?;
-            let mut object_collection_matches: Vec<(String, String, i64)> = cached
+            let mut object_collection_matches: Vec<(String, String, String, i64)> = cached
                 .iter()
                 .filter_map(|entry| cached_object_collection_match(entry, &pattern))
                 .collect();
 
-            object_collection_matches.sort_by(|a, b| b.2.cmp(&a.2));
-            for (collection_hex, name, _) in
+            object_collection_matches.sort_by(|a, b| b.3.cmp(&a.3));
+            for (collection_hex, name, href, _) in
                 object_collection_matches.into_iter().take(NAME_MATCH_LIMIT)
             {
                 results.push(SearchResult {
                     result_type: "object".to_string(),
-                    id: collection_hex.clone(),
+                    id: collection_hex,
                     label: format!("Object Collection {}", name),
-                    url: format!("/objects/{}", collection_hex),
+                    url: href,
                     match_kind: "name_contains".to_string(),
                 });
             }
@@ -921,7 +953,77 @@ mod tests {
 
         let object_result = cached_object_collection_match(&object_entry, "dotbit").unwrap();
         assert_eq!(object_result.0, "0xnft");
-        assert_eq!(object_result.2, 11);
+        assert_eq!(object_result.3, 11);
         assert!(cached_object_collection_match(&cluster_entry, "genesis").is_none());
+    }
+
+    /// A search hit's URL must be the page that can actually address the
+    /// resource. mNFT class IDs are 24 bytes and `/objects/{id}` serves 32-byte
+    /// Spore object IDs, so emitting `/objects/{class_id}` pointed the user at
+    /// an endpoint that rejects the identifier outright.
+    #[test]
+    fn test_object_collection_href_targets_the_page_that_owns_the_id() {
+        let class_id = format!("0x{}", "ab".repeat(24));
+        assert_eq!(
+            object_collection_href("m-nft", &class_id),
+            format!("/classes/{class_id}")
+        );
+        assert_eq!(
+            object_collection_href("dotbit", "0xanything"),
+            "/identities/dotbit"
+        );
+        assert_eq!(
+            object_collection_href("did_ckb", "0xanything"),
+            "/identities/did:ckb"
+        );
+        assert_eq!(
+            object_collection_href("bit_cell", "0xfeed"),
+            "/identities/0xfeed"
+        );
+        // Anything else keeps the object route (32-byte collections).
+        let spore_collection = format!("0x{}", "cd".repeat(32));
+        assert_eq!(
+            object_collection_href("unknown", &spore_collection),
+            format!("/objects/{spore_collection}")
+        );
+    }
+
+    #[test]
+    fn test_mnft_class_search_hit_links_to_the_class_page() {
+        let class_id = format!("0x{}", "11".repeat(24));
+        let entry = CachedAssetEntry {
+            id: class_id.clone(),
+            asset_type: "object".to_string(),
+            standard: "m-nft".to_string(),
+            name: Some("Some Class".to_string()),
+            symbol: None,
+            icon_url: None,
+            holders_count: 5,
+            transfers_count: 6,
+            transfers_24h: 0,
+            decimals: None,
+            total_supply: None,
+            maximum_supply: None,
+            content_type: None,
+            content_size: None,
+            cluster_id: None,
+            cluster_name: None,
+            owned_capacity: None,
+            owned_knowledge: None,
+            composition_tier: None,
+            onchain_ratio: None,
+            onchain_count: None,
+            type_code_hash: None,
+            type_hash_type: None,
+            type_args: None,
+            description: None,
+        };
+        let (id, _name, href, _) = cached_object_collection_match(&entry, "some").unwrap();
+        assert_eq!(id, class_id);
+        assert_eq!(
+            href,
+            format!("/classes/{class_id}"),
+            "a 24-byte mNFT class ID must not be linked into the 32-byte /objects namespace"
+        );
     }
 }

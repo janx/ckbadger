@@ -3,17 +3,35 @@
 //! Provides TOML-based configuration parsing, work directory resolution,
 //! and share directory discovery.
 //!
-//! Priority: CLI args > ckbadger.toml > defaults
+//! Priority: CLI args > config.toml > defaults
 
 use anyhow::{bail, Context, Result};
+use ckbadger_common::hardfork::normalize_network;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+
+mod orchestrator;
+pub use orchestrator::{
+    co_resident_network_count, is_orchestrator, load_orchestrator_config, network_workdir,
+    parse_orchestrator_config, validate_network_entry, NetworkEntry, OrchestratorConfig,
+};
+
+/// Resolve every accepted network spelling to the one identity used by all
+/// services, persisted metadata, and frontend routes.
+pub fn canonical_network_name(network: &str) -> Result<&'static str> {
+    normalize_network(network).ok_or_else(|| {
+        anyhow::anyhow!(
+            "unknown network '{}' (expected mainnet or testnet)",
+            network
+        )
+    })
+}
 
 // ---------------------------------------------------------------------------
 // Config structs
 // ---------------------------------------------------------------------------
 
-/// Top-level configuration, parsed from ckbadger.toml.
+/// Top-level configuration, parsed from config.toml.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct CkbadgerConfig {
@@ -58,6 +76,10 @@ pub struct FrontendConfig {
 pub struct IndexerConfig {
     pub bulk_sync_threshold: u64,
     pub poll_interval_ms: u64,
+    /// Whole-process bulk-sync budget. This is distinct from the RocksDB-only
+    /// `[store].memory_budget_gb`; `None` uses the per-network RAM share.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bulk_memory_budget_gb: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -161,6 +183,7 @@ impl Default for IndexerConfig {
         Self {
             bulk_sync_threshold: 1000,
             poll_interval_ms: 1000,
+            bulk_memory_budget_gb: None,
         }
     }
 }
@@ -216,7 +239,7 @@ impl Default for CrawlerConfig {
 pub struct WorkDir {
     /// The work directory root.
     pub root: PathBuf,
-    /// Path to ckbadger.toml.
+    /// Path to config.toml.
     pub config_path: PathBuf,
     /// Mutable canonical state (RocksDB domain store).
     pub domain_data: PathBuf,
@@ -251,7 +274,7 @@ impl WorkDir {
     /// already exists on disk.
     pub fn resolve(root: &Path) -> Self {
         let root = root.to_path_buf();
-        let config_path = root.join("ckbadger.toml");
+        let config_path = root.join("config.toml");
         let data_dir = root.join("data");
         let domain_data = data_dir.join("domain");
         let append_only_data = data_dir.join("append-only");
@@ -291,7 +314,7 @@ impl WorkDir {
     }
 
     /// Returns true if the work directory has been initialized
-    /// (i.e. ckbadger.toml exists).
+    /// (i.e. config.toml exists).
     pub fn is_initialized(&self) -> bool {
         self.config_path.exists()
     }
@@ -301,13 +324,13 @@ impl WorkDir {
 // Config loading
 // ---------------------------------------------------------------------------
 
-/// Load configuration from `ckbadger.toml` inside the given work directory.
+/// Load configuration from `config.toml` inside the given work directory.
 ///
 /// Missing keys in the TOML file fall back to their default values.
 /// If the file does not exist, returns an error (the work directory
 /// should be initialized first via `ckbadger init`).
 pub fn load_config(work_dir: &Path) -> Result<CkbadgerConfig> {
-    let config_path = work_dir.join("ckbadger.toml");
+    let config_path = work_dir.join("config.toml");
     let content = std::fs::read_to_string(&config_path)
         .with_context(|| format!("failed to read config file: {}", config_path.display()))?;
     parse_config(&content)
@@ -317,7 +340,7 @@ pub fn load_config(work_dir: &Path) -> Result<CkbadgerConfig> {
 ///
 /// Missing keys fall back to their default values via `#[serde(default)]`.
 pub fn parse_config(toml_str: &str) -> Result<CkbadgerConfig> {
-    let value: toml::Value = toml::from_str(toml_str).context("failed to parse ckbadger.toml")?;
+    let value: toml::Value = toml::from_str(toml_str).context("failed to parse config.toml")?;
     if value
         .get("ckb")
         .and_then(toml::Value::as_table)
@@ -327,26 +350,30 @@ pub fn parse_config(toml_str: &str) -> Result<CkbadgerConfig> {
         bail!("[ckb].data_path has been removed; use [ckb].workdir");
     }
 
-    toml::from_str(toml_str).context("failed to parse ckbadger.toml")
+    let mut config: CkbadgerConfig =
+        toml::from_str(toml_str).context("failed to parse config.toml")?;
+    config.ckb.network = canonical_network_name(&config.ckb.network)?.to_string();
+    Ok(config)
 }
 
 // ---------------------------------------------------------------------------
 // Default config generation
 // ---------------------------------------------------------------------------
 
-/// Generate the default ckbadger.toml content for `ckbadger init`.
+/// Per-network `config.toml` template for `ckbadger init`.
 ///
 /// The output is a hand-crafted TOML string (not serialized from the struct)
 /// so we can include comments explaining each field.
-pub fn default_config_toml() -> String {
-    r#"[ckb]
+pub fn default_config_toml(network: &str, api_port: u16) -> String {
+    format!(
+        r#"[ckb]
 rpc_url = "http://127.0.0.1:8114"
-network = "mainnet"               # mainnet | testnet
+network = "{network}"               # mainnet | testnet
 workdir = ""                      # REQUIRED: CKB node config directory
 
 [api]
 host = "127.0.0.1"
-port = 8101
+port = {api_port}
 rate_limit = 100
 rate_limit_burst = 200
 slow_request_threshold_ms = 100
@@ -358,6 +385,7 @@ port = 8100
 [indexer]
 bulk_sync_threshold = 1000
 poll_interval_ms = 1000
+# bulk_memory_budget_gb = 32     # Optional whole-indexer bulk-sync hard limit
 
 [store]
 domain_data_path = "data/domain"
@@ -368,13 +396,32 @@ direct_io_reads = true
 [log]
 level = "info"
 "#
-    .to_string()
+    )
+}
+
+/// Top-level orchestrator `ckbadger.toml` template.
+pub fn default_orchestrator_toml(networks: &[&str]) -> String {
+    let mut out = String::new();
+    for name in networks {
+        out.push_str(&format!("[[network]]\nname = \"{name}\"\n\n"));
+    }
+    out.push_str(
+        r#"[frontend]
+host = "127.0.0.1"
+port = 8100
+
+[log]
+level = "info"
+"#,
+    );
+    out
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedStorePaths {
     pub domain_data: PathBuf,
     pub append_only_data: PathBuf,
+    pub network_data: PathBuf,
     pub decoder_cache: PathBuf,
 }
 
@@ -411,6 +458,7 @@ pub fn resolve_store_paths(work_dir: &Path, store: &StoreConfig) -> ResolvedStor
     ResolvedStorePaths {
         domain_data: resolve_workdir_path(work_dir, &store.domain_data_path),
         append_only_data: resolve_workdir_path(work_dir, &store.append_only_data_path),
+        network_data: resolve_workdir_path(work_dir, &store.network_data_path),
         decoder_cache: resolve_workdir_path(work_dir, &store.decoder_cache_path),
     }
 }
@@ -548,6 +596,7 @@ mod tests {
 
         assert_eq!(cfg.indexer.bulk_sync_threshold, 1000);
         assert_eq!(cfg.indexer.poll_interval_ms, 1000);
+        assert_eq!(cfg.indexer.bulk_memory_budget_gb, None);
 
         assert_eq!(cfg.store.domain_data_path, "data/domain");
         assert_eq!(cfg.store.append_only_data_path, "data/append-only");
@@ -624,6 +673,7 @@ port = 3000
 [indexer]
 bulk_sync_threshold = 500
 poll_interval_ms = 2000
+bulk_memory_budget_gb = 36
 
 [store]
 domain_data_path = "/data/domain"
@@ -647,6 +697,7 @@ level = "debug"
         assert_eq!(cfg.frontend.port, 3000);
         assert_eq!(cfg.indexer.bulk_sync_threshold, 500);
         assert_eq!(cfg.indexer.poll_interval_ms, 2000);
+        assert_eq!(cfg.indexer.bulk_memory_budget_gb, Some(36));
         assert_eq!(cfg.store.domain_data_path, "/data/domain");
         assert_eq!(cfg.store.append_only_data_path, "/data/append");
         assert_eq!(cfg.store.memory_budget_gb, Some(48));
@@ -686,27 +737,68 @@ data_path = "/var/lib/ckb/data/db"
 
     #[test]
     fn test_default_config_toml_round_trips_to_defaults() {
-        let toml_str = default_config_toml();
+        let toml_str = default_config_toml("mainnet", 8101);
         let cfg = parse_config(&toml_str).unwrap();
         assert_eq!(cfg, CkbadgerConfig::default());
     }
 
     #[test]
     fn test_default_config_toml_declares_ckb_workdir() {
-        let toml_str = default_config_toml();
+        let toml_str = default_config_toml("mainnet", 8101);
         assert!(toml_str.contains("workdir = "));
         assert!(!toml_str.contains("\ndata_path = "));
     }
 
     #[test]
     fn test_default_config_toml_contains_all_sections() {
-        let toml_str = default_config_toml();
+        let toml_str = default_config_toml("mainnet", 8101);
         assert!(toml_str.contains("[ckb]"));
         assert!(toml_str.contains("[api]"));
         assert!(toml_str.contains("[frontend]"));
         assert!(toml_str.contains("[indexer]"));
         assert!(toml_str.contains("[store]"));
         assert!(toml_str.contains("[log]"));
+    }
+
+    #[test]
+    fn default_config_toml_is_parametrized_and_parses() {
+        let toml = default_config_toml("testnet", 8102);
+        assert!(toml.contains("network = \"testnet\""));
+        assert!(toml.contains("port = 8102"));
+        let cfg = parse_config(&toml).unwrap();
+        assert_eq!(cfg.ckb.network, "testnet");
+        assert_eq!(cfg.api.port, 8102);
+    }
+
+    #[test]
+    fn parse_config_canonicalizes_known_network_aliases() {
+        let mainnet = parse_config("[ckb]\nnetwork = \" CKB \"\n").unwrap();
+        assert_eq!(mainnet.ckb.network, "mainnet");
+
+        let testnet = parse_config("[ckb]\nnetwork = \"pudge\"\n").unwrap();
+        assert_eq!(testnet.ckb.network, "testnet");
+    }
+
+    #[test]
+    fn parse_config_rejects_unknown_network() {
+        let err = parse_config("[ckb]\nnetwork = \"devnet\"\n")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("devnet"));
+        assert!(err.contains("mainnet or testnet"));
+    }
+
+    #[test]
+    fn default_orchestrator_toml_parses_and_lists_networks() {
+        let toml = default_orchestrator_toml(&["mainnet", "testnet"]);
+        let cfg = parse_orchestrator_config(&toml).unwrap();
+        assert_eq!(
+            cfg.networks
+                .iter()
+                .map(|n| n.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["mainnet", "testnet"]
+        );
     }
 
     #[test]
@@ -745,6 +837,10 @@ data_path = "/var/lib/ckb/data/db"
             PathBuf::from("/tmp/ckbadger/custom/domain")
         );
         assert_eq!(resolved.append_only_data, PathBuf::from("/ssd/append-only"));
+        assert_eq!(
+            resolved.network_data,
+            PathBuf::from("/tmp/ckbadger/data/network")
+        );
     }
 
     #[test]
@@ -799,7 +895,7 @@ data_path = "/var/lib/ckb/data/db"
 [ckb]
 network = "testnet"
 "#;
-        std::fs::write(dir.path().join("ckbadger.toml"), config_content).unwrap();
+        std::fs::write(dir.path().join("config.toml"), config_content).unwrap();
 
         let cfg = load_config(dir.path()).unwrap();
         assert_eq!(cfg.ckb.network, "testnet");
@@ -828,7 +924,7 @@ network = "testnet"
         let wd = WorkDir::resolve(root);
 
         assert_eq!(wd.root, root);
-        assert_eq!(wd.config_path, root.join("ckbadger.toml"));
+        assert_eq!(wd.config_path, root.join("config.toml"));
         assert_eq!(wd.domain_data, root.join("data/domain"));
         assert_eq!(wd.append_only_data, root.join("data/append-only"));
         assert_eq!(wd.run_dir, root.join("run"));
@@ -870,9 +966,15 @@ network = "testnet"
         let wd = WorkDir::resolve(root);
         assert!(!wd.is_initialized());
 
-        std::fs::write(root.join("ckbadger.toml"), "").unwrap();
+        std::fs::write(root.join("config.toml"), "").unwrap();
         let wd = WorkDir::resolve(root);
         assert!(wd.is_initialized());
+    }
+
+    #[test]
+    fn workdir_uses_config_toml_filename() {
+        let wd = WorkDir::resolve(Path::new("/tmp/ckb-mainnet"));
+        assert_eq!(wd.config_path, Path::new("/tmp/ckb-mainnet/config.toml"));
     }
 
     // -- Share directory resolution --

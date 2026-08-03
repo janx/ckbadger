@@ -20,6 +20,7 @@ fn build_dao_cache_entry(
 ) -> DaoDepositCacheEntry {
     DaoDepositCacheEntry {
         capacity: deposit.capacity,
+        occupied_capacity: deposit.occupied_capacity,
         deposit_block_number: block_number,
         deposit_timestamp,
         lock_script_hash: deposit.lock_script_hash.clone(),
@@ -31,6 +32,7 @@ fn build_dao_cache_entry(
         withdraw_request_ar: None,
         withdraw_block: None,
         withdraw_tx: None,
+        withdraw_request_occupied_capacity: None,
         withdraw_to_output_index: None,
         compensation: None,
     }
@@ -51,9 +53,26 @@ fn dao_cache_entry_to_row(
     }
 }
 
+/// A DAO cell created by the consuming transaction — a candidate phase-1
+/// withdraw-request output for one of the deposits consumed in the same tx.
+#[derive(Debug, Clone)]
+pub struct NewDaoOutput {
+    pub tx_hash: Vec<u8>,
+    pub output_index: i16,
+    pub lock_script_hash: Vec<u8>,
+    pub capacity: i64,
+    /// Exact occupied capacity of this withdraw-request cell.
+    ///
+    /// RFC-0023 derives `counted_capacity` from the WITHDRAWING cell, so this
+    /// — not the original deposit cell's occupied capacity — is what the
+    /// deposit's compensation must be computed from once phase-1 happens.
+    pub occupied_capacity: i64,
+    pub deposit_block: u64,
+}
+
 pub trait DaoWithdrawalContextTrait {
     fn consumed_deposits(&self) -> &[DaoConsumedRow];
-    fn new_dao_outputs(&self) -> &[(Vec<u8>, i16, Vec<u8>, i64, u64)];
+    fn new_dao_outputs(&self) -> &[NewDaoOutput];
     fn block_number(&self) -> i64;
     fn consuming_tx_hash(&self) -> &[u8];
     fn timestamp(&self) -> DateTime<Utc>;
@@ -68,7 +87,7 @@ pub trait DaoWithdrawalContextTrait {
 #[derive(Clone)]
 pub struct DaoWithdrawalContext {
     pub consumed_deposits: Vec<DaoConsumedRow>,
-    pub new_dao_outputs: Vec<(Vec<u8>, i16, Vec<u8>, i64, u64)>,
+    pub new_dao_outputs: Vec<NewDaoOutput>,
     pub tx_inputs: Vec<(Vec<u8>, i16)>,
     pub candidate_withdraw_to_outputs: Vec<(i16, Vec<u8>)>,
     pub block_number: i64,
@@ -81,7 +100,7 @@ impl DaoWithdrawalContextTrait for DaoWithdrawalContext {
         &self.consumed_deposits
     }
 
-    fn new_dao_outputs(&self) -> &[(Vec<u8>, i16, Vec<u8>, i64, u64)] {
+    fn new_dao_outputs(&self) -> &[NewDaoOutput] {
         &self.new_dao_outputs
     }
 
@@ -145,12 +164,12 @@ fn infer_withdraw_to_output_index_from_outputs(
 }
 
 fn select_phase1_output_for_deposit<'a>(
-    new_dao_outputs: &'a [(Vec<u8>, i16, Vec<u8>, i64, u64)],
+    new_dao_outputs: &'a [NewDaoOutput],
     consumed_output_indices: &HashSet<usize>,
     capacity: i64,
     deposit_block_number: i64,
     lock_script_hash: &[u8],
-) -> Result<Option<(usize, &'a (Vec<u8>, i16, Vec<u8>, i64, u64))>> {
+) -> Result<Option<(usize, &'a NewDaoOutput)>> {
     let deposit_block_u64 = u64::try_from(deposit_block_number).map_err(|_| {
         anyhow!(
             "invalid negative DAO deposit block number while matching phase-1 output: {}",
@@ -159,13 +178,14 @@ fn select_phase1_output_for_deposit<'a>(
     })?;
 
     let base_candidates = || {
-        new_dao_outputs.iter().enumerate().filter(
-            move |(pos, (_, _, _, cap, output_deposit_block))| {
-                *cap == capacity
-                    && *output_deposit_block == deposit_block_u64
+        new_dao_outputs
+            .iter()
+            .enumerate()
+            .filter(move |(pos, out)| {
+                out.capacity == capacity
+                    && out.deposit_block == deposit_block_u64
                     && !consumed_output_indices.contains(pos)
-            },
-        )
+            })
     };
 
     // Prefer lock_script_hash match for disambiguation (multiple deposits with
@@ -181,17 +201,15 @@ fn select_phase1_output_for_deposit<'a>(
     // to withdraw multiple identical-capacity deposits from the same block
     // while also changing locks, which is rare in practice.
     let with_lock = base_candidates()
-        .filter(|(_, (_, _, output_lock_hash, _, _))| {
-            output_lock_hash.as_slice() == lock_script_hash
-        })
+        .filter(|(_, out)| out.lock_script_hash.as_slice() == lock_script_hash)
         // Use output index as a deterministic tie-breaker when exact metadata repeats.
-        .min_by_key(|(pos, (_, output_index, _, _, _))| (*output_index, *pos));
+        .min_by_key(|(pos, out)| (out.output_index, *pos));
 
     if with_lock.is_some() {
         return Ok(with_lock);
     }
 
-    Ok(base_candidates().min_by_key(|(pos, (_, output_index, _, _, _))| (*output_index, *pos)))
+    Ok(base_candidates().min_by_key(|(pos, out)| (out.output_index, *pos)))
 }
 
 fn infer_request_output_index_from_inputs(
@@ -435,7 +453,7 @@ impl BatchWriter {
                             capacity
                         );
                     };
-                    let (pos, (new_tx_hash, new_output_index, _, _, _)) =
+                    let (pos, request_output) =
                         select_phase1_output_for_deposit(
                             ctx.new_dao_outputs(),
                             &consumed_output_indices,
@@ -458,8 +476,14 @@ impl BatchWriter {
 
                     entry.status = 1;
                     entry.withdraw_request_block = Some(ctx.block_number());
-                    entry.withdraw_request_tx = Some(new_tx_hash.clone());
-                    entry.withdraw_request_output_index = Some(*new_output_index);
+                    entry.withdraw_request_tx = Some(request_output.tx_hash.clone());
+                    entry.withdraw_request_output_index = Some(request_output.output_index);
+                    // RFC-0023 computes compensation from the WITHDRAWING cell,
+                    // so persist this request cell's exact occupied capacity —
+                    // it differs from the deposit cell's whenever the request
+                    // changes lock script.
+                    entry.withdraw_request_occupied_capacity =
+                        Some(request_output.occupied_capacity);
                     entry.withdraw_request_ar = dao_fields
                         .get(&ctx.block_number())
                         .and_then(|dao| extract_ar_from_dao(dao))
@@ -484,7 +508,11 @@ impl BatchWriter {
                         entry.deposit_block_number,
                     );
                     batch.put_dao_deposit(&outpoint_key, &entry);
-                    batch.put_dao_by_withdraw_tx(new_tx_hash, *new_output_index, &outpoint_key);
+                    batch.put_dao_by_withdraw_tx(
+                        &request_output.tx_hash,
+                        request_output.output_index,
+                        &outpoint_key,
+                    );
                     // Propagate phase1 update to pending map so a hypothetical
                     // same-batch phase2 lookup sees status=1 with request fields.
                     pending_deposits.insert(outpoint_key, entry);
@@ -580,8 +608,25 @@ impl BatchWriter {
                                 req_dao.len()
                             )
                         })?;
-                        let compensation =
-                            calculate_dao_compensation_from_ar(capacity, ar_deposit, ar_withdraw)?;
+                        // RFC-0023: `counted_capacity` comes from the
+                        // WITHDRAWING (phase-1 request) cell, not the deposit.
+                        let request_occupied_capacity = entry
+                            .withdraw_request_occupied_capacity
+                            .ok_or_else(|| {
+                                anyhow!(
+                                    "DAO deposit missing withdraw request occupied capacity during withdrawal completion: consuming_tx=0x{}, deposit_outpoint=0x{}:{}, request_block={}",
+                                    hex::encode(ctx.consuming_tx_hash()),
+                                    hex::encode(original_tx_hash),
+                                    original_output_index,
+                                    request_block
+                                )
+                            })?;
+                        let compensation = calculate_dao_compensation_from_ar(
+                            capacity,
+                            request_occupied_capacity,
+                            ar_deposit,
+                            ar_withdraw,
+                        )?;
                         let withdraw_to_output_index =
                             ctx.withdraw_to_output_index_for_lock(&entry.lock_script_hash);
                         entry.status = 2;
@@ -609,6 +654,27 @@ impl BatchWriter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Build a phase-1 request output for tests. Standard secp DAO cell shape
+    /// (102 CKB occupied) unless a test needs the deposit/request occupied
+    /// capacities to differ.
+    fn new_dao_output(
+        tx_hash: Vec<u8>,
+        output_index: i16,
+        lock_script_hash: Vec<u8>,
+        capacity: i64,
+        deposit_block: u64,
+    ) -> NewDaoOutput {
+        NewDaoOutput {
+            tx_hash,
+            output_index,
+            lock_script_hash,
+            capacity,
+            occupied_capacity: 102_00000000,
+            deposit_block,
+        }
+    }
+
     use ckbadger_store::types::CachedBlockHeader;
 
     fn dedup_tx_hashes<'a>(tx_hashes: &[&'a [u8]]) -> Vec<&'a [u8]> {
@@ -623,7 +689,7 @@ mod tests {
     #[derive(Clone)]
     struct BatchCtx {
         consumed: Vec<DaoConsumedRow>,
-        new_outputs: Vec<(Vec<u8>, i16, Vec<u8>, i64, u64)>,
+        new_outputs: Vec<NewDaoOutput>,
         block_num: i64,
         consuming_tx: Vec<u8>,
     }
@@ -632,7 +698,7 @@ mod tests {
         fn consumed_deposits(&self) -> &[DaoConsumedRow] {
             &self.consumed
         }
-        fn new_dao_outputs(&self) -> &[(Vec<u8>, i16, Vec<u8>, i64, u64)] {
+        fn new_dao_outputs(&self) -> &[NewDaoOutput] {
             &self.new_outputs
         }
         fn block_number(&self) -> i64 {
@@ -659,6 +725,9 @@ mod tests {
             dao,
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         }
     }
@@ -670,6 +739,7 @@ mod tests {
             output_index: 7,
             lock_script_hash: vec![0x22; 32],
             capacity: 123_456,
+            occupied_capacity: 45_678,
         };
         let entry = build_dao_cache_entry(&deposit, 42, 9876, 0);
 
@@ -692,6 +762,7 @@ mod tests {
     fn test_dao_cache_entry_to_row_maps_fields() {
         let entry = DaoDepositCacheEntry {
             capacity: 999,
+            occupied_capacity: 111,
             deposit_block_number: 77,
             deposit_timestamp: 0,
             lock_script_hash: vec![0x33; 32],
@@ -703,6 +774,7 @@ mod tests {
             withdraw_request_ar: Some(456),
             withdraw_block: None,
             withdraw_tx: None,
+            withdraw_request_occupied_capacity: Some(111),
             withdraw_to_output_index: None,
             compensation: None,
         };
@@ -831,19 +903,22 @@ mod tests {
 
     #[test]
     fn test_calculate_dao_compensation_from_ar_errors_on_capacity_below_occupied() {
-        let err = calculate_dao_compensation_from_ar(100_00000000, 100, 110).unwrap_err();
-        assert!(err.to_string().contains("below occupied"));
+        let err =
+            calculate_dao_compensation_from_ar(100_00000000, 102_00000000, 100, 110).unwrap_err();
+        assert!(err.to_string().contains("below occupied capacity"));
     }
 
     #[test]
     fn test_calculate_dao_compensation_from_ar_errors_on_ar_underflow() {
-        let err = calculate_dao_compensation_from_ar(200_00000000, 100, 90).unwrap_err();
+        let err =
+            calculate_dao_compensation_from_ar(200_00000000, 102_00000000, 100, 90).unwrap_err();
         assert!(err.to_string().contains("underflow"));
     }
 
     #[test]
     fn test_calculate_dao_compensation_from_ar_errors_on_zero_deposit_ar() {
-        let err = calculate_dao_compensation_from_ar(200_00000000, 0, 100).unwrap_err();
+        let err =
+            calculate_dao_compensation_from_ar(200_00000000, 102_00000000, 0, 100).unwrap_err();
         assert!(err.to_string().contains("zero deposit AR"));
     }
 
@@ -868,6 +943,7 @@ mod tests {
             outpoint_key,
             DaoDepositCacheEntry {
                 capacity: deposit_capacity,
+                occupied_capacity: 0,
                 deposit_block_number: deposit_block,
                 deposit_timestamp: 0,
                 lock_script_hash: vec![0xBB; 32],
@@ -879,6 +955,7 @@ mod tests {
                 withdraw_request_ar: None,
                 withdraw_block: None,
                 withdraw_tx: None,
+                withdraw_request_occupied_capacity: None,
                 withdraw_to_output_index: None,
                 compensation: None,
             },
@@ -934,6 +1011,7 @@ mod tests {
             outpoint_key,
             DaoDepositCacheEntry {
                 capacity: 100_00000000,
+                occupied_capacity: 102_00000000,
                 deposit_block_number: 100,
                 deposit_timestamp: 0,
                 lock_script_hash: vec![0xBB; 32],
@@ -945,6 +1023,7 @@ mod tests {
                 withdraw_request_ar: Some(11),
                 withdraw_block: None,
                 withdraw_tx: None,
+                withdraw_request_occupied_capacity: Some(102_00000000),
                 withdraw_to_output_index: None,
                 compensation: None,
             },
@@ -1001,6 +1080,7 @@ mod tests {
 
         let pending_entry = DaoDepositCacheEntry {
             capacity: deposit_capacity,
+            occupied_capacity: 102_00000000,
             deposit_block_number: deposit_block,
             deposit_timestamp: 0,
             lock_script_hash: vec![0xBB; 32],
@@ -1012,6 +1092,7 @@ mod tests {
             withdraw_request_ar: None,
             withdraw_block: None,
             withdraw_tx: None,
+            withdraw_request_occupied_capacity: None,
             withdraw_to_output_index: None,
             compensation: None,
         };
@@ -1031,7 +1112,7 @@ mod tests {
         #[derive(Clone)]
         struct TestCtx {
             consumed: Vec<DaoConsumedRow>,
-            new_outputs: Vec<(Vec<u8>, i16, Vec<u8>, i64, u64)>,
+            new_outputs: Vec<NewDaoOutput>,
             block_num: i64,
             consuming_tx: Vec<u8>,
         }
@@ -1039,7 +1120,7 @@ mod tests {
             fn consumed_deposits(&self) -> &[DaoConsumedRow] {
                 &self.consumed
             }
-            fn new_dao_outputs(&self) -> &[(Vec<u8>, i16, Vec<u8>, i64, u64)] {
+            fn new_dao_outputs(&self) -> &[NewDaoOutput] {
                 &self.new_outputs
             }
             fn block_number(&self) -> i64 {
@@ -1062,7 +1143,7 @@ mod tests {
                 status: 0, // Phase 1 withdrawal
                 lock_script_hash: vec![0xBB; 32],
             }],
-            new_outputs: vec![(
+            new_outputs: vec![new_dao_output(
                 withdraw_tx_hash.clone(),
                 0,
                 vec![0xBB; 32],
@@ -1133,6 +1214,7 @@ mod tests {
             outpoint_key,
             DaoDepositCacheEntry {
                 capacity: 500_00000000,
+                occupied_capacity: 102_00000000,
                 deposit_block_number: 100,
                 deposit_timestamp: 0,
                 lock_script_hash: vec![0xBB; 32],
@@ -1144,6 +1226,7 @@ mod tests {
                 withdraw_request_ar: Some(11),
                 withdraw_block: None,
                 withdraw_tx: None,
+                withdraw_request_occupied_capacity: Some(102_00000000),
                 withdraw_to_output_index: None,
                 compensation: None,
             },
@@ -1204,6 +1287,7 @@ mod tests {
             outpoint_key,
             DaoDepositCacheEntry {
                 capacity,
+                occupied_capacity: 102_00000000,
                 deposit_block_number: 100,
                 deposit_timestamp: 0,
                 lock_script_hash: vec![0xBB; 32],
@@ -1215,6 +1299,7 @@ mod tests {
                 withdraw_request_ar: None,
                 withdraw_block: None,
                 withdraw_tx: None,
+                withdraw_request_occupied_capacity: None,
                 withdraw_to_output_index: None,
                 compensation: None,
             },
@@ -1230,8 +1315,8 @@ mod tests {
                 lock_script_hash: vec![0xBB; 32],
             }],
             new_outputs: vec![
-                (vec![0xC1; 32], 0, vec![0xBB; 32], capacity, 100),
-                (vec![0xC2; 32], 1, vec![0xBB; 32], capacity, 100),
+                new_dao_output(vec![0xC1; 32], 0, vec![0xBB; 32], capacity, 100),
+                new_dao_output(vec![0xC2; 32], 1, vec![0xBB; 32], capacity, 100),
             ],
             block_num: 200,
             consuming_tx: vec![0xDD; 32],
@@ -1287,6 +1372,7 @@ mod tests {
             outpoint,
             DaoDepositCacheEntry {
                 capacity,
+                occupied_capacity: 102_00000000,
                 deposit_block_number: 100,
                 deposit_timestamp: 0,
                 lock_script_hash: vec![0xBB; 32],
@@ -1298,6 +1384,7 @@ mod tests {
                 withdraw_request_ar: None,
                 withdraw_block: None,
                 withdraw_tx: None,
+                withdraw_request_occupied_capacity: None,
                 withdraw_to_output_index: None,
                 compensation: None,
             },
@@ -1314,8 +1401,8 @@ mod tests {
                 lock_script_hash: vec![0xBB; 32],
             }],
             new_outputs: vec![
-                (withdraw_tx.clone(), 0, vec![0xBB; 32], capacity, 101),
-                (withdraw_tx.clone(), 1, vec![0xBB; 32], capacity, 100),
+                new_dao_output(withdraw_tx.clone(), 0, vec![0xBB; 32], capacity, 101),
+                new_dao_output(withdraw_tx.clone(), 1, vec![0xBB; 32], capacity, 100),
             ],
             block_num: 200,
             consuming_tx: vec![0xDD; 32],
@@ -1378,6 +1465,7 @@ mod tests {
             outpoint,
             DaoDepositCacheEntry {
                 capacity,
+                occupied_capacity: 102_00000000,
                 deposit_block_number: 5668752,
                 deposit_timestamp: 0,
                 lock_script_hash: vec![0x33; 32],
@@ -1389,6 +1477,7 @@ mod tests {
                 withdraw_request_ar: None,
                 withdraw_block: None,
                 withdraw_tx: None,
+                withdraw_request_occupied_capacity: None,
                 withdraw_to_output_index: None,
                 compensation: None,
             },
@@ -1404,7 +1493,13 @@ mod tests {
                 status: 0,
                 lock_script_hash: vec![0x33; 32],
             }],
-            new_outputs: vec![(withdraw_tx.clone(), 0, vec![0x44; 32], capacity, 5668752)],
+            new_outputs: vec![new_dao_output(
+                withdraw_tx.clone(),
+                0,
+                vec![0x44; 32],
+                capacity,
+                5668752,
+            )],
             block_num: 5733774,
             consuming_tx: vec![0xDD; 32],
         };
@@ -1480,6 +1575,7 @@ mod tests {
             outpoint_key,
             DaoDepositCacheEntry {
                 capacity: deposit_capacity,
+                occupied_capacity: 102_00000000,
                 deposit_block_number: deposit_block,
                 deposit_timestamp: 0,
                 lock_script_hash: lock_hash.clone(),
@@ -1491,6 +1587,7 @@ mod tests {
                 withdraw_request_ar: None,
                 withdraw_block: None,
                 withdraw_tx: None,
+                withdraw_request_occupied_capacity: None,
                 withdraw_to_output_index: None,
                 compensation: None,
             },
@@ -1505,7 +1602,7 @@ mod tests {
                 status: 0,
                 lock_script_hash: lock_hash.clone(),
             }],
-            new_outputs: vec![(
+            new_outputs: vec![new_dao_output(
                 withdraw_request_tx.clone(),
                 0,
                 lock_hash.clone(),
@@ -1567,6 +1664,7 @@ mod tests {
             outpoint_key,
             DaoDepositCacheEntry {
                 capacity: deposit_capacity,
+                occupied_capacity: 102_00000000,
                 deposit_block_number: deposit_block,
                 deposit_timestamp: 0,
                 lock_script_hash: lock_hash.clone(),
@@ -1578,6 +1676,7 @@ mod tests {
                 withdraw_request_ar: None,
                 withdraw_block: None,
                 withdraw_tx: None,
+                withdraw_request_occupied_capacity: None,
                 withdraw_to_output_index: None,
                 compensation: None,
             },
@@ -1592,7 +1691,7 @@ mod tests {
                 status: 0,
                 lock_script_hash: lock_hash.clone(),
             }],
-            new_outputs: vec![(
+            new_outputs: vec![new_dao_output(
                 vec![0xDD; 32],
                 0,
                 lock_hash,
@@ -1638,6 +1737,7 @@ mod tests {
                 output_index: i32::from(i16::MAX) + 1,
                 lock_script_hash: vec![0xCD; 32],
                 capacity: 123,
+                occupied_capacity: 0,
             },
             42_i64,
             chrono::Utc::now(),

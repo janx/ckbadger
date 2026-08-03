@@ -27,6 +27,7 @@ import { classifyActivity } from '@/lib/activity-classify';
 import { buildMarkdownDocument, markdownList, markdownTable } from '@/lib/ai/markdown-format';
 import { CHART_PAGE_SLUGS, type ParsedMarkdownPage } from '@/lib/ai/markdown-route';
 import { resolveBuildVersion } from '@/lib/runtime-config';
+import { resolveActiveNetwork } from '@/lib/active-network';
 import { analyzeWitness, buildScriptGroupLens, inferWitnessInsights } from '@/lib/witness-analysis';
 
 const DEFAULT_LIMIT = 20;
@@ -345,14 +346,17 @@ function renderMinerDistribution(chart: MinerDistributionResponse): string {
     `## ${chart.title}`,
     '',
     markdownTable(
-      ['address', 'minerName', 'blocksMined', 'percentage'],
+      ['minerLockHash', 'address', 'minerName', 'blocksMined', 'percentage'],
       chart.data.map((miner) => [
-        hashShort(miner.address),
+        hashShort(miner.minerLockHash),
+        miner.address ?? '-',
         miner.minerName ?? '-',
         miner.blocksMined,
         miner.percentage,
       ])
     ),
+    '',
+    `Window: ${chart.fromDate}–${chart.toDate} (${chart.windowDays} complete UTC+8 days)`,
     '',
     `Total blocks: ${chart.totalBlocks}`,
   ].join('\n');
@@ -524,7 +528,7 @@ function renderTokenSummary(token: Token) {
       ['symbol', token.symbol ?? '-'],
       ['name', token.name ?? '-'],
       ['standard', token.standard],
-      ['decimals', token.decimals],
+      ['decimals', token.decimals ?? 'unknown'],
       ['totalSupply', token.totalSupply],
       ['holdersCount', token.holdersCount],
       ['transfersCount', token.transfersCount],
@@ -740,7 +744,7 @@ export async function renderMarkdownPage(
       return { status: 200, body };
     }
     case 'hardforks': {
-      const hardforks = await api.getHardforks();
+      const hardforks = await api.getHardforks({ network: resolveActiveNetwork() });
       const body = buildMarkdownDocument(buildMeta(page.pathname, page.kind, origin), [
         '# Hardforks',
         '',
@@ -1395,6 +1399,49 @@ export async function renderMarkdownPage(
             ['isLive', item.isLive],
             ['ownerLockHash', item.ownerLockHash ?? '-'],
             ['createdAtBlock', item.createdAtBlock],
+            ['txHash', item.txHash ?? '-'],
+            ['outputIndex', item.outputIndex ?? '-'],
+          ]
+        ),
+        '',
+        '## Activities',
+        '',
+        markdownTable(
+          ['txHash', 'blockNumber', 'txIndex', 'timestamp', 'actions'],
+          activities.data.map((activity) => [
+            hashShort(activity.txHash),
+            activity.blockNumber,
+            activity.txIndex,
+            activity.timestamp,
+            activity.actions.join(','),
+          ])
+        ),
+      ]);
+      return { status: 200, body };
+    }
+    case 'bit_cell_item_detail': {
+      const limit = parseLimit(searchParams);
+      const cursor = searchParams.get('cursor') ?? undefined;
+      const action = parseMnftActivityAction(searchParams.get('action'));
+      const [item, activities] = await Promise.all([
+        api.getBitCellItemDetail(page.identityId),
+        api.getBitCellItemActivities(page.identityId, { limit, cursor, action }),
+      ]);
+      const body = buildMarkdownDocument(buildMeta(page.pathname, page.kind, origin), [
+        `# .bit Cell ${item.name ?? hashShort(item.nftId, 14, 12)}`,
+        '',
+        '## Identity',
+        '',
+        markdownTable(
+          ['field', 'value'],
+          [
+            ['nftId', item.nftId],
+            ['name', item.name ?? '-'],
+            ['standard', item.standard],
+            ['isLive', item.isLive],
+            ['ownerLockHash', item.ownerLockHash ?? '-'],
+            ['createdAtBlock', item.createdAtBlock],
+            ['expiredAt', item.expiredAt ?? '-'],
             ['txHash', item.txHash ?? '-'],
             ['outputIndex', item.outputIndex ?? '-'],
           ]

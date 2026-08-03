@@ -8,6 +8,7 @@ vi.mock('@/lib/api', () => ({
     getNetworkStats: vi.fn(),
   },
   isWarmupPendingError: vi.fn(() => false),
+  isNetworkInitializingError: vi.fn(() => false),
 }));
 
 describe('GlobalStatsBar', () => {
@@ -61,15 +62,15 @@ describe('GlobalStatsBar', () => {
     expect(api.getNetworkStats).toHaveBeenCalledTimes(1);
     expect(screen.getByRole('link', { name: /block/i })).toHaveAttribute(
       'href',
-      '/blocks/18823834'
+      '/mainnet/blocks/18823834'
     );
     expect(screen.getByRole('link', { name: /epoch/i })).toHaveAttribute(
       'href',
-      '/charts/epoch-time-length'
+      '/mainnet/charts/epoch-time-length'
     );
     expect(screen.getByRole('link', { name: /hash/i })).toHaveAttribute(
       'href',
-      '/charts/hash-rate'
+      '/mainnet/charts/hash-rate'
     );
     expect(screen.getByText('13,814')).toBeInTheDocument();
     expect(screen.getByText('828/947 87.4%')).toBeInTheDocument();

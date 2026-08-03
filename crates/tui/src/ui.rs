@@ -20,6 +20,7 @@ use crate::db::{
     ApiServiceInfo, ChainInfoData, LabelCount, NetworkHistoryPoint, PeersData, RuntimeDiagData,
     ServiceLogTailData, SupervisorServiceData, SyncStatusRow, TuiDb,
 };
+use crate::multi::{MultiNetworkDb, NetworkLocal};
 
 const RATE_HISTORY_SIZE: usize = 3600;
 const LOG_HISTORY_SIZE: usize = 200;
@@ -140,7 +141,7 @@ struct ControllerDeltas {
 
 pub struct App {
     build_version: String,
-    db: TuiDb,
+    db: MultiNetworkDb,
     sync_status: Option<SyncStatusRow>,
     memory_stats: Option<MemoryStatsData>,
     chain_info: Option<ChainInfoData>,
@@ -186,6 +187,7 @@ pub struct App {
     help_visible: bool,
     force_compact_layout: bool,
     diagnostics_view_mode: DiagnosticsViewMode,
+    network_summaries: Vec<NetworkSummaryRow>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -197,7 +199,7 @@ enum SyncBottleneck {
 }
 
 impl App {
-    pub fn new(db: TuiDb, build_version: String) -> Self {
+    pub fn new(db: MultiNetworkDb, build_version: String) -> Self {
         let mut log_entries = VecDeque::with_capacity(LOG_HISTORY_SIZE);
         log_entries.push_back(LogEntry {
             timestamp: Local::now(),
@@ -250,11 +252,12 @@ impl App {
             help_visible: false,
             force_compact_layout: false,
             diagnostics_view_mode: DiagnosticsViewMode::Auto,
+            network_summaries: Vec::new(),
         }
     }
 
     pub fn db(&self) -> &TuiDb {
-        &self.db
+        self.db.selected()
     }
 
     pub fn next_tab(&mut self) {
@@ -263,6 +266,67 @@ impl App {
 
     pub fn previous_tab(&mut self) {
         self.main_tab = self.main_tab.prev();
+    }
+
+    pub fn network_names(&self) -> Vec<&str> {
+        self.db.names()
+    }
+
+    pub fn selected_network_index(&self) -> usize {
+        self.db.selected_index()
+    }
+
+    pub fn network_summaries(&self) -> &[NetworkSummaryRow] {
+        &self.network_summaries
+    }
+
+    pub async fn select_next_network(&mut self) {
+        if self.db.len() <= 1 {
+            return;
+        }
+        self.db.select_next();
+        self.on_network_switched().await;
+    }
+
+    pub async fn select_prev_network(&mut self) {
+        if self.db.len() <= 1 {
+            return;
+        }
+        self.db.select_prev();
+        self.on_network_switched().await;
+    }
+
+    async fn on_network_switched(&mut self) {
+        // Throughput history + event-detection state are per-network; reset them so
+        // the switch doesn't chart a discontinuity or fire cross-network alerts.
+        self.rate_history.clear();
+        self.tx_rate_history.clear();
+        self.db_write_history.clear();
+        self.db_commit_history.clear();
+        self.fetch_stage_history.clear();
+        self.parse_stage_history.clear();
+        self.write_stage_history.clear();
+        self.bulk_build_ms_history.clear();
+        self.bulk_fetch_ms_history.clear();
+        self.build_cpu_ms_history.clear();
+        self.fetch_wait_ms_history.clear();
+        self.flush_wait_ms_history.clear();
+        self.l0_files_history.clear();
+        self.last_overlap_batch_count = 0;
+        self.prev_controller_knobs = None;
+        self.controller_deltas = None;
+        self.prev_is_bulk_sync = None;
+        self.prev_is_syncing = None;
+        self.prev_pipeline_reset_epoch = None;
+        self.prev_bottleneck = None;
+        self.stale_warning_active = false;
+        self.last_rate_drop_alert = None;
+        self.last_tx_rate_drop_alert = None;
+        self.status_message = Some((
+            format!("Network: {}", self.db.selected_name()),
+            Instant::now(),
+        ));
+        self.refresh().await;
     }
 
     pub fn toggle_help(&mut self) {
@@ -342,16 +406,36 @@ impl App {
     }
 
     pub async fn refresh(&mut self) {
-        let (
-            (sync_status_result, memory_stats, runtime_diag, indexer_bg_tasks),
-            (chain_info, api_service, api_bg_tasks),
-            services,
-            log_tails,
-        ) = tokio::join!(
-            self.db.get_local_snapshot(),
-            self.db.get_chain_info_and_api_service_info(),
+        // Cheap local snapshots for EVERY network -> Overview summary rows, and the
+        // selected network's detail.
+        let locals = self.db.refresh_all_local().await;
+        let sel = self.db.selected_index();
+        let mut summaries = Vec::with_capacity(locals.len());
+        let mut selected_detail = None;
+        for (i, local) in locals.into_iter().enumerate() {
+            summaries.push(network_summary_row(&local));
+            let NetworkLocal {
+                name: _,
+                sync,
+                memory,
+                runtime,
+                indexer_bg,
+            } = local;
+            if i == sel {
+                selected_detail = Some((sync, memory, runtime, indexer_bg));
+            }
+        }
+        self.network_summaries = summaries;
+        let (sync_status_result, memory_stats, runtime_diag, indexer_bg_tasks) =
+            selected_detail.expect("selected network index is always in range");
+
+        // Shared services/logs (one IPC call to the root socket) + selected-network
+        // HTTP (chain stats + peers), all concurrently.
+        let (services, log_tails, (chain_info, api_service, api_bg_tasks), peers) = tokio::join!(
             self.db.get_supervisor_services(),
             self.db.get_service_log_tails(),
+            self.db.selected_chain_info_and_api(),
+            self.db.selected_peers(),
         );
 
         match sync_status_result {
@@ -378,7 +462,7 @@ impl App {
         self.runtime_diag = runtime_diag;
         self.supervisor_services = services;
         self.service_log_tails = log_tails;
-        self.peers_data = Some(self.db.get_peers_data().await);
+        self.peers_data = Some(peers);
         self.last_refresh = Instant::now();
 
         self.detect_events();
@@ -667,6 +751,141 @@ pub fn draw(f: &mut Frame, app: &App) {
     }
 }
 
+/// One Overview row's worth of a network's health. Store-derived; `error` is set
+/// (and metrics left `None`) when the network's store could not be read.
+#[derive(Debug, Clone)]
+pub struct NetworkSummaryRow {
+    pub name: String,
+    pub progress: Option<f64>,
+    pub tip: Option<i64>,
+    pub blk_per_sec: Option<f64>,
+    pub db_mem_bytes: Option<u64>,
+    pub error: Option<String>,
+}
+
+fn network_summary_row(local: &NetworkLocal) -> NetworkSummaryRow {
+    match &local.sync {
+        Ok(s) => NetworkSummaryRow {
+            name: local.name.clone(),
+            progress: Some(s.progress),
+            tip: Some(s.tip_block),
+            blk_per_sec: s.rate_realtime.or(s.rate_ema),
+            db_mem_bytes: local.memory.as_ref().map(|m| m.rocksdb_total_bytes),
+            error: None,
+        },
+        Err(e) => NetworkSummaryRow {
+            name: local.name.clone(),
+            progress: None,
+            tip: None,
+            blk_per_sec: None,
+            db_mem_bytes: None,
+            error: Some(e.to_string()),
+        },
+    }
+}
+
+fn format_bytes_short(bytes: u64) -> String {
+    const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
+    const MIB: f64 = 1024.0 * 1024.0;
+    let b = bytes as f64;
+    if b >= GIB {
+        format!("{:.1}G", b / GIB)
+    } else if b >= MIB {
+        format!("{:.0}M", b / MIB)
+    } else {
+        format!("{bytes}B")
+    }
+}
+
+fn network_summary_line(row: &NetworkSummaryRow, selected: bool, _width: usize) -> Line<'static> {
+    let marker = if selected { "▸" } else { " " };
+    let name_style = if selected {
+        Style::default()
+            .fg(TERMINAL_GREEN)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(FOREGROUND)
+    };
+
+    if let Some(err) = &row.error {
+        return Line::from(vec![
+            Span::styled(format!("{marker} {:<8} ", row.name), name_style),
+            Span::styled(format!("error: {err}"), Style::default().fg(AMBER)),
+        ]);
+    }
+
+    let pct = row
+        .progress
+        .map(|p| format!("{p:.1}%"))
+        .unwrap_or_else(|| "—".into());
+    let tip = row.tip.map(|t| t.to_string()).unwrap_or_else(|| "—".into());
+    let rate = row
+        .blk_per_sec
+        .map(|r| format!("{r:.0} blk/s"))
+        .unwrap_or_else(|| "—".into());
+    let mem = row
+        .db_mem_bytes
+        .map(format_bytes_short)
+        .unwrap_or_else(|| "—".into());
+
+    Line::from(vec![
+        Span::styled(format!("{marker} {:<8} ", row.name), name_style),
+        Span::styled(format!("{pct:>7}  "), Style::default().fg(FOREGROUND)),
+        Span::styled(format!("tip {tip:>10}  "), Style::default().fg(SLATE_500)),
+        Span::styled(format!("{rate:>10}  "), Style::default().fg(SLATE_500)),
+        Span::styled(format!("mem {mem}"), Style::default().fg(SLATE_500)),
+    ])
+}
+
+fn network_switcher_line(names: &[&str], selected: usize) -> Line<'static> {
+    if names.len() <= 1 {
+        let only = names.first().copied().unwrap_or("");
+        return Line::from(vec![
+            Span::styled("net ", Style::default().fg(SLATE_500)),
+            Span::styled(only.to_string(), Style::default().fg(FOREGROUND)),
+        ]);
+    }
+    let mut spans = vec![Span::styled("net ", Style::default().fg(SLATE_500))];
+    for (i, name) in names.iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::styled(" ", Style::default().fg(SLATE_700)));
+        }
+        let style = if i == selected {
+            Style::default()
+                .fg(Color::Black)
+                .bg(TERMINAL_GREEN)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(SLATE_500)
+        };
+        spans.push(Span::styled(format!(" {name} "), style));
+    }
+    spans.push(Span::styled("  [ ]", Style::default().fg(SLATE_700)));
+    Line::from(spans)
+}
+
+fn line_display_width(line: &Line) -> usize {
+    line.spans.iter().map(|s| s.content.chars().count()).sum()
+}
+
+fn draw_network_summaries(f: &mut Frame, app: &App, area: Rect) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(SLATE_800))
+        .title(" Networks ");
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let selected = app.selected_network_index();
+    let lines: Vec<Line> = app
+        .network_summaries()
+        .iter()
+        .enumerate()
+        .map(|(i, row)| network_summary_line(row, i == selected, inner.width as usize))
+        .collect();
+    f.render_widget(Paragraph::new(lines), inner);
+}
+
 fn draw_header(f: &mut Frame, app: &App, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
@@ -828,6 +1047,20 @@ fn draw_tabs(f: &mut Frame, app: &App, area: Rect) {
     spans.push(Span::styled("  [Tab/s]", Style::default().fg(SLATE_500)));
 
     f.render_widget(Paragraph::new(Line::from(spans)), inner);
+
+    // Network switcher, right-anchored over the tabs row. Drawn into its own
+    // sub-rect (not over all of `inner`) so the left-aligned tab labels survive.
+    let switcher = network_switcher_line(&app.network_names(), app.selected_network_index());
+    let sw = (line_display_width(&switcher).min(inner.width as usize)) as u16;
+    if sw > 0 {
+        let sw_area = Rect {
+            x: inner.x + inner.width - sw,
+            y: inner.y,
+            width: sw,
+            height: 1,
+        };
+        f.render_widget(Paragraph::new(switcher), sw_area);
+    }
 }
 
 fn draw_content(f: &mut Frame, app: &App, area: Rect) {
@@ -935,7 +1168,7 @@ fn draw_peers_content(f: &mut Frame, app: &App, area: Rect) {
             f,
             area,
             vec![Line::from(Span::styled(
-                "Crawler disabled — set `[crawler].enabled = true` in ckbadger.toml",
+                "Crawler disabled — set `[crawler].enabled = true` in config.toml",
                 Style::default().fg(SLATE_500),
             ))],
         ),
@@ -1272,7 +1505,7 @@ fn draw_peers_trend(f: &mut Frame, data: &PeersData, area: Rect) {
     );
 }
 
-fn draw_overview_content(f: &mut Frame, app: &App, area: Rect) {
+fn draw_overview_body(f: &mut Frame, app: &App, area: Rect) {
     let log_min_height = overview_log_min_height();
     match detect_layout_density(app, area) {
         LayoutDensity::Compact => match compact_overview_layout(area) {
@@ -1347,6 +1580,23 @@ fn draw_overview_content(f: &mut Frame, app: &App, area: Rect) {
             draw_storage_health(f, app, chunks[3]);
             draw_overview_tail(f, app, chunks[4]);
         }
+    }
+}
+
+fn draw_overview_content(f: &mut Frame, app: &App, area: Rect) {
+    let summaries = app.network_summaries();
+    if summaries.len() > 1 {
+        let rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(summaries.len() as u16 + 2), // +2 for the block borders
+                Constraint::Min(0),
+            ])
+            .split(area);
+        draw_network_summaries(f, app, rows[0]);
+        draw_overview_body(f, app, rows[1]);
+    } else {
+        draw_overview_body(f, app, area);
     }
 }
 
@@ -5666,12 +5916,24 @@ fn draw_system_environment(
     f.render_widget(Paragraph::new(lines), inner);
 }
 
+/// Render a CKB node path, or an explicit "unavailable" label when it's empty.
+/// The CLI leaves a network's CKB paths empty when that network's CKB node can't
+/// be resolved (display-only data — the store + API still work), so make that
+/// visible instead of showing a blank field.
+fn ckb_path_display(p: &std::path::Path) -> String {
+    if p.as_os_str().is_empty() {
+        "unavailable (CKB node not resolved)".to_string()
+    } else {
+        p.display().to_string()
+    }
+}
+
 fn system_workdir_lines(
     ckbadger_workdir: &std::path::Path,
     ckb_workdir: &std::path::Path,
 ) -> Vec<Line<'static>> {
     vec![
-        system_kv_line("CKB workdir", ckb_workdir.display().to_string(), FOREGROUND),
+        system_kv_line("CKB workdir", ckb_path_display(ckb_workdir), FOREGROUND),
         system_kv_line(
             "ckbadger workdir",
             ckbadger_workdir.display().to_string(),
@@ -5710,7 +5972,7 @@ fn system_store_path_lines(
     let append_cf_count = APPEND_CFS.len();
 
     vec![
-        system_kv_line("CKB RocksDB", ckb_db_path.display().to_string(), FOREGROUND),
+        system_kv_line("CKB RocksDB", ckb_path_display(ckb_db_path), FOREGROUND),
         system_kv_line(
             "Domain store",
             domain_path.display().to_string(),
@@ -5955,32 +6217,34 @@ mod tests {
     use super::{
         api_health_state, background_task_last_result, background_task_state_label,
         build_controller_column_lines, build_finalize_left_column, build_pipeline_column,
-        build_resources_column, bulk_queue_indicator_line, chart_height_warning,
+        build_resources_column, bulk_queue_indicator_line, chart_height_warning, ckb_path_display,
         compact_overview_layout, consumed_cells_source_color, consumed_cells_source_label,
         controller_panel_lines, dense_right_lines, detail_right_lines, diagnostics_dense_panel,
         direct_io_reads_label, disk_pressure_lines, eta_confidence_label, footer_hint_line,
         footer_status_message, format_age_secs, format_last_round_age, format_num,
         format_num_commas, format_num_compact, format_rate_expanded, format_signed_num_i128,
         format_stage_commit_gap_ms, header_right_line, header_title_line, heartbeat_is_on,
-        io_fetch_write_jitter_line, is_rate_drop, merged_sparkline_p95_line,
-        overview_log_min_height, overview_services_min_height, peers_trend_series,
-        peers_view_state, percentile_from_history, pipeline_bottleneck, pipeline_flow_state,
-        rate_jitter, render_gauge, runtime_health_state, runtime_live_delta,
-        service_log_tails_line, sparkline, split_background_tasks, stale_age_secs, stale_status,
-        startup_phase_label, storage_pressure_l0_line, storage_pressure_wbm_line,
-        storage_runtime_columns, supervisor_services_line, sync_bottleneck, system_kv_line,
-        system_store_path_lines, system_workdir_lines, trend_delta, trim_for_panel,
-        visible_background_tasks, App, Color, CompactOverviewLayout, ControllerDeltas,
-        DiagnosticsViewMode, MainTab, PeersView, SyncBottleneck, AMBER, CYAN,
-        STATUS_MESSAGE_TTL_SECS, TERMINAL_DIM,
+        io_fetch_write_jitter_line, is_rate_drop, merged_sparkline_p95_line, network_summary_line,
+        network_summary_row, network_switcher_line, overview_log_min_height,
+        overview_services_min_height, peers_trend_series, peers_view_state,
+        percentile_from_history, pipeline_bottleneck, pipeline_flow_state, rate_jitter,
+        render_gauge, runtime_health_state, runtime_live_delta, service_log_tails_line, sparkline,
+        split_background_tasks, stale_age_secs, stale_status, startup_phase_label,
+        storage_pressure_l0_line, storage_pressure_wbm_line, storage_runtime_columns,
+        supervisor_services_line, sync_bottleneck, system_kv_line, system_store_path_lines,
+        system_workdir_lines, trend_delta, trim_for_panel, visible_background_tasks, App, Color,
+        CompactOverviewLayout, ControllerDeltas, DiagnosticsViewMode, MainTab, NetworkSummaryRow,
+        PeersView, SyncBottleneck, AMBER, CYAN, STATUS_MESSAGE_TTL_SECS, TERMINAL_DIM,
     };
     use crate::db::{
-        ApiServiceInfo, RuntimeDiagData, ServiceLogTailData, SupervisorServiceData, TuiDb,
+        ApiServiceInfo, RuntimeDiagData, ServiceLogTailData, SupervisorServiceData, SyncStatusRow,
     };
+    use crate::multi::{MultiNetworkDb, NetworkLocal, TuiNetwork};
     use ckbadger_common::{
         BackgroundTaskEntry, BackgroundTaskKind, BackgroundTaskState, BulkBuildProgressData,
         MemoryStatsData,
     };
+    use ckbadger_store::StoreRuntimeConfig;
     use ratatui::layout::{Constraint, Direction, Layout, Rect};
     use ratatui::text::Line;
     use std::collections::VecDeque;
@@ -6897,9 +7161,31 @@ mod tests {
         assert!(footer_status_message(Some(&expired)).is_none());
     }
 
+    /// Build a 1-element aggregator over one (possibly absent) store — the
+    /// multi-network replacement for the old `TuiDb::new` test convenience now
+    /// that `App` holds a `MultiNetworkDb`. A nonexistent path yields no store,
+    /// so downstream reads stay `None`, exactly as before.
+    async fn single_network_db(api_url: &str, domain: &str, append_only: &str) -> MultiNetworkDb {
+        MultiNetworkDb::new(
+            vec![TuiNetwork {
+                name: "mainnet".to_string(),
+                domain_data_path: domain.to_string(),
+                append_only_data_path: append_only.to_string(),
+                ckbadger_workdir: ".".to_string(),
+                ckb_workdir: ".".to_string(),
+                ckb_db_path: ".".to_string(),
+                api_url: api_url.to_string(),
+                store_runtime_config: StoreRuntimeConfig::default(),
+            }],
+            None,
+            None,
+        )
+        .await
+    }
+
     #[tokio::test]
     async fn test_app_refresh_without_store_dependency() {
-        let db = TuiDb::new(
+        let db = single_network_db(
             "http://127.0.0.1:9/api/v1",
             "/tmp/ckbadger-store",
             "/tmp/ckbadger-store-append-only",
@@ -6913,8 +7199,50 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn switching_network_resets_rate_drop_dedup() {
+        use std::time::Instant;
+        fn net(name: &str) -> TuiNetwork {
+            TuiNetwork {
+                name: name.to_string(),
+                domain_data_path: format!("/nonexistent-tui/{name}/domain"),
+                append_only_data_path: format!("/nonexistent-tui/{name}/append"),
+                ckbadger_workdir: ".".to_string(),
+                ckb_workdir: ".".to_string(),
+                ckb_db_path: ".".to_string(),
+                api_url: format!("http://127.0.0.1:1/{name}"),
+                store_runtime_config: StoreRuntimeConfig::default(),
+            }
+        }
+        let db = MultiNetworkDb::new(vec![net("mainnet"), net("testnet")], None, None).await;
+        let mut app = App::new(db, "test".to_string());
+
+        // Simulate an active rate-drop dedup window on the current network.
+        app.last_rate_drop_alert = Some(Instant::now());
+        app.last_tx_rate_drop_alert = Some(Instant::now());
+
+        app.select_next_network().await;
+
+        assert_eq!(app.db.selected_index(), 1, "switched to testnet");
+        assert!(
+            app.last_rate_drop_alert.is_none(),
+            "rate-drop dedup reset on switch"
+        );
+        assert!(
+            app.last_tx_rate_drop_alert.is_none(),
+            "tx rate-drop dedup reset on switch"
+        );
+    }
+
+    #[test]
+    fn ckb_path_display_labels_empty_as_unavailable() {
+        use std::path::Path;
+        assert!(ckb_path_display(Path::new("")).contains("unavailable"));
+        assert_eq!(ckb_path_display(Path::new("/ckb/data/db")), "/ckb/data/db");
+    }
+
+    #[tokio::test]
     async fn test_log_warning_deduplicates_recent_same_message() {
-        let db = TuiDb::new(
+        let db = single_network_db(
             "http://127.0.0.1:9/api/v1",
             "/tmp/ckbadger-store",
             "/tmp/ckbadger-store-append-only",
@@ -7676,5 +8004,121 @@ mod tests {
         assert!(all_text.contains("Live cells"), "missing live cells");
         assert!(all_text.contains("L0"), "missing L0 gauge");
         assert!(all_text.contains("WBM"), "missing WBM gauge");
+    }
+
+    fn stub_sync_row(progress: f64, tip: i64, rate: f64) -> SyncStatusRow {
+        SyncStatusRow {
+            tip_block: tip,
+            chain_tip: tip,
+            is_syncing: false,
+            is_bulk_sync: false,
+            progress,
+            elapsed_time: None,
+            eta: None,
+            eta_seconds: None,
+            rate_realtime: Some(rate),
+            rate_ema: None,
+            tx_rate_realtime: None,
+            tx_rate_ema: None,
+            db_write_ms: None,
+            db_commit_ms: None,
+            rpc_fetch_ms: None,
+            pipeline: None,
+            pipeline_reset_epoch: None,
+            pipeline_reset_reason: None,
+            last_batch_blocks: None,
+            startup_phase: None,
+            is_direct_db_read: false,
+            bulk_build: None,
+        }
+    }
+
+    #[test]
+    fn summary_row_from_ok_local_carries_metrics() {
+        let local = NetworkLocal {
+            name: "mainnet".into(),
+            sync: Ok(stub_sync_row(99.9, 12_345_678, 1234.0)),
+            memory: None,
+            runtime: None,
+            indexer_bg: None,
+        };
+        let row = network_summary_row(&local);
+        assert_eq!(row.name, "mainnet");
+        assert_eq!(row.progress, Some(99.9));
+        assert_eq!(row.tip, Some(12_345_678));
+        assert_eq!(row.blk_per_sec, Some(1234.0));
+        assert!(row.error.is_none());
+    }
+
+    #[test]
+    fn summary_row_from_err_local_is_explicit_error_state() {
+        let local = NetworkLocal {
+            name: "testnet".into(),
+            sync: Err(anyhow::anyhow!("store not accessible")),
+            memory: None,
+            runtime: None,
+            indexer_bg: None,
+        };
+        let row = network_summary_row(&local);
+        assert_eq!(row.progress, None);
+        assert_eq!(row.tip, None);
+        assert!(row
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("store not accessible"));
+    }
+
+    #[test]
+    fn summary_line_error_state_has_no_placeholder_metrics() {
+        let row = NetworkSummaryRow {
+            name: "testnet".into(),
+            progress: None,
+            tip: None,
+            blk_per_sec: None,
+            db_mem_bytes: None,
+            error: Some("boom".into()),
+        };
+        let line = network_summary_line(&row, false, 100);
+        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(text.contains("testnet"));
+        assert!(text.contains("error"));
+        assert!(!text.contains('%'), "error row shows no progress metric");
+        assert!(!text.contains("blk/s"), "error row shows no rate metric");
+    }
+
+    #[test]
+    fn summary_line_selected_row_marks_and_renders_metrics() {
+        let row = NetworkSummaryRow {
+            name: "mainnet".into(),
+            progress: Some(99.9),
+            tip: Some(12_345_678),
+            blk_per_sec: Some(1234.0),
+            db_mem_bytes: Some(18 * 1024 * 1024 * 1024),
+            error: None,
+        };
+        let line = network_summary_line(&row, true, 100);
+        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(text.contains("mainnet"));
+        assert!(text.contains("99.9%"));
+        assert!(text.contains("12345678"));
+        assert!(text.contains('▸'));
+    }
+
+    #[test]
+    fn switcher_multi_network_shows_all_and_hint() {
+        let line = network_switcher_line(&["mainnet", "testnet"], 1);
+        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(text.contains("mainnet"));
+        assert!(text.contains("testnet"));
+        assert!(text.contains("[ ]"));
+    }
+
+    #[test]
+    fn switcher_single_network_has_no_hint() {
+        let line = network_switcher_line(&["mainnet"], 0);
+        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(text.contains("mainnet"));
+        assert!(!text.contains("[ ]"));
     }
 }

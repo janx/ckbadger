@@ -53,6 +53,10 @@ impl TransactionLookup {
         matches!(self.status, Status::Pending | Status::Proposed)
     }
 
+    pub fn is_committed(&self) -> bool {
+        matches!(self.status, Status::Committed)
+    }
+
     pub fn pending_label(&self) -> &'static str {
         match self.status {
             Status::Pending => "Pending Transaction",

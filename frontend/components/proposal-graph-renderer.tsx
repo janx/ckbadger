@@ -3,6 +3,7 @@
 import { useCallback, useMemo, useRef } from 'react';
 import type { GraphNode, GraphLink, ProposalGraphMetadata } from '@/lib/api';
 import type { ForceGraphMethods, NodeObject, LinkObject } from 'react-force-graph-2d';
+import { useRouter } from '@/src/navigation';
 import dynamic from '@/lib/dynamic-client';
 
 type ForceNode = NodeObject;
@@ -50,6 +51,10 @@ export function ProposalGraphRenderer({
   height = 500,
 }: ProposalGraphProps) {
   const graphRef = useRef<ForceGraphMethods | undefined>(undefined);
+  // Network-aware SPA navigation: a raw `window.location.href = '/blocks/N'`
+  // both reloads the app and drops the `/<network>` prefix, so the guard would
+  // resolve the block against the DEFAULT network.
+  const router = useRouter();
 
   const graphData = useMemo(
     () => ({
@@ -127,7 +132,7 @@ export function ProposalGraphRenderer({
         const data = node.data as Record<string, unknown> | undefined;
         const blockNumber = data?.blockNumber;
         if (blockNumber !== undefined) {
-          window.location.href = `/blocks/${blockNumber}`;
+          router.push(`/blocks/${blockNumber}`);
           return;
         }
       }
@@ -135,7 +140,7 @@ export function ProposalGraphRenderer({
         onNodeClick(node as unknown as GraphNode);
       }
     },
-    [onNodeClick]
+    [onNodeClick, router]
   );
 
   const nodePointerAreaPaint = useCallback(

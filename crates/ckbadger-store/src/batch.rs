@@ -3,6 +3,8 @@
 use rocksdb::{ColumnFamily, WriteBatch};
 use std::collections::HashMap;
 
+use ckbadger_common::TokenBalance;
+
 use crate::keys;
 use crate::store::{CkbadgerStore, StoreWriteIntent};
 use crate::types::*;
@@ -22,6 +24,13 @@ pub struct StoreBatch<'a> {
     batch: WriteBatch,
     append_ops: Vec<AppendBatchOp>,
     pending_dao_deposits: HashMap<Vec<u8>, DaoDepositCacheEntry>,
+    /// Transaction-local Fiber channel view. `None` represents a staged delete.
+    /// Reads must consult this view before committed RocksDB so lifecycle
+    /// transitions in one atomic batch observe earlier writes.
+    pending_fiber_channels: HashMap<Vec<u8>, Option<FiberChannel>>,
+    /// Transaction-local commitment-hash index with the same shadowing rules as
+    /// `pending_fiber_channels`.
+    pending_fiber_channel_by_commitment: HashMap<Vec<u8>, Option<Vec<u8>>>,
 }
 
 impl<'a> StoreBatch<'a> {
@@ -31,6 +40,8 @@ impl<'a> StoreBatch<'a> {
             batch: WriteBatch::default(),
             append_ops: Vec::new(),
             pending_dao_deposits: HashMap::new(),
+            pending_fiber_channels: HashMap::new(),
+            pending_fiber_channel_by_commitment: HashMap::new(),
         }
     }
 
@@ -150,6 +161,13 @@ impl<'a> StoreBatch<'a> {
         // Merge pending DAO deposits (other's entries win on conflict,
         // preserving last-write-wins within a batch merge sequence).
         self.pending_dao_deposits.extend(other.pending_dao_deposits);
+
+        // Preserve the same last-write-wins order for transaction-local Fiber
+        // state when domain batches are merged before the atomic commit.
+        self.pending_fiber_channels
+            .extend(other.pending_fiber_channels);
+        self.pending_fiber_channel_by_commitment
+            .extend(other.pending_fiber_channel_by_commitment);
     }
 
     fn commit_inner(self, no_wal: bool, sync: bool) -> anyhow::Result<()> {
@@ -520,44 +538,72 @@ impl<'a> StoreBatch<'a> {
     pub fn put_cell_by_lock_code(
         &mut self,
         lock_code_hash: &[u8],
+        hash_type: u8,
         block_num: i64,
         tx_hash: &[u8],
         output_index: i16,
     ) {
-        let key = keys::encode_cell_index_key(lock_code_hash, block_num, tx_hash, output_index);
+        let key = keys::encode_cell_code_index_key(
+            lock_code_hash,
+            hash_type,
+            block_num,
+            tx_hash,
+            output_index,
+        );
         self.put_cf(self.store.cf_cell_by_lock_code(), key, []);
     }
 
     pub fn delete_cell_by_lock_code(
         &mut self,
         lock_code_hash: &[u8],
+        hash_type: u8,
         block_num: i64,
         tx_hash: &[u8],
         output_index: i16,
     ) {
-        let key = keys::encode_cell_index_key(lock_code_hash, block_num, tx_hash, output_index);
+        let key = keys::encode_cell_code_index_key(
+            lock_code_hash,
+            hash_type,
+            block_num,
+            tx_hash,
+            output_index,
+        );
         self.delete_cf(self.store.cf_cell_by_lock_code(), &key);
     }
 
     pub fn put_cell_by_type_code(
         &mut self,
         type_code_hash: &[u8],
+        hash_type: u8,
         block_num: i64,
         tx_hash: &[u8],
         output_index: i16,
     ) {
-        let key = keys::encode_cell_index_key(type_code_hash, block_num, tx_hash, output_index);
+        let key = keys::encode_cell_code_index_key(
+            type_code_hash,
+            hash_type,
+            block_num,
+            tx_hash,
+            output_index,
+        );
         self.put_cf(self.store.cf_cell_by_type_code(), key, []);
     }
 
     pub fn delete_cell_by_type_code(
         &mut self,
         type_code_hash: &[u8],
+        hash_type: u8,
         block_num: i64,
         tx_hash: &[u8],
         output_index: i16,
     ) {
-        let key = keys::encode_cell_index_key(type_code_hash, block_num, tx_hash, output_index);
+        let key = keys::encode_cell_code_index_key(
+            type_code_hash,
+            hash_type,
+            block_num,
+            tx_hash,
+            output_index,
+        );
         self.delete_cf(self.store.cf_cell_by_type_code(), &key);
     }
 
@@ -601,21 +647,9 @@ impl<'a> StoreBatch<'a> {
         self.delete_cf(self.store.cf_cell_by_type(), key);
     }
 
-    pub fn put_cell_by_lock_code_raw(&mut self, key: &[u8]) {
-        self.put_cf(self.store.cf_cell_by_lock_code(), key, []);
-    }
-
-    pub fn delete_cell_by_lock_code_raw(&mut self, key: &[u8]) {
-        self.delete_cf(self.store.cf_cell_by_lock_code(), key);
-    }
-
-    pub fn put_cell_by_type_code_raw(&mut self, key: &[u8]) {
-        self.put_cf(self.store.cf_cell_by_type_code(), key, []);
-    }
-
-    pub fn delete_cell_by_type_code_raw(&mut self, key: &[u8]) {
-        self.delete_cf(self.store.cf_cell_by_type_code(), key);
-    }
+    // NOTE: no raw-key helpers for the cell-by-code CFs. Their keys carry a
+    // hash_type dimension after the code hash; all writers must go through
+    // put/delete_cell_by_{lock,type}_code so the key shape stays enforced.
 
     // ---- Block headers ----
 
@@ -771,33 +805,46 @@ impl<'a> StoreBatch<'a> {
         self.put_cf(self.store.cf_tokens(), type_hash, &value);
     }
 
-    pub fn put_token_holder(&mut self, type_hash: &[u8], lock_hash: &[u8], balance: i128) {
+    pub fn put_token_holder(
+        &mut self,
+        type_hash: &[u8],
+        lock_hash: &[u8],
+        balance: impl Into<TokenBalance>,
+    ) {
+        let balance = balance.into();
         let key = keys::encode_token_holder_key(type_hash, lock_hash);
-        self.put_cf(self.store.cf_token_holders(), key, balance.to_le_bytes());
+        self.put_cf(self.store.cf_token_holders(), key, balance.to_be_bytes());
     }
 
     pub fn put_token_holder_by_balance(
         &mut self,
         type_hash: &[u8],
         lock_hash: &[u8],
-        balance: i128,
+        balance: impl Into<TokenBalance>,
     ) {
+        let balance = balance.into();
         assert!(
-            balance > 0,
+            !balance.is_zero(),
             "put_token_holder_by_balance expects positive balance, got {}",
             balance
         );
-        let key = keys::encode_token_holder_balance_key(type_hash, balance, lock_hash);
+        let key = keys::encode_token_holder_balance_key(type_hash, &balance, lock_hash);
         self.put_cf(self.store.cf_token_holders_by_balance(), key, []);
     }
 
-    pub fn put_addr_token_by_balance(&mut self, lock_hash: &[u8], type_hash: &[u8], balance: i128) {
+    pub fn put_addr_token_by_balance(
+        &mut self,
+        lock_hash: &[u8],
+        type_hash: &[u8],
+        balance: impl Into<TokenBalance>,
+    ) {
+        let balance = balance.into();
         assert!(
-            balance > 0,
+            !balance.is_zero(),
             "put_addr_token_by_balance expects positive balance, got {}",
             balance
         );
-        let key = keys::encode_addr_token_balance_key(lock_hash, balance, type_hash);
+        let key = keys::encode_addr_token_balance_key(lock_hash, &balance, type_hash);
         self.put_cf(self.store.cf_addr_tokens_by_balance(), key, []);
     }
 
@@ -913,9 +960,10 @@ impl<'a> StoreBatch<'a> {
         &mut self,
         type_hash: &[u8],
         lock_hash: &[u8],
-        balance: i128,
+        balance: impl Into<TokenBalance>,
     ) {
-        let key = keys::encode_token_holder_balance_key(type_hash, balance, lock_hash);
+        let balance = balance.into();
+        let key = keys::encode_token_holder_balance_key(type_hash, &balance, lock_hash);
         self.delete_cf(self.store.cf_token_holders_by_balance(), key);
     }
 
@@ -923,9 +971,10 @@ impl<'a> StoreBatch<'a> {
         &mut self,
         lock_hash: &[u8],
         type_hash: &[u8],
-        balance: i128,
+        balance: impl Into<TokenBalance>,
     ) {
-        let key = keys::encode_addr_token_balance_key(lock_hash, balance, type_hash);
+        let balance = balance.into();
+        let key = keys::encode_addr_token_balance_key(lock_hash, &balance, type_hash);
         self.delete_cf(self.store.cf_addr_tokens_by_balance(), key);
     }
 
@@ -1255,9 +1304,41 @@ impl<'a> StoreBatch<'a> {
 
     // ---- Fiber Channels ----
 
+    /// Read a Fiber channel through this batch's transactional view.
+    ///
+    /// Staged writes and deletes shadow committed RocksDB state, giving every
+    /// lifecycle handler one read-your-writes path for the lifetime of the
+    /// batch. Committed reads are not cached because only staged mutations may
+    /// participate in `StoreBatch::merge_from` last-write-wins ordering.
+    pub fn get_fiber_channel(&mut self, channel_id: &[u8]) -> anyhow::Result<Option<FiberChannel>> {
+        if let Some(channel) = self.pending_fiber_channels.get(channel_id) {
+            return Ok(channel.clone());
+        }
+
+        self.store.get_fiber_channel(channel_id)
+    }
+
     pub fn put_fiber_channel(&mut self, channel_id: &[u8], channel: &FiberChannel) {
         let value = bincode::serialize(channel).expect("serialize FiberChannel");
         self.put_cf(self.store.cf_fiber_channels(), channel_id, &value);
+        self.pending_fiber_channels
+            .insert(channel_id.to_vec(), Some(channel.clone()));
+    }
+
+    /// Read the commitment index through this batch's transactional view.
+    pub fn get_fiber_channel_id_by_commitment(
+        &mut self,
+        commitment_hash: &[u8],
+    ) -> anyhow::Result<Option<Vec<u8>>> {
+        if let Some(channel_id) = self
+            .pending_fiber_channel_by_commitment
+            .get(commitment_hash)
+        {
+            return Ok(channel_id.clone());
+        }
+
+        self.store
+            .get_fiber_channel_id_by_commitment(commitment_hash)
     }
 
     pub fn put_fiber_channel_by_commitment(&mut self, commitment_hash: &[u8], channel_id: &[u8]) {
@@ -1266,6 +1347,8 @@ impl<'a> StoreBatch<'a> {
             commitment_hash,
             channel_id,
         );
+        self.pending_fiber_channel_by_commitment
+            .insert(commitment_hash.to_vec(), Some(channel_id.to_vec()));
     }
 
     pub fn put_addr_fiber_channel(&mut self, lock_hash: &[u8], channel_id: &[u8]) {
@@ -1275,29 +1358,14 @@ impl<'a> StoreBatch<'a> {
 
     pub fn delete_fiber_channel(&mut self, channel_id: &[u8]) {
         self.delete_cf(self.store.cf_fiber_channels(), channel_id);
-    }
-
-    pub fn put_fiber_channel_by_funding_args(
-        &mut self,
-        funding_lock_args: &[u8],
-        channel_id: &[u8],
-    ) {
-        self.put_cf(
-            self.store.cf_fiber_channel_by_funding_args(),
-            funding_lock_args,
-            channel_id,
-        );
+        self.pending_fiber_channels
+            .insert(channel_id.to_vec(), None);
     }
 
     pub fn delete_fiber_channel_by_commitment(&mut self, commitment_hash: &[u8]) {
         self.delete_cf(self.store.cf_fiber_channel_by_commitment(), commitment_hash);
-    }
-
-    pub fn delete_fiber_channel_by_funding_args(&mut self, funding_lock_args: &[u8]) {
-        self.delete_cf(
-            self.store.cf_fiber_channel_by_funding_args(),
-            funding_lock_args,
-        );
+        self.pending_fiber_channel_by_commitment
+            .insert(commitment_hash.to_vec(), None);
     }
 
     pub fn delete_addr_fiber_channel(&mut self, lock_hash: &[u8], channel_id: &[u8]) {
@@ -1475,6 +1543,9 @@ mod tests {
             dao: vec![0u8; 32],
             transactions_count: 5,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
         batch.put_block_header(0, &header);
@@ -2288,6 +2359,9 @@ mod tests {
             dao: vec![0u8; 32],
             transactions_count: 2,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
         a.put_block_header(42, &header);

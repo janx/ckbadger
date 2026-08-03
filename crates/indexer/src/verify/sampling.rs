@@ -40,6 +40,17 @@ impl LcgSampler {
         result.sort();
         result
     }
+
+    /// Deterministically shuffle a slice in place.
+    ///
+    /// Fisher-Yates keeps address sampling reproducible without inheriting the
+    /// ordering of an API candidate list (for example, balance descending).
+    pub fn shuffle<T>(&mut self, values: &mut [T]) {
+        for i in (1..values.len()).rev() {
+            let j = (self.next() % (i as u64 + 1)) as usize;
+            values.swap(i, j);
+        }
+    }
 }
 
 /// Compute a skip interval for uniformly sampling a CF iterator.
@@ -103,6 +114,21 @@ mod tests {
         let mut s = LcgSampler::new(42);
         let result = s.sample_range(10, 0);
         assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_lcg_shuffle_is_deterministic_and_preserves_values() {
+        let mut a: Vec<u64> = (0..20).collect();
+        let mut b = a.clone();
+        let original = a.clone();
+
+        LcgSampler::new(42).shuffle(&mut a);
+        LcgSampler::new(42).shuffle(&mut b);
+
+        assert_eq!(a, b);
+        assert_ne!(a, original);
+        a.sort_unstable();
+        assert_eq!(a, original);
     }
 
     #[test]

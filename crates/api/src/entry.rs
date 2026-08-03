@@ -40,6 +40,14 @@ pub struct ApiServiceConfig {
     pub crawler_enabled: bool,
 }
 
+/// One backend network the frontend proxy can route to.
+#[derive(Clone, Debug)]
+pub struct FrontendNetwork {
+    pub name: String,
+    pub api_host: String,
+    pub api_port: u16,
+}
+
 /// Configuration for the standalone frontend server.
 #[derive(Clone)]
 pub struct FrontendServiceConfig {
@@ -52,33 +60,37 @@ pub struct FrontendServiceConfig {
     /// Local filesystem override directory (e.g. workdir/frontend/).
     /// When set, serves from disk instead of embedded assets.
     pub frontend_dir: Option<PathBuf>,
+    /// All networks this frontend serves (proxy targets). Single-network mode
+    /// is a one-element vec matching `ckb_network`/`api_port`.
+    pub networks: Vec<FrontendNetwork>,
+    /// Default network for the `/` redirect + un-prefixed paths.
+    pub default_network: String,
 }
 
 /// Run the API server (API + WebSocket only, no frontend). Blocks until shutdown.
 pub async fn run_api(config: ApiServiceConfig) -> Result<()> {
-    // When started by the supervisor alongside the indexer, the domain store
-    // may not exist yet (the indexer creates it on first open).  Wait up to
-    // 60 seconds for the CURRENT marker file before attempting to open the
-    // secondary instance — this avoids the "No such file or directory"
-    // crash-restart loop on fresh installs.
+    let addr = format!("{}:{}", config.host, config.port);
     let domain_current = Path::new(&config.domain_data_path).join("CURRENT");
-    let wait_start = std::time::Instant::now();
-    let max_wait = std::time::Duration::from_secs(60);
-    while !domain_current.exists() {
-        if wait_start.elapsed() >= max_wait {
-            bail!(
-                "domain store not found after {}s — is the indexer running? (expected: {})",
-                max_wait.as_secs(),
-                domain_current.display(),
-            );
-        }
-        info!(
-            "Waiting for indexer to create domain store ({}s)...",
-            wait_start.elapsed().as_secs()
-        );
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    let append_current = Path::new(&config.append_only_data_path).join("CURRENT");
+
+    // Phase 1: bind immediately, serve 503 "initializing" until the stores exist.
+    // When started by the supervisor alongside the indexer — especially a network
+    // still queued for sequential bulk sync — the stores may not exist for hours.
+    // Instead of bailing and crash-looping under the supervisor, bind the port now
+    // and serve 503 "initializing" until the indexer creates both stores, then fall
+    // through to phase 2 and serve the real router.
+    if !(domain_current.exists() && append_current.exists()) {
+        info!("API pre-sync on {} (store not present yet)", addr);
+        let listener = tokio::net::TcpListener::bind(&addr).await?;
+        axum::serve(listener, presync_router(&config.ckb_network))
+            .with_graceful_shutdown(wait_for_stores(
+                domain_current.clone(),
+                append_current.clone(),
+            ))
+            .await?;
     }
 
+    // Phase 2: stores exist — open them and serve the real router (unchanged below).
     let secondary_path = secondary_store_path(&config.domain_data_path, SecondaryStoreOwner::Api);
     info!(
         "Opening ckbadger domain store (secondary) at: {} -> {}",
@@ -117,7 +129,11 @@ pub async fn run_api(config: ApiServiceConfig) -> Result<()> {
                 config.network_data_path,
                 sec.display()
             );
-            match CkbadgerStore::open_network_secondary(primary, sec.as_path()) {
+            match CkbadgerStore::open_network_secondary_with_runtime(
+                primary,
+                sec.as_path(),
+                config.store_runtime_config,
+            ) {
                 Ok(s) => Some(Arc::new(s)),
                 Err(e) => {
                     tracing::warn!("network store present but failed to open secondary: {e}");
@@ -147,10 +163,8 @@ pub async fn run_api(config: ApiServiceConfig) -> Result<()> {
     };
     let app = create_router(app_config).await;
 
-    let addr = format!("{}:{}", config.host, config.port);
     info!("Starting API server on {}", addr);
-
-    let listener = tokio::net::TcpListener::bind(&addr).await?;
+    let listener = bind_with_retry(&addr).await?;
     axum::serve(
         listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),
@@ -158,6 +172,65 @@ pub async fn run_api(config: ApiServiceConfig) -> Result<()> {
     .await?;
 
     Ok(())
+}
+
+/// A minimal router served while a network's store doesn't exist yet: every route
+/// returns 503 with the codebase's error shape (`error` = code) so the frontend's
+/// `isNetworkInitializingError` (mirroring `warmup_pending`) can detect it.
+fn presync_router(network: &str) -> axum::Router {
+    let network = network.to_string();
+    axum::Router::new().fallback(move || {
+        let network = network.clone();
+        async move {
+            (
+                axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                axum::Json(serde_json::json!({
+                    "error": "initializing",
+                    "network": network,
+                    "message": "This network has not started syncing yet",
+                })),
+            )
+        }
+    })
+}
+
+/// Resolve once both the domain and append-only stores exist (indefinite wait, with
+/// periodic progress logs — a queued network may wait hours for its turn).
+///
+/// Takes owned paths so the returned future is `'static`, as required by
+/// `axum::serve(..).with_graceful_shutdown(..)`.
+async fn wait_for_stores(domain_current: PathBuf, append_current: PathBuf) {
+    let start = std::time::Instant::now();
+    loop {
+        if domain_current.exists() && append_current.exists() {
+            return;
+        }
+        if start.elapsed().as_secs().is_multiple_of(30) {
+            info!(
+                "Waiting for indexer to create stores ({}s)...",
+                start.elapsed().as_secs()
+            );
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
+}
+
+/// Re-bind after the pre-sync listener was dropped. On the Linux/localhost target a
+/// freed LISTEN socket rebinds immediately — TIME_WAIT on the pre-sync client
+/// connections does not block re-binding the listening port — so a short retry
+/// (rather than SO_REUSEADDR) is enough to cover the sub-second drop→rebind gap; the
+/// real bind error surfaces if every attempt fails.
+async fn bind_with_retry(addr: &str) -> Result<tokio::net::TcpListener> {
+    for attempt in 0..20 {
+        match tokio::net::TcpListener::bind(addr).await {
+            Ok(l) => return Ok(l),
+            Err(_) if attempt < 19 => {
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await
+            }
+            Err(e) => return Err(e.into()),
+        }
+    }
+    unreachable!()
 }
 
 /// Run the standalone frontend server. Blocks until shutdown.
@@ -173,7 +246,11 @@ pub async fn run_frontend_server(config: FrontendServiceConfig) -> Result<()> {
     info!("Starting frontend server on {}", addr);
 
     let listener = tokio::net::TcpListener::bind(&addr).await?;
-    axum::serve(listener, app).await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await?;
 
     Ok(())
 }
@@ -186,21 +263,42 @@ struct FrontendFsState {
 
 #[derive(Clone)]
 struct FrontendRuntimeConfig {
-    api_port: u16,
-    frontend_port: u16,
     ckb_network: String,
     ckb_rpc_url: String,
     build_version: String,
+    /// Live networks offered by the SPA switcher; emitted as `[{ name }]`.
+    networks: Vec<FrontendNetwork>,
+    /// Network the SPA selects by default on first load.
+    default_network: String,
 }
 
 pub fn build_frontend_router(config: FrontendServiceConfig) -> Result<Router> {
     let runtime_config = FrontendRuntimeConfig {
-        api_port: config.api_port,
-        frontend_port: config.port,
         ckb_network: config.ckb_network.clone(),
         ckb_rpc_url: config.ckb_rpc_url.clone(),
         build_version: config.build_version.clone(),
+        networks: config.networks.clone(),
+        default_network: config.default_network.clone(),
     };
+
+    // Network-aware reverse proxy for `/api/{network}/v1/*` + `/ws/{network}`.
+    // Built as a self-contained `Router<()>` (its state is erased by `.with_state`)
+    // so it can be merged into either serving branch ahead of the SPA fallback.
+    // Only one branch runs (each `return`s), so moving it into the first branch
+    // that executes and again in the next is sound — the earlier move diverges.
+    let proxy_state = Arc::new(crate::frontend_proxy::ProxyState::new(
+        config
+            .networks
+            .iter()
+            .map(|n| (n.name.clone(), (n.api_host.clone(), n.api_port)))
+            .collect(),
+    ));
+    let proxy_router = crate::frontend_proxy::proxy_router(proxy_state);
+
+    // The capabilities document describes THIS origin, so it needs the concrete
+    // networks the proxy above routes to.
+    let capability_networks: Vec<String> = config.networks.iter().map(|n| n.name.clone()).collect();
+    let capability_default_network = config.default_network.clone();
 
     if let Some(frontend_dir) = config.frontend_dir {
         let index_path = frontend_dir.join("index.html");
@@ -229,7 +327,17 @@ pub fn build_frontend_router(config: FrontendServiceConfig) -> Result<Router> {
                     move || frontend_runtime_config_handler(runtime_config.clone())
                 }),
             )
-            .route("/capabilities", get(frontend_capabilities_handler))
+            .route(
+                "/capabilities",
+                get(move |headers| {
+                    frontend_capabilities_handler(
+                        headers,
+                        capability_networks.clone(),
+                        capability_default_network.clone(),
+                    )
+                }),
+            )
+            .merge(proxy_router)
             .fallback({
                 let state = state.clone();
                 move |uri| frontend_filesystem_handler(State(state.clone()), uri)
@@ -246,7 +354,17 @@ pub fn build_frontend_router(config: FrontendServiceConfig) -> Result<Router> {
                     move || frontend_runtime_config_handler(runtime_config.clone())
                 }),
             )
-            .route("/capabilities", get(frontend_capabilities_handler))
+            .route(
+                "/capabilities",
+                get(move |headers| {
+                    frontend_capabilities_handler(
+                        headers,
+                        capability_networks.clone(),
+                        capability_default_network.clone(),
+                    )
+                }),
+            )
+            .merge(proxy_router)
             .fallback(embedded_frontend::embedded_frontend_handler));
     }
 
@@ -259,37 +377,35 @@ pub fn build_frontend_router(config: FrontendServiceConfig) -> Result<Router> {
 }
 
 async fn frontend_runtime_config_handler(config: FrontendRuntimeConfig) -> Response {
-    let network = serde_json::to_string(&config.ckb_network)
-        .expect("failed to serialize ckb_network for runtime config");
-    let rpc_url =
-        serde_json::to_string(&config.ckb_rpc_url).expect("failed to serialize ckb_rpc_url");
-    let build_version = serde_json::to_string(&config.build_version)
-        .expect("failed to serialize build_version for runtime config");
-    let body = format!(
-        r#"(() => {{
-  const protocol = window.location.protocol === 'https:' ? 'https:' : 'http:';
-  const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const defaultPort = window.location.protocol === 'https:' ? '443' : '80';
-  const currentPort = window.location.port || defaultPort;
-  const behindProxy = currentPort !== '{api_port}' && currentPort !== '{frontend_port}';
-  const host = behindProxy
-    ? window.location.host
-    : (window.location.hostname || '127.0.0.1') + ':{api_port}';
-  window.__CKBADGER_RUNTIME_CONFIG__ = {{
-    apiBase: `${{protocol}}//${{host}}/api/v1`,
-    wsUrl: `${{wsProtocol}}//${{host}}/ws`,
-    ckbNetwork: {network},
-    ckbRpcUrl: {rpc_url},
-    buildVersion: {build_version},
-  }};
-}})();
-"#,
-        api_port = config.api_port,
-        frontend_port = config.frontend_port,
-        network = network,
-        rpc_url = rpc_url,
-        build_version = build_version,
-    );
+    // Live network list for the SPA switcher. Element shape is `{ name }` — the
+    // switcher reads `n.name`; per-network backend ports stay server-side (the
+    // reverse proxy owns them) and are intentionally not exposed here.
+    let networks = config
+        .networks
+        .iter()
+        .map(|n| serde_json::json!({ "name": n.name }))
+        .collect::<Vec<_>>();
+
+    // Base patterns are RELATIVE + same-origin. The literal `{network}` token is
+    // a placeholder the SPA substitutes with the active network at call time
+    // (and it builds an absolute ws://|wss:// URL from `wsUrlPattern`), so no
+    // absolute host/port is computed here anymore.
+    let runtime_config = serde_json::json!({
+        "networks": networks,
+        "defaultNetwork": config.default_network,
+        "apiBasePattern": "/api/{network}/v1",
+        "wsUrlPattern": "/ws/{network}",
+        // Back-compat: still read by resolveCkbNetwork/resolveCkbRpcUrl until
+        // their consumers migrate to the per-network patterns (later task).
+        // `ckbNetwork` mirrors the orchestrator's default network.
+        "ckbNetwork": config.ckb_network,
+        "ckbRpcUrl": config.ckb_rpc_url,
+        "buildVersion": config.build_version,
+    });
+    let runtime_config_json =
+        serde_json::to_string(&runtime_config).expect("failed to serialize runtime config");
+
+    let body = format!("window.__CKBADGER_RUNTIME_CONFIG__ = {runtime_config_json};\n");
 
     (
         StatusCode::OK,
@@ -305,13 +421,17 @@ async fn frontend_runtime_config_handler(config: FrontendRuntimeConfig) -> Respo
         .into_response()
 }
 
-async fn frontend_capabilities_handler(headers: HeaderMap) -> Response {
+async fn frontend_capabilities_handler(
+    headers: HeaderMap,
+    networks: Vec<String>,
+    default_network: String,
+) -> Response {
     let origin = headers
         .get(header::HOST)
         .and_then(|v| v.to_str().ok())
         .map(|host| format!("http://{}", host))
         .unwrap_or_default();
-    let body = build_capabilities_json(&origin);
+    let body = build_capabilities_json(&origin, &networks, &default_network);
     (
         StatusCode::OK,
         [
@@ -330,12 +450,23 @@ async fn frontend_capabilities_handler(headers: HeaderMap) -> Response {
 ///
 /// This is the Rust equivalent of `frontend/lib/ai/capabilities.ts` `buildAiCapabilities()`.
 /// The route patterns are kept in sync manually — they change infrequently.
-fn build_capabilities_json(origin: &str) -> String {
+///
+/// Every path here must be a real route on the origin serving the document. This
+/// origin is the shared frontend server, where only the network-prefixed
+/// patterns exist: `/api/v1` and `/ws` match no route, fall through to the SPA
+/// fallback and answer `200 text/html`, so advertising them would hand any agent
+/// that trusts this document a path that "succeeds" with a web page. The
+/// concrete `networks` list is what makes the `{network}` placeholder usable.
+fn build_capabilities_json(origin: &str, networks: &[String], default_network: &str) -> String {
     serde_json::json!({
         "origin": origin,
         "site": {
             "name": "ckbadger",
-            "apiBase": "/api/v1"
+            "pageBasePattern": "/{network}",
+            "apiBasePattern": "/api/{network}/v1",
+            "wsUrlPattern": "/ws/{network}",
+            "networks": networks,
+            "defaultNetwork": default_network
         },
         "formatNegotiation": {
             "priority": ["query.format", "path.suffix", "accept.header"],
@@ -382,7 +513,7 @@ fn build_capabilities_json(origin: &str) -> String {
                 "/charts", "/charts/{slug}",
                 "/classes/{classId}", "/clusters/{clusterId}",
                 "/dao", "/dao/charts",
-                "/forks", "/forks/{id}", "/hardforks",
+                "/forks", "/forks/{id}", "/hardforks", "/network",
                 "/identities/{collectionId}",
                 "/identities/dotbit/{identityId}", "/identities/did/{identityId}",
                 "/objects", "/objects/{sporeId}", "/objects/mnft/{objectId}",
@@ -414,7 +545,7 @@ fn build_capabilities_json(origin: &str) -> String {
                 "route": "/tx/{hash}",
                 "profile": "debugger",
                 "payloadPath": "data.txDebugger.mockTransaction",
-                "debuggerCommandTemplate": "curl \"<url>.raw?profile=debugger\" | jq '.data.txDebugger.mockTransaction' > mock_tx.json && ckb-debugger --tx-file mock_tx.json --cell-index 0 --cell-type input --script-group-type lock"
+                "debuggerCommandTemplate": "curl \"<url>.raw?profile=debugger\" | jq '.data.txDebugger.mockTransaction' > mock_tx.json && ckb-debugger --tx-file mock_tx.json --cell-index 0 --cell-type input --script-group-type lock --script-version <2|1|0: VM ceiling at the tx's commit epoch; 0 pre-Mirana, 1 pre-Meepo, else 2>"
             },
             "txWitnessPayload": {
                 "route": "/tx/{hash}",
@@ -547,6 +678,12 @@ mod tests {
             ckb_rpc_url: "http://127.0.0.1:8114".to_string(),
             build_version: "0.1.0+testbuild".to_string(),
             frontend_dir: Some(PathBuf::from("/work/frontend")),
+            default_network: "mainnet".to_string(),
+            networks: vec![FrontendNetwork {
+                name: "mainnet".to_string(),
+                api_host: "127.0.0.1".to_string(),
+                api_port: 8101,
+            }],
         };
 
         assert_eq!(config.host, "127.0.0.1");
@@ -558,6 +695,10 @@ mod tests {
             config.frontend_dir.as_ref().unwrap(),
             &PathBuf::from("/work/frontend")
         );
+        assert_eq!(config.default_network, "mainnet");
+        assert_eq!(config.networks.len(), 1);
+        assert_eq!(config.networks[0].name, "mainnet");
+        assert_eq!(config.networks[0].api_port, 8101);
     }
 
     #[test]
@@ -570,6 +711,12 @@ mod tests {
             ckb_rpc_url: "http://127.0.0.1:8114".to_string(),
             build_version: "0.1.0+testbuild".to_string(),
             frontend_dir: None,
+            default_network: "mainnet".to_string(),
+            networks: vec![FrontendNetwork {
+                name: "mainnet".to_string(),
+                api_host: "127.0.0.1".to_string(),
+                api_port: 8101,
+            }],
         };
 
         assert!(config.frontend_dir.is_none());
@@ -598,6 +745,12 @@ mod tests {
             ckb_rpc_url: "http://127.0.0.1:8114".to_string(),
             build_version: "0.1.0+testbuild".to_string(),
             frontend_dir: Some(dir.path().to_path_buf()),
+            default_network: "mainnet".to_string(),
+            networks: vec![FrontendNetwork {
+                name: "mainnet".to_string(),
+                api_host: "127.0.0.1".to_string(),
+                api_port: 8101,
+            }],
         })
         .unwrap_err();
 
@@ -616,6 +769,12 @@ mod tests {
             ckb_rpc_url: "http://127.0.0.1:8114".to_string(),
             build_version: "0.1.0+testbuild".to_string(),
             frontend_dir: Some(dir.path().to_path_buf()),
+            default_network: "mainnet".to_string(),
+            networks: vec![FrontendNetwork {
+                name: "mainnet".to_string(),
+                api_host: "127.0.0.1".to_string(),
+                api_port: 8101,
+            }],
         })
         .unwrap();
 
@@ -639,14 +798,28 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("index.html"), "<html>spa</html>").unwrap();
 
+        // Orchestrator-shape config: two live networks, default mainnet.
         let router = build_frontend_router(FrontendServiceConfig {
             host: "127.0.0.1".to_string(),
             port: 8100,
-            api_port: 9101,
-            ckb_network: "testnet".to_string(),
-            ckb_rpc_url: "http://127.0.0.1:18114".to_string(),
+            api_port: 8101,
+            ckb_network: "mainnet".to_string(),
+            ckb_rpc_url: "http://127.0.0.1:8114".to_string(),
             build_version: "0.1.0+feature/foo@abcdef123456".to_string(),
             frontend_dir: Some(dir.path().to_path_buf()),
+            default_network: "mainnet".to_string(),
+            networks: vec![
+                FrontendNetwork {
+                    name: "mainnet".to_string(),
+                    api_host: "127.0.0.1".to_string(),
+                    api_port: 8101,
+                },
+                FrontendNetwork {
+                    name: "testnet".to_string(),
+                    api_host: "127.0.0.1".to_string(),
+                    api_port: 8102,
+                },
+            ],
         })
         .unwrap();
 
@@ -661,24 +834,105 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get("content-type").unwrap(),
+            "application/javascript; charset=utf-8"
+        );
+
         let body = response.into_body().collect().await.unwrap().to_bytes();
         let text = String::from_utf8(body.to_vec()).unwrap();
+
+        // Assigns the global the SPA reads.
         assert!(
-            text.contains("'9101'"),
-            "should contain api_port for proxy detection"
+            text.contains("window.__CKBADGER_RUNTIME_CONFIG__ ="),
+            "missing global assignment: {text}"
+        );
+
+        // Live-network list (the SPA switcher reads `n.name`).
+        assert!(
+            text.contains("\"networks\""),
+            "missing networks key: {text}"
+        );
+        assert!(text.contains("\"mainnet\""), "missing mainnet name: {text}");
+        assert!(text.contains("\"testnet\""), "missing testnet name: {text}");
+        assert!(
+            text.contains("\"defaultNetwork\":\"mainnet\""),
+            "missing defaultNetwork: {text}"
+        );
+
+        // Network-relative, same-origin base patterns; the literal {network}
+        // placeholder is substituted by the SPA for the active network.
+        assert!(
+            text.contains("\"apiBasePattern\":\"/api/{network}/v1\""),
+            "missing apiBasePattern: {text}"
         );
         assert!(
-            text.contains("'8100'"),
-            "should contain frontend_port for proxy detection"
+            text.contains("\"wsUrlPattern\":\"/ws/{network}\""),
+            "missing wsUrlPattern: {text}"
+        );
+
+        // Back-compat fields still emitted for un-migrated consumers.
+        assert!(
+            text.contains("buildVersion"),
+            "missing buildVersion: {text}"
         );
         assert!(
-            text.contains(":9101"),
-            "should contain api_port in host fallback"
+            text.contains("\"0.1.0+feature/foo@abcdef123456\""),
+            "missing build version value: {text}"
         );
-        assert!(text.contains("\"testnet\""));
-        assert!(text.contains("\"http://127.0.0.1:18114\""));
-        assert!(text.contains("buildVersion"));
-        assert!(text.contains("\"0.1.0+feature/foo@abcdef123456\""));
+        assert!(
+            text.contains("\"ckbNetwork\":\"mainnet\""),
+            "missing ckbNetwork: {text}"
+        );
+
+        // Old absolute-URL fields are gone (superseded by the relative patterns).
+        assert!(
+            !text.contains("\"apiBase\":"),
+            "legacy apiBase should be removed: {text}"
+        );
+        assert!(
+            !text.contains("\"wsUrl\":"),
+            "legacy wsUrl should be removed: {text}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_build_frontend_router_multi_network_config_builds() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("index.html"), "<html>spa</html>").unwrap();
+
+        // An orchestrator-shape config carrying two networks must build a router
+        // without panic (single-network is just the one-element case).
+        let router = build_frontend_router(FrontendServiceConfig {
+            host: "127.0.0.1".to_string(),
+            port: 8100,
+            api_port: 8101,
+            ckb_network: "mainnet".to_string(),
+            ckb_rpc_url: String::new(),
+            build_version: "0.1.0+testbuild".to_string(),
+            frontend_dir: Some(dir.path().to_path_buf()),
+            default_network: "mainnet".to_string(),
+            networks: vec![
+                FrontendNetwork {
+                    name: "mainnet".to_string(),
+                    api_host: "127.0.0.1".to_string(),
+                    api_port: 8101,
+                },
+                FrontendNetwork {
+                    name: "testnet".to_string(),
+                    api_host: "127.0.0.1".to_string(),
+                    api_port: 8102,
+                },
+            ],
+        })
+        .expect("two-network config should build a router");
+
+        // The SPA still serves through the multi-network router.
+        let response = router
+            .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
     }
 
     #[tokio::test]
@@ -694,6 +948,19 @@ mod tests {
             ckb_rpc_url: "http://127.0.0.1:8114".to_string(),
             build_version: "0.1.0+testbuild".to_string(),
             frontend_dir: Some(dir.path().to_path_buf()),
+            default_network: "mainnet".to_string(),
+            networks: vec![
+                FrontendNetwork {
+                    name: "mainnet".to_string(),
+                    api_host: "127.0.0.1".to_string(),
+                    api_port: 8101,
+                },
+                FrontendNetwork {
+                    name: "testnet".to_string(),
+                    api_host: "127.0.0.1".to_string(),
+                    api_port: 8102,
+                },
+            ],
         })
         .unwrap();
 
@@ -719,8 +986,32 @@ mod tests {
 
         assert_eq!(json["origin"], "http://localhost:8100");
         assert_eq!(json["site"]["name"], "ckbadger");
-        assert_eq!(json["site"]["apiBase"], "/api/v1");
+        assert_eq!(json["site"]["pageBasePattern"], "/{network}");
+        assert_eq!(json["site"]["apiBasePattern"], "/api/{network}/v1");
+        assert_eq!(json["site"]["wsUrlPattern"], "/ws/{network}");
+        // The `{network}` placeholder is only usable with the list of networks
+        // this origin actually serves.
+        assert_eq!(
+            json["site"]["networks"],
+            serde_json::json!(["mainnet", "testnet"])
+        );
+        assert_eq!(json["site"]["defaultNetwork"], "mainnet");
+        // The single-network paths are NOT routes on this origin: they miss the
+        // proxy and fall through to the SPA, which answers 200 text/html.
+        // Advertising them in a machine-readable document poisons any agent that
+        // trusts it, so they must be absent.
+        assert!(json["site"].get("directApiBase").is_none());
+        assert!(json["site"].get("directWsUrl").is_none());
+        assert!(json["site"].get("apiBase").is_none());
         assert!(json["routes"]["markdown"].as_array().unwrap().len() > 20);
+        assert!(
+            json["routes"]["markdown"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|route| route == "/network"),
+            "Rust capabilities route matrix must advertise the network page"
+        );
         assert!(!json["routes"]["raw"].as_array().unwrap().is_empty());
         assert_eq!(
             json["formatNegotiation"]["raw"]["accept"],
@@ -730,5 +1021,33 @@ mod tests {
             json["rawProfiles"]["txDebuggerProfile"]["profile"],
             "debugger"
         );
+    }
+}
+
+#[cfg(test)]
+mod presync_tests {
+    use super::presync_router;
+    use axum::body::to_bytes;
+    use axum::http::{Request, StatusCode};
+    use tower::ServiceExt; // oneshot
+
+    #[tokio::test]
+    async fn presync_router_returns_503_initializing_for_any_path() {
+        let app = presync_router("testnet");
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/statistics/network")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body = to_bytes(res.into_body(), 64 * 1024).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["error"], "initializing");
+        assert_eq!(json["network"], "testnet");
+        assert!(json["message"].as_str().unwrap().contains("sync"));
     }
 }

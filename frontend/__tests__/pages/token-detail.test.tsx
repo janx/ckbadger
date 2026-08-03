@@ -12,6 +12,7 @@ vi.mock('@/lib/api', () => ({
     getTokenActivities: vi.fn(),
   },
   isWarmupPendingError: vi.fn(() => false),
+  isNetworkInitializingError: vi.fn(() => false),
 }));
 
 vi.mock('@/components/layout/header', () => ({
@@ -178,15 +179,95 @@ describe('TokenDetailPage', () => {
     expect(screen.getAllByText('Activities').length).toBeGreaterThan(0);
     expect(screen.getByText('mint')).toBeInTheDocument();
     expect(screen.getByText('transfer')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: '#12,345' })).toHaveAttribute('href', '/blocks/12345');
+    expect(screen.getByRole('link', { name: '#12,345' })).toHaveAttribute(
+      'href',
+      '/mainnet/blocks/12345'
+    );
     expect(
       screen
         .getAllByRole('link')
         .some(
           (link) =>
             link.getAttribute('href') ===
-            '/tx/0xabcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234'
+            '/mainnet/tx/0xabcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234'
         )
     ).toBe(true);
+  });
+
+  it('renders unknown decimals as raw amounts with a decimals-unknown marker', async () => {
+    // B5: a token with no label and no on-chain info cell has decimals: null.
+    // The page must show 'Unknown' for the Decimals stat and raw base-unit
+    // amounts annotated as such — never silently pretend decimals are 0.
+    vi.mocked(api.getToken).mockResolvedValue({
+      ...mockToken,
+      decimals: null,
+      // 'unlimited' keeps the literal text 'Unknown' unique to the Decimals stat
+      maximumSupplyStatus: 'unlimited' as const,
+    });
+    vi.mocked(api.getTokenActivities).mockResolvedValue({
+      data: [
+        {
+          txHash: '0xabcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234',
+          blockNumber: 12345,
+          txIndex: 0,
+          timestamp: '1700000000000',
+          actions: ['mint'],
+          transfers: [
+            {
+              fromLockHash: null,
+              fromAddress: null,
+              toLockHash: '0x1111111111111111111111111111111111111111111111111111111111111111',
+              toAddress: null,
+              amount: '100000000000',
+              isMint: true,
+              isBurn: false,
+            },
+          ],
+        },
+      ],
+      limit: 50,
+      hasMore: false,
+      nextCursor: null,
+    });
+
+    render(
+      <TokenDetailPage typeHash="0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef" />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('TEST')).toBeInTheDocument();
+    });
+
+    // Decimals stat surfaces the unknown explicitly.
+    expect(screen.getByText('Unknown')).toBeInTheDocument();
+    // Total Circulation falls back to the raw base-unit amount, annotated.
+    expect(screen.getByText('1,000,000,000,000 (raw)')).toBeInTheDocument();
+    // Transfer amounts carry the decimals-unknown marker.
+    await waitFor(() => {
+      expect(screen.getByText('Mint')).toBeInTheDocument();
+    });
+    expect(screen.getAllByTitle(/decimals unknown/i).length).toBeGreaterThan(0);
+  });
+
+  it('scales amounts exactly for decimals beyond double precision', async () => {
+    // decimals is the raw, unvalidated first byte of the xUDT Unique Cell, so
+    // >= 23 is reachable. A BigInt(10 ** 24) divisor rendered 10^24 base units
+    // as "1.000000000000000016777216".
+    vi.mocked(api.getToken).mockResolvedValue({
+      ...mockToken,
+      decimals: 24,
+      totalSupply: '1000000000000000000000000',
+    });
+
+    render(
+      <TokenDetailPage typeHash="0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef" />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('TEST')).toBeInTheDocument();
+    });
+
+    expect(screen.getByText('1.000000000000000000000000')).toBeInTheDocument();
+    expect(screen.queryByText('1.000000000000000016777216')).toBeNull();
   });
 });

@@ -11,6 +11,7 @@ vi.mock('@/lib/api', () => ({
     getMostUtilizedScriptsChart: vi.fn(),
   },
   isWarmupPendingError: vi.fn(() => false),
+  isNetworkInitializingError: vi.fn(() => false),
 }));
 
 vi.mock('@/components/layout/header', () => ({
@@ -52,7 +53,7 @@ describe('MostUtilizedScriptsPage', () => {
     expect(screen.getByText('Scripts Used & Total CKBytes')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /Back to Charts/i })).toHaveAttribute(
       'href',
-      '/charts'
+      '/mainnet/charts'
     );
 
     await waitFor(() => {

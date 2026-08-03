@@ -5,26 +5,52 @@ use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 use tracing::info;
 
+use ckbadger_common::TokenBalance;
+
 use crate::keys;
 use crate::store::*;
 use crate::sync_ops::checked_rollback_total;
 use crate::types::*;
 
 /// Bundled rollback delta maps for cutoff-date stats repair.
+#[derive(Default)]
 struct RollbackStatsDeltas {
-    /// Per-date: (blocks, txs, cells_created, cells_consumed)
+    /// Per-date (UTC+8): (blocks, txs, cells_created, cells_consumed)
     date: HashMap<String, (i32, i32, i32, i32)>,
     /// Per-date rolled-back uncle count (from CachedBlockHeader.uncles_count).
     /// Used to repair DailyBlockStats.total_uncles on the cutoff date.
     date_uncles: HashMap<String, i32>,
-    /// Per-hour: (blocks, txs, cells_created, cells_consumed)
+    /// Per-date rolled-back inter-block time: `(sum_ms, count)`.
+    ///
+    /// Mirrors the forward writers exactly (`BatchStats::accumulate_block_time`
+    /// and `ChainStatsAccumulator`): the gap `ts(b) - ts(b-1)` is attributed to
+    /// block `b`'s UTC+8 date, and a negative gap (clock skew) contributes
+    /// nothing. Repairs `DailyStats.block_time_sum_ms`/`block_time_count`, which
+    /// drive /charts/average-block-time and (since the exact hash-rate fix) the
+    /// divisor of /charts/hash-rate.
+    date_block_time: HashMap<String, (i64, i32)>,
+    /// Per-hour: (blocks, txs, cells_created, cells_consumed), keyed by the
+    /// **UTC** `%Y%m%d%H` strings of the chain-level HOURLY stats CF.
     hour: HashMap<String, (i32, i32, i32, i32)>,
     /// Per-date: (cap_transferred, used_cap_created, used_cap_consumed, data_created, data_consumed)
     date_capacity: HashMap<String, (i128, i128, i128, i64, i64)>,
+    /// Per-hour rolled-back `capacity_transferred`, keyed by the **UTC**
+    /// `%Y%m%d%H` strings of the chain-level HOURLY stats CF. `HourlyStats`
+    /// carries no other capacity/data field, so this single value completes
+    /// its additive-field set.
+    hour_capacity: HashMap<String, i128>,
     /// Per-date activity stats from rolled-back TxActions
     activity_date: HashMap<String, DailyActivityStats>,
     /// Per-hour activity stats from rolled-back TxActions
     activity_hour: HashMap<String, DailyActivityStats>,
+    /// Rebuilt unique-address set of the cutoff **date** bucket: exactly the
+    /// addresses of the surviving (block <= rollback_to) portion. Replaces the
+    /// stored set instead of subtracting from it — an address may appear in
+    /// both the surviving and the orphaned portion, so set difference is not
+    /// expressible as a count delta.
+    activity_addr_date: HashSet<[u8; 32]>,
+    /// Rebuilt unique-address set of the cutoff **hour** bucket (UTC+8 key).
+    activity_addr_hour: HashSet<[u8; 32]>,
     /// Per-(date, miner_lock_hash) rolled-back block count
     miner: HashMap<(String, Vec<u8>), i32>,
 }
@@ -44,16 +70,261 @@ fn cell_dist_size_bucket(occupied_capacity: i64) -> usize {
     }
 }
 
+/// Fail-fast subtraction for a non-negative `i32` counter in a stats row.
+///
+/// `checked_sub` alone only catches arithmetic overflow — `0i32.checked_sub(5)`
+/// is `Some(-5)` — so the sign is checked too: a count that would go negative
+/// means the rollback delta collection disagrees with the persisted row.
+fn checked_stats_sub_i32(
+    current: i32,
+    delta: i32,
+    field: &str,
+    bucket_kind: &str,
+    bucket: &str,
+) -> anyhow::Result<i32> {
+    let result = current.checked_sub(delta).filter(|v| *v >= 0);
+    result.ok_or_else(|| {
+        anyhow::anyhow!(
+            "stats rollback underflow: {}={}, field={}, stored={}, rolled_back={} (delta collection out of sync with persisted state)",
+            bucket_kind,
+            bucket,
+            field,
+            current,
+            delta
+        )
+    })
+}
+
+/// Fail-fast subtraction for a non-negative `i64` accumulator in a stats row.
+fn checked_stats_sub_i64(
+    current: i64,
+    delta: i64,
+    field: &str,
+    bucket_kind: &str,
+    bucket: &str,
+) -> anyhow::Result<i64> {
+    let result = current.checked_sub(delta).filter(|v| *v >= 0);
+    result.ok_or_else(|| {
+        anyhow::anyhow!(
+            "stats rollback underflow: {}={}, field={}, stored={}, rolled_back={} (delta collection out of sync with persisted state)",
+            bucket_kind,
+            bucket,
+            field,
+            current,
+            delta
+        )
+    })
+}
+
+/// Fail-fast subtraction for a non-negative `i128` capacity field.
+fn checked_stats_sub_i128(
+    current: i128,
+    delta: i128,
+    field: &str,
+    bucket_kind: &str,
+    bucket: &str,
+) -> anyhow::Result<i128> {
+    let result = current.checked_sub(delta).filter(|v| *v >= 0);
+    result.ok_or_else(|| {
+        anyhow::anyhow!(
+            "stats rollback underflow: {}={}, field={}, stored={}, rolled_back={} (delta collection out of sync with persisted state)",
+            bucket_kind,
+            bucket,
+            field,
+            current,
+            delta
+        )
+    })
+}
+
+/// Fail-fast checked subtraction for activity stats rollback repair.
+fn checked_activity_sub_u32(
+    current: u32,
+    delta: u32,
+    field: &str,
+    bucket_kind: &str,
+    bucket: &str,
+) -> anyhow::Result<u32> {
+    current.checked_sub(delta).ok_or_else(|| {
+        anyhow::anyhow!(
+            "activity stats rollback underflow: {}={}, field={}, stored={}, rolled_back={} (delta collection out of sync with persisted state)",
+            bucket_kind,
+            bucket,
+            field,
+            current,
+            delta
+        )
+    })
+}
+
+/// Subtract rolled-back activity deltas from a persisted activity stats row.
+///
+/// Single calculation path shared by the ACTIVITY_DAILY and ACTIVITY_HOURLY
+/// repair branches. Every subtraction is checked: an underflow (or a delta
+/// referencing a script/protocol key absent from the stored row) means the
+/// rollback delta collection disagrees with the persisted state, and masking
+/// it with a zero clamp would leave silently-corrupt aggregates — fail with
+/// enough context to locate the upstream bug instead.
+///
+/// `unique_address_count` is NOT subtracted — it is *set* from
+/// `rebuilt_addrs`, the address set of the surviving portion of this bucket.
+/// The orphaned branch may share addresses with the surviving portion, so the
+/// rolled-back address count is not a subtractable delta; the set (and with it
+/// the count) is rebuilt instead. Caller must persist the same set into the
+/// bucket's ADDR_SET row so live-sync dedup keeps agreeing with the count.
+fn subtract_activity_stats_delta(
+    s: &mut DailyActivityStats,
+    delta: &DailyActivityStats,
+    rebuilt_addrs: &HashSet<[u8; 32]>,
+    bucket_kind: &str,
+    bucket: &str,
+) -> anyhow::Result<()> {
+    s.unique_address_count =
+        crate::stats_ops::activity_addr_set_count(rebuilt_addrs.len(), bucket)?;
+    s.transfer_count = checked_activity_sub_u32(
+        s.transfer_count,
+        delta.transfer_count,
+        "transfer_count",
+        bucket_kind,
+        bucket,
+    )?;
+    s.dao_deposit_count = checked_activity_sub_u32(
+        s.dao_deposit_count,
+        delta.dao_deposit_count,
+        "dao_deposit_count",
+        bucket_kind,
+        bucket,
+    )?;
+    s.dao_withdraw_request_count = checked_activity_sub_u32(
+        s.dao_withdraw_request_count,
+        delta.dao_withdraw_request_count,
+        "dao_withdraw_request_count",
+        bucket_kind,
+        bucket,
+    )?;
+    s.dao_withdraw_complete_count = checked_activity_sub_u32(
+        s.dao_withdraw_complete_count,
+        delta.dao_withdraw_complete_count,
+        "dao_withdraw_complete_count",
+        bucket_kind,
+        bucket,
+    )?;
+    s.token_count = checked_activity_sub_u32(
+        s.token_count,
+        delta.token_count,
+        "token_count",
+        bucket_kind,
+        bucket,
+    )?;
+    s.object_count = checked_activity_sub_u32(
+        s.object_count,
+        delta.object_count,
+        "object_count",
+        bucket_kind,
+        bucket,
+    )?;
+    s.identity_count = checked_activity_sub_u32(
+        s.identity_count,
+        delta.identity_count,
+        "identity_count",
+        bucket_kind,
+        bucket,
+    )?;
+    s.script_call_count = checked_activity_sub_u32(
+        s.script_call_count,
+        delta.script_call_count,
+        "script_call_count",
+        bucket_kind,
+        bucket,
+    )?;
+    s.unknown_count = checked_activity_sub_u32(
+        s.unknown_count,
+        delta.unknown_count,
+        "unknown_count",
+        bucket_kind,
+        bucket,
+    )?;
+    s.coinbase_count = checked_activity_sub_u32(
+        s.coinbase_count,
+        delta.coinbase_count,
+        "coinbase_count",
+        bucket_kind,
+        bucket,
+    )?;
+    s.total_ckb_moved = s
+        .total_ckb_moved
+        .checked_sub(delta.total_ckb_moved)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "activity stats rollback underflow: {}={}, field=total_ckb_moved, stored={}, rolled_back={} (delta collection out of sync with persisted state)",
+                bucket_kind,
+                bucket,
+                s.total_ckb_moved,
+                delta.total_ckb_moved
+            )
+        })?;
+    for (k, v) in &delta.script_counts {
+        let existing = s.script_counts.get_mut(k).ok_or_else(|| {
+            anyhow::anyhow!(
+                "activity stats rollback references script_count key missing from stored row: {}={}, script={}, rolled_back={}",
+                bucket_kind,
+                bucket,
+                k,
+                v
+            )
+        })?;
+        *existing = checked_activity_sub_u32(
+            *existing,
+            *v,
+            &format!("script_counts[{}]", k),
+            bucket_kind,
+            bucket,
+        )?;
+    }
+    s.script_counts.retain(|_, v| *v > 0);
+    for (k, v) in &delta.protocol_action_counts {
+        let existing = s.protocol_action_counts.get_mut(k).ok_or_else(|| {
+            anyhow::anyhow!(
+                "activity stats rollback references protocol_action key missing from stored row: {}={}, action={}, rolled_back={}",
+                bucket_kind,
+                bucket,
+                k,
+                v
+            )
+        })?;
+        *existing = checked_activity_sub_u32(
+            *existing,
+            *v,
+            &format!("protocol_action_counts[{}]", k),
+            bucket_kind,
+            bucket,
+        )?;
+    }
+    s.protocol_action_counts.retain(|_, v| *v > 0);
+    Ok(())
+}
+
 /// Attempt to repair a daily or hourly stats entry on the cutoff date by
 /// subtracting the rolled-back block/tx/cell deltas instead of deleting.
 /// Returns `true` if the entry was repaired (caller should NOT delete it),
 /// `false` if it should be deleted as before (e.g. not a daily/hourly prefix,
 /// or the entire day's blocks were rolled back).
+///
+/// Two hour cutoffs are required because the hour-keyed stats CFs
+/// deliberately use two clocks (see `keys::stats_prefix`):
+/// - `cutoff_yyyymmddhh_utc8`: UTC+8 — matches ACTIVITY_HOURLY keys;
+/// - `cutoff_yyyymmddhh_utc`: UTC — matches chain-level HOURLY keys.
+///
+/// Each must stay aligned with the same-prefix predicate in
+/// `should_delete_stats_for_replay`, whose `>=` delete range includes the
+/// cutoff bucket that this repair intercepts.
+#[allow(clippy::too_many_arguments)]
 fn repair_cutoff_date_stats(
     key: &[u8],
     value: &[u8],
     cutoff_date: &str,
-    cutoff_yyyymmddhh: &str,
+    cutoff_yyyymmddhh_utc8: &str,
+    cutoff_yyyymmddhh_utc: &str,
     deltas: &RollbackStatsDeltas,
     store: &CkbadgerStore,
     batch: &mut WriteBatch,
@@ -82,6 +353,11 @@ fn repair_cutoff_date_stats(
             let (rb_blocks, rb_txs, rb_created, rb_consumed) = delta.copied().unwrap_or_default();
             let (rb_cap, rb_used_created, rb_used_consumed, rb_data_created, rb_data_consumed) =
                 cap_delta.copied().unwrap_or_default();
+            let (rb_block_time_sum_ms, rb_block_time_count) = deltas
+                .date_block_time
+                .get(date_str)
+                .copied()
+                .unwrap_or((0, 0));
 
             let mut s: DailyStats = bincode::deserialize(value).map_err(|e| {
                 anyhow::anyhow!(
@@ -90,6 +366,24 @@ fn repair_cutoff_date_stats(
                     e
                 )
             })?;
+            // Inter-block time: reverse exactly the gaps the orphaned blocks
+            // contributed. Leaving them in makes the day's average block time —
+            // and the hash-rate chart, which divides by this sum — permanently
+            // wrong for every day a reorg touched.
+            s.block_time_sum_ms = checked_stats_sub_i64(
+                s.block_time_sum_ms,
+                rb_block_time_sum_ms,
+                "block_time_sum_ms",
+                "date",
+                date_str,
+            )?;
+            s.block_time_count = checked_stats_sub_i32(
+                s.block_time_count,
+                rb_block_time_count,
+                "block_time_count",
+                "date",
+                date_str,
+            )?;
             s.blocks_count -= rb_blocks;
             s.transactions_count -= rb_txs;
             s.cells_created -= rb_created;
@@ -138,20 +432,21 @@ fn repair_cutoff_date_stats(
             }
             let hour_str = std::str::from_utf8(&suffix[..10])
                 .map_err(|e| anyhow::anyhow!("invalid hourly stats hour: {}", e))?;
-            let date_part = &hour_str[..8];
-            if date_part != cutoff_date {
+            // Chain-level hourly keys are UTC hour strings (see
+            // `BatchWriter::update_hourly_statistics`), so they compare
+            // against the UTC cutoff — NOT the UTC+8 one used by the
+            // date-scoped and activity buckets. Only the cutoff hour itself
+            // is repaired; later hours are fully rolled back and deleted.
+            if hour_str != cutoff_yyyymmddhh_utc {
                 return Ok(false);
             }
-            // Only repair the cutoff hour itself; later hours are fully
-            // rolled back and should be deleted.
-            if hour_str != cutoff_yyyymmddhh {
+            let delta = deltas.hour.get(hour_str);
+            let cap_delta = deltas.hour_capacity.get(hour_str);
+            if delta.is_none() && cap_delta.is_none() {
                 return Ok(false);
             }
-            let delta = match deltas.hour.get(hour_str) {
-                Some(d) => *d,
-                None => return Ok(false),
-            };
-            let (rb_blocks, rb_txs, rb_created, rb_consumed) = delta;
+            let (rb_blocks, rb_txs, rb_created, rb_consumed) = delta.copied().unwrap_or_default();
+            let rb_capacity = cap_delta.copied().unwrap_or_default();
             let mut s: HourlyStats = bincode::deserialize(value).map_err(|e| {
                 anyhow::anyhow!(
                     "failed to deserialize hourly stats for rollback repair: hour={}, {}",
@@ -159,12 +454,39 @@ fn repair_cutoff_date_stats(
                     e
                 )
             })?;
-            s.blocks_count -= rb_blocks;
-            s.transactions_count -= rb_txs;
-            s.cells_created -= rb_created;
-            s.cells_consumed -= rb_consumed;
-            // capacity_transferred for hourly — subtract from date-level
-            // capacity deltas (not tracked per-hour; leave unchanged for hourly)
+            // Every additive HourlyStats field is repaired here; `hour` is the
+            // bucket's identity (epoch seconds of the hour start), not an
+            // accumulator, so it stays as stored.
+            s.blocks_count =
+                checked_stats_sub_i32(s.blocks_count, rb_blocks, "blocks_count", "hour", hour_str)?;
+            s.transactions_count = checked_stats_sub_i32(
+                s.transactions_count,
+                rb_txs,
+                "transactions_count",
+                "hour",
+                hour_str,
+            )?;
+            s.cells_created = checked_stats_sub_i32(
+                s.cells_created,
+                rb_created,
+                "cells_created",
+                "hour",
+                hour_str,
+            )?;
+            s.cells_consumed = checked_stats_sub_i32(
+                s.cells_consumed,
+                rb_consumed,
+                "cells_consumed",
+                "hour",
+                hour_str,
+            )?;
+            s.capacity_transferred = checked_stats_sub_i128(
+                s.capacity_transferred,
+                rb_capacity,
+                "capacity_transferred",
+                "hour",
+                hour_str,
+            )?;
 
             let cf = store.stats_cf_by_prefix(prefix)?;
             let encoded = bincode::serialize(&s)
@@ -192,37 +514,16 @@ fn repair_cutoff_date_stats(
                     e
                 )
             })?;
-            s.transfer_count = s.transfer_count.saturating_sub(delta.transfer_count);
-            s.dao_deposit_count = s.dao_deposit_count.saturating_sub(delta.dao_deposit_count);
-            s.dao_withdraw_request_count = s
-                .dao_withdraw_request_count
-                .saturating_sub(delta.dao_withdraw_request_count);
-            s.dao_withdraw_complete_count = s
-                .dao_withdraw_complete_count
-                .saturating_sub(delta.dao_withdraw_complete_count);
-            s.token_count = s.token_count.saturating_sub(delta.token_count);
-            s.object_count = s.object_count.saturating_sub(delta.object_count);
-            s.identity_count = s.identity_count.saturating_sub(delta.identity_count);
-            s.script_call_count = s.script_call_count.saturating_sub(delta.script_call_count);
-            s.unknown_count = s.unknown_count.saturating_sub(delta.unknown_count);
-            s.coinbase_count = s.coinbase_count.saturating_sub(delta.coinbase_count);
-            s.total_ckb_moved = s.total_ckb_moved.saturating_sub(delta.total_ckb_moved);
-            // unique_address_count: keep existing value — cutoff-date addr set
-            // is preserved (not deleted) so live sync dedup remains correct.
-            // Subtract script_counts
-            for (k, v) in &delta.script_counts {
-                if let Some(existing) = s.script_counts.get_mut(k) {
-                    *existing = existing.saturating_sub(*v);
-                }
-            }
-            s.script_counts.retain(|_, v| *v > 0);
-            // Subtract protocol_action_counts
-            for (k, v) in &delta.protocol_action_counts {
-                if let Some(existing) = s.protocol_action_counts.get_mut(k) {
-                    *existing = existing.saturating_sub(*v);
-                }
-            }
-            s.protocol_action_counts.retain(|_, v| *v > 0);
+            // unique_address_count is reset to the surviving portion's address
+            // set inside this helper; the caller writes the matching ADDR_SET
+            // row so set and count stay one value.
+            subtract_activity_stats_delta(
+                &mut s,
+                delta,
+                &deltas.activity_addr_date,
+                "date",
+                date_str,
+            )?;
             let cf = store.stats_cf_by_prefix(prefix)?;
             let encoded = bincode::serialize(&s)
                 .map_err(|e| anyhow::anyhow!("serialize activity daily stats repair: {}", e))?;
@@ -239,8 +540,10 @@ fn repair_cutoff_date_stats(
             if date_part != cutoff_date {
                 return Ok(false);
             }
-            // Only repair the cutoff hour; later hours are fully rolled back.
-            if hour_str != cutoff_yyyymmddhh {
+            // Activity hourly keys are UTC+8 hour strings (the
+            // `block_datetime_from_ms` convention). Only the cutoff hour is
+            // repaired; later hours are fully rolled back.
+            if hour_str != cutoff_yyyymmddhh_utc8 {
                 return Ok(false);
             }
             let delta = match deltas.activity_hour.get(hour_str) {
@@ -254,33 +557,13 @@ fn repair_cutoff_date_stats(
                     e
                 )
             })?;
-            s.transfer_count = s.transfer_count.saturating_sub(delta.transfer_count);
-            s.dao_deposit_count = s.dao_deposit_count.saturating_sub(delta.dao_deposit_count);
-            s.dao_withdraw_request_count = s
-                .dao_withdraw_request_count
-                .saturating_sub(delta.dao_withdraw_request_count);
-            s.dao_withdraw_complete_count = s
-                .dao_withdraw_complete_count
-                .saturating_sub(delta.dao_withdraw_complete_count);
-            s.token_count = s.token_count.saturating_sub(delta.token_count);
-            s.object_count = s.object_count.saturating_sub(delta.object_count);
-            s.identity_count = s.identity_count.saturating_sub(delta.identity_count);
-            s.script_call_count = s.script_call_count.saturating_sub(delta.script_call_count);
-            s.unknown_count = s.unknown_count.saturating_sub(delta.unknown_count);
-            s.coinbase_count = s.coinbase_count.saturating_sub(delta.coinbase_count);
-            s.total_ckb_moved = s.total_ckb_moved.saturating_sub(delta.total_ckb_moved);
-            for (k, v) in &delta.script_counts {
-                if let Some(existing) = s.script_counts.get_mut(k) {
-                    *existing = existing.saturating_sub(*v);
-                }
-            }
-            s.script_counts.retain(|_, v| *v > 0);
-            for (k, v) in &delta.protocol_action_counts {
-                if let Some(existing) = s.protocol_action_counts.get_mut(k) {
-                    *existing = existing.saturating_sub(*v);
-                }
-            }
-            s.protocol_action_counts.retain(|_, v| *v > 0);
+            subtract_activity_stats_delta(
+                &mut s,
+                delta,
+                &deltas.activity_addr_hour,
+                "hour",
+                hour_str,
+            )?;
             let cf = store.stats_cf_by_prefix(prefix)?;
             let encoded = bincode::serialize(&s)
                 .map_err(|e| anyhow::anyhow!("serialize activity hourly stats repair: {}", e))?;
@@ -391,6 +674,135 @@ fn repair_cutoff_date_stats(
     }
 }
 
+/// Unique-address sets of the cutoff buckets, rebuilt from the surviving
+/// (block <= rollback_to) portion of the chain.
+struct CutoffAddrSets {
+    /// Cutoff **date** bucket (UTC+8 `%Y%m%d`), ACTIVITY_DAILY_ADDR_SET.
+    date: HashSet<[u8; 32]>,
+    /// Cutoff **hour** bucket (UTC+8 `%Y%m%d%H`), ACTIVITY_HOURLY_ADDR_SET.
+    hour: HashSet<[u8; 32]>,
+}
+
+/// Rebuild the cutoff day/hour unique-address sets from the surviving portion
+/// of the chain.
+///
+/// The persisted address set is a *set*, not a counter: an address active in
+/// both the orphaned and the surviving portion cannot be removed by
+/// subtracting a rolled-back count. So the cutoff buckets are recomputed from
+/// the surviving TxActions using the same bucket assignment and participant
+/// filter as the live write path (`SyncBatch`): non-cellbase transactions,
+/// 32-byte participant lock hashes, UTC+8 date / UTC+8 hour of the tx
+/// timestamp. Replay then merges the new branch into these rebuilt rows
+/// through `BatchWriter::merge_persistent_addr_set` as usual.
+///
+/// Scan bound: block headers are walked backwards from `rollback_to` while
+/// they still carry the cutoff date, which gives the first block of the cutoff
+/// day; TxActions are then scanned over `[first_block_of_day, rollback_to]`.
+/// This mirrors the forward walk in `recompute_dao_daily_snapshot_for_date`.
+fn rebuild_cutoff_activity_addr_sets(
+    store: &CkbadgerStore,
+    rollback_to: i64,
+    cutoff_date: &str,
+    cutoff_hour_utc8: &str,
+) -> anyhow::Result<CutoffAddrSets> {
+    let mut sets = CutoffAddrSets {
+        date: HashSet::new(),
+        hour: HashSet::new(),
+    };
+    if rollback_to < 0 {
+        // Everything was rolled back — both buckets are empty.
+        return Ok(sets);
+    }
+
+    // 1. Lowest surviving block that still belongs to the cutoff date.
+    let mut scan_from_block = rollback_to + 1;
+    let mut bn = rollback_to;
+    while bn >= 0 {
+        let Some(header) = store.get_block_header(bn)? else {
+            // Sparse header range — stop, exactly like the forward walk in
+            // recompute_dao_daily_snapshot_for_date.
+            break;
+        };
+        let date = ckbadger_common::block_date_from_ms(header.timestamp)
+            .format("%Y%m%d")
+            .to_string();
+        if date != cutoff_date {
+            break;
+        }
+        scan_from_block = bn;
+        bn -= 1;
+    }
+    if scan_from_block > rollback_to {
+        // No surviving block carries the cutoff date.
+        return Ok(sets);
+    }
+
+    // 2. Collect participants of surviving TxActions, bucketed by their own
+    //    timestamp — the same rule the live write path applies.
+    //    CF_TX_ACTIONS is keyed newest-first; seek to the first entry of
+    //    `rollback_to` and walk down to `scan_from_block`.
+    let seek_key = keys::encode_tx_actions_key(rollback_to, i32::MAX, &[0u8; 32]);
+    let iter = store.iterator_cf(
+        store.cf_tx_actions(),
+        IteratorMode::From(&seek_key, rocksdb::Direction::Forward),
+    );
+    for item in iter {
+        let (key, value) = item.map_err(|e| {
+            anyhow::anyhow!(
+                "failed to iterate tx_actions while rebuilding cutoff addr sets: cutoff_date={}, {}",
+                cutoff_date,
+                e
+            )
+        })?;
+        if key.len() != keys::TX_ACTIONS_KEY_SIZE {
+            continue;
+        }
+        let (block_num, _tx_idx, _tx_hash) = keys::decode_tx_actions_key(&key);
+        if block_num < scan_from_block {
+            break;
+        }
+        if block_num > rollback_to {
+            anyhow::bail!(
+                "tx_actions scan for cutoff addr set rebuild started above the fork point: block_num={}, rollback_to={}",
+                block_num,
+                rollback_to
+            );
+        }
+        let tx_actions: TxActions = bincode::deserialize(&value).map_err(|e| {
+            anyhow::anyhow!(
+                "failed to deserialize TxActions while rebuilding cutoff addr sets: block_num={}, {}",
+                block_num,
+                e
+            )
+        })?;
+        // Coinbase participants are excluded from unique-address counts.
+        if tx_actions.is_cellbase {
+            continue;
+        }
+        let dt = ckbadger_common::block_datetime_from_ms(tx_actions.timestamp);
+        let in_date = dt.format("%Y%m%d").to_string() == cutoff_date;
+        let in_hour = dt.format("%Y%m%d%H").to_string() == cutoff_hour_utc8;
+        if !in_date && !in_hour {
+            continue;
+        }
+        for participant in &tx_actions.participants {
+            if participant.lock_hash.len() != 32 {
+                continue;
+            }
+            let mut lock_hash = [0u8; 32];
+            lock_hash.copy_from_slice(&participant.lock_hash);
+            if in_date {
+                sets.date.insert(lock_hash);
+            }
+            if in_hour {
+                sets.hour.insert(lock_hash);
+            }
+        }
+    }
+
+    Ok(sets)
+}
+
 fn parse_cutoff_date_yyyymmdd(cutoff_yyyymmdd: &[u8]) -> anyhow::Result<u32> {
     let cutoff_str = std::str::from_utf8(cutoff_yyyymmdd)
         .map_err(|e| anyhow::anyhow!("invalid cutoff date utf8 {:?}: {}", cutoff_yyyymmdd, e))?;
@@ -399,12 +811,24 @@ fn parse_cutoff_date_yyyymmdd(cutoff_yyyymmdd: &[u8]) -> anyhow::Result<u32> {
         .map_err(|e| anyhow::anyhow!("invalid cutoff date '{}': {}", cutoff_str, e))
 }
 
+/// Decide whether a stats row falls inside the replayed range and must go.
+///
+/// Two hour cutoffs are required because the hour-keyed stats CFs
+/// deliberately use two clocks (see `keys::stats_prefix`):
+/// - `cutoff_yyyymmddhh_utc8` (UTC+8) governs ACTIVITY_HOURLY keys;
+/// - `cutoff_yyyymmddhh_utc` (UTC) governs chain-level HOURLY keys.
+///
+/// The per-prefix routing here MUST stay aligned with
+/// `repair_cutoff_date_stats`: the `>=` ranges include the cutoff bucket,
+/// and only the matching-clock repair branch saves it from deletion.
 fn should_delete_stats_for_replay(
     key: &[u8],
     cutoff_yyyymmdd: &[u8],
-    cutoff_yyyymmddhh: &[u8],
+    cutoff_yyyymmddhh_utc8: &[u8],
+    cutoff_yyyymmddhh_utc: &[u8],
     cutoff_hour: i64,
     cutoff_epoch: i64,
+    delete_cutoff_epoch: bool,
 ) -> anyhow::Result<bool> {
     if key.is_empty() {
         return Ok(false);
@@ -413,7 +837,7 @@ fn should_delete_stats_for_replay(
     let suffix = &key[1..];
 
     match prefix {
-        // date scoped: YYYYMMDD
+        // date scoped: YYYYMMDD (UTC+8 calendar dates)
         keys::STATS_PREFIX_DAILY
         | keys::STATS_PREFIX_DAILY_BLOCK
         | keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT
@@ -422,17 +846,20 @@ fn should_delete_stats_for_replay(
         | keys::STATS_PREFIX_ADDR_COHORT => {
             Ok(suffix.len() >= 8 && &suffix[..8] >= cutoff_yyyymmdd)
         }
-        // hour scoped: YYYYMMDDHH
-        keys::STATS_PREFIX_HOURLY => Ok(suffix.len() >= 10 && &suffix[..10] >= cutoff_yyyymmddhh),
+        // hour scoped: YYYYMMDDHH on the UTC clock (chain-level hourly stats
+        // keys come from the UTC-truncated block hour — NOT UTC+8)
+        keys::STATS_PREFIX_HOURLY => {
+            Ok(suffix.len() >= 10 && &suffix[..10] >= cutoff_yyyymmddhh_utc)
+        }
         // date+miner hash: YYYYMMDD + 32-byte lock hash
         keys::STATS_PREFIX_MINER => Ok(suffix.len() >= 40 && &suffix[..8] >= cutoff_yyyymmdd),
-        // code_hash(32) + kind(1) + date(4B u32 YYYYMMDD BE)
+        // code_hash(32) + hash_type(1) + kind(1) + date(4B u32 YYYYMMDD BE)
         keys::STATS_PREFIX_SCRIPT_DAILY => {
             let cutoff_date = parse_cutoff_date_yyyymmdd(cutoff_yyyymmdd)?;
-            if suffix.len() < 37 {
+            if suffix.len() < 38 {
                 return Ok(false);
             }
-            let date = u32::from_be_bytes(suffix[33..37].try_into().map_err(|_| {
+            let date = u32::from_be_bytes(suffix[34..38].try_into().map_err(|_| {
                 anyhow::anyhow!("invalid script_daily suffix length: {}", suffix.len())
             })?);
             Ok(date >= cutoff_date)
@@ -489,13 +916,14 @@ fn should_delete_stats_for_replay(
         keys::STATS_PREFIX_ACTIVITY_DAILY_ADDR_SET => {
             Ok(suffix.len() >= 8 && &suffix[..8] > cutoff_yyyymmdd)
         }
-        // activity hourly: YYYYMMDDHH
+        // activity hourly: YYYYMMDDHH on the UTC+8 clock
+        // (`block_datetime_from_ms` convention)
         keys::STATS_PREFIX_ACTIVITY_HOURLY => {
-            Ok(suffix.len() >= 10 && &suffix[..10] >= cutoff_yyyymmddhh)
+            Ok(suffix.len() >= 10 && &suffix[..10] >= cutoff_yyyymmddhh_utc8)
         }
         // Strict > : preserve cutoff-hour addr set for dedup continuity
         keys::STATS_PREFIX_ACTIVITY_HOURLY_ADDR_SET => {
-            Ok(suffix.len() >= 10 && &suffix[..10] > cutoff_yyyymmddhh)
+            Ok(suffix.len() >= 10 && &suffix[..10] > cutoff_yyyymmddhh_utc8)
         }
         // per-asset hourly transfer counters: entity_hash(32B) + hour_bucket(8B BE i64)
         keys::STATS_PREFIX_TOKEN_HOURLY
@@ -513,6 +941,14 @@ fn should_delete_stats_for_replay(
             Ok(hour_bucket >= cutoff_hour)
         }
         // epoch-scoped: prefix(1B) + epoch_number(8B BE i64)
+        //
+        // Epochs that BEGIN inside the replayed range are deleted (replay
+        // rebuilds them wholesale from their first block). The boundary epoch
+        // — the one containing replay_start when replay does not begin at its
+        // first block — must be preserved: replay never revisits its earlier
+        // blocks, so deletion would let the writer recreate it with a
+        // fabricated mid-epoch start. It is truncated to the fork point by
+        // `repair_boundary_epoch_stats` instead.
         keys::STATS_PREFIX_EPOCH => {
             if suffix.len() < 8 {
                 return Ok(false);
@@ -520,7 +956,7 @@ fn should_delete_stats_for_replay(
             let epoch = i64::from_be_bytes(suffix[..8].try_into().map_err(|_| {
                 anyhow::anyhow!("invalid epoch stats suffix length: {}", suffix.len())
             })?);
-            Ok(epoch >= cutoff_epoch)
+            Ok(epoch > cutoff_epoch || (epoch == cutoff_epoch && delete_cutoff_epoch))
         }
         // BLOCK_TIME_DIST and EPOCH_TIME_DIST are cumulative histograms
         // spanning the entire chain. A shallow reorg (≤36 blocks) has
@@ -528,8 +964,17 @@ fn should_delete_stats_for_replay(
         // Deleting them would lose all pre-rollback counts since replay
         // only re-processes blocks after the fork point.
         //
-        // DAO singleton aggregates: always delete so they are recomputed after replay
-        keys::STATS_PREFIX_DAO_LATEST_STATS | keys::STATS_PREFIX_DAO_TOP_DEPOSITORS => Ok(true),
+        // DAO singleton aggregates (`dao_latest_stats`, `dao_top_depositors`):
+        // KEPT, never deleted. They are tip-scoped rows that the indexer
+        // rewrites wholesale right after this rollback commits
+        // (`refresh_latest_dao_statistics`), so deleting them buys nothing and
+        // costs a window in which they do not exist at all. The read path
+        // cannot tell that window apart from "never written", which is how
+        // `/dao/top-depositors` came to serve an empty leaderboard for tens of
+        // seconds after every reorg. Leaving the previous row in place keeps
+        // the read path answering with a value whose own `tip_block_number`
+        // states how stale it is, until the refresh overwrites it in place.
+        keys::STATS_PREFIX_DAO_LATEST_STATS | keys::STATS_PREFIX_DAO_TOP_DEPOSITORS => Ok(false),
         // Outpoint/index entries are NOT deleted here. They are append-only
         // historical indexes that cannot be rebuilt from ObjectEntry alone
         // (ObjectEntry lacks the current outpoint). Blanket deletion would
@@ -548,6 +993,66 @@ fn should_log_rollback_progress(scanned: u64, since_last_log: Duration) -> bool 
         && since_last_log >= ROLLBACK_PROGRESS_MIN_INTERVAL
 }
 
+/// Resolve the cell-by-code index keys (lock, and type when present) for one
+/// cell. Fails fast when a stored hash_type cannot form a key byte, with the
+/// outpoint context needed to locate the corrupt payload.
+fn cell_code_index_keys(
+    cell: &LiveCellInfo,
+    created_at_block: i64,
+    tx_hash: &[u8],
+    output_index: i16,
+) -> anyhow::Result<(Vec<u8>, Option<Vec<u8>>)> {
+    let lock_hash_type = keys::cell_code_index_hash_type_byte(cell.lock_hash_type)
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "invalid lock hash_type for cell-by-lock-code index during rollback: outpoint=0x{}:{}, error={}",
+                bytes_to_hex(tx_hash),
+                output_index,
+                e
+            )
+        })?;
+    let lock_code_key = keys::encode_cell_code_index_key(
+        &cell.lock_code_hash,
+        lock_hash_type,
+        created_at_block,
+        tx_hash,
+        output_index,
+    );
+
+    let type_code_key = match (&cell.type_code_hash, cell.type_hash_type) {
+        (Some(type_code_hash), Some(type_hash_type)) => {
+            let type_hash_type = keys::cell_code_index_hash_type_byte(type_hash_type)
+                .map_err(|e| {
+                    anyhow::anyhow!(
+                        "invalid type hash_type for cell-by-type-code index during rollback: outpoint=0x{}:{}, error={}",
+                        bytes_to_hex(tx_hash),
+                        output_index,
+                        e
+                    )
+                })?;
+            Some(keys::encode_cell_code_index_key(
+                type_code_hash,
+                type_hash_type,
+                created_at_block,
+                tx_hash,
+                output_index,
+            ))
+        }
+        (None, None) => None,
+        (type_code_hash, type_hash_type) => {
+            anyhow::bail!(
+                "cell type_code_hash/type_hash_type presence mismatch during rollback: outpoint=0x{}:{}, has_code_hash={}, has_hash_type={}",
+                bytes_to_hex(tx_hash),
+                output_index,
+                type_code_hash.is_some(),
+                type_hash_type.is_some()
+            );
+        }
+    };
+
+    Ok((lock_code_key, type_code_key))
+}
+
 fn delete_cell_index_entries(
     store: &CkbadgerStore,
     batch: &mut WriteBatch,
@@ -555,7 +1060,7 @@ fn delete_cell_index_entries(
     created_at_block: i64,
     tx_hash: &[u8],
     output_index: i16,
-) {
+) -> anyhow::Result<()> {
     let idx_key = keys::encode_cell_index_key(
         &cell.lock_script_hash,
         created_at_block,
@@ -563,28 +1068,23 @@ fn delete_cell_index_entries(
         output_index,
     );
     batch.delete_cf(store.cf_cell_by_lock(), &idx_key);
-    let idx_key = keys::encode_cell_index_key(
-        &cell.lock_code_hash,
-        created_at_block,
-        tx_hash,
-        output_index,
-    );
-    batch.delete_cf(store.cf_cell_by_lock_code(), &idx_key);
+    let (lock_code_key, type_code_key) =
+        cell_code_index_keys(cell, created_at_block, tx_hash, output_index)?;
+    batch.delete_cf(store.cf_cell_by_lock_code(), &lock_code_key);
     if let Some(ref type_hash) = cell.type_script_hash {
         let idx_key =
             keys::encode_cell_index_key(type_hash, created_at_block, tx_hash, output_index);
         batch.delete_cf(store.cf_cell_by_type(), &idx_key);
     }
-    if let Some(ref type_code_hash) = cell.type_code_hash {
-        let idx_key =
-            keys::encode_cell_index_key(type_code_hash, created_at_block, tx_hash, output_index);
-        batch.delete_cf(store.cf_cell_by_type_code(), &idx_key);
+    if let Some(type_code_key) = type_code_key {
+        batch.delete_cf(store.cf_cell_by_type_code(), &type_code_key);
     }
     if let Some(ref data_hash) = cell.data_hash {
         let idx_key =
             keys::encode_cell_index_key(data_hash, created_at_block, tx_hash, output_index);
         batch.delete_cf(store.cf_cell_by_data_hash(), &idx_key);
     }
+    Ok(())
 }
 
 fn put_cell_index_entries(
@@ -594,7 +1094,7 @@ fn put_cell_index_entries(
     created_at_block: i64,
     tx_hash: &[u8],
     output_index: i16,
-) {
+) -> anyhow::Result<()> {
     let idx_key = keys::encode_cell_index_key(
         &cell.lock_script_hash,
         created_at_block,
@@ -602,28 +1102,23 @@ fn put_cell_index_entries(
         output_index,
     );
     batch.put_cf(store.cf_cell_by_lock(), &idx_key, []);
-    let idx_key = keys::encode_cell_index_key(
-        &cell.lock_code_hash,
-        created_at_block,
-        tx_hash,
-        output_index,
-    );
-    batch.put_cf(store.cf_cell_by_lock_code(), &idx_key, []);
+    let (lock_code_key, type_code_key) =
+        cell_code_index_keys(cell, created_at_block, tx_hash, output_index)?;
+    batch.put_cf(store.cf_cell_by_lock_code(), &lock_code_key, []);
     if let Some(ref type_hash) = cell.type_script_hash {
         let idx_key =
             keys::encode_cell_index_key(type_hash, created_at_block, tx_hash, output_index);
         batch.put_cf(store.cf_cell_by_type(), &idx_key, []);
     }
-    if let Some(ref type_code_hash) = cell.type_code_hash {
-        let idx_key =
-            keys::encode_cell_index_key(type_code_hash, created_at_block, tx_hash, output_index);
-        batch.put_cf(store.cf_cell_by_type_code(), &idx_key, []);
+    if let Some(type_code_key) = type_code_key {
+        batch.put_cf(store.cf_cell_by_type_code(), &type_code_key, []);
     }
     if let Some(ref data_hash) = cell.data_hash {
         let idx_key =
             keys::encode_cell_index_key(data_hash, created_at_block, tx_hash, output_index);
         batch.put_cf(store.cf_cell_by_data_hash(), &idx_key, []);
     }
+    Ok(())
 }
 
 /// Accumulate derived-CF deltas for a cell changing live state during rollback.
@@ -633,19 +1128,25 @@ fn put_cell_index_entries(
 /// (cells_delta, live_delta, capacity_delta, owned_cap_delta, used_delta, owned_knowledge_delta)
 type ScriptReferenceDelta = (i64, i64, i128, i128, i128, i128);
 
+/// `(added, removed)`: signed split of a UDT holder-balance delta. Per-cell amounts
+/// are `u128`, but each side may aggregate many cells and uses `TokenBalance`.
+/// `added` sums cells restored to live
+/// (sign > 0) and `removed` sums cells removed from live (sign < 0).
+type TokenHolderDelta = (TokenBalance, TokenBalance);
+
 #[allow(clippy::too_many_arguments)]
 fn accumulate_cell_deltas(
     cell: &LiveCellInfo,
     sign: i128,
     addr_deltas: &mut HashMap<Vec<u8>, (i128, i128, i32, i64)>,
     script_deltas: &mut HashMap<(Vec<u8>, bool), (i64, i128, i128)>,
-    token_holder_deltas: &mut HashMap<(Vec<u8>, Vec<u8>), i128>,
+    token_holder_deltas: &mut HashMap<(Vec<u8>, Vec<u8>), TokenHolderDelta>,
     script_reference_deltas: &mut HashMap<(Vec<u8>, u8, bool), ScriptReferenceDelta>,
     cell_dist_count_deltas: &mut [i64; 6],
     cell_dist_capacity_deltas: &mut [i128; 6],
     created_at_block: i64,
     hodl_capacity_deltas: &mut HashMap<i64, i128>,
-) {
+) -> anyhow::Result<()> {
     let cap = cell.capacity as i128 * sign;
     let occ = cell.occupied_capacity as i128 * sign;
     let live_d = sign as i32;
@@ -724,11 +1225,31 @@ fn accumulate_cell_deltas(
         (&cell.type_script_hash, cell.udt_amount)
     {
         if udt_amount > 0 {
-            *token_holder_deltas
+            let e = token_holder_deltas
                 .entry((type_script_hash.clone(), cell.lock_script_hash.clone()))
-                .or_insert(0) += udt_amount as i128 * sign;
+                .or_insert_with(|| (TokenBalance::zero(), TokenBalance::zero()));
+            let amount = TokenBalance::from(udt_amount);
+            if sign > 0 {
+                e.0 = e.0.checked_add(&amount).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "reorg holder-balance added overflow: type_hash=0x{}, lock_hash=0x{}",
+                        bytes_to_hex(type_script_hash),
+                        bytes_to_hex(&cell.lock_script_hash)
+                    )
+                })?;
+            } else {
+                e.1 = e.1.checked_add(&amount).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "reorg holder-balance removed overflow: type_hash=0x{}, lock_hash=0x{}",
+                        bytes_to_hex(type_script_hash),
+                        bytes_to_hex(&cell.lock_script_hash)
+                    )
+                })?;
+            }
         }
     }
+
+    Ok(())
 }
 
 fn load_tx_contexts_from_undo_log(
@@ -1140,9 +1661,10 @@ fn normalize_dao_entry_for_rollback(
             if entry.withdraw_request_tx.is_none()
                 || entry.withdraw_request_output_index.is_none()
                 || entry.withdraw_request_block.is_none()
+                || entry.withdraw_request_ar.is_none()
             {
                 anyhow::bail!(
-                    "inconsistent DAO entry after rollback normalization: status=1 missing request fields, deposit_block={}",
+                    "inconsistent DAO entry after rollback normalization: status=1 missing request fields or AR, deposit_block={}",
                     entry.deposit_block_number
                 );
             }
@@ -1158,9 +1680,10 @@ fn normalize_dao_entry_for_rollback(
             if entry.withdraw_request_tx.is_none()
                 || entry.withdraw_request_output_index.is_none()
                 || entry.withdraw_request_block.is_none()
+                || entry.withdraw_request_ar.is_none()
             {
                 anyhow::bail!(
-                    "inconsistent DAO entry after rollback normalization: status=2 missing request fields, deposit_block={}",
+                    "inconsistent DAO entry after rollback normalization: status=2 missing request fields or AR, deposit_block={}",
                     entry.deposit_block_number
                 );
             }
@@ -1269,32 +1792,69 @@ impl CkbadgerStore {
             .as_ref()
             .map(|h| h.timestamp / 3_600_000);
         let replay_cutoff_epoch = replay_start_header.as_ref().map(|h| h.epoch_number);
-        let replay_cutoff_hour_str = replay_start_header.as_ref().map(|h| {
+        // UTC+8 hour cutoff — governs the ACTIVITY_HOURLY bucket family.
+        let replay_cutoff_hour_str_utc8 = replay_start_header.as_ref().map(|h| {
             ckbadger_common::block_datetime_from_ms(h.timestamp)
                 .format("%Y%m%d%H")
                 .to_string()
         });
+        // UTC hour cutoff — governs the chain-level HOURLY bucket family,
+        // whose keys are UTC hour strings (see
+        // `BatchWriter::update_hourly_statistics`). Routing the wrong clock
+        // here made rollback never touch those buckets, leaving rolled-back
+        // residue to accumulate monotonically.
+        let replay_cutoff_hour_str_utc = replay_start_header
+            .as_ref()
+            .map(|h| ckbadger_common::utc_hour_key_from_ms(h.timestamp));
 
-        // Determine the date of the fork_point itself so we can detect
-        // partial-day rollbacks (fork_point and first rolled-back block on
-        // the same calendar day).
-        let fork_point_date = if rollback_to >= 0 {
-            self.get_block_header(rollback_to)?.map(|h| {
-                ckbadger_common::block_date_from_ms(h.timestamp)
-                    .format("%Y%m%d")
-                    .to_string()
-            })
+        // The surviving fork-point header: its date detects partial-day
+        // rollbacks (fork_point and first rolled-back block on the same calendar
+        // day), and its timestamp is the predecessor of the first orphaned
+        // block's inter-block gap.
+        let fork_point_header = if rollback_to >= 0 {
+            self.get_block_header(rollback_to)?
         } else {
             None
         };
+        let fork_point_date = fork_point_header.as_ref().map(|h| {
+            ckbadger_common::block_date_from_ms(h.timestamp)
+                .format("%Y%m%d")
+                .to_string()
+        });
 
         info!(rollback_to, replay_start, "Rollback cleanup started");
 
-        // block_date_map: block_num → (date_yyyymmdd, hour_yyyymmddhh) for
-        // rolled-back blocks, used for per-date stats delta subtraction.
+        // block_date_map: block_num → (date_yyyymmdd UTC+8, hour_yyyymmddhh
+        // UTC) for rolled-back blocks, used for per-date/per-hour stats delta
+        // subtraction. The hour element is UTC because it repairs the
+        // UTC-keyed chain-level HOURLY buckets; the date element is UTC+8
+        // like every date-scoped stats key.
         let mut block_date_map: HashMap<i64, (String, String)> = HashMap::new();
         // Per-date rolled-back uncle count, populated during block header deletion loop.
         let mut stats_date_uncles: HashMap<String, i32> = HashMap::new();
+        // Per-date rolled-back inter-block time `(sum_ms, count)`, populated in
+        // the same loop. `prev_header` walks the chain from the surviving fork
+        // point so every orphaned block's gap `ts(b) - ts(b-1)` is the exact
+        // value the forward writers added.
+        let mut stats_date_block_time: HashMap<String, (i64, i32)> = HashMap::new();
+        let mut prev_header: Option<(i64, i64)> = fork_point_header
+            .as_ref()
+            .map(|h| (rollback_to, h.timestamp));
+        // Per-epoch rolled-back transaction count, used to truncate the
+        // boundary epoch stats row (the epoch containing replay_start).
+        let mut epoch_tx_removed: HashMap<i64, i64> = HashMap::new();
+        // Per-(date, miner) rolled-back block count for cutoff-date miner
+        // stats repair. Sourced from the header's cellbase-witness miner —
+        // the same attribution the forward write path uses.
+        let mut miner_rollback_deltas: HashMap<(String, Vec<u8>), i32> = HashMap::new();
+        // Rolled-back cellbase activity counts for the activity buckets, keyed
+        // by the **UTC+8** date / hour (the `block_datetime_from_ms` clock the
+        // ACTIVITY_* buckets use). Every block contributes exactly one cellbase
+        // activity to `DailyActivityStats::coinbase_count`, but cellbase rows
+        // are deliberately not persisted in CF_TX_ACTIONS, so the TxActions
+        // prescan below cannot see them — they are counted from the headers.
+        let mut activity_coinbase_date_deltas: HashMap<String, u32> = HashMap::new();
+        let mut activity_coinbase_hour_deltas: HashMap<String, u32> = HashMap::new();
 
         // 1. Delete block headers > rollback_to
         let mut stage = RollbackStageProgress::new("delete_block_headers");
@@ -1326,10 +1886,13 @@ impl CkbadgerStore {
                     e
                 )
             })?;
-            // Collect block→date/hour mapping for stats delta subtraction.
-            let block_dt = ckbadger_common::block_datetime_from_ms(header.timestamp);
-            let date_str = block_dt.format("%Y%m%d").to_string();
-            let hour_str = block_dt.format("%Y%m%d%H").to_string();
+            // Collect block→date/hour mapping for stats delta subtraction:
+            // UTC+8 date (date-scoped stats keys) + UTC hour (chain-level
+            // HOURLY stats keys).
+            let date_str = ckbadger_common::block_date_from_ms(header.timestamp)
+                .format("%Y%m%d")
+                .to_string();
+            let hour_str = ckbadger_common::utc_hour_key_from_ms(header.timestamp);
             // Accumulate per-date uncle count for repair_cutoff_date_stats.
             let uncles_entry = stats_date_uncles.entry(date_str.clone()).or_insert(0);
             *uncles_entry = uncles_entry
@@ -1340,7 +1903,71 @@ impl CkbadgerStore {
                         block_num
                     )
                 })?;
+            if let Some(miner) = header.miner_lock_hash.as_ref() {
+                *miner_rollback_deltas
+                    .entry((date_str.clone(), miner.clone()))
+                    .or_insert(0) += 1;
+            }
+            // Reverse this block's inter-block time contribution. The forward
+            // writers attribute `ts(b) - ts(b-1)` to block b's UTC+8 date and
+            // skip a negative gap, so the same two rules apply here — an
+            // approximation would leave the day's average block time and hash
+            // rate permanently wrong.
+            match prev_header {
+                Some((prev_num, prev_ts)) if prev_num + 1 == block_num => {
+                    let delta_ms = header.timestamp - prev_ts;
+                    if delta_ms >= 0 {
+                        let entry = stats_date_block_time
+                            .entry(date_str.clone())
+                            .or_insert((0, 0));
+                        entry.0 = entry.0.checked_add(delta_ms).ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "block_time_sum_ms overflow during rollback delta accumulation: block_num={}, delta_ms={}",
+                                block_num,
+                                delta_ms
+                            )
+                        })?;
+                        entry.1 += 1;
+                    }
+                }
+                Some((prev_num, _)) => {
+                    anyhow::bail!(
+                        "block header gap inside the rollback range: expected block {}, found {} (rollback_to={}); the inter-block time delta cannot be derived",
+                        prev_num + 1,
+                        block_num,
+                        rollback_to
+                    );
+                }
+                // No predecessor: either the genesis block (which the forward
+                // writers also give no gap), or `rollback_to`'s header is absent
+                // — and then `fork_point_date` is `None`, `is_partial_day` is
+                // false, and the cutoff day's row is deleted rather than
+                // repaired, so no delta is consumed.
+                None => {}
+            }
+            prev_header = Some((block_num, header.timestamp));
+
+            // Activity buckets run on the UTC+8 clock for both date and hour.
+            {
+                let dt = ckbadger_common::block_datetime_from_ms(header.timestamp);
+                *activity_coinbase_date_deltas
+                    .entry(dt.format("%Y%m%d").to_string())
+                    .or_insert(0) += 1;
+                *activity_coinbase_hour_deltas
+                    .entry(dt.format("%Y%m%d%H").to_string())
+                    .or_insert(0) += 1;
+            }
             block_date_map.insert(block_num, (date_str, hour_str));
+            let epoch_txs = epoch_tx_removed.entry(header.epoch_number).or_insert(0);
+            *epoch_txs = epoch_txs
+                .checked_add(i64::from(header.transactions_count))
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "epoch transactions_count overflow during rollback delta accumulation: block_num={}, epoch={}",
+                        block_num,
+                        header.epoch_number
+                    )
+                })?;
 
             batch.delete_cf(self.cf_block_headers(), &key);
             batch.delete_cf(self.cf_block_hash_index(), &header.hash);
@@ -1353,13 +1980,17 @@ impl CkbadgerStore {
         // these from the existing daily/hourly stats instead of deleting.
         // Keyed by date_yyyymmdd.  Fields: (blocks, txs, cells_created, cells_consumed).
         let mut stats_date_deltas: HashMap<String, (i32, i32, i32, i32)> = HashMap::new();
-        // Per-hour stats rollback deltas, keyed by hour_yyyymmddhh.
+        // Per-hour stats rollback deltas, keyed by UTC hour_yyyymmddhh
+        // (matching the chain-level HOURLY stats keys they repair).
         let mut stats_hour_deltas: HashMap<String, (i32, i32, i32, i32)> = HashMap::new();
         // Per-date capacity/used_capacity/data_size deltas, populated during cell rollback.
         // Keyed by date_yyyymmdd: (capacity_transferred, used_capacity_created,
         //                          used_capacity_consumed, data_size_created, data_size_consumed)
         let mut stats_date_capacity_deltas: HashMap<String, (i128, i128, i128, i64, i64)> =
             HashMap::new();
+        // Per-hour rolled-back capacity_transferred, keyed by UTC hour_yyyymmddhh
+        // (matching the chain-level HOURLY stats keys it repairs).
+        let mut stats_hour_capacity_deltas: HashMap<String, i128> = HashMap::new();
         // Cellbase tx hashes for rolled-back blocks (used to exclude cellbase
         // outputs from capacity_transferred in stage 4).
         let mut cellbase_tx_hashes: HashSet<Vec<u8>> = HashSet::new();
@@ -1539,38 +2170,48 @@ impl CkbadgerStore {
         }
         stage.finish(tx_hash_map_removed);
 
-        // Helper: accumulate per-date capacity deltas for stats repair.
-        // `tx_hash`: first 32 bytes of outpoint key
-        // `created_at_block`: block where cell was created
-        // `is_removal`: true if cell is being removed (created after fork), false if restored
+        // Helper: accumulate per-date and per-hour capacity/data deltas for
+        // stats repair.
+        //
+        // Each side of a cell's life is rolled back independently, decided by
+        // whether that side's block is itself rolled back (`block_date_map`
+        // holds exactly the rolled-back blocks):
+        //   - creation side rolled back  → subtract capacity_transferred (only
+        //     for non-cellbase creating txs), used_capacity_created, data_created
+        //   - consumption side rolled back → subtract used_capacity_consumed,
+        //     data_consumed
+        // A cell created *and* consumed inside the rolled-back range has both
+        // sides subtracted: its live-state deltas cancel out, but its flow
+        // contributions were counted on both sides and must both be removed.
+        //
+        // `tx_hash`: creating tx (first 32 bytes of the outpoint key)
         let accumulate_stats_capacity_delta =
             |cell: &LiveCellInfo,
              tx_hash: &[u8],
              created_at_block: i64,
              consumed_at_block: Option<i64>,
-             is_removal: bool,
              block_date_map: &HashMap<i64, (String, String)>,
              cellbase_tx_hashes: &HashSet<Vec<u8>>,
-             date_cap_deltas: &mut HashMap<String, (i128, i128, i128, i64, i64)>| {
-                if is_removal {
-                    // Cell was created after fork_point — subtract its contribution.
-                    if let Some((date_str, _)) = block_date_map.get(&created_at_block) {
-                        let e = date_cap_deltas.entry(date_str.clone()).or_default();
-                        // capacity_transferred: only non-cellbase tx outputs
-                        if !cellbase_tx_hashes.contains(tx_hash) {
-                            e.0 += cell.capacity as i128;
-                        }
-                        e.1 += cell.occupied_capacity as i128; // used_capacity_created
-                        e.3 += cell.data_size as i64; // data_size_created
+             date_cap_deltas: &mut HashMap<String, (i128, i128, i128, i64, i64)>,
+             hour_cap_deltas: &mut HashMap<String, i128>| {
+                if let Some((date_str, hour_str)) = block_date_map.get(&created_at_block) {
+                    let e = date_cap_deltas.entry(date_str.clone()).or_default();
+                    // capacity_transferred: only non-cellbase tx outputs
+                    if !cellbase_tx_hashes.contains(tx_hash) {
+                        e.0 += cell.capacity as i128;
+                        // Chain-level HOURLY buckets carry capacity_transferred
+                        // too, on the UTC clock of the creating block.
+                        *hour_cap_deltas.entry(hour_str.clone()).or_default() +=
+                            cell.capacity as i128;
                     }
-                } else {
-                    // Cell was consumed after fork_point — subtract its consumption.
-                    if let Some(consumed_block) = consumed_at_block {
-                        if let Some((date_str, _)) = block_date_map.get(&consumed_block) {
-                            let e = date_cap_deltas.entry(date_str.clone()).or_default();
-                            e.2 += cell.occupied_capacity as i128; // used_capacity_consumed
-                            e.4 += cell.data_size as i64; // data_size_consumed
-                        }
+                    e.1 += cell.occupied_capacity as i128; // used_capacity_created
+                    e.3 += cell.data_size as i64; // data_size_created
+                }
+                if let Some(consumed_block) = consumed_at_block {
+                    if let Some((date_str, _)) = block_date_map.get(&consumed_block) {
+                        let e = date_cap_deltas.entry(date_str.clone()).or_default();
+                        e.2 += cell.occupied_capacity as i128; // used_capacity_consumed
+                        e.4 += cell.data_size as i64; // data_size_consumed
                     }
                 }
             };
@@ -1584,8 +2225,8 @@ impl CkbadgerStore {
         let mut addr_balance_deltas: HashMap<Vec<u8>, (i128, i128, i32, i64)> = HashMap::new();
         // script_deltas: (code_hash, is_type) -> (live_cells_delta, live_cap_delta, live_occ_delta)
         let mut script_info_deltas: HashMap<(Vec<u8>, bool), (i64, i128, i128)> = HashMap::new();
-        // token_holder_deltas: (type_hash, lock_hash) -> balance_delta
-        let mut token_holder_deltas: HashMap<(Vec<u8>, Vec<u8>), i128> = HashMap::new();
+        // token_holder_deltas: (type_hash, lock_hash) -> (added, removed) u128 amounts
+        let mut token_holder_deltas: HashMap<(Vec<u8>, Vec<u8>), TokenHolderDelta> = HashMap::new();
         // script_reference_deltas: (code_hash, hash_type, is_type) -> ScriptReferenceDelta
         let mut script_reference_deltas: HashMap<(Vec<u8>, u8, bool), ScriptReferenceDelta> =
             HashMap::new();
@@ -1653,7 +2294,7 @@ impl CkbadgerStore {
                         positioned.created_at_block,
                         &tx_hash,
                         output_index,
-                    );
+                    )?;
                     cells_removed += 1;
                     accumulate_cell_deltas(
                         &positioned.cell,
@@ -1666,16 +2307,16 @@ impl CkbadgerStore {
                         &mut cell_dist_capacity_deltas,
                         positioned.created_at_block,
                         &mut hodl_capacity_deltas,
-                    );
+                    )?;
                     accumulate_stats_capacity_delta(
                         &positioned.cell,
                         &tx_hash,
                         positioned.created_at_block,
                         None,
-                        true,
                         &block_date_map,
                         &cellbase_tx_hashes,
                         &mut stats_date_capacity_deltas,
+                        &mut stats_hour_capacity_deltas,
                     );
                 }
                 stage.tick(cells_removed);
@@ -1722,6 +2363,21 @@ impl CkbadgerStore {
                             output_index
                         )
                     })?;
+                // Flow deltas are per-side: the consumption is always rolled
+                // back here, and the creation too when the cell was also
+                // created inside the rolled-back range (in which case the
+                // cell simply ceases to exist — no live-state delta, but both
+                // flow contributions must go).
+                accumulate_stats_capacity_delta(
+                    &info,
+                    &tx_hash,
+                    meta.created_at_block,
+                    Some(meta.consumed_at_block),
+                    &block_date_map,
+                    &cellbase_tx_hashes,
+                    &mut stats_date_capacity_deltas,
+                    &mut stats_hour_capacity_deltas,
+                );
                 if meta.created_at_block <= rollback_to {
                     batch.put_cf(
                         self.cf_live_cells(),
@@ -1735,7 +2391,7 @@ impl CkbadgerStore {
                         meta.created_at_block,
                         &tx_hash,
                         output_index,
-                    );
+                    )?;
                     cells_restored += 1;
                     accumulate_cell_deltas(
                         &info,
@@ -1748,17 +2404,7 @@ impl CkbadgerStore {
                         &mut cell_dist_capacity_deltas,
                         meta.created_at_block,
                         &mut hodl_capacity_deltas,
-                    );
-                    accumulate_stats_capacity_delta(
-                        &info,
-                        &tx_hash,
-                        meta.created_at_block,
-                        Some(meta.consumed_at_block),
-                        false,
-                        &block_date_map,
-                        &cellbase_tx_hashes,
-                        &mut stats_date_capacity_deltas,
-                    );
+                    )?;
                 }
                 stage.tick(cells_restored);
             }
@@ -1809,7 +2455,7 @@ impl CkbadgerStore {
                             positioned.created_at_block,
                             &ctx.tx_hash,
                             output_index,
-                        );
+                        )?;
                         cells_removed += 1;
                         accumulate_cell_deltas(
                             &positioned.cell,
@@ -1822,19 +2468,23 @@ impl CkbadgerStore {
                             &mut cell_dist_capacity_deltas,
                             positioned.created_at_block,
                             &mut hodl_capacity_deltas,
-                        );
+                        )?;
                         accumulate_stats_capacity_delta(
                             &positioned.cell,
                             &ctx.tx_hash,
                             positioned.created_at_block,
                             None,
-                            true,
                             &block_date_map,
                             &cellbase_tx_hashes,
                             &mut stats_date_capacity_deltas,
+                            &mut stats_hour_capacity_deltas,
                         );
                     }
                     // Remove consumed marker for outputs created in rolled-back blocks.
+                    // An output of a rolled-back tx that is already consumed was
+                    // necessarily consumed by another rolled-back tx; that tx's
+                    // input loop below owns both flow sides of this cell, so no
+                    // stats delta is accumulated here.
                     batch.delete_cf(self.cf_consumed_cells(), outpoint_key);
                 }
 
@@ -1889,6 +2539,19 @@ impl CkbadgerStore {
                                 }
                             }
                             batch.delete_cf(self.cf_consumed_cells(), outpoint_key);
+                            // Per-side flow rollback: the consumption is always
+                            // rolled back here; the creation as well when this
+                            // cell was also created inside the rolled-back range.
+                            accumulate_stats_capacity_delta(
+                                &consumed.cell,
+                                &input.tx_hash,
+                                consumed.created_at_block,
+                                Some(consumed.consumed_at_block),
+                                &block_date_map,
+                                &cellbase_tx_hashes,
+                                &mut stats_date_capacity_deltas,
+                                &mut stats_hour_capacity_deltas,
+                            );
                             if consumed.created_at_block <= rollback_to {
                                 batch.put_cf(
                                     self.cf_live_cells(),
@@ -1902,7 +2565,7 @@ impl CkbadgerStore {
                                     consumed.created_at_block,
                                     &input.tx_hash,
                                     input.output_index,
-                                );
+                                )?;
                                 cells_restored += 1;
                                 accumulate_cell_deltas(
                                     &consumed.cell,
@@ -1915,17 +2578,7 @@ impl CkbadgerStore {
                                     &mut cell_dist_capacity_deltas,
                                     consumed.created_at_block,
                                     &mut hodl_capacity_deltas,
-                                );
-                                accumulate_stats_capacity_delta(
-                                    &consumed.cell,
-                                    &input.tx_hash,
-                                    consumed.created_at_block,
-                                    Some(consumed.consumed_at_block),
-                                    false,
-                                    &block_date_map,
-                                    &cellbase_tx_hashes,
-                                    &mut stats_date_capacity_deltas,
-                                );
+                                )?;
                             }
                         }
                         None => {
@@ -2061,17 +2714,26 @@ impl CkbadgerStore {
                 replay_cutoff_hour.expect("cutoff_hour must be set when cutoff_date is set");
             let cutoff_epoch =
                 replay_cutoff_epoch.expect("cutoff_epoch must be set when cutoff_date is set");
-            let cutoff_hour_str = replay_cutoff_hour_str
+            let cutoff_hour_str_utc8 = replay_cutoff_hour_str_utc8
                 .as_deref()
-                .expect("cutoff_hour_str must be set when cutoff_date is set");
+                .expect("cutoff_hour_str_utc8 must be set when cutoff_date is set");
+            let cutoff_hour_str_utc = replay_cutoff_hour_str_utc
+                .as_deref()
+                .expect("cutoff_hour_str_utc must be set when cutoff_date is set");
             // Detect partial-day rollback: fork_point and first rolled-back block
             // share the same calendar date.
             let is_partial_day = fork_point_date.as_deref().is_some_and(|fpd| fpd == cutoff);
+            // Replay starting at an epoch's first block rebuilds that epoch
+            // wholesale, so its row may be deleted. Otherwise the boundary
+            // epoch row is preserved and truncated below.
+            let delete_cutoff_epoch = replay_start_header
+                .as_ref()
+                .is_some_and(|h| h.epoch_index == 0);
 
-            // Pre-scan tx_actions for activity + miner rollback deltas (partial-day only).
+            // Pre-scan tx_actions for activity rollback deltas (partial-day only).
+            // Miner deltas were already accumulated from headers in stage 1.
             let mut activity_date_deltas: HashMap<String, DailyActivityStats> = HashMap::new();
             let mut activity_hour_deltas: HashMap<String, DailyActivityStats> = HashMap::new();
-            let mut miner_deltas: HashMap<(String, Vec<u8>), i32> = HashMap::new();
             if is_partial_day {
                 let mut stage = RollbackStageProgress::new("prescan_tx_actions_for_deltas");
                 let mut scanned = 0u64;
@@ -2098,6 +2760,17 @@ impl CkbadgerStore {
                                 e
                             )
                         })?;
+                    // Cellbase activities are counted from block headers below;
+                    // a persisted cellbase row would double-count them, so the
+                    // write path's "no cellbase in CF_TX_ACTIONS" invariant is
+                    // asserted here rather than silently absorbed.
+                    if tx_actions.is_cellbase {
+                        anyhow::bail!(
+                            "cellbase TxActions row found in CF_TX_ACTIONS during rollback prescan: block_num={}, tx_hash=0x{} (write path invariant violated)",
+                            block_num,
+                            bytes_to_hex(&tx_actions.tx_hash)
+                        );
+                    }
                     let dt = ckbadger_common::block_datetime_from_ms(tx_actions.timestamp);
                     let date_str = dt.format("%Y%m%d").to_string();
                     let hour_str = dt.format("%Y%m%d%H").to_string();
@@ -2111,31 +2784,49 @@ impl CkbadgerStore {
                         .or_default()
                         .accumulate_from_tx_actions(&tx_actions);
 
-                    // Miner identification: cellbase first participant's lock hash
-                    if tx_actions.is_cellbase {
-                        if let Some(p) = tx_actions.participants.first() {
-                            if p.lock_hash.len() == 32 {
-                                *miner_deltas
-                                    .entry((date_str, p.lock_hash.clone()))
-                                    .or_insert(0) += 1;
-                            }
-                        }
-                    }
-
                     scanned += 1;
                     stage.tick(scanned);
                 }
                 stage.finish(scanned);
+
+                // Fold in the header-derived cellbase counts: one coinbase
+                // activity per rolled-back block. Without this the repaired
+                // rows keep counting the orphaned branch's cellbases forever.
+                for (bucket, count) in &activity_coinbase_date_deltas {
+                    activity_date_deltas
+                        .entry(bucket.clone())
+                        .or_default()
+                        .coinbase_count += count;
+                }
+                for (bucket, count) in &activity_coinbase_hour_deltas {
+                    activity_hour_deltas
+                        .entry(bucket.clone())
+                        .or_default()
+                        .coinbase_count += count;
+                }
             }
+
+            // Rebuild the cutoff day/hour unique-address sets from the
+            // surviving chain. Unconditional (not gated on `is_partial_day`):
+            // when the whole cutoff day is rolled back the surviving portion is
+            // empty and the stale set must be dropped, otherwise the orphaned
+            // branch's addresses would stay in the bucket forever and inflate
+            // every later `unique_address_count` merge.
+            let cutoff_addr_sets =
+                rebuild_cutoff_activity_addr_sets(self, rollback_to, cutoff, cutoff_hour_str_utc8)?;
 
             let rollback_deltas = RollbackStatsDeltas {
                 date: stats_date_deltas,
                 date_uncles: stats_date_uncles,
+                date_block_time: stats_date_block_time,
                 hour: stats_hour_deltas,
                 date_capacity: stats_date_capacity_deltas,
+                hour_capacity: stats_hour_capacity_deltas,
                 activity_date: activity_date_deltas,
                 activity_hour: activity_hour_deltas,
-                miner: miner_deltas,
+                activity_addr_date: cutoff_addr_sets.date,
+                activity_addr_hour: cutoff_addr_sets.hour,
+                miner: miner_rollback_deltas,
             };
 
             let mut stats_removed = 0u64;
@@ -2162,12 +2853,30 @@ impl CkbadgerStore {
                     if !should_delete_stats_for_replay(
                         &key,
                         cutoff.as_bytes(),
-                        cutoff_hour_str.as_bytes(),
+                        cutoff_hour_str_utc8.as_bytes(),
+                        cutoff_hour_str_utc.as_bytes(),
                         cutoff_hour,
                         cutoff_epoch,
+                        delete_cutoff_epoch,
                     )? {
                         stage.tick(stats_removed + stats_repaired);
                         continue;
+                    }
+                    if key[0] == keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT {
+                        let suffix = &key[1..];
+                        if suffix.len() < 8 {
+                            anyhow::bail!(
+                                "invalid DAO daily snapshot key during rollback: key=0x{}",
+                                bytes_to_hex(&key)
+                            );
+                        }
+                        std::str::from_utf8(&suffix[..8]).map_err(|error| {
+                            anyhow::anyhow!(
+                                "invalid DAO daily snapshot date during rollback: key=0x{}, error={}",
+                                bytes_to_hex(&key),
+                                error
+                            )
+                        })?;
                     }
                     // For daily/hourly main stats on the cutoff date in a partial-day
                     // rollback, subtract the rolled-back deltas instead of deleting.
@@ -2176,7 +2885,8 @@ impl CkbadgerStore {
                             &key,
                             &value,
                             cutoff,
-                            cutoff_hour_str,
+                            cutoff_hour_str_utc8,
+                            cutoff_hour_str_utc,
                             &rollback_deltas,
                             self,
                             &mut batch,
@@ -2200,6 +2910,128 @@ impl CkbadgerStore {
                 );
             }
 
+            // 7a-0. Persist the rebuilt cutoff-bucket address sets. Written
+            // after the sweep so the rebuilt rows win, and encoded through the
+            // same helper as the live write path so replay's merge reads back
+            // exactly what it would have written itself. An empty surviving
+            // portion means the row must go, not be left stale.
+            {
+                let addr_set_rows: [(u8, &str, &HashSet<[u8; 32]>); 2] = [
+                    (
+                        keys::STATS_PREFIX_ACTIVITY_DAILY_ADDR_SET,
+                        cutoff,
+                        &rollback_deltas.activity_addr_date,
+                    ),
+                    (
+                        keys::STATS_PREFIX_ACTIVITY_HOURLY_ADDR_SET,
+                        cutoff_hour_str_utc8,
+                        &rollback_deltas.activity_addr_hour,
+                    ),
+                ];
+                for (prefix, bucket, addrs) in addr_set_rows {
+                    let key = keys::encode_stats_key(prefix, bucket.as_bytes());
+                    let cf = self.stats_cf_by_prefix(prefix)?;
+                    if addrs.is_empty() {
+                        batch.delete_cf(cf, &key);
+                    } else {
+                        let encoded =
+                            crate::stats_ops::encode_activity_addr_set(addrs.iter().copied());
+                        batch.put_cf(cf, &key, &encoded);
+                    }
+                }
+                info!(
+                    cutoff_date = cutoff,
+                    cutoff_hour = cutoff_hour_str_utc8,
+                    date_addrs = rollback_deltas.activity_addr_date.len(),
+                    hour_addrs = rollback_deltas.activity_addr_hour.len(),
+                    "rollback: cutoff-bucket unique address sets rebuilt from surviving chain"
+                );
+            }
+
+            // 7a. Truncate the boundary epoch stats row (the epoch containing
+            // replay_start) to the fork point. Replay only re-processes blocks
+            // > rollback_to, so this row must keep its true start_block /
+            // start_timestamp while its end/counts are rolled back.
+            if !delete_cutoff_epoch {
+                let boundary_header = replay_start_header.as_ref().ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "replay_start header missing while cutoff stats exist: replay_start={}",
+                        replay_start
+                    )
+                })?;
+                let boundary_epoch = boundary_header.epoch_number;
+                let key =
+                    keys::encode_stats_key(keys::STATS_PREFIX_EPOCH, &boundary_epoch.to_be_bytes());
+                let cf = self.cf_for_stats_key(&key)?;
+                let existing = self.get_cf(cf, &key)?.ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "boundary epoch stats row missing during rollback: epoch={}, replay_start={}, rollback_to={}",
+                        boundary_epoch,
+                        replay_start,
+                        rollback_to
+                    )
+                })?;
+                let mut row: EpochStats = bincode::deserialize(&existing).map_err(|e| {
+                    anyhow::anyhow!(
+                        "failed to deserialize boundary epoch stats during rollback: epoch={}, error={}",
+                        boundary_epoch,
+                        e
+                    )
+                })?;
+                if row.start_block > rollback_to {
+                    anyhow::bail!(
+                        "boundary epoch stats start_block after fork point: epoch={}, start_block={}, rollback_to={} (corrupt epoch row; re-sync required)",
+                        boundary_epoch,
+                        row.start_block,
+                        rollback_to
+                    );
+                }
+                let removed_txs = epoch_tx_removed.get(&boundary_epoch).copied().unwrap_or(0);
+                let removed_txs = i32::try_from(removed_txs).map_err(|_| {
+                    anyhow::anyhow!(
+                        "rolled-back epoch tx count exceeds i32 range: epoch={}, removed={}",
+                        boundary_epoch,
+                        removed_txs
+                    )
+                })?;
+                row.transactions_count =
+                    row.transactions_count.checked_sub(removed_txs).filter(|c| *c >= 0).ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "boundary epoch tx count underflow during rollback: epoch={}, had={}, removing={} (corrupt epoch row; re-sync required)",
+                            boundary_epoch,
+                            row.transactions_count,
+                            removed_txs
+                        )
+                    })?;
+                row.end_block = Some(rollback_to);
+                row.blocks_count =
+                    i32::try_from(rollback_to - row.start_block + 1).map_err(|_| {
+                        anyhow::anyhow!(
+                            "boundary epoch blocks_count exceeds i32 range: epoch={}, start_block={}, rollback_to={}",
+                            boundary_epoch,
+                            row.start_block,
+                            rollback_to
+                        )
+                    })?;
+                // The epoch continues into the replayed range, so it cannot be
+                // complete at the fork point.
+                row.end_timestamp = None;
+                let value = bincode::serialize(&row).map_err(|e| {
+                    anyhow::anyhow!(
+                        "failed to serialize truncated boundary epoch stats: epoch={}, error={}",
+                        boundary_epoch,
+                        e
+                    )
+                })?;
+                batch.put_cf(cf, &key, &value);
+                info!(
+                    boundary_epoch,
+                    end_block = rollback_to,
+                    blocks_count = row.blocks_count,
+                    "rollback: boundary epoch stats truncated to fork point"
+                );
+            }
+
             // 7b. Recompute DAO daily snapshots for all dates affected by
             // the rollback. Runs AFTER the dao_deposits repair stage and
             // AFTER the date-scoped stats deletion. This reads the now-correct
@@ -2209,10 +3041,29 @@ impl CkbadgerStore {
             // and secondary_pool / total_issuance / occupied_capacity re-read
             // from the last surviving block's DAO header.
             //
-            // Runs for both partial-day and cross-day rollbacks:
-            // - Partial-day: recomputes just the cutoff date up to rollback_to
-            // - Cross-day: recomputes every date from fork_point_date through
-            //   cutoff_date (inclusive), each bounded by its end-of-day block.
+            // A date in [fork_point_date, cutoff_date] is recomputed when both
+            // hold:
+            //   1. at least one rolled-back block carried that date, so the
+            //      date's block set actually changed, and
+            //   2. a DAO daily snapshot already exists for it, so there is
+            //      materialized DAO aggregate state to repair.
+            //
+            // (1) is what makes the fork-point date reachable. Its snapshot is
+            // never deleted by the date-scoped cutoff sweep, yet it goes stale
+            // whenever a rolled-back block's timestamp crossed the day boundary
+            // backwards — CKB block timestamps are only median-time-past-bounded,
+            // so a block after the cutoff block may carry an earlier date. The
+            // previous condition keyed off "the snapshot key was selected for
+            // deletion", which is only ever true for date >= cutoff, so the
+            // fork-point date was silently skipped and left permanently stale.
+            //
+            // (2) keeps fixture and partially initialized stores — block headers
+            // without DAO aggregate state — out of the recompute, which needs the
+            // full block prehistory of the day and fails fast without it.
+            let rolled_back_dates: HashSet<&str> = block_date_map
+                .values()
+                .map(|(date_str, _)| date_str.as_str())
+                .collect();
             let cutoff_naive = chrono::NaiveDate::parse_from_str(cutoff, "%Y%m%d")
                 .map_err(|e| anyhow::anyhow!("invalid cutoff_date {}: {}", cutoff, e))?;
             let recompute_start = if let Some(fpd) = fork_point_date.as_deref() {
@@ -2226,39 +3077,23 @@ impl CkbadgerStore {
             let mut ticks = 0u64;
             let mut d = recompute_start;
             while d <= cutoff_naive {
+                let snapshot_date = d.format("%Y%m%d").to_string();
+                if !rolled_back_dates.contains(snapshot_date.as_str())
+                    || self.get_dao_daily_snapshot(&snapshot_date)?.is_none()
+                {
+                    d += chrono::Duration::days(1);
+                    continue;
+                }
                 // recompute_dao_daily_snapshot_for_date takes &mut StoreBatch,
                 // while rollback_to_block accumulates into a raw WriteBatch.
                 // Build a temporary StoreBatch, run the recompute, then extract
                 // the inner WriteBatch and merge its serialized operations into
                 // the main batch so all rollback writes commit atomically.
+                // Recompute ops are appended after the cutoff-sweep deletes, so
+                // the rebuilt snapshot wins for dates whose key was deleted.
                 let mut recompute_batch = crate::batch::StoreBatch::new(self);
                 self.recompute_dao_daily_snapshot_for_date(d, rollback_to, &mut recompute_batch)?;
-                let recompute_wb = recompute_batch.into_write_batch();
-                if !recompute_wb.is_empty() {
-                    // Merge via RocksDB WriteBatch wire format:
-                    // [0..8] sequence (u64 LE), [8..12] entry count (u32 LE), [12..] ops.
-                    let main_data = batch.data();
-                    let extra_data = recompute_wb.data();
-                    let main_count = u32::from_le_bytes(
-                        main_data[8..12]
-                            .try_into()
-                            .expect("WriteBatch header >= 12 bytes"),
-                    );
-                    let extra_count = u32::from_le_bytes(
-                        extra_data[8..12]
-                            .try_into()
-                            .expect("WriteBatch header >= 12 bytes"),
-                    );
-                    let total_count = main_count.checked_add(extra_count).expect(
-                        "WriteBatch operation count overflow during DAO snapshot recompute merge",
-                    );
-                    let mut merged = Vec::with_capacity(main_data.len() + extra_data.len() - 12);
-                    merged.extend_from_slice(&main_data[..8]); // sequence from main
-                    merged.extend_from_slice(&total_count.to_le_bytes()); // combined count
-                    merged.extend_from_slice(&main_data[12..]); // ops from main
-                    merged.extend_from_slice(&extra_data[12..]); // ops from recompute
-                    batch = WriteBatch::from_data(&merged);
-                }
+                crate::batch::merge_write_batches(&mut batch, recompute_batch.into_write_batch());
                 ticks += 1;
                 dao_recompute_stage.tick(ticks);
                 d += chrono::Duration::days(1);
@@ -2506,14 +3341,6 @@ impl CkbadgerStore {
                     for participant in &channel.participants {
                         let addr_key = keys::encode_addr_fiber_channel_key(participant, &key);
                         batch.delete_cf(self.cf_addr_fiber_channels(), &addr_key);
-                    }
-
-                    // Delete funding_args index
-                    if !channel.funding_lock_args.is_empty() {
-                        batch.delete_cf(
-                            self.cf_fiber_channel_by_funding_args(),
-                            &channel.funding_lock_args,
-                        );
                     }
 
                     // Delete commitment index if present
@@ -2831,97 +3658,115 @@ impl CkbadgerStore {
             script_refs_updated += 1;
         }
 
-        // 9c. token_holders — apply balance deltas, track per-type_hash holder count changes
-        let mut type_hash_holder_changes: HashMap<Vec<u8>, (i128, i64)> = HashMap::new();
-        for ((type_hash, lock_hash), balance_delta) in &token_holder_deltas {
-            if *balance_delta == 0 {
+        // 9c. token_holders — apply exact aggregate balance deltas. Token-level supply and
+        // holder count are derived from this CF and are intentionally not updated separately.
+        for ((type_hash, lock_hash), delta) in &token_holder_deltas {
+            let (added, removed) = delta;
+            if added.is_zero() && removed.is_zero() {
                 continue;
             }
             let current = self
                 .get_token_holder_balance(type_hash, lock_hash)?
-                .unwrap_or(0);
-            let new_balance = current + balance_delta;
-            let entry = type_hash_holder_changes
-                .entry(type_hash.clone())
-                .or_insert((0, 0));
-            entry.0 += balance_delta; // total_supply delta
-
-            if new_balance < 0 {
-                anyhow::bail!(
-                    "token_holder underflow during rollback: type=0x{}, lock=0x{}, current={}, delta={}",
-                    bytes_to_hex(type_hash),
-                    bytes_to_hex(lock_hash),
-                    current,
-                    balance_delta
-                );
-            }
-
-            if current > 0 {
+                .unwrap_or_else(TokenBalance::zero);
+            // Compute the net change before applying it so self-transfers do not create
+            // a transient overflow. A true overflow/underflow remains an invariant
+            // violation; each direction reports its own failure so the message names
+            // the arithmetic that actually failed.
+            let new_balance = if added >= removed {
+                let net = added
+                    .checked_sub(removed)
+                    .expect("ordered TokenBalance subtraction");
+                current.checked_add(&net).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "token holder balance overflow during rollback: type_hash=0x{}, lock_hash=0x{}, current={}, added={}, removed={}, net_added={}",
+                        bytes_to_hex(type_hash),
+                        bytes_to_hex(lock_hash),
+                        current,
+                        added,
+                        removed,
+                        net
+                    )
+                })?
+            } else {
+                let net = removed
+                    .checked_sub(added)
+                    .expect("ordered TokenBalance subtraction");
+                current.checked_sub(&net).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "token holder balance underflow during rollback: type_hash=0x{}, lock_hash=0x{}, current={}, added={}, removed={}, net_removed={}",
+                        bytes_to_hex(type_hash),
+                        bytes_to_hex(lock_hash),
+                        current,
+                        added,
+                        removed,
+                        net
+                    )
+                })?
+            };
+            if !current.is_zero() {
                 batch.delete_cf(
                     self.cf_token_holders_by_balance(),
-                    keys::encode_token_holder_balance_key(type_hash, current, lock_hash),
+                    keys::encode_token_holder_balance_key(type_hash, &current, lock_hash),
                 );
                 batch.delete_cf(
                     self.cf_addr_tokens_by_balance(),
-                    keys::encode_addr_token_balance_key(lock_hash, current, type_hash),
+                    keys::encode_addr_token_balance_key(lock_hash, &current, type_hash),
                 );
             }
 
-            if new_balance == 0 {
+            if new_balance.is_zero() {
                 let key = keys::encode_token_holder_key(type_hash, lock_hash);
                 batch.delete_cf(self.cf_token_holders(), key);
-                if current > 0 {
-                    entry.1 -= 1; // lost a holder
-                }
                 holders_removed += 1;
             } else {
                 let key = keys::encode_token_holder_key(type_hash, lock_hash);
-                batch.put_cf(self.cf_token_holders(), key, new_balance.to_le_bytes());
+                batch.put_cf(self.cf_token_holders(), key, new_balance.to_be_bytes());
                 batch.put_cf(
                     self.cf_token_holders_by_balance(),
-                    keys::encode_token_holder_balance_key(type_hash, new_balance, lock_hash),
+                    keys::encode_token_holder_balance_key(type_hash, &new_balance, lock_hash),
                     [],
                 );
                 batch.put_cf(
                     self.cf_addr_tokens_by_balance(),
-                    keys::encode_addr_token_balance_key(lock_hash, new_balance, type_hash),
+                    keys::encode_addr_token_balance_key(lock_hash, &new_balance, type_hash),
                     [],
                 );
-                if current == 0 {
-                    entry.1 += 1; // gained a holder
-                }
                 holders_updated += 1;
             }
         }
 
-        // 9d. token_info — merge holder changes and transfer count deltas
-        let mut all_type_hashes: HashSet<Vec<u8>> =
-            type_hash_holder_changes.keys().cloned().collect();
-        all_type_hashes.extend(transfer_count_deltas.keys().cloned());
-        for type_hash in &all_type_hashes {
-            let (supply_delta, holders_delta) = type_hash_holder_changes
-                .get(type_hash)
-                .copied()
-                .unwrap_or((0, 0));
-            let transfers_removed = transfer_count_deltas.get(type_hash).copied().unwrap_or(0);
-            if supply_delta == 0 && holders_delta == 0 && transfers_removed == 0 {
+        // 9d. token_info — transfer count is metadata; holder-derived aggregates are not cached.
+        for (type_hash, transfers_removed) in &transfer_count_deltas {
+            if *transfers_removed == 0 {
                 continue;
             }
             if let Some(mut ti) = self.get_token(type_hash)? {
-                ti.holders_count += holders_delta;
-                if let Some(ref mut ts) = ti.total_supply {
-                    *ts += supply_delta;
-                }
-                ti.transfers_count -= transfers_removed;
+                ti.transfers_count = ti.transfers_count.checked_sub(*transfers_removed).ok_or_else(
+                    || {
+                        anyhow::anyhow!(
+                            "token transfers_count underflow during rollback: type_hash=0x{}, current={}, removed={}",
+                            bytes_to_hex(type_hash),
+                            ti.transfers_count,
+                            transfers_removed
+                        )
+                    },
+                )?;
                 batch.put_cf(
                     self.cf_tokens(),
                     type_hash.as_slice(),
                     bincode::serialize(&ti).expect("serialize TokenInfo"),
                 );
                 // Also update CF_STATS_TOKEN total transfers count
-                if transfers_removed != 0 {
+                if *transfers_removed != 0 {
                     let current_count = self.get_token_transfers_count(type_hash)?;
-                    let new_count = current_count - transfers_removed;
+                    let new_count = current_count.checked_sub(*transfers_removed).ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "token stats transfers_count underflow during rollback: type_hash=0x{}, current={}, removed={}",
+                            bytes_to_hex(type_hash),
+                            current_count,
+                            transfers_removed
+                        )
+                    })?;
                     let stats_key = keys::encode_token_transfers_key(type_hash);
                     batch.put_cf(self.cf_stats_token(), &stats_key, new_count.to_le_bytes());
                 }
@@ -3015,6 +3860,7 @@ impl CkbadgerStore {
                 // Clean up outpoint entries for this deleted spore using the
                 // reverse index (SPORE_OUTPOINT_BY_ID → outpoints).
                 let by_id_prefix = keys::encode_spore_outpoint_by_id_prefix(&spore_id);
+                let by_id_key_len = keys::spore_outpoint_by_id_key_len(spore_id.len());
                 let by_id_iter = self.prefix_iterator_cf(self.cf_stats_spore(), &by_id_prefix);
                 for by_id_item in by_id_iter {
                     let (by_id_key, _) = by_id_item.map_err(|e| {
@@ -3026,6 +3872,11 @@ impl CkbadgerStore {
                     })?;
                     if !by_id_key.starts_with(&by_id_prefix) {
                         break;
+                    }
+                    if by_id_key.len() != by_id_key_len {
+                        // Rows of a longer id that starts with these bytes —
+                        // not ours to delete.
+                        continue;
                     }
                     let (tx_hash, output_index) = keys::decode_spore_outpoint_by_id_key(&by_id_key);
                     let fwd_key = keys::encode_spore_outpoint_key(&tx_hash, output_index);
@@ -3305,6 +4156,50 @@ impl CkbadgerStore {
                         batch.delete_cf(self.cf_stats_mnft(), &by_id_key);
                     }
                 }
+                // `.bit Cell` and did:ckb identities record their outpoints in
+                // the spore reverse index (DotBit has its own, handled above),
+                // so both must be cleaned up here or a rolled-back identity
+                // leaves orphaned lifecycle rows behind.
+                if matches!(
+                    entry.standard,
+                    IdentityStandard::BitCell | IdentityStandard::DidCkb
+                ) {
+                    if identity_id.is_empty()
+                        || identity_id.len() > keys::SPORE_OUTPOINT_BY_ID_MAX_ID_LEN
+                    {
+                        return Err(anyhow::anyhow!(
+                            "identity id width violates the outpoint reverse index contract during rollback cleanup: standard={}, identity_id=0x{}, len={}, max={}",
+                            entry.standard.as_str(),
+                            bytes_to_hex(&identity_id),
+                            identity_id.len(),
+                            keys::SPORE_OUTPOINT_BY_ID_MAX_ID_LEN
+                        ));
+                    }
+                    let by_id_prefix = keys::encode_spore_outpoint_by_id_prefix(&identity_id);
+                    let by_id_key_len = keys::spore_outpoint_by_id_key_len(identity_id.len());
+                    let by_id_iter = self.prefix_iterator_cf(self.cf_stats_spore(), &by_id_prefix);
+                    for by_id_item in by_id_iter {
+                        let (by_id_key, _) = by_id_item.map_err(|e| {
+                            anyhow::anyhow!(
+                                "failed to iterate identity outpoint reverse index during rollback cleanup: identity_id=0x{}, error={}",
+                                bytes_to_hex(&identity_id),
+                                e
+                            )
+                        })?;
+                        if !by_id_key.starts_with(&by_id_prefix) {
+                            break;
+                        }
+                        if by_id_key.len() != by_id_key_len {
+                            // Rows of a longer id that starts with these bytes.
+                            continue;
+                        }
+                        let (tx_hash, output_index) =
+                            keys::decode_spore_outpoint_by_id_key(&by_id_key);
+                        let fwd_key = keys::encode_spore_outpoint_key(&tx_hash, output_index);
+                        batch.delete_cf(self.cf_stats_spore(), fwd_key);
+                        batch.delete_cf(self.cf_stats_spore(), &by_id_key);
+                    }
+                }
                 secondary_keys_deleted += 1;
                 stage.tick(
                     spore_deleted
@@ -3320,6 +4215,7 @@ impl CkbadgerStore {
             let collection_id = match entry.standard {
                 IdentityStandard::DotBit => DOTBIT_SENTINEL_COLLECTION.to_vec(),
                 IdentityStandard::DidCkb => DID_CKB_SENTINEL_COLLECTION.to_vec(),
+                IdentityStandard::BitCell => BIT_CELL_SENTINEL_COLLECTION.to_vec(),
             };
 
             // Rebuild identity_by_collection index
@@ -3334,6 +4230,7 @@ impl CkbadgerStore {
                     name: match entry.standard {
                         IdentityStandard::DotBit => Some(".bit".to_string()),
                         IdentityStandard::DidCkb => Some("did:ckb".to_string()),
+                        IdentityStandard::BitCell => Some(".bit Cell".to_string()),
                     },
                     ..Default::default()
                 });
@@ -3710,11 +4607,60 @@ mod tests {
     use crate::store::CkbadgerStore;
     use crate::types::{
         AddressBalance, AssetAction, CachedBlockHeader, CellDistributionTrackerState,
-        CompositionTier, DaoDepositCacheEntry, HodlTrackerState, LiveCellInfo,
+        CompositionTier, DaoDailySnapshot, DaoDepositCacheEntry, HodlTrackerState, LiveCellInfo,
         MnftCollectionAggregate, ObjectCollectionActivityEntry, ObjectEntry, ObjectExtra,
         ObjectStandard, ParticipantDelta, ScriptInfo, SporeMediaProfile, SyncStatus, TokenInfo,
         TxActions, TxIndexEntry, UndoInputOutPoint, UndoLogEntry, UndoTxContext,
     };
+
+    /// Persist a DAO daily snapshot directly, so a rollback fixture can start
+    /// from materialized DAO aggregate state.
+    #[cfg(test)]
+    fn seed_dao_daily_snapshot(store: &CkbadgerStore, date_key: &str, snapshot: &DaoDailySnapshot) {
+        let key =
+            keys::encode_stats_key(keys::stats_prefix::DAO_DAILY_SNAPSHOT, date_key.as_bytes());
+        store
+            .put_cf(
+                store.cf_stats_dao(),
+                &key,
+                &bincode::serialize(snapshot).unwrap(),
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn dao_completion_rollback_retains_request_ar_for_frozen_compensation() {
+        let mut entry = DaoDepositCacheEntry {
+            capacity: 300_00000000,
+            occupied_capacity: 142_00000000,
+            deposit_block_number: 10,
+            deposit_timestamp: 0,
+            lock_script_hash: vec![0x11; 32],
+            deposit_ar: 10_000,
+            status: 2,
+            withdraw_request_tx: Some(vec![0x22; 32]),
+            withdraw_request_output_index: Some(0),
+            withdraw_request_block: Some(20),
+            withdraw_request_ar: Some(11_000),
+            withdraw_block: Some(30),
+            withdraw_tx: Some(vec![0x33; 32]),
+            withdraw_request_occupied_capacity: Some(142_00000000),
+            withdraw_to_output_index: Some(0),
+            compensation: Some(15_80000000),
+        };
+
+        assert!(normalize_dao_entry_for_rollback(&mut entry, 25).unwrap());
+        assert_eq!(entry.status, 1);
+        assert_eq!(entry.withdraw_request_ar, Some(11_000));
+        assert!(entry.withdraw_block.is_none());
+        assert!(entry.compensation.is_none());
+
+        let compensation =
+            crate::dao_ops::dao_compensation_for_entry_at(&entry, 25, 99_999).unwrap();
+        assert_eq!(compensation.claimed, 0);
+        assert_eq!(compensation.unclaimed, 15_80000000);
+        assert_eq!(compensation.active_unmade, 0);
+    }
 
     fn put_canonical_tx(batch: &mut StoreBatch<'_>, block_num: i64, tx_idx: i32, tx_hash: &[u8]) {
         batch.put_tx_hash_map(tx_hash, block_num, tx_idx);
@@ -3775,15 +4721,43 @@ mod tests {
             .unwrap();
     }
 
+    /// DAO singletons are tip-scoped derived rows that the indexer rewrites
+    /// right after the rollback commits. Deleting them here would leave a
+    /// window with no singleton at all, which the read path cannot tell apart
+    /// from "never written". Keep the stale row and let the refresh overwrite.
+    #[test]
+    fn test_should_delete_stats_for_replay_keeps_dao_singletons() {
+        let cutoff = b"20260210";
+        let cutoff_hh = b"2026021000";
+        for prefix in [
+            crate::keys::STATS_PREFIX_DAO_LATEST_STATS,
+            crate::keys::STATS_PREFIX_DAO_TOP_DEPOSITORS,
+        ] {
+            let key = crate::keys::encode_stats_key(prefix, b"latest");
+            assert!(
+                !should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, 0, false)
+                    .unwrap(),
+                "DAO singleton prefix 0x{:02x} must survive rollback",
+                prefix
+            );
+        }
+    }
+
     #[test]
     fn test_should_delete_stats_for_replay_daily_prefix() {
         let cutoff = b"20260210";
         let cutoff_hh = b"2026021000";
         let key = crate::keys::encode_stats_key(crate::keys::STATS_PREFIX_DAILY, b"20260211");
-        assert!(should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, 0).unwrap());
+        assert!(
+            should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, 0, false)
+                .unwrap()
+        );
 
         let key_old = crate::keys::encode_stats_key(crate::keys::STATS_PREFIX_DAILY, b"20260209");
-        assert!(!should_delete_stats_for_replay(&key_old, cutoff, cutoff_hh, 0, 0).unwrap());
+        assert!(!should_delete_stats_for_replay(
+            &key_old, cutoff, cutoff_hh, cutoff_hh, 0, 0, false
+        )
+        .unwrap());
     }
 
     #[test]
@@ -3791,11 +4765,222 @@ mod tests {
         let cutoff = b"20260210";
         let cutoff_hh = b"2026021000";
         let hourly = crate::keys::encode_stats_key(crate::keys::STATS_PREFIX_HOURLY, b"2026021001");
-        assert!(should_delete_stats_for_replay(&hourly, cutoff, cutoff_hh, 0, 0).unwrap());
+        assert!(
+            should_delete_stats_for_replay(&hourly, cutoff, cutoff_hh, cutoff_hh, 0, 0, false)
+                .unwrap()
+        );
 
         let miner_suffix = [b"20260210".as_slice(), &[0xAA; 32]].concat();
         let miner = crate::keys::encode_stats_key(crate::keys::STATS_PREFIX_MINER, &miner_suffix);
-        assert!(should_delete_stats_for_replay(&miner, cutoff, cutoff_hh, 0, 0).unwrap());
+        assert!(
+            should_delete_stats_for_replay(&miner, cutoff, cutoff_hh, cutoff_hh, 0, 0, false)
+                .unwrap()
+        );
+    }
+
+    /// The two hour-keyed bucket families use different clocks: chain-level
+    /// HOURLY keys are UTC, activity hourly keys are UTC+8. A replay whose
+    /// start instant is 2026-02-10T07:xx UTC == 2026-02-10T15:xx UTC+8 must
+    /// route each prefix through its own cutoff — the pre-fix behavior applied
+    /// the UTC+8 cutoff to UTC keys, so chain hourly rows were never deleted.
+    #[test]
+    fn test_should_delete_stats_for_replay_routes_hour_cutoffs_by_clock() {
+        let cutoff = b"20260210";
+        let cutoff_hh_utc8 = b"2026021015";
+        let cutoff_hh_utc = b"2026021007";
+        let check = |prefix: u8, hour: &[u8]| {
+            let key = crate::keys::encode_stats_key(prefix, hour);
+            should_delete_stats_for_replay(&key, cutoff, cutoff_hh_utc8, cutoff_hh_utc, 0, 0, false)
+                .unwrap()
+        };
+
+        // Chain HOURLY at/after the UTC cutoff hour — deleted (the cutoff
+        // bucket itself is intercepted by repair when the day is partial).
+        assert!(check(crate::keys::STATS_PREFIX_HOURLY, b"2026021007"));
+        assert!(check(crate::keys::STATS_PREFIX_HOURLY, b"2026021008"));
+        // Chain HOURLY before the UTC cutoff hour — preserved.
+        assert!(!check(crate::keys::STATS_PREFIX_HOURLY, b"2026021006"));
+
+        // Activity hourly keys stay governed by the UTC+8 cutoff: the bucket
+        // matching the UTC cutoff string sits 8 hours BEFORE the replay start
+        // on the activity clock and must be preserved.
+        assert!(!check(
+            crate::keys::STATS_PREFIX_ACTIVITY_HOURLY,
+            b"2026021007"
+        ));
+        assert!(check(
+            crate::keys::STATS_PREFIX_ACTIVITY_HOURLY,
+            b"2026021015"
+        ));
+    }
+
+    /// The HOURLY repair branch must compare against the UTC cutoff hour and
+    /// find its deltas under UTC hour keys — aligned with the `>=` delete
+    /// predicate that includes the cutoff bucket.
+    #[test]
+    fn test_repair_hourly_uses_utc_cutoff_hour() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+
+        let original = HourlyStats {
+            hour: 1_770_692_400, // 2026-02-10T07:00:00Z
+            blocks_count: 300,
+            transactions_count: 900,
+            cells_created: 1200,
+            cells_consumed: 800,
+            capacity_transferred: 0,
+        };
+        let key = keys::encode_stats_key(keys::STATS_PREFIX_HOURLY, b"2026021007");
+        let value = bincode::serialize(&original).unwrap();
+
+        let mut hour_deltas = std::collections::HashMap::new();
+        hour_deltas.insert("2026021007".to_string(), (2i32, 6, 10, 4));
+        let deltas = RollbackStatsDeltas {
+            hour: hour_deltas,
+            ..Default::default()
+        };
+
+        let mut batch = rocksdb::WriteBatch::default();
+        // UTC+8 cutoff hour is 2026021015; the UTC one is 2026021007.
+        let repaired = repair_cutoff_date_stats(
+            &key,
+            &value,
+            "20260210",
+            "2026021015",
+            "2026021007",
+            &deltas,
+            &store,
+            &mut batch,
+        )
+        .unwrap();
+        assert!(
+            repaired,
+            "UTC-keyed HOURLY cutoff bucket must be repaired via the UTC cutoff"
+        );
+
+        store.write_batch(batch).unwrap();
+        let raw = store.get_stats_key(&key).unwrap().unwrap();
+        let result: HourlyStats = bincode::deserialize(&raw).unwrap();
+        assert_eq!(result.blocks_count, 298);
+        assert_eq!(result.transactions_count, 894);
+        assert_eq!(result.cells_created, 1190);
+        assert_eq!(result.cells_consumed, 796);
+
+        // An hour strictly after the UTC cutoff is NOT repaired (deleted by
+        // the caller instead).
+        let later_key = keys::encode_stats_key(keys::STATS_PREFIX_HOURLY, b"2026021008");
+        let mut batch = rocksdb::WriteBatch::default();
+        let repaired = repair_cutoff_date_stats(
+            &later_key,
+            &value,
+            "20260210",
+            "2026021015",
+            "2026021007",
+            &deltas,
+            &store,
+            &mut batch,
+        )
+        .unwrap();
+        assert!(!repaired);
+    }
+
+    /// Rolled-back activity deltas exceeding the stored aggregate mean the
+    /// delta collection is out of sync with persisted state. That must fail
+    /// fast with key/date context — never be masked by a zero clamp.
+    #[test]
+    fn test_repair_activity_underflow_fails_fast() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+
+        let date = "20260210";
+        let original = DailyActivityStats {
+            transfer_count: 2,
+            ..Default::default()
+        };
+        store.put_daily_activity_stats(date, &original).unwrap();
+
+        let mut activity_date = std::collections::HashMap::new();
+        activity_date.insert(
+            date.to_string(),
+            DailyActivityStats {
+                transfer_count: 5, // more than stored
+                ..Default::default()
+            },
+        );
+        let deltas = RollbackStatsDeltas {
+            activity_date,
+            ..Default::default()
+        };
+
+        let key = keys::encode_stats_key(keys::STATS_PREFIX_ACTIVITY_DAILY, date.as_bytes());
+        let value = bincode::serialize(&original).unwrap();
+        let mut batch = rocksdb::WriteBatch::default();
+        let err = repair_cutoff_date_stats(
+            &key,
+            &value,
+            date,
+            "2026021015",
+            "2026021007",
+            &deltas,
+            &store,
+            &mut batch,
+        )
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("underflow")
+                && msg.contains("transfer_count")
+                && msg.contains("20260210")
+                && msg.contains("stored=2")
+                && msg.contains("rolled_back=5"),
+            "underflow error must carry field/bucket/value context, got: {}",
+            msg
+        );
+    }
+
+    /// A delta referencing a script_count key absent from the stored row is
+    /// the same invariant violation and must also fail fast with context.
+    #[test]
+    fn test_repair_activity_missing_script_key_fails_fast() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+
+        let date = "20260210";
+        let original = DailyActivityStats {
+            transfer_count: 10,
+            ..Default::default()
+        };
+        store.put_daily_activity_stats(date, &original).unwrap();
+
+        let mut delta = DailyActivityStats::default();
+        delta.script_counts.insert("aabb".to_string(), 1);
+        let mut activity_date = std::collections::HashMap::new();
+        activity_date.insert(date.to_string(), delta);
+        let deltas = RollbackStatsDeltas {
+            activity_date,
+            ..Default::default()
+        };
+
+        let key = keys::encode_stats_key(keys::STATS_PREFIX_ACTIVITY_DAILY, date.as_bytes());
+        let value = bincode::serialize(&original).unwrap();
+        let mut batch = rocksdb::WriteBatch::default();
+        let err = repair_cutoff_date_stats(
+            &key,
+            &value,
+            date,
+            "2026021015",
+            "2026021007",
+            &deltas,
+            &store,
+            &mut batch,
+        )
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("missing from stored row") && msg.contains("aabb"),
+            "missing-key error must carry script/bucket context, got: {}",
+            msg
+        );
     }
 
     #[test]
@@ -3804,11 +4989,42 @@ mod tests {
         let cutoff_hh = b"2026021000";
         let code_hash = [0xAA; 32];
 
-        let new_key = crate::keys::encode_script_daily_key(&code_hash, false, 20260211);
-        assert!(should_delete_stats_for_replay(&new_key, cutoff, cutoff_hh, 0, 0).unwrap());
+        let new_key = crate::keys::encode_script_daily_key(&code_hash, 1, false, 20260211);
+        assert!(should_delete_stats_for_replay(
+            &new_key, cutoff, cutoff_hh, cutoff_hh, 0, 0, false
+        )
+        .unwrap());
 
-        let old_key = crate::keys::encode_script_daily_key(&code_hash, true, 20260209);
-        assert!(!should_delete_stats_for_replay(&old_key, cutoff, cutoff_hh, 0, 0).unwrap());
+        let old_key = crate::keys::encode_script_daily_key(&code_hash, 1, true, 20260209);
+        assert!(!should_delete_stats_for_replay(
+            &old_key, cutoff, cutoff_hh, cutoff_hh, 0, 0, false
+        )
+        .unwrap());
+
+        // The hash_type byte shifts the date offset; a data-form key at the
+        // cutoff date must be classified by its date, not by a misread field.
+        let data_form_key = crate::keys::encode_script_daily_key(&code_hash, 0, false, 20260210);
+        assert!(should_delete_stats_for_replay(
+            &data_form_key,
+            cutoff,
+            cutoff_hh,
+            cutoff_hh,
+            0,
+            0,
+            false
+        )
+        .unwrap());
+        let data_form_old = crate::keys::encode_script_daily_key(&code_hash, 0, false, 20260209);
+        assert!(!should_delete_stats_for_replay(
+            &data_form_old,
+            cutoff,
+            cutoff_hh,
+            cutoff_hh,
+            0,
+            0,
+            false
+        )
+        .unwrap());
     }
 
     #[test]
@@ -3818,10 +5034,16 @@ mod tests {
         let type_hash = [0xBB; 32];
 
         let new_key = crate::keys::encode_token_daily_key(&type_hash, 20260211);
-        assert!(should_delete_stats_for_replay(&new_key, cutoff, cutoff_hh, 0, 0).unwrap());
+        assert!(should_delete_stats_for_replay(
+            &new_key, cutoff, cutoff_hh, cutoff_hh, 0, 0, false
+        )
+        .unwrap());
 
         let old_key = crate::keys::encode_token_daily_key(&type_hash, 20260209);
-        assert!(!should_delete_stats_for_replay(&old_key, cutoff, cutoff_hh, 0, 0).unwrap());
+        assert!(!should_delete_stats_for_replay(
+            &old_key, cutoff, cutoff_hh, cutoff_hh, 0, 0, false
+        )
+        .unwrap());
     }
 
     #[test]
@@ -3831,10 +5053,16 @@ mod tests {
         let cluster_id = [0xCC; 32];
 
         let new_key = crate::keys::encode_cluster_daily_key(&cluster_id, 20260211);
-        assert!(should_delete_stats_for_replay(&new_key, cutoff, cutoff_hh, 0, 0).unwrap());
+        assert!(should_delete_stats_for_replay(
+            &new_key, cutoff, cutoff_hh, cutoff_hh, 0, 0, false
+        )
+        .unwrap());
 
         let old_key = crate::keys::encode_cluster_daily_key(&cluster_id, 20260209);
-        assert!(!should_delete_stats_for_replay(&old_key, cutoff, cutoff_hh, 0, 0).unwrap());
+        assert!(!should_delete_stats_for_replay(
+            &old_key, cutoff, cutoff_hh, cutoff_hh, 0, 0, false
+        )
+        .unwrap());
     }
 
     #[test]
@@ -3844,10 +5072,16 @@ mod tests {
         let spore_id = [0xDD; 32];
 
         let new_key = crate::keys::encode_spore_daily_key(&spore_id, 20260211);
-        assert!(should_delete_stats_for_replay(&new_key, cutoff, cutoff_hh, 0, 0).unwrap());
+        assert!(should_delete_stats_for_replay(
+            &new_key, cutoff, cutoff_hh, cutoff_hh, 0, 0, false
+        )
+        .unwrap());
 
         let old_key = crate::keys::encode_spore_daily_key(&spore_id, 20260209);
-        assert!(!should_delete_stats_for_replay(&old_key, cutoff, cutoff_hh, 0, 0).unwrap());
+        assert!(!should_delete_stats_for_replay(
+            &old_key, cutoff, cutoff_hh, cutoff_hh, 0, 0, false
+        )
+        .unwrap());
     }
 
     #[test]
@@ -3857,10 +5091,16 @@ mod tests {
         let collection_id = [0xEE; 24];
 
         let new_key = crate::keys::encode_object_daily_key(&collection_id, 20260211);
-        assert!(should_delete_stats_for_replay(&new_key, cutoff, cutoff_hh, 0, 0).unwrap());
+        assert!(should_delete_stats_for_replay(
+            &new_key, cutoff, cutoff_hh, cutoff_hh, 0, 0, false
+        )
+        .unwrap());
 
         let old_key = crate::keys::encode_object_daily_key(&collection_id, 20260209);
-        assert!(!should_delete_stats_for_replay(&old_key, cutoff, cutoff_hh, 0, 0).unwrap());
+        assert!(!should_delete_stats_for_replay(
+            &old_key, cutoff, cutoff_hh, cutoff_hh, 0, 0, false
+        )
+        .unwrap());
     }
 
     #[test]
@@ -3869,20 +5109,59 @@ mod tests {
         let cutoff_hh = b"2026021000";
         let cutoff_epoch: i64 = 100;
 
-        // Epoch at cutoff → delete
+        // Boundary epoch, replay starts mid-epoch → keep (truncated separately)
         let key =
             crate::keys::encode_stats_key(crate::keys::STATS_PREFIX_EPOCH, &100_i64.to_be_bytes());
-        assert!(should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, cutoff_epoch).unwrap());
+        assert!(!should_delete_stats_for_replay(
+            &key,
+            cutoff,
+            cutoff_hh,
+            cutoff_hh,
+            0,
+            cutoff_epoch,
+            false
+        )
+        .unwrap());
 
-        // Epoch after cutoff → delete
+        // Boundary epoch, replay starts at its first block → delete (full rebuild)
+        assert!(should_delete_stats_for_replay(
+            &key,
+            cutoff,
+            cutoff_hh,
+            cutoff_hh,
+            0,
+            cutoff_epoch,
+            true
+        )
+        .unwrap());
+
+        // Epoch after cutoff → delete regardless
         let key =
             crate::keys::encode_stats_key(crate::keys::STATS_PREFIX_EPOCH, &101_i64.to_be_bytes());
-        assert!(should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, cutoff_epoch).unwrap());
+        assert!(should_delete_stats_for_replay(
+            &key,
+            cutoff,
+            cutoff_hh,
+            cutoff_hh,
+            0,
+            cutoff_epoch,
+            false
+        )
+        .unwrap());
 
         // Epoch before cutoff → keep
         let key =
             crate::keys::encode_stats_key(crate::keys::STATS_PREFIX_EPOCH, &99_i64.to_be_bytes());
-        assert!(!should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, cutoff_epoch).unwrap());
+        assert!(!should_delete_stats_for_replay(
+            &key,
+            cutoff,
+            cutoff_hh,
+            cutoff_hh,
+            0,
+            cutoff_epoch,
+            false
+        )
+        .unwrap());
     }
 
     #[test]
@@ -3898,32 +5177,56 @@ mod tests {
         let type_script_hash = [0xDD; 32];
 
         let key = crate::keys::encode_spore_outpoint_key(&tx_hash, output_index);
-        assert!(!should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, 0).unwrap());
+        assert!(
+            !should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, 0, false)
+                .unwrap()
+        );
 
         let key = crate::keys::encode_spore_outpoint_by_id_key(&spore_id, &tx_hash, output_index);
-        assert!(!should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, 0).unwrap());
+        assert!(
+            !should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, 0, false)
+                .unwrap()
+        );
 
         let key = crate::keys::encode_spore_type_index_key(&type_script_hash);
-        assert!(!should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, 0).unwrap());
+        assert!(
+            !should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, 0, false)
+                .unwrap()
+        );
 
         let key = crate::keys::encode_mnft_class_outpoint_key(&tx_hash, output_index);
-        assert!(!should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, 0).unwrap());
+        assert!(
+            !should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, 0, false)
+                .unwrap()
+        );
 
         let key = crate::keys::encode_mnft_token_outpoint_key(&tx_hash, output_index);
-        assert!(!should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, 0).unwrap());
+        assert!(
+            !should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, 0, false)
+                .unwrap()
+        );
 
         let key = crate::keys::encode_dotbit_account_outpoint_key(&tx_hash, output_index);
-        assert!(!should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, 0).unwrap());
+        assert!(
+            !should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, 0, false)
+                .unwrap()
+        );
 
         let key = crate::keys::encode_dotbit_outpoint_by_account_id_key(
             &account_id,
             &tx_hash,
             output_index,
         );
-        assert!(!should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, 0).unwrap());
+        assert!(
+            !should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, 0, false)
+                .unwrap()
+        );
 
         let key = crate::keys::encode_object_type_index_key(&type_script_hash);
-        assert!(!should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, 0).unwrap());
+        assert!(
+            !should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, 0, false)
+                .unwrap()
+        );
     }
 
     #[test]
@@ -3938,27 +5241,81 @@ mod tests {
 
         // TOKEN_HOURLY at cutoff_hour → deleted
         let key = crate::keys::encode_token_hourly_key(&type_hash, cutoff_hour);
-        assert!(should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hour, 0).unwrap());
+        assert!(should_delete_stats_for_replay(
+            &key,
+            cutoff,
+            cutoff_hh,
+            cutoff_hh,
+            cutoff_hour,
+            0,
+            false
+        )
+        .unwrap());
 
         // TOKEN_HOURLY before cutoff → preserved
         let key = crate::keys::encode_token_hourly_key(&type_hash, cutoff_hour - 1);
-        assert!(!should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hour, 0).unwrap());
+        assert!(!should_delete_stats_for_replay(
+            &key,
+            cutoff,
+            cutoff_hh,
+            cutoff_hh,
+            cutoff_hour,
+            0,
+            false
+        )
+        .unwrap());
 
         // SPORE_HOURLY at cutoff_hour → deleted
         let key = crate::keys::encode_spore_hourly_key(&cluster_id, cutoff_hour);
-        assert!(should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hour, 0).unwrap());
+        assert!(should_delete_stats_for_replay(
+            &key,
+            cutoff,
+            cutoff_hh,
+            cutoff_hh,
+            cutoff_hour,
+            0,
+            false
+        )
+        .unwrap());
 
         // SPORE_HOURLY before cutoff → preserved
         let key = crate::keys::encode_spore_hourly_key(&cluster_id, cutoff_hour - 1);
-        assert!(!should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hour, 0).unwrap());
+        assert!(!should_delete_stats_for_replay(
+            &key,
+            cutoff,
+            cutoff_hh,
+            cutoff_hh,
+            cutoff_hour,
+            0,
+            false
+        )
+        .unwrap());
 
         // OBJECT_HOURLY at cutoff_hour → deleted
         let key = crate::keys::encode_object_hourly_key(&collection_id, cutoff_hour);
-        assert!(should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hour, 0).unwrap());
+        assert!(should_delete_stats_for_replay(
+            &key,
+            cutoff,
+            cutoff_hh,
+            cutoff_hh,
+            cutoff_hour,
+            0,
+            false
+        )
+        .unwrap());
 
         // OBJECT_HOURLY before cutoff → preserved
         let key = crate::keys::encode_object_hourly_key(&collection_id, cutoff_hour - 1);
-        assert!(!should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hour, 0).unwrap());
+        assert!(!should_delete_stats_for_replay(
+            &key,
+            cutoff,
+            cutoff_hh,
+            cutoff_hh,
+            cutoff_hour,
+            0,
+            false
+        )
+        .unwrap());
     }
 
     #[test]
@@ -3966,8 +5323,9 @@ mod tests {
         let cutoff = b"invalid-cutoff";
         let cutoff_hh = b"invalid-cutoff";
         let code_hash = [0xAA; 32];
-        let key = crate::keys::encode_script_daily_key(&code_hash, false, 20260211);
-        let err = should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, 0).unwrap_err();
+        let key = crate::keys::encode_script_daily_key(&code_hash, 1, false, 20260211);
+        let err = should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, 0, false)
+            .unwrap_err();
         assert!(err.to_string().contains("invalid cutoff date"));
     }
 
@@ -3988,6 +5346,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
 
@@ -4021,6 +5382,296 @@ mod tests {
         assert_eq!(result.blocks_removed, 0);
     }
 
+    fn seed_epoch_row(store: &CkbadgerStore, stats: &EpochStats) {
+        let key =
+            keys::encode_stats_key(keys::STATS_PREFIX_EPOCH, &stats.epoch_number.to_be_bytes());
+        let cf = store.cf_for_stats_key(&key).unwrap();
+        store
+            .put_cf(cf, &key, &bincode::serialize(stats).unwrap())
+            .unwrap();
+    }
+
+    fn read_epoch_row(store: &CkbadgerStore, epoch: i64) -> Option<EpochStats> {
+        let key = keys::encode_stats_key(keys::STATS_PREFIX_EPOCH, &epoch.to_be_bytes());
+        let cf = store.cf_for_stats_key(&key).unwrap();
+        store
+            .get_cf(cf, &key)
+            .unwrap()
+            .map(|v| bincode::deserialize(&v).unwrap())
+    }
+
+    /// Regression (F1): a mid-epoch rollback must TRUNCATE the boundary epoch
+    /// stats row (preserving its true start_block/start_timestamp) instead of
+    /// deleting it. Replay only re-processes blocks > rollback_to, so a
+    /// deleted row used to be recreated with a fabricated start at the fork
+    /// point, corrupting epoch avg block time, hash rate, and epoch ETA after
+    /// every shallow reorg. Epochs that begin inside the replayed range are
+    /// still deleted (replay rebuilds them from their first block).
+    #[test]
+    fn test_rollback_truncates_boundary_epoch_row_and_deletes_later_epochs() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+
+        let ts = |n: i64| 1_700_000_000_000 + n * 10_000;
+        {
+            let mut batch = StoreBatch::new(&store);
+            for n in 100..=150i64 {
+                batch.put_block_header(
+                    n,
+                    &CachedBlockHeader {
+                        hash: {
+                            let mut h = vec![0u8; 32];
+                            h[0] = n as u8;
+                            h
+                        },
+                        parent_hash: vec![0u8; 32],
+                        timestamp: ts(n),
+                        epoch_number: 5,
+                        epoch_index: (n - 100) as i32,
+                        epoch_length: 1800,
+                        dao: vec![0; 32],
+                        transactions_count: 2,
+                        uncles_count: 0,
+                        proposals_count: 0,
+                        compact_target: 0x1a08a97e,
+                        miner_lock_hash: None,
+                        cycles: None,
+                    },
+                );
+            }
+            batch.commit().unwrap();
+        }
+        let epoch_start_ts = chrono::DateTime::from_timestamp_millis(ts(100)).unwrap();
+        seed_epoch_row(
+            &store,
+            &EpochStats {
+                epoch_number: 5,
+                start_block: 100,
+                end_block: Some(150),
+                blocks_count: 51,
+                length: 1800,
+                start_timestamp: epoch_start_ts,
+                end_timestamp: None,
+                transactions_count: 102,
+            },
+        );
+        // An epoch that starts strictly inside the replayed range must still
+        // be deleted so replay can rebuild it from its first block.
+        seed_epoch_row(
+            &store,
+            &EpochStats {
+                epoch_number: 6,
+                start_block: 145,
+                end_block: Some(150),
+                blocks_count: 6,
+                length: 1800,
+                start_timestamp: chrono::DateTime::from_timestamp_millis(ts(145)).unwrap(),
+                end_timestamp: None,
+                transactions_count: 12,
+            },
+        );
+        seed_sync_status(&store, 150, &[150u8; 32], 102, 0, 0);
+
+        store.rollback_to_block(120).unwrap();
+
+        let boundary = read_epoch_row(&store, 5).expect("boundary epoch row must survive rollback");
+        assert_eq!(boundary.start_block, 100, "start_block must be preserved");
+        assert_eq!(
+            boundary.start_timestamp, epoch_start_ts,
+            "start_timestamp must be preserved"
+        );
+        assert_eq!(boundary.end_block, Some(120));
+        assert_eq!(boundary.blocks_count, 21);
+        // 30 rolled-back blocks (121..=150) × 2 txs each subtracted.
+        assert_eq!(boundary.transactions_count, 102 - 60);
+        assert_eq!(boundary.end_timestamp, None);
+
+        assert!(
+            read_epoch_row(&store, 6).is_none(),
+            "epochs starting inside the replayed range must be deleted"
+        );
+    }
+
+    /// Regression (F5): partial-day rollback subtracts miner-stat deltas using
+    /// the header's cellbase-witness miner (`miner_lock_hash`), matching the
+    /// forward write path's attribution. (The old code inferred the miner from
+    /// the cellbase tx's first participant — the cellbase OUTPUT lock, i.e.
+    /// the N-11 block's miner.)
+    #[test]
+    fn test_partial_day_rollback_subtracts_miner_stats_by_witness_miner() {
+        // 2026-04-08 in UTC+8 (see block_date semantics).
+        let day_start_ms: i64 = 1775577600000;
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+
+        let miner_a = vec![0xA1; 32];
+        let miner_b = vec![0xB2; 32];
+        {
+            let mut batch = StoreBatch::new(&store);
+            for n in 1..=4i64 {
+                let miner = if n <= 2 { &miner_a } else { &miner_b };
+                batch.put_block_header(
+                    n,
+                    &CachedBlockHeader {
+                        hash: {
+                            let mut h = vec![0u8; 32];
+                            h[0] = n as u8;
+                            h
+                        },
+                        parent_hash: vec![0u8; 32],
+                        timestamp: day_start_ms + n * 1000,
+                        epoch_number: 1,
+                        epoch_index: n as i32,
+                        epoch_length: 1800,
+                        dao: vec![0; 32],
+                        transactions_count: 1,
+                        uncles_count: 0,
+                        proposals_count: 0,
+                        compact_target: 0,
+                        miner_lock_hash: Some(miner.clone()),
+                        cycles: None,
+                    },
+                );
+            }
+            batch.commit().unwrap();
+        }
+        seed_epoch_row(
+            &store,
+            &EpochStats {
+                epoch_number: 1,
+                start_block: 1,
+                end_block: Some(4),
+                blocks_count: 4,
+                length: 1800,
+                start_timestamp: chrono::DateTime::from_timestamp_millis(day_start_ms + 1000)
+                    .unwrap(),
+                end_timestamp: None,
+                transactions_count: 4,
+            },
+        );
+        let date = "20260408";
+        store
+            .put_miner_stats(
+                date,
+                &miner_a,
+                &MinerStats {
+                    miner_lock_hash: miner_a.clone(),
+                    blocks_count: 2,
+                    last_block_number: 2,
+                },
+            )
+            .unwrap();
+        store
+            .put_miner_stats(
+                date,
+                &miner_b,
+                &MinerStats {
+                    miner_lock_hash: miner_b.clone(),
+                    blocks_count: 2,
+                    last_block_number: 4,
+                },
+            )
+            .unwrap();
+        seed_sync_status(&store, 4, &[4u8; 32], 4, 0, 0);
+
+        // Roll back blocks 3 and 4 — both mined by miner_b.
+        store.rollback_to_block(2).unwrap();
+
+        let read_miner = |miner: &[u8]| -> Option<MinerStats> {
+            let suffix = [date.as_bytes(), miner].concat();
+            let key = keys::encode_stats_key(keys::stats_prefix::MINER, &suffix);
+            store
+                .get_cf(store.cf_stats_chain(), &key)
+                .unwrap()
+                .map(|v| bincode::deserialize(&v).unwrap())
+        };
+        assert!(
+            read_miner(&miner_b).is_none(),
+            "miner_b lost all rolled-back blocks; its daily row must be deleted"
+        );
+        let kept = read_miner(&miner_a).expect("miner_a row must survive");
+        assert_eq!(kept.blocks_count, 2, "miner_a blocks were before the fork");
+    }
+
+    /// A rollback landing exactly on an epoch boundary (replay starts at the
+    /// epoch's first block) must delete that epoch's row: replay rebuilds it
+    /// wholesale via the writer's is_new path.
+    #[test]
+    fn test_rollback_at_epoch_boundary_deletes_epoch_row() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+
+        let ts = |n: i64| 1_700_000_000_000 + n * 10_000;
+        {
+            let mut batch = StoreBatch::new(&store);
+            for n in 100..=150i64 {
+                let (epoch_number, epoch_index) = if n < 130 { (5, n - 100) } else { (6, n - 130) };
+                batch.put_block_header(
+                    n,
+                    &CachedBlockHeader {
+                        hash: {
+                            let mut h = vec![0u8; 32];
+                            h[0] = n as u8;
+                            h
+                        },
+                        parent_hash: vec![0u8; 32],
+                        timestamp: ts(n),
+                        epoch_number,
+                        epoch_index: epoch_index as i32,
+                        epoch_length: 30,
+                        dao: vec![0; 32],
+                        transactions_count: 2,
+                        uncles_count: 0,
+                        proposals_count: 0,
+                        compact_target: 0x1a08a97e,
+                        miner_lock_hash: None,
+                        cycles: None,
+                    },
+                );
+            }
+            batch.commit().unwrap();
+        }
+        seed_epoch_row(
+            &store,
+            &EpochStats {
+                epoch_number: 5,
+                start_block: 100,
+                end_block: Some(129),
+                blocks_count: 30,
+                length: 30,
+                start_timestamp: chrono::DateTime::from_timestamp_millis(ts(100)).unwrap(),
+                end_timestamp: Some(chrono::DateTime::from_timestamp_millis(ts(129)).unwrap()),
+                transactions_count: 60,
+            },
+        );
+        seed_epoch_row(
+            &store,
+            &EpochStats {
+                epoch_number: 6,
+                start_block: 130,
+                end_block: Some(150),
+                blocks_count: 21,
+                length: 30,
+                start_timestamp: chrono::DateTime::from_timestamp_millis(ts(130)).unwrap(),
+                end_timestamp: None,
+                transactions_count: 42,
+            },
+        );
+        seed_sync_status(&store, 150, &[150u8; 32], 102, 0, 0);
+
+        // Fork exactly before epoch 6's first block: replay starts at 130
+        // (epoch_index 0), so epoch 6's row is rebuilt from scratch.
+        store.rollback_to_block(129).unwrap();
+
+        assert!(
+            read_epoch_row(&store, 6).is_none(),
+            "epoch starting at replay_start must be deleted for full rebuild"
+        );
+        let prev = read_epoch_row(&store, 5).expect("completed prior epoch must be untouched");
+        assert!(prev.end_timestamp.is_some());
+        assert_eq!(prev.transactions_count, 60);
+    }
+
     #[test]
     fn test_rollback_to_block_deletes_tx_actions_above_target() {
         let dir = tempfile::tempdir().unwrap();
@@ -4039,6 +5690,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
         let header2 = CachedBlockHeader {
@@ -4051,6 +5705,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
 
@@ -4107,6 +5764,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
         let header2 = CachedBlockHeader {
@@ -4119,6 +5779,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 2,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
 
@@ -4215,6 +5878,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
         let header1 = CachedBlockHeader {
@@ -4227,6 +5893,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
 
@@ -4322,6 +5991,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
         let header1 = CachedBlockHeader {
@@ -4334,6 +6006,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
 
@@ -4418,6 +6093,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
         let header2 = CachedBlockHeader {
@@ -4430,6 +6108,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
         let cell = LiveCellInfo {
@@ -4501,6 +6182,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
         let header2 = CachedBlockHeader {
@@ -4513,6 +6197,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
 
@@ -4640,6 +6327,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
         let header2 = CachedBlockHeader {
@@ -4652,6 +6342,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
 
@@ -4790,6 +6483,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
         let header2 = CachedBlockHeader {
@@ -4802,6 +6498,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
 
@@ -4905,9 +6604,7 @@ mod tests {
                 name: None,
                 symbol: None,
                 decimals: Some(8),
-                total_supply: Some(100),
                 max_supply: None,
-                holders_count: 1,
                 first_seen_block: 1,
                 icon_url: None,
                 description: None,
@@ -4924,14 +6621,14 @@ mod tests {
             store
                 .list_token_holders_by_balance(&type_hash, 10, None)
                 .unwrap(),
-            vec![(lock_b.clone(), 100)]
+            vec![(lock_b.clone(), TokenBalance::from(100))]
         );
 
         store.rollback_to_block(1).unwrap();
 
         assert_eq!(
             store.get_token_holder_balance(&type_hash, &lock_a).unwrap(),
-            Some(100)
+            Some(TokenBalance::from(100))
         );
         assert_eq!(
             store.get_token_holder_balance(&type_hash, &lock_b).unwrap(),
@@ -4941,18 +6638,412 @@ mod tests {
             store
                 .list_token_holders_by_balance(&type_hash, 10, None)
                 .unwrap(),
-            vec![(lock_a.clone(), 100)]
+            vec![(lock_a.clone(), TokenBalance::from(100))]
         );
         assert_eq!(
             store
                 .list_address_tokens_by_balance(&lock_a, 10, None)
                 .unwrap(),
-            vec![(type_hash.clone(), 100)]
+            vec![(type_hash.clone(), TokenBalance::from(100))]
         );
         assert!(store
             .list_address_tokens_by_balance(&lock_b, 10, None)
             .unwrap()
             .is_empty());
+    }
+
+    /// Rolling back a UDT transfer whose amount exceeds `i128::MAX` must restore the
+    /// prior holder to its exact balance (and keep the derived supply) without wrapping.
+    /// Under the old `i128` accounting `big as i128` was negative, corrupting the
+    /// delta and tripping the underflow bail.
+    #[test]
+    fn test_rollback_restores_holder_balance_above_i128_max() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+
+        // ~2.22e38, > i128::MAX (~1.70e38) but < u128::MAX (~3.40e38).
+        let big: u128 = 222_044_604_925_031_325_468_940_491_728_862_838_784;
+
+        let header1 = CachedBlockHeader {
+            hash: vec![0x01; 32],
+            parent_hash: vec![0u8; 32],
+            timestamp: 1_700_000_000_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+            uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
+            cycles: None,
+        };
+        let header2 = CachedBlockHeader {
+            hash: vec![0x02; 32],
+            parent_hash: vec![0u8; 32],
+            timestamp: 1_700_000_010_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+            uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
+            cycles: None,
+        };
+
+        let type_hash = vec![0x90; 32];
+        let lock_a = vec![0xA1; 32];
+        let lock_b = vec![0xB1; 32];
+        let lock_code_hash = vec![0x11; 32];
+        let type_code_hash = vec![0x22; 32];
+        let input_tx = vec![0x41; 32];
+        let transfer_tx = vec![0x42; 32];
+
+        // Amounts (udt_amount) are u128 and set to `big`; capacities stay small (i128).
+        let input_cell = LiveCellInfo {
+            capacity: 100,
+            lock_script_hash: lock_a.clone(),
+            lock_code_hash: lock_code_hash.clone(),
+            lock_hash_type: 1,
+            lock_args: vec![],
+            type_script_hash: Some(type_hash.clone()),
+            type_code_hash: Some(type_code_hash.clone()),
+            type_hash_type: Some(1),
+            type_args: Some(vec![0x33; 20]),
+            data_size: 16,
+            occupied_capacity: 100,
+            udt_amount: Some(big),
+            data_hash: None,
+        };
+        let output_cell = LiveCellInfo {
+            capacity: 100,
+            lock_script_hash: lock_b.clone(),
+            lock_code_hash: lock_code_hash.clone(),
+            lock_hash_type: 1,
+            lock_args: vec![],
+            type_script_hash: Some(type_hash.clone()),
+            type_code_hash: Some(type_code_hash.clone()),
+            type_hash_type: Some(1),
+            type_args: Some(vec![0x33; 20]),
+            data_size: 16,
+            occupied_capacity: 100,
+            udt_amount: Some(big),
+            data_hash: None,
+        };
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_block_header(1, &header1);
+        batch.put_block_header(2, &header2);
+        put_canonical_tx(&mut batch, 2, 0, &transfer_tx);
+        batch.put_cell(&input_tx, 0, &input_cell, 1);
+        batch.put_cell(&transfer_tx, 0, &output_cell, 2);
+        batch.put_consumed_cell_with_consumer(&input_tx, 0, &input_cell, 1, 2, Some(&transfer_tx));
+        batch.delete_cell(&input_tx, 0);
+        batch.put_reorg_undo_log_by_block(
+            2,
+            0,
+            &UndoLogEntry::TxContext(UndoTxContext {
+                tx_hash: transfer_tx.clone(),
+                outputs_count: 1,
+                inputs: vec![UndoInputOutPoint {
+                    tx_hash: input_tx.clone(),
+                    output_index: 0,
+                }],
+            }),
+        );
+        batch.put_addr_balance(&lock_a, &AddressBalance::default());
+        batch.put_addr_balance(
+            &lock_b,
+            &AddressBalance {
+                balance: 100,
+                used_capacity: 100,
+                live_cells_count: 1,
+                total_cells_count: 1,
+                ..Default::default()
+            },
+        );
+        batch.put_script_info(
+            &lock_code_hash,
+            &ScriptInfo {
+                code_hash: lock_code_hash.clone(),
+                lock_live_cells_count: 1,
+                lock_owned_capacity_sum: 100,
+                lock_owned_knowledge_sum: 100,
+                ..Default::default()
+            },
+        );
+        batch.put_script_info(
+            &type_code_hash,
+            &ScriptInfo {
+                code_hash: type_code_hash.clone(),
+                type_live_cells_count: 1,
+                type_owned_capacity_sum: 100,
+                type_owned_knowledge_sum: 100,
+                ..Default::default()
+            },
+        );
+        batch.put_token(
+            &type_hash,
+            &TokenInfo {
+                type_code_hash: type_code_hash.clone(),
+                hash_type: 1,
+                type_args: vec![0x33; 20],
+                standard: "sudt".to_string(),
+                name: None,
+                symbol: None,
+                decimals: Some(8),
+                max_supply: None,
+                first_seen_block: 1,
+                icon_url: None,
+                description: None,
+                transfers_count: 0,
+            },
+        );
+        batch.put_token_holder(&type_hash, &lock_b, big);
+        batch.put_token_holder_by_balance(&type_hash, &lock_b, big);
+        batch.put_addr_token_by_balance(&lock_b, &type_hash, big);
+        batch.commit().unwrap();
+        seed_sync_status(&store, 2, &header2.hash, 1, 1, 1);
+
+        assert_eq!(
+            store
+                .list_token_holders_by_balance(&type_hash, 10, None)
+                .unwrap(),
+            vec![(lock_b.clone(), TokenBalance::from(big))]
+        );
+
+        store.rollback_to_block(1).unwrap();
+
+        // lock_a's input cell (amount = big) is restored to live; lock_b's output removed.
+        assert_eq!(
+            store.get_token_holder_balance(&type_hash, &lock_a).unwrap(),
+            Some(TokenBalance::from(big))
+        );
+        assert_eq!(
+            store.get_token_holder_balance(&type_hash, &lock_b).unwrap(),
+            None
+        );
+        assert_eq!(
+            store
+                .list_token_holders_by_balance(&type_hash, 10, None)
+                .unwrap(),
+            vec![(lock_a.clone(), TokenBalance::from(big))]
+        );
+        assert_eq!(
+            store
+                .list_address_tokens_by_balance(&lock_a, 10, None)
+                .unwrap(),
+            vec![(type_hash.clone(), TokenBalance::from(big))]
+        );
+        // Derived supply is unchanged (big moved from lock_b back to lock_a).
+        assert_eq!(
+            store.aggregate_token_holder_stats(&type_hash).unwrap().1,
+            TokenBalance::from(big)
+        );
+    }
+
+    /// Regression: rolling back a UDT **self-transfer** (consume own cell of amount
+    /// `big`, create a new cell of amount `big` back to the SAME (type_hash, lock))
+    /// must not spuriously overflow u128 while applying the per-holder balance delta.
+    ///
+    /// On rollback of that block the holder delta for lock_a is (added=big, removed=big)
+    /// and the tip balance is `current=big`. A naive `current + added` first computes
+    /// `2*big`, which overflows u128 whenever `big > u128::MAX/2` — halting a legitimate
+    /// reorg. `big` here is ~2.22e38, so `2*big > u128::MAX`. The net-difference form
+    /// (`current + (added - removed)`) applies the zero net change without overflowing.
+    #[test]
+    fn test_rollback_restores_self_transfer_holder_balance_above_half_u128_max() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+
+        // ~2.22e38: > u128::MAX/2 (~1.70e38), so 2*big overflows u128; still < u128::MAX.
+        let big: u128 = 222_044_604_925_031_325_468_940_491_728_862_838_784;
+
+        let header1 = CachedBlockHeader {
+            hash: vec![0x01; 32],
+            parent_hash: vec![0u8; 32],
+            timestamp: 1_700_000_000_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+            uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
+            cycles: None,
+        };
+        let header2 = CachedBlockHeader {
+            hash: vec![0x02; 32],
+            parent_hash: vec![0u8; 32],
+            timestamp: 1_700_000_010_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+            uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
+            cycles: None,
+        };
+
+        let type_hash = vec![0x90; 32];
+        let lock_a = vec![0xA1; 32];
+        let lock_code_hash = vec![0x11; 32];
+        let type_code_hash = vec![0x22; 32];
+        let input_tx = vec![0x41; 32];
+        let transfer_tx = vec![0x42; 32];
+
+        // Self-transfer: input (lock_a, big) consumed and output (lock_a, big) created
+        // back to the SAME lock + type in one tx at block 2.
+        let input_cell = LiveCellInfo {
+            capacity: 100,
+            lock_script_hash: lock_a.clone(),
+            lock_code_hash: lock_code_hash.clone(),
+            lock_hash_type: 1,
+            lock_args: vec![],
+            type_script_hash: Some(type_hash.clone()),
+            type_code_hash: Some(type_code_hash.clone()),
+            type_hash_type: Some(1),
+            type_args: Some(vec![0x33; 20]),
+            data_size: 16,
+            occupied_capacity: 100,
+            udt_amount: Some(big),
+            data_hash: None,
+        };
+        let output_cell = LiveCellInfo {
+            capacity: 100,
+            lock_script_hash: lock_a.clone(),
+            lock_code_hash: lock_code_hash.clone(),
+            lock_hash_type: 1,
+            lock_args: vec![],
+            type_script_hash: Some(type_hash.clone()),
+            type_code_hash: Some(type_code_hash.clone()),
+            type_hash_type: Some(1),
+            type_args: Some(vec![0x33; 20]),
+            data_size: 16,
+            occupied_capacity: 100,
+            udt_amount: Some(big),
+            data_hash: None,
+        };
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_block_header(1, &header1);
+        batch.put_block_header(2, &header2);
+        put_canonical_tx(&mut batch, 2, 0, &transfer_tx);
+        batch.put_cell(&input_tx, 0, &input_cell, 1);
+        batch.put_cell(&transfer_tx, 0, &output_cell, 2);
+        batch.put_consumed_cell_with_consumer(&input_tx, 0, &input_cell, 1, 2, Some(&transfer_tx));
+        batch.delete_cell(&input_tx, 0);
+        batch.put_reorg_undo_log_by_block(
+            2,
+            0,
+            &UndoLogEntry::TxContext(UndoTxContext {
+                tx_hash: transfer_tx.clone(),
+                outputs_count: 1,
+                inputs: vec![UndoInputOutPoint {
+                    tx_hash: input_tx.clone(),
+                    output_index: 0,
+                }],
+            }),
+        );
+        // Tip addr_balance for lock_a: the output cell is live (input consumed). Two cells
+        // were ever created for lock_a (input @ block1, output @ block2) → total=2.
+        batch.put_addr_balance(
+            &lock_a,
+            &AddressBalance {
+                balance: 100,
+                used_capacity: 100,
+                live_cells_count: 1,
+                total_cells_count: 2,
+                ..Default::default()
+            },
+        );
+        batch.put_script_info(
+            &lock_code_hash,
+            &ScriptInfo {
+                code_hash: lock_code_hash.clone(),
+                lock_live_cells_count: 1,
+                lock_owned_capacity_sum: 100,
+                lock_owned_knowledge_sum: 100,
+                ..Default::default()
+            },
+        );
+        batch.put_script_info(
+            &type_code_hash,
+            &ScriptInfo {
+                code_hash: type_code_hash.clone(),
+                type_live_cells_count: 1,
+                type_owned_capacity_sum: 100,
+                type_owned_knowledge_sum: 100,
+                ..Default::default()
+            },
+        );
+        batch.put_token(
+            &type_hash,
+            &TokenInfo {
+                type_code_hash: type_code_hash.clone(),
+                hash_type: 1,
+                type_args: vec![0x33; 20],
+                standard: "sudt".to_string(),
+                name: None,
+                symbol: None,
+                decimals: Some(8),
+                max_supply: None,
+                first_seen_block: 1,
+                icon_url: None,
+                description: None,
+                transfers_count: 0,
+            },
+        );
+        // Tip holder balance for lock_a is `big` (held by the live output cell).
+        batch.put_token_holder(&type_hash, &lock_a, big);
+        batch.put_token_holder_by_balance(&type_hash, &lock_a, big);
+        batch.put_addr_token_by_balance(&lock_a, &type_hash, big);
+        batch.commit().unwrap();
+        seed_sync_status(&store, 2, &header2.hash, 1, 1, 1);
+
+        assert_eq!(
+            store
+                .list_token_holders_by_balance(&type_hash, 10, None)
+                .unwrap(),
+            vec![(lock_a.clone(), TokenBalance::from(big))]
+        );
+
+        // Naive `current.checked_add(added)` computes big+big (=2*big) and overflows
+        // u128 → this rollback errors. Net-difference form restores cleanly.
+        store.rollback_to_block(1).unwrap();
+
+        // lock_a's balance is restored to its prior value `big` (input cell live again,
+        // output cell removed; the self-transfer nets to no change).
+        assert_eq!(
+            store.get_token_holder_balance(&type_hash, &lock_a).unwrap(),
+            Some(TokenBalance::from(big))
+        );
+        assert_eq!(
+            store
+                .list_token_holders_by_balance(&type_hash, 10, None)
+                .unwrap(),
+            vec![(lock_a.clone(), TokenBalance::from(big))]
+        );
+        assert_eq!(
+            store
+                .list_address_tokens_by_balance(&lock_a, 10, None)
+                .unwrap(),
+            vec![(type_hash.clone(), TokenBalance::from(big))]
+        );
+        // Derived supply is unchanged: added=big, removed=big nets to zero.
+        assert_eq!(
+            store.aggregate_token_holder_stats(&type_hash).unwrap().1,
+            TokenBalance::from(big)
+        );
     }
 
     #[test]
@@ -4970,6 +7061,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
         let header2 = CachedBlockHeader {
@@ -4982,6 +7076,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 2,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
 
@@ -5157,6 +7254,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
         let header2 = CachedBlockHeader {
@@ -5169,6 +7269,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
 
@@ -5216,6 +7319,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
         let header2 = CachedBlockHeader {
@@ -5228,6 +7334,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
 
@@ -5289,6 +7398,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
         let header2 = CachedBlockHeader {
@@ -5301,6 +7413,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
 
@@ -5395,6 +7510,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
         let header2 = CachedBlockHeader {
@@ -5407,6 +7525,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
         let keep_cell = LiveCellInfo {
@@ -5532,6 +7653,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
         let header2 = CachedBlockHeader {
@@ -5544,6 +7668,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
         let header3 = CachedBlockHeader {
@@ -5556,6 +7683,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
 
@@ -5581,6 +7711,7 @@ mod tests {
             &outpoint_a,
             &DaoDepositCacheEntry {
                 capacity: 100,
+                occupied_capacity: 0,
                 deposit_block_number: 1,
                 deposit_timestamp: 0,
                 lock_script_hash: vec![0xA1; 32],
@@ -5592,6 +7723,7 @@ mod tests {
                 withdraw_request_ar: Some(1),
                 withdraw_block: None,
                 withdraw_tx: None,
+                withdraw_request_occupied_capacity: Some(0),
                 withdraw_to_output_index: None,
                 compensation: None,
             },
@@ -5604,6 +7736,7 @@ mod tests {
             &outpoint_b,
             &DaoDepositCacheEntry {
                 capacity: 200,
+                occupied_capacity: 0,
                 deposit_block_number: 1,
                 deposit_timestamp: 0,
                 lock_script_hash: vec![0xB1; 32],
@@ -5615,6 +7748,7 @@ mod tests {
                 withdraw_request_ar: Some(1),
                 withdraw_block: Some(3),
                 withdraw_tx: Some(vec![0x44; 32]),
+                withdraw_request_occupied_capacity: Some(0),
                 withdraw_to_output_index: Some(0),
                 compensation: Some(10),
             },
@@ -5626,6 +7760,7 @@ mod tests {
             &outpoint_c,
             &DaoDepositCacheEntry {
                 capacity: 300,
+                occupied_capacity: 0,
                 deposit_block_number: 2,
                 deposit_timestamp: 0,
                 lock_script_hash: vec![0xC1; 32],
@@ -5637,6 +7772,7 @@ mod tests {
                 withdraw_request_ar: None,
                 withdraw_block: None,
                 withdraw_tx: None,
+                withdraw_request_occupied_capacity: None,
                 withdraw_to_output_index: None,
                 compensation: None,
             },
@@ -5717,6 +7853,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
         let header2 = CachedBlockHeader {
@@ -5729,6 +7868,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
 
@@ -5743,6 +7885,7 @@ mod tests {
             &deposit_outpoint,
             &DaoDepositCacheEntry {
                 capacity: 123,
+                occupied_capacity: 0,
                 deposit_block_number: 2,
                 deposit_timestamp: 0,
                 lock_script_hash: vec![0x11; 32],
@@ -5754,6 +7897,7 @@ mod tests {
                 withdraw_request_ar: Some(1),
                 withdraw_block: None,
                 withdraw_tx: None,
+                withdraw_request_occupied_capacity: Some(0),
                 withdraw_to_output_index: None,
                 compensation: None,
             },
@@ -5817,6 +7961,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
 
@@ -5846,6 +7993,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
         let header2 = CachedBlockHeader {
@@ -5858,6 +8008,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
         let tx_hash = vec![0x21; 32];
@@ -5935,6 +8088,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
         let header2 = CachedBlockHeader {
@@ -5947,6 +8103,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
 
@@ -6137,6 +8296,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 0,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
 
@@ -6208,6 +8370,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
         let header2 = CachedBlockHeader {
@@ -6220,6 +8385,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
         let mut batch = StoreBatch::new(&store);
@@ -6313,6 +8481,55 @@ mod tests {
     }
 
     #[test]
+    fn accumulate_reorg_holder_delta_supports_amount_above_u128() {
+        let amount = 200u128 << 120;
+        let type_hash = vec![0x91; 32];
+        let lock_hash = vec![0x92; 32];
+        let cell = LiveCellInfo {
+            capacity: 200_00000000,
+            lock_script_hash: lock_hash.clone(),
+            lock_code_hash: vec![0x11; 32],
+            lock_hash_type: 1,
+            lock_args: vec![],
+            type_script_hash: Some(type_hash.clone()),
+            type_code_hash: Some(vec![0x22; 32]),
+            type_hash_type: Some(1),
+            type_args: Some(vec![0x33; 20]),
+            data_size: 16,
+            occupied_capacity: 142_00000000,
+            udt_amount: Some(amount),
+            data_hash: None,
+        };
+        let mut addr = HashMap::new();
+        let mut script = HashMap::new();
+        let mut token = HashMap::new();
+        let mut script_ref = HashMap::new();
+        let mut cell_dist_count = [0i64; 6];
+        let mut cell_dist_capacity = [0i128; 6];
+        let mut hodl = HashMap::new();
+
+        for created_at_block in [1, 2] {
+            accumulate_cell_deltas(
+                &cell,
+                1,
+                &mut addr,
+                &mut script,
+                &mut token,
+                &mut script_ref,
+                &mut cell_dist_count,
+                &mut cell_dist_capacity,
+                created_at_block,
+                &mut hodl,
+            )
+            .unwrap();
+        }
+
+        let (added, removed) = token.get(&(type_hash, lock_hash)).unwrap();
+        assert_eq!(added.to_string(), "531691198313966349161522824112137830400");
+        assert!(removed.is_zero());
+    }
+
+    #[test]
     fn test_accumulate_cell_deltas_records_hodl_capacity_by_created_block() {
         // The rolled-back cell walk must record each cell's FULL capacity against
         // its creation block, signed: +1 (restore consumed) credits, -1 (remove
@@ -6352,7 +8569,8 @@ mod tests {
             &mut cd_cap,
             19_665_025,
             &mut hodl,
-        );
+        )
+        .unwrap();
         assert_eq!(
             hodl.get(&19_665_025).copied(),
             Some(485_835_712_305_249_i128)
@@ -6370,7 +8588,8 @@ mod tests {
             &mut cd_cap,
             19_665_025,
             &mut hodl,
-        );
+        )
+        .unwrap();
         assert_eq!(hodl.get(&19_665_025).copied(), Some(0_i128));
     }
 
@@ -6474,6 +8693,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
         let header2 = CachedBlockHeader {
@@ -6486,6 +8708,9 @@ mod tests {
             dao: vec![0; 32],
             transactions_count: 1,
             uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
             cycles: None,
         };
         let mut batch = StoreBatch::new(&store);
@@ -6681,6 +8906,9 @@ mod tests {
                     dao: vec![0; 32],
                     transactions_count: 0,
                     uncles_count: 0,
+                    proposals_count: 0,
+                    compact_target: 0,
+                    miner_lock_hash: None,
                     cycles: None,
                 },
             );
@@ -6736,6 +8964,9 @@ mod tests {
                     dao: vec![0; 32],
                     transactions_count: 3,
                     uncles_count: 0,
+                    proposals_count: 0,
+                    compact_target: 0,
+                    miner_lock_hash: None,
                     cycles: None,
                 },
             );
@@ -6795,8 +9026,10 @@ mod tests {
             total_all_cells: 110,
             total_data_size: 500,
             knowledge_size: None,
-            block_time_sum_ms: 0,
-            block_time_count: 0,
+            // Blocks 1..5 are 1 hour apart and block 1 has no predecessor here,
+            // so the forward writers accumulated four 3_600_000 ms gaps.
+            block_time_sum_ms: 4 * 3_600_000,
+            block_time_count: 4,
         };
         store
             .put_cf(
@@ -6822,6 +9055,10 @@ mod tests {
         assert_eq!(repaired.transactions_count, 6); // 10 - 4
         assert_eq!(repaired.cells_created, 12); // 20 - 8
         assert_eq!(repaired.cells_consumed, 6); // 10 - 4
+                                                // Blocks 4 and 5 each carried a 3_600_000 ms gap; both are reversed.
+        assert_eq!(repaired.block_time_sum_ms, 2 * 3_600_000);
+        assert_eq!(repaired.block_time_count, 2);
+        assert_eq!(repaired.avg_block_time_ms(), Some(3_600_000));
     }
 
     #[test]
@@ -6831,19 +9068,43 @@ mod tests {
 
         // Hour 14 on same date — canonical, should NOT be deleted
         let key_before = keys::encode_stats_key(keys::STATS_PREFIX_HOURLY, b"2026021014");
-        assert!(!should_delete_stats_for_replay(&key_before, cutoff, cutoff_hh, 0, 0).unwrap());
+        assert!(!should_delete_stats_for_replay(
+            &key_before,
+            cutoff,
+            cutoff_hh,
+            cutoff_hh,
+            0,
+            0,
+            false
+        )
+        .unwrap());
 
         // Hour 15 (cutoff hour) — should be deleted (repair handles it)
         let key_at = keys::encode_stats_key(keys::STATS_PREFIX_HOURLY, b"2026021015");
-        assert!(should_delete_stats_for_replay(&key_at, cutoff, cutoff_hh, 0, 0).unwrap());
+        assert!(
+            should_delete_stats_for_replay(&key_at, cutoff, cutoff_hh, cutoff_hh, 0, 0, false)
+                .unwrap()
+        );
 
         // Hour 16 — after cutoff, should be deleted
         let key_after = keys::encode_stats_key(keys::STATS_PREFIX_HOURLY, b"2026021016");
-        assert!(should_delete_stats_for_replay(&key_after, cutoff, cutoff_hh, 0, 0).unwrap());
+        assert!(should_delete_stats_for_replay(
+            &key_after, cutoff, cutoff_hh, cutoff_hh, 0, 0, false
+        )
+        .unwrap());
 
         // Previous day — should NOT be deleted
         let key_prev_day = keys::encode_stats_key(keys::STATS_PREFIX_HOURLY, b"2026020923");
-        assert!(!should_delete_stats_for_replay(&key_prev_day, cutoff, cutoff_hh, 0, 0).unwrap());
+        assert!(!should_delete_stats_for_replay(
+            &key_prev_day,
+            cutoff,
+            cutoff_hh,
+            cutoff_hh,
+            0,
+            0,
+            false
+        )
+        .unwrap());
     }
 
     #[test]
@@ -6853,15 +9114,24 @@ mod tests {
 
         // Hour 14 — canonical, NOT deleted
         let key = keys::encode_stats_key(keys::STATS_PREFIX_ACTIVITY_HOURLY, b"2026021014");
-        assert!(!should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, 0).unwrap());
+        assert!(
+            !should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, 0, false)
+                .unwrap()
+        );
 
         // Hour 15 (cutoff) — deleted
         let key = keys::encode_stats_key(keys::STATS_PREFIX_ACTIVITY_HOURLY, b"2026021015");
-        assert!(should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, 0).unwrap());
+        assert!(
+            should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, 0, false)
+                .unwrap()
+        );
 
         // Hour 16 — deleted
         let key = keys::encode_stats_key(keys::STATS_PREFIX_ACTIVITY_HOURLY, b"2026021016");
-        assert!(should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, 0).unwrap());
+        assert!(
+            should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, 0, false)
+                .unwrap()
+        );
     }
 
     #[test]
@@ -6871,26 +9141,41 @@ mod tests {
 
         // Daily ADDR_SET on cutoff date — preserved (strict >)
         let key = keys::encode_stats_key(keys::STATS_PREFIX_ACTIVITY_DAILY_ADDR_SET, b"20260210");
-        assert!(!should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, 0).unwrap());
+        assert!(
+            !should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, 0, false)
+                .unwrap()
+        );
 
         // Daily ADDR_SET day after — deleted
         let key = keys::encode_stats_key(keys::STATS_PREFIX_ACTIVITY_DAILY_ADDR_SET, b"20260211");
-        assert!(should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, 0).unwrap());
+        assert!(
+            should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, 0, false)
+                .unwrap()
+        );
 
         // Hourly ADDR_SET at cutoff hour — preserved (strict >)
         let key =
             keys::encode_stats_key(keys::STATS_PREFIX_ACTIVITY_HOURLY_ADDR_SET, b"2026021015");
-        assert!(!should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, 0).unwrap());
+        assert!(
+            !should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, 0, false)
+                .unwrap()
+        );
 
         // Hourly ADDR_SET hour before cutoff — preserved
         let key =
             keys::encode_stats_key(keys::STATS_PREFIX_ACTIVITY_HOURLY_ADDR_SET, b"2026021014");
-        assert!(!should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, 0).unwrap());
+        assert!(
+            !should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, 0, false)
+                .unwrap()
+        );
 
         // Hourly ADDR_SET hour after cutoff — deleted
         let key =
             keys::encode_stats_key(keys::STATS_PREFIX_ACTIVITY_HOURLY_ADDR_SET, b"2026021016");
-        assert!(should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, 0).unwrap());
+        assert!(
+            should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, 0, false)
+                .unwrap()
+        );
     }
 
     #[test]
@@ -6929,14 +9214,15 @@ mod tests {
         let mut activity_date = std::collections::HashMap::new();
         activity_date.insert(date.to_string(), activity_delta);
 
+        // The surviving portion of the cutoff date holds these two addresses;
+        // the repaired row's unique_address_count is that set's size, not the
+        // stored 200 (an orphaned-branch-only address must not linger).
+        let activity_addr_date = HashSet::from([[0xA1u8; 32], [0xA2u8; 32]]);
+
         let deltas = RollbackStatsDeltas {
-            date: std::collections::HashMap::new(),
-            date_uncles: std::collections::HashMap::new(),
-            hour: std::collections::HashMap::new(),
-            date_capacity: std::collections::HashMap::new(),
             activity_date,
-            activity_hour: std::collections::HashMap::new(),
-            miner: std::collections::HashMap::new(),
+            activity_addr_date,
+            ..Default::default()
         };
 
         let key = keys::encode_stats_key(keys::STATS_PREFIX_ACTIVITY_DAILY, date.as_bytes());
@@ -6947,6 +9233,7 @@ mod tests {
             &key,
             &value,
             date,
+            "2026021015",
             "2026021015",
             &deltas,
             &store,
@@ -6962,8 +9249,9 @@ mod tests {
         assert_eq!(result.transfer_count, 97);
         assert_eq!(result.coinbase_count, 49);
         assert_eq!(result.total_ckb_moved, 490_000);
-        // unique_address_count preserved
-        assert_eq!(result.unique_address_count, 200);
+        // unique_address_count is rebuilt from the surviving portion's address
+        // set, never carried over from the pre-reorg row.
+        assert_eq!(result.unique_address_count, 2);
     }
 
     #[test]
@@ -6976,8 +9264,6 @@ mod tests {
             avg_difficulty: 1000.0,
             block_count: 720,
             total_uncles: 5,
-            block_time_sum_ms: 720 * 10_000,
-            block_time_count: 720,
         };
         let key = keys::encode_stats_key(keys::STATS_PREFIX_DAILY_BLOCK, date.as_bytes());
         let value = bincode::serialize(&original).unwrap();
@@ -6987,12 +9273,7 @@ mod tests {
 
         let deltas = RollbackStatsDeltas {
             date: date_deltas,
-            date_uncles: std::collections::HashMap::new(),
-            hour: std::collections::HashMap::new(),
-            date_capacity: std::collections::HashMap::new(),
-            activity_date: std::collections::HashMap::new(),
-            activity_hour: std::collections::HashMap::new(),
-            miner: std::collections::HashMap::new(),
+            ..Default::default()
         };
 
         let mut batch = rocksdb::WriteBatch::default();
@@ -7000,6 +9281,7 @@ mod tests {
             &key,
             &value,
             date,
+            "2026021015",
             "2026021015",
             &deltas,
             &store,
@@ -7034,21 +9316,14 @@ mod tests {
         let value = bincode::serialize(&original).unwrap();
 
         // Empty miner deltas — this miner not rolled back
-        let deltas = RollbackStatsDeltas {
-            date: std::collections::HashMap::new(),
-            date_uncles: std::collections::HashMap::new(),
-            hour: std::collections::HashMap::new(),
-            date_capacity: std::collections::HashMap::new(),
-            activity_date: std::collections::HashMap::new(),
-            activity_hour: std::collections::HashMap::new(),
-            miner: std::collections::HashMap::new(),
-        };
+        let deltas = RollbackStatsDeltas::default();
 
         let mut batch = rocksdb::WriteBatch::default();
         let repaired = repair_cutoff_date_stats(
             &key,
             &value,
             date,
+            "2026021015",
             "2026021015",
             &deltas,
             &store,
@@ -7082,6 +9357,9 @@ mod tests {
                 dao: vec![0u8; 32],
                 transactions_count: 1,
                 uncles_count: 0,
+                proposals_count: 0,
+                compact_target: 0,
+                miner_lock_hash: None,
                 cycles: None,
             },
             CachedBlockHeader {
@@ -7094,6 +9372,9 @@ mod tests {
                 dao: vec![0u8; 32],
                 transactions_count: 1,
                 uncles_count: 1, // this block has an uncle
+                proposals_count: 0,
+                compact_target: 0,
+                miner_lock_hash: None,
                 cycles: None,
             },
             CachedBlockHeader {
@@ -7106,6 +9387,9 @@ mod tests {
                 dao: vec![0u8; 32],
                 transactions_count: 1,
                 uncles_count: 0,
+                proposals_count: 0,
+                compact_target: 0,
+                miner_lock_hash: None,
                 cycles: None,
             },
             CachedBlockHeader {
@@ -7118,6 +9402,9 @@ mod tests {
                 dao: vec![0u8; 32],
                 transactions_count: 1,
                 uncles_count: 1, // this block (to be rolled back) has an uncle
+                proposals_count: 0,
+                compact_target: 0,
+                miner_lock_hash: None,
                 cycles: None,
             },
         ];
@@ -7133,10 +9420,25 @@ mod tests {
             avg_difficulty: 1.0,
             block_count: 4,
             total_uncles: 2,
-            block_time_sum_ms: 4 * 1_000,
-            block_time_count: 4,
         };
         store.put_daily_block_stats("20260408", &pre_reorg).unwrap();
+
+        // Epoch row must exist for a mid-epoch rollback (written atomically
+        // with block headers on real write paths).
+        seed_epoch_row(
+            &store,
+            &EpochStats {
+                epoch_number: 1,
+                start_block: 1,
+                end_block: Some(4),
+                blocks_count: 4,
+                length: 1800,
+                start_timestamp: chrono::DateTime::from_timestamp_millis(day_start_ms + 1000)
+                    .unwrap(),
+                end_timestamp: None,
+                transactions_count: 4,
+            },
+        );
 
         // Rollback block 4 — the one with 1 uncle.
         // rollback_to=3 means block 4 is removed.
@@ -7157,6 +9459,609 @@ mod tests {
             1,
             "total_uncles must be decremented from 2 → 1 when the rolled-back block had 1 uncle (currently {})",
             repaired.total_uncles
+        );
+    }
+
+    /// Rollback must reverse the orphaned blocks' inter-block time contribution
+    /// to the cutoff day, not just the block/tx/cell counters.
+    ///
+    /// The forward writers attribute the gap `ts(b) - ts(b-1)` to block `b`'s
+    /// UTC+8 date (`BatchStats::accumulate_block_time` /
+    /// `ChainStatsAccumulator`, negative gaps skipped). Leaving an orphaned
+    /// block's gap in `DailyStats.block_time_sum_ms` corrupts
+    /// /charts/average-block-time for that day forever, and since 07904e8f the
+    /// hash-rate chart divides by that same field.
+    #[test]
+    fn test_rollback_reverses_daily_block_time_on_cutoff_date() {
+        // 2026-04-08 00:00 UTC+8 = 2026-04-07 16:00 UTC.
+        let day_start_ms: i64 = 1775577600000;
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+
+        // Blocks 0..4, all on 2026-04-08 UTC+8. Gaps attributed forward:
+        //   b1: 1000, b2: 1000, b3: 1000, b4: 1500  → sum 4500 over 4 deltas.
+        let timestamps = [0i64, 1000, 2000, 3000, 4500];
+        let mut batch = StoreBatch::new(&store);
+        for (block, offset) in timestamps.iter().enumerate() {
+            batch.put_block_header(
+                block as i64,
+                &CachedBlockHeader {
+                    hash: vec![block as u8; 32],
+                    parent_hash: vec![block.saturating_sub(1) as u8; 32],
+                    timestamp: day_start_ms + offset,
+                    epoch_number: 1,
+                    epoch_index: block as i32,
+                    epoch_length: 1800,
+                    dao: vec![0u8; 32],
+                    transactions_count: 1,
+                    uncles_count: 0,
+                    proposals_count: 0,
+                    compact_target: 0,
+                    miner_lock_hash: None,
+                    cycles: None,
+                },
+            );
+        }
+        batch.commit().unwrap();
+
+        store
+            .put_daily_stats(
+                "20260408",
+                &DailyStats {
+                    blocks_count: 5,
+                    transactions_count: 0,
+                    cells_created: 0,
+                    cells_consumed: 0,
+                    capacity_transferred: 0,
+                    used_capacity_created: 0,
+                    used_capacity_consumed: 0,
+                    total_live_cells: 0,
+                    total_dead_cells: 0,
+                    total_all_cells: 0,
+                    total_data_size: 0,
+                    knowledge_size: None,
+                    block_time_sum_ms: 4_500,
+                    block_time_count: 4,
+                },
+            )
+            .unwrap();
+
+        seed_epoch_row(
+            &store,
+            &EpochStats {
+                epoch_number: 1,
+                start_block: 0,
+                end_block: Some(4),
+                blocks_count: 5,
+                length: 1800,
+                start_timestamp: chrono::DateTime::from_timestamp_millis(day_start_ms).unwrap(),
+                end_timestamp: None,
+                transactions_count: 5,
+            },
+        );
+
+        // Orphan block 4 only. Its gap is ts(4) - ts(3) = 1500 ms, one delta.
+        store.rollback_to_block(3).unwrap();
+
+        let repaired = store
+            .get_daily_stats("20260408")
+            .unwrap()
+            .expect("DailyStats for 20260408 must survive a partial-day rollback");
+        assert_eq!(
+            repaired.blocks_count, 4,
+            "blocks_count must drop by the one orphaned block"
+        );
+        assert_eq!(
+            repaired.block_time_sum_ms, 3_000,
+            "the orphaned block's 1500 ms gap must be reversed exactly (got {})",
+            repaired.block_time_sum_ms
+        );
+        assert_eq!(
+            repaired.block_time_count, 3,
+            "the orphaned block contributed exactly one delta (got {})",
+            repaired.block_time_count
+        );
+        assert_eq!(
+            repaired.avg_block_time_ms(),
+            Some(1_000),
+            "the surviving day averages its three surviving 1000 ms gaps"
+        );
+    }
+
+    /// A negative gap (clock skew) is skipped by both forward writers, so
+    /// rollback must skip it too — subtracting it would inflate the day's sum.
+    #[test]
+    fn test_rollback_skips_negative_block_time_gap_like_the_writers() {
+        let day_start_ms: i64 = 1775577600000;
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+
+        // b3 -> b4 goes backwards by 500 ms: the forward path never counted it.
+        let timestamps = [0i64, 1000, 2000, 3000, 2500];
+        let mut batch = StoreBatch::new(&store);
+        for (block, offset) in timestamps.iter().enumerate() {
+            batch.put_block_header(
+                block as i64,
+                &CachedBlockHeader {
+                    hash: vec![block as u8; 32],
+                    parent_hash: vec![block.saturating_sub(1) as u8; 32],
+                    timestamp: day_start_ms + offset,
+                    epoch_number: 1,
+                    epoch_index: block as i32,
+                    epoch_length: 1800,
+                    dao: vec![0u8; 32],
+                    transactions_count: 1,
+                    uncles_count: 0,
+                    proposals_count: 0,
+                    compact_target: 0,
+                    miner_lock_hash: None,
+                    cycles: None,
+                },
+            );
+        }
+        batch.commit().unwrap();
+
+        store
+            .put_daily_stats(
+                "20260408",
+                &DailyStats {
+                    blocks_count: 5,
+                    block_time_sum_ms: 3_000,
+                    block_time_count: 3,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+        seed_epoch_row(
+            &store,
+            &EpochStats {
+                epoch_number: 1,
+                start_block: 0,
+                end_block: Some(4),
+                blocks_count: 5,
+                length: 1800,
+                start_timestamp: chrono::DateTime::from_timestamp_millis(day_start_ms).unwrap(),
+                end_timestamp: None,
+                transactions_count: 5,
+            },
+        );
+
+        store.rollback_to_block(3).unwrap();
+
+        let repaired = store.get_daily_stats("20260408").unwrap().unwrap();
+        assert_eq!(
+            (repaired.block_time_sum_ms, repaired.block_time_count),
+            (3_000, 3),
+            "a gap the writers skipped must not be subtracted on rollback"
+        );
+    }
+
+    // ---- cross-day DAO daily snapshot recompute ------------------------------
+
+    /// 32-byte DAO header field: C | AR | S | U as little-endian u64s.
+    fn cross_day_dao_field(c: u64, ar: u64, s: u64, u: u64) -> Vec<u8> {
+        let mut dao = vec![0u8; 32];
+        dao[0..8].copy_from_slice(&c.to_le_bytes());
+        dao[8..16].copy_from_slice(&ar.to_le_bytes());
+        dao[16..24].copy_from_slice(&s.to_le_bytes());
+        dao[24..32].copy_from_slice(&u.to_le_bytes());
+        dao
+    }
+
+    /// UTC millis for a UTC+8 wall-clock time on `date`.
+    fn cross_day_utc8_ms(date: chrono::NaiveDate, hour: u32, minute: u32) -> i64 {
+        use chrono::{FixedOffset, TimeZone};
+        FixedOffset::east_opt(ckbadger_common::CKB_UTC8_OFFSET)
+            .unwrap()
+            .from_local_datetime(&date.and_hms_opt(hour, minute, 0).unwrap())
+            .single()
+            .unwrap()
+            .timestamp_millis()
+    }
+
+    fn cross_day_header(block: i64, timestamp: i64, dao: Vec<u8>) -> CachedBlockHeader {
+        CachedBlockHeader {
+            hash: vec![block as u8; 32],
+            parent_hash: vec![block.saturating_sub(1) as u8; 32],
+            timestamp,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1800,
+            dao,
+            transactions_count: 1,
+            uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
+            cycles: None,
+        }
+    }
+
+    /// A DAO daily snapshot whose every field is deliberately wrong, so any
+    /// assertion that passes proves the row was actually recomputed.
+    fn stale_dao_daily_snapshot(date: &str) -> DaoDailySnapshot {
+        DaoDailySnapshot {
+            date: date.to_string(),
+            total_deposited: 111,
+            depositors_count: 222,
+            new_deposits: 333,
+            withdrawals: 444,
+            compensation: 555,
+            cumulative_deposit_amount: 666,
+            total_issuance: 777,
+            secondary_pool: 888,
+            occupied_capacity: 999,
+            cum_miner_secondary: 1010,
+            cum_dao_compensation: 1111,
+            cum_treasury: 1212,
+            unmade_dao_interests: 1313,
+            unclaimed_compensation: 1414,
+            cumulative_depositors: 1515,
+            daily_depositor_addresses: 1616,
+            protocol_deposited: Some(1717),
+        }
+    }
+
+    const CROSS_DAY_C: u64 = 100_000_000_000_000;
+    const CROSS_DAY_U: u64 = 20_000_000_000;
+    const CROSS_DAY_S: u64 = 50_000_000_000;
+    const CROSS_DAY_AR_DEPOSIT: u64 = 10_000_000_000_000_000;
+    const CROSS_DAY_AR_END: u64 = 10_100_000_000_000_000;
+    const CROSS_DAY_CAPACITY: i64 = 100_000_000_000;
+    const CROSS_DAY_OCCUPIED: i64 = 10_200_000_000;
+
+    #[test]
+    fn test_cross_day_rollback_recomputes_fork_point_date_dao_snapshot() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+
+        let prev_date = chrono::NaiveDate::from_ymd_opt(2026, 3, 9).unwrap();
+        let fork_date = chrono::NaiveDate::from_ymd_opt(2026, 3, 10).unwrap();
+        let cutoff_date = chrono::NaiveDate::from_ymd_opt(2026, 3, 11).unwrap();
+
+        let mut batch = StoreBatch::new(&store);
+        // Block 0 is the previous day's tail — the C/S/U baseline for block 1.
+        for (block, ts, ar) in [
+            (
+                0i64,
+                cross_day_utc8_ms(prev_date, 23, 50),
+                CROSS_DAY_AR_DEPOSIT,
+            ),
+            (1, cross_day_utc8_ms(fork_date, 0, 10), CROSS_DAY_AR_DEPOSIT),
+            (2, cross_day_utc8_ms(fork_date, 12, 0), CROSS_DAY_AR_DEPOSIT),
+            // Block 3 is the fork point and the final surviving block of the
+            // fork-point date.
+            (3, cross_day_utc8_ms(fork_date, 23, 50), CROSS_DAY_AR_END),
+            // Block 4 is the first rolled-back block and sets the cutoff date.
+            (4, cross_day_utc8_ms(cutoff_date, 0, 5), CROSS_DAY_AR_END),
+            // Block 5 is rolled back too, but its timestamp crosses the day
+            // boundary backwards onto the fork-point date. CKB block timestamps
+            // are only median-time-past-bounded, so this is legal — and it is
+            // what leaves the fork-point date's snapshot stale.
+            (5, cross_day_utc8_ms(fork_date, 23, 58), CROSS_DAY_AR_END),
+        ] {
+            batch.put_block_header(
+                block,
+                &cross_day_header(
+                    block,
+                    ts,
+                    cross_day_dao_field(CROSS_DAY_C, ar, CROSS_DAY_S, CROSS_DAY_U),
+                ),
+            );
+        }
+        batch.put_dao_deposit(
+            &keys::encode_outpoint(&[0xAA; 32], 0),
+            &DaoDepositCacheEntry {
+                capacity: CROSS_DAY_CAPACITY,
+                occupied_capacity: CROSS_DAY_OCCUPIED,
+                deposit_block_number: 2,
+                deposit_timestamp: 0,
+                lock_script_hash: vec![0xA1; 32],
+                deposit_ar: CROSS_DAY_AR_DEPOSIT as i64,
+                status: 0,
+                withdraw_request_tx: None,
+                withdraw_request_output_index: None,
+                withdraw_request_block: None,
+                withdraw_request_ar: None,
+                withdraw_block: None,
+                withdraw_tx: None,
+                withdraw_request_occupied_capacity: None,
+                withdraw_to_output_index: None,
+                compensation: None,
+            },
+        );
+        batch.commit().unwrap();
+        seed_sync_status(&store, 5, &[5u8; 32], 0, 0, 0);
+        // Real consensus secondary_epoch_reward; the DAO snapshot recompute
+        // needs it for the per-block miner secondary split.
+        store
+            .set_secondary_epoch_reward(61_369_863_013_698)
+            .unwrap();
+
+        // Both the fork-point date and the cutoff date have materialized DAO
+        // aggregate state before the rollback.
+        seed_dao_daily_snapshot(&store, "20260310", &stale_dao_daily_snapshot("2026-03-10"));
+        seed_dao_daily_snapshot(&store, "20260311", &stale_dao_daily_snapshot("2026-03-11"));
+
+        // Cross-day rollback: fork point is on 2026-03-10, cutoff on 2026-03-11.
+        store.rollback_to_block(3).unwrap();
+
+        let expected_unclaimed = i128::from(
+            ckbadger_common::dao::calculate_dao_compensation_from_ar(
+                CROSS_DAY_CAPACITY,
+                CROSS_DAY_OCCUPIED,
+                CROSS_DAY_AR_DEPOSIT,
+                CROSS_DAY_AR_END,
+            )
+            .unwrap(),
+        );
+
+        let recomputed = store
+            .get_dao_daily_snapshot("20260310")
+            .unwrap()
+            .expect("fork-point date snapshot must survive a cross-day rollback");
+        assert_eq!(
+            recomputed.cum_dao_compensation, expected_unclaimed,
+            "fork-point date snapshot must be recomputed, not left at its stale cumulative value"
+        );
+        assert_eq!(recomputed.unclaimed_compensation, expected_unclaimed);
+        assert_eq!(recomputed.unmade_dao_interests, expected_unclaimed);
+        assert_eq!(
+            recomputed.cum_treasury,
+            i128::from(CROSS_DAY_S) - expected_unclaimed
+        );
+        assert_eq!(recomputed.total_deposited, i128::from(CROSS_DAY_CAPACITY));
+        assert_eq!(
+            recomputed.protocol_deposited,
+            Some(i128::from(CROSS_DAY_CAPACITY))
+        );
+        assert_eq!(recomputed.new_deposits, 1);
+        assert_eq!(recomputed.withdrawals, 0);
+        assert_eq!(recomputed.depositors_count, 1);
+        assert_eq!(recomputed.cumulative_depositors, 1);
+        assert_eq!(recomputed.daily_depositor_addresses, 1);
+        assert_eq!(recomputed.total_issuance, i128::from(CROSS_DAY_C));
+        assert_eq!(recomputed.secondary_pool, i128::from(CROSS_DAY_S));
+        assert_eq!(recomputed.occupied_capacity, i128::from(CROSS_DAY_U));
+        assert_eq!(recomputed.compensation, 0);
+        // Blocks 1..=3 survive on the fork-point date, each splitting its own
+        // scheduled secondary issuance against its parent's C/U. S is flat
+        // across this fixture, which under the old S-delta reconstruction
+        // wrongly produced zero — the protocol issues secondary every block
+        // regardless of how the pool moves.
+        let per_block_miner = ckbadger_common::dao::calculate_miner_secondary_issuance(
+            ckbadger_common::dao::secondary_block_issuance(0, 1800, 61_369_863_013_698).unwrap(),
+            i128::from(CROSS_DAY_C),
+            i128::from(CROSS_DAY_U),
+        )
+        .unwrap();
+        assert_eq!(per_block_miner, 6_818_873);
+        assert_eq!(recomputed.cum_miner_secondary, 3 * per_block_miner);
+
+        // The cutoff date has no surviving blocks, so its snapshot is dropped.
+        assert!(
+            store.get_dao_daily_snapshot("20260311").unwrap().is_none(),
+            "cutoff-date snapshot must be deleted when no block on that date survives"
+        );
+    }
+
+    /// Fixture layout shared by the skip tests: no block 0, so any DAO snapshot
+    /// recompute of the fork-point date would fail fast on the missing previous
+    /// block header. `last_block_date` decides whether the final rolled-back
+    /// block lands back on the fork-point date.
+    fn seed_truncated_cross_day_fixture(
+        store: &CkbadgerStore,
+        fork_date: chrono::NaiveDate,
+        cutoff_date: chrono::NaiveDate,
+        last_block_on_fork_date: bool,
+    ) {
+        let last_block_ts = if last_block_on_fork_date {
+            cross_day_utc8_ms(fork_date, 23, 58)
+        } else {
+            cross_day_utc8_ms(cutoff_date, 0, 20)
+        };
+        let mut batch = StoreBatch::new(store);
+        for (block, ts) in [
+            (1i64, cross_day_utc8_ms(fork_date, 0, 10)),
+            (2, cross_day_utc8_ms(fork_date, 12, 0)),
+            (3, cross_day_utc8_ms(fork_date, 23, 50)),
+            (4, cross_day_utc8_ms(cutoff_date, 0, 5)),
+            (5, last_block_ts),
+        ] {
+            batch.put_block_header(
+                block,
+                &cross_day_header(
+                    block,
+                    ts,
+                    cross_day_dao_field(
+                        CROSS_DAY_C,
+                        CROSS_DAY_AR_DEPOSIT,
+                        CROSS_DAY_S,
+                        CROSS_DAY_U,
+                    ),
+                ),
+            );
+        }
+        batch.commit().unwrap();
+        seed_sync_status(store, 5, &[5u8; 32], 0, 0, 0);
+    }
+
+    /// Rollback cleanup of an identity's outpoint rows scans the reverse index
+    /// by id prefix. With variable-width ids, a short id's prefix also matches
+    /// a longer id that starts with the same bytes — so rolling one back must
+    /// never delete the other's rows, in either direction.
+    #[test]
+    fn identity_rollback_outpoint_cleanup_does_not_alias_between_short_and_long_ids() {
+        use crate::types::{IdentityEntry, IdentityExtra, IdentityStandard};
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+
+        // Pair A: 20-byte id rolled back, 32-byte id sharing its prefix survives.
+        let short_a = vec![0x11u8; 20];
+        let mut long_a = short_a.clone();
+        long_a.extend_from_slice(&[0x11u8; 12]);
+        // Pair B: the reverse — 32-byte id rolled back, 20-byte prefix survives.
+        let short_b = vec![0x22u8; 20];
+        let mut long_b = short_b.clone();
+        long_b.extend_from_slice(&[0x22u8; 12]);
+
+        let did_entry = |created_at_block: i64| IdentityEntry {
+            standard: IdentityStandard::DidCkb,
+            owner_lock_hash: Some(vec![0x31; 32]),
+            name: None,
+            is_live: true,
+            created_at_block,
+            created_at_tx: vec![0x91; 32],
+            extra: IdentityExtra::DidCkb,
+        };
+
+        let short_a_tx = [0xA1u8; 32];
+        let long_a_tx = [0xA2u8; 32];
+        let short_b_tx = [0xB1u8; 32];
+        let long_b_tx = [0xB2u8; 32];
+
+        let mut batch = StoreBatch::new(&store);
+        // Created after the rollback point → deleted.
+        batch.put_identity(&short_a, &did_entry(150));
+        batch.put_identity(&long_b, &did_entry(150));
+        // Created before the rollback point → survive.
+        batch.put_identity(&long_a, &did_entry(100));
+        batch.put_identity(&short_b, &did_entry(100));
+
+        batch.put_spore_outpoint(&short_a_tx, 0, &short_a);
+        batch.put_spore_outpoint(&long_a_tx, 0, &long_a);
+        batch.put_spore_outpoint(&short_b_tx, 0, &short_b);
+        batch.put_spore_outpoint(&long_b_tx, 0, &long_b);
+
+        for b in 50..=160 {
+            batch.put_block_header(
+                b,
+                &CachedBlockHeader {
+                    hash: vec![b as u8; 32],
+                    parent_hash: vec![0u8; 32],
+                    timestamp: 1_700_000_000_000 + b * 1000,
+                    epoch_number: 0,
+                    epoch_index: 0,
+                    epoch_length: 1800,
+                    dao: vec![0; 32],
+                    transactions_count: 0,
+                    uncles_count: 0,
+                    proposals_count: 0,
+                    compact_target: 0,
+                    miner_lock_hash: None,
+                    cycles: None,
+                },
+            );
+        }
+        batch.commit().unwrap();
+        seed_sync_status(&store, 160, &[160u8; 32], 0, 0, 0);
+
+        store.rollback_to_block(120).unwrap();
+
+        // Rolled-back identities are gone, together with their outpoint rows.
+        assert!(store.get_identity(&short_a).unwrap().is_none());
+        assert!(store.get_identity(&long_b).unwrap().is_none());
+        assert!(
+            store
+                .list_spore_outpoints_by_spore_id(&short_a)
+                .unwrap()
+                .is_empty(),
+            "rolled-back 20-byte identity must lose its outpoint rows"
+        );
+        assert!(
+            store
+                .list_spore_outpoints_by_spore_id(&long_b)
+                .unwrap()
+                .is_empty(),
+            "rolled-back 32-byte identity must lose its outpoint rows"
+        );
+
+        // Surviving identities keep theirs — no aliasing deletion either way.
+        assert!(store.get_identity(&long_a).unwrap().is_some());
+        assert!(store.get_identity(&short_b).unwrap().is_some());
+        assert_eq!(
+            store.list_spore_outpoints_by_spore_id(&long_a).unwrap(),
+            vec![(long_a_tx.to_vec(), 0)],
+            "rolling back a 20-byte id must not delete a longer id's rows"
+        );
+        assert_eq!(
+            store.list_spore_outpoints_by_spore_id(&short_b).unwrap(),
+            vec![(short_b_tx.to_vec(), 0)],
+            "rolling back a 32-byte id must not delete its 20-byte prefix id's rows"
+        );
+
+        // Forward outpoint rows follow the same fate as their reverse rows.
+        assert!(store
+            .get_spore_id_by_outpoint(&short_a_tx, 0)
+            .unwrap()
+            .is_none());
+        assert!(store
+            .get_spore_id_by_outpoint(&long_b_tx, 0)
+            .unwrap()
+            .is_none());
+        assert_eq!(
+            store.get_spore_id_by_outpoint(&long_a_tx, 0).unwrap(),
+            Some(long_a.clone())
+        );
+        assert_eq!(
+            store.get_spore_id_by_outpoint(&short_b_tx, 0).unwrap(),
+            Some(short_b.clone())
+        );
+    }
+
+    #[test]
+    fn test_cross_day_rollback_skips_dates_without_a_materialized_dao_snapshot() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+
+        let fork_date = chrono::NaiveDate::from_ymd_opt(2026, 3, 10).unwrap();
+        let cutoff_date = chrono::NaiveDate::from_ymd_opt(2026, 3, 11).unwrap();
+        // Block 5 rolls back onto the fork-point date, so that date IS touched
+        // by the rollback — but the store holds no DAO aggregate state for it.
+        seed_truncated_cross_day_fixture(&store, fork_date, cutoff_date, true);
+
+        store.rollback_to_block(3).expect(
+            "rollback must skip dates with no materialized DAO snapshot instead of failing on \
+             the missing previous block header",
+        );
+
+        assert!(
+            store.get_dao_daily_snapshot("20260310").unwrap().is_none(),
+            "a date with no pre-existing DAO snapshot must not gain one from rollback"
+        );
+        assert!(store.get_dao_daily_snapshot("20260311").unwrap().is_none());
+    }
+
+    #[test]
+    fn test_cross_day_rollback_skips_dates_with_no_rolled_back_blocks() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+
+        let fork_date = chrono::NaiveDate::from_ymd_opt(2026, 3, 10).unwrap();
+        let cutoff_date = chrono::NaiveDate::from_ymd_opt(2026, 3, 11).unwrap();
+        // Every rolled-back block stays on the cutoff date, so the fork-point
+        // date's block set is unchanged and its snapshot is still correct.
+        seed_truncated_cross_day_fixture(&store, fork_date, cutoff_date, false);
+        seed_dao_daily_snapshot(&store, "20260310", &stale_dao_daily_snapshot("2026-03-10"));
+
+        store.rollback_to_block(3).expect(
+            "an unaffected date must not be recomputed, so a store without its block prehistory \
+             must still roll back cleanly",
+        );
+
+        let untouched = store
+            .get_dao_daily_snapshot("20260310")
+            .unwrap()
+            .expect("an unaffected date keeps its snapshot");
+        let expected = stale_dao_daily_snapshot("2026-03-10");
+        assert_eq!(
+            bincode::serialize(&untouched).unwrap(),
+            bincode::serialize(&expected).unwrap(),
+            "a date no rolled-back block touched must be left exactly as written"
         );
     }
 }

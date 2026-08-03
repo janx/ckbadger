@@ -1,9 +1,11 @@
-import type { ComponentType } from 'react';
+import type { ComponentType, ReactElement } from 'react';
 import type { RouteObject } from 'react-router-dom';
-import { Outlet, useParams } from 'react-router-dom';
+import { Navigate, Outlet, useLocation, useParams } from 'react-router-dom';
 import { SiteFooter } from '@/components/layout/site-footer';
+import { NetworkQueryScope } from '@/components/network-query-scope';
 import { NotFoundPage } from '@/components/not-found-page';
 import { RouteErrorBoundary } from '@/components/route-error-boundary';
+import { isKnownNetwork, resolveDefaultNetwork } from '@/lib/active-network';
 import dynamic from '@/lib/dynamic-client';
 
 type PageModule<TProps extends object = object> = {
@@ -16,11 +18,42 @@ function AppFrame() {
   return (
     <div className="flex min-h-screen flex-col">
       <div className="flex-1">
-        <Outlet />
+        <NetworkQueryScope>
+          <Outlet />
+        </NetworkQueryScope>
       </div>
       <SiteFooter />
     </div>
   );
+}
+
+/** `/` → `/<default-network>`, keeping any deep-link search/hash (as NetworkGuard does). */
+function RootNetworkRedirect() {
+  const location = useLocation();
+
+  return <Navigate to={`/${resolveDefaultNetwork()}${location.search}${location.hash}`} replace />;
+}
+
+/**
+ * Validates the `:network` path segment. When it is missing or unknown, PREPEND
+ * the default network to the ENTIRE original path (preserving old un-prefixed deep
+ * links, e.g. `/tx/0x…` → `/mainnet/tx/0x…`) rather than stripping the segment.
+ * A valid `/<network>/…` passes through unchanged, so there is no redirect loop.
+ */
+function NetworkGuard({ children }: { children: ReactElement }): ReactElement {
+  const { network } = useParams();
+  const location = useLocation();
+
+  if (!network || !isKnownNetwork(network)) {
+    return (
+      <Navigate
+        to={`/${resolveDefaultNetwork()}${location.pathname}${location.search}${location.hash}`}
+        replace
+      />
+    );
+  }
+
+  return children;
 }
 
 function lazyPage<TProps extends object>(loader: () => Promise<PageModule<TProps>>) {
@@ -154,6 +187,12 @@ const DidCkbItemDetailRoute = lazyParamPage(
     identityId: params.identityId ?? '',
   })
 );
+const BitCellItemDetailRoute = lazyParamPage(
+  () => import('@/app/identities/bit-cell/[identityId]/client-page'),
+  (params) => ({
+    identityId: params.identityId ?? '',
+  })
+);
 const MnftClassDetailRoute = lazyParamPage(
   () => import('@/app/classes/[classId]/client-page'),
   (params) => ({
@@ -168,257 +207,268 @@ const IdentityCollectionRoute = lazyParamPage(
 );
 
 export function createAppRouter(): RouteObject[] {
-  return [
+  const children: RouteObject[] = [
     {
-      path: '/',
-      element: <AppFrame />,
+      index: true,
+      element: <HomePage />,
+    },
+    {
+      path: 'activities',
+      element: <ActivitiesPage />,
+    },
+    {
+      path: 'assets',
+      element: <AssetsRedirectPage />,
+    },
+    {
+      path: 'inventory/tokens',
+      element: <InventoryTokensPage />,
+    },
+    {
+      path: 'inventory/objects',
+      element: <InventoryObjectsPage />,
+    },
+    {
+      path: 'inventory/identities',
+      element: <InventoryIdentitiesPage />,
+    },
+    {
+      path: 'blocks',
+      element: <BlocksPage />,
+    },
+    {
+      path: 'blocks/:id',
+      element: <BlockDetailPage />,
+    },
+    {
+      path: 'transactions',
+      element: <TransactionsPage />,
+    },
+    {
+      path: 'tx/:hash',
+      element: <TransactionDetailPage />,
+    },
+    {
+      path: 'address/:addr',
+      element: <AddressDetailPage />,
+    },
+    {
+      path: 'cell/:outpoint',
+      element: <CellDetailPage />,
+    },
+    {
+      path: 'scripts',
+      element: <ScriptsPage />,
+    },
+    {
+      path: 'forks',
+      element: <ForksPage />,
+    },
+    {
+      path: 'forks/:id',
+      element: <ForkDetailPage />,
+    },
+    {
+      path: 'charts',
+      element: <ChartsPage />,
+    },
+    {
+      path: 'charts/most-utilized-scripts',
+      element: <MostUtilizedScriptsPage />,
+    },
+    {
+      path: 'charts/most-utilized-assets',
+      element: <MostUtilizedAssetsPage />,
+    },
+    {
+      path: 'charts/secondary-issuance',
+      element: <SecondaryIssuancePage />,
+    },
+    {
+      path: 'charts/total-supply',
+      element: <TotalSupplyPage />,
+    },
+    {
+      path: 'charts/knowledge-size',
+      element: <KnowledgeSizePage />,
+    },
+    {
+      path: 'charts/hodl-wave',
+      element: <HodlWavePage />,
+    },
+    {
+      path: 'charts/epoch-time-length',
+      element: <EpochTimeLengthPage />,
+    },
+    {
+      path: 'charts/capacity-turnover-ratio',
+      element: <CapacityTurnoverRatioPage />,
+    },
+    {
+      path: 'charts/common-knowledge-composition',
+      element: <CommonKnowledgeCompositionPage />,
+    },
+    {
+      path: 'charts/activity-volume',
+      element: <ActivityVolumePage />,
+    },
+    {
+      path: 'charts/activity-type-breakdown',
+      element: <ActivityTypeBreakdownPage />,
+    },
+    {
+      path: 'charts/active-addresses',
+      element: <ActiveAddressesPage />,
+    },
+    {
+      path: 'charts/ckb-volume',
+      element: <CkbVolumePage />,
+    },
+    {
+      path: 'charts/address-cohort-retention',
+      element: <AddressCohortRetentionPage />,
+    },
+    {
+      path: 'charts/average-block-time',
+      element: <AverageBlockTimePage />,
+    },
+    {
+      path: 'charts/block-time-distribution',
+      element: <BlockTimeDistributionPage />,
+    },
+    {
+      path: 'charts/cell-count',
+      element: <CellCountPage />,
+    },
+    {
+      path: 'charts/cell-size-distribution',
+      element: <CellSizeDistributionPage />,
+    },
+    {
+      path: 'charts/circulation-ratio',
+      element: <CirculationRatioPage />,
+    },
+    {
+      path: 'charts/daily-deposit',
+      element: <DailyDepositPage />,
+    },
+    {
+      path: 'charts/difficulty',
+      element: <DifficultyPage />,
+    },
+    {
+      path: 'charts/epoch-time-distribution',
+      element: <EpochTimeDistributionPage />,
+    },
+    {
+      path: 'charts/hash-rate',
+      element: <HashRatePage />,
+    },
+    {
+      path: 'charts/inflation-rate',
+      element: <InflationRatePage />,
+    },
+    {
+      path: 'charts/miner-address-distribution',
+      element: <MinerAddressDistributionPage />,
+    },
+    {
+      path: 'charts/nominal-apc',
+      element: <NominalApcPage />,
+    },
+    {
+      path: 'charts/total-deposit',
+      element: <TotalDepositPage />,
+    },
+    {
+      path: 'charts/transaction-count',
+      element: <TransactionCountPage />,
+    },
+    {
+      path: 'charts/uncle-rate',
+      element: <UncleRatePage />,
+    },
+    {
+      path: 'fiber/channels',
+      element: <FiberChannelsPage />,
+    },
+    {
+      path: 'fiber/channels/:id',
+      element: <FiberChannelDetailPage />,
+    },
+    {
+      path: 'dao',
+      element: <DaoPage />,
+    },
+    {
+      path: 'hardforks',
+      element: <HardforksPage />,
+    },
+    {
+      path: 'network',
+      element: <NetworkPage />,
+    },
+    {
+      path: 'script/:codeHash',
+      element: <ScriptByCodeHashRoute />,
+    },
+    {
+      path: 'scripts/:name',
+      element: <ScriptDetailRoute />,
+    },
+    {
+      path: 'tokens/:typeHash',
+      element: <TokenDetailRoute />,
+    },
+    {
+      path: 'clusters/:clusterId',
+      element: <ClusterDetailRoute />,
+    },
+    {
+      path: 'identities/:collectionId',
+      element: <IdentityCollectionRoute />,
+    },
+    {
+      path: 'classes/:classId',
+      element: <MnftClassDetailRoute />,
+    },
+    {
+      path: 'objects/:sporeId',
+      element: <SporeDetailRoute />,
+    },
+    {
+      path: 'objects/mnft/:objectId',
+      element: <MnftItemDetailRoute />,
+    },
+    {
+      path: 'identities/dotbit/:identityId',
+      element: <DotbitItemDetailRoute />,
+    },
+    {
+      path: 'identities/did/:identityId',
+      element: <DidCkbItemDetailRoute />,
+    },
+    {
+      path: 'identities/bit-cell/:identityId',
+      element: <BitCellItemDetailRoute />,
+    },
+    {
+      path: '*',
+      element: <NotFoundPage />,
+    },
+  ];
+
+  return [
+    { path: '/', element: <RootNetworkRedirect /> },
+    {
+      path: '/:network',
+      element: (
+        <NetworkGuard>
+          <AppFrame />
+        </NetworkGuard>
+      ),
       errorElement: <RouteErrorBoundary />,
-      children: [
-        {
-          index: true,
-          element: <HomePage />,
-        },
-        {
-          path: 'activities',
-          element: <ActivitiesPage />,
-        },
-        {
-          path: 'assets',
-          element: <AssetsRedirectPage />,
-        },
-        {
-          path: 'inventory/tokens',
-          element: <InventoryTokensPage />,
-        },
-        {
-          path: 'inventory/objects',
-          element: <InventoryObjectsPage />,
-        },
-        {
-          path: 'inventory/identities',
-          element: <InventoryIdentitiesPage />,
-        },
-        {
-          path: 'blocks',
-          element: <BlocksPage />,
-        },
-        {
-          path: 'blocks/:id',
-          element: <BlockDetailPage />,
-        },
-        {
-          path: 'transactions',
-          element: <TransactionsPage />,
-        },
-        {
-          path: 'tx/:hash',
-          element: <TransactionDetailPage />,
-        },
-        {
-          path: 'address/:addr',
-          element: <AddressDetailPage />,
-        },
-        {
-          path: 'cell/:outpoint',
-          element: <CellDetailPage />,
-        },
-        {
-          path: 'scripts',
-          element: <ScriptsPage />,
-        },
-        {
-          path: 'forks',
-          element: <ForksPage />,
-        },
-        {
-          path: 'forks/:id',
-          element: <ForkDetailPage />,
-        },
-        {
-          path: 'charts',
-          element: <ChartsPage />,
-        },
-        {
-          path: 'charts/most-utilized-scripts',
-          element: <MostUtilizedScriptsPage />,
-        },
-        {
-          path: 'charts/most-utilized-assets',
-          element: <MostUtilizedAssetsPage />,
-        },
-        {
-          path: 'charts/secondary-issuance',
-          element: <SecondaryIssuancePage />,
-        },
-        {
-          path: 'charts/total-supply',
-          element: <TotalSupplyPage />,
-        },
-        {
-          path: 'charts/knowledge-size',
-          element: <KnowledgeSizePage />,
-        },
-        {
-          path: 'charts/hodl-wave',
-          element: <HodlWavePage />,
-        },
-        {
-          path: 'charts/epoch-time-length',
-          element: <EpochTimeLengthPage />,
-        },
-        {
-          path: 'charts/capacity-turnover-ratio',
-          element: <CapacityTurnoverRatioPage />,
-        },
-        {
-          path: 'charts/common-knowledge-composition',
-          element: <CommonKnowledgeCompositionPage />,
-        },
-        {
-          path: 'charts/activity-volume',
-          element: <ActivityVolumePage />,
-        },
-        {
-          path: 'charts/activity-type-breakdown',
-          element: <ActivityTypeBreakdownPage />,
-        },
-        {
-          path: 'charts/active-addresses',
-          element: <ActiveAddressesPage />,
-        },
-        {
-          path: 'charts/ckb-volume',
-          element: <CkbVolumePage />,
-        },
-        {
-          path: 'charts/address-cohort-retention',
-          element: <AddressCohortRetentionPage />,
-        },
-        {
-          path: 'charts/average-block-time',
-          element: <AverageBlockTimePage />,
-        },
-        {
-          path: 'charts/block-time-distribution',
-          element: <BlockTimeDistributionPage />,
-        },
-        {
-          path: 'charts/cell-count',
-          element: <CellCountPage />,
-        },
-        {
-          path: 'charts/cell-size-distribution',
-          element: <CellSizeDistributionPage />,
-        },
-        {
-          path: 'charts/circulation-ratio',
-          element: <CirculationRatioPage />,
-        },
-        {
-          path: 'charts/daily-deposit',
-          element: <DailyDepositPage />,
-        },
-        {
-          path: 'charts/difficulty',
-          element: <DifficultyPage />,
-        },
-        {
-          path: 'charts/epoch-time-distribution',
-          element: <EpochTimeDistributionPage />,
-        },
-        {
-          path: 'charts/hash-rate',
-          element: <HashRatePage />,
-        },
-        {
-          path: 'charts/inflation-rate',
-          element: <InflationRatePage />,
-        },
-        {
-          path: 'charts/miner-address-distribution',
-          element: <MinerAddressDistributionPage />,
-        },
-        {
-          path: 'charts/nominal-apc',
-          element: <NominalApcPage />,
-        },
-        {
-          path: 'charts/total-deposit',
-          element: <TotalDepositPage />,
-        },
-        {
-          path: 'charts/transaction-count',
-          element: <TransactionCountPage />,
-        },
-        {
-          path: 'charts/uncle-rate',
-          element: <UncleRatePage />,
-        },
-        {
-          path: 'fiber/channels',
-          element: <FiberChannelsPage />,
-        },
-        {
-          path: 'fiber/channels/:id',
-          element: <FiberChannelDetailPage />,
-        },
-        {
-          path: 'dao',
-          element: <DaoPage />,
-        },
-        {
-          path: 'hardforks',
-          element: <HardforksPage />,
-        },
-        {
-          path: 'network',
-          element: <NetworkPage />,
-        },
-        {
-          path: 'script/:codeHash',
-          element: <ScriptByCodeHashRoute />,
-        },
-        {
-          path: 'scripts/:name',
-          element: <ScriptDetailRoute />,
-        },
-        {
-          path: 'tokens/:typeHash',
-          element: <TokenDetailRoute />,
-        },
-        {
-          path: 'clusters/:clusterId',
-          element: <ClusterDetailRoute />,
-        },
-        {
-          path: 'identities/:collectionId',
-          element: <IdentityCollectionRoute />,
-        },
-        {
-          path: 'classes/:classId',
-          element: <MnftClassDetailRoute />,
-        },
-        {
-          path: 'objects/:sporeId',
-          element: <SporeDetailRoute />,
-        },
-        {
-          path: 'objects/mnft/:objectId',
-          element: <MnftItemDetailRoute />,
-        },
-        {
-          path: 'identities/dotbit/:identityId',
-          element: <DotbitItemDetailRoute />,
-        },
-        {
-          path: 'identities/did/:identityId',
-          element: <DidCkbItemDetailRoute />,
-        },
-        {
-          path: '*',
-          element: <NotFoundPage />,
-        },
-      ],
+      children,
     },
   ];
 }

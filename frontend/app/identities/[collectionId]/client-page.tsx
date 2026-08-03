@@ -77,7 +77,8 @@ export default function IdentityCollectionPage({ collectionId }: IdentityCollect
   const isDotbit = collection
     ? isDotbitAlias(collection.collectionId) || collection.standard.toLowerCase() === 'dotbit'
     : isDotbitAlias(collectionId);
-  const searchLabel = isDotbit ? 'Search .bit' : 'Search did:ckb';
+  const isBitCell = collection?.standard.toLowerCase() === 'bit_cell';
+  const searchLabel = isDotbit ? 'Search .bit' : isBitCell ? 'Search .bit Cell' : 'Search did:ckb';
   // Fetch collection items (gallery — always visible)
   const {
     data: collectionItems,

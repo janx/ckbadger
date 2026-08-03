@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::sync::LazyLock;
 
 use anyhow::{anyhow, Result};
 use tracing::warn;
@@ -11,10 +10,8 @@ use super::script::ScriptParser;
 
 pub const DOTBIT_ACCOUNT_CELL_TYPE_ID: &str =
     "0x4f170a048198408f4f4d36bdbcddcebe7a0ae85244d3ab08fd40a80cbfc70918";
-
-static DOTBIT_TYPE_ID_HASH: LazyLock<Vec<u8>> =
-    LazyLock::new(|| parse_hex_to_bytes(DOTBIT_ACCOUNT_CELL_TYPE_ID));
-
+pub const DOTBIT_ACCOUNT_CELL_TYPE_ID_TESTNET: &str =
+    "0x1106d9eaccde0995a7e07e80dd0ce7509f21752538dfdd1ee2526d24574846b1";
 const HASH_BYTES_LEN: usize = 32;
 const ACCOUNT_ID_LEN: usize = 20;
 const DAS_WITNESS_HEADER_LEN: usize = 7; // "das"(3) + action_data_type(4)
@@ -53,113 +50,133 @@ pub(crate) struct DotbitWitnessAccountData {
     pub(crate) status: Option<u8>,
 }
 
+#[derive(Debug)]
+struct ParsedDotbitCellData {
+    account_id: Vec<u8>,
+    account: Option<String>,
+    next_account_id: Option<Vec<u8>>,
+    expired_at: Option<u64>,
+    registered_at: Option<u64>,
+    status: Option<u8>,
+}
+
 pub struct DotbitParser;
 
 impl DotbitParser {
+    /// Return whether a type script is the canonical `.bit` AccountCell.
+    /// `.bit Cell` is a separate identity asset with an independent lifecycle.
     pub fn is_account_cell_type_script(code_hash: &[u8]) -> bool {
-        code_hash == DOTBIT_TYPE_ID_HASH.as_slice()
+        crate::parser::registry::PROTOCOL_REGISTRY.is(
+            code_hash,
+            crate::parser::registry::ProtocolScript::DotbitAccount,
+        )
     }
 
     pub fn parse_account_cell(output: &CellOutput, data_hex: &str) -> Option<ParsedDotbitAccount> {
         let type_script = output.type_.as_ref()?;
         let type_code_hash = parse_hex_to_bytes(&type_script.code_hash);
-
-        if !Self::is_account_cell_type_script(&type_code_hash) {
-            return None;
-        }
-
+        let type_args = parse_hex_to_bytes(&type_script.args);
         let data = parse_hex_to_bytes(data_hex);
-
-        let min_len = HASH_BYTES_LEN + ACCOUNT_ID_LEN;
-        if data.len() < min_len {
-            return None;
-        }
-
-        let account_id_from_args = parse_hex_to_bytes(&type_script.args);
-        let account_id_from_data = data[HASH_BYTES_LEN..HASH_BYTES_LEN + ACCOUNT_ID_LEN].to_vec();
-
-        // Prefer type args when available (newer layout), but keep data fallback
-        // for historical/live cells where args may be empty.
-        let account_id = if account_id_from_args.len() == ACCOUNT_ID_LEN
-            && !account_id_from_args.iter().all(|&b| b == 0)
-        {
-            account_id_from_args
-        } else if !account_id_from_data.iter().all(|&b| b == 0) {
-            account_id_from_data
-        } else {
-            return None;
-        };
-
-        let next_account_id = if data.len() >= HASH_BYTES_LEN + ACCOUNT_ID_LEN * 2 {
-            let next_id =
-                data[HASH_BYTES_LEN + ACCOUNT_ID_LEN..HASH_BYTES_LEN + ACCOUNT_ID_LEN * 2].to_vec();
-            if next_id.iter().all(|&b| b == 0) {
-                None
-            } else {
-                Some(next_id)
-            }
-        } else {
-            None
-        };
-
-        let expired_at = if data.len() >= HASH_BYTES_LEN + ACCOUNT_ID_LEN * 2 + 8 {
-            let offset = HASH_BYTES_LEN + ACCOUNT_ID_LEN * 2;
-            let bytes: [u8; 8] = data[offset..offset + 8].try_into().ok()?;
-            Some(u64::from_le_bytes(bytes))
-        } else {
-            None
-        };
+        let parsed = Self::parse_identity_cell_data(&type_code_hash, &type_args, &data)?;
 
         let type_script_hash = ScriptParser::compute_script_hash(type_script);
         let owner_lock_hash = ScriptParser::compute_script_hash(&output.lock);
 
         Some(ParsedDotbitAccount {
-            account_id,
-            account: None,
+            account_id: parsed.account_id,
+            account: parsed.account,
             type_script_hash,
-            next_account_id,
-            expired_at,
-            registered_at: None,
-            status: None,
+            next_account_id: parsed.next_account_id,
+            expired_at: parsed.expired_at,
+            registered_at: parsed.registered_at,
+            status: parsed.status,
             owner_lock_hash,
         })
     }
 
     pub fn parse_account_parsed_cell(cell: &ParsedCell) -> Option<ParsedDotbitAccount> {
         let type_code_hash = cell.type_code_hash.as_ref()?;
+        let type_args = cell.type_args.as_deref().unwrap_or_default();
+        let parsed = Self::parse_identity_cell_data(type_code_hash, type_args, &cell.data)?;
 
+        Some(ParsedDotbitAccount {
+            account_id: parsed.account_id,
+            account: parsed.account,
+            type_script_hash: cell.type_script_hash.clone()?,
+            next_account_id: parsed.next_account_id,
+            expired_at: parsed.expired_at,
+            registered_at: parsed.registered_at,
+            status: parsed.status,
+            owner_lock_hash: cell.lock_script_hash.clone(),
+        })
+    }
+
+    /// Resolve the canonical 20-byte `.bit` account ID for activity building.
+    ///
+    /// Output cells carry raw protocol data and use the same parser as identity
+    /// materialization. Input activities may instead carry an already-resolved
+    /// 20-byte ID loaded from the outpoint index because raw input data is not
+    /// available in that stage.
+    pub(crate) fn resolve_account_id(
+        type_code_hash: &[u8],
+        type_args: Option<&[u8]>,
+        data_or_resolved_id: &[u8],
+    ) -> Option<Vec<u8>> {
         if !Self::is_account_cell_type_script(type_code_hash) {
             return None;
         }
 
-        let data = &cell.data;
+        if data_or_resolved_id.len() == ACCOUNT_ID_LEN {
+            return (!data_or_resolved_id.iter().all(|&byte| byte == 0))
+                .then(|| data_or_resolved_id.to_vec());
+        }
 
+        Self::parse_identity_cell_data(
+            type_code_hash,
+            type_args.unwrap_or_default(),
+            data_or_resolved_id,
+        )
+        .map(|parsed| parsed.account_id)
+    }
+
+    fn parse_identity_cell_data(
+        type_code_hash: &[u8],
+        type_args: &[u8],
+        data: &[u8],
+    ) -> Option<ParsedDotbitCellData> {
+        use crate::parser::registry::ProtocolScript;
+
+        match crate::parser::registry::PROTOCOL_REGISTRY.get(type_code_hash) {
+            Some(ProtocolScript::DotbitAccount) => {
+                Self::parse_legacy_account_cell_data(type_args, data)
+            }
+            _ => None,
+        }
+    }
+
+    fn parse_legacy_account_cell_data(
+        type_args: &[u8],
+        data: &[u8],
+    ) -> Option<ParsedDotbitCellData> {
         let min_len = HASH_BYTES_LEN + ACCOUNT_ID_LEN;
         if data.len() < min_len {
             return None;
         }
 
-        let account_id_from_args = cell.type_args.as_deref();
         let account_id_from_data = &data[HASH_BYTES_LEN..HASH_BYTES_LEN + ACCOUNT_ID_LEN];
-
-        let account_id = if let Some(args) =
-            account_id_from_args.filter(|a| a.len() == ACCOUNT_ID_LEN && !a.iter().all(|&b| b == 0))
-        {
-            args.to_vec()
-        } else if !account_id_from_data.iter().all(|&b| b == 0) {
-            account_id_from_data.to_vec()
-        } else {
-            return None;
-        };
+        let account_id =
+            if type_args.len() == ACCOUNT_ID_LEN && !type_args.iter().all(|&byte| byte == 0) {
+                type_args.to_vec()
+            } else if !account_id_from_data.iter().all(|&byte| byte == 0) {
+                account_id_from_data.to_vec()
+            } else {
+                return None;
+            };
 
         let next_account_id = if data.len() >= HASH_BYTES_LEN + ACCOUNT_ID_LEN * 2 {
             let next_id =
-                data[HASH_BYTES_LEN + ACCOUNT_ID_LEN..HASH_BYTES_LEN + ACCOUNT_ID_LEN * 2].to_vec();
-            if next_id.iter().all(|&b| b == 0) {
-                None
-            } else {
-                Some(next_id)
-            }
+                &data[HASH_BYTES_LEN + ACCOUNT_ID_LEN..HASH_BYTES_LEN + ACCOUNT_ID_LEN * 2];
+            (!next_id.iter().all(|&byte| byte == 0)).then(|| next_id.to_vec())
         } else {
             None
         };
@@ -172,15 +189,13 @@ impl DotbitParser {
             None
         };
 
-        Some(ParsedDotbitAccount {
+        Some(ParsedDotbitCellData {
             account_id,
             account: None,
-            type_script_hash: cell.type_script_hash.clone()?,
             next_account_id,
             expired_at,
             registered_at: None,
             status: None,
-            owner_lock_hash: cell.lock_script_hash.clone(),
         })
     }
 
@@ -219,10 +234,12 @@ impl DotbitParser {
                     output_index
                 )
             })?;
-            if let Some(wd) = witness_bundle.accounts.get(&account.account_id) {
-                account.account = wd.name.clone();
-                account.registered_at = wd.registered_at;
-                account.status = wd.status;
+            if account.account.is_none() {
+                if let Some(wd) = witness_bundle.accounts.get(&account.account_id) {
+                    account.account = wd.name.clone();
+                    account.registered_at = wd.registered_at;
+                    account.status = wd.status;
+                }
             }
             if account.account.is_none() {
                 // DAS witness may lack account name for some historical or
@@ -405,12 +422,15 @@ fn parse_account_chars_to_name(account_chars: &[u8]) -> Option<String> {
     Some(account)
 }
 
-fn parse_molecule_u32(data: &[u8]) -> Option<usize> {
+pub(super) fn parse_molecule_u32(data: &[u8]) -> Option<usize> {
     let raw: [u8; 4] = data.try_into().ok()?;
     Some(u32::from_le_bytes(raw) as usize)
 }
 
-fn parse_molecule_table_fields(data: &[u8], min_field_count: usize) -> Option<Vec<&[u8]>> {
+pub(super) fn parse_molecule_table_fields(
+    data: &[u8],
+    min_field_count: usize,
+) -> Option<Vec<&[u8]>> {
     let header_size = 4 + min_field_count * 4;
     if data.len() < header_size {
         return None;
@@ -455,7 +475,7 @@ fn parse_molecule_table_fields(data: &[u8], min_field_count: usize) -> Option<Ve
     )
 }
 
-fn parse_molecule_bytes(data: &[u8]) -> Option<&[u8]> {
+pub(super) fn parse_molecule_bytes(data: &[u8]) -> Option<&[u8]> {
     if data.len() < 4 {
         return None;
     }
@@ -729,6 +749,14 @@ mod tests {
             "0x0000000000000000000000000000000000000000000000000000000000000000",
         );
         assert!(!DotbitParser::is_account_cell_type_script(&other));
+    }
+
+    #[test]
+    fn detects_testnet_bit_account() {
+        let t = crate::rpc::parse_hex_to_bytes(
+            "0x1106d9eaccde0995a7e07e80dd0ce7509f21752538dfdd1ee2526d24574846b1",
+        );
+        assert!(DotbitParser::is_account_cell_type_script(&t));
     }
 
     #[test]

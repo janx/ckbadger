@@ -3,6 +3,7 @@
 //! Tests token insertion, holder balance management, holder deletion,
 //! and listing operations with limits.
 
+use ckbadger_common::TokenBalance;
 use ckbadger_indexer::rpc::{
     BlockResponseWithCycles, BlockView, CellInput, CellOutput, HeaderView, OutPoint, Script,
     TransactionView,
@@ -12,6 +13,11 @@ use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::CkbadgerStore;
 use ckbadger_store::TokenInfo;
 use std::sync::Arc;
+
+/// Real mainnet cellbase first witness (block 12,000,000): block parsing
+/// requires every non-genesis cellbase to carry a valid RFC-0022
+/// `CellbaseWitness`.
+const TEST_CELLBASE_WITNESS: &str = "0x7a0000000c00000055000000490000001000000030000000310000009bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce801140000008211f1b938a107cd53b6302cc752a6fc3965638d210000000000000020302e3131332e3020283832383731613320323032342d30312d303929";
 
 fn setup_store() -> Arc<CkbadgerStore> {
     let dir = tempfile::tempdir().unwrap();
@@ -70,7 +76,7 @@ fn bulk_build_udt_fixture() -> BlockResponseWithCycles {
             type_: Some(type_script.clone()),
         }],
         outputs_data: vec![format!("0x{}", hex::encode(1000u128.to_le_bytes()))],
-        witnesses: vec!["0x".to_string()],
+        witnesses: vec![TEST_CELLBASE_WITNESS.to_string()],
     };
 
     let tx1 = TransactionView {
@@ -136,14 +142,7 @@ fn bulk_build_udt_fixture() -> BlockResponseWithCycles {
     }
 }
 
-fn make_token(
-    name: &str,
-    symbol: &str,
-    decimals: i32,
-    total_supply: i128,
-    holders_count: i64,
-    first_seen_block: i64,
-) -> TokenInfo {
+fn make_token(name: &str, symbol: &str, decimals: i32, first_seen_block: i64) -> TokenInfo {
     TokenInfo {
         type_code_hash: vec![0x44u8; 32],
         hash_type: 1,
@@ -152,9 +151,7 @@ fn make_token(
         name: Some(name.to_string()),
         symbol: Some(symbol.to_string()),
         decimals: Some(decimals),
-        total_supply: Some(total_supply),
         max_supply: None,
-        holders_count,
         first_seen_block,
         icon_url: None,
         description: Some(format!("{} token", name)),
@@ -166,7 +163,7 @@ fn make_token(
 fn test_insert_token_retrieve_by_type_hash() {
     let store = setup_store();
     let type_hash = vec![0xA1u8; 32];
-    let token = make_token("TestCoin", "TC", 8, 100_000_000_000_000, 42, 1000);
+    let token = make_token("TestCoin", "TC", 8, 1000);
 
     let mut batch = StoreBatch::new(&store);
     batch.put_token(&type_hash, &token);
@@ -179,8 +176,6 @@ fn test_insert_token_retrieve_by_type_hash() {
     assert_eq!(retrieved.name, Some("TestCoin".to_string()));
     assert_eq!(retrieved.symbol, Some("TC".to_string()));
     assert_eq!(retrieved.decimals, Some(8));
-    assert_eq!(retrieved.total_supply, Some(100_000_000_000_000));
-    assert_eq!(retrieved.holders_count, 42);
     assert_eq!(retrieved.first_seen_block, 1000);
     assert_eq!(retrieved.standard, "xUDT");
     assert_eq!(retrieved.hash_type, 1);
@@ -206,7 +201,7 @@ fn test_update_token_holder_balance() {
     let lock_hash = vec![0xC1u8; 32];
 
     // Insert token info first
-    let token = make_token("HolderCoin", "HC", 6, 500_000_000_000, 1, 2000);
+    let token = make_token("HolderCoin", "HC", 6, 2000);
     let mut batch = StoreBatch::new(&store);
     batch.put_token(&type_hash, &token);
     batch.put_token_holder(&type_hash, &lock_hash, 1000_000000);
@@ -216,7 +211,7 @@ fn test_update_token_holder_balance() {
     let balance = store
         .get_token_holder_balance(&type_hash, &lock_hash)
         .unwrap();
-    assert_eq!(balance, Some(1000_000000));
+    assert_eq!(balance, Some(TokenBalance::from(1000_000000)));
 
     // Update holder balance (simulating receiving more tokens)
     let mut batch = StoreBatch::new(&store);
@@ -226,7 +221,7 @@ fn test_update_token_holder_balance() {
     let updated = store
         .get_token_holder_balance(&type_hash, &lock_hash)
         .unwrap();
-    assert_eq!(updated, Some(2500_000000));
+    assert_eq!(updated, Some(TokenBalance::from(2500_000000)));
 
     // Verify via list_token_holders
     let holders = store.list_token_holders(&type_hash, 100).unwrap();
@@ -242,7 +237,7 @@ fn test_delete_token_holder_zero_balance() {
     let lock_hash = vec![0xE1u8; 32];
 
     // Insert holder with a balance
-    let token = make_token("DelCoin", "DC", 8, 100_00000000, 1, 3000);
+    let token = make_token("DelCoin", "DC", 8, 3000);
     let mut batch = StoreBatch::new(&store);
     batch.put_token(&type_hash, &token);
     batch.put_token_holder(&type_hash, &lock_hash, 50_00000000);
@@ -252,7 +247,7 @@ fn test_delete_token_holder_zero_balance() {
     let before = store
         .get_token_holder_balance(&type_hash, &lock_hash)
         .unwrap();
-    assert_eq!(before, Some(50_00000000));
+    assert_eq!(before, Some(TokenBalance::from(50_00000000)));
 
     // Delete the holder (simulating balance going to zero)
     let mut batch = StoreBatch::new(&store);
@@ -284,7 +279,7 @@ fn test_list_token_holders_with_limit() {
     let holder4 = vec![0x04u8; 32];
     let holder5 = vec![0x05u8; 32];
 
-    let token = make_token("BigCoin", "BC", 8, 10000_00000000, 5, 100);
+    let token = make_token("BigCoin", "BC", 8, 100);
 
     let mut batch = StoreBatch::new(&store);
     batch.put_token(&type_hash, &token);
@@ -308,12 +303,12 @@ fn test_list_token_holders_with_limit() {
     assert_eq!(single.len(), 1, "limit of 1 should return exactly 1");
 
     // Verify all balances are correct by collecting them
-    let all_balances: Vec<i128> = all.iter().map(|(_, bal)| *bal).collect();
-    assert!(all_balances.contains(&1000_00000000));
-    assert!(all_balances.contains(&2000_00000000));
-    assert!(all_balances.contains(&3000_00000000));
-    assert!(all_balances.contains(&500_00000000));
-    assert!(all_balances.contains(&4500_00000000));
+    let all_balances: Vec<TokenBalance> = all.iter().map(|(_, bal)| bal.clone()).collect();
+    assert!(all_balances.contains(&TokenBalance::from(1000_00000000)));
+    assert!(all_balances.contains(&TokenBalance::from(2000_00000000)));
+    assert!(all_balances.contains(&TokenBalance::from(3000_00000000)));
+    assert!(all_balances.contains(&TokenBalance::from(500_00000000)));
+    assert!(all_balances.contains(&TokenBalance::from(4500_00000000)));
 
     // Verify a different type_hash returns no holders
     let other_type = vec![0x99u8; 32];
@@ -343,27 +338,30 @@ fn bulk_build_token_owner_materializes_live_token_and_holder_state_without_db_re
     assert_eq!(token.hash_type, 1);
     assert_eq!(token.type_args, vec![0x12; 32]);
     assert_eq!(token.first_seen_block, 14_000_900);
-    assert_eq!(token.total_supply, Some(1000));
-    assert_eq!(token.holders_count, 1);
     assert_eq!(token.transfers_count, 4);
     assert_eq!(snapshot.token_transfer_counts.get(type_hash), Some(&4));
 
     let holders = snapshot.token_holders.get(type_hash).expect("holders");
     assert_eq!(holders.len(), 1);
-    let holder_balances: Vec<i128> = holders.values().copied().collect();
-    assert_eq!(holder_balances, vec![1000]);
+    let holder_balances: Vec<TokenBalance> = holders.values().cloned().collect();
+    assert_eq!(holder_balances, vec![TokenBalance::from(1000)]);
 
     assert_eq!(snapshot.addr_tokens.len(), 1);
     let mut addr_balances = snapshot
         .addr_tokens
         .values()
-        .map(|tokens: &std::collections::HashMap<Vec<u8>, i128>| {
-            assert_eq!(tokens.len(), 1);
-            *tokens.get(type_hash).expect("address token balance")
-        })
+        .map(
+            |tokens: &std::collections::HashMap<Vec<u8>, TokenBalance>| {
+                assert_eq!(tokens.len(), 1);
+                tokens
+                    .get(type_hash)
+                    .expect("address token balance")
+                    .clone()
+            },
+        )
         .collect::<Vec<_>>();
     addr_balances.sort_unstable();
-    assert_eq!(addr_balances, vec![1000]);
+    assert_eq!(addr_balances, vec![TokenBalance::from(1000)]);
 
     let hourly = snapshot
         .token_hourly_transfers
