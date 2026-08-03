@@ -157,7 +157,11 @@ output_index`; activity cursors encode `block_num:tx_idx`; spore/cluster list cu
 - `CursorPaginatedResponse<BlockResponse>` — block metadata + miner/hardfork activation
 - `BlockResponse` — single block
 - `BlockFeeStatsResponse` — total_size, total_cycles, fee-rate stats, `cycles_pending`
-- `Vec<BlockProposal>` — proposal_id + committed_tx info
+- `Vec<BlockProposal>` — `proposalIndex`, `proposalId`, `committedTxHash`, `committedBlockNumber`.
+  Commitments are resolved through the shared NC-Max commit-window scan (`+2..=+10`, first matching
+  tx in chain order wins — the same `resolve_committed_txs` path `/graph/proposals` uses). A
+  proposal not committed within the window blocks that exist (e.g. tip-adjacent windows) reports
+  both fields as `null`.
 
 ---
 

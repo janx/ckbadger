@@ -328,3 +328,104 @@ async fn test_proposal_graph_without_uncles_is_unchanged() {
     assert_eq!(json["metadata"]["committedCount"], 2);
     assert_eq!(proposal_nodes(&json).len(), 2);
 }
+
+// ---------------------------------------------------------------------------
+// Commit-window resolution pin. This test passes BEFORE the resolution logic
+// is extracted into the shared `resolve_committed_txs` helper (used by both
+// /graph/proposals and /blocks/{id}/proposals) and MUST still pass after —
+// proving the refactor preserves the exact matching semantics bit for bit:
+//   - scan order: window blocks ascending (+2..=+10), transactions in-block
+//     order, FIRST match wins (a later duplicate inclusion changes nothing);
+//   - a missing window block is skipped, not an error (tip-adjacent windows);
+//   - both window edges are exclusive fences: a matching tx at +1 or +11 does
+//     not commit the proposal.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_proposal_graph_commit_window_semantics_pinned() {
+    let txs = committed_transactions();
+    let (tx_a, tx_b, tx_c, tx_d) = (&txs[1], &txs[2], &txs[3], &txs[4]);
+
+    let specs = vec![
+        FixtureBlock {
+            number: 440,
+            proposals: vec![
+                tx_a.proposal_short_id(),
+                tx_b.proposal_short_id(),
+                tx_c.proposal_short_id(),
+                tx_d.proposal_short_id(),
+            ],
+            uncles: vec![],
+            transactions: vec![],
+        },
+        // +1: BEFORE the close edge (+2). tx_d's inclusion here must not count.
+        FixtureBlock {
+            number: 441,
+            proposals: vec![],
+            uncles: vec![],
+            transactions: vec![tx_d.clone()],
+        },
+        // 442 is deliberately missing: the scan skips the gap.
+        FixtureBlock {
+            number: 443,
+            proposals: vec![],
+            uncles: vec![],
+            transactions: vec![tx_a.clone(), tx_b.clone()],
+        },
+        // A duplicate inclusion of tx_a later in the window: first match wins.
+        FixtureBlock {
+            number: 449,
+            proposals: vec![],
+            uncles: vec![],
+            transactions: vec![tx_a.clone()],
+        },
+        // +11: BEYOND the far edge (+10). tx_c stays uncommitted.
+        FixtureBlock {
+            number: 451,
+            proposals: vec![],
+            uncles: vec![],
+            transactions: vec![tx_c.clone()],
+        },
+    ];
+    let json = proposal_graph(&specs, 440).await;
+
+    assert_eq!(json["metadata"]["totalProposals"], 4, "got {json}");
+    assert_eq!(
+        json["metadata"]["committedCount"], 2,
+        "only tx_a and tx_b commit inside the +2..=+10 window, got {json}"
+    );
+    assert_eq!(
+        json["metadata"]["commitmentWindow"]["earliestCommitBlock"],
+        442
+    );
+    assert_eq!(
+        json["metadata"]["commitmentWindow"]["latestCommitBlock"],
+        450
+    );
+
+    let node_a = proposal_node(&json, &short_id_hex(tx_a));
+    assert_eq!(node_a["data"]["txHash"], tx_hash_hex(tx_a));
+    assert_eq!(
+        node_a["data"]["commitBlock"], 443,
+        "first match in scan order wins; the duplicate at 449 must not shift it"
+    );
+    assert_eq!(node_a["data"]["distance"], 3);
+
+    let node_b = proposal_node(&json, &short_id_hex(tx_b));
+    assert_eq!(node_b["data"]["txHash"], tx_hash_hex(tx_b));
+    assert_eq!(node_b["data"]["commitBlock"], 443);
+
+    // Uncommitted proposals contribute no proposal node at all.
+    assert_eq!(proposal_nodes(&json).len(), 2);
+
+    // Exactly one commit-block node (443), carrying both commitments.
+    let commit_nodes: Vec<_> = json["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|n| n["nodeType"] == "commit_block")
+        .collect();
+    assert_eq!(commit_nodes.len(), 1, "got {json}");
+    assert_eq!(commit_nodes[0]["data"]["blockNumber"], 443);
+    assert_eq!(commit_nodes[0]["data"]["committedCount"], 2);
+}

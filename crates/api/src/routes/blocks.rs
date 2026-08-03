@@ -798,23 +798,33 @@ async fn get_block_proposals(
                 let mut hash = [0u8; 32];
                 hash.copy_from_slice(&h.hash);
                 if let Some(block) = ckb_store.get_block(&hash) {
-                    block
+                    // CKB proposal IDs are 10-byte tx hash prefixes; resolve
+                    // each to its committing transaction through the shared
+                    // commit-window helper (the same path /graph/proposals
+                    // uses). Proposals not committed within the window blocks
+                    // that exist stay null — honest data near the tip.
+                    let short_ids: Vec<Vec<u8>> = block
                         .data()
                         .proposals()
                         .into_iter()
+                        .map(|proposal_id| proposal_id.raw_data().to_vec())
+                        .collect();
+                    let commitments = crate::routes::proposal_window::resolve_committed_txs(
+                        ckb_store,
+                        block_number,
+                        &short_ids,
+                    );
+                    short_ids
+                        .into_iter()
+                        .zip(commitments)
                         .enumerate()
-                        .map(|(i, proposal_id)| {
-                            let proposal_bytes: Vec<u8> = proposal_id.raw_data().to_vec();
-                            BlockProposal {
-                                proposal_index: i as i16,
-                                proposal_id: format!("0x{}", hex::encode(&proposal_bytes)),
-                                // CKB proposal IDs are 10-byte tx hash prefixes.
-                                // Resolving committed_tx would require a prefix scan of
-                                // tx_hash_map, so it remains omitted until a dedicated
-                                // proposal->tx reverse index exists.
-                                committed_tx_hash: None,
-                                committed_block_number: None,
-                            }
+                        .map(|(i, (proposal_bytes, commitment))| BlockProposal {
+                            proposal_index: i as i16,
+                            proposal_id: format!("0x{}", hex::encode(&proposal_bytes)),
+                            committed_tx_hash: commitment
+                                .as_ref()
+                                .map(|(tx_hash, _)| format!("0x{}", hex::encode(tx_hash))),
+                            committed_block_number: commitment.map(|(_, number)| number),
                         })
                         .collect()
                 } else {
