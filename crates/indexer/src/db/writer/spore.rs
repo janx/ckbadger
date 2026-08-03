@@ -1727,6 +1727,120 @@ mod tests {
     }
 
     #[test]
+    fn test_real_testnet_did_ckb_cell_roundtrips_identity_store() {
+        use crate::parser::test_helpers::real_did_ckb;
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone(), store.clone());
+
+        // Real audited testnet cell 0x00290adc…:0 (block 18082860).
+        let (output, data_hex) = real_did_ckb::cell_32();
+        let parsed = crate::parser::spore::SporeParser::parse_spore_cell(&output, data_hex)
+            .expect("real did:ckb output must be classified for the identity write path");
+        let tx_hash = crate::rpc::parse_hex_to_bytes(real_did_ckb::CELL_32_TX_HASH);
+        let item_id = crate::rpc::parse_hex_to_bytes(real_did_ckb::CELL_32_ARGS);
+
+        let mut batch = StoreBatch::new(writer.store());
+        let mut state = writer.new_spore_batch_state();
+        writer
+            .insert_spore_cell(
+                &parsed,
+                &tx_hash,
+                0,
+                18_082_860,
+                1_753_000_000_000,
+                &mut batch,
+                &mut state,
+            )
+            .unwrap();
+        batch.commit().unwrap();
+
+        // Read back exactly the way the API detail route does (get_identity by
+        // the args item id).
+        let identity = store
+            .get_identity(&item_id)
+            .unwrap()
+            .expect("identity entry must exist under the args item id");
+        assert_eq!(identity.standard, IdentityStandard::DidCkb);
+        assert!(identity.is_live);
+        assert!(matches!(identity.extra, IdentityExtra::DidCkb));
+        let expected_owner =
+            crate::parser::script::ScriptParser::compute_script_hash(&output.lock);
+        assert_eq!(identity.owner_lock_hash, Some(expected_owner));
+        assert_eq!(identity.created_at_block, 18_082_860);
+        assert_eq!(identity.created_at_tx, tx_hash);
+
+        // Collection aggregate (drives /assets?type=identity).
+        let agg = store
+            .get_identity_collection_aggregate(&DID_CKB_SENTINEL_COLLECTION)
+            .unwrap()
+            .expect("did:ckb aggregate");
+        assert_eq!(agg.standard, IdentityStandard::DidCkb);
+        assert_eq!(agg.name.as_deref(), Some("did:ckb"));
+        assert_eq!(agg.total_count, 1);
+        assert_eq!(agg.live_count, 1);
+        assert_eq!(agg.holders_count, 1);
+
+        // Items listing index (drives /assets/identities/did_ckb/items).
+        let ids = store
+            .list_identity_ids_by_collection(&DID_CKB_SENTINEL_COLLECTION, None, 10)
+            .unwrap();
+        assert_eq!(ids, vec![item_id.clone()]);
+
+        // Outpoint → id mapping used by the live consume path.
+        let mapped = writer
+            .get_spore_id_by_outpoint(&tx_hash, 0)
+            .unwrap()
+            .expect("outpoint mapping");
+        assert_eq!(mapped, item_id);
+    }
+
+    #[test]
+    fn test_real_testnet_did_ckb_20_byte_item_id_roundtrips_identity_store() {
+        use crate::parser::test_helpers::real_did_ckb;
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone(), store.clone());
+
+        // Real testnet cell 0x1d43c10b…:0 with a 20-byte args item id.
+        let (output, data_hex) = real_did_ckb::cell_20();
+        let parsed = crate::parser::spore::SporeParser::parse_spore_cell(&output, data_hex)
+            .expect("real 20-byte-args did:ckb output must be classified");
+        let tx_hash = crate::rpc::parse_hex_to_bytes(real_did_ckb::CELL_20_TX_HASH);
+        let item_id = crate::rpc::parse_hex_to_bytes(real_did_ckb::CELL_20_ARGS);
+        assert_eq!(item_id.len(), 20);
+
+        let mut batch = StoreBatch::new(writer.store());
+        let mut state = writer.new_spore_batch_state();
+        writer
+            .insert_spore_cell(
+                &parsed,
+                &tx_hash,
+                0,
+                21_080_336,
+                1_753_100_000_000,
+                &mut batch,
+                &mut state,
+            )
+            .unwrap();
+        batch.commit().unwrap();
+
+        let identity = store
+            .get_identity(&item_id)
+            .unwrap()
+            .expect("20-byte item id must be persisted verbatim");
+        assert_eq!(identity.standard, IdentityStandard::DidCkb);
+        assert!(identity.is_live);
+
+        let ids = store
+            .list_identity_ids_by_collection(&DID_CKB_SENTINEL_COLLECTION, None, 10)
+            .unwrap();
+        assert_eq!(ids, vec![item_id.clone()]);
+    }
+
+    #[test]
     fn test_get_spore_hourly_transfer_errors_on_invalid_existing_value_length() {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());

@@ -3117,6 +3117,31 @@ mod tests {
     use crate::sync::TEST_CELLBASE_WITNESS;
 
     #[test]
+    fn bulk_semantic_tag_classifies_real_did_ckb_cells() {
+        use crate::parser::cell::CellParser;
+        use crate::parser::test_helpers::real_did_ckb;
+
+        // Real captured testnet did:ckb cells (32-byte and 20-byte args) must
+        // receive a did classification in bulk facts extraction; `Plain` means
+        // the whole identity pipeline is unreachable for them.
+        let (output_32, data_32) = real_did_ckb::cell_32();
+        let cell_32 = CellParser::parse_output(&output_32, data_32).expect("parsed cell 32");
+        assert_ne!(
+            classify_bulk_cell_semantic_tag(&cell_32),
+            CellSemanticTag::Plain,
+            "32-byte-args did:ckb cell must not classify as Plain"
+        );
+
+        let (output_20, data_20) = real_did_ckb::cell_20();
+        let cell_20 = CellParser::parse_output(&output_20, data_20).expect("parsed cell 20");
+        assert_ne!(
+            classify_bulk_cell_semantic_tag(&cell_20),
+            CellSemanticTag::Plain,
+            "20-byte-args did:ckb cell must not classify as Plain"
+        );
+    }
+
+    #[test]
     fn test_precommit_invariant_failure_policy_is_fail_fast() {
         let error = anyhow::Error::new(PreCommitInvariantError::new(
             "fiber lifecycle",

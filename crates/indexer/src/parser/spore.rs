@@ -476,6 +476,62 @@ mod tests {
     }
 
     #[test]
+    fn test_real_testnet_did_ckb_cell_classifies_as_did() {
+        use crate::parser::test_helpers::real_did_ckb;
+
+        // Registry maps docs/metadata/scripts/did-ckb.toml (slug "did-ckb") on
+        // both networks; the did classifier must fire for those code hashes.
+        let testnet = parse_hex_to_bytes(real_did_ckb::TYPE_CODE_HASH_TESTNET);
+        assert!(
+            SporeParser::is_did_type_script(&testnet),
+            "did:ckb testnet code_hash must classify as did"
+        );
+        let mainnet = parse_hex_to_bytes(real_did_ckb::TYPE_CODE_HASH_MAINNET);
+        assert!(
+            SporeParser::is_did_type_script(&mainnet),
+            "did:ckb mainnet code_hash must classify as did"
+        );
+    }
+
+    #[test]
+    fn test_real_testnet_did_ckb_cell_parses_item_id_from_args() {
+        use crate::parser::test_helpers::real_did_ckb;
+
+        // Live-path parse of the audited testnet cell 0x00290adc…:0
+        // (block 18082860): the identity item id is the full type-script args.
+        let (output, data_hex) = real_did_ckb::cell_32();
+        let parsed = SporeParser::parse_spore_cell(&output, data_hex)
+            .expect("real did:ckb cell must be classified by the live parse path");
+        assert!(parsed.is_did);
+        assert_eq!(
+            parsed.spore_id,
+            parse_hex_to_bytes(real_did_ckb::CELL_32_ARGS),
+            "item id must be the exact type-script args"
+        );
+        assert_eq!(parsed.owner_lock_hash.len(), 32);
+    }
+
+    #[test]
+    fn test_real_testnet_did_ckb_20_byte_args_cell_parses_in_bulk_path() {
+        use crate::parser::test_helpers::real_did_ckb;
+
+        // 31 of 421 live testnet did:ckb cells carry 20-byte args. The bulk
+        // (ParsedCell) path must classify them and preserve the exact 20-byte
+        // item id; a fixed 32-byte gate silently drops these real cells.
+        let (output, data_hex) = real_did_ckb::cell_20();
+        let parsed_cell = CellParser::parse_output(&output, data_hex).expect("parsed cell");
+        let parsed = SporeParser::parse_spore_parsed_cell(&parsed_cell)
+            .expect("real 20-byte-args did:ckb cell must be classified by the bulk parse path");
+        assert!(parsed.is_did);
+        let expected_id = parse_hex_to_bytes(real_did_ckb::CELL_20_ARGS);
+        assert_eq!(expected_id.len(), 20);
+        assert_eq!(
+            parsed.spore_id, expected_id,
+            "20-byte item id must be preserved verbatim"
+        );
+    }
+
+    #[test]
     fn excludes_testnet_bit_cell_from_spore() {
         let t = parse_hex_to_bytes(
             "0x0b1f412fbae26853ff7d082d422c2bdd9e2ff94ee8aaec11240a5b34cc6e890f",

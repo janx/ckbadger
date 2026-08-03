@@ -1581,6 +1581,53 @@ mod tests {
     }
 
     #[test]
+    fn test_did_ckb_changes_are_labeled_as_identity() {
+        use crate::parser::test_helpers::real_did_ckb;
+
+        let owner = 0xCD;
+        let did_code_hash = crate::rpc::parse_hex_to_bytes(real_did_ckb::TYPE_CODE_HASH_TESTNET);
+        // Item id = the full type-script args of the real audited testnet cell.
+        let item_id = crate::rpc::parse_hex_to_bytes(real_did_ckb::CELL_32_ARGS);
+        let did_data = crate::rpc::parse_hex_to_bytes(real_did_ckb::CELL_32_DATA);
+
+        let outputs = vec![make_output(
+            owner,
+            350_00000000,
+            Some(did_code_hash),
+            Some(vec![0x33; 32]),
+            Some(item_id.clone()),
+            did_data,
+        )];
+
+        let tx = TxView {
+            tx_hash: &[0x09; 32],
+            block_hash: &[0xA9; 32],
+            tx_index: 0,
+            block_number: 125,
+            timestamp: 1_700_000_200,
+            is_cellbase: false,
+            inputs: vec![],
+            outputs: outputs.iter().map(|o| o.view()).collect(),
+        };
+
+        let actions_list = build_tx_actions_for_block_no_detectors(&[tx]).unwrap();
+        assert_eq!(actions_list.len(), 1);
+        let owner_p = find_participant(&actions_list[0], owner);
+        assert!(
+            owner_p.tags & TAG_IDENTITY != 0,
+            "did:ckb output must tag the participant as identity"
+        );
+        let identity_delta = owner_p
+            .item_deltas
+            .iter()
+            .find(|d| d.kind == ITEM_KIND_IDENTITY)
+            .expect("did:ckb identity item delta should be present");
+        assert_eq!(identity_delta.item_id, item_id);
+        assert_eq!(identity_delta.magnitude, 1); // output-only = +1
+        assert!(!identity_delta.negative);
+    }
+
+    #[test]
     fn test_dao_withdraw_complete_produces_protocol_action() {
         let owner = 0xAA;
         let dao_code_hash = crate::rpc::parse_hex_to_bytes(crate::parser::dao::DAO_CODE_HASH);
