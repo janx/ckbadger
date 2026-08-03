@@ -4,12 +4,17 @@ website = "https://www.fiber.world/"
 
 [mainnet]
 [[mainnet.versions]]
+# Code cell 0x95006eee7b4c0c8ad66e0514c88ed0ae43fc8db27793427de86a348ec720b9d6:2
+# (node-verified 2026-08-03: type script hash == canonical_ref_hash, bytecode
+# data hash == version_hash; same binary as the testnet deployment).
 canonical_ref_hash = "0x2d45c4d3ed3e942f1945386ee82a5d1b7e4bb16d7fe1ab015421174ab747406c"
-version_hash = "0x2d45c4d3ed3e942f1945386ee82a5d1b7e4bb16d7fe1ab015421174ab747406c"
+version_hash = "0x7e35b1d77d1ec4967ff81829f3af9022572ad8ce3197f7b58ea062a09de666df"
 canonical_hash_type = "type"
 
 [testnet]
 [[testnet.versions]]
+# Code cell 0x12c569a258dd9c5bd99f632bb8314b1263b90921ba31496467580d6b79dd14a7:2
+# (node-verified 2026-08-03).
 canonical_ref_hash = "0x740dee83f87c6f309824d8fd3fbdd3c8380ee6fc9acc90b1a748438afcdf81d8"
-version_hash = "0x740dee83f87c6f309824d8fd3fbdd3c8380ee6fc9acc90b1a748438afcdf81d8"
+version_hash = "0x7e35b1d77d1ec4967ff81829f3af9022572ad8ce3197f7b58ea062a09de666df"
 canonical_hash_type = "type"

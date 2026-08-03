@@ -2461,7 +2461,7 @@ async fn get_address(
             code_hash: format!("0x{}", hex::encode(&si.code_hash)),
             name: si.name.unwrap_or_else(|| "Unknown".to_string()),
             script_kind: Some("lock".to_string()),
-            deprecated: false,
+            deprecated: si.deprecated,
         });
 
         (Some(script), script_info_response, addr)

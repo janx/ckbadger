@@ -4,14 +4,18 @@ website = "https://utxoswap.xyz/"
 
 [mainnet]
 [[mainnet.versions]]
+# Code cell 0x5292c77c62f108e3a33e54ed3bdcc4457a9d7d88be0c6ef3c1811f473394e2f7:0
+# (node-verified 2026-08-03).
 canonical_ref_hash = "0x3547c9aa563804e47ba3ebd37e6012e447c91a238f7aa71b1a75319f11df060e"
-version_hash = "0x3547c9aa563804e47ba3ebd37e6012e447c91a238f7aa71b1a75319f11df060e"
+version_hash = "0x6fb9173d1dae0d686030ec24889c754d15f18c7e87c7d92c4a1431621054e7b9"
 canonical_hash_type = "type"
 deprecated = true
 
 [testnet]
 [[testnet.versions]]
+# Code cell 0xad80b3b20c1ce63f2b0863c1ef697a98184dfee1158e623de6a132d271f01e76:0
+# (node-verified 2026-08-03).
 canonical_ref_hash = "0x4e9c30c8d6ce275740fbe69eae49c3d8c213578c5bd066f4938fe3c7dec6e101"
-version_hash = "0x4e9c30c8d6ce275740fbe69eae49c3d8c213578c5bd066f4938fe3c7dec6e101"
+version_hash = "0x04a2dd40c570d9cbfb8ed71550830d92e2b39b713c1ad2e30d5ad4d1e2f8a72b"
 canonical_hash_type = "type"
 deprecated = true

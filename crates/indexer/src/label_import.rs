@@ -183,6 +183,60 @@ pub(crate) enum ImportDeployment {
     Pseudo(PseudoScriptDeployment),
 }
 
+/// What a version entry's `version_hash` field attaches to.
+///
+/// A version is a deployment's bytecode identity — the code cell's data hash.
+/// The chain-side usage rollup attributes reference stats to versions by the
+/// live code cell's actual data hash, so a label attached to anything else
+/// decorates a version that will never receive usage while the real one stays
+/// unlabeled (the failure that zeroed the Fiber families).
+enum VersionAttachment {
+    /// A plausible bytecode identity to attach the label to.
+    Attachable(Vec<u8>),
+    /// Legacy all-zero sentinel: the entry declares no version.
+    NoVersion,
+    /// The declared identity is provably not a bytecode data hash; the reason
+    /// explains why. Attaching it would silently misattribute the family.
+    Invalid(String),
+}
+
+/// THE single computation deciding whether an entry's version identity is
+/// attachable. Both the family `versions_count` and the version-write path go
+/// through here so they can never disagree.
+fn version_attachment(entry: &ScriptDeploymentEntry) -> Result<VersionAttachment> {
+    let version_hash = decode_hex(&entry.version_hash)
+        .map_err(|e| anyhow::anyhow!("invalid version_hash `{}`: {}", entry.version_hash, e))?;
+    if version_hash.iter().all(|&b| b == 0) {
+        return Ok(VersionAttachment::NoVersion);
+    }
+    let reference_hash = decode_hex(&entry.canonical_ref_hash).map_err(|e| {
+        anyhow::anyhow!(
+            "invalid canonical_ref_hash `{}`: {}",
+            entry.canonical_ref_hash,
+            e
+        )
+    })?;
+    match entry.canonical_hash_type.as_str() {
+        // A type-script hash is never a bytecode data hash, so an entry that
+        // copies the reference into version_hash is a placeholder.
+        "type" if version_hash == reference_hash => Ok(VersionAttachment::Invalid(
+            "version_hash equals canonical_ref_hash for a type-referenced deployment; \
+             a type-script hash is never the bytecode's data hash (set version_hash \
+             to the code cell's data hash)"
+                .to_string(),
+        )),
+        // For data forms the reference IS the bytecode data hash.
+        "data" | "data1" | "data2" if version_hash != reference_hash => {
+            Ok(VersionAttachment::Invalid(
+                "version_hash differs from canonical_ref_hash for a data-form \
+                 deployment; the data-form reference IS the bytecode's data hash"
+                    .to_string(),
+            ))
+        }
+        _ => Ok(VersionAttachment::Attachable(version_hash)),
+    }
+}
+
 impl ScriptNetworkMetadata {
     pub(crate) fn import_deployments(&self) -> Vec<ImportDeployment> {
         if let Some(pseudo) = &self.pseudo {
@@ -584,7 +638,6 @@ fn upsert_script_label(
                             version_info.website = None;
                             version_info.canonical_reference_hash = None;
                             version_info.canonical_hash_type = None;
-                            version_info.associated_code_hash = None;
                             store.put_script_version(&data_hash, &version_info)?;
                         }
                     }
@@ -619,10 +672,19 @@ fn upsert_script_family(
     family.description = script.description.clone();
     family.website = script.website.clone();
     family.category = script.category.clone();
-    family.versions_count = active_deployments
-        .iter()
-        .filter(|deployment| matches!(deployment, ImportDeployment::Version(_)))
-        .count() as i64;
+    // Count unique attachable bytecode versions: one binary deployed under
+    // several references (e.g. RGB++ signet + BTC-testnet3) is ONE version,
+    // and an entry whose version identity is invalid attaches nothing, so the
+    // family must not claim it.
+    let mut attachable_versions: std::collections::HashSet<Vec<u8>> = Default::default();
+    for deployment in active_deployments {
+        if let ImportDeployment::Version(version) = deployment {
+            if let VersionAttachment::Attachable(version_hash) = version_attachment(version)? {
+                attachable_versions.insert(version_hash);
+            }
+        }
+    }
+    family.versions_count = attachable_versions.len() as i64;
     store.put_script_family_direct(family_id, &family)?;
     store.put_script_family_name_direct(&script.name, family_id)?;
     Ok(())
@@ -674,19 +736,33 @@ fn import_single_deployment(
     // Pseudo-scripts (Type ID, Zero Lock) have no deployed code cell and therefore
     // no meaningful version_hash — skip the version-write; code_hash-level metadata
     // was already persisted above.
+    //
+    // A version entry whose declared identity is provably not a bytecode data
+    // hash (see [`version_attachment`]) is skipped LOUDLY: attaching it would
+    // label a version that no chain rollup will ever attribute usage to, while
+    // the real deployed version stays unlabeled — the family then reads zero
+    // against thousands of live cells on chain. The reference-level label
+    // written above is kept; the canonical reference hash itself is real chain
+    // vocabulary.
     let version_hash = match deployment {
-        ImportDeployment::Version(version) => {
-            let decoded = decode_hex(&version.version_hash).ok();
-            let is_zero = decoded
-                .as_ref()
-                .map(|h| h.iter().all(|&b| b == 0))
-                .unwrap_or(true);
-            if is_zero {
-                None
-            } else {
-                decoded
+        ImportDeployment::Version(version) => match version_attachment(version)? {
+            VersionAttachment::Attachable(version_hash) => Some(version_hash),
+            VersionAttachment::NoVersion => None,
+            VersionAttachment::Invalid(reason) => {
+                warn!(
+                    family = family_id,
+                    script = %script.name,
+                    version_hash = %version.version_hash,
+                    canonical_ref_hash = %version.canonical_ref_hash,
+                    canonical_hash_type = version.canonical_hash_type.as_str(),
+                    %reason,
+                    "skipping script version attachment: fix the version_hash in \
+                     docs/metadata/scripts/{}.toml",
+                    family_id,
+                );
+                return Ok(());
             }
-        }
+        },
         ImportDeployment::Pseudo(_) => None,
     };
     let Some(version_hash) = version_hash else {
@@ -720,7 +796,6 @@ fn import_single_deployment(
     version_info.category = script.category.clone();
     version_info.description = script.description.clone();
     version_info.website = script.website.clone();
-    version_info.associated_code_hash = Some(code_hash.clone());
     if let ImportDeployment::Version(version) = deployment {
         version_info.canonical_reference_hash = Some(code_hash.clone());
         version_info.canonical_hash_type = Some(ScriptParser::parse_hash_type(
@@ -1176,10 +1251,6 @@ disabled = true
                 )
                 .unwrap()),
                 canonical_hash_type: Some(ScriptParser::parse_hash_type("type")),
-                associated_code_hash: Some(hex::decode(
-                    "9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8"
-                )
-                .unwrap()),
                 ..Default::default()
             }
         );
@@ -1697,7 +1768,10 @@ canonical_hash_type = "data1"
 
         let version_info = store.get_script_version(&version_hash).unwrap().unwrap();
         assert_eq!(version_info.name.as_deref(), Some("Shared Version"));
-        assert_eq!(version_info.associated_code_hash, Some(mainnet_code_hash));
+        assert_eq!(
+            version_info.canonical_reference_hash,
+            Some(mainnet_code_hash)
+        );
         assert_eq!(
             store
                 .list_script_version_hashes_by_label("Shared Version")
@@ -2052,5 +2126,374 @@ mod bundled_label_chain_consistency_tests {
         assert_eq!(row.symbol.as_deref(), Some(chain.symbol.as_str()));
         assert_eq!(row.name.as_deref(), Some(chain.name.as_str()));
         assert_eq!(row.decimals, Some(i32::from(chain.decimal)));
+    }
+}
+
+/// Guards on the TOML `version_hash` field: a version is a deployment's
+/// bytecode identity (the code cell's data hash). For a type-referenced
+/// deployment the reference hash is a type-script hash and can never be the
+/// bytecode's data hash, so `version_hash == canonical_ref_hash` under
+/// `canonical_hash_type = "type"` is a placeholder that would label a
+/// nonexistent version while the real one accumulates usage unlabeled — the
+/// exact failure that zeroed the Fiber families.
+#[cfg(test)]
+mod version_identity_tests {
+    use super::test_log_capture::capture_warnings;
+    use super::*;
+    use ckbadger_store::batch::StoreBatch;
+    use ckbadger_store::types::{LiveCellInfo, ScriptReferenceInfo};
+    use tempfile::TempDir;
+
+    fn type_entry(version_hash: &str, canonical_ref_hash: &str) -> ScriptDeploymentEntry {
+        ScriptDeploymentEntry {
+            version_hash: version_hash.to_string(),
+            canonical_ref_hash: canonical_ref_hash.to_string(),
+            canonical_hash_type: ValidatedHashType::new("type".to_string(), "canonical_hash_type")
+                .unwrap(),
+            deprecated: false,
+        }
+    }
+
+    fn script_with_mainnet_versions(
+        slug: &str,
+        name: &str,
+        versions: Vec<ScriptDeploymentEntry>,
+    ) -> ScriptMetadata {
+        ScriptMetadata {
+            metadata_slug: Some(slug.to_string()),
+            name: name.to_string(),
+            description: Some("test".to_string()),
+            website: None,
+            category: Some("lock".to_string()),
+            disabled: false,
+            mainnet: Some(ScriptNetworkMetadata {
+                versions,
+                pseudo: None,
+            }),
+            testnet: None,
+        }
+    }
+
+    #[test]
+    fn test_placeholder_type_version_hash_warns_and_skips_version_attachment() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path().to_str().unwrap()).unwrap();
+
+        let placeholder = "0x1111111111111111111111111111111111111111111111111111111111111111";
+        let script = script_with_mainnet_versions(
+            "placeholder-family",
+            "Placeholder Lock",
+            vec![type_entry(placeholder, placeholder)],
+        );
+
+        let (result, logs) = capture_warnings(|| upsert_script_label(&store, &script, "mainnet"));
+        result.unwrap();
+
+        assert!(
+            logs.contains("placeholder-family") && logs.contains("version_hash"),
+            "placeholder version_hash must be reported loudly with the family id, got: {logs}"
+        );
+        assert!(
+            logs.contains(&placeholder[2..]),
+            "warning must name the offending hash, got: {logs}"
+        );
+
+        let placeholder_bytes = decode_hex(placeholder).unwrap();
+        assert!(
+            store
+                .get_script_version(&placeholder_bytes)
+                .unwrap()
+                .is_none(),
+            "a placeholder version_hash must not create a version row"
+        );
+        assert!(
+            store
+                .list_script_version_hashes_by_family("placeholder-family")
+                .unwrap()
+                .is_empty(),
+            "placeholder must not be indexed under the family"
+        );
+        assert!(
+            store
+                .list_script_version_hashes_by_label("Placeholder Lock")
+                .unwrap()
+                .is_empty(),
+            "placeholder must not be indexed under the label"
+        );
+
+        let family = store
+            .get_script_family("placeholder-family")
+            .unwrap()
+            .expect("family row is still created for the reference-level label");
+        assert_eq!(
+            family.versions_count, 0,
+            "family must not claim a version that was never attached"
+        );
+
+        // The canonical reference itself is real chain vocabulary — its
+        // reference-level label survives so the deployment is still named.
+        let info = store
+            .get_script_info(&placeholder_bytes)
+            .unwrap()
+            .expect("reference-level script info should be labeled");
+        assert_eq!(info.name.as_deref(), Some("Placeholder Lock"));
+    }
+
+    #[test]
+    fn test_data_form_version_hash_mismatch_warns_and_skips_version_attachment() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path().to_str().unwrap()).unwrap();
+
+        let version = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let reference = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        let script = ScriptMetadata {
+            metadata_slug: Some("data-mismatch".to_string()),
+            name: "Data Mismatch".to_string(),
+            description: None,
+            website: None,
+            category: None,
+            disabled: false,
+            mainnet: Some(ScriptNetworkMetadata {
+                versions: vec![ScriptDeploymentEntry {
+                    version_hash: version.to_string(),
+                    canonical_ref_hash: reference.to_string(),
+                    canonical_hash_type: ValidatedHashType::new(
+                        "data1".to_string(),
+                        "canonical_hash_type",
+                    )
+                    .unwrap(),
+                    deprecated: false,
+                }],
+                pseudo: None,
+            }),
+            testnet: None,
+        };
+
+        let (result, logs) = capture_warnings(|| upsert_script_label(&store, &script, "mainnet"));
+        result.unwrap();
+
+        assert!(
+            logs.contains("data-mismatch"),
+            "a data-form entry whose version_hash differs from its reference must warn, got: {logs}"
+        );
+        assert!(
+            store
+                .get_script_version(&decode_hex(version).unwrap())
+                .unwrap()
+                .is_none(),
+            "mismatched data-form version must not be attached"
+        );
+        assert_eq!(
+            store
+                .get_script_family("data-mismatch")
+                .unwrap()
+                .unwrap()
+                .versions_count,
+            0
+        );
+    }
+
+    #[test]
+    fn test_shared_bytecode_version_entries_count_once_in_family_versions_count() {
+        // The RGB++ testnet shape: two type-id deployments (signet + testnet3)
+        // of the SAME bytecode are two TOML entries with one version_hash. The
+        // family has one version, not two.
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path().to_str().unwrap()).unwrap();
+
+        let shared_version = "0x7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e";
+        let script = script_with_mainnet_versions(
+            "shared-bytecode",
+            "Shared Bytecode",
+            vec![
+                type_entry(
+                    shared_version,
+                    "0xd0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0",
+                ),
+                type_entry(
+                    shared_version,
+                    "0x6161616161616161616161616161616161616161616161616161616161616161",
+                ),
+            ],
+        );
+
+        let (result, logs) = capture_warnings(|| upsert_script_label(&store, &script, "mainnet"));
+        result.unwrap();
+        assert!(
+            logs.is_empty(),
+            "two references sharing one real bytecode version are valid metadata, got: {logs}"
+        );
+
+        let family = store
+            .get_script_family("shared-bytecode")
+            .unwrap()
+            .expect("family should be imported");
+        assert_eq!(
+            family.versions_count, 1,
+            "one bytecode version deployed under two references is ONE version"
+        );
+        assert_eq!(
+            store
+                .list_script_version_hashes_by_family("shared-bytecode")
+                .unwrap(),
+            vec![decode_hex(shared_version).unwrap()]
+        );
+
+        // Both references carry the label.
+        for reference in [
+            "0xd0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0",
+            "0x6161616161616161616161616161616161616161616161616161616161616161",
+        ] {
+            let info = store
+                .get_script_info(&decode_hex(reference).unwrap())
+                .unwrap()
+                .expect("reference label should be written");
+            assert_eq!(info.name.as_deref(), Some("Shared Bytecode"));
+        }
+    }
+
+    /// Corpus guard: NO bundled script label may carry a version identity the
+    /// import path would refuse. Pinning individual families guards those
+    /// families; this walks every bundled entry on every network so a future
+    /// TOML cannot reintroduce a placeholder and silently zero a family the
+    /// way fiber-funding-lock, fiber-commitment-lock and rgb[testnet] were.
+    #[test]
+    fn no_bundled_script_label_carries_an_unattachable_version_identity() {
+        let mut checked = 0usize;
+        let mut offenders: Vec<String> = Vec::new();
+
+        for script in bundled::script_labels() {
+            if script.disabled {
+                continue;
+            }
+            let family = script.metadata_slug.clone().unwrap_or_else(|| {
+                panic!(
+                    "bundled script label without metadata_slug: {}",
+                    script.name
+                )
+            });
+            for (network, metadata) in [
+                ("mainnet", script.mainnet.as_ref()),
+                ("testnet", script.testnet.as_ref()),
+            ] {
+                let Some(metadata) = metadata else { continue };
+                for entry in &metadata.versions {
+                    checked += 1;
+                    match version_attachment(entry).expect("bundled hashes must decode") {
+                        VersionAttachment::Attachable(_) | VersionAttachment::NoVersion => {}
+                        VersionAttachment::Invalid(reason) => offenders.push(format!(
+                            "{family}.toml [{network}] version_hash={} ref={}: {reason}",
+                            entry.version_hash, entry.canonical_ref_hash
+                        )),
+                    }
+                }
+            }
+        }
+
+        assert!(
+            checked > 50,
+            "the guard must reach the whole bundled corpus, only saw {checked} version entries"
+        );
+        assert!(
+            offenders.is_empty(),
+            "{} bundled script version entries would be skipped by label import \
+             (their families would read zero usage): {:#?}",
+            offenders.len(),
+            offenders
+        );
+    }
+
+    /// End-to-end with the real bundled metadata: the testnet Fiber funding
+    /// lock label must land on the version the chain actually resolves — the
+    /// live code cell's bytecode data hash (node-verified vector) — so the
+    /// usage rollup carries the family's numbers.
+    #[test]
+    fn test_bundled_fiber_funding_labels_attach_to_the_live_code_cell_version() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        super::run_label_import_bundled(&store, "testnet").unwrap();
+
+        // Chain truth (testnet node, verified 2026-08-03): type reference
+        // 0x6c67887f... resolves to the live code cell at
+        // 0x12c569a2...:1 whose bytecode data hash is 0x17b1910f....
+        let funding_ref =
+            hex::decode("6c67887fe201ee0c7853f1682c0b77c0e6214044c156c7558269390a8afa6d7c")
+                .unwrap();
+        let funding_version =
+            hex::decode("17b1910fbcfdfc146ee2ed05587f0e862b799d33ca3c8e1c52d18f2f67716e47")
+                .unwrap();
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_cell(
+            &[0xcc; 32],
+            1,
+            &LiveCellInfo {
+                capacity: 100_00000000,
+                lock_script_hash: vec![0x11; 32],
+                lock_code_hash: vec![0x22; 32],
+                lock_hash_type: 1,
+                lock_args: vec![],
+                type_script_hash: Some(funding_ref.clone()),
+                type_code_hash: Some(vec![0x33; 32]),
+                type_hash_type: Some(1),
+                type_args: Some(vec![]),
+                data_size: 128,
+                occupied_capacity: 61_00000000,
+                udt_amount: None,
+                data_hash: Some(funding_version.clone()),
+            },
+            5,
+        );
+        batch.put_cell_by_type(&funding_ref, 5, &[0xcc; 32], 1);
+        batch.put_cell_by_data_hash(&funding_version, 5, &[0xcc; 32], 1);
+        batch.put_script_reference_info(
+            1,
+            &funding_ref,
+            &ScriptReferenceInfo {
+                reference_hash: funding_ref.clone(),
+                hash_type: 1,
+                lock_cells_count: 6000,
+                lock_live_cells_count: 5021,
+                lock_capacity_sum: 17_000_000_000_000_000,
+                lock_owned_capacity_sum: 16_131_558_405_032_860,
+                lock_used_capacity_sum: 40_000_000_000_000,
+                lock_owned_knowledge_sum: 39_182_700_000_000,
+                ..Default::default()
+            },
+        );
+        batch.commit().unwrap();
+
+        let rollups =
+            crate::db::writer::collect_current_script_reference_rollup_state(&store, &store)
+                .unwrap();
+
+        let version = rollups
+            .versions
+            .iter()
+            .find(|(hash, _)| hash == &funding_version)
+            .map(|(_, info)| info)
+            .expect("the live funding bytecode version row must exist");
+        assert_eq!(
+            version.name.as_deref(),
+            Some("Fiber Funding Lock"),
+            "the label must be attached to the version the chain resolves"
+        );
+        assert_eq!(version.family_id.as_deref(), Some("fiber-funding-lock"));
+        assert_eq!(version.lock_live_cells_count, 5021);
+        assert_eq!(version.lock_owned_capacity_sum, 16_131_558_405_032_860);
+
+        let family = rollups
+            .families
+            .iter()
+            .find(|(id, _)| id == "fiber-funding-lock")
+            .map(|(_, info)| info)
+            .expect("fiber-funding-lock family must exist");
+        assert_eq!(
+            family.live_cells_count, 5021,
+            "family usage must carry the reference's rollup, not zero"
+        );
+        assert_eq!(family.owned_capacity_sum, 16_131_558_405_032_860);
+        assert_eq!(family.owned_knowledge_sum, 39_182_700_000_000);
+        assert_eq!(family.versions_count, 1);
     }
 }
