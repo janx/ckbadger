@@ -451,18 +451,17 @@ fn format_json_value(value: &Value) -> String {
     }
 }
 
-fn parse_le_modulo(bytes: &[u8], modulo: usize) -> usize {
-    if modulo == 0 {
-        return 0;
+/// Decode a DNA segment exactly as the official dob0 decoders' `parse_u64`
+/// does: only 1..=8-byte segments are valid (zero-padded little-endian);
+/// anything else — including an exhausted, empty segment — is
+/// `DecodeUnexpectedDNASegment` in the decoder and `None` here.
+fn parse_dna_segment_u64(segment: &[u8]) -> Option<u64> {
+    if segment.is_empty() || segment.len() > 8 {
+        return None;
     }
-    let m = modulo as u128;
-    let mut acc: u128 = 0;
-    let mut factor: u128 = 1 % m;
-    for b in bytes {
-        acc = (acc + (((*b as u128 % m) * factor) % m)) % m;
-        factor = (factor * 256) % m;
-    }
-    acc as usize
+    let mut buf = [0u8; 8];
+    buf[..segment.len()].copy_from_slice(segment);
+    Some(u64::from_le_bytes(buf))
 }
 
 fn parse_le_u128(bytes: &[u8]) -> Option<u128> {
@@ -616,28 +615,32 @@ fn decode_dob0_trait_value(pattern: &Dob0PatternElement, dna_slice: &[u8]) -> Va
                 if options.is_empty() {
                     return Value::Null;
                 }
-                let idx = parse_le_modulo(dna_slice, options.len());
+                let Some(offset) = parse_dna_segment_u64(dna_slice) else {
+                    return Value::Null;
+                };
+                let idx = (offset % options.len() as u64) as usize;
                 return options[idx].clone();
             }
             Value::Null
         }
         "range" => {
+            // Official decoders (v0/v2/v3): exactly two unsigned bounds,
+            // upper strictly greater than lower, EXCLUSIVE width:
+            // value = lower + offset % (upper - lower).
             if let Some(Value::Array(args)) = &pattern.trait_args {
-                if args.len() < 2 {
+                if args.len() != 2 {
                     return Value::Null;
                 }
-                let min = args[0].as_i64();
-                let max = args[1].as_i64();
-                if let (Some(a), Some(b)) = (min, max) {
-                    let lo = a.min(b);
-                    let hi = a.max(b);
-                    if let Some(width) = hi.checked_sub(lo).and_then(|d| d.checked_add(1)) {
-                        if let Ok(width_usize) = usize::try_from(width) {
-                            let offset = parse_le_modulo(dna_slice, width_usize) as i64;
-                            return Value::from(lo + offset);
-                        }
-                    }
+                let (Some(lower), Some(upper)) = (args[0].as_u64(), args[1].as_u64()) else {
+                    return Value::Null;
+                };
+                if upper <= lower {
+                    return Value::Null;
                 }
+                let Some(offset) = parse_dna_segment_u64(dna_slice) else {
+                    return Value::Null;
+                };
+                return Value::from(lower + offset % (upper - lower));
             }
             Value::Null
         }
@@ -673,20 +676,34 @@ fn decode_dob0_trait_value(pattern: &Dob0PatternElement, dna_slice: &[u8]) -> Va
     }
 }
 
-fn selector_matches_exact(selector: &Value, trait_value: &str) -> bool {
+/// Whether a dob1 options selector matches a trait value, following the
+/// official spore-dob-1 renderer (`get_dob1_value_by_dob0_value`):
+/// - a number selector matches by numeric equality;
+/// - a string selector matches literally (a bare "*" string is NOT a
+///   wildcard — it only matches a trait value that is literally "*");
+/// - an array selector whose FIRST element is "*" is the wildcard and
+///   matches anything (the form real clusters use, e.g. `[["*"],""]`);
+/// - any other array selector is a two-element numeric [start, end] range,
+///   inclusive on both ends.
+fn dob1_selector_matches(selector: &Value, trait_value: &str) -> bool {
     match selector {
-        Value::String(s) => s != "*" && s == trait_value,
-        Value::Array(items) => items
-            .iter()
-            .any(|item| selector_matches_exact(item, trait_value)),
-        _ => format_json_value(selector) == trait_value,
-    }
-}
-
-fn selector_contains_wildcard(selector: &Value) -> bool {
-    match selector {
-        Value::String(s) => s == "*",
-        Value::Array(items) => items.iter().any(selector_contains_wildcard),
+        Value::String(s) => s == trait_value,
+        Value::Number(_) => format_json_value(selector) == trait_value,
+        Value::Array(items) => {
+            if items.first().and_then(|v| v.as_str()) == Some("*") {
+                return true;
+            }
+            if items.len() != 2 {
+                return false;
+            }
+            let (Some(start), Some(end)) = (items[0].as_u64(), items[1].as_u64()) else {
+                return false;
+            };
+            let Ok(value) = trait_value.parse::<u64>() else {
+                return false;
+            };
+            start <= value && value <= end
+        }
         _ => false,
     }
 }
@@ -707,7 +724,9 @@ fn resolve_dob1_snippet(
         return None;
     }
 
-    let mut wildcard: Option<String> = None;
+    // Official renderer semantics: options are evaluated IN ORDER and the
+    // first matching selector wins — including the wildcard when it is
+    // reached first. No exact-match-anywhere preference.
     let trait_value = traits.get(&pattern.trait_name).cloned().unwrap_or_default();
     let options = pattern.trait_args.as_ref()?.as_array()?;
     for option in options {
@@ -717,20 +736,14 @@ fn resolve_dob1_snippet(
         if pair.len() < 2 {
             continue;
         }
-        let selector = &pair[0];
-        let snippet = if let Some(v) = pair[1].as_str() {
-            v
-        } else {
+        let Some(snippet) = pair[1].as_str() else {
             continue;
         };
-        if selector_contains_wildcard(selector) {
-            wildcard = Some(snippet.to_string());
-        }
-        if selector_matches_exact(selector, &trait_value) {
+        if dob1_selector_matches(&pair[0], &trait_value) {
             return Some(snippet.to_string());
         }
     }
-    wildcard
+    None
 }
 
 pub fn build_dob1_svg(
@@ -842,23 +855,146 @@ mod tests {
             .any(|source| source.uri.contains("btcfs://goodasseti0")));
     }
 
-    #[test]
-    fn dob_options_prefers_exact_selector_over_wildcard_even_when_wildcard_comes_first() {
-        let pattern = Dob1PatternElement {
+    fn dob1_options_pattern(args: serde_json::Value) -> Dob1PatternElement {
+        Dob1PatternElement {
             image_name: "IMAGE.0".to_string(),
             svg_fields: "elements".to_string(),
             trait_name: "Background".to_string(),
             pattern_type: "options".to_string(),
-            trait_args: Some(serde_json::json!([
-                ["*", "<image href='http://fallback.example/fallback.png' />"],
-                ["rare", "<image href='btcfs://rareasseti0' />"]
-            ])),
-        };
-        let mut traits = HashMap::new();
-        traits.insert("Background".to_string(), "rare".to_string());
+            trait_args: Some(args),
+        }
+    }
 
-        let snippet = resolve_dob1_snippet(&pattern, &traits).unwrap();
+    fn background_traits(value: &str) -> HashMap<String, String> {
+        let mut traits = HashMap::new();
+        traits.insert("Background".to_string(), value.to_string());
+        traits
+    }
+
+    /// Official spore-dob-1 renderer (`get_dob1_value_by_dob0_value`):
+    /// options are evaluated IN ORDER and the first matching selector wins —
+    /// the wildcard (an array selector whose first element is "*", as used by
+    /// real clusters, e.g. `[["*"],""]` in "dob1-basic-shape") matches
+    /// unconditionally when reached. A later exact match must NOT override an
+    /// earlier wildcard.
+    #[test]
+    fn dob_options_first_match_in_order_wins_including_wildcard() {
+        let pattern = dob1_options_pattern(serde_json::json!([
+            [["*"], "<image href='http://fallback.example/fallback.png' />"],
+            ["rare", "<image href='btcfs://rareasseti0' />"]
+        ]));
+        let snippet = resolve_dob1_snippet(&pattern, &background_traits("rare")).unwrap();
+        assert!(
+            snippet.contains("http://fallback.example/fallback.png"),
+            "wildcard listed first must win in order, got: {snippet}"
+        );
+
+        // ... and an exact match listed before the wildcard still wins.
+        let pattern = dob1_options_pattern(serde_json::json!([
+            ["rare", "<image href='btcfs://rareasseti0' />"],
+            [["*"], "<image href='http://fallback.example/fallback.png' />"]
+        ]));
+        let snippet = resolve_dob1_snippet(&pattern, &background_traits("rare")).unwrap();
         assert!(snippet.contains("btcfs://rareasseti0"));
+    }
+
+    /// Official selector semantics: a bare "*" STRING selector is a literal
+    /// comparison (only the array form `["*"]` is the wildcard), and a
+    /// two-element numeric array selector is an inclusive [start, end] range.
+    #[test]
+    fn dob_options_selector_semantics_follow_official_renderer() {
+        // Bare "*" string: literal, not a wildcard.
+        let pattern = dob1_options_pattern(serde_json::json!([
+            ["*", "<g id='star-literal'/>"],
+            ["x", "<g id='x'/>"]
+        ]));
+        assert_eq!(
+            resolve_dob1_snippet(&pattern, &background_traits("x")).as_deref(),
+            Some("<g id='x'/>")
+        );
+        assert_eq!(
+            resolve_dob1_snippet(&pattern, &background_traits("*")).as_deref(),
+            Some("<g id='star-literal'/>")
+        );
+
+        // Numeric [start, end] selector matches by inclusive range.
+        let pattern = dob1_options_pattern(serde_json::json!([
+            [[3, 7], "<g id='mid'/>"],
+            [["*"], "<g id='other'/>"]
+        ]));
+        assert_eq!(
+            resolve_dob1_snippet(&pattern, &background_traits("5")).as_deref(),
+            Some("<g id='mid'/>")
+        );
+        assert_eq!(
+            resolve_dob1_snippet(&pattern, &background_traits("7")).as_deref(),
+            Some("<g id='mid'/>")
+        );
+        assert_eq!(
+            resolve_dob1_snippet(&pattern, &background_traits("8")).as_deref(),
+            Some("<g id='other'/>")
+        );
+
+        // No option matches and no wildcard: no snippet.
+        let pattern = dob1_options_pattern(serde_json::json!([["a", "<g id='a'/>"]]));
+        assert_eq!(resolve_dob1_snippet(&pattern, &background_traits("b")), None);
+    }
+
+    fn dob0_pattern(pattern_type: &str, args: Option<serde_json::Value>) -> Dob0PatternElement {
+        Dob0PatternElement {
+            trait_name: "T".to_string(),
+            dna_offset: 0,
+            dna_length: 1,
+            pattern_type: pattern_type.to_string(),
+            trait_args: args,
+            dob_type: Some("Number".to_string()),
+        }
+    }
+
+    /// Official dob0 decoders (v0/v2/v3 alike): range width is EXCLUSIVE —
+    /// `lower + offset % (upper - lower)` — and `upper <= lower` is a decode
+    /// error, with unsigned bounds. The old re-implementation used an
+    /// inclusive `hi - lo + 1` width and silently reordered/accepted signed
+    /// bounds.
+    #[test]
+    fn dob0_range_width_is_exclusive_per_official_decoder() {
+        // Segment 0xFA = 250, range [0, 100]: 250 % 100 = 50 (inclusive width
+        // would give 250 % 101 = 48).
+        let pattern = dob0_pattern("range", Some(serde_json::json!([0, 100])));
+        assert_eq!(
+            decode_dob0_trait_value(&pattern, &[0xFA]),
+            Value::from(50u64)
+        );
+
+        // upper <= lower is invalid — must not be silently reordered.
+        let pattern = dob0_pattern("range", Some(serde_json::json!([100, 0])));
+        assert_eq!(decode_dob0_trait_value(&pattern, &[0x05]), Value::Null);
+        let pattern = dob0_pattern("range", Some(serde_json::json!([5, 5])));
+        assert_eq!(decode_dob0_trait_value(&pattern, &[0x05]), Value::Null);
+
+        // Bounds are unsigned in every official decoder.
+        let pattern = dob0_pattern("range", Some(serde_json::json!([-5, 5])));
+        assert_eq!(decode_dob0_trait_value(&pattern, &[0x03]), Value::Null);
+    }
+
+    /// Official `parse_u64` accepts only 1..=8-byte DNA segments; anything
+    /// else is DecodeUnexpectedDNASegment. The old modular-arithmetic helper
+    /// happily consumed arbitrarily long segments.
+    #[test]
+    fn dob0_segments_outside_1_to_8_bytes_are_invalid() {
+        let nine_bytes = [1u8, 0, 0, 0, 0, 0, 0, 0, 0];
+
+        let mut options = dob0_pattern("options", Some(serde_json::json!(["a", "b", "c"])));
+        options.dna_length = 9;
+        assert_eq!(decode_dob0_trait_value(&options, &nine_bytes), Value::Null);
+
+        let mut range = dob0_pattern("range", Some(serde_json::json!([0, 100])));
+        range.dna_length = 9;
+        assert_eq!(decode_dob0_trait_value(&range, &nine_bytes), Value::Null);
+
+        // An exhausted (empty) segment is a decode error too.
+        let options = dob0_pattern("options", Some(serde_json::json!(["a", "b"])));
+        assert_eq!(decode_dob0_trait_value(&options, &[]), Value::Null);
     }
 
     #[test]
