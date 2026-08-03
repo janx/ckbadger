@@ -25,9 +25,7 @@ use ckbadger_store::CkbadgerStore;
 
 use crate::media_store::{sniff_media_type, MediaBlobStore};
 
-use crate::parser::media_source::{
-    extract_uri_sources, parse_dna_hex_from_content_text, resolve_tier,
-};
+use crate::parser::media_source::{extract_uri_sources, parse_dna_hex_from_content, resolve_tier};
 use crate::parser::spore::SporeParser;
 use crate::rpc::{parse_hex_to_bytes, CkbRpcClient};
 use crate::sync::dob_decode_error::DobDecodeError;
@@ -694,7 +692,7 @@ async fn load_decoder_binary(
 /// 1. Look up the spore's outpoint (tx_hash, output_index) from the domain store.
 /// 2. Fetch the creation transaction via CKB RPC to obtain raw output data.
 /// 3. Parse the Spore molecule to extract the content field.
-/// 4. Decode the content as text and extract the DNA hex string.
+/// 4. Extract the DNA hex from the content bytes (raw-binary or text form).
 async fn extract_dna_from_spore(
     spore_id: &[u8],
     store: &CkbadgerStore,
@@ -725,8 +723,7 @@ async fn extract_dna_from_spore(
             }
         })?;
 
-    let content_text = String::from_utf8_lossy(&content_bytes);
-    parse_dna_hex_from_content_text(&content_text).ok_or_else(|| DobDecodeError::DnaInvalid {
+    parse_dna_hex_from_content(&content_bytes).ok_or_else(|| DobDecodeError::DnaInvalid {
         detail: "failed to extract DNA hex from spore content".to_string(),
     })
 }
@@ -1346,6 +1343,79 @@ mod tests {
         assert_eq!(decode_hex_field("0xabcd").unwrap(), vec![0xAB, 0xCD]);
         assert_eq!(decode_hex_field("abcd").unwrap(), vec![0xAB, 0xCD]);
         assert!(decode_hex_field("0xZZZZ").is_err());
+    }
+
+    #[tokio::test]
+    async fn test_extract_dna_from_spore_raw_binary_content_form() {
+        // Real testnet spore 0x9ca1e7fc9a89254d5438fb32d99aadce1c24cd1d4a49b7
+        // 35be9c13d8ceae9c9c ("Forgily Characters"), creation tx 0x05e84bc76e
+        // 29309216e10702258a6af92ae8fdfce8d53ca39b03ca3bf621c050 output 0.
+        // Its Spore content starts with 0x00: the official raw-binary DNA
+        // form (dob-decoder-standalone-server decode_spore_content), where
+        // the DNA is the hex of the bytes after the marker.
+        let spore_cell_data_hex = "0xc90000001000000019000000a500000005000000646f622f30880000000001034764640000f2761adf8466504b02a91a95abaecebf6cc43599c5fcbf2db8973d7b91fcc30c68747470733a2f2f6172746966616374732e666f7267696c792e636f6d2f696d6167655f6172746966616374732f65353832343962342d626136302d346231622d626231312d6662316133333935346666632e706e670000000000000000000020000000288433dccb8a5f13602f3c63d7f7e6b3f4d401bc8e7fd4c0055ce1ee2e5d86d1";
+        let expected_dna = "01034764640000f2761adf8466504b02a91a95abaecebf6cc43599c5fcbf2db8973d7b91fcc30c68747470733a2f2f6172746966616374732e666f7267696c792e636f6d2f696d6167655f6172746966616374732f65353832343962342d626136302d346231622d626231312d6662316133333935346666632e706e6700000000000000000000";
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        let spore_id =
+            hex::decode("9ca1e7fc9a89254d5438fb32d99aadce1c24cd1d4a49b735be9c13d8ceae9c9c")
+                .unwrap();
+        let tx_hash =
+            hex::decode("05e84bc76e29309216e10702258a6af92ae8fdfce8d53ca39b03ca3bf621c050")
+                .unwrap();
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_spore_outpoint(&tx_hash, 0, &spore_id);
+        batch.commit().unwrap();
+
+        let server = MockServer::start().await;
+        let tx_hash_hex = format!("0x{}", hex::encode(&tx_hash));
+        let dummy_lock = json!({
+            "code_hash": format!("0x{}", "11".repeat(32)),
+            "hash_type": "type",
+            "args": "0x"
+        });
+        Mock::given(method("POST"))
+            .and(body_partial_json(json!({
+                "method": "get_transaction",
+                "params": [tx_hash_hex.clone()]
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": {
+                    "transaction": {
+                        "hash": tx_hash_hex,
+                        "version": "0x0",
+                        "cell_deps": [],
+                        "header_deps": [],
+                        "inputs": [],
+                        "outputs": [
+                            {
+                                "capacity": "0x34e62ce00",
+                                "lock": dummy_lock,
+                                "type": null
+                            }
+                        ],
+                        "outputs_data": [spore_cell_data_hex],
+                        "witnesses": []
+                    },
+                    "tx_status": {
+                        "status": "committed",
+                        "block_hash": null,
+                        "block_number": null
+                    }
+                }
+            })))
+            .mount(&server)
+            .await;
+
+        let rpc_client = CkbRpcClient::new(server.uri());
+        let dna = extract_dna_from_spore(&spore_id, &store, &rpc_client)
+            .await
+            .expect("raw-binary DNA form must be extractable");
+        assert_eq!(dna, expected_dna);
     }
 
     #[tokio::test]

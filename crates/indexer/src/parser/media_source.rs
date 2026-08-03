@@ -45,8 +45,11 @@ pub fn analyze_spore_media_profile(
             Ok(text) => {
                 if normalized_type.starts_with("dob/") {
                     if !skip_dob_decode {
+                        // DOB DNA lives in the raw content bytes — the
+                        // raw-binary form (content[0] == 0x00) is not UTF-8
+                        // text, so this branch must not go through `text`.
                         let (mut dob_sources, _dob_rendered) =
-                            extract_dob_media_sources(&text, cluster_description, &mut issues);
+                            extract_dob_media_sources(content, cluster_description, &mut issues);
                         sources.append(&mut dob_sources);
                     }
                     // When skipped, DOB media sources will be backfilled
@@ -152,7 +155,7 @@ pub(crate) fn uri_seems_image(uri: &str) -> bool {
 }
 
 fn extract_dob_media_sources(
-    content_text: &str,
+    content: &[u8],
     cluster_description: Option<&str>,
     issues: &mut Vec<String>,
 ) -> (Vec<SporeMediaSource>, bool) {
@@ -160,7 +163,7 @@ fn extract_dob_media_sources(
     if metadata.is_none() {
         issues.push("missing or invalid cluster description for DOB media analysis".to_string());
     }
-    let dna_hex = parse_dna_hex_from_content_text(content_text);
+    let dna_hex = parse_dna_hex_from_content(content);
     if dna_hex.is_none() {
         issues.push("missing or invalid DNA for DOB media analysis".to_string());
     }
@@ -393,7 +396,27 @@ fn clean_hex(raw: &str) -> Option<String> {
     Some(normalized)
 }
 
-pub(crate) fn parse_dna_hex_from_content_text(content_text: &str) -> Option<String> {
+/// Extract DOB DNA hex from raw Spore content bytes.
+///
+/// Single calculation path mirroring the official
+/// dob-decoder-standalone-server `decode_spore_content`:
+/// - first content byte `0x00` → raw-binary form, the DNA is the hex
+///   encoding of the remaining raw bytes;
+/// - otherwise the content is UTF-8 text holding either a JSON string, a
+///   JSON array (first element), a JSON object with a `"dna"` field, or
+///   bare hex text.
+///
+/// Empty content has no DNA (`None`); non-UTF-8 text-form content is
+/// rejected exactly like the official server's `serde_json::from_slice`.
+pub(crate) fn parse_dna_hex_from_content(content: &[u8]) -> Option<String> {
+    match content.first() {
+        None => None,
+        Some(0) => Some(hex::encode(&content[1..])),
+        Some(_) => parse_dna_hex_from_content_text(std::str::from_utf8(content).ok()?),
+    }
+}
+
+fn parse_dna_hex_from_content_text(content_text: &str) -> Option<String> {
     let trimmed = content_text.trim();
     if trimmed.is_empty() {
         return None;
@@ -934,6 +957,84 @@ mod tests {
         let profile = analyze_spore_media_profile("dob/0", b"00", Some(&metadata), false);
         assert_eq!(profile.tier, CompositionTier::DecentralizedMixture);
         assert!(profile.sources.iter().any(|s| s.scheme == "ipfs"));
+    }
+
+    /// Real testnet spore content of `0x9ca1e7fc9a89254d5438fb32d99aadce1c24cd
+    /// 1d4a49b735be9c13d8ceae9c9c` ("Forgily Characters", cluster `0x288433dc
+    /// cb8a5f13602f3c63d7f7e6b3f4d401bc8e7fd4c0055ce1ee2e5d86d1`): the raw-
+    /// binary DNA form — first content byte 0x00, DNA = remaining raw bytes.
+    const FORGILY_RAW_BINARY_CONTENT_HEX: &str = "0001034764640000f2761adf8466504b02a91a95abaecebf6cc43599c5fcbf2db8973d7b91fcc30c68747470733a2f2f6172746966616374732e666f7267696c792e636f6d2f696d6167655f6172746966616374732f65353832343962342d626136302d346231622d626231312d6662316133333935346666632e706e6700000000000000000000";
+
+    /// Real on-chain cluster description of the Forgily Characters cluster.
+    const FORGILY_CLUSTER_DESCRIPTION: &str = r##"{"description":"Forgily Characters — AI-forged collectible characters, each provably one-of-a-kind. Every character is generated once, never duplicated, and signed with C2PA content credentials at creation. The on-chain DNA (135 bytes) encodes: rarity tier (Common/Rare/Epic/Legendary/Genesis), VNS novelty scores — Visual, Narrative, Signature (0-100, measured against every character ever forged), lineage generation, a SHA-256 commitment to the character's full C2PA-signed off-chain record, and its portrait. The CKB locked in each cell is the character's redeemable floor value, held by its owner alone. Verify any character: recompute the SHA-256 of its published record and compare with the on-chain Provenance trait — no trust in Forgily required. Forge your own at https://forgily.com","dob":{"ver":0,"decoder":{"type":"code_hash","hash":"0x13cac78ad8482202f18f9df4ea707611c35f994375fa03ae79121312dda9925c"},"pattern":[["Tier","String",1,1,"options",["Common","Rare","Epic","Legendary","Genesis"]],["Visual Novelty","Number",2,1,"rawNumber"],["Narrative Novelty","Number",3,1,"rawNumber"],["Signature Novelty","Number",4,1,"rawNumber"],["Generation","Number",5,2,"rawNumber"],["Provenance","String",7,32,"rawString"],["prev.type","String",0,1,"options",["image"]],["prev.bg","String",39,96,"utf8"],["prev.bgcolor","String",1,1,"options",["#64748B","#3B82F6","#A855F7","#F59E0B","#(135deg, #22D3EE, #A855F7, #F59E0B)"]]]}}"##;
+
+    #[test]
+    fn dob_raw_binary_content_form_extracts_dna_and_media_sources() {
+        // Official spec (dob-decoder-standalone-server decode_spore_content):
+        // content[0] == 0x00 → DNA is the hex of the remaining raw bytes. The
+        // Forgily DNA carries the portrait URL in its utf8 `prev.bg` trait, so
+        // a working DNA extraction must surface that media source.
+        let content = hex::decode(FORGILY_RAW_BINARY_CONTENT_HEX).unwrap();
+        let profile = analyze_spore_media_profile(
+            "dob/0",
+            &content,
+            Some(FORGILY_CLUSTER_DESCRIPTION),
+            false,
+        );
+        assert!(
+            profile.issues.is_empty(),
+            "raw-binary DNA form must not be reported as invalid: {:?}",
+            profile.issues
+        );
+        assert!(
+            profile.sources.iter().any(|s| s.uri
+                == "https://artifacts.forgily.com/image_artifacts/e58249b4-ba60-4b1b-bb11-fb1a33954ffc.png"),
+            "prev.bg trait URL must be extracted from the raw-binary DNA, got {:?}",
+            profile.sources
+        );
+        assert_eq!(profile.tier, CompositionTier::CentralizedMixture);
+    }
+
+    #[test]
+    fn parse_dna_hex_from_content_supports_all_official_content_forms() {
+        // Raw-binary form (real Forgily testnet vector above).
+        let binary_content = hex::decode(FORGILY_RAW_BINARY_CONTENT_HEX).unwrap();
+        assert_eq!(
+            parse_dna_hex_from_content(&binary_content).as_deref(),
+            Some(&FORGILY_RAW_BINARY_CONTENT_HEX[2..]),
+            "content[0] == 0x00 must yield the hex of the remaining raw bytes"
+        );
+        // Negative control: the pre-fix text-only path (lossy UTF-8 decode of
+        // the raw bytes) cannot extract this DNA — the byte branch above is
+        // load-bearing, not redundant.
+        assert_eq!(
+            parse_dna_hex_from_content_text(&String::from_utf8_lossy(&binary_content)),
+            None
+        );
+
+        // JSON-object form — real mainnet spore 0x041e9872a9972ab578ff153103
+        // 5614338efbebe1cc55148cb382d8a7561f1e37 content, byte-identical
+        // regression for the existing text path.
+        assert_eq!(
+            parse_dna_hex_from_content(
+                br#"{"id":2730,"dna":"72b50189f616a0143cdc035e924f5b58"}"#
+            )
+            .as_deref(),
+            Some("72b50189f616a0143cdc035e924f5b58")
+        );
+
+        // JSON-string form — real mainnet spore 0xdf555ebe39a6c844d6a444a82b
+        // 438a84ba1f8992c0706f4a4d37f018535fed40 content ("Chinese Mahjong").
+        let json_string_dna = "62746366733a2f2f6338343632616635623736356338633830376265353433393463373034336535653534653739363163386533366438666230373638373063373763376339643669300009df209dc570666f72676566d1471b94ae9fd8a610f70d";
+        let json_string_content = format!("\"{json_string_dna}\"");
+        assert_eq!(
+            parse_dna_hex_from_content(json_string_content.as_bytes()).as_deref(),
+            Some(json_string_dna)
+        );
+
+        // Empty content is invalid (the official server would panic here; we
+        // must reject it instead of indexing garbage).
+        assert_eq!(parse_dna_hex_from_content(b""), None);
     }
 
     #[test]
