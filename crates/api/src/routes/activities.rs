@@ -19,7 +19,7 @@ use crate::response::{
     CursorPaginatedResponse,
 };
 use crate::utils::address::{address_to_lock_script_hash, compute_script_hash, script_to_address};
-use crate::utils::{parse_hash32, parse_optional_block_tx_cursor};
+use crate::utils::{is_ckb_address, parse_hash32, parse_optional_block_tx_cursor};
 use crate::AppState;
 
 /// Resolve a lock_hash to a CKB address using the persistent lock script mapping.
@@ -820,7 +820,9 @@ async fn get_address_activities(
     Query(params): Query<ActivityParams>,
 ) -> ApiResult<CursorPaginatedResponse<ActivityResponse>> {
     validate_activity_filter(params.filter.as_deref())?;
-    let lock_hash = if addr.starts_with("ckb1") || addr.starts_with("ckt1") {
+    // Routing via the shared `is_ckb_address` (not an inline prefix check) so
+    // every address entry point shares one case-handling rule.
+    let lock_hash = if is_ckb_address(&addr) {
         address_to_lock_script_hash(&addr)
             .map_err(|e| ApiError::bad_request(format!("Invalid address: {}", e)))?
     } else {

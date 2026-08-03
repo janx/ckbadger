@@ -801,3 +801,146 @@ async fn test_get_cell_keeps_exact_hash_types() {
         json["address"]
     );
 }
+
+// ---------------------------------------------------------------------------
+// Audited bugs (2026-08-01 night, agent E `format_probe_mainnet.txt`):
+// `/addresses/{addr}` accepted RFC-invalid full addresses carrying the legacy
+// Bech32 checksum (RFC-0021 mandates Bech32m for the 0x00 format), served full
+// stats, and echoed the invalid input string back as `address`; all-uppercase
+// bech32m (legal per spec case rules) fell into the hex-hash branch and got a
+// misleading 400. The response `address` must always be the canonical
+// lowercase encoding of the lock script on the serving network — never an
+// input echo.
+// ---------------------------------------------------------------------------
+
+/// Mainnet burn lock (secp sighash, hash_type `type`, args = 20 zero bytes):
+/// canonical bech32m form, the same payload under the WRONG legacy bech32
+/// checksum, and the same payload under the testnet HRP (all audit vectors).
+const BURN_BECH32M: &str = "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqgqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq5m759c";
+const BURN_WRONG_BECH32_CHECKSUM: &str = "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqgqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqp8wcq6";
+const BURN_BECH32M_CKT: &str = "ckt1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqgqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq6f4m0q";
+
+/// Seed the burn lock's script + balance so the endpoint has real stats to
+/// serve (the audited live probe reported balance 35,417,100,000,000 and 11
+/// live cells; values mirrored here so a wrongly accepted request would
+/// observably return them).
+fn seed_burn_lock(store: &Arc<CkbadgerStore>) -> Vec<u8> {
+    let code_hash =
+        hex::decode("9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8").unwrap();
+    let args = vec![0u8; 20];
+    let lock_hash = compute_script_hash(&code_hash, 1, &args);
+
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_lock_script(
+        &lock_hash,
+        &ckbadger_store::types::LockScriptEntry {
+            code_hash,
+            hash_type: 1,
+            args,
+        },
+    );
+    batch.put_addr_balance(
+        &lock_hash,
+        &ckbadger_store::types::AddressBalance {
+            balance: 35_417_100_000_000,
+            used_capacity: 1_100_000_000_000,
+            live_cells_count: 11,
+            total_cells_count: 20,
+            txs_count: 9,
+            first_seen_block: 1,
+            first_seen_tx: vec![0x01; 32],
+            last_activity_block: 5,
+            last_activity_tx: vec![0x02; 32],
+        },
+    );
+    batch.commit().unwrap();
+    lock_hash
+}
+
+#[tokio::test]
+async fn test_get_address_rejects_full_address_with_bech32_checksum() {
+    let store = test_store();
+    seed_burn_lock(&store);
+    let app = create_router(test_config(store)).await;
+
+    let (status, json) = get_json(&app, &format!("/addresses/{BURN_WRONG_BECH32_CHECKSUM}")).await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "an RFC-invalid checksum must be rejected, not served (the audited bug answered 200 with full stats), got {json}"
+    );
+    let message = json["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("bech32m"),
+        "error must name the checksum requirement, got: {message}"
+    );
+}
+
+#[tokio::test]
+async fn test_get_address_uppercase_equals_lowercase_and_canonicalizes() {
+    let store = test_store();
+    let lock_hash = seed_burn_lock(&store);
+    let app = create_router(test_config(store)).await;
+
+    let (status_lower, lower) = get_json(&app, &format!("/addresses/{BURN_BECH32M}")).await;
+    assert_eq!(status_lower, StatusCode::OK, "got {lower}");
+    assert_eq!(lower["address"], BURN_BECH32M);
+    assert_eq!(lower["balance"], "35417100000000");
+    assert_eq!(lower["liveCellsCount"], 11);
+    assert_eq!(lower["transactionsCount"], 9);
+    assert_eq!(
+        lower["lockScriptHash"],
+        format!("0x{}", hex::encode(&lock_hash))
+    );
+
+    let (status_upper, upper) =
+        get_json(&app, &format!("/addresses/{}", BURN_BECH32M.to_uppercase())).await;
+    assert_eq!(
+        status_upper,
+        StatusCode::OK,
+        "all-uppercase bech32m is a legal encoding and must resolve, got {upper}"
+    );
+    assert_eq!(
+        upper, lower,
+        "uppercase input must yield the identical response, canonical lowercase `address` included"
+    );
+}
+
+#[tokio::test]
+async fn test_get_address_returns_canonical_network_encoding_not_input_echo() {
+    // A valid bech32m encoding under the testnet HRP resolves the same lock
+    // hash (the HRP is not part of the script), but the response `address`
+    // must be the canonical encoding for the SERVING network (mainnet here),
+    // never the raw input echoed back.
+    let store = test_store();
+    seed_burn_lock(&store);
+    let app = create_router(test_config(store)).await;
+
+    let (status, json) = get_json(&app, &format!("/addresses/{BURN_BECH32M_CKT}")).await;
+    assert_eq!(status, StatusCode::OK, "got {json}");
+    assert_eq!(json["balance"], "35417100000000");
+    assert_eq!(
+        json["address"], BURN_BECH32M,
+        "`address` is the canonical lock-script encoding on the serving network, not an input echo"
+    );
+}
+
+#[tokio::test]
+async fn test_get_address_unindexed_uppercase_reports_canonical_form() {
+    // Never-indexed address: no stored lock script, but the input itself
+    // decodes to the lock script, so the canonical lowercase form is still
+    // reported (with honest zero stats and no guessed `lockScript`).
+    let store = test_store();
+    let app = create_router(test_config(store)).await;
+
+    let (status, json) =
+        get_json(&app, &format!("/addresses/{}", BURN_BECH32M.to_uppercase())).await;
+    assert_eq!(status, StatusCode::OK, "got {json}");
+    assert_eq!(json["balance"], "0");
+    assert_eq!(json["liveCellsCount"], 0);
+    assert_eq!(
+        json["address"], BURN_BECH32M,
+        "canonical form comes from the decoded lock script even with no stored entry"
+    );
+    assert_eq!(json["lockScript"], serde_json::Value::Null);
+}

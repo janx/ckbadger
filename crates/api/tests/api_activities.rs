@@ -786,3 +786,46 @@ async fn test_address_activities_filtered_page_still_omits_total() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(json.get("total"), None);
 }
+
+// ---------------------------------------------------------------------------
+// Audited bug (2026-08-01 night, agent E): all-uppercase bech32m addresses are
+// legal per the bech32 case rules, but every address entry point routed them
+// into the hex-hash branch (the activities handler even had its own inline
+// lowercase-only prefix check) and answered a misleading 400 about hex hashes.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_address_activities_accepts_uppercase_address() {
+    let (core_store, append_only_store) = split_test_stores();
+
+    // Mainnet burn lock (secp sighash, args = 20 zero bytes); its canonical
+    // bech32m encoding is the audit vector below.
+    let burn_address = "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqgqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq5m759c";
+    let code_hash =
+        hex::decode("9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8").unwrap();
+    let lock_hash = compute_script_hash(&code_hash, 1, &[0u8; 20]);
+    seed_activity_with_txs_count(&core_store, &lock_hash, 1);
+
+    let config = test_config_with_append_only(core_store.clone(), append_only_store);
+    let app = create_router(config).await;
+
+    let (status_lower, lower) =
+        get_json(&app, &format!("/addresses/{burn_address}/activities")).await;
+    assert_eq!(status_lower, StatusCode::OK, "got {lower}");
+    assert_eq!(lower["data"].as_array().unwrap().len(), 1);
+
+    let (status_upper, upper) = get_json(
+        &app,
+        &format!("/addresses/{}/activities", burn_address.to_uppercase()),
+    )
+    .await;
+    assert_eq!(
+        status_upper,
+        StatusCode::OK,
+        "uppercase bech32m must route to the address branch, got {upper}"
+    );
+    assert_eq!(
+        upper, lower,
+        "uppercase input must enumerate the identical activities"
+    );
+}

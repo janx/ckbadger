@@ -232,7 +232,17 @@ output_index`; activity cursors encode `block_num:tx_idx`; spore/cluster list cu
 
 - `CursorPaginatedResponse<CellResponse>` — cell summary
 - `CellDetailResponse` — full cell detail with `lock`/`type_script` (`ScriptResponse`), `data`, `data_analysis`, `dep_group_items`, `code_cell_of: Vec<CodeCellScript>`, `dao_info: Option<DaoInfo>`, `used_capacity_breakdown: OccupiedCapacityBreakdown`
-- `AddressResponse` — lock_script_hash, balance, used_capacity, lock_script (`ScriptResponse`) + `lock_script_info: LockScriptInfo`
+- `AddressResponse` — lock_script_hash, balance, used_capacity, lock_script (`ScriptResponse`) + `lock_script_info: LockScriptInfo`.
+  `address` is always the canonical lowercase RFC-0021 encoding of the lock script on the serving
+  network — never the raw input echoed back
+
+**Address inputs (`{addr}`, all address endpoints)**
+
+- One shared parser (`parse_address_to_script`): RFC-0021 full format (`0x00`) only, Bech32m
+  checksum enforced (the legacy Bech32 checksum is a `400` naming the reason), `hash_type` must be
+  `0x00|0x01|0x02|0x04`.
+- Case follows the bech32 spec: all-lowercase and ALL-UPPERCASE both accepted, mixed case rejected.
+- A 64-hex-char lock script hash (optional `0x`) is accepted everywhere an address is.
 - `Vec<TopAddressResponse>` / `Vec<ActiveAddressResponse>`
 - `CursorPaginatedResponse<AddressTransactionResponse>` — tx_type, capacity_change, script_labels
 - `CursorPaginatedResponse<AddressTokenResponse>` — per-address token balance
