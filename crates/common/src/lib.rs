@@ -12,6 +12,7 @@ pub mod proposal;
 pub mod sync;
 pub mod token;
 pub mod types;
+pub mod utxoswap;
 
 pub use address::script_to_address;
 pub use error::{Error, Result};

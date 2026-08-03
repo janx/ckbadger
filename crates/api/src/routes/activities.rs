@@ -429,28 +429,14 @@ fn decode_fiber_commitment_lock_args(args: &[u8]) -> Option<serde_json::Value> {
     Some(obj)
 }
 
+/// Decodes UTXOSwap intent lock args for live display.
+///
+/// Both the field layout and the field names come from the single shared
+/// decoder in `ckbadger-common`, so this display can never drift from the
+/// metadata the indexer persists. Only the `protocol` tag is added here.
 fn decode_utxoswap_intent_args(args: &[u8]) -> Option<serde_json::Value> {
-    use ckbadger_indexer::parser::utxoswap::parse_intent_args;
-
-    let parsed = parse_intent_args(args)?;
-
-    let mut result = serde_json::json!({
-        "protocol": "utxoswap",
-        "intentType": parsed.intent_type.display_name(),
-        "poolTypeHash": format!("0x{}", hex::encode(parsed.pool_type_hash)),
-        "amountIn": parsed.amount_in.to_string(),
-        "amountOutMin": parsed.amount_out_min.to_string(),
-        "assetInIndex": parsed.asset_in_index,
-    });
-
-    if let Some(extra) = &parsed.create_pool_extra {
-        result["assetX"] = serde_json::json!(format!("0x{}", hex::encode(extra.asset_x)));
-        result["assetY"] = serde_json::json!(format!("0x{}", hex::encode(extra.asset_y)));
-        result["amountX"] = serde_json::json!(extra.amount_x.to_string());
-        result["amountY"] = serde_json::json!(extra.amount_y.to_string());
-        result["totalFeeRate"] = serde_json::json!(extra.total_fee_rate);
-    }
-
+    let mut result = ckbadger_common::utxoswap::parse_intent_args(args)?.metadata_json();
+    result["protocol"] = serde_json::json!("utxoswap");
     Some(result)
 }
 
@@ -1228,51 +1214,107 @@ mod tests {
         assert!(LOCK_ARGS_DECODERS.contains_key(&commitment_mainnet));
     }
 
+    /// Real mainnet swap intent args (tx 0x44f659be…, block 13,845,652).
+    const REAL_SWAP_INTENT_ARGS: &str = "0xbefc0a6053441e9bcba6d3f6c1599c37a1d8187a235edb927fc68f446e06f2e677fb52aa7f158ae800000000000000000000000000000000030180ea822b000000000000000000000000324f4251220000000000000000000000";
+
+    /// Real mainnet AddLiquidity intent args (tx 0x18d1b37e…, block 14,046,271).
+    const REAL_ADD_LIQUIDITY_INTENT_ARGS: &str = "0x0001d85947f67df16556a1caef3b7f939a69fb2329273406698f36e9bdf46db404176859b0ba3a6b00000000000000000000000000000000013a219800000000000000000000000000805e9700000000000000000000000000506c0300000000000000000000000000ee670300000000000000000000000000";
+
+    /// Real mainnet RemoveLiquidity intent args (tx 0x416ed0a3…, block 20,003,047).
+    const REAL_REMOVE_LIQUIDITY_INTENT_ARGS: &str = "0xc41696293f5b16b471f9116631da82a4102c5b01b82e9073fee07b9caf625f0be45d3ec061be221200000000000000000100000000000000025b4ff3776d2f00000000000000000000b7d95acc3505000000000000000000001b35f86b53d501000000000000000000";
+
     #[test]
     fn test_decode_utxoswap_intent_swap() {
-        let mut args = vec![0u8; 90];
-        args[0..20].fill(0xAA);
-        args[20..40].fill(0xBB);
-        args[56] = 3; // SwapExactInputForOutput
-        args[57] = 1; // asset_in_index
-        args[58..74].copy_from_slice(&1_000_000u128.to_le_bytes());
-        args[74..90].copy_from_slice(&500_000u128.to_le_bytes());
-
+        let args = parse_hex_code_hash(REAL_SWAP_INTENT_ARGS);
         let result = decode_utxoswap_intent_args(&args).unwrap();
         assert_eq!(result["protocol"], "utxoswap");
         assert_eq!(result["intentType"], "SwapExactInputForOutput");
+        assert_eq!(
+            result["poolTypeHash"],
+            "0x235edb927fc68f446e06f2e677fb52aa7f158ae8"
+        );
         assert_eq!(result["assetInIndex"], 1);
-        assert_eq!(result["amountIn"], "1000000");
-        assert_eq!(result["amountOutMin"], "500000");
+        assert_eq!(result["amountIn"], "730000000");
+        assert_eq!(result["amountOutMin"], "147392188210");
         assert!(result.get("assetX").is_none());
+    }
+
+    /// The API's live display used to re-implement the decode and carried the
+    /// identical bug: the 90-byte swap layout applied to a 121-byte
+    /// AddLiquidity payload, yielding 2^127-scale amounts. It now shares the
+    /// one decoder in `ckbadger-common`.
+    #[test]
+    fn test_decode_utxoswap_intent_add_liquidity() {
+        let args = parse_hex_code_hash(REAL_ADD_LIQUIDITY_INTENT_ARGS);
+        let result = decode_utxoswap_intent_args(&args).unwrap();
+        assert_eq!(result["protocol"], "utxoswap");
+        assert_eq!(result["intentType"], "AddLiquidity");
+        assert_eq!(result["desiredX"], "9969978");
+        assert_eq!(result["minX"], "9920128");
+        assert_eq!(result["desiredY"], "224336");
+        assert_eq!(result["minY"], "223214");
+
+        assert!(result.get("amountIn").is_none());
+        assert!(result.get("amountOutMin").is_none());
+        assert!(result.get("assetInIndex").is_none());
+        assert!(
+            !result
+                .to_string()
+                .contains("170141183460469231731687303715884144673"),
+            "old 2^127-scale garbage resurfaced: {result}"
+        );
+    }
+
+    #[test]
+    fn test_decode_utxoswap_intent_remove_liquidity() {
+        let args = parse_hex_code_hash(REAL_REMOVE_LIQUIDITY_INTENT_ARGS);
+        let result = decode_utxoswap_intent_args(&args).unwrap();
+        assert_eq!(result["intentType"], "RemoveLiquidity");
+        assert_eq!(result["lpAmount"], "52147210375003");
+        assert_eq!(result["minX"], "5728619911607");
+        assert_eq!(result["minY"], "516029247141147");
+        assert!(result.get("amountIn").is_none());
     }
 
     #[test]
     fn test_decode_utxoswap_intent_create_pool() {
-        let mut args = vec![0u8; 154];
-        args[0..20].fill(0xAA);
-        args[20..40].fill(0xBB);
-        args[56] = 0; // CreatePool
-        args[57] = 30; // total_fee_rate
-        args[58..90].fill(0xCC);
-        args[90..122].fill(0xDD);
-        args[122..138].copy_from_slice(&5_000u128.to_le_bytes());
-        args[138..154].copy_from_slice(&10_000u128.to_le_bytes());
+        // Real mainnet CreatePool intent args (tx 0xdd8b76a8…, block 13,372,041).
+        let args = parse_hex_code_hash("0x4d93a976fd4eb7a6349c020fadc3ef65834701dc000000000000000000000000000000000000000000000000000000000100000000000000001e000000000000000000000000000000000000000000000000000000000000000061bd91b121e5b7bbf9ccb4bc46c3106ac69c2dfd7b1c1143c4b4fdb33fd6182600e40b5402000000000000000000000000e40b54020000000000000000000000");
 
         let result = decode_utxoswap_intent_args(&args).unwrap();
         assert_eq!(result["protocol"], "utxoswap");
         assert_eq!(result["intentType"], "CreatePool");
         assert_eq!(result["totalFeeRate"], 30);
-        assert_eq!(result["amountX"], "5000");
-        assert_eq!(result["amountY"], "10000");
-        assert!(result["assetX"].as_str().unwrap().starts_with("0x"));
-        assert!(result["assetY"].as_str().unwrap().starts_with("0x"));
+        assert_eq!(result["amountX"], "10000000000");
+        assert_eq!(result["amountY"], "10000000000");
+        assert_eq!(
+            result["assetY"],
+            "0x61bd91b121e5b7bbf9ccb4bc46c3106ac69c2dfd7b1c1143c4b4fdb33fd61826"
+        );
+        // CreatePool no longer carries bogus zero-valued swap fields.
+        assert!(result.get("amountIn").is_none());
+        assert!(result.get("assetInIndex").is_none());
     }
 
     #[test]
     fn test_decode_utxoswap_intent_too_short() {
-        let args = vec![0u8; 89];
+        // Below the 57-byte shared header there is nothing trustworthy to read.
+        let args = vec![0u8; 56];
         assert!(decode_utxoswap_intent_args(&args).is_none());
+    }
+
+    /// A recognised type with an unexpected payload length must be reported as
+    /// unparsed rather than decoded with some other type's layout.
+    #[test]
+    fn test_decode_utxoswap_intent_unexpected_length_is_unparsed() {
+        let mut args = parse_hex_code_hash(REAL_SWAP_INTENT_ARGS);
+        args[56] = 1; // claim AddLiquidity on a 90-byte payload
+        let result = decode_utxoswap_intent_args(&args).unwrap();
+        assert_eq!(result["intentType"], "AddLiquidity");
+        assert_eq!(result["payloadUnparsed"], true);
+        assert_eq!(result["argsLen"], 90);
+        assert!(result.get("amountIn").is_none());
+        assert!(result.get("desiredX").is_none());
     }
 
     #[test]
