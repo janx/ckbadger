@@ -1693,7 +1693,7 @@ row. The handler masked the absence with
 `unwrap_or_else(|| DaoTopDepositors { depositors: vec![], .. })`, then cached
 that empty response for the full 30s TTL. `/dao/statistics` hid the same state
 behind a silent full-scan recompute — a fallback chain that had additionally
-*drifted* from the indexer's own treasury/compensation formulas, so the two
+_drifted_ from the indexer's own treasury/compensation formulas, so the two
 paths would have disagreed had anyone compared them.
 
 **Fix**: Rollback no longer deletes the singletons (they are tip-scoped rows
@@ -1751,7 +1751,7 @@ Separately, `/tokens/{type_hash}/holders` returned `address: null` for every
 holder.
 
 **Root Cause**: Two divergent resolution paths. The address handler derived the
-lock script from *one live cell* instead of `get_lock_script`, so it degraded
+lock script from _one live cell_ instead of `get_lock_script`, so it degraded
 to null exactly when an address had no live cells. The holders handler simply
 hardcoded `address: None` while the module's own `resolve_lock_addresses` —
 used by the sibling transfers/activities handlers — sat unused.
@@ -1788,7 +1788,7 @@ which no later request would recompute.
 
 **Fix**: `MockInput`/`MockCellDep` carry a required committing-block hash
 (an unresolvable one is an invariant violation, not a `None`), and a group is
-accepted only when `Run result: 0` *and* exit code 0; anything else is an
+accepted only when `Run result: 0` _and_ exit code 0; anything else is an
 error, which the existing worker persists as the `-1` failed marker.
 
 **Lesson**: An external verifier's exit status is part of its answer. Parsing
@@ -1816,14 +1816,14 @@ kills the process instead of the request. `/blocks` computed `cursor - 1`
 (so `cursor = 0` produced `-1`, and `i64::MIN` wrapped to `i64::MAX` in
 release, silently serving the newest page); `/dao/calculator` only compared
 `withdraw < deposit`, which `-1` passes; `/transactions` did call
-`validate_block_number` — 21 lines *after* it had already looked the header up.
+`validate_block_number` — 21 lines _after_ it had already looked the header up.
 
 **Why a green test did not protect `/transactions`**: its regression test
 asserted 400 and passed for months. Under the test profile a panic unwinds,
 and the handler swallowed the result twice (`get_block_header(..).ok()` inside
 a `spawn_blocking` whose `JoinError` was `.unwrap_or(0)`-ed), so control
 reached the later validation and returned a reassuring 400 — while the release
-binary was already dead. The fix therefore validates first *and* deletes the
+binary was already dead. The fix therefore validates first _and_ deletes the
 swallowing, so an ordering regression now surfaces as a 500 rather than a
 passing test.
 
@@ -1844,4 +1844,246 @@ the crash the release profile takes.
 
 ---
 
-_Last updated: 2026-08-02_
+### API-011: A checksum variant accepted, then echoed back as canonical
+
+**Date**: 2026-08-03
+
+**Symptom**: `/addresses/{addr}` answered 200 with full balance and cell counts
+for an address whose checksum is invalid under RFC-0021 (the burn payload
+carrying a legacy Bech32 checksum where the 0x00 full format mandates
+Bech32m), and returned that invalid string back to the caller in the response's
+`address` field. The official explorer 404s the same string. Separately,
+an all-uppercase address — legal per the bech32 case rules — fell through to
+the hex-hash branch and produced a 400 complaining about a 32-byte hex hash.
+
+**Root Cause**: `bech32::decode` is checksum-variant agnostic, so the parser
+verified only that the payload's format byte was 0x00, never that the encoding
+that carried it was the one the format requires. The response then preferred
+the caller's raw input over re-encoding the resolved lock script, so a rejected
+string became a published one.
+
+**Fix**: Decode explicitly under Bech32m for the full format, rejecting the
+legacy variant with an error naming the reason; accept either case as the spec
+allows; and always render `address` from the resolved lock script on the
+serving network, never from the input.
+
+**Lesson**: Echoing input into a response field makes the API an authority on
+a string it never validated. The canonical form has to be derived from the
+decoded value, which incidentally makes the wrong-checksum bug impossible to
+reintroduce quietly — the derived form simply would not match.
+
+### API-012: Two endpoints, one fact, one of them silent
+
+**Date**: 2026-08-03
+
+**Symptom**: `/blocks/{id}/proposals` reported `committedTxHash: null` for all
+1,500 proposals of block 11988763, of which 1,410 were in fact committed within
+the commit window, while `/graph/proposals/{block_number}` resolved those very
+commitments for the same block.
+
+**Root Cause**: The proposals handler hardcoded the field to `None` pending "a
+dedicated proposal-to-tx reverse index", but the sibling graph endpoint already
+answered the question by scanning the commit window. Consumers could not tell
+"never committed" from "not computed".
+
+**Fix**: The window scan was extracted into one helper used by both endpoints,
+with the graph endpoint's matching semantics pinned by a test first so the
+extraction provably changed nothing there. A proposal with no match in the
+available window stays null, which is now an honest answer rather than a
+placeholder.
+
+**Lesson**: A field that is always null is indistinguishable from data, and
+the justification for it ("no index exists") went stale the moment a sibling
+handler computed the same thing a different way. Documented omissions need a
+periodic check that they are still omissions.
+
+### API-013: An empty array where there was no answer
+
+**Date**: 2026-08-03
+
+**Symptom**: `/transactions/{hash}/cell-deps` returned 200 with an empty array
+both when the transaction did not exist and when the CKB store backing the
+lookup was unavailable — the same response a transaction with genuinely no
+cell deps would produce.
+
+**Root Cause**: The handler mapped both failure paths to `ok(vec![])`.
+
+**Fix**: A missing transaction is a 404 and an unavailable data source is a
+500 naming what is missing; a reader that lags behind a node that reports the
+transaction as committed also fails loudly rather than reporting absence.
+
+**Lesson**: The empty collection is a legitimate answer for one question only —
+"what are this transaction's cell deps" — so using it for "I could not tell"
+destroys the distinction at exactly the point a client would have retried.
+
+## Category: Ecosystem Protocol Detection
+
+### PROTO-001: One payload layout applied to every UTXOSwap intent type
+
+**Date**: 2026-08-03
+
+**Symptom**: Roughly 23% of mainnet UTXOSwap protocol metadata (and 28% of
+testnet) recorded amounts around 1.7e38 — add-liquidity and remove-liquidity
+actions showed `amountIn: 170141183460469231731687303715884144673` where the
+transaction had moved 9,969,978 shannons.
+
+**Root Cause**: `parse_intent_args` had one catch-all branch that applied the
+swap layout (`args[57]` index, `args[58..74]` and `args[74..90]` as u128s) to
+every intent type that was not CreatePool. On chain the payload is per-type:
+AddLiquidity is 121 bytes of four u128s, RemoveLiquidity 105 bytes of three,
+and only the two swap types match the assumed shape. Reading a u128 one byte
+late swallows the next field's low byte as its own high byte, which is why
+every wrong value was `2^127 + (true_value >> 8)`.
+
+**Fix**: Per-type decoding in a single decoder hoisted into `ckbadger-common`
+and shared by the indexer parser and the API's live lock-args display, which
+had carried its own copy of the same bug. Field names now describe what each
+type actually holds; an unknown type or a length mismatch records a typed
+`Unparsed` marker instead of borrowing another type's layout.
+
+**Lesson**: A catch-all match arm over a protocol's message types is a claim
+that every unlisted variant shares one layout — a claim no one verified here.
+The field identities were confirmed against what the transactions actually
+produce (the intent cell's own capacity and paired UDT amount), not inferred
+from plausible-looking byte patterns.
+
+### PROTO-002: Per-participant inference presented as transaction-level fact
+
+**Date**: 2026-08-03
+
+**Symptom**: One Stable++ transaction was labeled `borrow`, `adjust` and
+`repay` at once; every one of the 68 vault closures in mainnet history also
+carried `liquidation`; and about 89.5% of transactions labeled `redemption`
+were ordinary RUSD transfers or DEX swaps that never touched a vault.
+
+**Root Cause**: The detector ran once per participating owner and derived the
+action from that owner's own balance deltas, so a transaction with several
+participants emitted several mutually exclusive labels for one on-chain event.
+The truth table also mapped any nonzero RUSD delta without a vault to
+"redemption", and an `input_capacity == 0` early return skipped pure-receiver
+owners, which is exactly the borrower in a borrow.
+
+**Fix**: Classification is computed once per transaction from transaction-level
+facts (vault cells in and out, intent cells consumed, RUSD supply delta). A
+transaction that touches no vault, pool, or intent cell now emits no Stable++
+action at all. `liquidation` was removed rather than repaired: all 68 closures
+consume an intent belonging to the closing vault's own owner, so no chain
+discriminator for a forced liquidation exists, and a label that fires on every
+closure carries no information. `redemption` now requires RUSD actually
+destroyed against a consumed intent, which currently fires zero times.
+
+**Lesson**: When the thing being described is a property of the transaction,
+computing it from one participant's view guarantees contradictions the moment
+a second participant exists. And an emitted label must have a chain fact that
+distinguishes it — inventing "liquidation" from the shape of a normal close
+made the data actively misleading rather than merely incomplete.
+
+### PROTO-003: A protocol pipeline nothing could reach
+
+**Date**: 2026-08-03
+
+**Symptom**: 421 live testnet and 32 live mainnet did:ckb identity cells were
+absent from every surface — `/assets/identities/did_ckb` returned 404, item
+detail 404, search empty — while the store schema, writer paths, aggregates
+and API routes for exactly that data all existed and compiled.
+
+**Root Cause**: The script registry mapped the `did-ckb` metadata slug to
+`ProtocolScript::DidCkb`, but every detection site tested
+`ProtocolScript::SporeDid`, a legacy variant no slug maps to. The predicate
+was therefore permanently false and the entire downstream pipeline — insert,
+consume, aggregate emit, live sentinels, writer paths — was unreachable code.
+
+**Fix**: A dedicated `DidCkbParser` resolving the real registry variant, wired
+symmetrically through the live and bulk paths. Wiring it exposed a second
+defect the dormant code had hidden: 31 of the 421 cells carry 20-byte type
+args, and both the outpoint reverse index and the forward map assumed exactly
+32 bytes, so the reverse index key became variable-width (ids stay verbatim;
+scans filter on exact key length and exact id bytes) and the forward map
+stopped silently returning `None` for shorter ids.
+
+**Lesson**: Dead code does not merely fail to run, it fails to be tested
+against reality — this pipeline had never met a real cell, so its fixed-width
+assumption survived unchallenged until classification was switched on. A
+protocol is only integrated when something asserts its cells are indexed;
+until then, shipped routes and schema are evidence of intent, not of function.
+
+### PROTO-004: Curated labels attached to a hash the chain never resolves
+
+**Date**: 2026-08-03
+
+**Symptom**: The Fiber Funding and Commitment lock families reported zero
+cells against 5,021 live funding cells on testnet, and `/scripts/lookup` for
+the RGB++ BTC-testnet3 deployment answered with the signet deployment's
+numbers (680 cells instead of 12,486) including signet's code cell.
+
+**Root Cause**: Two independent faults that compound. In the metadata, ten
+entries set a version's identity to the canonical reference hash — a type
+script hash, which can never equal a code cell's bytecode data hash — while
+the usage rollup attributes a reference to a version by reading the live code
+cell's actual data hash, so the labeled version received nothing. In the API,
+a version carried a single `associated_code_hash` slot used to redirect stats
+lookups, but one bytecode is deployed under several independent references, so
+the last label written (signet) answered for all of them.
+
+**Fix**: The single-slot redirect is deleted rather than re-keyed, since no
+one slot can express a one-to-many relation and the per-reference rollup
+already holds the answer. Label import now validates a declared version
+against the shapes a version hash can actually take, naming the offending TOML
+and skipping the attachment instead of silently zeroing a family. The ten
+metadata entries were corrected against code cells read from the node.
+
+**Lesson**: Curated metadata is an input that can be wrong, so the code that
+consumes it needs the same fail-loud posture as any other untrusted input —
+here a placeholder silently produced a plausible zero, which reads as "this
+script is unused" rather than "this label never matched anything".
+
+### PROTO-005: Endianness copied from a fixture instead of the contract
+
+**Date**: 2026-08-03
+
+**Symptom**: mNFT item #1 displayed as token index 16777216 across all 5,209
+classes; the official explorer showed 0, 1, 2 for the same items.
+
+**Root Cause**: The parser read the 4-byte token index little-endian while the
+official contract's `parse_type_args_id` reads it big-endian. The parser's own
+test fixtures constructed args with `to_le_bytes`, so the tests agreed with
+the bug and would have kept agreeing forever.
+
+**Fix**: Big-endian in both parse paths, with the fixtures rebuilt from the
+contract's definition, in the bulk-build tests as well.
+
+**Lesson**: A test that builds its input with the same assumption as the code
+under test asserts only self-consistency. For a format defined by someone
+else, the fixture has to come from the external definition — the contract
+source or bytes captured from the chain — or it is not a test of correctness.
+
+### PROTO-006: An unsupported encoding recorded as a permanent failure
+
+**Date**: 2026-08-03
+
+**Symptom**: 24 of 40 sampled testnet DOB clusters failed to decode entirely
+("failed to extract DNA hex from spore content"), and the failures were
+persisted as deterministic so nothing would ever retry them.
+
+**Root Cause**: The DOB spec defines a raw-binary DNA form (content byte zero
+is `0x00`, DNA is the remaining bytes); the extractor only handled the text
+and JSON forms, running the content through a lossy UTF-8 conversion first.
+A related dispatch defect chose the protocol version from the spore's
+`content_type` with a silent `unwrap_or(0)` default, where the reference
+implementation dispatches on the cluster's declared `dob.ver`.
+
+**Fix**: One shared extractor that handles all three content forms, and
+cluster `dob.ver` as the dispatch authority with an undeclared version now a
+typed failure rather than a silent version 0. Three read-path
+re-implementations of decoder rules (range width, segment modulo, option
+selector precedence) were also brought to the reference behavior; one existing
+unit test had encoded the nonconforming precedence and was replaced.
+
+**Lesson**: Classifying a decode failure as deterministic is a statement that
+the input, not the decoder, is at fault — so it must not be reachable by an
+input shape the decoder simply does not implement, or the classification turns
+a missing feature into permanent data loss that a rebuild alone cannot heal.
+
+---
+
+_Last updated: 2026-08-03_
