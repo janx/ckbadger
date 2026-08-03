@@ -2557,3 +2557,249 @@ async fn test_lookup_scripts_accepts_tx_hash_parameter() {
     let response = app.oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
 }
+
+/// Two type-id deployments sharing one bytecode version (the RGB++ testnet
+/// signet/testnet3 shape). Each lookup must serve the QUERIED reference's own
+/// usage stats and its own deployment code cell — never the sibling
+/// deployment's. Regression for the associated_code_hash single-slot redirect
+/// that served the signet deployment's numbers for the testnet3 reference.
+#[tokio::test]
+async fn test_script_lookup_serves_queried_references_own_stats_for_shared_bytecode() {
+    let store = test_store();
+
+    // Shared bytecode version (data hash of the code cells).
+    let version_hash = vec![0x7e; 32];
+    // Two independent type-id deployments of the same binary.
+    let ref_signet = vec![0xd0; 32];
+    let ref_testnet3 = vec![0x61; 32];
+    let signet_code_cell_tx = vec![0xaa; 32];
+    let testnet3_code_cell_tx = vec![0xbb; 32];
+
+    // Labeled version row, as label import writes it for the family.
+    store
+        .put_script_version(
+            &version_hash,
+            &ScriptVersionInfo {
+                version_hash: version_hash.clone(),
+                name: Some("RGB++".to_string()),
+                description: Some("RGB++ Lock".to_string()),
+                canonical_reference_hash: Some(ref_signet.clone()),
+                canonical_hash_type: Some(1),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+    // Both references resolve to the shared version.
+    store
+        .put_script_reference_to_version_direct(1, &ref_signet, &version_hash)
+        .unwrap();
+    store
+        .put_script_reference_to_version_direct(1, &ref_testnet3, &version_hash)
+        .unwrap();
+
+    // Per-reference usage truth (audit numbers from the live testnet capture).
+    store
+        .put_script_info_direct(
+            &ref_signet,
+            &ScriptInfo {
+                code_hash: ref_signet.clone(),
+                hash_type: 1,
+                name: Some("RGB++".to_string()),
+                lock_cells_count: 1337,
+                lock_live_cells_count: 680,
+                lock_capacity_sum: 20_000_000_000_000,
+                lock_owned_capacity_sum: 17_587_097_961_011,
+                lock_used_capacity_sum: 12_000_000_000_000,
+                lock_owned_knowledge_sum: 11_771_100_000_000,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    store
+        .put_script_info_direct(
+            &ref_testnet3,
+            &ScriptInfo {
+                code_hash: ref_testnet3.clone(),
+                hash_type: 1,
+                name: Some("RGB++".to_string()),
+                lock_cells_count: 21009,
+                lock_live_cells_count: 12486,
+                lock_capacity_sum: 480_000_000_000_000,
+                lock_owned_capacity_sum: 475_592_296_325_729,
+                lock_used_capacity_sum: 280_000_000_000_000,
+                lock_owned_knowledge_sum: 279_292_400_000_000,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+    // Each deployment's own code cell carries the same bytecode.
+    let mut batch = StoreBatch::new(store.as_ref());
+    for (tx_hash, type_hash, block) in [
+        (&signet_code_cell_tx, &ref_signet, 100i64),
+        (&testnet3_code_cell_tx, &ref_testnet3, 200i64),
+    ] {
+        batch.put_cell(
+            tx_hash,
+            0,
+            &LiveCellInfo {
+                capacity: 100_00000000,
+                lock_script_hash: vec![0x11; 32],
+                lock_code_hash: vec![0x22; 32],
+                lock_hash_type: 1,
+                lock_args: vec![],
+                type_script_hash: Some(type_hash.clone()),
+                type_code_hash: Some(vec![0x33; 32]),
+                type_hash_type: Some(1),
+                type_args: Some(vec![]),
+                data_size: 64,
+                occupied_capacity: 61_00000000,
+                udt_amount: None,
+                data_hash: Some(version_hash.clone()),
+            },
+            block,
+        );
+        batch.put_cell_by_type(type_hash, block, tx_hash, 0);
+        batch.put_cell_by_data_hash(&version_hash, block, tx_hash, 0);
+    }
+    batch.commit().unwrap();
+
+    let app = create_router(test_config(store)).await;
+    let ref_signet_hex = format!("0x{}", hex::encode(&ref_signet));
+    let ref_testnet3_hex = format!("0x{}", hex::encode(&ref_testnet3));
+
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/v1/scripts/lookup")
+        .header("content-type", "application/json")
+        .body(Body::from(format!(
+            r#"{{"codeHashes":["{}","{}"]}}"#,
+            ref_signet_hex, ref_testnet3_hex
+        )))
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    // The testnet3 reference serves ITS OWN stats and ITS OWN code cell.
+    assert_eq!(json[&ref_testnet3_hex]["name"], "RGB++");
+    assert_eq!(json[&ref_testnet3_hex]["liveCellsCount"], 12486);
+    assert_eq!(
+        json[&ref_testnet3_hex]["ownedCapacitySum"],
+        "475592296325729"
+    );
+    assert_eq!(
+        json[&ref_testnet3_hex]["ownedKnowledgeSum"],
+        "279292400000000"
+    );
+    assert_eq!(
+        json[&ref_testnet3_hex]["codeCellTxHash"],
+        format!("0x{}", hex::encode(&testnet3_code_cell_tx))
+    );
+    assert_eq!(json[&ref_testnet3_hex]["codeCellsTotal"], 1);
+    assert_eq!(json[&ref_testnet3_hex]["codeCellsLiveCount"], 1);
+
+    // The signet reference likewise serves only its own deployment.
+    assert_eq!(json[&ref_signet_hex]["liveCellsCount"], 680);
+    assert_eq!(json[&ref_signet_hex]["ownedCapacitySum"], "17587097961011");
+    assert_eq!(json[&ref_signet_hex]["ownedKnowledgeSum"], "11771100000000");
+    assert_eq!(
+        json[&ref_signet_hex]["codeCellTxHash"],
+        format!("0x{}", hex::encode(&signet_code_cell_tx))
+    );
+    assert_eq!(json[&ref_signet_hex]["codeCellsTotal"], 1);
+}
+
+/// An ambiguous type reference (two live bytecode versions) still describes
+/// the queried reference itself: a deprecated flag recorded for the reference
+/// must surface instead of a hardcoded `false`.
+#[tokio::test]
+async fn test_script_lookup_ambiguous_reference_reports_reference_deprecated() {
+    let store = test_store();
+
+    let reference_hash = vec![0x66; 32];
+    let version_a = vec![0x67; 32];
+    let version_b = vec![0x68; 32];
+
+    store
+        .put_script_info_direct(
+            &reference_hash,
+            &ScriptInfo {
+                code_hash: reference_hash.clone(),
+                hash_type: 1,
+                name: Some("Old Deprecated Lock".to_string()),
+                deprecated: true,
+                lock_cells_count: 5,
+                lock_live_cells_count: 2,
+                lock_capacity_sum: 1_000,
+                lock_owned_capacity_sum: 500,
+                lock_used_capacity_sum: 800,
+                lock_owned_knowledge_sum: 400,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+    let mut batch = StoreBatch::new(store.as_ref());
+    for (tx_hash, data_hash, block) in [
+        (vec![0xa1; 32], &version_a, 10i64),
+        (vec![0xa2; 32], &version_b, 11i64),
+    ] {
+        batch.put_cell(
+            &tx_hash,
+            0,
+            &LiveCellInfo {
+                capacity: 100_00000000,
+                lock_script_hash: vec![0x11; 32],
+                lock_code_hash: vec![0x22; 32],
+                lock_hash_type: 1,
+                lock_args: vec![],
+                type_script_hash: Some(reference_hash.clone()),
+                type_code_hash: Some(vec![0x33; 32]),
+                type_hash_type: Some(1),
+                type_args: Some(vec![]),
+                data_size: 64,
+                occupied_capacity: 61_00000000,
+                udt_amount: None,
+                data_hash: Some(data_hash.clone()),
+            },
+            block,
+        );
+        batch.put_cell_by_type(&reference_hash, block, &tx_hash, 0);
+        batch.put_cell_by_data_hash(data_hash, block, &tx_hash, 0);
+    }
+    batch.commit().unwrap();
+
+    let app = create_router(test_config(store)).await;
+    let reference_hash_hex = format!("0x{}", hex::encode(&reference_hash));
+
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/v1/scripts/lookup")
+        .header("content-type", "application/json")
+        .body(Body::from(format!(
+            r#"{{"codeHashes":["{}"]}}"#,
+            reference_hash_hex
+        )))
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(json[&reference_hash_hex]["resolutionState"], "ambiguous");
+    assert_eq!(json[&reference_hash_hex]["name"], "Old Deprecated Lock");
+    assert_eq!(
+        json[&reference_hash_hex]["deprecated"], true,
+        "the queried reference is marked deprecated in the store; the ambiguous fallback record must not hardcode false"
+    );
+    assert_eq!(
+        json[&reference_hash_hex]["ambiguity"]["versionHashes"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+}

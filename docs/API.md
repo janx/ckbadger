@@ -232,7 +232,7 @@ output_index`; activity cursors encode `block_num:tx_idx`; spore/cluster list cu
 
 - `CursorPaginatedResponse<CellResponse>` — cell summary
 - `CellDetailResponse` — full cell detail with `lock`/`type_script` (`ScriptResponse`), `data`, `data_analysis`, `dep_group_items`, `code_cell_of: Vec<CodeCellScript>`, `dao_info: Option<DaoInfo>`, `used_capacity_breakdown: OccupiedCapacityBreakdown`
-- `AddressResponse` — lock_script_hash, balance, used_capacity, lock_script (`ScriptResponse`) + `lock_script_info: LockScriptInfo`
+- `AddressResponse` — lock_script_hash, balance, used_capacity, lock_script (`ScriptResponse`) + `lock_script_info: LockScriptInfo` (`deprecated` reflects the stored script record, e.g. an address on a superseded ACP deployment reports `true`)
 - `Vec<TopAddressResponse>` / `Vec<ActiveAddressResponse>`
 - `CursorPaginatedResponse<AddressTransactionResponse>` — tx_type, capacity_change, script_labels
 - `CursorPaginatedResponse<AddressTokenResponse>` — per-address token balance
@@ -557,7 +557,14 @@ disabled or empty state. A point lookup still returns not found.
 **Responses**
 
 - `CursorPaginatedResponse<ScriptFamilyListItemResponse>` — script family listing (from `crate::response`)
-- `HashMap<String, ScriptLookupInfo>` — keyed by reference hash; each entry has resolution_state (`resolved`/`ambiguous`) and optional `ambiguity: ScriptResolutionAmbiguityResponse`
+- `HashMap<String, ScriptLookupInfo>` — keyed by reference hash; each entry has resolution_state (`resolved`/`ambiguous`) and optional `ambiguity: ScriptResolutionAmbiguityResponse`.
+  Every deployment-scoped field describes **the queried reference**, never a sibling deployment
+  that happens to share the same bytecode: `liveCellsCount`/`ownedCapacitySum`/`ownedKnowledgeSum`
+  and `scriptKind` come from the queried reference's own usage rollup (zero when the reference has
+  no indexed usage), and `codeCellTxHash`/`codeCellOutputIndex`/`codeCellsLiveCount`/`codeCellsTotal`
+  cover only the code cells deployed under that reference. `codeHash` remains the resolved bytecode
+  version hash, which two deployments of one binary legitimately share. `deprecated` is reported for
+  ambiguous references too, from the reference's own record.
 - `CodeCellResponse` — `tx_hash`, `output_index` (option of either)
 - `CodeCellsResponse` — `code_cells: Vec<CodeCellEntry>`, counts, optional `resolved_version_hash`, optional ambiguity
 - `ScriptFamilyDetailResponse` — family + `versions` (from `crate::response`)

@@ -801,3 +801,68 @@ async fn test_get_cell_keeps_exact_hash_types() {
         json["address"]
     );
 }
+
+/// The address page must report the lock script's deprecated flag from the
+/// store, not a hardcoded `false`. Vector: the old testnet Anyone-Can-Pay
+/// deployment 0x86a1c698... is marked `deprecated = true` in
+/// docs/metadata/scripts/anyone-can-pay-lock.toml, which label import persists
+/// on the reference's ScriptInfo row.
+#[tokio::test]
+async fn test_get_address_lock_script_info_reports_deprecated_version() {
+    let store = test_store();
+    let code_hash =
+        hex::decode("86a1c6987a4acbe1a887cca4c9dd2ac9fcb07405bbeda51b861b18bbf7492c4b").unwrap();
+    let args = vec![0x44; 20];
+    let lock_hash = compute_script_hash(&code_hash, 1, &args);
+
+    store
+        .put_script_info_direct(
+            &code_hash,
+            &ckbadger_store::types::ScriptInfo {
+                code_hash: code_hash.clone(),
+                hash_type: 1,
+                name: Some("Anyone-Can-Pay Lock".to_string()),
+                deprecated: true,
+                lock_cells_count: 1,
+                lock_live_cells_count: 1,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_lock_script(
+        &lock_hash,
+        &ckbadger_store::types::LockScriptEntry {
+            code_hash: code_hash.clone(),
+            hash_type: 1,
+            args: args.clone(),
+        },
+    );
+    batch.put_addr_balance(
+        &lock_hash,
+        &ckbadger_store::types::AddressBalance {
+            balance: 100_00000000,
+            used_capacity: 61_00000000,
+            live_cells_count: 1,
+            total_cells_count: 1,
+            txs_count: 1,
+            first_seen_block: 10,
+            first_seen_tx: vec![0x01; 32],
+            last_activity_block: 20,
+            last_activity_tx: vec![0x02; 32],
+        },
+    );
+    batch.commit().unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let (status, json) = get_json(&app, &format!("/addresses/0x{}", hex::encode(&lock_hash))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json["lockScriptInfo"]["name"], "Anyone-Can-Pay Lock");
+    assert_eq!(
+        json["lockScriptInfo"]["deprecated"], true,
+        "store marks this script version deprecated; the address response must reflect it"
+    );
+}
