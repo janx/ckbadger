@@ -456,9 +456,12 @@ In particular:
 
 ## Related References
 
-- [docs/rfcs/rfcs/0022-transaction-structure/0022-transaction-structure.md](./rfcs/rfcs/0022-transaction-structure/0022-transaction-structure.md)
-- [docs/rfcs/rfcs/0029-allow-script-multiple-matches-on-identical-code/0029-allow-script-multiple-matches-on-identical-code.md](./rfcs/rfcs/0029-allow-script-multiple-matches-on-identical-code/0029-allow-script-multiple-matches-on-identical-code.md)
-- [docs/rfcs/rfcs/0032-ckb-vm-version-selection/0032-ckb-vm-version-selection.md](./rfcs/rfcs/0032-ckb-vm-version-selection/0032-ckb-vm-version-selection.md)
-- [docs/rfcs/rfcs/0051-ckb2023/0051-ckb2023.md](./rfcs/rfcs/0051-ckb2023/0051-ckb2023.md)
-- [docs/docs.nervos.org/website/docs/script/type-id.mdx](./docs.nervos.org/website/docs/script/type-id.mdx)
-- [docs/docs.nervos.org/website/docs/tech-explanation/data-type-diff.md](./docs.nervos.org/website/docs/tech-explanation/data-type-diff.md)
+Upstream sources (the `rfcs` and `docs.nervos.org` git submodules were removed;
+nothing under `docs/` mirrors them):
+
+- [RFC-0022 Transaction Structure](https://github.com/nervosnetwork/rfcs/blob/master/rfcs/0022-transaction-structure/0022-transaction-structure.md)
+- [RFC-0029 Allow Script Multiple Matches on Identical Code](https://github.com/nervosnetwork/rfcs/blob/master/rfcs/0029-allow-script-multiple-matches-on-identical-code/0029-allow-script-multiple-matches-on-identical-code.md)
+- [RFC-0032 CKB-VM Version Selection](https://github.com/nervosnetwork/rfcs/blob/master/rfcs/0032-ckb-vm-version-selection/0032-ckb-vm-version-selection.md)
+- [RFC-0051 CKB2023](https://github.com/nervosnetwork/rfcs/blob/master/rfcs/0051-ckb2023/0051-ckb2023.md)
+- [Nervos Docs — Type ID](https://docs.nervos.org/docs/script/type-id)
+- [Nervos Docs — Data vs Type hash type](https://docs.nervos.org/docs/tech-explanation/data-type-diff)

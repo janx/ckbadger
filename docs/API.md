@@ -43,7 +43,9 @@ output_index`; activity cursors encode `block_num:tx_idx`; spore/cluster list cu
 ## Modules
 
 `api_routes()` (`crates/api/src/routes/mod.rs:26`) merges 18 modules.
-`tx_lookup.rs` is a helper imported by `transactions.rs` and is not mounted.
+Two files in `routes/` are helpers rather than mounted modules: `tx_lookup.rs`
+(imported by `transactions.rs`) and `proposal_window.rs` (the shared
+proposal-window scan used by `blocks.rs` and `graph.rs`).
 
 ---
 

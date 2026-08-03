@@ -256,16 +256,19 @@ ckbadger verify --list-checks             # List all checks
 
 **BEFORE making changes to CKB-related code, READ the relevant documentation:**
 
-| Topic            | Document                          | Must Read Before                              |
-| ---------------- | --------------------------------- | --------------------------------------------- |
-| **Worldview**    | `docs/prompts/WORLD_VIEW.md`      | **Any design or implementation**              |
-| Bulk sync rules  | `docs/prompts/BULK_SYNC.md`       | Bulk sync logic or sync-mode boundary changes |
-| Reorg handling   | `docs/prompts/REORG_HANDLING.md`  | Reorg or fork-related changes                 |
-| Activity system  | `docs/prompts/ACTIVITY_DESIGN.md` | Activity feed or activity CF changes          |
-| CKB protocol     | `docs/rfcs/`                      | Understanding CKB internals                   |
-| Nervos docs      | `docs/docs.nervos.org/`           | User-facing explanations                      |
-| DAO, APC, Supply | `docs/DAO_CALCULATIONS.md`        | Any DAO/supply/circulation changes            |
-| Architecture     | `docs/ARCHITECTURE_MAP.md`        | Module ownership questions                    |
+| Topic            | Document                              | Must Read Before                              |
+| ---------------- | ------------------------------------- | --------------------------------------------- |
+| **Worldview**    | `docs/prompts/WORLD_VIEW.md`          | **Any design or implementation**              |
+| Bulk sync rules  | `docs/prompts/BULK_SYNC.md`           | Bulk sync logic or sync-mode boundary changes |
+| Reorg handling   | `docs/prompts/REORG_HANDLING.md`      | Reorg or fork-related changes                 |
+| Activity system  | `docs/prompts/ACTIVITY_DESIGN.md`     | Activity feed or activity CF changes          |
+| CKB protocol     | https://github.com/nervosnetwork/rfcs | Understanding CKB internals                   |
+| Nervos docs      | https://docs.nervos.org               | User-facing explanations                      |
+| DAO, APC, Supply | `docs/DAO_CALCULATIONS.md`            | Any DAO/supply/circulation changes            |
+| Architecture     | `docs/ARCHITECTURE_MAP.md`            | Module ownership questions                    |
+
+The RFC and Nervos-docs sources are upstream links, not vendored copies — they were
+git submodules and were removed; nothing under `docs/` mirrors them.
 
 ### Common Knowledge (CKB Core Concept)
 
@@ -344,30 +347,30 @@ const DAO_CODE_HASH: &str = "0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d
 
 ## File Locations
 
-| What             | Where                                                                                                                                              |
-| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| CLI binary       | `crates/cli/src/main.rs` (subcommands, supervisor)                                                                                                 |
-| Config           | `crates/config/src/lib.rs` (per-network `config.toml`); `crates/config/src/orchestrator.rs` (orchestrator `ckbadger.toml`, `[[network]]`)          |
-| IPC protocol     | `crates/ipc/src/` (Unix socket server/client)                                                                                                      |
-| Storage engine   | `crates/ckbadger-store/src/` (types, store, keys, \*\_ops.rs)                                                                                      |
-| API routes       | `crates/api/src/routes/*.rs` (18 modules)                                                                                                          |
-| Response types   | `crates/api/src/response.rs`                                                                                                                       |
-| WebSocket        | `crates/api/src/ws/`                                                                                                                               |
-| RPC client       | `crates/indexer/src/rpc/client.rs`                                                                                                                 |
-| Parsers          | `crates/indexer/src/parser/*.rs` (block, cell, dao, dotbit, fiber, media_source, mnft, rgbpp, script, spore, stablepp, transaction, udt, utxoswap) |
-| DB writers       | `crates/indexer/src/db/writer/*.rs` (20 modules)                                                                                                   |
-| DOB decoder      | `crates/dob-decoder/src/` (lib, vm, cache, fetch, types)                                                                                           |
-| Label import     | `crates/indexer/src/label_import.rs`                                                                                                               |
-| Verify checks    | `crates/indexer/src/verify/*.rs`                                                                                                                   |
-| TUI              | `crates/tui/src/`                                                                                                                                  |
-| Bench            | `crates/bench/src/` (stress testing, endpoint benchmarks, reports)                                                                                 |
-| Frontend API     | `frontend/lib/api.ts`                                                                                                                              |
-| LLM discovery    | `frontend/public/llms.txt`, `frontend/public/llms-full.txt`                                                                                        |
-| UI components    | `frontend/components/ui/`                                                                                                                          |
-| Pages            | `frontend/app/` (dynamic routes split: `page.tsx` wrapper + `client-page.tsx`)                                                                     |
-| Tests (Rust)     | Inline `#[cfg(test)]`, per-resource `crates/api/tests/api_*.rs` (shared helpers in `crates/api/tests/common/mod.rs`)                               |
-| Tests (Frontend) | `frontend/__tests__/**/*.test.{ts,tsx}`, `frontend/__tests__/msw/handlers.ts`                                                                      |
-| CI               | `.github/workflows/ci.yml`                                                                                                                         |
+| What             | Where                                                                                                                                                                           |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| CLI binary       | `crates/cli/src/main.rs` (subcommands, supervisor)                                                                                                                              |
+| Config           | `crates/config/src/lib.rs` (per-network `config.toml`); `crates/config/src/orchestrator.rs` (orchestrator `ckbadger.toml`, `[[network]]`)                                       |
+| IPC protocol     | `crates/ipc/src/` (Unix socket server/client)                                                                                                                                   |
+| Storage engine   | `crates/ckbadger-store/src/` (types, store, keys, \*\_ops.rs)                                                                                                                   |
+| API routes       | `crates/api/src/routes/*.rs` (18 mounted modules + `tx_lookup`/`proposal_window` helpers)                                                                                       |
+| Response types   | `crates/api/src/response.rs`                                                                                                                                                    |
+| WebSocket        | `crates/api/src/ws/`                                                                                                                                                            |
+| RPC client       | `crates/indexer/src/rpc/client.rs`                                                                                                                                              |
+| Parsers          | `crates/indexer/src/parser/*.rs` (bit_cell, block, cell, dao, did_ckb, dotbit, fiber, media_source, mnft, registry, rgbpp, script, spore, stablepp, transaction, udt, utxoswap) |
+| DB writers       | `crates/indexer/src/db/writer/*.rs` (20 modules)                                                                                                                                |
+| DOB decoder      | `crates/dob-decoder/src/` (lib, vm, cache, fetch, types)                                                                                                                        |
+| Label import     | `crates/indexer/src/label_import.rs`                                                                                                                                            |
+| Verify checks    | `crates/indexer/src/verify/*.rs`                                                                                                                                                |
+| TUI              | `crates/tui/src/`                                                                                                                                                               |
+| Bench            | `crates/bench/src/` (stress testing, endpoint benchmarks, reports)                                                                                                              |
+| Frontend API     | `frontend/lib/api.ts`                                                                                                                                                           |
+| LLM discovery    | `frontend/public/llms.txt`, `frontend/public/llms-full.txt`                                                                                                                     |
+| UI components    | `frontend/components/ui/`                                                                                                                                                       |
+| Pages            | `frontend/app/` (dynamic routes split: `page.tsx` wrapper + `client-page.tsx`)                                                                                                  |
+| Tests (Rust)     | Inline `#[cfg(test)]`, per-resource `crates/api/tests/api_*.rs` (shared helpers in `crates/api/tests/common/mod.rs`)                                                            |
+| Tests (Frontend) | `frontend/__tests__/**/*.test.{ts,tsx}`, `frontend/__tests__/msw/handlers.ts`                                                                                                   |
+| CI               | `.github/workflows/ci.yml`                                                                                                                                                      |
 
 ## Dependencies
 

@@ -4,8 +4,8 @@ This document describes the calculation logic for Nervos DAO statistics displaye
 
 ## References
 
-- [RFC-0023: Deposit and Withdraw in Nervos DAO](./rfcs/rfcs/0023-dao-deposit-withdraw/0023-dao-deposit-withdraw.md)
-- [RFC-0015: CKB Cryptoeconomics](./rfcs/rfcs/0015-ckb-cryptoeconomics/0015-ckb-cryptoeconomics.md)
+- [RFC-0023: Deposit and Withdraw in Nervos DAO](https://github.com/nervosnetwork/rfcs/blob/master/rfcs/0023-dao-deposit-withdraw/0023-dao-deposit-withdraw.md)
+- [RFC-0015: CKB Cryptoeconomics](https://github.com/nervosnetwork/rfcs/blob/master/rfcs/0015-ckb-cryptoeconomics/0015-ckb-cryptoeconomics.md)
 - [Understanding the Nervos CKB Issuance Model](https://www.nervos.org/knowledge-base/understanding_nervos_ckb_issuance_model)
 
 ## CKB Supply Model
@@ -141,14 +141,14 @@ const EPOCHS_PER_HALVING: f64 = 8_760.0;
 
 There is deliberately no global `GENESIS_BURNT` calculation constant. Likewise, 102 CKB is only
 the occupied capacity of a standard secp256k1 DAO cell; compensation uses the exact occupied
-capacity persisted with each deposit.
+capacity of the cell RFC-0023 counts, persisted per deposit.
 
 ## 1. Individual Deposit Compensation
 
 For a single DAO deposit, compensation is calculated using AR growth:
 
 ```
-free_capacity = capacity - occupied_capacity
+free_capacity = capacity - counted_occupied_capacity
 compensation = free_capacity * (AR_withdraw / AR_deposit) - free_capacity
              = free_capacity * (AR_withdraw - AR_deposit) / AR_deposit
 ```
@@ -156,14 +156,33 @@ compensation = free_capacity * (AR_withdraw / AR_deposit) - free_capacity
 Where:
 
 - `capacity`: Total CKB locked in the deposit (in shannons)
-- `occupied_capacity`: Exact occupied capacity of that deposit cell, derived
-  from its capacity field, lock script, type script, and data
+- `counted_occupied_capacity`: Exact occupied capacity of the cell RFC-0023
+  counts (see below), derived from its capacity field, lock script, type
+  script, and data
 - `AR_deposit`: AR value at deposit block
 - `AR_withdraw`: AR value at the phase-1 withdraw-request block
 
+### Which cell's occupied capacity is counted
+
+RFC-0023 derives `counted_capacity` from the **withdrawing cell** — the phase-1
+request cell — not from the original deposit cell. The DAO type script does not
+enforce lock preservation, so a withdraw request may carry a different lock and
+therefore a different occupied capacity than the deposit it consumed.
+
+| Deposit state              | Occupied capacity used                                         |
+| -------------------------- | -------------------------------------------------------------- |
+| Status 0 — still accruing  | The deposit cell's own occupied capacity (no request cell yet) |
+| Status 1 — phase-1 frozen  | The **withdraw-request cell's** occupied capacity              |
+| Status 2 — phase-2 claimed | The **withdraw-request cell's** occupied capacity              |
+
+`DaoDepositCacheEntry` therefore persists both: `occupied_capacity` at deposit
+and `withdraw_request_occupied_capacity` at phase-1. A status ≥ 1 entry missing
+the request value fails loudly; it never falls back to the deposit cell.
+
 The familiar 102 CKB value applies to a standard secp256k1 DAO cell. It is not
-a protocol-wide constant for cells using different lock scripts. The indexer
-therefore persists the original deposit cell's exact occupied capacity.
+a protocol-wide constant for cells using different lock scripts — the observed
+divergent shape on mainnet is a 33-byte-args lock at deposit withdrawing into a
+standard 20-byte-args secp lock, a 13 CKB difference.
 
 ### Lifecycle aggregation
 
@@ -239,7 +258,7 @@ APC decreases over time because cumulative `total_issuance` grows while secondar
 **Implementation**:
 
 - Core calculation: `crates/common/src/dao.rs::calculate_estimated_apc()`
-- API wrapper: `crates/api/src/routes/dao.rs::estimated_apc_from_store()`
+- API wrapper: `crates/api/src/routes/dao.rs::estimated_apc_from_state()`
 
 ## 3. Secondary Issuance Components
 
@@ -249,19 +268,38 @@ interchangeable calculation paths.
 
 ### 3.1 Miner secondary issuance
 
-For block `N`, using header state at the end of block `N-1`:
+Block `i`'s miner share is the protocol's own direct split (RFC-0023), using
+the DAO header state of the PARENT block:
 
 ```
-non_miner_delta =
-    (S_N - S_(N-1)) + claimed_compensation_in_block_N
-
-miner_secondary_delta =
-    non_miner_delta * U_(N-1) / (C_(N-1) - U_(N-1))
+s_i    = per-block secondary issuance from the epoch schedule
+miner_i = floor(s_i * U_(i-1) / C_(i-1))
 ```
 
-If `non_miner_delta` is a negative protocol correction, miner reward does not
-decrease. Cumulative miner secondary issuance is the exact sum of the
-non-negative per-block miner deltas.
+`s_i` derives from the block header's packed epoch field plus the consensus
+`secondary_epoch_reward`: the epoch reward is divided evenly over the epoch and
+the division remainder is distributed as +1 shannon to the first
+`secondary_epoch_reward % epoch_length` blocks — the same rule CKB applies to
+the primary epoch reward. `secondary_epoch_reward` is fetched from
+`get_consensus` at indexer startup, persisted in sync meta, and re-verified on
+every restart so a network mismatch surfaces immediately.
+
+This is the value the node reports as `miner_reward.secondary` in
+`get_block_economic_state`. Cumulative miner secondary issuance is the exact
+sum of these per-block values.
+
+**Never reconstruct it** from the secondary-pool delta plus claimed
+compensation (`(S_N - S_(N-1)) + claimed`, split by `U/(C-U)`). That
+reconstruction couples the mining series to ckbadger's own DAO claim
+recognition and carries an inherent flooring drift; it broke the on-chain
+identity `cum_miner + cum_claimed = cum_secondary - (S_tip - S_0)`. Claimed
+compensation feeds only the compensation aggregates.
+
+Genesis carries its own primary+secondary share inside the genesis DAO `C`
+field and has no parent to split against — the node defines no miner reward for
+block 0 — so block 0 only seeds the parent C/U state. A missing parent C/U or
+an invalid C/U relationship fails with block and date context; there is no
+zero-clamp.
 
 ### 3.2 DAO compensation
 
@@ -306,12 +344,18 @@ not part of `active_unmade`.
 
 - `C`, `S`, `U`, and `AR`: exact DAO fields from every block header
 - `claimed_compensation_in_block`: exact phase-2 lifecycle transition
-- Per-deposit capacity, exact occupied capacity, deposit AR, request AR, and
-  lifecycle block numbers: domain-store `dao_deposits`
+- Per-deposit capacity, deposit and withdraw-request occupied capacities,
+  deposit AR, request AR, and lifecycle block numbers: domain-store
+  `dao_deposits`
+- Per-block secondary schedule:
+  `crates/common/src/dao.rs::secondary_block_issuance()`
 - Miner arithmetic:
-  `crates/common/src/dao.rs::calculate_secondary_miner_delta()`
+  `crates/common/src/dao.rs::calculate_miner_secondary_issuance()`
 - Per-block miner accumulation:
-  `crates/indexer/src/sync/dao_helpers.rs`
+  `crates/indexer/src/sync/dao_helpers.rs::accumulate_miner_secondary_for_block()`
+  (applied by all three twins: live sync `sync/batch.rs`, bulk build
+  `bulk_build/owners/dao.rs`, and the reorg snapshot recompute
+  `ckbadger-store/src/stats_ops.rs`)
 - Exact bulk compensation timeline:
   `crates/indexer/src/sync/bulk_build/owners/dao.rs`
 - Exact live post-commit materialization:
@@ -321,23 +365,23 @@ not part of `active_unmade`.
 
 DAO-related state is split across several CFs:
 
-| CF / Data             | Key                                                     | Value                            | Purpose                                                                                                                                          |
-| --------------------- | ------------------------------------------------------- | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `dao_deposits`        | `tx_hash + output_index`                                | `DaoDepositCacheEntry`           | Deposit lifecycle plus original capacity, exact occupied capacity, deposit/request ARs, and validated claimed compensation                       |
-| `dao_by_withdraw_tx`  | `withdraw_outpoint` (34B)                               | `deposit_outpoint_key`           | Fast lookup on withdraw completion (keyed by withdraw request outpoint)                                                                          |
-| `dao_by_block`        | `block_desc (8B BE) + outpoint (34B)`                   | empty                            | Newest-first global DAO deposit index                                                                                                            |
-| `dao_by_lock_block`   | `lock_hash (32B) + block_desc (8B BE) + outpoint (34B)` | empty                            | Newest-first DAO deposit index scoped by lock hash                                                                                               |
-| `dao_by_status_block` | `status (2B BE) + block_desc (8B BE) + outpoint (34B)`  | empty                            | Newest-first DAO deposit index scoped by status                                                                                                  |
-| `stats_dao`           | date / fixed summary keys                               | `DaoDailySnapshot` and summaries | Daily cumulative series (`total_issuance`, `secondary_pool`, `occupied_capacity`, `cum_miner_secondary`, `cum_dao_compensation`, `cum_treasury`) |
+| CF / Data             | Key                                                     | Value                            | Purpose                                                                                                                                             |
+| --------------------- | ------------------------------------------------------- | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `dao_deposits`        | `tx_hash + output_index`                                | `DaoDepositCacheEntry`           | Deposit lifecycle plus original capacity, deposit and withdraw-request occupied capacities, deposit/request ARs, and validated claimed compensation |
+| `dao_by_withdraw_tx`  | `withdraw_outpoint` (34B)                               | `deposit_outpoint_key`           | Fast lookup on withdraw completion (keyed by withdraw request outpoint)                                                                             |
+| `dao_by_block`        | `block_desc (8B BE) + outpoint (34B)`                   | empty                            | Newest-first global DAO deposit index                                                                                                               |
+| `dao_by_lock_block`   | `lock_hash (32B) + block_desc (8B BE) + outpoint (34B)` | empty                            | Newest-first DAO deposit index scoped by lock hash                                                                                                  |
+| `dao_by_status_block` | `status (2B BE) + block_desc (8B BE) + outpoint (34B)`  | empty                            | Newest-first DAO deposit index scoped by status                                                                                                     |
+| `stats_dao`           | date / fixed summary keys                               | `DaoDailySnapshot` and summaries | Daily cumulative series (`total_issuance`, `secondary_pool`, `occupied_capacity`, `cum_miner_secondary`, `cum_dao_compensation`, `cum_treasury`)    |
 
 ## 5. Update Triggers
 
-| Statistic                       | Trigger                            | Function / owner                                                                      |
-| ------------------------------- | ---------------------------------- | ------------------------------------------------------------------------------------- |
-| Miner secondary issuance        | Every processed block              | `accumulate_secondary_issuance_deltas_from_csu()`                                     |
-| Bulk daily deposit compensation | Bulk final materialization         | `DaoCompensationTimeline`                                                             |
-| Live daily deposit compensation | After each live domain-store batch | `BatchWriter::refresh_dao_statistics_after_batch()`                                   |
-| Reorg cutoff-date repair        | After partial-day rollback         | `CkbadgerStore::recompute_dao_daily_snapshot_for_date()` + `repair_cutoff_date_stats` |
+| Statistic                       | Trigger                            | Function / owner                                                                                                                                    |
+| ------------------------------- | ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Miner secondary issuance        | Every processed block              | `accumulate_miner_secondary_for_block()`                                                                                                            |
+| Bulk daily deposit compensation | Bulk final materialization         | `DaoCompensationTimeline`                                                                                                                           |
+| Live daily deposit compensation | After each live domain-store batch | `BatchWriter::refresh_latest_dao_statistics()` (tip day + DAO singletons only; completed days are materialized exact inside their own atomic batch) |
+| Reorg cutoff-date repair        | After partial-day rollback         | `CkbadgerStore::recompute_dao_daily_snapshot_for_date()` + `repair_cutoff_date_stats`                                                               |
 
 > **Note:** Estimated APC served by DAO APIs is derived from the latest cached header's epoch,
 > protocol issuance schedule, and `GenesisBaseline.total_issuance`; it is not read from a

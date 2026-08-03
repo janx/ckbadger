@@ -70,9 +70,7 @@ Bulk sync is the high-throughput index building path used with a fresh store.
 The bulk-build engine (`crates/indexer/src/sync/bulk_build/`) implements these rules via an
 in-memory build model where RocksDB is the final write-once artifact, not working memory.
 
-See [docs/superpowers/specs/2026-03-17-bulk-sync-build-engine-design.md](../superpowers/specs/2026-03-17-bulk-sync-build-engine-design.md)
-for the full design spec and [docs/INDEXER_PIPELINE.md](../INDEXER_PIPELINE.md) for runtime
-architecture details.
+See [docs/INDEXER_PIPELINE.md](../INDEXER_PIPELINE.md) for runtime architecture details.
 
 ### Key invariants
 

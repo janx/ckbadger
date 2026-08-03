@@ -16,20 +16,49 @@ Each object is stored as an `ObjectEntry` with standard-specific data in `Object
 
 ## Spore Content Types
 
-A spore's `content_type` (MIME) determines how its cell data is interpreted:
+A spore's `content_type` (MIME) determines how its cell data is presented:
 
-| Content Type                    | Frontend Standard | Behavior                                |
-| ------------------------------- | ----------------- | --------------------------------------- |
-| `image/png`, `image/jpeg`, etc. | `plain-image`     | Raw bytes displayed as image            |
-| `image/svg+xml`                 | `plain-svg`       | Raw SVG in cell data                    |
-| `text/plain`, `text/html`       | `plain-text`      | Raw text in cell data                   |
-| `dob/0`                         | `dob/0`           | DNA decoded by single decoder           |
-| `dob/1`                         | `dob/1`           | DNA decoded by multi-step decoder chain |
-| other                           | `generic`         | Hex view only                           |
+| Content Type                    | Frontend Standard | Behavior                         |
+| ------------------------------- | ----------------- | -------------------------------- |
+| `image/png`, `image/jpeg`, etc. | `plain-image`     | Raw bytes displayed as image     |
+| `image/svg+xml`                 | `plain-svg`       | Raw SVG in cell data             |
+| `text/plain`, `text/html`       | `plain-text`      | Raw text in cell data            |
+| `dob/0`, `dob/1`                | `dob/0`, `dob/1`  | DNA decoded by on-chain decoders |
+| other                           | `generic`         | Hex view only                    |
+
+A `dob/*` content type marks the spore as DOB-decodable, but it does **not**
+decide which DOB protocol version runs — see below.
 
 ## DOB Protocol
 
-DOB spores store a short DNA hex string as cell content. The DNA is decoded by on-chain decoder binaries specified in the parent cluster's description JSON.
+DOB spores store DNA as cell content. The DNA is decoded by on-chain decoder binaries specified in the parent cluster's description JSON.
+
+### Version Dispatch (cluster `dob.ver`, not `content_type`)
+
+The protocol version comes from the **cluster metadata's `dob.ver`**, mirroring
+the official server's `ClusterDescriptionField::unbox_dob`:
+
+| `dob.ver` in cluster metadata | Dispatch                            |
+| ----------------------------- | ----------------------------------- |
+| absent or `null`              | DOB/0 (per spec)                    |
+| `0` / `1`                     | DOB/0 / DOB/1                       |
+| any other number, non-integer | Loud `ClusterMetadataInvalid` error |
+
+The spore's own `content_type` is used only as a consistency cross-check; it is
+never a dispatch source and never silently defaults to 0. Mainnet has clusters
+declaring `ver: 1` while holding spores typed `dob/0` — those must run the DOB/1
+chain, which is exactly what the official reference server returns.
+
+### DNA Content Forms
+
+`parse_dna_hex_from_content()` (`crates/indexer/src/parser/media_source.rs`)
+accepts both official forms, matching the reference server's
+`decode_spore_content`:
+
+| First content byte | Form       | DNA                                                                                       |
+| ------------------ | ---------- | ----------------------------------------------------------------------------------------- |
+| `0x00`             | Raw binary | Hex encoding of the remaining bytes                                                       |
+| anything else      | UTF-8 text | JSON string, JSON array (first item), JSON object `{"dna": "..."}`, or a plain hex string |
 
 ### DOB/0: Single Decoder
 

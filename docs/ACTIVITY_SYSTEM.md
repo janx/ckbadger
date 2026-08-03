@@ -911,12 +911,24 @@ Active detectors:
 - **RgbppDetector** — RGB++ leap/transfer actions via lock script transitions
 - **FiberDetector** — Fiber Network channel lifecycle (open/close/force_close/settlement)
 - **StableppDetector** — Stable++ CDP vault lifecycle (open_vault/borrow/repay/close_vault/liquidation/redemption)
+- **UtxoSwapDetector** — UTXOSwap intent lifecycle (`*_submitted` / `*_settled` for swap, add_liquidity, remove_liquidity) from Intent Lock cell transitions
 
 **DAO protocol actions** (deposit, withdraw_request, withdraw_complete) are emitted directly by
 the activity builder during the build phase, not by a separate `ProtocolDetector`
 implementation. `AssetKind::Dao` is derived from the shared `ProtocolRegistry`.
 
-The `docs/script-name-overrides.json` `protocols` field retains code_hash groupings as reference metadata but is no longer used at runtime for protocol identification.
+### Action deduplication
+
+A detector re-derives the same tx-level event once per participating owner, so
+detector-derived actions are deduped by `(protocol, action, metadata_raw)`
+(`dedup_protocol_actions()`).
+
+Per-cell DAO actions bypass dedup entirely: they are emitted once per cell and
+legitimately repeat within one transaction — one tx creating six equal-capacity
+DAO deposits for the same lock must keep all six `dao:deposit` actions.
+
+Protocol identification comes from the shared `ProtocolRegistry` built from
+`docs/metadata/scripts/*.toml`; there is no separate runtime protocol-grouping file.
 
 ---
 
@@ -936,8 +948,9 @@ The `docs/script-name-overrides.json` `protocols` field retains code_hash groupi
 | `crates/indexer/src/db/writer/rgbpp_detector.rs`    | RgbppDetector: ProtocolDetector impl (leap_to_ckb, leap_to_btc, transfer, btc_time_locked, receive)                                  |
 | `crates/indexer/src/db/writer/fiber_detector.rs`    | FiberDetector: ProtocolDetector impl (open, close, force_close, settlement)                                                          |
 | `crates/indexer/src/db/writer/stablepp_detector.rs` | StableppDetector: ProtocolDetector impl (open_vault, borrow, repay, close_vault, adjust, liquidation, redemption)                    |
+| `crates/indexer/src/db/writer/utxoswap_detector.rs` | UtxoSwapDetector: ProtocolDetector impl (swap/add_liquidity/remove_liquidity, each `_submitted` and `_settled`)                      |
 | `crates/indexer/src/parser/registry.rs`             | Fail-fast ProtocolRegistry built from bundled mainnet/testnet script metadata                                                        |
-| `crates/indexer/src/build.rs`                       | Bundles token/script metadata and additional non-deprecated UDT-category deployments                                                 |
+| `crates/indexer/build.rs`                           | Bundles token/script metadata and additional non-deprecated UDT-category deployments                                                 |
 
 ### Storage
 
@@ -983,4 +996,4 @@ The `docs/script-name-overrides.json` `protocols` field retains code_hash groupi
 | --------------------------------- | ----------------------------------------------- |
 | `docs/prompts/ACTIVITY_DESIGN.md` | Three-layer design specification and principles |
 | `docs/STORE_SCHEMA.md`            | Column family reference                         |
-| `docs/script-name-overrides.json` | Protocol grouping data                          |
+| `docs/metadata/scripts/*.toml`    | Canonical protocol/script detection metadata    |

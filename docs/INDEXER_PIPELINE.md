@@ -356,9 +356,8 @@ All code hash data is now available from `LiveCellInfo` — no separate DB reads
 
 Fresh-db bulk sync uses a dedicated build engine that treats RocksDB as a write-once artifact
 rather than working memory. Per [docs/prompts/BULK_SYNC.md](./prompts/BULK_SYNC.md), all required
-data must be computed inline on the canonical block path. See
-[docs/superpowers/specs/2026-03-17-bulk-sync-build-engine-design.md](./superpowers/specs/2026-03-17-bulk-sync-build-engine-design.md)
-for the full design rationale.
+data must be computed inline on the canonical block path — that document is the single source of
+truth for bulk-sync behavior, constraints, and failure handling.
 
 ### Architecture
 
