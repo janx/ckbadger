@@ -21,8 +21,7 @@ use crate::sync::bulk_build::interner::IdentityInterner;
 use crate::sync::bulk_build::materialize::{MaterializedRow, Materializer};
 use crate::sync::bulk_build::sequencer::BulkSequencer;
 use crate::sync::dao_helpers::{
-    accumulate_secondary_issuance_deltas_from_csu, derive_running_depositors, extract_dao_csu,
-    BatchStats,
+    accumulate_miner_secondary_for_block, derive_running_depositors, extract_dao_csu, BatchStats,
 };
 use crate::sync::pipeline::build_bulk_facts_arena_from_blocks;
 
@@ -50,11 +49,33 @@ pub(crate) struct DaoOwner {
     ever_deposited: HashSet<Vec<u8>>,
     /// Per-day unique addresses that made deposits (including repeat depositors).
     daily_depositing_addresses: FxHashMap<NaiveDate, HashSet<Vec<u8>>>,
-    claimed_compensation_by_block: FxHashMap<i64, i128>,
-    prev_dao_csu: Option<(i128, i128, i128)>,
+    /// Parent block's DAO `C`/`U`, the base of the per-block miner secondary
+    /// split `floor(s_i * U_{i-1} / C_{i-1})` (RFC-0023).
+    prev_dao_cu: Option<(i128, i128)>,
+    /// Consensus secondary issuance per epoch, from the node's `get_consensus`.
+    /// `None` until configured; the miner split then fails loudly rather than
+    /// silently issuing zero.
+    secondary_epoch_reward: Option<u64>,
     /// Per-date end-of-day block number and AR, for exact unmade_dao_interests
     /// computation during materialization.
     daily_end_of_day: FxHashMap<NaiveDate, (i64, u64)>,
+}
+
+impl DaoOwner {
+    /// Supply the consensus secondary issuance per epoch, required by the
+    /// per-block miner secondary split. Must be called before any block is
+    /// recorded; `record_block` fails loudly otherwise instead of silently
+    /// attributing zero secondary issuance.
+    pub(crate) fn set_secondary_epoch_reward(&mut self, shannons: u64) {
+        self.secondary_epoch_reward = Some(shannons);
+    }
+
+    /// Seed the parent block's DAO `C`/`U` when bulk build resumes at a block
+    /// above genesis. Without it the first recorded block has no state to
+    /// split its secondary issuance against and `record_block` fails fast.
+    pub(crate) fn seed_prev_dao_cu(&mut self, total_issuance: i128, occupied_capacity: i128) {
+        self.prev_dao_cu = Some((total_issuance, occupied_capacity));
+    }
 }
 
 struct DaoCompensationTimeline<'a> {
@@ -487,6 +508,12 @@ impl BulkReducer for DaoOwner {
                         tx,
                         "DAO withdraw request output index",
                     )?);
+                    // RFC-0023 computes compensation from the WITHDRAWING
+                    // cell, so persist this request cell's exact occupied
+                    // capacity — it differs from the deposit cell's whenever
+                    // the withdraw request changes lock script.
+                    entry.withdraw_request_occupied_capacity =
+                        Some(request_output.occupied_capacity);
                     if let Some(existing) = self
                         .request_outpoints
                         .insert(request_output.outpoint, origin_outpoint)
@@ -602,9 +629,23 @@ impl BulkReducer for DaoOwner {
                                 )
                             })
                         })?;
+                    // RFC-0023: `counted_capacity` comes from the WITHDRAWING
+                    // (phase-1 request) cell, not the original deposit cell.
+                    let request_occupied_capacity = entry
+                        .withdraw_request_occupied_capacity
+                        .ok_or_else(|| {
+                            anyhow!(
+                                "withdraw_request_occupied_capacity missing for DAO status=1 entry: request_block={}, block={}, tx=0x{}, tx_index={}, origin_outpoint={}",
+                                request_block,
+                                tx.block_number,
+                                hex::encode(tx.tx_hash),
+                                tx.tx_index,
+                                format_outpoint(&origin_outpoint)
+                            )
+                        })?;
                     let compensation = calculate_dao_compensation_from_ar(
                         entry.capacity,
-                        entry.occupied_capacity,
+                        request_occupied_capacity,
                         deposit_ar,
                         request_ar,
                     )?;
@@ -620,12 +661,6 @@ impl BulkReducer for DaoOwner {
                     entry.withdraw_to_output_index = withdraw_to_output_index;
                     entry.compensation = Some(compensation);
                     self.request_outpoints.remove(&input_view.outpoint);
-                    Self::bump_daily_i128_for_block(
-                        &mut self.claimed_compensation_by_block,
-                        tx.block_number,
-                        compensation as i128,
-                        "dao claimed compensation by block",
-                    )?;
                     Self::bump_daily_i64(
                         &mut self.daily_withdrawals_delta,
                         tx_date,
@@ -704,6 +739,7 @@ impl BulkReducer for DaoOwner {
                     withdraw_request_ar: None,
                     withdraw_block: None,
                     withdraw_tx: None,
+                    withdraw_request_occupied_capacity: None,
                     withdraw_to_output_index: None,
                     compensation: None,
                 },
@@ -827,8 +863,6 @@ impl DaoOwner {
             + self.daily_depositing_addresses.values().map(|s|
                 s.len() as u64 * (std::mem::size_of::<Vec<u8>>() as u64 + 32)
               ).sum::<u64>()
-            + self.claimed_compensation_by_block.len() as u64
-                * std::mem::size_of::<(i64, i128)>() as u64
             + self.daily_end_of_day.len() as u64
                 * std::mem::size_of::<(NaiveDate, (i64, u64))>() as u64;
         std::mem::size_of::<Self>() as u64
@@ -1104,21 +1138,23 @@ impl DaoOwner {
             self.daily_end_of_day.insert(block_date, (block.number, ar));
         }
 
-        let claimed_compensation_in_block = self
-            .claimed_compensation_by_block
-            .remove(&block.number)
-            .unwrap_or(0);
-
+        let secondary_epoch_reward = self.secondary_epoch_reward.ok_or_else(|| {
+            anyhow!(
+                "missing consensus secondary_epoch_reward in bulk DAO reducer: block={}",
+                block.number
+            )
+        })?;
         let mut stats = BatchStats::default();
-        accumulate_secondary_issuance_deltas_from_csu(
+        accumulate_miner_secondary_for_block(
             &mut stats,
             block.number,
             block_date,
+            i64::from(block.epoch_index),
+            i64::from(block.epoch_length),
             c,
-            s,
             u,
-            claimed_compensation_in_block,
-            &mut self.prev_dao_csu,
+            secondary_epoch_reward,
+            &mut self.prev_dao_cu,
         )?;
         if let Some(delta) = stats.daily_secondary_miner_delta.get(&block_date) {
             Self::bump_daily_i128(
@@ -1204,39 +1240,6 @@ impl DaoOwner {
             );
         }
         target.insert(date, next);
-        Ok(())
-    }
-
-    fn bump_daily_i128_for_block(
-        target: &mut FxHashMap<i64, i128>,
-        block_number: i64,
-        delta: i128,
-        metric: &str,
-    ) -> Result<()> {
-        if delta == 0 {
-            return Ok(());
-        }
-        let current = target.get(&block_number).copied().unwrap_or(0);
-        let next = current.checked_add(delta).ok_or_else(|| {
-            anyhow!(
-                "{} overflow: block={} current={} delta={}",
-                metric,
-                block_number,
-                current,
-                delta
-            )
-        })?;
-        if next < 0 {
-            bail!(
-                "{} underflow: block={} current={} delta={} next={}",
-                metric,
-                block_number,
-                current,
-                delta,
-                next
-            );
-        }
-        target.insert(block_number, next);
         Ok(())
     }
 
@@ -1702,6 +1705,7 @@ mod tests {
             withdraw_request_ar: None,
             withdraw_block: None,
             withdraw_tx: None,
+            withdraw_request_occupied_capacity: None,
             withdraw_to_output_index: None,
             compensation: None,
         };
@@ -1749,6 +1753,7 @@ mod tests {
             withdraw_request_ar: Some(10_000_100_000_000_000),
             withdraw_block: None,
             withdraw_tx: None,
+            withdraw_request_occupied_capacity: Some(102_00000000),
             withdraw_to_output_index: None,
             compensation: None,
         };
@@ -1775,6 +1780,7 @@ mod tests {
             withdraw_request_ar: None,
             withdraw_block: None,
             withdraw_tx: None,
+            withdraw_request_occupied_capacity: None,
             withdraw_to_output_index: None,
             compensation: None,
         };
@@ -2175,6 +2181,7 @@ mod tests {
                 withdraw_request_ar: Some(12_000),
                 withdraw_block: None,
                 withdraw_tx: None,
+                withdraw_request_occupied_capacity: Some(102_00000000),
                 withdraw_to_output_index: None,
                 compensation: None,
             },

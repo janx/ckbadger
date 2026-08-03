@@ -4644,6 +4644,7 @@ mod tests {
             withdraw_request_ar: Some(11_000),
             withdraw_block: Some(30),
             withdraw_tx: Some(vec![0x33; 32]),
+            withdraw_request_occupied_capacity: Some(142_00000000),
             withdraw_to_output_index: Some(0),
             compensation: Some(15_80000000),
         };
@@ -7722,6 +7723,7 @@ mod tests {
                 withdraw_request_ar: Some(1),
                 withdraw_block: None,
                 withdraw_tx: None,
+                withdraw_request_occupied_capacity: Some(0),
                 withdraw_to_output_index: None,
                 compensation: None,
             },
@@ -7746,6 +7748,7 @@ mod tests {
                 withdraw_request_ar: Some(1),
                 withdraw_block: Some(3),
                 withdraw_tx: Some(vec![0x44; 32]),
+                withdraw_request_occupied_capacity: Some(0),
                 withdraw_to_output_index: Some(0),
                 compensation: Some(10),
             },
@@ -7769,6 +7772,7 @@ mod tests {
                 withdraw_request_ar: None,
                 withdraw_block: None,
                 withdraw_tx: None,
+                withdraw_request_occupied_capacity: None,
                 withdraw_to_output_index: None,
                 compensation: None,
             },
@@ -7893,6 +7897,7 @@ mod tests {
                 withdraw_request_ar: Some(1),
                 withdraw_block: None,
                 withdraw_tx: None,
+                withdraw_request_occupied_capacity: Some(0),
                 withdraw_to_output_index: None,
                 compensation: None,
             },
@@ -9763,12 +9768,18 @@ mod tests {
                 withdraw_request_ar: None,
                 withdraw_block: None,
                 withdraw_tx: None,
+                withdraw_request_occupied_capacity: None,
                 withdraw_to_output_index: None,
                 compensation: None,
             },
         );
         batch.commit().unwrap();
         seed_sync_status(&store, 5, &[5u8; 32], 0, 0, 0);
+        // Real consensus secondary_epoch_reward; the DAO snapshot recompute
+        // needs it for the per-block miner secondary split.
+        store
+            .set_secondary_epoch_reward(61_369_863_013_698)
+            .unwrap();
 
         // Both the fork-point date and the cutoff date have materialized DAO
         // aggregate state before the rollback.
@@ -9816,8 +9827,19 @@ mod tests {
         assert_eq!(recomputed.secondary_pool, i128::from(CROSS_DAY_S));
         assert_eq!(recomputed.occupied_capacity, i128::from(CROSS_DAY_U));
         assert_eq!(recomputed.compensation, 0);
-        // S is flat across this fixture, so no miner secondary is attributed.
-        assert_eq!(recomputed.cum_miner_secondary, 0);
+        // Blocks 1..=3 survive on the fork-point date, each splitting its own
+        // scheduled secondary issuance against its parent's C/U. S is flat
+        // across this fixture, which under the old S-delta reconstruction
+        // wrongly produced zero — the protocol issues secondary every block
+        // regardless of how the pool moves.
+        let per_block_miner = ckbadger_common::dao::calculate_miner_secondary_issuance(
+            ckbadger_common::dao::secondary_block_issuance(0, 1800, 61_369_863_013_698).unwrap(),
+            i128::from(CROSS_DAY_C),
+            i128::from(CROSS_DAY_U),
+        )
+        .unwrap();
+        assert_eq!(per_block_miner, 6_818_873);
+        assert_eq!(recomputed.cum_miner_secondary, 3 * per_block_miner);
 
         // The cutoff date has no surviving blocks, so its snapshot is dropped.
         assert!(

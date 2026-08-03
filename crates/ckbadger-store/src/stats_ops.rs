@@ -5,7 +5,7 @@ use crate::store::CkbadgerStore;
 use crate::types::*;
 
 use crate::bytes_to_hex;
-use ckbadger_common::dao::calculate_secondary_miner_delta;
+use ckbadger_common::dao::{calculate_miner_secondary_issuance, secondary_block_issuance};
 
 // ---------------------------------------------------------------------------
 // Activity address-set rows (ACTIVITY_DAILY_ADDR_SET / ACTIVITY_HOURLY_ADDR_SET)
@@ -1228,10 +1228,21 @@ impl CkbadgerStore {
             None => (0i128, 0i128, 0i64, 0i64, 0i128, 0i128, 0i64, 0i64),
         };
 
+        // The per-block miner secondary split needs the consensus secondary
+        // issuance per epoch. It is persisted from the node's `get_consensus`
+        // at indexer startup; a store without it cannot produce exact values.
+        let secondary_epoch_reward = self.get_secondary_epoch_reward()?.ok_or_else(|| {
+            anyhow::anyhow!(
+                "missing consensus secondary_epoch_reward while recomputing DAO snapshot: target_date={}, end_block_inclusive={}",
+                date,
+                end_block_inclusive
+            )
+        })?;
+
         // RFC-0023 defines block N's issuance distribution from the DAO state
         // at the end of block N-1. Read that header directly instead of using
         // the previous daily snapshot as an approximate boundary value.
-        let mut prev_dao_csu = if day_start_block > 0 {
+        let mut prev_dao_cu = if day_start_block > 0 {
             let previous_block = day_start_block - 1;
             let header = self.get_block_header(previous_block)?.ok_or_else(|| {
                 anyhow::anyhow!(
@@ -1240,14 +1251,15 @@ impl CkbadgerStore {
                     previous_block
                 )
             })?;
-            Some(extract_dao_csu(&header.dao).ok_or_else(|| {
+            let (prev_c, _prev_s, prev_u) = extract_dao_csu(&header.dao).ok_or_else(|| {
                 anyhow::anyhow!(
                     "invalid previous DAO field during snapshot recompute: target_date={}, previous_block={}, dao_len={}",
                     date,
                     previous_block,
                     header.dao.len()
                 )
-            })?)
+            })?;
+            Some((prev_c, prev_u))
         } else {
             None
         };
@@ -1403,17 +1415,9 @@ impl CkbadgerStore {
             }
 
             // 5c. Phase-2 (withdraw completion) in this block. Increment withdrawals
-            //     count, subtract from protocol_deposited, and accumulate claimed
-            //     compensation for the secondary-issuance split.
-            let claimed_compensation_in_block: i128 = by_phase2_block
-                .get(&block_num)
-                .map(|v| {
-                    v.iter()
-                        .filter_map(|e| e.compensation)
-                        .map(i128::from)
-                        .sum()
-                })
-                .unwrap_or(0);
+            //     count and subtract from protocol_deposited. Claimed compensation
+            //     feeds only the compensation aggregates (step 6), never the
+            //     miner series.
             if let Some(phase2s) = by_phase2_block.get(&block_num) {
                 for p in phase2s {
                     running_protocol_deposited = running_protocol_deposited
@@ -1430,37 +1434,41 @@ impl CkbadgerStore {
                 }
             }
 
-            // 5d. Exact miner portion for this block. RFC-0023 uses C/U from
-            // the end of block N-1. DAO compensation is computed separately
-            // from each deposit's lifecycle below.
-            if let Some((prev_c, prev_s, prev_u)) = prev_dao_csu {
-                let s_delta = s.checked_sub(prev_s).ok_or_else(|| {
+            // 5d. Exact miner portion for this block: the protocol's own
+            // direct split `floor(s_i * U_{i-1} / C_{i-1})` (RFC-0023), where
+            // `s_i` comes from the epoch schedule and C/U come from the end of
+            // block N-1. Deliberately independent of DAO claimed compensation,
+            // which has its own exact per-deposit lifecycle path below.
+            // Genesis carries its own share inside the genesis DAO `C` and has
+            // no parent to split against.
+            if block_num > 0 {
+                let (prev_c, prev_u) = prev_dao_cu.ok_or_else(|| {
                     anyhow::anyhow!(
-                        "secondary_pool s_delta overflow during recompute: block_num={}, current_s={}, previous_s={}",
+                        "missing parent DAO C/U during recompute: block_num={}, target_date={}",
                         block_num,
-                        s,
-                        prev_s
+                        date
                     )
                 })?;
-                let non_miner_delta = s_delta
-                    .checked_add(claimed_compensation_in_block)
-                    .ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "non_miner_delta overflow during recompute: block_num={}",
-                            block_num
-                        )
+                let secondary_issuance = secondary_block_issuance(
+                    i64::from(header.epoch_index),
+                    i64::from(header.epoch_length),
+                    secondary_epoch_reward,
+                )
+                .map_err(|error| {
+                    anyhow::anyhow!("{error}: block_num={}, target_date={}", block_num, date)
+                })?;
+                let miner = calculate_miner_secondary_issuance(secondary_issuance, prev_c, prev_u)
+                    .map_err(|error| {
+                        anyhow::anyhow!("{error}: block_num={}, target_date={}", block_num, date)
                     })?;
-                if non_miner_delta != 0 {
-                    let miner = calculate_secondary_miner_delta(prev_c, prev_u, non_miner_delta)?;
-                    running_cum_miner = running_cum_miner.checked_add(miner).ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "cum_miner_secondary overflow during recompute: block_num={}",
-                            block_num
-                        )
-                    })?;
-                }
+                running_cum_miner = running_cum_miner.checked_add(miner).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "cum_miner_secondary overflow during recompute: block_num={}",
+                        block_num
+                    )
+                })?;
             }
-            prev_dao_csu = Some((c, s, u));
+            prev_dao_cu = Some((c, u));
         }
 
         // 6. Exact end-of-day compensation from the normalized DAO lifecycle.
@@ -2469,6 +2477,7 @@ mod dao_daily_snapshot_recompute_tests {
             withdraw_request_ar: None,
             withdraw_block: None,
             withdraw_tx: None,
+            withdraw_request_occupied_capacity: None,
             withdraw_to_output_index: None,
             compensation: None,
         }
@@ -2476,6 +2485,17 @@ mod dao_daily_snapshot_recompute_tests {
 
     const TEST_C: u64 = 100_000_000_000_000;
     const TEST_U: u64 = 20_000_000_000;
+    /// Real consensus `secondary_epoch_reward` (mainnet and testnet agree).
+    const TEST_SECONDARY_EPOCH_REWARD: u64 = 61_369_863_013_698;
+
+    /// Expected per-block miner secondary for a block at `epoch_index` of an
+    /// epoch of `epoch_length`, splitting against the TEST_C/TEST_U parent
+    /// state: `floor(s_i * U / C)` per RFC-0023.
+    fn expected_miner_secondary(epoch_index: i64, epoch_length: i64) -> i128 {
+        let s = secondary_block_issuance(epoch_index, epoch_length, TEST_SECONDARY_EPOCH_REWARD)
+            .unwrap();
+        calculate_miner_secondary_issuance(s, i128::from(TEST_C), i128::from(TEST_U)).unwrap()
+    }
 
     #[test]
     fn test_recompute_dao_daily_snapshot_for_date_handles_day_start_block_zero() {
@@ -2487,8 +2507,13 @@ mod dao_daily_snapshot_recompute_tests {
         let ar_end: u64 = 10_100_000_000_000_000;
         let s: u64 = 50_000_000_000;
 
-        // The whole day starts at block 0, so there is no previous block header
-        // and no C/U baseline for the miner split.
+        store
+            .set_secondary_epoch_reward(TEST_SECONDARY_EPOCH_REWARD)
+            .unwrap();
+
+        // The whole day starts at block 0. Genesis carries its own share
+        // inside the genesis DAO `C` and has no parent to split against, so
+        // it contributes nothing; blocks 1 and 2 split against their parents.
         let mut batch = crate::batch::StoreBatch::new(&store);
         batch.put_block_header(
             0,
@@ -2554,9 +2579,13 @@ mod dao_daily_snapshot_recompute_tests {
         assert_eq!(snapshot.total_issuance, i128::from(TEST_C));
         assert_eq!(snapshot.secondary_pool, i128::from(s));
         assert_eq!(snapshot.occupied_capacity, i128::from(TEST_U));
-        // No previous block header exists, so no C/U baseline and therefore no
-        // miner secondary is attributed for this day.
-        assert_eq!(snapshot.cum_miner_secondary, 0);
+        // Genesis contributes nothing; blocks 1 and 2 each split their own
+        // scheduled secondary issuance against their parent's C/U. The split
+        // is independent of the S-field delta (S is constant across this day,
+        // which under the old reconstruction wrongly produced zero).
+        let per_block_miner = expected_miner_secondary(0, 1800);
+        assert!(per_block_miner > 0);
+        assert_eq!(snapshot.cum_miner_secondary, 2 * per_block_miner);
         assert_eq!(snapshot.compensation, 0);
         assert_eq!(snapshot.unclaimed_compensation, expected_unclaimed);
         assert_eq!(snapshot.unmade_dao_interests, expected_unclaimed);
@@ -2569,9 +2598,12 @@ mod dao_daily_snapshot_recompute_tests {
     }
 
     #[test]
-    fn test_recompute_dao_daily_snapshot_for_date_uses_previous_block_csu_for_miner_split() {
+    fn test_recompute_dao_daily_snapshot_for_date_uses_previous_block_cu_for_miner_split() {
         let dir = tempfile::tempdir().unwrap();
         let store = CkbadgerStore::open_test_unified(dir.path().to_str().unwrap()).unwrap();
+        store
+            .set_secondary_epoch_reward(TEST_SECONDARY_EPOCH_REWARD)
+            .unwrap();
 
         let prev_date = chrono::NaiveDate::from_ymd_opt(2026, 3, 9).unwrap();
         let date = chrono::NaiveDate::from_ymd_opt(2026, 3, 10).unwrap();
@@ -2631,21 +2663,13 @@ mod dao_daily_snapshot_recompute_tests {
 
         let snapshot = store.get_dao_daily_snapshot("20260310").unwrap().unwrap();
 
-        // Block 1 uses block 0's C/U with S(1) - S(0); block 2 uses block 1's.
-        let miner_block1 = calculate_secondary_miner_delta(
-            i128::from(TEST_C),
-            i128::from(TEST_U),
-            i128::from(s1 - s0),
-        )
-        .unwrap();
-        let miner_block2 = calculate_secondary_miner_delta(
-            i128::from(TEST_C),
-            i128::from(TEST_U),
-            i128::from(s2 - s1),
-        )
-        .unwrap();
-        assert!(miner_block1 > 0 && miner_block2 > 0);
-        assert_eq!(snapshot.cum_miner_secondary, miner_block1 + miner_block2);
+        // Blocks 1 and 2 each split their own scheduled secondary issuance
+        // against their parent's C/U (block 0 and block 1 respectively). The
+        // differing S deltas (s1-s0 vs s2-s1) must NOT change the result —
+        // the miner series is independent of the S-pool delta.
+        let per_block_miner = expected_miner_secondary(0, 1800);
+        assert!(per_block_miner > 0);
+        assert_eq!(snapshot.cum_miner_secondary, 2 * per_block_miner);
         assert_eq!(snapshot.secondary_pool, i128::from(s2));
         assert_eq!(snapshot.total_deposited, i128::from(capacity));
 
@@ -2687,6 +2711,10 @@ mod dao_daily_snapshot_recompute_tests {
                 tip_block_hash: vec![2u8; 32],
                 ..Default::default()
             })
+            .unwrap();
+
+        store
+            .set_secondary_epoch_reward(TEST_SECONDARY_EPOCH_REWARD)
             .unwrap();
 
         let mut recompute = crate::batch::StoreBatch::new(&store);

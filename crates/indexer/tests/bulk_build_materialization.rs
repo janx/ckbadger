@@ -32,7 +32,21 @@ fn fixture_header(number: u64, hash_byte: u8) -> HeaderView {
     fixture_header_with_timestamp(number, hash_byte, 1_710_000_000_000)
 }
 
+/// C (total_issuance) carried by every fixture header. Must exceed `U` for the
+/// RFC-0023 secondary-issuance split, and be at least genesis issuance for the
+/// latest DAO statistics / APC validation.
+const FIXTURE_DAO_C: u64 = 33_600_000_000 * SHANNON;
+
+/// U (occupied_capacity) carried by every fixture header. Must be < C.
+const FIXTURE_DAO_U: u64 = 100_000_000_000_000;
+
 fn fixture_header_with_timestamp(number: u64, hash_byte: u8, timestamp_ms: i64) -> HeaderView {
+    // A real chain header always carries a valid DAO field; an all-zero one
+    // would make C == U == 0, which is not a chain state the protocol can
+    // split secondary issuance against.
+    let mut dao = [0u8; 32];
+    dao[0..8].copy_from_slice(&FIXTURE_DAO_C.to_le_bytes());
+    dao[24..32].copy_from_slice(&FIXTURE_DAO_U.to_le_bytes());
     HeaderView {
         version: "0x0".to_string(),
         compact_target: "0x1a08a97e".to_string(),
@@ -43,7 +57,7 @@ fn fixture_header_with_timestamp(number: u64, hash_byte: u8, timestamp_ms: i64) 
         transactions_root: format!("0x{}", "22".repeat(32)),
         proposals_hash: format!("0x{}", "33".repeat(32)),
         extra_hash: format!("0x{}", "44".repeat(32)),
-        dao: format!("0x{}", "00".repeat(32)),
+        dao: format!("0x{}", hex::encode(dao)),
         nonce: "0x1".to_string(),
         hash: format!("0x{}", format!("{hash_byte:02x}").repeat(32)),
     }
@@ -68,15 +82,10 @@ fn fixture_lock_script_with_args(args_hex: &str) -> Script {
 fn fixture_header_with_ar(number: u64, hash_byte: u8, ar: u64, timestamp_ms: i64) -> HeaderView {
     let mut header = fixture_header_with_timestamp(number, hash_byte, timestamp_ms);
     let mut dao = [0u8; 32];
-    // C (total_issuance) — must be > U for split_secondary_issuance validation and
-    // at least genesis issuance for latest DAO statistics/APC validation.
-    let c: u64 = 33_600_000_000 * SHANNON;
-    dao[0..8].copy_from_slice(&c.to_le_bytes());
+    dao[0..8].copy_from_slice(&FIXTURE_DAO_C.to_le_bytes());
     // AR (accumulated rate)
     dao[8..16].copy_from_slice(&ar.to_le_bytes());
-    // U (occupied_capacity) — must be < C
-    let u: u64 = 100_000_000_000_000;
-    dao[24..32].copy_from_slice(&u.to_le_bytes());
+    dao[24..32].copy_from_slice(&FIXTURE_DAO_U.to_le_bytes());
     header.dao = format!("0x{}", hex::encode(dao));
     header
 }

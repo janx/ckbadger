@@ -1699,6 +1699,10 @@ pub mod sync_meta_keys {
     pub const NETWORK_IDENTITY: &[u8] = b"network_identity";
     /// Genesis economic baseline (bincode `GenesisBaseline`), derived at block 0.
     pub const GENESIS_BASELINE: &[u8] = b"genesis_baseline";
+    /// Consensus secondary issuance per epoch in shannons (LE u64), fetched
+    /// from the node's `get_consensus` at indexer startup. Required by the
+    /// per-block miner-secondary split `floor(s_i * U_{i-1} / C_{i-1})`.
+    pub const SECONDARY_EPOCH_REWARD: &[u8] = b"secondary_epoch_reward";
 }
 
 // -- Reorg event history (CF_SYNC_META) --

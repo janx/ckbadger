@@ -370,6 +370,33 @@ impl CkbadgerStore {
         )
     }
 
+    /// Read the consensus secondary issuance per epoch (shannons), persisted
+    /// from the node's `get_consensus` at indexer startup.
+    pub fn get_secondary_epoch_reward(&self) -> anyhow::Result<Option<u64>> {
+        match self.get_cf(self.cf_sync_meta(), sync_meta_keys::SECONDARY_EPOCH_REWARD)? {
+            Some(value) => {
+                let bytes: [u8; 8] = value.as_slice().try_into().map_err(|_| {
+                    anyhow::anyhow!(
+                        "corrupt secondary_epoch_reward value in sync meta: expected 8 bytes, got {}",
+                        value.len()
+                    )
+                })?;
+                Ok(Some(u64::from_le_bytes(bytes)))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Persist the consensus secondary issuance per epoch (write-once at
+    /// indexer startup, verified against the node on every restart).
+    pub fn set_secondary_epoch_reward(&self, shannons: u64) -> anyhow::Result<()> {
+        self.put_cf(
+            self.cf_sync_meta(),
+            sync_meta_keys::SECONDARY_EPOCH_REWARD,
+            &shannons.to_le_bytes(),
+        )
+    }
+
     /// Store memory stats data (JSON serialized, ephemeral monitoring).
     pub fn put_memory_stats(&self, data: &[u8]) -> anyhow::Result<()> {
         self.put_cf(self.cf_sync_meta(), sync_meta_keys::MEMORY_STATS, data)

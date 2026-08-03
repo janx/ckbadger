@@ -370,6 +370,35 @@ pub async fn run_indexer_sync(mut config: Config) -> Result<()> {
         store.set_genesis_baseline(&baseline)?;
     }
 
+    // --- consensus secondary issuance per epoch ---
+    // Required by the per-block miner secondary split
+    // `floor(s_i * U_{i-1} / C_{i-1})` (RFC-0023). Re-read from the node on
+    // every start and persisted, so a node/network mismatch surfaces here
+    // rather than as silently wrong economics.
+    {
+        let secondary_epoch_reward = guard_rpc
+            .get_secondary_epoch_reward()
+            .await
+            .context("failed to fetch consensus secondary_epoch_reward")?;
+        if let Some(existing) = store.get_secondary_epoch_reward()? {
+            if existing != secondary_epoch_reward {
+                anyhow::bail!(
+                    "consensus secondary_epoch_reward changed for this database: persisted={}, node={}; \
+                     the DAO economics series was built with the persisted value — re-sync from genesis",
+                    existing,
+                    secondary_epoch_reward
+                );
+            }
+        } else {
+            info!(
+                network = %config.network,
+                secondary_epoch_reward,
+                "persisted consensus secondary epoch reward"
+            );
+            store.set_secondary_epoch_reward(secondary_epoch_reward)?;
+        }
+    }
+
     run_startup_label_import(store.clone(), &config).await?;
 
     let indexer = Indexer::new(

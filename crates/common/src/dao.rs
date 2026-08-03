@@ -96,50 +96,81 @@ pub fn calculate_dao_compensation_from_ar(
         .map_err(|_| anyhow!("DAO compensation exceeds i64: {}", compensation_u128))
 }
 
-/// Calculate the exact miner portion of a per-block non-miner secondary-pool
-/// change.
+/// Per-block total secondary issuance `s_i` from the epoch schedule.
 ///
-/// A negative delta is an on-chain protocol correction, not negative issuance.
-/// It does not reduce the cumulative miner reward. DAO compensation is
-/// calculated independently from each deposit's AR lifecycle; it must not be
-/// reconstructed by proportionally splitting this aggregate delta.
-pub fn calculate_secondary_miner_delta(
-    total_issuance: i128,
-    occupied_capacity: i128,
-    non_miner_secondary_delta: i128,
+/// The consensus constant `secondary_epoch_reward` (from the node's
+/// `get_consensus`) is divided evenly over the epoch; the division remainder
+/// is distributed as +1 shannon to the first
+/// `secondary_epoch_reward % epoch_length` blocks of the epoch — the same
+/// rule CKB applies to the primary epoch reward. A block's position within
+/// its epoch (`epoch_index`) and the epoch length both come from the block
+/// header's packed epoch field, so `s_i` derives purely from the header plus
+/// this one consensus constant.
+pub fn secondary_block_issuance(
+    epoch_index: i64,
+    epoch_length: i64,
+    secondary_epoch_reward: u64,
+) -> anyhow::Result<u64> {
+    if epoch_length <= 0 || epoch_index < 0 || epoch_index >= epoch_length {
+        bail!(
+            "invalid epoch position while deriving secondary block issuance: epoch_index={}, epoch_length={}, secondary_epoch_reward={}",
+            epoch_index,
+            epoch_length,
+            secondary_epoch_reward
+        );
+    }
+    let length = epoch_length as u64;
+    let base = secondary_epoch_reward / length;
+    let remainder = secondary_epoch_reward % length;
+    if (epoch_index as u64) < remainder {
+        Ok(base + 1)
+    } else {
+        Ok(base)
+    }
+}
+
+/// Exact miner portion of block `i`'s secondary issuance, per RFC-0023:
+/// `floor(s_i * U_{i-1} / C_{i-1})`, where `s_i` is the block's total
+/// secondary issuance from the epoch schedule and `U`/`C` are the occupied
+/// capacity and total issuance from the PARENT block's DAO header field.
+///
+/// This is the protocol's own direct split — the same value the node reports
+/// as `miner_reward.secondary` in `get_block_economic_state`. It must never
+/// be reconstructed from the S-pool delta plus claimed compensation: that
+/// reconstruction couples the mining series to DAO-claim recognition and
+/// carries an inherent flooring drift.
+///
+/// The genesis block has no parent state to split against — its own
+/// secondary share `s_0` enters the genesis `S` pool in full and the node
+/// defines no miner reward for block 0 — so callers handle block 0
+/// explicitly instead of calling this.
+pub fn calculate_miner_secondary_issuance(
+    secondary_issuance: u64,
+    parent_total_issuance: i128,
+    parent_occupied_capacity: i128,
 ) -> anyhow::Result<i128> {
-    if total_issuance < 0 || occupied_capacity < 0 {
+    if parent_total_issuance <= 0
+        || parent_occupied_capacity < 0
+        || parent_occupied_capacity >= parent_total_issuance
+    {
         bail!(
-            "negative input in secondary miner calculation: total_issuance={}, occupied_capacity={}, non_miner_secondary_delta={}",
-            total_issuance,
-            occupied_capacity,
-            non_miner_secondary_delta
-        );
-    }
-    if total_issuance <= occupied_capacity {
-        bail!(
-            "invalid DAO C/U relationship: total_issuance={}, occupied_capacity={}, non_miner_secondary_delta={}",
-            total_issuance,
-            occupied_capacity,
-            non_miner_secondary_delta
+            "invalid parent DAO C/U relationship while splitting secondary issuance: parent_total_issuance={}, parent_occupied_capacity={}, secondary_issuance={}",
+            parent_total_issuance,
+            parent_occupied_capacity,
+            secondary_issuance
         );
     }
 
-    let liquid_supply = total_issuance - occupied_capacity;
-    if non_miner_secondary_delta <= 0 {
-        return Ok(0);
-    }
-
-    let miner = non_miner_secondary_delta
-        .checked_mul(occupied_capacity)
-        .ok_or_else(|| anyhow!("secondary issuance miner multiplication overflow"))?
-        / liquid_supply;
-    if miner < 0 {
-        bail!(
-            "secondary miner calculation produced negative result: miner={}, non_miner_secondary_delta={}",
-            miner, non_miner_secondary_delta
-        );
-    }
+    let miner = (secondary_issuance as i128)
+        .checked_mul(parent_occupied_capacity)
+        .ok_or_else(|| {
+            anyhow!(
+                "secondary issuance miner multiplication overflow: secondary_issuance={}, parent_occupied_capacity={}",
+                secondary_issuance,
+                parent_occupied_capacity
+            )
+        })?
+        / parent_total_issuance;
     Ok(miner)
 }
 
@@ -296,9 +327,169 @@ mod tests {
     /// the 33.6B approximation previously hardcoded here.
     const MAINNET_GENESIS_ISSUANCE: i128 = 3_360_000_145_238_488_200;
 
+    /// Consensus `secondary_epoch_reward` shared by mainnet and testnet
+    /// (verified against both nodes' `get_consensus`): 61,369,863,013,698
+    /// shannons per epoch (1.344B CKB/year over 2190 epochs).
+    const SECONDARY_EPOCH_REWARD: u64 = 61_369_863_013_698;
+
+    // -- secondary_block_issuance (real mainnet vectors) --------------------
+    //
+    // Every expected value below was captured from a mainnet node:
+    // `issuance.secondary` of `get_block_economic_state`, cross-checked
+    // against the header's packed epoch field.
+
     #[test]
-    fn secondary_miner_ignores_negative_protocol_correction() {
-        assert_eq!(calculate_secondary_miner_delta(1_000, 100, -30).unwrap(), 0);
+    fn secondary_block_issuance_genesis_epoch_block_1() {
+        // Block 1: epoch 0, index 1, length 1743. 61369863013698 / 1743 =
+        // 35209330472 rem 1002 → +1 shannon for the first 1002 blocks.
+        assert_eq!(
+            secondary_block_issuance(1, 1743, SECONDARY_EPOCH_REWARD).unwrap(),
+            35_209_330_473
+        );
+    }
+
+    #[test]
+    fn secondary_block_issuance_epoch_977_block_1600000() {
+        // Block 1600000: epoch 977, index 202, length 1797.
+        assert_eq!(
+            secondary_block_issuance(202, 1797, SECONDARY_EPOCH_REWARD).unwrap(),
+            34_151_287_153
+        );
+    }
+
+    #[test]
+    fn secondary_block_issuance_first_halving_epoch_8760() {
+        // Blocks 11487788 (index 0) and 11487790 (index 2): epoch 8760
+        // (first primary halving), length 1354. Secondary is unaffected by
+        // the halving: 61369863013698 / 1354 = 45324861900 rem 1041.
+        assert_eq!(
+            secondary_block_issuance(0, 1354, SECONDARY_EPOCH_REWARD).unwrap(),
+            45_324_861_901
+        );
+        assert_eq!(
+            secondary_block_issuance(2, 1354, SECONDARY_EPOCH_REWARD).unwrap(),
+            45_324_861_901
+        );
+    }
+
+    #[test]
+    fn secondary_block_issuance_remainder_boundary_epoch_14670() {
+        // Epoch 14670, length 1800: 61369863013698 / 1800 = 34094368340
+        // rem 1698. Block 20040784 (index 1697) is the LAST +1 block;
+        // block 20040785 (index 1698) is the first base block. Both values
+        // node-verified via get_block_economic_state.
+        assert_eq!(
+            secondary_block_issuance(1697, 1800, SECONDARY_EPOCH_REWARD).unwrap(),
+            34_094_368_341
+        );
+        assert_eq!(
+            secondary_block_issuance(1698, 1800, SECONDARY_EPOCH_REWARD).unwrap(),
+            34_094_368_340
+        );
+    }
+
+    #[test]
+    fn secondary_block_issuance_rejects_invalid_epoch_position() {
+        for (index, length) in [(0, 0), (-1, 1800), (1800, 1800), (5, -3)] {
+            let err = secondary_block_issuance(index, length, SECONDARY_EPOCH_REWARD).unwrap_err();
+            assert!(
+                err.to_string().contains("invalid epoch position"),
+                "expected invalid-epoch-position error for index={index} length={length}, got: {err}"
+            );
+        }
+    }
+
+    // -- calculate_miner_secondary_issuance (real mainnet vectors) ----------
+    //
+    // Expected values are `miner_reward.secondary` from the node's
+    // `get_block_economic_state`; C/U inputs are the PARENT block's DAO field.
+
+    #[test]
+    fn miner_secondary_block_1_splits_against_genesis_state() {
+        // Block 1: parent = genesis. C_0 = 3360000145238488200 (33.6B + the
+        // genesis block's own p_0+s_0 share of 145238488200 shannons),
+        // U_0 = 504120308900000000 (incl. 5.04B virtual occupied).
+        assert_eq!(
+            calculate_miner_secondary_issuance(
+                35_209_330_473,
+                3_360_000_145_238_488_200,
+                504_120_308_900_000_000
+            )
+            .unwrap(),
+            5_282_660_055
+        );
+    }
+
+    #[test]
+    fn miner_secondary_block_1600000() {
+        // 2020-04 block; the S-delta reconstruction yields 4781307094 here
+        // (one shannon high) — the direct split matches the node exactly.
+        assert_eq!(
+            calculate_miner_secondary_issuance(
+                34_151_287_153,
+                3_607_356_675_738_101_574,
+                505_043_338_100_000_000
+            )
+            .unwrap(),
+            4_781_307_093
+        );
+    }
+
+    #[test]
+    fn miner_secondary_block_4460004_uncle_era() {
+        // 2021 block (epoch 3372, index 1410, length 1800).
+        assert_eq!(
+            secondary_block_issuance(1410, 1800, SECONDARY_EPOCH_REWARD).unwrap(),
+            34_094_368_341
+        );
+        assert_eq!(
+            calculate_miner_secondary_issuance(
+                34_094_368_341,
+                4_213_822_410_958_901_500,
+                505_618_106_200_000_000
+            )
+            .unwrap(),
+            4_090_995_839
+        );
+    }
+
+    #[test]
+    fn miner_secondary_block_11487790_post_halving() {
+        assert_eq!(
+            calculate_miner_secondary_issuance(
+                45_324_861_901,
+                5_577_600_232_289_909_804,
+                519_018_915_500_000_000
+            )
+            .unwrap(),
+            4_217_667_041
+        );
+    }
+
+    #[test]
+    fn miner_secondary_block_20040000_recent() {
+        assert_eq!(
+            calculate_miner_secondary_issuance(
+                34_094_368_341,
+                6_507_087_985_083_702_342,
+                519_971_469_200_000_000
+            )
+            .unwrap(),
+            2_724_428_936
+        );
+    }
+
+    #[test]
+    fn miner_secondary_rejects_invalid_parent_state() {
+        // C <= U, C = 0, U < 0 — all invalid chain states must bail loudly.
+        for (c, u) in [(1_000, 1_000), (1_000, 2_000), (0, 0), (1_000, -1)] {
+            let err = calculate_miner_secondary_issuance(10, c, u).unwrap_err();
+            assert!(
+                err.to_string()
+                    .contains("invalid parent DAO C/U relationship"),
+                "expected invalid C/U error for C={c} U={u}, got: {err}"
+            );
+        }
     }
 
     #[test]
@@ -312,17 +503,6 @@ mod tests {
         .unwrap();
 
         assert_eq!(compensation, 15_80000000);
-    }
-
-    #[test]
-    fn secondary_miner_delta_is_exact_for_positive_delta() {
-        assert_eq!(calculate_secondary_miner_delta(1_000, 100, 90).unwrap(), 10);
-    }
-
-    #[test]
-    fn secondary_miner_delta_rejects_invalid_chain_state() {
-        let err = calculate_secondary_miner_delta(1_000, 1_000, 10).unwrap_err();
-        assert!(err.to_string().contains("invalid DAO C/U relationship"));
     }
 
     #[test]
