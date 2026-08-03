@@ -2334,8 +2334,7 @@ impl ObjectOwner {
             spore_id.to_vec(),
         );
         self.stats_spore_rows.insert(
-            keys::encode_spore_outpoint_by_id_key(spore_id, &cell.outpoint.tx_hash, output_index)
-                .to_vec(),
+            keys::encode_spore_outpoint_by_id_key(spore_id, &cell.outpoint.tx_hash, output_index),
             Vec::new(),
         );
         Ok(())
@@ -3121,26 +3120,13 @@ mod tests {
         ]
     }
 
-    /// Live/bulk parity for the item-id width guard: a real-shaped 20-byte
-    /// did:ckb item id must fail fast in the bulk reducer with the same
-    /// actionable context as the live writer, never be silently skipped.
-    #[test]
-    fn object_owner_rejects_did_ckb_item_id_not_representable_in_outpoint_index() {
-        use crate::parser::test_helpers::real_did_ckb;
-
-        let interner = IdentityInterner::default();
-        let lock = interner.intern_bytes(vec![0xcc; 32]);
-        let did_type_hash = interner.intern_bytes(vec![0x92; 32]);
-        let frozen = interner.snapshot_for_reads();
-        let ctx = ReducerContext::new(&frozen);
-
-        let did_id = crate::rpc::parse_hex_to_bytes(real_did_ckb::CELL_20_ARGS);
-        assert_eq!(did_id.len(), 20);
-        let tx_hash: [u8; 32] = crate::rpc::parse_hex_to_bytes(real_did_ckb::CELL_20_TX_HASH)
-            .try_into()
-            .expect("32-byte tx hash");
-
-        let tx = ResolvedTxFacts {
+    /// Build a one-output did:ckb transaction carrying `did_id` as its item id.
+    fn did_ckb_tx_facts(
+        did_id: Vec<u8>,
+        tx_hash: [u8; 32],
+        lock: InternId,
+    ) -> ResolvedTxFacts<'static> {
+        ResolvedTxFacts {
             tx_hash,
             block_number: 21_080_336,
             block_hash: [0x80; 32],
@@ -3157,10 +3143,10 @@ mod tests {
                 lock_code_hash_id: InternId::new(16),
                 lock_hash_type: 1,
                 lock_args_id: InternId::new(17),
-                type_script_hash_id: Some(did_type_hash),
-                type_code_hash_id: Some(InternId::new(18)),
+                type_script_hash_id: Some(InternId::new(18)),
+                type_code_hash_id: Some(InternId::new(19)),
                 type_hash_type: Some(1),
-                type_args_id: Some(InternId::new(19)),
+                type_args_id: Some(InternId::new(20)),
                 occupied_capacity: 61_00000000,
                 data_size: 205,
                 data: Vec::new(),
@@ -3168,26 +3154,73 @@ mod tests {
                 udt_amount: None,
                 semantic_tag: CellSemanticTag::DidCkb,
                 dao_state: None,
-                protocol_facts: Some(CellProtocolFacts::DidCkb(DidCkbProtocolFacts {
-                    did_id: did_id.clone(),
-                })),
+                protocol_facts: Some(CellProtocolFacts::DidCkb(DidCkbProtocolFacts { did_id })),
             }]
             .into(),
-        };
+        }
+    }
 
+    /// Live/bulk parity: a real-shaped 20-byte did:ckb item id indexes in the
+    /// bulk reducer exactly as it does in the live writer, id kept verbatim.
+    #[test]
+    fn object_owner_indexes_real_20_byte_did_ckb_item_id() {
+        use crate::parser::test_helpers::real_did_ckb;
+
+        let interner = IdentityInterner::default();
+        let lock = interner.intern_bytes(vec![0xcc; 32]);
+        let frozen = interner.snapshot_for_reads();
+        let ctx = ReducerContext::new(&frozen);
+
+        let did_id = crate::rpc::parse_hex_to_bytes(real_did_ckb::CELL_20_ARGS);
+        assert_eq!(did_id.len(), 20);
+        let tx_hash: [u8; 32] = crate::rpc::parse_hex_to_bytes(real_did_ckb::CELL_20_TX_HASH)
+            .try_into()
+            .expect("32-byte tx hash");
+
+        let tx = did_ckb_tx_facts(did_id.clone(), tx_hash, lock);
         let mut owner = ObjectOwner::default();
-        let err = owner
+        owner
             .apply_tx(&tx, &ctx)
-            .expect_err("bulk reducer must fail fast on a non-representable item id");
-        let message = err.to_string();
-        assert!(
-            message.contains("not representable in the spore-outpoint reverse index"),
-            "error must name the constraint: {message}"
+            .expect("20-byte did:ckb must index");
+
+        let entry = owner
+            .identities
+            .get(&did_id)
+            .expect("identity entry keyed by the verbatim 20-byte id");
+        assert_eq!(entry.standard, IdentityStandard::DidCkb);
+        assert!(entry.is_live);
+        assert_eq!(
+            owner.did_agg.as_ref().expect("did aggregate").total_count,
+            1
         );
-        assert!(
-            message.contains(&hex::encode(&did_id)),
-            "error must name the offending item id: {message}"
-        );
+        // Outpoint rows are keyed by the same verbatim id.
+        assert!(owner
+            .stats_spore_rows
+            .contains_key(&keys::encode_spore_outpoint_by_id_key(&did_id, &tx_hash, 0)));
+    }
+
+    /// Live/bulk parity for the width guard: only genuinely unindexable ids
+    /// (outside 1..=32 bytes) are rejected, with the same actionable context.
+    #[test]
+    fn object_owner_rejects_did_ckb_item_id_outside_indexable_width() {
+        let interner = IdentityInterner::default();
+        let lock = interner.intern_bytes(vec![0xcc; 32]);
+        let frozen = interner.snapshot_for_reads();
+        let ctx = ReducerContext::new(&frozen);
+
+        for bad_id in [Vec::new(), vec![0x01u8; 33]] {
+            let tx = did_ckb_tx_facts(bad_id.clone(), [0x7A; 32], lock);
+            let mut owner = ObjectOwner::default();
+            let err = owner
+                .apply_tx(&tx, &ctx)
+                .expect_err("bulk reducer must fail fast on an unindexable item id");
+            let message = err.to_string();
+            assert!(
+                message.contains("item id width is not indexable"),
+                "error must name the constraint: {message}"
+            );
+            assert!(owner.identities.is_empty(), "no partial state on rejection");
+        }
     }
 
     #[test]

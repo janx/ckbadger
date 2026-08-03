@@ -478,16 +478,9 @@ impl BatchWriter {
         batch: &mut StoreBatch,
         state: &mut SporeBatchState,
     ) -> Result<()> {
-        // An empty item id would collapse distinct identities onto one store
-        // key. Same rule as bulk facts extraction — fail fast, both modes.
-        if did.did_id.is_empty() {
-            bail!(
-                "did:ckb cell has empty type-script args (empty item id): tx=0x{}, output_index={}",
-                hex::encode(tx_hash),
-                output_index
-            );
-        }
-        // Checked before any write so a rejected cell leaves no partial state.
+        // Ids are stored verbatim at their natural width; only widths outside
+        // the indexable range are rejected. Checked before any write so a
+        // rejected cell leaves no partial state. Same guard in bulk.
         super::ensure_outpoint_indexable_item_id(&did.did_id, "did:ckb", tx_hash, output_index)?;
 
         let existing = state.get_identity(self.store.as_ref(), &did.did_id)?;
@@ -1794,13 +1787,11 @@ mod tests {
     }
 
     /// Real live-testnet did:ckb cells carry 20-byte type-script args (31 of
-    /// 421 as of the 2026-08-01 audit). The identity store itself keys ids
-    /// verbatim, but the spore-outpoint reverse index encodes a fixed 32-byte
-    /// id, so those cells are not representable today. They must fail fast with
-    /// actionable context — never be silently dropped, and never reach the key
-    /// encoder's assert (which would abort the process).
+    /// 421 as of the 2026-08-01 audit). Ids are stored verbatim at their
+    /// natural width, so those cells index end-to-end — including the outpoint
+    /// reverse index that backs the item's `/activities` route.
     #[test]
-    fn test_real_testnet_did_ckb_20_byte_item_id_fails_fast_and_writes_nothing() {
+    fn test_real_testnet_did_ckb_20_byte_item_id_roundtrips_identity_store() {
         use crate::parser::test_helpers::real_did_ckb;
 
         let dir = tempfile::tempdir().unwrap();
@@ -1817,30 +1808,78 @@ mod tests {
 
         let mut batch = StoreBatch::new(writer.store());
         let mut state = writer.new_spore_batch_state();
-        let err = writer
+        writer
             .insert_did_ckb_cell(&parsed, &tx_hash, 0, 21_080_336, &mut batch, &mut state)
-            .expect_err("20-byte item id must fail fast, not be silently dropped");
-        let message = err.to_string();
-        assert!(
-            message.contains("not representable in the spore-outpoint reverse index"),
-            "error must name the constraint: {message}"
-        );
-        assert!(
-            message.contains(&hex::encode(&item_id)),
-            "error must name the offending item id: {message}"
-        );
-        assert!(
-            message.contains(&hex::encode(&tx_hash)),
-            "error must locate the cell: {message}"
-        );
+            .unwrap();
         batch.commit().unwrap();
 
-        // Rejected before any write: no partial identity state.
-        assert!(store.get_identity(&item_id).unwrap().is_none());
-        assert!(store
-            .get_identity_collection_aggregate(&DID_CKB_SENTINEL_COLLECTION)
+        let identity = store
+            .get_identity(&item_id)
             .unwrap()
-            .is_none());
+            .expect("20-byte item id must be persisted verbatim");
+        assert_eq!(identity.standard, IdentityStandard::DidCkb);
+        assert!(identity.is_live);
+        assert_eq!(identity.created_at_block, 21_080_336);
+
+        let ids = store
+            .list_identity_ids_by_collection(&DID_CKB_SENTINEL_COLLECTION, None, 10)
+            .unwrap();
+        assert_eq!(ids, vec![item_id.clone()]);
+
+        // Forward outpoint map (live consume resolves the item through this)
+        // returns the 20-byte id verbatim, not a truncated/absent value.
+        assert_eq!(
+            writer.get_spore_id_by_outpoint(&tx_hash, 0).unwrap(),
+            Some(item_id.clone())
+        );
+        // Reverse index backs `/assets/identities/did/items/{id}/activities`.
+        assert_eq!(
+            store.list_spore_outpoints_by_spore_id(&item_id).unwrap(),
+            vec![(tx_hash.clone(), 0)]
+        );
+    }
+
+    /// The width guard now rejects only what genuinely cannot be indexed: an
+    /// id outside 1..=32 bytes (empty would collapse identities onto one key;
+    /// longer than 32 could never be queried through the API's item-id cap).
+    #[test]
+    fn test_did_ckb_item_id_outside_indexable_width_fails_fast_and_writes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone(), store.clone());
+        let tx_hash = vec![0x7A; 32];
+
+        for bad_id in [Vec::new(), vec![0x01; 33]] {
+            let mut batch = StoreBatch::new(writer.store());
+            let mut state = writer.new_spore_batch_state();
+            let err = writer
+                .insert_did_ckb_cell(
+                    &make_parsed_did(&bad_id, &[0xE1; 32]),
+                    &tx_hash,
+                    0,
+                    500,
+                    &mut batch,
+                    &mut state,
+                )
+                .expect_err("unindexable item id width must fail fast");
+            let message = err.to_string();
+            assert!(
+                message.contains("item id width is not indexable"),
+                "error must name the constraint: {message}"
+            );
+            assert!(
+                message.contains(&hex::encode(&tx_hash)),
+                "error must locate the cell: {message}"
+            );
+            batch.commit().unwrap();
+
+            // Rejected before any write: no partial identity state.
+            assert!(store.get_identity(&bad_id).unwrap().is_none());
+            assert!(store
+                .get_identity_collection_aggregate(&DID_CKB_SENTINEL_COLLECTION)
+                .unwrap()
+                .is_none());
+        }
     }
 
     #[test]

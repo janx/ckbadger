@@ -927,47 +927,75 @@ pub fn decode_spore_outpoint_key(key: &[u8]) -> (Vec<u8>, i16) {
     decode_outpoint(&key[1..35])
 }
 
-/// Spore outpoint reverse index key: prefix(1B) + spore_id(32B) + outpoint(34B)
-pub const SPORE_OUTPOINT_BY_ID_KEY_SIZE: usize = 67;
+/// Spore/identity outpoint reverse index key:
+/// `prefix(1B) + id(1..=32B, verbatim) + outpoint(34B)`
+///
+/// The id component is VARIABLE width. Spore and `.bit Cell` ids are always 32
+/// bytes, but did:ckb item ids are the type-script args verbatim and occur on
+/// chain in more than one width (390 × 32-byte and 31 × 20-byte among the 421
+/// live testnet did:ckb cells). The id is stored verbatim — the same way
+/// `CF_IDENTITY_DATA` and `identity_by_collection` key it — rather than hashed
+/// or padded, so a key still contains the id it belongs to.
+///
+/// **Scanning contract**: a shorter id is a byte-prefix of a longer id that
+/// starts with the same bytes, so its rows share the scan prefix AND can sort
+/// *between* the shorter id's own rows. Every reader must therefore
+///
+/// 1. bound the scan with `prefix(1B) + id`, and
+/// 2. keep only keys whose length is exactly
+///    [`spore_outpoint_by_id_key_len`] for the id being scanned — skipping
+///    (never stopping at) foreign lengths.
+///
+/// The outpoint is recovered from the fixed-width 34-byte suffix, so it stays
+/// decodable for any id width.
+pub const SPORE_OUTPOINT_BY_ID_MAX_ID_LEN: usize = HASH32_LEN;
 
-/// Prefix for scanning all outpoints of a given spore: prefix(1B) + spore_id(32B)
-pub const SPORE_OUTPOINT_BY_ID_PREFIX_SIZE: usize = 33;
+/// Exact key length for a given id width: `prefix(1B) + id + outpoint(34B)`.
+pub const fn spore_outpoint_by_id_key_len(id_len: usize) -> usize {
+    1 + id_len + OUTPOINT_KEY_SIZE
+}
+
+#[inline]
+#[track_caller]
+fn assert_by_id_len(encoder: &str, id_len: usize) {
+    assert!(
+        (1..=SPORE_OUTPOINT_BY_ID_MAX_ID_LEN).contains(&id_len),
+        "{}: id must be between 1 and {} bytes, got {}",
+        encoder,
+        SPORE_OUTPOINT_BY_ID_MAX_ID_LEN,
+        id_len
+    );
+}
 
 pub fn encode_spore_outpoint_by_id_key(
     spore_id: &[u8],
     tx_hash: &[u8],
     output_index: i16,
-) -> [u8; SPORE_OUTPOINT_BY_ID_KEY_SIZE] {
-    assert_key_component_len(
-        "encode_spore_outpoint_by_id_key",
-        "spore_id",
-        spore_id.len(),
-        HASH32_LEN,
-    );
-    let mut key = [0u8; SPORE_OUTPOINT_BY_ID_KEY_SIZE];
-    key[0] = STATS_PREFIX_SPORE_OUTPOINT_BY_ID;
-    key[1..33].copy_from_slice(&spore_id[..32]);
-    key[33..67].copy_from_slice(&encode_outpoint(tx_hash, output_index));
+) -> Vec<u8> {
+    assert_by_id_len("encode_spore_outpoint_by_id_key", spore_id.len());
+    let mut key = Vec::with_capacity(spore_outpoint_by_id_key_len(spore_id.len()));
+    key.push(STATS_PREFIX_SPORE_OUTPOINT_BY_ID);
+    key.extend_from_slice(spore_id);
+    key.extend_from_slice(&encode_outpoint(tx_hash, output_index));
     key
 }
 
-pub fn encode_spore_outpoint_by_id_prefix(
-    spore_id: &[u8],
-) -> [u8; SPORE_OUTPOINT_BY_ID_PREFIX_SIZE] {
-    assert_key_component_len(
-        "encode_spore_outpoint_by_id_prefix",
-        "spore_id",
-        spore_id.len(),
-        HASH32_LEN,
-    );
-    let mut prefix = [0u8; SPORE_OUTPOINT_BY_ID_PREFIX_SIZE];
-    prefix[0] = STATS_PREFIX_SPORE_OUTPOINT_BY_ID;
-    prefix[1..33].copy_from_slice(&spore_id[..32]);
+pub fn encode_spore_outpoint_by_id_prefix(spore_id: &[u8]) -> Vec<u8> {
+    assert_by_id_len("encode_spore_outpoint_by_id_prefix", spore_id.len());
+    let mut prefix = Vec::with_capacity(1 + spore_id.len());
+    prefix.push(STATS_PREFIX_SPORE_OUTPOINT_BY_ID);
+    prefix.extend_from_slice(spore_id);
     prefix
 }
 
 pub fn decode_spore_outpoint_by_id_key(key: &[u8]) -> (Vec<u8>, i16) {
-    decode_outpoint(&key[33..67])
+    assert!(
+        key.len() >= spore_outpoint_by_id_key_len(1),
+        "decode_spore_outpoint_by_id_key: key must be at least {} bytes, got {}",
+        spore_outpoint_by_id_key_len(1),
+        key.len()
+    );
+    decode_outpoint(&key[key.len() - OUTPOINT_KEY_SIZE..])
 }
 
 /// mNFT class outpoint lookup key: prefix(1B) + outpoint(34B)
@@ -2303,7 +2331,8 @@ mod tests {
         let spore_id = [0xCCu8; 32];
         let tx_hash = [0xDDu8; 32];
         let key = encode_spore_outpoint_by_id_key(&spore_id, &tx_hash, 3);
-        assert_eq!(key.len(), SPORE_OUTPOINT_BY_ID_KEY_SIZE);
+        assert_eq!(key.len(), spore_outpoint_by_id_key_len(spore_id.len()));
+        assert_eq!(key.len(), 67);
         assert_eq!(key[0], STATS_PREFIX_SPORE_OUTPOINT_BY_ID);
         assert_eq!(&key[1..33], &spore_id);
         let (decoded_tx_hash, decoded_output_index) = decode_spore_outpoint_by_id_key(&key);
@@ -2311,8 +2340,77 @@ mod tests {
         assert_eq!(decoded_output_index, 3);
 
         let prefix = encode_spore_outpoint_by_id_prefix(&spore_id);
-        assert_eq!(prefix.len(), SPORE_OUTPOINT_BY_ID_PREFIX_SIZE);
+        assert_eq!(prefix.len(), 33);
         assert!(key.starts_with(&prefix));
+    }
+
+    /// did:ckb item ids are the type-script args verbatim and are NOT
+    /// fixed-width on chain (390 × 32-byte + 31 × 20-byte on live testnet).
+    /// The reverse index therefore encodes a variable-width id between a
+    /// 1-byte prefix and a fixed 34-byte outpoint suffix.
+    #[test]
+    fn test_spore_outpoint_by_id_key_supports_variable_width_ids() {
+        let tx_hash = [0xDDu8; 32];
+
+        for id_len in [1usize, 20, 31, 32] {
+            let id = vec![0xA7u8; id_len];
+            let key = encode_spore_outpoint_by_id_key(&id, &tx_hash, 5);
+            assert_eq!(key.len(), 1 + id_len + OUTPOINT_KEY_SIZE);
+            assert_eq!(key.len(), spore_outpoint_by_id_key_len(id_len));
+            assert_eq!(key[0], STATS_PREFIX_SPORE_OUTPOINT_BY_ID);
+            assert_eq!(&key[1..1 + id_len], id.as_slice());
+
+            let prefix = encode_spore_outpoint_by_id_prefix(&id);
+            assert_eq!(prefix.len(), 1 + id_len);
+            assert!(key.starts_with(&prefix));
+
+            // The outpoint is decoded from the fixed-width suffix, so it stays
+            // recoverable no matter how wide the id is.
+            let (decoded_tx_hash, decoded_output_index) = decode_spore_outpoint_by_id_key(&key);
+            assert_eq!(decoded_tx_hash, tx_hash.to_vec());
+            assert_eq!(decoded_output_index, 5);
+        }
+    }
+
+    /// A short id that is a byte-prefix of a longer id shares the scan prefix,
+    /// so keys must remain distinguishable by exact length.
+    #[test]
+    fn test_spore_outpoint_by_id_short_id_is_length_distinguishable_from_longer_id() {
+        let short_id = vec![0x11u8; 20];
+        let mut long_id = short_id.clone();
+        long_id.extend_from_slice(&[0x11u8; 12]);
+        assert_eq!(long_id.len(), 32);
+        assert!(long_id.starts_with(&short_id));
+
+        let tx_hash = [0xEEu8; 32];
+        let short_key = encode_spore_outpoint_by_id_key(&short_id, &tx_hash, 0);
+        let long_key = encode_spore_outpoint_by_id_key(&long_id, &tx_hash, 0);
+
+        // The longer id's rows fall inside the shorter id's scan prefix …
+        let short_prefix = encode_spore_outpoint_by_id_prefix(&short_id);
+        assert!(long_key.starts_with(&short_prefix));
+        // … so only the exact key length separates them.
+        assert_ne!(short_key.len(), long_key.len());
+        assert_eq!(short_key.len(), spore_outpoint_by_id_key_len(20));
+        assert_eq!(long_key.len(), spore_outpoint_by_id_key_len(32));
+    }
+
+    #[test]
+    #[should_panic(expected = "must be between 1 and 32 bytes")]
+    fn test_spore_outpoint_by_id_key_rejects_empty_id() {
+        let _ = encode_spore_outpoint_by_id_key(&[], &[0xDDu8; 32], 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "must be between 1 and 32 bytes")]
+    fn test_spore_outpoint_by_id_key_rejects_oversized_id() {
+        let _ = encode_spore_outpoint_by_id_key(&[0x01u8; 33], &[0xDDu8; 32], 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "must be between 1 and 32 bytes")]
+    fn test_spore_outpoint_by_id_prefix_rejects_empty_id() {
+        let _ = encode_spore_outpoint_by_id_prefix(&[]);
     }
 
     #[test]
@@ -3273,22 +3371,10 @@ mod tests {
                     let _ = encode_spore_daily_prefix(h);
                 },
             },
-            FixedWidthCase {
-                encoder: "encode_spore_outpoint_by_id_key",
-                component: "spore_id",
-                expected: 32,
-                call: |h| {
-                    let _ = encode_spore_outpoint_by_id_key(h, &H, 0);
-                },
-            },
-            FixedWidthCase {
-                encoder: "encode_spore_outpoint_by_id_prefix",
-                component: "spore_id",
-                expected: 32,
-                call: |h| {
-                    let _ = encode_spore_outpoint_by_id_prefix(h);
-                },
-            },
+            // `encode_spore_outpoint_by_id_key`/`_prefix` are deliberately NOT
+            // fixed-width — identity item ids are stored verbatim at any width
+            // in 1..=32. Their bounds are covered by the dedicated
+            // `test_spore_outpoint_by_id_key_rejects_*` tests.
             FixedWidthCase {
                 encoder: "encode_spore_type_index_key",
                 component: "type_script_hash",

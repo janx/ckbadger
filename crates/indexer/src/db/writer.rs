@@ -82,38 +82,34 @@ impl BatchWriter {
     }
 }
 
-/// Guard for identity item ids that must be recorded in the spore-outpoint
-/// reverse index (`SPORE_OUTPOINT_BY_ID`).
-///
-/// Identity item ids are the type-script args verbatim and the identity store
-/// itself is width-agnostic (`CF_IDENTITY_DATA` and `identity_by_collection`
-/// both key on the raw id). The spore-outpoint reverse index, however, encodes
-/// a FIXED 32-byte id component, and it is what backs the per-item lifecycle
+/// Guard for identity item ids that are recorded in the spore-outpoint reverse
+/// index (`SPORE_OUTPOINT_BY_ID`), which backs the per-item lifecycle feed
 /// (`/assets/identities/*/items/{id}/activities`).
 ///
-/// Live testnet did:ckb holds real cells with 20-byte args (31 of 421 as of the
-/// 2026-08-01 audit), which that index cannot represent. Rather than silently
-/// dropping their lifecycle rows (the endpoint would return an empty history
-/// for a real item) or letting the key encoder's assert abort the process, this
-/// fails fast with the exact context needed to act on it. Widening the index
-/// key is a deliberate store-schema decision, not something to patch around
-/// here.
+/// Item ids are the type-script args verbatim, and every id-keyed store
+/// structure — `CF_IDENTITY_DATA`, `identity_by_collection` and the reverse
+/// index — stores them at their natural width, so real did:ckb cells index
+/// whether their args are 32 bytes (390 of 421 live testnet cells) or 20 bytes
+/// (the remaining 31).
+///
+/// What genuinely cannot be indexed is an id outside `1..=32` bytes: a
+/// zero-length id would collapse distinct identities onto one key, and the API
+/// caps item ids at 32 bytes (`parse_asset_id_max32`), so a longer id would be
+/// indexed but permanently unqueryable. Those fail fast here with locating
+/// context rather than reaching the key encoder's process-aborting assert.
 pub(crate) fn ensure_outpoint_indexable_item_id(
     item_id: &[u8],
     protocol: &str,
     tx_hash: &[u8],
     output_index: i16,
 ) -> anyhow::Result<()> {
-    const OUTPOINT_INDEX_ID_LEN: usize = 32;
-    if item_id.len() != OUTPOINT_INDEX_ID_LEN {
+    if item_id.is_empty() || item_id.len() > ckbadger_store::keys::SPORE_OUTPOINT_BY_ID_MAX_ID_LEN {
         anyhow::bail!(
-            "{protocol} item id width is not representable in the spore-outpoint reverse index: \
-             item_id=0x{}, actual_len={}, required_len={}, tx=0x{}, output_index={} — \
-             the identity store keys ids verbatim, but SPORE_OUTPOINT_BY_ID encodes a fixed \
-             32-byte id; widening that key is a pending store-schema decision",
+            "{protocol} item id width is not indexable: item_id=0x{}, actual_len={}, \
+             allowed=1..={}, tx=0x{}, output_index={}",
             hex::encode(item_id),
             item_id.len(),
-            OUTPOINT_INDEX_ID_LEN,
+            ckbadger_store::keys::SPORE_OUTPOINT_BY_ID_MAX_ID_LEN,
             hex::encode(tx_hash),
             output_index
         );
