@@ -94,6 +94,9 @@ fn script_labels_from_semantic_tags(semantic_tags: u16) -> Vec<String> {
     if semantic_tags & st::CLUSTER != 0 {
         labels.push("Spore Cluster".to_string());
     }
+    if semantic_tags & st::DID_CKB != 0 {
+        labels.push("did:ckb".to_string());
+    }
     labels
 }
 
@@ -4088,10 +4091,25 @@ mod tests {
         let labels = script_labels_from_semantic_tags(st::DAO | st::XUDT | st::CLUSTER);
         assert_eq!(labels, vec!["NervosDAO", "xUDT", "Spore Cluster"]);
 
+        // did:ckb is an independent identity protocol with its own tag/label.
+        assert_eq!(
+            script_labels_from_semantic_tags(st::DID_CKB),
+            vec!["did:ckb"]
+        );
+        assert_ne!(st::DID_CKB, st::SPORE);
+        assert_ne!(st::DID_CKB, st::BIT_CELL);
+
         // All bits set.
-        let all = st::DAO | st::SUDT | st::XUDT | st::DOTBIT | st::MNFT | st::SPORE | st::CLUSTER;
+        let all = st::DAO
+            | st::SUDT
+            | st::XUDT
+            | st::DOTBIT
+            | st::MNFT
+            | st::SPORE
+            | st::CLUSTER
+            | st::DID_CKB;
         let labels = script_labels_from_semantic_tags(all);
-        assert_eq!(labels.len(), 7);
+        assert_eq!(labels.len(), 8);
     }
 
     #[test]

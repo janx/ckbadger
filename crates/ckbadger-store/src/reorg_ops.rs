@@ -3860,6 +3860,7 @@ impl CkbadgerStore {
                 // Clean up outpoint entries for this deleted spore using the
                 // reverse index (SPORE_OUTPOINT_BY_ID → outpoints).
                 let by_id_prefix = keys::encode_spore_outpoint_by_id_prefix(&spore_id);
+                let by_id_key_len = keys::spore_outpoint_by_id_key_len(spore_id.len());
                 let by_id_iter = self.prefix_iterator_cf(self.cf_stats_spore(), &by_id_prefix);
                 for by_id_item in by_id_iter {
                     let (by_id_key, _) = by_id_item.map_err(|e| {
@@ -3871,6 +3872,11 @@ impl CkbadgerStore {
                     })?;
                     if !by_id_key.starts_with(&by_id_prefix) {
                         break;
+                    }
+                    if by_id_key.len() != by_id_key_len {
+                        // Rows of a longer id that starts with these bytes —
+                        // not ours to delete.
+                        continue;
                     }
                     let (tx_hash, output_index) = keys::decode_spore_outpoint_by_id_key(&by_id_key);
                     let fwd_key = keys::encode_spore_outpoint_key(&tx_hash, output_index);
@@ -4150,19 +4156,42 @@ impl CkbadgerStore {
                         batch.delete_cf(self.cf_stats_mnft(), &by_id_key);
                     }
                 }
-                if entry.standard == IdentityStandard::BitCell && identity_id.len() == 32 {
+                // `.bit Cell` and did:ckb identities record their outpoints in
+                // the spore reverse index (DotBit has its own, handled above),
+                // so both must be cleaned up here or a rolled-back identity
+                // leaves orphaned lifecycle rows behind.
+                if matches!(
+                    entry.standard,
+                    IdentityStandard::BitCell | IdentityStandard::DidCkb
+                ) {
+                    if identity_id.is_empty()
+                        || identity_id.len() > keys::SPORE_OUTPOINT_BY_ID_MAX_ID_LEN
+                    {
+                        return Err(anyhow::anyhow!(
+                            "identity id width violates the outpoint reverse index contract during rollback cleanup: standard={}, identity_id=0x{}, len={}, max={}",
+                            entry.standard.as_str(),
+                            bytes_to_hex(&identity_id),
+                            identity_id.len(),
+                            keys::SPORE_OUTPOINT_BY_ID_MAX_ID_LEN
+                        ));
+                    }
                     let by_id_prefix = keys::encode_spore_outpoint_by_id_prefix(&identity_id);
+                    let by_id_key_len = keys::spore_outpoint_by_id_key_len(identity_id.len());
                     let by_id_iter = self.prefix_iterator_cf(self.cf_stats_spore(), &by_id_prefix);
                     for by_id_item in by_id_iter {
                         let (by_id_key, _) = by_id_item.map_err(|e| {
                             anyhow::anyhow!(
-                                "failed to iterate .bit Cell outpoint reverse index during rollback cleanup: identity_id=0x{}, error={}",
+                                "failed to iterate identity outpoint reverse index during rollback cleanup: identity_id=0x{}, error={}",
                                 bytes_to_hex(&identity_id),
                                 e
                             )
                         })?;
                         if !by_id_key.starts_with(&by_id_prefix) {
                             break;
+                        }
+                        if by_id_key.len() != by_id_key_len {
+                            // Rows of a longer id that starts with these bytes.
+                            continue;
                         }
                         let (tx_hash, output_index) =
                             keys::decode_spore_outpoint_by_id_key(&by_id_key);
@@ -9836,6 +9865,130 @@ mod tests {
         }
         batch.commit().unwrap();
         seed_sync_status(store, 5, &[5u8; 32], 0, 0, 0);
+    }
+
+    /// Rollback cleanup of an identity's outpoint rows scans the reverse index
+    /// by id prefix. With variable-width ids, a short id's prefix also matches
+    /// a longer id that starts with the same bytes — so rolling one back must
+    /// never delete the other's rows, in either direction.
+    #[test]
+    fn identity_rollback_outpoint_cleanup_does_not_alias_between_short_and_long_ids() {
+        use crate::types::{IdentityEntry, IdentityExtra, IdentityStandard};
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+
+        // Pair A: 20-byte id rolled back, 32-byte id sharing its prefix survives.
+        let short_a = vec![0x11u8; 20];
+        let mut long_a = short_a.clone();
+        long_a.extend_from_slice(&[0x11u8; 12]);
+        // Pair B: the reverse — 32-byte id rolled back, 20-byte prefix survives.
+        let short_b = vec![0x22u8; 20];
+        let mut long_b = short_b.clone();
+        long_b.extend_from_slice(&[0x22u8; 12]);
+
+        let did_entry = |created_at_block: i64| IdentityEntry {
+            standard: IdentityStandard::DidCkb,
+            owner_lock_hash: Some(vec![0x31; 32]),
+            name: None,
+            is_live: true,
+            created_at_block,
+            created_at_tx: vec![0x91; 32],
+            extra: IdentityExtra::DidCkb,
+        };
+
+        let short_a_tx = [0xA1u8; 32];
+        let long_a_tx = [0xA2u8; 32];
+        let short_b_tx = [0xB1u8; 32];
+        let long_b_tx = [0xB2u8; 32];
+
+        let mut batch = StoreBatch::new(&store);
+        // Created after the rollback point → deleted.
+        batch.put_identity(&short_a, &did_entry(150));
+        batch.put_identity(&long_b, &did_entry(150));
+        // Created before the rollback point → survive.
+        batch.put_identity(&long_a, &did_entry(100));
+        batch.put_identity(&short_b, &did_entry(100));
+
+        batch.put_spore_outpoint(&short_a_tx, 0, &short_a);
+        batch.put_spore_outpoint(&long_a_tx, 0, &long_a);
+        batch.put_spore_outpoint(&short_b_tx, 0, &short_b);
+        batch.put_spore_outpoint(&long_b_tx, 0, &long_b);
+
+        for b in 50..=160 {
+            batch.put_block_header(
+                b,
+                &CachedBlockHeader {
+                    hash: vec![b as u8; 32],
+                    parent_hash: vec![0u8; 32],
+                    timestamp: 1_700_000_000_000 + b * 1000,
+                    epoch_number: 0,
+                    epoch_index: 0,
+                    epoch_length: 1800,
+                    dao: vec![0; 32],
+                    transactions_count: 0,
+                    uncles_count: 0,
+                    proposals_count: 0,
+                    compact_target: 0,
+                    miner_lock_hash: None,
+                    cycles: None,
+                },
+            );
+        }
+        batch.commit().unwrap();
+        seed_sync_status(&store, 160, &[160u8; 32], 0, 0, 0);
+
+        store.rollback_to_block(120).unwrap();
+
+        // Rolled-back identities are gone, together with their outpoint rows.
+        assert!(store.get_identity(&short_a).unwrap().is_none());
+        assert!(store.get_identity(&long_b).unwrap().is_none());
+        assert!(
+            store
+                .list_spore_outpoints_by_spore_id(&short_a)
+                .unwrap()
+                .is_empty(),
+            "rolled-back 20-byte identity must lose its outpoint rows"
+        );
+        assert!(
+            store
+                .list_spore_outpoints_by_spore_id(&long_b)
+                .unwrap()
+                .is_empty(),
+            "rolled-back 32-byte identity must lose its outpoint rows"
+        );
+
+        // Surviving identities keep theirs — no aliasing deletion either way.
+        assert!(store.get_identity(&long_a).unwrap().is_some());
+        assert!(store.get_identity(&short_b).unwrap().is_some());
+        assert_eq!(
+            store.list_spore_outpoints_by_spore_id(&long_a).unwrap(),
+            vec![(long_a_tx.to_vec(), 0)],
+            "rolling back a 20-byte id must not delete a longer id's rows"
+        );
+        assert_eq!(
+            store.list_spore_outpoints_by_spore_id(&short_b).unwrap(),
+            vec![(short_b_tx.to_vec(), 0)],
+            "rolling back a 32-byte id must not delete its 20-byte prefix id's rows"
+        );
+
+        // Forward outpoint rows follow the same fate as their reverse rows.
+        assert!(store
+            .get_spore_id_by_outpoint(&short_a_tx, 0)
+            .unwrap()
+            .is_none());
+        assert!(store
+            .get_spore_id_by_outpoint(&long_b_tx, 0)
+            .unwrap()
+            .is_none());
+        assert_eq!(
+            store.get_spore_id_by_outpoint(&long_a_tx, 0).unwrap(),
+            Some(long_a.clone())
+        );
+        assert_eq!(
+            store.get_spore_id_by_outpoint(&short_b_tx, 0).unwrap(),
+            Some(short_b.clone())
+        );
     }
 
     #[test]

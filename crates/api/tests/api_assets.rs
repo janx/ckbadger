@@ -1054,6 +1054,161 @@ async fn test_assets_nft_collection_accepts_did_ckb_aliases() {
 }
 
 #[tokio::test]
+async fn test_assets_did_ckb_item_detail_supports_20_byte_item_ids() {
+    let store = test_store();
+    // Real live-testnet did:ckb item id (type-script args verbatim, 20 bytes):
+    // cell 0x1d43c10b...:0. 31 of 421 live testnet did:ckb cells carry
+    // 20-byte args, so the detail route must accept non-32-byte item ids.
+    let did_id = hex::decode("00ee044b93fab31c060417d159f9678b7cc154d4").unwrap();
+    assert_eq!(did_id.len(), 20);
+
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_identity(
+        &did_id,
+        &IdentityEntry {
+            standard: IdentityStandard::DidCkb,
+            owner_lock_hash: Some(vec![0x31; 32]),
+            name: None,
+            is_live: true,
+            created_at_block: 21_080_336,
+            created_at_tx: vec![0x91; 32],
+            extra: IdentityExtra::DidCkb,
+        },
+    );
+    batch.commit().unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/assets/identities/did/items/0x{}",
+            hex::encode(&did_id)
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["nftId"], format!("0x{}", hex::encode(&did_id)));
+    assert_eq!(json["standard"], "did_ckb");
+    assert_eq!(json["isLive"], true);
+    assert_eq!(json["createdAtBlock"], 21_080_336);
+}
+
+/// The item lifecycle feed resolves through the outpoint reverse index, whose
+/// id component is variable-width. A real 20-byte did:ckb item id must produce
+/// its real mint/transfer history, not an empty feed.
+#[tokio::test]
+async fn test_assets_did_ckb_20_byte_item_activities_resolve() {
+    let store = test_store();
+    // Real live-testnet did:ckb item id (type-script args verbatim, 20 bytes).
+    let did_id = hex::decode("00ee044b93fab31c060417d159f9678b7cc154d4").unwrap();
+    assert_eq!(did_id.len(), 20);
+    let mint_tx = vec![0x93; 32];
+    let transfer_tx = vec![0x94; 32];
+
+    {
+        let mut batch = StoreBatch::new(store.as_ref());
+        batch.put_identity(
+            &did_id,
+            &IdentityEntry {
+                standard: IdentityStandard::DidCkb,
+                owner_lock_hash: Some(vec![0x31; 32]),
+                name: None,
+                is_live: true,
+                created_at_block: 300,
+                created_at_tx: mint_tx.clone(),
+                extra: IdentityExtra::DidCkb,
+            },
+        );
+        batch.commit().unwrap();
+    }
+
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_spore_outpoint(&mint_tx, 0, &did_id);
+    batch.put_spore_outpoint(&transfer_tx, 0, &did_id);
+    batch.put_consumed_cell_with_consumer(
+        &mint_tx,
+        0,
+        &LiveCellInfo {
+            capacity: 521_00000000,
+            lock_script_hash: vec![0x41; 32],
+            lock_code_hash: vec![0x51; 32],
+            lock_hash_type: 1,
+            lock_args: vec![0x61; 22],
+            type_script_hash: Some(vec![0x71; 32]),
+            type_code_hash: Some(vec![0x81; 32]),
+            type_hash_type: Some(1),
+            type_args: Some(did_id.clone()),
+            data_size: 205,
+            occupied_capacity: 61_00000000,
+            udt_amount: None,
+            data_hash: None,
+        },
+        300,
+        400,
+        Some(&transfer_tx),
+    );
+    batch.put_tx_hash_map(&mint_tx, 300, 0);
+    batch.put_tx_index(
+        300,
+        0,
+        &TxIndexEntry {
+            is_cellbase: false,
+            timestamp: 1_753_000_000,
+            inputs_count: 0,
+            outputs_count: 1,
+            fee: 0,
+            tx_size: 180,
+            cycles: None,
+            semantic_tags: 0,
+        },
+    );
+    batch.put_tx_hash_map(&transfer_tx, 400, 0);
+    batch.put_tx_index(
+        400,
+        0,
+        &TxIndexEntry {
+            is_cellbase: false,
+            timestamp: 1_753_000_100,
+            inputs_count: 1,
+            outputs_count: 1,
+            fee: 0,
+            tx_size: 200,
+            cycles: None,
+            semantic_tags: 0,
+        },
+    );
+    batch.commit().unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/assets/identities/did/items/0x{}/activities?limit=20",
+            hex::encode(&did_id)
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        json["data"].as_array().unwrap().len(),
+        2,
+        "20-byte item id must resolve its lifecycle rows"
+    );
+    assert_eq!(json["data"][0]["blockNumber"], 400);
+    assert_eq!(json["data"][0]["actions"][0], "transfer");
+    assert_eq!(json["data"][1]["blockNumber"], 300);
+    assert_eq!(json["data"][1]["actions"][0], "mint");
+}
+
+#[tokio::test]
 async fn test_assets_did_ckb_item_detail_and_activities() {
     let store = test_store();
     let did_id = [0xB7u8; 32];

@@ -1510,6 +1510,8 @@ const SHANNONS_PER_CKB: i128 = 100_000_000;
 ///   hashes, so none are added here.
 /// - `NftSpore` = registry `SporeNft | SporeDid | Cluster`. `.bit Cell` is an independent
 ///   identity protocol and therefore remains in `OtherTyped`, not the Spore bucket.
+///   The Web5 `did:ckb` contract (`DidCkb`) is likewise an independent identity protocol
+///   and stays in `OtherTyped`; `SporeDid` is a legacy variant no code_hash maps to.
 /// - `OtherTyped` = every other typed cell (unchanged residual bucket).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum KnowledgeBucket {

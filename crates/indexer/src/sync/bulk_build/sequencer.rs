@@ -427,7 +427,6 @@ mod tests {
         arena.cells[0].protocol_facts = Some(super::super::facts::CellProtocolFacts::Spore(
             super::super::facts::SporeProtocolFacts {
                 spore_id: [0x44; 32],
-                is_did: false,
                 content_type: "image/png".to_string(),
                 content: b"payload".to_vec(),
                 cluster_id: Some([0x55; 32]),

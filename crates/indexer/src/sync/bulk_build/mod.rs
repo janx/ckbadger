@@ -4169,7 +4169,7 @@ fn build_history_rows_for_block(
                     continue;
                 };
                 match protocol {
-                    facts::CellProtocolFacts::Spore(spore) if !spore.is_did => {
+                    facts::CellProtocolFacts::Spore(spore) => {
                         let collection_id = spore
                             .cluster_id
                             .map(|id| id.to_vec())
@@ -4178,6 +4178,18 @@ fn build_history_rows_for_block(
                             &collection_id,
                             &tx.tx_hash,
                             &spore.spore_id,
+                            &tx.block_hash,
+                            tx.block_number,
+                            tx.tx_index,
+                            tx.timestamp_ms,
+                            false,
+                        );
+                    }
+                    facts::CellProtocolFacts::DidCkb(did) => {
+                        identity_activity_acc.record(
+                            &DID_CKB_SENTINEL_COLLECTION,
+                            &tx.tx_hash,
+                            &did.did_id,
                             &tx.block_hash,
                             tx.block_number,
                             tx.tx_index,
@@ -4221,11 +4233,11 @@ fn build_history_rows_for_block(
                     continue;
                 };
                 match protocol {
-                    facts::CellProtocolFacts::Spore(spore) if spore.is_did => {
+                    facts::CellProtocolFacts::DidCkb(did) => {
                         identity_activity_acc.record(
                             &DID_CKB_SENTINEL_COLLECTION,
                             &tx.tx_hash,
-                            &spore.spore_id,
+                            &did.did_id,
                             &tx.block_hash,
                             tx.block_number,
                             tx.tx_index,
@@ -4434,7 +4446,7 @@ fn build_object_collection_activity_rows(
                 continue;
             };
             match protocol {
-                facts::CellProtocolFacts::Spore(spore) if !spore.is_did => {
+                facts::CellProtocolFacts::Spore(spore) => {
                     let collection_id = spore
                         .cluster_id
                         .map(|id| id.to_vec())
@@ -4443,6 +4455,18 @@ fn build_object_collection_activity_rows(
                         &collection_id,
                         &tx.tx_hash,
                         &spore.spore_id,
+                        &tx.block_hash,
+                        tx.block_number,
+                        tx.tx_index,
+                        tx.timestamp_ms,
+                        false,
+                    );
+                }
+                facts::CellProtocolFacts::DidCkb(did) => {
+                    identity_activity_acc.record(
+                        &DID_CKB_SENTINEL_COLLECTION,
+                        &tx.tx_hash,
+                        &did.did_id,
                         &tx.block_hash,
                         tx.block_number,
                         tx.tx_index,
@@ -4486,11 +4510,11 @@ fn build_object_collection_activity_rows(
                 continue;
             };
             match protocol {
-                facts::CellProtocolFacts::Spore(spore) if spore.is_did => {
+                facts::CellProtocolFacts::DidCkb(did) => {
                     identity_activity_acc.record(
                         &DID_CKB_SENTINEL_COLLECTION,
                         &tx.tx_hash,
-                        &spore.spore_id,
+                        &did.did_id,
                         &tx.block_hash,
                         tx.block_number,
                         tx.tx_index,

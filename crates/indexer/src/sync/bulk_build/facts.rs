@@ -7,6 +7,7 @@ use tracing::warn;
 
 use crate::parser::bit_cell::BitCellParser;
 use crate::parser::cell::ParsedCell;
+use crate::parser::did_ckb::DidCkbParser;
 use crate::parser::dotbit::{DotbitParser, DotbitWitnessBundle};
 use crate::parser::mnft::MnftParser;
 use crate::parser::spore::SporeParser;
@@ -41,10 +42,17 @@ pub(crate) struct BlockFacts {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct SporeProtocolFacts {
     pub(crate) spore_id: [u8; 32],
-    pub(crate) is_did: bool,
     pub(crate) content_type: String,
     pub(crate) content: Vec<u8>,
     pub(crate) cluster_id: Option<[u8; 32]>,
+}
+
+/// did:ckb identity cell facts. The item id is the full type-script args,
+/// which is NOT fixed-width on chain (live testnet holds both 32-byte and
+/// 20-byte ids), so it cannot share `SporeProtocolFacts`' fixed 32-byte id.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct DidCkbProtocolFacts {
+    pub(crate) did_id: Vec<u8>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -106,6 +114,7 @@ pub(crate) struct BitCellProtocolFacts {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) enum CellProtocolFacts {
     Spore(SporeProtocolFacts),
+    DidCkb(DidCkbProtocolFacts),
     Cluster(ClusterProtocolFacts),
     MnftIssuer(MnftIssuerProtocolFacts),
     MnftClass(MnftClassProtocolFacts),
@@ -153,6 +162,7 @@ pub enum CellSemanticTag {
     Xudt,
     Dotbit,
     BitCell,
+    DidCkb,
     Mnft,
     Spore,
     Cluster,
@@ -169,6 +179,7 @@ impl CellSemanticTag {
             Self::Xudt => semantic_tags::XUDT,
             Self::Dotbit => semantic_tags::DOTBIT,
             Self::BitCell => semantic_tags::BIT_CELL,
+            Self::DidCkb => semantic_tags::DID_CKB,
             Self::Mnft => semantic_tags::MNFT,
             Self::Spore => semantic_tags::SPORE,
             Self::Cluster => semantic_tags::CLUSTER,
@@ -368,7 +379,6 @@ pub(crate) fn parse_protocol_facts(
                     tx_hash,
                     output_index,
                 )?,
-                is_did: spore.is_did,
                 content_type: spore.content_type,
                 content: spore.content,
                 cluster_id: parse_optional_fixed_protocol_id::<32>(
@@ -377,6 +387,27 @@ pub(crate) fn parse_protocol_facts(
                     tx_hash,
                     output_index,
                 )?,
+            })))
+        }
+        CellSemanticTag::DidCkb => {
+            let did = DidCkbParser::parse_did_parsed_cell(cell).ok_or_else(|| {
+                anyhow!(
+                    "failed to parse did:ckb cell semantics in protocol facts: tx=0x{}, output_index={}",
+                    hex::encode(tx_hash),
+                    output_index
+                )
+            })?;
+            // The identity item id is the type-script args verbatim; an empty
+            // id would collapse distinct identities onto one store key.
+            if did.did_id.is_empty() {
+                return Err(anyhow!(
+                    "did:ckb cell has empty type-script args (empty item id): tx=0x{}, output_index={}",
+                    hex::encode(tx_hash),
+                    output_index
+                ));
+            }
+            Ok(Some(CellProtocolFacts::DidCkb(DidCkbProtocolFacts {
+                did_id: did.did_id,
             })))
         }
         CellSemanticTag::Cluster => {

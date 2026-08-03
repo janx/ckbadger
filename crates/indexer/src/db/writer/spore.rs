@@ -2,7 +2,8 @@ use anyhow::{bail, Result};
 use std::collections::{HashMap, HashSet};
 
 use crate::parser::{
-    analyze_spore_media_profile, ParsedBitCell, ParsedClusterCell, ParsedSporeCell,
+    analyze_spore_media_profile, ParsedBitCell, ParsedClusterCell, ParsedDidCkbCell,
+    ParsedSporeCell,
 };
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::keys;
@@ -463,6 +464,104 @@ impl BatchWriter {
         Ok(())
     }
 
+    /// Insert a did:ckb identity cell (live sync path).
+    ///
+    /// did:ckb entries are written to the identity store, not the spore/object
+    /// store. The item id is the type-script args verbatim and is NOT
+    /// fixed-width on chain (live testnet holds both 32-byte and 20-byte ids).
+    pub(crate) fn insert_did_ckb_cell(
+        &self,
+        did: &ParsedDidCkbCell,
+        tx_hash: &[u8],
+        output_index: i16,
+        block_number: i64,
+        batch: &mut StoreBatch,
+        state: &mut SporeBatchState,
+    ) -> Result<()> {
+        // Ids are stored verbatim at their natural width; only widths outside
+        // the indexable range are rejected. Checked before any write so a
+        // rejected cell leaves no partial state. Same guard in bulk.
+        super::ensure_outpoint_indexable_item_id(&did.did_id, "did:ckb", tx_hash, output_index)?;
+
+        let existing = state.get_identity(self.store.as_ref(), &did.did_id)?;
+        self.record_object_undo(
+            batch,
+            block_number,
+            CF_IDENTITY_DATA,
+            &did.did_id,
+            existing.as_ref().and_then(|e| bincode::serialize(e).ok()),
+            &mut state.undo_seq_by_block,
+        );
+        let was_live = existing.as_ref().is_some_and(|e| e.is_live);
+        let old_owner = if was_live {
+            existing.as_ref().and_then(|e| e.owner_lock_hash.clone())
+        } else {
+            None
+        };
+        let identity = IdentityEntry {
+            standard: IdentityStandard::DidCkb,
+            owner_lock_hash: Some(did.owner_lock_hash.clone()),
+            name: None,
+            is_live: true,
+            created_at_block: existing
+                .as_ref()
+                .map(|e| e.created_at_block)
+                .unwrap_or(block_number),
+            created_at_tx: existing
+                .as_ref()
+                .map(|e| e.created_at_tx.clone())
+                .unwrap_or_else(|| tx_hash.to_vec()),
+            extra: IdentityExtra::DidCkb,
+        };
+        batch.put_identity(&did.did_id, &identity);
+        state.put_identity(&did.did_id, identity);
+        batch.put_spore_outpoint(tx_hash, output_index, &did.did_id);
+        state.put_spore_outpoint(tx_hash, output_index, &did.did_id);
+
+        // Update identity collection aggregate
+        let cid = &DID_CKB_SENTINEL_COLLECTION;
+        let mut agg = state.get_identity_agg(self.store.as_ref(), cid)?;
+        if agg.standard == IdentityStandard::default() && agg.total_count == 0 {
+            agg.standard = IdentityStandard::DidCkb;
+            agg.name = Some("did:ckb".to_string());
+        }
+        if existing.is_none() {
+            // New identity — add to identity collection index
+            batch.put_identity_by_collection(cid, &did.did_id);
+            agg.total_count = agg.total_count.checked_add(1).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "did:ckb identity total_count overflow: did_id=0x{}",
+                    hex::encode(&did.did_id)
+                )
+            })?;
+            agg.live_count = agg.live_count.checked_add(1).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "did:ckb identity live_count overflow: did_id=0x{}",
+                    hex::encode(&did.did_id)
+                )
+            })?;
+        } else if !was_live {
+            // Re-activate consumed identity
+            agg.live_count = agg.live_count.checked_add(1).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "did:ckb identity live_count overflow on reactivate: did_id=0x{}",
+                    hex::encode(&did.did_id)
+                )
+            })?;
+        }
+        let owner_from = if was_live { old_owner.as_deref() } else { None };
+        self.apply_identity_owner_transition(
+            cid,
+            owner_from,
+            Some(did.owner_lock_hash.as_slice()),
+            &mut agg,
+            batch,
+            state,
+        )?;
+        state.put_identity_agg(cid, agg, batch);
+        Ok(())
+    }
+
     pub(crate) fn insert_spore_cell(
         &self,
         spore: &ParsedSporeCell,
@@ -473,15 +572,6 @@ impl BatchWriter {
         batch: &mut StoreBatch,
         state: &mut SporeBatchState,
     ) -> Result<()> {
-        let new_is_did = spore.is_did;
-
-        if new_is_did && spore.cluster_id.is_some() {
-            bail!(
-                "did:ckb entry unexpectedly has cluster_id: spore_id=0x{}",
-                hex::encode(&spore.spore_id)
-            );
-        }
-
         // The cluster_id comes out of the spore cell's molecule `Bytes` data, which
         // carries no width guarantee of its own. Bulk sync validates it via
         // `parse_optional_fixed_protocol_id::<32>`; the live path did not, so the
@@ -500,88 +590,6 @@ impl BatchWriter {
             }
         }
 
-        // did:ckb entries are written to the identity store, not the spore/object store.
-        if new_is_did {
-            let existing = state.get_identity(self.store.as_ref(), &spore.spore_id)?;
-            self.record_object_undo(
-                batch,
-                block_number,
-                CF_IDENTITY_DATA,
-                &spore.spore_id,
-                existing.as_ref().and_then(|e| bincode::serialize(e).ok()),
-                &mut state.undo_seq_by_block,
-            );
-            let was_live = existing.as_ref().is_some_and(|e| e.is_live);
-            let old_owner = if was_live {
-                existing.as_ref().and_then(|e| e.owner_lock_hash.clone())
-            } else {
-                None
-            };
-            let identity = IdentityEntry {
-                standard: IdentityStandard::DidCkb,
-                owner_lock_hash: Some(spore.owner_lock_hash.clone()),
-                name: None,
-                is_live: true,
-                created_at_block: existing
-                    .as_ref()
-                    .map(|e| e.created_at_block)
-                    .unwrap_or(block_number),
-                created_at_tx: existing
-                    .as_ref()
-                    .map(|e| e.created_at_tx.clone())
-                    .unwrap_or_else(|| tx_hash.to_vec()),
-                extra: IdentityExtra::DidCkb,
-            };
-            batch.put_identity(&spore.spore_id, &identity);
-            state.put_identity(&spore.spore_id, identity);
-            batch.put_spore_outpoint(tx_hash, output_index, &spore.spore_id);
-            state.put_spore_outpoint(tx_hash, output_index, &spore.spore_id);
-
-            // Update identity collection aggregate
-            let cid = &DID_CKB_SENTINEL_COLLECTION;
-            let mut agg = state.get_identity_agg(self.store.as_ref(), cid)?;
-            if agg.standard == IdentityStandard::default() && agg.total_count == 0 {
-                agg.standard = IdentityStandard::DidCkb;
-                agg.name = Some("did:ckb".to_string());
-            }
-            if existing.is_none() {
-                // New identity — add to identity collection index
-                batch.put_identity_by_collection(cid, &spore.spore_id);
-                agg.total_count = agg.total_count.checked_add(1).ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "did:ckb identity total_count overflow: spore_id=0x{}",
-                        hex::encode(&spore.spore_id)
-                    )
-                })?;
-                agg.live_count = agg.live_count.checked_add(1).ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "did:ckb identity live_count overflow: spore_id=0x{}",
-                        hex::encode(&spore.spore_id)
-                    )
-                })?;
-            } else if !was_live {
-                // Re-activate consumed identity
-                agg.live_count = agg.live_count.checked_add(1).ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "did:ckb identity live_count overflow on reactivate: spore_id=0x{}",
-                        hex::encode(&spore.spore_id)
-                    )
-                })?;
-            }
-            let owner_from = if was_live { old_owner.as_deref() } else { None };
-            self.apply_identity_owner_transition(
-                cid,
-                owner_from,
-                Some(spore.owner_lock_hash.as_slice()),
-                &mut agg,
-                batch,
-                state,
-            )?;
-            state.put_identity_agg(cid, agg, batch);
-            return Ok(());
-        }
-
-        // Regular spore/object handling below.
         let existing = state.get_spore(self.store.as_ref(), &spore.spore_id)?;
         self.record_object_undo(
             batch,
@@ -1203,7 +1211,6 @@ mod tests {
         ParsedSporeCell {
             spore_id: spore_id.to_vec(),
             type_script_hash: vec![0x99; 32],
-            is_did: false,
             content_type: "image/png".to_string(),
             content: vec![0x89, 0x50, 0x4e, 0x47],
             cluster_id: Some(cluster_id.to_vec()),
@@ -1216,7 +1223,6 @@ mod tests {
         ParsedSporeCell {
             spore_id: spore_id.to_vec(),
             type_script_hash: vec![0x99; 32],
-            is_did: false,
             content_type: "image/png".to_string(),
             content: vec![0x89, 0x50, 0x4e, 0x47],
             cluster_id: None,
@@ -1225,16 +1231,10 @@ mod tests {
         }
     }
 
-    fn make_parsed_did(spore_id: &[u8], owner_lock: &[u8]) -> ParsedSporeCell {
-        ParsedSporeCell {
-            spore_id: spore_id.to_vec(),
-            type_script_hash: vec![0x98; 32],
-            is_did: true,
-            content_type: "application/json".to_string(),
-            content: br#"{"name":"did"}"#.to_vec(),
-            cluster_id: None,
+    fn make_parsed_did(did_id: &[u8], owner_lock: &[u8]) -> ParsedDidCkbCell {
+        ParsedDidCkbCell {
+            did_id: did_id.to_vec(),
             owner_lock_hash: owner_lock.to_vec(),
-            media_profile: None,
         }
     }
 
@@ -1703,12 +1703,11 @@ mod tests {
         let mut batch = StoreBatch::new(writer.store());
         let mut state = writer.new_spore_batch_state();
         writer
-            .insert_spore_cell(
+            .insert_did_ckb_cell(
                 &make_parsed_did(&did_id, &owner),
                 &[0x10; 32],
                 0,
                 200,
-                3_600_000,
                 &mut batch,
                 &mut state,
             )
@@ -1724,6 +1723,163 @@ mod tests {
         assert!(identity.is_live);
         assert_eq!(identity.owner_lock_hash, Some(owner));
         assert!(matches!(identity.extra, IdentityExtra::DidCkb));
+    }
+
+    #[test]
+    fn test_real_testnet_did_ckb_cell_roundtrips_identity_store() {
+        use crate::parser::test_helpers::real_did_ckb;
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone(), store.clone());
+
+        // Real audited testnet cell 0x00290adc…:0 (block 18082860).
+        let (output, _data_hex) = real_did_ckb::cell_32();
+        let parsed = crate::parser::did_ckb::DidCkbParser::parse_did_cell(&output)
+            .expect("real did:ckb output must be classified for the identity write path");
+        let tx_hash = crate::rpc::parse_hex_to_bytes(real_did_ckb::CELL_32_TX_HASH);
+        let item_id = crate::rpc::parse_hex_to_bytes(real_did_ckb::CELL_32_ARGS);
+
+        let mut batch = StoreBatch::new(writer.store());
+        let mut state = writer.new_spore_batch_state();
+        writer
+            .insert_did_ckb_cell(&parsed, &tx_hash, 0, 18_082_860, &mut batch, &mut state)
+            .unwrap();
+        batch.commit().unwrap();
+
+        // Read back exactly the way the API detail route does (get_identity by
+        // the args item id).
+        let identity = store
+            .get_identity(&item_id)
+            .unwrap()
+            .expect("identity entry must exist under the args item id");
+        assert_eq!(identity.standard, IdentityStandard::DidCkb);
+        assert!(identity.is_live);
+        assert!(matches!(identity.extra, IdentityExtra::DidCkb));
+        let expected_owner = crate::parser::script::ScriptParser::compute_script_hash(&output.lock);
+        assert_eq!(identity.owner_lock_hash, Some(expected_owner));
+        assert_eq!(identity.created_at_block, 18_082_860);
+        assert_eq!(identity.created_at_tx, tx_hash);
+
+        // Collection aggregate (drives /assets?type=identity).
+        let agg = store
+            .get_identity_collection_aggregate(&DID_CKB_SENTINEL_COLLECTION)
+            .unwrap()
+            .expect("did:ckb aggregate");
+        assert_eq!(agg.standard, IdentityStandard::DidCkb);
+        assert_eq!(agg.name.as_deref(), Some("did:ckb"));
+        assert_eq!(agg.total_count, 1);
+        assert_eq!(agg.live_count, 1);
+        assert_eq!(agg.holders_count, 1);
+
+        // Items listing index (drives /assets/identities/did_ckb/items).
+        let ids = store
+            .list_identity_ids_by_collection(&DID_CKB_SENTINEL_COLLECTION, None, 10)
+            .unwrap();
+        assert_eq!(ids, vec![item_id.clone()]);
+
+        // Outpoint → id mapping used by the live consume path.
+        let mapped = writer
+            .get_spore_id_by_outpoint(&tx_hash, 0)
+            .unwrap()
+            .expect("outpoint mapping");
+        assert_eq!(mapped, item_id);
+    }
+
+    /// Real live-testnet did:ckb cells carry 20-byte type-script args (31 of
+    /// 421 as of the 2026-08-01 audit). Ids are stored verbatim at their
+    /// natural width, so those cells index end-to-end — including the outpoint
+    /// reverse index that backs the item's `/activities` route.
+    #[test]
+    fn test_real_testnet_did_ckb_20_byte_item_id_roundtrips_identity_store() {
+        use crate::parser::test_helpers::real_did_ckb;
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone(), store.clone());
+
+        // Real testnet cell 0x1d43c10b…:0 with a 20-byte args item id.
+        let (output, _data_hex) = real_did_ckb::cell_20();
+        let parsed = crate::parser::did_ckb::DidCkbParser::parse_did_cell(&output)
+            .expect("real 20-byte-args did:ckb output must be classified");
+        let tx_hash = crate::rpc::parse_hex_to_bytes(real_did_ckb::CELL_20_TX_HASH);
+        let item_id = crate::rpc::parse_hex_to_bytes(real_did_ckb::CELL_20_ARGS);
+        assert_eq!(item_id.len(), 20);
+
+        let mut batch = StoreBatch::new(writer.store());
+        let mut state = writer.new_spore_batch_state();
+        writer
+            .insert_did_ckb_cell(&parsed, &tx_hash, 0, 21_080_336, &mut batch, &mut state)
+            .unwrap();
+        batch.commit().unwrap();
+
+        let identity = store
+            .get_identity(&item_id)
+            .unwrap()
+            .expect("20-byte item id must be persisted verbatim");
+        assert_eq!(identity.standard, IdentityStandard::DidCkb);
+        assert!(identity.is_live);
+        assert_eq!(identity.created_at_block, 21_080_336);
+
+        let ids = store
+            .list_identity_ids_by_collection(&DID_CKB_SENTINEL_COLLECTION, None, 10)
+            .unwrap();
+        assert_eq!(ids, vec![item_id.clone()]);
+
+        // Forward outpoint map (live consume resolves the item through this)
+        // returns the 20-byte id verbatim, not a truncated/absent value.
+        assert_eq!(
+            writer.get_spore_id_by_outpoint(&tx_hash, 0).unwrap(),
+            Some(item_id.clone())
+        );
+        // Reverse index backs `/assets/identities/did/items/{id}/activities`.
+        assert_eq!(
+            store.list_spore_outpoints_by_spore_id(&item_id).unwrap(),
+            vec![(tx_hash.clone(), 0)]
+        );
+    }
+
+    /// The width guard now rejects only what genuinely cannot be indexed: an
+    /// id outside 1..=32 bytes (empty would collapse identities onto one key;
+    /// longer than 32 could never be queried through the API's item-id cap).
+    #[test]
+    fn test_did_ckb_item_id_outside_indexable_width_fails_fast_and_writes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone(), store.clone());
+        let tx_hash = vec![0x7A; 32];
+
+        for bad_id in [Vec::new(), vec![0x01; 33]] {
+            let mut batch = StoreBatch::new(writer.store());
+            let mut state = writer.new_spore_batch_state();
+            let err = writer
+                .insert_did_ckb_cell(
+                    &make_parsed_did(&bad_id, &[0xE1; 32]),
+                    &tx_hash,
+                    0,
+                    500,
+                    &mut batch,
+                    &mut state,
+                )
+                .expect_err("unindexable item id width must fail fast");
+            let message = err.to_string();
+            assert!(
+                message.contains("item id width is not indexable"),
+                "error must name the constraint: {message}"
+            );
+            assert!(
+                message.contains(&hex::encode(&tx_hash)),
+                "error must locate the cell: {message}"
+            );
+            batch.commit().unwrap();
+
+            // Rejected before any write: no partial identity state.
+            assert!(store.get_identity(&bad_id).unwrap().is_none());
+            assert!(store
+                .get_identity_collection_aggregate(&DID_CKB_SENTINEL_COLLECTION)
+                .unwrap()
+                .is_none());
+        }
     }
 
     #[test]
@@ -1760,12 +1916,11 @@ mod tests {
             let mut batch = StoreBatch::new(writer.store());
             let mut state = writer.new_spore_batch_state();
             writer
-                .insert_spore_cell(
+                .insert_did_ckb_cell(
                     &make_parsed_did(&did_id, &owner),
                     &[0x22; 32],
                     0,
                     300,
-                    10_800_000,
                     &mut batch,
                     &mut state,
                 )
@@ -1900,23 +2055,21 @@ mod tests {
         let mut batch = StoreBatch::new(writer.store());
         let mut state = writer.new_spore_batch_state();
         writer
-            .insert_spore_cell(
+            .insert_did_ckb_cell(
                 &make_parsed_did(&spore_id_a, &owner_a),
                 &tx_hash_a,
                 0,
                 100,
-                100_000,
                 &mut batch,
                 &mut state,
             )
             .unwrap();
         writer
-            .insert_spore_cell(
+            .insert_did_ckb_cell(
                 &make_parsed_did(&spore_id_b, &owner_b),
                 &tx_hash_b,
                 0,
                 100,
-                100_000,
                 &mut batch,
                 &mut state,
             )
@@ -1947,12 +2100,11 @@ mod tests {
         let mut batch = StoreBatch::new(writer.store());
         let mut state = writer.new_spore_batch_state();
         writer
-            .insert_spore_cell(
+            .insert_did_ckb_cell(
                 &make_parsed_did(&spore_id, &owner),
                 &tx_hash,
                 0,
                 100,
-                100_000,
                 &mut batch,
                 &mut state,
             )
@@ -1990,23 +2142,21 @@ mod tests {
         let mut batch = StoreBatch::new(writer.store());
         let mut state = writer.new_spore_batch_state();
         writer
-            .insert_spore_cell(
+            .insert_did_ckb_cell(
                 &make_parsed_did(&[0x01; 32], &owner),
                 &[0xF1; 32],
                 0,
                 100,
-                100_000,
                 &mut batch,
                 &mut state,
             )
             .unwrap();
         writer
-            .insert_spore_cell(
+            .insert_did_ckb_cell(
                 &make_parsed_did(&[0x02; 32], &owner),
                 &[0xF2; 32],
                 1,
                 100,
-                100_000,
                 &mut batch,
                 &mut state,
             )
@@ -2035,12 +2185,11 @@ mod tests {
         let mut batch = StoreBatch::new(writer.store());
         let mut state = writer.new_spore_batch_state();
         writer
-            .insert_spore_cell(
+            .insert_did_ckb_cell(
                 &make_parsed_did(&spore_id, &owner),
                 &[0xF1; 32],
                 0,
                 100,
-                100_000,
                 &mut batch,
                 &mut state,
             )
@@ -2059,12 +2208,11 @@ mod tests {
         let mut batch = StoreBatch::new(writer.store());
         let mut state = writer.new_spore_batch_state();
         writer
-            .insert_spore_cell(
+            .insert_did_ckb_cell(
                 &make_parsed_did(&spore_id, &owner),
                 &[0xF3; 32],
                 0,
                 300,
-                300_000,
                 &mut batch,
                 &mut state,
             )
