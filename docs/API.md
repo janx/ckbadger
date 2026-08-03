@@ -182,7 +182,9 @@ output_index`; activity cursors encode `block_num:tx_idx`; spore/cluster list cu
 
 - `CursorPaginatedResponse<TransactionResponse>` / `TransactionResponse` — hash, block_number, fee, cycles
 - `TransactionDetailResponse` — full detail with `inputs`, `outputs`, witnesses, fee rate, confirmations
-- `Vec<CellDepResponse>` — out_point + dep_type
+- `Vec<CellDepResponse>` — out_point + dep_type. Fail-fast: `500` when the CKB RocksDB reader is
+  unavailable (the endpoint's only data source), `400` for a pending/proposed mempool tx, `404`
+  when the tx exists nowhere — never a silent `200 []` for those states
 - `CyclesStatusResponse` (from `crate::cycles`) — status, cycles, error
 - `TransactionLifecycleResponse` — phase, proposal_id, `proposed_in`/`committed_in`, commitment_distance, `commitment_window: CommitmentWindow`
 

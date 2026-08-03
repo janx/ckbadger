@@ -506,3 +506,162 @@ async fn test_transaction_lifecycle_prefers_main_zone_over_uncle_in_same_block()
     assert_eq!(json["proposedIn"]["blockNumber"], 436);
     assert_eq!(json["proposedInUncle"], serde_json::Value::Null);
 }
+
+// ---------------------------------------------------------------------------
+// Audited bug (2026-08-01 night, agent E): /transactions/{hash}/cell-deps
+// answered `200 []` both when the CKB RocksDB reader was unavailable and when
+// the transaction did not exist — a silent-empty shape that made "no deps",
+// "no reader", and "no such tx" indistinguishable. Fail-fast contract: reader
+// unavailable -> 5xx with context; tx nonexistent -> 404.
+// ---------------------------------------------------------------------------
+
+fn unknown_transaction_rpc_response() -> serde_json::Value {
+    serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+            "transaction": null,
+            "cycles": null,
+            "fee": null,
+            "min_replace_fee": null,
+            "time_added_to_pool": null,
+            "tx_status": {
+                "status": "unknown",
+                "block_hash": null,
+                "block_number": null,
+                "reason": null
+            }
+        }
+    })
+}
+
+async fn mount_unknown_transaction_rpc(server: &MockServer) {
+    Mock::given(method("POST"))
+        .and(body_partial_json(
+            serde_json::json!({ "method": "get_transaction" }),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(unknown_transaction_rpc_response()))
+        .mount(server)
+        .await;
+}
+
+#[tokio::test]
+async fn test_cell_deps_nonexistent_tx_returns_404() {
+    let store = test_store();
+    let server = MockServer::start().await;
+    mount_unknown_transaction_rpc(&server).await;
+    let hash = format!("0x{}", "ee".repeat(32));
+
+    let mut config = test_config(store);
+    config.ckb_rpc_url = server.uri();
+    let app = create_router(config).await;
+
+    let (status, json) = get_json(&app, &format!("/transactions/{hash}/cell-deps")).await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "a transaction unknown to both the CKB store and the node must 404, not answer a silent `200 []`, got {json}"
+    );
+    assert!(
+        json["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("Transaction not found"),
+        "got {json}"
+    );
+}
+
+#[tokio::test]
+async fn test_cell_deps_without_ckb_store_is_5xx_not_silent_empty() {
+    let store = test_store();
+    // The RPC mock reports the tx as unknown so the OLD code path (RPC lookup
+    // then `ok(vec![])`) observably produced `200 []` here rather than failing
+    // on an unreachable RPC endpoint.
+    let server = MockServer::start().await;
+    mount_unknown_transaction_rpc(&server).await;
+
+    // A CKB DB path that does not exist: the reader cannot open, so the
+    // endpoint has no data source at all.
+    let missing_path =
+        std::env::temp_dir().join(format!("ckbadger-missing-ckb-db-{}", Uuid::new_v4()));
+    let mut config = test_config_with_ckb_db_path(
+        store.clone(),
+        store,
+        missing_path.to_string_lossy().to_string(),
+        None,
+    );
+    config.ckb_rpc_url = server.uri();
+    let app = create_router(config).await;
+
+    let (status, json) = get_json(
+        &app,
+        &format!("/transactions/0x{}/cell-deps", "ee".repeat(32)),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "no CKB RocksDB reader means the endpoint has no data source: loud 5xx, never a silent `200 []`, got {json}"
+    );
+    assert!(
+        json["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("CKB RocksDB reader"),
+        "error must name the unavailable reader, got {json}"
+    );
+}
+
+#[tokio::test]
+async fn test_cell_deps_committed_tx_returns_deps_from_ckb_store() {
+    use ckb_types::prelude::*;
+
+    let store = test_store();
+
+    let dep_tx_hash = [0xAB; 32];
+    let tx = ckb_types::core::TransactionBuilder::default()
+        .cell_dep(
+            ckb_types::packed::CellDep::new_builder()
+                .out_point(
+                    ckb_types::packed::OutPoint::new_builder()
+                        .tx_hash(ckb_types::packed::Byte32::new(dep_tx_hash))
+                        .index(1u32.pack())
+                        .build(),
+                )
+                .dep_type(ckb_types::core::DepType::DepGroup.into())
+                .build(),
+        )
+        .build();
+    let tx_hash: [u8; 32] = tx.hash().unpack();
+
+    let epoch = ckb_types::core::EpochNumberWithFraction::new(1, 0, 1800);
+    let block = ckb_types::core::BlockBuilder::default()
+        .number(77u64.pack())
+        .epoch(epoch.pack())
+        .transaction(tx)
+        .build();
+    let chain = seed_ckb_chain(&[block]);
+
+    let config = test_config_with_ckb_db_path(
+        store.clone(),
+        store,
+        chain.path.clone(),
+        Some(chain.cleanup.clone()),
+    );
+    let app = create_router(config).await;
+
+    let (status, json) = get_json(
+        &app,
+        &format!("/transactions/0x{}/cell-deps", hex::encode(tx_hash)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "got {json}");
+    let deps = json.as_array().expect("cell deps array");
+    assert_eq!(deps.len(), 1);
+    assert_eq!(
+        deps[0]["outPointTxHash"],
+        format!("0x{}", hex::encode(dep_tx_hash))
+    );
+    assert_eq!(deps[0]["outPointIndex"], 1);
+    assert_eq!(deps[0]["depType"], "dep_group");
+}
