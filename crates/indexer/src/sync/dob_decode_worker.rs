@@ -25,9 +25,7 @@ use ckbadger_store::CkbadgerStore;
 
 use crate::media_store::{sniff_media_type, MediaBlobStore};
 
-use crate::parser::media_source::{
-    extract_uri_sources, parse_dna_hex_from_content_text, resolve_tier,
-};
+use crate::parser::media_source::{extract_uri_sources, parse_dna_hex_from_content, resolve_tier};
 use crate::parser::spore::SporeParser;
 use crate::rpc::{parse_hex_to_bytes, CkbRpcClient};
 use crate::sync::dob_decode_error::DobDecodeError;
@@ -515,13 +513,31 @@ async fn decode_single_spore(
         }
     })?;
 
-    let dna_hex = extract_dna_from_spore(spore_id, &ctx.store, &ctx.rpc_client).await?;
-
     let dob_obj = metadata
         .get("dob")
         .ok_or_else(|| DobDecodeError::ClusterMetadataInvalid {
             detail: "cluster metadata missing 'dob' field".to_string(),
         })?;
+
+    // Cluster metadata `dob.ver` is the dispatch authority for the protocol
+    // version (official server: types.rs unbox_dob). The spore's content_type
+    // serves only as a consistency cross-check, never as the dispatch source.
+    let dob_version = parse_dob_version_from_cluster(dob_obj).map_err(|e| {
+        DobDecodeError::ClusterMetadataInvalid {
+            detail: e.to_string(),
+        }
+    })?;
+    if parse_dob_version_from_content_type(content_type) != Some(dob_version.number()) {
+        warn!(
+            spore_id = hex::encode(spore_id),
+            content_type,
+            cluster_ver = dob_version.number(),
+            "spore content_type version differs from cluster dob.ver — \
+             cluster metadata is authoritative"
+        );
+    }
+
+    let dna_hex = extract_dna_from_spore(spore_id, &ctx.store, &ctx.rpc_client).await?;
 
     let decoder_steps =
         parse_decoder_steps(dob_obj).map_err(|e| DobDecodeError::ClusterMetadataInvalid {
@@ -536,10 +552,8 @@ async fn decode_single_spore(
         });
     }
 
-    let dob_version = parse_dob_version(content_type);
-
     let decoded = tokio::task::spawn_blocking(move || match dob_version {
-        0 => {
+        DobVersion::V0 => {
             let Some(first_step) = resolved_steps.first() else {
                 return Err(anyhow::anyhow!("decoder chain is empty"));
             };
@@ -549,14 +563,13 @@ async fn decode_single_spore(
                 &first_step.pattern_json,
             )
         }
-        1 => {
+        DobVersion::V1 => {
             let decoders: Vec<(&[u8], &str)> = resolved_steps
                 .iter()
                 .map(|step| (step.binary.as_slice(), step.pattern_json.as_str()))
                 .collect();
             ckbadger_dob_decoder::decode_dob1_chain(&decoders, &dna_hex)
         }
-        v => Err(anyhow::anyhow!("unsupported DOB version: {v}")),
     })
     .await
     .map_err(|e| DobDecodeError::Internal(anyhow::anyhow!("CKB-VM spawn_blocking panicked: {e}")))?
@@ -694,7 +707,7 @@ async fn load_decoder_binary(
 /// 1. Look up the spore's outpoint (tx_hash, output_index) from the domain store.
 /// 2. Fetch the creation transaction via CKB RPC to obtain raw output data.
 /// 3. Parse the Spore molecule to extract the content field.
-/// 4. Decode the content as text and extract the DNA hex string.
+/// 4. Extract the DNA hex from the content bytes (raw-binary or text form).
 async fn extract_dna_from_spore(
     spore_id: &[u8],
     store: &CkbadgerStore,
@@ -725,8 +738,7 @@ async fn extract_dna_from_spore(
             }
         })?;
 
-    let content_text = String::from_utf8_lossy(&content_bytes);
-    parse_dna_hex_from_content_text(&content_text).ok_or_else(|| DobDecodeError::DnaInvalid {
+    parse_dna_hex_from_content(&content_bytes).ok_or_else(|| DobDecodeError::DnaInvalid {
         detail: "failed to extract DNA hex from spore content".to_string(),
     })
 }
@@ -785,16 +797,52 @@ fn verify_blake2b_hash(data: &[u8], expected_hash: &[u8]) -> Result<()> {
     Ok(())
 }
 
-/// Parse the DOB version from a content type string like "dob/0" or "dob/1".
-fn parse_dob_version(content_type: &str) -> u32 {
-    let normalized = content_type.trim().to_ascii_lowercase();
-    if let Some(rest) = normalized.strip_prefix("dob/") {
-        // Take just the version number, ignoring any parameters after ";"
-        let version_str = rest.split(';').next().unwrap_or("0").trim();
-        version_str.parse().unwrap_or(0)
-    } else {
-        0
+/// DOB protocol version. Dispatch is decided by cluster metadata `dob.ver`
+/// (the authority per the official server's `unbox_dob`), never by the
+/// spore's content_type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DobVersion {
+    V0,
+    V1,
+}
+
+impl DobVersion {
+    fn number(self) -> u64 {
+        match self {
+            DobVersion::V0 => 0,
+            DobVersion::V1 => 1,
+        }
     }
+}
+
+/// Parse the protocol version from the cluster metadata `dob` object.
+///
+/// Mirrors the official `ClusterDescriptionField::unbox_dob`: an absent (or
+/// null) `ver` means version 0; `0`/`1` select their version; anything else —
+/// an undefined version number or a non-integer value — is a loud error,
+/// never a silent default.
+fn parse_dob_version_from_cluster(dob: &Value) -> Result<DobVersion> {
+    match dob.get("ver") {
+        None | Some(Value::Null) => Ok(DobVersion::V0),
+        Some(ver) => match ver.as_u64() {
+            Some(0) => Ok(DobVersion::V0),
+            Some(1) => Ok(DobVersion::V1),
+            Some(other) => bail!(
+                "unsupported DOB version in cluster metadata: dob.ver={other} (only 0 and 1 are defined)"
+            ),
+            None => bail!("cluster metadata dob.ver is not an unsigned integer: {ver}"),
+        },
+    }
+}
+
+/// Version implied by a spore's content type ("dob/0" → 0, "dob/1" → 1,
+/// parameters after ';' ignored). Used only as a consistency cross-check
+/// against the cluster's authoritative `dob.ver`; unparseable types yield
+/// `None` — there is no silent default.
+fn parse_dob_version_from_content_type(content_type: &str) -> Option<u64> {
+    let normalized = content_type.trim().to_ascii_lowercase();
+    let rest = normalized.strip_prefix("dob/")?;
+    rest.split(';').next()?.trim().parse().ok()
 }
 
 /// Parse a DecoderRef from the DOB metadata's decoder entry.
@@ -968,14 +1016,81 @@ mod tests {
     use wiremock::matchers::{body_partial_json, method};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
+    /// Real mainnet cluster description of `0x0d3cdf07dd357d55795f09e04d8394
+    /// 5a6cf674e4dd5cc1e344c873d1c816740b` ("dob1-basic-shape"): declares
+    /// `dob.ver = 1` with a two-decoder chain, yet its spores (e.g.
+    /// `0x157f6a5782000f0c6a79e1709b7a425ef4347c4615e679c38f3f376ce9a781d6`)
+    /// carry content_type `dob/0`. The reference server decodes them as
+    /// dob/1 (three outputs incl. the rendered SVG) because the cluster is
+    /// the version authority.
+    const DOB1_BASIC_SHAPE_CLUSTER_DESCRIPTION: &str = r#"{"description":"This is a basic-shape example for dob1.","dob":{"ver":1,"decoders":[{"decoder":{"type":"code_hash","hash":"0x13cac78ad8482202f18f9df4ea707611c35f994375fa03ae79121312dda9925c"},"pattern":[["Shape","String",1,1,"options",["circle","square","triangle","star","text"]],["BackgroundColor","String",0,1,"options",["red","blue","green","yellow","pink"]]]},{"decoder":{"type":"code_hash","hash":"0xda3525549b72970b4c95f5b5749357f20d1293d335710b674f09c32f7d54b6dc"},"pattern":[["IMAGE.0","attributes","","raw","xmlns='http://www.w3.org/2000/svg' viewBox='0 0 500 500'"],["IMAGE.0","elements","BackgroundColor","options",[["red","<rect width='500' height='500' x='0' y='0' fill='red' />"],[["*"],"<rect width='500' height='500' x='0' y='0' fill='pink' />"]]]]}]}}"#;
+
     #[test]
-    fn test_parse_dob_version() {
-        assert_eq!(parse_dob_version("dob/0"), 0);
-        assert_eq!(parse_dob_version("dob/1"), 1);
-        assert_eq!(parse_dob_version("DOB/0"), 0);
-        assert_eq!(parse_dob_version("dob/0;charset=utf-8"), 0);
-        assert_eq!(parse_dob_version("dob/1;charset=utf-8"), 1);
-        assert_eq!(parse_dob_version("text/plain"), 0);
+    fn test_cluster_ver_is_dispatch_authority_over_content_type() {
+        let metadata: Value = serde_json::from_str(DOB1_BASIC_SHAPE_CLUSTER_DESCRIPTION).unwrap();
+        let dob = metadata.get("dob").unwrap();
+        // Cluster says dob/1 — dispatch must follow it ...
+        assert_eq!(parse_dob_version_from_cluster(dob).unwrap(), DobVersion::V1);
+        // ... even though the live spores in this cluster are typed dob/0.
+        assert_eq!(parse_dob_version_from_content_type("dob/0"), Some(0));
+    }
+
+    #[test]
+    fn test_parse_dob_version_from_cluster_absent_ver_is_v0() {
+        // Official unbox_dob: `Some(0) | None => V0`.
+        let absent: Value = serde_json::json!({ "decoder": {}, "pattern": [] });
+        assert_eq!(
+            parse_dob_version_from_cluster(&absent).unwrap(),
+            DobVersion::V0
+        );
+        let null: Value = serde_json::json!({ "ver": null });
+        assert_eq!(
+            parse_dob_version_from_cluster(&null).unwrap(),
+            DobVersion::V0
+        );
+        let zero: Value = serde_json::json!({ "ver": 0 });
+        assert_eq!(
+            parse_dob_version_from_cluster(&zero).unwrap(),
+            DobVersion::V0
+        );
+    }
+
+    #[test]
+    fn test_parse_dob_version_from_cluster_rejects_undefined_versions_loudly() {
+        let v2: Value = serde_json::json!({ "ver": 2 });
+        let err = parse_dob_version_from_cluster(&v2).unwrap_err();
+        assert!(err.to_string().contains("unsupported DOB version"));
+
+        let garbage: Value = serde_json::json!({ "ver": "abc" });
+        let err = parse_dob_version_from_cluster(&garbage).unwrap_err();
+        assert!(err.to_string().contains("not an unsigned integer"));
+
+        let negative: Value = serde_json::json!({ "ver": -1 });
+        let err = parse_dob_version_from_cluster(&negative).unwrap_err();
+        assert!(err.to_string().contains("not an unsigned integer"));
+
+        let fractional: Value = serde_json::json!({ "ver": 1.5 });
+        let err = parse_dob_version_from_cluster(&fractional).unwrap_err();
+        assert!(err.to_string().contains("not an unsigned integer"));
+    }
+
+    #[test]
+    fn test_parse_dob_version_from_content_type_has_no_silent_default() {
+        assert_eq!(parse_dob_version_from_content_type("dob/0"), Some(0));
+        assert_eq!(parse_dob_version_from_content_type("dob/1"), Some(1));
+        assert_eq!(parse_dob_version_from_content_type("DOB/0"), Some(0));
+        assert_eq!(
+            parse_dob_version_from_content_type("dob/0;charset=utf-8"),
+            Some(0)
+        );
+        assert_eq!(
+            parse_dob_version_from_content_type("dob/1;charset=utf-8"),
+            Some(1)
+        );
+        // Non-DOB and unparseable types must be None, never a silent 0.
+        assert_eq!(parse_dob_version_from_content_type("text/plain"), None);
+        assert_eq!(parse_dob_version_from_content_type("dob/abc"), None);
+        assert_eq!(parse_dob_version_from_content_type("dob/"), None);
     }
 
     #[test]
@@ -1349,6 +1464,79 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_extract_dna_from_spore_raw_binary_content_form() {
+        // Real testnet spore 0x9ca1e7fc9a89254d5438fb32d99aadce1c24cd1d4a49b7
+        // 35be9c13d8ceae9c9c ("Forgily Characters"), creation tx 0x05e84bc76e
+        // 29309216e10702258a6af92ae8fdfce8d53ca39b03ca3bf621c050 output 0.
+        // Its Spore content starts with 0x00: the official raw-binary DNA
+        // form (dob-decoder-standalone-server decode_spore_content), where
+        // the DNA is the hex of the bytes after the marker.
+        let spore_cell_data_hex = "0xc90000001000000019000000a500000005000000646f622f30880000000001034764640000f2761adf8466504b02a91a95abaecebf6cc43599c5fcbf2db8973d7b91fcc30c68747470733a2f2f6172746966616374732e666f7267696c792e636f6d2f696d6167655f6172746966616374732f65353832343962342d626136302d346231622d626231312d6662316133333935346666632e706e670000000000000000000020000000288433dccb8a5f13602f3c63d7f7e6b3f4d401bc8e7fd4c0055ce1ee2e5d86d1";
+        let expected_dna = "01034764640000f2761adf8466504b02a91a95abaecebf6cc43599c5fcbf2db8973d7b91fcc30c68747470733a2f2f6172746966616374732e666f7267696c792e636f6d2f696d6167655f6172746966616374732f65353832343962342d626136302d346231622d626231312d6662316133333935346666632e706e6700000000000000000000";
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        let spore_id =
+            hex::decode("9ca1e7fc9a89254d5438fb32d99aadce1c24cd1d4a49b735be9c13d8ceae9c9c")
+                .unwrap();
+        let tx_hash =
+            hex::decode("05e84bc76e29309216e10702258a6af92ae8fdfce8d53ca39b03ca3bf621c050")
+                .unwrap();
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_spore_outpoint(&tx_hash, 0, &spore_id);
+        batch.commit().unwrap();
+
+        let server = MockServer::start().await;
+        let tx_hash_hex = format!("0x{}", hex::encode(&tx_hash));
+        let dummy_lock = json!({
+            "code_hash": format!("0x{}", "11".repeat(32)),
+            "hash_type": "type",
+            "args": "0x"
+        });
+        Mock::given(method("POST"))
+            .and(body_partial_json(json!({
+                "method": "get_transaction",
+                "params": [tx_hash_hex.clone()]
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": {
+                    "transaction": {
+                        "hash": tx_hash_hex,
+                        "version": "0x0",
+                        "cell_deps": [],
+                        "header_deps": [],
+                        "inputs": [],
+                        "outputs": [
+                            {
+                                "capacity": "0x34e62ce00",
+                                "lock": dummy_lock,
+                                "type": null
+                            }
+                        ],
+                        "outputs_data": [spore_cell_data_hex],
+                        "witnesses": []
+                    },
+                    "tx_status": {
+                        "status": "committed",
+                        "block_hash": null,
+                        "block_number": null
+                    }
+                }
+            })))
+            .mount(&server)
+            .await;
+
+        let rpc_client = CkbRpcClient::new(server.uri());
+        let dna = extract_dna_from_spore(&spore_id, &store, &rpc_client)
+            .await
+            .expect("raw-binary DNA form must be extractable");
+        assert_eq!(dna, expected_dna);
+    }
+
+    #[tokio::test]
     async fn test_extract_dna_from_spore_no_outpoints() {
         let dir = tempfile::tempdir().unwrap();
         let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
@@ -1508,6 +1696,59 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_decode_single_spore_rejects_unknown_cluster_version_loudly() {
+        use super::super::dob_decode_error::DobDecodeError;
+        use ckbadger_store::types::{ObjectEntry, ObjectExtra, ObjectStandard};
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+        let decoder_cache = Arc::new(DecoderBinaryCache::new(&dir.path().join("cache")).unwrap());
+        let media_store = Arc::new(MediaBlobStore::new(dir.path().join("media")));
+        let ctx = DecodeContext {
+            store: store.clone(),
+            append_only_store: store.clone(),
+            decoder_cache,
+            media_store,
+            rpc_client: CkbRpcClient::new("http://localhost:9999"),
+        };
+
+        // A cluster declaring dob.ver = 2 — undefined by the protocol (the
+        // official unbox_dob returns DOBVersionNumberUndefined). Must be a
+        // deterministic loud metadata failure, never silently decoded as the
+        // content_type's version.
+        let cluster_id = vec![0x11u8; 32];
+        let cluster = ObjectEntry {
+            standard: ObjectStandard::SporeCluster,
+            collection_id: None,
+            token_id: None,
+            owner_lock_hash: Some(vec![0x22; 32]),
+            name: None,
+            description: Some(
+                r#"{"description":"x","dob":{"ver":2,"decoders":[{"decoder":{"type":"code_hash","hash":"0x13cac78ad8482202f18f9df4ea707611c35f994375fa03ae79121312dda9925c"},"pattern":[["A","String",0,1,"options",["a"]]]}]}}"#
+                    .to_string(),
+            ),
+            is_live: true,
+            created_at_block: 1,
+            created_at_tx: vec![0x33; 32],
+            extra: ObjectExtra::SporeCluster,
+        };
+        store.put_spore_direct(&cluster_id, &cluster).unwrap();
+
+        let spore_id = [0x44u8; 32];
+        let err = decode_single_spore(&spore_id, "dob/0", Some(&cluster_id), &ctx)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, DobDecodeError::ClusterMetadataInvalid { .. }),
+            "undefined cluster dob.ver must be a deterministic metadata failure, got: {err}"
+        );
+        assert!(
+            err.to_string().contains("unsupported DOB version"),
+            "error must name the version problem, got: {err}"
+        );
+    }
+
+    #[tokio::test]
     async fn test_worker_records_deterministic_failure_and_stops_relisting() {
         use ckbadger_store::types::{
             CompositionTier, DecodeOutcome, ObjectEntry, ObjectExtra, ObjectStandard,
@@ -1588,8 +1829,9 @@ mod tests {
             shutdown,
         );
 
-        // A real cluster with a valid-JSON description, so decode gets PAST
-        // ClusterNotFound / ClusterMetadataInvalid and actually reaches
+        // A real cluster with a dob-valid description, so decode gets PAST
+        // ClusterNotFound / ClusterMetadataInvalid (incl. the version check,
+        // which now runs before any RPC) and actually reaches
         // extract_dna_from_spore (where the transient fault occurs).
         let cluster_id = vec![0x11u8; 32];
         let cluster = ObjectEntry {
@@ -1598,7 +1840,10 @@ mod tests {
             token_id: None,
             owner_lock_hash: Some(vec![0x22; 32]),
             name: None,
-            description: Some("{}".to_string()),
+            description: Some(
+                r#"{"description":"x","dob":{"ver":0,"decoder":{"type":"code_hash","hash":"0x13cac78ad8482202f18f9df4ea707611c35f994375fa03ae79121312dda9925c"},"pattern":[["A","String",0,1,"options",["a"]]]}}"#
+                    .to_string(),
+            ),
             is_live: true,
             created_at_block: 1,
             created_at_tx: vec![0x33; 32],

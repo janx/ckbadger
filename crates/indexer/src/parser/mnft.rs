@@ -199,7 +199,9 @@ impl MnftParser {
         }
 
         let class_id = args[..24].to_vec();
-        let token_index = u32::from_le_bytes(args[24..28].try_into().ok()?);
+        // Official contract (nervina-labs/ckb-nft-scripts helper.rs
+        // parse_type_args_id) decodes the 4-byte token id big-endian.
+        let token_index = u32::from_be_bytes(args[24..28].try_into().ok()?);
 
         let data = parse_hex_to_bytes(data_hex);
         let token_data = Self::parse_token_data(&data)?;
@@ -236,7 +238,8 @@ impl MnftParser {
             token_id: args.clone(),
             type_script_hash: cell.type_script_hash.clone()?,
             class_id: args[..24].to_vec(),
-            token_index: u32::from_le_bytes(args[24..28].try_into().ok()?),
+            // Big-endian per the official contract's parse_type_args_id.
+            token_index: u32::from_be_bytes(args[24..28].try_into().ok()?),
             characteristic: token_data.characteristic,
             configure: token_data.configure,
             state: token_data.state,
@@ -425,9 +428,12 @@ mod tests {
         }
     }
 
+    // On-chain mNFT type args encode class index and token index big-endian
+    // (contract parse_type_args_id uses u32::from_be_bytes); fixtures must
+    // fabricate the same byte order as real chain data.
     fn create_class_type_script(issuer_id: &[u8], class_id: u32) -> Script {
         let mut args = issuer_id.to_vec();
-        args.extend_from_slice(&class_id.to_le_bytes());
+        args.extend_from_slice(&class_id.to_be_bytes());
         Script {
             code_hash: MNFT_CLASS_CODE_HASH.to_string(),
             hash_type: "type".to_string(),
@@ -437,7 +443,7 @@ mod tests {
 
     fn create_token_type_script(class_id: &[u8], token_index: u32) -> Script {
         let mut args = class_id.to_vec();
-        args.extend_from_slice(&token_index.to_le_bytes());
+        args.extend_from_slice(&token_index.to_be_bytes());
         Script {
             code_hash: MNFT_TOKEN_CODE_HASH.to_string(),
             hash_type: "type".to_string(),
@@ -593,7 +599,7 @@ mod tests {
     fn test_parse_class_cell_with_extended_args_uses_first_24_bytes() {
         let issuer_id = [0xcd; 20];
         let mut args = issuer_id.to_vec();
-        args.extend_from_slice(&7u32.to_le_bytes());
+        args.extend_from_slice(&7u32.to_be_bytes());
         args.extend_from_slice(&[0xaa, 0xbb, 0xcc, 0xdd]); // extension bytes
 
         let output = CellOutput {
@@ -618,7 +624,7 @@ mod tests {
     fn test_parse_token_cell() {
         let issuer_id = [0xab; 20];
         let mut class_id = issuer_id.to_vec();
-        class_id.extend_from_slice(&3u32.to_le_bytes());
+        class_id.extend_from_slice(&3u32.to_be_bytes());
 
         let output = CellOutput {
             capacity: "0x174876e800".to_string(),
@@ -645,7 +651,7 @@ mod tests {
     fn test_parse_token_parsed_cell_matches_raw_path() {
         let issuer_id = [0xab; 20];
         let mut class_id = issuer_id.to_vec();
-        class_id.extend_from_slice(&3u32.to_le_bytes());
+        class_id.extend_from_slice(&3u32.to_be_bytes());
 
         let output = CellOutput {
             capacity: "0x174876e800".to_string(),
@@ -772,7 +778,7 @@ mod tests {
     fn test_parse_tokens_with_output_indices_preserves_real_output_index() {
         let issuer_id = [0xab; 20];
         let mut class_id = issuer_id.to_vec();
-        class_id.extend_from_slice(&3u32.to_le_bytes());
+        class_id.extend_from_slice(&3u32.to_be_bytes());
 
         let non_mnft_output = CellOutput {
             capacity: "0x174876e800".to_string(),
@@ -865,6 +871,45 @@ mod tests {
             parsed[0].0, 2,
             "issuer at output index 2 must preserve real index, not 0"
         );
+    }
+
+    #[test]
+    fn test_parse_token_index_big_endian_real_chain_args() {
+        // Real mainnet mNFT token args (class "0x8f67efedd50c61c9dd332defd4051f08
+        // a02d797700000014"): the official contract decodes the trailing 4-byte
+        // token id big-endian (nervina-labs/ckb-nft-scripts
+        // script-utils/src/helper.rs parse_type_args_id -> u32::from_be_bytes).
+        // Little-endian misreads suffix 00000001 as 16777216.
+        let class_id_hex = "8f67efedd50c61c9dd332defd4051f08a02d797700000014";
+        for (index_suffix_hex, expected_index) in
+            [("00000000", 0u32), ("00000001", 1), ("00000002", 2)]
+        {
+            let output = CellOutput {
+                capacity: "0x174876e800".to_string(),
+                lock: create_lock_script(),
+                type_: Some(Script {
+                    code_hash: MNFT_TOKEN_CODE_HASH.to_string(),
+                    hash_type: "type".to_string(),
+                    args: format!("0x{class_id_hex}{index_suffix_hex}"),
+                }),
+            };
+            let data = create_token_data(&[0u8; 8], 0xc0, 0);
+            let data_hex = format!("0x{}", hex::encode(&data));
+
+            let raw = MnftParser::parse_token_cell(&output, &data_hex).expect("must parse");
+            assert_eq!(
+                raw.token_index, expected_index,
+                "token args suffix {index_suffix_hex} must decode big-endian"
+            );
+
+            let parsed_cell = crate::parser::cell::CellParser::parse_output(&output, &data_hex)
+                .expect("parsed cell");
+            let preparsed = MnftParser::parse_token_parsed_cell(&parsed_cell).expect("must parse");
+            assert_eq!(
+                preparsed.token_index, expected_index,
+                "parsed-cell path must decode big-endian too"
+            );
+        }
     }
 
     #[test]
