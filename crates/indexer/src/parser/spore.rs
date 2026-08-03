@@ -30,7 +30,6 @@ pub const CLUSTER_CODE_HASH_TESTNET_V1: &str =
 pub struct ParsedSporeCell {
     pub spore_id: Vec<u8>,
     pub type_script_hash: Vec<u8>,
-    pub is_did: bool,
     pub content_type: String,
     pub content: Vec<u8>,
     pub cluster_id: Option<Vec<u8>>,
@@ -52,18 +51,12 @@ pub struct ParsedClusterCell {
 pub struct SporeParser;
 
 impl SporeParser {
-    pub fn is_did_type_script(code_hash: &[u8]) -> bool {
-        crate::parser::registry::PROTOCOL_REGISTRY
-            .is(code_hash, crate::parser::registry::ProtocolScript::SporeDid)
-    }
-
+    /// Spore NFT type scripts only. did:ckb is an independent identity
+    /// protocol handled by `DidCkbParser`; it must never enter the Spore
+    /// object pipeline.
     pub fn is_spore_nft_type_script(code_hash: &[u8]) -> bool {
         crate::parser::registry::PROTOCOL_REGISTRY
             .is(code_hash, crate::parser::registry::ProtocolScript::SporeNft)
-    }
-
-    pub fn is_spore_type_script(code_hash: &[u8]) -> bool {
-        Self::is_spore_nft_type_script(code_hash) || Self::is_did_type_script(code_hash)
     }
 
     pub fn is_cluster_type_script(code_hash: &[u8]) -> bool {
@@ -74,9 +67,8 @@ impl SporeParser {
     pub fn parse_spore_cell(output: &CellOutput, data_hex: &str) -> Option<ParsedSporeCell> {
         let type_script = output.type_.as_ref()?;
         let type_code_hash = parse_hex_to_bytes(&type_script.code_hash);
-        let is_did = Self::is_did_type_script(&type_code_hash);
 
-        if !is_did && !Self::is_spore_nft_type_script(&type_code_hash) {
+        if !Self::is_spore_nft_type_script(&type_code_hash) {
             return None;
         }
 
@@ -84,26 +76,12 @@ impl SporeParser {
         let type_script_hash = ScriptParser::compute_script_hash(type_script);
         let owner_lock_hash = ScriptParser::compute_script_hash(&output.lock);
 
-        if is_did {
-            return Some(ParsedSporeCell {
-                spore_id,
-                type_script_hash,
-                is_did: true,
-                content_type: String::new(),
-                content: Vec::new(),
-                cluster_id: None,
-                owner_lock_hash,
-                media_profile: None,
-            });
-        }
-
         let data = parse_hex_to_bytes(data_hex);
         let spore_data = Self::parse_spore_data(&data)?;
 
         Some(ParsedSporeCell {
             spore_id,
             type_script_hash,
-            is_did: false,
             content_type: spore_data.content_type,
             content: spore_data.content,
             cluster_id: spore_data.cluster_id,
@@ -116,9 +94,8 @@ impl SporeParser {
         let type_code_hash = cell.type_code_hash.as_ref()?;
         let type_args = cell.type_args.as_ref()?;
         let type_script_hash = cell.type_script_hash.as_ref()?;
-        let is_did = Self::is_did_type_script(type_code_hash);
 
-        if !is_did && !Self::is_spore_nft_type_script(type_code_hash) {
+        if !Self::is_spore_nft_type_script(type_code_hash) {
             return None;
         }
 
@@ -126,24 +103,10 @@ impl SporeParser {
             return None;
         }
 
-        if is_did {
-            return Some(ParsedSporeCell {
-                spore_id: type_args.clone(),
-                type_script_hash: type_script_hash.clone(),
-                is_did: true,
-                content_type: String::new(),
-                content: Vec::new(),
-                cluster_id: None,
-                owner_lock_hash: cell.lock_script_hash.clone(),
-                media_profile: None,
-            });
-        }
-
         let spore_data = Self::parse_spore_data(&cell.data)?;
         Some(ParsedSporeCell {
             spore_id: type_args.clone(),
             type_script_hash: type_script_hash.clone(),
-            is_did: false,
             content_type: spore_data.content_type,
             content: spore_data.content,
             cluster_id: spore_data.cluster_id,
@@ -442,26 +405,29 @@ mod tests {
     }
 
     #[test]
-    fn test_is_spore_type_script() {
-        let spore_hash = parse_hex_to_bytes(SPORE_CODE_HASH_MAINNET_V2);
-        assert!(SporeParser::is_spore_type_script(&spore_hash));
+    fn test_is_spore_nft_type_script_excludes_bit_cell_and_did_ckb() {
+        use crate::parser::test_helpers::real_did_ckb;
 
-        let bit_cell_hash = parse_hex_to_bytes(BIT_CELL_CODE_HASH_MAINNET);
-        assert!(!SporeParser::is_spore_type_script(&bit_cell_hash));
-
-        let other_hash = parse_hex_to_bytes(
-            "0x0000000000000000000000000000000000000000000000000000000000000000",
-        );
-        assert!(!SporeParser::is_spore_type_script(&other_hash));
-    }
-
-    #[test]
-    fn test_is_spore_nft_type_script_excludes_bit_cell() {
         let spore_hash = parse_hex_to_bytes(SPORE_CODE_HASH_MAINNET_V2);
         assert!(SporeParser::is_spore_nft_type_script(&spore_hash));
 
         let bit_cell_hash = parse_hex_to_bytes(BIT_CELL_CODE_HASH_MAINNET);
         assert!(!SporeParser::is_spore_nft_type_script(&bit_cell_hash));
+
+        // did:ckb is an independent identity protocol, never a Spore NFT.
+        for did_hash in [
+            real_did_ckb::TYPE_CODE_HASH_TESTNET,
+            real_did_ckb::TYPE_CODE_HASH_MAINNET,
+        ] {
+            assert!(!SporeParser::is_spore_nft_type_script(&parse_hex_to_bytes(
+                did_hash
+            )));
+        }
+
+        let other_hash = parse_hex_to_bytes(
+            "0x0000000000000000000000000000000000000000000000000000000000000000",
+        );
+        assert!(!SporeParser::is_spore_nft_type_script(&other_hash));
     }
 
     #[test]
@@ -476,59 +442,16 @@ mod tests {
     }
 
     #[test]
-    fn test_real_testnet_did_ckb_cell_classifies_as_did() {
+    fn test_real_did_ckb_cells_do_not_parse_as_spores() {
         use crate::parser::test_helpers::real_did_ckb;
 
-        // Registry maps docs/metadata/scripts/did-ckb.toml (slug "did-ckb") on
-        // both networks; the did classifier must fire for those code hashes.
-        let testnet = parse_hex_to_bytes(real_did_ckb::TYPE_CODE_HASH_TESTNET);
-        assert!(
-            SporeParser::is_did_type_script(&testnet),
-            "did:ckb testnet code_hash must classify as did"
-        );
-        let mainnet = parse_hex_to_bytes(real_did_ckb::TYPE_CODE_HASH_MAINNET);
-        assert!(
-            SporeParser::is_did_type_script(&mainnet),
-            "did:ckb mainnet code_hash must classify as did"
-        );
-    }
-
-    #[test]
-    fn test_real_testnet_did_ckb_cell_parses_item_id_from_args() {
-        use crate::parser::test_helpers::real_did_ckb;
-
-        // Live-path parse of the audited testnet cell 0x00290adc…:0
-        // (block 18082860): the identity item id is the full type-script args.
-        let (output, data_hex) = real_did_ckb::cell_32();
-        let parsed = SporeParser::parse_spore_cell(&output, data_hex)
-            .expect("real did:ckb cell must be classified by the live parse path");
-        assert!(parsed.is_did);
-        assert_eq!(
-            parsed.spore_id,
-            parse_hex_to_bytes(real_did_ckb::CELL_32_ARGS),
-            "item id must be the exact type-script args"
-        );
-        assert_eq!(parsed.owner_lock_hash.len(), 32);
-    }
-
-    #[test]
-    fn test_real_testnet_did_ckb_20_byte_args_cell_parses_in_bulk_path() {
-        use crate::parser::test_helpers::real_did_ckb;
-
-        // 31 of 421 live testnet did:ckb cells carry 20-byte args. The bulk
-        // (ParsedCell) path must classify them and preserve the exact 20-byte
-        // item id; a fixed 32-byte gate silently drops these real cells.
-        let (output, data_hex) = real_did_ckb::cell_20();
-        let parsed_cell = CellParser::parse_output(&output, data_hex).expect("parsed cell");
-        let parsed = SporeParser::parse_spore_parsed_cell(&parsed_cell)
-            .expect("real 20-byte-args did:ckb cell must be classified by the bulk parse path");
-        assert!(parsed.is_did);
-        let expected_id = parse_hex_to_bytes(real_did_ckb::CELL_20_ARGS);
-        assert_eq!(expected_id.len(), 20);
-        assert_eq!(
-            parsed.spore_id, expected_id,
-            "20-byte item id must be preserved verbatim"
-        );
+        // did:ckb identity cells are handled by DidCkbParser; the Spore object
+        // pipeline must reject them on both the live and bulk parse paths.
+        for (output, data_hex) in [real_did_ckb::cell_32(), real_did_ckb::cell_20()] {
+            assert!(SporeParser::parse_spore_cell(&output, data_hex).is_none());
+            let parsed_cell = CellParser::parse_output(&output, data_hex).expect("parsed cell");
+            assert!(SporeParser::parse_spore_parsed_cell(&parsed_cell).is_none());
+        }
     }
 
     #[test]
@@ -536,8 +459,8 @@ mod tests {
         let t = parse_hex_to_bytes(
             "0x0b1f412fbae26853ff7d082d422c2bdd9e2ff94ee8aaec11240a5b34cc6e890f",
         );
-        assert!(!SporeParser::is_did_type_script(&t));
-        assert!(!SporeParser::is_spore_type_script(&t));
+        assert!(!crate::parser::did_ckb::DidCkbParser::is_type_script(&t));
+        assert!(!SporeParser::is_spore_nft_type_script(&t));
     }
 
     #[test]
@@ -670,7 +593,6 @@ mod tests {
 
         let parsed = SporeParser::parse_spore_parsed_cell(&parsed_cell).expect("spore facts");
 
-        assert!(!parsed.is_did);
         assert_eq!(parsed.spore_id.len(), 32);
         assert_eq!(parsed.content_type, "image/png");
         assert_eq!(parsed.content, b"fake png data");

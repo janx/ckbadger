@@ -26,7 +26,7 @@ fn code_hashes() -> &'static CodeHashes {
 enum AssetKind {
     Udt,
     Dao,
-    SporeDid,
+    DidCkb,
     Spore,
     Cluster,
     MnftToken,
@@ -62,7 +62,10 @@ impl CodeHashes {
             let kind = match protocol {
                 ProtocolScript::Sudt | ProtocolScript::Xudt => continue,
                 ProtocolScript::Dao => AssetKind::Dao,
-                ProtocolScript::SporeDid => AssetKind::SporeDid,
+                ProtocolScript::DidCkb => AssetKind::DidCkb,
+                // Legacy variant: no metadata slug maps to it, and did:ckb has
+                // its own identity above — it must never classify here.
+                ProtocolScript::SporeDid => continue,
                 ProtocolScript::SporeNft => AssetKind::Spore,
                 ProtocolScript::Cluster => AssetKind::Cluster,
                 ProtocolScript::MnftToken => AssetKind::MnftToken,
@@ -720,7 +723,7 @@ fn classify_input<'a>(
                 accum.dao_withdraw_completes.push((capacity, compensation));
             }
         }
-        Some(AssetKind::SporeDid) => {
+        Some(AssetKind::DidCkb) => {
             if let Some(args) = type_args {
                 if !args.is_empty() {
                     accum.did_ckb_inputs.push(args);
@@ -828,7 +831,7 @@ fn classify_output<'a>(
                 }
             }
         }
-        Some(AssetKind::SporeDid) => {
+        Some(AssetKind::DidCkb) => {
             if let Some(args) = type_args {
                 if !args.is_empty() {
                     accum.did_ckb_outputs.push(args);

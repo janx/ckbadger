@@ -24,8 +24,8 @@ use crate::db::writer::object_activity_acc::ObjectCollectionActivityAccumulator;
 use crate::db::writer::DaoSnapshotBoundary;
 use crate::db::{BatchWriter, DaoWithdrawalContext};
 use crate::parser::{
-    BitCellParser, BlockParser, CellParser, DaoParser, DotbitParser, MnftParser, ScriptParser,
-    SporeParser, TransactionParser, UdtParser,
+    BitCellParser, BlockParser, CellParser, DaoParser, DidCkbParser, DotbitParser, MnftParser,
+    ScriptParser, SporeParser, TransactionParser, UdtParser,
 };
 
 use crate::rpc::{BlockResponseWithCycles, CkbRpcClient};
@@ -2437,9 +2437,7 @@ impl Indexer {
                                         .and_then(|type_code_hash| {
                                             if BitCellParser::is_type_script(type_code_hash) {
                                                 Some(BIT_CELL_SENTINEL_COLLECTION.as_slice())
-                                            } else if SporeParser::is_did_type_script(
-                                                type_code_hash,
-                                            ) {
+                                            } else if DidCkbParser::is_type_script(type_code_hash) {
                                                 Some(DID_CKB_SENTINEL_COLLECTION.as_slice())
                                             } else {
                                                 None
@@ -2484,7 +2482,8 @@ impl Indexer {
                                     .or_else(|| batch_cell_infos.get(&key))
                                 {
                                     if let Some(tch) = info.type_code_hash.as_ref() {
-                                        if SporeParser::is_spore_type_script(tch)
+                                        if SporeParser::is_spore_nft_type_script(tch)
+                                            || DidCkbParser::is_type_script(tch)
                                             || BitCellParser::is_type_script(tch)
                                         {
                                             bail!(
@@ -2628,33 +2627,54 @@ impl Indexer {
                             &mut data_batch,
                             &mut spore_state,
                         )?;
-                        if spore.is_did {
-                            identity_activity_acc.record(
-                                &DID_CKB_SENTINEL_COLLECTION,
-                                &tx_data.hash,
-                                &spore.spore_id,
-                                &parsed.hash,
+                        let cid = spore
+                            .cluster_id
+                            .as_deref()
+                            .unwrap_or(&SOLE_SPORES_SENTINEL_COLLECTION);
+                        object_activity_acc.record(
+                            cid,
+                            &tx_data.hash,
+                            &spore.spore_id,
+                            &parsed.hash,
+                            parsed.number,
+                            checked_usize_to_i32(tx_idx, "tx_idx")?,
+                            ts_ms,
+                            true,
+                        );
+                    }
+                    for (output_index, ref did) in
+                        DidCkbParser::parse_did_cells_with_output_indices(tx)
+                    {
+                        let output_index_i16 = checked_usize_to_i16(
+                            output_index,
+                            "did:ckb output index while processing grouped blocks",
+                        )
+                        .map_err(|e| {
+                            anyhow!(
+                                "{}: block={}, tx_hash=0x{}",
+                                e,
                                 parsed.number,
-                                checked_usize_to_i32(tx_idx, "tx_idx")?,
-                                ts_ms,
-                                true,
-                            );
-                        } else {
-                            let cid = spore
-                                .cluster_id
-                                .as_deref()
-                                .unwrap_or(&SOLE_SPORES_SENTINEL_COLLECTION);
-                            object_activity_acc.record(
-                                cid,
-                                &tx_data.hash,
-                                &spore.spore_id,
-                                &parsed.hash,
-                                parsed.number,
-                                checked_usize_to_i32(tx_idx, "tx_idx")?,
-                                ts_ms,
-                                true,
-                            );
-                        }
+                                hex::encode(tx_data.hash)
+                            )
+                        })?;
+                        self.writer.insert_did_ckb_cell(
+                            did,
+                            &tx_data.hash,
+                            output_index_i16,
+                            parsed.number,
+                            &mut data_batch,
+                            &mut spore_state,
+                        )?;
+                        identity_activity_acc.record(
+                            &DID_CKB_SENTINEL_COLLECTION,
+                            &tx_data.hash,
+                            &did.did_id,
+                            &parsed.hash,
+                            parsed.number,
+                            checked_usize_to_i32(tx_idx, "tx_idx")?,
+                            ts_ms,
+                            true,
+                        );
                     }
                     for bit_cell_output in BitCellParser::parse_cells(tx)? {
                         self.writer.insert_bit_cell(

@@ -112,15 +112,13 @@ impl BulkReducer for ObjectOwner {
                 entry.1 -= i128::from(input.occupied_capacity);
             }
             if let Some(CellProtocolFacts::Spore(spore)) = input.protocol_facts.as_ref() {
-                if !spore.is_did {
-                    self.record_spore_daily_delta(
-                        spore.spore_id.as_slice(),
-                        spore.cluster_id.as_ref().map(|id| id.as_slice()),
-                        date_yyyymmdd,
-                        -i128::from(input.capacity),
-                        -i128::from(input.occupied_capacity),
-                    );
-                }
+                self.record_spore_daily_delta(
+                    spore.spore_id.as_slice(),
+                    spore.cluster_id.as_ref().map(|id| id.as_slice()),
+                    date_yyyymmdd,
+                    -i128::from(input.capacity),
+                    -i128::from(input.occupied_capacity),
+                );
             }
             self.apply_input(input)?;
         }
@@ -136,15 +134,13 @@ impl BulkReducer for ObjectOwner {
                 entry.1 += i128::from(cell.occupied_capacity);
             }
             if let Some(CellProtocolFacts::Spore(spore)) = cell.protocol_facts.as_ref() {
-                if !spore.is_did {
-                    self.record_spore_daily_delta(
-                        spore.spore_id.as_slice(),
-                        spore.cluster_id.as_ref().map(|id| id.as_slice()),
-                        date_yyyymmdd,
-                        i128::from(cell.capacity),
-                        i128::from(cell.occupied_capacity),
-                    );
-                }
+                self.record_spore_daily_delta(
+                    spore.spore_id.as_slice(),
+                    spore.cluster_id.as_ref().map(|id| id.as_slice()),
+                    date_yyyymmdd,
+                    i128::from(cell.capacity),
+                    i128::from(cell.occupied_capacity),
+                );
             }
             self.apply_output(
                 cell,
@@ -609,9 +605,7 @@ impl ObjectOwner {
         };
 
         match protocol {
-            CellProtocolFacts::Spore(spore) if spore.is_did => {
-                self.consume_did(spore.spore_id.as_slice())
-            }
+            CellProtocolFacts::DidCkb(did) => self.consume_did(did.did_id.as_slice()),
             CellProtocolFacts::Spore(spore) => self.consume_spore(spore.spore_id.as_slice()),
             CellProtocolFacts::MnftIssuer(issuer) => self.consume_mnft_issuer(&issuer.issuer_id),
             CellProtocolFacts::MnftClass(class) => self.consume_mnft_class(&class.class_id),
@@ -637,9 +631,7 @@ impl ObjectOwner {
 
         match protocol {
             CellProtocolFacts::Cluster(cluster) => self.insert_cluster(cluster, cell, ctx, tx),
-            CellProtocolFacts::Spore(spore) if spore.is_did => {
-                self.insert_did(spore, cell, ctx, tx)
-            }
+            CellProtocolFacts::DidCkb(did) => self.insert_did(did, cell, ctx, tx),
             CellProtocolFacts::Spore(spore) => self.insert_spore(
                 spore,
                 cell,
@@ -737,12 +729,27 @@ impl ObjectOwner {
 
     fn insert_did(
         &mut self,
-        did: &crate::sync::bulk_build::facts::SporeProtocolFacts,
+        did: &crate::sync::bulk_build::facts::DidCkbProtocolFacts,
         cell: &CellFacts,
         ctx: &ReducerContext<'_>,
         tx: &ResolvedTxFacts<'_>,
     ) -> Result<()> {
-        let did_id = did.spore_id.to_vec();
+        let did_id = did.did_id.clone();
+        // Same guard as the live writer, checked before any state mutation so
+        // live and bulk cannot disagree about which cells are indexable.
+        let output_index = i16::try_from(cell.outpoint.index).map_err(|_| {
+            anyhow!(
+                "did:ckb outpoint index exceeds i16: outpoint=0x{}:{}",
+                hex::encode(cell.outpoint.tx_hash),
+                cell.outpoint.index
+            )
+        })?;
+        crate::db::writer::ensure_outpoint_indexable_item_id(
+            &did_id,
+            "did:ckb",
+            &cell.outpoint.tx_hash,
+            output_index,
+        )?;
         let owner_lock = ctx.resolve_identity(cell.lock_script_hash_id).to_vec();
         let existing = self.identities.get(&did_id).cloned();
         let was_live = existing.as_ref().is_some_and(|entry| entry.is_live);
@@ -2461,9 +2468,7 @@ fn classify_nft_collection_from_protocol(
         CellProtocolFacts::MnftToken(token) => Some(token.class_id.clone()),
         CellProtocolFacts::Dotbit(_) => Some(DOTBIT_SENTINEL_COLLECTION.to_vec()),
         CellProtocolFacts::BitCell(_) => Some(BIT_CELL_SENTINEL_COLLECTION.to_vec()),
-        CellProtocolFacts::Spore(spore) if spore.is_did => {
-            Some(DID_CKB_SENTINEL_COLLECTION.to_vec())
-        }
+        CellProtocolFacts::DidCkb(_) => Some(DID_CKB_SENTINEL_COLLECTION.to_vec()),
         _ => None,
     }
 }
@@ -2857,9 +2862,10 @@ mod tests {
     };
     use crate::sync::bulk_build::build_object_collection_activity_rows;
     use crate::sync::bulk_build::facts::{
-        CellFacts, CellProtocolFacts, CellSemanticTag, ClusterProtocolFacts, DotbitProtocolFacts,
-        MnftClassProtocolFacts, MnftIssuerProtocolFacts, MnftTokenProtocolFacts, OutPointKey,
-        ResolvedInputFacts, ResolvedTxFacts, SporeProtocolFacts,
+        CellFacts, CellProtocolFacts, CellSemanticTag, ClusterProtocolFacts, DidCkbProtocolFacts,
+        DotbitProtocolFacts, MnftClassProtocolFacts, MnftIssuerProtocolFacts,
+        MnftTokenProtocolFacts, OutPointKey, ResolvedInputFacts, ResolvedTxFacts,
+        SporeProtocolFacts,
     };
     use crate::sync::bulk_build::unique_temp_test_dir;
     use crate::sync::types::InternId;
@@ -3115,6 +3121,75 @@ mod tests {
         ]
     }
 
+    /// Live/bulk parity for the item-id width guard: a real-shaped 20-byte
+    /// did:ckb item id must fail fast in the bulk reducer with the same
+    /// actionable context as the live writer, never be silently skipped.
+    #[test]
+    fn object_owner_rejects_did_ckb_item_id_not_representable_in_outpoint_index() {
+        use crate::parser::test_helpers::real_did_ckb;
+
+        let interner = IdentityInterner::default();
+        let lock = interner.intern_bytes(vec![0xcc; 32]);
+        let did_type_hash = interner.intern_bytes(vec![0x92; 32]);
+        let frozen = interner.snapshot_for_reads();
+        let ctx = ReducerContext::new(&frozen);
+
+        let did_id = crate::rpc::parse_hex_to_bytes(real_did_ckb::CELL_20_ARGS);
+        assert_eq!(did_id.len(), 20);
+        let tx_hash: [u8; 32] = crate::rpc::parse_hex_to_bytes(real_did_ckb::CELL_20_TX_HASH)
+            .try_into()
+            .expect("32-byte tx hash");
+
+        let tx = ResolvedTxFacts {
+            tx_hash,
+            block_number: 21_080_336,
+            block_hash: [0x80; 32],
+            timestamp_ms: 1_753_100_000_000,
+            block_dao_ar: 0,
+            tx_index: 0,
+            dotbit_action: None,
+            resolved_inputs: Vec::new(),
+            cells: vec![cell_facts! {
+                outpoint: OutPointKey::new(tx_hash, 0),
+                created_at_block: 21_080_336,
+                capacity: 521_00000000,
+                lock_script_hash_id: lock,
+                lock_code_hash_id: InternId::new(16),
+                lock_hash_type: 1,
+                lock_args_id: InternId::new(17),
+                type_script_hash_id: Some(did_type_hash),
+                type_code_hash_id: Some(InternId::new(18)),
+                type_hash_type: Some(1),
+                type_args_id: Some(InternId::new(19)),
+                occupied_capacity: 61_00000000,
+                data_size: 205,
+                data: Vec::new(),
+                data_hash: None,
+                udt_amount: None,
+                semantic_tag: CellSemanticTag::DidCkb,
+                dao_state: None,
+                protocol_facts: Some(CellProtocolFacts::DidCkb(DidCkbProtocolFacts {
+                    did_id: did_id.clone(),
+                })),
+            }]
+            .into(),
+        };
+
+        let mut owner = ObjectOwner::default();
+        let err = owner
+            .apply_tx(&tx, &ctx)
+            .expect_err("bulk reducer must fail fast on a non-representable item id");
+        let message = err.to_string();
+        assert!(
+            message.contains("not representable in the spore-outpoint reverse index"),
+            "error must name the constraint: {message}"
+        );
+        assert!(
+            message.contains(&hex::encode(&did_id)),
+            "error must name the offending item id: {message}"
+        );
+    }
+
     #[test]
     fn object_owner_materializes_spore_transfer_and_did_burn_without_db_reads() {
         let interner = crate::sync::bulk_build::interner::IdentityInterner::default();
@@ -3198,7 +3273,6 @@ mod tests {
                     dao_state: None,
                     protocol_facts: Some(CellProtocolFacts::Spore(SporeProtocolFacts {
                         spore_id,
-                        is_did: false,
                         content_type: "image/png".to_string(),
                         content: b"spore-content".to_vec(),
                         cluster_id: Some(cluster_id),
@@ -3221,14 +3295,10 @@ mod tests {
                     data: Vec::new(),
                     data_hash: None,
                     udt_amount: None,
-                    semantic_tag: CellSemanticTag::Spore,
+                    semantic_tag: CellSemanticTag::DidCkb,
                     dao_state: None,
-                    protocol_facts: Some(CellProtocolFacts::Spore(SporeProtocolFacts {
-                        spore_id: did_id,
-                        is_did: true,
-                        content_type: String::new(),
-                        content: Vec::new(),
-                        cluster_id: None,
+                    protocol_facts: Some(CellProtocolFacts::DidCkb(DidCkbProtocolFacts {
+                        did_id: did_id.to_vec(),
                     })),
                 },
             ]
@@ -3261,7 +3331,6 @@ mod tests {
                 dao_state: None,
                 protocol_facts: Some(CellProtocolFacts::Spore(SporeProtocolFacts {
                     spore_id,
-                    is_did: false,
                     content_type: "image/png".to_string(),
                     content: b"spore-content".to_vec(),
                     cluster_id: Some(cluster_id),
@@ -3288,7 +3357,6 @@ mod tests {
                 dao_state: None,
                 protocol_facts: Some(CellProtocolFacts::Spore(SporeProtocolFacts {
                     spore_id,
-                    is_did: false,
                     content_type: "image/png".to_string(),
                     content: b"spore-content".to_vec(),
                     cluster_id: Some(cluster_id),
@@ -3319,14 +3387,10 @@ mod tests {
                 type_code_hash_id: Some(InternId::new(18)),
                 type_hash_type: Some(1),
                 type_args_id: Some(InternId::new(19)),
-                semantic_tag: CellSemanticTag::Spore,
+                semantic_tag: CellSemanticTag::DidCkb,
                 dao_state: None,
-                protocol_facts: Some(CellProtocolFacts::Spore(SporeProtocolFacts {
-                    spore_id: did_id,
-                    is_did: true,
-                    content_type: String::new(),
-                    content: Vec::new(),
-                    cluster_id: None,
+                protocol_facts: Some(CellProtocolFacts::DidCkb(DidCkbProtocolFacts {
+                    did_id: did_id.to_vec(),
                 })),
             }],
             cells: Vec::new().into(),

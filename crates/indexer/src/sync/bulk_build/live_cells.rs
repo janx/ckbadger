@@ -235,6 +235,7 @@ fn protocol_facts_heap_bytes(facts: &CellProtocolFacts) -> u64 {
         CellProtocolFacts::Spore(facts) => {
             facts.content_type.capacity() as u64 + facts.content.capacity() as u64
         }
+        CellProtocolFacts::DidCkb(facts) => facts.did_id.capacity() as u64,
         CellProtocolFacts::Cluster(facts) => {
             string_bytes(&facts.name) + string_bytes(&facts.description)
         }

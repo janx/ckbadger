@@ -21,7 +21,7 @@ use crate::parser::transaction::TransactionParser;
 use crate::parser::udt::UdtStandard;
 use crate::parser::{
     dotbit::{may_contain_das_witness, parse_dotbit_witness_bundle, DotbitWitnessBundle},
-    BitCellParser, DotbitParser, MnftParser, SporeParser, UdtParser,
+    BitCellParser, DidCkbParser, DotbitParser, MnftParser, SporeParser, UdtParser,
 };
 use crate::rpc::BlockResponseWithCycles;
 use ckbadger_store::types::{DOTBIT_SENTINEL_COLLECTION, SOLE_SPORES_SENTINEL_COLLECTION};
@@ -165,7 +165,11 @@ pub(crate) fn classify_bulk_cell_semantic_tag(cell: &ParsedCell) -> CellSemantic
         return CellSemanticTag::Cluster;
     }
 
-    if SporeParser::is_spore_type_script(type_code_hash) {
+    if DidCkbParser::is_type_script(type_code_hash) {
+        return CellSemanticTag::DidCkb;
+    }
+
+    if SporeParser::is_spore_nft_type_script(type_code_hash) {
         return CellSemanticTag::Spore;
     }
 
@@ -210,7 +214,11 @@ pub(crate) fn classify_live_cell_semantic_tag(cell: &LiveCellInfo) -> CellSemant
         return CellSemanticTag::Cluster;
     }
 
-    if SporeParser::is_spore_type_script(type_code_hash) {
+    if DidCkbParser::is_type_script(type_code_hash) {
+        return CellSemanticTag::DidCkb;
+    }
+
+    if SporeParser::is_spore_nft_type_script(type_code_hash) {
         return CellSemanticTag::Spore;
     }
 
@@ -1963,16 +1971,14 @@ impl Indexer {
                                     }
                                     if DotbitParser::is_account_cell_type_script(type_code_hash)
                                         || MnftParser::is_token_type_script(type_code_hash)
-                                        || SporeParser::is_did_type_script(type_code_hash)
+                                        || DidCkbParser::is_type_script(type_code_hash)
                                     {
                                         let collection_id =
                                             if DotbitParser::is_account_cell_type_script(
                                                 type_code_hash,
                                             ) {
                                                 Some(DOTBIT_SENTINEL_COLLECTION.to_vec())
-                                            } else if SporeParser::is_did_type_script(
-                                                type_code_hash,
-                                            ) {
+                                            } else if DidCkbParser::is_type_script(type_code_hash) {
                                                 Some(DID_CKB_SENTINEL_COLLECTION.to_vec())
                                             } else if let Some(cached) =
                                                 object_type_index_cache.get(type_script_hash)
@@ -3119,26 +3125,41 @@ mod tests {
     #[test]
     fn bulk_semantic_tag_classifies_real_did_ckb_cells() {
         use crate::parser::cell::CellParser;
+        use crate::parser::dotbit::DotbitWitnessBundle;
         use crate::parser::test_helpers::real_did_ckb;
+        use crate::rpc::parse_hex_to_bytes;
+        use crate::sync::bulk_build::facts::parse_protocol_facts;
 
         // Real captured testnet did:ckb cells (32-byte and 20-byte args) must
-        // receive a did classification in bulk facts extraction; `Plain` means
-        // the whole identity pipeline is unreachable for them.
-        let (output_32, data_32) = real_did_ckb::cell_32();
-        let cell_32 = CellParser::parse_output(&output_32, data_32).expect("parsed cell 32");
-        assert_ne!(
-            classify_bulk_cell_semantic_tag(&cell_32),
-            CellSemanticTag::Plain,
-            "32-byte-args did:ckb cell must not classify as Plain"
-        );
+        // receive the DidCkb classification in bulk facts extraction; `Plain`
+        // means the whole identity pipeline is unreachable for them.
+        for ((output, data_hex), expected_args) in [
+            (real_did_ckb::cell_32(), real_did_ckb::CELL_32_ARGS),
+            (real_did_ckb::cell_20(), real_did_ckb::CELL_20_ARGS),
+        ] {
+            let cell = CellParser::parse_output(&output, data_hex).expect("parsed cell");
+            let tag = classify_bulk_cell_semantic_tag(&cell);
+            assert_eq!(
+                tag,
+                CellSemanticTag::DidCkb,
+                "real did:ckb cell must classify as DidCkb"
+            );
 
-        let (output_20, data_20) = real_did_ckb::cell_20();
-        let cell_20 = CellParser::parse_output(&output_20, data_20).expect("parsed cell 20");
-        assert_ne!(
-            classify_bulk_cell_semantic_tag(&cell_20),
-            CellSemanticTag::Plain,
-            "20-byte-args did:ckb cell must not classify as Plain"
-        );
+            let facts =
+                parse_protocol_facts(&cell, tag, &DotbitWitnessBundle::default(), &[0u8; 32], 0)
+                    .expect("protocol facts")
+                    .expect("did:ckb cell must produce protocol facts");
+            match facts {
+                CellProtocolFacts::DidCkb(did) => {
+                    assert_eq!(
+                        did.did_id,
+                        parse_hex_to_bytes(expected_args),
+                        "bulk facts must carry the exact args item id"
+                    );
+                }
+                other => panic!("expected DidCkb facts, got {other:?}"),
+            }
+        }
     }
 
     #[test]
@@ -3457,6 +3478,7 @@ mod tests {
                         | CellSemanticTag::Xudt
                         | CellSemanticTag::Dotbit
                         | CellSemanticTag::BitCell
+                        | CellSemanticTag::DidCkb
                         | CellSemanticTag::Mnft
                         | CellSemanticTag::Spore
                         | CellSemanticTag::Cluster
@@ -3613,7 +3635,6 @@ mod tests {
                 assert_eq!(spore.cluster_id, Some(cluster_id));
                 assert_eq!(spore.content_type, "image/png");
                 assert_eq!(spore.content, b"spore-content");
-                assert!(!spore.is_did);
             }
             other => panic!("expected spore facts, got {other:?}"),
         }

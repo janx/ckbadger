@@ -1054,6 +1054,50 @@ async fn test_assets_nft_collection_accepts_did_ckb_aliases() {
 }
 
 #[tokio::test]
+async fn test_assets_did_ckb_item_detail_supports_20_byte_item_ids() {
+    let store = test_store();
+    // Real live-testnet did:ckb item id (type-script args verbatim, 20 bytes):
+    // cell 0x1d43c10b...:0. 31 of 421 live testnet did:ckb cells carry
+    // 20-byte args, so the detail route must accept non-32-byte item ids.
+    let did_id = hex::decode("00ee044b93fab31c060417d159f9678b7cc154d4").unwrap();
+    assert_eq!(did_id.len(), 20);
+
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_identity(
+        &did_id,
+        &IdentityEntry {
+            standard: IdentityStandard::DidCkb,
+            owner_lock_hash: Some(vec![0x31; 32]),
+            name: None,
+            is_live: true,
+            created_at_block: 21_080_336,
+            created_at_tx: vec![0x91; 32],
+            extra: IdentityExtra::DidCkb,
+        },
+    );
+    batch.commit().unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/assets/identities/did/items/0x{}",
+            hex::encode(&did_id)
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["nftId"], format!("0x{}", hex::encode(&did_id)));
+    assert_eq!(json["standard"], "did_ckb");
+    assert_eq!(json["isLive"], true);
+    assert_eq!(json["createdAtBlock"], 21_080_336);
+}
+
+#[tokio::test]
 async fn test_assets_did_ckb_item_detail_and_activities() {
     let store = test_store();
     let did_id = [0xB7u8; 32];

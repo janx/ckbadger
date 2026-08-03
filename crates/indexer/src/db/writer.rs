@@ -82,6 +82,45 @@ impl BatchWriter {
     }
 }
 
+/// Guard for identity item ids that must be recorded in the spore-outpoint
+/// reverse index (`SPORE_OUTPOINT_BY_ID`).
+///
+/// Identity item ids are the type-script args verbatim and the identity store
+/// itself is width-agnostic (`CF_IDENTITY_DATA` and `identity_by_collection`
+/// both key on the raw id). The spore-outpoint reverse index, however, encodes
+/// a FIXED 32-byte id component, and it is what backs the per-item lifecycle
+/// (`/assets/identities/*/items/{id}/activities`).
+///
+/// Live testnet did:ckb holds real cells with 20-byte args (31 of 421 as of the
+/// 2026-08-01 audit), which that index cannot represent. Rather than silently
+/// dropping their lifecycle rows (the endpoint would return an empty history
+/// for a real item) or letting the key encoder's assert abort the process, this
+/// fails fast with the exact context needed to act on it. Widening the index
+/// key is a deliberate store-schema decision, not something to patch around
+/// here.
+pub(crate) fn ensure_outpoint_indexable_item_id(
+    item_id: &[u8],
+    protocol: &str,
+    tx_hash: &[u8],
+    output_index: i16,
+) -> anyhow::Result<()> {
+    const OUTPOINT_INDEX_ID_LEN: usize = 32;
+    if item_id.len() != OUTPOINT_INDEX_ID_LEN {
+        anyhow::bail!(
+            "{protocol} item id width is not representable in the spore-outpoint reverse index: \
+             item_id=0x{}, actual_len={}, required_len={}, tx=0x{}, output_index={} — \
+             the identity store keys ids verbatim, but SPORE_OUTPOINT_BY_ID encodes a fixed \
+             32-byte id; widening that key is a pending store-schema decision",
+            hex::encode(item_id),
+            item_id.len(),
+            OUTPOINT_INDEX_ID_LEN,
+            hex::encode(tx_hash),
+            output_index
+        );
+    }
+    Ok(())
+}
+
 pub mod activities;
 mod addresses;
 pub(crate) mod cell_distribution;

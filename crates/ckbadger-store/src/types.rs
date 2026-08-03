@@ -143,6 +143,7 @@ pub mod semantic_tags {
     pub const SPORE: u16 = 1 << 5;
     pub const CLUSTER: u16 = 1 << 6;
     pub const BIT_CELL: u16 = 1 << 7;
+    pub const DID_CKB: u16 = 1 << 8;
 }
 
 /// Aggregated cell statistics for a token.
