@@ -880,7 +880,10 @@ mod tests {
     #[test]
     fn dob_options_first_match_in_order_wins_including_wildcard() {
         let pattern = dob1_options_pattern(serde_json::json!([
-            [["*"], "<image href='http://fallback.example/fallback.png' />"],
+            [
+                ["*"],
+                "<image href='http://fallback.example/fallback.png' />"
+            ],
             ["rare", "<image href='btcfs://rareasseti0' />"]
         ]));
         let snippet = resolve_dob1_snippet(&pattern, &background_traits("rare")).unwrap();
@@ -892,7 +895,10 @@ mod tests {
         // ... and an exact match listed before the wildcard still wins.
         let pattern = dob1_options_pattern(serde_json::json!([
             ["rare", "<image href='btcfs://rareasseti0' />"],
-            [["*"], "<image href='http://fallback.example/fallback.png' />"]
+            [
+                ["*"],
+                "<image href='http://fallback.example/fallback.png' />"
+            ]
         ]));
         let snippet = resolve_dob1_snippet(&pattern, &background_traits("rare")).unwrap();
         assert!(snippet.contains("btcfs://rareasseti0"));
@@ -937,7 +943,10 @@ mod tests {
 
         // No option matches and no wildcard: no snippet.
         let pattern = dob1_options_pattern(serde_json::json!([["a", "<g id='a'/>"]]));
-        assert_eq!(resolve_dob1_snippet(&pattern, &background_traits("b")), None);
+        assert_eq!(
+            resolve_dob1_snippet(&pattern, &background_traits("b")),
+            None
+        );
     }
 
     fn dob0_pattern(pattern_type: &str, args: Option<serde_json::Value>) -> Dob0PatternElement {
@@ -1152,10 +1161,8 @@ mod tests {
         // 5614338efbebe1cc55148cb382d8a7561f1e37 content, byte-identical
         // regression for the existing text path.
         assert_eq!(
-            parse_dna_hex_from_content(
-                br#"{"id":2730,"dna":"72b50189f616a0143cdc035e924f5b58"}"#
-            )
-            .as_deref(),
+            parse_dna_hex_from_content(br#"{"id":2730,"dna":"72b50189f616a0143cdc035e924f5b58"}"#)
+                .as_deref(),
             Some("72b50189f616a0143cdc035e924f5b58")
         );
 

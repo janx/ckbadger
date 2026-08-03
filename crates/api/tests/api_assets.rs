@@ -3074,3 +3074,184 @@ async fn test_assets_round_trip_their_own_cursor_and_treat_empty_as_page_one() {
     );
     assert!(page2["nextCursor"].is_null());
 }
+
+/// Regression (Bug: spore-cluster ids accepted with permanently empty rows):
+/// /assets/objects/{collection_id}/items resolves spore clusters for its
+/// aggregate/total (CF_CLUSTER_AGG fallback) but sourced rows only from
+/// list_mnft_ids_by_collection, so a spore cluster returned correct totals
+/// with zero rows forever (live mainnet: "Chinese Mahjong"
+/// 0xc22de62b3933f741e203714a189a2f468779e384fa33307fb9902d11aa648080,
+/// total 138 / live 98 / recycled 40, data always []). Rows must come from
+/// the same source as /spore/clusters/{id}/spores and agree with totals.
+#[tokio::test]
+async fn test_object_collection_items_serves_spore_cluster_rows_matching_totals() {
+    let store = test_store();
+    let cluster_id = [0xC2u8; 32];
+    let cluster_id_hex = format!("0x{}", hex::encode(cluster_id));
+
+    store
+        .put_spore_direct(
+            &cluster_id,
+            &ObjectEntry {
+                standard: ObjectStandard::SporeCluster,
+                collection_id: None,
+                token_id: None,
+                owner_lock_hash: Some(vec![0x11; 32]),
+                name: Some("Test Mahjong".to_string()),
+                description: None,
+                is_live: true,
+                created_at_block: 100,
+                created_at_tx: vec![0x10; 32],
+                extra: ObjectExtra::SporeCluster,
+            },
+        )
+        .unwrap();
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_cluster_aggregate(
+        &cluster_id,
+        &ClusterAggregate {
+            total_count: 3,
+            live_count: 2,
+            owner_count: 2,
+            pure_ckb_count: 2,
+            ..Default::default()
+        },
+    );
+    batch.commit().unwrap();
+
+    // Three member spores: two live, one melted; distinct creation blocks so
+    // the (created_at_block DESC, id ASC) order is observable.
+    for (id_byte, block, is_live, name) in [
+        (0xA1u8, 300i64, true, "tile-one"),
+        (0xA2, 250, false, "tile-two"),
+        (0xA3, 200, true, "tile-three"),
+    ] {
+        store
+            .put_spore_direct(
+                &[id_byte; 32],
+                &ObjectEntry {
+                    standard: ObjectStandard::Spore,
+                    collection_id: Some(cluster_id.to_vec()),
+                    token_id: None,
+                    owner_lock_hash: Some(vec![id_byte; 32]),
+                    name: Some(name.to_string()),
+                    description: None,
+                    is_live,
+                    created_at_block: block,
+                    created_at_tx: vec![id_byte ^ 0xFF; 32],
+                    extra: ObjectExtra::Spore {
+                        content_type: "dob/0".to_string(),
+                        content_length: 8,
+                        media_profile: SporeMediaProfile {
+                            tier: CompositionTier::PureCkb,
+                            sources: vec![],
+                            issues: vec![],
+                        },
+                    },
+                },
+            )
+            .unwrap();
+    }
+
+    let app = create_router(test_config(store)).await;
+
+    // All items: rows must exist and agree with the aggregate total.
+    let (status, json) = get_json(
+        &app,
+        &format!("/assets/objects/{cluster_id_hex}/items?limit=20"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json["total"], 3);
+    let rows = json["data"].as_array().unwrap();
+    assert_eq!(
+        rows.len(),
+        3,
+        "spore-cluster rows must match the reported total, got {json}"
+    );
+    // Same order as /spore/clusters/{id}/spores: created_at_block DESC, id ASC.
+    assert_eq!(rows[0]["nftId"], format!("0x{}", hex::encode([0xA1u8; 32])));
+    assert_eq!(rows[1]["nftId"], format!("0x{}", hex::encode([0xA2u8; 32])));
+    assert_eq!(rows[2]["nftId"], format!("0x{}", hex::encode([0xA3u8; 32])));
+    assert_eq!(rows[0]["standard"], "spore");
+    assert_eq!(rows[0]["name"], "tile-one");
+    assert_eq!(rows[0]["isLive"], true);
+    assert_eq!(rows[1]["isLive"], false);
+    assert_eq!(
+        rows[0]["txHash"],
+        format!("0x{}", hex::encode([0xA1u8 ^ 0xFF; 32])),
+        "spore rows carry the creation tx like the spore endpoints"
+    );
+
+    // Status filters: rows and totals stay in agreement.
+    let (status, live) = get_json(
+        &app,
+        &format!("/assets/objects/{cluster_id_hex}/items?limit=20&status=live"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{live}");
+    assert_eq!(live["total"], 2);
+    assert_eq!(live["data"].as_array().unwrap().len(), 2);
+
+    let (status, recycled) = get_json(
+        &app,
+        &format!("/assets/objects/{cluster_id_hex}/items?limit=20&status=recycled"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{recycled}");
+    assert_eq!(recycled["total"], 1);
+    assert_eq!(recycled["data"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        recycled["data"][0]["nftId"],
+        format!("0x{}", hex::encode([0xA2u8; 32]))
+    );
+
+    // Search narrows rows (count-less response like the mNFT branch).
+    let (status, searched) = get_json(
+        &app,
+        &format!("/assets/objects/{cluster_id_hex}/items?limit=20&search=tile-three"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{searched}");
+    assert_eq!(searched["data"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        searched["data"][0]["nftId"],
+        format!("0x{}", hex::encode([0xA3u8; 32]))
+    );
+
+    // Pagination walks every row exactly once via the returned cursor.
+    let mut seen = Vec::new();
+    let mut cursor: Option<String> = None;
+    for _ in 0..10 {
+        let path = match &cursor {
+            Some(c) => format!("/assets/objects/{cluster_id_hex}/items?limit=1&cursor={c}"),
+            None => format!("/assets/objects/{cluster_id_hex}/items?limit=1"),
+        };
+        let (status, page) = get_json(&app, &path).await;
+        assert_eq!(status, StatusCode::OK, "{page}");
+        for row in page["data"].as_array().unwrap() {
+            seen.push(row["nftId"].as_str().unwrap().to_string());
+        }
+        match page["nextCursor"].as_str() {
+            Some(next) => cursor = Some(next.to_string()),
+            None => break,
+        }
+    }
+    assert_eq!(
+        seen,
+        vec![
+            format!("0x{}", hex::encode([0xA1u8; 32])),
+            format!("0x{}", hex::encode([0xA2u8; 32])),
+            format!("0x{}", hex::encode([0xA3u8; 32])),
+        ],
+        "cursor pagination must walk all spore rows exactly once"
+    );
+
+    // A malformed cursor on the spore branch is a 400, never an empty page 1.
+    let (status, _) = get_json(
+        &app,
+        &format!("/assets/objects/{cluster_id_hex}/items?limit=1&cursor=abc"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}

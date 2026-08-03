@@ -904,8 +904,7 @@ mod tests {
 
             let parsed_cell = crate::parser::cell::CellParser::parse_output(&output, &data_hex)
                 .expect("parsed cell");
-            let preparsed =
-                MnftParser::parse_token_parsed_cell(&parsed_cell).expect("must parse");
+            let preparsed = MnftParser::parse_token_parsed_cell(&parsed_cell).expect("must parse");
             assert_eq!(
                 preparsed.token_index, expected_index,
                 "parsed-cell path must decode big-endian too"

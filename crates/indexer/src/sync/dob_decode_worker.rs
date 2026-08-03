@@ -1030,10 +1030,7 @@ mod tests {
         let metadata: Value = serde_json::from_str(DOB1_BASIC_SHAPE_CLUSTER_DESCRIPTION).unwrap();
         let dob = metadata.get("dob").unwrap();
         // Cluster says dob/1 — dispatch must follow it ...
-        assert_eq!(
-            parse_dob_version_from_cluster(dob).unwrap(),
-            DobVersion::V1
-        );
+        assert_eq!(parse_dob_version_from_cluster(dob).unwrap(), DobVersion::V1);
         // ... even though the live spores in this cluster are typed dob/0.
         assert_eq!(parse_dob_version_from_content_type("dob/0"), Some(0));
     }

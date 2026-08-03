@@ -78,7 +78,10 @@ pub struct ListParams {
 
 /// Decoded position cursor for the spore/cluster lists, which page over
 /// `(created_at_block DESC, id ASC)`.
-type BlockIdCursor = (i64, Vec<u8>);
+pub(super) type BlockIdCursor = (i64, Vec<u8>);
+
+/// One row of the spore cache: `(spore_id, entry)`.
+pub(super) type SporeCacheRow = (Vec<u8>, ckbadger_store::ObjectEntry);
 
 /// Whether the row at `(block, id)` comes strictly after `cursor` in
 /// `(created_at_block DESC, id ASC)` order — i.e. belongs to the next page.
@@ -705,7 +708,7 @@ fn build_cluster_responses_from_cached_entries(
     clusters
 }
 
-fn load_spore_cache(
+pub(super) fn load_spore_cache(
     state: &AppState,
 ) -> Result<arc_swap::Guard<Arc<Option<SporeCache>>>, ApiRouteError> {
     let guard = state.spore_cache.load();
@@ -869,6 +872,59 @@ async fn get_cluster_activities(
     ))
 }
 
+/// Page over a cluster's member spores — the single row source shared by
+/// `/spore/clusters/{id}/spores` and `/assets/objects/{id}/items`.
+///
+/// `by_cluster` indices follow the cache's `(created_at_block DESC, id ASC)`
+/// total order and cover every member spore regardless of liveness. Resume
+/// happens strictly after the cursor row over the *full* index list (the
+/// resume point is a position, independent of any filter), and `matches` then
+/// selects the rows the caller wants. Returns up to `limit + 1` rows so the
+/// caller can detect "has more" and mint the next cursor.
+pub(super) fn select_cluster_spore_page<'a>(
+    cache: &'a SporeCache,
+    cluster_id: &[u8],
+    limit: usize,
+    cursor: Option<&BlockIdCursor>,
+    matches: impl Fn(&[u8], &ckbadger_store::ObjectEntry) -> bool,
+) -> Vec<&'a SporeCacheRow> {
+    let Some(indices) = cache.by_cluster.get(cluster_id) else {
+        return Vec::new();
+    };
+
+    let start = match cursor {
+        None => 0,
+        Some(cur) => indices
+            .iter()
+            .position(|&i| {
+                let (spore_id, entry) = &cache.all[i];
+                is_after_block_id_cursor(entry.created_at_block, spore_id, cur)
+            })
+            .unwrap_or(indices.len()),
+    };
+
+    indices[start..]
+        .iter()
+        .map(|&i| &cache.all[i])
+        .filter(|(spore_id, entry)| matches(spore_id, entry))
+        .take(limit + 1)
+        .collect()
+}
+
+/// Position key of a cluster member named by its spore id, for callers whose
+/// own cursor contract is a bare item id (`/assets/objects/{id}/items`).
+/// `None` means the id is not a member of this cluster.
+pub(super) fn find_cluster_spore_position(
+    cache: &SporeCache,
+    cluster_id: &[u8],
+    spore_id: &[u8],
+) -> Option<BlockIdCursor> {
+    cache.by_cluster.get(cluster_id)?.iter().find_map(|&i| {
+        let (id, entry) = &cache.all[i];
+        (id.as_slice() == spore_id).then(|| (entry.created_at_block, id.clone()))
+    })
+}
+
 /// Get spores by cluster — served from in-memory SporeCache (zero RocksDB reads).
 async fn get_spores_by_cluster(
     State(state): State<Arc<AppState>>,
@@ -883,32 +939,8 @@ async fn get_spores_by_cluster(
     let guard = load_spore_cache(&state)?;
     let cache = guard.as_ref().as_ref().unwrap();
 
-    // by_cluster indices follow the cache's (created_at_block DESC, id ASC)
-    // total order. Resume strictly after the cursor row (position over the
-    // full index list — liveness is irrelevant to the resume point), then
-    // filter to live spores.
-    let selected: Vec<_> = cache
-        .by_cluster
-        .get(&id)
-        .map(|indices| {
-            let start = match &cursor {
-                None => 0,
-                Some(cur) => indices
-                    .iter()
-                    .position(|&i| {
-                        let (spore_id, entry) = &cache.all[i];
-                        is_after_block_id_cursor(entry.created_at_block, spore_id, cur)
-                    })
-                    .unwrap_or(indices.len()),
-            };
-            indices[start..]
-                .iter()
-                .filter(|&&i| cache.all[i].1.is_live)
-                .take(limit + 1)
-                .map(|&i| &cache.all[i])
-                .collect()
-        })
-        .unwrap_or_default();
+    let selected =
+        select_cluster_spore_page(cache, &id, limit, cursor.as_ref(), |_, entry| entry.is_live);
 
     let has_more = selected.len() > limit;
     let page: Vec<_> = selected.into_iter().take(limit).collect();

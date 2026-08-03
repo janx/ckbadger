@@ -36,35 +36,58 @@ fn is_identity_sentinel(collection_id: &[u8]) -> bool {
         || collection_id == DID_CKB_SENTINEL_COLLECTION
 }
 
+/// Which store a collection's aggregate — and therefore its item rows — comes
+/// from. Resolved once by [`get_collection_aggregate`] so callers never have
+/// to re-derive the collection type from the normalised aggregate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ObjectCollectionSource {
+    /// `CF_IDENTITY_AGG` (.bit / bit-cell / did:ckb sentinels).
+    Identity,
+    /// `CF_MNFT_COLLECTION_AGG` (mNFT classes).
+    Mnft,
+    /// `CF_CLUSTER_AGG` (Spore/DOB clusters).
+    SporeCluster,
+}
+
+/// A collection aggregate together with the store it was resolved from.
+pub(super) struct ResolvedCollection {
+    pub(super) source: ObjectCollectionSource,
+    pub(super) aggregate: MnftCollectionAggregate,
+}
+
 /// Read the collection aggregate from the correct CF (identity vs object).
 ///
 /// Identity sentinel collections store aggregates in `CF_IDENTITY_AGG`;
-/// all other collections use `CF_MNFT_COLLECTION_AGG`.  The returned
-/// [`MnftCollectionAggregate`] is a normalised view so callers don't
-/// need to branch on the collection type.
+/// mNFT collections use `CF_MNFT_COLLECTION_AGG`; Spore/DOB clusters use
+/// `CF_CLUSTER_AGG`.  The returned [`MnftCollectionAggregate`] is a normalised
+/// view, and the accompanying [`ObjectCollectionSource`] tells callers which
+/// row source belongs to it.
 fn get_collection_aggregate(
     store: &CkbadgerStore,
     collection_id: &[u8],
-) -> anyhow::Result<Option<MnftCollectionAggregate>> {
+) -> anyhow::Result<Option<ResolvedCollection>> {
     if is_identity_sentinel(collection_id) {
         let opt = store.get_identity_collection_aggregate(collection_id)?;
         return Ok(opt.map(|id_agg| {
             use ckbadger_store::types::ObjectStandard;
-            MnftCollectionAggregate {
-                name: id_agg.name,
-                // ObjectStandard has no DotBit/DidCkb variants; Spore is a
-                // placeholder.  Display-level standard is resolved by
-                // resolve_collection_standard() using collection_id, not this field.
-                standard: match id_agg.standard {
-                    ckbadger_store::types::IdentityStandard::DotBit => ObjectStandard::Spore,
-                    ckbadger_store::types::IdentityStandard::BitCell => ObjectStandard::Spore,
-                    ckbadger_store::types::IdentityStandard::DidCkb => ObjectStandard::Spore,
+            ResolvedCollection {
+                source: ObjectCollectionSource::Identity,
+                aggregate: MnftCollectionAggregate {
+                    name: id_agg.name,
+                    // ObjectStandard has no DotBit/DidCkb variants; Spore is a
+                    // placeholder.  Display-level standard is resolved by
+                    // resolve_collection_standard() using collection_id, not this field.
+                    standard: match id_agg.standard {
+                        ckbadger_store::types::IdentityStandard::DotBit => ObjectStandard::Spore,
+                        ckbadger_store::types::IdentityStandard::BitCell => ObjectStandard::Spore,
+                        ckbadger_store::types::IdentityStandard::DidCkb => ObjectStandard::Spore,
+                    },
+                    total_count: id_agg.total_count,
+                    live_count: id_agg.live_count,
+                    holders_count: id_agg.holders_count,
+                    activities_count: id_agg.activities_count,
+                    ..Default::default()
                 },
-                total_count: id_agg.total_count,
-                live_count: id_agg.live_count,
-                holders_count: id_agg.holders_count,
-                activities_count: id_agg.activities_count,
-                ..Default::default()
             }
         }));
     }
@@ -73,24 +96,30 @@ fn get_collection_aggregate(
     // The unified /assets list includes both sources, so the detail endpoint
     // must be able to resolve IDs from either CF.
     if let Some(agg) = store.get_mnft_collection_aggregate(collection_id)? {
-        return Ok(Some(agg));
+        return Ok(Some(ResolvedCollection {
+            source: ObjectCollectionSource::Mnft,
+            aggregate: agg,
+        }));
     }
 
     // Fallback: Spore/DOB cluster from CF_CLUSTER_AGG
     if let Some(cluster) = store.get_cluster_aggregate(collection_id)? {
         use ckbadger_store::types::ObjectStandard;
-        return Ok(Some(MnftCollectionAggregate {
-            name: cluster.name,
-            standard: ObjectStandard::Spore,
-            total_count: cluster.total_count,
-            live_count: cluster.live_count,
-            holders_count: cluster.owner_count,
-            activities_count: 0,
-            btc_ckb_count: cluster.btc_ckb_count,
-            pure_ckb_count: cluster.pure_ckb_count,
-            decentralized_mixture_count: cluster.decentralized_mixture_count,
-            centralized_mixture_count: cluster.centralized_mixture_count,
-            unknown_count: cluster.unknown_count,
+        return Ok(Some(ResolvedCollection {
+            source: ObjectCollectionSource::SporeCluster,
+            aggregate: MnftCollectionAggregate {
+                name: cluster.name,
+                standard: ObjectStandard::Spore,
+                total_count: cluster.total_count,
+                live_count: cluster.live_count,
+                holders_count: cluster.owner_count,
+                activities_count: 0,
+                btc_ckb_count: cluster.btc_ckb_count,
+                pure_ckb_count: cluster.pure_ckb_count,
+                decentralized_mixture_count: cluster.decentralized_mixture_count,
+                centralized_mixture_count: cluster.centralized_mixture_count,
+                unknown_count: cluster.unknown_count,
+            },
         }));
     }
 
@@ -1829,7 +1858,9 @@ async fn get_object_collection(
 
     let agg = get_collection_aggregate(state.store.as_ref(), &collection_id_bytes)
         .map_err(|e| ApiError::internal(e.to_string()))?;
-    let agg = agg.ok_or_else(|| ApiError::not_found("Object collection not found"))?;
+    let agg = agg
+        .ok_or_else(|| ApiError::not_found("Object collection not found"))?
+        .aggregate;
 
     let daily = state
         .store
@@ -2410,6 +2441,136 @@ pub(crate) fn list_identity_items_inner(
     }
 }
 
+/// Item rows of a Spore/DOB cluster collection.
+///
+/// Rows come from [`super::spore::select_cluster_spore_page`] — the same
+/// source `/spore/clusters/{id}/spores` serves — so rows and the
+/// cluster-aggregate totals reported next to them always describe the same
+/// set of member spores.
+///
+/// This endpoint's cursor contract is a bare item id (shared with the mNFT
+/// and identity branches), so the cursor is resolved to its position in the
+/// cluster's `(created_at_block DESC, id ASC)` order before paging. A cursor
+/// naming an item that is not a member of this collection is a client error,
+/// not a silent page-one restart.
+fn list_spore_cluster_items(
+    state: &AppState,
+    collection_id: &[u8],
+    limit: i64,
+    cursor_bytes: Option<Vec<u8>>,
+    search_lower: Option<&str>,
+    status_filter: NftItemStatusFilter,
+    agg: &MnftCollectionAggregate,
+) -> ApiResult<CursorPaginatedResponse<CollectionItemResponse>> {
+    let guard = super::spore::load_spore_cache(state)?;
+    let cache = guard
+        .as_ref()
+        .as_ref()
+        .expect("load_spore_cache returns Err when the cache is absent");
+
+    let cursor_position = match cursor_bytes.as_deref() {
+        None => None,
+        Some(item_id) => Some(
+            super::spore::find_cluster_spore_position(cache, collection_id, item_id).ok_or_else(
+                || {
+                    ApiError::bad_request(format!(
+                        "Invalid object items cursor: item 0x{} is not in collection 0x{}",
+                        hex::encode(item_id),
+                        hex::encode(collection_id)
+                    ))
+                },
+            )?,
+        ),
+    };
+
+    let selected = super::spore::select_cluster_spore_page(
+        cache,
+        collection_id,
+        limit as usize,
+        cursor_position.as_ref(),
+        |spore_id, entry| {
+            nft_item_matches_status(status_filter, entry)
+                && nft_item_matches_search(search_lower, spore_id, entry)
+        },
+    );
+
+    let has_more = selected.len() as i64 > limit;
+    let page_items: Vec<_> = selected.into_iter().take(limit as usize).collect();
+
+    let rows: Vec<CollectionItemResponse> = page_items
+        .iter()
+        .map(|(spore_id, entry)| CollectionItemResponse {
+            nft_id: format!("0x{}", hex::encode(spore_id)),
+            name: entry.name.clone(),
+            standard: entry.standard.asset_standard().to_string(),
+            owner_lock_hash: entry
+                .owner_lock_hash
+                .as_ref()
+                .map(|h| format!("0x{}", hex::encode(h))),
+            is_live: entry.is_live,
+            created_at_block: entry.created_at_block,
+            expired_at: None,
+            registered_at: None,
+            status: None,
+            // Spores carry their creation outpoint's tx hash, exactly like
+            // /spore/clusters/{id}/spores; ObjectEntry has no output_index.
+            tx_hash: Some(format!("0x{}", hex::encode(&entry.created_at_tx))),
+            output_index: None,
+        })
+        .collect();
+
+    let next_cursor = if has_more {
+        page_items
+            .last()
+            .map(|(spore_id, _)| format!("0x{}", hex::encode(spore_id)))
+    } else {
+        None
+    };
+
+    if search_lower.is_some() {
+        return ok(CursorPaginatedResponse::without_total(
+            rows,
+            limit,
+            next_cursor,
+        ));
+    }
+
+    let total = collection_total_for_status(status_filter, agg, collection_id)?;
+    ok(CursorPaginatedResponse::new(
+        rows,
+        total,
+        limit,
+        next_cursor,
+    ))
+}
+
+/// Total item count reported alongside a status-filtered item page.
+///
+/// `recycled` is `total - live`; a negative result means the aggregate itself
+/// is corrupt, which is reported rather than clamped.
+fn collection_total_for_status(
+    status_filter: NftItemStatusFilter,
+    agg: &MnftCollectionAggregate,
+    collection_id: &[u8],
+) -> Result<i64, ApiRouteError> {
+    match status_filter {
+        NftItemStatusFilter::All => Ok(agg.total_count),
+        NftItemStatusFilter::Live => Ok(agg.live_count),
+        NftItemStatusFilter::Recycled => agg
+            .total_count
+            .checked_sub(agg.live_count)
+            .filter(|recycled| *recycled >= 0)
+            .ok_or_else(|| {
+                ApiError::internal(format!(
+                    "invalid object collection aggregate counts: collection_id=0x{}, total_count={}, live_count={}",
+                    hex::encode(collection_id),
+                    agg.total_count,
+                    agg.live_count
+                ))
+            }),
+    }
+}
+
 async fn list_object_collection_items(
     State(state): State<Arc<AppState>>,
     Path(collection_id): Path<String>,
@@ -2425,21 +2586,38 @@ async fn list_object_collection_items(
         .map(decode_object_item_cursor)
         .transpose()?;
 
-    let agg = get_collection_aggregate(state.store.as_ref(), &collection_id_bytes)
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-    let agg = agg.ok_or_else(|| ApiError::not_found("Object collection not found"))?;
+    let resolved = get_collection_aggregate(state.store.as_ref(), &collection_id_bytes)
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .ok_or_else(|| ApiError::not_found("Object collection not found"))?;
+    let agg = resolved.aggregate;
 
-    if is_identity_sentinel(&collection_id_bytes) {
-        return list_identity_items_inner(
-            state.store.as_ref(),
-            state.append_only_store.as_ref(),
-            &collection_id_bytes,
-            limit,
-            cursor_bytes,
-            search_lower.as_deref(),
-            status_filter,
-            &agg,
-        );
+    // Item rows must come from the row source that owns this collection's
+    // members — the same source its aggregate/total came from.
+    match resolved.source {
+        ObjectCollectionSource::Identity => {
+            return list_identity_items_inner(
+                state.store.as_ref(),
+                state.append_only_store.as_ref(),
+                &collection_id_bytes,
+                limit,
+                cursor_bytes,
+                search_lower.as_deref(),
+                status_filter,
+                &agg,
+            );
+        }
+        ObjectCollectionSource::SporeCluster => {
+            return list_spore_cluster_items(
+                &state,
+                &collection_id_bytes,
+                limit,
+                cursor_bytes,
+                search_lower.as_deref(),
+                status_filter,
+                &agg,
+            );
+        }
+        ObjectCollectionSource::Mnft => {}
     }
 
     let mut matched_items: Vec<(Vec<u8>, ckbadger_store::types::ObjectEntry)> =
@@ -2580,22 +2758,7 @@ async fn list_object_collection_items(
             next_cursor,
         ))
     } else {
-        let total = match status_filter {
-            NftItemStatusFilter::All => agg.total_count,
-            NftItemStatusFilter::Live => agg.live_count,
-            NftItemStatusFilter::Recycled => {
-                agg.total_count
-                    .checked_sub(agg.live_count)
-                    .ok_or_else(|| {
-                        ApiError::internal(format!(
-                            "invalid object collection aggregate counts: collection_id=0x{}, total_count={}, live_count={}",
-                            hex::encode(&collection_id_bytes),
-                            agg.total_count,
-                            agg.live_count
-                        ))
-                    })?
-            }
-        };
+        let total = collection_total_for_status(status_filter, &agg, &collection_id_bytes)?;
         ok(CursorPaginatedResponse::new(
             rows,
             total,
@@ -2679,7 +2842,8 @@ async fn list_object_collection_holders(
 
     let agg = get_collection_aggregate(state.store.as_ref(), &collection_id_bytes)
         .map_err(|e| ApiError::internal(e.to_string()))?
-        .ok_or_else(|| ApiError::not_found("Object collection not found"))?;
+        .ok_or_else(|| ApiError::not_found("Object collection not found"))?
+        .aggregate;
     if agg.holders_count < 0 {
         return Err(ApiError::internal(format!(
             "invalid object collection aggregate holders_count: collection_id=0x{}, holders_count={}",
@@ -2817,7 +2981,9 @@ async fn get_object_collection_capacity_chart(
 
     let agg = get_collection_aggregate(state.store.as_ref(), &collection_id_bytes)
         .map_err(|e| ApiError::internal(e.to_string()))?;
-    let agg = agg.ok_or_else(|| ApiError::not_found("Object collection not found"))?;
+    let agg = agg
+        .ok_or_else(|| ApiError::not_found("Object collection not found"))?
+        .aggregate;
 
     let daily = state
         .store
