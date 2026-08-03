@@ -236,12 +236,12 @@ impl ProtocolDetector for StableppDetector {
         item_deltas: &[ItemDelta],
         type_calls: &[TypeCallEntry],
         lock_calls: &[LockCallEntry],
-    ) -> Vec<ProtocolAction> {
+    ) -> anyhow::Result<Vec<ProtocolAction>> {
         if !self.has_stablepp_scripts(tx, type_calls, lock_calls) {
-            return vec![];
+            return Ok(vec![]);
         }
         if accum.input_capacity == 0 {
-            return vec![];
+            return Ok(vec![]);
         }
 
         let (vault_in, vault_out) = self.count_vault_cells(tx);
@@ -257,7 +257,7 @@ impl ProtocolDetector for StableppDetector {
             "vaultCount": vault_count,
         });
 
-        vec![ProtocolAction::new("stablepp", action, metadata)]
+        Ok(vec![ProtocolAction::new("stablepp", action, metadata)])
     }
 }
 

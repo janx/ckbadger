@@ -164,7 +164,7 @@ impl ProtocolDetector for RgbppDetector {
         _item_deltas: &[ckbadger_store::types::ItemDelta],
         _type_calls: &[ckbadger_store::types::TypeCallEntry],
         _lock_calls: &[ckbadger_store::types::LockCallEntry],
-    ) -> Vec<ProtocolAction> {
+    ) -> anyhow::Result<Vec<ProtocolAction>> {
         // Group cells by type_script identity (type_code_hash + type_args).
         // Skip cells without type scripts.
         use std::collections::BTreeMap;
@@ -209,6 +209,6 @@ impl ProtocolDetector for RgbppDetector {
             actions.extend(self.classify_action(cells, owner_lock_hash));
         }
 
-        actions
+        Ok(actions)
     }
 }

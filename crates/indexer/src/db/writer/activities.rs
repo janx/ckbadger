@@ -207,6 +207,11 @@ pub(crate) trait ProtocolDetector: Send + Sync {
     /// without allocating or building data structures.
     fn might_apply(&self, tx: &TxView<'_>) -> bool;
 
+    /// Detect protocol actions for one owner of `tx`.
+    ///
+    /// Returns `Err` when the transaction violates a protocol invariant the
+    /// detector cannot honestly summarise — that halts the batch rather than
+    /// silently dropping the action.
     fn detect(
         &self,
         tx: &TxView<'_>,
@@ -215,7 +220,7 @@ pub(crate) trait ProtocolDetector: Send + Sync {
         item_deltas: &[ItemDelta],
         type_calls: &[TypeCallEntry],
         lock_calls: &[LockCallEntry],
-    ) -> Vec<ProtocolAction>;
+    ) -> Result<Vec<ProtocolAction>>;
 }
 
 /// Build `TxActions` for all transactions in a block (no protocol detectors).
@@ -579,20 +584,17 @@ fn build_tx_actions<'a>(
             .collect();
 
         // Run detectors per-owner, collect at TX level
-        let detector_actions: Vec<ProtocolAction> = applicable_detectors
-            .iter()
-            .flat_map(|d| {
-                d.detect(
-                    tx,
-                    lock_hash,
-                    accum,
-                    &item_deltas,
-                    &owner_type_calls,
-                    &owner_lock_calls,
-                )
-            })
-            .collect();
-        all_protocol_actions.extend(detector_actions);
+        for detector in &applicable_detectors {
+            let detector_actions = detector.detect(
+                tx,
+                lock_hash,
+                accum,
+                &item_deltas,
+                &owner_type_calls,
+                &owner_lock_calls,
+            )?;
+            all_protocol_actions.extend(detector_actions);
+        }
 
         // Compute tags bitmask
         let mut tags: u16 = 0;
