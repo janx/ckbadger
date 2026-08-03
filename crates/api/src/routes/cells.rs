@@ -17,11 +17,12 @@ use crate::response::{
     default_limit, encode_cursor, hash_type_to_str, ok, ApiError, ApiResult, ApiRouteError,
     CursorPaginatedResponse, ScriptResponse,
 };
+use crate::utils::address::compute_script_hash;
 use crate::utils::{
     address_to_lock_script_hash, deployment_key_for_script, deployment_reference_hashes,
-    is_ckb_address, is_known_script_name, merge_script_info_for_reference, parse_hash32,
-    parse_optional_block_tx_cursor, parse_output_index, resolve_code_hash_for_hash_type,
-    script_to_address, shannon_to_ckb,
+    is_ckb_address, is_known_script_name, merge_script_info_for_reference, parse_address_to_script,
+    parse_hash32, parse_optional_block_tx_cursor, parse_output_index,
+    resolve_code_hash_for_hash_type, script_to_address, shannon_to_ckb,
 };
 use crate::warmup::{
     CachedAddressEntry, CACHE_KEY_ADDRESSES_ACTIVE, CACHE_KEY_ADDRESSES_TOP, CACHE_KEY_SCRIPTS_ALL,
@@ -2359,10 +2360,23 @@ async fn get_address(
         return ok(cached);
     }
 
-    let (lock_hash, input_address) = if is_ckb_address(&addr) {
-        let hash = address_to_lock_script_hash(&addr)
+    let (lock_hash, canonical_input_address) = if is_ckb_address(&addr) {
+        let script = parse_address_to_script(&addr)
             .map_err(|e| ApiError::bad_request(format!("Invalid CKB address: {}", e)))?;
-        (hash, Some(addr.clone()))
+        let hash = compute_script_hash(&script.code_hash, script.hash_type, &script.args);
+        // The response `address` is always the canonical encoding of the lock
+        // script on the serving network — computed through the same
+        // `script_to_address` path as every other handler, never the raw input
+        // echoed back (uppercase input canonicalizes to lowercase, a
+        // foreign-HRP input to this network's HRP).
+        let canonical = script_to_address(
+            &script.code_hash,
+            script.hash_type as i16,
+            &script.args,
+            &state.ckb_network,
+        )
+        .map_err(|e| ApiError::bad_request(format!("Invalid CKB address: {}", e)))?;
+        (hash, Some(canonical))
     } else {
         let hash = parse_hash32(&addr, "address/lock script hash")?;
         (hash, None)
@@ -2424,24 +2438,24 @@ async fn get_address(
             args: format!("0x{}", hex::encode(&entry.args)),
         };
 
-        let addr = match input_address {
-            Some(addr) => Some(addr),
-            None => Some(
-                script_to_address(
-                    &entry.code_hash,
-                    entry.hash_type,
-                    &entry.args,
-                    &state.ckb_network,
-                )
-                .map_err(|e| {
-                    ApiError::internal(format!(
-                        "failed to encode address: lock_hash=0x{}, error={}",
-                        hex::encode(&lock_hash),
-                        e
-                    ))
-                })?,
-            ),
-        };
+        // Canonical encoding from the stored lock script (identical to the
+        // input-derived script when the query was an address: equal lock
+        // hashes imply equal scripts).
+        let addr = Some(
+            script_to_address(
+                &entry.code_hash,
+                entry.hash_type,
+                &entry.args,
+                &state.ckb_network,
+            )
+            .map_err(|e| {
+                ApiError::internal(format!(
+                    "failed to encode address: lock_hash=0x{}, error={}",
+                    hex::encode(&lock_hash),
+                    e
+                ))
+            })?,
+        );
 
         let script_info_response = script_info.map(|si| LockScriptInfo {
             code_hash: format!("0x{}", hex::encode(&si.code_hash)),
@@ -2452,9 +2466,11 @@ async fn get_address(
 
         (Some(script), script_info_response, addr)
     } else {
-        // No cell with this lock has ever been indexed, so the script components are
-        // genuinely unknown: report the hash only, never a guessed script.
-        (None, None, input_address)
+        // No cell with this lock has ever been indexed, so the store knows no
+        // script components: report no guessed `lockScript`. When the query
+        // itself was an address, its decoded lock script still yields the
+        // canonical encoding (same `script_to_address` path as above).
+        (None, None, canonical_input_address)
     };
 
     let recent_activities_count = transactions_count;

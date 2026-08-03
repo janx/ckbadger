@@ -10,6 +10,7 @@ pub(crate) mod hardforks;
 mod identities;
 mod mempool;
 mod network;
+mod proposal_window;
 mod scripts;
 mod search;
 mod spore;

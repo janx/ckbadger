@@ -183,11 +183,13 @@ pub struct TestCkbChain {
 /// Column families mirror `ckb-db-schema`: `0` = index (number <-> hash), `1` =
 /// block header (`packed::HeaderView`), `2` = block body (`packed::TransactionView`
 /// keyed by `block_hash || tx_index_be`), `3` = block uncles
-/// (`packed::UncleBlockVecView`), `7` = block proposal ids
-/// (`packed::ProposalShortIdVec`). Storing the *packed view* forms (not the bare
-/// `Header`/`UncleBlock`/`Transaction`) is what the node does and what the reader
-/// parses back — in particular the body's stored `hash` field is the hash the
-/// reader hands out, so a fixture may fake it to a real mainnet tx hash.
+/// (`packed::UncleBlockVecView`), `5` = transaction info (`packed::TransactionInfo`
+/// keyed by tx hash — what `get_transaction` resolves through), `7` = block
+/// proposal ids (`packed::ProposalShortIdVec`). Storing the *packed view* forms
+/// (not the bare `Header`/`UncleBlock`/`Transaction`) is what the node does and
+/// what the reader parses back — in particular the body's stored `hash` field is
+/// the hash the reader hands out, so a fixture may fake it to a real mainnet tx
+/// hash.
 pub fn seed_ckb_chain(blocks: &[ckb_types::core::BlockView]) -> TestCkbChain {
     use ckb_types::prelude::*;
 
@@ -206,6 +208,7 @@ pub fn seed_ckb_chain(blocks: &[ckb_types::core::BlockView]) -> TestCkbChain {
         let cf_header = db.cf_handle("1").unwrap();
         let cf_body = db.cf_handle("2").unwrap();
         let cf_uncle = db.cf_handle("3").unwrap();
+        let cf_tx_info = db.cf_handle("5").unwrap();
         let cf_proposals = db.cf_handle("7").unwrap();
         for block in blocks {
             let hash: [u8; 32] = block.hash().unpack();
@@ -223,11 +226,30 @@ pub fn seed_ckb_chain(blocks: &[ckb_types::core::BlockView]) -> TestCkbChain {
                 key.extend_from_slice(&hash);
                 key.extend_from_slice(&(index as u32).to_be_bytes());
                 db.put_cf(&cf_body, key, tx.pack().as_slice()).unwrap();
+
+                // `packed::TransactionInfo` is a 52-byte molecule struct laid
+                // out as raw concatenation: block_number (u64 LE) + block_epoch
+                // (u64 LE) + TransactionKey (block_hash 32 + index u32 BE) —
+                // exactly what `get_transaction_with_block_number` parses back.
+                let mut info = Vec::with_capacity(52);
+                info.extend_from_slice(&number.to_le_bytes());
+                info.extend_from_slice(&block.epoch().full_value().to_le_bytes());
+                info.extend_from_slice(&hash);
+                info.extend_from_slice(&(index as u32).to_be_bytes());
+                let tx_hash: [u8; 32] = tx.hash().unpack();
+                db.put_cf(&cf_tx_info, tx_hash, info).unwrap();
             }
         }
         // The reader attaches as a secondary instance, so everything must be in SST
         // files before it opens.
-        for cf in [&cf_index, &cf_header, &cf_body, &cf_uncle, &cf_proposals] {
+        for cf in [
+            &cf_index,
+            &cf_header,
+            &cf_body,
+            &cf_uncle,
+            &cf_tx_info,
+            &cf_proposals,
+        ] {
             db.flush_cf(cf).unwrap();
         }
     }

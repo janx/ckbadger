@@ -8,7 +8,10 @@ pub mod params;
 pub mod script_resolution;
 pub mod supply;
 
-pub use address::{address_to_lock_script_hash, is_ckb_address, script_to_address};
+pub use address::{
+    address_to_lock_script_hash, is_ckb_address, parse_address_to_script, script_to_address,
+    AddressLockScript,
+};
 pub use assets::{
     accumulate_owned_capacity, apply_owned_capacity_delta, resolve_collection_standard,
     resolve_dob_collection_name, resolve_object_collection_composition_tier_override,

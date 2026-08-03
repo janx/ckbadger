@@ -157,7 +157,11 @@ output_index`; activity cursors encode `block_num:tx_idx`; spore/cluster list cu
 - `CursorPaginatedResponse<BlockResponse>` — block metadata + miner/hardfork activation
 - `BlockResponse` — single block
 - `BlockFeeStatsResponse` — total_size, total_cycles, fee-rate stats, `cycles_pending`
-- `Vec<BlockProposal>` — proposal_id + committed_tx info
+- `Vec<BlockProposal>` — `proposalIndex`, `proposalId`, `committedTxHash`, `committedBlockNumber`.
+  Commitments are resolved through the shared NC-Max commit-window scan (`+2..=+10`, first matching
+  tx in chain order wins — the same `resolve_committed_txs` path `/graph/proposals` uses). A
+  proposal not committed within the window blocks that exist (e.g. tip-adjacent windows) reports
+  both fields as `null`.
 
 ---
 
@@ -182,7 +186,9 @@ output_index`; activity cursors encode `block_num:tx_idx`; spore/cluster list cu
 
 - `CursorPaginatedResponse<TransactionResponse>` / `TransactionResponse` — hash, block_number, fee, cycles
 - `TransactionDetailResponse` — full detail with `inputs`, `outputs`, witnesses, fee rate, confirmations
-- `Vec<CellDepResponse>` — out_point + dep_type
+- `Vec<CellDepResponse>` — out_point + dep_type. Fail-fast: `500` when the CKB RocksDB reader is
+  unavailable (the endpoint's only data source), `400` for a pending/proposed mempool tx, `404`
+  when the tx exists nowhere — never a silent `200 []` for those states
 - `CyclesStatusResponse` (from `crate::cycles`) — status, cycles, error
 - `TransactionLifecycleResponse` — phase, proposal_id, `proposed_in`/`committed_in`, commitment_distance, `commitment_window: CommitmentWindow`
 
@@ -232,7 +238,17 @@ output_index`; activity cursors encode `block_num:tx_idx`; spore/cluster list cu
 
 - `CursorPaginatedResponse<CellResponse>` — cell summary
 - `CellDetailResponse` — full cell detail with `lock`/`type_script` (`ScriptResponse`), `data`, `data_analysis`, `dep_group_items`, `code_cell_of: Vec<CodeCellScript>`, `dao_info: Option<DaoInfo>`, `used_capacity_breakdown: OccupiedCapacityBreakdown`
-- `AddressResponse` — lock_script_hash, balance, used_capacity, lock_script (`ScriptResponse`) + `lock_script_info: LockScriptInfo`
+- `AddressResponse` — lock_script_hash, balance, used_capacity, lock_script (`ScriptResponse`) + `lock_script_info: LockScriptInfo`.
+  `address` is always the canonical lowercase RFC-0021 encoding of the lock script on the serving
+  network — never the raw input echoed back
+
+**Address inputs (`{addr}`, all address endpoints)**
+
+- One shared parser (`parse_address_to_script`): RFC-0021 full format (`0x00`) only, Bech32m
+  checksum enforced (the legacy Bech32 checksum is a `400` naming the reason), `hash_type` must be
+  `0x00|0x01|0x02|0x04`.
+- Case follows the bech32 spec: all-lowercase and ALL-UPPERCASE both accepted, mixed case rejected.
+- A 64-hex-char lock script hash (optional `0x`) is accepted everywhere an address is.
 - `Vec<TopAddressResponse>` / `Vec<ActiveAddressResponse>`
 - `CursorPaginatedResponse<AddressTransactionResponse>` — tx_type, capacity_change, script_labels
 - `CursorPaginatedResponse<AddressTokenResponse>` — per-address token balance

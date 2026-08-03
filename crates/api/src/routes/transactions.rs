@@ -1527,52 +1527,59 @@ async fn get_cell_deps(
     Path(hash): Path<String>,
 ) -> ApiResult<Vec<CellDepResponse>> {
     let hash_bytes = parse_hash32(&hash, "transaction hash")?;
+    let mut tx_hash = [0u8; 32];
+    tx_hash.copy_from_slice(&hash_bytes);
 
-    // Read cell_deps directly from CKB's RocksDB
-    if let Some(ref store) = state.ckb_store {
-        if hash_bytes.len() == 32 {
-            let mut tx_hash = [0u8; 32];
-            tx_hash.copy_from_slice(&hash_bytes);
-            if let Some(tx_view) = store.get_transaction(&tx_hash) {
-                let rpc_tx = ckb_store_reader::convert_transaction_view(&tx_view);
-                let cell_deps: Vec<CellDepResponse> = rpc_tx
-                    .cell_deps
-                    .into_iter()
-                    .map(|dep| {
-                        let out_point_index =
-                            parse_out_point_index(&dep.out_point.index).map_err(|e| {
-                                ApiError::internal(format!(
-                                    "malformed cell dep out_point index {:?} in tx {}: {}",
-                                    dep.out_point.index, hash, e
-                                ))
-                            })?;
-                        Ok(CellDepResponse {
-                            out_point_tx_hash: dep.out_point.tx_hash,
-                            out_point_index,
-                            dep_type: dep.dep_type,
-                        })
-                    })
-                    .collect::<Result<_, crate::response::ApiRouteError>>()?;
-                return ok(cell_deps);
-            }
-        }
+    // Cell deps are read from the CKB node's own RocksDB. Without that reader
+    // the endpoint has no data source at all, so fail loudly instead of
+    // shipping a silent `[]` that is indistinguishable from "no deps".
+    let Some(store) = state.ckb_store.as_ref() else {
+        return Err(ApiError::internal(format!(
+            "cell deps for {} unavailable: CKB RocksDB reader is not open; check the configured CKB db path",
+            hash
+        )));
+    };
+
+    if let Some(tx_view) = store.get_transaction(&tx_hash) {
+        let rpc_tx = ckb_store_reader::convert_transaction_view(&tx_view);
+        let cell_deps: Vec<CellDepResponse> = rpc_tx
+            .cell_deps
+            .into_iter()
+            .map(|dep| {
+                let out_point_index = parse_out_point_index(&dep.out_point.index).map_err(|e| {
+                    ApiError::internal(format!(
+                        "malformed cell dep out_point index {:?} in tx {}: {}",
+                        dep.out_point.index, hash, e
+                    ))
+                })?;
+                Ok(CellDepResponse {
+                    out_point_tx_hash: dep.out_point.tx_hash,
+                    out_point_index,
+                    dep_type: dep.dep_type,
+                })
+            })
+            .collect::<Result<_, crate::response::ApiRouteError>>()?;
+        return ok(cell_deps);
     }
 
-    if let Some(tx_lookup) = fetch_transaction_lookup(&state.ckb_rpc_url, &hash)
+    // Not in the node's chain data: either still in the mempool, or nonexistent.
+    match fetch_transaction_lookup(&state.ckb_rpc_url, &hash)
         .await
         .map_err(ApiError::internal)?
     {
-        if tx_lookup.is_pending_like() {
-            return Err(ApiError::bad_request(pending_transaction_resource_error(
-                &hash,
-                tx_lookup.status_str(),
-                "Cell deps",
-            )));
+        Some(tx_lookup) if tx_lookup.is_pending_like() => Err(ApiError::bad_request(
+            pending_transaction_resource_error(&hash, tx_lookup.status_str(), "Cell deps"),
+        )),
+        Some(tx_lookup) if tx_lookup.is_committed() => {
+            // The node RPC sees the tx committed but the secondary reader does
+            // not: catch-up lag or a stale reader path. A 404 would be a lie.
+            Err(ApiError::internal(format!(
+                "transaction {} is committed per node RPC but missing from the CKB RocksDB reader; reader catch-up lag or stale CKB db path",
+                hash
+            )))
         }
+        _ => Err(ApiError::not_found("Transaction not found")),
     }
-
-    // Fallback: RocksDB not available or tx not found
-    ok(vec![])
 }
 
 async fn get_cycles_status(
