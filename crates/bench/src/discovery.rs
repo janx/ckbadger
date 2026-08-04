@@ -402,7 +402,7 @@ async fn discover_params(
                 Some((hash, count))
             })
             .collect();
-        with_counts.sort_by(|a, b| b.1.cmp(&a.1));
+        with_counts.sort_by_key(|item| std::cmp::Reverse(item.1));
         let candidates: Vec<String> = with_counts
             .into_iter()
             .take(10)
@@ -536,7 +536,7 @@ async fn discover_params(
                     Some((id, count))
                 })
                 .collect();
-            with_counts.sort_by(|a, b| b.1.cmp(&a.1));
+            with_counts.sort_by_key(|item| std::cmp::Reverse(item.1));
             let candidates: Vec<String> = with_counts
                 .into_iter()
                 .take(10)
