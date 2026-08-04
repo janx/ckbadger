@@ -53,10 +53,13 @@ describe('NetworkSwitcher', () => {
     expect(trigger).not.toHaveTextContent('CKB network');
     expect(trigger.className).toContain('py-1.5');
     expect(trigger.className).not.toContain('min-h-11');
+    expect(trigger).toHaveClass('border-aqua/50', 'bg-aqua/10', 'text-aqua');
+    expect(trigger).not.toHaveClass('text-text-dim');
     expect(trigger).toHaveAttribute('aria-haspopup', 'menu');
     expect(screen.getByText('CKB network')).toBeInTheDocument();
     expect(mainnet).toHaveAttribute('aria-current', 'page');
     expect(mainnet).toHaveAttribute('aria-checked', 'true');
+    expect(mainnet).toHaveClass('bg-aqua/10', 'text-aqua');
     expect(testnet).not.toHaveAttribute('aria-current');
     expect(testnet).toHaveAttribute('aria-checked', 'false');
   });
