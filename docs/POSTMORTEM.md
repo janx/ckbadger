@@ -2086,4 +2086,160 @@ a missing feature into permanent data loss that a rebuild alone cannot heal.
 
 ---
 
-_Last updated: 2026-08-03_
+### PROTO-007: A protocol wired into the live classifier only
+
+**Date**: 2026-08-04
+
+**Symptom**: Every did:ckb identity was missing — 421 live cells on testnet
+(390 with 32-byte args, 31 with 20-byte), 113 on mainnet — after a full
+from-genesis re-sync on the binary that had just fixed the did:ckb pipeline
+(PROTO-003). The collection, every item id, and search all returned 404 while
+the underlying cells were indexed and readable through `/cells/{tx}/{i}`.
+
+**Root Cause**: `code_hash_to_semantic_tag` in `bulk_build/binary_facts.rs`
+matched the protocol registry with a trailing `_ => CellSemanticTag::Plain`
+arm and had no `ProtocolScript::DidCkb` case, so bulk build classified every
+did:ckb cell as a plain cell and never produced protocol facts for it. Both
+live-sync classifiers in `sync/pipeline.rs` did handle it. A from-genesis
+re-sync runs essentially all of history through the bulk path, so the fix that
+shipped was inert in the only mode that mattered.
+
+**Fix**: Added the missing arm and removed the catch-all — the match is now
+exhaustive over `ProtocolScript`, so a new variant fails to compile instead of
+silently degrading to `Plain`. Added a cross-path parity test that classifies
+every registered code hash through both the bulk and live classifiers and
+requires them to agree; it reproduced the outage as the sole divergence.
+
+**Lesson**: A wildcard arm over a protocol enum turns "unhandled" into
+"ordinary". Where two code paths must classify the same thing, per-protocol
+unit tests prove nothing unless one test drives both paths with the same
+input — the did:ckb unit tests were green throughout, because they only ever
+exercised the live classifier.
+
+---
+
+### DAO-028: The same shannons in two buckets of one partition
+
+**Date**: 2026-08-04
+
+**Symptom**: `/dao/statistics` (`miningReward + depositCompensation + burnt`)
+and the Secondary Issuance chart (`mining + compensation + burnt`) exceeded the
+protocol's total secondary issuance by 77,489,937.99 CKB on mainnet and
+87,894.98 CKB on testnet. The protocol identity `mining + claimed ==
+Σsecondary − S_tip + S_genesis` held at zero shannons, so the miner and claimed
+series were exact and the entire excess sat in the treasury/compensation split.
+
+**Root Cause**: `unmade_dao_interests` was written as
+`DaoCompensationBreakdown::active_unmade` — the status-0 share only — and
+treasury was derived as `S − unmade_dao_interests`. But RFC-0023 removes a
+deposit's interest from `S` only when the phase-2 completion transaction
+subtracts `withdrawed_interests`, so interest already frozen on a phase-1
+withdraw-request cell is still inside `S`. That frozen amount was therefore
+left in treasury while `cum_dao_compensation` (= claimed + unclaimed) already
+counted it. Four sites derived treasury independently (live writer, bulk
+reducer, store recompute, API read path), so the definition could drift.
+
+**Fix**: One derivation, `dao_treasury_split(secondary_pool, unclaimed)` in
+`ckbadger-store`, used by all four sites via
+`DaoCompensationBreakdown::treasury`. The duplicate
+`DaoDailySnapshot::unmade_dao_interests` field and the redundant
+`compute_unmade_dao_interests` scan were deleted, leaving `unclaimed_compensation`
+as the single stored quantity. `active_unmade` survives only as a diagnostic
+and is documented as never valid for the treasury split. An API-statistics
+fixture that had encoded the overlap as intended behavior was corrected.
+
+**Lesson**: When a breakdown is presented as a partition, assert that its parts
+reconstruct the whole — `treasury + unclaimed == S` is a one-line invariant
+that would have failed the moment the wrong summand was chosen. Two stored
+fields that differ only in a subtle qualifier are an invitation to pick the
+wrong one.
+
+---
+
+### PROTO-008: A capacity heuristic gating on-chain evidence
+
+**Date**: 2026-08-04
+
+**Symptom**: Over 437 sampled mainnet UTXOSwap transactions, 6 of 228 on-chain
+intent cells produced no `*_submitted` action and 8 of 228 consumed intent
+cells produced no `*_settled` action.
+
+**Root Cause**: Two independent defects. (1) The submitted branch was wrapped in
+`if ckb_delta < 0`, requiring the intent owner's net capacity delta to be
+negative — but an intent cell's capacity can be funded by anyone, and a
+batching transaction can return more capacity than the submitter spent. Mainnet
+tx `0x8fa2c828…` submits two intents and the owner of the dropped one ended
+`+8,799,994,175` shannons. (2) All detector output was deduplicated by
+`(protocol, action, metadata)` to collapse the copies a tx-level detector emits
+once per participating owner. UTXOSwap is not tx-level: it emits one action per
+intent cell, and mainnet tx `0xffedf80f…` settles five cells owned by five
+different addresses whose payloads are byte-identical — five events reported as
+one.
+
+**Fix**: Deleted the capacity gate; attribution now rests solely on the owner
+prefix the intent records on chain, exactly as the settled branch already did.
+Added `ProtocolDetector::emits_tx_level_actions`, defaulting to the tx-level
+behavior, so only detectors that genuinely summarise one event per transaction
+are deduplicated across owners; UTXOSwap declares per-cell emission and joins
+the per-cell DAO actions that were already exempt.
+
+**Lesson**: Deriving a fact from a capacity heuristic when the chain states it
+directly is guaranteed to be wrong at the margins. And a deduplication key must
+identify the _event_: `(protocol, action, metadata)` cannot tell "one event seen
+by two owners" from "two events that happen to look alike".
+
+---
+
+### API-014: A size that could not reproduce its own fee rate
+
+**Date**: 2026-08-04
+
+**Symptom**: `/transactions/{hash}/detail` served `txSize: 981` and
+`feeRate: 2105` for mainnet tx `0xdf615176…`, but `981` cannot produce `2105` —
+`2074 * 1000 / 981` is `2114`. The official explorer reported `bytes: 985` for
+the same transaction.
+
+**Root Cause**: Fee rates divided by the protocol's serialized size in block
+(molecule size + the 4-byte offset slot the transaction occupies in the block's
+transactions table), while the `txSize` / `size` fields served the bare molecule
+size. The divergence was deliberate and documented, but the frontend recomputes
+`fee / txSize` in three places, so the UI displayed a fee rate that disagreed
+with the API's own field for the same transaction, and both sizes disagreed with
+the node and explorer.
+
+**Fix**: One convention everywhere the API serves a size — `txSize`, the block
+`fee-stats.totalSize`, and the fee-rate denominator all use the serialized size
+in block, converted once at the response boundary (the store still holds
+molecule sizes). Two tests that pinned the old split convention were updated,
+and the detail test now asserts the fields reproduce each other.
+
+**Lesson**: If two fields in one response are related by arithmetic, a client
+will do that arithmetic. Serving them on different conventions makes the
+response internally false no matter how well the difference is documented.
+
+---
+
+### API-015: A deterministic value served as null
+
+**Date**: 2026-08-04
+
+**Symptom**: `/dao/deposits?status=1` returned `compensation: null` for all
+1,660 mainnet and 1,062 testnet pending withdraw requests, even though those
+rows' compensation totalled the 77.49M CKB that DAO-028 traced through the
+aggregates.
+
+**Root Cause**: The row mapper served the stored `entry.compensation`, which is
+only populated at phase-2 completion. A phase-1 request has already frozen its
+compensation at the request AR, and the same process derives it for every
+aggregate through `dao_frozen_request_compensation` — the listing simply never
+asked.
+
+**Fix**: The listing derives compensation through that same helper as soon as a
+withdraw request exists, so the listing and `/dao/statistics` cannot disagree.
+
+**Lesson**: `null` should mean "no answer exists", not "this code path did not
+compute the answer that another path in the same process already has".
+
+---
+
+_Last updated: 2026-08-04_
