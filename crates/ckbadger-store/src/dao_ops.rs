@@ -34,7 +34,7 @@ pub type StagedDaoCompletions = HashMap<Vec<u8>, (i64, Vec<u8>)>;
 /// uses it for both phase-1 and completed deposits (validating any stored
 /// compensation against it), and pre-commit snapshot construction uses it when
 /// projecting a staged phase-2 completion.
-fn dao_frozen_request_compensation(entry: &DaoDepositCacheEntry) -> anyhow::Result<i64> {
+pub fn dao_frozen_request_compensation(entry: &DaoDepositCacheEntry) -> anyhow::Result<i64> {
     let deposit_ar = u64::try_from(entry.deposit_ar).map_err(|_| {
         anyhow::anyhow!(
             "negative DAO deposit AR: deposit_block={}, deposit_ar={}",
@@ -512,47 +512,6 @@ impl CkbadgerStore {
             visitor(&key, &entry)?;
         }
         Ok(())
-    }
-
-    /// Sum exact lifecycle compensation for deposits still active at the
-    /// observation block.
-    ///
-    /// The observation block is required so this path shares the same
-    /// historical lifecycle calculation as daily snapshots and latest stats.
-    /// Returns the total unmade DAO interests in shannons.
-    pub fn compute_unmade_dao_interests(
-        &self,
-        end_block: i64,
-        end_ar: u64,
-    ) -> anyhow::Result<i128> {
-        let mut total: i128 = 0;
-        self.scan_dao_deposits(|_, entry| {
-            if entry.status == 0 {
-                let contribution = dao_compensation_for_entry_at(entry, end_block, end_ar)?;
-                if contribution.claimed != 0
-                    || contribution.unclaimed != contribution.active_unmade
-                {
-                    anyhow::bail!(
-                        "status-0 DAO entry produced non-active compensation: deposit_block={}, observation_block={}, contribution={:?}",
-                        entry.deposit_block_number,
-                        end_block,
-                        contribution
-                    );
-                }
-                total = total
-                    .checked_add(contribution.active_unmade)
-                    .ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "unmade DAO compensation overflow: deposit_block={}, observation_block={}, observation_ar={}",
-                            entry.deposit_block_number,
-                            end_block,
-                            end_ar
-                        )
-                    })?;
-            }
-            Ok(())
-        })?;
-        Ok(total)
     }
 
     /// Compute exact lifecycle-based DAO compensation at a historical block.

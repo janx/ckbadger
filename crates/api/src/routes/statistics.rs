@@ -4333,7 +4333,6 @@ mod tests {
             cumulative_depositors: 0,
             daily_depositor_addresses: 0,
             protocol_deposited: None,
-            unmade_dao_interests: 0,
         }
     }
 
@@ -4523,7 +4522,7 @@ mod tests {
         let genesis_burnt = 840_000_000_000_000_000i128;
         let total = genesis_burnt + 1_000_000;
         let mut s = snapshot("2026-02-17", 100, total, 130, 0);
-        s.unmade_dao_interests = 30;
+        s.unclaimed_compensation = 30;
         s.cum_treasury = 100;
         let map = build_liquid_supply_by_date_map(&[s], genesis_burnt).unwrap();
         assert_eq!(map.get("2026-02-17"), Some(&(1_000_000 - 130 - 100)));
@@ -4683,7 +4682,6 @@ mod tests {
             cum_miner_secondary: 0,
             cum_dao_compensation: 0,
             cum_treasury: 0,
-            unmade_dao_interests: 0,
             unclaimed_compensation: 0,
             cumulative_depositors: 0,
             daily_depositor_addresses: 0,

@@ -52,20 +52,31 @@ const DAO_TYPE_CODE_HASH_HEX: &str =
     "82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e";
 const TX_BLOCK_HASHES_CACHE_TTL: StdDuration = StdDuration::from_secs(30);
 
-/// Fee-rate denominator: fee rates divide by the transaction's serialized
-/// size in block — molecule size plus the 4-byte offset slot the transaction
-/// occupies in the block's transactions table — matching the node, explorer,
-/// and wallet convention. The `size`/`txSize` response fields themselves stay
-/// molecule-sized. This is the single denominator definition for every
-/// fee-rate the API serves (transaction detail, pending detail, block
-/// fee-stats).
-pub(crate) fn tx_serialized_size_in_block(molecule_size: i32) -> u128 {
-    u128::try_from(i64::from(molecule_size) + 4).unwrap_or_else(|_| {
-        panic!(
-            "fee-rate call sites guard molecule_size > 0, got {}",
-            molecule_size
-        )
-    })
+/// A transaction's size as CKB counts it: the molecule size plus the 4-byte
+/// offset slot the transaction occupies in the block's transactions table.
+///
+/// This is the size the node's tx-pool, wallets, and the official explorer all
+/// report, and it is the fee-rate denominator. The API serves it as `txSize` /
+/// `size` so that the size and the fee rate in one response are reproducible
+/// from each other — reporting the bare molecule size while dividing by this
+/// one made `fee / txSize` disagree with the served `feeRate`.
+///
+/// The store keeps molecule sizes; conversion happens once, here, at the
+/// response boundary.
+pub(crate) fn tx_serialized_size_in_block(molecule_size: i32) -> i32 {
+    molecule_size
+        .checked_add(4)
+        .unwrap_or_else(|| panic!("transaction molecule size overflows i32: {molecule_size}"))
+}
+
+/// Fee rate in shannons per 1000 bytes, floored, over the same size the API
+/// serves as `txSize`. Single definition for every fee rate the API returns
+/// (transaction detail, pending detail, block fee-stats).
+pub(crate) fn tx_fee_rate(fee: u128, size_in_block: i32) -> String {
+    let denominator = u128::try_from(size_in_block).unwrap_or_else(|_| {
+        panic!("fee-rate call sites guard size_in_block > 0, got {size_in_block}")
+    });
+    (fee * 1000 / denominator).to_string()
 }
 
 pub fn routes() -> Router<Arc<AppState>> {
@@ -283,7 +294,7 @@ async fn list_transactions(
                     inputs_count: entry.inputs_count as i32,
                     outputs_count: entry.outputs_count as i32,
                     fee: entry.fee.to_string(),
-                    tx_size: Some(entry.tx_size),
+                    tx_size: Some(tx_serialized_size_in_block(entry.tx_size)),
                     cycles: entry.cycles,
                     cycles_status: derive_cycles_status(entry.cycles, entry.is_cellbase),
                     is_cellbase: entry.is_cellbase,
@@ -386,7 +397,7 @@ async fn list_transactions(
                     inputs_count: entry.inputs_count as i32,
                     outputs_count: entry.outputs_count as i32,
                     fee: entry.fee.to_string(),
-                    tx_size: Some(entry.tx_size),
+                    tx_size: Some(tx_serialized_size_in_block(entry.tx_size)),
                     cycles: entry.cycles,
                     cycles_status: derive_cycles_status(entry.cycles, entry.is_cellbase),
                     is_cellbase: entry.is_cellbase,
@@ -440,7 +451,7 @@ async fn get_transaction(
                 inputs_count: entry.inputs_count as i32,
                 outputs_count: entry.outputs_count as i32,
                 fee: entry.fee.to_string(),
-                tx_size: Some(entry.tx_size),
+                tx_size: Some(tx_serialized_size_in_block(entry.tx_size)),
                 cycles: entry.cycles,
                 cycles_status: derive_cycles_status(entry.cycles, entry.is_cellbase),
                 is_cellbase: entry.is_cellbase,
@@ -770,12 +781,13 @@ async fn get_transaction_detail(
                 ))
             })?;
 
-        let fee_rate = tx_lookup.tx_size.and_then(|size| {
-            if size <= 0 {
-                return None;
-            }
+        let pending_tx_size = tx_lookup
+            .tx_size
+            .filter(|size| *size > 0)
+            .map(tx_serialized_size_in_block);
+        let fee_rate = pending_tx_size.and_then(|size| {
             let fee_value: u128 = fee.parse().ok()?;
-            Some(((fee_value * 1000) / tx_serialized_size_in_block(size)).to_string())
+            Some(tx_fee_rate(fee_value, size))
         });
 
         let pool_cycles = tx_lookup.cycles.map(|value| value as i64);
@@ -794,7 +806,7 @@ async fn get_transaction_detail(
             outputs_count: rpc_tx.outputs.len() as i32,
             fee,
             fee_rate,
-            tx_size: tx_lookup.tx_size,
+            tx_size: pending_tx_size,
             cycles: pool_cycles,
             cycles_status: derive_cycles_status(pool_cycles, pool_is_cellbase),
             confirmations: None,
@@ -853,7 +865,11 @@ async fn get_transaction_detail(
         0
     };
 
-    let final_tx_size = if tx_size > 0 { Some(tx_size) } else { None };
+    let final_tx_size = if tx_size > 0 {
+        Some(tx_serialized_size_in_block(tx_size))
+    } else {
+        None
+    };
 
     // Read full transaction from CKB node's RocksDB for inputs/outputs
     let (
@@ -903,8 +919,7 @@ async fn get_transaction_detail(
     })?;
     let fee = fee_value.to_string();
 
-    let fee_rate = final_tx_size
-        .map(|size| ((fee_value * 1000) / tx_serialized_size_in_block(size)).to_string());
+    let fee_rate = final_tx_size.map(|size| tx_fee_rate(fee_value, size));
 
     ok(TransactionDetailResponse {
         hash: tx_hash_hex,
@@ -2146,6 +2161,32 @@ mod tests {
         assert!(parse_out_point_index("0xzz").is_err());
         assert!(parse_out_point_index("").is_err());
         assert!(parse_out_point_index("0x").is_err());
+    }
+
+    /// Regression: the `txSize` a response serves and the `feeRate` it serves
+    /// must be reproducible from each other. They were not — `feeRate` used the
+    /// protocol's serialized-size-in-block while `txSize` reported the bare
+    /// molecule size, so a client (and the frontend, in three places) recomputing
+    /// `fee / txSize` got a different rate than the API's own field, and the
+    /// size disagreed with the node and official explorer by 4 bytes.
+    ///
+    /// Vector: mainnet tx 0xdf615176… — molecule 981 bytes, fee 2074 shannons.
+    /// The node/explorer size is 985 and the protocol fee rate is 2105.
+    #[test]
+    fn fee_rate_is_reproducible_from_the_served_tx_size() {
+        let molecule_size = 981i32;
+        let fee: u128 = 2074;
+
+        let served_size = tx_serialized_size_in_block(molecule_size);
+        assert_eq!(served_size, 985, "must match the node/explorer size");
+
+        let served_rate = tx_fee_rate(fee, served_size);
+        assert_eq!(served_rate, "2105");
+        assert_eq!(
+            served_rate,
+            (fee * 1000 / u128::try_from(served_size).unwrap()).to_string(),
+            "feeRate must equal fee * 1000 / txSize using the served txSize"
+        );
     }
 
     #[test]

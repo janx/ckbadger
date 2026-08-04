@@ -646,18 +646,40 @@ fn code_hash_to_semantic_tag(code_hash: &[u8], hash_type: i16) -> CellSemanticTa
         };
     }
 
+    // Exhaustive on purpose: no `_` arm. A new `ProtocolScript` variant must
+    // fail to compile here rather than silently classify as `Plain`, which is
+    // how did:ckb went unindexed through every from-genesis re-sync while the
+    // live-sync classifiers handled it correctly.
     match PROTOCOL_REGISTRY.get(code_hash) {
         // DAO does not enforce hash_type — matches historical behavior.
         Some(ProtocolScript::Dao) => CellSemanticTag::Dao,
         Some(ProtocolScript::DotbitAccount) => CellSemanticTag::Dotbit,
         Some(ProtocolScript::BitCell) => CellSemanticTag::BitCell,
+        Some(ProtocolScript::DidCkb) => CellSemanticTag::DidCkb,
         Some(
             ProtocolScript::MnftIssuer | ProtocolScript::MnftClass | ProtocolScript::MnftToken,
         ) => CellSemanticTag::Mnft,
         Some(ProtocolScript::SporeNft | ProtocolScript::SporeDid) => CellSemanticTag::Spore,
         Some(ProtocolScript::Cluster) => CellSemanticTag::Cluster,
-        // Unregistered code_hash or a non-cell protocol.
-        _ => CellSemanticTag::Plain,
+        // UDT deployments are resolved above by `UdtParser`, the single source
+        // for standard and bundled xUDT-compatible code hashes. Reaching here
+        // means that parser rejected this (code_hash, hash_type) pair.
+        Some(ProtocolScript::Sudt | ProtocolScript::Xudt) => CellSemanticTag::Plain,
+        // Lock scripts and non-cell protocols carry no cell-level semantic tag;
+        // they are detected from the lock side, not the type script.
+        Some(
+            ProtocolScript::RgbppLock
+            | ProtocolScript::BtcTimeLock
+            | ProtocolScript::FiberFunding
+            | ProtocolScript::FiberCommitment
+            | ProtocolScript::StablePpAsset
+            | ProtocolScript::StablePpPool
+            | ProtocolScript::StablePpIntent
+            | ProtocolScript::StablePpVault
+            | ProtocolScript::UtxoSwapIntent,
+        ) => CellSemanticTag::Plain,
+        // Unregistered code_hash.
+        None => CellSemanticTag::Plain,
     }
 }
 
@@ -1261,6 +1283,74 @@ mod tests {
     fn classify_from_code_hash_unknown_type_is_plain() {
         let hash = [0xFF; 32];
         assert_eq!(code_hash_to_semantic_tag(&hash, 1), CellSemanticTag::Plain);
+    }
+
+    /// Regression: did:ckb cells must classify as `DidCkb` in the bulk-build
+    /// path. This classifier is the ONLY one a from-genesis re-sync exercises,
+    /// so a missing arm here silently drops every did:ckb identity even though
+    /// the live-sync classifiers handle it.
+    #[test]
+    fn classify_from_code_hash_did_ckb() {
+        for hex in [
+            crate::parser::test_helpers::real_did_ckb::TYPE_CODE_HASH_MAINNET,
+            crate::parser::test_helpers::real_did_ckb::TYPE_CODE_HASH_TESTNET,
+        ] {
+            let hash = crate::rpc::parse_hex_to_bytes(hex);
+            assert_eq!(
+                code_hash_to_semantic_tag(&hash, 1),
+                CellSemanticTag::DidCkb,
+                "did:ckb code_hash {hex} must classify as DidCkb in bulk build"
+            );
+        }
+    }
+
+    /// Cross-path parity: for every code_hash the protocol registry knows, the
+    /// bulk-build classifier and the live-sync classifier must agree.
+    ///
+    /// The did:ckb outage was invisible to per-protocol unit tests because they
+    /// only exercised one path. Any future `ProtocolScript` variant that is
+    /// wired into one classifier but not the other fails here.
+    #[test]
+    fn bulk_and_live_classifiers_agree_on_every_registered_code_hash() {
+        use crate::parser::cell::ParsedCell;
+        use crate::parser::registry::PROTOCOL_REGISTRY;
+
+        let mut divergences = Vec::new();
+        for (code_hash, protocol) in PROTOCOL_REGISTRY.iter() {
+            for hash_type in [0i16, 1, 2, 4] {
+                let cell = ParsedCell {
+                    capacity: 0,
+                    lock_code_hash: vec![0u8; 32],
+                    lock_hash_type: 1,
+                    lock_args: Vec::new(),
+                    lock_script_hash: vec![0u8; 32],
+                    type_code_hash: Some(code_hash.clone()),
+                    type_hash_type: Some(hash_type),
+                    type_args: Some(Vec::new()),
+                    type_script_hash: Some(vec![0u8; 32]),
+                    data_hash: [0u8; 32],
+                    data_size: 0,
+                    data: Vec::new(),
+                };
+                let live = crate::sync::pipeline::classify_bulk_cell_semantic_tag(&cell);
+                let bulk = code_hash_to_semantic_tag(code_hash, hash_type);
+                if live != bulk {
+                    divergences.push(format!(
+                        "code_hash=0x{} protocol={:?} hash_type={}: live={:?} bulk={:?}",
+                        hex::encode(code_hash),
+                        protocol,
+                        hash_type,
+                        live,
+                        bulk
+                    ));
+                }
+            }
+        }
+        assert!(
+            divergences.is_empty(),
+            "bulk and live semantic-tag classifiers diverge:\n  {}",
+            divergences.join("\n  ")
+        );
     }
 
     /// Testnet regression: testnet sUDT + testnet mNFT token classify in bulk

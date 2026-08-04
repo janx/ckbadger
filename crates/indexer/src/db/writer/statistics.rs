@@ -69,9 +69,8 @@ pub struct DaoSnapshotInput {
     pub cum_dao_compensation: i128,
     /// Cumulative secondary issuance to treasury (shannons).
     pub cum_treasury: i128,
-    /// AR-based compensation sum for active (status-0) deposits (shannons).
-    pub unmade_dao_interests: i128,
-    /// Unclaimed DAO compensation at this point (shannons).
+    /// Unclaimed DAO compensation at this point (shannons): accruing on live
+    /// deposits plus already frozen on phase-1 withdraw-request cells.
     pub unclaimed_compensation: i128,
     /// Cumulative count of unique addresses that have ever deposited.
     pub cumulative_depositors: i64,
@@ -108,7 +107,6 @@ impl ExactDaoSnapshotCompensation {
         snapshot.compensation = self.breakdown.claimed;
         snapshot.cum_dao_compensation = self.total;
         snapshot.unclaimed_compensation = self.breakdown.unclaimed;
-        snapshot.unmade_dao_interests = self.breakdown.active_unmade;
         snapshot.secondary_pool = self.secondary_pool;
         snapshot.cum_treasury = self.treasury;
     }
@@ -117,7 +115,6 @@ impl ExactDaoSnapshotCompensation {
         input.total_compensation = self.breakdown.claimed;
         input.cum_dao_compensation = self.total;
         input.unclaimed_compensation = self.breakdown.unclaimed;
-        input.unmade_dao_interests = self.breakdown.active_unmade;
         input.secondary_pool = self.secondary_pool;
         input.cum_treasury = self.treasury;
     }
@@ -610,7 +607,6 @@ impl BatchWriter {
             cum_miner_secondary: dao_snapshot.cum_miner_secondary,
             cum_dao_compensation: dao_snapshot.cum_dao_compensation,
             cum_treasury: dao_snapshot.cum_treasury,
-            unmade_dao_interests: dao_snapshot.unmade_dao_interests,
             unclaimed_compensation: dao_snapshot.unclaimed_compensation,
             cumulative_depositors: dao_snapshot.cumulative_depositors,
             daily_depositor_addresses: dao_snapshot.daily_depositor_addresses,
@@ -983,24 +979,9 @@ impl BatchWriter {
                 breakdown.unclaimed
             )
         })?;
-        let treasury = secondary_pool
-            .checked_sub(breakdown.active_unmade)
-            .ok_or_else(|| {
-                anyhow!(
-                    "DAO treasury subtraction overflow at observation block {}: secondary_pool={}, active_unmade={}",
-                    observation_block,
-                    secondary_pool,
-                    breakdown.active_unmade
-                )
-            })?;
-        if treasury < 0 {
-            bail!(
-                "active DAO interests exceed secondary pool at observation block {}: secondary_pool={}, active_unmade={}",
-                observation_block,
-                secondary_pool,
-                breakdown.active_unmade
-            );
-        }
+        let treasury = breakdown
+            .treasury(secondary_pool)
+            .with_context(|| format!("at observation block {observation_block}"))?;
 
         Ok(ExactDaoSnapshotCompensation {
             breakdown,
@@ -1506,7 +1487,6 @@ mod tests {
             cum_dao_compensation: 20_00000000,
             cum_treasury: 30_00000000,
             unclaimed_compensation: 0,
-            unmade_dao_interests: 0,
             cumulative_depositors: 0,
             daily_depositor_addresses: 0,
             protocol_deposited: None,
@@ -1530,12 +1510,12 @@ mod tests {
         assert_eq!(latest.deposit_compensation, 296_00000000);
         assert_eq!(latest.burnt, 32_00000000);
 
-        // Verify snapshot's unmade_dao_interests and secondary_pool were patched
+        // Verify snapshot's unclaimed_compensation and secondary_pool were patched
         // to the live tip values, ensuring chart and stats agree.
         let patched_snapshot = store.get_latest_dao_daily_snapshot().unwrap().unwrap();
         assert_eq!(patched_snapshot.compensation, 198_00000000);
         assert_eq!(patched_snapshot.cum_dao_compensation, 296_00000000);
-        assert_eq!(patched_snapshot.unmade_dao_interests, 98_00000000);
+        assert_eq!(patched_snapshot.unclaimed_compensation, 98_00000000);
         assert_eq!(patched_snapshot.secondary_pool, 130_00000000); // tip_s
     }
 
@@ -1591,7 +1571,6 @@ mod tests {
             cum_dao_compensation: 0,
             cum_treasury: 0,
             unclaimed_compensation: 0,
-            unmade_dao_interests: 0,
             cumulative_depositors: 1,
             daily_depositor_addresses: 0,
             protocol_deposited: Some(202_00000000),
@@ -1667,7 +1646,6 @@ mod tests {
             "the completed day must be exact in the same commit that writes it"
         );
         assert_eq!(previous.unclaimed_compensation, 100_00000000);
-        assert_eq!(previous.unmade_dao_interests, 100_00000000);
         assert_eq!(previous.cum_treasury, 200_00000000);
         assert_eq!(previous.secondary_pool, 300_00000000);
 
@@ -1759,7 +1737,6 @@ mod tests {
         // free = 202 - 102 = 100 CKB; compensation = 100 * 200/100 - 100 = 100 CKB.
         assert_eq!(with_overlay.cum_dao_compensation, 100_00000000);
         assert_eq!(with_overlay.unclaimed_compensation, 100_00000000);
-        assert_eq!(with_overlay.unmade_dao_interests, 100_00000000);
         assert_eq!(with_overlay.cum_treasury, 200_00000000);
         assert_eq!(with_overlay.total_compensation, 0);
     }
@@ -1818,6 +1795,20 @@ mod tests {
         assert_eq!(pending.unclaimed_compensation, 100_00000000);
         assert_eq!(pending.total_compensation, 0);
         assert_eq!(pending.cum_dao_compensation, 100_00000000);
+        // Regression: the protocol removes this deposit's interest from `S` only
+        // at phase-2 completion, so while the request is pending the 100 CKB is
+        // still inside `S` AND already counted in `cum_dao_compensation`.
+        // Deriving treasury from the status-0 share alone left it in treasury
+        // too, double-counting it across two buckets of one partition.
+        assert_eq!(
+            pending.cum_treasury, 200_00000000,
+            "phase-1 frozen interest must be excluded from treasury"
+        );
+        assert_eq!(
+            pending.cum_treasury + pending.unclaimed_compensation,
+            300_00000000,
+            "treasury + unclaimed must reconstruct the protocol's S exactly"
+        );
 
         // The same batch stages the phase-2 completion at block 8, so by the end
         // of this day the frozen value is claimed, not unclaimed.
@@ -1843,7 +1834,6 @@ mod tests {
             "a completion staged in this batch must be claimed by the day it closes"
         );
         assert_eq!(claimed.unclaimed_compensation, 0);
-        assert_eq!(claimed.unmade_dao_interests, 0);
         assert_eq!(
             claimed.cum_dao_compensation, 100_00000000,
             "the cumulative total is unchanged by the claimed/unclaimed split"
@@ -1899,7 +1889,6 @@ mod tests {
             cum_miner_secondary: 0,
             cum_dao_compensation: 0,
             cum_treasury: 0,
-            unmade_dao_interests: 0,
             unclaimed_compensation: 0,
             cumulative_depositors: 1,
             daily_depositor_addresses: 0,
@@ -2053,7 +2042,6 @@ mod tests {
             cum_dao_compensation: 20_00000000,
             cum_treasury: 30_00000000,
             unclaimed_compensation: 0,
-            unmade_dao_interests: 0,
             cumulative_depositors: 0,
             daily_depositor_addresses: 0,
             protocol_deposited: None,

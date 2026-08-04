@@ -9697,7 +9697,6 @@ mod tests {
             cum_miner_secondary: 1010,
             cum_dao_compensation: 1111,
             cum_treasury: 1212,
-            unmade_dao_interests: 1313,
             unclaimed_compensation: 1414,
             cumulative_depositors: 1515,
             daily_depositor_addresses: 1616,
@@ -9808,7 +9807,6 @@ mod tests {
             "fork-point date snapshot must be recomputed, not left at its stale cumulative value"
         );
         assert_eq!(recomputed.unclaimed_compensation, expected_unclaimed);
-        assert_eq!(recomputed.unmade_dao_interests, expected_unclaimed);
         assert_eq!(
             recomputed.cum_treasury,
             i128::from(CROSS_DAY_S) - expected_unclaimed

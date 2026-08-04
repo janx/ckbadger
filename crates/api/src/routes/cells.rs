@@ -3111,7 +3111,9 @@ async fn get_address_transactions(
                 let inputs_count = tx_entry.inputs_count;
                 let outputs_count = tx_entry.outputs_count;
                 let is_cellbase = tx_entry.is_cellbase;
-                let tx_size = Some(tx_entry.tx_size);
+                let tx_size = Some(crate::routes::transactions::tx_serialized_size_in_block(
+                    tx_entry.tx_size,
+                ));
                 let cycles = tx_entry.cycles;
 
                 // Script labels from semantic_tags bitmap (single calculation path).

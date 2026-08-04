@@ -63,14 +63,17 @@ function NetworkSwitcherControl({ networks, className, onSwitch }: NetworkSwitch
         aria-haspopup="menu"
         className={cn(
           NAVBAR_DROPDOWN_TRIGGER_CLASS,
-          'border-base-border/80 bg-base-surface/70 text-text-dim hover:border-text-ghost hover:bg-base-elevated/70 hover:text-text focus-visible:border-aqua/40 focus-visible:ring-aqua/20 w-full justify-between focus-visible:outline-none focus-visible:ring-1 md:w-auto'
+          'border-aqua/50 bg-aqua/10 text-aqua shadow-glow-aqua hover:border-aqua/80 hover:bg-aqua/15 hover:text-info-bright focus-visible:border-aqua focus-visible:ring-aqua/30 w-full justify-between focus-visible:outline-none focus-visible:ring-1 md:w-auto'
         )}
       >
-        <span aria-hidden="true" className="bg-text-ghost h-1.5 w-1.5 shrink-0 rounded-full" />
+        <span
+          aria-hidden="true"
+          className="bg-aqua h-1.5 w-1.5 shrink-0 rounded-full shadow-[0_0_6px_rgba(104,204,240,0.8)]"
+        />
         <span className="truncate">{active}</span>
         <svg
           aria-hidden="true"
-          className="text-text-ghost ml-auto h-3 w-3 shrink-0"
+          className="text-aqua/70 ml-auto h-3 w-3 shrink-0"
           fill="none"
           viewBox="0 0 24 24"
           stroke="currentColor"
@@ -103,7 +106,7 @@ function NetworkSwitcherControl({ networks, className, onSwitch }: NetworkSwitch
                     className={cn(
                       'flex w-full items-center gap-2 rounded-sm px-2.5 py-2 text-left transition-colors',
                       isActive
-                        ? 'bg-base-elevated text-text-bright'
+                        ? 'bg-aqua/10 text-aqua'
                         : 'text-text-dim hover:bg-base-elevated/60 hover:text-text'
                     )}
                   >
@@ -111,16 +114,16 @@ function NetworkSwitcherControl({ networks, className, onSwitch }: NetworkSwitch
                       aria-hidden="true"
                       className={cn(
                         'flex h-3 w-3 shrink-0 items-center justify-center rounded-full border',
-                        isActive ? 'border-aqua/70' : 'border-text-ghost'
+                        isActive ? 'border-aqua' : 'border-text-ghost'
                       )}
                     >
-                      {isActive && <span className="bg-aqua/70 h-1 w-1 rounded-full" />}
+                      {isActive && <span className="bg-aqua h-1 w-1 rounded-full" />}
                     </span>
                     <span className="min-w-0 flex-1 truncate font-mono text-[11px] uppercase tracking-[0.12em]">
                       {net}
                     </span>
                     {isActive && (
-                      <span className="text-text-ghost font-mono text-[8px] uppercase tracking-[0.12em]">
+                      <span className="text-aqua/70 font-mono text-[8px] uppercase tracking-[0.12em]">
                         Current
                       </span>
                     )}

@@ -266,7 +266,7 @@ fn deposit_to_response(
     outpoint_key: &[u8],
     entry: &ckbadger_store::DaoDepositCacheEntry,
     state: &AppState,
-) -> DaoDepositResponse {
+) -> Result<DaoDepositResponse, ApiRouteError> {
     let (tx_hash_bytes, output_index) = keys::decode_outpoint(outpoint_key);
 
     // Try to resolve the block header for timestamp
@@ -335,7 +335,24 @@ fn deposit_to_response(
         }
     };
 
-    DaoDepositResponse {
+    // Compensation is known the moment a withdraw request exists: it freezes at
+    // the request AR. Derived through the same helper the DAO aggregates use, so
+    // the listing and `/dao/statistics` can never disagree. Still accruing
+    // (status 0) has no settled value to report.
+    let compensation = if entry.withdraw_request_block.is_some() {
+        Some(
+            ckbadger_store::dao_frozen_request_compensation(entry).map_err(|e| {
+                ApiError::internal(format!(
+                    "failed to derive DAO compensation for outpoint 0x{}: {e:#}",
+                    hex::encode(outpoint_key)
+                ))
+            })?,
+        )
+    } else {
+        None
+    };
+
+    Ok(DaoDepositResponse {
         tx_hash: format!("0x{}", hex::encode(&tx_hash_bytes)),
         output_index: output_index as i32,
         lock_script_hash: format!("0x{}", hex::encode(&entry.lock_script_hash)),
@@ -353,8 +370,8 @@ fn deposit_to_response(
         withdraw_timestamp,
         withdraw_tx_hash,
         withdraw_to_output_index: entry.withdraw_to_output_index.map(i32::from),
-        compensation: entry.compensation.map(|c| c.to_string()),
-    }
+        compensation: compensation.map(|c| c.to_string()),
+    })
 }
 
 async fn list_deposits(
@@ -412,7 +429,7 @@ async fn list_deposits(
     let deposits: Vec<DaoDepositResponse> = page
         .iter()
         .map(|(key, entry)| deposit_to_response(key, entry, &state))
-        .collect();
+        .collect::<Result<_, _>>()?;
 
     ok(CursorPaginatedResponse::without_total(
         deposits,
@@ -457,7 +474,7 @@ async fn get_deposits_by_address(
     let deposits: Vec<DaoDepositResponse> = page
         .iter()
         .map(|(key, entry)| deposit_to_response(key, entry, &state))
-        .collect();
+        .collect::<Result<_, _>>()?;
 
     ok(CursorPaginatedResponse::without_total(
         deposits,
@@ -1253,7 +1270,7 @@ mod tests {
     fn snapshot(
         total_issuance: i128,
         secondary_pool: i128,
-        unmade_dao_interests: i128,
+        unclaimed_compensation: i128,
     ) -> ckbadger_store::DaoDailySnapshot {
         ckbadger_store::DaoDailySnapshot {
             date: "2026-02-18".to_string(),
@@ -1269,11 +1286,10 @@ mod tests {
             cum_miner_secondary: 0,
             cum_dao_compensation: 0,
             cum_treasury: 999,
-            unclaimed_compensation: 0,
+            unclaimed_compensation,
             cumulative_depositors: 0,
             daily_depositor_addresses: 0,
             protocol_deposited: None,
-            unmade_dao_interests,
         }
     }
 

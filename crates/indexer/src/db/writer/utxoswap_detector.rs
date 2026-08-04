@@ -34,44 +34,54 @@ impl ProtocolDetector for UtxoSwapDetector {
                 .any(|output| is_intent_lock(output.lock_code_hash))
     }
 
+    /// One action per intent cell, not one per transaction: a single tx can
+    /// carry several independent intents, and their args can be byte-identical
+    /// when different owners submit the same amounts against the same pool.
+    fn emits_tx_level_actions(&self) -> bool {
+        false
+    }
+
     fn detect(
         &self,
         tx: &TxView<'_>,
         owner_lock_hash: &[u8],
-        accum: &OwnerAccum<'_>,
+        _accum: &OwnerAccum<'_>,
         _item_deltas: &[ItemDelta],
         _type_calls: &[TypeCallEntry],
         _lock_calls: &[LockCallEntry],
     ) -> anyhow::Result<Vec<ProtocolAction>> {
         let mut actions = Vec::new();
 
-        let ckb_delta = accum.output_capacity - accum.input_capacity;
-
         // --- Submitted: intent lock on outputs, only for the intent's owner ---
-        if ckb_delta < 0 {
-            for output in &tx.outputs {
-                if !is_intent_lock(output.lock_code_hash) {
-                    continue;
-                }
-                let parsed = match parse_intent_args(output.lock_args) {
-                    Some(p) => p,
-                    None => continue,
-                };
-
-                // Only attribute to the actual intent owner, not co-signers or fee sponsors
-                if owner_lock_hash.len() < 20 || owner_lock_hash[..20] != parsed.owner_lock_hash[..]
-                {
-                    continue;
-                }
-
-                let action_name = format!("{}_submitted", parsed.intent_type.action_name());
-
-                actions.push(ProtocolAction::new(
-                    "utxoswap",
-                    action_name,
-                    parsed.metadata_json(),
-                ));
+        //
+        // Attribution comes from the owner prefix the intent cell records on
+        // chain — the same evidence the settled branch below uses. It must NOT
+        // additionally require the owner's net CKB delta to be negative: an
+        // intent cell's capacity can be funded by anyone, and a batching
+        // transaction can hand the submitter back more capacity than it spent.
+        // Mainnet tx 0x8fa2c828… submits two intents and only one submitter has
+        // a negative delta; the other (+8,799,994,175 shannons) was dropped.
+        for output in &tx.outputs {
+            if !is_intent_lock(output.lock_code_hash) {
+                continue;
             }
+            let parsed = match parse_intent_args(output.lock_args) {
+                Some(p) => p,
+                None => continue,
+            };
+
+            // Only attribute to the actual intent owner, not co-signers or fee sponsors
+            if owner_lock_hash.len() < 20 || owner_lock_hash[..20] != parsed.owner_lock_hash[..] {
+                continue;
+            }
+
+            let action_name = format!("{}_submitted", parsed.intent_type.action_name());
+
+            actions.push(ProtocolAction::new(
+                "utxoswap",
+                action_name,
+                parsed.metadata_json(),
+            ));
         }
 
         // --- Settled: intent lock on inputs, owner_lock_hash prefix match ---
@@ -311,6 +321,138 @@ mod tests {
         assert_eq!(meta["amountOutMin"], "500");
         assert_eq!(meta["assetInIndex"], 0);
         assert!(meta["poolTypeHash"].as_str().unwrap().starts_with("0x"));
+    }
+
+    /// Regression (mainnet tx 0x8fa2c828…): one transaction submits two intents
+    /// for two different owners, and only one of those owners has a negative net
+    /// CKB delta. The intent args record the owner on chain, so attribution must
+    /// come from that prefix alone — gating on the owner's capacity delta drops
+    /// real submissions (the other owner there was +8,799,994,175 shannons).
+    #[test]
+    fn test_swap_submitted_for_owner_with_non_negative_ckb_delta() {
+        let intent_code_hash = parse_hex_to_bytes(INTENT_LOCK_CODE_HASH_MAINNET);
+        let standard_lock = vec![0x11; 32];
+
+        let payer: u8 = 0xAA;
+        let funded: u8 = 0xBB;
+        // Distinct lock_script_hash per intent cell: different args hash to
+        // different script hashes on chain.
+        let intent_cell_a: u8 = 0xF0;
+        let intent_cell_b: u8 = 0xF1;
+
+        let payer_args = build_intent_args(&[payer; 20], 3, 0, 1000, 500);
+        // `funded` submits an intent whose capacity someone else pays for, and
+        // still ends the transaction with more CKB than it started with.
+        let funded_args = build_intent_args(&[funded; 20], 3, 1, 7000, 6000);
+
+        let inputs = vec![
+            make_input(payer, standard_lock.clone(), vec![0x22; 20], 900_00000000),
+            make_input(funded, standard_lock.clone(), vec![0x33; 20], 100_00000000),
+        ];
+        let outputs = vec![
+            make_output(
+                intent_cell_a,
+                intent_code_hash.clone(),
+                payer_args,
+                300_00000000,
+            ),
+            make_output(intent_cell_b, intent_code_hash, funded_args, 400_00000000),
+            // payer: 900 in, 100 out  -> delta -800
+            make_output(payer, standard_lock.clone(), vec![0x22; 20], 100_00000000),
+            // funded: 100 in, 200 out -> delta +100 (non-negative)
+            make_output(funded, standard_lock, vec![0x33; 20], 200_00000000),
+        ];
+
+        let tx = TxView {
+            tx_hash: &[0x51; 32],
+            block_hash: &[0xD1; 32],
+            tx_index: 1,
+            block_number: 6001,
+            timestamp: 1_700_300_001,
+            is_cellbase: false,
+            inputs: inputs.iter().map(|i| i.view()).collect(),
+            outputs: outputs.iter().map(|o| o.view()).collect(),
+        };
+
+        let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(UtxoSwapDetector::new(true))];
+        let actions_list = build_tx_actions_for_block(&[tx], &detectors).unwrap();
+        let actions = &actions_list[0];
+
+        let submitted: Vec<_> = actions
+            .protocol_actions
+            .iter()
+            .filter(|a| a.protocol == "utxoswap" && a.action == "swap_exact_input_submitted")
+            .collect();
+        assert_eq!(
+            submitted.len(),
+            2,
+            "both on-chain intent cells must produce a submitted action, got {submitted:?}"
+        );
+        let amounts: Vec<String> = submitted
+            .iter()
+            .map(|a| {
+                a.metadata_value().unwrap()["amountIn"]
+                    .as_str()
+                    .unwrap()
+                    .to_string()
+            })
+            .collect();
+        assert!(amounts.contains(&"1000".to_string()), "{amounts:?}");
+        assert!(amounts.contains(&"7000".to_string()), "{amounts:?}");
+    }
+
+    /// Regression (mainnet tx 0xffedf80f…): a batch settle consumes five intent
+    /// cells owned by five different addresses whose payloads are byte-identical.
+    /// They are five distinct on-chain events, but the tx-level dedup key is
+    /// (protocol, action, metadata) — which carries no owner — so they collapsed
+    /// into one action. Per-cell detector output must not be deduped.
+    #[test]
+    fn test_batch_settle_keeps_one_action_per_intent_cell() {
+        let intent_code_hash = parse_hex_to_bytes(INTENT_LOCK_CODE_HASH_MAINNET);
+        let standard_lock = vec![0x11; 32];
+        let owners: [u8; 3] = [0xA1, 0xA2, 0xA3];
+
+        // Identical payloads, different owners — exactly the on-chain shape.
+        let inputs: Vec<OwnedInput> = owners
+            .iter()
+            .enumerate()
+            .map(|(i, owner)| {
+                make_input(
+                    0xE0 + i as u8,
+                    intent_code_hash.clone(),
+                    build_intent_args(&[*owner; 20], 3, 1, 2000, 1500),
+                    100_00000000,
+                )
+            })
+            .collect();
+        let outputs: Vec<OwnedOutput> = owners
+            .iter()
+            .map(|owner| make_output(*owner, standard_lock.clone(), vec![0x22; 20], 99_00000000))
+            .collect();
+
+        let tx = TxView {
+            tx_hash: &[0x52; 32],
+            block_hash: &[0xD2; 32],
+            tx_index: 1,
+            block_number: 6002,
+            timestamp: 1_700_300_002,
+            is_cellbase: false,
+            inputs: inputs.iter().map(|i| i.view()).collect(),
+            outputs: outputs.iter().map(|o| o.view()).collect(),
+        };
+
+        let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(UtxoSwapDetector::new(true))];
+        let actions_list = build_tx_actions_for_block(&[tx], &detectors).unwrap();
+        let settled = actions_list[0]
+            .protocol_actions
+            .iter()
+            .filter(|a| a.protocol == "utxoswap" && a.action == "swap_exact_input_settled")
+            .count();
+        assert_eq!(
+            settled,
+            owners.len(),
+            "each consumed intent cell is a distinct settlement event"
+        );
     }
 
     #[test]

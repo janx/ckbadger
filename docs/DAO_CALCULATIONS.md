@@ -69,7 +69,7 @@ must subtract the complete `S` pool, not only its treasury portion.
 | ----------------------------- | ------------------------------------------------------ | ------------------------- |
 | `total_issuance`              | DAO field `C` (genesis + primary + secondary schedule) | 33.6B                     |
 | `unissued_secondary`          | DAO field `S` (unmade DAO interest + treasury)         | ~0                        |
-| `secondary_treasury`          | `S - unmade_dao_interests`                             | ~0                        |
+| `secondary_treasury`          | `S - unclaimed_compensation`                           | ~0                        |
 | `protocol_circulating`        | `C - GenesisBaseline.burnt - S`                        | ~25.2B                    |
 | `liquid`                      | `protocol_circulating - locked_in_dao`                 | varies                    |
 | `explorer_policy_locked`      | Explorer-labelled vesting and Bug Bounty balances      | varies                    |
@@ -329,16 +329,36 @@ the preceding batch.
 
 ### 3.3 Treasury
 
-The explorer-compatible treasury series is derived directly from the on-chain
-secondary pool and active unmade interest:
+The treasury series is derived directly from the on-chain secondary pool and
+the total unmade DAO interest:
 
 ```
-treasury = S - active_unmade
+treasury = S - unclaimed_compensation
 ```
 
-This formula deliberately uses only still-accruing status-0 compensation.
-Phase-1 compensation is frozen and remains in `unclaimed_compensation`, but is
-not part of `active_unmade`.
+`S` shrinks only when a phase-2 completion transaction subtracts
+`withdrawed_interests`, so at any observation block it still holds the interest
+owed to live deposits **and** the interest already frozen on phase-1
+withdraw-request cells. Both are in `unclaimed_compensation`, so both must come
+out of treasury.
+
+Subtracting only `active_unmade` (the status-0 share) leaves the phase-1 frozen
+amount inside treasury while `cum_dao_compensation = claimed + unclaimed`
+already counts it — the same shannons in two buckets of one partition, which
+overstated mainnet's secondary-issuance breakdown by 77,489,937.99 CKB
+(see POSTMORTEM DAO-028). `active_unmade` is a diagnostic split only and is
+never a valid treasury summand.
+
+The partition invariant, which every write path must preserve:
+
+```
+treasury + unclaimed_compensation == S
+cum_miner_secondary + cum_dao_compensation + treasury == Σ secondary issuance
+```
+
+`dao_treasury_split(secondary_pool, unclaimed)` in `ckbadger-store` is the sole
+implementation, shared by the live writer, the bulk reducer, the store
+recompute path, and the API read path.
 
 ### 3.4 Data sources and implementation
 
@@ -396,7 +416,7 @@ Shows stacked area of CKB distribution:
 ```
 total_issuance = DAO field C
 unissued_secondary = DAO field S
-secondary_treasury = S - unmade_dao_interests
+secondary_treasury = S - unclaimed_compensation
 total_burnt = GenesisBaseline.burnt + secondary_treasury
 protocol_circulating =
     total_issuance - GenesisBaseline.burnt - unissued_secondary
@@ -409,9 +429,10 @@ liquid = protocol_circulating - locked_in_dao
 | Locked in DAO        | active DAO deposit principal                 | ~0         |
 | Burnt                | `GenesisBaseline.burnt + secondary_treasury` | 8.4B       |
 
-Outstanding `unmade_dao_interests` are not circulating yet and are not
-treasury/burnt. Consequently the three displayed layers sum to
-`C - unmade_dao_interests`.
+Outstanding `unclaimed_compensation` (interest accruing on live deposits plus
+interest frozen on phase-1 withdraw-request cells) is not circulating yet and is
+not treasury/burnt. Consequently the three displayed layers sum to
+`C - unclaimed_compensation`.
 
 **Implementation**: `crates/api/src/routes/statistics.rs::get_total_supply_chart()`
 

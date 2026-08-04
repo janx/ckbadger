@@ -221,6 +221,21 @@ pub(crate) trait ProtocolDetector: Send + Sync {
         type_calls: &[TypeCallEntry],
         lock_calls: &[LockCallEntry],
     ) -> Result<Vec<ProtocolAction>>;
+
+    /// Emission model of this detector, which decides whether its actions may
+    /// be deduplicated across owners.
+    ///
+    /// `true` (default): `detect` summarises ONE tx-level event and re-derives
+    /// the same action for every participating owner, so owner-duplicates must
+    /// collapse into a single action.
+    ///
+    /// `false`: `detect` emits one action per on-chain cell that belongs to the
+    /// queried owner. Those never duplicate across owners, and two distinct
+    /// cells can carry byte-identical payloads — deduping by
+    /// (protocol, action, metadata) would silently merge separate events.
+    fn emits_tx_level_actions(&self) -> bool {
+        true
+    }
 }
 
 /// Build `TxActions` for all transactions in a block (no protocol detectors).
@@ -591,11 +606,12 @@ fn build_tx_actions<'a>(
             })
             .collect();
 
-        // Run detectors per-owner, collect at TX level. Detector actions are
-        // gathered into their own vec (not `all_protocol_actions`) so the
-        // per-owner dedup below never touches the per-cell DAO actions pushed
-        // earlier in this loop. A detector that reports an invariant violation
-        // aborts the batch rather than contributing a partial action set.
+        // Run detectors per-owner, collect at TX level. Tx-level detector output
+        // goes into its own vec so the cross-owner dedup below never touches the
+        // per-cell DAO actions pushed earlier in this loop — nor the per-cell
+        // detector output, which is already one action per on-chain cell. A
+        // detector that reports an invariant violation aborts the batch rather
+        // than contributing a partial action set.
         for detector in &applicable_detectors {
             let detector_actions = detector.detect(
                 tx,
@@ -605,7 +621,11 @@ fn build_tx_actions<'a>(
                 &owner_type_calls,
                 &owner_lock_calls,
             )?;
-            detector_protocol_actions.extend(detector_actions);
+            if detector.emits_tx_level_actions() {
+                detector_protocol_actions.extend(detector_actions);
+            } else {
+                all_protocol_actions.extend(detector_actions);
+            }
         }
 
         // Compute tags bitmask
@@ -641,12 +661,15 @@ fn build_tx_actions<'a>(
         });
     }
 
-    // Deduplicate detector-derived actions only: the same detector re-derives
-    // one tx-level event per participating owner (utxoswap/stablepp/fiber/
-    // rgbpp), so owner-duplicates must collapse to one. Per-cell DAO actions in
-    // `all_protocol_actions` are NOT deduped — they are emitted once per cell
-    // and legitimately repeat (e.g. one tx creating six equal-capacity DAO
-    // deposits for one lock must keep all six `dao:deposit` actions).
+    // Deduplicate tx-level detector output only: those detectors re-derive one
+    // tx-level event per participating owner (stablepp/fiber/rgbpp), so
+    // owner-duplicates must collapse to one. `all_protocol_actions` is NOT
+    // deduped — it holds per-cell actions (DAO deposits/withdrawals, and
+    // detectors that report `emits_tx_level_actions() == false` such as
+    // utxoswap intents). Those are emitted once per cell and legitimately
+    // repeat: one tx creating six equal-capacity DAO deposits for one lock must
+    // keep all six `dao:deposit` actions, and a batch settle consuming five
+    // intent cells with byte-identical payloads is five settlements.
     dedup_protocol_actions(&mut detector_protocol_actions);
     all_protocol_actions.extend(detector_protocol_actions);
 

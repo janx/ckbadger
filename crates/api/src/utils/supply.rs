@@ -1,4 +1,5 @@
 use anyhow::{ensure, Context, Result};
+use ckbadger_store::types::dao_treasury_split;
 use ckbadger_store::DaoDailySnapshot;
 
 /// Exact supply components derived from one end-of-day DAO snapshot.
@@ -15,42 +16,13 @@ pub struct DaoSupply {
     pub liquid: i128,
 }
 
-/// Derive the treasury portion of DAO `S`.
+/// Derive the treasury portion of DAO `S` for one daily snapshot.
 ///
-/// RFC-0023 defines `S` as all unissued secondary issuance, including both
-/// unmade DAO compensation and treasury funds. The treasury portion is
-/// therefore exactly `S - unmade_dao_interests`.
+/// Delegates to [`dao_treasury_split`], the single derivation shared with the
+/// indexer write paths, and only adds the snapshot date for locating a bad row.
 pub fn dao_treasury(snapshot: &DaoDailySnapshot) -> Result<i128> {
-    ensure!(
-        snapshot.secondary_pool >= 0,
-        "negative secondary_pool in dao_daily_snapshots for {}: {}",
-        snapshot.date,
-        snapshot.secondary_pool
-    );
-    ensure!(
-        snapshot.unmade_dao_interests >= 0,
-        "negative unmade_dao_interests in dao_daily_snapshots for {}: {}",
-        snapshot.date,
-        snapshot.unmade_dao_interests
-    );
-
-    let treasury = snapshot
-        .secondary_pool
-        .checked_sub(snapshot.unmade_dao_interests)
-        .with_context(|| {
-            format!(
-                "treasury underflow in dao_daily_snapshots for {}: secondary_pool={}, unmade_dao_interests={}",
-                snapshot.date, snapshot.secondary_pool, snapshot.unmade_dao_interests
-            )
-        })?;
-    ensure!(
-        treasury >= 0,
-        "unmade DAO interests exceed secondary_pool for {}: secondary_pool={}, unmade_dao_interests={}",
-        snapshot.date,
-        snapshot.secondary_pool,
-        snapshot.unmade_dao_interests
-    );
-    Ok(treasury)
+    dao_treasury_split(snapshot.secondary_pool, snapshot.unclaimed_compensation)
+        .with_context(|| format!("in dao_daily_snapshots for {}", snapshot.date))
 }
 
 /// Derive all user-facing supply components from the canonical DAO fields.
@@ -154,8 +126,7 @@ mod tests {
             cum_miner_secondary: 0,
             cum_dao_compensation: 0,
             cum_treasury: 999,
-            unmade_dao_interests: 100,
-            unclaimed_compensation: 0,
+            unclaimed_compensation: 100,
             cumulative_depositors: 0,
             daily_depositor_addresses: 0,
             protocol_deposited: None,
@@ -184,14 +155,39 @@ mod tests {
         assert_eq!(dao_treasury(&snapshot).unwrap(), 200);
     }
 
+    /// The protocol subtracts a deposit's interest from `S` only when the
+    /// phase-2 completion transaction runs (`withdrawed_interests`). Interest
+    /// already frozen on a phase-1 withdraw-request cell is therefore still
+    /// inside `S`, and it is already counted in `cum_dao_compensation`
+    /// (= claimed + unclaimed). Leaving it in treasury as well counts the same
+    /// shannons twice, so `treasury + unclaimed` must equal `S` exactly.
+    #[test]
+    fn treasury_plus_unclaimed_compensation_equals_secondary_pool() {
+        let mut snapshot = snapshot();
+        snapshot.secondary_pool = 1_000;
+        // 200 accruing on live deposits + 100 frozen on phase-1 request cells.
+        snapshot.unclaimed_compensation = 300;
+
+        let treasury = dao_treasury(&snapshot).unwrap();
+        assert_eq!(
+            treasury + snapshot.unclaimed_compensation,
+            snapshot.secondary_pool,
+            "treasury must exclude ALL unmade DAO interest, not just the status-0 share"
+        );
+        assert_eq!(treasury, 700);
+    }
+
     #[test]
     fn rejects_unmade_interest_above_secondary_pool() {
         let mut snapshot = snapshot();
-        snapshot.unmade_dao_interests = 301;
+        snapshot.unclaimed_compensation = 301;
         let error = dao_supply(&snapshot, 400).unwrap_err();
-        assert!(error
-            .to_string()
-            .contains("unmade DAO interests exceed secondary_pool"));
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("unmade DAO interests exceed secondary_pool"),
+            "{message}"
+        );
+        assert!(message.contains("2026-07-23"), "{message}");
     }
 
     #[test]

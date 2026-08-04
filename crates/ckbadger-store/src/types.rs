@@ -315,6 +315,10 @@ pub struct DaoCompensationBreakdown {
     pub claimed: i128,
     pub unclaimed: i128,
     /// Compensation still accruing on status-0 deposits at the observation AR.
+    ///
+    /// Diagnostic only: this is the status-0 share of `unclaimed`, excluding
+    /// interest already frozen on phase-1 withdraw-request cells. It must never
+    /// be used to derive treasury — see [`dao_treasury_split`].
     pub active_unmade: i128,
 }
 
@@ -322,6 +326,48 @@ impl DaoCompensationBreakdown {
     pub fn total(self) -> Option<i128> {
         self.claimed.checked_add(self.unclaimed)
     }
+
+    /// Treasury portion of the protocol's secondary pool at this observation.
+    pub fn treasury(self, secondary_pool: i128) -> anyhow::Result<i128> {
+        dao_treasury_split(secondary_pool, self.unclaimed)
+    }
+}
+
+/// Split the DAO secondary pool `S` into its treasury portion.
+///
+/// This is the single derivation of treasury; every write and read path routes
+/// through it.
+///
+/// RFC-0023 keeps *all* unissued secondary issuance in `S`, and `S` shrinks only
+/// when a phase-2 completion transaction subtracts `withdrawed_interests`. So at
+/// any observation block `S` still holds the interest owed to both live
+/// (status-0) deposits and phase-1 withdraw-request cells whose amount is
+/// already frozen. Treasury is what remains after removing all of it:
+/// `S - unclaimed`.
+///
+/// Subtracting only the status-0 share leaves phase-1 frozen interest inside
+/// treasury while `cum_dao_compensation` (= claimed + unclaimed) already counts
+/// it, double-counting those shannons across two buckets of one partition
+/// (77,489,937.99 CKB on mainnet at the time this was found).
+pub fn dao_treasury_split(secondary_pool: i128, unclaimed: i128) -> anyhow::Result<i128> {
+    anyhow::ensure!(
+        secondary_pool >= 0,
+        "negative DAO secondary_pool: {secondary_pool}"
+    );
+    anyhow::ensure!(
+        unclaimed >= 0,
+        "negative unclaimed DAO compensation: {unclaimed}"
+    );
+    let treasury = secondary_pool.checked_sub(unclaimed).ok_or_else(|| {
+        anyhow::anyhow!(
+            "DAO treasury subtraction overflow: secondary_pool={secondary_pool}, unclaimed={unclaimed}"
+        )
+    })?;
+    anyhow::ensure!(
+        treasury >= 0,
+        "unmade DAO interests exceed secondary_pool: secondary_pool={secondary_pool}, unclaimed={unclaimed}"
+    );
+    Ok(treasury)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -356,11 +402,9 @@ pub struct DaoDailySnapshot {
     /// Cumulative secondary issuance to treasury (shannons).
     #[serde(default)]
     pub cum_treasury: i128,
-    /// AR-based compensation sum for active (status-0) deposits at end of day (shannons).
-    /// Used to derive explorer-compatible treasury: `secondary_pool - unmade_dao_interests`.
-    #[serde(default)]
-    pub unmade_dao_interests: i128,
-    /// Unclaimed DAO compensation at end of day (shannons).
+    /// Unclaimed DAO compensation at end of day (shannons): interest accruing on
+    /// live deposits plus interest already frozen on phase-1 withdraw-request
+    /// cells. Treasury is derived from this via [`dao_treasury_split`].
     #[serde(default)]
     pub unclaimed_compensation: i128,
     /// Cumulative count of unique addresses that have ever deposited into DAO

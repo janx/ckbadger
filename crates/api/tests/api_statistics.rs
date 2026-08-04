@@ -681,7 +681,6 @@ async fn test_network_stats_includes_hero_metrics_from_dao_snapshot() {
         cum_dao_compensation: 3_000_000_000_000_000,
         cum_treasury: 2_000_000_000_000_000,
         unclaimed_compensation: 0,
-        unmade_dao_interests: 0,
         cumulative_depositors: 0,
         daily_depositor_addresses: 0,
         protocol_deposited: None,
@@ -785,7 +784,6 @@ async fn test_network_stats_circulating_supply_uses_seeded_genesis_baseline() {
         cum_dao_compensation: 3_000_000_000_000_000,
         cum_treasury,
         unclaimed_compensation: 0,
-        unmade_dao_interests: 0,
         cumulative_depositors: 0,
         daily_depositor_addresses: 0,
         protocol_deposited: None,
@@ -872,7 +870,6 @@ async fn test_network_stats_reports_initializing_when_baseline_missing() {
         cum_dao_compensation: 3_000_000_000_000_000,
         cum_treasury: 2_000_000_000_000_000,
         unclaimed_compensation: 0,
-        unmade_dao_interests: 0,
         cumulative_depositors: 0,
         daily_depositor_addresses: 0,
         protocol_deposited: None,
@@ -1069,8 +1066,7 @@ async fn test_inflation_rate_uses_exact_trailing_year_dao_snapshots() {
                     cum_miner_secondary: i128,
                     cum_dao_compensation: i128,
                     cum_treasury: i128,
-                    unclaimed_compensation: i128,
-                    unmade_dao_interests: i128| DaoDailySnapshot {
+                    unclaimed_compensation: i128| DaoDailySnapshot {
         date: date.format("%Y-%m-%d").to_string(),
         total_deposited: 0,
         depositors_count: 0,
@@ -1084,7 +1080,6 @@ async fn test_inflation_rate_uses_exact_trailing_year_dao_snapshots() {
         cum_miner_secondary,
         cum_dao_compensation,
         cum_treasury,
-        unmade_dao_interests,
         unclaimed_compensation,
         cumulative_depositors: 0,
         daily_depositor_addresses: 0,
@@ -1093,9 +1088,9 @@ async fn test_inflation_rate_uses_exact_trailing_year_dao_snapshots() {
 
     // C grows by 10%; exact cumulative secondary issuance
     // (miner + S + claimed) grows by 2%, leaving 8% primary dilution.
-    // cum_dao_compensation and cum_treasury deliberately overlap on frozen
-    // compensation, so adding those chart components would incorrectly report
-    // 3% secondary growth.
+    // The chart must use that exact formula rather than summing the stacked
+    // components: `cum_dao_compensation` already contains `unclaimed`, which is
+    // exactly the part of S that `cum_treasury` excludes.
     let mut rows = Vec::new();
     for day_offset in 0..=365_i64 {
         let scale = i128::from(day_offset);
@@ -1105,8 +1100,7 @@ async fn test_inflation_rate_uses_exact_trailing_year_dao_snapshots() {
         let secondary_pool = 50_000_000 + 5_000_000 * scale / 365;
         let unclaimed = 20_000_000 + 10_000_000 * scale / 365;
         let cum_dao = claimed + unclaimed;
-        let active_unmade = 20_000_000;
-        let treasury = secondary_pool - active_unmade;
+        let treasury = secondary_pool - unclaimed;
         rows.push(snapshot(
             start_date + chrono::Duration::days(day_offset),
             total_issuance,
@@ -1116,7 +1110,6 @@ async fn test_inflation_rate_uses_exact_trailing_year_dao_snapshots() {
             cum_dao,
             treasury,
             unclaimed,
-            active_unmade,
         ));
     }
     rows.push(snapshot(
@@ -1126,9 +1119,8 @@ async fn test_inflation_rate_uses_exact_trailing_year_dao_snapshots() {
         20_000_000,
         60_000_000,
         55_000_000,
-        40_000_000,
+        25_000_000,
         35_000_000,
-        20_000_000,
     ));
 
     for row in rows {
@@ -1215,7 +1207,6 @@ async fn test_inflation_rate_forward_fills_testnet_genesis_blockless_days() {
         cum_miner_secondary: 0,
         cum_dao_compensation: 0,
         cum_treasury: 0,
-        unmade_dao_interests: 0,
         unclaimed_compensation: 0,
         cumulative_depositors: 0,
         daily_depositor_addresses: 0,
@@ -1329,7 +1320,6 @@ async fn test_inflation_rate_rejects_missing_snapshot_on_block_bearing_day() {
             cum_miner_secondary: 0,
             cum_dao_compensation: 0,
             cum_treasury: 0,
-            unmade_dao_interests: 0,
             unclaimed_compensation: 0,
             cumulative_depositors: 0,
             daily_depositor_addresses: 0,
@@ -1643,7 +1633,6 @@ async fn test_asset_ecosystem_breakdown_is_share_of_total_live_capacity() {
         cum_dao_compensation: 0,
         cum_treasury: 0,
         unclaimed_compensation: 0,
-        unmade_dao_interests: 0,
         cumulative_depositors: 0,
         daily_depositor_addresses: 0,
         protocol_deposited: None,
@@ -2052,7 +2041,6 @@ fn seed_knowledge_size_fixture(store: &Arc<CkbadgerStore>, occupied_capacity: i1
         cum_dao_compensation: 0,
         cum_treasury: 0,
         unclaimed_compensation: 0,
-        unmade_dao_interests: 0,
         cumulative_depositors: 0,
         daily_depositor_addresses: 0,
         protocol_deposited: None,

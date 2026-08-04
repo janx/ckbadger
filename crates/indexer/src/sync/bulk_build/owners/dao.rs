@@ -1,6 +1,6 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use chrono::NaiveDate;
 use ckbadger_store::keys;
 use ckbadger_store::types::{DaoDailySnapshot, DaoDepositCacheEntry};
@@ -56,7 +56,7 @@ pub(crate) struct DaoOwner {
     /// `None` until configured; the miner split then fails loudly rather than
     /// silently issuing zero.
     secondary_epoch_reward: Option<u64>,
-    /// Per-date end-of-day block number and AR, for exact unmade_dao_interests
+    /// Per-date end-of-day block number and AR, for exact unclaimed-compensation
     /// computation during materialization.
     daily_end_of_day: FxHashMap<NaiveDate, (i64, u64)>,
 }
@@ -966,17 +966,9 @@ impl DaoOwner {
             let total_compensation = compensation.total().ok_or_else(|| {
                 anyhow!("DAO total compensation overflow on snapshot date {}", date)
             })?;
-            let cumulative_treasury = secondary_pool
-                .checked_sub(compensation.active_unmade)
-                .ok_or_else(|| anyhow!("DAO treasury subtraction overflow on {}", date))?;
-            if cumulative_treasury < 0 {
-                bail!(
-                    "active DAO interests exceed secondary pool on {}: secondary_pool={}, active_unmade={}",
-                    date,
-                    secondary_pool,
-                    compensation.active_unmade
-                );
-            }
+            let cumulative_treasury = compensation
+                .treasury(secondary_pool)
+                .with_context(|| format!("on bulk DAO snapshot date {date}"))?;
 
             let snapshot = DaoDailySnapshot {
                 date: date.format("%Y-%m-%d").to_string(),
@@ -992,7 +984,6 @@ impl DaoOwner {
                 cum_miner_secondary: running_cum_miner,
                 cum_dao_compensation: total_compensation,
                 cum_treasury: cumulative_treasury,
-                unmade_dao_interests: compensation.active_unmade,
                 unclaimed_compensation: compensation.unclaimed,
                 cumulative_depositors: running_cumulative_depositors,
                 daily_depositor_addresses: self
@@ -1098,10 +1089,9 @@ impl DaoOwner {
         })
     }
 
-    /// Compute exact unmade_dao_interests at a given block by iterating all
-    /// deposits and summing per-deposit compensation for those that were
-    /// status-0 at `block_number`.  Same formula as the live-sync path
-    /// (`compute_unmade_dao_interests` in dao_ops.rs).
+    /// Sum the status-0 share of unmade compensation at a given block.
+    /// Diagnostic helper for tests only — treasury is derived from the full
+    /// `unclaimed` total via `DaoCompensationBreakdown::treasury`.
     #[cfg(test)]
     fn compute_unmade_at_block(&self, block_number: i64, ar: u64) -> Result<i128> {
         Ok(self
@@ -1131,7 +1121,7 @@ impl DaoOwner {
         })?;
         self.daily_dao_fields.insert(block_date, (c, s, u));
 
-        // Track end-of-day block number and AR for exact unmade_dao_interests
+        // Track end-of-day block number and AR for exact unclaimed-compensation
         // computation during materialization (HashMap overwrites → last block
         // of each day persists).
         if let Some(ar) = extract_ar_from_dao_bytes(&block.dao) {
@@ -1682,7 +1672,7 @@ mod tests {
     use crate::sync::types::InternId;
 
     /// Regression: previously the running-sum formula crashed at block 64 with
-    /// "negative unmade_dao_interests -1" due to double integer truncation.
+    /// "negative unclaimed compensation -1" due to double integer truncation.
     /// The new approach computes exact per-deposit compensation, matching the
     /// live-sync path.
     #[test]
