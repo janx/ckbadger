@@ -147,7 +147,6 @@ async fn test_dao_stats_serves_singleton_and_reports_its_as_of_block() {
             cum_dao_compensation: 0,
             cum_treasury: 0,
             unclaimed_compensation: 0,
-            unmade_dao_interests: 0,
             cumulative_depositors: 0,
             daily_depositor_addresses: 0,
             protocol_deposited: Some(0),
@@ -345,7 +344,6 @@ async fn test_total_deposit_chart_recomputes_after_initial_empty_response() {
         cum_dao_compensation: 0,
         cum_treasury: 0,
         unclaimed_compensation: 0,
-        unmade_dao_interests: 0,
         cumulative_depositors: 7,
         daily_depositor_addresses: 0,
         protocol_deposited: None,
@@ -568,6 +566,57 @@ async fn test_dao_deposits_status_filter_uses_descending_order() {
     assert_eq!(rows.len(), 2);
     assert_eq!(rows[0]["depositBlockNumber"], 30);
     assert_eq!(rows[1]["depositBlockNumber"], 20);
+}
+
+/// A phase-1 withdraw request has already frozen its compensation at the
+/// request AR — the value is deterministic and the aggregates
+/// (`/dao/statistics`, the secondary-issuance chart) are computed from it. The
+/// deposit listing must serve that same number instead of `null`.
+#[tokio::test]
+async fn test_dao_deposits_serve_frozen_compensation_for_pending_withdraw_requests() {
+    let store = test_store();
+    let mut batch = StoreBatch::new(store.as_ref());
+    // free = 202 - 102 = 100 CKB; compensation = 100 * 200/100 - 100 = 100 CKB.
+    batch.put_dao_deposit(
+        &ckbadger_store::keys::encode_outpoint(&[0xC1; 32], 0),
+        &DaoDepositCacheEntry {
+            capacity: 202_00000000,
+            occupied_capacity: 102_00000000,
+            deposit_block_number: 10,
+            deposit_timestamp: 0,
+            lock_script_hash: vec![0x11; 32],
+            deposit_ar: 100,
+            status: 1,
+            withdraw_request_tx: Some(vec![0xD1; 32]),
+            withdraw_request_output_index: Some(0),
+            withdraw_request_block: Some(20),
+            withdraw_request_ar: Some(200),
+            withdraw_block: None,
+            withdraw_tx: None,
+            withdraw_request_occupied_capacity: Some(102_00000000),
+            withdraw_to_output_index: None,
+            compensation: None,
+        },
+    );
+    batch.commit().unwrap();
+
+    let app = create_router(test_config(store)).await;
+    let request = Request::builder()
+        .uri("/api/v1/dao/deposits?limit=10&status=1")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let rows = json["data"].as_array().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["status"], "withdrawing");
+    assert_eq!(
+        rows[0]["compensation"], "10000000000",
+        "pending withdraw requests must serve their frozen compensation"
+    );
 }
 
 #[tokio::test]
@@ -907,7 +956,6 @@ fn seed_dao_daily_snapshot(
         cum_dao_compensation: 0,
         cum_treasury: 0,
         unclaimed_compensation: 0,
-        unmade_dao_interests: 0,
         cumulative_depositors: new_deposits,
         daily_depositor_addresses: new_deposits,
         protocol_deposited: Some(cumulative_deposit_amount),

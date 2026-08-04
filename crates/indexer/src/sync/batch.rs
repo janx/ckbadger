@@ -3992,14 +3992,15 @@ impl Indexer {
                             anyhow!("missing DAO end block for snapshot date {}", date)
                         })?;
                     let completed_end_block = completed_boundaries.get(date).copied();
-                    let unmade_dao_interests = if completed_end_block.is_some() {
+                    let unclaimed_compensation = if completed_end_block.is_some() {
                         // Replaced below by the exact end-of-day lifecycle value,
                         // which already includes this batch's staged deposits.
                         0
                     } else {
                         self.writer
                             .store()
-                            .compute_unmade_dao_interests(end_block, ar)?
+                            .compute_dao_compensation_breakdown_at(end_block, ar)?
+                            .unclaimed
                     };
 
                     let mut dao_snapshot = crate::db::writer::DaoSnapshotInput {
@@ -4019,8 +4020,7 @@ impl Indexer {
                         cum_miner_secondary: running_cum_miner,
                         cum_dao_compensation: staged_cum_dao,
                         cum_treasury: staged_cum_treasury,
-                        unmade_dao_interests,
-                        unclaimed_compensation: 0,
+                        unclaimed_compensation,
                         cumulative_depositors: running_cumulative_depositors,
                         daily_depositor_addresses,
                         protocol_deposited: Some(running_protocol_deposited),
@@ -5121,9 +5121,14 @@ mod tests {
         fn header(number: u64, ar: u64) -> HeaderView {
             // DAO field: C (total issuance) and U (occupied) must satisfy
             // C > U for the secondary-miner split; AR drives compensation.
+            // S (the unissued secondary pool) must cover the compensation this
+            // fixture's deposit has earned — on chain a deposit's interest is
+            // paid out of S, so S = 0 alongside earned interest is impossible
+            // and the treasury split now rejects it.
             let mut dao = [0u8; 32];
             dao[0..8].copy_from_slice(&3_360_000_000_000_000_000u64.to_le_bytes());
             dao[8..16].copy_from_slice(&ar.to_le_bytes());
+            dao[16..24].copy_from_slice(&10_000_000_000u64.to_le_bytes());
             dao[24..32].copy_from_slice(&100_000_000_000_000u64.to_le_bytes());
             // Epoch 40 (length 1800) starts at block 100, so the first
             // fixture batch opens the epoch stats row exactly like a real

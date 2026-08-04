@@ -5,6 +5,7 @@ use crate::store::CkbadgerStore;
 use crate::types::*;
 
 use crate::bytes_to_hex;
+use anyhow::Context;
 use ckbadger_common::dao::{calculate_miner_secondary_issuance, secondary_block_issuance};
 
 // ---------------------------------------------------------------------------
@@ -1485,22 +1486,9 @@ impl CkbadgerStore {
                 compensation.unclaimed
             )
         })?;
-        let cumulative_treasury = last_header_s
-            .checked_sub(compensation.active_unmade)
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "DAO treasury subtraction overflow during recompute: target_date={}",
-                    date
-                )
-            })?;
-        if cumulative_treasury < 0 {
-            anyhow::bail!(
-                "active DAO interests exceed secondary pool during recompute: target_date={}, secondary_pool={}, active_unmade={}",
-                date,
-                last_header_s,
-                compensation.active_unmade
-            );
-        }
+        let cumulative_treasury = compensation
+            .treasury(last_header_s)
+            .with_context(|| format!("during DAO recompute for target_date={date}"))?;
 
         // 7. Write the rebuilt snapshot.
         let snapshot = DaoDailySnapshot {
@@ -1517,7 +1505,6 @@ impl CkbadgerStore {
             cum_miner_secondary: running_cum_miner,
             cum_dao_compensation: total_compensation,
             cum_treasury: cumulative_treasury,
-            unmade_dao_interests: compensation.active_unmade,
             unclaimed_compensation: compensation.unclaimed,
             cumulative_depositors: running_cumulative_depositors,
             daily_depositor_addresses: daily_depositor_locks.len() as i64,
@@ -1903,7 +1890,6 @@ mod tests {
             cum_dao_compensation: 2_000_000_000_000,
             cum_treasury: 7_000_000_000_000,
             unclaimed_compensation: 0,
-            unmade_dao_interests: 0,
             cumulative_depositors: 0,
             daily_depositor_addresses: 0,
             protocol_deposited: None,
@@ -1942,7 +1928,6 @@ mod tests {
             cum_dao_compensation: 2,
             cum_treasury: 3,
             unclaimed_compensation: 0,
-            unmade_dao_interests: 0,
             cumulative_depositors: 0,
             daily_depositor_addresses: 0,
             protocol_deposited: None,
@@ -2015,7 +2000,6 @@ mod tests {
             cum_dao_compensation: 1_000_000_000_000,
             cum_treasury: 3_500_000_000_000,
             unclaimed_compensation: 0,
-            unmade_dao_interests: 0,
             cumulative_depositors: 0,
             daily_depositor_addresses: 0,
             protocol_deposited: None,
@@ -2073,7 +2057,6 @@ mod tests {
                 cum_dao_compensation: cum_dao,
                 cum_treasury,
                 unclaimed_compensation: 0,
-                unmade_dao_interests: 0,
                 cumulative_depositors: 0,
                 daily_depositor_addresses: 0,
                 protocol_deposited: None,
@@ -2588,7 +2571,6 @@ mod dao_daily_snapshot_recompute_tests {
         assert_eq!(snapshot.cum_miner_secondary, 2 * per_block_miner);
         assert_eq!(snapshot.compensation, 0);
         assert_eq!(snapshot.unclaimed_compensation, expected_unclaimed);
-        assert_eq!(snapshot.unmade_dao_interests, expected_unclaimed);
         assert_eq!(snapshot.cum_dao_compensation, expected_unclaimed);
         assert_eq!(
             snapshot.cum_treasury,
