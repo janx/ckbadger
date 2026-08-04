@@ -58,10 +58,7 @@ function findFirstItemDelta(activity: GlobalActivity): ItemDelta | null {
 }
 
 /** Find the first item delta of a specific kind across all participants. */
-function findFirstItemDeltaByKind(
-  activity: GlobalActivity,
-  kind: string
-): ItemDelta | null {
+function findFirstItemDeltaByKind(activity: GlobalActivity, kind: string): ItemDelta | null {
   for (const p of activity.participants) {
     const match = p.itemDeltas.find((d) => d.kind === kind);
     if (match) return match;
@@ -138,8 +135,7 @@ export function classifyActivity(activity: GlobalActivity): ClassifiedActivity {
 
   // Layer 2: Item deltas (via tags bitmask for fast check, then find actual delta)
   for (const { kind, activityType } of ITEM_KIND_PRIORITY) {
-    const tagBit =
-      kind === 'token' ? TAG_TOKEN : kind === 'object' ? TAG_OBJECT : TAG_IDENTITY;
+    const tagBit = kind === 'token' ? TAG_TOKEN : kind === 'object' ? TAG_OBJECT : TAG_IDENTITY;
     if (tags & tagBit) {
       const match = findFirstItemDeltaByKind(activity, kind);
       if (match) {

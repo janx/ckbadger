@@ -75,7 +75,13 @@ describe('classifyActivity', () => {
             ckbDelta: '0',
             usedDelta: '0',
             itemDeltas: [
-              { kind: 'token', typeScriptHash: '0xtoken', delta: '500', symbol: 'SEAL', decimals: 8 },
+              {
+                kind: 'token',
+                typeScriptHash: '0xtoken',
+                delta: '500',
+                symbol: 'SEAL',
+                decimals: 8,
+              },
             ],
             tags: 1,
           },
