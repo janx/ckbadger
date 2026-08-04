@@ -108,7 +108,9 @@ async fn test_search_name_matches_script_token_and_cluster_assets() {
 
     let script_hash = vec![0x31; 32];
     let token_hash = vec![0x32; 32];
+    let popular_token_hash = vec![0x34; 32];
     let cluster_id = vec![0x33; 32];
+    let popular_cluster_id = vec![0x35; 32];
 
     store
         .put_script_version(
@@ -140,8 +142,30 @@ async fn test_search_name_matches_script_token_and_cluster_assets() {
             },
         )
         .unwrap();
+    store
+        .put_token_direct(
+            &popular_token_hash,
+            &TokenInfo {
+                type_code_hash: vec![0x45; 32],
+                hash_type: 1,
+                type_args: vec![0x56; 32],
+                standard: "xudt".to_string(),
+                name: Some("Alpha Popular Token".to_string()),
+                symbol: Some("ALPHA2".to_string()),
+                decimals: Some(8),
+                max_supply: None,
+                first_seen_block: 0,
+                icon_url: None,
+                description: None,
+                transfers_count: 0,
+            },
+        )
+        .unwrap();
 
     let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_token_holder(&token_hash, &[0x61; 32], 100u128);
+    batch.put_token_holder(&popular_token_hash, &[0x62; 32], 100u128);
+    batch.put_token_holder(&popular_token_hash, &[0x63; 32], 100u128);
     batch.put_cluster_aggregate(
         &cluster_id,
         &ClusterAggregate {
@@ -150,6 +174,17 @@ async fn test_search_name_matches_script_token_and_cluster_assets() {
             total_count: 10,
             live_count: 8,
             owner_count: 2,
+            ..Default::default()
+        },
+    );
+    batch.put_cluster_aggregate(
+        &popular_cluster_id,
+        &ClusterAggregate {
+            name: Some("Alpha Popular Cluster".to_string()),
+            description: None,
+            total_count: 20,
+            live_count: 16,
+            owner_count: 4,
             ..Default::default()
         },
     );
@@ -172,6 +207,14 @@ async fn test_search_name_matches_script_token_and_cluster_assets() {
     let expected_script_url = "/scripts/Alpha%20Lock".to_string();
     let expected_token_url = format!("/tokens/0x{}", hex::encode(&token_hash));
     let expected_cluster_url = format!("/clusters/0x{}", hex::encode(&cluster_id));
+    let expected_token_order = [
+        format!("0x{}", hex::encode(&popular_token_hash)),
+        format!("0x{}", hex::encode(&token_hash)),
+    ];
+    let expected_cluster_order = [
+        format!("0x{}", hex::encode(&popular_cluster_id)),
+        format!("0x{}", hex::encode(&cluster_id)),
+    ];
 
     assert!(rows.iter().any(|row| {
         row["resultType"].as_str() == Some("script")
@@ -185,6 +228,20 @@ async fn test_search_name_matches_script_token_and_cluster_assets() {
         row["resultType"].as_str() == Some("cluster")
             && row["url"].as_str() == Some(expected_cluster_url.as_str())
     }));
+
+    let token_order: Vec<_> = rows
+        .iter()
+        .filter(|row| row["resultType"] == "token")
+        .map(|row| row["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(token_order, expected_token_order);
+
+    let cluster_order: Vec<_> = rows
+        .iter()
+        .filter(|row| row["resultType"] == "cluster")
+        .map(|row| row["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(cluster_order, expected_cluster_order);
 }
 
 #[tokio::test]

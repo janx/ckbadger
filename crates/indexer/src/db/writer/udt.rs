@@ -88,7 +88,7 @@ impl BatchWriter {
         let existing_results = self.store.multi_get_cf(cf_keys);
 
         for ((key, owned_cap_delta, owned_knowledge_delta), existing_res) in
-            keyed_changes.into_iter().zip(existing_results.into_iter())
+            keyed_changes.into_iter().zip(existing_results)
         {
             let mut existing: TokenDailyDelta = match existing_res {
                 Ok(Some(value)) => bincode::deserialize(&value).map_err(|e| {

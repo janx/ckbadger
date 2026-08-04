@@ -2414,7 +2414,7 @@ impl CkbadgerStore {
         }
 
         // Sort by size descending and keep top 5
-        cf_sizes.sort_by(|a, b| b.1.cmp(&a.1));
+        cf_sizes.sort_by_key(|item| std::cmp::Reverse(item.1));
         cf_sizes.truncate(5);
         let (consumed_cells_bytes, consumed_cells_bytes_source) = consumed_cf_storage_bytes(
             consumed_cf_live_data_bytes,

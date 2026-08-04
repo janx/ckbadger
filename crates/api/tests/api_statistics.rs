@@ -1761,6 +1761,10 @@ async fn test_activity_summary_24h_window_uses_utc8_bucket_clock() {
                 &hour_key,
                 &ckbadger_store::types::DailyActivityStats {
                     transfer_count: 1,
+                    script_counts: std::collections::HashMap::from([
+                        ("11".repeat(32), 2),
+                        ("22".repeat(32), 5),
+                    ]),
                     ..Default::default()
                 },
             )
@@ -1794,6 +1798,19 @@ async fn test_activity_summary_24h_window_uses_utc8_bucket_clock() {
         hours_covered,
         "aggregate must sum exactly the covered buckets"
     );
+
+    let script_counts = json["scriptCounts"].as_array().unwrap();
+    assert_eq!(script_counts.len(), 2);
+    assert_eq!(
+        script_counts[0]["codeHash"],
+        format!("0x{}", "22".repeat(32))
+    );
+    assert_eq!(script_counts[0]["count"], 5 * hours_covered);
+    assert_eq!(
+        script_counts[1]["codeHash"],
+        format!("0x{}", "11".repeat(32))
+    );
+    assert_eq!(script_counts[1]["count"], 2 * hours_covered);
 }
 
 // ============================================================

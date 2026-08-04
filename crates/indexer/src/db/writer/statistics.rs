@@ -1154,7 +1154,7 @@ impl BatchWriter {
         // Build and store top depositors
         {
             let mut sorted: Vec<_> = depositor_map.into_iter().collect();
-            sorted.sort_by(|a, b| b.1 .0.cmp(&a.1 .0));
+            sorted.sort_by_key(|item| std::cmp::Reverse(item.1 .0));
             sorted.truncate(100);
 
             let depositors = sorted
@@ -3002,7 +3002,7 @@ mod activity_stats_tests {
         e.2 += 2000.0;
 
         let mut sorted: Vec<_> = depositor_map.into_iter().collect();
-        sorted.sort_by(|a, b| b.1 .0.cmp(&a.1 .0));
+        sorted.sort_by_key(|item| std::cmp::Reverse(item.1 .0));
         sorted.truncate(100);
 
         assert_eq!(sorted[0].0, lock_b);

@@ -670,7 +670,7 @@ async fn search(
                 })
                 .collect();
 
-            token_matches.sort_by(|a, b| b.5.cmp(&a.5));
+            token_matches.sort_by_key(|item| std::cmp::Reverse(item.5));
             for (type_hash_hex, name, symbol, name_match, symbol_match, _) in
                 token_matches.into_iter().take(NAME_MATCH_LIMIT)
             {
@@ -703,7 +703,7 @@ async fn search(
                 .filter_map(|entry| cached_cluster_match(entry, &pattern))
                 .collect();
 
-            cluster_matches.sort_by(|a, b| b.2.cmp(&a.2));
+            cluster_matches.sort_by_key(|item| std::cmp::Reverse(item.2));
             for (cluster_hex, name, _) in cluster_matches.into_iter().take(NAME_MATCH_LIMIT) {
                 results.push(SearchResult {
                     result_type: "cluster".to_string(),
@@ -724,7 +724,7 @@ async fn search(
                 .filter_map(|entry| cached_object_collection_match(entry, &pattern))
                 .collect();
 
-            object_collection_matches.sort_by(|a, b| b.3.cmp(&a.3));
+            object_collection_matches.sort_by_key(|item| std::cmp::Reverse(item.3));
             for (collection_hex, name, href, _) in
                 object_collection_matches.into_iter().take(NAME_MATCH_LIMIT)
             {
@@ -756,7 +756,7 @@ async fn search(
                 })
                 .collect();
 
-            spore_matches.sort_by(|a, b| b.2.cmp(&a.2));
+            spore_matches.sort_by_key(|item| std::cmp::Reverse(item.2));
             for (spore_id, name, _) in spore_matches.into_iter().take(NAME_MATCH_LIMIT) {
                 let spore_hex = format!("0x{}", hex::encode(spore_id));
                 results.push(SearchResult {

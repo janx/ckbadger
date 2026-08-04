@@ -164,7 +164,7 @@ pub fn aggregate_chain_store_memory(
             .iter()
             .map(|(name, bytes)| (format!("append-only.{name}"), *bytes)),
     );
-    top_cf_sizes.sort_by(|a, b| b.1.cmp(&a.1));
+    top_cf_sizes.sort_by_key(|item| std::cmp::Reverse(item.1));
     top_cf_sizes.truncate(5);
 
     Ok(ChainStoreMemorySnapshot {

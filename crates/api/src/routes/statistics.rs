@@ -244,7 +244,7 @@ async fn get_tx_stats(State(state): State<Arc<AppState>>) -> ApiResult<TxStatsRe
         .into_iter()
         .filter(|(_, h)| h.hour * 1000 > cutoff_24h && h.hour * 1000 <= reference_ts)
         .collect();
-    recent_hourly.sort_by(|a, b| b.1.hour.cmp(&a.1.hour)); // desc
+    recent_hourly.sort_by_key(|item| std::cmp::Reverse(item.1.hour)); // desc
     recent_hourly.truncate(24);
 
     // Get daily stats (last 14 days)
@@ -514,7 +514,7 @@ fn rolling_24h_tx_window(
         .map(|(_, h)| h)
         .filter(|h| h.hour * 1000 > cutoff_ms && h.hour * 1000 <= reference_ts_ms)
         .collect();
-    recent.sort_by(|a, b| b.hour.cmp(&a.hour));
+    recent.sort_by_key(|item| std::cmp::Reverse(item.hour));
     recent.truncate(24);
     let count = recent.iter().map(|h| h.transactions_count as i64).sum();
     let window_secs = recent
@@ -3921,7 +3921,7 @@ async fn get_daily_activity_stats(
                     count,
                 })
                 .collect();
-            script_counts.sort_by(|a, b| b.count.cmp(&a.count));
+            script_counts.sort_by_key(|item| std::cmp::Reverse(item.count));
 
             DailyActivityStatsResponse {
                 date,
@@ -4044,7 +4044,7 @@ async fn get_activity_summary_24h(
             count,
         })
         .collect();
-    script_counts.sort_by(|a, b| b.count.cmp(&a.count));
+    script_counts.sort_by_key(|item| std::cmp::Reverse(item.count));
 
     let result = ActivitySummary24hResponse {
         transfer_count: agg.transfer_count,
