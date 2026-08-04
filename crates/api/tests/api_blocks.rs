@@ -213,10 +213,12 @@ async fn test_block_fee_stats_uses_serialized_size_in_block_denominator() {
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["blockNumber"], 321);
     assert_eq!(json["transactionCount"], 1);
-    // totalSize keeps the molecule size; only the fee-rate denominator uses
-    // the serialized size in block (molecule + 4), matching the node,
-    // explorer, and wallet convention: 1234 * 1000 / 226.
-    assert_eq!(json["totalSize"], 222);
+    // Sizes and fee rates are served on ONE convention: the serialized size in
+    // block (molecule + 4), matching the node, explorer, and wallet. Reporting
+    // molecule sizes here while dividing by molecule + 4 made `totalSize`
+    // disagree with the summed per-tx `txSize` and made every client-side
+    // `fee / size` disagree with the served fee rate.
+    assert_eq!(json["totalSize"], 226);
     let expected_rate = 1234.0f64 * 1000.0 / 226.0;
     for field in ["avgFeeRate", "minFeeRate", "maxFeeRate"] {
         let got = json[field].as_f64().unwrap();

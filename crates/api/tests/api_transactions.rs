@@ -178,11 +178,17 @@ async fn test_transaction_detail_prefers_committed_store_over_mempool() {
     assert_eq!(json["status"], "committed");
     assert_eq!(json["blockNumber"], 321);
     assert_eq!(json["fee"], "1234");
-    assert_eq!(json["txSize"], 222);
-    // feeRate divides by the serialized size in block (molecule size + 4),
-    // matching the node/explorer/wallet convention: 1234 * 1000 / 226 = 5460.
-    // The `txSize` field itself stays molecule-sized.
+    // `txSize` is the serialized size in block (molecule 222 + the 4-byte offset
+    // slot), the size the node, explorer and wallets report — and the same size
+    // `feeRate` divides by, so the two fields reproduce each other:
+    // 1234 * 1000 / 226 = 5460.
+    assert_eq!(json["txSize"], 226);
     assert_eq!(json["feeRate"], "5460");
+    assert_eq!(
+        json["feeRate"].as_str().unwrap(),
+        (1234u128 * 1000 / json["txSize"].as_u64().unwrap() as u128).to_string(),
+        "feeRate must be reproducible from the served txSize"
+    );
     assert_eq!(json["cycles"], 333);
 }
 
