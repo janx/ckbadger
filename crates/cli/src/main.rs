@@ -2288,8 +2288,12 @@ mod tests {
     /// The scaffolded default frontend port, distinct from every default API port.
     const TEST_FRONTEND_PORT: u16 = 3000;
 
-    fn test_binding(name: &str, api_port: u16, workdir: &str) -> OrchestratorNetworkBinding {
-        let workdir = PathBuf::from(workdir);
+    fn test_binding(
+        name: &str,
+        api_port: u16,
+        workdir: impl Into<PathBuf>,
+    ) -> OrchestratorNetworkBinding {
+        let workdir = workdir.into();
         OrchestratorNetworkBinding {
             network: name.to_string(),
             api_port,
@@ -2302,18 +2306,20 @@ mod tests {
 
     #[test]
     fn test_check_orchestrator_bindings_distinct_ports_and_dirs_ok() {
+        let dir = TempDir::new().unwrap();
         let nets = vec![
-            test_binding("mainnet", 8101, "/root/mainnet"),
-            test_binding("testnet", 8102, "/root/testnet"),
+            test_binding("mainnet", 8101, dir.path().join("mainnet")),
+            test_binding("testnet", 8102, dir.path().join("testnet")),
         ];
         assert!(check_orchestrator_bindings(&nets, TEST_FRONTEND_PORT).is_ok());
     }
 
     #[test]
     fn test_check_orchestrator_bindings_duplicate_port_errors() {
+        let dir = TempDir::new().unwrap();
         let nets = vec![
-            test_binding("mainnet", 8101, "/root/mainnet"),
-            test_binding("testnet", 8101, "/root/testnet"),
+            test_binding("mainnet", 8101, dir.path().join("mainnet")),
+            test_binding("testnet", 8101, dir.path().join("testnet")),
         ];
         let err = check_orchestrator_bindings(&nets, TEST_FRONTEND_PORT)
             .unwrap_err()
@@ -2329,9 +2335,10 @@ mod tests {
         // the check only compared api-vs-api: a frontend/API clash reached
         // runtime, where whichever lost the bind race restart-looped — and the
         // frontend is the whole deployment's entry point.
+        let dir = TempDir::new().unwrap();
         let nets = vec![
-            test_binding("mainnet", 8101, "/root/mainnet"),
-            test_binding("testnet", 3000, "/root/testnet"),
+            test_binding("mainnet", 8101, dir.path().join("mainnet")),
+            test_binding("testnet", 3000, dir.path().join("testnet")),
         ];
         let err = check_orchestrator_bindings(&nets, TEST_FRONTEND_PORT)
             .unwrap_err()
@@ -2348,7 +2355,8 @@ mod tests {
     fn test_check_orchestrator_bindings_frontend_collides_with_the_first_network_too() {
         // Guards the loop bound: the frontend must be compared against EVERY api
         // port, not only the ones after the first.
-        let nets = vec![test_binding("mainnet", 8101, "/root/mainnet")];
+        let dir = TempDir::new().unwrap();
+        let nets = vec![test_binding("mainnet", 8101, dir.path().join("mainnet"))];
         let err = check_orchestrator_bindings(&nets, 8101)
             .unwrap_err()
             .to_string();
@@ -2358,29 +2366,29 @@ mod tests {
 
     #[test]
     fn test_check_orchestrator_bindings_duplicate_workdir_errors() {
+        let dir = TempDir::new().unwrap();
+        let shared = dir.path().join("shared");
         let nets = vec![
-            test_binding("mainnet", 8101, "/root/shared"),
-            test_binding("testnet", 8102, "/root/shared"),
+            test_binding("mainnet", 8101, shared.clone()),
+            test_binding("testnet", 8102, shared.clone()),
         ];
         let err = check_orchestrator_bindings(&nets, TEST_FRONTEND_PORT)
             .unwrap_err()
             .to_string();
         assert!(err.contains("mainnet"), "error names first network: {err}");
         assert!(err.contains("testnet"), "error names second network: {err}");
-        assert!(
-            err.contains("/root/shared"),
-            "error names the shared workdir: {err}"
-        );
+        assert!(err.contains(&shared.display().to_string()), "got: {err}");
     }
 
     #[test]
     fn test_check_orchestrator_bindings_rejects_each_duplicate_logical_store_path() {
+        let dir = TempDir::new().unwrap();
         for logical_store in ["domain", "append-only", "network"] {
             let mut nets = vec![
-                test_binding("mainnet", 8101, "/root/mainnet"),
-                test_binding("testnet", 8102, "/root/testnet"),
+                test_binding("mainnet", 8101, dir.path().join("mainnet")),
+                test_binding("testnet", 8102, dir.path().join("testnet")),
             ];
-            let shared = PathBuf::from(format!("/custom/shared-{logical_store}"));
+            let shared = dir.path().join(format!("shared-{logical_store}"));
             match logical_store {
                 "domain" => {
                     nets[0].domain_data_path = shared.clone();
@@ -2409,9 +2417,10 @@ mod tests {
 
     #[test]
     fn test_check_orchestrator_bindings_rejects_cross_class_store_collision() {
+        let dir = TempDir::new().unwrap();
         let mut nets = vec![
-            test_binding("mainnet", 8101, "/root/mainnet"),
-            test_binding("testnet", 8102, "/root/testnet"),
+            test_binding("mainnet", 8101, dir.path().join("mainnet")),
+            test_binding("testnet", 8102, dir.path().join("testnet")),
         ];
         nets[1].network_data_path = nets[0].domain_data_path.clone();
 
@@ -2437,8 +2446,8 @@ mod tests {
         let mainnet_workdir = root.join("mainnet");
         let testnet_workdir = root.join("testnet");
         let mut nets = vec![
-            test_binding("mainnet", 8101, mainnet_workdir.to_str().unwrap()),
-            test_binding("testnet", 8102, testnet_workdir.to_str().unwrap()),
+            test_binding("mainnet", 8101, mainnet_workdir),
+            test_binding("testnet", 8102, testnet_workdir),
         ];
         nets[0].domain_data_path = store_link.join("domain");
         nets[1].domain_data_path = shared.join("domain");
