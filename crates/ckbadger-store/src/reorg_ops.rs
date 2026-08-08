@@ -1,6 +1,6 @@
 //! Reorg (rollback) operations.
 
-use rocksdb::{IteratorMode, WriteBatch};
+use rocksdb::{Direction, IteratorMode, WriteBatch};
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 use tracing::info;
@@ -821,6 +821,39 @@ fn parse_cutoff_date_yyyymmdd(cutoff_yyyymmdd: &[u8]) -> anyhow::Result<u32> {
 /// The per-prefix routing here MUST stay aligned with
 /// `repair_cutoff_date_stats`: the `>=` ranges include the cutoff bucket,
 /// and only the matching-clock repair branch saves it from deletion.
+/// Stats key prefixes that `should_delete_stats_for_replay` can select.
+///
+/// The rollback sweep seeks to each of these instead of walking the stats CFs
+/// end to end, because most of what those CFs hold — outpoint and type indexes,
+/// DAO singletons, whole-chain time histograms — is never replay-scoped and
+/// grows without bound. Being a superset is harmless (the predicate still
+/// decides every visited key); being a subset would silently leave stale
+/// aggregates behind, which is what
+/// `test_replay_candidate_prefixes_cover_every_deletable_stats_family` pins.
+const STATS_REPLAY_CANDIDATE_PREFIXES: [u8; 21] = [
+    keys::STATS_PREFIX_DAILY,
+    keys::STATS_PREFIX_DAILY_BLOCK,
+    keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT,
+    keys::STATS_PREFIX_HODL_WAVE,
+    keys::STATS_PREFIX_CELL_DISTRIBUTION,
+    keys::STATS_PREFIX_ADDR_COHORT,
+    keys::STATS_PREFIX_HOURLY,
+    keys::STATS_PREFIX_MINER,
+    keys::STATS_PREFIX_SCRIPT_DAILY,
+    keys::STATS_PREFIX_TOKEN_DAILY,
+    keys::STATS_PREFIX_CLUSTER_DAILY,
+    keys::STATS_PREFIX_SPORE_DAILY,
+    keys::STATS_PREFIX_OBJECT_DAILY,
+    keys::STATS_PREFIX_ACTIVITY_DAILY,
+    keys::STATS_PREFIX_ACTIVITY_DAILY_ADDR_SET,
+    keys::STATS_PREFIX_ACTIVITY_HOURLY,
+    keys::STATS_PREFIX_ACTIVITY_HOURLY_ADDR_SET,
+    keys::STATS_PREFIX_TOKEN_HOURLY,
+    keys::STATS_PREFIX_SPORE_HOURLY,
+    keys::STATS_PREFIX_OBJECT_HOURLY,
+    keys::STATS_PREFIX_EPOCH,
+];
+
 fn should_delete_stats_for_replay(
     key: &[u8],
     cutoff_yyyymmdd: &[u8],
@@ -2269,6 +2302,11 @@ impl CkbadgerStore {
         // here lets stage 8c address the rows directly instead of scanning the
         // whole CF for them — see the note there for why that matters.
         let mut tx_participants: HashMap<Vec<u8>, HashSet<Vec<u8>>> = HashMap::new();
+        // Token types touched by the rolled-back range, collected from the same
+        // cells. A transfer record is only ever written for a type carried by
+        // one of its tx's cells, so this covers every rolled-back record; being
+        // a superset is harmless because stage 8 counts the rows it finds.
+        let mut rolled_back_type_hashes: HashSet<Vec<u8>> = HashSet::new();
 
         if !use_tx_context {
             if txs_removed > 0 {
@@ -2481,6 +2519,9 @@ impl CkbadgerStore {
                             .entry(ctx.tx_hash.clone())
                             .or_default()
                             .insert(positioned.cell.lock_script_hash.clone());
+                        if let Some(type_hash) = &positioned.cell.type_script_hash {
+                            rolled_back_type_hashes.insert(type_hash.clone());
+                        }
                         delete_cell_index_entries(
                             self,
                             &mut batch,
@@ -2589,6 +2630,12 @@ impl CkbadgerStore {
                                     .entry(input.tx_hash.clone())
                                     .or_default()
                                     .insert(consumed.cell.lock_script_hash.clone());
+                            }
+                            // Unconditional: the cell may predate the fork
+                            // point, but the tx spending it is rolled back and
+                            // its transfer record goes with it.
+                            if let Some(type_hash) = &consumed.cell.type_script_hash {
+                                rolled_back_type_hashes.insert(type_hash.clone());
                             }
                             // Per-side flow rollback: the consumption is always
                             // rolled back here; the creation as well when this
@@ -2760,6 +2807,7 @@ impl CkbadgerStore {
         // For the cutoff date itself (when fork_point is on the same day),
         // subtract per-date rollback deltas instead of deleting so that the
         // retained portion of that day is preserved.
+        let mut stats_scanned = 0u64;
         if let Some(cutoff) = replay_cutoff_date.as_deref() {
             let cutoff_hour =
                 replay_cutoff_hour.expect("cutoff_hour must be set when cutoff_date is set");
@@ -2893,64 +2941,75 @@ impl CkbadgerStore {
                 self.cf_stats_mnft(),
             ];
             for cf in stats_cfs {
-                let iter = self.iterator_cf(cf, IteratorMode::Start);
-                for item in iter {
-                    let (key, value) = item.map_err(|e| {
-                        anyhow::anyhow!(
-                            "failed to iterate stats CF in rollback_to_block cleanup: {}",
-                            e
-                        )
-                    })?;
-                    if !should_delete_stats_for_replay(
-                        &key,
-                        cutoff.as_bytes(),
-                        cutoff_hour_str_utc8.as_bytes(),
-                        cutoff_hour_str_utc.as_bytes(),
-                        cutoff_hour,
-                        cutoff_epoch,
-                        delete_cutoff_epoch,
-                    )? {
-                        stage.tick(stats_removed + stats_repaired);
-                        continue;
-                    }
-                    if key[0] == keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT {
-                        let suffix = &key[1..];
-                        if suffix.len() < 8 {
-                            anyhow::bail!(
-                                "invalid DAO daily snapshot key during rollback: key=0x{}",
-                                bytes_to_hex(&key)
-                            );
+                // Visit only the replay-scoped prefixes. The stats CFs also
+                // hold outpoint/type indexes and per-entity owner rows that
+                // rollback never touches and that grow with the chain; walking
+                // them made this sweep the second-largest rollback cost.
+                for prefix in STATS_REPLAY_CANDIDATE_PREFIXES {
+                    let iter =
+                        self.iterator_cf(cf, IteratorMode::From(&[prefix], Direction::Forward));
+                    for item in iter {
+                        let (key, value) = item.map_err(|e| {
+                            anyhow::anyhow!(
+                                "failed to iterate stats CF in rollback_to_block cleanup: {}",
+                                e
+                            )
+                        })?;
+                        if key.first() != Some(&prefix) {
+                            break;
                         }
-                        std::str::from_utf8(&suffix[..8]).map_err(|error| {
+                        stats_scanned += 1;
+                        if !should_delete_stats_for_replay(
+                            &key,
+                            cutoff.as_bytes(),
+                            cutoff_hour_str_utc8.as_bytes(),
+                            cutoff_hour_str_utc.as_bytes(),
+                            cutoff_hour,
+                            cutoff_epoch,
+                            delete_cutoff_epoch,
+                        )? {
+                            stage.tick(stats_removed + stats_repaired);
+                            continue;
+                        }
+                        if key[0] == keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT {
+                            let suffix = &key[1..];
+                            if suffix.len() < 8 {
+                                anyhow::bail!(
+                                    "invalid DAO daily snapshot key during rollback: key=0x{}",
+                                    bytes_to_hex(&key)
+                                );
+                            }
+                            std::str::from_utf8(&suffix[..8]).map_err(|error| {
                             anyhow::anyhow!(
                                 "invalid DAO daily snapshot date during rollback: key=0x{}, error={}",
                                 bytes_to_hex(&key),
                                 error
                             )
                         })?;
-                    }
-                    // For daily/hourly main stats on the cutoff date in a partial-day
-                    // rollback, subtract the rolled-back deltas instead of deleting.
-                    if is_partial_day && !key.is_empty() {
-                        let repaired = repair_cutoff_date_stats(
-                            &key,
-                            &value,
-                            cutoff,
-                            cutoff_hour_str_utc8,
-                            cutoff_hour_str_utc,
-                            &rollback_deltas,
-                            self,
-                            &mut batch,
-                        )?;
-                        if repaired {
-                            stats_repaired += 1;
-                            stage.tick(stats_removed + stats_repaired);
-                            continue;
                         }
+                        // For daily/hourly main stats on the cutoff date in a partial-day
+                        // rollback, subtract the rolled-back deltas instead of deleting.
+                        if is_partial_day && !key.is_empty() {
+                            let repaired = repair_cutoff_date_stats(
+                                &key,
+                                &value,
+                                cutoff,
+                                cutoff_hour_str_utc8,
+                                cutoff_hour_str_utc,
+                                &rollback_deltas,
+                                self,
+                                &mut batch,
+                            )?;
+                            if repaired {
+                                stats_repaired += 1;
+                                stage.tick(stats_removed + stats_repaired);
+                                continue;
+                            }
+                        }
+                        batch.delete_cf(cf, &key);
+                        stats_removed += 1;
+                        stage.tick(stats_removed + stats_repaired);
                     }
-                    batch.delete_cf(cf, &key);
-                    stats_removed += 1;
-                    stage.tick(stats_removed + stats_repaired);
                 }
             }
             stage.finish(stats_removed + stats_repaired);
@@ -3161,27 +3220,73 @@ impl CkbadgerStore {
         // 8. Delete token_transfers entries > rollback_to
         // Key: type_hash(32) + block_num_desc(8) + tx_idx(4) = 44
         // Per-type_hash count of deleted transfers, for TokenInfo.transfers_count update.
+        //
+        // The trailing index is a synthetic per-(type_hash, block) counter, not
+        // the chain tx index, so the exact keys are not derivable from the
+        // rolled-back transactions. They are descending by block within a
+        // type_hash prefix, though, so seeking to each touched token and
+        // stopping at the fork point visits only the rolled-back rows —
+        // bounded by the rolled-back data instead of by the whole CF, which on
+        // testnet meant 17.5M reads to delete nothing.
         let mut transfer_count_deltas: HashMap<Vec<u8>, i64> = HashMap::new();
         let mut token_transfers_removed = 0u64;
+        let mut token_transfers_scanned = 0u64;
         let mut stage = RollbackStageProgress::new("delete_token_transfers");
-        let iter = self.iterator_cf(self.cf_token_transfers(), IteratorMode::Start);
-        for item in iter {
-            let (key, _) = item.map_err(|e| {
-                anyhow::anyhow!(
-                    "failed to iterate token_transfers in rollback_to_block cleanup: {}",
-                    e
-                )
-            })?;
-            if key.len() == 44 {
-                let (block_num, _) = keys::decode_token_transfer_key(&key);
-                if block_num > rollback_to {
+        if use_tx_context {
+            for type_hash in &rolled_back_type_hashes {
+                let iter = self.iterator_cf(
+                    self.cf_token_transfers(),
+                    IteratorMode::From(type_hash, rocksdb::Direction::Forward),
+                );
+                for item in iter {
+                    token_transfers_scanned += 1;
+                    let (key, _) = item.map_err(|e| {
+                        anyhow::anyhow!(
+                            "failed to iterate token_transfers in rollback_to_block cleanup: {}",
+                            e
+                        )
+                    })?;
+                    if !key.starts_with(type_hash.as_slice()) {
+                        break;
+                    }
+                    if key.len() != 44 {
+                        continue;
+                    }
+                    let (block_num, _) = keys::decode_token_transfer_key(&key);
+                    if block_num <= rollback_to {
+                        // Descending by block within the prefix, so every
+                        // remaining row for this token survives too.
+                        break;
+                    }
                     batch.delete_cf(self.cf_token_transfers(), &key);
                     token_transfers_removed += 1;
-                    let type_hash = key[0..32].to_vec();
-                    *transfer_count_deltas.entry(type_hash).or_insert(0) += 1;
+                    *transfer_count_deltas.entry(type_hash.clone()).or_insert(0) += 1;
+                    stage.tick(token_transfers_removed);
                 }
             }
-            stage.tick(token_transfers_removed);
+        } else {
+            // No tx-contexts: the touched token set is unknown, so fall back to
+            // the full scan, as the cell stages above already did.
+            let iter = self.iterator_cf(self.cf_token_transfers(), IteratorMode::Start);
+            for item in iter {
+                token_transfers_scanned += 1;
+                let (key, _) = item.map_err(|e| {
+                    anyhow::anyhow!(
+                        "failed to iterate token_transfers in rollback_to_block cleanup: {}",
+                        e
+                    )
+                })?;
+                if key.len() == 44 {
+                    let (block_num, _) = keys::decode_token_transfer_key(&key);
+                    if block_num > rollback_to {
+                        batch.delete_cf(self.cf_token_transfers(), &key);
+                        token_transfers_removed += 1;
+                        let type_hash = key[0..32].to_vec();
+                        *transfer_count_deltas.entry(type_hash).or_insert(0) += 1;
+                    }
+                }
+                stage.tick(token_transfers_removed);
+            }
         }
         stage.finish(token_transfers_removed);
 
@@ -4697,6 +4802,8 @@ impl CkbadgerStore {
             cells_removed,
             cells_restored,
             addr_txs_scanned,
+            token_transfers_scanned,
+            stats_scanned,
         })
     }
 }
@@ -4712,6 +4819,12 @@ pub struct RollbackResult {
     /// tx-contexts are available; equals the whole CF on the fallback path.
     /// Exposed because an unbounded value here is what stalls live sync.
     pub addr_txs_scanned: u64,
+    /// CF_TOKEN_TRANSFERS reads performed while deleting rolled-back transfer
+    /// records. Same bound and same reason as `addr_txs_scanned`.
+    pub token_transfers_scanned: u64,
+    /// Stats-CF reads performed by the replay-cutoff sweep. Bounded by the
+    /// replay-scoped prefixes rather than by everything the stats CFs hold.
+    pub stats_scanned: u64,
 }
 
 #[cfg(test)]
@@ -4860,6 +4973,41 @@ mod tests {
             );
         }
         batch.commit().unwrap();
+    }
+
+    /// The rollback stats sweep visits only `STATS_REPLAY_CANDIDATE_PREFIXES`
+    /// instead of every key in the stats CFs, which is sound only while no
+    /// other prefix can be selected. Probe every byte outside the list with
+    /// suffixes crafted to satisfy each selection pattern the predicate uses —
+    /// ASCII dates, big-endian u32 dates, big-endian i64 hours and epochs — so
+    /// a new deletable family that forgets to join the list fails here rather
+    /// than silently leaving stale aggregates behind after every reorg.
+    #[test]
+    fn test_replay_candidate_prefixes_cover_every_deletable_stats_family() {
+        let cutoff = b"20260807";
+        let cutoff_hh = b"2026080712";
+        let probes = [
+            vec![0x00u8; 64], // zero dates / epoch 0
+            vec![0x30u8; 64], // ASCII '0'
+            vec![0x39u8; 64], // ASCII '9' — sorts above any real date
+            vec![0x7Fu8; 64], // large positive big-endian i64
+            vec![0xFFu8; 64], // u32::MAX date
+        ];
+        for prefix in 0u8..=u8::MAX {
+            if STATS_REPLAY_CANDIDATE_PREFIXES.contains(&prefix) {
+                continue;
+            }
+            for probe in &probes {
+                let mut key = vec![prefix];
+                key.extend_from_slice(probe);
+                assert!(
+                    !should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, 0, true)
+                        .unwrap(),
+                    "prefix {prefix:#04x} is selectable but missing from \
+                     STATS_REPLAY_CANDIDATE_PREFIXES — the rollback sweep would never visit it"
+                );
+            }
+        }
     }
 
     /// DAO singletons are tip-scoped derived rows that the indexer rewrites
@@ -5539,6 +5687,128 @@ mod tests {
             .get_cf(cf, &key)
             .unwrap()
             .map(|v| bincode::deserialize(&v).unwrap())
+    }
+
+    /// The replay-cutoff stats sweep used to walk all seven stats CFs end to
+    /// end (1.09M keys / 24s on testnet, to touch 15 rows). Most of what those
+    /// CFs hold is outpoint and type indexes that rollback never selects and
+    /// that grow with the chain, so the sweep now seeks only the replay-scoped
+    /// prefixes. Rows under a never-selected prefix must not be read at all.
+    #[test]
+    fn test_rollback_stats_sweep_skips_never_selected_prefixes() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+
+        let ts = |n: i64| 1_700_000_000_000 + n * 10_000;
+        {
+            let mut batch = StoreBatch::new(&store);
+            for n in 100..=150i64 {
+                batch.put_block_header(
+                    n,
+                    &CachedBlockHeader {
+                        hash: {
+                            let mut h = vec![0u8; 32];
+                            h[0] = n as u8;
+                            h
+                        },
+                        parent_hash: vec![0u8; 32],
+                        timestamp: ts(n),
+                        epoch_number: 5,
+                        epoch_index: (n - 100) as i32,
+                        epoch_length: 1800,
+                        dao: vec![0; 32],
+                        transactions_count: 0,
+                        uncles_count: 0,
+                        proposals_count: 0,
+                        compact_target: 0x1a08a97e,
+                        miner_lock_hash: None,
+                        cycles: None,
+                    },
+                );
+            }
+            batch.commit().unwrap();
+        }
+
+        // Replay-scoped: the boundary epoch (preserved, truncated in place)
+        // and an epoch beginning inside the replayed range (deleted).
+        seed_epoch_row(
+            &store,
+            &EpochStats {
+                epoch_number: 5,
+                start_block: 100,
+                end_block: Some(150),
+                blocks_count: 51,
+                length: 1800,
+                start_timestamp: chrono::DateTime::from_timestamp_millis(ts(100)).unwrap(),
+                end_timestamp: None,
+                transactions_count: 0,
+            },
+        );
+        seed_epoch_row(
+            &store,
+            &EpochStats {
+                epoch_number: 6,
+                start_block: 145,
+                end_block: Some(150),
+                blocks_count: 6,
+                length: 1800,
+                start_timestamp: chrono::DateTime::from_timestamp_millis(ts(145)).unwrap(),
+                end_timestamp: None,
+                transactions_count: 0,
+            },
+        );
+
+        // Never selected: append-only outpoint/type indexes. Reading any of
+        // these means the sweep is walking the CFs instead of seeking.
+        let noise_count = 300usize;
+        let noise_prefixes = [
+            keys::STATS_PREFIX_SPORE_OUTPOINT,
+            keys::STATS_PREFIX_MNFT_TOKEN_OUTPOINT,
+            keys::STATS_PREFIX_OBJECT_TYPE_INDEX,
+        ];
+        let noise_key = |prefix: u8, i: usize| {
+            let mut suffix = vec![0x55u8; 36];
+            suffix[0] = (i % 256) as u8;
+            suffix[1] = (i / 256) as u8;
+            keys::encode_stats_key(prefix, &suffix)
+        };
+        for prefix in noise_prefixes {
+            for i in 0..noise_count {
+                let key = noise_key(prefix, i);
+                let cf = store.cf_for_stats_key(&key).unwrap();
+                store.put_cf(cf, &key, &[0u8; 8]).unwrap();
+            }
+        }
+
+        let result = store.rollback_to_block(140).unwrap();
+
+        // The replay-scoped row is gone; the boundary epoch is truncated, not
+        // deleted, so the sweep must still have visited it.
+        assert!(read_epoch_row(&store, 6).is_none());
+        assert_eq!(read_epoch_row(&store, 5).unwrap().end_block, Some(140));
+
+        // Every never-selected row survives untouched.
+        for prefix in noise_prefixes {
+            for i in 0..noise_count {
+                let key = noise_key(prefix, i);
+                let cf = store.cf_for_stats_key(&key).unwrap();
+                assert!(
+                    store.get_cf(cf, &key).unwrap().is_some(),
+                    "noise row {i} under prefix {prefix:#04x} must survive"
+                );
+            }
+        }
+
+        // Only the two epoch rows were read: 21 candidate prefixes x 7 CFs of
+        // seeks, none of which lands inside a never-selected family.
+        assert_eq!(
+            result.stats_scanned,
+            2,
+            "stats sweep read {} keys with {} unrelated index rows present — \
+             cost must not scale with what the stats CFs accumulate",
+            result.stats_scanned,
+            noise_count * noise_prefixes.len()
+        );
     }
 
     /// Regression (F1): a mid-epoch rollback must TRUNCATE the boundary epoch
@@ -6722,6 +6992,226 @@ mod tests {
             "addr_txs rollback read {} keys with {} unrelated entries in the CF — \
              cost must not scale with chain history",
             result.addr_txs_scanned, noise_count
+        );
+    }
+
+    /// Same defect class as `test_rollback_deletes_addr_txs_without_scanning_whole_cf`,
+    /// in the CF that became the next bottleneck once addr_txs was fixed:
+    /// deleting rolled-back token transfers iterated all of CF_TOKEN_TRANSFERS
+    /// (17.5M keys / 30s on testnet, to delete zero rows).
+    ///
+    /// Its keys cannot be derived — the trailing index is a synthetic
+    /// per-(type_hash, block) counter, not the chain tx index — but they are
+    /// descending by block within a type_hash prefix, so a prefix scan that
+    /// stops at the fork point visits only the rolled-back rows. The token
+    /// types to scan come from the same cells the cell rollback already loads.
+    #[test]
+    fn test_rollback_deletes_token_transfers_without_scanning_whole_cf() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+
+        let header1 = CachedBlockHeader {
+            hash: vec![0x01; 32],
+            parent_hash: vec![0u8; 32],
+            timestamp: 1_700_000_000_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+            uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
+            cycles: None,
+        };
+        let header2 = CachedBlockHeader {
+            hash: vec![0x02; 32],
+            timestamp: 1_700_000_010_000,
+            ..header1.clone()
+        };
+
+        let type_hash = vec![0x90u8; 32];
+        let lock_a = vec![0xA1u8; 32];
+        let lock_b = vec![0xB1u8; 32];
+        let lock_code_hash = vec![0x11u8; 32];
+        let type_code_hash = vec![0x22u8; 32];
+        let input_tx = vec![0x41u8; 32];
+        let transfer_tx = vec![0x42u8; 32];
+
+        let udt_cell = |lock_hash: &[u8]| LiveCellInfo {
+            capacity: 100,
+            lock_script_hash: lock_hash.to_vec(),
+            lock_code_hash: lock_code_hash.clone(),
+            lock_hash_type: 1,
+            lock_args: vec![],
+            type_script_hash: Some(type_hash.clone()),
+            type_code_hash: Some(type_code_hash.clone()),
+            type_hash_type: Some(1),
+            type_args: Some(vec![0x33; 20]),
+            data_size: 16,
+            occupied_capacity: 100,
+            udt_amount: Some(100),
+            data_hash: None,
+        };
+        let input_cell = udt_cell(&lock_a);
+        let output_cell = udt_cell(&lock_b);
+
+        let transfer_record = |block_number: i64| TokenTransferRecord {
+            tx_hash: transfer_tx.clone(),
+            block_number,
+            from_lock_hash: Some(lock_a.clone()),
+            to_lock_hash: lock_b.clone(),
+            amount: 100,
+            is_mint: false,
+            is_burn: false,
+            timestamp: 1_700_000_000_000,
+        };
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_block_header(1, &header1);
+        batch.put_block_header(2, &header2);
+        put_canonical_tx(&mut batch, 2, 0, &transfer_tx);
+        batch.put_cell(&input_tx, 0, &input_cell, 1);
+        batch.put_cell(&transfer_tx, 0, &output_cell, 2);
+        batch.put_consumed_cell_with_consumer(&input_tx, 0, &input_cell, 1, 2, Some(&transfer_tx));
+        batch.delete_cell(&input_tx, 0);
+        batch.put_reorg_undo_log_by_block(
+            2,
+            0,
+            &UndoLogEntry::TxContext(UndoTxContext {
+                tx_hash: transfer_tx.clone(),
+                outputs_count: 1,
+                inputs: vec![UndoInputOutPoint {
+                    tx_hash: input_tx.clone(),
+                    output_index: 0,
+                }],
+            }),
+        );
+
+        // Two rolled-back transfer rows for this token (the trailing index is
+        // the per-(type_hash, block) counter) plus one that must survive.
+        batch.put_token_transfer(&type_hash, 2, 0, &transfer_record(2));
+        batch.put_token_transfer(&type_hash, 2, 1, &transfer_record(2));
+        batch.put_token_transfer(&type_hash, 1, 0, &transfer_record(1));
+
+        // Transfer history for unrelated tokens, all below the fork point.
+        // Reading any of these means the rollback is scanning the whole CF.
+        let noise_count = 400usize;
+        for i in 0..noise_count {
+            let mut other = vec![0x77u8; 32];
+            other[0] = (i % 256) as u8;
+            other[1] = (i / 256) as u8;
+            batch.put_token_transfer(&other, 1, 0, &transfer_record(1));
+        }
+
+        batch.put_addr_balance(
+            &lock_a,
+            &AddressBalance {
+                txs_count: 1,
+                ..Default::default()
+            },
+        );
+        batch.put_addr_balance(
+            &lock_b,
+            &AddressBalance {
+                balance: 100,
+                used_capacity: 100,
+                live_cells_count: 1,
+                total_cells_count: 1,
+                txs_count: 1,
+                ..Default::default()
+            },
+        );
+        batch.put_script_info(
+            &lock_code_hash,
+            &ScriptInfo {
+                code_hash: lock_code_hash.clone(),
+                lock_live_cells_count: 1,
+                lock_owned_capacity_sum: 100,
+                lock_owned_knowledge_sum: 100,
+                ..Default::default()
+            },
+        );
+        batch.put_script_info(
+            &type_code_hash,
+            &ScriptInfo {
+                code_hash: type_code_hash.clone(),
+                type_live_cells_count: 1,
+                type_owned_capacity_sum: 100,
+                type_owned_knowledge_sum: 100,
+                ..Default::default()
+            },
+        );
+        batch.put_token(
+            &type_hash,
+            &TokenInfo {
+                type_code_hash: type_code_hash.clone(),
+                hash_type: 1,
+                type_args: vec![0x33; 20],
+                standard: "sudt".to_string(),
+                name: None,
+                symbol: None,
+                decimals: Some(8),
+                max_supply: None,
+                first_seen_block: 1,
+                icon_url: None,
+                description: None,
+                transfers_count: 3,
+            },
+        );
+        batch.put_token_holder(&type_hash, &lock_b, 100);
+        batch.put_token_holder_by_balance(&type_hash, &lock_b, 100);
+        batch.put_addr_token_by_balance(&lock_b, &type_hash, 100);
+        batch.commit().unwrap();
+        seed_tx_address_history(
+            &store,
+            2,
+            0,
+            &transfer_tx,
+            &[lock_a.as_slice(), lock_b.as_slice()],
+        );
+        seed_sync_status(&store, 2, &header2.hash, 1, 1, 1);
+
+        let result = store.rollback_to_block(1).unwrap();
+
+        // Only the surviving row is left for this token.
+        let remaining = store.list_token_transfers(&type_hash, 10, None).unwrap();
+        assert_eq!(
+            remaining
+                .iter()
+                .map(|(block_num, tx_idx, _)| (*block_num, *tx_idx))
+                .collect::<Vec<_>>(),
+            vec![(1, 0)]
+        );
+        assert_eq!(
+            store
+                .get_token(&type_hash)
+                .unwrap()
+                .unwrap()
+                .transfers_count,
+            1
+        );
+
+        // Unrelated tokens are untouched.
+        for i in 0..noise_count {
+            let mut other = vec![0x77u8; 32];
+            other[0] = (i % 256) as u8;
+            other[1] = (i / 256) as u8;
+            assert_eq!(
+                store.list_token_transfers(&other, 10, None).unwrap().len(),
+                1,
+                "noise token {i}"
+            );
+        }
+
+        // Exactly the two deleted rows plus the first surviving row, which is
+        // what stops the prefix scan. The old full scan read every noise row.
+        assert_eq!(
+            result.token_transfers_scanned, 3,
+            "token_transfers rollback read {} keys with {} unrelated tokens in the CF — \
+             cost must not scale with chain history",
+            result.token_transfers_scanned, noise_count
         );
     }
 
