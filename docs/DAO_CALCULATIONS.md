@@ -462,13 +462,16 @@ Shows the exact cumulative secondary-issuance amounts materialized in each DAO d
 ```
 compensation = cum_dao_compensation
 mining = cum_miner_secondary
-burnt = secondary_pool - active_unmade
+burnt = secondary_pool - unclaimed_compensation
+protocolTotalShannons = cum_miner_secondary + secondary_pool + claimed_compensation
 ```
 
 The API converts each shannon value to whole CKB for the stacked-area series. It does not
 reconstruct these amounts from capacity percentages: miner issuance is the sum of exact
 per-block deltas, DAO compensation follows individual deposit lifecycles, and burnt/treasury is
-the exact residual of `S`.
+the exact residual of `S`. `protocolTotalShannons` remains in shannons and is not a displayed
+stack; it is the independent protocol total used to normalize external partitions without
+deriving the expected result from ckbadger's treasury value.
 
 **Implementation**: `crates/api/src/routes/statistics.rs::get_secondary_issuance_chart()`
 
@@ -527,9 +530,9 @@ the request fails with the affected date and block context.
 `secondary_pool` is DAO header `S`, the non-miner secondary issuance that has
 not yet been claimed. Adding cumulative claimed compensation restores the
 amount that left `S`; adding `cum_miner_secondary` then gives total secondary
-issuance. Do not sum the secondary-issuance chart's
-`cum_dao_compensation` and `cum_treasury` series here: frozen phase-1
-compensation is represented in both and would be counted twice.
+issuance. The corrected secondary-issuance partition also sums to that total,
+but this independent `miner + S + claimed` identity deliberately avoids using
+`cum_treasury`, so it can verify the treasury split instead of assuming it.
 
 **Implementation**:
 `crates/api/src/routes/statistics.rs::build_inflation_rate_response()`

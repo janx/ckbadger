@@ -33,7 +33,14 @@ declaration order. Point `-C` at a network subdirectory (for example,
 | --------------------- | ------ | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Fast** (F1-F7)      | 7      | seconds | API reachable, sync complete, genesis block, tip block, deep fork clear, DAO statistics sane, genesis-baseline burnt invariant                                                                                                                  |
 | **Sampling** (S1-S23) | 23     | minutes | Block hash roundtrip, parent chain, address balance, chart validations (tx count, cells, supply, block time, epoch, HODL wave, knowledge composition, APC, inflation), supply invariants, RPC compare, tokens, spores, NFTs, holder consistency |
-| **Explorer** (X1-X26) | 26     | minutes | Compare last 30 days against official CKB explorer API (tx count, DAO deposit, hash rate, difficulty, knowledge size, uncle rate, cell counts, supply, circulation, mining reward, treasury)                                                    |
+| **Explorer** (X1-X26) | 26     | minutes | Compare last 30 days against official CKB explorer API (tx count, DAO deposit, hash rate, difficulty, knowledge size, uncle rate, cell counts, supply, circulation, compensation, mining reward, normalized treasury)                           |
+
+Explorer `burnt` and `treasury_amount` are not compared raw: the official explorer leaves phase-1
+frozen DAO interest in treasury while also including it in deposit compensation. The verifier
+normalizes that legacy partition against the exact protocol total (`miner + S + claimed`), then
+subtracts Explorer's comparable mining and compensation components to reconstruct protocol
+treasury. `/charts/secondary-issuance` exposes that independent total as
+`protocolTotalShannons`. See POSTMORTEM DAO-029.
 
 `--depth fast` runs Fast tier only. `--depth sampling` runs all three tiers (Fast + Sampling +
 Explorer). The public `ckbadger verify` command resolves each network's API, RPC, official

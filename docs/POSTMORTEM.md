@@ -2156,6 +2156,49 @@ wrong one.
 
 ---
 
+### DAO-029: Verifier directly compared incompatible treasury partitions
+
+**Date**: 2026-08-08
+
+**Symptom**: After DAO-028 corrected treasury, `verify --depth sampling` failed
+`explorer_burnt`, `explorer_treasury_amount`, and
+`nervos_dao_treasury_amount`. On 2026-08-07 the burnt and treasury comparisons
+differed by 7,750,109,300,991,488 and 7,750,109,300,991,360 shannons
+respectively; the 128-shannon display-path difference is negligible beside the
+shared phase-1 component, while their percentage deviations used different
+denominators.
+
+**Root Cause**: The verifier registrations were not updated with DAO-028. The
+official explorer's `DailyStatistic` model includes both active and phase-1
+frozen interest in `unclaimed_compensation` and therefore in
+`deposit_compensation`, but still derives `treasury_amount` as `S -
+unmade_dao_interests`, where `unmade_dao_interests` is only the active share.
+The phase-1 amount is consequently present in both its treasury and compensation
+buckets. Its NervosDAO contract endpoint forwards the latest daily treasury
+with the same definition. ckbadger correctly derives `S -
+unclaimed_compensation`, so direct equality is impossible while phase-1 requests
+exist. The explorer API exposes no daily phase-1 series that could normalize the
+definitions independently.
+
+**Fix**: Kept all three checks, but replaced raw equality with an exact partition
+conversion. The secondary-issuance API now exposes an independent protocol total
+derived as `miner + S + claimed`; the verifier subtracts Explorer's comparable
+`mining_reward + deposit_compensation` to reconstruct protocol treasury. The
+difference between Explorer's legacy treasury and that remainder is its implied
+phase-1 overlap. The burnt conversion subtracts that same overlap from
+Explorer's burnt value, preserving its exact genesis component, while the
+NervosDAO point check aligns its cached treasury to the same latest completed
+daily row. The conversion rejects negative overlap or overlap greater than total
+DAO compensation. No tolerance was widened.
+
+**Lesson**: An external reference is useful only when both sides partition the
+same quantity with the same boundaries. If an independent total and comparable
+components exist, normalize both partitions to that total; otherwise a stable
+definition mismatch is not noise to tolerate and raw equality has no
+correctness signal.
+
+---
+
 ### PROTO-008: A capacity heuristic gating on-chain evidence
 
 **Date**: 2026-08-04
@@ -2242,4 +2285,4 @@ compute the answer that another path in the same process already has".
 
 ---
 
-_Last updated: 2026-08-04_
+_Last updated: 2026-08-08_

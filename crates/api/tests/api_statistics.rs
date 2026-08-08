@@ -1050,6 +1050,64 @@ async fn test_miner_distribution_reads_from_derived_store() {
 }
 
 #[tokio::test]
+async fn test_secondary_issuance_chart_exposes_exact_protocol_total() {
+    const CKB: i128 = 100_000_000;
+
+    let core_store = test_store();
+    let append_only_store = test_append_only_store();
+    let snapshot = DaoDailySnapshot {
+        date: "2026-08-07".to_string(),
+        total_deposited: 0,
+        depositors_count: 0,
+        new_deposits: 0,
+        withdrawals: 0,
+        compensation: 10 * CKB,
+        cumulative_deposit_amount: 0,
+        total_issuance: 0,
+        secondary_pool: 50 * CKB,
+        occupied_capacity: 0,
+        cum_miner_secondary: 40 * CKB,
+        cum_dao_compensation: 30 * CKB,
+        cum_treasury: 30 * CKB,
+        unclaimed_compensation: 20 * CKB,
+        cumulative_depositors: 0,
+        daily_depositor_addresses: 0,
+        protocol_deposited: None,
+    };
+    let snapshot_key = ckbadger_store::keys::encode_stats_key(
+        ckbadger_store::keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT,
+        b"20260807",
+    );
+    core_store
+        .put_cf(
+            core_store.cf_stats_dao(),
+            &snapshot_key,
+            &bincode::serialize(&snapshot).unwrap(),
+        )
+        .unwrap();
+
+    let config = test_config_with_append_only(core_store, append_only_store);
+    let app = create_router(config).await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/charts/secondary-issuance")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["data"][0]["protocolTotalShannons"], "10000000000");
+    assert_eq!(json["data"][0]["values"]["mining"], "40");
+    assert_eq!(json["data"][0]["values"]["compensation"], "30");
+    assert_eq!(json["data"][0]["values"]["burnt"], "30");
+}
+
+#[tokio::test]
 async fn test_inflation_rate_uses_exact_trailing_year_dao_snapshots() {
     let core_store = test_store();
     let append_only_store = test_append_only_store();

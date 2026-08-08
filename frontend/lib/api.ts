@@ -1251,6 +1251,7 @@ interface MinerDistributionResponse {
 interface StackedAreaDataPoint {
   date: string;
   values: Record<string, string>;
+  protocolTotalShannons?: string;
 }
 
 interface StackedAreaSeries {

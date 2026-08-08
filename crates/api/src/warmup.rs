@@ -1221,6 +1221,7 @@ pub async fn warmup_chart_caches(state: Arc<AppState>) {
         "chart:miner-address-distribution",
         "chart:total-supply",
         "chart:secondary-issuance",
+        "chart:secondary-issuance:v2",
     ];
     for key in STUB_CHART_KEYS {
         state.cache.delete(key).await;
@@ -1258,7 +1259,7 @@ pub async fn warmup_chart_caches(state: Arc<AppState>) {
             warmup_miner_distribution
         ),
         run_warmup!("chart:total-supply", warmup_total_supply),
-        run_warmup!("chart:secondary-issuance", warmup_secondary_issuance),
+        run_warmup!("chart:secondary-issuance:v2", warmup_secondary_issuance),
     );
 
     let elapsed_ms = chart_start.elapsed().as_secs_f64() * 1000.0;
@@ -1337,6 +1338,7 @@ async fn warmup_total_supply(state: &AppState) -> Result<(), String> {
 
 async fn warmup_secondary_issuance(state: &AppState) -> Result<(), String> {
     state.cache.delete("chart:secondary-issuance").await;
+    state.cache.delete("chart:secondary-issuance:v2").await;
     Ok(())
 }
 

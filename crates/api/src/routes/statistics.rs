@@ -613,6 +613,27 @@ pub struct StackedAreaChartResponse {
     pub title: String,
 }
 
+/// Secondary issuance keeps the UI's whole-CKB stacked values while exposing
+/// the exact protocol total in shannons for agents and integrity checks. The
+/// total follows the independent chain identity `miner + S + claimed`; it does
+/// not sum the displayed compensation and treasury buckets, so a verifier can
+/// check that split without deriving its expected value from the split itself.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SecondaryIssuanceDataPoint {
+    pub date: String,
+    pub values: std::collections::HashMap<String, String>,
+    pub protocol_total_shannons: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SecondaryIssuanceChartResponse {
+    pub data: Vec<SecondaryIssuanceDataPoint>,
+    pub series: Vec<StackedAreaSeries>,
+    pub title: String,
+}
+
 fn stacked_chart_response_has_data(response: &StackedAreaChartResponse) -> bool {
     !response.data.is_empty()
 }
@@ -3193,9 +3214,13 @@ fn calculate_nominal_apc(year: f64, genesis_supply_ckb: f64) -> f64 {
 
 async fn get_secondary_issuance_chart(
     State(state): State<Arc<AppState>>,
-) -> ApiResult<StackedAreaChartResponse> {
-    let cache_key = "chart:secondary-issuance";
-    if let Some(cached) = state.cache.get::<StackedAreaChartResponse>(cache_key).await {
+) -> ApiResult<SecondaryIssuanceChartResponse> {
+    let cache_key = "chart:secondary-issuance:v2";
+    if let Some(cached) = state
+        .cache
+        .get::<SecondaryIssuanceChartResponse>(cache_key)
+        .await
+    {
         return ok(cached);
     }
 
@@ -3205,32 +3230,13 @@ async fn get_secondary_issuance_chart(
         .map_err(|e| ApiError::internal(e.to_string()))?
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    let mut data = Vec::new();
-    for snapshot in &snapshots {
-        let (cum_miner, cum_dao, _) = snapshot_secondary_cumulative(snapshot)?;
-        let treasury = dao_treasury(snapshot).map_err(|e| ApiError::internal(e.to_string()))?;
-        if cum_miner <= 0 && cum_dao <= 0 && treasury <= 0 {
-            continue;
-        }
-
-        let mut values = std::collections::HashMap::new();
-        values.insert(
-            "compensation".to_string(),
-            (cum_dao / SHANNONS_PER_CKB).to_string(),
-        );
-        values.insert(
-            "mining".to_string(),
-            (cum_miner / SHANNONS_PER_CKB).to_string(),
-        );
-        values.insert(
-            "burnt".to_string(),
-            (treasury / SHANNONS_PER_CKB).to_string(),
-        );
-        data.push(StackedAreaDataPoint {
-            date: snapshot.date.clone(),
-            values,
-        });
-    }
+    let data = snapshots
+        .iter()
+        .map(secondary_issuance_data_point)
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .flatten()
+        .collect();
 
     let series = vec![
         StackedAreaSeries {
@@ -3250,7 +3256,7 @@ async fn get_secondary_issuance_chart(
         },
     ];
 
-    let response = StackedAreaChartResponse {
+    let response = SecondaryIssuanceChartResponse {
         data,
         series,
         title: "Secondary Issuance".to_string(),
@@ -3305,9 +3311,10 @@ fn snapshot_total_secondary_issuance(
 
     // RFC-0023's S field contains non-miner secondary issuance that has not
     // yet been claimed. Add cumulative claimed compensation back to S, then
-    // add the independently materialized miner share. `cum_dao_compensation`
-    // and `cum_treasury` cannot be summed here because both include frozen
-    // phase-1 compensation.
+    // add the independently materialized miner share. Deliberately do not sum
+    // `cum_dao_compensation + treasury` here: that partition is equal when
+    // correct, but using it would make this total unable to verify the treasury
+    // split independently.
     snapshot
         .cum_miner_secondary
         .checked_add(snapshot.secondary_pool)
@@ -3321,6 +3328,38 @@ fn snapshot_total_secondary_issuance(
                 snapshot.compensation
             ))
         })
+}
+
+fn secondary_issuance_data_point(
+    snapshot: &ckbadger_store::DaoDailySnapshot,
+) -> Result<Option<SecondaryIssuanceDataPoint>, ApiRouteError> {
+    let (cum_miner, cum_dao, _) = snapshot_secondary_cumulative(snapshot)?;
+    let treasury = dao_treasury(snapshot).map_err(|e| ApiError::internal(e.to_string()))?;
+    if cum_miner <= 0 && cum_dao <= 0 && treasury <= 0 {
+        return Ok(None);
+    }
+
+    let protocol_total = snapshot_total_secondary_issuance(snapshot)?;
+    let values = HashMap::from([
+        (
+            "compensation".to_string(),
+            (cum_dao / SHANNONS_PER_CKB).to_string(),
+        ),
+        (
+            "mining".to_string(),
+            (cum_miner / SHANNONS_PER_CKB).to_string(),
+        ),
+        (
+            "burnt".to_string(),
+            (treasury / SHANNONS_PER_CKB).to_string(),
+        ),
+    ]);
+
+    Ok(Some(SecondaryIssuanceDataPoint {
+        date: snapshot.date.clone(),
+        values,
+        protocol_total_shannons: protocol_total.to_string(),
+    }))
 }
 
 fn certify_inflation_snapshot_gap_is_blockless(
@@ -4369,6 +4408,29 @@ mod tests {
         s.cum_treasury = 30;
 
         assert_eq!(snapshot_total_secondary_issuance(&s).unwrap(), 100);
+    }
+
+    #[test]
+    fn secondary_issuance_point_exposes_independent_exact_protocol_total() {
+        const CKB: i128 = 100_000_000;
+        let mut s = snapshot("2026-08-07", 100, 1_000 * CKB, 50 * CKB, 0);
+        s.compensation = 10 * CKB;
+        s.cum_miner_secondary = 40 * CKB;
+        s.cum_dao_compensation = 30 * CKB;
+        s.unclaimed_compensation = 20 * CKB;
+        s.cum_treasury = 30 * CKB;
+
+        let point = secondary_issuance_data_point(&s)
+            .unwrap()
+            .expect("non-zero point");
+
+        assert_eq!(point.protocol_total_shannons, (100 * CKB).to_string());
+        assert_eq!(point.values.get("mining").map(String::as_str), Some("40"));
+        assert_eq!(
+            point.values.get("compensation").map(String::as_str),
+            Some("30")
+        );
+        assert_eq!(point.values.get("burnt").map(String::as_str), Some("30"));
     }
 
     #[test]
