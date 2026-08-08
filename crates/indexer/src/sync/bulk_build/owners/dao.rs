@@ -969,6 +969,9 @@ impl DaoOwner {
             let cumulative_treasury = compensation
                 .treasury(secondary_pool)
                 .with_context(|| format!("on bulk DAO snapshot date {date}"))?;
+            let frozen_phase1_compensation = compensation
+                .frozen_phase1()
+                .with_context(|| format!("on bulk DAO snapshot date {date}"))?;
 
             let snapshot = DaoDailySnapshot {
                 date: date.format("%Y-%m-%d").to_string(),
@@ -985,6 +988,7 @@ impl DaoOwner {
                 cum_dao_compensation: total_compensation,
                 cum_treasury: cumulative_treasury,
                 unclaimed_compensation: compensation.unclaimed,
+                frozen_phase1_compensation,
                 cumulative_depositors: running_cumulative_depositors,
                 daily_depositor_addresses: self
                     .daily_depositing_addresses
@@ -1918,14 +1922,13 @@ mod tests {
             .into(),
         };
         owner.apply_tx(&tx1, &ctx).expect("apply request");
+        let phase1_compensation = owner.compute_compensation_at_block(101, 12_000).unwrap();
         assert_eq!(
-            owner
-                .compute_compensation_at_block(101, 12_000)
-                .unwrap()
-                .unclaimed,
+            phase1_compensation.unclaimed,
             11_60000000,
             "phase-1 compensation must freeze at request AR using the deposit cell's exact occupied capacity"
         );
+        assert_eq!(phase1_compensation.frozen_phase1().unwrap(), 11_60000000);
 
         let tx2 = ResolvedTxFacts {
             tx_hash: [0x33; 32],

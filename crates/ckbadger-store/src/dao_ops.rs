@@ -1234,30 +1234,38 @@ mod tests {
     fn compensation_breakdown_follows_deposit_request_completion_lifecycle() {
         let entry = lifecycle_entry();
 
+        let active = dao_compensation_for_entry_at(&entry, 15, 10_500).unwrap();
         assert_eq!(
-            dao_compensation_for_entry_at(&entry, 15, 10_500).unwrap(),
+            active,
             DaoCompensationBreakdown {
                 claimed: 0,
                 unclaimed: 7_90000000,
                 active_unmade: 7_90000000,
             }
         );
+        assert_eq!(active.frozen_phase1().unwrap(), 0);
+
+        let phase1 = dao_compensation_for_entry_at(&entry, 25, 99_999).unwrap();
         assert_eq!(
-            dao_compensation_for_entry_at(&entry, 25, 99_999).unwrap(),
+            phase1,
             DaoCompensationBreakdown {
                 claimed: 0,
                 unclaimed: 15_80000000,
                 active_unmade: 0,
             }
         );
+        assert_eq!(phase1.frozen_phase1().unwrap(), 15_80000000);
+
+        let completed = dao_compensation_for_entry_at(&entry, 30, 99_999).unwrap();
         assert_eq!(
-            dao_compensation_for_entry_at(&entry, 30, 99_999).unwrap(),
+            completed,
             DaoCompensationBreakdown {
                 claimed: 15_80000000,
                 unclaimed: 0,
                 active_unmade: 0,
             }
         );
+        assert_eq!(completed.frozen_phase1().unwrap(), 0);
     }
 
     #[test]

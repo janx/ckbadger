@@ -72,6 +72,8 @@ pub struct DaoSnapshotInput {
     /// Unclaimed DAO compensation at this point (shannons): accruing on live
     /// deposits plus already frozen on phase-1 withdraw-request cells.
     pub unclaimed_compensation: i128,
+    /// Exact compensation frozen on phase-1 withdraw-request cells.
+    pub frozen_phase1_compensation: i128,
     /// Cumulative count of unique addresses that have ever deposited.
     pub cumulative_depositors: i64,
     /// Unique addresses that deposited on this specific day (including repeat depositors).
@@ -99,6 +101,7 @@ struct ExactDaoSnapshotCompensation {
     breakdown: DaoCompensationBreakdown,
     total: i128,
     treasury: i128,
+    frozen_phase1: i128,
     secondary_pool: i128,
 }
 
@@ -107,6 +110,7 @@ impl ExactDaoSnapshotCompensation {
         snapshot.compensation = self.breakdown.claimed;
         snapshot.cum_dao_compensation = self.total;
         snapshot.unclaimed_compensation = self.breakdown.unclaimed;
+        snapshot.frozen_phase1_compensation = self.frozen_phase1;
         snapshot.secondary_pool = self.secondary_pool;
         snapshot.cum_treasury = self.treasury;
     }
@@ -115,6 +119,7 @@ impl ExactDaoSnapshotCompensation {
         input.total_compensation = self.breakdown.claimed;
         input.cum_dao_compensation = self.total;
         input.unclaimed_compensation = self.breakdown.unclaimed;
+        input.frozen_phase1_compensation = self.frozen_phase1;
         input.secondary_pool = self.secondary_pool;
         input.cum_treasury = self.treasury;
     }
@@ -608,6 +613,7 @@ impl BatchWriter {
             cum_dao_compensation: dao_snapshot.cum_dao_compensation,
             cum_treasury: dao_snapshot.cum_treasury,
             unclaimed_compensation: dao_snapshot.unclaimed_compensation,
+            frozen_phase1_compensation: dao_snapshot.frozen_phase1_compensation,
             cumulative_depositors: dao_snapshot.cumulative_depositors,
             daily_depositor_addresses: dao_snapshot.daily_depositor_addresses,
             protocol_deposited: dao_snapshot.protocol_deposited,
@@ -982,11 +988,15 @@ impl BatchWriter {
         let treasury = breakdown
             .treasury(secondary_pool)
             .with_context(|| format!("at observation block {observation_block}"))?;
+        let frozen_phase1 = breakdown
+            .frozen_phase1()
+            .with_context(|| format!("at observation block {observation_block}"))?;
 
         Ok(ExactDaoSnapshotCompensation {
             breakdown,
             total,
             treasury,
+            frozen_phase1,
             secondary_pool,
         })
     }
@@ -1487,6 +1497,7 @@ mod tests {
             cum_dao_compensation: 20_00000000,
             cum_treasury: 30_00000000,
             unclaimed_compensation: 0,
+            frozen_phase1_compensation: 0,
             cumulative_depositors: 0,
             daily_depositor_addresses: 0,
             protocol_deposited: None,
@@ -1571,6 +1582,7 @@ mod tests {
             cum_dao_compensation: 0,
             cum_treasury: 0,
             unclaimed_compensation: 0,
+            frozen_phase1_compensation: 0,
             cumulative_depositors: 1,
             daily_depositor_addresses: 0,
             protocol_deposited: Some(202_00000000),
@@ -1890,6 +1902,7 @@ mod tests {
             cum_dao_compensation: 0,
             cum_treasury: 0,
             unclaimed_compensation: 0,
+            frozen_phase1_compensation: 0,
             cumulative_depositors: 1,
             daily_depositor_addresses: 0,
             protocol_deposited: Some(202_00000000),
@@ -2042,6 +2055,7 @@ mod tests {
             cum_dao_compensation: 20_00000000,
             cum_treasury: 30_00000000,
             unclaimed_compensation: 0,
+            frozen_phase1_compensation: 0,
             cumulative_depositors: 0,
             daily_depositor_addresses: 0,
             protocol_deposited: None,
@@ -2071,6 +2085,10 @@ mod tests {
         // = (400_00000000 + 1200_00000000) / 500_00000000 = 3.2 → "3 days"
         assert_eq!(latest.average_deposit_days, "3 days");
         assert_eq!(latest.tip_block_number, 100);
+
+        let snapshot = store.get_latest_dao_daily_snapshot().unwrap().unwrap();
+        assert_eq!(snapshot.unclaimed_compensation, 197_00000000);
+        assert_eq!(snapshot.frozen_phase1_compensation, 99_00000000);
     }
 
     #[test]

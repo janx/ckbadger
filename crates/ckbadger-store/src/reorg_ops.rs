@@ -10652,6 +10652,7 @@ mod tests {
             cum_dao_compensation: 1111,
             cum_treasury: 1212,
             unclaimed_compensation: 1414,
+            frozen_phase1_compensation: 1415,
             cumulative_depositors: 1515,
             daily_depositor_addresses: 1616,
             protocol_deposited: Some(1717),
@@ -10761,6 +10762,10 @@ mod tests {
             "fork-point date snapshot must be recomputed, not left at its stale cumulative value"
         );
         assert_eq!(recomputed.unclaimed_compensation, expected_unclaimed);
+        assert_eq!(
+            recomputed.frozen_phase1_compensation, 0,
+            "active compensation must not be materialized as frozen phase-1"
+        );
         assert_eq!(
             recomputed.cum_treasury,
             i128::from(CROSS_DAY_S) - expected_unclaimed

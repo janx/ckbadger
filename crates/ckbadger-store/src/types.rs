@@ -327,6 +327,34 @@ impl DaoCompensationBreakdown {
         self.claimed.checked_add(self.unclaimed)
     }
 
+    /// Compensation frozen on phase-1 withdraw-request cells.
+    ///
+    /// This is the exact semantic overlap in CKB Explorer's legacy treasury
+    /// partition: its treasury subtracts only [`Self::active_unmade`], while
+    /// its DAO compensation includes all [`Self::unclaimed`].
+    pub fn frozen_phase1(self) -> anyhow::Result<i128> {
+        anyhow::ensure!(
+            self.active_unmade >= 0,
+            "negative active DAO compensation: active_unmade={}",
+            self.active_unmade
+        );
+        anyhow::ensure!(
+            self.unclaimed >= self.active_unmade,
+            "active DAO compensation exceeds unclaimed: active_unmade={}, unclaimed={}",
+            self.active_unmade,
+            self.unclaimed
+        );
+        self.unclaimed
+            .checked_sub(self.active_unmade)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "phase-1 DAO compensation subtraction overflow: unclaimed={}, active_unmade={}",
+                    self.unclaimed,
+                    self.active_unmade
+                )
+            })
+    }
+
     /// Treasury portion of the protocol's secondary pool at this observation.
     pub fn treasury(self, secondary_pool: i128) -> anyhow::Result<i128> {
         dao_treasury_split(secondary_pool, self.unclaimed)
@@ -407,6 +435,11 @@ pub struct DaoDailySnapshot {
     /// cells. Treasury is derived from this via [`dao_treasury_split`].
     #[serde(default)]
     pub unclaimed_compensation: i128,
+    /// Exact compensation frozen on phase-1 withdraw-request cells at end of
+    /// day. Persisted so external legacy treasury partitions can be normalized
+    /// without rescanning every DAO lifecycle entry at API read time.
+    #[serde(default)]
+    pub frozen_phase1_compensation: i128,
     /// Cumulative count of unique addresses that have ever deposited into DAO
     /// (only increments, never decremented on withdrawal).
     #[serde(default)]

@@ -37,7 +37,7 @@ struct StackedAreaDataPoint {
     date: String,
     values: HashMap<String, String>,
     #[serde(default)]
-    protocol_total_shannons: Option<String>,
+    phase1_compensation_shannons: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -454,36 +454,33 @@ fn fetch_our_stacked_chart_sum_shannons(
     Ok(map)
 }
 
-/// Fetch the independently derived cumulative protocol secondary issuance for
-/// each DAO daily snapshot. The API computes this as `miner + S + claimed`, so
-/// it does not depend on the treasury split being verified here.
-fn fetch_our_protocol_secondary_totals(
-    ctx: &CheckContext,
-) -> anyhow::Result<HashMap<String, i128>> {
+/// Fetch the exact phase-1 frozen compensation materialized from DAO
+/// lifecycles for each daily snapshot.
+fn fetch_our_phase1_compensation(ctx: &CheckContext) -> anyhow::Result<HashMap<String, i128>> {
     let chart_path = "charts/secondary-issuance";
     let wrapper: StackedAreaChartResponse = api_get(ctx, chart_path)?;
     let mut map = HashMap::new();
     for point in wrapper.data {
         let date = normalize_date(&point.date);
-        let total = point.protocol_total_shannons.ok_or_else(|| {
+        let phase1 = point.phase1_compensation_shannons.ok_or_else(|| {
             anyhow::anyhow!(
-                "{} response is missing protocolTotalShannons for {}; rebuild and restart the ckbadger API",
+                "{} response is missing phase1CompensationShannons for {}; rebuild, re-sync, and restart the ckbadger API",
                 chart_path,
                 date
             )
         })?;
-        let parsed = total.parse::<i128>().map_err(|error| {
+        let parsed = phase1.parse::<i128>().map_err(|error| {
             anyhow::anyhow!(
-                "invalid protocolTotalShannons in {} for {}: value='{}', error={}",
+                "invalid phase1CompensationShannons in {} for {}: value='{}', error={}",
                 chart_path,
                 date,
-                total,
+                phase1,
                 error
             )
         })?;
         anyhow::ensure!(
             parsed >= 0,
-            "negative protocolTotalShannons in {} for {}: {}",
+            "negative phase1CompensationShannons in {} for {}: {}",
             chart_path,
             date,
             parsed
@@ -711,178 +708,82 @@ fn parse_ckb_to_shannon(ckb: &str) -> Option<i128> {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct ConvertedExplorerTreasury {
-    legacy_treasury: i128,
-    implied_phase1_overlap: i128,
-    protocol_treasury: i128,
-}
-
-/// Convert the explorer's legacy secondary-issuance partition to the protocol
-/// partition without reading ckbadger's treasury value.
-///
-/// `protocol_total` is independently derived from the chain identity
-/// `miner + S + claimed`. Mining and total DAO compensation have comparable
-/// semantics on both explorers, so protocol treasury is their exact remainder.
-/// The excess in the explorer's legacy partition is the implied phase-1 amount
-/// that it includes in both treasury and compensation.
-fn convert_explorer_treasury_partition(
-    protocol_total: i128,
-    explorer_mining: i128,
-    explorer_deposit_compensation: i128,
-    explorer_legacy_treasury: i128,
+/// Normalize an Explorer legacy secondary-issuance partition by subtracting
+/// the exact phase-1 compensation that Explorer includes in both compensation
+/// and treasury/burnt. The phase-1 amount is materialized from ckbadger's DAO
+/// lifecycle; it is not inferred from Explorer aggregates or from the treasury
+/// value under test.
+fn subtract_phase1_from_explorer_partition(
+    legacy_value: i128,
+    phase1: i128,
+    field: &str,
     entity: &str,
-) -> anyhow::Result<ConvertedExplorerTreasury> {
-    for (label, value) in [
-        ("protocol total", protocol_total),
-        ("Explorer mining", explorer_mining),
-        (
-            "Explorer deposit compensation",
-            explorer_deposit_compensation,
-        ),
-        ("Explorer legacy treasury", explorer_legacy_treasury),
-    ] {
-        anyhow::ensure!(value >= 0, "negative {} for {}: {}", label, entity, value);
-    }
-
-    let comparable_components = explorer_mining
-        .checked_add(explorer_deposit_compensation)
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "Explorer mining + compensation overflow for {}: mining={}, compensation={}",
-                entity,
-                explorer_mining,
-                explorer_deposit_compensation
-            )
-        })?;
+) -> anyhow::Result<i128> {
     anyhow::ensure!(
-        comparable_components <= protocol_total,
-        "Explorer mining + compensation exceed protocol total for {}: mining={}, compensation={}, protocol_total={}",
+        legacy_value >= 0,
+        "negative Explorer {} for {}: legacy_value={}",
+        field,
         entity,
-        explorer_mining,
-        explorer_deposit_compensation,
-        protocol_total
-    );
-    let protocol_treasury = protocol_total
-        .checked_sub(comparable_components)
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "protocol treasury subtraction overflow for {}: protocol_total={}, comparable_components={}",
-                entity,
-                protocol_total,
-                comparable_components
-            )
-        })?;
-    let implied_phase1_overlap = explorer_legacy_treasury
-        .checked_sub(protocol_treasury)
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "Explorer phase-1 overlap subtraction overflow for {}: legacy_treasury={}, protocol_treasury={}",
-                entity,
-                explorer_legacy_treasury,
-                protocol_treasury
-            )
-        })?;
-    anyhow::ensure!(
-        implied_phase1_overlap >= 0,
-        "negative implied phase-1 overlap for {}: legacy_treasury={}, protocol_treasury={}, overlap={}",
-        entity,
-        explorer_legacy_treasury,
-        protocol_treasury,
-        implied_phase1_overlap
+        legacy_value
     );
     anyhow::ensure!(
-        implied_phase1_overlap <= explorer_deposit_compensation,
-        "Explorer implied phase-1 overlap exceeds compensation for {}: overlap={}, compensation={}",
+        phase1 >= 0,
+        "negative exact phase-1 compensation for {}: phase1={}",
         entity,
-        implied_phase1_overlap,
-        explorer_deposit_compensation
+        phase1
     );
-
-    Ok(ConvertedExplorerTreasury {
-        legacy_treasury: explorer_legacy_treasury,
-        implied_phase1_overlap,
-        protocol_treasury,
+    anyhow::ensure!(
+        legacy_value >= phase1,
+        "Explorer {} is below exact phase-1 compensation for {}: legacy_value={}, phase1={}",
+        field,
+        entity,
+        legacy_value,
+        phase1
+    );
+    legacy_value.checked_sub(phase1).ok_or_else(|| {
+        anyhow::anyhow!(
+            "Explorer {} is below exact phase-1 compensation for {}: legacy_value={}, phase1={}",
+            field,
+            entity,
+            legacy_value,
+            phase1
+        )
     })
 }
 
-fn converted_explorer_treasury_partitions_by_date(
+fn phase1_normalized_explorer_partition_by_date(
     ctx: &CheckContext,
-) -> anyhow::Result<HashMap<String, ConvertedExplorerTreasury>> {
-    let protocol_totals = fetch_our_protocol_secondary_totals(ctx)?;
-    let explorer_mining = fetch_explorer_daily(ctx, "mining_reward", "mining_reward")?;
-    let explorer_compensation =
-        fetch_explorer_daily(ctx, "deposit_compensation", "deposit_compensation")?;
-    let explorer_treasury = fetch_explorer_daily(ctx, "treasury_amount", "treasury_amount")?;
-
-    let mut converted = HashMap::new();
-    for date in last_30_days() {
-        let (Some(total), Some(mining), Some(compensation), Some(legacy_treasury)) = (
-            protocol_totals.get(&date),
-            explorer_mining.get(&date),
-            explorer_compensation.get(&date),
-            explorer_treasury.get(&date),
-        ) else {
-            continue;
-        };
-        let mining = parse_integral_explorer_shannons(mining, "mining_reward", &date)?;
-        let compensation =
-            parse_integral_explorer_shannons(compensation, "deposit_compensation", &date)?;
-        let legacy_treasury =
-            parse_integral_explorer_shannons(legacy_treasury, "treasury_amount", &date)?;
-        let value = convert_explorer_treasury_partition(
-            *total,
-            mining,
-            compensation,
-            legacy_treasury,
-            &date,
-        )?;
-        converted.insert(date, value);
-    }
-    Ok(converted)
-}
-
-fn converted_explorer_treasury_by_date(
-    ctx: &CheckContext,
+    indicator: &str,
+    field: &str,
 ) -> anyhow::Result<HashMap<String, String>> {
-    Ok(converted_explorer_treasury_partitions_by_date(ctx)?
-        .into_iter()
-        .map(|(date, converted)| (date, converted.protocol_treasury.to_string()))
-        .collect())
-}
-
-fn converted_explorer_burnt_by_date(ctx: &CheckContext) -> anyhow::Result<HashMap<String, String>> {
-    let converted_treasury = converted_explorer_treasury_partitions_by_date(ctx)?;
-    let explorer_burnt = fetch_explorer_daily(ctx, "burnt", "burnt")?;
-    let mut converted_burnt = HashMap::new();
+    let explorer_values = fetch_explorer_daily(ctx, indicator, field)?;
+    let phase1_by_date = fetch_our_phase1_compensation(ctx)?;
+    let mut normalized = HashMap::new();
 
     for date in last_30_days() {
-        let (Some(converted), Some(legacy_burnt)) =
-            (converted_treasury.get(&date), explorer_burnt.get(&date))
+        let (Some(legacy_value), Some(phase1)) =
+            (explorer_values.get(&date), phase1_by_date.get(&date))
         else {
             continue;
         };
-        let legacy_burnt = parse_integral_explorer_shannons(legacy_burnt, "burnt", &date)?;
-        anyhow::ensure!(
-            legacy_burnt >= converted.legacy_treasury,
-            "Explorer burnt is below legacy treasury for {}: burnt={}, treasury={}",
-            date,
-            legacy_burnt,
-            converted.legacy_treasury
-        );
-        let protocol_burnt = legacy_burnt
-            .checked_sub(converted.implied_phase1_overlap)
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "Explorer burnt conversion overflow for {}: burnt={}, phase1_overlap={}",
-                    date,
-                    legacy_burnt,
-                    converted.implied_phase1_overlap
-                )
-            })?;
-        converted_burnt.insert(date, protocol_burnt.to_string());
+        let legacy_value = parse_integral_explorer_shannons(legacy_value, field, &date)?;
+        let protocol_value =
+            subtract_phase1_from_explorer_partition(legacy_value, *phase1, field, &date)?;
+        normalized.insert(date, protocol_value.to_string());
     }
-    Ok(converted_burnt)
+    Ok(normalized)
+}
+
+fn phase1_normalized_explorer_treasury_by_date(
+    ctx: &CheckContext,
+) -> anyhow::Result<HashMap<String, String>> {
+    phase1_normalized_explorer_partition_by_date(ctx, "treasury_amount", "treasury_amount")
+}
+
+fn phase1_normalized_explorer_burnt_by_date(
+    ctx: &CheckContext,
+) -> anyhow::Result<HashMap<String, String>> {
+    phase1_normalized_explorer_partition_by_date(ctx, "burnt", "burnt")
 }
 
 /// Compare float values with tolerance.
@@ -1888,9 +1789,10 @@ impl Check for ExplorerCirculatingSupply {
     }
 }
 
-/// X12: Compare total burnt after converting the explorer's legacy treasury
-/// partition to the protocol partition. The conversion uses the independent
-/// protocol secondary total, not ckbadger's treasury value.
+/// X12: Compare total burnt after applying the network's explicit Explorer
+/// normalization policy. Both networks subtract the exact chain-derived
+/// phase-1 overlap; testnet then compares transitions because its Explorer
+/// series retains a historical constant baseline gap.
 pub struct ExplorerBurnt;
 
 impl Check for ExplorerBurnt {
@@ -1898,7 +1800,7 @@ impl Check for ExplorerBurnt {
         "explorer_burnt"
     }
     fn description(&self) -> &'static str {
-        "Daily burnt vs protocol-normalized explorer partition"
+        "Daily burnt vs network-normalized explorer partition"
     }
     fn tier(&self) -> CheckTier {
         CheckTier::Sampling
@@ -1910,17 +1812,44 @@ impl Check for ExplorerBurnt {
         Some(30)
     }
     fn run(&self, ctx: &CheckContext, progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
-        let explorer_data = converted_explorer_burnt_by_date(ctx)?;
         let our_data =
             fetch_our_stacked_chart_sum_shannons(ctx, "charts/total-supply", &["burnt"])?;
-        Ok(run_i128_relative_tolerance_explorer_check(
-            &our_data,
-            &explorer_data,
-            progress,
-            "protocol_normalized_burnt",
-            1,
-            500,
-        ))
+        let explorer_data = phase1_normalized_explorer_burnt_by_date(ctx)?;
+        match ctx.network {
+            ckbadger_common::hardfork::NETWORK_MAINNET => {
+                Ok(run_i128_relative_tolerance_explorer_check(
+                    &our_data,
+                    &explorer_data,
+                    progress,
+                    "protocol_normalized_burnt",
+                    1,
+                    500,
+                ))
+            }
+            ckbadger_common::hardfork::NETWORK_TESTNET => {
+                Ok(run_i128_relative_tolerance_explorer_daily_delta_check(
+                    &our_data,
+                    &explorer_data,
+                    progress,
+                    "testnet_baseline_normalized_burnt",
+                    1,
+                    500,
+                    |ours, theirs| {
+                        let ours = ours.parse::<i128>().ok()?;
+                        let theirs = parse_integral_explorer_shannons(
+                            theirs,
+                            "phase1-normalized burnt",
+                            "daily delta",
+                        )
+                        .ok()?;
+                        Some((ours, theirs))
+                    },
+                ))
+            }
+            network => {
+                anyhow::bail!("unsupported network for Explorer burnt normalization: '{network}'")
+            }
+        }
     }
 }
 
@@ -2006,8 +1935,8 @@ impl Check for ExplorerMiningReward {
     }
 }
 
-/// X15: Compare treasury after converting the explorer's overlapping legacy
-/// partition to the protocol partition.
+/// X15: Compare treasury after subtracting the exact chain-derived phase-1
+/// overlap from Explorer's legacy partition. See X12 for the testnet baseline.
 pub struct ExplorerTreasuryAmount;
 
 impl Check for ExplorerTreasuryAmount {
@@ -2015,7 +1944,7 @@ impl Check for ExplorerTreasuryAmount {
         "explorer_treasury_amount"
     }
     fn description(&self) -> &'static str {
-        "Daily treasury vs protocol-normalized explorer partition"
+        "Daily treasury vs network-normalized explorer partition"
     }
     fn tier(&self) -> CheckTier {
         CheckTier::Sampling
@@ -2027,17 +1956,44 @@ impl Check for ExplorerTreasuryAmount {
         Some(30)
     }
     fn run(&self, ctx: &CheckContext, progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
-        let explorer_data = converted_explorer_treasury_by_date(ctx)?;
         let our_data =
             fetch_our_stacked_chart_sum_shannons(ctx, "charts/secondary-issuance", &["burnt"])?;
-        Ok(run_i128_relative_tolerance_explorer_check(
-            &our_data,
-            &explorer_data,
-            progress,
-            "protocol_normalized_treasury",
-            1,
-            500,
-        ))
+        let explorer_data = phase1_normalized_explorer_treasury_by_date(ctx)?;
+        match ctx.network {
+            ckbadger_common::hardfork::NETWORK_MAINNET => {
+                Ok(run_i128_relative_tolerance_explorer_check(
+                    &our_data,
+                    &explorer_data,
+                    progress,
+                    "protocol_normalized_treasury",
+                    1,
+                    500,
+                ))
+            }
+            ckbadger_common::hardfork::NETWORK_TESTNET => {
+                Ok(run_i128_relative_tolerance_explorer_daily_delta_check(
+                    &our_data,
+                    &explorer_data,
+                    progress,
+                    "testnet_baseline_normalized_treasury",
+                    1,
+                    500,
+                    |ours, theirs| {
+                        let ours = ours.parse::<i128>().ok()?;
+                        let theirs = parse_integral_explorer_shannons(
+                            theirs,
+                            "phase1-normalized treasury_amount",
+                            "daily delta",
+                        )
+                        .ok()?;
+                        Some((ours, theirs))
+                    },
+                ))
+            }
+            network => anyhow::bail!(
+                "unsupported network for Explorer treasury normalization: '{network}'"
+            ),
+        }
     }
 }
 
@@ -2502,8 +2458,9 @@ impl Check for NervosDaoDepositCompensation {
     }
 }
 
-/// X24: Convert the NervosDAO contract endpoint's legacy treasury at its latest
-/// completed daily row, then compare it with ckbadger's same-date treasury.
+/// X24: Validate the NervosDAO contract endpoint against its latest completed
+/// daily row, then subtract the same exact phase-1 overlap as X15 for the
+/// ckbadger comparison.
 pub struct NervosDaoTreasuryAmount;
 
 impl Check for NervosDaoTreasuryAmount {
@@ -2511,7 +2468,7 @@ impl Check for NervosDaoTreasuryAmount {
         "nervos_dao_treasury_amount"
     }
     fn description(&self) -> &'static str {
-        "NervosDAO treasury normalized at explorer's latest completed day"
+        "NervosDAO treasury network-normalized at latest completed day"
     }
     fn tier(&self) -> CheckTier {
         CheckTier::Sampling
@@ -2525,23 +2482,22 @@ impl Check for NervosDaoTreasuryAmount {
     fn run(&self, ctx: &CheckContext, _progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
         let explorer = fetch_explorer_nervos_dao(ctx)?;
         let daily_treasury = fetch_explorer_daily(ctx, "treasury_amount", "treasury_amount")?;
-        let converted = converted_explorer_treasury_by_date(ctx)?;
+        let normalized_treasury = phase1_normalized_explorer_treasury_by_date(ctx)?;
         let ours =
             fetch_our_stacked_chart_sum_shannons(ctx, "charts/secondary-issuance", &["burnt"])?;
-
-        let latest_date = daily_treasury
-            .keys()
-            .filter(|date| converted.contains_key(*date) && ours.contains_key(*date))
-            .max()
-            .cloned()
-            .ok_or_else(|| {
-                anyhow::anyhow!("no common completed date for NervosDAO treasury conversion")
-            })?;
         let contract_legacy = parse_integral_explorer_shannons(
             &explorer.treasury_amount,
             "treasury_amount",
             "contracts/nervos_dao",
         )?;
+        let latest_date = daily_treasury
+            .keys()
+            .filter(|date| normalized_treasury.contains_key(*date) && ours.contains_key(*date))
+            .max()
+            .cloned()
+            .ok_or_else(|| {
+                anyhow::anyhow!("no common completed date for NervosDAO treasury conversion")
+            })?;
         let daily_legacy = parse_integral_explorer_shannons(
             daily_treasury
                 .get(&latest_date)
@@ -2556,15 +2512,18 @@ impl Check for NervosDaoTreasuryAmount {
             .map_err(|error| {
                 anyhow::anyhow!("invalid ckbadger treasury for {}: {}", latest_date, error)
             })?;
-        let converted_treasury = converted
+        let normalized_explorer_treasury = normalized_treasury
             .get(&latest_date)
             .ok_or_else(|| {
-                anyhow::anyhow!("missing converted Explorer treasury for {}", latest_date)
+                anyhow::anyhow!(
+                    "missing phase1-normalized Explorer treasury for {}",
+                    latest_date
+                )
             })?
             .parse::<i128>()
             .map_err(|error| {
                 anyhow::anyhow!(
-                    "invalid converted Explorer treasury for {}: {}",
+                    "invalid phase1-normalized Explorer treasury for {}: {}",
                     latest_date,
                     error
                 )
@@ -2582,9 +2541,9 @@ impl Check for NervosDaoTreasuryAmount {
         }
         if let Some(finding) = compare_nonnegative_i128_relative_tolerance(
             our_treasury,
-            converted_treasury,
+            normalized_explorer_treasury,
             &latest_date,
-            "protocol_normalized_treasury",
+            "phase1_normalized_treasury",
             1,
             200,
         ) {
@@ -2594,7 +2553,7 @@ impl Check for NervosDaoTreasuryAmount {
         if findings.is_empty() {
             Ok(CheckResult::pass_with_detail(
                 1,
-                format!("normalized at {}", latest_date),
+                format!("phase-1 normalized at {}", latest_date),
             ))
         } else {
             Ok(CheckResult::fail(1, findings))
@@ -3512,48 +3471,20 @@ mod tests {
     }
 
     #[test]
-    fn explorer_treasury_conversion_removes_only_partition_overlap() {
-        let converted = convert_explorer_treasury_partition(1_000, 100, 250, 700, "fixture")
-            .expect("valid partition");
-
-        assert_eq!(converted.protocol_treasury, 650);
-        assert_eq!(converted.implied_phase1_overlap, 50);
+    fn explorer_treasury_conversion_subtracts_exact_phase1_compensation() {
         assert_eq!(
-            converted
-                .legacy_treasury
-                .checked_sub(converted.implied_phase1_overlap),
-            Some(converted.protocol_treasury)
+            subtract_phase1_from_explorer_partition(700, 50, "treasury_amount", "fixture")
+                .expect("valid partition"),
+            650
         );
     }
 
     #[test]
-    fn explorer_treasury_conversion_rejects_components_above_protocol_total() {
-        let err = convert_explorer_treasury_partition(300, 200, 101, 50, "2026-08-07")
-            .expect_err("partition remainder must not be negative");
+    fn explorer_treasury_conversion_rejects_partition_below_phase1() {
+        let err = subtract_phase1_from_explorer_partition(49, 50, "treasury_amount", "2026-08-07")
+            .expect_err("legacy partition cannot be below phase-1 compensation");
 
-        assert!(err
-            .to_string()
-            .contains("Explorer mining + compensation exceed protocol total"));
-        assert!(err.to_string().contains("2026-08-07"));
-    }
-
-    #[test]
-    fn explorer_treasury_conversion_rejects_negative_phase1_overlap() {
-        let err = convert_explorer_treasury_partition(1_000, 100, 250, 649, "2026-08-07")
-            .expect_err("legacy treasury cannot be below protocol treasury");
-
-        assert!(err.to_string().contains("negative implied phase-1 overlap"));
-        assert!(err.to_string().contains("2026-08-07"));
-    }
-
-    #[test]
-    fn explorer_treasury_conversion_rejects_phase1_above_compensation() {
-        let err = convert_explorer_treasury_partition(1_000, 100, 250, 901, "2026-08-07")
-            .expect_err("phase-1 overlap is part of total DAO compensation");
-
-        assert!(err
-            .to_string()
-            .contains("implied phase-1 overlap exceeds compensation"));
+        assert!(err.to_string().contains("below exact phase-1 compensation"));
         assert!(err.to_string().contains("2026-08-07"));
     }
 
@@ -3575,7 +3506,8 @@ mod tests {
                             "mining": "100",
                             "burnt": "650"
                         },
-                        "protocolTotalShannons": "100000000000"
+                        "protocolTotalShannons": "100000000000",
+                        "phase1CompensationShannons": "5000000000"
                     }]
                 })))
                 .mount(&server)
@@ -3633,6 +3565,121 @@ mod tests {
         });
 
         let ctx = explorer_test_context(&server);
+        let progress = ProgressReporter::new(None);
+        let treasury = ExplorerTreasuryAmount.run(&ctx, &progress).unwrap();
+        let burnt = ExplorerBurnt.run(&ctx, &progress).unwrap();
+        let latest = NervosDaoTreasuryAmount.run(&ctx, &progress).unwrap();
+
+        assert!(treasury.passed, "findings: {:?}", treasury.findings);
+        assert!(burnt.passed, "findings: {:?}", burnt.findings);
+        assert!(latest.passed, "findings: {:?}", latest.findings);
+    }
+
+    #[test]
+    fn testnet_treasury_checks_normalize_historical_offsets_by_transition() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let server = runtime.block_on(MockServer::start());
+        let older_date = last_30_days()[2].clone();
+        let latest_date = last_30_days()[1].clone();
+        let older_timestamp = explorer_timestamp_for_date(&older_date).to_string();
+        let latest_timestamp = explorer_timestamp_for_date(&latest_date).to_string();
+
+        runtime.block_on(async {
+            Mock::given(method("GET"))
+                .and(path("/api/v1/charts/secondary-issuance"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "data": [
+                        {
+                            "date": older_date,
+                            "values": {
+                                "compensation": "250",
+                                "mining": "100",
+                                "burnt": "650"
+                            },
+                            "protocolTotalShannons": "100000000000",
+                            "phase1CompensationShannons": "5000000000"
+                        },
+                        {
+                            "date": latest_date,
+                            "values": {
+                                "compensation": "270",
+                                "mining": "110",
+                                "burnt": "720"
+                            },
+                            "protocolTotalShannons": "110000000000",
+                            "phase1CompensationShannons": "5500000000"
+                        }
+                    ]
+                })))
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/api/v1/charts/total-supply"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "data": [
+                        {
+                            "date": older_date,
+                            "values": { "burnt": "8400000650" }
+                        },
+                        {
+                            "date": latest_date,
+                            "values": { "burnt": "8400000720" }
+                        }
+                    ]
+                })))
+                .mount(&server)
+                .await;
+
+            for (indicator, older_value, latest_value) in [
+                ("mining_reward", "10000000000", "11000000000"),
+                ("deposit_compensation", "23000000000", "25000000000"),
+                ("treasury_amount", "70000000010", "77500000010"),
+                ("burnt", "840000070000000010", "840000077500000010"),
+            ] {
+                Mock::given(method("GET"))
+                    .and(path(format!("/api/v1/daily_statistics/{indicator}")))
+                    .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                        "data": [
+                            {
+                                "attributes": {
+                                    "created_at_unixtimestamp": older_timestamp,
+                                    (indicator): older_value
+                                }
+                            },
+                            {
+                                "attributes": {
+                                    "created_at_unixtimestamp": latest_timestamp,
+                                    (indicator): latest_value
+                                }
+                            }
+                        ]
+                    })))
+                    .mount(&server)
+                    .await;
+            }
+
+            Mock::given(method("GET"))
+                .and(path("/api/v1/contracts/nervos_dao"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "data": {
+                        "attributes": {
+                            "total_deposit": "1",
+                            "depositors_count": "1",
+                            "unclaimed_compensation": "1",
+                            "claimed_compensation": "1",
+                            "average_deposit_time": "1 days",
+                            "mining_reward": "11000000000",
+                            "deposit_compensation": "25000000000",
+                            "treasury_amount": "77500000010",
+                            "estimated_apc": "1"
+                        }
+                    }
+                })))
+                .mount(&server)
+                .await;
+        });
+
+        let ctx = explorer_test_context_for_network(&server, "testnet");
         let progress = ProgressReporter::new(None);
         let treasury = ExplorerTreasuryAmount.run(&ctx, &progress).unwrap();
         let burnt = ExplorerBurnt.run(&ctx, &progress).unwrap();

@@ -37,10 +37,12 @@ declaration order. Point `-C` at a network subdirectory (for example,
 
 Explorer `burnt` and `treasury_amount` are not compared raw: the official explorer leaves phase-1
 frozen DAO interest in treasury while also including it in deposit compensation. The verifier
-normalizes that legacy partition against the exact protocol total (`miner + S + claimed`), then
-subtracts Explorer's comparable mining and compensation components to reconstruct protocol
-treasury. `/charts/secondary-issuance` exposes that independent total as
-`protocolTotalShannons`. See POSTMORTEM DAO-029.
+subtracts ckbadger's exact lifecycle-derived phase-1 amount from the Explorer legacy partition.
+`/charts/secondary-issuance` exposes that materialized amount as
+`phase1CompensationShannons`; it is not inferred from the treasury value being checked. Mainnet's
+daily checks use absolute comparisons. Testnet's daily checks compare normalized changes because
+its Explorer statistics retain historical constant baseline gaps; the NervosDAO point check uses
+the normalized latest completed day. No tolerance is widened. See POSTMORTEM DAO-029 and DAO-031.
 
 `--depth fast` runs Fast tier only. `--depth sampling` runs all three tiers (Fast + Sampling +
 Explorer). The public `ckbadger verify` command resolves each network's API, RPC, official

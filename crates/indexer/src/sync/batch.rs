@@ -3163,7 +3163,7 @@ impl Indexer {
         } else {
             HashMap::new()
         };
-        let mut same_batch_dao_for_stats: HashMap<(Vec<u8>, i16), i64> = HashMap::new();
+        let mut same_batch_dao_for_stats = DaoSameBatchMap::new();
         let mut active_dao_deposit_counts_by_lock: HashMap<Vec<u8>, i64> = HashMap::new();
         let mut ever_deposited_by_lock: HashMap<Vec<u8>, bool> = HashMap::new();
         {
@@ -3992,16 +3992,24 @@ impl Indexer {
                             anyhow!("missing DAO end block for snapshot date {}", date)
                         })?;
                     let completed_end_block = completed_boundaries.get(date).copied();
-                    let unclaimed_compensation = if completed_end_block.is_some() {
-                        // Replaced below by the exact end-of-day lifecycle value,
-                        // which already includes this batch's staged deposits.
-                        0
-                    } else {
-                        self.writer
-                            .store()
-                            .compute_dao_compensation_breakdown_at(end_block, ar)?
-                            .unclaimed
-                    };
+                    let (unclaimed_compensation, frozen_phase1_compensation) =
+                        if completed_end_block.is_some() {
+                            // Replaced below by the exact end-of-day lifecycle value,
+                            // which already includes this batch's staged deposits.
+                            (0, 0)
+                        } else {
+                            let compensation = self
+                                .writer
+                                .store()
+                                .compute_dao_compensation_breakdown_at(end_block, ar)?;
+                            let frozen_phase1 =
+                                compensation.frozen_phase1().with_context(|| {
+                                    format!(
+                                        "while staging incomplete DAO snapshot for date {date} at block {end_block}"
+                                    )
+                                })?;
+                            (compensation.unclaimed, frozen_phase1)
+                        };
 
                     let mut dao_snapshot = crate::db::writer::DaoSnapshotInput {
                         total_deposited: running_total_deposited,
@@ -4021,6 +4029,7 @@ impl Indexer {
                         cum_dao_compensation: staged_cum_dao,
                         cum_treasury: staged_cum_treasury,
                         unclaimed_compensation,
+                        frozen_phase1_compensation,
                         cumulative_depositors: running_cumulative_depositors,
                         daily_depositor_addresses,
                         protocol_deposited: Some(running_protocol_deposited),

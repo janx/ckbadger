@@ -1252,6 +1252,7 @@ interface StackedAreaDataPoint {
   date: string;
   values: Record<string, string>;
   protocolTotalShannons?: string;
+  phase1CompensationShannons?: string;
 }
 
 interface StackedAreaSeries {

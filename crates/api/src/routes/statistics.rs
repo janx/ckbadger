@@ -614,16 +614,17 @@ pub struct StackedAreaChartResponse {
 }
 
 /// Secondary issuance keeps the UI's whole-CKB stacked values while exposing
-/// the exact protocol total in shannons for agents and integrity checks. The
-/// total follows the independent chain identity `miner + S + claimed`; it does
-/// not sum the displayed compensation and treasury buckets, so a verifier can
-/// check that split without deriving its expected value from the split itself.
+/// exact shannon values needed by agents and integrity checks. The phase-1
+/// amount is the semantic overlap in CKB Explorer's legacy treasury partition;
+/// exposing the materialized lifecycle value lets verification normalize that
+/// partition without an API-time lifecycle scan.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SecondaryIssuanceDataPoint {
     pub date: String,
     pub values: std::collections::HashMap<String, String>,
     pub protocol_total_shannons: String,
+    pub phase1_compensation_shannons: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -3340,6 +3341,20 @@ fn secondary_issuance_data_point(
     }
 
     let protocol_total = snapshot_total_secondary_issuance(snapshot)?;
+    if snapshot.frozen_phase1_compensation < 0 {
+        return Err(ApiError::internal(format!(
+            "negative frozen_phase1_compensation in dao_daily_snapshots for {}: {}",
+            snapshot.date, snapshot.frozen_phase1_compensation
+        )));
+    }
+    if snapshot.frozen_phase1_compensation > snapshot.unclaimed_compensation {
+        return Err(ApiError::internal(format!(
+            "frozen_phase1_compensation exceeds unclaimed_compensation in dao_daily_snapshots for {}: frozen_phase1={}, unclaimed={}",
+            snapshot.date,
+            snapshot.frozen_phase1_compensation,
+            snapshot.unclaimed_compensation
+        )));
+    }
     let values = HashMap::from([
         (
             "compensation".to_string(),
@@ -3359,6 +3374,7 @@ fn secondary_issuance_data_point(
         date: snapshot.date.clone(),
         values,
         protocol_total_shannons: protocol_total.to_string(),
+        phase1_compensation_shannons: snapshot.frozen_phase1_compensation.to_string(),
     }))
 }
 
@@ -4369,6 +4385,7 @@ mod tests {
             cum_dao_compensation: 0,
             cum_treasury: 0,
             unclaimed_compensation: 0,
+            frozen_phase1_compensation: 0,
             cumulative_depositors: 0,
             daily_depositor_addresses: 0,
             protocol_deposited: None,
@@ -4745,6 +4762,7 @@ mod tests {
             cum_dao_compensation: 0,
             cum_treasury: 0,
             unclaimed_compensation: 0,
+            frozen_phase1_compensation: 0,
             cumulative_depositors: 0,
             daily_depositor_addresses: 0,
             protocol_deposited: None,

@@ -2199,6 +2199,79 @@ correctness signal.
 
 ---
 
+### DAO-030: Same-batch phase-1 left a phantom daily deposit
+
+**Date**: 2026-08-09
+
+**Symptom**: Testnet `explorer_total_deposit` reported a single daily mismatch:
+ckbadger increased by 25,000,000,000 shannons on 2026-08-06 while Explorer was
+unchanged. The canonical 250 CKB deposit
+`0x039caefa…52f1a:0` was created at block 21,995,763 and consumed by its
+phase-1 withdraw request at block 21,995,783, both before the same UTC+8 day
+boundary. Its end-of-day active-deposit contribution must therefore be zero.
+
+**Root Cause**: The live daily-snapshot accumulator prefetched DAO inputs from
+the domain store before processing the writer batch. It separately remembered
+deposits created inside the batch, but input processing consulted only the
+prefetched committed map. A deposit followed by phase-1 in the same batch added
+capacity and an active depositor without applying the matching phase-1
+subtraction. The canonical lifecycle row itself was correct; only the derived
+`stats_dao` daily delta was wrong.
+
+**Fix**: Same-batch deposits now retain capacity and lock identity, and both
+committed and same-batch deposits enter one phase-1 delta path. That path
+subtracts explorer-style active capacity and updates the unique active
+depositor count while deliberately retaining protocol-deposited capacity until
+phase-2. Unknown lifecycle statuses fail. If a deposit is resolved from both
+sources, its capacity, lock, and active status must agree exactly; contradictory
+sources fail with transaction/outpoint context.
+
+**Re-sync required**: Yes. This corrects the indexer-owned domain-store
+`stats_dao` write path. Purge the chain stores and re-sync from genesis; the
+append-only store format and semantics are unchanged.
+
+---
+
+### DAO-031: Testnet baselines made inferred phase-1 overlap negative
+
+**Date**: 2026-08-09
+
+**Symptom**: DAO-029's partition conversion passed mainnet but failed all three
+testnet treasury checks on 2026-08-07 with
+`legacy_treasury=728634560840159901`,
+`protocol_treasury=728644436851809595`, and an impossible inferred phase-1
+overlap of `-9876011649694`. Comparing raw testnet treasury changes instead was
+also invalid: the 2026-07-09→10 transition deviated by 0.2913%, beyond the
+unchanged 0.2% tolerance.
+
+**Root Cause**: DAO-029 reconstructed protocol treasury from ckbadger's exact
+protocol total minus Explorer's absolute mining and compensation components.
+Testnet Explorer's compensation series has a known historical constant baseline
+gap, so those absolute components do not share one partition total. The
+resulting remainder was not a treasury value and could not be used to infer
+phase-1 overlap. Raw treasury changes fail whenever the real phase-1 frozen
+amount changes because Explorer deliberately leaves that amount in treasury.
+
+**Fix**: The lifecycle summation now materializes
+`frozen_phase1_compensation = unclaimed - active_unmade` into every DAO daily
+snapshot and exposes it exactly as `phase1CompensationShannons`. All three
+checks subtract that chain-derived amount from Explorer's legacy treasury or
+burnt value. Mainnet's daily checks retain absolute comparison; testnet's daily
+checks compare normalized transitions so its unrelated historical baseline
+cancels. The NervosDAO contract value must still equal Explorer's latest
+completed daily legacy value before that point is normalized. On the previously
+failing 2026-07-09→10 transition, the normalized delta differs by only
+7,090,598 shannons (about 0.000002%). Across the full cached comparison window,
+testnet's maximum normalized transition difference was 7,179,690 shannons (21
+parts per billion), while mainnet's maximum absolute treasury difference was
+10 parts per billion. No tolerance was widened or check removed.
+
+**Re-sync required**: Yes. `DaoDailySnapshot` in the domain store gained the
+exact frozen phase-1 field. All live, bulk, and reorg-recompute writers populate
+it from the same lifecycle calculation. The append-only store is untouched.
+
+---
+
 ### PROTO-008: A capacity heuristic gating on-chain evidence
 
 **Date**: 2026-08-04
@@ -2285,4 +2358,4 @@ compute the answer that another path in the same process already has".
 
 ---
 
-_Last updated: 2026-08-08_
+_Last updated: 2026-08-09_

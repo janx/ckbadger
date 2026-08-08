@@ -1489,6 +1489,9 @@ impl CkbadgerStore {
         let cumulative_treasury = compensation
             .treasury(last_header_s)
             .with_context(|| format!("during DAO recompute for target_date={date}"))?;
+        let frozen_phase1_compensation = compensation
+            .frozen_phase1()
+            .with_context(|| format!("during DAO recompute for target_date={date}"))?;
 
         // 7. Write the rebuilt snapshot.
         let snapshot = DaoDailySnapshot {
@@ -1506,6 +1509,7 @@ impl CkbadgerStore {
             cum_dao_compensation: total_compensation,
             cum_treasury: cumulative_treasury,
             unclaimed_compensation: compensation.unclaimed,
+            frozen_phase1_compensation,
             cumulative_depositors: running_cumulative_depositors,
             daily_depositor_addresses: daily_depositor_locks.len() as i64,
             protocol_deposited: Some(running_protocol_deposited),
@@ -1890,6 +1894,7 @@ mod tests {
             cum_dao_compensation: 2_000_000_000_000,
             cum_treasury: 7_000_000_000_000,
             unclaimed_compensation: 0,
+            frozen_phase1_compensation: 0,
             cumulative_depositors: 0,
             daily_depositor_addresses: 0,
             protocol_deposited: None,
@@ -1928,6 +1933,7 @@ mod tests {
             cum_dao_compensation: 2,
             cum_treasury: 3,
             unclaimed_compensation: 0,
+            frozen_phase1_compensation: 0,
             cumulative_depositors: 0,
             daily_depositor_addresses: 0,
             protocol_deposited: None,
@@ -2000,6 +2006,7 @@ mod tests {
             cum_dao_compensation: 1_000_000_000_000,
             cum_treasury: 3_500_000_000_000,
             unclaimed_compensation: 0,
+            frozen_phase1_compensation: 0,
             cumulative_depositors: 0,
             daily_depositor_addresses: 0,
             protocol_deposited: None,
@@ -2057,6 +2064,7 @@ mod tests {
                 cum_dao_compensation: cum_dao,
                 cum_treasury,
                 unclaimed_compensation: 0,
+                frozen_phase1_compensation: 0,
                 cumulative_depositors: 0,
                 daily_depositor_addresses: 0,
                 protocol_deposited: None,

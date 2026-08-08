@@ -392,7 +392,7 @@ DAO-related state is split across several CFs:
 | `dao_by_block`        | `block_desc (8B BE) + outpoint (34B)`                   | empty                            | Newest-first global DAO deposit index                                                                                                               |
 | `dao_by_lock_block`   | `lock_hash (32B) + block_desc (8B BE) + outpoint (34B)` | empty                            | Newest-first DAO deposit index scoped by lock hash                                                                                                  |
 | `dao_by_status_block` | `status (2B BE) + block_desc (8B BE) + outpoint (34B)`  | empty                            | Newest-first DAO deposit index scoped by status                                                                                                     |
-| `stats_dao`           | date / fixed summary keys                               | `DaoDailySnapshot` and summaries | Daily cumulative series (`total_issuance`, `secondary_pool`, `occupied_capacity`, `cum_miner_secondary`, `cum_dao_compensation`, `cum_treasury`)    |
+| `stats_dao`           | date / fixed summary keys                               | `DaoDailySnapshot` and summaries | Daily cumulative series, including exact unclaimed and frozen phase-1 compensation splits                                                           |
 
 ## 5. Update Triggers
 
@@ -464,14 +464,16 @@ compensation = cum_dao_compensation
 mining = cum_miner_secondary
 burnt = secondary_pool - unclaimed_compensation
 protocolTotalShannons = cum_miner_secondary + secondary_pool + claimed_compensation
+phase1CompensationShannons = unclaimed_compensation - active_unmade
 ```
 
 The API converts each shannon value to whole CKB for the stacked-area series. It does not
 reconstruct these amounts from capacity percentages: miner issuance is the sum of exact
 per-block deltas, DAO compensation follows individual deposit lifecycles, and burnt/treasury is
 the exact residual of `S`. `protocolTotalShannons` remains in shannons and is not a displayed
-stack; it is the independent protocol total used to normalize external partitions without
-deriving the expected result from ckbadger's treasury value.
+stack. `phase1CompensationShannons` also remains in shannons; it is materialized into the daily
+snapshot from the same exact lifecycle pass and lets verification normalize the official
+Explorer's legacy overlapping treasury partition without rescanning DAO entries at read time.
 
 **Implementation**: `crates/api/src/routes/statistics.rs::get_secondary_issuance_chart()`
 

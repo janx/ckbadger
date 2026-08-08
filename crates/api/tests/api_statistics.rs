@@ -681,6 +681,7 @@ async fn test_network_stats_includes_hero_metrics_from_dao_snapshot() {
         cum_dao_compensation: 3_000_000_000_000_000,
         cum_treasury: 2_000_000_000_000_000,
         unclaimed_compensation: 0,
+        frozen_phase1_compensation: 0,
         cumulative_depositors: 0,
         daily_depositor_addresses: 0,
         protocol_deposited: None,
@@ -784,6 +785,7 @@ async fn test_network_stats_circulating_supply_uses_seeded_genesis_baseline() {
         cum_dao_compensation: 3_000_000_000_000_000,
         cum_treasury,
         unclaimed_compensation: 0,
+        frozen_phase1_compensation: 0,
         cumulative_depositors: 0,
         daily_depositor_addresses: 0,
         protocol_deposited: None,
@@ -870,6 +872,7 @@ async fn test_network_stats_reports_initializing_when_baseline_missing() {
         cum_dao_compensation: 3_000_000_000_000_000,
         cum_treasury: 2_000_000_000_000_000,
         unclaimed_compensation: 0,
+        frozen_phase1_compensation: 0,
         cumulative_depositors: 0,
         daily_depositor_addresses: 0,
         protocol_deposited: None,
@@ -1050,7 +1053,7 @@ async fn test_miner_distribution_reads_from_derived_store() {
 }
 
 #[tokio::test]
-async fn test_secondary_issuance_chart_exposes_exact_protocol_total() {
+async fn test_secondary_issuance_chart_exposes_exact_verifier_values() {
     const CKB: i128 = 100_000_000;
 
     let core_store = test_store();
@@ -1070,6 +1073,7 @@ async fn test_secondary_issuance_chart_exposes_exact_protocol_total() {
         cum_dao_compensation: 30 * CKB,
         cum_treasury: 30 * CKB,
         unclaimed_compensation: 20 * CKB,
+        frozen_phase1_compensation: 5 * CKB,
         cumulative_depositors: 0,
         daily_depositor_addresses: 0,
         protocol_deposited: None,
@@ -1102,6 +1106,7 @@ async fn test_secondary_issuance_chart_exposes_exact_protocol_total() {
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["data"][0]["protocolTotalShannons"], "10000000000");
+    assert_eq!(json["data"][0]["phase1CompensationShannons"], "500000000");
     assert_eq!(json["data"][0]["values"]["mining"], "40");
     assert_eq!(json["data"][0]["values"]["compensation"], "30");
     assert_eq!(json["data"][0]["values"]["burnt"], "30");
@@ -1139,6 +1144,7 @@ async fn test_inflation_rate_uses_exact_trailing_year_dao_snapshots() {
         cum_dao_compensation,
         cum_treasury,
         unclaimed_compensation,
+        frozen_phase1_compensation: 0,
         cumulative_depositors: 0,
         daily_depositor_addresses: 0,
         protocol_deposited: None,
@@ -1266,6 +1272,7 @@ async fn test_inflation_rate_forward_fills_testnet_genesis_blockless_days() {
         cum_dao_compensation: 0,
         cum_treasury: 0,
         unclaimed_compensation: 0,
+        frozen_phase1_compensation: 0,
         cumulative_depositors: 0,
         daily_depositor_addresses: 0,
         protocol_deposited: None,
@@ -1379,6 +1386,7 @@ async fn test_inflation_rate_rejects_missing_snapshot_on_block_bearing_day() {
             cum_dao_compensation: 0,
             cum_treasury: 0,
             unclaimed_compensation: 0,
+            frozen_phase1_compensation: 0,
             cumulative_depositors: 0,
             daily_depositor_addresses: 0,
             protocol_deposited: None,
@@ -1691,6 +1699,7 @@ async fn test_asset_ecosystem_breakdown_is_share_of_total_live_capacity() {
         cum_dao_compensation: 0,
         cum_treasury: 0,
         unclaimed_compensation: 0,
+        frozen_phase1_compensation: 0,
         cumulative_depositors: 0,
         daily_depositor_addresses: 0,
         protocol_deposited: None,
@@ -2116,6 +2125,7 @@ fn seed_knowledge_size_fixture(store: &Arc<CkbadgerStore>, occupied_capacity: i1
         cum_dao_compensation: 0,
         cum_treasury: 0,
         unclaimed_compensation: 0,
+        frozen_phase1_compensation: 0,
         cumulative_depositors: 0,
         daily_depositor_addresses: 0,
         protocol_deposited: None,
