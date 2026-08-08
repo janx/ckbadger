@@ -948,6 +948,38 @@ pub(crate) fn should_log_unresolved_retry(attempt: usize) -> bool {
     attempt == 1 || attempt.is_multiple_of(10) || attempt >= PARSER_UNRESOLVED_MAX_RETRIES
 }
 
+/// What the parser should do after one unresolved-input attempt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum UnresolvedRetryDecision {
+    Retry,
+    GiveUp,
+}
+
+/// Advance the parser's unresolved-input retry budget by one attempt.
+///
+/// The budget exists to detect inputs that will never resolve. A reorg
+/// rollback is the one case where "unresolved" is expected and temporary: it
+/// republishes the very cells the parser is waiting on, and its writes stay
+/// uncommitted — invisible to reads — until it finishes. Attempts made while
+/// one is running therefore carry no evidence either way and must not consume
+/// the budget. Counting them is what killed live sync on testnet: a rollback
+/// outlasted the budget, the parser gave up mid-reorg, and the pipeline reset
+/// into an epoch with no parser and aborted the process.
+pub(crate) fn advance_unresolved_retry_budget(
+    retry_count: &mut usize,
+    rollback_in_progress: bool,
+) -> UnresolvedRetryDecision {
+    if rollback_in_progress {
+        return UnresolvedRetryDecision::Retry;
+    }
+    *retry_count += 1;
+    if *retry_count >= PARSER_UNRESOLVED_MAX_RETRIES {
+        UnresolvedRetryDecision::GiveUp
+    } else {
+        UnresolvedRetryDecision::Retry
+    }
+}
+
 pub(crate) fn should_log_pipeline_idle_timeout(consecutive_idle_timeouts: u64) -> bool {
     consecutive_idle_timeouts <= 3 || consecutive_idle_timeouts.is_multiple_of(10)
 }
@@ -1151,6 +1183,50 @@ mod tests {
         assert!(!should_log_unresolved_retry(2));
         assert!(should_log_unresolved_retry(10));
         assert!(should_log_unresolved_retry(PARSER_UNRESOLVED_MAX_RETRIES));
+    }
+
+    #[test]
+    fn test_unresolved_retry_budget_gives_up_only_after_max_attempts() {
+        let mut retry_count = 0usize;
+        for _ in 0..(PARSER_UNRESOLVED_MAX_RETRIES - 1) {
+            assert_eq!(
+                advance_unresolved_retry_budget(&mut retry_count, false),
+                UnresolvedRetryDecision::Retry
+            );
+        }
+        assert_eq!(
+            advance_unresolved_retry_budget(&mut retry_count, false),
+            UnresolvedRetryDecision::GiveUp
+        );
+        assert_eq!(retry_count, PARSER_UNRESOLVED_MAX_RETRIES);
+    }
+
+    /// Regression test for the crash that terminated the testnet indexer: a
+    /// reorg rollback ran longer than the retry budget, so the parser gave up
+    /// on inputs the rollback was about to republish. An in-progress rollback
+    /// must not consume the budget, however long it takes.
+    #[test]
+    fn test_unresolved_retry_budget_frozen_while_rollback_in_progress() {
+        let mut retry_count = 0usize;
+        for _ in 0..(PARSER_UNRESOLVED_MAX_RETRIES * 10) {
+            assert_eq!(
+                advance_unresolved_retry_budget(&mut retry_count, true),
+                UnresolvedRetryDecision::Retry
+            );
+        }
+        assert_eq!(retry_count, 0, "rollback attempts must not consume budget");
+
+        // Once the rollback commits, the full budget is still available.
+        for _ in 0..(PARSER_UNRESOLVED_MAX_RETRIES - 1) {
+            assert_eq!(
+                advance_unresolved_retry_budget(&mut retry_count, false),
+                UnresolvedRetryDecision::Retry
+            );
+        }
+        assert_eq!(
+            advance_unresolved_retry_budget(&mut retry_count, false),
+            UnresolvedRetryDecision::GiveUp
+        );
     }
 
     #[test]

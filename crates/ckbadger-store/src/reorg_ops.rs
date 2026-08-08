@@ -2114,6 +2114,11 @@ impl CkbadgerStore {
         let tx_context_count = tx_contexts.len() as u64;
         let use_tx_context = tx_context_count > 0 && tx_context_count == txs_removed;
         let mut tx_hash_map_removed = 0u64;
+        // Chain position of every rolled-back transaction, captured here because
+        // this stage already reads the mapping and then deletes it. Stage 8c
+        // needs it to address that transaction's `addr_txs` rows directly
+        // instead of scanning the whole CF for them.
+        let mut rolled_back_tx_positions: HashMap<Vec<u8>, (i64, i32)> = HashMap::new();
         let mut stage = RollbackStageProgress::new("delete_tx_hash_map");
         if use_tx_context {
             let mut seen_tx_hashes: HashSet<&[u8]> = HashSet::new();
@@ -2127,15 +2132,31 @@ impl CkbadgerStore {
                 if !seen_tx_hashes.insert(ctx.tx_hash.as_slice()) {
                     continue;
                 }
-                // Collect cellbase tx hashes before deleting the mapping.
-                if let Some(val) = self.get_cf(self.cf_tx_hash_map(), &ctx.tx_hash)? {
-                    if val.len() == 12 {
-                        let tx_idx = keys::decode_tx_idx(&val[8..12]);
-                        if tx_idx == 0 {
-                            cellbase_tx_hashes.insert(ctx.tx_hash.clone());
-                        }
-                    }
+                // Read the position before deleting the mapping. A rolled-back
+                // tx without a mapping means tx_index and tx_hash_map disagree,
+                // which would silently strand its address history.
+                let val = self
+                    .get_cf(self.cf_tx_hash_map(), &ctx.tx_hash)?
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "missing tx_hash_map entry for rolled-back tx: tx_hash=0x{}, rollback_to={}",
+                            bytes_to_hex(&ctx.tx_hash),
+                            rollback_to
+                        )
+                    })?;
+                if val.len() != 12 {
+                    anyhow::bail!(
+                        "invalid tx_hash_map value length during rollback cleanup: tx_hash=0x{}, value_len={}, expected=12",
+                        bytes_to_hex(&ctx.tx_hash),
+                        val.len()
+                    );
                 }
+                let mapped_block = keys::decode_block_num(&val[..8]);
+                let tx_idx = keys::decode_tx_idx(&val[8..12]);
+                if tx_idx == 0 {
+                    cellbase_tx_hashes.insert(ctx.tx_hash.clone());
+                }
+                rolled_back_tx_positions.insert(ctx.tx_hash.clone(), (mapped_block, tx_idx));
                 batch.delete_cf(self.cf_tx_hash_map(), &ctx.tx_hash);
                 tx_hash_map_removed += 1;
                 stage.tick(tx_hash_map_removed);
@@ -2240,6 +2261,14 @@ impl CkbadgerStore {
         // their creation-date bucket; cells restored (consumed after fork_point) add
         // back.  Resolved from block to creation date during HODL tracker repair.
         let mut hodl_capacity_deltas: HashMap<i64, i128> = HashMap::new();
+        // Participant lock hashes per rolled-back tx, keyed by tx hash. The
+        // forward writer creates one addr_txs row per (participant, tx), where
+        // the participants are the lock hashes of the tx's output cells plus,
+        // for non-cellbase txs, of its resolved input cells. The tx-context cell
+        // rollback below already loads exactly those cells, so collecting them
+        // here lets stage 8c address the rows directly instead of scanning the
+        // whole CF for them — see the note there for why that matters.
+        let mut tx_participants: HashMap<Vec<u8>, HashSet<Vec<u8>>> = HashMap::new();
 
         if !use_tx_context {
             if txs_removed > 0 {
@@ -2413,7 +2442,7 @@ impl CkbadgerStore {
             let mut stage = RollbackStageProgress::new("rollback_cells_from_tx_context");
             // tx_contexts is already in newest-first (LIFO) order from
             // rollback_via_undo_log — do NOT reverse again.
-            for ctx in tx_contexts.into_iter() {
+            for ctx in &tx_contexts {
                 if ctx.tx_hash.len() != 32 {
                     anyhow::bail!(
                         "invalid tx-context hash length during rollback: expected=32, got={}",
@@ -2448,6 +2477,10 @@ impl CkbadgerStore {
                                 )
                             })?;
                         batch.delete_cf(self.cf_live_cells(), outpoint_key);
+                        tx_participants
+                            .entry(ctx.tx_hash.clone())
+                            .or_default()
+                            .insert(positioned.cell.lock_script_hash.clone());
                         delete_cell_index_entries(
                             self,
                             &mut batch,
@@ -2539,6 +2572,24 @@ impl CkbadgerStore {
                                 }
                             }
                             batch.delete_cf(self.cf_consumed_cells(), outpoint_key);
+                            // This cell makes its owner a participant of the
+                            // consuming tx, and — when the cell was created
+                            // inside the rolled-back range — of its creating tx
+                            // too. The creating tx's own output loop cannot see
+                            // it: the cell is consumed, so it is not in
+                            // live_cells, and the restore below is only staged
+                            // in `batch`. This is the sole place its lock hash
+                            // is loaded, so both attributions are recorded here.
+                            tx_participants
+                                .entry(ctx.tx_hash.clone())
+                                .or_default()
+                                .insert(consumed.cell.lock_script_hash.clone());
+                            if consumed.created_at_block > rollback_to {
+                                tx_participants
+                                    .entry(input.tx_hash.clone())
+                                    .or_default()
+                                    .insert(consumed.cell.lock_script_hash.clone());
+                            }
                             // Per-side flow rollback: the consumption is always
                             // rolled back here; the creation as well when this
                             // cell was also created inside the rolled-back range.
@@ -3166,39 +3217,81 @@ impl CkbadgerStore {
             }
         }
 
-        // 8c. Delete addr_txs entries for rolled-back blocks.
-        // Also count per-address tx removals to correct txs_count in stage 9a,
-        // and track the latest surviving addr_tx per address for last_activity repair.
+        // 8c. Delete addr_txs entries for rolled-back blocks, counting per-address
+        // removals so stage 9a can correct txs_count.
+        //
+        // The keys are `lock_hash + block_num_desc + tx_idx_desc + tx_hash`, so
+        // they cannot be range-scanned by block: a full-CF iteration used to be
+        // the only way to find them. That cost grows with chain history without
+        // bound (641M keys / ~3 min on testnet to delete a single row) and it
+        // outran the parser's unresolved-input retry budget, terminating live
+        // sync. So derive the keys instead: the forward writer creates exactly
+        // one row per (participant lock_hash, tx), where the participants are
+        // the lock hashes of the tx's output cells plus, for non-cellbase txs,
+        // of its resolved input cells. Both are addressable by outpoint in the
+        // append-only store, which never deletes, so the exact key set for a
+        // rolled-back tx is reconstructible from the cells its rollback already
+        // loaded — see `tx_participants`.
         let mut addr_txs_count_deltas: HashMap<Vec<u8>, i64> = HashMap::new();
-        let mut addr_latest_surviving: HashMap<Vec<u8>, (i64, Vec<u8>)> = HashMap::new();
+        let mut addr_txs_scanned = 0u64;
         {
             let mut addr_txs_removed = 0u64;
             let mut stage = RollbackStageProgress::new("delete_addr_txs");
-            let iter = self.iterator_cf(self.cf_addr_txs(), IteratorMode::Start);
-            for item in iter {
-                let (key, _) = item.map_err(|e| {
-                    anyhow::anyhow!(
-                        "failed to iterate addr_txs in rollback_to_block cleanup: {}",
-                        e
-                    )
-                })?;
-                if key.len() != keys::ADDR_TX_KEY_SIZE {
-                    continue;
+            if use_tx_context {
+                for (tx_hash, participants) in &tx_participants {
+                    let (block_num, tx_idx) =
+                        *rolled_back_tx_positions.get(tx_hash).ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "missing chain position for rolled-back tx while deleting addr_txs: tx_hash=0x{}, rollback_to={}",
+                                bytes_to_hex(tx_hash),
+                                rollback_to
+                            )
+                        })?;
+                    for lock_hash in participants {
+                        let key = keys::encode_addr_tx_key(lock_hash, block_num, tx_idx, tx_hash);
+                        addr_txs_scanned += 1;
+                        if self.get_cf(self.cf_addr_txs(), &key)?.is_none() {
+                            anyhow::bail!(
+                                "missing addr_txs row for rolled-back participant: lock_hash=0x{}, block={}, tx_idx={}, tx_hash=0x{} — \
+                                 participant collection disagrees with the forward write path",
+                                bytes_to_hex(lock_hash),
+                                block_num,
+                                tx_idx,
+                                bytes_to_hex(tx_hash)
+                            );
+                        }
+                        batch.delete_cf(self.cf_addr_txs(), &key);
+                        *addr_txs_count_deltas.entry(lock_hash.clone()).or_insert(0) += 1;
+                        addr_txs_removed += 1;
+                        stage.tick(addr_txs_removed);
+                    }
                 }
-                let (lock_hash, block_num, _tx_idx, tx_hash) = keys::decode_addr_tx_key(&key);
-                if block_num <= rollback_to {
-                    // Track latest surviving entry per address (keys are desc by block_num,
-                    // so first surviving entry per address is the latest)
-                    addr_latest_surviving
-                        .entry(lock_hash)
-                        .or_insert_with(|| (block_num, tx_hash));
+            } else {
+                // No tx-contexts (undo log unavailable): the participant set is
+                // not reconstructible, so fall back to the full scan that the
+                // cell stages above already fell back to for the same reason.
+                let iter = self.iterator_cf(self.cf_addr_txs(), IteratorMode::Start);
+                for item in iter {
+                    addr_txs_scanned += 1;
+                    let (key, _) = item.map_err(|e| {
+                        anyhow::anyhow!(
+                            "failed to iterate addr_txs in rollback_to_block cleanup: {}",
+                            e
+                        )
+                    })?;
+                    if key.len() != keys::ADDR_TX_KEY_SIZE {
+                        continue;
+                    }
+                    let (lock_hash, block_num, _tx_idx, _tx_hash) = keys::decode_addr_tx_key(&key);
+                    if block_num <= rollback_to {
+                        stage.tick(addr_txs_removed);
+                        continue;
+                    }
+                    batch.delete_cf(self.cf_addr_txs(), &key);
+                    *addr_txs_count_deltas.entry(lock_hash).or_insert(0) += 1;
+                    addr_txs_removed += 1;
                     stage.tick(addr_txs_removed);
-                    continue;
                 }
-                batch.delete_cf(self.cf_addr_txs(), &key);
-                *addr_txs_count_deltas.entry(lock_hash).or_insert(0) += 1;
-                addr_txs_removed += 1;
-                stage.tick(addr_txs_removed);
             }
             stage.finish(addr_txs_removed);
             if addr_txs_removed > 0 {
@@ -3511,15 +3604,31 @@ impl CkbadgerStore {
                     ab.live_cells_count
                 );
             }
-            // Repair last_activity from the latest surviving addr_tx entry
+            // Repair last_activity from the latest surviving addr_tx entry.
+            // addr_txs keys are descending by block within a lock_hash prefix,
+            // so seeking just past the fork point lands directly on that entry —
+            // one seek per affected address, no scan of the address's history.
+            // The deletions above are still only staged in `batch`, but they all
+            // sit before this cursor, so the store view cannot return one.
             if ab.last_activity_block > rollback_to {
-                if let Some((surv_block, surv_tx)) = addr_latest_surviving.get(lock_hash) {
-                    ab.last_activity_block = *surv_block;
-                    ab.last_activity_tx = surv_tx.clone();
+                let latest_surviving = if rollback_to < 0 {
+                    None
                 } else {
-                    // No surviving addr_txs — reset to first_seen
-                    ab.last_activity_block = ab.first_seen_block;
-                    ab.last_activity_tx = ab.first_seen_tx.clone();
+                    addr_txs_scanned += 1;
+                    self.list_addr_txs_recent(lock_hash, 1, Some((rollback_to, i32::MAX)))?
+                        .into_iter()
+                        .next()
+                };
+                match latest_surviving {
+                    Some((surv_block, _, surv_tx, _)) => {
+                        ab.last_activity_block = surv_block;
+                        ab.last_activity_tx = surv_tx;
+                    }
+                    None => {
+                        // No surviving addr_txs — reset to first_seen
+                        ab.last_activity_block = ab.first_seen_block;
+                        ab.last_activity_tx = ab.first_seen_tx.clone();
+                    }
                 }
             }
             batch.put_cf(
@@ -4587,6 +4696,7 @@ impl CkbadgerStore {
             txs_removed,
             cells_removed,
             cells_restored,
+            addr_txs_scanned,
         })
     }
 }
@@ -4597,6 +4707,11 @@ pub struct RollbackResult {
     pub txs_removed: u64,
     pub cells_removed: u64,
     pub cells_restored: u64,
+    /// CF_ADDR_TXS reads performed while deleting rolled-back address history
+    /// and repairing `last_activity`. Bounded by the rolled-back data when
+    /// tx-contexts are available; equals the whole CF on the fallback path.
+    /// Exposed because an unbounded value here is what stalls live sync.
+    pub addr_txs_scanned: u64,
 }
 
 #[cfg(test)]
@@ -4606,7 +4721,7 @@ mod tests {
     use crate::keys;
     use crate::store::CkbadgerStore;
     use crate::types::{
-        AddressBalance, AssetAction, CachedBlockHeader, CellDistributionTrackerState,
+        AddrTxValue, AddressBalance, AssetAction, CachedBlockHeader, CellDistributionTrackerState,
         CompositionTier, DaoDailySnapshot, DaoDepositCacheEntry, HodlTrackerState, LiveCellInfo,
         MnftCollectionAggregate, ObjectCollectionActivityEntry, ObjectEntry, ObjectExtra,
         ObjectStandard, ParticipantDelta, ScriptInfo, SporeMediaProfile, SyncStatus, TokenInfo,
@@ -4719,6 +4834,32 @@ mod tests {
                 ..Default::default()
             })
             .unwrap();
+    }
+
+    /// Seed the `tx_hash_map` + `addr_txs` rows the forward writer always
+    /// produces for a transaction: one address-history row per participant,
+    /// where participants are the lock hashes of the tx's output cells plus,
+    /// for non-cellbase txs, of its resolved input cells. Rollback fixtures
+    /// need these because rollback must locate and delete exactly those rows.
+    fn seed_tx_address_history(
+        store: &CkbadgerStore,
+        block_num: i64,
+        tx_idx: i32,
+        tx_hash: &[u8],
+        participants: &[&[u8]],
+    ) {
+        let mut batch = StoreBatch::new(store);
+        batch.put_tx_hash_map(tx_hash, block_num, tx_idx);
+        for lock_hash in participants {
+            batch.put_addr_tx(
+                lock_hash,
+                block_num,
+                tx_idx,
+                tx_hash,
+                &AddrTxValue::new(0, true, true, 0),
+            );
+        }
+        batch.commit().unwrap();
     }
 
     /// DAO singletons are tip-scoped derived rows that the indexer rewrites
@@ -6268,7 +6409,13 @@ mod tests {
             }),
         );
         // Seed derived CFs so inline delta application can find them.
-        batch.put_addr_balance(&[0xAA; 32], &AddressBalance::default());
+        batch.put_addr_balance(
+            &[0xAA; 32],
+            &AddressBalance {
+                txs_count: 1,
+                ..Default::default()
+            },
+        );
         batch.put_addr_balance(
             &[0xBB; 32],
             &AddressBalance {
@@ -6276,6 +6423,7 @@ mod tests {
                 used_capacity: 200,
                 live_cells_count: 1,
                 total_cells_count: 1,
+                txs_count: 1,
                 ..Default::default()
             },
         );
@@ -6290,6 +6438,7 @@ mod tests {
             },
         );
         batch.commit().unwrap();
+        seed_tx_address_history(&store, 2, 0, &consuming_tx, &[&[0xAA; 32], &[0xBB; 32]]);
         seed_sync_status(&store, 2, &header2.hash, 1, 1, 1);
 
         assert!(store.get_cell(&input_tx, 0, &store).unwrap().is_none());
@@ -6307,6 +6456,273 @@ mod tests {
             .get_consumed_cell(&input_tx, 0, &store)
             .unwrap()
             .is_none());
+    }
+
+    /// Regression test for the live-sync stall that killed the testnet indexer:
+    /// deleting rolled-back `addr_txs` used to iterate the whole CF (641M keys
+    /// on testnet, ~3 minutes) to remove a handful of entries, which outran the
+    /// parser's unresolved-input retry budget and terminated the pipeline.
+    ///
+    /// Participants are derivable from the rolled-back transactions themselves,
+    /// so the cost must scale with the rolled-back data, not with chain history.
+    /// The noise entries below stand in for that history: they must never be
+    /// read. Covers the cellbase participant too — cellbase transactions get
+    /// `addr_txs` rows but no CF_TX_ACTIONS bundle, so deriving participants
+    /// from activity bundles alone would leave the miner's row behind.
+    #[test]
+    fn test_rollback_deletes_addr_txs_without_scanning_whole_cf() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+
+        let addr_a = vec![0xAAu8; 32]; // input owner, active in both blocks
+        let addr_b = vec![0xBBu8; 32]; // output owner, only in the rolled-back block
+        let addr_c = vec![0xCCu8; 32]; // cellbase (miner) owner
+        let lock_code_hash = vec![0x11u8; 32];
+
+        let header1 = CachedBlockHeader {
+            hash: vec![0x01; 32],
+            parent_hash: vec![0u8; 32],
+            timestamp: 1_700_000_000_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+            uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
+            cycles: None,
+        };
+        let header2 = CachedBlockHeader {
+            hash: vec![0x02; 32],
+            timestamp: 1_700_000_010_000,
+            transactions_count: 2,
+            ..header1.clone()
+        };
+
+        let make_cell = |capacity: i64, lock_hash: &[u8]| LiveCellInfo {
+            capacity,
+            lock_script_hash: lock_hash.to_vec(),
+            lock_code_hash: lock_code_hash.clone(),
+            lock_hash_type: 1,
+            lock_args: vec![],
+            type_script_hash: None,
+            type_code_hash: None,
+            type_hash_type: None,
+            type_args: None,
+            data_size: 0,
+            occupied_capacity: capacity,
+            udt_amount: None,
+            data_hash: None,
+        };
+
+        let input_tx = vec![0x31u8; 32]; // block 1, creates A's cell
+        let cellbase_tx = vec![0x32u8; 32]; // block 2 tx_idx 0, pays C
+        let consuming_tx = vec![0x33u8; 32]; // block 2 tx_idx 1, A -> B
+
+        let input_cell = make_cell(400, &addr_a);
+        let cellbase_cell = make_cell(500, &addr_c);
+        let output_cell = make_cell(200, &addr_b);
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_block_header(1, &header1);
+        batch.put_block_header(2, &header2);
+
+        batch.put_tx_index(
+            1,
+            0,
+            &TxIndexEntry {
+                is_cellbase: true,
+                timestamp: header1.timestamp,
+                inputs_count: 0,
+                outputs_count: 1,
+                fee: 0,
+                tx_size: 1,
+                cycles: None,
+                semantic_tags: 0,
+            },
+        );
+        batch.put_tx_index(
+            2,
+            0,
+            &TxIndexEntry {
+                is_cellbase: true,
+                timestamp: header2.timestamp,
+                inputs_count: 0,
+                outputs_count: 1,
+                fee: 0,
+                tx_size: 1,
+                cycles: None,
+                semantic_tags: 0,
+            },
+        );
+        batch.put_tx_index(
+            2,
+            1,
+            &TxIndexEntry {
+                is_cellbase: false,
+                timestamp: header2.timestamp,
+                inputs_count: 1,
+                outputs_count: 1,
+                fee: 0,
+                tx_size: 1,
+                cycles: None,
+                semantic_tags: 0,
+            },
+        );
+        batch.put_tx_hash_map(&input_tx, 1, 0);
+        batch.put_tx_hash_map(&cellbase_tx, 2, 0);
+        batch.put_tx_hash_map(&consuming_tx, 2, 1);
+
+        // Cell state at tip: A's cell consumed by consuming_tx, B and C live.
+        batch.put_cell(&input_tx, 0, &input_cell, 1);
+        batch.put_consumed_cell_with_consumer(&input_tx, 0, &input_cell, 1, 2, Some(&consuming_tx));
+        batch.delete_cell(&input_tx, 0);
+        batch.put_cell(&cellbase_tx, 0, &cellbase_cell, 2);
+        batch.put_cell(&consuming_tx, 0, &output_cell, 2);
+
+        // Undo contexts for both block-2 transactions. The cellbase carries the
+        // all-zero/-1 sentinel input, exactly as the forward writer records it.
+        batch.put_reorg_undo_log_by_block(
+            2,
+            0,
+            &UndoLogEntry::TxContext(UndoTxContext {
+                tx_hash: cellbase_tx.clone(),
+                outputs_count: 1,
+                inputs: vec![UndoInputOutPoint {
+                    tx_hash: vec![0u8; 32],
+                    output_index: -1,
+                }],
+            }),
+        );
+        batch.put_reorg_undo_log_by_block(
+            2,
+            1,
+            &UndoLogEntry::TxContext(UndoTxContext {
+                tx_hash: consuming_tx.clone(),
+                outputs_count: 1,
+                inputs: vec![UndoInputOutPoint {
+                    tx_hash: input_tx.clone(),
+                    output_index: 0,
+                }],
+            }),
+        );
+
+        // Address history the forward writer would have produced.
+        let val = AddrTxValue::new(0, true, true, 0);
+        batch.put_addr_tx(&addr_a, 1, 0, &input_tx, &val);
+        batch.put_addr_tx(&addr_a, 2, 1, &consuming_tx, &val);
+        batch.put_addr_tx(&addr_b, 2, 1, &consuming_tx, &val);
+        batch.put_addr_tx(&addr_c, 2, 0, &cellbase_tx, &val);
+
+        // Chain history for unrelated addresses, all below the fork point.
+        // Reading any of these means the rollback is scanning the whole CF.
+        let noise_count = 500usize;
+        for i in 0..noise_count {
+            let mut lock_hash = vec![0x77u8; 32];
+            lock_hash[0] = (i % 256) as u8;
+            lock_hash[1] = (i / 256) as u8;
+            batch.put_addr_tx(&lock_hash, 1, 0, &input_tx, &val);
+        }
+
+        batch.put_addr_balance(
+            &addr_a,
+            &AddressBalance {
+                balance: 0,
+                used_capacity: 0,
+                live_cells_count: 0,
+                total_cells_count: 1,
+                txs_count: 2,
+                first_seen_block: 1,
+                first_seen_tx: input_tx.clone(),
+                last_activity_block: 2,
+                last_activity_tx: consuming_tx.clone(),
+            },
+        );
+        batch.put_addr_balance(
+            &addr_b,
+            &AddressBalance {
+                balance: 200,
+                used_capacity: 200,
+                live_cells_count: 1,
+                total_cells_count: 1,
+                txs_count: 1,
+                first_seen_block: 2,
+                first_seen_tx: consuming_tx.clone(),
+                last_activity_block: 2,
+                last_activity_tx: consuming_tx.clone(),
+            },
+        );
+        batch.put_addr_balance(
+            &addr_c,
+            &AddressBalance {
+                balance: 500,
+                used_capacity: 500,
+                live_cells_count: 1,
+                total_cells_count: 1,
+                txs_count: 1,
+                first_seen_block: 2,
+                first_seen_tx: cellbase_tx.clone(),
+                last_activity_block: 2,
+                last_activity_tx: cellbase_tx.clone(),
+            },
+        );
+        batch.put_script_info(
+            &lock_code_hash,
+            &ScriptInfo {
+                code_hash: lock_code_hash.clone(),
+                hash_type: 1,
+                lock_live_cells_count: 2,
+                lock_owned_capacity_sum: 700,
+                lock_owned_knowledge_sum: 700,
+                ..Default::default()
+            },
+        );
+        batch.commit().unwrap();
+        seed_sync_status(&store, 2, &header2.hash, 3, 3, 1);
+
+        let result = store.rollback_to_block(1).unwrap();
+
+        let addr_txs_of = |lock_hash: &[u8]| {
+            store
+                .list_addr_txs_recent(lock_hash, 10, None)
+                .unwrap()
+                .into_iter()
+                .map(|(block_num, tx_idx, _, _)| (block_num, tx_idx))
+                .collect::<Vec<_>>()
+        };
+
+        // Rolled-back history is gone, including the cellbase participant.
+        assert_eq!(addr_txs_of(&addr_a), vec![(1, 0)]);
+        assert_eq!(addr_txs_of(&addr_b), Vec::new());
+        assert_eq!(addr_txs_of(&addr_c), Vec::new());
+
+        // Surviving history is untouched.
+        for i in 0..noise_count {
+            let mut lock_hash = vec![0x77u8; 32];
+            lock_hash[0] = (i % 256) as u8;
+            lock_hash[1] = (i / 256) as u8;
+            assert_eq!(addr_txs_of(&lock_hash), vec![(1, 0)], "noise entry {i}");
+        }
+
+        // txs_count and last_activity repaired from the latest surviving entry.
+        let ab_a = store.get_addr_balance(&addr_a).unwrap().unwrap();
+        assert_eq!(ab_a.txs_count, 1);
+        assert_eq!(ab_a.last_activity_block, 1);
+        assert_eq!(ab_a.last_activity_tx, input_tx);
+
+        // The point of the fix: cost tracks the rolled-back data, not the CF.
+        // Exactly 3 deleted rows (A@2, B@2, C@2) + one last_activity seek for
+        // each of the 3 affected addresses. The old full scan read all
+        // `noise_count` unrelated entries on top of that, and on testnet that
+        // meant 641M reads to delete a single row.
+        assert_eq!(
+            result.addr_txs_scanned, 6,
+            "addr_txs rollback read {} keys with {} unrelated entries in the CF — \
+             cost must not scale with chain history",
+            result.addr_txs_scanned, noise_count
+        );
     }
 
     /// Regression test: rollback_via_undo_log deletes undo entries, so the
@@ -6412,7 +6828,13 @@ mod tests {
                 }],
             }),
         );
-        batch.put_addr_balance(&[0xAA; 32], &AddressBalance::default());
+        batch.put_addr_balance(
+            &[0xAA; 32],
+            &AddressBalance {
+                txs_count: 1,
+                ..Default::default()
+            },
+        );
         batch.put_addr_balance(
             &[0xBB; 32],
             &AddressBalance {
@@ -6420,6 +6842,7 @@ mod tests {
                 used_capacity: 200,
                 live_cells_count: 1,
                 total_cells_count: 1,
+                txs_count: 1,
                 ..Default::default()
             },
         );
@@ -6434,6 +6857,7 @@ mod tests {
             },
         );
         batch.commit().unwrap();
+        seed_tx_address_history(&store, 2, 0, &consuming_tx, &[&[0xAA; 32], &[0xBB; 32]]);
         seed_sync_status(&store, 2, &header2.hash, 1, 1, 1);
 
         // Step 1: rollback_via_undo_log deletes undo entries and returns
@@ -6563,7 +6987,13 @@ mod tests {
                 }],
             }),
         );
-        batch.put_addr_balance(&lock_a, &AddressBalance::default());
+        batch.put_addr_balance(
+            &lock_a,
+            &AddressBalance {
+                txs_count: 1,
+                ..Default::default()
+            },
+        );
         batch.put_addr_balance(
             &lock_b,
             &AddressBalance {
@@ -6571,6 +7001,7 @@ mod tests {
                 used_capacity: 100,
                 live_cells_count: 1,
                 total_cells_count: 1,
+                txs_count: 1,
                 ..Default::default()
             },
         );
@@ -6615,6 +7046,13 @@ mod tests {
         batch.put_token_holder_by_balance(&type_hash, &lock_b, 100);
         batch.put_addr_token_by_balance(&lock_b, &type_hash, 100);
         batch.commit().unwrap();
+        seed_tx_address_history(
+            &store,
+            2,
+            0,
+            &transfer_tx,
+            &[lock_a.as_slice(), lock_b.as_slice()],
+        );
         seed_sync_status(&store, 2, &header2.hash, 1, 1, 1);
 
         assert_eq!(
@@ -6755,7 +7193,13 @@ mod tests {
                 }],
             }),
         );
-        batch.put_addr_balance(&lock_a, &AddressBalance::default());
+        batch.put_addr_balance(
+            &lock_a,
+            &AddressBalance {
+                txs_count: 1,
+                ..Default::default()
+            },
+        );
         batch.put_addr_balance(
             &lock_b,
             &AddressBalance {
@@ -6763,6 +7207,7 @@ mod tests {
                 used_capacity: 100,
                 live_cells_count: 1,
                 total_cells_count: 1,
+                txs_count: 1,
                 ..Default::default()
             },
         );
@@ -6807,6 +7252,13 @@ mod tests {
         batch.put_token_holder_by_balance(&type_hash, &lock_b, big);
         batch.put_addr_token_by_balance(&lock_b, &type_hash, big);
         batch.commit().unwrap();
+        seed_tx_address_history(
+            &store,
+            2,
+            0,
+            &transfer_tx,
+            &[lock_a.as_slice(), lock_b.as_slice()],
+        );
         seed_sync_status(&store, 2, &header2.hash, 1, 1, 1);
 
         assert_eq!(
@@ -6963,6 +7415,7 @@ mod tests {
                 used_capacity: 100,
                 live_cells_count: 1,
                 total_cells_count: 2,
+                txs_count: 1,
                 ..Default::default()
             },
         );
@@ -7008,6 +7461,9 @@ mod tests {
         batch.put_token_holder_by_balance(&type_hash, &lock_a, big);
         batch.put_addr_token_by_balance(&lock_a, &type_hash, big);
         batch.commit().unwrap();
+        // Self-transfer: input and output share lock_a, so it is the tx's only
+        // participant and gets a single addr_txs row.
+        seed_tx_address_history(&store, 2, 0, &transfer_tx, &[lock_a.as_slice()]);
         seed_sync_status(&store, 2, &header2.hash, 1, 1, 1);
 
         assert_eq!(
@@ -7472,6 +7928,7 @@ mod tests {
                 used_capacity: 100,
                 live_cells_count: 1,
                 total_cells_count: 1,
+                txs_count: 1,
                 ..Default::default()
             },
         );
@@ -7486,6 +7943,7 @@ mod tests {
             },
         );
         batch.commit().unwrap();
+        seed_tx_address_history(&store, 2, 0, &cellbase_tx, &[&[0xAA; 32]]);
         seed_sync_status(&store, 2, &header2.hash, 1, 1, 0);
 
         store.rollback_to_block(1).unwrap();
@@ -7493,6 +7951,12 @@ mod tests {
         assert!(store.get_cell(&cellbase_tx, 0, &store).unwrap().is_none());
         assert!(store.get_tx_index(2, 0).unwrap().is_none());
         assert_eq!(store.get_tx_location(&cellbase_tx).unwrap(), None);
+        // The miner's address history goes with it — a cellbase tx has an
+        // addr_txs row but no CF_TX_ACTIONS bundle to derive it from.
+        assert!(store
+            .list_addr_txs_recent(&[0xAA; 32], 10, None)
+            .unwrap()
+            .is_empty());
     }
 
     #[test]

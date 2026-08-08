@@ -43,6 +43,8 @@ pub(crate) fn classify_das_action(action: &str) -> DasActionKind {
         | "accept_offer"
         | "fulfill_approval"
         | "bid_expired_account_dutch_auction"
+        // Pre-rename spelling of the above, still present in testnet history.
+        | "bid_expired_account_auction"
         | "sell_account" => DasActionKind::Mapped(AssetAction::Transfer),
         // Recycle
         "recycle_expired_account" => DasActionKind::Mapped(AssetAction::Recycle),
@@ -109,6 +111,13 @@ pub(crate) fn classify_das_action(action: &str) -> DasActionKind {
         "create_device_key_list" | "update_device_key_list" | "destroy_device_key_list" => {
             DasActionKind::Suppressed
         }
+        // Legacy actions from testnet-only contract versions that predate the
+        // catalogues above. None carries an AccountCell on any output —
+        // `quote_price_for_ckb` updates the CKB price oracle (QuoteCell),
+        // `create_wallet` creates the WalletCell that `withdraw_from_wallet`
+        // later drains, and `balance_deposit` funds a BalanceCell — so none
+        // produces .bit collection activity.
+        "quote_price_for_ckb" | "create_wallet" | "balance_deposit" => DasActionKind::Suppressed,
         _ => DasActionKind::Unknown,
     }
 }
@@ -1316,6 +1325,36 @@ mod tests {
         ));
     }
 
+    /// Legacy testnet actions from contract versions that predate the current
+    /// upstream catalogue. Classified from the transactions themselves: none
+    /// of the three below carries an AccountCell (`0x1106d9ea…`) type script
+    /// on any output, so they produce no .bit collection activity.
+    #[test]
+    fn test_classify_das_action_legacy_non_account_cell_actions() {
+        for action in ["quote_price_for_ckb", "create_wallet", "balance_deposit"] {
+            assert!(
+                matches!(classify_das_action(action), DasActionKind::Suppressed),
+                "{action} touches no AccountCell and should be Suppressed"
+            );
+        }
+    }
+
+    /// `bid_expired_account_auction` is the pre-rename spelling of
+    /// `bid_expired_account_dutch_auction`: its outputs do carry an AccountCell,
+    /// and the winning bid moves the expired account to a new owner.
+    #[test]
+    fn test_classify_das_action_legacy_expired_account_auction_is_transfer() {
+        // Both spellings name the same on-chain action.
+        assert!(matches!(
+            das_action_to_asset_action("bid_expired_account_auction"),
+            Some(AssetAction::Transfer)
+        ));
+        assert!(matches!(
+            das_action_to_asset_action("bid_expired_account_dutch_auction"),
+            Some(AssetAction::Transfer)
+        ));
+    }
+
     fn make_test_account(
         account_id: &[u8],
         owner_lock_hash: &[u8],
@@ -1529,6 +1568,15 @@ mod tests {
         domain_batch.put_live_cell_marker_by_outpoint(&reactivate_tx_hash, 0, 200);
         domain_batch.put_tx_index(200, 0, &make_tx_entry(1));
         domain_batch.put_tx_hash_map(&reactivate_tx_hash, 200, 0);
+        // The forward writer records one addr_txs row per tx participant; the
+        // owner of the reactivation output is this tx's only participant.
+        domain_batch.put_addr_tx(
+            &owner,
+            200,
+            0,
+            &reactivate_tx_hash,
+            &ckbadger_store::types::AddrTxValue::new(0, false, true, 0),
+        );
         domain_batch.put_script_info(
             &[0x55; 32],
             &ScriptInfo {
