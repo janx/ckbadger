@@ -452,6 +452,20 @@ interface Cell {
   matchedScriptKind?: 'lock' | 'type';
 }
 
+interface LiveCellSummary {
+  tip: {
+    block: number;
+    hash: string;
+  };
+  liveCells: number;
+  classes: {
+    dao: number;
+    typedNonDao: number;
+    plain: number;
+  };
+  dataBearing: number;
+}
+
 interface CellDep {
   outPointTxHash: string;
   outPointIndex: number;
@@ -1704,6 +1718,7 @@ export type {
   GraphLink,
   GraphResponse,
   Cell,
+  LiveCellSummary,
   CellDataAnalysis,
   CellDeterministicDecode,
   CellDataSegment,
@@ -2037,6 +2052,10 @@ export const api = {
     if (params.typeCodeHash) query.set('type_code_hash', params.typeCodeHash);
     if (params.cursor) query.set('cursor', params.cursor);
     return fetchApi(`/cells/live?${query}`);
+  },
+
+  getLiveCellSummary: (): Promise<LiveCellSummary> => {
+    return fetchApi('/cells/live-summary');
   },
 
   getCellsByScriptRef: (params: {

@@ -89,6 +89,26 @@ describe('api', () => {
       await api.getLiveCells({ lockScriptHash: '0xabc123', typeScriptHash: '0xdef456' });
     });
 
+    it('getLiveCellSummary reads the fixed-size summary endpoint', async () => {
+      server.use(
+        http.get('/api/:network/v1/cells/live-summary', () => {
+          return HttpResponse.json({
+            tip: { block: 123, hash: `0x${'ab'.repeat(32)}` },
+            liveCells: 6,
+            classes: { dao: 1, typedNonDao: 2, plain: 3 },
+            dataBearing: 4,
+          });
+        })
+      );
+
+      const summary = await api.getLiveCellSummary();
+
+      expect(summary.tip.block).toBe(123);
+      expect(summary.liveCells).toBe(6);
+      expect(summary.classes).toEqual({ dao: 1, typedNonDao: 2, plain: 3 });
+      expect(summary.dataBearing).toBe(4);
+    });
+
     it('builds query params for getTokens with search', async () => {
       server.use(
         http.get('/api/:network/v1/tokens', ({ request }) => {

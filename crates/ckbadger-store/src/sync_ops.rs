@@ -3,11 +3,12 @@
 use anyhow::anyhow;
 use rocksdb::{Direction, IteratorMode};
 
+use crate::batch::StoreBatch;
 use crate::keys::{self, sync_meta_keys};
 use crate::store::CkbadgerStore;
 use crate::types::{
-    BulkBuildSessionMarker, DeepForkInfo, GenesisBaseline, ReorgEvent, ReorgEventRecord,
-    RuntimeStatus, SyncStatus,
+    BulkBuildSessionMarker, DeepForkInfo, GenesisBaseline, LiveCellSummary, ReorgEvent,
+    ReorgEventRecord, RuntimeStatus, SyncStatus,
 };
 
 impl CkbadgerStore {
@@ -55,6 +56,54 @@ impl CkbadgerStore {
     pub fn set_sync_status(&self, status: &SyncStatus) -> anyhow::Result<()> {
         let value = bincode::serialize(status)?;
         self.put_cf(self.cf_sync_meta(), sync_meta_keys::SYNC_STATUS, &value)
+    }
+
+    /// Read the one API-visible live-cell summary. This is a single RocksDB
+    /// point lookup; no cell or index scan is involved.
+    pub fn get_live_cell_summary(&self) -> anyhow::Result<Option<LiveCellSummary>> {
+        let value = self.get_cf(
+            self.cf_sync_meta(),
+            sync_meta_keys::LIVE_CELL_SUMMARY_CURRENT,
+        )?;
+        let summary = value
+            .map(|value| decode_live_cell_summary(&value, "current", None))
+            .transpose()?;
+        if summary.is_some() && !self.is_live_cell_summary_initialized()? {
+            anyhow::bail!("current live-cell summary exists without initialized marker");
+        }
+        Ok(summary)
+    }
+
+    pub fn is_live_cell_summary_initialized(&self) -> anyhow::Result<bool> {
+        match self.get_cf(
+            self.cf_sync_meta(),
+            sync_meta_keys::LIVE_CELL_SUMMARY_INITIALIZED,
+        )? {
+            None => Ok(false),
+            Some(value) if value.as_slice() == [1u8] => Ok(true),
+            Some(value) => Err(anyhow!(
+                "invalid live-cell summary initialized marker: expected=0x01 actual=0x{}",
+                crate::bytes_to_hex(&value),
+            )),
+        }
+    }
+
+    /// Read one block-end history snapshot used by shallow reorg rollback.
+    pub fn get_live_cell_summary_at(
+        &self,
+        block_number: i64,
+    ) -> anyhow::Result<Option<LiveCellSummary>> {
+        if block_number < 0 {
+            return Err(anyhow!(
+                "cannot read live-cell summary history at negative block: block={}",
+                block_number
+            ));
+        }
+        let key = keys::encode_live_cell_summary_history_key(block_number);
+        let value = self.get_cf(self.cf_sync_meta(), &key)?;
+        value
+            .map(|value| decode_live_cell_summary(&value, "history", Some(block_number)))
+            .transpose()
     }
 
     pub fn update_sync_status<F>(&self, update_fn: F) -> anyhow::Result<()>
@@ -230,6 +279,105 @@ impl CkbadgerStore {
                 sync_meta_keys::ROLLBACK_CLEANUP_IN_PROGRESS,
             )
         }
+    }
+
+    /// Restore the public live-cell summary after an interrupted rollback that
+    /// committed only the visibility marker, but no canonical data beyond the
+    /// persisted sync tip. The exact block-end history record is the sole
+    /// recovery source; no cell scan or recalculation is performed.
+    pub fn restore_live_cell_summary_visibility_after_interrupted_rollback(
+        &self,
+    ) -> anyhow::Result<()> {
+        if !self.is_rollback_cleanup_in_progress()? {
+            anyhow::bail!(
+                "cannot restore live-cell summary visibility without a rollback cleanup marker"
+            );
+        }
+
+        let status = self.get_sync_status()?;
+        let initialized = self.is_live_cell_summary_initialized()?;
+        let current = self.get_live_cell_summary()?;
+        let history = if status.tip_block_hash.is_empty() {
+            None
+        } else {
+            self.get_live_cell_summary_at(status.tip_block_number)?
+        };
+
+        if !initialized && (current.is_some() || history.is_some()) {
+            anyhow::bail!(
+                "live-cell summary records exist without initialized marker during interrupted rollback recovery: current={:?} history={:?}",
+                current,
+                history,
+            );
+        }
+
+        let mut batch = StoreBatch::new(self);
+        match (initialized, current, history) {
+            (_, None, None) if status.tip_block_hash.is_empty() => {}
+            (false, None, None) => {}
+            (true, None, None) => {
+                anyhow::bail!(
+                    "initialized live-cell summary lost both current and tip history during interrupted rollback recovery: tip_block={}",
+                    status.tip_block_number,
+                );
+            }
+            (_, Some(_), None) => {
+                anyhow::bail!(
+                    "current live-cell summary exists without tip history during interrupted rollback recovery: tip_block={}",
+                    status.tip_block_number,
+                );
+            }
+            (false, _, Some(_)) => {
+                anyhow::bail!(
+                    "live-cell summary history exists without initialized marker during interrupted rollback recovery"
+                );
+            }
+            (true, current, Some(history)) => {
+                history.validate_against_sync_totals(
+                    status.total_cells_created,
+                    status.total_cells_consumed,
+                )?;
+                if history.tip_block_number != status.tip_block_number
+                    || history.tip_block_hash.as_slice() != status.tip_block_hash.as_slice()
+                {
+                    anyhow::bail!(
+                        "live-cell summary history/status mismatch during interrupted rollback recovery: summary_block={} summary_hash=0x{} status_block={} status_hash=0x{}",
+                        history.tip_block_number,
+                        hex::encode(history.tip_block_hash),
+                        status.tip_block_number,
+                        hex::encode(&status.tip_block_hash),
+                    );
+                }
+                if let Some(current) = current {
+                    if current != history {
+                        anyhow::bail!(
+                            "current/history live-cell summary mismatch during interrupted rollback recovery: current={:?} history={:?}",
+                            current,
+                            history,
+                        );
+                    }
+                }
+                let header = self
+                    .get_block_header(status.tip_block_number)?
+                    .ok_or_else(|| {
+                        anyhow!(
+                            "missing canonical tip header during interrupted rollback summary recovery: block={}",
+                            status.tip_block_number,
+                        )
+                    })?;
+                if header.hash.as_slice() != history.tip_block_hash.as_slice() {
+                    anyhow::bail!(
+                        "live-cell summary history/header mismatch during interrupted rollback recovery: block={} summary_hash=0x{} header_hash=0x{}",
+                        status.tip_block_number,
+                        hex::encode(history.tip_block_hash),
+                        hex::encode(header.hash),
+                    );
+                }
+                batch.put_live_cell_summary_snapshots(&[history])?;
+            }
+        }
+        batch.delete_sync_meta(sync_meta_keys::ROLLBACK_CLEANUP_IN_PROGRESS);
+        batch.commit()
     }
 
     /// Get sync tip (block number and hash) from the sync_status.
@@ -530,6 +678,43 @@ fn decode_reorg_event_record(key: &[u8], value: &[u8]) -> anyhow::Result<ReorgEv
     })
 }
 
+fn decode_live_cell_summary(
+    value: &[u8],
+    source: &str,
+    expected_block: Option<i64>,
+) -> anyhow::Result<LiveCellSummary> {
+    // All fields are fixed width: i64 + [u8; 32] + 4*u64.
+    const ENCODED_LEN: usize = 72;
+    if value.len() != ENCODED_LEN {
+        return Err(anyhow!(
+            "corrupt live-cell summary value length: source={} expected_bytes={} actual_bytes={} expected_block={:?}",
+            source,
+            ENCODED_LEN,
+            value.len(),
+            expected_block,
+        ));
+    }
+    let summary: LiveCellSummary = bincode::deserialize(value).map_err(|error| {
+        anyhow!(
+            "failed to deserialize live-cell summary: source={} expected_block={:?} error={}",
+            source,
+            expected_block,
+            error,
+        )
+    })?;
+    summary.validate()?;
+    if let Some(expected_block) = expected_block {
+        if summary.tip_block_number != expected_block {
+            return Err(anyhow!(
+                "live-cell summary history key/value block mismatch: key_block={} value_block={}",
+                expected_block,
+                summary.tip_block_number,
+            ));
+        }
+    }
+    Ok(summary)
+}
+
 pub(crate) fn checked_rollback_total(
     field_name: &str,
     current_total: i64,
@@ -567,7 +752,187 @@ pub(crate) fn checked_rollback_total(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::batch::StoreBatch;
     use crate::keys::sync_meta_keys;
+
+    fn live_cell_summary(block: i64) -> LiveCellSummary {
+        LiveCellSummary {
+            tip_block_number: block,
+            tip_block_hash: [u8::try_from(block).unwrap_or(0xFF); 32],
+            dao: u64::try_from(block + 1).unwrap(),
+            typed_non_dao: 2,
+            plain: 3,
+            data_bearing: 1,
+        }
+    }
+
+    #[test]
+    fn live_cell_summary_roundtrip_retains_exactly_reorg_window() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        let summaries = (0..=50).map(live_cell_summary).collect::<Vec<_>>();
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_live_cell_summary_snapshots(&summaries).unwrap();
+        batch.commit().unwrap();
+
+        assert_eq!(
+            store.get_live_cell_summary().unwrap(),
+            Some(live_cell_summary(50))
+        );
+        assert!(store.is_live_cell_summary_initialized().unwrap());
+        assert!(store.get_live_cell_summary_at(13).unwrap().is_none());
+        for block in 14..=50 {
+            assert_eq!(
+                store.get_live_cell_summary_at(block).unwrap(),
+                Some(live_cell_summary(block))
+            );
+        }
+    }
+
+    #[test]
+    fn live_cell_summary_write_is_domain_only_and_never_targets_cells_cf() {
+        let dir = tempfile::tempdir().unwrap();
+        let append_store = CkbadgerStore::open_append_only(dir.path()).unwrap();
+        let mut batch = StoreBatch::new(&append_store);
+        let error = batch
+            .put_live_cell_summary_snapshots(&[live_cell_summary(0)])
+            .unwrap_err();
+        let delete_error = batch.delete_live_cell_summary_current().unwrap_err();
+
+        assert!(error.to_string().contains("domain store"));
+        assert!(delete_error.to_string().contains("domain store"));
+        assert_eq!(
+            crate::cf_write_policy(crate::CF_SYNC_META),
+            crate::CfWritePolicy::FinalSnapshot
+        );
+        assert!(!crate::is_append_only_cf_name(crate::CF_SYNC_META));
+        assert!(append_store
+            .iterator_cf(append_store.cf_cells(), IteratorMode::Start)
+            .next()
+            .is_none());
+    }
+
+    #[test]
+    fn live_cell_summary_read_fails_on_corrupt_fixed_width_value() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        store
+            .put_cf(
+                store.cf_sync_meta(),
+                sync_meta_keys::LIVE_CELL_SUMMARY_CURRENT,
+                b"not-72-bytes",
+            )
+            .unwrap();
+
+        let error = store.get_live_cell_summary().unwrap_err();
+        assert!(error.to_string().contains("value length"));
+    }
+
+    #[test]
+    fn live_cell_summary_read_rejects_current_without_initialized_marker() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        store
+            .put_cf(
+                store.cf_sync_meta(),
+                sync_meta_keys::LIVE_CELL_SUMMARY_CURRENT,
+                &bincode::serialize(&live_cell_summary(0)).unwrap(),
+            )
+            .unwrap();
+
+        let error = store.get_live_cell_summary().unwrap_err();
+        assert!(error.to_string().contains("without initialized marker"));
+    }
+
+    #[test]
+    fn live_cell_summary_initialized_marker_rejects_unknown_value() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        store
+            .put_cf(
+                store.cf_sync_meta(),
+                sync_meta_keys::LIVE_CELL_SUMMARY_INITIALIZED,
+                &[2],
+            )
+            .unwrap();
+
+        let error = store.is_live_cell_summary_initialized().unwrap_err();
+        assert!(error.to_string().contains("initialized marker"));
+    }
+
+    #[test]
+    fn interrupted_rollback_restores_current_summary_from_exact_tip_history() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        let summary = live_cell_summary(7);
+        let header = crate::types::CachedBlockHeader {
+            hash: summary.tip_block_hash.to_vec(),
+            parent_hash: vec![0x06; 32],
+            timestamp: 1_700_000_007_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+            uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
+            cycles: None,
+        };
+        let mut seed = StoreBatch::new(&store);
+        seed.put_block_header(7, &header);
+        seed.put_live_cell_summary_snapshots(&[summary]).unwrap();
+        seed.commit().unwrap();
+        store
+            .set_sync_status(&SyncStatus {
+                tip_block_number: 7,
+                tip_block_hash: summary.tip_block_hash.to_vec(),
+                total_cells_created: 20,
+                total_cells_consumed: 7,
+                ..Default::default()
+            })
+            .unwrap();
+
+        let mut withdraw = StoreBatch::new(&store);
+        withdraw.put_sync_meta(sync_meta_keys::ROLLBACK_CLEANUP_IN_PROGRESS, &[1]);
+        withdraw.delete_live_cell_summary_current().unwrap();
+        withdraw.commit().unwrap();
+        assert_eq!(store.get_live_cell_summary().unwrap(), None);
+
+        store
+            .restore_live_cell_summary_visibility_after_interrupted_rollback()
+            .unwrap();
+
+        assert_eq!(store.get_live_cell_summary().unwrap(), Some(summary));
+        assert!(!store.is_rollback_cleanup_in_progress().unwrap());
+    }
+
+    #[test]
+    fn initialized_summary_missing_current_and_history_fails_recovery() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        store
+            .set_sync_status(&SyncStatus {
+                tip_block_number: 7,
+                tip_block_hash: vec![0x07; 32],
+                ..Default::default()
+            })
+            .unwrap();
+        let mut batch = StoreBatch::new(&store);
+        batch.put_sync_meta(sync_meta_keys::LIVE_CELL_SUMMARY_INITIALIZED, &[1]);
+        batch.put_sync_meta(sync_meta_keys::ROLLBACK_CLEANUP_IN_PROGRESS, &[1]);
+        batch.commit().unwrap();
+
+        let error = store
+            .restore_live_cell_summary_visibility_after_interrupted_rollback()
+            .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("lost both current and tip history"));
+        assert!(store.is_rollback_cleanup_in_progress().unwrap());
+    }
 
     #[test]
     fn test_runtime_status_lifecycle() {

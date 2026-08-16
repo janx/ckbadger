@@ -10,6 +10,7 @@ mod dob_decode_error;
 pub mod dob_decode_worker;
 mod helpers;
 mod indexer;
+mod live_cell_summary;
 mod nft_helpers;
 mod pipeline;
 mod progress;

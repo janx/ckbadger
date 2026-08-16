@@ -127,6 +127,16 @@ namespace includes:
 - chain identity: `network_identity`, persisted at first sync and validated on later starts
 - exact economics: `genesis_baseline` (`GenesisBaseline { total_issuance, burnt,
 virtual_occupied }`), derived from block 0 and used by supply, APC, and knowledge-size paths
+- exact live-cell inventory: `live_cell_summary:initialized`, `live_cell_summary:current`, plus
+  `live_cell_summary:history:<block_be_i64>`. Each value is a fixed-width 72-byte
+  `LiveCellSummary` (`tip block/hash` + four `u64` counters). History retains up to 37 block-end
+  snapshots (current plus the maximum 36-block automatic reorg depth).
+
+The live-cell summary is mutable canonical state, so it belongs to the domain store. Normal sync
+updates it in the same atomic batch as block headers and `sync_status`; bulk-build keeps only the
+four global counters and up to 37 snapshots in memory, then publishes them with the final status.
+Reorg restores a retained target snapshot and deletes orphan snapshots. Neither API reads nor
+recovery scan `live_cells`/`cells`, and `CF_CELLS` is never written by this feature.
 
 Missing or conflicting identity/baseline state is an invariant failure. API readers must not
 invent a replacement value or write this CF.

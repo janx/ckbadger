@@ -4,7 +4,7 @@ use serde::Deserialize;
 
 /// Maximum reorg depth before triggering deep fork handling.
 /// CKB finalizes after 24 blocks, 36 provides safety margin.
-pub const DEEP_FORK_DEPTH: u64 = 36;
+pub const DEEP_FORK_DEPTH: u64 = ckbadger_common::MAX_SHALLOW_REORG_DEPTH;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {

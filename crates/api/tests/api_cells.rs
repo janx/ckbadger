@@ -2,6 +2,148 @@ mod common;
 use common::*;
 
 #[tokio::test]
+async fn test_live_cell_summary_returns_exact_constant_size_projection() {
+    let store = test_store();
+    let summary = ckbadger_store::LiveCellSummary {
+        tip_block_number: 12_345_678,
+        tip_block_hash: [0xAB; 32],
+        dao: 182_341,
+        typed_non_dao: 2_639_044,
+        plain: 5_600_552,
+        data_bearing: 2_810_388,
+    };
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_live_cell_summary_snapshots(&[summary]).unwrap();
+    batch.commit().unwrap();
+    let app = create_router(test_config(store)).await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/cells/live-summary")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        json,
+        serde_json::json!({
+            "tip": {
+                "block": 12_345_678,
+                "hash": format!("0x{}", "ab".repeat(32)),
+            },
+            "liveCells": 8_421_937,
+            "classes": {
+                "dao": 182_341,
+                "typedNonDao": 2_639_044,
+                "plain": 5_600_552,
+            },
+            "dataBearing": 2_810_388,
+        })
+    );
+}
+
+#[tokio::test]
+async fn test_live_cell_summary_is_503_until_indexer_publishes_snapshot() {
+    let store = test_store();
+    let app = create_router(test_config(store)).await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/cells/live-summary")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["error"], "initializing");
+}
+
+#[tokio::test]
+async fn test_live_cell_summary_corruption_fails_instead_of_returning_defaults() {
+    let store = test_store();
+    store
+        .put_cf(
+            store.cf_sync_meta(),
+            ckbadger_store::keys::sync_meta_keys::LIVE_CELL_SUMMARY_CURRENT,
+            b"corrupt",
+        )
+        .unwrap();
+    let app = create_router(test_config(store)).await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/cells/live-summary")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["error"], "internal_error");
+    assert!(json["message"].as_str().unwrap().contains("value length"));
+}
+
+#[tokio::test]
+async fn test_live_cell_summary_missing_after_initialization_is_not_masked_as_warmup() {
+    let store = test_store();
+    let summary = ckbadger_store::LiveCellSummary {
+        tip_block_number: 7,
+        tip_block_hash: [0x07; 32],
+        dao: 1,
+        typed_non_dao: 1,
+        plain: 1,
+        data_bearing: 1,
+    };
+    let mut seed = StoreBatch::new(store.as_ref());
+    seed.put_live_cell_summary_snapshots(&[summary]).unwrap();
+    seed.commit().unwrap();
+    store
+        .set_sync_status(&ckbadger_store::SyncStatus {
+            tip_block_number: 7,
+            tip_block_hash: summary.tip_block_hash.to_vec(),
+            total_cells_created: 3,
+            ..Default::default()
+        })
+        .unwrap();
+    let mut corrupt = StoreBatch::new(store.as_ref());
+    corrupt.delete_live_cell_summary_current().unwrap();
+    corrupt.commit().unwrap();
+    let app = create_router(test_config(store)).await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/cells/live-summary")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["error"], "internal_error");
+    assert!(json["message"]
+        .as_str()
+        .unwrap()
+        .contains("missing outside reconciliation"));
+}
+
+#[tokio::test]
 async fn test_get_cell_returns_occupied_capacity_breakdown() {
     let store = test_store();
     let tx_hash = vec![0xab; 32];

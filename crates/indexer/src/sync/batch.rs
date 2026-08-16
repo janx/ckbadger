@@ -14,8 +14,9 @@ use tracing::{debug, info, warn};
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::keys;
 use ckbadger_store::types::{
-    DailyActivityStats, DaoDailySnapshot, IdentityCollectionAggregate, MnftTypeIndex,
-    PositionedCellInfo, ScriptReferenceInfo, SporeTypeIndex, SOLE_SPORES_SENTINEL_COLLECTION,
+    DailyActivityStats, DaoDailySnapshot, IdentityCollectionAggregate, LiveCellSummary,
+    MnftTypeIndex, PositionedCellInfo, ScriptReferenceInfo, SporeTypeIndex,
+    SOLE_SPORES_SENTINEL_COLLECTION,
 };
 use ckbadger_store::CkbadgerStore;
 
@@ -38,6 +39,9 @@ use super::helpers::*;
 use super::indexer::{
     persist_bulk_sync_completion_status, take_bulk_sync_completion_transition, Indexer,
     CACHE_INVALIDATION_INTERVAL,
+};
+use super::live_cell_summary::{
+    CellSummaryContext, LiveCellSummaryCounter, LiveCellSummaryProjection,
 };
 use super::nft_helpers::*;
 use super::sync_mode::*;
@@ -160,6 +164,273 @@ fn resolve_consumed_stats(
         }
     }
     Ok((data_size_consumed, used_capacity_consumed))
+}
+
+fn parsed_cell_summary_projection(
+    cell: &crate::parser::cell::ParsedCell,
+    context: CellSummaryContext<'_>,
+) -> Result<LiveCellSummaryProjection> {
+    let has_type_script = cell.type_script_hash.is_some();
+    let has_type_code_hash = cell.type_code_hash.is_some();
+    let is_dao = cell
+        .type_code_hash
+        .as_deref()
+        .is_some_and(DaoParser::is_dao_code_hash);
+    LiveCellSummaryProjection::from_parts(
+        has_type_script,
+        has_type_code_hash,
+        is_dao,
+        cell.data_size,
+        context,
+    )
+}
+
+fn positioned_cell_summary_projection(
+    cell: &PositionedCellInfo,
+    context: CellSummaryContext<'_>,
+) -> Result<LiveCellSummaryProjection> {
+    let has_type_script = cell.type_script_hash.is_some();
+    let has_type_code_hash = cell.type_code_hash.is_some();
+    let is_dao = cell
+        .type_code_hash
+        .as_deref()
+        .is_some_and(DaoParser::is_dao_code_hash);
+    LiveCellSummaryProjection::from_parts(
+        has_type_script,
+        has_type_code_hash,
+        is_dao,
+        cell.data_size,
+        context,
+    )
+}
+
+/// Build exact block-end summary snapshots from the same already-resolved
+/// inputs and parsed outputs used by the canonical live writer.
+///
+/// The only RocksDB reads are the previous current/history point records. Cell
+/// payloads are never re-read and no live-cell scan is possible on this path.
+fn prepare_live_cell_summary_snapshots(
+    store: &CkbadgerStore,
+    all_parsed_blocks: &[crate::parser::block::ParsedBlock],
+    all_tx_data: &[TxData],
+    input_cell_info: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
+    batch_cell_infos: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
+) -> Result<Vec<LiveCellSummary>> {
+    let first = all_parsed_blocks
+        .first()
+        .ok_or_else(|| anyhow!("cannot prepare live-cell summaries for an empty block batch"))?;
+    let status = store.get_sync_status()?;
+    let current = store.get_live_cell_summary()?;
+
+    let mut counter = if first.number == 0 {
+        if current.is_some() || !status.tip_block_hash.is_empty() {
+            bail!(
+                "cannot initialize live-cell summary at genesis over existing canonical state: current_summary_block={:?} sync_tip_block={} sync_tip_hash=0x{}",
+                current.map(|summary| summary.tip_block_number),
+                status.tip_block_number,
+                hex::encode(&status.tip_block_hash),
+            );
+        }
+        LiveCellSummaryCounter::default()
+    } else {
+        let expected_previous = first.number.checked_sub(1).ok_or_else(|| {
+            anyhow!(
+                "live-cell summary previous block underflow: first_block={}",
+                first.number
+            )
+        })?;
+        let current = current.ok_or_else(|| {
+            anyhow!(
+                "missing current live-cell summary before live batch: first_block={} expected_previous_block={}; purge and re-sync from genesis",
+                first.number,
+                expected_previous,
+            )
+        })?;
+        current.validate_against_sync_totals(
+            status.total_cells_created,
+            status.total_cells_consumed,
+        )?;
+        if current.tip_block_number != expected_previous
+            || status.tip_block_number != expected_previous
+        {
+            bail!(
+                "live-cell summary tip does not precede live batch: first_block={} expected_previous_block={} summary_block={} sync_status_block={}",
+                first.number,
+                expected_previous,
+                current.tip_block_number,
+                status.tip_block_number,
+            );
+        }
+        if current.tip_block_hash.as_slice() != first.parent_hash.as_slice()
+            || status.tip_block_hash.as_slice() != current.tip_block_hash.as_slice()
+        {
+            bail!(
+                "live-cell summary canonical hash mismatch before live batch: first_block={} expected_parent=0x{} summary_hash=0x{} sync_status_hash=0x{}",
+                first.number,
+                hex::encode(&first.parent_hash),
+                hex::encode(current.tip_block_hash),
+                hex::encode(&status.tip_block_hash),
+            );
+        }
+        let history = store
+            .get_live_cell_summary_at(expected_previous)?
+            .ok_or_else(|| {
+                anyhow!(
+                    "missing live-cell summary history at current tip: block={}; purge and re-sync from genesis",
+                    expected_previous,
+                )
+            })?;
+        if history != current {
+            bail!(
+                "current/history live-cell summary mismatch: block={} current={:?} history={:?}",
+                expected_previous,
+                current,
+                history,
+            );
+        }
+        LiveCellSummaryCounter::from_summary(&current)?
+    };
+
+    let mut snapshots = Vec::with_capacity(all_parsed_blocks.len());
+    let mut tx_offset = 0usize;
+    let mut previous_block: Option<&crate::parser::block::ParsedBlock> = None;
+    let mut created_delta = 0i64;
+    let mut consumed_delta = 0i64;
+
+    for block in all_parsed_blocks {
+        if let Some(previous) = previous_block {
+            let expected_number = previous.number.checked_add(1).ok_or_else(|| {
+                anyhow!(
+                    "live-cell summary block sequence overflow after block {}",
+                    previous.number
+                )
+            })?;
+            if block.number != expected_number || block.parent_hash != previous.hash {
+                bail!(
+                    "non-canonical live-cell summary block sequence: previous_block={} previous_hash=0x{} expected_block={} actual_block={} actual_parent=0x{}",
+                    previous.number,
+                    hex::encode(&previous.hash),
+                    expected_number,
+                    block.number,
+                    hex::encode(&block.parent_hash),
+                );
+            }
+        }
+        let tx_count = checked_tx_count(block.transactions_count, block.number)?;
+        let tx_end = tx_offset.checked_add(tx_count).ok_or_else(|| {
+            anyhow!(
+                "live-cell summary tx range overflow: block={} offset={} tx_count={}",
+                block.number,
+                tx_offset,
+                tx_count,
+            )
+        })?;
+        let txs = all_tx_data.get(tx_offset..tx_end).ok_or_else(|| {
+            anyhow!(
+                "live-cell summary tx range out of bounds: block={} offset={} end={} all_txs={}",
+                block.number,
+                tx_offset,
+                tx_end,
+                all_tx_data.len(),
+            )
+        })?;
+        tx_offset = tx_end;
+
+        for tx in txs {
+            if tx.block_number != block.number {
+                bail!(
+                    "live-cell summary tx/block mismatch: expected_block={} tx_block={} tx=0x{} tx_index={}",
+                    block.number,
+                    tx.block_number,
+                    hex::encode(tx.hash),
+                    tx.tx_index,
+                );
+            }
+            // Inputs are spent before outputs are born, matching CKB state
+            // transition order and correctly cancelling same-batch cells.
+            if !tx.is_cellbase {
+                for input in &tx.inputs {
+                    let output_index = parsed_input_outpoint_index_i16(
+                        input.previous_output_index,
+                        "live_cell_summary",
+                    )?;
+                    let key = (input.previous_tx_hash.to_vec(), output_index);
+                    let cell = input_cell_info
+                        .get(&key)
+                        .or_else(|| batch_cell_infos.get(&key))
+                        .ok_or_else(|| {
+                            anyhow!(
+                                "unresolved input while updating live-cell summary: block={} tx=0x{} previous_outpoint=0x{}:{}",
+                                block.number,
+                                hex::encode(tx.hash),
+                                hex::encode(input.previous_tx_hash),
+                                output_index,
+                            )
+                        })?;
+                    let context = CellSummaryContext::new(
+                        "spend",
+                        block.number,
+                        &input.previous_tx_hash,
+                        i64::from(output_index),
+                    );
+                    let projection = positioned_cell_summary_projection(cell, context)?;
+                    counter = counter.after_spend(projection, context)?;
+                    consumed_delta = consumed_delta.checked_add(1).ok_or_else(|| {
+                        anyhow!(
+                            "live-cell summary consumed delta overflow: block={} tx=0x{}",
+                            block.number,
+                            hex::encode(tx.hash),
+                        )
+                    })?;
+                }
+            }
+            for (output_index, cell) in tx.cells.iter().enumerate() {
+                let output_index_i64 = i64::try_from(output_index).map_err(|_| {
+                    anyhow!(
+                        "live-cell summary output index exceeds i64: block={} tx=0x{} output_index={}",
+                        block.number,
+                        hex::encode(tx.hash),
+                        output_index,
+                    )
+                })?;
+                let context =
+                    CellSummaryContext::new("birth", block.number, &tx.hash, output_index_i64);
+                let projection = parsed_cell_summary_projection(cell, context)?;
+                counter = counter.after_birth(projection, context)?;
+                created_delta = created_delta.checked_add(1).ok_or_else(|| {
+                    anyhow!(
+                        "live-cell summary created delta overflow: block={} tx=0x{}",
+                        block.number,
+                        hex::encode(tx.hash),
+                    )
+                })?;
+            }
+        }
+
+        snapshots.push(counter.snapshot(block.number, &block.hash)?);
+        previous_block = Some(block);
+    }
+
+    if tx_offset != all_tx_data.len() {
+        bail!(
+            "live-cell summary did not consume all parsed transactions: consumed_txs={} all_txs={}",
+            tx_offset,
+            all_tx_data.len(),
+        );
+    }
+    let expected_created = status
+        .total_cells_created
+        .checked_add(created_delta)
+        .ok_or_else(|| anyhow!("live-cell summary total created overflow"))?;
+    let expected_consumed = status
+        .total_cells_consumed
+        .checked_add(consumed_delta)
+        .ok_or_else(|| anyhow!("live-cell summary total consumed overflow"))?;
+    snapshots
+        .last()
+        .expect("non-empty parsed blocks checked above")
+        .validate_against_sync_totals(expected_created, expected_consumed)?;
+    Ok(snapshots)
 }
 
 struct ActivityInputIndexes<'a> {
@@ -1327,6 +1598,20 @@ impl Indexer {
                 format_outpoint_sample(&unresolved_outpoints, 5)
             ));
         }
+
+        let live_cell_summary_snapshots = prepare_live_cell_summary_snapshots(
+            self.writer.store(),
+            all_parsed_blocks,
+            &all_tx_data,
+            &input_cell_info,
+            &batch_cell_infos,
+        )
+        .with_context(|| {
+            format!(
+                "failed to prepare live-cell summary snapshots for blocks {}-{}",
+                first_block, last_block
+            )
+        })?;
 
         let t_precompute = Instant::now();
 
@@ -3509,13 +3794,53 @@ impl Indexer {
                 let mut status = self.writer.store().get_sync_status()?;
                 status.tip_block_number = block_number;
                 status.tip_block_hash = block_hash.clone();
-                status.total_transactions += batch_stats.sync_totals.0;
-                status.total_cells_created += batch_stats.sync_totals.1;
-                status.total_cells_consumed += batch_stats.sync_totals.2;
+                status.total_transactions = status
+                    .total_transactions
+                    .checked_add(batch_stats.sync_totals.0)
+                    .ok_or_else(|| anyhow!("sync total_transactions overflow"))?;
+                status.total_cells_created = status
+                    .total_cells_created
+                    .checked_add(batch_stats.sync_totals.1)
+                    .ok_or_else(|| anyhow!("sync total_cells_created overflow"))?;
+                status.total_cells_consumed = status
+                    .total_cells_consumed
+                    .checked_add(batch_stats.sync_totals.2)
+                    .ok_or_else(|| anyhow!("sync total_cells_consumed overflow"))?;
                 status.last_synced_at = chrono::Utc::now().timestamp();
                 if ema_rate > 0.0 {
                     status.sync_ema_rate = Some(ema_rate);
                 }
+
+                let summary = live_cell_summary_snapshots.last().ok_or_else(|| {
+                    anyhow!(
+                        "missing live-cell summary snapshot for non-empty batch {}-{}",
+                        first_block,
+                        last_block,
+                    )
+                })?;
+                if summary.tip_block_number != block_number
+                    || summary.tip_block_hash.as_slice() != block_hash.as_slice()
+                {
+                    bail!(
+                        "live-cell summary/status tip mismatch before commit: summary_block={} summary_hash=0x{} status_block={} status_hash=0x{}",
+                        summary.tip_block_number,
+                        hex::encode(summary.tip_block_hash),
+                        block_number,
+                        hex::encode(block_hash),
+                    );
+                }
+                summary.validate_against_sync_totals(
+                    status.total_cells_created,
+                    status.total_cells_consumed,
+                )?;
+                stats_batch
+                    .put_live_cell_summary_snapshots(&live_cell_summary_snapshots)
+                    .with_context(|| {
+                        format!(
+                            "failed to stage live-cell summary snapshots for blocks {}-{}",
+                            first_block, last_block
+                        )
+                    })?;
                 let status_bytes = bincode::serialize(&status)
                     .with_context(|| "failed to serialize sync_status for atomic batch commit")?;
                 stats_batch.put_sync_meta(
@@ -4084,6 +4409,9 @@ mod tests {
     use ckbadger_store::LiveCellInfo;
     use std::sync::Arc;
 
+    use crate::parser::block::ParsedBlock;
+    use crate::parser::cell::ParsedCell;
+
     fn dummy_live_cell_info() -> LiveCellInfo {
         LiveCellInfo {
             capacity: 1,
@@ -4104,6 +4432,121 @@ mod tests {
 
     fn dummy_positioned_cell_info() -> PositionedCellInfo {
         PositionedCellInfo::new(dummy_live_cell_info(), 1)
+    }
+
+    fn summary_test_parsed_cell(type_code_hash: Option<Vec<u8>>, data_size: i32) -> ParsedCell {
+        ParsedCell {
+            capacity: 100_000_000,
+            lock_code_hash: vec![0x10; 32],
+            lock_hash_type: 1,
+            lock_args: vec![],
+            lock_script_hash: vec![0x11; 32],
+            type_script_hash: type_code_hash.as_ref().map(|_| vec![0x12; 32]),
+            type_code_hash,
+            type_hash_type: None,
+            type_args: None,
+            data_hash: [0x13; 32],
+            data_size,
+            data: vec![0x14; usize::try_from(data_size).unwrap()],
+        }
+    }
+
+    #[test]
+    fn live_batch_summary_uses_resolved_transitions_without_scanning_store_cells() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        let tx0_hash = [0x21; 32];
+        let tx1_hash = [0x22; 32];
+        let plain = summary_test_parsed_cell(None, 0);
+        let dao = summary_test_parsed_cell(
+            Some(crate::rpc::parse_hex_to_bytes(
+                crate::parser::dao::DAO_CODE_HASH,
+            )),
+            8,
+        );
+        let unknown_typed = summary_test_parsed_cell(Some(vec![0x99; 32]), 4);
+        let replacement_plain = summary_test_parsed_cell(None, 0);
+
+        let mut tx0 = dummy_tx_data(
+            tx0_hash,
+            true,
+            vec![],
+            vec![plain.clone(), dao, unknown_typed],
+            vec![],
+            vec![],
+        );
+        tx0.tx_index = 0;
+        let mut tx1 = dummy_tx_data(
+            tx1_hash,
+            false,
+            vec![crate::parser::transaction::ParsedInput {
+                previous_tx_hash: tx0_hash,
+                previous_output_index: 0,
+                since: 0,
+            }],
+            vec![replacement_plain],
+            vec![],
+            vec![],
+        );
+        tx1.tx_index = 1;
+
+        let block = ParsedBlock {
+            number: 0,
+            hash: vec![0x42; 32],
+            parent_hash: vec![0; 32],
+            timestamp: DateTime::<Utc>::from_timestamp(1_700_000_000, 0).unwrap(),
+            version: 0,
+            compact_target: 0,
+            transactions_count: 2,
+            proposals_count: 0,
+            uncles_count: 0,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: [0; 32],
+            nonce: vec![0; 16],
+            extra_hash: vec![0; 32],
+            proposals_hash: vec![0; 32],
+            transactions_root: vec![0; 32],
+            proposals: vec![],
+            miner_lock_hash: None,
+        };
+        let consumed_plain = LiveCellInfo {
+            capacity: plain.capacity,
+            lock_script_hash: plain.lock_script_hash,
+            lock_code_hash: plain.lock_code_hash,
+            lock_hash_type: plain.lock_hash_type,
+            lock_args: plain.lock_args,
+            type_script_hash: None,
+            type_code_hash: None,
+            type_hash_type: None,
+            type_args: None,
+            data_size: 0,
+            occupied_capacity: 61_000_000,
+            udt_amount: None,
+            data_hash: Some(plain.data_hash.to_vec()),
+        };
+        let batch_cells = HashMap::from([(
+            (tx0_hash.to_vec(), 0i16),
+            PositionedCellInfo::new(consumed_plain, 0),
+        )]);
+
+        let snapshots = prepare_live_cell_summary_snapshots(
+            &store,
+            &[block],
+            &[tx0, tx1],
+            &HashMap::new(),
+            &batch_cells,
+        )
+        .unwrap();
+
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0].live_cells().unwrap(), 3);
+        assert_eq!(snapshots[0].dao, 1);
+        assert_eq!(snapshots[0].typed_non_dao, 1);
+        assert_eq!(snapshots[0].plain, 1);
+        assert_eq!(snapshots[0].data_bearing, 2);
+        assert_eq!(store.get_live_cell_summary().unwrap(), None);
     }
 
     fn dummy_tx_index_entry() -> ckbadger_store::types::TxIndexEntry {
@@ -5127,6 +5570,12 @@ mod tests {
             }
         }
 
+        fn block_hash(number: u64) -> [u8; 32] {
+            let mut hash = [0x55u8; 32];
+            hash[0..8].copy_from_slice(&number.to_le_bytes());
+            hash
+        }
+
         fn header(number: u64, ar: u64) -> HeaderView {
             // DAO field: C (total issuance) and U (occupied) must satisfy
             // C > U for the secondary-miner split; AR drives compensation.
@@ -5149,20 +5598,20 @@ mod tests {
                 timestamp: format!("0x{:x}", 1_700_000_000_000u64 + number * 1000),
                 number: format!("0x{number:x}"),
                 epoch: format!("0x{epoch:x}"),
-                parent_hash: format!("0x{}", "11".repeat(32)),
+                parent_hash: format!(
+                    "0x{}",
+                    hex::encode(block_hash(
+                        number
+                            .checked_sub(1)
+                            .expect("live write fixture block must have a parent"),
+                    ))
+                ),
                 transactions_root: format!("0x{}", "22".repeat(32)),
                 proposals_hash: format!("0x{}", "33".repeat(32)),
                 extra_hash: format!("0x{}", "44".repeat(32)),
                 dao: format!("0x{}", hex::encode(dao)),
                 nonce: "0x1".to_string(),
-                hash: format!(
-                    "0x{}",
-                    hex::encode({
-                        let mut h = [0x55u8; 32];
-                        h[0..8].copy_from_slice(&number.to_le_bytes());
-                        h
-                    })
-                ),
+                hash: format!("0x{}", hex::encode(block_hash(number))),
             }
         }
 
@@ -5226,11 +5675,12 @@ mod tests {
                 dao[8..16].copy_from_slice(&AR_DEPOSIT.to_le_bytes());
                 dao[24..32].copy_from_slice(&100_000_000_000_000u64.to_le_bytes());
                 let mut batch = ckbadger_store::batch::StoreBatch::new(store.as_ref());
+                let parent_hash = block_hash(99);
                 batch.put_block_header(
                     99,
                     &ckbadger_store::types::CachedBlockHeader {
-                        hash: vec![0x99; 32],
-                        parent_hash: vec![0x98; 32],
+                        hash: parent_hash.to_vec(),
+                        parent_hash: block_hash(98).to_vec(),
                         timestamp: 1_699_999_999_000,
                         epoch_number: 39,
                         epoch_index: 1799,
@@ -5243,6 +5693,25 @@ mod tests {
                         miner_lock_hash: None,
                         cycles: None,
                     },
+                );
+                batch
+                    .put_live_cell_summary_snapshots(&[LiveCellSummary {
+                        tip_block_number: 99,
+                        tip_block_hash: parent_hash,
+                        dao: 0,
+                        typed_non_dao: 0,
+                        plain: 0,
+                        data_bearing: 0,
+                    }])
+                    .expect("seed parent live-cell summary");
+                let status = ckbadger_store::types::SyncStatus {
+                    tip_block_number: 99,
+                    tip_block_hash: parent_hash.to_vec(),
+                    ..Default::default()
+                };
+                batch.put_sync_meta(
+                    ckbadger_store::keys::sync_meta_keys::SYNC_STATUS,
+                    &bincode::serialize(&status).expect("serialize seeded sync status"),
                 );
                 batch.commit().expect("seed parent block header");
             }

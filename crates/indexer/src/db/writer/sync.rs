@@ -242,6 +242,16 @@ impl BatchWriter {
                 rollback_target, next_block, cleanup_reason, "Startup cleanup complete"
             );
         } else if force_cleanup {
+            if self.store.is_rollback_cleanup_in_progress()? {
+                self.store
+                    .restore_live_cell_summary_visibility_after_interrupted_rollback()?;
+                info!(
+                    start_block,
+                    next_block,
+                    cleanup_reason,
+                    "Restored live-cell summary visibility from exact tip history after interrupted rollback"
+                );
+            }
             info!(
                 start_block,
                 next_block,

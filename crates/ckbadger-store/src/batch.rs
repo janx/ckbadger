@@ -1413,6 +1413,90 @@ impl<'a> StoreBatch<'a> {
 
     // ---- Sync meta ----
 
+    /// Stage block-end live-cell summaries into the bounded history ring and
+    /// publish the last one as the API-visible current value.
+    ///
+    /// This is a domain-store mutation. It intentionally has no append-only
+    /// equivalent: `CF_CELLS` remains immutable cell payload history.
+    pub fn put_live_cell_summary_snapshots(
+        &mut self,
+        summaries: &[LiveCellSummary],
+    ) -> anyhow::Result<()> {
+        if !self.store.has_cf(crate::CF_SYNC_META) {
+            anyhow::bail!(
+                "live-cell summaries belong to the domain store; sync_meta is unavailable in this store class"
+            );
+        }
+        if summaries.is_empty() {
+            anyhow::bail!("cannot publish an empty live-cell summary snapshot sequence");
+        }
+
+        let mut previous_block: Option<i64> = None;
+        for summary in summaries {
+            summary.validate()?;
+            if let Some(previous_block) = previous_block {
+                let expected = previous_block.checked_add(1).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "live-cell summary block sequence overflow after block {}",
+                        previous_block
+                    )
+                })?;
+                if summary.tip_block_number != expected {
+                    anyhow::bail!(
+                        "non-consecutive live-cell summary sequence: previous_block={} expected_block={} actual_block={}",
+                        previous_block,
+                        expected,
+                        summary.tip_block_number,
+                    );
+                }
+            }
+
+            let value = bincode::serialize(summary).map_err(|error| {
+                anyhow::anyhow!(
+                    "failed to serialize live-cell summary: block={} error={}",
+                    summary.tip_block_number,
+                    error,
+                )
+            })?;
+            let history_key = keys::encode_live_cell_summary_history_key(summary.tip_block_number);
+            self.put_sync_meta(&history_key, &value);
+
+            if let Some(expired_block) = summary
+                .tip_block_number
+                .checked_sub(LIVE_CELL_SUMMARY_HISTORY_BLOCKS)
+                .filter(|block| *block >= 0)
+            {
+                let expired_key = keys::encode_live_cell_summary_history_key(expired_block);
+                self.delete_sync_meta(&expired_key);
+            }
+            previous_block = Some(summary.tip_block_number);
+        }
+
+        let current = summaries
+            .last()
+            .expect("non-empty summary sequence checked above");
+        let value = bincode::serialize(current).map_err(|error| {
+            anyhow::anyhow!(
+                "failed to serialize current live-cell summary: block={} error={}",
+                current.tip_block_number,
+                error,
+            )
+        })?;
+        self.put_sync_meta(keys::sync_meta_keys::LIVE_CELL_SUMMARY_INITIALIZED, &[1u8]);
+        self.put_sync_meta(keys::sync_meta_keys::LIVE_CELL_SUMMARY_CURRENT, &value);
+        Ok(())
+    }
+
+    pub fn delete_live_cell_summary_current(&mut self) -> anyhow::Result<()> {
+        if !self.store.has_cf(crate::CF_SYNC_META) {
+            anyhow::bail!(
+                "live-cell summaries belong to the domain store; sync_meta is unavailable in this store class"
+            );
+        }
+        self.delete_sync_meta(keys::sync_meta_keys::LIVE_CELL_SUMMARY_CURRENT);
+        Ok(())
+    }
+
     pub fn put_sync_meta(&mut self, key: &[u8], value: &[u8]) {
         self.put_cf(self.store.cf_sync_meta(), key, value);
     }

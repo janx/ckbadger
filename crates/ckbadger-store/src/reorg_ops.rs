@@ -55,6 +55,167 @@ struct RollbackStatsDeltas {
     miner: HashMap<(String, Vec<u8>), i32>,
 }
 
+#[derive(Debug)]
+struct LiveCellSummaryRollbackPlan {
+    old_tip: i64,
+    first_retained_block: i64,
+    target: Option<LiveCellSummary>,
+}
+
+fn prepare_live_cell_summary_rollback(
+    store: &CkbadgerStore,
+    rollback_to: i64,
+    status: &SyncStatus,
+    current_may_be_withdrawn: bool,
+) -> anyhow::Result<Option<LiveCellSummaryRollbackPlan>> {
+    let initialized = store.is_live_cell_summary_initialized()?;
+    let current = store.get_live_cell_summary()?;
+    let tip_history = if status.tip_block_hash.is_empty() {
+        None
+    } else {
+        store.get_live_cell_summary_at(status.tip_block_number)?
+    };
+
+    if !initialized {
+        if current.is_some() || tip_history.is_some() {
+            anyhow::bail!(
+                "live-cell summary records exist without initialized marker before rollback: current={:?} tip_history={:?}",
+                current,
+                tip_history,
+            );
+        }
+        return Ok(None);
+    }
+    if status.tip_block_hash.is_empty() {
+        if current.is_none() && tip_history.is_none() {
+            // Valid pre-genesis state after rollback_to=-1. The initialized
+            // marker remains so later record loss cannot look like an old DB.
+            return Ok(None);
+        }
+        anyhow::bail!(
+            "live-cell summary exists while sync status has no canonical tip: current={:?} tip_history={:?}",
+            current,
+            tip_history,
+        );
+    }
+
+    let tip_history = tip_history.ok_or_else(|| {
+        anyhow::anyhow!(
+            "missing live-cell summary history at rollback source tip: block={} hash=0x{}",
+            status.tip_block_number,
+            hex::encode(&status.tip_block_hash),
+        )
+    })?;
+    tip_history
+        .validate_against_sync_totals(status.total_cells_created, status.total_cells_consumed)?;
+    if tip_history.tip_block_number != status.tip_block_number
+        || tip_history.tip_block_hash.as_slice() != status.tip_block_hash.as_slice()
+    {
+        anyhow::bail!(
+            "live-cell summary rollback source/status mismatch: summary_block={} summary_hash=0x{} status_block={} status_hash=0x{}",
+            tip_history.tip_block_number,
+            hex::encode(tip_history.tip_block_hash),
+            status.tip_block_number,
+            hex::encode(&status.tip_block_hash),
+        );
+    }
+    match current {
+        Some(current) if current != tip_history => {
+            anyhow::bail!(
+                "current/history live-cell summary mismatch before rollback: block={} current={:?} history={:?}",
+                status.tip_block_number,
+                current,
+                tip_history,
+            );
+        }
+        None if !current_may_be_withdrawn => {
+            anyhow::bail!(
+                "current live-cell summary is missing before rollback without an existing cleanup marker: tip_block={}",
+                status.tip_block_number,
+            );
+        }
+        _ => {}
+    }
+
+    if rollback_to > status.tip_block_number {
+        anyhow::bail!(
+            "live-cell summary rollback target is above source tip: rollback_to={} source_tip={}",
+            rollback_to,
+            status.tip_block_number,
+        );
+    }
+    let rollback_depth = status
+        .tip_block_number
+        .checked_sub(rollback_to)
+        .ok_or_else(|| anyhow::anyhow!("live-cell summary rollback depth underflow"))?;
+    let max_depth = i64::try_from(ckbadger_common::MAX_SHALLOW_REORG_DEPTH).map_err(|_| {
+        anyhow::anyhow!(
+            "maximum shallow reorg depth exceeds i64: depth={}",
+            ckbadger_common::MAX_SHALLOW_REORG_DEPTH
+        )
+    })?;
+    if rollback_depth > max_depth {
+        anyhow::bail!(
+            "live-cell summary rollback exceeds retained history: source_tip={} rollback_to={} depth={} max_depth={}",
+            status.tip_block_number,
+            rollback_to,
+            rollback_depth,
+            max_depth,
+        );
+    }
+
+    let target = if rollback_to >= 0 {
+        let target = store
+            .get_live_cell_summary_at(rollback_to)?
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "missing retained live-cell summary at rollback target: rollback_to={} source_tip={} depth={}",
+                    rollback_to,
+                    status.tip_block_number,
+                    rollback_depth,
+                )
+            })?;
+        let header = store.get_block_header(rollback_to)?.ok_or_else(|| {
+            anyhow::anyhow!(
+                "missing canonical header for live-cell summary rollback target: rollback_to={}",
+                rollback_to
+            )
+        })?;
+        if target.tip_block_number != rollback_to
+            || target.tip_block_hash.as_slice() != header.hash.as_slice()
+        {
+            anyhow::bail!(
+                "live-cell summary rollback target/header mismatch: summary_block={} summary_hash=0x{} rollback_to={} header_hash=0x{}",
+                target.tip_block_number,
+                hex::encode(target.tip_block_hash),
+                rollback_to,
+                hex::encode(header.hash),
+            );
+        }
+        Some(target)
+    } else {
+        None
+    };
+
+    let retained_span = LIVE_CELL_SUMMARY_HISTORY_BLOCKS
+        .checked_sub(1)
+        .ok_or_else(|| anyhow::anyhow!("live-cell summary history window must be positive"))?;
+    let candidate_first = status
+        .tip_block_number
+        .checked_sub(retained_span)
+        .ok_or_else(|| anyhow::anyhow!("live-cell summary retained-window underflow"))?;
+    let first_retained_block = if candidate_first < 0 {
+        0
+    } else {
+        candidate_first
+    };
+    Ok(Some(LiveCellSummaryRollbackPlan {
+        old_tip: status.tip_block_number,
+        first_retained_block,
+        target,
+    }))
+}
+
 /// Cell distribution size bucket — must match the logic in
 /// `crates/indexer/src/db/writer/cell_distribution.rs::size_bucket`.
 fn cell_dist_size_bucket(occupied_capacity: i64) -> usize {
@@ -1793,9 +1954,30 @@ impl CkbadgerStore {
             );
         }
         let cells_store = append_only_store.unwrap_or(self);
-        // Persist a rollback marker so startup can force cleanup if interrupted.
-        self.set_rollback_cleanup_in_progress(true)?;
         let sync_status_before = self.get_sync_status()?;
+        let cleanup_was_in_progress = self.is_rollback_cleanup_in_progress()?;
+        let live_cell_summary_plan = prepare_live_cell_summary_rollback(
+            self,
+            rollback_to,
+            &sync_status_before,
+            cleanup_was_in_progress,
+        )?;
+        // Persist the cleanup marker and withdraw the current public summary
+        // atomically. The block-scoped history remains available for exact
+        // restoration in the final rollback batch.
+        let mut visibility_batch = WriteBatch::default();
+        visibility_batch.put_cf(
+            self.cf_sync_meta(),
+            keys::sync_meta_keys::ROLLBACK_CLEANUP_IN_PROGRESS,
+            [1u8],
+        );
+        if live_cell_summary_plan.is_some() {
+            visibility_batch.delete_cf(
+                self.cf_sync_meta(),
+                keys::sync_meta_keys::LIVE_CELL_SUMMARY_CURRENT,
+            );
+        }
+        self.write_batch(visibility_batch)?;
         // Only blocks up to the last persisted sync tip were counted into sync_status totals.
         // Startup cleanup may delete partial tail data beyond that point without subtracting it.
         let rollback_accounted_tip = if sync_status_before.tip_block_number == 0
@@ -4740,38 +4922,90 @@ impl CkbadgerStore {
             Vec::new()
         };
         let tip_number = if rollback_to < 0 { 0 } else { rollback_to };
-        {
-            let mut status = sync_status_before;
-            status.tip_block_number = tip_number;
-            status.tip_block_hash = tip_hash;
-            status.total_transactions = checked_rollback_total(
-                "total_transactions",
-                status.total_transactions,
-                rollback_total_transactions,
-                tip_number,
-            )?;
-            status.total_cells_created = checked_rollback_total(
-                "total_cells_created",
-                status.total_cells_created,
-                rollback_total_cells_created,
-                tip_number,
-            )?;
-            status.total_cells_consumed = checked_rollback_total(
-                "total_cells_consumed",
-                status.total_cells_consumed,
-                rollback_total_cells_consumed,
-                tip_number,
-            )?;
-            status.last_synced_at = chrono::Utc::now().timestamp();
-            let status_bytes = bincode::serialize(&status).map_err(|e| {
-                anyhow::anyhow!("failed to serialize sync_status during rollback: {}", e)
-            })?;
-            batch.put_cf(
-                self.cf_sync_meta(),
-                keys::sync_meta_keys::SYNC_STATUS,
-                &status_bytes,
-            );
+        let mut status = sync_status_before;
+        status.tip_block_number = tip_number;
+        status.tip_block_hash = tip_hash;
+        status.total_transactions = checked_rollback_total(
+            "total_transactions",
+            status.total_transactions,
+            rollback_total_transactions,
+            tip_number,
+        )?;
+        status.total_cells_created = checked_rollback_total(
+            "total_cells_created",
+            status.total_cells_created,
+            rollback_total_cells_created,
+            tip_number,
+        )?;
+        status.total_cells_consumed = checked_rollback_total(
+            "total_cells_consumed",
+            status.total_cells_consumed,
+            rollback_total_cells_consumed,
+            tip_number,
+        )?;
+        status.last_synced_at = chrono::Utc::now().timestamp();
+
+        if let Some(plan) = live_cell_summary_plan {
+            if let Some(target) = plan.target {
+                target.validate_against_sync_totals(
+                    status.total_cells_created,
+                    status.total_cells_consumed,
+                )?;
+                if target.tip_block_number != status.tip_block_number
+                    || target.tip_block_hash.as_slice() != status.tip_block_hash.as_slice()
+                {
+                    anyhow::bail!(
+                        "live-cell summary/status mismatch after rollback: summary_block={} summary_hash=0x{} status_block={} status_hash=0x{}",
+                        target.tip_block_number,
+                        hex::encode(target.tip_block_hash),
+                        status.tip_block_number,
+                        hex::encode(&status.tip_block_hash),
+                    );
+                }
+                let encoded = bincode::serialize(&target).map_err(|error| {
+                    anyhow::anyhow!(
+                        "failed to serialize live-cell summary rollback target: block={} error={}",
+                        target.tip_block_number,
+                        error,
+                    )
+                })?;
+                batch.put_cf(
+                    self.cf_sync_meta(),
+                    keys::sync_meta_keys::LIVE_CELL_SUMMARY_CURRENT,
+                    &encoded,
+                );
+            } else {
+                batch.delete_cf(
+                    self.cf_sync_meta(),
+                    keys::sync_meta_keys::LIVE_CELL_SUMMARY_CURRENT,
+                );
+            }
+
+            let first_to_delete = if rollback_to < plan.first_retained_block {
+                plan.first_retained_block
+            } else {
+                rollback_to.checked_add(1).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "live-cell summary rollback history delete bound overflow: rollback_to={}",
+                        rollback_to
+                    )
+                })?
+            };
+            if first_to_delete <= plan.old_tip {
+                for block_number in first_to_delete..=plan.old_tip {
+                    let key = keys::encode_live_cell_summary_history_key(block_number);
+                    batch.delete_cf(self.cf_sync_meta(), key);
+                }
+            }
         }
+        let status_bytes = bincode::serialize(&status).map_err(|e| {
+            anyhow::anyhow!("failed to serialize sync_status during rollback: {}", e)
+        })?;
+        batch.put_cf(
+            self.cf_sync_meta(),
+            keys::sync_meta_keys::SYNC_STATUS,
+            &status_bytes,
+        );
         // Clear the rollback-in-progress marker in the same atomic batch.
         batch.delete_cf(
             self.cf_sync_meta(),
@@ -4836,9 +5070,9 @@ mod tests {
     use crate::types::{
         AddrTxValue, AddressBalance, AssetAction, CachedBlockHeader, CellDistributionTrackerState,
         CompositionTier, DaoDailySnapshot, DaoDepositCacheEntry, HodlTrackerState, LiveCellInfo,
-        MnftCollectionAggregate, ObjectCollectionActivityEntry, ObjectEntry, ObjectExtra,
-        ObjectStandard, ParticipantDelta, ScriptInfo, SporeMediaProfile, SyncStatus, TokenInfo,
-        TxActions, TxIndexEntry, UndoInputOutPoint, UndoLogEntry, UndoTxContext,
+        LiveCellSummary, MnftCollectionAggregate, ObjectCollectionActivityEntry, ObjectEntry,
+        ObjectExtra, ObjectStandard, ParticipantDelta, ScriptInfo, SporeMediaProfile, SyncStatus,
+        TokenInfo, TxActions, TxIndexEntry, UndoInputOutPoint, UndoLogEntry, UndoTxContext,
     };
 
     /// Persist a DAO daily snapshot directly, so a rollback fixture can start
@@ -6233,6 +6467,25 @@ mod tests {
         batch.put_tx_index(1, 0, &block1_tx);
         batch.put_tx_index(2, 0, &block2_tx_a);
         batch.put_tx_index(2, 1, &block2_tx_b);
+        let summary1 = LiveCellSummary {
+            tip_block_number: 1,
+            tip_block_hash: header1.hash.clone().try_into().unwrap(),
+            dao: 0,
+            typed_non_dao: 0,
+            plain: 1,
+            data_bearing: 0,
+        };
+        let summary2 = LiveCellSummary {
+            tip_block_number: 2,
+            tip_block_hash: header2.hash.clone().try_into().unwrap(),
+            dao: 1,
+            typed_non_dao: 2,
+            plain: 2,
+            data_bearing: 3,
+        };
+        batch
+            .put_live_cell_summary_snapshots(&[summary1, summary2])
+            .unwrap();
         batch.commit().unwrap();
 
         store
@@ -6254,6 +6507,10 @@ mod tests {
         assert_eq!(status.total_transactions, 1);
         assert_eq!(status.total_cells_created, 2);
         assert_eq!(status.total_cells_consumed, 1);
+        assert_eq!(store.get_live_cell_summary().unwrap(), Some(summary1));
+        assert_eq!(store.get_live_cell_summary_at(1).unwrap(), Some(summary1));
+        assert_eq!(store.get_live_cell_summary_at(2).unwrap(), None);
+        assert!(!store.is_rollback_cleanup_in_progress().unwrap());
     }
 
     #[test]

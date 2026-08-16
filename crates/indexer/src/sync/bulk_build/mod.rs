@@ -16,10 +16,10 @@ use ckbadger_store::types::{
     decode_live_cell_marker, BulkBuildSessionMarker, CachedBlockHeader,
     CellDistributionTrackerState, ConsumedCellMeta, DailyActivityStats, DailyAddressCohort,
     DailyCellDistribution, DailyHodlWave, DaoDailySnapshot, DaoLatestStatistics, DaoTopDepositors,
-    HodlTrackerState, HourlyStats, LiveCellInfo, LockScriptEntry, MinerStats, ObjectStandard,
-    ScriptDailyDelta, SporeTypeIndex, SyncStatus, TokenTransferRecord, TxActions, TxIndexEntry,
-    BIT_CELL_SENTINEL_COLLECTION, DID_CKB_SENTINEL_COLLECTION, DOTBIT_SENTINEL_COLLECTION,
-    SOLE_SPORES_SENTINEL_COLLECTION,
+    HodlTrackerState, HourlyStats, LiveCellInfo, LiveCellSummary, LockScriptEntry, MinerStats,
+    ObjectStandard, ScriptDailyDelta, SporeTypeIndex, SyncStatus, TokenTransferRecord, TxActions,
+    TxIndexEntry, BIT_CELL_SENTINEL_COLLECTION, DID_CKB_SENTINEL_COLLECTION,
+    DOTBIT_SENTINEL_COLLECTION, SOLE_SPORES_SENTINEL_COLLECTION,
 };
 use ckbadger_store::{
     AddressBalance, CkbadgerStore, ScriptInfo, CF_ADDR_TXS, CF_BLOCK_HASH_INDEX, CF_BLOCK_HEADERS,
@@ -774,6 +774,9 @@ impl BulkBuildEngine {
         let finalize_started_copy = finalize_started;
         let materialize_shutdown = indexer.shutdown_flag();
 
+        let live_cell_summaries: Vec<LiveCellSummary> =
+            runtime.sequencer.live_cell_summaries().copied().collect();
+
         let BulkBuildRuntimeState {
             owners,
             sequencer,
@@ -881,7 +884,11 @@ impl BulkBuildEngine {
             indexer
                 .bulk_build_perf
                 .record_finalize_step(13, finalize_started.elapsed());
-            sync_totals.finalize_success(indexer.writer.store().as_ref(), false)?;
+            sync_totals.finalize_success(
+                indexer.writer.store().as_ref(),
+                false,
+                &live_cell_summaries,
+            )?;
             indexer.writer.refresh_latest_dao_statistics()?;
         }
 
@@ -989,6 +996,7 @@ impl BulkBuildSyncTotals {
         self,
         store: &CkbadgerStore,
         mark_bulk_sync_completed: bool,
+        live_cell_summaries: &[LiveCellSummary],
     ) -> Result<SyncStatus> {
         let mut status = store.get_sync_status()?;
 
@@ -1021,7 +1029,36 @@ impl BulkBuildSyncTotals {
         if mark_bulk_sync_completed {
             status.mark_bulk_sync_completed(status.tip_block_number);
         }
-        store.set_sync_status(&status)?;
+
+        let summary = live_cell_summaries.last().ok_or_else(|| {
+            anyhow!(
+                "bulk build produced no live-cell summary snapshots: status_tip_block={} status_tip_hash=0x{}",
+                status.tip_block_number,
+                hex::encode(&status.tip_block_hash),
+            )
+        })?;
+        if summary.tip_block_number != status.tip_block_number
+            || summary.tip_block_hash.as_slice() != status.tip_block_hash.as_slice()
+        {
+            bail!(
+                "bulk live-cell summary/status tip mismatch before commit: summary_block={} summary_hash=0x{} status_block={} status_hash=0x{}",
+                summary.tip_block_number,
+                hex::encode(summary.tip_block_hash),
+                status.tip_block_number,
+                hex::encode(&status.tip_block_hash),
+            );
+        }
+        summary.validate_against_sync_totals(
+            status.total_cells_created,
+            status.total_cells_consumed,
+        )?;
+
+        let mut batch = ckbadger_store::batch::StoreBatch::new(store);
+        batch.put_live_cell_summary_snapshots(live_cell_summaries)?;
+        let status_bytes = bincode::serialize(&status)
+            .with_context(|| "failed to serialize bulk-build sync status")?;
+        batch.put_sync_meta(keys::sync_meta_keys::SYNC_STATUS, &status_bytes);
+        batch.commit()?;
         Ok(status)
     }
 }
@@ -2858,7 +2895,7 @@ impl BulkBuildRuntimeState {
         self,
         domain_store: &CkbadgerStore,
         materializer: &mut materialize::Materializer<'_>,
-    ) -> Result<()> {
+    ) -> Result<Vec<LiveCellSummary>> {
         // Genesis-derived burn adjustment for knowledge_size. Fail-fast if the
         // baseline was never derived (single calculation path, no fallback).
         let virtual_occupied = domain_store
@@ -2868,6 +2905,11 @@ impl BulkBuildRuntimeState {
             })?
             .virtual_occupied;
         let prepared_finalize = self.prepare_finalize_artifacts(virtual_occupied)?;
+        let live_cell_summaries = self
+            .sequencer
+            .live_cell_summaries()
+            .copied()
+            .collect::<Vec<_>>();
         let BulkBuildRuntimeState {
             owners,
             sequencer,
@@ -2892,7 +2934,7 @@ impl BulkBuildRuntimeState {
         if !meta_batch.is_empty() {
             meta_batch.commit()?;
         }
-        Ok(())
+        Ok(live_cell_summaries)
     }
 
     fn prepare_finalize_artifacts(
@@ -3190,6 +3232,7 @@ pub struct CoreOwnerStateSnapshot {
 pub struct BulkArtifactSnapshot {
     pub report: materialize::MaterializationReport,
     pub sync_status: SyncStatus,
+    pub live_cell_summary: Option<LiveCellSummary>,
     pub bulk_build_session_marker: Option<BulkBuildSessionMarker>,
     pub hodl_tracker_state: Option<HodlTrackerState>,
     pub cell_dist_tracker_state: Option<CellDistributionTrackerState>,
@@ -3390,9 +3433,10 @@ where
             processed_blocks = block_idx + 1;
         }
 
-        runtime.finalize(domain_store.as_ref(), &mut materializer)?;
+        let live_cell_summaries = runtime.finalize(domain_store.as_ref(), &mut materializer)?;
         flush_bulk_build_materialized_state(domain_store.as_ref(), append_store.as_ref())?;
-        let sync_status = sync_totals.finalize_success(domain_store.as_ref(), false)?;
+        let sync_status =
+            sync_totals.finalize_success(domain_store.as_ref(), false, &live_cell_summaries)?;
         crate::db::writer::BatchWriter::new(domain_store.clone(), append_store.clone())
             .refresh_latest_dao_statistics()?;
         domain_store.clear_bulk_build_session_marker()?;
@@ -3521,9 +3565,10 @@ fn materialize_bulk_artifacts_from_block_batches_for_test_impl(
             }
             sync_totals.record_batch(&batch_stats)?;
         }
-        runtime.finalize(domain_store.as_ref(), &mut materializer)?;
+        let live_cell_summaries = runtime.finalize(domain_store.as_ref(), &mut materializer)?;
         flush_bulk_build_materialized_state(domain_store.as_ref(), append_store.as_ref())?;
-        let sync_status = sync_totals.finalize_success(domain_store.as_ref(), true)?;
+        let sync_status =
+            sync_totals.finalize_success(domain_store.as_ref(), true, &live_cell_summaries)?;
         crate::db::writer::BatchWriter::new(domain_store.clone(), append_store.clone())
             .refresh_latest_dao_statistics()?;
         domain_store.clear_bulk_build_session_marker()?;
@@ -3568,12 +3613,14 @@ fn collect_bulk_artifact_snapshot(
         cell_by_data_hash,
     ) = collect_cell_snapshot(domain_store, append_store)?;
     let bulk_build_session_marker = domain_store.get_bulk_build_session_marker()?;
+    let live_cell_summary = domain_store.get_live_cell_summary()?;
     let hodl_tracker_state = domain_store.get_hodl_tracker_state()?;
     let cell_dist_tracker_state = domain_store.get_cell_dist_tracker_state()?;
 
     Ok(BulkArtifactSnapshot {
         report,
         sync_status,
+        live_cell_summary,
         bulk_build_session_marker,
         hodl_tracker_state,
         cell_dist_tracker_state,
@@ -7499,8 +7546,8 @@ mod tests {
             cycles: None,
         };
 
-        // Block 11: tx consumes genesis cellbase output
-        let block11_cellbase = TransactionView {
+        // Block 1: tx consumes genesis cellbase output
+        let block1_cellbase = TransactionView {
             hash: format!("0x{}", "fc".repeat(32)),
             version: "0x0".to_string(),
             cell_deps: vec![],
@@ -7540,11 +7587,11 @@ mod tests {
             outputs_data: vec!["0x".to_string()],
             witnesses: vec!["0x".to_string()],
         };
-        let block_11 = BlockResponseWithCycles {
+        let block_1 = BlockResponseWithCycles {
             block: BlockView {
-                header: fixture_header(11, 0x0b),
+                header: fixture_header(1, 0x01),
                 uncles: vec![],
-                transactions: vec![block11_cellbase, spend_tx],
+                transactions: vec![block1_cellbase, spend_tx],
                 proposals: vec![],
             },
             cycles: None,
@@ -7555,7 +7602,7 @@ mod tests {
         // "missing live input" at block 11.
         let interner = interner::IdentityInterner::default();
         let (arena, _) = crate::sync::pipeline::build_bulk_facts_arena_from_blocks(
-            &[genesis_block, block_11],
+            &[genesis_block, block_1],
             &interner,
         )
         .expect("facts arena");
@@ -7567,9 +7614,9 @@ mod tests {
 
         // Block 0 cellbase: 0 inputs (cellbase), 1 output
         assert!(resolved[0].resolved_inputs.is_empty());
-        // Block 11 cellbase: 0 inputs, 1 output
+        // Block 1 cellbase: 0 inputs, 1 output
         assert!(resolved[1].resolved_inputs.is_empty());
-        // Block 11 spend tx: 1 input (genesis cell), 1 output
+        // Block 1 spend tx: 1 input (genesis cell), 1 output
         assert_eq!(resolved[2].resolved_inputs.len(), 1);
         assert_eq!(resolved[2].resolved_inputs[0].capacity, 500_00000000);
     }

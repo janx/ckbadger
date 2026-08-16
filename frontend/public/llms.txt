@@ -27,6 +27,8 @@ Machine-friendly endpoints:
   - Raw response `meta` includes `buildVersion`
   - Raw response headers: `x-ckbadger-format`, `x-ckbadger-profile`, `x-ckbadger-schema`
 - Capability descriptor: `/capabilities` (JSON)
+- Exact live-cell inventory: `/api/{network}/v1/cells/live-summary` (constant-size JSON; verify
+  `tip.block`/`tip.hash` against the local CKB node)
 
 Core page groups below are relative to `/{network}`:
 

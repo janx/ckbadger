@@ -1284,6 +1284,113 @@ pub struct SyncStatus {
     pub deep_fork_info: Option<DeepForkInfo>,
 }
 
+/// Exact block-end live-cell classification published by the indexer.
+///
+/// `live_cells` is deliberately not persisted: it is the checked sum of the
+/// three mutually-exclusive classes, so a stored total can never drift from
+/// its partition. Every field has a fixed-width binary representation.
+pub const LIVE_CELL_SUMMARY_HISTORY_BLOCKS: i64 =
+    ckbadger_common::MAX_SHALLOW_REORG_DEPTH as i64 + 1;
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LiveCellSummary {
+    pub tip_block_number: i64,
+    pub tip_block_hash: [u8; 32],
+    pub dao: u64,
+    pub typed_non_dao: u64,
+    pub plain: u64,
+    pub data_bearing: u64,
+}
+
+impl LiveCellSummary {
+    pub fn live_cells(&self) -> anyhow::Result<u64> {
+        self.dao
+            .checked_add(self.typed_non_dao)
+            .and_then(|value| value.checked_add(self.plain))
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "live-cell summary class total overflow: block={} dao={} typed_non_dao={} plain={}",
+                    self.tip_block_number,
+                    self.dao,
+                    self.typed_non_dao,
+                    self.plain,
+                )
+            })
+    }
+
+    pub fn validate(&self) -> anyhow::Result<()> {
+        if self.tip_block_number < 0 {
+            anyhow::bail!(
+                "live-cell summary has negative tip block: block={}",
+                self.tip_block_number
+            );
+        }
+        let live_cells = self.live_cells()?;
+        if self.data_bearing > live_cells {
+            anyhow::bail!(
+                "live-cell summary data-bearing count exceeds live cells: block={} data_bearing={} live_cells={}",
+                self.tip_block_number,
+                self.data_bearing,
+                live_cells,
+            );
+        }
+        Ok(())
+    }
+
+    pub fn validate_against_sync_totals(
+        &self,
+        total_cells_created: i64,
+        total_cells_consumed: i64,
+    ) -> anyhow::Result<()> {
+        self.validate()?;
+        if total_cells_created < 0 || total_cells_consumed < 0 {
+            anyhow::bail!(
+                "live-cell summary cannot validate against negative sync totals: block={} created={} consumed={}",
+                self.tip_block_number,
+                total_cells_created,
+                total_cells_consumed,
+            );
+        }
+        let expected = total_cells_created
+            .checked_sub(total_cells_consumed)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "live-cell summary sync total subtraction overflow: block={} created={} consumed={}",
+                    self.tip_block_number,
+                    total_cells_created,
+                    total_cells_consumed,
+                )
+            })?;
+        if expected < 0 {
+            anyhow::bail!(
+                "live-cell summary sync totals imply a negative live-cell count: block={} created={} consumed={}",
+                self.tip_block_number,
+                total_cells_created,
+                total_cells_consumed,
+            );
+        }
+        let actual = self.live_cells()?;
+        let expected = u64::try_from(expected).map_err(|_| {
+            anyhow::anyhow!(
+                "live-cell summary expected count conversion failed: block={} expected={}",
+                self.tip_block_number,
+                expected,
+            )
+        })?;
+        if actual != expected {
+            anyhow::bail!(
+                "live-cell summary disagrees with sync totals: block={} summary_live_cells={} created={} consumed={} expected_live_cells={}",
+                self.tip_block_number,
+                actual,
+                total_cells_created,
+                total_cells_consumed,
+                expected,
+            );
+        }
+        Ok(())
+    }
+}
+
 impl SyncStatus {
     pub fn init_sync_start(&mut self, start_block: i64, is_bulk_sync: bool) {
         if is_bulk_sync {
@@ -2733,6 +2840,51 @@ mod tests {
         assert_eq!(decoded.txs_count, 7);
         assert_eq!(decoded.first_seen_block, 100);
         assert_eq!(decoded.last_activity_block, 500);
+    }
+
+    #[test]
+    fn live_cell_summary_is_fixed_width_and_derives_total_from_partition() {
+        let summary = LiveCellSummary {
+            tip_block_number: 12_345_678,
+            tip_block_hash: [0x42; 32],
+            dao: 182_341,
+            typed_non_dao: 2_639_044,
+            plain: 5_600_552,
+            data_bearing: 2_810_388,
+        };
+
+        summary.validate().unwrap();
+        assert_eq!(summary.live_cells().unwrap(), 8_421_937);
+        assert_eq!(std::mem::size_of::<LiveCellSummary>(), 72);
+        assert_eq!(bincode::serialize(&summary).unwrap().len(), 72);
+    }
+
+    #[test]
+    fn live_cell_summary_rejects_partition_and_sync_total_invariants() {
+        let summary = LiveCellSummary {
+            tip_block_number: 10,
+            tip_block_hash: [0x10; 32],
+            dao: 1,
+            typed_non_dao: 2,
+            plain: 3,
+            data_bearing: 7,
+        };
+        assert!(summary
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("data-bearing count exceeds"));
+
+        let summary = LiveCellSummary {
+            data_bearing: 4,
+            ..summary
+        };
+        assert!(summary
+            .validate_against_sync_totals(8, 1)
+            .unwrap_err()
+            .to_string()
+            .contains("disagrees with sync totals"));
+        summary.validate_against_sync_totals(8, 2).unwrap();
     }
 
     #[test]

@@ -1703,6 +1703,47 @@ pub mod sync_meta_keys {
     /// from the node's `get_consensus` at indexer startup. Required by the
     /// per-block miner-secondary split `floor(s_i * U_{i-1} / C_{i-1})`.
     pub const SECONDARY_EPOCH_REWARD: &[u8] = b"secondary_epoch_reward";
+    /// API-visible live-cell summary at the latest fully committed canonical
+    /// block. The value is a fixed-width bincode `LiveCellSummary`.
+    pub const LIVE_CELL_SUMMARY_CURRENT: &[u8] = b"live_cell_summary:current";
+    /// Presence marker distinguishing a pre-feature/rebuild-required store
+    /// from corruption that removed both current and history records.
+    pub const LIVE_CELL_SUMMARY_INITIALIZED: &[u8] = b"live_cell_summary:initialized";
+}
+
+/// Block-end summary history used only for bounded shallow-reorg restoration.
+pub const LIVE_CELL_SUMMARY_HISTORY_KEY_PREFIX: &[u8] = b"live_cell_summary:history:";
+pub const LIVE_CELL_SUMMARY_HISTORY_KEY_SIZE: usize =
+    LIVE_CELL_SUMMARY_HISTORY_KEY_PREFIX.len() + BLOCK_NUM_KEY_SIZE;
+
+pub fn encode_live_cell_summary_history_key(block_number: i64) -> Vec<u8> {
+    let mut key = Vec::with_capacity(LIVE_CELL_SUMMARY_HISTORY_KEY_SIZE);
+    key.extend_from_slice(LIVE_CELL_SUMMARY_HISTORY_KEY_PREFIX);
+    key.extend_from_slice(&encode_block_num(block_number));
+    key
+}
+
+pub fn decode_live_cell_summary_history_key(key: &[u8]) -> anyhow::Result<i64> {
+    if key.len() != LIVE_CELL_SUMMARY_HISTORY_KEY_SIZE
+        || !key.starts_with(LIVE_CELL_SUMMARY_HISTORY_KEY_PREFIX)
+    {
+        anyhow::bail!(
+            "malformed live-cell summary history key: expected prefix=0x{} length={}, got key=0x{} length={}",
+            crate::bytes_to_hex(LIVE_CELL_SUMMARY_HISTORY_KEY_PREFIX),
+            LIVE_CELL_SUMMARY_HISTORY_KEY_SIZE,
+            crate::bytes_to_hex(key),
+            key.len(),
+        );
+    }
+    let block_number = decode_block_num(&key[LIVE_CELL_SUMMARY_HISTORY_KEY_PREFIX.len()..]);
+    if block_number < 0 {
+        anyhow::bail!(
+            "live-cell summary history key contains negative block: block={} key=0x{}",
+            block_number,
+            crate::bytes_to_hex(key),
+        );
+    }
+    Ok(block_number)
 }
 
 // -- Reorg event history (CF_SYNC_META) --
@@ -1895,6 +1936,28 @@ pub fn decode_addr_fiber_channel_key(key: &[u8]) -> (&[u8], &[u8]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn live_cell_summary_history_key_roundtrip_and_order() {
+        let first = encode_live_cell_summary_history_key(12_345_678);
+        let second = encode_live_cell_summary_history_key(12_345_679);
+
+        assert_eq!(first.len(), LIVE_CELL_SUMMARY_HISTORY_KEY_SIZE);
+        assert_eq!(
+            decode_live_cell_summary_history_key(&first).unwrap(),
+            12_345_678
+        );
+        assert!(first < second);
+    }
+
+    #[test]
+    fn live_cell_summary_history_key_rejects_wrong_shape() {
+        let error =
+            decode_live_cell_summary_history_key(b"live_cell_summary:history:short").unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("malformed live-cell summary history key"));
+    }
 
     #[test]
     fn test_reorg_event_key_roundtrip_and_shape() {

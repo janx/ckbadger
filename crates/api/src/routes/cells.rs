@@ -1377,6 +1377,7 @@ fn analyze_cell_data(
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
+        .route("/cells/live-summary", get(get_live_cell_summary))
         .route("/cells/live", get(list_live_cells))
         .route("/cells/by-script", get(list_cells_by_script))
         .route("/cells/{tx_hash}/{output_index}", get(get_cell))
@@ -1388,6 +1389,101 @@ pub fn routes() -> Router<Arc<AppState>> {
             get(get_address_transactions),
         )
         .route("/addresses/{addr}/tokens", get(get_address_tokens))
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LiveCellSummaryTipResponse {
+    pub block: i64,
+    pub hash: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LiveCellSummaryClassesResponse {
+    pub dao: u64,
+    pub typed_non_dao: u64,
+    pub plain: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LiveCellSummaryResponse {
+    pub tip: LiveCellSummaryTipResponse,
+    pub live_cells: u64,
+    pub classes: LiveCellSummaryClassesResponse,
+    pub data_bearing: u64,
+}
+
+async fn get_live_cell_summary(
+    State(state): State<Arc<AppState>>,
+) -> ApiResult<LiveCellSummaryResponse> {
+    let summary = state.store.get_live_cell_summary().map_err(|error| {
+        ApiError::internal(format!("failed to read live-cell summary: {error}"))
+    })?;
+    let summary = match summary {
+        Some(summary) => summary,
+        None => {
+            let initializing = || {
+                ApiError::initializing(
+                    "live-cell summary is unavailable while the indexer initializes or reconciles a reorg",
+                )
+            };
+            let initialized = state
+                .store
+                .is_live_cell_summary_initialized()
+                .map_err(|error| {
+                    ApiError::internal(format!(
+                        "failed to read live-cell summary initialization state: {error}"
+                    ))
+                })?;
+            if !initialized {
+                return Err(initializing());
+            }
+            let rollback_in_progress =
+                state
+                    .store
+                    .is_rollback_cleanup_in_progress()
+                    .map_err(|error| {
+                        ApiError::internal(format!(
+                            "failed to read live-cell summary rollback state: {error}"
+                        ))
+                    })?;
+            if rollback_in_progress {
+                return Err(initializing());
+            }
+            let status = state.store.get_sync_status().map_err(|error| {
+                ApiError::internal(format!(
+                    "failed to read sync status for live-cell summary: {error}"
+                ))
+            })?;
+            if status.deep_fork_detected || status.tip_block_hash.is_empty() {
+                return Err(initializing());
+            }
+            return Err(ApiError::internal(format!(
+                "initialized live-cell summary is missing outside reconciliation: tip_block={} tip_hash=0x{}",
+                status.tip_block_number,
+                hex::encode(status.tip_block_hash),
+            )));
+        }
+    };
+    let live_cells = summary.live_cells().map_err(|error| {
+        ApiError::internal(format!("invalid persisted live-cell summary: {error}"))
+    })?;
+
+    ok(LiveCellSummaryResponse {
+        tip: LiveCellSummaryTipResponse {
+            block: summary.tip_block_number,
+            hash: format!("0x{}", hex::encode(summary.tip_block_hash)),
+        },
+        live_cells,
+        classes: LiveCellSummaryClassesResponse {
+            dao: summary.dao,
+            typed_non_dao: summary.typed_non_dao,
+            plain: summary.plain,
+        },
+        data_bearing: summary.data_bearing,
+    })
 }
 
 #[derive(Debug, Deserialize)]

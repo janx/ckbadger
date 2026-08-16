@@ -1593,6 +1593,16 @@ fn bulk_build_stage_handoff_materializes_consistent_partial_state_without_comple
     assert_eq!(snapshot.sync_status.total_transactions, 2);
     assert_eq!(snapshot.sync_status.total_cells_created, 3);
     assert_eq!(snapshot.sync_status.total_cells_consumed, 1);
+    let live_summary = snapshot
+        .live_cell_summary
+        .expect("bulk handoff must publish its exact live-cell summary");
+    assert_eq!(live_summary.tip_block_number, 2);
+    assert_eq!(live_summary.tip_block_hash, [0xb2; 32]);
+    assert_eq!(live_summary.live_cells().unwrap(), 2);
+    assert_eq!(live_summary.dao, 0);
+    assert_eq!(live_summary.typed_non_dao, 0);
+    assert_eq!(live_summary.plain, 2);
+    assert_eq!(live_summary.data_bearing, 0);
     assert!(snapshot.sync_status.sync_started_at.is_some());
     assert!(
         snapshot.sync_status.bulk_sync_completed_at.is_none(),

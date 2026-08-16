@@ -7,6 +7,9 @@ use super::facts::{
     OutPointKey, ResolvedInputFacts,
 };
 use super::sequencer::BulkSequencer;
+use crate::sync::live_cell_summary::{
+    CellSummaryContext, LiveCellSummaryCounter, LiveCellSummaryProjection,
+};
 use crate::sync::types::InternId;
 
 #[derive(Debug, Default)]
@@ -15,6 +18,7 @@ pub(crate) struct LiveCellOwner {
     extras: FxHashMap<OutPointKey, LiveCellExtras>,
     protocol_facts: FxHashMap<OutPointKey, CellProtocolFacts>,
     protocol_heap_bytes: u64,
+    summary: LiveCellSummaryCounter,
 }
 
 impl LiveCellOwner {
@@ -53,14 +57,18 @@ impl LiveCellOwner {
                 format_outpoint(&outpoint)
             ));
         }
-        self.live.insert(outpoint, slot);
-        if let Some(extras) = extras {
-            self.extras.insert(outpoint, extras);
-        }
-        if let Some(facts) = protocol_facts {
-            let heap_bytes = protocol_facts_heap_bytes(&facts);
-            self.protocol_heap_bytes = self
-                .protocol_heap_bytes
+
+        let summary_context = CellSummaryContext::new(
+            "birth",
+            slot.created_at_block,
+            &outpoint.tx_hash,
+            i64::from(outpoint.index),
+        );
+        let projection = live_cell_summary_projection(&slot, summary_context)?;
+        let updated_summary = self.summary.after_birth(projection, summary_context)?;
+        let updated_protocol_heap_bytes = if let Some(facts) = protocol_facts.as_ref() {
+            let heap_bytes = protocol_facts_heap_bytes(facts);
+            self.protocol_heap_bytes
                 .checked_add(heap_bytes)
                 .ok_or_else(|| {
                     anyhow!(
@@ -69,9 +77,20 @@ impl LiveCellOwner {
                         self.protocol_heap_bytes,
                         heap_bytes,
                     )
-                })?;
+                })?
+        } else {
+            self.protocol_heap_bytes
+        };
+
+        self.live.insert(outpoint, slot);
+        if let Some(extras) = extras {
+            self.extras.insert(outpoint, extras);
+        }
+        if let Some(facts) = protocol_facts {
             self.protocol_facts.insert(outpoint, facts);
         }
+        self.protocol_heap_bytes = updated_protocol_heap_bytes;
+        self.summary = updated_summary;
         Ok(())
     }
 
@@ -80,22 +99,33 @@ impl LiveCellOwner {
         outpoint: &OutPointKey,
         ctx: &ConsumeContext,
     ) -> Result<ResolvedInputFacts> {
-        let slot = self.live.remove(outpoint).ok_or_else(|| {
-            anyhow!(
-                "missing live input: block={} tx=0x{} tx_index={} input_index={} outpoint={}",
-                ctx.block_number,
-                hex::encode(ctx.tx_hash),
-                ctx.tx_index,
-                ctx.input_index,
-                format_outpoint(outpoint),
-            )
-        })?;
-        let extras = self.extras.remove(outpoint).unwrap_or_default();
-        let facts = self.protocol_facts.remove(outpoint);
-        if let Some(facts) = facts.as_ref() {
+        let live_entry = self.live.entry(*outpoint);
+        let occupied = match live_entry {
+            std::collections::hash_map::Entry::Occupied(occupied) => occupied,
+            std::collections::hash_map::Entry::Vacant(_) => {
+                return Err(anyhow!(
+                    "missing live input: block={} tx=0x{} tx_index={} input_index={} outpoint={}",
+                    ctx.block_number,
+                    hex::encode(ctx.tx_hash),
+                    ctx.tx_index,
+                    ctx.input_index,
+                    format_outpoint(outpoint),
+                ));
+            }
+        };
+        let slot = *occupied.get();
+
+        let summary_context = CellSummaryContext::new(
+            "spend",
+            ctx.block_number,
+            &outpoint.tx_hash,
+            i64::from(outpoint.index),
+        );
+        let projection = live_cell_summary_projection(&slot, summary_context)?;
+        let updated_summary = self.summary.after_spend(projection, summary_context)?;
+        let updated_protocol_heap_bytes = if let Some(facts) = self.protocol_facts.get(outpoint) {
             let heap_bytes = protocol_facts_heap_bytes(facts);
-            self.protocol_heap_bytes = self
-                .protocol_heap_bytes
+            self.protocol_heap_bytes
                 .checked_sub(heap_bytes)
                 .ok_or_else(|| {
                     anyhow!(
@@ -104,10 +134,26 @@ impl LiveCellOwner {
                         self.protocol_heap_bytes,
                         heap_bytes,
                     )
-                })?;
-        }
+                })?
+        } else {
+            self.protocol_heap_bytes
+        };
+
+        let slot = occupied.remove();
+        let extras = self.extras.remove(outpoint).unwrap_or_default();
+        let facts = self.protocol_facts.remove(outpoint);
+        self.protocol_heap_bytes = updated_protocol_heap_bytes;
+        self.summary = updated_summary;
 
         Ok(slot.into_resolved_input_facts(*outpoint, extras, facts))
+    }
+
+    pub(crate) fn summary(
+        &self,
+        block_number: i64,
+        block_hash: &[u8],
+    ) -> Result<ckbadger_store::LiveCellSummary> {
+        self.summary.snapshot(block_number, block_hash)
     }
 }
 
@@ -220,6 +266,19 @@ impl LiveCellSlot {
             protocol_facts,
         }
     }
+}
+
+fn live_cell_summary_projection(
+    slot: &LiveCellSlot,
+    context: CellSummaryContext<'_>,
+) -> Result<LiveCellSummaryProjection> {
+    LiveCellSummaryProjection::from_parts(
+        slot.type_script_hash_id.is_some(),
+        slot.type_code_hash_id.is_some(),
+        matches!(slot.semantic_tag, CellSemanticTag::Dao),
+        slot.data_size,
+        context,
+    )
 }
 
 fn protocol_facts_heap_bytes(facts: &CellProtocolFacts) -> u64 {
@@ -456,6 +515,52 @@ mod tests {
         assert_eq!(resolved.occupied_capacity, 61_00000000);
         assert_eq!(resolved.semantic_tag, CellSemanticTag::Plain);
         assert_eq!(owner.live_count(), 0);
+    }
+
+    #[test]
+    fn live_cell_owner_summary_classifies_unknown_typed_cells_without_slot_growth() {
+        let mut owner = LiveCellOwner::default();
+
+        let mut typed = sample_created_slot();
+        typed.type_script_hash_id = Some(InternId::new(3));
+        typed.type_code_hash_id = Some(InternId::new(4));
+        typed.type_hash_type = Some(1);
+        typed.type_args_id = Some(InternId::new(5));
+        typed.data_size = 4;
+        // `Plain` here means the registry did not recognize the type script;
+        // it is still typed_non_dao because a type script exists.
+        typed.semantic_tag = CellSemanticTag::Plain;
+        let typed_outpoint = OutPointKey::new([0x21; 32], 0);
+        owner
+            .insert_created(typed_outpoint, typed, None, None)
+            .unwrap();
+
+        let mut dao = typed;
+        dao.semantic_tag = CellSemanticTag::Dao;
+        dao.data_size = 0;
+        let dao_outpoint = OutPointKey::new([0x22; 32], 0);
+        owner.insert_created(dao_outpoint, dao, None, None).unwrap();
+
+        let plain_outpoint = OutPointKey::new([0x23; 32], 0);
+        owner
+            .insert_created(plain_outpoint, sample_created_slot(), None, None)
+            .unwrap();
+
+        let summary = owner.summary(14_000_000, &[0x42; 32]).unwrap();
+        assert_eq!(summary.live_cells().unwrap(), 3);
+        assert_eq!(summary.dao, 1);
+        assert_eq!(summary.typed_non_dao, 1);
+        assert_eq!(summary.plain, 1);
+        assert_eq!(summary.data_bearing, 1);
+
+        owner
+            .consume(&typed_outpoint, &sample_consume_ctx())
+            .unwrap();
+        let after_spend = owner.summary(14_000_001, &[0x43; 32]).unwrap();
+        assert_eq!(after_spend.live_cells().unwrap(), 2);
+        assert_eq!(after_spend.typed_non_dao, 0);
+        assert_eq!(after_spend.data_bearing, 0);
+        assert!(std::mem::size_of::<LiveCellSlot>() <= 120);
     }
 
     #[test]

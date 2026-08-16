@@ -200,6 +200,7 @@ proposal-window scan used by `blocks.rs` and `graph.rs`).
 
 | Method | Path                                     | Handler                    | Purpose                                                                                           |
 | ------ | ---------------------------------------- | -------------------------- | ------------------------------------------------------------------------------------------------- |
+| GET    | `/api/v1/cells/live-summary`             | `get_live_cell_summary`    | Exact O(1) live-cell class/data counts at a verifiable canonical tip                              |
 | GET    | `/api/v1/cells/live`                     | `list_live_cells`          | List live cells with optional lock/type/type_code_hash filters (cursor)                           |
 | GET    | `/api/v1/cells/by-script`                | `list_cells_by_script`     | List cells matching a script reference (`code_hash`, `hash_type`, `script_kind=lock\|type\|both`) |
 | GET    | `/api/v1/cells/{tx_hash}/{output_index}` | `get_cell`                 | Get cell detail (live or consumed) including data/dep_group/code_cell_of/DAO info                 |
@@ -214,6 +215,33 @@ proposal-window scan used by `blocks.rs` and `graph.rs`).
 - `ListCellsParams` — `limit`, `lock_script_hash`, `type_script_hash`, `type_code_hash`, `cursor`
 - `ListCellsByScriptParams` — `limit`, `code_hash`, `hash_type`, `script_kind` (default `both`), `cursor`
 - `TopAddressesParams` — `limit` (default 100)
+
+**`/cells/live-summary` response and consistency**
+
+```json
+{
+  "tip": { "block": 12345678, "hash": "0x..." },
+  "liveCells": 8421937,
+  "classes": {
+    "dao": 182341,
+    "typedNonDao": 2639044,
+    "plain": 5600552
+  },
+  "dataBearing": 2810388
+}
+```
+
+- `dao`, `typedNonDao`, and `plain` are mutually exclusive and their checked sum is
+  `liveCells`. `dataBearing` is orthogonal and counts cells whose data is non-empty.
+- The indexer updates the fixed-size record from birth/spend transitions. Normal sync publishes it
+  in the same domain-store batch as the canonical block header and sync status; bulk sync publishes
+  it only after canonical history is finalized, atomically with the final sync status. The request
+  performs only a constant number of point reads; it never scans live cells.
+- During initial bulk sync and while a reorg/deep-fork reconciliation has withdrawn the current
+  record, the endpoint returns `503` with `error: "initializing"`. Corrupt/inconsistent records
+  fail with `500`; no zero/default result is synthesized.
+- Consumers such as cknerv should verify `tip.hash` against the local CKB node's
+  `get_block_hash(tip.block)` before accepting the counts.
 
 **`/cells/by-script` behavior**
 

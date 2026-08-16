@@ -109,6 +109,10 @@ API:
 - Direct per-network API base: `/api/v1` on that API's configured port
 - JSON API supports blocks, transactions, cells, scripts, tokens, assets/identities, charts, DAO,
   forks, hardfork timeline, and optional crawler network observations.
+- Exact live-cell inventory: `/api/{network}/v1/cells/live-summary`; the three class counters are
+  mutually exclusive, `dataBearing` is orthogonal, and `tip.block`/`tip.hash` is locally
+  verifiable. The endpoint is a fixed-size point read and returns 503 until a canonical snapshot
+  is published.
 - Capability descriptor: `/capabilities` (formats, profiles, route matrix, and strict error codes).
 
 Notes for agents:

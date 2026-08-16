@@ -30,6 +30,12 @@ use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, Utc};
 /// We match this so our daily stats align with the official explorer.
 pub const CKB_UTC8_OFFSET: i32 = 8 * 3600;
 
+/// Maximum fork depth that ckbadger repairs automatically.
+///
+/// Reorg handling and any bounded canonical snapshots must share this one
+/// value. A deeper fork is an operator-visible rebuild condition.
+pub const MAX_SHALLOW_REORG_DEPTH: u64 = 36;
+
 /// Convert a UTC timestamp to a NaiveDate using CKB's UTC+8 day boundary.
 pub fn block_date(ts: DateTime<Utc>) -> NaiveDate {
     let utc8 = FixedOffset::east_opt(CKB_UTC8_OFFSET).unwrap();

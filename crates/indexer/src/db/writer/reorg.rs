@@ -66,6 +66,10 @@ impl BatchWriter {
         let mut batch = StoreBatch::new(self.store.as_ref());
         batch.put_sync_meta(event_key.as_bytes(), &event_bytes);
         batch.put_sync_meta(sync_meta_keys::SYNC_STATUS, &status_bytes);
+        // The local node has already reported that this tip is no longer
+        // canonical. Keep the API unavailable until an operator resolves the
+        // deep fork instead of serving a stale summary under a canonical label.
+        batch.delete_live_cell_summary_current()?;
         batch.commit()?;
 
         Ok(())
@@ -89,6 +93,47 @@ impl BatchWriter {
             )
         })?;
 
+        // Validate the retained recovery source before undo-log replay. The
+        // old summary stays verifiable by hash during this first phase;
+        // rollback_to_block withdraws it before staging canonical cell changes.
+        let summary_initialized = self.store.is_live_cell_summary_initialized()?;
+        let current_summary = self.store.get_live_cell_summary()?;
+        if summary_initialized && current_summary.is_none() {
+            return Err(anyhow!(
+                "initialized live-cell summary is missing before reorg: old_tip={} old_tip_hash=0x{}",
+                old_tip,
+                hex::encode(old_tip_hash),
+            ));
+        }
+        if !summary_initialized && current_summary.is_some() {
+            return Err(anyhow!(
+                "live-cell summary current record exists without initialized marker before reorg"
+            ));
+        }
+        if let Some(current) = current_summary {
+            let history = self
+                .store
+                .get_live_cell_summary_at(current.tip_block_number)?
+                .ok_or_else(|| {
+                    anyhow!(
+                        "missing live-cell summary history before reorg: block={} hash=0x{}",
+                        current.tip_block_number,
+                        hex::encode(current.tip_block_hash),
+                    )
+                })?;
+            if history != current
+                || current.tip_block_number != old_tip
+                || current.tip_block_hash.as_slice() != old_tip_hash
+            {
+                return Err(anyhow!(
+                    "live-cell summary does not match reorg source tip: current={:?} history={:?} old_tip={} old_tip_hash=0x{}",
+                    current,
+                    history,
+                    old_tip,
+                    hex::encode(old_tip_hash),
+                ));
+            }
+        }
         // Revert domain mutations from undo-log first so that entity data
         // (Spore, mNFT, dotbit) is restored to pre-fork state before the
         // multi-stage rollback rebuilds aggregates from it.
@@ -193,7 +238,8 @@ mod tests {
 
     use ckbadger_store::keys;
     use ckbadger_store::store::CkbadgerStore;
-    use ckbadger_store::types::ReorgEventKind;
+    use ckbadger_store::types::{LiveCellSummary, ReorgEventKind, SyncStatus};
+    use ckbadger_store::StoreBatch;
 
     use crate::db::writer::BatchWriter;
 
@@ -253,6 +299,26 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone(), store.clone());
+        let summary = LiveCellSummary {
+            tip_block_number: 120,
+            tip_block_hash: [0x11; 32],
+            dao: 1,
+            typed_non_dao: 0,
+            plain: 2,
+            data_bearing: 1,
+        };
+        let mut seed = StoreBatch::new(store.as_ref());
+        seed.put_live_cell_summary_snapshots(&[summary]).unwrap();
+        seed.commit().unwrap();
+        store
+            .set_sync_status(&SyncStatus {
+                tip_block_number: 120,
+                tip_block_hash: vec![0x11; 32],
+                total_cells_created: 4,
+                total_cells_consumed: 1,
+                ..Default::default()
+            })
+            .unwrap();
 
         writer
             .record_deep_fork(100, &[0x33; 32], 120, &[0x11; 32], 130, &[0x22; 32], 20)
@@ -280,6 +346,8 @@ mod tests {
         assert_eq!(info.db_tip, 120);
         assert_eq!(info.chain_tip, 130);
         assert_eq!(info.depth, 20);
+        assert_eq!(store.get_live_cell_summary().unwrap(), None);
+        assert_eq!(store.get_live_cell_summary_at(120).unwrap(), Some(summary));
     }
 
     #[tokio::test]
