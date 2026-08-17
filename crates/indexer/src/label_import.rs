@@ -1873,6 +1873,16 @@ mod bundled_label_chain_consistency_tests {
     const RGBPP_MAINNET_ARGS: &str =
         "0x08875c56644d39dd9629d291357d3026debc5d22fa88d924d60ce8f16dd50e70";
 
+    /// InterPay's published testnet USDI deployment. The contract's SSRI
+    /// metadata reports six decimals; attaching this script to the unrelated
+    /// eight-decimal plain-xUDT label was the regression fixed by PR #12.
+    const TESTNET_USDI_TYPE_HASH: &str =
+        "07ac97b5ff3df4b49f59a59f4d80d33d22c1263a57467c512c93b9c29b7a0de3";
+    const TESTNET_USDI_CODE_HASH: &str =
+        "0xcc9dc33ef234e14bc788c43a4848556a5fb16401a04662fc55db9bb201987037";
+    const TESTNET_USDI_ARGS: &str =
+        "0x71fd1985b2971a9903e4d8ed0d59e6710166985217ca0681437883837b86162f";
+
     /// Every network a bundled token can deploy to. The corpus guard runs over
     /// all of them, so no bundled row sits outside the check.
     const NETWORKS: [&str; 2] = ["mainnet", "testnet"];
@@ -1950,6 +1960,56 @@ mod bundled_label_chain_consistency_tests {
             unreachable.len(),
             &unreachable[..unreachable.len().min(5)]
         );
+    }
+
+    #[test]
+    fn bundled_testnet_usdi_label_matches_issuer_deployment() {
+        let expected_type_hash =
+            hex::decode(TESTNET_USDI_TYPE_HASH).expect("pinned USDI type hash must be valid hex");
+        let labels = bundled::udt_labels();
+        let matching: Vec<(&TokenMetadata, &TokenDeployment)> = labels
+            .iter()
+            .filter(|token| !token.disabled)
+            .filter_map(|token| {
+                let deployment = token.testnet.as_ref()?;
+                let type_hash =
+                    compute_type_hash(deployment).expect("bundled deployment must hash");
+                (type_hash == expected_type_hash).then_some((token, deployment))
+            })
+            .collect();
+
+        assert_eq!(
+            matching.len(),
+            1,
+            "testnet USDI must have exactly one bundled label, found {}",
+            matching.len()
+        );
+        let (label, deployment) = matching[0];
+        assert_eq!(deployment.code_hash, TESTNET_USDI_CODE_HASH);
+        assert_eq!(deployment.hash_type, "type");
+        assert_eq!(deployment.args, TESTNET_USDI_ARGS);
+        assert_eq!(label.name, "USDI");
+        assert_eq!(label.symbol, "USDI");
+        assert_eq!(label.decimals, 6);
+        assert_eq!(label.standard, "xudt_compatible");
+
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path().to_str().unwrap()).unwrap();
+        let result = super::run_label_import_bundled(&store, "testnet").unwrap();
+        assert!(
+            result.errors.is_empty(),
+            "testnet label import failed: {:?}",
+            result.errors
+        );
+
+        let stored = store
+            .get_token(&expected_type_hash)
+            .unwrap()
+            .expect("testnet USDI label must be imported");
+        assert_eq!(stored.name.as_deref(), Some("USDI"));
+        assert_eq!(stored.symbol.as_deref(), Some("USDI"));
+        assert_eq!(stored.decimals, Some(6));
+        assert_eq!(stored.standard, "xudt_compatible");
     }
 
     /// A Unique Cell observation that says exactly what the stored row says.
