@@ -15,6 +15,7 @@ use axum::{routing::get, Router};
 use ckbadger_common::{
     BackgroundTaskEntry, BackgroundTaskKind, BackgroundTaskState, BackgroundTasksData,
 };
+use ckbadger_store::read_view::{self, ReadViewGuard};
 use ckbadger_store::CkbadgerStore;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
@@ -369,24 +370,30 @@ pub async fn create_router(config: AppConfig) -> Router {
             let ckb = refresh_ckb_store.clone();
             let network = refresh_network_store.clone();
             let result = tokio::task::spawn_blocking(move || {
-                // Refresh append-only BEFORE domain to match the indexer's commit
-                // order (append-only first, domain second). This eliminates a
-                // transient window where domain has a live-cell marker whose
-                // payload hasn't been caught up in the append-only secondary yet.
-                if let Err(e) = append_only.refresh() {
+                // One exclusive window for every secondary this process reads.
+                // It waits for in-flight requests (each pins the view for its
+                // whole lifetime) and blocks new ones, so no response can mix a
+                // pre-catch-up index row with a post-catch-up entry, and no
+                // cross-store read can see domain advanced past append-only.
+                // Refresh order inside the window is therefore invisible to
+                // readers; append-only stays first to match the indexer's own
+                // commit order.
+                let window = read_view::catch_up_window();
+                if let Err(e) = append_only.catch_up_in_window(&window) {
                     tracing::warn!("Append-only store refresh failed: {}", e);
                 }
-                if let Err(e) = store.refresh() {
+                if let Err(e) = store.catch_up_in_window(&window) {
                     tracing::warn!("Store refresh failed: {}", e);
                 }
                 if let Some(ref ckb_store) = ckb {
+                    // Owned by ckb-store-reader; already inside our window.
                     if let Err(e) = ckb_store.refresh() {
                         tracing::warn!("CKB store refresh failed: {}", e);
                     }
                 }
                 // Opt-in network-crawler secondary: refresh only when present.
                 if let Some(ref net) = network {
-                    if let Err(e) = net.refresh() {
+                    if let Err(e) = net.catch_up_in_window(&window) {
                         tracing::warn!("Network store refresh failed: {}", e);
                     }
                 }
@@ -458,12 +465,62 @@ pub async fn create_router(config: AppConfig) -> Router {
     Router::new()
         .nest("/api/v1", routes::api_routes())
         .route("/ws", get(ws::ws_handler))
+        // Innermost layer: pin the read view around handler execution only,
+        // after rate limiting has already rejected what it will reject.
+        .layer(axum::middleware::from_fn(pin_read_view))
         .layer(rate_limit_layer)
         .layer(cors)
         .layer(CompressionLayer::new())
         .layer(axum::middleware::from_fn(mark_polling_request))
         .layer(trace_layer)
         .with_state(state)
+}
+
+/// This request's pin on the process-wide read view.
+///
+/// The API reads RocksDB secondaries, which cannot take snapshots and whose
+/// view advances only on catch-up. Pinning it for the whole request is what
+/// makes a response coherent: index row and the entry it points at, domain
+/// marker and append-only payload, every read in the handler — all one view.
+/// Without it a catch-up landing mid-request tears them apart (see
+/// `ckbadger_store::read_view`).
+///
+/// Handlers get it as `Extension<RequestReadView>` and only need it to opt out
+/// via [`RequestReadView::release`].
+#[derive(Clone)]
+pub struct RequestReadView(Arc<std::sync::Mutex<Option<ReadViewGuard>>>);
+
+impl RequestReadView {
+    fn pin() -> Self {
+        Self(Arc::new(std::sync::Mutex::new(Some(
+            read_view::acquire_read(),
+        ))))
+    }
+
+    /// Stop pinning the view for the rest of this request.
+    ///
+    /// Only for handlers whose contract is to observe the *next* view — the
+    /// cycles long-poll waits for the indexer to write a result, so it must let
+    /// catch-up run. Everything read after this call may come from a newer
+    /// view than what was read before it.
+    pub fn release(&self) {
+        let _ = self.0.lock().expect("request read view poisoned").take();
+    }
+}
+
+/// Pin one read view per request, released when the response is produced.
+///
+/// Public so test routers can mount the production layer stack:
+/// `.layer(axum::middleware::from_fn(pin_read_view))`.
+pub async fn pin_read_view(
+    mut request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let view = RequestReadView::pin();
+    request.extensions_mut().insert(view.clone());
+    let response = next.run(request).await;
+    drop(view);
+    response
 }
 
 /// Marker inserted into response extensions for high-frequency polling endpoints.
@@ -502,6 +559,88 @@ async fn mark_polling_request(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The read view is process-wide, so these two must not overlap.
+    static READ_VIEW_TEST_SERIAL: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+    async fn pinned_scopes_probe() -> String {
+        read_view::pinned_read_scopes().to_string()
+    }
+
+    async fn releasing_probe(view: Option<axum::Extension<RequestReadView>>) -> String {
+        let before = read_view::pinned_read_scopes();
+        if let Some(axum::Extension(view)) = view {
+            view.release();
+        }
+        format!("{before},{}", read_view::pinned_read_scopes())
+    }
+
+    #[tokio::test]
+    async fn test_request_pins_one_read_view_for_the_handler_lifetime() {
+        use axum::body::Body;
+        use axum::extract::Request;
+        use http_body_util::BodyExt;
+        use tower::ServiceExt;
+
+        let _serial = READ_VIEW_TEST_SERIAL.lock().await;
+
+        let app = Router::new()
+            .route("/probe", get(pinned_scopes_probe))
+            .layer(axum::middleware::from_fn(pin_read_view));
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/probe")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+
+        assert_eq!(
+            &body[..],
+            b"1",
+            "handler must run inside exactly one pinned read view"
+        );
+        assert_eq!(
+            read_view::pinned_read_scopes(),
+            0,
+            "the pin must be released once the response is produced"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_handler_can_release_its_read_view_to_await_new_data() {
+        use axum::body::Body;
+        use axum::extract::Request;
+        use http_body_util::BodyExt;
+        use tower::ServiceExt;
+
+        let _serial = READ_VIEW_TEST_SERIAL.lock().await;
+
+        let app = Router::new()
+            .route("/probe", get(releasing_probe))
+            .layer(axum::middleware::from_fn(pin_read_view));
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/probe")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+
+        assert_eq!(
+            &body[..],
+            b"1,0",
+            "release() must let catch-up proceed for the rest of the request"
+        );
+    }
 
     #[test]
     fn test_api_routes_are_nested_under_v1() {

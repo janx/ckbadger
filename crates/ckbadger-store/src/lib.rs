@@ -24,6 +24,7 @@ pub mod batch;
 pub mod keys;
 pub mod network_keys;
 pub mod network_types;
+pub mod read_view;
 pub mod store;
 pub mod types;
 

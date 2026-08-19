@@ -1521,6 +1521,115 @@ mod tests {
         assert_eq!(current.status, 1, "hook must have updated canonical row");
     }
 
+    /// The API reads a secondary, which cannot snapshot: a catch-up landing
+    /// between the index-row read and the entry load makes a healthy 0->1
+    /// withdraw request look like a stale index row and fails the listing.
+    /// Pinning the read view for the scope (what the API middleware does per
+    /// request) keeps the catch-up out until the scan is done.
+    #[test]
+    fn test_status_pagination_holds_one_view_while_catch_up_waits() {
+        use std::sync::mpsc;
+        use std::sync::Arc;
+
+        let primary_dir = TempDir::new().unwrap();
+        let secondary_dir = TempDir::new().unwrap();
+        let primary = Arc::new(CkbadgerStore::open_test_unified(primary_dir.path()).unwrap());
+        let outpoint = keys::encode_outpoint(&[0xC3; 32], 0);
+
+        let mut batch = StoreBatch::new(&primary);
+        batch.put_dao_deposit(
+            &outpoint,
+            &DaoDepositCacheEntry {
+                capacity: 100,
+                occupied_capacity: 0,
+                deposit_block_number: 30,
+                deposit_timestamp: 0,
+                lock_script_hash: vec![0x11; 32],
+                deposit_ar: 1,
+                status: 0,
+                withdraw_request_tx: None,
+                withdraw_request_output_index: None,
+                withdraw_request_block: None,
+                withdraw_request_ar: None,
+                withdraw_block: None,
+                withdraw_tx: None,
+                withdraw_request_occupied_capacity: None,
+                withdraw_to_output_index: None,
+                compensation: None,
+            },
+        );
+        batch.commit().unwrap();
+
+        let secondary = Arc::new(
+            CkbadgerStore::open_test_unified_secondary(primary_dir.path(), secondary_dir.path())
+                .unwrap(),
+        );
+        secondary.refresh().unwrap();
+
+        // One pinned read view for this scope, as the API pins one per request.
+        let view = crate::read_view::acquire_read();
+
+        let (catcher_tx, catcher_rx) = mpsc::channel();
+        let hook_primary = Arc::clone(&primary);
+        let hook_secondary = Arc::clone(&secondary);
+        let hook_outpoint = outpoint;
+        set_dao_status_pagination_hook(Some(Box::new(move |_scanned, outpoint_key| {
+            if outpoint_key != hook_outpoint.as_slice() {
+                return;
+            }
+            // The indexer commits the withdraw request mid-scan...
+            let mut entry = hook_primary
+                .get_dao_deposit(outpoint_key)
+                .expect("load dao deposit in hook")
+                .expect("dao deposit missing in hook");
+            entry.status = 1;
+            entry.withdraw_request_block = Some(31);
+            entry.withdraw_request_tx = Some(vec![0xBB; 32]);
+            entry.withdraw_request_output_index = Some(0);
+            entry.withdraw_request_ar = Some(2);
+            hook_primary
+                .put_dao_deposit_direct(outpoint_key, &entry)
+                .expect("update dao deposit in hook");
+
+            // ...and the refresh loop tries to advance the secondary onto it.
+            let catcher_store = Arc::clone(&hook_secondary);
+            let catcher = std::thread::spawn(move || catcher_store.refresh());
+            std::thread::sleep(std::time::Duration::from_millis(150));
+            catcher_tx.send(catcher).expect("send catch-up handle");
+        })));
+
+        let rows = secondary.list_dao_deposits_by_status_paginated(0, 10, None);
+        set_dao_status_pagination_hook(None);
+
+        let rows = rows.expect("a pinned view must not observe a mid-scan catch-up");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].0, outpoint);
+        assert_eq!(
+            rows[0].1.status, 0,
+            "the pinned view serves the pre-catch-up state, whole"
+        );
+
+        // Releasing the view lets the queued catch-up land; the next scope sees it.
+        drop(view);
+        catcher_rx
+            .recv()
+            .expect("catch-up handle")
+            .join()
+            .expect("catch-up thread panicked")
+            .expect("catch-up failed");
+
+        assert!(secondary
+            .list_dao_deposits_by_status_paginated(0, 10, None)
+            .unwrap()
+            .is_empty());
+        let moved = secondary
+            .list_dao_deposits_by_status_paginated(1, 10, None)
+            .unwrap();
+        assert_eq!(moved.len(), 1);
+        assert_eq!(moved[0].0, outpoint);
+        assert_eq!(moved[0].1.status, 1);
+    }
+
     #[test]
     fn test_scan_dao_deposits_by_lock_visits_only_target_lock() {
         let dir = TempDir::new().unwrap();
