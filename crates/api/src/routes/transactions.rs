@@ -1,7 +1,7 @@
 use axum::{
     extract::{Path, Query, State},
     routing::{get, post},
-    Router,
+    Extension, Router,
 };
 use ckb_types::packed;
 use ckbadger_common::cycles_task::{CyclesTaskResult, CyclesTaskStatus};
@@ -20,7 +20,7 @@ use crate::routes::tx_lookup::{fetch_transaction_lookup, pending_transaction_res
 use crate::utils::{
     parse_hash32, parse_optional_block_tx_cursor, script_to_address, validate_block_number,
 };
-use crate::AppState;
+use crate::{AppState, RequestReadView};
 use tracing::instrument;
 
 /// (block_number, tx_hash, tx_index, tx_index_entry, block_hash)
@@ -1662,6 +1662,9 @@ async fn get_cycles_status(
 async fn trigger_cycles_calculation(
     State(state): State<Arc<AppState>>,
     Path(hash): Path<String>,
+    // Optional so the handler still works in routers built without the
+    // read-view middleware (unit tests mounting `routes()` directly).
+    read_view: Option<Extension<RequestReadView>>,
 ) -> ApiResult<CyclesStatusResponse> {
     let hash_bytes = parse_hash32(&hash, "transaction hash")?;
 
@@ -1706,6 +1709,15 @@ async fn trigger_cycles_calculation(
                     cycles: None,
                     error: Some(e),
                 });
+            }
+
+            // This is the one handler whose contract is to observe the *next*
+            // view: it waits for the indexer to write the cycles result, which
+            // only becomes visible after a catch-up. Keeping the request's pin
+            // would block that catch-up and guarantee a timeout, so release it
+            // before waiting. Everything read above was pinned.
+            if let Some(Extension(view)) = read_view {
+                view.release();
             }
 
             ok(wait_cycles_result(&state, &hash, &hash_bytes).await?)

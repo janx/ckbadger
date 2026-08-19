@@ -166,6 +166,9 @@ pub fn create_router_without_warmup(config: AppConfig) -> axum::Router {
 
     axum::Router::new()
         .nest("/api/v1", api_routes())
+        // Same read-view pin production mounts, so integration tests exercise
+        // handlers under a pinned view rather than a bare router.
+        .layer(axum::middleware::from_fn(ckbadger_api::pin_read_view))
         .with_state(state)
 }
 

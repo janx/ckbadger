@@ -102,6 +102,57 @@ fn all_checks() -> Vec<Box<dyn Check>> {
     checks
 }
 
+/// Whether a check runs at the requested depth. Explorer checks are gated on
+/// their own rule rather than their tier, so this is the single definition both
+/// the filter and `--checks` validation use.
+fn runs_at_depth(check: &dyn Check, depth: CheckTier) -> bool {
+    if check.requires_explorer() {
+        return depth >= CheckTier::Sampling;
+    }
+    check.tier() <= depth
+}
+
+/// Reject a `--checks` selection that would run nothing, rather than reporting
+/// an all-green run over an empty set. A typo or a too-shallow `--depth` is a
+/// mistake in the request, not a passing verification.
+fn validate_check_selection(
+    all: &[Box<dyn Check>],
+    selected: Option<&[String]>,
+    depth: CheckTier,
+) -> anyhow::Result<()> {
+    let Some(selected) = selected else {
+        return Ok(());
+    };
+
+    let unknown: Vec<&str> = selected
+        .iter()
+        .filter(|name| !all.iter().any(|c| c.name() == name.as_str()))
+        .map(String::as_str)
+        .collect();
+    if !unknown.is_empty() {
+        anyhow::bail!(
+            "unknown check name(s): {} — see --list-checks",
+            unknown.join(", ")
+        );
+    }
+
+    let excluded: Vec<String> = all
+        .iter()
+        .filter(|c| selected.iter().any(|name| name == c.name()))
+        .filter(|c| !runs_at_depth(c.as_ref(), depth))
+        .map(|c| format!("{} ({})", c.name(), c.tier()))
+        .collect();
+    if !excluded.is_empty() {
+        anyhow::bail!(
+            "--checks selected {} which do not run at --depth {}; raise the depth",
+            excluded.join(", "),
+            depth
+        );
+    }
+
+    Ok(())
+}
+
 /// Main entry point for the verify subcommand.
 pub fn run(args: VerifyArgs) -> anyhow::Result<()> {
     let all = all_checks();
@@ -149,23 +200,16 @@ pub fn run(args: VerifyArgs) -> anyhow::Result<()> {
         cache_dir,
     };
 
-    // Filter checks by tier and name
+    validate_check_selection(&all, args.checks.as_deref(), args.depth)?;
+
     let checks_to_run: Vec<&dyn Check> = all
         .iter()
         .filter(|c| {
-            // Filter by tier
-            if c.tier() > args.depth && !c.requires_explorer() {
-                return false;
-            }
-            // Explorer checks run at sampling tier
-            if c.requires_explorer() && args.depth < CheckTier::Sampling {
-                return false;
-            }
-            // Filter by name if --checks specified
-            if let Some(ref names) = args.checks {
-                return names.iter().any(|n| n == c.name());
-            }
-            true
+            runs_at_depth(c.as_ref(), args.depth)
+                && args
+                    .checks
+                    .as_ref()
+                    .is_none_or(|names| names.iter().any(|n| n == c.name()))
         })
         .map(|c| c.as_ref())
         .collect();
@@ -242,4 +286,68 @@ pub fn run(args: VerifyArgs) -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod selection_tests {
+    use super::*;
+
+    fn first_named(pick: impl Fn(&dyn Check) -> bool) -> String {
+        all_checks()
+            .iter()
+            .find(|c| pick(c.as_ref()))
+            .map(|c| c.name().to_string())
+            .expect("registry should contain such a check")
+    }
+
+    #[test]
+    fn no_selection_runs_the_whole_tier() {
+        validate_check_selection(&all_checks(), None, CheckTier::Fast).unwrap();
+    }
+
+    #[test]
+    fn a_selected_check_of_the_requested_tier_is_accepted() {
+        let fast = first_named(|c| c.tier() == CheckTier::Fast && !c.requires_explorer());
+        validate_check_selection(&all_checks(), Some(&[fast]), CheckTier::Fast).unwrap();
+    }
+
+    #[test]
+    fn an_unknown_check_name_is_rejected() {
+        let error = validate_check_selection(
+            &all_checks(),
+            Some(&["dao_status_index_matches_depsoits".to_string()]),
+            CheckTier::Sampling,
+        )
+        .expect_err("a typo must not report an all-green run over zero checks");
+        let message = error.to_string();
+        assert!(message.contains("unknown check name"), "{message}");
+        assert!(
+            message.contains("dao_status_index_matches_depsoits"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn a_selected_check_above_the_requested_depth_is_rejected() {
+        let sampling = first_named(|c| c.tier() == CheckTier::Sampling && !c.requires_explorer());
+        let error = validate_check_selection(
+            &all_checks(),
+            Some(std::slice::from_ref(&sampling)),
+            CheckTier::Fast,
+        )
+        .expect_err("selecting a sampling check at fast depth must not run nothing");
+        let message = error.to_string();
+        assert!(message.contains(&sampling), "{message}");
+        assert!(message.contains("raise the depth"), "{message}");
+    }
+
+    #[test]
+    fn explorer_checks_are_gated_on_sampling_depth_not_their_tier() {
+        let explorer_check = all_checks()
+            .into_iter()
+            .find(|c| c.requires_explorer())
+            .expect("registry should contain explorer checks");
+        assert!(!runs_at_depth(explorer_check.as_ref(), CheckTier::Fast));
+        assert!(runs_at_depth(explorer_check.as_ref(), CheckTier::Sampling));
+    }
 }

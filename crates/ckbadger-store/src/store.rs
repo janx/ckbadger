@@ -13,6 +13,7 @@ use rocksdb::{
 use serde::{Deserialize, Serialize};
 
 use crate::keys;
+use crate::read_view;
 use crate::types::MemoryStats;
 
 /// Type alias for RocksDB iterator items to avoid complex type lint.
@@ -1176,7 +1177,29 @@ impl CkbadgerStore {
     }
 
     /// Catch up with primary instance writes (secondary only).
+    ///
+    /// Advancing a secondary's view is the only thing that can make two reads
+    /// in one logical scope disagree, so it happens inside an exclusive
+    /// [`read_view::CatchUpWindow`]: it waits for in-flight pinned read scopes
+    /// and blocks new ones for its duration. Never call this from a thread
+    /// holding a [`read_view::ReadViewGuard`] — that self-deadlocks.
+    ///
+    /// Use [`Self::catch_up_in_window`] instead when several stores must land
+    /// in the same window.
     pub fn refresh(&self) -> anyhow::Result<()> {
+        if !self.is_secondary {
+            return Ok(());
+        }
+        let window = read_view::catch_up_window();
+        self.catch_up_in_window(&window)
+    }
+
+    /// Advance this store's view inside an already-open catch-up window.
+    ///
+    /// Taking the window by reference is what makes "all secondaries advance
+    /// together" checkable at compile time: cross-store reads (domain marker +
+    /// append-only payload) cannot straddle two windows.
+    pub fn catch_up_in_window(&self, _window: &read_view::CatchUpWindow) -> anyhow::Result<()> {
         if self.is_secondary {
             self.db.try_catch_up_with_primary()?;
         }
