@@ -7,6 +7,7 @@ use super::checks::*;
 use super::report::format_number;
 use super::sampling::LcgSampler;
 use ckbadger_common::TokenBalance;
+use std::collections::HashMap;
 
 const SYNC_COMPLETE_MAX_LAG_BLOCKS: i64 = 100;
 const SHANNONS_PER_CKB: i128 = 100_000_000;
@@ -4024,6 +4025,306 @@ fn miner_address_from_witness(witness_hex: &str, network: &str) -> Option<String
 // ============================================
 
 /// Return all API-based checks (fast + sampling).
+/// S24: every DAO deposit is listed under its own status, and no status listing
+/// carries an outpoint the deposit table does not.
+///
+/// `dao_by_status_block` keys embed a *mutable* field, so every 0→1→2
+/// transition has to delete the old index row and write the new one in the same
+/// atomic batch. A leaked row is invisible until someone pages onto it — and
+/// then it fails that request outright — so this is a full-table cross-check
+/// rather than a sample: coverage cannot depend on which pages a user happens
+/// to open.
+///
+/// Exact on live data. The chain advances during the walk and DAO status only
+/// moves forward, so walking the unfiltered listing first and the status
+/// listings in ascending order makes a concurrent transition unambiguous: the
+/// deposit turns up in a listing at or after its recorded status, never before
+/// it. A reorg can move status backwards, so one is detected and reported
+/// instead of being folded into findings.
+pub struct DaoStatusIndexMatchesDeposits;
+
+const DAO_DEPOSITS_PAGE_LIMIT: usize = 100;
+/// Runaway guard: mainnet holds ~92k deposits (~920 pages). Reaching this means
+/// the cursor is not advancing, which is itself a defect — so it errors instead
+/// of silently truncating the walk.
+const DAO_DEPOSITS_MAX_PAGES: usize = 50_000;
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DaoDepositRecord {
+    tx_hash: String,
+    output_index: i32,
+    status: String,
+    deposit_block_number: i64,
+}
+
+fn dao_status_label(status: i16) -> &'static str {
+    match status {
+        0 => "deposited",
+        1 => "withdrawing",
+        2 => "withdrawn",
+        _ => "unknown",
+    }
+}
+
+fn dao_status_rank(label: &str) -> Option<i16> {
+    match label {
+        "deposited" => Some(0),
+        "withdrawing" => Some(1),
+        "withdrawn" => Some(2),
+        _ => None,
+    }
+}
+
+fn dao_outpoint_key(tx_hash: &str, output_index: i32) -> String {
+    format!("{}:{}", tx_hash.to_lowercase(), output_index)
+}
+
+fn walk_dao_deposits(
+    ctx: &CheckContext,
+    progress: &ProgressReporter,
+    status: Option<i16>,
+) -> anyhow::Result<Vec<DaoDepositRecord>> {
+    let status_query = match status {
+        Some(status) => format!("status={status}&"),
+        None => String::new(),
+    };
+    let mut rows: Vec<DaoDepositRecord> = Vec::new();
+    let mut cursor: Option<String> = None;
+
+    for _ in 0..DAO_DEPOSITS_MAX_PAGES {
+        let path = match cursor.as_deref() {
+            Some(cursor) => format!(
+                "dao/deposits?{status_query}limit={DAO_DEPOSITS_PAGE_LIMIT}&cursor={cursor}"
+            ),
+            None => format!("dao/deposits?{status_query}limit={DAO_DEPOSITS_PAGE_LIMIT}"),
+        };
+        let page: CursorPage<DaoDepositRecord> = api_get(ctx, &path)?;
+        progress.inc(page.data.len() as u64);
+        rows.extend(page.data);
+        match page.next_cursor {
+            Some(next) => cursor = Some(next),
+            None => return Ok(rows),
+        }
+    }
+
+    anyhow::bail!(
+        "dao/deposits walk did not terminate within {} pages (status={:?}, rows collected={})",
+        DAO_DEPOSITS_MAX_PAGES,
+        status,
+        rows.len()
+    )
+}
+
+/// One row observed in a status listing.
+#[derive(Clone, Copy)]
+struct DaoIndexRow {
+    status: i16,
+    deposit_block: i64,
+}
+
+/// What the walks observed, in the form the verdict is derived from.
+struct DaoStatusIndexObservation {
+    /// outpoint -> (status rank reported by the unfiltered listing, deposit block)
+    recorded: HashMap<String, (i16, i64)>,
+    /// outpoint -> every status listing row it appeared in, in ascending order
+    indexed: HashMap<String, Vec<DaoIndexRow>>,
+    /// Deposit block of the newest deposit at the moment the walk started.
+    /// Anything above it entered the table mid-check.
+    newest_deposit_block: i64,
+}
+
+/// Absorbed observations that are legitimate on a live chain, not findings.
+#[derive(Default, PartialEq, Eq, Debug)]
+struct DaoStatusIndexAbsorbed {
+    /// Deposits that moved to a later status while the check was running.
+    transitions: u64,
+    /// Deposits created after the unfiltered walk read its newest page.
+    created_mid_check: u64,
+}
+
+/// Classify the observation. Pure so the live-chain rules are testable.
+fn evaluate_dao_status_index(
+    observed: &DaoStatusIndexObservation,
+) -> (Vec<Finding>, DaoStatusIndexAbsorbed) {
+    let mut findings = Vec::new();
+    let mut absorbed = DaoStatusIndexAbsorbed::default();
+
+    for (outpoint, (recorded_rank, deposit_block)) in &observed.recorded {
+        match observed.indexed.get(outpoint) {
+            None => findings.push(Finding {
+                entity: outpoint.clone(),
+                details: vec![format!(
+                    "deposit appears in no status listing: status={}, deposit_block={}",
+                    dao_status_label(*recorded_rank),
+                    deposit_block
+                )],
+            }),
+            Some(rows) => {
+                for row in rows {
+                    match row.status.cmp(recorded_rank) {
+                        std::cmp::Ordering::Equal => {}
+                        // Status only moves forward, so a later listing means the
+                        // deposit transitioned while this check was running.
+                        std::cmp::Ordering::Greater => absorbed.transitions += 1,
+                        std::cmp::Ordering::Less => findings.push(Finding {
+                            entity: outpoint.clone(),
+                            details: vec![format!(
+                                "status listing is behind the deposit: indexed under {}, deposit reports {}",
+                                dao_status_label(row.status),
+                                dao_status_label(*recorded_rank)
+                            )],
+                        }),
+                    }
+                }
+            }
+        }
+    }
+
+    for (outpoint, rows) in &observed.indexed {
+        if observed.recorded.contains_key(outpoint) {
+            continue;
+        }
+        // A deposit created after the unfiltered walk read its newest page is
+        // expected to be missing from it.
+        if rows
+            .iter()
+            .all(|row| row.deposit_block > observed.newest_deposit_block)
+        {
+            absorbed.created_mid_check += 1;
+            continue;
+        }
+        findings.push(Finding {
+            entity: outpoint.clone(),
+            details: vec![format!(
+                "status listing {} has an outpoint the deposit listing does not",
+                rows.iter()
+                    .map(|row| dao_status_label(row.status))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )],
+        });
+    }
+
+    (findings, absorbed)
+}
+
+impl Check for DaoStatusIndexMatchesDeposits {
+    fn name(&self) -> &'static str {
+        "dao_status_index_matches_deposits"
+    }
+
+    fn description(&self) -> &'static str {
+        "Every DAO deposit is listed under its own status and no status listing is stale"
+    }
+
+    fn tier(&self) -> CheckTier {
+        CheckTier::Sampling
+    }
+
+    fn run(&self, ctx: &CheckContext, progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
+        let tip_height = fetch_network_stats(ctx)?.latest_block;
+        let tip_before: BlockResponse = api_get(ctx, &format!("blocks/{tip_height}"))?;
+
+        progress.set_message("dao/deposits (all)");
+        let deposits = walk_dao_deposits(ctx, progress, None)?;
+
+        // The unfiltered listing is ordered by deposit block DESC.
+        let newest_deposit_block = deposits
+            .first()
+            .map(|record| record.deposit_block_number)
+            .unwrap_or(i64::MIN);
+
+        let mut recorded: HashMap<String, (i16, i64)> = HashMap::with_capacity(deposits.len());
+        let mut findings: Vec<Finding> = Vec::new();
+        for record in &deposits {
+            let outpoint = dao_outpoint_key(&record.tx_hash, record.output_index);
+            let Some(rank) = dao_status_rank(&record.status) else {
+                findings.push(Finding {
+                    entity: outpoint,
+                    details: vec![format!("unknown deposit status '{}'", record.status)],
+                });
+                continue;
+            };
+            if recorded
+                .insert(outpoint.clone(), (rank, record.deposit_block_number))
+                .is_some()
+            {
+                findings.push(Finding {
+                    entity: outpoint,
+                    details: vec!["deposit listed twice by the unfiltered listing".to_string()],
+                });
+            }
+        }
+
+        let mut indexed: HashMap<String, Vec<DaoIndexRow>> = HashMap::with_capacity(recorded.len());
+        let mut index_rows = 0u64;
+        for status in [0i16, 1, 2] {
+            progress.set_message(&format!("dao/deposits?status={status}"));
+            for record in walk_dao_deposits(ctx, progress, Some(status))? {
+                index_rows += 1;
+                let outpoint = dao_outpoint_key(&record.tx_hash, record.output_index);
+                let expected = dao_status_label(status);
+                if record.status != expected {
+                    findings.push(Finding {
+                        entity: outpoint.clone(),
+                        details: vec![format!(
+                            "status listing {status} returned a deposit reporting '{}' (expected '{expected}')",
+                            record.status
+                        )],
+                    });
+                }
+                indexed.entry(outpoint).or_default().push(DaoIndexRow {
+                    status,
+                    deposit_block: record.deposit_block_number,
+                });
+            }
+        }
+
+        let observed = DaoStatusIndexObservation {
+            recorded,
+            indexed,
+            newest_deposit_block,
+        };
+        let (cross_findings, absorbed) = evaluate_dao_status_index(&observed);
+        findings.extend(cross_findings);
+
+        // A reorg can move a deposit's status backwards, which is the one thing
+        // that looks like the defect this check hunts. Detect it and say so
+        // rather than reporting findings the chain, not the index, produced.
+        let tip_after: BlockResponse = api_get(ctx, &format!("blocks/{tip_height}"))?;
+        let reorged = tip_after.hash != tip_before.hash;
+
+        let deposits_checked = observed.recorded.len() as u64;
+        if reorged && !findings.is_empty() {
+            return Ok(CheckResult::pass_with_detail(
+                deposits_checked,
+                format!(
+                    "INCONCLUSIVE: block {} changed hash during the walk (reorg); \
+                     {} finding(s) withheld because a reorg can move status backwards — rerun",
+                    tip_height,
+                    findings.len()
+                ),
+            ));
+        }
+
+        if findings.is_empty() {
+            Ok(CheckResult::pass_with_detail(
+                deposits_checked,
+                format!(
+                    "{} deposits, {} status index rows, {} concurrent transition(s) and {} new deposit(s) absorbed",
+                    format_number(deposits_checked),
+                    format_number(index_rows),
+                    absorbed.transitions,
+                    absorbed.created_mid_check
+                ),
+            ))
+        } else {
+            Ok(CheckResult::fail(deposits_checked, findings))
+        }
+    }
+}
+
 pub fn api_checks() -> Vec<Box<dyn Check>> {
     vec![
         // Fast
@@ -4058,12 +4359,110 @@ pub fn api_checks() -> Vec<Box<dyn Check>> {
         Box::new(ObjectAssetCollectionConsistency),
         Box::new(AssetTopHoldersAddressConsistency),
         Box::new(IdentityCollectionHolderConsistency),
+        Box::new(DaoStatusIndexMatchesDeposits),
     ]
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn dao_observation(
+        recorded: &[(&str, i16, i64)],
+        indexed: &[(&str, i16, i64)],
+        newest_deposit_block: i64,
+    ) -> DaoStatusIndexObservation {
+        let mut recorded_map: HashMap<String, (i16, i64)> = HashMap::new();
+        for (outpoint, status, block) in recorded {
+            recorded_map.insert((*outpoint).to_string(), (*status, *block));
+        }
+        let mut indexed_map: HashMap<String, Vec<DaoIndexRow>> = HashMap::new();
+        for (outpoint, status, block) in indexed {
+            indexed_map
+                .entry((*outpoint).to_string())
+                .or_default()
+                .push(DaoIndexRow {
+                    status: *status,
+                    deposit_block: *block,
+                });
+        }
+        DaoStatusIndexObservation {
+            recorded: recorded_map,
+            indexed: indexed_map,
+            newest_deposit_block,
+        }
+    }
+
+    #[test]
+    fn dao_status_index_accepts_a_consistent_observation() {
+        let observed = dao_observation(
+            &[("0xaa:0", 0, 30), ("0xbb:0", 1, 20), ("0xcc:0", 2, 10)],
+            &[("0xaa:0", 0, 30), ("0xbb:0", 1, 20), ("0xcc:0", 2, 10)],
+            30,
+        );
+        let (findings, absorbed) = evaluate_dao_status_index(&observed);
+        assert!(findings.is_empty(), "unexpected findings: {findings:?}");
+        assert_eq!(absorbed, DaoStatusIndexAbsorbed::default());
+    }
+
+    #[test]
+    fn dao_status_index_flags_a_listing_behind_the_deposit() {
+        // The reported bug: the deposit moved to withdrawing, the status-0
+        // listing still carries it.
+        let observed = dao_observation(&[("0xaa:0", 1, 30)], &[("0xaa:0", 0, 30)], 30);
+        let (findings, absorbed) = evaluate_dao_status_index(&observed);
+        assert_eq!(findings.len(), 1);
+        assert!(
+            findings[0].details[0].contains("status listing is behind the deposit"),
+            "{:?}",
+            findings[0]
+        );
+        assert_eq!(absorbed, DaoStatusIndexAbsorbed::default());
+    }
+
+    #[test]
+    fn dao_status_index_absorbs_a_transition_that_lands_mid_walk() {
+        // Recorded as deposited, found in the withdrawing listing walked later:
+        // status only moves forward, so this is the chain, not the index.
+        let observed = dao_observation(&[("0xaa:0", 0, 30)], &[("0xaa:0", 1, 30)], 30);
+        let (findings, absorbed) = evaluate_dao_status_index(&observed);
+        assert!(findings.is_empty(), "unexpected findings: {findings:?}");
+        assert_eq!(absorbed.transitions, 1);
+    }
+
+    #[test]
+    fn dao_status_index_flags_a_deposit_missing_from_every_listing() {
+        let observed = dao_observation(&[("0xaa:0", 0, 30)], &[], 30);
+        let (findings, _) = evaluate_dao_status_index(&observed);
+        assert_eq!(findings.len(), 1);
+        assert!(
+            findings[0].details[0].contains("appears in no status listing"),
+            "{:?}",
+            findings[0]
+        );
+    }
+
+    #[test]
+    fn dao_status_index_flags_an_index_row_with_no_deposit() {
+        let observed = dao_observation(&[], &[("0xaa:0", 0, 25)], 30);
+        let (findings, absorbed) = evaluate_dao_status_index(&observed);
+        assert_eq!(findings.len(), 1);
+        assert!(
+            findings[0].details[0].contains("the deposit listing does not"),
+            "{:?}",
+            findings[0]
+        );
+        assert_eq!(absorbed.created_mid_check, 0);
+    }
+
+    #[test]
+    fn dao_status_index_absorbs_a_deposit_created_mid_check() {
+        // Newer than the newest deposit the unfiltered walk could have seen.
+        let observed = dao_observation(&[], &[("0xaa:0", 0, 31)], 30);
+        let (findings, absorbed) = evaluate_dao_status_index(&observed);
+        assert!(findings.is_empty(), "unexpected findings: {findings:?}");
+        assert_eq!(absorbed.created_mid_check, 1);
+    }
     use serde_json::json;
     use std::sync::{
         atomic::{AtomicUsize, Ordering},
@@ -4142,7 +4541,7 @@ mod tests {
     #[test]
     fn test_api_checks_registered() {
         let checks = api_checks();
-        assert_eq!(checks.len(), 30);
+        assert_eq!(checks.len(), 31);
         // Verify names are unique
         let names: Vec<&str> = checks.iter().map(|c| c.name()).collect();
         let unique: std::collections::HashSet<&str> = names.iter().copied().collect();
@@ -4164,6 +4563,7 @@ mod tests {
         assert!(names.contains(&"object_asset_collection_consistency"));
         assert!(names.contains(&"asset_top_holders_address_consistency"));
         assert!(names.contains(&"identity_collection_holder_consistency"));
+        assert!(names.contains(&"dao_status_index_matches_deposits"));
     }
 
     #[test]
@@ -4178,7 +4578,7 @@ mod tests {
             .filter(|c| c.tier() == CheckTier::Sampling)
             .count();
         assert_eq!(fast_count, 7);
-        assert_eq!(sampling_count, 23);
+        assert_eq!(sampling_count, 24);
     }
 
     #[test]

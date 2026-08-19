@@ -19,7 +19,7 @@ Data integrity verification. Calls the API and optionally the official CKB explo
 
 ```bash
 ckbadger verify --depth fast              # 7 checks, seconds
-ckbadger verify --depth sampling          # 56 checks, minutes
+ckbadger verify --depth sampling          # 57 checks, minutes
 ckbadger verify --list-checks             # List all checks
 ```
 
@@ -29,11 +29,11 @@ declaration order. Point `-C` at a network subdirectory (for example,
 
 ### Check Tiers
 
-| Tier                  | Checks | Runtime | What it validates                                                                                                                                                                                                                               |
-| --------------------- | ------ | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Fast** (F1-F7)      | 7      | seconds | API reachable, sync complete, genesis block, tip block, deep fork clear, DAO statistics sane, genesis-baseline burnt invariant                                                                                                                  |
-| **Sampling** (S1-S23) | 23     | minutes | Block hash roundtrip, parent chain, address balance, chart validations (tx count, cells, supply, block time, epoch, HODL wave, knowledge composition, APC, inflation), supply invariants, RPC compare, tokens, spores, NFTs, holder consistency |
-| **Explorer** (X1-X26) | 26     | minutes | Compare last 30 days against official CKB explorer API (tx count, DAO deposit, hash rate, difficulty, knowledge size, uncle rate, cell counts, supply, circulation, compensation, mining reward, normalized treasury)                           |
+| Tier                  | Checks | Runtime | What it validates                                                                                                                                                                                                                                                             |
+| --------------------- | ------ | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Fast** (F1-F7)      | 7      | seconds | API reachable, sync complete, genesis block, tip block, deep fork clear, DAO statistics sane, genesis-baseline burnt invariant                                                                                                                                                |
+| **Sampling** (S1-S24) | 24     | minutes | Block hash roundtrip, parent chain, address balance, chart validations (tx count, cells, supply, block time, epoch, HODL wave, knowledge composition, APC, inflation), supply invariants, RPC compare, tokens, spores, NFTs, holder consistency, DAO status index vs deposits |
+| **Explorer** (X1-X26) | 26     | minutes | Compare last 30 days against official CKB explorer API (tx count, DAO deposit, hash rate, difficulty, knowledge size, uncle rate, cell counts, supply, circulation, compensation, mining reward, normalized treasury)                                                         |
 
 Explorer `burnt` and `treasury_amount` are not compared raw: the official explorer leaves phase-1
 frozen DAO interest in treasury while also including it in deposit compensation. The verifier
@@ -67,7 +67,7 @@ unbounded scan.
 
 > **Scope:** `verify` covers only chain-derived data (the domain + append-only stores). The
 > **network store** (`net_nodes` / `net_stats`, written by the opt-in `ckbadger-crawler`) is
-> **outside** all 56 checks — it holds observational, non-chain p2p-crawler data that is
+> **outside** all 57 checks — it holds observational, non-chain p2p-crawler data that is
 > non-deterministic and not subject to chain-integrity invariants, so none of these checks apply
 > to it.
 
