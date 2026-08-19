@@ -225,6 +225,46 @@ struct VerifyArgs {
     /// List available checks and exit
     #[arg(long)]
     list_checks: bool,
+
+    /// Run only these checks (comma-separated names from --list-checks)
+    #[arg(long, value_delimiter = ',')]
+    checks: Option<Vec<String>>,
+
+    /// Skip official explorer comparison checks
+    #[arg(long)]
+    no_explorer: bool,
+
+    /// Output format: text or json
+    #[arg(long, default_value = "text")]
+    format: String,
+
+    /// Number of samples for the sampling tier
+    #[arg(long, default_value_t = 1000)]
+    sample_count: usize,
+
+    /// Deterministic sampling seed
+    #[arg(long, default_value_t = 42)]
+    seed: u64,
+
+    /// Max allowed deviation from explorer data (fraction, e.g. 0.001 = 0.1%)
+    #[arg(long, default_value_t = 0.001)]
+    tolerance: f64,
+
+    /// Override the ckbadger API base URL (single-network workdir only)
+    #[arg(long)]
+    api_url: Option<String>,
+
+    /// Override the CKB RPC URL (single-network workdir only)
+    #[arg(long)]
+    rpc_url: Option<String>,
+
+    /// Override the official explorer API URL (single-network workdir only)
+    #[arg(long)]
+    explorer_url: Option<String>,
+
+    /// Override the explorer response cache directory (single-network workdir only)
+    #[arg(long)]
+    cache_dir: Option<String>,
 }
 
 #[derive(clap::Args)]
@@ -1184,6 +1224,41 @@ fn build_verify_target(
     })
 }
 
+/// Flags that name one network's endpoints, and whether each was given.
+fn per_network_overrides(args: &VerifyArgs) -> Vec<&'static str> {
+    [
+        ("--api-url", args.api_url.is_some()),
+        ("--rpc-url", args.rpc_url.is_some()),
+        ("--explorer-url", args.explorer_url.is_some()),
+        ("--cache-dir", args.cache_dir.is_some()),
+    ]
+    .into_iter()
+    .filter(|(_, given)| *given)
+    .map(|(flag, _)| flag)
+    .collect()
+}
+
+/// An endpoint override describes one network. Applying it to an orchestrator
+/// root would silently point every network at the same API or share one explorer
+/// cache, so it is rejected instead.
+fn reject_multi_network_overrides(
+    overrides: &[&str],
+    target_count: usize,
+    workdir: &Path,
+) -> Result<()> {
+    if target_count <= 1 || overrides.is_empty() {
+        return Ok(());
+    }
+    bail!(
+        "endpoint overrides describe a single network, but {} resolves {} networks; \
+         run with -C {}/<network> (given: {})",
+        workdir.display(),
+        target_count,
+        workdir.display(),
+        overrides.join(", ")
+    )
+}
+
 /// Resolve and validate every network before starting any potentially long-running
 /// verification. A plain workdir produces one target; an orchestrator root produces
 /// one target per `[[network]]`, in declaration order.
@@ -1218,6 +1293,64 @@ fn resolve_verify_targets(workdir: &Path) -> Result<Vec<VerifyTarget>> {
 mod verify_url_tests {
     use super::*;
     use tempfile::TempDir;
+
+    #[test]
+    fn verify_flags_reach_the_runner_and_split_by_scope() {
+        use clap::Parser;
+
+        let cli = Cli::try_parse_from([
+            "ckbadger",
+            "verify",
+            "--depth",
+            "sampling",
+            "--checks",
+            "dao_status_index_matches_deposits,api_reachable",
+            "--no-explorer",
+            "--format",
+            "json",
+            "--api-url",
+            "http://127.0.0.1:8101/api/v1",
+        ])
+        .expect("verify flags should parse");
+        let Command::Verify(args) = cli.command else {
+            panic!("expected the verify subcommand");
+        };
+
+        assert_eq!(
+            args.checks.as_deref(),
+            Some(
+                [
+                    "dao_status_index_matches_deposits".to_string(),
+                    "api_reachable".to_string()
+                ]
+                .as_slice()
+            ),
+            "--checks must split on commas"
+        );
+        assert!(args.no_explorer);
+        assert_eq!(args.format, "json");
+        assert_eq!(
+            per_network_overrides(&args),
+            vec!["--api-url"],
+            "only endpoint overrides are network-scoped"
+        );
+    }
+
+    #[test]
+    fn endpoint_overrides_are_rejected_on_a_multi_network_workdir() {
+        let workdir = Path::new("/tmp/work");
+
+        reject_multi_network_overrides(&["--api-url"], 1, workdir)
+            .expect("a single network accepts an endpoint override");
+        reject_multi_network_overrides(&[], 2, workdir).expect("no override, no restriction");
+
+        let error = reject_multi_network_overrides(&["--api-url", "--cache-dir"], 2, workdir)
+            .expect_err("pointing two networks at one endpoint must fail");
+        let message = error.to_string();
+        assert!(message.contains("--api-url"), "{message}");
+        assert!(message.contains("--cache-dir"), "{message}");
+        assert!(message.contains("2 networks"), "{message}");
+    }
 
     #[test]
     fn explorer_url_is_network_aware() {
@@ -1441,8 +1574,14 @@ async fn cmd_verify(workdir: &Path, args: &VerifyArgs) -> Result<()> {
         "sampling" => indexer_verify::checks::CheckTier::Sampling,
         _ => bail!("Invalid depth: {}. Use fast or sampling", args.depth),
     };
+    let format = match args.format.to_lowercase().as_str() {
+        "text" => indexer_verify::OutputFormat::Text,
+        "json" => indexer_verify::OutputFormat::Json,
+        _ => bail!("Invalid format: {}. Use text or json", args.format),
+    };
 
     let targets = resolve_verify_targets(workdir)?;
+    reject_multi_network_overrides(&per_network_overrides(args), targets.len(), workdir)?;
     let show_network = targets.len() > 1;
 
     for (index, target) in targets.into_iter().enumerate() {
@@ -1458,18 +1597,22 @@ async fn cmd_verify(workdir: &Path, args: &VerifyArgs) -> Result<()> {
         let network = target.network.clone();
         let verify_args = indexer_verify::VerifyArgs {
             network: network.clone(),
-            api_url: target.api_url,
-            rpc_url: Some(target.rpc_url),
-            explorer_url: target.explorer_url,
-            no_explorer: false,
+            api_url: args.api_url.clone().unwrap_or(target.api_url),
+            rpc_url: Some(args.rpc_url.clone().unwrap_or(target.rpc_url)),
+            explorer_url: args.explorer_url.clone().unwrap_or(target.explorer_url),
+            no_explorer: args.no_explorer,
             depth,
-            sample_count: 1000,
-            seed: 42,
-            tolerance: 0.001,
-            format: indexer_verify::OutputFormat::Text,
-            checks: None,
+            sample_count: args.sample_count,
+            seed: args.seed,
+            tolerance: args.tolerance,
+            format,
+            checks: args.checks.clone(),
             list_checks: args.list_checks,
-            cache_dir: Some(target.cache_dir.to_string_lossy().into_owned()),
+            cache_dir: Some(
+                args.cache_dir
+                    .clone()
+                    .unwrap_or_else(|| target.cache_dir.to_string_lossy().into_owned()),
+            ),
         };
 
         tokio::task::spawn_blocking(move || indexer_verify::run(verify_args))
@@ -2266,6 +2409,20 @@ mod tests {
 
     // -- verify command --
 
+    /// Parse verify flags the way the CLI does, so tests inherit the real
+    /// clap defaults instead of a second copy of them.
+    fn parse_verify_args(flags: &[&str]) -> VerifyArgs {
+        use clap::Parser;
+
+        let mut argv = vec!["ckbadger", "verify"];
+        argv.extend_from_slice(flags);
+        let cli = Cli::try_parse_from(argv).expect("verify flags should parse");
+        match cli.command {
+            Command::Verify(args) => args,
+            _ => panic!("expected the verify subcommand"),
+        }
+    }
+
     #[tokio::test]
     async fn test_verify_accepts_orchestrator_root() {
         let dir = TempDir::new().unwrap();
@@ -2274,13 +2431,27 @@ mod tests {
 
         cmd_verify(
             &root,
-            &VerifyArgs {
-                depth: "sampling".to_string(),
-                list_checks: true,
-            },
+            &parse_verify_args(&["--depth", "sampling", "--list-checks"]),
         )
         .await
         .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_verify_rejects_endpoint_override_on_orchestrator_root() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().to_path_buf();
+        cmd_init(&root, &InitArgs { with_testnet: true }).unwrap();
+
+        let error = cmd_verify(
+            &root,
+            &parse_verify_args(&["--api-url", "http://127.0.0.1:8101/api/v1"]),
+        )
+        .await
+        .expect_err("one API URL cannot describe two networks");
+        let message = error.to_string();
+        assert!(message.contains("--api-url"), "got: {message}");
+        assert!(message.contains("2 networks"), "got: {message}");
     }
 
     // -- orchestrator binding fail-fast --

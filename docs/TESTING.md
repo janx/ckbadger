@@ -79,6 +79,25 @@ ckbadger verify [OPTIONS]
 OPTIONS:
   --depth <DEPTH>          fast or sampling [default: fast]
   --list-checks            List all checks and exit
+  --checks <NAMES>         Run only these checks (comma-separated)
+  --no-explorer            Skip official explorer comparison checks
+  --format <FORMAT>        text or json [default: text]
+  --sample-count <N>       Samples for the sampling tier [default: 1000]
+  --seed <N>               Deterministic sampling seed [default: 42]
+  --tolerance <F>          Max explorer deviation, fraction [default: 0.001]
+  --api-url <URL>          Override the ckbadger API base URL
+  --rpc-url <URL>          Override the CKB RPC URL
+  --explorer-url <URL>     Override the explorer API URL
+  --cache-dir <DIR>        Override the explorer response cache directory
+```
+
+`--checks` fails on an unknown name, and on a name whose tier is above `--depth`,
+rather than reporting an all-green run over zero checks. The four endpoint
+overrides describe one network, so they are rejected on an orchestrator root —
+run them against `-C <workdir>/<network>`.
+
+```bash
+ckbadger verify -C work/mainnet --depth sampling --checks dao_status_index_matches_deposits
 ```
 
 ### Explorer Response Cache
