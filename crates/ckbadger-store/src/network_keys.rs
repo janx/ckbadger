@@ -4,6 +4,18 @@
 /// 0x00 can never collide with a history key because metric ids start at 1.
 pub const STATS_STATUS_KEY: [u8; 1] = [0x00];
 
+/// Reserved singleton key for [`crate::ActiveCrawl`] in `CF_NET_CRAWL`.
+pub const CRAWL_ACTIVE_KEY: [u8; 1] = [0x00];
+/// Prefix for peer-keyed [`crate::CrawlCandidate`] values in `CF_NET_CRAWL`.
+pub const CRAWL_CANDIDATE_PREFIX: u8 = 0x01;
+
+pub fn crawl_candidate_key(peer_id: &[u8]) -> Vec<u8> {
+    let mut key = Vec::with_capacity(1 + peer_id.len());
+    key.push(CRAWL_CANDIDATE_PREFIX);
+    key.extend_from_slice(peer_id);
+    key
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Metric {

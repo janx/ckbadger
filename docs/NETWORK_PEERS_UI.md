@@ -11,7 +11,8 @@ trends, and a filterable node table.
 
 ## Goal
 
-- Turn the observations the crawler already writes to `CF_NET_NODES` / `CF_NET_STATS` into a usable,
+- Turn the observations the crawler writes to `CF_NET_NODES` / `CF_NET_STATS` and the exact active
+  progress in `CF_NET_CRAWL` into a usable,
   honest dashboard, without changing the crawler or the chain indexer/API.
 - Deliverables: **summary cards, distributions, trend charts, node table** — plus the `/network/*`
   read API that backs them.
@@ -43,26 +44,24 @@ trends, and a filterable node table.
 
 ## Background
 
-Plan 1 (merged, branch history in `feature/network-peer-crawler`) shipped: the `network` store class
-(`open_network` / `open_network_secondary`, CFs `CF_NET_NODES` → `NodeRecord`, `CF_NET_STATS` →
-`0x00` `LatestStatus` singleton + `[metric][gran][BE bucket]` → `HistoryPoint`); store read ops
-`get_node` / `scan_nodes` / `get_network_status` / `scan_history`; the `ckbadger-crawler` service;
-`[crawler]` config (`enabled=false` default). This plan only READS that store.
+The `network` store class exposes `CF_NET_NODES` → published `NodeRecord`, `CF_NET_STATS` → the
+completed `LatestStatus` singleton and history, and `CF_NET_CRAWL` → durable active-round state.
+The API reads all three through a secondary; it never writes the store.
 
 ---
 
 ## Architecture
 
 - **API** (`crates/api`):
-  - `AppState` (`crates/api/src/lib.rs`) gains `network_store: Option<Arc<CkbadgerStore>>` and
-    `crawler_enabled: bool` (from `[crawler].enabled`). The Option is `Some` only when the network
-    store primary (`data/network`, i.e. `CURRENT` exists) is present — the crawler is opt-in, so on
-    most deployments it is `None`.
-  - `entry.rs` opens the network secondary via `CkbadgerStore::open_network_secondary(primary,
-secondary)` guarded by a path-exists check; failure to open (absent/locked) ⇒ `None` + a
-    `tracing::warn`, never an API startup failure.
-  - Add `network.refresh()` (guarded by the Option) to the existing secondary-refresh loop
-    (`crates/api/src/lib.rs:~342`) so `/network` reflects new crawl rounds automatically.
+  - `AppState` (`crates/api/src/lib.rs`) holds a hot-swappable read-only network-store secondary
+    plus `crawler_enabled: bool` (from `[crawler].enabled`). The slot is empty until the opt-in
+    crawler creates `data/network`.
+  - `entry.rs` attempts the secondary open before router construction and retries in the
+    background when the primary is absent or still being upgraded. Once available, it installs
+    the secondary atomically; API restart is not required. Repeated identical open failures are
+    logged once rather than once per retry.
+  - The existing secondary-refresh loop loads the current slot and calls `network.refresh()` when
+    attached, so `/network` reflects new crawl rounds automatically.
   - New `crates/api/src/routes/network.rs` with `routes()` merged into `api_routes()`
     (`routes/mod.rs`). Handlers follow the existing pattern:
     `async fn h(State(state): State<Arc<AppState>>, ...) -> ApiResult<Json<T>>`.
@@ -85,7 +84,7 @@ only; no backend rename.
 
 ## API Endpoints (`/network/*`, read-only, `camelCase` via serde)
 
-All read from `state.network_store`. When it is `None` (crawler never ran): `/summary` returns
+All read from `state.network_store`. When its slot is empty (crawler never ran): `/summary` returns
 `hasData:false`; the others return empty results (`[]` / empty page / empty series) — **not** errors.
 
 ### `GET /network/summary`
@@ -94,19 +93,26 @@ Drives the onboarding-vs-dashboard switch.
 
 ```jsonc
 NetworkSummary {
-  enabled: bool,                 // [crawler].enabled
-  hasData: bool,                 // network_store is Some AND get_network_status() is Some
-  lastRound: LatestStatus | null // the CF_NET_STATS 0x00 singleton, camelCase
+  enabled: bool,
+  hasData: bool,                      // a completed status exists
+  lastRound: LatestStatus | null,     // CF_NET_STATS 0x00, completed only
+  activeRound: ActiveCrawl | null     // exact CF_NET_CRAWL progress, separate from lastRound
 }
 LatestStatus {
-  roundId, started, finished, dialed, reachable, unreachable,
-  foreignDropped, newNodes, totalKnown, frontierDrained
+  roundId, startedAt, finishedAt,
+  candidatePeers, attemptedPeers, reachablePeers, unreachablePeers,
+  addressAttempts, failedAddressAttempts, foreignPeers, malformedAddresses,
+  newNodes, totalKnown
+}
+ActiveCrawl {
+  roundId, startedAt, lastCheckpointAt,
+  candidatePeers, completedPeers, addressAttempts, blockedReason
 }
 ```
 
-`lastRound.reachable` is the post-round reachable node count, but `lastRound.unreachable` is the
-number of address probes that returned no same-network Identify. For node-level reachability, use
-`/network/distributions`, whose `unreachable` is exactly `totalKnown - reachable`.
+Peer-level and address-attempt-level counters have different, explicit names. `activeRound` never
+overwrites the completed snapshot; consumers can show progress while continuing to render the
+last internally consistent `lastRound`.
 
 ### `GET /network/distributions`
 
@@ -171,12 +177,14 @@ agent-friendliness (llms.txt ethos); cut it if undesired.
   how to enable it: set `[crawler].enabled = true` in that network's `config.toml` (+ optional
   `geoip_city_path` / `geoip_asn_path` for geo/ASN), noting it does outbound whole-network
   crawling. When `enabled=true` but `hasData=false`, a "crawler enabled — waiting for the first
-  round" variant.
+  round" variant includes exact `activeRound.completedPeers / candidatePeers` progress when an
+  active checkpoint exists.
 - **`hasData=true` → Dashboard**:
-  1. **Summary cards** (from `lastRound`): discovered reachable / failed probe addresses / total
-     known / last-round age; a **"partial round"** badge when `!frontierDrained`. The current
-     failed-probe card is abbreviated as "Unreachable"; rename it to keep the unit distinct from
-     the node-level distribution. Honest labels use "discovered", never "total network nodes".
+  1. **Summary cards** (from completed `lastRound`): discovered reachable peers / failed peer
+     candidates / total known / last-round age. A separate active-round badge reports the current
+     round id and exact completed/candidate progress. The detail line keeps address attempts,
+     failed addresses, and foreign peers distinct. Honest labels use "discovered", never "total
+     network nodes".
   2. **Distributions** (from `/distributions`): version (bar/pie), country (bar/list — no map),
      ASN top-N (bar), protocol support, reachable-vs-unreachable. Reuse existing chart components
      (`frontend/components/ui/`).
@@ -196,7 +204,7 @@ agent-friendliness (llms.txt ethos); cut it if undesired.
 - Per-section loading skeletons (TanStack Query loading).
 - A store-read failure surfaces as a per-section error card, not a full-page crash.
 - "No data" is the onboarding state (driven by `summary.hasData`), NOT an error.
-- Background poll refresh; a subtle "updated Xm ago" from `lastRound.finished`.
+- Background poll refresh; a subtle "updated Xm ago" from `lastRound.finishedAt`.
 
 ---
 
@@ -207,12 +215,11 @@ agent-friendliness (llms.txt ethos); cut it if undesired.
   - The shared harness opens and seeds an isolated test network store with two `NodeRecord`s, a
     `LatestStatus`, and history buckets, then injects that handle into the read-only API state.
   - Endpoint tests cover seeded and empty states, aggregation, current-day exclusion, filters,
-    pagination, point lookup, malformed peer IDs, and not-found behavior.
-  - The production secondary-open/read-only boundary is enforced by the API entry path; a dedicated
-    integration test for that boundary remains useful follow-up coverage.
+    pagination, point lookup, malformed peer IDs, not-found behavior, hot attachment after router
+    construction, and secondary attachment when the crawler primary appears after API startup.
 - **Frontend** — `frontend/__tests__/`:
-  - Tests cover onboarding and per-network configuration guidance, first-round waiting, dashboard
-    summary/partial status, distributions, trend query boundaries, node rows and reachability
+  - Tests cover onboarding and per-network configuration guidance, active first-round progress,
+    completed/active separation, distributions, trend query boundaries, node rows and reachability
     filtering, shortcut/command discovery, and conditional MaxMind attribution.
   - MSW handlers for `/network/*` live in `frontend/__tests__/msw/handlers.ts`; API method coverage
     lives in `frontend/__tests__/lib/network-api.test.ts`.
@@ -224,7 +231,7 @@ agent-friendliness (llms.txt ethos); cut it if undesired.
 - **Behavior change** — new read-only `/network/*` API + a "Peers" frontend dashboard (summary,
   distributions, trends, node table) surfacing the crawler's `network` store. Opt-in-aware: shows
   onboarding until the crawler runs. No change to the crawler, chain indexer, or chain API.
-- **Re-sync required** — **No** (read-only surfacing of existing data).
+- **Re-sync required** — no chain re-sync. The crawler schema migration itself requires a one-time
+  clear/re-crawl of a pre-change development network store.
 - **What to do next** — a future topology (reachability/gossip) graph would require a new,
-  explicitly non-authoritative API/UX contract; it is not part of the current implementation. Add a
-  production-path integration test that proves the API opens the network store secondary/read-only.
+  explicitly non-authoritative API/UX contract; it is not part of the current implementation.

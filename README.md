@@ -161,7 +161,7 @@ ckbadger run (orchestrator supervisor)
 | **Visualization** | react-force-graph-2d, D3.js                                         | Cell relationship graphs         |
 | **API**           | Rust (Axum)                                                         | High-performance REST/WebSocket  |
 | **Indexer**       | Rust (3-stage pipeline)                                             | Block parsing, cell tracking     |
-| **Storage**       | RocksDB (59 domain + 1 append-only + 2 network CFs, ckbadger-store) | Embedded three-store data engine |
+| **Storage**       | RocksDB (59 domain + 1 append-only + 3 network CFs, ckbadger-store) | Embedded three-store data engine |
 | **Cache**         | In-memory LRU                                                       | API response cache               |
 | **IPC**           | Unix domain sockets                                                 | Inter-process communication      |
 

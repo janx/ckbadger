@@ -9,37 +9,69 @@ use std::sync::Arc;
 use crate::response::{ok, ApiError, ApiResult};
 use crate::AppState;
 use ckbadger_store::network_keys::{bucket_of, Granularity, Metric};
-use ckbadger_store::{LatestStatus, NodeRecord};
+use ckbadger_store::{CrawlProgress, LatestStatus, NodeRecord};
 
 /// Latest crawl-round status, camelCase-serialized for the API.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LatestStatusResponse {
     pub round_id: u64,
-    pub started: u64,
-    pub finished: u64,
-    pub dialed: u64,
-    pub reachable: u64,
-    pub unreachable: u64,
-    pub foreign_dropped: u64,
+    pub started_at: u64,
+    pub finished_at: u64,
+    pub candidate_peers: u64,
+    pub attempted_peers: u64,
+    pub reachable_peers: u64,
+    pub unreachable_peers: u64,
+    pub address_attempts: u64,
+    pub failed_address_attempts: u64,
+    pub foreign_peers: u64,
+    pub malformed_addresses: u64,
     pub new_nodes: u64,
     pub total_known: u64,
-    pub frontier_drained: bool,
 }
 
 impl From<LatestStatus> for LatestStatusResponse {
     fn from(s: LatestStatus) -> Self {
         Self {
             round_id: s.round_id,
-            started: s.started,
-            finished: s.finished,
-            dialed: s.dialed,
-            reachable: s.reachable,
-            unreachable: s.unreachable,
-            foreign_dropped: s.foreign_dropped,
+            started_at: s.started,
+            finished_at: s.finished,
+            candidate_peers: s.candidate_peers,
+            attempted_peers: s.attempted_peers,
+            reachable_peers: s.reachable_peers,
+            unreachable_peers: s.unreachable_peers,
+            address_attempts: s.address_attempts,
+            failed_address_attempts: s.failed_address_attempts,
+            foreign_peers: s.foreign_peers,
+            malformed_addresses: s.malformed_addresses,
             new_nodes: s.new_nodes,
             total_known: s.total_known,
-            frontier_drained: s.frontier_drained,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActiveCrawlResponse {
+    pub round_id: u64,
+    pub started_at: u64,
+    pub last_checkpoint_at: u64,
+    pub candidate_peers: u64,
+    pub completed_peers: u64,
+    pub address_attempts: u64,
+    pub blocked_reason: Option<String>,
+}
+
+impl From<CrawlProgress> for ActiveCrawlResponse {
+    fn from(progress: CrawlProgress) -> Self {
+        Self {
+            round_id: progress.round_id,
+            started_at: progress.started_at,
+            last_checkpoint_at: progress.last_checkpoint_at,
+            candidate_peers: progress.candidate_peers,
+            completed_peers: progress.completed_peers,
+            address_attempts: progress.address_attempts,
+            blocked_reason: progress.blocked_reason,
         }
     }
 }
@@ -52,6 +84,7 @@ pub struct NetworkSummary {
     pub enabled: bool,
     pub has_data: bool,
     pub last_round: Option<LatestStatusResponse>,
+    pub active_round: Option<ActiveCrawlResponse>,
 }
 
 pub fn routes() -> Router<Arc<AppState>> {
@@ -64,17 +97,25 @@ pub fn routes() -> Router<Arc<AppState>> {
 }
 
 async fn summary(State(state): State<Arc<AppState>>) -> ApiResult<NetworkSummary> {
-    let last_round = match &state.network_store {
-        Some(s) => s
-            .get_network_status()
-            .map_err(|e| ApiError::internal(e.to_string()))?
-            .map(Into::into),
-        None => None,
+    let network_store = state.network_store.load_full();
+    let (last_round, active_round) = match network_store {
+        Some(store) => (
+            store
+                .get_network_status()
+                .map_err(|e| ApiError::internal(e.to_string()))?
+                .map(Into::into),
+            store
+                .get_crawl_progress()
+                .map_err(|e| ApiError::internal(e.to_string()))?
+                .map(Into::into),
+        ),
+        None => (None, None),
     };
     ok(NetworkSummary {
         enabled: state.crawler_enabled,
         has_data: last_round.is_some(),
         last_round,
+        active_round,
     })
 }
 
@@ -136,7 +177,8 @@ fn asn_label(rec: &NodeRecord) -> String {
 }
 
 async fn distributions(State(state): State<Arc<AppState>>) -> ApiResult<NetworkDistributions> {
-    let nodes = match &state.network_store {
+    let network_store = state.network_store.load_full();
+    let nodes = match network_store {
         Some(s) => s
             .scan_nodes()
             .map_err(|e| ApiError::internal(e.to_string()))?,
@@ -223,7 +265,8 @@ async fn history(
         .ok_or_else(|| ApiError::bad_request(format!("unknown metric '{}'", q.metric)))?;
     let gran = parse_gran(&q.granularity)
         .ok_or_else(|| ApiError::bad_request(format!("unknown granularity '{}'", q.granularity)))?;
-    let points = match &state.network_store {
+    let network_store = state.network_store.load_full();
+    let points = match network_store {
         None => Vec::new(),
         Some(s) => {
             let from_b = q.from.map(|t| bucket_of(t, gran)).unwrap_or(0);
@@ -323,7 +366,8 @@ async fn nodes(
     Query(q): Query<NodesQuery>,
 ) -> ApiResult<NetworkNodesPage> {
     let limit = q.limit.unwrap_or(50).clamp(1, 500);
-    let mut rows = match &state.network_store {
+    let network_store = state.network_store.load_full();
+    let mut rows = match network_store {
         Some(s) => s
             .scan_nodes()
             .map_err(|e| ApiError::internal(e.to_string()))?,
@@ -398,7 +442,8 @@ async fn node_by_id(
     AxumPath(peer_hex): AxumPath<String>,
 ) -> ApiResult<NodeDetailResponse> {
     let peer = hex::decode(&peer_hex).map_err(|_| ApiError::bad_request("peerId must be hex"))?;
-    let rec = match &state.network_store {
+    let network_store = state.network_store.load_full();
+    let rec = match network_store {
         Some(s) => s
             .get_node(&peer)
             .map_err(|e| ApiError::internal(e.to_string()))?,

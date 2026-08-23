@@ -62,11 +62,11 @@ For any non-trivial task, use this structure in the final summary or PR descript
 - **Append-only store responsibility**: append-only store (`[store].append_only_data_path`, 1 CF: `CF_CELLS`) holds only immutable cell payloads, content-addressed by outpoint. Write-once, never updated or deleted.
 - **Append-only correction policy**: if cell payload data in the append-only store is wrong, fix indexer logic and rebuild from genesis; do not patch cell data with in-place update/delete.
 - **Cross-store cell reads**: live/consumed markers live in domain store; cell payloads live in append-only store. Reading a full cell requires both the domain and append-only stores.
-- **Network store responsibility** (third store class): the network store (`[store].network_data_path`, default `data/network`, 2 CFs: `CF_NET_NODES`, `CF_NET_STATS`) holds whole-network p2p-crawler observations — non-chain, non-deterministic, TTL-retained network-topology data. Written exclusively by the opt-in `ckbadger-crawler` service (never the indexer); the API opens it secondary (read-only). It is the ONLY store EXEMPT from the rebuild-from-genesis invariant, because its contents derive from live p2p observation rather than chain replay.
+- **Network store responsibility** (third store class): the network store (`[store].network_data_path`, default `data/network`, 3 CFs: `CF_NET_NODES`, `CF_NET_STATS`, `CF_NET_CRAWL`) holds whole-network p2p-crawler observations and durable in-progress crawl state — non-chain, non-deterministic, TTL-retained network-topology data. Written exclusively by the opt-in `ckbadger-crawler` service (never the indexer); the API opens it secondary (read-only). It is the ONLY store EXEMPT from the rebuild-from-genesis invariant, because its contents derive from live p2p observation rather than chain replay.
 
 ## Store Boundary Check Rules (MANDATORY)
 
-- `CF_CELLS` is the only append-only CF. The 59 domain CFs are the canonical mutable chain view; the 2 network CFs (`CF_NET_NODES`, `CF_NET_STATS`) belong to the separate network store (mutable, TTL-retained, non-chain).
+- `CF_CELLS` is the only append-only CF. The 59 domain CFs are the canonical mutable chain view; the 3 network CFs (`CF_NET_NODES`, `CF_NET_STATS`, `CF_NET_CRAWL`) belong to the separate network store (mutable, TTL-retained, non-chain).
 - Every storage PR must explicitly state which logical store each new/changed write path targets (`domain`, `append-only`, or `network`).
 - Any write path to the append-only store (`CF_CELLS`) must be reviewed as append-only semantics: new-key append only, no update, no delete, no overwrite.
 - Do not add helper APIs that allow generic mutation on append-only store (for example update-by-key or delete-by-key operations).
@@ -152,7 +152,7 @@ crates/
   indexer/        # Blockchain sync daemon library (three-stage pipeline)
     src/sync/bulk_build/ # Bulk-build engine (in-memory reducers, FactsArena, LiveCellOwner)
     src/verify/   #   Data integrity verification suite (57 checks)
-  ckbadger-store/ # Embedded RocksDB storage engine (three store classes: 59 domain + 1 append-only + 2 network CFs)
+  ckbadger-store/ # Embedded RocksDB storage engine (three store classes: 59 domain + 1 append-only + 3 network CFs)
   dob-decoder/    # CKB-VM DOB decoder (DNA extraction from Spore NFTs)
   common/         # Shared types (block, cell, tx, script, error)
   ckb-store-reader/ # Read-only CKB RocksDB reader (optional direct read mode)
@@ -163,7 +163,7 @@ frontend/         # Vite + React SPA
 docs/ARCHITECTURE_MAP.md     # Module ownership and entry points
 docs/POSTMORTEM.md           # Historical bugs - READ BEFORE CKB/DAO WORK
 docs/INDEXER_PIPELINE.md     # Pipeline architecture and progress tracking
-docs/STORE_SCHEMA.md         # Column families reference (59 domain + 1 append-only + 2 network)
+docs/STORE_SCHEMA.md         # Column families reference (59 domain + 1 append-only + 3 network)
 docs/TESTING.md               # Data integrity verification details
 ```
 
@@ -191,7 +191,7 @@ Sync progress and memory stats are stored in RocksDB (`get_sync_tip()`/`get_sync
 
 ## ckbadger-store (Embedded Storage Engine)
 
-Three logical RocksDB store classes: domain (`[store].domain_data_path`, default `data/domain`, 59 CFs), append-only (`[store].append_only_data_path`, default `data/append-only`, 1 CF: `CF_CELLS`), and network (`[store].network_data_path`, default `data/network`, 2 CFs: `CF_NET_NODES`, `CF_NET_STATS`). For the two chain stores the indexer opens read-write and the API opens secondary (read-only); the append-only store holds only immutable cell payloads keyed by outpoint, while all other chain state (activities, indexes, stats, etc.) lives in the domain store. A secondary has no snapshots and its view advances only on `try_catch_up_with_primary()`, so the API pins one read view per HTTP request (`crates/ckbadger-store/src/read_view.rs`) and catch-up is exclusive with pinned scopes — any read that resolves an index row and then loads the row it points at is coherent by default. Handlers that wait for the indexer to write new data (the cycles long-poll) must release the pin first; see `docs/STORE_SCHEMA.md` → Read Consistency. The network store is written solely by the opt-in `ckbadger-crawler` service (configured via the `[crawler]` section, default `enabled = false`; API opens it secondary) and holds non-chain p2p-crawler observations — it is the only store EXEMPT from rebuild-from-genesis. See `docs/STORE_SCHEMA.md` for full column family reference.
+Three logical RocksDB store classes: domain (`[store].domain_data_path`, default `data/domain`, 59 CFs), append-only (`[store].append_only_data_path`, default `data/append-only`, 1 CF: `CF_CELLS`), and network (`[store].network_data_path`, default `data/network`, 3 CFs: `CF_NET_NODES`, `CF_NET_STATS`, `CF_NET_CRAWL`). For the two chain stores the indexer opens read-write and the API opens secondary (read-only); the append-only store holds only immutable cell payloads keyed by outpoint, while all other chain state (activities, indexes, stats, etc.) lives in the domain store. A secondary has no snapshots and its view advances only on `try_catch_up_with_primary()`, so the API pins one read view per HTTP request (`crates/ckbadger-store/src/read_view.rs`) and catch-up is exclusive with pinned scopes — any read that resolves an index row and then loads the row it points at is coherent by default. Handlers that wait for the indexer to write new data (the cycles long-poll) must release the pin first; see `docs/STORE_SCHEMA.md` → Read Consistency. The network store is written solely by the opt-in `ckbadger-crawler` service (configured via the `[crawler]` section, default `enabled = false`; API opens it secondary) and holds non-chain p2p-crawler observations plus resumable crawl state — it is the only store EXEMPT from rebuild-from-genesis. See `docs/STORE_SCHEMA.md` for full column family reference.
 
 Memory is budgeted per network. `[store].memory_budget_gb` is an explicit per-network override;
 otherwise detected host RAM is divided by the number of co-resident orchestrator networks. The

@@ -437,6 +437,7 @@ pub const CF_LOCK_SCRIPTS: &str = "lock_scripts";
 // These live in the standalone "network" store class, not in domain or append-only.
 pub const CF_NET_NODES: &str = "net_nodes";
 pub const CF_NET_STATS: &str = "net_stats";
+pub const CF_NET_CRAWL: &str = "net_crawl";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CfWritePolicy {
@@ -519,6 +520,7 @@ const CF_WRITE_POLICY_FINAL_SNAPSHOT: &[&str] = &[
     // never append-only. They live in the separate network store.
     CF_NET_NODES,
     CF_NET_STATS,
+    CF_NET_CRAWL,
 ];
 
 pub fn cf_write_policy(cf_name: &str) -> CfWritePolicy {
@@ -690,7 +692,7 @@ pub const DOMAIN_CFS: &[&str] = &[
 pub const APPEND_CFS: &[&str] = &[CF_CELLS];
 
 /// Column families for the standalone network crawler store (mutable, domain-like).
-pub const NETWORK_CFS: &[&str] = &[CF_NET_NODES, CF_NET_STATS];
+pub const NETWORK_CFS: &[&str] = &[CF_NET_NODES, CF_NET_STATS, CF_NET_CRAWL];
 
 fn append_path_from_domain(domain_path: &Path) -> PathBuf {
     if domain_path.file_name().and_then(|name| name.to_str()) == Some("domain") {
@@ -3496,12 +3498,13 @@ mod tests {
     }
 
     #[test]
-    fn network_store_opens_with_two_cfs_rw() {
+    fn network_store_opens_with_three_cfs_rw() {
         let dir = tempfile::tempdir().unwrap();
         let store = CkbadgerStore::open_network(dir.path()).unwrap();
-        // Both CFs must be resolvable as live handles in the opened store.
+        // All network CFs must be resolvable as live handles in the opened store.
         assert!(store.cf_handle_exists(CF_NET_NODES));
         assert!(store.cf_handle_exists(CF_NET_STATS));
+        assert!(store.cf_handle_exists(CF_NET_CRAWL));
         assert!(!store.is_secondary());
     }
 
@@ -3562,6 +3565,7 @@ mod tests {
         // Network store is mutable/domain-like; it must NOT be classified append-only.
         assert!(!is_append_only_cf_name(CF_NET_NODES));
         assert!(!is_append_only_cf_name(CF_NET_STATS));
+        assert!(!is_append_only_cf_name(CF_NET_CRAWL));
     }
 
     #[test]

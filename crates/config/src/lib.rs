@@ -121,15 +121,12 @@ pub struct CrawlerConfig {
     /// Delay between the end of one crawl round and the start of the next.
     pub round_interval_secs: u64,
     /// Maximum number of concurrent outbound dials within a round.
-    ///
-    /// NOTE: not yet applied — the crawler currently dials sequentially; bounded
-    /// concurrency is a planned pre-enable follow-up (rounds are already
-    /// time-bounded by `round_budget_secs`).
     pub max_dial_concurrency: usize,
     /// Per-dial connect/handshake timeout.
     pub dial_timeout_secs: u64,
-    /// Wall-clock budget for a single crawl round before it is cut short.
-    pub round_budget_secs: u64,
+    /// Admission/checkpoint budget for one execution slice. A logical crawl
+    /// round resumes across slices until its durable frontier drains.
+    pub slice_budget_secs: u64,
     /// Retention window (days) for hourly history rollups.
     pub history_hourly_retention_days: u64,
     /// Upper bound on the crawl frontier size, guarding against a peer that
@@ -216,13 +213,32 @@ impl Default for CrawlerConfig {
             round_interval_secs: 900,
             max_dial_concurrency: 128,
             dial_timeout_secs: 15,
-            round_budget_secs: 600,
+            slice_budget_secs: 600,
             history_hourly_retention_days: 30,
             max_frontier: 100_000,
             geoip_city_path: None,
             geoip_asn_path: None,
             bootnodes: Vec::new(),
         }
+    }
+}
+
+impl CrawlerConfig {
+    /// Validate crawler resource bounds before any store or network mutation.
+    pub fn validate(&self) -> Result<()> {
+        if self.max_dial_concurrency == 0 {
+            bail!("crawler.max_dial_concurrency must be greater than zero");
+        }
+        if self.dial_timeout_secs == 0 {
+            bail!("crawler.dial_timeout_secs must be greater than zero");
+        }
+        if self.slice_budget_secs == 0 {
+            bail!("crawler.slice_budget_secs must be greater than zero");
+        }
+        if self.max_frontier == 0 {
+            bail!("crawler.max_frontier must be greater than zero");
+        }
+        Ok(())
     }
 }
 
@@ -349,6 +365,14 @@ pub fn parse_config(toml_str: &str) -> Result<CkbadgerConfig> {
     {
         bail!("[ckb].data_path has been removed; use [ckb].workdir");
     }
+    if value
+        .get("crawler")
+        .and_then(toml::Value::as_table)
+        .and_then(|crawler| crawler.get("round_budget_secs"))
+        .is_some()
+    {
+        bail!("[crawler].round_budget_secs has been renamed; use [crawler].slice_budget_secs");
+    }
 
     let mut config: CkbadgerConfig =
         toml::from_str(toml_str).context("failed to parse config.toml")?;
@@ -390,8 +414,21 @@ poll_interval_ms = 1000
 [store]
 domain_data_path = "data/domain"
 append_only_data_path = "data/append-only"
+network_data_path = "data/network"
 # memory_budget_gb = 32           # Optional RocksDB RAM budget override
 direct_io_reads = true
+
+[crawler]
+enabled = false
+round_interval_secs = 900
+max_dial_concurrency = 128
+dial_timeout_secs = 15
+slice_budget_secs = 600
+history_hourly_retention_days = 30
+max_frontier = 100000
+# geoip_city_path = "/path/to/GeoLite2-City.mmdb"
+# geoip_asn_path = "/path/to/GeoLite2-ASN.mmdb"
+# bootnodes = ["/ip4/127.0.0.1/tcp/8114/p2p/..."]
 
 [log]
 level = "info"
@@ -614,6 +651,7 @@ mod tests {
         assert!(!c.crawler.enabled);
         assert_eq!(c.crawler.round_interval_secs, 900);
         assert_eq!(c.crawler.max_dial_concurrency, 128);
+        assert_eq!(c.crawler.slice_budget_secs, 600);
         assert_eq!(c.crawler.max_frontier, 100_000);
         assert_eq!(c.store.network_data_path, "data/network");
         // Explicit [crawler] section overrides.
@@ -623,6 +661,31 @@ mod tests {
         .unwrap();
         assert!(c2.crawler.enabled);
         assert_eq!(c2.crawler.round_interval_secs, 60);
+    }
+
+    #[test]
+    fn crawler_config_rejects_zero_resource_bounds() {
+        for invalid in [
+            CrawlerConfig {
+                max_dial_concurrency: 0,
+                ..CrawlerConfig::default()
+            },
+            CrawlerConfig {
+                dial_timeout_secs: 0,
+                ..CrawlerConfig::default()
+            },
+            CrawlerConfig {
+                slice_budget_secs: 0,
+                ..CrawlerConfig::default()
+            },
+            CrawlerConfig {
+                max_frontier: 0,
+                ..CrawlerConfig::default()
+            },
+        ] {
+            assert!(invalid.validate().is_err());
+        }
+        assert!(CrawlerConfig::default().validate().is_ok());
     }
 
     // -- TOML parsing --
@@ -733,6 +796,18 @@ data_path = "/var/lib/ckb/data/db"
         assert!(err.to_string().contains("[ckb].data_path has been removed"));
     }
 
+    #[test]
+    fn test_parse_config_rejects_legacy_crawler_round_budget() {
+        let err = parse_config(
+            r#"
+[crawler]
+round_budget_secs = 30
+"#,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("slice_budget_secs"));
+    }
+
     // -- Default config TOML generation --
 
     #[test]
@@ -757,6 +832,7 @@ data_path = "/var/lib/ckb/data/db"
         assert!(toml_str.contains("[frontend]"));
         assert!(toml_str.contains("[indexer]"));
         assert!(toml_str.contains("[store]"));
+        assert!(toml_str.contains("[crawler]"));
         assert!(toml_str.contains("[log]"));
     }
 

@@ -781,11 +781,13 @@ export async function renderMarkdownPage(
             ['field', 'value'],
             [
               ['roundId', round.roundId],
-              ['discoveredReachable', round.reachable],
-              ['unreachable', round.unreachable],
+              ['candidatePeers', round.candidatePeers],
+              ['reachablePeers', round.reachablePeers],
+              ['unreachablePeers', round.unreachablePeers],
+              ['addressAttempts', round.addressAttempts],
+              ['failedAddressAttempts', round.failedAddressAttempts],
               ['totalKnown', round.totalKnown],
-              ['frontierDrained', round.frontierDrained],
-              ['finished', round.finished],
+              ['finishedAt', round.finishedAt],
             ]
           )
         );
@@ -795,6 +797,25 @@ export async function renderMarkdownPage(
           summary.enabled
             ? 'Crawler enabled — waiting for the first round to finish.'
             : 'Crawler disabled. Enable it in ckbadger.toml under `[crawler]` with `enabled = true`.'
+        );
+      }
+      if (summary.activeRound) {
+        const active = summary.activeRound;
+        sections.push(
+          '',
+          '## Active Round',
+          '',
+          markdownTable(
+            ['field', 'value'],
+            [
+              ['roundId', active.roundId],
+              ['candidatePeers', active.candidatePeers],
+              ['completedPeers', active.completedPeers],
+              ['addressAttempts', active.addressAttempts],
+              ['lastCheckpointAt', active.lastCheckpointAt],
+              ['blockedReason', active.blockedReason ?? ''],
+            ]
+          )
         );
       }
       sections.push(

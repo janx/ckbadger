@@ -13,6 +13,8 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 serde = { workspace = true }
 async-trait = { workspace = true }
+futures = { workspace = true }
+hex = { workspace = true }
 maxminddb = { workspace = true }
 ckb-network = { workspace = true }
 ckb-types = { workspace = true }

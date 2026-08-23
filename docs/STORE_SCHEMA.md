@@ -1,10 +1,10 @@
-# ckbadger-store Column Families (62 total: 59 domain + 1 append-only + 2 network)
+# ckbadger-store Column Families (63 total: 59 domain + 1 append-only + 3 network)
 
 ckbadger runs three logical RocksDB store classes (all backed by `ckbadger-store`):
 
 - **Domain store** (`[store].domain_data_path`, 59 CFs) — canonical chain view, all mutable state including activities, addr_txs, live/consumed cell markers, indexes, stats, and aggregates. May perform create/update/delete as required by chain progression and reorg handling.
 - **Append-only store** (`[store].append_only_data_path`, 1 CF: `cells`) — immutable cell payloads, content-addressed by outpoint. Write-once, never updated or deleted.
-- **Network store** (`[store].network_data_path`, 2 CFs: `net_nodes`, `net_stats`) — whole-network p2p-crawler observations: non-chain, non-deterministic, TTL-retained. Written solely by the opt-in `ckbadger-crawler` service; it is the **only store class EXEMPT from rebuild-from-genesis**. See the [Network Store](#network-store) section below.
+- **Network store** (`[store].network_data_path`, 3 CFs: `net_nodes`, `net_stats`, `net_crawl`) — whole-network p2p-crawler observations plus durable in-progress crawl state: non-chain, non-deterministic, TTL-retained. Written solely by the opt-in `ckbadger-crawler` service; it is the **only store class EXEMPT from rebuild-from-genesis**. See the [Network Store](#network-store) section below.
 
 The indexer opens the two chain stores (domain + append-only) read-write and the API opens them secondary (read-only). The network store follows the same sole-writer + secondary-reader model: the crawler opens it read-write (sole writer), read consumers (API) open it secondary (read-only). Cell reads are cross-store: live/consumed markers in domain, cell payloads in append-only.
 
@@ -74,6 +74,7 @@ The indexer opens the two chain stores (domain + append-only) read-write and the
 | `lock_scripts`                   | lock_hash (32B)                                                   | LockScriptEntry                                                      | Lock script components by hash (survives cell consumption for address resolution)                                                                                                      |
 | `net_nodes` **(network store)**  | peer_id (raw bytes)                                               | NodeRecord                                                           | Per-peer crawler observation (own_addrs, client_version, flags, protocols, first/last_seen, last_reachable_at, reachable, geo, asn, last_rtt_ms, sampled known_peers)                  |
 | `net_stats` **(network store)**  | `0x00` singleton, or metric(1B)+gran(1B)+bucket(8B BE)            | LatestStatus / HistoryPoint                                          | Latest-round status singleton (key `0x00`) + time-bucketed history points keyed per metric × granularity                                                                               |
+| `net_crawl` **(network store)**  | `0x00` singleton, or `0x01` + peer_id                             | ActiveCrawl / CrawlCandidate                                         | Durable logical-round scheduler state: exact progress, peer-keyed address frontier, per-round result, and staged successful observations                                               |
 
 ### Cell-by-Code Index Note
 
@@ -169,7 +170,7 @@ Cell distribution and address cohort snapshots are materialized by the indexer d
 
 ## Network Store
 
-The **network store** (`[store].network_data_path`, default `data/network`, CFs `net_nodes` + `net_stats`) is a distinct third RocksDB store class holding whole-network CKB L1 p2p-crawler observations. Unlike the two chain stores it is:
+The **network store** (`[store].network_data_path`, default `data/network`, CFs `net_nodes` + `net_stats` + `net_crawl`) is a distinct third RocksDB store class holding whole-network CKB L1 p2p-crawler observations and resumable crawl state. Unlike the two chain stores it is:
 
 - **Non-chain / non-deterministic** — contents are derived from live peer-to-peer observation (reachability probes, discovery responses), not from deterministic block replay.
 - **TTL-retained** — node records and history rollups are pruned on a rolling retention window; it is not a permanent append log.
@@ -184,6 +185,19 @@ Key = raw `peer_id` bytes → `NodeRecord` (per-peer crawler view: `own_addrs`, 
 
 - `0x00` (single reserved byte) → `LatestStatus` singleton — summary of the latest completed crawl round.
 - `metric(1B) + granularity(1B) + ts_bucket(8B big-endian)` → `HistoryPoint` — time-bucketed rollups. Metrics: total nodes, reachable nodes, version share, country share. Granularity: hour, day. The big-endian bucket keeps each `(metric, granularity)` series in chronological key order, so range scans and prunes are contiguous.
+
+### `net_crawl` key layout
+
+- `0x00` → `ActiveCrawl` singleton — the current logical round id, start/checkpoint times, exact address-attempt counters, scheduling sequence, and an actionable blocked reason when coverage cannot be preserved.
+- `0x01 + peer_id` → `CrawlCandidate` — all durable addresses for one peer, discovery timestamps, current-round result, fairness sequence, and any successful observation staged for publication.
+
+A slice checkpoint atomically updates `ActiveCrawl` and its changed candidates in `net_crawl`.
+Partial slices never modify the published `net_nodes` snapshot or `net_stats` latest status. Once
+every peer candidate has a terminal result, one RocksDB write batch publishes node changes,
+history points, and `LatestStatus` while deleting the active-round singleton. Readers therefore
+observe either the previous completed round or the next completed round, never a partial mixture.
+If the API starts before this opt-in store exists, it keeps an empty read-only slot and retries the
+secondary open; crawler creation or schema upgrade becomes visible without restarting the API.
 
 ## Key Design
 

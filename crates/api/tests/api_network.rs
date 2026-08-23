@@ -4,13 +4,14 @@ use common::*;
 
 #[tokio::test]
 async fn summary_reports_disabled_and_no_data_by_default() {
-    let cfg = test_config(test_store()); // network_store None, crawler_enabled false
+    let cfg = test_config(test_store()); // empty network-store slot, crawler disabled
     let app = create_router_without_warmup(cfg);
     let res = get_json(&app, "/network/summary").await;
     assert_eq!(res.0, StatusCode::OK);
     assert_eq!(res.1["enabled"], false);
     assert_eq!(res.1["hasData"], false);
     assert!(res.1["lastRound"].is_null());
+    assert!(res.1["activeRound"].is_null());
 }
 
 #[tokio::test]
@@ -21,7 +22,73 @@ async fn summary_reports_has_data_when_seeded() {
     assert_eq!(res.1["enabled"], true);
     assert_eq!(res.1["hasData"], true);
     assert_eq!(res.1["lastRound"]["totalKnown"], 2);
-    assert_eq!(res.1["lastRound"]["reachable"], 1);
+    assert_eq!(res.1["lastRound"]["reachablePeers"], 1);
+    assert_eq!(res.1["lastRound"]["addressAttempts"], 3);
+    assert!(res.1["activeRound"].is_null());
+}
+
+#[tokio::test]
+async fn summary_observes_network_store_attached_after_router_startup() {
+    let cfg = test_config(test_store());
+    let network_store = cfg.network_store.clone();
+    let app = create_router_without_warmup(cfg);
+
+    let (_, before) = get_json(&app, "/network/summary").await;
+    assert_eq!(before["hasData"], false);
+    assert!(before["lastRound"].is_null());
+
+    network_store.store(Some(test_network_store()));
+
+    let (_, after) = get_json(&app, "/network/summary").await;
+    assert_eq!(after["hasData"], true);
+    assert_eq!(after["lastRound"]["roundId"], 5);
+    assert_eq!(after["lastRound"]["totalKnown"], 2);
+}
+
+#[tokio::test]
+async fn summary_reports_active_progress_separately_from_completed_round() {
+    use ckbadger_store::{ActiveCrawl, CrawlAddress, CrawlCandidate};
+
+    let network = test_network_store();
+    network
+        .checkpoint_crawl(
+            &ActiveCrawl {
+                round_id: 6,
+                started_at: 300,
+                last_checkpoint_at: 320,
+                address_attempts: 1,
+                blocked_reason: Some("frontier capacity exceeded".into()),
+                ..Default::default()
+            },
+            &[(
+                b"peerC".to_vec(),
+                CrawlCandidate {
+                    addresses: vec![CrawlAddress {
+                        addr: "addrC".into(),
+                        last_advertised_at: 300,
+                        attempted_round: 0,
+                    }],
+                    first_discovered_at: 300,
+                    last_advertised_at: 300,
+                    round_id: 6,
+                    ..Default::default()
+                },
+            )],
+        )
+        .unwrap();
+    let cfg = test_config_with_network(test_store(), network, true);
+    let app = create_router_without_warmup(cfg);
+    let (_, body) = get_json(&app, "/network/summary").await;
+
+    assert_eq!(body["lastRound"]["roundId"], 5);
+    assert_eq!(body["activeRound"]["roundId"], 6);
+    assert_eq!(body["activeRound"]["candidatePeers"], 1);
+    assert_eq!(body["activeRound"]["completedPeers"], 0);
+    assert_eq!(body["activeRound"]["addressAttempts"], 1);
+    assert_eq!(
+        body["activeRound"]["blockedReason"],
+        "frontier capacity exceeded"
+    );
 }
 
 #[tokio::test]

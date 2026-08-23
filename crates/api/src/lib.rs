@@ -10,7 +10,7 @@ pub mod utils;
 pub mod warmup;
 pub mod ws;
 
-use arc_swap::ArcSwap;
+use arc_swap::{ArcSwap, ArcSwapOption};
 use axum::{routing::get, Router};
 use ckbadger_common::{
     BackgroundTaskEntry, BackgroundTaskKind, BackgroundTaskState, BackgroundTasksData,
@@ -61,9 +61,10 @@ impl Drop for CleanupPathGuard {
 pub struct AppState {
     pub store: Arc<CkbadgerStore>,
     pub append_only_store: Arc<CkbadgerStore>,
-    /// Optional read-only secondary of the network-crawler store. `None` when the
-    /// opt-in crawler has never produced a primary store (the common case).
-    pub network_store: Option<Arc<CkbadgerStore>>,
+    /// Hot-swappable read-only secondary of the network-crawler store. The slot
+    /// starts empty when the crawler has not created its primary yet and is
+    /// populated without restarting the API once that primary becomes available.
+    pub network_store: Arc<ArcSwapOption<CkbadgerStore>>,
     /// Whether the network crawler is enabled in config (drives UI availability
     /// hints independently of whether a store snapshot exists yet).
     pub crawler_enabled: bool,
@@ -191,8 +192,8 @@ impl AppState {
 pub struct AppConfig {
     pub store: Arc<CkbadgerStore>,
     pub append_only_store: Arc<CkbadgerStore>,
-    /// Optional read-only secondary of the network-crawler store (opt-in).
-    pub network_store: Option<Arc<CkbadgerStore>>,
+    /// Hot-swappable read-only secondary of the network-crawler store (opt-in).
+    pub network_store: Arc<ArcSwapOption<CkbadgerStore>>,
     /// Whether the network crawler is enabled in config.
     pub crawler_enabled: bool,
     pub ckb_rpc_url: String,
@@ -368,7 +369,7 @@ pub async fn create_router(config: AppConfig) -> Router {
             let store = refresh_store.clone();
             let append_only = refresh_append_only_store.clone();
             let ckb = refresh_ckb_store.clone();
-            let network = refresh_network_store.clone();
+            let network = refresh_network_store.load_full();
             let result = tokio::task::spawn_blocking(move || {
                 // One exclusive window for every secondary this process reads.
                 // It waits for in-flight requests (each pins the view for its

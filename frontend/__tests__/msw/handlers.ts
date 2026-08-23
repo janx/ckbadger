@@ -509,6 +509,7 @@ export const handlers = [
       enabled: false,
       hasData: false,
       lastRound: null,
+      activeRound: null,
     });
   }),
 

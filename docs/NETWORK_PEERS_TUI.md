@@ -25,8 +25,9 @@ existing HTTP client.
 - **Fail-fast vs "no data"** — an API/network error degrades to an on-screen error line (like the
   existing `ApiServiceInfo` health), never a panic; the crawler being off / not-yet-run is a NORMAL
   state driven by `summary.enabled` / `summary.hasData`, rendered as a message (not an error).
-- **Honesty** — labels match the web dashboard: "discovered reachable" nodes, a `PARTIAL` marker when
-  `frontierDrained=false`; no "total network" claim.
+- **Honesty** — labels match the web dashboard: completed peer counters and address attempts have
+  distinct names, and an active logical round is shown as separate progress; no "total network"
+  claim.
 - **Reuse, no new primitives** — reuse `chart.rs` (`render_bar_chart` / `render_stacked_bar_chart`),
   the existing density/layout helpers, and the refresh-tick loop.
 
@@ -65,13 +66,28 @@ everything a peers view needs.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct NetworkLastRound {
-    round_id: u64, started: u64, finished: u64, dialed: u64,
-    reachable: u64, unreachable: u64, foreign_dropped: u64,
-    new_nodes: u64, total_known: u64, frontier_drained: bool,
+    round_id: u64, started_at: u64, finished_at: u64,
+    candidate_peers: u64, attempted_peers: u64,
+    reachable_peers: u64, unreachable_peers: u64,
+    address_attempts: u64, failed_address_attempts: u64,
+    foreign_peers: u64, malformed_addresses: u64,
+    new_nodes: u64, total_known: u64,
 }
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct NetworkSummary { enabled: bool, has_data: bool, last_round: Option<NetworkLastRound> }
+struct NetworkActiveRound {
+    round_id: u64, started_at: u64, last_checkpoint_at: u64,
+    candidate_peers: u64, completed_peers: u64,
+    address_attempts: u64, blocked_reason: Option<String>,
+}
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct NetworkSummary {
+    enabled: bool,
+    has_data: bool,
+    last_round: Option<NetworkLastRound>,
+    active_round: Option<NetworkActiveRound>,
+}
 
 #[derive(Debug, Clone, Deserialize)]
 struct LabelCount { label: String, count: u64 }
@@ -121,12 +137,12 @@ Top-to-bottom, density-aware (mirror the existing tabs' `LayoutDensity` handling
 trend on short terminals):
 
 1. **Status block** (~3–5 lines) — a labeled stat grid from `summary.last_round`:
-   - Crawler: on/off · `#round_id` · last-round age (from `finished`, e.g. "3m ago") · a bright
-     **PARTIAL** marker when `!frontier_drained`.
-   - Discovered: `total_known` · `reachable`; `lastRound.unreachable` is failed address probes,
-     not `total_known - reachable`. The current compact label abbreviates it as "unreachable" and
-     should be renamed to make that unit explicit.
-   - This round: `dialed` · `new_nodes` · `foreign_dropped`.
+   - Crawler: on/off · completed `#round_id` · last-round age from `finished_at`.
+   - An active round adds `CRAWLING #round_id completed_peers/candidate_peers` without altering
+     the displayed completed snapshot.
+   - Discovered: `total_known` · `reachable_peers` · `unreachable_peers`.
+   - Completed round: `address_attempts` · `failed_address_attempts` · `new_nodes` ·
+     `foreign_peers`.
 2. **Distributions** (two side-by-side bar charts via `render_bar_chart`):
    - Left: version top-N (`distributions.versions`).
    - Right: country top-N (`distributions.countries`).
@@ -157,7 +173,7 @@ total` holds by construction (same-round aggregate); a bucket where `reachable >
   parse from canned API JSON (assert camelCase mapping, `lastRound: null` → `None`, populated case).
 - **Tab cycling** (`ui.rs`): `MainTab::next()`/`prev()` include `Peers` in the correct cycle
   (Overview→Sync→System→Peers→Overview and reverse).
-- **Pure helpers**: last-round age formatting; `frontier_drained=false` → PARTIAL; the current trend
+- **Pure helpers**: last-round age formatting; completed/active state selection; the current trend
   zip/synthesis behavior (`total`,`reachable` → `(reachable, unreachable)` per hour); the state
   selector (error vs disabled vs waiting vs dashboard) as a small pure function over `PeersData`.
 - **Render** (only if the crate already uses ratatui `TestBackend` — the implementer confirms and

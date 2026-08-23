@@ -66,7 +66,7 @@ the check fails at the first proving page instead of expanding into an
 unbounded scan.
 
 > **Scope:** `verify` covers only chain-derived data (the domain + append-only stores). The
-> **network store** (`net_nodes` / `net_stats`, written by the opt-in `ckbadger-crawler`) is
+> **network store** (`net_nodes` / `net_stats` / `net_crawl`, written by the opt-in `ckbadger-crawler`) is
 > **outside** all 57 checks — it holds observational, non-chain p2p-crawler data that is
 > non-deterministic and not subject to chain-integrity invariants, so none of these checks apply
 > to it.

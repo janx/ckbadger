@@ -5,7 +5,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Header } from '@/components/layout/header';
 import { PageHeader, Badge } from '@/components/ui/page-header';
 import { StatBlock, StatGrid } from '@/components/ui/stat-block';
-import { api, LabelCount, NetworkLastRound } from '@/lib/api';
+import { api, LabelCount, NetworkActiveRound, NetworkLastRound } from '@/lib/api';
 import { formatTimeAgo } from '@/lib/utils';
 import { NetworkDistributions } from '@/app/network/distributions';
 import { NetworkTrends } from '@/app/network/trends';
@@ -50,14 +50,23 @@ function ReachabilityCaveat({ className }: { className?: string }) {
   );
 }
 
-function PeersOnboarding({ enabled }: { enabled: boolean }) {
+function PeersOnboarding({
+  enabled,
+  activeRound,
+}: {
+  enabled: boolean;
+  activeRound: NetworkActiveRound | null;
+}) {
   return (
     <div className="space-y-4">
       {enabled && (
         <div className="border-info/30 bg-info/10 rounded border px-4 py-3">
           <p className="text-info font-mono text-sm">
-            Crawler enabled — waiting for the first round to finish. Peer data appears here once the
-            first crawl completes (this can take a few minutes).
+            {activeRound?.blockedReason
+              ? `Crawler round #${activeRound.roundId} blocked — ${activeRound.blockedReason}`
+              : activeRound
+                ? `Crawler round #${activeRound.roundId} in progress — ${activeRound.completedPeers}/${activeRound.candidatePeers} peer candidates completed, ${activeRound.addressAttempts} address attempts.`
+                : 'Crawler enabled — waiting for the first round to start. Peer data appears here once the first crawl completes.'}
           </p>
         </div>
       )}
@@ -122,8 +131,14 @@ function MaxMindAttribution() {
   );
 }
 
-function PeersDashboard({ lastRound }: { lastRound: NetworkLastRound }) {
-  const updatedAgo = formatTimeAgo(lastRound.finished * 1000);
+function PeersDashboard({
+  lastRound,
+  activeRound,
+}: {
+  lastRound: NetworkLastRound;
+  activeRound: NetworkActiveRound | null;
+}) {
+  const updatedAgo = formatTimeAgo(lastRound.finishedAt * 1000);
 
   return (
     <div className="space-y-4">
@@ -131,19 +146,36 @@ function PeersDashboard({ lastRound }: { lastRound: NetworkLastRound }) {
         <span className="text-text-dim font-mono text-xs">
           Round #{lastRound.roundId} · updated {updatedAgo}
         </span>
-        {!lastRound.frontierDrained && (
+        {activeRound && (
           <Badge variant="gold" className="uppercase">
-            partial round
+            {activeRound.blockedReason
+              ? `round #${activeRound.roundId} blocked`
+              : `round #${activeRound.roundId} crawling ${activeRound.completedPeers}/${activeRound.candidatePeers}`}
           </Badge>
         )}
       </div>
 
       <StatGrid columns={4}>
-        <StatBlock label="Discovered Reachable" value={lastRound.reachable} color="jade" />
-        <StatBlock label="Unreachable" value={lastRound.unreachable} color="rouge" />
+        <StatBlock label="Discovered Reachable" value={lastRound.reachablePeers} color="jade" />
+        <StatBlock
+          label="Failed Peer Candidates"
+          value={lastRound.unreachablePeers}
+          color="rouge"
+        />
         <StatBlock label="Total Known" value={lastRound.totalKnown} color="aqua" />
         <StatBlock label="Last Round" value={updatedAgo} color="gold" />
       </StatGrid>
+
+      <p className="text-text-dim font-mono text-xs">
+        Last round: {lastRound.addressAttempts} address attempts · {lastRound.failedAddressAttempts}{' '}
+        failed addresses · {lastRound.foreignPeers} foreign peers
+      </p>
+
+      {activeRound?.blockedReason && (
+        <p className="border-negative/30 bg-negative/10 text-negative rounded border px-3 py-2 font-mono text-xs">
+          Active crawler round blocked: {activeRound.blockedReason}
+        </p>
+      )}
 
       <ReachabilityCaveat />
 
@@ -166,9 +198,9 @@ export function NetworkClientPage() {
   if (isLoading || !summary) {
     content = <LoadingSkeleton />;
   } else if (!summary.enabled || !summary.hasData || !summary.lastRound) {
-    content = <PeersOnboarding enabled={summary.enabled} />;
+    content = <PeersOnboarding enabled={summary.enabled} activeRound={summary.activeRound} />;
   } else {
-    content = <PeersDashboard lastRound={summary.lastRound} />;
+    content = <PeersDashboard lastRound={summary.lastRound} activeRound={summary.activeRound} />;
   }
 
   return <PageShell>{content}</PageShell>;

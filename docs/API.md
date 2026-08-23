@@ -561,7 +561,7 @@ These endpoints read the optional, non-chain network store written by `ckbadger-
 
 | Method | Path                              | Handler         | Purpose                                                      |
 | ------ | --------------------------------- | --------------- | ------------------------------------------------------------ |
-| GET    | `/api/v1/network/summary`         | `summary`       | Crawler enabled/data state and latest completed round        |
+| GET    | `/api/v1/network/summary`         | `summary`       | Crawler state, latest completed round, and active progress   |
 | GET    | `/api/v1/network/distributions`   | `distributions` | Reachability, client, country, ASN, and protocol histograms  |
 | GET    | `/api/v1/network/history`         | `history`       | Hour/day time series for node counts and distribution shares |
 | GET    | `/api/v1/network/nodes`           | `nodes`         | Filterable cursor-paginated discovered-node list             |
@@ -578,7 +578,9 @@ These endpoints read the optional, non-chain network store written by `ckbadger-
 
 **Responses**
 
-- `NetworkSummary` — `enabled`, `hasData`, optional `lastRound`
+- `NetworkSummary` — `enabled`, `hasData`, optional completed `lastRound`, and optional separate
+  `activeRound`. Completed-round peer counters and address-attempt counters use distinct fields;
+  an active round reports exact `completedPeers / candidatePeers` checkpoint progress.
 - `NetworkDistributions` — total/reachable counts plus sorted label/count buckets
 - `NetworkHistory` — requested metric/granularity and ascending points; daily data excludes the
   incomplete current day

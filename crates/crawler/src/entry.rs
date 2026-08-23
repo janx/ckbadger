@@ -8,7 +8,7 @@ use ckbadger_config::{CkbadgerConfig, CrawlerConfig};
 use ckbadger_store::{CkbadgerStore, StoreRuntimeConfig};
 
 use crate::ckb_prober::CkbProber;
-use crate::engine::{run_round, RoundConfig};
+use crate::engine::{run_crawl_slice, CrawlSliceReport, RoundConfig, SystemCrawlClock};
 use crate::geoip::{GeoIp, MaxmindGeoIp, NoGeo};
 
 /// Resolve the geo backend from config: `NoGeo` when unconfigured, a fail-fast
@@ -24,11 +24,10 @@ pub fn select_geoip(cfg: &CrawlerConfig) -> anyhow::Result<Box<dyn GeoIp>> {
 
 /// Run the crawler service loop.
 ///
-/// Startup fail-fast: a half-configured geo backend or a network with no
-/// bootnodes both propagate `Err` and prevent the loop from starting. Once
-/// running, a failed round is a *recorded observation* (logged via
-/// `tracing::error!`), never fatal — the loop keeps going. When `run_once` is
-/// set the loop returns after a single round (used by `crawl --once`).
+/// Startup configuration and every internal crawler/store error propagate.
+/// Expected remote failures are typed observations inside the engine. A logical
+/// round resumes immediately across checkpointed slices and is the unit of
+/// `crawl --once` success.
 ///
 /// `store_runtime_config` is this network's RAM share, computed by the CLI (the
 /// crawler crate has no access to the orchestrator config). The network store is
@@ -44,6 +43,7 @@ pub async fn run_crawler(
         tracing::info!("crawler disabled ([crawler].enabled=false); exiting");
         return Ok(());
     }
+    cfg.crawler.validate()?;
 
     let store = CkbadgerStore::open_network_with_runtime(
         work_dir.join(&cfg.store.network_data_path),
@@ -56,32 +56,39 @@ pub async fn run_crawler(
         node_ttl_secs: 2_592_000,
         hourly_retention_days: cfg.crawler.history_hourly_retention_days,
         top_n: 20,
+        max_dial_concurrency: cfg.crawler.max_dial_concurrency,
         max_addrs: None,
         max_frontier: Some(cfg.crawler.max_frontier),
-        round_budget: Some(std::time::Duration::from_secs(
-            cfg.crawler.round_budget_secs,
+        slice_budget: Some(std::time::Duration::from_secs(
+            cfg.crawler.slice_budget_secs,
         )),
     };
-
-    // Resume the round counter from the persisted status so round ids are
-    // monotonic across restarts.
-    let mut round_id = store.get_network_status()?.map(|s| s.round_id).unwrap_or(0);
+    let clock = SystemCrawlClock;
 
     loop {
-        round_id += 1;
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)?
-            .as_secs();
-        match run_round(&store, &prober, geoip.as_ref(), &round_cfg, now, round_id).await {
-            Ok(r) => tracing::info!(
-                round_id,
-                reachable = r.status.reachable,
-                total = r.status.total_known,
-                drained = r.status.frontier_drained,
-                "crawl round done"
-            ),
-            // A failed round is recorded and skipped, not fatal — keep looping.
-            Err(e) => tracing::error!(round_id, "crawl round failed: {e:#}"),
+        loop {
+            match run_crawl_slice(&store, &prober, geoip.as_ref(), &clock, &round_cfg).await? {
+                CrawlSliceReport::Partial(progress) => {
+                    tracing::info!(
+                        round_id = progress.round_id,
+                        completed_peers = progress.completed_peers,
+                        candidate_peers = progress.candidate_peers,
+                        address_attempts = progress.address_attempts,
+                        "crawl slice checkpointed; resuming logical round"
+                    );
+                    tokio::task::yield_now().await;
+                }
+                CrawlSliceReport::Completed(status) => {
+                    tracing::info!(
+                        round_id = status.round_id,
+                        reachable_peers = status.reachable_peers,
+                        total_known = status.total_known,
+                        address_attempts = status.address_attempts,
+                        "crawl round completed"
+                    );
+                    break;
+                }
+            }
         }
         if run_once {
             return Ok(());

@@ -752,15 +752,30 @@ pub(crate) async fn fetch_service_log_tails(log_dir: &Path) -> Option<Vec<Servic
 #[serde(rename_all = "camelCase")]
 pub struct NetworkLastRound {
     pub round_id: u64,
-    pub started: u64,
-    pub finished: u64,
-    pub dialed: u64,
-    pub reachable: u64,
-    pub unreachable: u64,
-    pub foreign_dropped: u64,
+    pub started_at: u64,
+    pub finished_at: u64,
+    pub candidate_peers: u64,
+    pub attempted_peers: u64,
+    pub reachable_peers: u64,
+    pub unreachable_peers: u64,
+    pub address_attempts: u64,
+    pub failed_address_attempts: u64,
+    pub foreign_peers: u64,
+    pub malformed_addresses: u64,
     pub new_nodes: u64,
     pub total_known: u64,
-    pub frontier_drained: bool,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NetworkActiveRound {
+    pub round_id: u64,
+    pub started_at: u64,
+    pub last_checkpoint_at: u64,
+    pub candidate_peers: u64,
+    pub completed_peers: u64,
+    pub address_attempts: u64,
+    pub blocked_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -769,6 +784,8 @@ pub struct NetworkSummary {
     pub enabled: bool,
     pub has_data: bool,
     pub last_round: Option<NetworkLastRound>,
+    #[serde(default)]
+    pub active_round: Option<NetworkActiveRound>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -970,17 +987,25 @@ mod tests {
 
     #[test]
     fn parse_network_summary_null_and_populated() {
-        let off: NetworkSummary =
-            serde_json::from_str(r#"{"enabled":false,"hasData":false,"lastRound":null}"#).unwrap();
+        let off: NetworkSummary = serde_json::from_str(
+            r#"{"enabled":false,"hasData":false,"lastRound":null,"activeRound":null}"#,
+        )
+        .unwrap();
         assert!(!off.enabled && !off.has_data && off.last_round.is_none());
 
         let on: NetworkSummary = serde_json::from_str(
-            r#"{"enabled":true,"hasData":true,"lastRound":{"roundId":5,"started":1,"finished":2,"dialed":8,"reachable":3,"unreachable":1,"foreignDropped":0,"newNodes":2,"totalKnown":4,"frontierDrained":true}}"#,
+            r#"{"enabled":true,"hasData":true,"lastRound":{"roundId":5,"startedAt":1,"finishedAt":2,"candidatePeers":4,"attemptedPeers":4,"reachablePeers":3,"unreachablePeers":1,"addressAttempts":8,"failedAddressAttempts":1,"foreignPeers":0,"malformedAddresses":0,"newNodes":2,"totalKnown":4},"activeRound":{"roundId":6,"startedAt":3,"lastCheckpointAt":4,"candidatePeers":5,"completedPeers":2,"addressAttempts":2,"blockedReason":"frontier capacity exceeded"}}"#,
         ).unwrap();
+        let active = on.active_round.as_ref().unwrap();
+        assert_eq!(active.completed_peers, 2);
+        assert_eq!(
+            active.blocked_reason.as_deref(),
+            Some("frontier capacity exceeded")
+        );
         let lr = on.last_round.unwrap();
         assert_eq!(lr.total_known, 4);
-        assert_eq!(lr.reachable, 3);
-        assert!(lr.frontier_drained);
+        assert_eq!(lr.reachable_peers, 3);
+        assert_eq!(lr.address_attempts, 8);
     }
 
     #[test]

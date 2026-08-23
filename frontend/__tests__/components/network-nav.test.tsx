@@ -34,16 +34,20 @@ const DASHBOARD_SUMMARY = {
   hasData: true,
   lastRound: {
     roundId: 5,
-    started: 0,
-    finished: 0,
-    dialed: 2,
-    reachable: 1,
-    unreachable: 1,
-    foreignDropped: 0,
+    startedAt: 0,
+    finishedAt: 0,
+    candidatePeers: 2,
+    attemptedPeers: 2,
+    reachablePeers: 1,
+    unreachablePeers: 1,
+    addressAttempts: 2,
+    failedAddressAttempts: 1,
+    foreignPeers: 0,
+    malformedAddresses: 0,
     newNodes: 0,
     totalKnown: 2,
-    frontierDrained: true,
   },
+  activeRound: null,
 };
 
 describe('Peers nav entry', () => {

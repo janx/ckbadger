@@ -1848,21 +1848,35 @@ export interface LabelCount {
 
 export interface NetworkLastRound {
   roundId: number;
-  started: number;
-  finished: number;
-  dialed: number;
-  reachable: number;
-  unreachable: number;
-  foreignDropped: number;
+  startedAt: number;
+  finishedAt: number;
+  candidatePeers: number;
+  attemptedPeers: number;
+  reachablePeers: number;
+  unreachablePeers: number;
+  addressAttempts: number;
+  failedAddressAttempts: number;
+  foreignPeers: number;
+  malformedAddresses: number;
   newNodes: number;
   totalKnown: number;
-  frontierDrained: boolean;
+}
+
+export interface NetworkActiveRound {
+  roundId: number;
+  startedAt: number;
+  lastCheckpointAt: number;
+  candidatePeers: number;
+  completedPeers: number;
+  addressAttempts: number;
+  blockedReason: string | null;
 }
 
 export interface NetworkSummary {
   enabled: boolean;
   hasData: boolean;
   lastRound: NetworkLastRound | null;
+  activeRound: NetworkActiveRound | null;
 }
 
 export interface NetworkDistributions {

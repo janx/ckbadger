@@ -1,4 +1,5 @@
 use anyhow::{bail, Result};
+use arc_swap::ArcSwapOption;
 use axum::extract::State;
 use axum::http::{header, HeaderMap, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
@@ -6,6 +7,7 @@ use axum::{routing::get, Router};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 use tracing::info;
 
 use ckbadger_store::{
@@ -33,11 +35,81 @@ pub struct ApiServiceConfig {
     pub dob_decode_dir: PathBuf,
     /// Directory where API writes cycles calculation request files for the indexer worker.
     pub cycles_request_dir: Option<std::path::PathBuf>,
-    /// Path to the network-crawler store primary. The API opens a read-only
-    /// secondary only when this primary already exists (opt-in crawler).
+    /// Path to the network-crawler store primary. The API attaches a read-only
+    /// secondary immediately or when this opt-in primary later appears.
     pub network_data_path: String,
     /// Whether the network crawler is enabled in config (surfaced to the UI).
     pub crawler_enabled: bool,
+}
+
+const NETWORK_STORE_RETRY_INTERVAL: Duration = Duration::from_secs(1);
+
+fn open_network_secondary_if_present(
+    primary_path: &Path,
+    runtime_config: StoreRuntimeConfig,
+) -> Result<Option<Arc<CkbadgerStore>>> {
+    if !primary_path.join("CURRENT").exists() {
+        return Ok(None);
+    }
+
+    let secondary_path = secondary_store_path(primary_path, SecondaryStoreOwner::Api);
+    CkbadgerStore::open_network_secondary_with_runtime(
+        primary_path,
+        secondary_path.as_path(),
+        runtime_config,
+    )
+    .map(Arc::new)
+    .map(Some)
+}
+
+async fn wait_for_network_store_secondary(
+    slot: Arc<ArcSwapOption<CkbadgerStore>>,
+    primary_path: PathBuf,
+    runtime_config: StoreRuntimeConfig,
+    retry_interval: Duration,
+) {
+    let mut last_error = None;
+    loop {
+        if slot.load().is_some() {
+            return;
+        }
+
+        let open_primary_path = primary_path.clone();
+        let open_result = tokio::task::spawn_blocking(move || {
+            open_network_secondary_if_present(&open_primary_path, runtime_config)
+        })
+        .await;
+
+        match open_result {
+            Ok(Ok(Some(store))) => {
+                slot.store(Some(store));
+                info!(
+                    "Network store secondary attached after crawler startup: {}",
+                    primary_path.display()
+                );
+                return;
+            }
+            Ok(Ok(None)) => {}
+            Ok(Err(error)) => {
+                let message = error.to_string();
+                if last_error.as_deref() != Some(message.as_str()) {
+                    tracing::warn!(
+                        "network store present but failed to open secondary; will retry: {message}"
+                    );
+                    last_error = Some(message);
+                }
+            }
+            Err(error) => {
+                let message = format!("network store secondary open task failed: {error}");
+                if last_error.as_deref() != Some(message.as_str()) {
+                    tracing::warn!("{message}; will retry");
+                    last_error = Some(message);
+                }
+            }
+        }
+
+        tokio::time::sleep(retry_interval).await;
+    }
 }
 
 /// One backend network the frontend proxy can route to.
@@ -116,34 +188,38 @@ pub async fn run_api(config: ApiServiceConfig) -> Result<()> {
         config.store_runtime_config,
     )?);
 
-    // The network-crawler store is opt-in: open a read-only secondary only when
-    // the crawler has already produced a primary (CURRENT marker present). A
-    // missing primary or an open failure is a normal `None`, never a startup
-    // error — the API stays read-only and never writes this store.
-    let network_store = {
-        let primary = Path::new(&config.network_data_path);
-        if primary.join("CURRENT").exists() {
-            let sec = secondary_store_path(&config.network_data_path, SecondaryStoreOwner::Api);
-            info!(
-                "Opening ckbadger network store (secondary) at: {} -> {}",
-                config.network_data_path,
-                sec.display()
-            );
-            match CkbadgerStore::open_network_secondary_with_runtime(
-                primary,
-                sec.as_path(),
-                config.store_runtime_config,
-            ) {
-                Ok(s) => Some(Arc::new(s)),
-                Err(e) => {
-                    tracing::warn!("network store present but failed to open secondary: {e}");
-                    None
-                }
+    // The API remains read-only, but unlike the chain stores the opt-in network
+    // primary may appear after the API has already started. Try once before
+    // constructing the router, then keep retrying in the background until the
+    // crawler creates/upgrades the primary and the secondary can be attached.
+    let network_primary_path = PathBuf::from(&config.network_data_path);
+    let initial_network_store =
+        match open_network_secondary_if_present(&network_primary_path, config.store_runtime_config)
+        {
+            Ok(store) => store,
+            Err(error) => {
+                tracing::warn!(
+                    "network store present but failed to open secondary; will retry: {error}"
+                );
+                None
             }
-        } else {
-            None
-        }
-    };
+        };
+    if initial_network_store.is_some() {
+        info!(
+            "Opened ckbadger network store (secondary) at: {}",
+            config.network_data_path
+        );
+    }
+    let should_wait_for_network_store = initial_network_store.is_none();
+    let network_store = Arc::new(ArcSwapOption::from(initial_network_store));
+    if should_wait_for_network_store {
+        tokio::spawn(wait_for_network_store_secondary(
+            network_store.clone(),
+            network_primary_path,
+            config.store_runtime_config,
+            NETWORK_STORE_RETRY_INTERVAL,
+        ));
+    }
 
     let app_config = AppConfig {
         store,
@@ -666,6 +742,51 @@ mod tests {
         assert_eq!(config.dob_decode_dir, PathBuf::from("/data/media"));
         assert_eq!(config.network_data_path, "/data/network");
         assert!(!config.crawler_enabled);
+    }
+
+    #[tokio::test]
+    async fn network_secondary_attaches_when_primary_appears_after_api_start() {
+        use ckbadger_store::LatestStatus;
+
+        let dir = tempfile::tempdir().expect("network store tempdir");
+        let primary_path = dir.path().join("network");
+        let slot = Arc::new(ArcSwapOption::from(None));
+        let waiter = tokio::spawn(wait_for_network_store_secondary(
+            slot.clone(),
+            primary_path.clone(),
+            StoreRuntimeConfig::default(),
+            Duration::from_millis(10),
+        ));
+
+        tokio::time::sleep(Duration::from_millis(25)).await;
+        assert!(slot.load_full().is_none());
+
+        let primary =
+            CkbadgerStore::open_network_with_runtime(&primary_path, StoreRuntimeConfig::default())
+                .expect("open network primary");
+        primary
+            .put_network_status(&LatestStatus {
+                round_id: 9,
+                started: 100,
+                finished: 200,
+                ..Default::default()
+            })
+            .expect("seed network status");
+
+        tokio::time::timeout(Duration::from_secs(5), waiter)
+            .await
+            .expect("secondary attachment timed out")
+            .expect("secondary attachment task panicked");
+
+        let secondary = slot.load_full().expect("network secondary attached");
+        assert_eq!(
+            secondary
+                .get_network_status()
+                .expect("read network status")
+                .expect("network status exists")
+                .round_id,
+            9
+        );
     }
 
     #[test]

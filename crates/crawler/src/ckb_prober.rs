@@ -23,11 +23,12 @@
 //! peer's Identify (verifying the network id) but do not send our own — the peer emits its
 //! Identify immediately on connect, well within the probe window.
 
+use std::borrow::Cow;
 use std::collections::{BTreeSet, HashMap};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 
 use ckb_network::{extract_peer_id, SupportProtocols};
@@ -40,7 +41,7 @@ use p2p::{
     builder::ServiceBuilder,
     bytes::Bytes,
     context::{ProtocolContext, ProtocolContextMutRef, ServiceContext},
-    multiaddr::Multiaddr,
+    multiaddr::{Multiaddr, Protocol as MultiProtocol},
     secio::{PeerId, PublicKey, SecioKeyPair},
     service::{
         ProtocolHandle, ProtocolMeta, ServiceAsyncControl, ServiceError, ServiceEvent,
@@ -50,7 +51,7 @@ use p2p::{
     ProtocolId, SessionId,
 };
 
-use crate::prober::{ProbeOutcome, Prober};
+use crate::prober::{ProbeCandidate, ProbeObservation, ProbeOutcome, ProbeResult, Prober};
 
 // ---------------------------------------------------------------------------
 // Built-in bootnodes (from the CKB v0.119.0 `resource/ckb.toml`). The per-network
@@ -204,6 +205,15 @@ struct PeerCapture {
     discovered_addrs: Vec<String>,
     /// Set once we have parsed a same-network Identify (⇒ reachable).
     identify_seen: bool,
+    foreign_identify_seen: bool,
+    rejected_identify_seen: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum IdentifyState {
+    SameNetwork,
+    ForeignNetwork,
+    Rejected,
 }
 
 type Captures = Arc<Mutex<HashMap<Vec<u8>, PeerCapture>>>;
@@ -275,9 +285,8 @@ impl ServiceProtocol for CrawlerHandler {
         let key = peer_id.as_bytes().to_vec();
         let proto_id = context.proto_id();
         if proto_id == self.identify_id {
-            if let Some(parsed) = parse_identify(&data) {
-                // Only a same-network peer counts as reachable.
-                if parsed.net_name == *self.net_id {
+            match parse_identify(&data) {
+                Some(parsed) if parsed.net_name == *self.net_id => {
                     self.record(key, |c| {
                         c.client_version = Some(parsed.client_version);
                         c.flags = parsed.flags;
@@ -285,6 +294,8 @@ impl ServiceProtocol for CrawlerHandler {
                         c.identify_seen = true;
                     });
                 }
+                Some(_) => self.record(key, |c| c.foreign_identify_seen = true),
+                None => self.record(key, |c| c.rejected_identify_seen = true),
             }
         } else if proto_id == self.discovery_id {
             let addrs = decode_nodes_addrs(&data);
@@ -329,6 +340,38 @@ pub struct CkbProber {
 }
 
 impl CkbProber {
+    fn normalize_candidate(addr: &str, peer_hint: Option<&[u8]>) -> Result<Option<ProbeCandidate>> {
+        let mut multiaddr: Multiaddr = match addr.parse() {
+            Ok(addr) => addr,
+            Err(_) => return Ok(None),
+        };
+        let embedded_peer = extract_peer_id(&multiaddr);
+        let peer_id = match (embedded_peer, peer_hint) {
+            (Some(embedded), Some(hint)) => {
+                let expected = PeerId::from_bytes(hint.to_vec()).with_context(|| {
+                    format!("invalid persisted peer id for candidate address '{addr}'")
+                })?;
+                if embedded != expected {
+                    return Ok(None);
+                }
+                embedded
+            }
+            (Some(embedded), None) => embedded,
+            (None, Some(hint)) => {
+                let expected = PeerId::from_bytes(hint.to_vec()).with_context(|| {
+                    format!("invalid persisted peer id for own address '{addr}'")
+                })?;
+                multiaddr.push(MultiProtocol::P2P(Cow::Owned(hint.to_vec())));
+                expected
+            }
+            (None, None) => return Ok(None),
+        };
+        Ok(Some(ProbeCandidate {
+            peer_id: peer_id.as_bytes().to_vec(),
+            addr: multiaddr.to_string(),
+        }))
+    }
+
     /// Build a prober for `network` ("mainnet"/"testnet").
     ///
     /// Fails fast if the network is unknown or no bootnodes can be resolved (config override else
@@ -356,12 +399,24 @@ impl CkbProber {
                  (set [crawler].bootnodes or use a network with built-in bootnodes)"
             ));
         }
+        if cfg.dial_timeout_secs == 0 {
+            return Err(anyhow!(
+                "crawler dial_timeout_secs must be greater than zero"
+            ));
+        }
+        for addr in &bootnodes {
+            if Self::normalize_candidate(addr, None)?.is_none() {
+                return Err(anyhow!(
+                    "crawler bootnode must be a valid multiaddr with /p2p peer id: {addr}"
+                ));
+            }
+        }
 
         let net_id = identify_name(spec_id, genesis_hash);
         Self::start(
             net_id,
             bootnodes,
-            Duration::from_secs(cfg.dial_timeout_secs.max(1)),
+            Duration::from_secs(cfg.dial_timeout_secs),
         )
     }
 
@@ -402,16 +457,26 @@ impl CkbProber {
     }
 
     /// Wait until the peer's same-network Identify has been captured (⇒ reachable).
-    async fn await_identify(&self, key: &[u8]) {
+    async fn await_identify(&self, key: &[u8]) -> IdentifyState {
         loop {
-            if self
+            if let Some(state) = self
                 .captures
                 .lock()
                 .expect("captures poisoned")
                 .get(key)
-                .is_some_and(|c| c.identify_seen)
+                .and_then(|capture| {
+                    if capture.identify_seen {
+                        Some(IdentifyState::SameNetwork)
+                    } else if capture.foreign_identify_seen {
+                        Some(IdentifyState::ForeignNetwork)
+                    } else if capture.rejected_identify_seen {
+                        Some(IdentifyState::Rejected)
+                    } else {
+                        None
+                    }
+                })
             {
-                return;
+                return state;
             }
             tokio::time::sleep(POLL_INTERVAL).await;
         }
@@ -434,28 +499,45 @@ impl CkbProber {
         }
     }
 
-    /// Snapshot + remove the capture for `key`, returning the assembled outcome if reachable.
-    fn take_outcome(&self, key: &[u8], peer_id: &PeerId, rtt: Duration) -> Option<ProbeOutcome> {
+    /// Snapshot + remove the capture for `key`, returning both the assembled
+    /// outcome and the session that must be disconnected.
+    fn take_outcome(
+        &self,
+        key: &[u8],
+        peer_id: &PeerId,
+        rtt: Duration,
+    ) -> Result<(ProbeOutcome, Option<SessionId>)> {
         let cap = self
             .captures
             .lock()
             .expect("captures poisoned")
-            .remove(key)?;
+            .remove(key)
+            .ok_or_else(|| anyhow!("missing peer capture after same-network Identify"))?;
         if !cap.identify_seen {
-            return None;
+            return Err(anyhow!(
+                "peer capture lost same-network Identify invariant: peer_id={peer_id}"
+            ));
         }
+        let session_id = cap.session_id;
         let mut discovered = cap.discovered_addrs;
         discovered.sort();
         discovered.dedup();
-        Some(ProbeOutcome {
-            peer_id: peer_id.as_bytes().to_vec(),
-            client_version: cap.client_version.unwrap_or_default(),
-            flags: cap.flags,
-            protocols: cap.opened_protocols.into_iter().collect(),
-            own_addrs: cap.listen_addrs,
-            rtt_ms: Some(u32::try_from(rtt.as_millis()).unwrap_or(u32::MAX)),
-            discovered_addrs: discovered,
-        })
+        Ok((
+            ProbeOutcome {
+                peer_id: peer_id.as_bytes().to_vec(),
+                client_version: cap.client_version.with_context(|| {
+                    format!("same-network Identify missing client version: peer_id={peer_id}")
+                })?,
+                flags: cap.flags,
+                protocols: cap.opened_protocols.into_iter().collect(),
+                own_addrs: cap.listen_addrs,
+                rtt_ms: Some(u32::try_from(rtt.as_millis()).with_context(|| {
+                    format!("probe RTT exceeds u32 milliseconds: peer_id={peer_id}, rtt={rtt:?}")
+                })?),
+                discovered_addrs: discovered,
+            },
+            session_id,
+        ))
     }
 
     /// Disconnect the session recorded for `key` (feeler behaviour) if still open.
@@ -474,16 +556,24 @@ impl CkbProber {
 
 #[async_trait]
 impl Prober for CkbProber {
-    async fn probe(&self, addr: &str) -> Result<Option<ProbeOutcome>> {
-        // Malformed address or one lacking a peer id is an unreachable observation, not an error.
-        let multiaddr: Multiaddr = match addr.parse() {
-            Ok(m) => m,
-            Err(_) => return Ok(None),
+    fn candidate_from_addr(
+        &self,
+        addr: &str,
+        peer_hint: Option<&[u8]>,
+    ) -> Result<Option<ProbeCandidate>> {
+        Self::normalize_candidate(addr, peer_hint)
+    }
+
+    async fn probe(&self, expected_peer_id: &[u8], addr: &str) -> Result<ProbeResult> {
+        let Some(candidate) = Self::normalize_candidate(addr, Some(expected_peer_id))? else {
+            return Ok(ProbeResult::failed(ProbeObservation::MalformedAddress));
         };
-        let peer_id = match extract_peer_id(&multiaddr) {
-            Some(p) => p,
-            None => return Ok(None),
-        };
+        let multiaddr: Multiaddr = candidate
+            .addr
+            .parse()
+            .context("normalized crawler address must parse")?;
+        let peer_id = PeerId::from_bytes(candidate.peer_id)
+            .context("normalized crawler peer id must be valid")?;
         let key = peer_id.as_bytes().to_vec();
 
         // Fresh capture for this probe (drop any stale entry from a prior round).
@@ -500,26 +590,43 @@ impl Prober for CkbProber {
             .await
             .is_err()
         {
-            return Ok(None);
+            return Ok(ProbeResult::failed(ProbeObservation::DialFailed));
         }
 
-        // Phase 1: bounded wait for the same-network Identify. Timeout ⇒ unreachable.
-        let reached = tokio::time::timeout(self.dial_timeout, self.await_identify(&key)).await;
+        // Phase 1: bounded wait for a typed Identify result.
+        let identify = tokio::time::timeout(self.dial_timeout, self.await_identify(&key)).await;
         let rtt = start.elapsed();
-        if reached.is_err() {
+        let state = match identify {
+            Ok(state) => state,
+            Err(_) => {
+                self.disconnect(&key).await;
+                self.captures
+                    .lock()
+                    .expect("captures poisoned")
+                    .remove(&key);
+                return Ok(ProbeResult::failed(ProbeObservation::TimedOut));
+            }
+        };
+        if state != IdentifyState::SameNetwork {
             self.disconnect(&key).await;
             self.captures
                 .lock()
                 .expect("captures poisoned")
                 .remove(&key);
-            return Ok(None);
+            return Ok(ProbeResult::failed(match state {
+                IdentifyState::ForeignNetwork => ProbeObservation::ForeignNetwork,
+                IdentifyState::Rejected => ProbeObservation::HandshakeRejected,
+                IdentifyState::SameNetwork => unreachable!("handled above"),
+            }));
         }
 
         // Phase 2: node is reachable; give the Discovery reply a brief, bounded grace.
         self.await_discovery(&key).await;
-        let outcome = self.take_outcome(&key, &peer_id, rtt);
-        self.disconnect(&key).await;
-        Ok(outcome)
+        let (outcome, session_id) = self.take_outcome(&key, &peer_id, rtt)?;
+        if let Some(session_id) = session_id {
+            let _ = self.control.disconnect(session_id).await;
+        }
+        Ok(ProbeResult::reachable(outcome))
     }
 
     fn bootnodes(&self) -> Vec<String> {
@@ -530,6 +637,7 @@ impl Prober for CkbProber {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[test]
     fn identify_name_matches_ckb_format() {
@@ -663,7 +771,7 @@ mod tests {
     /// `GetNodes` with a fixed `Nodes` — all UNCOMPRESSED, like a real node's built-in protocols.
     #[derive(Clone)]
     struct MockPeer {
-        net_id: Arc<String>,
+        net_id: Option<Arc<String>>,
         advertised: Arc<String>,
         identify_id: ProtocolId,
         discovery_id: ProtocolId,
@@ -675,8 +783,10 @@ mod tests {
 
         async fn connected(&mut self, context: ProtocolContextMutRef<'_>, _version: &str) {
             if context.proto_id() == self.identify_id {
-                let msg = encode_identify(&self.net_id, 0b1111, "mock-client/1.0", &[]);
-                let _ = context.send_message(msg).await;
+                if let Some(net_id) = &self.net_id {
+                    let msg = encode_identify(net_id, 0b1111, "mock-client/1.0", &[]);
+                    let _ = context.send_message(msg).await;
+                }
             }
         }
 
@@ -699,12 +809,33 @@ mod tests {
         }
     }
 
-    /// Start the mock peer on an ephemeral loopback port; returns its dial multiaddr.
-    async fn start_mock_peer(net_id: &str, advertised: &str) -> String {
+    #[derive(Clone)]
+    struct MockPeerServiceHandle {
+        closed_sessions: Arc<AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl ServiceHandle for MockPeerServiceHandle {
+        async fn handle_error(&mut self, _context: &mut ServiceContext, _error: ServiceError) {}
+
+        async fn handle_event(&mut self, _context: &mut ServiceContext, event: ServiceEvent) {
+            if matches!(event, ServiceEvent::SessionClose { .. }) {
+                self.closed_sessions.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+    }
+
+    /// Start the mock peer on an ephemeral loopback port; returns its dial
+    /// multiaddr and a counter proving the crawler closed its feeler session.
+    async fn start_mock_peer_with_identify(
+        net_id: Option<&str>,
+        advertised: &str,
+    ) -> (String, Arc<AtomicUsize>) {
         let key = SecioKeyPair::secp256k1_generated();
         let peer_id = key.peer_id();
+        let closed_sessions = Arc::new(AtomicUsize::new(0));
         let handler = MockPeer {
-            net_id: Arc::new(net_id.to_string()),
+            net_id: net_id.map(|net_id| Arc::new(net_id.to_string())),
             advertised: Arc::new(advertised.to_string()),
             identify_id: SupportProtocols::Identify.protocol_id(),
             discovery_id: SupportProtocols::Discovery.protocol_id(),
@@ -720,13 +851,24 @@ mod tests {
         for meta in metas {
             builder = builder.insert_protocol(meta);
         }
-        let mut service = builder.handshake_type(key.into()).build(());
+        let mut service = builder
+            .handshake_type(key.into())
+            .build(MockPeerServiceHandle {
+                closed_sessions: Arc::clone(&closed_sessions),
+            });
         let listen = service
             .listen("/ip4/127.0.0.1/tcp/0".parse().unwrap())
             .await
             .expect("mock peer listens");
         tokio::spawn(async move { service.run().await });
-        format!("{}/p2p/{}", listen, peer_id.to_base58())
+        (
+            format!("{}/p2p/{}", listen, peer_id.to_base58()),
+            closed_sessions,
+        )
+    }
+
+    async fn start_mock_peer(net_id: &str, advertised: &str) -> (String, Arc<AtomicUsize>) {
+        start_mock_peer_with_identify(Some(net_id), advertised).await
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -735,15 +877,20 @@ mod tests {
         let advertised = "/ip4/9.9.9.9/tcp/8114/p2p/QmaZMemLXSsxKUrYNucjEbPxVX3rBKsGhWW2muWtWxUWyh";
         let expected = advertised.parse::<Multiaddr>().unwrap().to_string();
 
-        let dial_addr = start_mock_peer(&net_id, advertised).await;
+        let (dial_addr, closed_sessions) = start_mock_peer(&net_id, advertised).await;
         let prober =
             CkbProber::start(net_id, vec![], Duration::from_secs(8)).expect("prober starts");
 
-        let outcome = prober
-            .probe(&dial_addr)
+        let candidate = prober
+            .candidate_from_addr(&dial_addr, None)
+            .expect("candidate normalization is infallible")
+            .expect("loopback address contains a peer id");
+        let result = prober
+            .probe(&candidate.peer_id, &candidate.addr)
             .await
-            .expect("probe is infallible")
-            .expect("mock peer is reachable (identify captured)");
+            .expect("probe is infallible");
+        assert_eq!(result.observation, ProbeObservation::Reachable);
+        let outcome = result.outcome.expect("reachable probe has an outcome");
 
         assert_eq!(outcome.client_version, "mock-client/1.0");
         assert!(
@@ -752,5 +899,110 @@ mod tests {
              was re-compressed and the peer could not decode our GetNodes",
             outcome.discovered_addrs
         );
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while closed_sessions.load(Ordering::SeqCst) == 0 {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("successful feeler probe must disconnect its session");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn shared_service_probes_distinct_peers_concurrently() {
+        let net_id = "/ckbtest/deadbeef".to_string();
+        let advertised = "/ip4/9.9.9.9/tcp/8114/p2p/QmaZMemLXSsxKUrYNucjEbPxVX3rBKsGhWW2muWtWxUWyh";
+        let mut dial_addrs = Vec::new();
+        for _ in 0..4 {
+            let (addr, _) = start_mock_peer(&net_id, advertised).await;
+            dial_addrs.push(addr);
+        }
+        let prober = CkbProber::start(net_id, vec![], Duration::from_secs(8)).unwrap();
+        let candidates: Vec<ProbeCandidate> = dial_addrs
+            .iter()
+            .map(|addr| prober.candidate_from_addr(addr, None).unwrap().unwrap())
+            .collect();
+
+        let results = futures::future::join_all(
+            candidates
+                .iter()
+                .map(|candidate| prober.probe(&candidate.peer_id, &candidate.addr)),
+        )
+        .await;
+        assert_eq!(results.len(), 4);
+        for result in results {
+            assert_eq!(result.unwrap().observation, ProbeObservation::Reachable);
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn foreign_identify_is_reported_separately_from_timeout() {
+        let (dial_addr, _) = start_mock_peer("/foreign/deadbeef", "/ip4/9.9.9.9/tcp/8114").await;
+        let prober = CkbProber::start(
+            "/ckbtest/deadbeef".to_string(),
+            vec![],
+            Duration::from_secs(8),
+        )
+        .unwrap();
+        let candidate = prober
+            .candidate_from_addr(&dial_addr, None)
+            .unwrap()
+            .unwrap();
+        let result = prober
+            .probe(&candidate.peer_id, &candidate.addr)
+            .await
+            .unwrap();
+        assert_eq!(result.observation, ProbeObservation::ForeignNetwork);
+        assert!(result.outcome.is_none());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn missing_identify_is_reported_as_timeout_and_disconnected() {
+        let (dial_addr, closed_sessions) =
+            start_mock_peer_with_identify(None, "/ip4/9.9.9.9/tcp/8114").await;
+        let prober = CkbProber::start(
+            "/ckbtest/deadbeef".to_string(),
+            vec![],
+            Duration::from_millis(250),
+        )
+        .unwrap();
+        let candidate = prober
+            .candidate_from_addr(&dial_addr, None)
+            .unwrap()
+            .unwrap();
+
+        let result = prober
+            .probe(&candidate.peer_id, &candidate.addr)
+            .await
+            .unwrap();
+
+        assert_eq!(result.observation, ProbeObservation::TimedOut);
+        assert!(result.outcome.is_none());
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while closed_sessions.load(Ordering::SeqCst) == 0 {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("timed-out feeler probe must disconnect its session");
+    }
+
+    #[tokio::test]
+    async fn malformed_address_is_a_typed_observation() {
+        let prober = CkbProber::start(
+            "/ckbtest/deadbeef".to_string(),
+            vec![],
+            Duration::from_secs(1),
+        )
+        .unwrap();
+        assert!(prober
+            .candidate_from_addr("not-a-multiaddr", None)
+            .unwrap()
+            .is_none());
+        let result = prober
+            .probe(b"not-a-peer", "not-a-multiaddr")
+            .await
+            .unwrap();
+        assert_eq!(result.observation, ProbeObservation::MalformedAddress);
     }
 }

@@ -27,7 +27,7 @@ function createWrapper() {
 
 describe('NetworkClientPage', () => {
   it('shows the onboarding empty state when the crawler is off / has no data', async () => {
-    // Default MSW handler serves { enabled:false, hasData:false, lastRound:null }.
+    // Default MSW handler serves no completed or active round.
     render(<NetworkClientPage />, { wrapper: createWrapper() });
 
     // Explains what the peer crawler is.
@@ -44,7 +44,7 @@ describe('NetworkClientPage', () => {
   it('shows a waiting message when enabled but the first round has not finished', async () => {
     server.use(
       http.get(`${API_BASE}/network/summary`, () =>
-        HttpResponse.json({ enabled: true, hasData: false, lastRound: null })
+        HttpResponse.json({ enabled: true, hasData: false, lastRound: null, activeRound: null })
       )
     );
 
@@ -61,16 +61,20 @@ describe('NetworkClientPage', () => {
           hasData: true,
           lastRound: {
             totalKnown: 2,
-            reachable: 1,
-            unreachable: 1,
-            frontierDrained: true,
+            candidatePeers: 2,
+            attemptedPeers: 2,
+            reachablePeers: 1,
+            unreachablePeers: 1,
             roundId: 5,
-            started: 0,
-            finished: 0,
-            dialed: 2,
-            foreignDropped: 0,
+            startedAt: 0,
+            finishedAt: 0,
+            addressAttempts: 2,
+            failedAddressAttempts: 1,
+            foreignPeers: 0,
+            malformedAddresses: 0,
             newNodes: 0,
           },
+          activeRound: null,
         })
       )
     );
@@ -79,15 +83,14 @@ describe('NetworkClientPage', () => {
 
     // Honest summary-card labels (never "total network nodes").
     expect(await screen.findByText('Discovered Reachable')).toBeInTheDocument();
-    expect(screen.getByText('Unreachable')).toBeInTheDocument();
+    expect(screen.getByText('Failed Peer Candidates')).toBeInTheDocument();
     expect(screen.getByText('Total Known')).toBeInTheDocument();
-    // frontierDrained:true ⇒ no partial-round badge.
-    expect(screen.queryByText(/partial round/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/crawling/i)).not.toBeInTheDocument();
     // Reachability caveat still visible on the dashboard.
     expect(screen.getByText(/discoverable \/ reachable nodes only/i)).toBeInTheDocument();
   });
 
-  it('flags a partial round when the frontier was not drained', async () => {
+  it('shows active progress separately from the last completed round', async () => {
     server.use(
       http.get(`${API_BASE}/network/summary`, () =>
         HttpResponse.json({
@@ -95,15 +98,27 @@ describe('NetworkClientPage', () => {
           hasData: true,
           lastRound: {
             totalKnown: 3,
-            reachable: 2,
-            unreachable: 1,
-            frontierDrained: false,
-            roundId: 6,
-            started: 0,
-            finished: 0,
-            dialed: 3,
-            foreignDropped: 0,
+            candidatePeers: 3,
+            attemptedPeers: 3,
+            reachablePeers: 2,
+            unreachablePeers: 1,
+            roundId: 5,
+            startedAt: 0,
+            finishedAt: 1,
+            addressAttempts: 3,
+            failedAddressAttempts: 1,
+            foreignPeers: 0,
+            malformedAddresses: 0,
             newNodes: 0,
+          },
+          activeRound: {
+            roundId: 6,
+            startedAt: 2,
+            lastCheckpointAt: 3,
+            candidatePeers: 3,
+            completedPeers: 2,
+            addressAttempts: 2,
+            blockedReason: null,
           },
         })
       )
@@ -111,6 +126,33 @@ describe('NetworkClientPage', () => {
 
     render(<NetworkClientPage />, { wrapper: createWrapper() });
 
-    expect(await screen.findByText(/partial round/i)).toBeInTheDocument();
+    expect(await screen.findByText(/round #6 crawling 2\/3/i)).toBeInTheDocument();
+  });
+
+  it('surfaces an actionable blocked reason before the first round publishes', async () => {
+    server.use(
+      http.get(`${API_BASE}/network/summary`, () =>
+        HttpResponse.json({
+          enabled: true,
+          hasData: false,
+          lastRound: null,
+          activeRound: {
+            roundId: 1,
+            startedAt: 2,
+            lastCheckpointAt: 3,
+            candidatePeers: 3,
+            completedPeers: 1,
+            addressAttempts: 1,
+            blockedReason: 'frontier capacity exceeded: limit=3',
+          },
+        })
+      )
+    );
+
+    render(<NetworkClientPage />, { wrapper: createWrapper() });
+
+    expect(await screen.findByText(/round #1 blocked/i)).toHaveTextContent(
+      'frontier capacity exceeded: limit=3'
+    );
   });
 });

@@ -568,6 +568,7 @@ describe('renderMarkdownPage', () => {
       enabled: false,
       hasData: false,
       lastRound: null,
+      activeRound: null,
     });
 
     const result = await renderMarkdownPage({
@@ -589,16 +590,20 @@ describe('renderMarkdownPage', () => {
       hasData: true,
       lastRound: {
         roundId: 5,
-        started: 0,
-        finished: 1700000000,
-        dialed: 2,
-        reachable: 1,
-        unreachable: 1,
-        foreignDropped: 0,
+        startedAt: 0,
+        finishedAt: 1700000000,
+        candidatePeers: 2,
+        attemptedPeers: 2,
+        reachablePeers: 1,
+        unreachablePeers: 1,
+        addressAttempts: 2,
+        failedAddressAttempts: 1,
+        foreignPeers: 0,
+        malformedAddresses: 0,
         newNodes: 0,
         totalKnown: 2,
-        frontierDrained: true,
       },
+      activeRound: null,
     });
 
     const result = await renderMarkdownPage({
@@ -609,7 +614,7 @@ describe('renderMarkdownPage', () => {
 
     expect(result.status).toBe(200);
     expect(result.body).toContain('## Last Round');
-    expect(result.body).toContain('discoveredReachable');
+    expect(result.body).toContain('reachablePeers');
     expect(result.body).toContain('| totalKnown | 2 |');
   });
 

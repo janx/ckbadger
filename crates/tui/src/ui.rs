@@ -1077,6 +1077,8 @@ pub(crate) enum PeersView {
     Error(String),
     Disabled,
     Waiting,
+    Active(String),
+    Blocked(String),
     Dashboard,
 }
 
@@ -1089,7 +1091,22 @@ pub(crate) fn peers_view_state(data: &PeersData) -> PeersView {
     match &data.summary {
         Some(s) if s.enabled && s.has_data && s.last_round.is_some() => PeersView::Dashboard,
         Some(s) if !s.enabled => PeersView::Disabled,
-        Some(_) => PeersView::Waiting, // enabled but no data / no last round yet
+        Some(s) => match &s.active_round {
+            Some(active) => match &active.blocked_reason {
+                Some(reason) => PeersView::Blocked(format!(
+                    "Crawler round #{} BLOCKED — {}",
+                    active.round_id, reason
+                )),
+                None => PeersView::Active(format!(
+                    "Crawler round #{} — {}/{} peer candidates completed · {} address attempts",
+                    active.round_id,
+                    active.completed_peers,
+                    active.candidate_peers,
+                    active.address_attempts
+                )),
+            },
+            None => PeersView::Waiting,
+        },
         None => match &data.error {
             Some(e) => PeersView::Error(e.clone()),
             None => PeersView::Waiting,
@@ -1180,6 +1197,22 @@ fn draw_peers_content(f: &mut Frame, app: &App, area: Rect) {
                 Style::default().fg(SLATE_500),
             ))],
         ),
+        PeersView::Active(message) => draw_peers_message(
+            f,
+            area,
+            vec![Line::from(Span::styled(
+                message,
+                Style::default().fg(AMBER),
+            ))],
+        ),
+        PeersView::Blocked(message) => draw_peers_message(
+            f,
+            area,
+            vec![Line::from(Span::styled(
+                message,
+                Style::default().fg(ERROR_RED),
+            ))],
+        ),
         PeersView::Dashboard => draw_peers_dashboard(f, data, area),
     }
 }
@@ -1260,7 +1293,7 @@ fn draw_peers_status(f: &mut Frame, data: &PeersData, area: Rect) {
         .map(|d| d.as_secs())
         .unwrap_or(0);
 
-    // Line 1: crawler on · #round · age · PARTIAL (when the frontier was not drained)
+    // Line 1: last atomically completed round plus optional active progress.
     let mut line1 = vec![
         Span::styled("Crawler ", Style::default().fg(SLATE_500)),
         Span::styled(
@@ -1278,15 +1311,27 @@ fn draw_peers_status(f: &mut Frame, data: &PeersData, area: Rect) {
         ),
         Span::styled("  ·  ", Style::default().fg(SLATE_700)),
         Span::styled(
-            format_last_round_age(lr.finished, now),
+            format_last_round_age(lr.finished_at, now),
             Style::default().fg(FOREGROUND),
         ),
     ];
-    if !lr.frontier_drained {
+    if let Some(active) = data
+        .summary
+        .as_ref()
+        .and_then(|summary| summary.active_round.as_ref())
+    {
         line1.push(Span::styled("  ·  ", Style::default().fg(SLATE_700)));
+        let (label, color) = if active.blocked_reason.is_some() {
+            ("BLOCKED", ERROR_RED)
+        } else {
+            ("CRAWLING", AMBER)
+        };
         line1.push(Span::styled(
-            "PARTIAL",
-            Style::default().fg(AMBER).add_modifier(Modifier::BOLD),
+            format!(
+                "{} #{} {}/{}",
+                label, active.round_id, active.completed_peers, active.candidate_peers
+            ),
+            Style::default().fg(color).add_modifier(Modifier::BOLD),
         ));
     }
 
@@ -1301,35 +1346,55 @@ fn draw_peers_status(f: &mut Frame, data: &PeersData, area: Rect) {
         ),
         Span::styled(" known  ·  ", Style::default().fg(SLATE_700)),
         Span::styled(
-            format_num_u64(lr.reachable),
+            format_num_u64(lr.reachable_peers),
             Style::default().fg(TERMINAL_GREEN),
         ),
-        Span::styled(" reachable  ·  ", Style::default().fg(SLATE_700)),
+        Span::styled(" reachable peers  ·  ", Style::default().fg(SLATE_700)),
         Span::styled(
-            format_num_u64(lr.unreachable),
+            format_num_u64(lr.unreachable_peers),
             Style::default().fg(SLATE_500),
         ),
-        Span::styled(" unreachable", Style::default().fg(SLATE_500)),
+        Span::styled(" failed peers", Style::default().fg(SLATE_500)),
     ]);
 
     // Line 3: this-round activity
     let line3 = Line::from(vec![
         Span::styled("This round ", Style::default().fg(SLATE_500)),
-        Span::styled(format_num_u64(lr.dialed), Style::default().fg(FOREGROUND)),
-        Span::styled(" dialed  ·  ", Style::default().fg(SLATE_700)),
+        Span::styled(
+            format_num_u64(lr.address_attempts),
+            Style::default().fg(FOREGROUND),
+        ),
+        Span::styled(" address attempts  ·  ", Style::default().fg(SLATE_700)),
+        Span::styled(
+            format_num_u64(lr.failed_address_attempts),
+            Style::default().fg(SLATE_500),
+        ),
+        Span::styled(" failed  ·  ", Style::default().fg(SLATE_700)),
         Span::styled(
             format_num_u64(lr.new_nodes),
             Style::default().fg(TERMINAL_GREEN),
         ),
         Span::styled(" new  ·  ", Style::default().fg(SLATE_700)),
         Span::styled(
-            format_num_u64(lr.foreign_dropped),
+            format_num_u64(lr.foreign_peers),
             Style::default().fg(SLATE_500),
         ),
-        Span::styled(" foreign dropped", Style::default().fg(SLATE_500)),
+        Span::styled(" foreign peers", Style::default().fg(SLATE_500)),
     ]);
 
-    f.render_widget(Paragraph::new(vec![Line::from(line1), line2, line3]), inner);
+    let mut lines = vec![Line::from(line1), line2, line3];
+    if let Some(reason) = data
+        .summary
+        .as_ref()
+        .and_then(|summary| summary.active_round.as_ref())
+        .and_then(|active| active.blocked_reason.as_deref())
+    {
+        lines.push(Line::from(vec![
+            Span::styled("Blocked  ", Style::default().fg(ERROR_RED)),
+            Span::styled(reason, Style::default().fg(SLATE_500)),
+        ]));
+    }
+    f.render_widget(Paragraph::new(lines), inner);
 }
 
 const PEERS_DIST_TOP_N: usize = 8;
@@ -6331,6 +6396,7 @@ mod tests {
                 enabled: false,
                 has_data: false,
                 last_round: None,
+                active_round: None,
             }),
             ..Default::default()
         };
@@ -6340,13 +6406,44 @@ mod tests {
                 enabled: true,
                 has_data: false,
                 last_round: None,
+                active_round: None,
             }),
             ..Default::default()
         };
         assert!(matches!(peers_view_state(&waiting), PeersView::Waiting));
+        let active_summary: NetworkSummary = serde_json::from_str(
+            r#"{"enabled":true,"hasData":false,"lastRound":null,"activeRound":{"roundId":1,"startedAt":1,"lastCheckpointAt":2,"candidatePeers":5,"completedPeers":2,"addressAttempts":3,"blockedReason":null}}"#,
+        )
+        .unwrap();
+        let active = PeersData {
+            summary: Some(active_summary),
+            ..Default::default()
+        };
+        match peers_view_state(&active) {
+            PeersView::Active(message) => {
+                assert!(message.contains("2/5 peer candidates"));
+                assert!(message.contains("3 address attempts"));
+            }
+            _ => panic!("expected active first-round view"),
+        }
+        let blocked_summary: NetworkSummary = serde_json::from_str(
+            r#"{"enabled":true,"hasData":false,"lastRound":null,"activeRound":{"roundId":1,"startedAt":1,"lastCheckpointAt":2,"candidatePeers":5,"completedPeers":2,"addressAttempts":3,"blockedReason":"frontier capacity exceeded"}}"#,
+        )
+        .unwrap();
+        let blocked = PeersData {
+            summary: Some(blocked_summary),
+            ..Default::default()
+        };
+        match peers_view_state(&blocked) {
+            PeersView::Blocked(message) => {
+                assert!(message.contains("BLOCKED"));
+                assert!(message.contains("frontier capacity exceeded"));
+            }
+            _ => panic!("expected blocked first-round view"),
+        }
         // has_data true with a lastRound => Dashboard.
         let dash_summary: NetworkSummary = serde_json::from_str(
-            r#"{"enabled":true,"hasData":true,"lastRound":{"roundId":5,"started":1,"finished":2,"dialed":8,"reachable":3,"unreachable":1,"foreignDropped":0,"newNodes":2,"totalKnown":4,"frontierDrained":true}}"#,
+            r#"{"enabled":true,"hasData":true,"lastRound":{"roundId":5,"startedAt":1,"finishedAt":2,"candidatePeers":4,"attemptedPeers":4,"reachablePeers":3,"unreachablePeers":1,"addressAttempts":8,"failedAddressAttempts":1,"foreignPeers":0,"malformedAddresses":0,"newNodes":2,"totalKnown":4},"activeRound":null}"#,
         )
         .unwrap();
         let dashboard = PeersData {
@@ -6363,7 +6460,7 @@ mod tests {
         // render the Dashboard — the crawler status block is the tab's primary content and
         // must not be hidden behind a full-screen Error for a missing chart endpoint.
         let summary: NetworkSummary = serde_json::from_str(
-            r#"{"enabled":true,"hasData":true,"lastRound":{"roundId":1,"started":0,"finished":0,"dialed":0,"reachable":0,"unreachable":0,"foreignDropped":0,"newNodes":0,"totalKnown":0,"frontierDrained":true}}"#,
+            r#"{"enabled":true,"hasData":true,"lastRound":{"roundId":1,"startedAt":0,"finishedAt":0,"candidatePeers":0,"attemptedPeers":0,"reachablePeers":0,"unreachablePeers":0,"addressAttempts":0,"failedAddressAttempts":0,"foreignPeers":0,"malformedAddresses":0,"newNodes":0,"totalKnown":0},"activeRound":null}"#,
         )
         .unwrap();
         let data = PeersData {

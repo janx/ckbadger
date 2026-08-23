@@ -106,7 +106,7 @@ pub fn test_config_with_ckb_db_path(
     AppConfig {
         append_only_store,
         store,
-        network_store: None,
+        network_store: Arc::new(arc_swap::ArcSwapOption::from(None)),
         crawler_enabled: false,
         ckb_rpc_url: "http://localhost:8114".to_string(),
         ckb_network: "mainnet".to_string(),
@@ -132,7 +132,7 @@ pub fn test_config_with_network(
     crawler_enabled: bool,
 ) -> AppConfig {
     AppConfig {
-        network_store: Some(network_store),
+        network_store: Arc::new(arc_swap::ArcSwapOption::from(Some(network_store))),
         crawler_enabled,
         ..test_config(store)
     }
@@ -580,10 +580,15 @@ pub fn test_network_store() -> std::sync::Arc<ckbadger_store::CkbadgerStore> {
     s.put_node(b"peerB", &node).unwrap();
     s.put_network_status(&LatestStatus {
         round_id: 5,
-        reachable: 1,
-        unreachable: 1,
+        started: 100,
+        finished: 200,
+        candidate_peers: 2,
+        attempted_peers: 2,
+        reachable_peers: 1,
+        unreachable_peers: 1,
+        address_attempts: 3,
+        failed_address_attempts: 2,
         total_known: 2,
-        frontier_drained: true,
         ..Default::default()
     })
     .unwrap();
