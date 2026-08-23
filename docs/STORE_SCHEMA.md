@@ -191,6 +191,32 @@ Key = raw `peer_id` bytes → `NodeRecord` (per-peer crawler view: `own_addrs`, 
 - `CkbadgerStore::open_domain_secondary(primary_path, secondary_path)` / `open_append_only_secondary(primary_path, secondary_path)` — read-only mode for API/TUI (split secondary stores)
 - All store operations are synchronous (RocksDB reads are fast)
 
+## Read Consistency (secondary readers)
+
+A secondary cannot take snapshots (`GetSnapshot` fails with "snapshot not supported in secondary
+mode"), and its view advances _only_ when `try_catch_up_with_primary()` runs. Without a read view,
+any read that resolves an index row and then loads the row it points at spans two views when a
+catch-up lands in between: the iterator, pinned at creation, still yields the pre-catch-up index
+row while the point lookup already sees the post-catch-up entry.
+
+`crates/ckbadger-store/src/read_view.rs` makes catch-up — the single mutation point of a reader's
+view — exclusive with pinned read scopes, restoring per process the guarantee `snapshot()` gives on
+a primary, which every multi-CF read path already assumes:
+
+- `CkbadgerStore::refresh` runs inside a `CatchUpWindow`; `catch_up_in_window()` takes that window
+  by reference, so "all secondaries advance together" is checked at compile time. Refresh order
+  between the domain and append-only stores is therefore invisible to readers.
+- The API pins one read view per HTTP request (innermost middleware), so a response can never mix
+  two views.
+- Deliberately **not** pinned: handlers that wait for the indexer to write new data (the cycles
+  long-poll releases its pin before waiting — its contract is to observe the _next_ view), plus
+  background full-store scans (cache warmup) and WebSocket broadcasters, which interleave external
+  I/O with minutes-long scans and accept drift rather than freeze catch-up.
+- Both sides are bounded: a read scope arriving after a catch-up queues yields to it for 100ms and
+  then pins anyway, and a catch-up held up by a read scope logs the stall every 5s.
+- Never hold a read view across `CkbadgerStore::refresh` on the same thread — that self-deadlocks.
+  Catch-up runs on its own thread (`spawn_blocking` in the API), never inside a pinned scope.
+
 ## Memory Considerations
 
 Memory sizing is per network rather than a fixed host-wide peak:

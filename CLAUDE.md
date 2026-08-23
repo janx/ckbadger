@@ -191,7 +191,7 @@ Sync progress and memory stats are stored in RocksDB (`get_sync_tip()`/`get_sync
 
 ## ckbadger-store (Embedded Storage Engine)
 
-Three logical RocksDB store classes: domain (`[store].domain_data_path`, default `data/domain`, 59 CFs), append-only (`[store].append_only_data_path`, default `data/append-only`, 1 CF: `CF_CELLS`), and network (`[store].network_data_path`, default `data/network`, 2 CFs: `CF_NET_NODES`, `CF_NET_STATS`). For the two chain stores the indexer opens read-write and the API opens secondary (read-only); the append-only store holds only immutable cell payloads keyed by outpoint, while all other chain state (activities, indexes, stats, etc.) lives in the domain store. The network store is written solely by the opt-in `ckbadger-crawler` service (configured via the `[crawler]` section, default `enabled = false`; API opens it secondary) and holds non-chain p2p-crawler observations — it is the only store EXEMPT from rebuild-from-genesis. See `docs/STORE_SCHEMA.md` for full column family reference.
+Three logical RocksDB store classes: domain (`[store].domain_data_path`, default `data/domain`, 59 CFs), append-only (`[store].append_only_data_path`, default `data/append-only`, 1 CF: `CF_CELLS`), and network (`[store].network_data_path`, default `data/network`, 2 CFs: `CF_NET_NODES`, `CF_NET_STATS`). For the two chain stores the indexer opens read-write and the API opens secondary (read-only); the append-only store holds only immutable cell payloads keyed by outpoint, while all other chain state (activities, indexes, stats, etc.) lives in the domain store. A secondary has no snapshots and its view advances only on `try_catch_up_with_primary()`, so the API pins one read view per HTTP request (`crates/ckbadger-store/src/read_view.rs`) and catch-up is exclusive with pinned scopes — any read that resolves an index row and then loads the row it points at is coherent by default. Handlers that wait for the indexer to write new data (the cycles long-poll) must release the pin first; see `docs/STORE_SCHEMA.md` → Read Consistency. The network store is written solely by the opt-in `ckbadger-crawler` service (configured via the `[crawler]` section, default `enabled = false`; API opens it secondary) and holds non-chain p2p-crawler observations — it is the only store EXEMPT from rebuild-from-genesis. See `docs/STORE_SCHEMA.md` for full column family reference.
 
 Memory is budgeted per network. `[store].memory_budget_gb` is an explicit per-network override;
 otherwise detected host RAM is divided by the number of co-resident orchestrator networks. The
@@ -342,7 +342,7 @@ const DAO_CODE_HASH: &str = "0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d
 | Vite SPA deep links       | Rust frontend server must fall back to `index.html` for non-files |
 | Vitest globals            | Add `vitest/globals` to tsconfig types                            |
 | MSW handlers              | Must start server in setup.ts `beforeAll`                         |
-| RocksDB secondary mode    | API uses `open_secondary()` — read-only, no write locks           |
+| RocksDB secondary mode    | Read-only, no write locks, no snapshots — pin a read view         |
 | Spore molecule `Bytes`    | Size field = content length (NOT total size including header)     |
 
 ## File Locations

@@ -12,8 +12,8 @@ Quick navigation map for humans and agents working in `ckbadger`.
 3. Each indexer validates its configured network against the CKB node, derives the exact
    `GenesisBaseline` from block 0 when absent, fetches chain data, parses it, and writes its own
    domain and append-only RocksDB stores.
-4. Each API opens those two chain stores as read-only secondaries. A direct per-network API serves
-   `/api/v1/*` and `/ws`.
+4. Each API opens those two chain stores as read-only secondaries, refreshing them on a catch-up
+   loop. A direct per-network API serves `/api/v1/*` and `/ws`.
 5. The shared frontend serves pages under `/{network}/...` and proxies
    `/api/{network}/v1/*` → that network's `/api/v1/*`, plus
    `/ws/{network}` → that network's `/ws`.
@@ -28,6 +28,13 @@ Quick navigation map for humans and agents working in `ckbadger`.
 | Append-only | Per-network indexer | API secondary reader      | Immutable cell payloads keyed by outpoint                                 |
 | Network     | Per-network crawler | API secondary reader      | Non-chain p2p observations; TTL-retained and not rebuildable from genesis |
 
+A RocksDB secondary has no snapshots, so a reader's view changes only when catch-up runs.
+`crates/ckbadger-store/src/read_view.rs` makes catch-up exclusive with pinned read scopes, and the
+API pins one view per request: any new read path that resolves an index row and then loads the row
+it points at is coherent by default, and a handler that waits for the indexer to write new data
+(long-poll) must release its pin first. See
+[docs/STORE_SCHEMA.md](STORE_SCHEMA.md#read-consistency-secondary-readers).
+
 ## Module Map
 
 | Layer                    | Entry points                                              | Core files                                                                                             | Tests                                                     |
@@ -35,7 +42,7 @@ Quick navigation map for humans and agents working in `ckbadger`.
 | CLI / supervisor         | `crates/cli/src/main.rs`                                  | `supervisor.rs`, `sequencer.rs`                                                                        | `cargo test -p ckbadger`                                  |
 | Configuration            | `crates/config/src/lib.rs`                                | `orchestrator.rs`                                                                                      | `cargo test -p ckbadger-config`                           |
 | Indexer library          | `crates/indexer/src/lib.rs`, `entry.rs`                   | `network_guard.rs`, `genesis_baseline.rs`, `lifecycle.rs`, `sync/`, `parser/`, `db/writer/`, `verify/` | `cargo test -p ckbadger-indexer`                          |
-| Store                    | `crates/ckbadger-store/src/lib.rs`                        | `store.rs`, `types.rs`, `keys.rs`, `*_ops.rs`, `network_*`                                             | `cargo test -p ckbadger-store`                            |
+| Store                    | `crates/ckbadger-store/src/lib.rs`                        | `store.rs`, `read_view.rs`, `types.rs`, `keys.rs`, `*_ops.rs`, `network_*`                             | `cargo test -p ckbadger-store`                            |
 | API / frontend server    | `crates/api/src/lib.rs`, `entry.rs`                       | `routes/`, `ws/`, `frontend_proxy.rs`, `embedded_frontend.rs`, `response.rs`                           | `cargo test -p ckbadger-api`, `crates/api/tests/api_*.rs` |
 | Crawler                  | `crates/crawler/src/lib.rs`                               | round engine, p2p prober, network-store writer                                                         | `cargo test -p ckbadger-crawler`                          |
 | TUI                      | `crates/tui/src/lib.rs`                                   | `multi.rs`, service/sync/memory/network panels                                                         | `cargo test -p ckbadger-tui`                              |

@@ -46,7 +46,7 @@ trends, and sampled peer gossip. The current UI does not render a topology graph
   (`get_peers` is local-node-only). Node records retain only a bounded sample of advertised peers;
   the current API and UI do not turn that sample into a topology graph.
 - Not a per-node detail page. A point API endpoint exists for hover popovers and API/agent use.
-- Not part of the chain data-integrity `verify` suite (observational data, outside the 56 checks).
+- Not part of the chain data-integrity `verify` suite (observational data, outside the 57 checks).
 
 ---
 

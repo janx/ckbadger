@@ -2358,4 +2358,61 @@ compute the answer that another path in the same process already has".
 
 ---
 
-_Last updated: 2026-08-09_
+### API-016: A fail-fast assertion whose premise the read path had lost
+
+**Date**: 2026-08-19
+
+**Symptom**: `GET /dao/deposits?status=0` intermittently returned 500 on healthy
+data, on mainnet and testnet:
+
+    dao_by_status_block stale status: expected=0, actual=1
+
+The index was not stale. A full-table audit of both live stores matched exactly
+(91,508 deposits vs 91,508 index rows on mainnet, 9,288 vs 9,288 on testnet),
+and the 0->1 transition it tripped on is an ordinary withdraw request.
+
+**Root Cause**: A RocksDB secondary cannot take snapshots (`GetSnapshot` fails
+with "snapshot not supported in secondary mode"), and its view advances _only_
+when `try_catch_up_with_primary()` runs — every second in the API. The listing
+resolves an index row and then loads the deposit it points at, so when a
+catch-up landed between the two, the iterator (pinned at creation) still yielded
+the pre-catch-up index row while the point lookup already saw the post-catch-up
+entry. The cross-check between them then failed on a perfectly normal
+transition. Reads without such a cross-check returned a torn mix of two views
+and said nothing.
+
+The snapshot-consistent version of this read existed: ca9afe04 added it, and
+559e05fb dropped the snapshot again to make the path work on a secondary — on
+the only path the API actually takes. Its regression test exercised the primary
+branch only, so CI stayed green over the broken one. The same contract had three
+copies of its checks, which is why a fix could live on one branch while the test
+covered another.
+
+**Fix**: `ckbadger_store::read_view` makes catch-up — the single mutation point
+of a reader's view — exclusive with pinned read scopes, restoring per process
+the guarantee `snapshot()` gives on a primary, which every multi-CF read path
+already assumes. `refresh()` runs inside a `CatchUpWindow` and
+`catch_up_in_window()` takes that window by reference, so "all secondaries
+advance together" is checked at compile time; the API pins one view per request
+in an innermost middleware, so a response cannot mix two views; the cycles
+long-poll, whose contract is to observe the _next_ view, releases its pin before
+waiting. Both sides are bounded (a scope arriving after a queued catch-up yields
+100ms, then pins anyway; a blocked catch-up logs the stall every 5s), so a
+request stream cannot starve catch-up and one wedged handler cannot freeze later
+requests. The "refresh append-only before domain" ordering workaround was
+deleted — one window now covers every secondary. One `DaoReadView` and one
+resolver replaced the three copies of the index/entry contract, and verify
+gained `dao_status_index_matches_deposits` (sampling), a full-table cross-check
+that reports INCONCLUSIVE on a reorg rather than blaming the index.
+
+**Lesson**: The assertion was right and the data was right; what had been
+quietly removed was the premise the assertion was written against. When a change
+drops a consistency primitive to make code run in a different mode, restore the
+primitive in that mode — do not leave invariant checks standing on a premise
+that no longer holds, and never silence them instead. A test that covers only
+the primary branch of a primary/secondary split covers the branch production
+does not take.
+
+---
+
+_Last updated: 2026-08-23_
