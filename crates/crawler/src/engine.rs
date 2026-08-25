@@ -1022,10 +1022,12 @@ fn apply_probe_result(
                 stage_advertisement(target, &peer_id, alias, observed_at, round_id)?;
                 dirty.insert(target_peer_id.clone());
             }
-            let normalized_discovered: Vec<String> = normalized_advertisements
+            let mut normalized_discovered: Vec<String> = normalized_advertisements
                 .into_iter()
                 .map(|(_, alias)| alias)
                 .collect();
+            normalized_discovered.sort();
+            normalized_discovered.dedup();
             if outcome.discovery.normalized_advertised_addresses != 0 {
                 anyhow::bail!(
                     "prober populated crawler-owned normalized Discovery counter: round_id={}, peer_id=0x{}, value={}",
@@ -2345,6 +2347,43 @@ mod tests {
                 .unwrap(),
         );
         assert!(store.get_crawl_candidate(b"direct-only").unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn discovery_aliases_are_canonical_when_peer_and_alias_orders_differ() {
+        let prober = InstrumentedProber::new(
+            vec!["source".into()],
+            HashMap::from([
+                ("source".into(), b"source".to_vec()),
+                ("alias-a".into(), b"z-target".to_vec()),
+                ("alias-z".into(), b"a-target".to_vec()),
+            ]),
+            HashMap::from([(
+                "source".into(),
+                outcome(b"source", "source", &["alias-a", "alias-z"]),
+            )]),
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_network(dir.path()).unwrap();
+        let clock = TestClock::new(10_000);
+
+        let status = completed(
+            run_crawl_slice(
+                &store,
+                &prober,
+                &NoGeo,
+                &clock,
+                &RoundConfig::test_defaults(),
+            )
+            .await
+            .unwrap(),
+        );
+
+        assert_eq!(status.discovery.normalized_advertised_addresses, 2);
+        let alias_a = store.get_crawl_candidate(b"z-target").unwrap().unwrap();
+        let alias_z = store.get_crawl_candidate(b"a-target").unwrap().unwrap();
+        assert_eq!(alias_a.advertisements[0].alias, "alias-a");
+        assert_eq!(alias_z.advertisements[0].alias, "alias-z");
     }
 
     #[tokio::test]
