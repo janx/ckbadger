@@ -1,54 +1,104 @@
-import { describe, it, expect } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '../utils/test-utils';
+import { describe, expect, it } from 'vitest';
+import { fireEvent, render, screen, waitFor, within } from '../utils/test-utils';
 import { truncateHash } from '@/lib/utils';
-import { NodesTable } from '@/app/network/nodes-table';
+import { PeersTable } from '@/app/network/nodes-table';
 
-// peerIds mirror the canned two-node page served by the global MSW handler
-// (frontend/__tests__/msw/handlers.ts). Node A is reachable, Node B is not.
-const REACHABLE_PEER_ID = 'QmReachablePeer1111111111111111111111111111AaBb';
-const UNREACHABLE_PEER_ID = 'QmUnreachablePeer22222222222222222222222222CcDd';
+const REACHABLE_PEER_ID = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+const UNVERIFIED_PEER_ID = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
 
-describe('NodesTable', () => {
-  it('renders both nodes from the canned page (truncated peerId, version, country, reachable badge)', async () => {
-    render(<NodesTable />);
+describe('PeersTable', () => {
+  it('renders exact peer states and candidate-only metadata as em dashes', async () => {
+    render(<PeersTable />);
 
-    // Both rows render.
-    await waitFor(() => expect(screen.getAllByTestId('node-row')).toHaveLength(2));
+    await waitFor(() => expect(screen.getAllByTestId('peer-row')).toHaveLength(2));
 
-    // peerIds are truncated via the shared hash-truncate util.
     expect(screen.getByText(truncateHash(REACHABLE_PEER_ID))).toBeInTheDocument();
-    expect(screen.getByText(truncateHash(UNREACHABLE_PEER_ID))).toBeInTheDocument();
-    // Full peerId is not rendered (proves truncation actually happened).
-    expect(screen.queryByText(REACHABLE_PEER_ID)).not.toBeInTheDocument();
+    expect(screen.getByText(truncateHash(UNVERIFIED_PEER_ID))).toBeInTheDocument();
+    const reachableRow = screen
+      .getByText(truncateHash(REACHABLE_PEER_ID))
+      .closest<HTMLElement>('[data-testid]');
+    expect(within(reachableRow!).getByText('Reachable')).toBeInTheDocument();
+    expect(screen.queryByText(/^Unreachable$/)).not.toBeInTheDocument();
 
-    // Version + country cells render as real DOM text.
-    expect(screen.getByText('0.114.0')).toBeInTheDocument();
-    expect(screen.getByText('0.113.0')).toBeInTheDocument();
-    expect(screen.getByText('United States')).toBeInTheDocument();
-    expect(screen.getByText('Germany')).toBeInTheDocument();
-
-    // Reachability badges (one of each).
-    expect(screen.getByText('Reachable')).toBeInTheDocument();
-    expect(screen.getByText('Unreachable')).toBeInTheDocument();
+    const candidateRow = screen
+      .getByText(truncateHash(UNVERIFIED_PEER_ID))
+      .closest<HTMLElement>('[data-testid]');
+    expect(within(candidateRow!).getByText('Advertised · unverified')).toBeInTheDocument();
+    expect(candidateRow).toHaveTextContent('—');
+    expect(candidateRow).not.toHaveTextContent('Unknown');
   });
 
-  it('refetches with reachable=true when the "Reachable only" filter is toggled, leaving one row', async () => {
-    render(<NodesTable />);
+  it('refetches with the selected exact display state', async () => {
+    render(<PeersTable />);
+    await waitFor(() => expect(screen.getAllByTestId('peer-row')).toHaveLength(2));
 
-    // Start with both nodes.
-    await waitFor(() => expect(screen.getAllByTestId('node-row')).toHaveLength(2));
+    fireEvent.change(screen.getByLabelText('Filter by peer state'), {
+      target: { value: 'advertisedUnverified' },
+    });
 
-    // Toggle the reachable-only filter — this changes the query key and triggers a real refetch;
-    // the MSW handler honours reachable=true and returns only the reachable node.
-    fireEvent.click(screen.getByRole('button', { name: 'Reachable only' }));
+    await waitFor(() => expect(screen.getAllByTestId('peer-row')).toHaveLength(1));
+    expect(screen.getByText(truncateHash(UNVERIFIED_PEER_ID))).toBeInTheDocument();
+    expect(screen.queryByText(truncateHash(REACHABLE_PEER_ID))).not.toBeInTheDocument();
+  });
 
-    // Now only the reachable node remains.
-    await waitFor(() => expect(screen.getAllByTestId('node-row')).toHaveLength(1));
-    expect(screen.getByText('0.114.0')).toBeInTheDocument();
-    expect(screen.getByText(truncateHash(REACHABLE_PEER_ID))).toBeInTheDocument();
-    // The unreachable node dropped out of the refetched page.
-    expect(screen.queryByText('0.113.0')).not.toBeInTheDocument();
-    expect(screen.queryByText('Germany')).not.toBeInTheDocument();
-    expect(screen.queryByText(truncateHash(UNREACHABLE_PEER_ID))).not.toBeInTheDocument();
+  it('offers all six typed observations and refetches with the selected value', async () => {
+    render(<PeersTable />);
+    await waitFor(() => expect(screen.getAllByTestId('peer-row')).toHaveLength(2));
+
+    const select = screen.getByLabelText('Filter by address observation');
+    expect(
+      within(select)
+        .getAllByRole('option')
+        .map((option) => (option as HTMLOptionElement).value)
+    ).toEqual([
+      '',
+      'dialRequestFailed',
+      'noAuthenticatedSessionBeforeDeadline',
+      'authenticatedSessionWithoutIdentifyBeforeDeadline',
+      'malformedIdentify',
+      'foreignNetwork',
+      'sameNetworkIdentified',
+    ]);
+
+    fireEvent.change(select, {
+      target: { value: 'noAuthenticatedSessionBeforeDeadline' },
+    });
+
+    await waitFor(() => expect(screen.getAllByTestId('peer-row')).toHaveLength(1));
+    expect(screen.getByText(truncateHash(UNVERIFIED_PEER_ID))).toBeInTheDocument();
+    expect(screen.queryByText(truncateHash(REACHABLE_PEER_ID))).not.toBeInTheDocument();
+  });
+
+  it('expands a peer into address-level probe evidence', async () => {
+    render(<PeersTable />);
+    await waitFor(() => expect(screen.getAllByTestId('peer-row')).toHaveLength(2));
+
+    fireEvent.click(
+      screen.getByRole('button', { name: `Show evidence for ${UNVERIFIED_PEER_ID}` })
+    );
+
+    expect(await screen.findByText('Last completed round #5')).toBeInTheDocument();
+    const evidence = screen.getByTestId('peer-evidence-row');
+    expect(
+      within(evidence).getByText('No authenticated session before deadline')
+    ).toBeInTheDocument();
+    expect(within(evidence).getByText('2 consecutive exhausted rounds')).toBeInTheDocument();
+    expect(within(evidence).getByText(/first advertised/)).toHaveTextContent(/last advertised/);
+    expect(within(evidence).getByText('Advertised by')).toBeInTheDocument();
+  });
+
+  it('shows retained Discovery evidence for a verified peer', async () => {
+    render(<PeersTable />);
+    await waitFor(() => expect(screen.getAllByTestId('peer-row')).toHaveLength(2));
+
+    fireEvent.click(screen.getByRole('button', { name: `Show evidence for ${REACHABLE_PEER_ID}` }));
+
+    expect(await screen.findByText('Retained verification')).toBeInTheDocument();
+    expect(screen.getByText('Valid Nodes replies: 1')).toBeInTheDocument();
+    expect(screen.getByText('Normalized advertisements: 2')).toBeInTheDocument();
+    expect(screen.getByText('Rejected advertisements: 0')).toBeInTheDocument();
+    expect(screen.getByText('Malformed messages: 0')).toBeInTheDocument();
+    expect(screen.getByText('Unexpected messages: 0')).toBeInTheDocument();
+    expect(screen.queryByText(/consecutive exhausted rounds/)).not.toBeInTheDocument();
   });
 });

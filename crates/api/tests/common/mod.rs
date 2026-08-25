@@ -547,7 +547,12 @@ pub fn seed_two_reference_script_family(
 /// Open a fresh seeded network store for API tests (a couple of nodes + a status + history).
 pub fn test_network_store() -> std::sync::Arc<ckbadger_store::CkbadgerStore> {
     use ckbadger_store::network_keys::{Granularity, Metric};
-    use ckbadger_store::{CkbadgerStore, HistoryPoint, LatestStatus, NodeRecord};
+    use ckbadger_store::{
+        ActiveCandidateProbe, ActiveCandidateState, ActiveCrawl, AddressObservationHistogram,
+        AddressProbeEvidence, AddressProbeResult, CkbadgerStore, CompletedCandidateEvidence,
+        CompletedCandidateOutcome, CompletedPeerOutcomes, CrawlAddress, CrawlCandidate,
+        DiscoveryEvidence, HistoryPoint, LatestStatus, NodeRecord, StagedProbeOutcome,
+    };
     let dir = tempfile::tempdir().expect("tmp");
     let s = std::sync::Arc::new(CkbadgerStore::open_test_network(dir.path()).unwrap());
     std::mem::forget(dir); // keep the temp dir alive for the store's lifetime (mirrors test_store())
@@ -571,35 +576,164 @@ pub fn test_network_store() -> std::sync::Arc<ckbadger_store::CkbadgerStore> {
             org: "Ex".into(),
         }),
         last_rtt_ms: Some(9),
-        known_peers: vec![],
+        discovery: DiscoveryEvidence {
+            valid_nodes_messages: 1,
+            normalized_advertised_addresses: 1,
+            ..Default::default()
+        },
+        known_peers: vec![b"peerC".to_vec()],
     };
-    s.put_node(b"peerA", &node).unwrap();
+    let mut node_a = node.clone();
+    node_a.first_seen = 200;
     node.reachable = false;
     node.client_version = "0.118.0".into();
     node.geo = None;
+    let node_b = node.clone();
+    // peerB represents a verification retained from an earlier round.
     s.put_node(b"peerB", &node).unwrap();
-    s.put_network_status(&LatestStatus {
+    let status = LatestStatus {
         round_id: 5,
         started: 100,
         finished: 200,
-        candidate_peers: 2,
-        attempted_peers: 2,
-        reachable_peers: 1,
-        unreachable_peers: 1,
-        address_attempts: 3,
-        failed_address_attempts: 2,
-        total_known: 2,
-        ..Default::default()
-    })
-    .unwrap();
-    s.put_history_point(
-        Metric::TotalNodes,
-        Granularity::Hour,
-        10,
-        &HistoryPoint {
-            scalar: 2,
-            buckets: vec![],
+        peer_outcomes: CompletedPeerOutcomes {
+            same_network_identified: 1,
+            exhausted_with_retained_verification: 1,
+            exhausted_without_retained_verification: 1,
+            ..Default::default()
         },
+        address_observations: AddressObservationHistogram {
+            dial_request_failed: 2,
+            same_network_identified: 1,
+            ..Default::default()
+        },
+        discovery: DiscoveryEvidence {
+            valid_nodes_messages: 1,
+            normalized_advertised_addresses: 1,
+            ..Default::default()
+        },
+        new_verified_peers: 1,
+        ..Default::default()
+    };
+    let durable_transition = |peer: &[u8], outcome: CompletedCandidateOutcome, result| {
+        let address = format!("addr{}", String::from_utf8_lossy(peer));
+        let observation = AddressProbeEvidence {
+            address: address.clone(),
+            round_id: 5,
+            observed_at: 200,
+            elapsed_ms: 9,
+            result,
+        };
+        let active_state = match outcome {
+            CompletedCandidateOutcome::SameNetworkIdentified => ActiveCandidateState::Succeeded,
+            CompletedCandidateOutcome::Exhausted => ActiveCandidateState::Exhausted,
+            CompletedCandidateOutcome::ForeignNetwork => ActiveCandidateState::ForeignNetwork,
+        };
+        let checkpoint = CrawlCandidate {
+            addresses: vec![CrawlAddress {
+                addr: address,
+                first_advertised_at: 100,
+                last_advertised_at: 200,
+            }],
+            first_discovered_at: 100,
+            last_advertised_at: 200,
+            active: Some(ActiveCandidateProbe {
+                round_id: 5,
+                state: active_state,
+                observations: vec![observation.clone()],
+                staged_success: (outcome == CompletedCandidateOutcome::SameNetworkIdentified)
+                    .then_some(StagedProbeOutcome {
+                        observed_at: 200,
+                        client_version: "0.119.0".into(),
+                        protocols: vec!["/ckb/discovery".into()],
+                        own_addrs: vec!["/ip4/1.2.3.4/tcp/8115".into()],
+                        rtt_ms: Some(9),
+                        discovered_addrs: vec!["addrpeerC".into()],
+                        discovery: DiscoveryEvidence {
+                            valid_nodes_messages: 1,
+                            normalized_advertised_addresses: 1,
+                            ..Default::default()
+                        },
+                        flags: 0,
+                    }),
+            }),
+            ..Default::default()
+        };
+        let completed = CrawlCandidate {
+            active: None,
+            last_completed: Some(CompletedCandidateEvidence {
+                round_id: 5,
+                outcome,
+                observations: vec![observation],
+                consecutive_exhausted_rounds: u64::from(
+                    outcome == CompletedCandidateOutcome::Exhausted,
+                ),
+            }),
+            ..checkpoint.clone()
+        };
+        (checkpoint, completed)
+    };
+    let transitions = vec![
+        (
+            b"peerA".to_vec(),
+            durable_transition(
+                b"peerA",
+                CompletedCandidateOutcome::SameNetworkIdentified,
+                AddressProbeResult::SameNetworkIdentified,
+            ),
+        ),
+        (
+            b"peerB".to_vec(),
+            durable_transition(
+                b"peerB",
+                CompletedCandidateOutcome::Exhausted,
+                AddressProbeResult::DialRequestFailed,
+            ),
+        ),
+        (
+            b"peerC".to_vec(),
+            durable_transition(
+                b"peerC",
+                CompletedCandidateOutcome::Exhausted,
+                AddressProbeResult::DialRequestFailed,
+            ),
+        ),
+    ];
+    let checkpoint_candidates = transitions
+        .iter()
+        .map(|(peer_id, (checkpoint, _))| (peer_id.clone(), checkpoint.clone()))
+        .collect::<Vec<_>>();
+    let completed_candidates = transitions
+        .into_iter()
+        .map(|(peer_id, (_, completed))| (peer_id, completed))
+        .collect::<Vec<_>>();
+    s.checkpoint_crawl(
+        &ActiveCrawl {
+            round_id: 5,
+            started_at: 100,
+            last_checkpoint_at: 200,
+            address_observations: status.address_observations.clone(),
+            ..Default::default()
+        },
+        &checkpoint_candidates,
+    )
+    .unwrap();
+    s.commit_crawl_round(
+        5,
+        &[(b"peerA".to_vec(), node_a), (b"peerB".to_vec(), node_b)],
+        &[],
+        &completed_candidates,
+        &[],
+        &status,
+        &[(
+            Metric::VerifiedPeers,
+            Granularity::Hour,
+            10,
+            HistoryPoint {
+                scalar: 2,
+                buckets: vec![],
+            },
+        )],
+        &[],
     )
     .unwrap();
     s

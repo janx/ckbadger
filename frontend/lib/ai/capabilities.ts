@@ -82,6 +82,19 @@ export interface AiCapabilities {
       ];
     };
   };
+  networkPeerEvidence: {
+    page: '/network';
+    verificationBoundary: 'authenticatedSameNetworkIdentify';
+    observationScope: 'thisCkbadgerInstance';
+    endpoints: readonly [
+      '/network/summary',
+      '/network/distributions',
+      '/network/history',
+      '/network/peers',
+      '/network/peers/{peerId}',
+    ];
+    historyMetrics: readonly ['verifiedPeers', 'reachablePeers', 'versionShare', 'countryShare'];
+  };
   routes: {
     markdown: readonly string[];
     raw: readonly string[];
@@ -165,6 +178,19 @@ export function buildAiCapabilities(origin?: string): AiCapabilities & { origin?
           'generatedAt',
         ],
       },
+    },
+    networkPeerEvidence: {
+      page: '/network',
+      verificationBoundary: 'authenticatedSameNetworkIdentify',
+      observationScope: 'thisCkbadgerInstance',
+      endpoints: [
+        '/network/summary',
+        '/network/distributions',
+        '/network/history',
+        '/network/peers',
+        '/network/peers/{peerId}',
+      ],
+      historyMetrics: ['verifiedPeers', 'reachablePeers', 'versionShare', 'countryShare'],
     },
     routes: {
       markdown: MARKDOWN_ROUTE_PATTERNS,

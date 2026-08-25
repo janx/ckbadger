@@ -515,9 +515,9 @@ export const handlers = [
 
   http.get(`${API_BASE}/network/distributions`, () => {
     return HttpResponse.json({
-      totalKnown: 0,
-      reachable: 0,
-      unreachable: 0,
+      verifiedRetained: 0,
+      sameNetworkReachable: 0,
+      verifiedUnavailable: 0,
       versions: [],
       countries: [],
       asns: [],
@@ -526,7 +526,7 @@ export const handlers = [
   }),
 
   http.get(`${API_BASE}/network/history`, ({ request }) => {
-    const metric = new URL(request.url).searchParams.get('metric') ?? 'totalNodes';
+    const metric = new URL(request.url).searchParams.get('metric') ?? 'verifiedPeers';
     // Canned daily points that already exclude the current (incomplete) day.
     const days = [1751328000, 1751414400, 1751500800];
 
@@ -558,8 +558,8 @@ export const handlers = [
         })),
       });
     }
-    // Scalar metrics: totalNodes / reachableNodes.
-    const base = metric === 'reachableNodes' ? 60 : 100;
+    // Scalar metrics: verifiedPeers / reachablePeers.
+    const base = metric === 'reachablePeers' ? 60 : 100;
     return HttpResponse.json({
       metric,
       granularity: 'day',
@@ -567,35 +567,106 @@ export const handlers = [
     });
   }),
 
-  http.get(`${API_BASE}/network/nodes`, ({ request }) => {
-    // Two canned nodes: one reachable, one not. Honour the reachable filter so a toggle in the UI
-    // triggers a real refetch that narrows the page to just the reachable node.
-    const nodes = [
+  http.get(`${API_BASE}/network/peers`, ({ request }) => {
+    // One currently reachable verified peer and one advertised candidate that has never completed
+    // a same-network Identify. Honour the exact display-state filter.
+    const peers = [
       {
-        peerId: 'QmReachablePeer1111111111111111111111111111AaBb',
-        addr: '/ip4/1.2.3.4/tcp/8115',
+        peerId: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        displayState: 'reachable',
+        primaryAddr: '/ip4/1.2.3.4/tcp/8115',
         version: '0.114.0',
         country: 'United States',
         asn: 'AS24940 Hetzner',
-        reachable: true,
-        lastSeen: 1751500800,
+        lastAdvertisedAt: 1751500800,
+        lastObservedAt: 1751500800,
         lastReachableAt: 1751500800,
         rttMs: 42,
       },
       {
-        peerId: 'QmUnreachablePeer22222222222222222222222222CcDd',
-        addr: '/ip4/5.6.7.8/tcp/8115',
-        version: '0.113.0',
-        country: 'Germany',
-        asn: 'AS3320 Deutsche Telekom',
-        reachable: false,
-        lastSeen: 1751414400,
-        lastReachableAt: 1751328000,
+        peerId: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+        displayState: 'advertisedUnverified',
+        primaryAddr: '/ip4/5.6.7.8/tcp/8115',
+        version: null,
+        country: null,
+        asn: null,
+        lastAdvertisedAt: 1751414400,
+        lastObservedAt: 1751414400,
+        lastReachableAt: null,
         rttMs: null,
       },
     ];
-    const reachable = new URL(request.url).searchParams.get('reachable');
-    const items = reachable === 'true' ? nodes.filter((n) => n.reachable) : nodes;
+    const searchParams = new URL(request.url).searchParams;
+    const state = searchParams.get('state');
+    const observation = searchParams.get('observation');
+    const items = peers.filter((peer) => {
+      const peerObservation =
+        peer.displayState === 'reachable'
+          ? 'sameNetworkIdentified'
+          : 'noAuthenticatedSessionBeforeDeadline';
+      return (
+        (!state || peer.displayState === state) && (!observation || peerObservation === observation)
+      );
+    });
     return HttpResponse.json({ items, nextCursor: null });
+  }),
+
+  http.get(`${API_BASE}/network/peers/:peerId`, ({ params }) => {
+    const peerId = String(params.peerId);
+    return HttpResponse.json({
+      peerId,
+      observationVantage: 'thisCkbadgerInstance',
+      displayState: peerId.startsWith('a') ? 'reachable' : 'advertisedUnverified',
+      firstDiscoveredAt: 1751328000,
+      lastAdvertisedAt: 1751500800,
+      aliases: [
+        {
+          address: peerId.startsWith('a') ? '/ip4/1.2.3.4/tcp/8115' : '/ip4/5.6.7.8/tcp/8115',
+          firstAdvertisedAt: 1751328000,
+          lastAdvertisedAt: 1751500800,
+        },
+      ],
+      lastCompleted: {
+        roundId: 5,
+        outcome: peerId.startsWith('a') ? 'sameNetworkIdentified' : 'exhausted',
+        observations: [
+          {
+            address: peerId.startsWith('a') ? '/ip4/1.2.3.4/tcp/8115' : '/ip4/5.6.7.8/tcp/8115',
+            roundId: 5,
+            observedAt: 1751500800,
+            elapsedMs: peerId.startsWith('a') ? 42 : 10000,
+            result: peerId.startsWith('a')
+              ? 'sameNetworkIdentified'
+              : 'noAuthenticatedSessionBeforeDeadline',
+          },
+        ],
+        consecutiveExhaustedRounds: peerId.startsWith('a') ? 0 : 2,
+      },
+      active: null,
+      verified: peerId.startsWith('a')
+        ? {
+            ownAddrs: ['/ip4/1.2.3.4/tcp/8115'],
+            clientVersion: '0.114.0',
+            flags: 1,
+            protocols: ['/ckb/2'],
+            firstSeen: 1751328000,
+            lastSeen: 1751500800,
+            lastReachableAt: 1751500800,
+            country: 'United States',
+            asn: 'AS24940 Hetzner',
+            rttMs: 42,
+            discovery: {
+              validNodesMessages: 1,
+              malformedMessages: 0,
+              unexpectedMessages: 0,
+              normalizedAdvertisedAddresses: 2,
+              rejectedAdvertisedAddresses: 0,
+            },
+          }
+        : null,
+      advertisers: peerId.startsWith('a')
+        ? []
+        : [{ advertiserPeerId: 'aaaaaaaa'.repeat(8), observedAt: 1751414400 }],
+    });
   }),
 ];

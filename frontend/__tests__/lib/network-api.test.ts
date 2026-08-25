@@ -14,6 +14,40 @@ describe('network api', () => {
     const d = await api.getNetworkDistributions();
     expect(Array.isArray(d.versions)).toBe(true);
   });
+
+  it('fetches peers through the evidence endpoint with exact filters', async () => {
+    let query = '';
+    server.use(
+      http.get('/api/:network/v1/network/peers', ({ request }) => {
+        query = new URL(request.url).search;
+        return HttpResponse.json({ items: [], nextCursor: null });
+      })
+    );
+
+    await api.getNetworkPeers({
+      cursor: 'peer-cursor',
+      limit: 25,
+      state: 'advertisedUnverified',
+      observation: 'dialRequestFailed',
+      country: 'US',
+      version: '0.119.0',
+    });
+
+    const params = new URLSearchParams(query);
+    expect(params.get('cursor')).toBe('peer-cursor');
+    expect(params.get('limit')).toBe('25');
+    expect(params.get('state')).toBe('advertisedUnverified');
+    expect(params.get('observation')).toBe('dialRequestFailed');
+    expect(params.get('country')).toBe('US');
+    expect(params.get('version')).toBe('0.119.0');
+  });
+
+  it('fetches address-level evidence for one peer', async () => {
+    const peerId = 'aa'.repeat(32);
+    const detail = await api.getNetworkPeer(peerId);
+    expect(detail.peerId).toBe(peerId);
+    expect(detail.lastCompleted?.observations[0].result).toBe('sameNetworkIdentified');
+  });
 });
 
 // The data layer must target `/api/<active-network>/v1/*` where the active network is derived

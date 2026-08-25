@@ -38,6 +38,22 @@ describe('buildAiCapabilities', () => {
     expect(capabilities.responseHeaders.raw.schemaHeader).toBe('x-ckbadger-schema');
     expect(capabilities.responseMetadata.markdown.frontmatterFields).toContain('buildVersion');
     expect(capabilities.responseMetadata.raw.metaFields).toContain('buildVersion');
+    expect(capabilities.networkPeerEvidence.verificationBoundary).toBe(
+      'authenticatedSameNetworkIdentify'
+    );
+    expect(capabilities.networkPeerEvidence.endpoints).toEqual([
+      '/network/summary',
+      '/network/distributions',
+      '/network/history',
+      '/network/peers',
+      '/network/peers/{peerId}',
+    ]);
+    expect(capabilities.networkPeerEvidence.historyMetrics).toEqual([
+      'verifiedPeers',
+      'reachablePeers',
+      'versionShare',
+      'countryShare',
+    ]);
   });
 
   it('derives the per-network patterns and network list from the runtime config', () => {

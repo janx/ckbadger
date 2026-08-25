@@ -19,8 +19,8 @@ pub fn crawl_candidate_key(peer_id: &[u8]) -> Vec<u8> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Metric {
-    TotalNodes = 1,
-    ReachableNodes = 2,
+    VerifiedPeers = 1,
+    ReachablePeers = 2,
     VersionShare = 3,
     CountryShare = 4,
 }
@@ -64,21 +64,21 @@ mod tests {
     use super::*;
     #[test]
     fn history_key_layout_and_ordering() {
-        let k = history_key(Metric::TotalNodes, Granularity::Hour, 0x0102030405060708);
-        assert_eq!(k[0], Metric::TotalNodes as u8);
+        let k = history_key(Metric::VerifiedPeers, Granularity::Hour, 0x0102030405060708);
+        assert_eq!(k[0], Metric::VerifiedPeers as u8);
         assert_eq!(k[1], Granularity::Hour as u8);
         assert_eq!(&k[2..10], &0x0102030405060708u64.to_be_bytes());
         // Big-endian bucket ⇒ lexicographic key order == chronological order.
-        let a = history_key(Metric::TotalNodes, Granularity::Hour, 10);
-        let b = history_key(Metric::TotalNodes, Granularity::Hour, 11);
+        let a = history_key(Metric::VerifiedPeers, Granularity::Hour, 10);
+        let b = history_key(Metric::VerifiedPeers, Granularity::Hour, 11);
         assert!(a < b);
         // Prefix isolates a (metric, gran) series.
         assert_eq!(
-            &history_prefix(Metric::TotalNodes, Granularity::Hour),
+            &history_prefix(Metric::VerifiedPeers, Granularity::Hour),
             &k[0..2]
         );
         // Status singleton can never collide with a history key (metric ids start at 1).
-        assert_ne!(STATS_STATUS_KEY[0], Metric::TotalNodes as u8);
+        assert_ne!(STATS_STATUS_KEY[0], Metric::VerifiedPeers as u8);
     }
     #[test]
     fn bucket_math() {

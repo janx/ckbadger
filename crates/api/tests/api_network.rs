@@ -1,267 +1,358 @@
 mod common;
+
+use std::sync::Arc;
+
 use axum::http::StatusCode;
+use ckbadger_store::{
+    ActiveCandidateProbe, ActiveCrawl, AddressObservationHistogram, CompletedPeerOutcomes,
+    LatestStatus,
+};
 use common::*;
 
 #[tokio::test]
 async fn summary_reports_disabled_and_no_data_by_default() {
-    let cfg = test_config(test_store()); // empty network-store slot, crawler disabled
-    let app = create_router_without_warmup(cfg);
-    let res = get_json(&app, "/network/summary").await;
-    assert_eq!(res.0, StatusCode::OK);
-    assert_eq!(res.1["enabled"], false);
-    assert_eq!(res.1["hasData"], false);
-    assert!(res.1["lastRound"].is_null());
-    assert!(res.1["activeRound"].is_null());
+    let app = create_router_without_warmup(test_config(test_store()));
+    let (code, body) = get_json(&app, "/network/summary").await;
+    assert_eq!(code, StatusCode::OK);
+    assert_eq!(body["enabled"], false);
+    assert_eq!(body["hasData"], false);
+    assert!(body["lastRound"].is_null());
+    assert!(body["activeRound"].is_null());
 }
 
 #[tokio::test]
-async fn summary_reports_has_data_when_seeded() {
-    let cfg = test_config_with_network(test_store(), test_network_store(), true);
-    let app = create_router_without_warmup(cfg);
-    let res = get_json(&app, "/network/summary").await;
-    assert_eq!(res.1["enabled"], true);
-    assert_eq!(res.1["hasData"], true);
-    assert_eq!(res.1["lastRound"]["totalKnown"], 2);
-    assert_eq!(res.1["lastRound"]["reachablePeers"], 1);
-    assert_eq!(res.1["lastRound"]["addressAttempts"], 3);
-    assert!(res.1["activeRound"].is_null());
+async fn summary_uses_exact_verification_terms_and_checked_projections() {
+    let app = create_router_without_warmup(test_config_with_network(
+        test_store(),
+        test_network_store(),
+        true,
+    ));
+    let (_, body) = get_json(&app, "/network/summary").await;
+
+    assert_eq!(body["lastRound"]["candidatePeers"], 3);
+    assert_eq!(body["lastRound"]["verifiedRetainedPeers"], 2);
+    assert_eq!(body["lastRound"]["reachablePeers"], 1);
+    assert_eq!(body["lastRound"]["verifiedUnavailablePeers"], 1);
+    assert_eq!(body["lastRound"]["exhaustedCandidates"], 2);
+    assert_eq!(body["lastRound"]["addressAttempts"], 3);
+    assert_eq!(body["lastRound"]["nonSuccessfulAddressAttempts"], 2);
+    assert!(body["lastRound"].get("totalKnown").is_none());
+    assert!(body["lastRound"].get("unreachablePeers").is_none());
 }
 
 #[tokio::test]
-async fn summary_observes_network_store_attached_after_router_startup() {
-    let cfg = test_config(test_store());
-    let network_store = cfg.network_store.clone();
-    let app = create_router_without_warmup(cfg);
+async fn summary_preserves_the_observed_144_57_87_58_semantic_split() {
+    let dir = tempfile::tempdir().unwrap();
+    let network = Arc::new(ckbadger_store::CkbadgerStore::open_test_network(dir.path()).unwrap());
+    std::mem::forget(dir);
+    network
+        .put_network_status(&LatestStatus {
+            round_id: 53,
+            started: 100,
+            finished: 200,
+            peer_outcomes: CompletedPeerOutcomes {
+                same_network_identified: 57,
+                exhausted_with_retained_verification: 1,
+                exhausted_without_retained_verification: 86,
+                ..Default::default()
+            },
+            address_observations: AddressObservationHistogram {
+                same_network_identified: 57,
+                dial_request_failed: 359,
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .unwrap();
+    let app = create_router_without_warmup(test_config_with_network(test_store(), network, true));
+    let (_, body) = get_json(&app, "/network/summary").await;
+    let round = &body["lastRound"];
 
-    let (_, before) = get_json(&app, "/network/summary").await;
-    assert_eq!(before["hasData"], false);
-    assert!(before["lastRound"].is_null());
-
-    network_store.store(Some(test_network_store()));
-
-    let (_, after) = get_json(&app, "/network/summary").await;
-    assert_eq!(after["hasData"], true);
-    assert_eq!(after["lastRound"]["roundId"], 5);
-    assert_eq!(after["lastRound"]["totalKnown"], 2);
+    assert_eq!(round["candidatePeers"], 144);
+    assert_eq!(round["reachablePeers"], 57);
+    assert_eq!(round["exhaustedCandidates"], 87);
+    assert_eq!(round["verifiedRetainedPeers"], 58);
+    assert_eq!(round["verifiedUnavailablePeers"], 1);
+    assert_eq!(
+        round["peerOutcomes"]["exhausted"]["withoutRetainedVerification"],
+        86
+    );
 }
 
 #[tokio::test]
-async fn summary_reports_active_progress_separately_from_completed_round() {
-    use ckbadger_store::{ActiveCrawl, CrawlAddress, CrawlCandidate};
-
+async fn active_round_remains_separate_from_completed_candidate_evidence() {
     let network = test_network_store();
+    let mut candidate = network.get_crawl_candidate(b"peerC").unwrap().unwrap();
+    candidate.active = Some(ActiveCandidateProbe {
+        round_id: 6,
+        ..Default::default()
+    });
     network
         .checkpoint_crawl(
             &ActiveCrawl {
                 round_id: 6,
                 started_at: 300,
                 last_checkpoint_at: 320,
-                address_attempts: 1,
                 blocked_reason: Some("frontier capacity exceeded".into()),
                 ..Default::default()
             },
+            &[(b"peerC".to_vec(), candidate)],
+        )
+        .unwrap();
+    let app = create_router_without_warmup(test_config_with_network(test_store(), network, true));
+
+    let (_, summary) = get_json(&app, "/network/summary").await;
+    assert_eq!(summary["lastRound"]["roundId"], 5);
+    assert_eq!(summary["activeRound"]["roundId"], 6);
+    assert_eq!(summary["activeRound"]["candidatePeers"], 1);
+    let (_, detail) = get_json(&app, "/network/peers/7065657243").await;
+    assert_eq!(detail["lastCompleted"]["roundId"], 5);
+    assert_eq!(detail["active"]["roundId"], 6);
+}
+
+#[tokio::test]
+async fn summary_observes_network_store_attached_after_router_startup() {
+    let config = test_config(test_store());
+    let slot = config.network_store.clone();
+    let app = create_router_without_warmup(config);
+    let (_, before) = get_json(&app, "/network/summary").await;
+    assert_eq!(before["hasData"], false);
+    slot.store(Some(test_network_store()));
+    let (_, after) = get_json(&app, "/network/summary").await;
+    assert_eq!(after["lastRound"]["verifiedRetainedPeers"], 2);
+}
+
+#[tokio::test]
+async fn distributions_are_explicitly_scoped_to_verified_records() {
+    let app = create_router_without_warmup(test_config_with_network(
+        test_store(),
+        test_network_store(),
+        true,
+    ));
+    let (_, body) = get_json(&app, "/network/distributions").await;
+    assert_eq!(body["verifiedRetained"], 2);
+    assert_eq!(body["sameNetworkReachable"], 1);
+    assert_eq!(body["verifiedUnavailable"], 1);
+    assert!(body.get("totalKnown").is_none());
+    assert!(body["countries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|bucket| bucket["label"] == "US" && bucket["count"] == 1));
+}
+
+#[tokio::test]
+async fn history_uses_verified_peer_metric_names() {
+    let app = create_router_without_warmup(test_config_with_network(
+        test_store(),
+        test_network_store(),
+        true,
+    ));
+    let (_, body) = get_json(
+        &app,
+        "/network/history?metric=verifiedPeers&granularity=hour",
+    )
+    .await;
+    assert_eq!(body["metric"], "verifiedPeers");
+    assert!(body["points"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|point| point["scalar"] == 2));
+    let (old_code, _) = get_json(&app, "/network/history?metric=totalNodes&granularity=hour").await;
+    assert_eq!(old_code, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn history_day_excludes_the_incomplete_current_day() {
+    use ckbadger_store::network_keys::{bucket_of, Granularity, Metric};
+    use ckbadger_store::{CkbadgerStore, HistoryPoint};
+
+    let dir = tempfile::tempdir().unwrap();
+    let network = Arc::new(CkbadgerStore::open_test_network(dir.path()).unwrap());
+    std::mem::forget(dir);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let current = bucket_of(now, Granularity::Day);
+    for (bucket, scalar) in [(current, 99), (current - 1, 5)] {
+        network
+            .put_history_point(
+                Metric::VerifiedPeers,
+                Granularity::Day,
+                bucket,
+                &HistoryPoint {
+                    scalar,
+                    buckets: vec![],
+                },
+            )
+            .unwrap();
+    }
+    let app = create_router_without_warmup(test_config_with_network(test_store(), network, true));
+    let (_, body) = get_json(
+        &app,
+        "/network/history?metric=verifiedPeers&granularity=day",
+    )
+    .await;
+    let points = body["points"].as_array().unwrap();
+    assert!(points.iter().any(|point| point["scalar"] == 5));
+    assert!(!points.iter().any(|point| point["scalar"] == 99));
+}
+
+#[tokio::test]
+async fn history_fails_fast_when_bucket_timestamp_overflows() {
+    use ckbadger_store::network_keys::{Granularity, Metric};
+    use ckbadger_store::{CkbadgerStore, HistoryPoint};
+
+    let dir = tempfile::tempdir().unwrap();
+    let network = Arc::new(CkbadgerStore::open_test_network(dir.path()).unwrap());
+    std::mem::forget(dir);
+    network
+        .put_history_point(
+            Metric::VerifiedPeers,
+            Granularity::Hour,
+            u64::MAX,
+            &HistoryPoint::default(),
+        )
+        .unwrap();
+    let app = create_router_without_warmup(test_config_with_network(test_store(), network, true));
+
+    let (status, body) = get_json(
+        &app,
+        "/network/history?metric=verifiedPeers&granularity=hour",
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(body.to_string().contains("history timestamp overflow"));
+    assert!(body.to_string().contains("bucket=18446744073709551615"));
+}
+
+#[tokio::test]
+async fn peers_unifies_verified_and_candidate_only_rows() {
+    let app = create_router_without_warmup(test_config_with_network(
+        test_store(),
+        test_network_store(),
+        true,
+    ));
+    let (_, all) = get_json(&app, "/network/peers").await;
+    assert_eq!(all["items"].as_array().unwrap().len(), 3);
+    let (_, unverified) = get_json(&app, "/network/peers?state=advertisedUnverified").await;
+    let items = unverified["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["peerId"], "7065657243");
+    assert!(items[0]["version"].is_null());
+    assert!(items[0]["country"].is_null());
+    let (_, unavailable) = get_json(&app, "/network/peers?state=verifiedUnavailable").await;
+    assert_eq!(unavailable["items"].as_array().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn peers_paginate_and_reject_invalid_limits_or_cursors() {
+    let app = create_router_without_warmup(test_config_with_network(
+        test_store(),
+        test_network_store(),
+        true,
+    ));
+    let (_, first) = get_json(&app, "/network/peers?limit=1").await;
+    let cursor = first["nextCursor"].as_str().unwrap();
+    let (_, second) = get_json(&app, &format!("/network/peers?limit=1&cursor={cursor}")).await;
+    assert_eq!(second["items"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        get_json(&app, "/network/peers?limit=0").await.0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        get_json(&app, "/network/peers?cursor=deadbeef").await.0,
+        StatusCode::BAD_REQUEST
+    );
+}
+
+#[tokio::test]
+async fn peers_reject_unknown_state_and_observation_before_store_access() {
+    let app = create_router_without_warmup(test_config(test_store()));
+
+    assert_eq!(
+        get_json(&app, "/network/peers?state=unreachable").await.0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        get_json(&app, "/network/peers?observation=timeout").await.0,
+        StatusCode::BAD_REQUEST
+    );
+}
+
+#[tokio::test]
+async fn peers_fail_when_persisted_candidate_has_no_alias() {
+    let dir = tempfile::tempdir().unwrap();
+    let network = Arc::new(ckbadger_store::CkbadgerStore::open_test_network(dir.path()).unwrap());
+    std::mem::forget(dir);
+    network
+        .checkpoint_crawl(
+            &ActiveCrawl {
+                round_id: 1,
+                ..Default::default()
+            },
             &[(
-                b"peerC".to_vec(),
-                CrawlCandidate {
-                    addresses: vec![CrawlAddress {
-                        addr: "addrC".into(),
-                        last_advertised_at: 300,
-                        attempted_round: 0,
-                    }],
-                    first_discovered_at: 300,
-                    last_advertised_at: 300,
-                    round_id: 6,
+                b"peerA".to_vec(),
+                ckbadger_store::CrawlCandidate {
+                    active: Some(ActiveCandidateProbe {
+                        round_id: 1,
+                        ..Default::default()
+                    }),
                     ..Default::default()
                 },
             )],
         )
         .unwrap();
-    let cfg = test_config_with_network(test_store(), network, true);
-    let app = create_router_without_warmup(cfg);
-    let (_, body) = get_json(&app, "/network/summary").await;
+    let app = create_router_without_warmup(test_config_with_network(test_store(), network, true));
 
-    assert_eq!(body["lastRound"]["roundId"], 5);
-    assert_eq!(body["activeRound"]["roundId"], 6);
-    assert_eq!(body["activeRound"]["candidatePeers"], 1);
-    assert_eq!(body["activeRound"]["completedPeers"], 0);
-    assert_eq!(body["activeRound"]["addressAttempts"], 1);
+    let (code, _) = get_json(&app, "/network/peers").await;
+    assert_eq!(code, StatusCode::INTERNAL_SERVER_ERROR);
+    let (detail_code, _) = get_json(&app, "/network/peers/7065657241").await;
+    assert_eq!(detail_code, StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
+async fn peer_detail_exposes_typed_alias_evidence_and_advertisers() {
+    let app = create_router_without_warmup(test_config_with_network(
+        test_store(),
+        test_network_store(),
+        true,
+    ));
+    let (code, body) = get_json(&app, "/network/peers/7065657243").await;
+    assert_eq!(code, StatusCode::OK);
+    assert_eq!(body["displayState"], "advertisedUnverified");
+    assert_eq!(body["observationVantage"], "thisCkbadgerInstance");
+    assert!(body["verified"].is_null());
+    assert_eq!(body["lastCompleted"]["outcome"], "exhausted");
     assert_eq!(
-        body["activeRound"]["blockedReason"],
-        "frontier capacity exceeded"
+        body["lastCompleted"]["observations"][0]["result"],
+        "dialRequestFailed"
     );
+    assert_eq!(body["advertisers"][0]["advertiserPeerId"], "7065657241");
+    assert_eq!(body["advertisers"][0]["observedAt"], 200);
 }
 
 #[tokio::test]
-async fn distributions_aggregates_from_nodes() {
-    let cfg = test_config_with_network(test_store(), test_network_store(), true);
-    let app = create_router_without_warmup(cfg);
-    let (_c, v) = get_json(&app, "/network/distributions").await;
-    assert_eq!(v["totalKnown"], 2);
-    assert_eq!(v["reachable"], 1);
-    assert_eq!(v["unreachable"], 1);
-    // peerA=US, peerB=None -> Unknown
-    let countries = v["countries"].as_array().unwrap();
-    assert!(countries
-        .iter()
-        .any(|c| c["label"] == "US" && c["count"] == 1));
-    assert!(countries
-        .iter()
-        .any(|c| c["label"] == "Unknown" && c["count"] == 1));
-    // versions: 0.119.0 and 0.118.0 one each
-    assert_eq!(v["versions"].as_array().unwrap().len(), 2);
-}
+async fn peer_routes_handle_empty_malformed_and_removed_node_contracts() {
+    let empty = create_router_without_warmup(test_config(test_store()));
+    let (code, page) = get_json(&empty, "/network/peers").await;
+    assert_eq!(code, StatusCode::OK);
+    assert!(page["items"].as_array().unwrap().is_empty());
 
-#[tokio::test]
-async fn distributions_empty_when_no_store() {
-    let app = create_router_without_warmup(test_config(test_store()));
-    let (_c, v) = get_json(&app, "/network/distributions").await;
-    assert_eq!(v["totalKnown"], 0);
-    assert_eq!(v["versions"].as_array().unwrap().len(), 0);
-}
-
-#[tokio::test]
-async fn history_returns_scalar_series() {
-    let cfg = test_config_with_network(test_store(), test_network_store(), true);
-    let app = create_router_without_warmup(cfg);
-    let (_c, v) = get_json(&app, "/network/history?metric=totalNodes&granularity=hour").await;
-    assert_eq!(v["metric"], "totalNodes");
-    let pts = v["points"].as_array().unwrap();
-    assert!(pts.iter().any(|p| p["scalar"] == 2));
-}
-
-#[tokio::test]
-async fn history_empty_when_no_store() {
-    let app = create_router_without_warmup(test_config(test_store()));
-    let (_c, v) = get_json(&app, "/network/history?metric=totalNodes&granularity=hour").await;
-    assert_eq!(v["points"].as_array().unwrap().len(), 0);
-}
-
-#[tokio::test]
-async fn history_day_excludes_current_day_without_to() {
-    use ckbadger_store::network_keys::{bucket_of, Granularity, Metric};
-    use ckbadger_store::{CkbadgerStore, HistoryPoint};
-    // Seed a network store with two Day buckets for TotalNodes: the incomplete
-    // current day (scalar 99) and the complete previous day (scalar 5).
-    let dir = tempfile::tempdir().unwrap();
-    let net = Arc::new(CkbadgerStore::open_test_network(dir.path()).unwrap());
-    std::mem::forget(dir); // keep the temp dir alive for the store's lifetime
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
-    let cur = bucket_of(now, Granularity::Day);
-    net.put_history_point(
-        Metric::TotalNodes,
-        Granularity::Day,
-        cur,
-        &HistoryPoint {
-            scalar: 99,
-            buckets: vec![],
-        },
-    )
-    .unwrap();
-    net.put_history_point(
-        Metric::TotalNodes,
-        Granularity::Day,
-        cur - 1,
-        &HistoryPoint {
-            scalar: 5,
-            buckets: vec![],
-        },
-    )
-    .unwrap();
-
-    let cfg = test_config_with_network(test_store(), net, true);
-    let app = create_router_without_warmup(cfg);
-    // No `to`: the endpoint must still drop the incomplete current day (server clock).
-    let (_c, v) = get_json(&app, "/network/history?metric=totalNodes&granularity=day").await;
-    let pts = v["points"].as_array().unwrap();
-    // Previous-day point survives; current-day point is excluded.
-    assert!(pts.iter().any(|p| p["scalar"] == 5));
-    assert!(!pts.iter().any(|p| p["scalar"] == 99));
-}
-
-#[tokio::test]
-async fn nodes_lists_and_filters() {
-    let cfg = test_config_with_network(test_store(), test_network_store(), true);
-    let app = create_router_without_warmup(cfg);
-    let (_c, all) = get_json(&app, "/network/nodes").await;
-    assert_eq!(all["items"].as_array().unwrap().len(), 2);
-    let (_c, reach) = get_json(&app, "/network/nodes?reachable=true").await;
-    assert_eq!(reach["items"].as_array().unwrap().len(), 1);
-}
-
-#[tokio::test]
-async fn node_by_id_not_found() {
-    let cfg = test_config_with_network(test_store(), test_network_store(), true);
-    let app = create_router_without_warmup(cfg);
-    let (code, _v) = get_json(&app, "/network/nodes/deadbeef").await;
-    assert_eq!(code, axum::http::StatusCode::NOT_FOUND);
-}
-
-#[tokio::test]
-async fn nodes_paginates_with_cursor() {
-    let cfg = test_config_with_network(test_store(), test_network_store(), true);
-    let app = create_router_without_warmup(cfg);
-    // Deterministic order (last_seen desc, peer_id asc) => peerA first, peerB second.
-    let peer_a = "7065657241"; // hex("peerA")
-    let peer_b = "7065657242"; // hex("peerB")
-    let (_c, p1) = get_json(&app, "/network/nodes?limit=1").await;
-    let items1 = p1["items"].as_array().unwrap();
-    assert_eq!(items1.len(), 1);
-    assert_eq!(items1[0]["peerId"], peer_a);
-    assert_eq!(p1["nextCursor"], peer_a); // more remain -> cursor set
-    let (_c, p2) = get_json(&app, &format!("/network/nodes?limit=1&cursor={peer_a}")).await;
-    let items2 = p2["items"].as_array().unwrap();
-    assert_eq!(items2.len(), 1);
-    assert_eq!(items2[0]["peerId"], peer_b);
-    assert!(p2["nextCursor"].is_null()); // last page -> no cursor
-}
-
-#[tokio::test]
-async fn nodes_filters_by_country_and_version() {
-    let cfg = test_config_with_network(test_store(), test_network_store(), true);
-    let app = create_router_without_warmup(cfg);
-    let (_c, us) = get_json(&app, "/network/nodes?country=US").await;
-    let us_items = us["items"].as_array().unwrap();
-    assert_eq!(us_items.len(), 1);
-    assert_eq!(us_items[0]["country"], "US");
-    let (_c, unknown) = get_json(&app, "/network/nodes?country=Unknown").await;
-    assert_eq!(unknown["items"].as_array().unwrap().len(), 1);
-    let (_c, ver) = get_json(&app, "/network/nodes?version=0.118.0").await;
-    let ver_items = ver["items"].as_array().unwrap();
-    assert_eq!(ver_items.len(), 1);
-    assert_eq!(ver_items[0]["version"], "0.118.0");
-}
-
-#[tokio::test]
-async fn nodes_empty_when_no_store() {
-    let app = create_router_without_warmup(test_config(test_store()));
-    let (code, v) = get_json(&app, "/network/nodes").await;
-    assert_eq!(code, axum::http::StatusCode::OK);
-    assert_eq!(v["items"].as_array().unwrap().len(), 0);
-    assert!(v["nextCursor"].is_null());
-}
-
-#[tokio::test]
-async fn node_by_id_returns_detail() {
-    let cfg = test_config_with_network(test_store(), test_network_store(), true);
-    let app = create_router_without_warmup(cfg);
-    let (code, v) = get_json(&app, "/network/nodes/7065657241").await; // hex("peerA")
-    assert_eq!(code, axum::http::StatusCode::OK);
-    assert_eq!(v["peerId"], "7065657241");
-    assert_eq!(v["clientVersion"], "0.119.0");
-    assert_eq!(v["country"], "US");
-    assert_eq!(v["reachable"], true);
-    assert_eq!(v["rttMs"], 9);
-    assert_eq!(v["knownPeers"], 0);
-    assert_eq!(v["ownAddrs"].as_array().unwrap().len(), 1);
-}
-
-#[tokio::test]
-async fn node_by_id_rejects_malformed_hex() {
-    let cfg = test_config_with_network(test_store(), test_network_store(), true);
-    let app = create_router_without_warmup(cfg);
-    let (code, _v) = get_json(&app, "/network/nodes/xyz").await;
-    assert_eq!(code, axum::http::StatusCode::BAD_REQUEST);
+    let app = create_router_without_warmup(test_config_with_network(
+        test_store(),
+        test_network_store(),
+        true,
+    ));
+    assert_eq!(
+        get_json(&app, "/network/peers/xyz").await.0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        get_json(&app, "/network/peers/deadbeef").await.0,
+        StatusCode::NOT_FOUND
+    );
 }

@@ -40,13 +40,18 @@ function DistributionBars({ title, items }: { title: string; items: LabelCount[]
 }
 
 function ReachabilityStat({ data }: { data: NetworkDistributionsData }) {
-  const { reachable, unreachable, totalKnown } = data;
+  const { sameNetworkReachable, verifiedUnavailable, verifiedRetained } = data;
   return (
     <div className="border-base-border bg-base-surface rounded border p-4">
-      <h3 className="text-text-bright mb-3 font-mono text-sm font-bold">Reachability</h3>
-      <ProgressBar value={reachable} max={totalKnown} showLabel={false} color="green" />
+      <h3 className="text-text-bright mb-3 font-mono text-sm font-bold">Retained verification</h3>
+      <ProgressBar
+        value={sameNetworkReachable}
+        max={verifiedRetained}
+        showLabel={false}
+        color="green"
+      />
       <p className="text-text-dim mt-2 font-mono text-xs tabular-nums">
-        {`${reachable} reachable · ${unreachable} unreachable`}
+        {`${sameNetworkReachable} same-network reachable · ${verifiedUnavailable} verified unavailable`}
       </p>
     </div>
   );

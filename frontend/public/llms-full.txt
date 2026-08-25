@@ -113,6 +113,18 @@ API:
   mutually exclusive, `dataBearing` is orthogonal, and `tip.block`/`tip.hash` is locally
   verifiable. The endpoint is a fixed-size point read and returns 503 until a canonical snapshot
   is published.
+- Optional local CKB L1 peer evidence uses `/api/{network}/v1/network/summary`,
+  `/network/distributions`, `/network/history`, `/network/peers`, and
+  `/network/peers/{peerId}` (the last four are relative to the same API base). Summary distinguishes
+  advertised candidates, same-network reachable, verified retained, and verified unavailable.
+  The unified peer list includes advertised-unverified candidates with nullable node metadata;
+  detail exposes retained aliases, exact typed address observations, separately labeled active
+  evidence, last verification, Discovery counters, and advertiser references. Verification means
+  an authenticated same-network CKB Identify from this ckbadger instance. `exhausted` is a scoped
+  completed-round observation, never a claim that a peer is globally invalid or offline. History
+  count metrics are `verifiedPeers` and `reachablePeers`; the UI pairs them into the disjoint
+  same-network-reachable and verified-unavailable stack. The peer list accepts exact state and all
+  six typed address-observation filters.
 - Capability descriptor: `/capabilities` (formats, profiles, route matrix, and strict error codes).
 
 Notes for agents:

@@ -3,7 +3,6 @@
 import { ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api, NetworkHistory, StackedAreaDataPoint, StackedAreaSeries } from '@/lib/api';
-import { MultiSeriesLineChart } from '@/components/ui/multi-series-line-chart';
 import { StackedAreaChart } from '@/components/ui/stacked-area-chart';
 import { getChartPaletteColor } from '@/lib/chart-colors';
 
@@ -18,28 +17,64 @@ function formatDay(ts: number): string {
   return new Date(ts * 1000).toISOString().slice(0, 10);
 }
 
-// Merge the two independent scalar histories (total + reachable node counts) into a single
-// same-axis dataset keyed by day, so both lines share one honest node-count scale.
-function mergeNodeCounts(
-  total: NetworkHistory | undefined,
+// Merge the two independent verified-peer histories into a same-axis dataset keyed by day.
+export function mergePeerCounts(
+  verified: NetworkHistory | undefined,
   reachable: NetworkHistory | undefined
-): StackedAreaDataPoint[] {
-  const byTs = new Map<number, { total?: number; reachable?: number }>();
-  for (const p of total?.points ?? []) {
-    byTs.set(p.ts, { ...(byTs.get(p.ts) ?? {}), total: p.scalar });
+): { data: StackedAreaDataPoint[]; error: string | null } {
+  if (!verified || !reachable) return { data: [], error: null };
+
+  const reachableByTs = new Map<number, number>();
+  for (const point of reachable.points) {
+    if (reachableByTs.has(point.ts)) {
+      return {
+        data: [],
+        error: `Invalid peer history: duplicate reachablePeers point at ${point.ts}`,
+      };
+    }
+    reachableByTs.set(point.ts, point.scalar);
   }
-  for (const p of reachable?.points ?? []) {
-    byTs.set(p.ts, { ...(byTs.get(p.ts) ?? {}), reachable: p.scalar });
-  }
-  return [...byTs.entries()]
-    .sort((a, b) => a[0] - b[0])
-    .map(([ts, v]) => ({
-      date: formatDay(ts),
+
+  const verifiedTimestamps = new Set<number>();
+  const data: StackedAreaDataPoint[] = [];
+  for (const point of [...verified.points].sort((left, right) => left.ts - right.ts)) {
+    if (verifiedTimestamps.has(point.ts)) {
+      return {
+        data: [],
+        error: `Invalid peer history: duplicate verifiedPeers point at ${point.ts}`,
+      };
+    }
+    verifiedTimestamps.add(point.ts);
+    const reachableCount = reachableByTs.get(point.ts);
+    if (reachableCount == null) {
+      return {
+        data: [],
+        error: `Invalid peer history: missing reachablePeers point at ${point.ts}`,
+      };
+    }
+    if (reachableCount > point.scalar) {
+      return {
+        data: [],
+        error: `Invalid peer history at ${point.ts}: reachablePeers ${reachableCount} exceeds verifiedPeers ${point.scalar}`,
+      };
+    }
+    reachableByTs.delete(point.ts);
+    data.push({
+      date: formatDay(point.ts),
       values: {
-        totalNodes: String(v.total ?? 0),
-        reachableNodes: String(v.reachable ?? 0),
+        sameNetworkReachable: String(reachableCount),
+        verifiedUnavailable: String(point.scalar - reachableCount),
       },
-    }));
+    });
+  }
+  const unmatchedReachableTimestamp = reachableByTs.keys().next().value;
+  if (unmatchedReachableTimestamp != null) {
+    return {
+      data: [],
+      error: `Invalid peer history: missing verifiedPeers point at ${unmatchedReachableTimestamp}`,
+    };
+  }
+  return { data, error: null };
 }
 
 // Turn per-day label buckets into stacked-area series. Series are the top-N labels by total
@@ -114,14 +149,14 @@ function ShareTrend({ title, history }: { title: string; history: NetworkHistory
 }
 
 export function NetworkTrends() {
-  const totalNodes = useQuery({
-    queryKey: ['network', 'history', 'totalNodes', 'day'],
-    queryFn: () => api.getNetworkHistory('totalNodes', 'day', undefined, nowSeconds()),
+  const verifiedPeers = useQuery({
+    queryKey: ['network', 'history', 'verifiedPeers', 'day'],
+    queryFn: () => api.getNetworkHistory('verifiedPeers', 'day', undefined, nowSeconds()),
     refetchInterval: 60000,
   });
-  const reachableNodes = useQuery({
-    queryKey: ['network', 'history', 'reachableNodes', 'day'],
-    queryFn: () => api.getNetworkHistory('reachableNodes', 'day', undefined, nowSeconds()),
+  const reachablePeers = useQuery({
+    queryKey: ['network', 'history', 'reachablePeers', 'day'],
+    queryFn: () => api.getNetworkHistory('reachablePeers', 'day', undefined, nowSeconds()),
     refetchInterval: 60000,
   });
   const versionShare = useQuery({
@@ -135,24 +170,41 @@ export function NetworkTrends() {
     refetchInterval: 60000,
   });
 
-  const nodeSeries: StackedAreaSeries[] = [
-    { key: 'totalNodes', label: 'Total Nodes', color: getChartPaletteColor(0) },
-    { key: 'reachableNodes', label: 'Reachable Nodes', color: getChartPaletteColor(2) },
+  const peerSeries: StackedAreaSeries[] = [
+    {
+      key: 'sameNetworkReachable',
+      label: 'Same-network reachable',
+      color: getChartPaletteColor(2),
+    },
+    {
+      key: 'verifiedUnavailable',
+      label: 'Verified unavailable',
+      color: getChartPaletteColor(0),
+    },
   ];
-  const nodeData = mergeNodeCounts(totalNodes.data, reachableNodes.data);
+  const peerCounts = mergePeerCounts(verifiedPeers.data, reachablePeers.data);
+  const peerHistoryError =
+    verifiedPeers.isError || reachablePeers.isError
+      ? 'Failed to load verified peer history.'
+      : peerCounts.error;
 
   return (
     <section className="space-y-4">
       <h2 className="text-text-bright font-mono text-lg font-bold">Trends</h2>
       <p className="text-text-dim font-mono text-xs">
-        Daily history of discovered nodes. The current (incomplete) day is excluded.
+        Daily history of retained verified peers. The current (incomplete) day is excluded.
       </p>
 
-      <TrendPanel title="Discovered Nodes (daily)">
-        {nodeData.length === 0 ? (
+      <TrendPanel title="Retained verification state (daily)">
+        {peerHistoryError ? (
+          <p className="text-negative font-mono text-xs">{peerHistoryError}</p>
+        ) : peerCounts.data.length === 0 ? (
           <p className="text-text-dim font-mono text-xs">No data yet</p>
         ) : (
-          <MultiSeriesLineChart data={nodeData} series={nodeSeries} height={260} />
+          <>
+            <StackedAreaChart data={peerCounts.data} series={peerSeries} height={260} />
+            <ChartLegend series={peerSeries} />
+          </>
         )}
       </TrendPanel>
 

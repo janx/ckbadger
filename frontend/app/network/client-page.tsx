@@ -9,7 +9,7 @@ import { api, LabelCount, NetworkActiveRound, NetworkLastRound } from '@/lib/api
 import { formatTimeAgo } from '@/lib/utils';
 import { NetworkDistributions } from '@/app/network/distributions';
 import { NetworkTrends } from '@/app/network/trends';
-import { NodesTable } from '@/app/network/nodes-table';
+import { PeersTable } from '@/app/network/nodes-table';
 
 function PageShell({ children }: { children: ReactNode }) {
   return (
@@ -18,7 +18,7 @@ function PageShell({ children }: { children: ReactNode }) {
       <main className="container mx-auto px-4 py-4">
         <PageHeader
           title="Peers"
-          subtitle="Whole-network CKB L1 peer discovery — the nodes this crawler can reach"
+          subtitle="CKB L1 peer advertisements and same-network reachability evidence from this crawler"
         />
         {children}
       </main>
@@ -43,8 +43,9 @@ function ReachabilityCaveat({ className }: { className?: string }) {
   return (
     <div className={`border-warning/30 bg-warning/10 rounded border px-4 py-3 ${className ?? ''}`}>
       <p className="text-warning font-mono text-xs leading-relaxed">
-        Honest caveat: these are <strong>discoverable / reachable nodes only</strong> — not the full
-        network. Nodes behind NAT or firewalls, or that refuse dials, stay hidden.
+        Evidence boundary: an advertised candidate is not verified until this crawler completes an
+        authenticated, same-network Identify exchange. These local observations are not the full
+        network; nodes behind NAT or firewalls can stay hidden.
       </p>
     </div>
   );
@@ -75,9 +76,9 @@ function PeersOnboarding({
         <h2 className="text-text-bright mb-2 font-mono text-lg font-bold">The CKB peer crawler</h2>
         <p className="text-text-dim mb-4 text-sm leading-relaxed">
           The peer crawler performs whole-network CKB L1 node discovery: starting from bootnodes it
-          dials outward across the p2p network and records every node it can reach. It is{' '}
-          <span className="text-text">local-first</span> — you run the crawl, and the resulting
-          dataset is yours.
+          dials outward across the p2p network and records each same-network peer this observer
+          verifies. It is <span className="text-text">local-first</span> — you run the crawl, and
+          the resulting dataset is yours.
         </p>
 
         <ReachabilityCaveat className="mb-4" />
@@ -156,19 +157,21 @@ function PeersDashboard({
       </div>
 
       <StatGrid columns={4}>
-        <StatBlock label="Discovered Reachable" value={lastRound.reachablePeers} color="jade" />
+        <StatBlock label="Advertised candidates" value={lastRound.candidatePeers} color="gold" />
+        <StatBlock label="Same-network reachable" value={lastRound.reachablePeers} color="jade" />
+        <StatBlock label="Verified retained" value={lastRound.verifiedRetainedPeers} color="aqua" />
         <StatBlock
-          label="Failed Peer Candidates"
-          value={lastRound.unreachablePeers}
+          label="Verified unavailable"
+          value={lastRound.verifiedUnavailablePeers}
           color="rouge"
         />
-        <StatBlock label="Total Known" value={lastRound.totalKnown} color="aqua" />
-        <StatBlock label="Last Round" value={updatedAgo} color="gold" />
       </StatGrid>
 
       <p className="text-text-dim font-mono text-xs">
-        Last round: {lastRound.addressAttempts} address attempts · {lastRound.failedAddressAttempts}{' '}
-        failed addresses · {lastRound.foreignPeers} foreign peers
+        Last round: {lastRound.addressAttempts} address attempts ·{' '}
+        {lastRound.nonSuccessfulAddressAttempts} non-successful observations ·{' '}
+        {lastRound.exhaustedCandidates} exhausted candidates · {lastRound.foreignPeers} foreign
+        peers · {lastRound.newVerifiedPeers} newly verified
       </p>
 
       {activeRound?.blockedReason && (
@@ -181,7 +184,7 @@ function PeersDashboard({
 
       <NetworkDistributions />
       <NetworkTrends />
-      <NodesTable />
+      <PeersTable />
       <MaxMindAttribution />
     </div>
   );

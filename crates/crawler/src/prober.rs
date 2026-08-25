@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use ckbadger_store::{AddressProbeResult, DiscoveryEvidence};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProbeCandidate {
@@ -17,38 +18,34 @@ pub struct ProbeOutcome {
     pub rtt_ms: Option<u32>,
     /// Addresses returned by the Discovery `Nodes` response.
     pub discovered_addrs: Vec<String>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ProbeObservation {
-    Reachable,
-    DialFailed,
-    TimedOut,
-    MalformedAddress,
-    ForeignNetwork,
-    HandshakeRejected,
+    pub discovery: DiscoveryEvidence,
 }
 
 #[derive(Debug, Clone)]
 pub struct ProbeResult {
-    pub observation: ProbeObservation,
-    pub outcome: Option<ProbeOutcome>,
+    pub(crate) observation: AddressProbeResult,
+    pub(crate) elapsed_ms: u64,
+    pub(crate) outcome: Option<ProbeOutcome>,
 }
 
 impl ProbeResult {
-    pub fn reachable(outcome: ProbeOutcome) -> Self {
+    pub fn reachable(outcome: ProbeOutcome, elapsed_ms: u64) -> Self {
         Self {
-            observation: ProbeObservation::Reachable,
+            observation: AddressProbeResult::SameNetworkIdentified,
+            elapsed_ms,
             outcome: Some(outcome),
         }
     }
 
-    pub fn failed(observation: ProbeObservation) -> Self {
-        debug_assert_ne!(observation, ProbeObservation::Reachable);
-        Self {
-            observation,
-            outcome: None,
+    pub fn failed(observation: AddressProbeResult, elapsed_ms: u64) -> anyhow::Result<Self> {
+        if observation == AddressProbeResult::SameNetworkIdentified {
+            anyhow::bail!("same-network observation requires a reachable outcome");
         }
+        Ok(Self {
+            observation,
+            elapsed_ms,
+            outcome: None,
+        })
     }
 }
 
@@ -65,7 +62,7 @@ pub trait Prober: Send + Sync {
     ) -> anyhow::Result<Option<ProbeCandidate>>;
 
     /// Dial `addr`, run Identify+Discovery, then disconnect (feeler style).
-    /// Expected network outcomes are represented by [`ProbeObservation`]; only
+    /// Expected network outcomes are represented by [`AddressProbeResult`]; only
     /// local/prober invariant failures return `Err`.
     async fn probe(&self, peer_id: &[u8], addr: &str) -> anyhow::Result<ProbeResult>;
 
@@ -86,6 +83,7 @@ mod tests {
             own_addrs: vec![],
             rtt_ms: None,
             discovered_addrs: vec![],
+            discovery: DiscoveryEvidence::default(),
         };
         assert_eq!(o.peer_id, vec![1]);
     }
@@ -100,9 +98,22 @@ mod tests {
             own_addrs: vec![],
             rtt_ms: None,
             discovered_addrs: vec![],
+            discovery: DiscoveryEvidence::default(),
         };
-        let result = ProbeResult::reachable(outcome);
-        assert_eq!(result.observation, ProbeObservation::Reachable);
+        let result = ProbeResult::reachable(outcome, 42);
+        assert_eq!(
+            result.observation,
+            AddressProbeResult::SameNetworkIdentified
+        );
         assert!(result.outcome.is_some());
+    }
+
+    #[test]
+    fn failure_result_rejects_same_network_success() {
+        let error = ProbeResult::failed(AddressProbeResult::SameNetworkIdentified, 42)
+            .expect_err("same-network success requires an outcome");
+        assert!(error
+            .to_string()
+            .contains("same-network observation requires a reachable outcome"));
     }
 }

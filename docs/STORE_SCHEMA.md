@@ -72,9 +72,9 @@ The indexer opens the two chain stores (domain + append-only) read-write and the
 | `sync_meta`                      | fixed keys                                                        | Typed records / JSON monitoring bytes                                | Tip/status/runtime/progress/memory, reorg/deep-fork state, bulk session marker, background tasks, network identity, and genesis economic baseline                                      |
 | `dob_decoded`                    | spore_id (32B)                                                    | DecodeOutcome (Decoded(DobDecodedEntry) \| Failed(DobDecodeFailure)) | Cached CKB-VM DOB decode outcome (bulk-disabled, populated after sync catches up to tip). Failed is written only for deterministic failures; transient RPC failures are not persisted. |
 | `lock_scripts`                   | lock_hash (32B)                                                   | LockScriptEntry                                                      | Lock script components by hash (survives cell consumption for address resolution)                                                                                                      |
-| `net_nodes` **(network store)**  | peer_id (raw bytes)                                               | NodeRecord                                                           | Per-peer crawler observation (own_addrs, client_version, flags, protocols, first/last_seen, last_reachable_at, reachable, geo, asn, last_rtt_ms, sampled known_peers)                  |
-| `net_stats` **(network store)**  | `0x00` singleton, or metric(1B)+gran(1B)+bucket(8B BE)            | LatestStatus / HistoryPoint                                          | Latest-round status singleton (key `0x00`) + time-bucketed history points keyed per metric × granularity                                                                               |
-| `net_crawl` **(network store)**  | `0x00` singleton, or `0x01` + peer_id                             | ActiveCrawl / CrawlCandidate                                         | Durable logical-round scheduler state: exact progress, peer-keyed address frontier, per-round result, and staged successful observations                                               |
+| `net_nodes` **(network store)**  | peer_id (raw bytes)                                               | NodeRecord                                                           | TTL-retained same-network verification, latest reachability, exact Discovery evidence, and advertised peer references                                                                  |
+| `net_stats` **(network store)**  | `0x00` singleton, or metric(1B)+gran(1B)+bucket(8B BE)            | LatestStatus / HistoryPoint                                          | Checked completed outcome/address/Discovery aggregates plus time-bucketed verified/reachable/share history                                                                             |
+| `net_crawl` **(network store)**  | `0x00` singleton, or `0x01` + peer_id                             | ActiveCrawl / CrawlCandidate                                         | Durable logical-round scheduler state: aliases, active probe state, stable completed peer/address evidence, and staged success                                                         |
 
 ### Cell-by-Code Index Note
 
@@ -179,25 +179,62 @@ The **network store** (`[store].network_data_path`, default `data/network`, CFs 
 
 ### `net_nodes`
 
-Key = raw `peer_id` bytes → `NodeRecord` (per-peer crawler view: `own_addrs`, `client_version`, `flags`, `protocols`, `first_seen`, `last_seen`, `last_reachable_at`, `reachable`, `geo`, `asn`, `last_rtt_ms`, and a per-round sample of `known_peers`).
+Key = raw `peer_id` bytes → `NodeRecord`. A record exists only after an authenticated peer returns
+a valid Identify for the configured CKB network. Fields are `own_addrs`, `client_version`, `flags`,
+`protocols`, `first_seen`, `last_seen`, `last_reachable_at`, latest completed-round `reachable`,
+optional `geo`/`asn`/`last_rtt_ms`, exact `DiscoveryEvidence`, and `known_peers` resolved from the
+last Discovery observation. `known_peers` is source-centric address-book gossip, not a live edge.
 
 ### `net_stats` key layout
 
-- `0x00` (single reserved byte) → `LatestStatus` singleton — summary of the latest completed crawl round.
-- `metric(1B) + granularity(1B) + ts_bucket(8B big-endian)` → `HistoryPoint` — time-bucketed rollups. Metrics: total nodes, reachable nodes, version share, country share. Granularity: hour, day. The big-endian bucket keeps each `(metric, granularity)` series in chronological key order, so range scans and prunes are contiguous.
+- `0x00` (single reserved byte) → `LatestStatus` singleton — latest completed round id/times;
+  `CompletedPeerOutcomes`; `AddressObservationHistogram`; aggregate `DiscoveryEvidence`;
+  `malformed_addresses`; and `new_verified_peers`. Candidate, retained, reachable, unavailable,
+  exhausted, foreign, and address-attempt totals are checked projections from the two matrices,
+  not separately persisted counters.
+- `metric(1B) + granularity(1B) + ts_bucket(8B big-endian)` → `HistoryPoint` — time-bucketed
+  rollups. Metric ids are `VerifiedPeers=1`, `ReachablePeers=2`, `VersionShare=3`, and
+  `CountryShare=4`; granularities are hour/day. Big-endian buckets preserve chronological key
+  order. The numeric ids for the first two metrics are unchanged, but the serialized network
+  schema and public names are intentionally breaking.
 
 ### `net_crawl` key layout
 
-- `0x00` → `ActiveCrawl` singleton — the current logical round id, start/checkpoint times, exact address-attempt counters, scheduling sequence, and an actionable blocked reason when coverage cannot be preserved.
-- `0x01 + peer_id` → `CrawlCandidate` — all durable addresses for one peer, discovery timestamps, current-round result, fairness sequence, and any successful observation staged for publication.
+- `0x00` → `ActiveCrawl` singleton — current logical round id, start/checkpoint times, exact active
+  address-observation histogram, scheduling sequence, malformed-address count, and actionable
+  blocked reason.
+- `0x01 + peer_id` → `CrawlCandidate` — retained `CrawlAddress` aliases and advertisement times,
+  fairness sequence, optional resumable `ActiveCandidateProbe`, and optional immutable
+  `CompletedCandidateEvidence` for the last completed round. Each address observation includes
+  address, round/time, exact elapsed milliseconds, and typed `AddressProbeResult`.
 
-A slice checkpoint atomically updates `ActiveCrawl` and its changed candidates in `net_crawl`.
-Partial slices never modify the published `net_nodes` snapshot or `net_stats` latest status. Once
-every peer candidate has a terminal result, one RocksDB write batch publishes node changes,
-history points, and `LatestStatus` while deleting the active-round singleton. Readers therefore
-observe either the previous completed round or the next completed round, never a partial mixture.
-If the API starts before this opt-in store exists, it keeps an empty read-only slot and retries the
-secondary open; crawler creation or schema upgrade becomes visible without restarting the API.
+A slice checkpoint atomically updates `ActiveCrawl` and changed candidates in `net_crawl`; it does
+not erase their `last_completed` evidence. Partial slices never modify the published `net_nodes`
+snapshot or `net_stats` status. Once every candidate is terminal, the crawler moves active evidence
+to `last_completed`, and one RocksDB batch publishes candidate updates/deletes, verified-node
+changes, checked status/history, and deletion of the active singleton.
+
+Before building that batch, `commit_crawl_round` validates the candidate evidence through the same
+checked classification helpers used by the crawler. It rejects unknown/duplicate aliases,
+outcome/result disagreement, duplicate peer deltas, new records without same-network evidence,
+per-peer reachability drift, matrix/snapshot drift, Discovery drift, and overflow. Every current-
+round candidate publication must also be the exact terminal `active` → `last_completed` transition
+from its persisted checkpoint; the persisted active histogram, rebuilt candidate histogram, and
+status histogram must agree. A store-owned checked alias index is the single path used by both the
+crawler and commit validator to resolve staged Discovery addresses into sorted/deduplicated
+`known_peers`. Staged success uniquely fixes every published node field except Geo/ASN; retained
+exhausted/foreign nodes may change only `reachable` to false. Observation times must lie inside the
+durable round clock and the successful address timestamp must equal the staged-success timestamp.
+An inactive, expired candidate is deleted unchanged in the following round so the latest completed
+evidence remains inspectable for one full publication interval.
+Readers therefore observe either the previous completed round or the next internally coherent
+completed round. If the API starts before the store exists, it keeps an empty read-only slot and
+retries the secondary open; crawler creation becomes visible without an API restart.
+
+This serialized schema is not backward compatible. Recreate only the network primary and its API
+secondary (default mainnet paths `work/mainnet/data/network` and
+`work/mainnet/data/network-api-secondary`) and crawl again. Do not delete or re-sync the domain or
+append-only chain stores.
 
 ## Key Design
 

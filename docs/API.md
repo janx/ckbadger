@@ -559,34 +559,54 @@ proposal-window scan used by `blocks.rs` and `graph.rs`).
 
 These endpoints read the optional, non-chain network store written by `ckbadger-crawler`.
 
-| Method | Path                              | Handler         | Purpose                                                      |
-| ------ | --------------------------------- | --------------- | ------------------------------------------------------------ |
-| GET    | `/api/v1/network/summary`         | `summary`       | Crawler state, latest completed round, and active progress   |
-| GET    | `/api/v1/network/distributions`   | `distributions` | Reachability, client, country, ASN, and protocol histograms  |
-| GET    | `/api/v1/network/history`         | `history`       | Hour/day time series for node counts and distribution shares |
-| GET    | `/api/v1/network/nodes`           | `nodes`         | Filterable cursor-paginated discovered-node list             |
-| GET    | `/api/v1/network/nodes/{peer_id}` | `node_by_id`    | Full detail for one hex-encoded peer ID                      |
+| Method | Path                              | Handler         | Purpose                                                              |
+| ------ | --------------------------------- | --------------- | -------------------------------------------------------------------- |
+| GET    | `/api/v1/network/summary`         | `summary`       | Checked completed evidence projections plus separate active progress |
+| GET    | `/api/v1/network/distributions`   | `distributions` | Histograms scoped explicitly to retained verified peer records       |
+| GET    | `/api/v1/network/history`         | `history`       | Verified/reachable counts and distribution shares by hour/day        |
+| GET    | `/api/v1/network/peers`           | `peers`         | Unified candidate list with optional verified-record metadata        |
+| GET    | `/api/v1/network/peers/{peer_id}` | `peer_by_id`    | Aliases, typed probe evidence, verification, and advertisers         |
 
 **Params**
 
-- `HistoryQuery` — required `metric` (`totalNodes`, `reachableNodes`, `versionShare`,
+- `HistoryQuery` — required `metric` (`verifiedPeers`, `reachablePeers`, `versionShare`,
   `countryShare`) and `granularity` (`hour`, `day`), plus optional inclusive Unix-second `from`
   and `to`
-- `NodesQuery` — optional `cursor`, `limit` (default 50, maximum 500), `reachable`, `country`,
-  and exact `version`
+- `PeersQuery` — optional `cursor`, `limit` (default 50, valid range 1–500), exact `state`
+  (`reachable`, `verifiedUnavailable`, `advertisedUnverified`, `foreignNetwork`, or
+  `noCompletedObservation`), typed address `observation` (`dialRequestFailed`,
+  `noAuthenticatedSessionBeforeDeadline`,
+  `authenticatedSessionWithoutIdentifyBeforeDeadline`, `malformedIdentify`, `foreignNetwork`, or
+  `sameNetworkIdentified`), `country`, and exact `version`
+
+Unknown `state` or `observation` values return `400` before any network-store read. History bucket
+timestamps use checked multiplication; an unrepresentable persisted bucket is an explicit `500`
+store invariant failure rather than a wrapped timestamp.
+
 - `Path(peer_id): Path<String>` — raw peer ID encoded as hexadecimal
 
 **Responses**
 
 - `NetworkSummary` — `enabled`, `hasData`, optional completed `lastRound`, and optional separate
-  `activeRound`. Completed-round peer counters and address-attempt counters use distinct fields;
-  an active round reports exact `completedPeers / candidatePeers` checkpoint progress.
-- `NetworkDistributions` — total/reachable counts plus sorted label/count buckets
+  `activeRound`. `lastRound` exposes checked `candidatePeers`, `verifiedRetainedPeers`,
+  `reachablePeers`, `verifiedUnavailablePeers`, `exhaustedCandidates`, `foreignPeers`,
+  `addressAttempts`, and `nonSuccessfulAddressAttempts`, plus the persisted peer outcome matrix,
+  address-result histogram, Discovery counters, malformed-address count, and newly verified count.
+  `activeRound` reports exact checkpoint progress without replacing completed evidence.
+- `NetworkDistributions` — `verifiedRetained`, `sameNetworkReachable`,
+  `verifiedUnavailable`, and sorted version/country/ASN/protocol buckets over verified records only
 - `NetworkHistory` — requested metric/granularity and ascending points; daily data excludes the
   incomplete current day
-- `NetworkNodesPage` — `items` and optional `nextCursor`
-- `NodeDetailResponse` — addresses, version, flags, protocols, observation times, reachability,
-  geo/ASN, RTT, and known-peer count
+- `NetworkPeersPage` — unified candidate `items` and optional `nextCursor`. Candidate-only
+  version/country/ASN/RTT fields are `null`; the API does not fabricate node metadata.
+- `PeerDetailResponse` — observation vantage, retained aliases, immutable `lastCompleted` typed
+  address evidence, optional separately labeled `active` evidence, optional retained `verified`
+  record with exact Discovery counters, and retained `{advertiserPeerId, observedAt}` references
+  inverted from verified peers' `known_peers` lists
+
+The old `/network/nodes` routes and ambiguous fields such as `totalKnown` and
+`unreachablePeers` are intentionally removed. `advertisedUnverified` means all retained aliases
+were exhausted without a retained same-network verification; it is not a global liveness claim.
 
 When the crawler/store is disabled, summary and aggregate/list endpoints return an honest
 disabled or empty state. A point lookup still returns not found.

@@ -32,8 +32,7 @@ describe('NetworkClientPage', () => {
 
     // Explains what the peer crawler is.
     expect(await screen.findByText('The CKB peer crawler')).toBeInTheDocument();
-    // Honest reachability caveat is present.
-    expect(screen.getByText(/discoverable \/ reachable nodes only/i)).toBeInTheDocument();
+    expect(screen.getByText(/an advertised candidate is not verified/i)).toBeInTheDocument();
     // How to enable it.
     expect(screen.getByText('How to enable')).toBeInTheDocument();
     expect(screen.getByText(/enabled = true/)).toBeInTheDocument();
@@ -60,19 +59,39 @@ describe('NetworkClientPage', () => {
           enabled: true,
           hasData: true,
           lastRound: {
-            totalKnown: 2,
             candidatePeers: 2,
-            attemptedPeers: 2,
+            verifiedRetainedPeers: 2,
             reachablePeers: 1,
-            unreachablePeers: 1,
+            verifiedUnavailablePeers: 1,
+            exhaustedCandidates: 1,
             roundId: 5,
             startedAt: 0,
             finishedAt: 0,
             addressAttempts: 2,
-            failedAddressAttempts: 1,
+            nonSuccessfulAddressAttempts: 1,
             foreignPeers: 0,
             malformedAddresses: 0,
-            newNodes: 0,
+            newVerifiedPeers: 0,
+            peerOutcomes: {
+              sameNetworkIdentified: 1,
+              exhausted: { withRetainedVerification: 1, withoutRetainedVerification: 0 },
+              foreignNetwork: { withRetainedVerification: 0, withoutRetainedVerification: 0 },
+            },
+            addressObservations: {
+              dialRequestFailed: 1,
+              noAuthenticatedSessionBeforeDeadline: 0,
+              authenticatedSessionWithoutIdentifyBeforeDeadline: 0,
+              malformedIdentify: 0,
+              foreignNetwork: 0,
+              sameNetworkIdentified: 1,
+            },
+            discovery: {
+              validNodesMessages: 1,
+              malformedMessages: 0,
+              unexpectedMessages: 0,
+              normalizedAdvertisedAddresses: 2,
+              rejectedAdvertisedAddresses: 0,
+            },
           },
           activeRound: null,
         })
@@ -81,13 +100,14 @@ describe('NetworkClientPage', () => {
 
     render(<NetworkClientPage />, { wrapper: createWrapper() });
 
-    // Honest summary-card labels (never "total network nodes").
-    expect(await screen.findByText('Discovered Reachable')).toBeInTheDocument();
-    expect(screen.getByText('Failed Peer Candidates')).toBeInTheDocument();
-    expect(screen.getByText('Total Known')).toBeInTheDocument();
+    expect(await screen.findByText('Advertised candidates')).toBeInTheDocument();
+    expect(screen.getByText('Same-network reachable')).toBeInTheDocument();
+    expect(screen.getByText('Verified retained')).toBeInTheDocument();
+    expect(screen.getAllByText('Verified unavailable').length).toBeGreaterThan(0);
+    expect(screen.queryByText('Total Known')).not.toBeInTheDocument();
+    expect(screen.queryByText('Failed Peer Candidates')).not.toBeInTheDocument();
     expect(screen.queryByText(/crawling/i)).not.toBeInTheDocument();
-    // Reachability caveat still visible on the dashboard.
-    expect(screen.getByText(/discoverable \/ reachable nodes only/i)).toBeInTheDocument();
+    expect(screen.getByText(/an advertised candidate is not verified/i)).toBeInTheDocument();
   });
 
   it('shows active progress separately from the last completed round', async () => {
@@ -97,19 +117,39 @@ describe('NetworkClientPage', () => {
           enabled: true,
           hasData: true,
           lastRound: {
-            totalKnown: 3,
             candidatePeers: 3,
-            attemptedPeers: 3,
+            verifiedRetainedPeers: 3,
             reachablePeers: 2,
-            unreachablePeers: 1,
+            verifiedUnavailablePeers: 1,
+            exhaustedCandidates: 1,
             roundId: 5,
             startedAt: 0,
             finishedAt: 1,
             addressAttempts: 3,
-            failedAddressAttempts: 1,
+            nonSuccessfulAddressAttempts: 1,
             foreignPeers: 0,
             malformedAddresses: 0,
-            newNodes: 0,
+            newVerifiedPeers: 0,
+            peerOutcomes: {
+              sameNetworkIdentified: 2,
+              exhausted: { withRetainedVerification: 1, withoutRetainedVerification: 0 },
+              foreignNetwork: { withRetainedVerification: 0, withoutRetainedVerification: 0 },
+            },
+            addressObservations: {
+              dialRequestFailed: 1,
+              noAuthenticatedSessionBeforeDeadline: 0,
+              authenticatedSessionWithoutIdentifyBeforeDeadline: 0,
+              malformedIdentify: 0,
+              foreignNetwork: 0,
+              sameNetworkIdentified: 2,
+            },
+            discovery: {
+              validNodesMessages: 2,
+              malformedMessages: 0,
+              unexpectedMessages: 0,
+              normalizedAdvertisedAddresses: 3,
+              rejectedAdvertisedAddresses: 0,
+            },
           },
           activeRound: {
             roundId: 6,

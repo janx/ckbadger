@@ -1130,27 +1130,52 @@ pub(crate) fn format_last_round_age(finished: u64, now: u64) -> String {
     }
 }
 
-/// Zip totalNodes + reachableNodes hourly points on `ts`; drop buckets where the reachable point
-/// is missing or `reachable > total` (upstream invariant violation — surfaced as a gap, never
-/// masked with `saturating_sub`). Returns (reachable_series, unreachable_series) as f64 for the
-/// stacked-bar chart.
+/// Join verifiedPeers + reachablePeers hourly points on `ts` and derive verified-unavailable.
+/// Every timestamp must occur exactly once in both inputs and reachable must not exceed verified;
+/// malformed history is returned as an actionable error instead of being skipped or clamped.
 pub(crate) fn peers_trend_series(
-    total: &[NetworkHistoryPoint],
+    verified: &[NetworkHistoryPoint],
     reachable: &[NetworkHistoryPoint],
-) -> (VecDeque<f64>, VecDeque<f64>) {
-    use std::collections::HashMap;
-    let r_by_ts: HashMap<u64, u64> = reachable.iter().map(|p| (p.ts, p.scalar)).collect();
-    let mut r_out = VecDeque::new();
-    let mut u_out = VecDeque::new();
-    for t in total {
-        if let Some(&r) = r_by_ts.get(&t.ts) {
-            if r <= t.scalar {
-                r_out.push_back(r as f64);
-                u_out.push_back((t.scalar - r) as f64);
-            }
+) -> Result<(VecDeque<f64>, VecDeque<f64>), String> {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    let mut reachable_by_ts = BTreeMap::new();
+    for point in reachable {
+        if reachable_by_ts.insert(point.ts, point.scalar).is_some() {
+            return Err(format!(
+                "duplicate reachablePeers history point: ts={}",
+                point.ts
+            ));
         }
     }
-    (r_out, u_out)
+    let mut verified_timestamps = BTreeSet::new();
+    let mut r_out = VecDeque::new();
+    let mut unavailable_out = VecDeque::new();
+    for point in verified {
+        if !verified_timestamps.insert(point.ts) {
+            return Err(format!(
+                "duplicate verifiedPeers history point: ts={}",
+                point.ts
+            ));
+        }
+        let reachable_count = reachable_by_ts
+            .remove(&point.ts)
+            .ok_or_else(|| format!("missing reachablePeers point: ts={}", point.ts))?;
+        let unavailable_count = point.scalar.checked_sub(reachable_count).ok_or_else(|| {
+            format!(
+                "invalid peer history: ts={}, reachablePeers={} exceeds verifiedPeers={}",
+                point.ts, reachable_count, point.scalar
+            )
+        })?;
+        r_out.push_back(reachable_count as f64);
+        unavailable_out.push_back(unavailable_count as f64);
+    }
+    if let Some((&timestamp, _)) = reachable_by_ts.first_key_value() {
+        return Err(format!(
+            "missing verifiedPeers point for reachablePeers: ts={timestamp}"
+        ));
+    }
+    Ok((r_out, unavailable_out))
 }
 
 fn draw_peers_content(f: &mut Frame, app: &App, area: Rect) {
@@ -1253,7 +1278,7 @@ fn draw_peers_dashboard(f: &mut Frame, data: &PeersData, area: Rect) {
         .constraints([
             Constraint::Length(8),  // status block
             Constraint::Length(12), // version + country distributions
-            Constraint::Min(6),     // reachable/unreachable trend
+            Constraint::Min(6),     // reachable/verified-unavailable trend
         ])
         .split(area);
 
@@ -1335,30 +1360,37 @@ fn draw_peers_status(f: &mut Frame, data: &PeersData, area: Rect) {
         ));
     }
 
-    // Line 2: discovered totals (honest wording — "discovered", not "total network")
+    // Lines 2-3 keep advertised candidates distinct from retained cryptographic verification.
     let line2 = Line::from(vec![
-        Span::styled("Discovered ", Style::default().fg(SLATE_500)),
+        Span::styled("Advertised candidates ", Style::default().fg(SLATE_500)),
         Span::styled(
-            format_num_u64(lr.total_known),
-            Style::default()
-                .fg(TERMINAL_GREEN)
-                .add_modifier(Modifier::BOLD),
+            format_num_u64(lr.candidate_peers),
+            Style::default().fg(AMBER).add_modifier(Modifier::BOLD),
         ),
-        Span::styled(" known  ·  ", Style::default().fg(SLATE_700)),
+        Span::styled(
+            "  ·  Same-network reachable ",
+            Style::default().fg(SLATE_700),
+        ),
         Span::styled(
             format_num_u64(lr.reachable_peers),
             Style::default().fg(TERMINAL_GREEN),
         ),
-        Span::styled(" reachable peers  ·  ", Style::default().fg(SLATE_700)),
+    ]);
+    let line3 = Line::from(vec![
+        Span::styled("Verified retained ", Style::default().fg(SLATE_500)),
         Span::styled(
-            format_num_u64(lr.unreachable_peers),
-            Style::default().fg(SLATE_500),
+            format_num_u64(lr.verified_retained_peers),
+            Style::default().fg(FOREGROUND),
         ),
-        Span::styled(" failed peers", Style::default().fg(SLATE_500)),
+        Span::styled("  ·  Verified unavailable ", Style::default().fg(SLATE_700)),
+        Span::styled(
+            format_num_u64(lr.verified_unavailable_peers),
+            Style::default().fg(AMBER),
+        ),
     ]);
 
-    // Line 3: this-round activity
-    let line3 = Line::from(vec![
+    // Line 4: exact this-round address and terminal candidate observations.
+    let line4 = Line::from(vec![
         Span::styled("This round ", Style::default().fg(SLATE_500)),
         Span::styled(
             format_num_u64(lr.address_attempts),
@@ -1366,23 +1398,35 @@ fn draw_peers_status(f: &mut Frame, data: &PeersData, area: Rect) {
         ),
         Span::styled(" address attempts  ·  ", Style::default().fg(SLATE_700)),
         Span::styled(
-            format_num_u64(lr.failed_address_attempts),
+            format_num_u64(lr.non_successful_address_attempts),
             Style::default().fg(SLATE_500),
         ),
-        Span::styled(" failed  ·  ", Style::default().fg(SLATE_700)),
+        Span::styled(" non-successful  ·  ", Style::default().fg(SLATE_700)),
         Span::styled(
-            format_num_u64(lr.new_nodes),
+            format_num_u64(lr.exhausted_candidates),
+            Style::default().fg(SLATE_500),
+        ),
+        Span::styled(" exhausted candidates  ·  ", Style::default().fg(SLATE_700)),
+        Span::styled(
+            format_num_u64(lr.new_verified_peers),
             Style::default().fg(TERMINAL_GREEN),
         ),
-        Span::styled(" new  ·  ", Style::default().fg(SLATE_700)),
+        Span::styled(" newly verified", Style::default().fg(SLATE_500)),
+    ]);
+    let line5 = Line::from(vec![
+        Span::styled("Foreign network ", Style::default().fg(SLATE_500)),
         Span::styled(
             format_num_u64(lr.foreign_peers),
             Style::default().fg(SLATE_500),
         ),
-        Span::styled(" foreign peers", Style::default().fg(SLATE_500)),
+        Span::styled("  ·  Malformed addresses ", Style::default().fg(SLATE_700)),
+        Span::styled(
+            format_num_u64(lr.malformed_addresses),
+            Style::default().fg(SLATE_500),
+        ),
     ]);
 
-    let mut lines = vec![Line::from(line1), line2, line3];
+    let mut lines = vec![Line::from(line1), line2, line3, line4, line5];
     if let Some(reason) = data
         .summary
         .as_ref()
@@ -1424,7 +1468,7 @@ fn draw_peers_distributions(f: &mut Frame, data: &PeersData, area: Rect) {
         return;
     };
 
-    // Reserve the bottom line for the reachable/unreachable summary.
+    // Reserve the bottom line for the retained-verification split.
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(1), Constraint::Length(1)])
@@ -1439,19 +1483,19 @@ fn draw_peers_distributions(f: &mut Frame, data: &PeersData, area: Rect) {
     draw_label_count_chart(f, cols[1], "Countries", &dist.countries);
 
     let summary = Line::from(vec![
-        Span::styled("discovered reachable ", Style::default().fg(SLATE_500)),
+        Span::styled("same-network reachable ", Style::default().fg(SLATE_500)),
         Span::styled(
-            format_num_u64(dist.reachable),
+            format_num_u64(dist.same_network_reachable),
             Style::default().fg(TERMINAL_GREEN),
         ),
-        Span::styled("  ·  unreachable ", Style::default().fg(SLATE_500)),
+        Span::styled("  ·  verified unavailable ", Style::default().fg(SLATE_500)),
         Span::styled(
-            format_num_u64(dist.unreachable),
+            format_num_u64(dist.verified_unavailable),
             Style::default().fg(SLATE_500),
         ),
-        Span::styled("  ·  known ", Style::default().fg(SLATE_500)),
+        Span::styled("  ·  verified retained ", Style::default().fg(SLATE_500)),
         Span::styled(
-            format_num_u64(dist.total_known),
+            format_num_u64(dist.verified_retained),
             Style::default().fg(FOREGROUND),
         ),
     ]);
@@ -1513,7 +1557,7 @@ fn draw_peers_trend(f: &mut Frame, data: &PeersData, area: Rect) {
         .borders(Borders::ALL)
         .border_style(Style::default().fg(SLATE_800))
         .title(Span::styled(
-            "Discovered Nodes (hourly)",
+            "Verified peers (hourly)",
             Style::default().fg(FOREGROUND),
         ));
     let inner = block.inner(area);
@@ -1522,7 +1566,18 @@ fn draw_peers_trend(f: &mut Frame, data: &PeersData, area: Rect) {
         return;
     }
 
-    let (r, u) = peers_trend_series(&data.total_history, &data.reachable_history);
+    let (r, unavailable) = match peers_trend_series(&data.verified_history, &data.reachable_history)
+    {
+        Ok(series) => series,
+        Err(error) => {
+            f.render_widget(
+                Paragraph::new(Span::styled(error, Style::default().fg(ERROR_RED)))
+                    .wrap(Wrap { trim: true }),
+                inner,
+            );
+            return;
+        }
+    };
 
     let rows = Layout::default()
         .direction(Direction::Vertical)
@@ -1530,16 +1585,20 @@ fn draw_peers_trend(f: &mut Frame, data: &PeersData, area: Rect) {
         .split(inner);
 
     let legend = Line::from(vec![
-        Span::styled("■ reachable ", Style::default().fg(Color::Green)),
+        Span::styled(
+            "■ same-network reachable ",
+            Style::default().fg(Color::Green),
+        ),
         Span::styled(
             r.back()
                 .map(|v| format!("{v:.0}"))
                 .unwrap_or_else(|| "-".to_string()),
             Style::default().fg(Color::Green),
         ),
-        Span::styled("   ■ unreachable ", Style::default().fg(SLATE_500)),
+        Span::styled("   ■ verified unavailable ", Style::default().fg(SLATE_500)),
         Span::styled(
-            u.back()
+            unavailable
+                .back()
                 .map(|v| format!("{v:.0}"))
                 .unwrap_or_else(|| "-".to_string()),
             Style::default().fg(SLATE_500),
@@ -1551,10 +1610,10 @@ fn draw_peers_trend(f: &mut Frame, data: &PeersData, area: Rect) {
         return;
     }
     // Zero-filled 3rd series satisfies the 3-series stacked API; the visible height is
-    // reachable + unreachable = total discovered nodes for the bucket.
+    // same-network reachable + verified unavailable = verified retained for the bucket.
     let zeros: VecDeque<f64> = std::iter::repeat_n(0.0, r.len()).collect();
     let chart = render_stacked_bar_chart(
-        [&r, &u, &zeros],
+        [&r, &unavailable, &zeros],
         [Color::Green, Color::DarkGray, Color::Reset],
         rows[1].width as usize,
         rows[1].height as usize,
@@ -6285,12 +6344,12 @@ mod tests {
         build_resources_column, bulk_queue_indicator_line, chart_height_warning, ckb_path_display,
         compact_overview_layout, consumed_cells_source_color, consumed_cells_source_label,
         controller_panel_lines, dense_right_lines, detail_right_lines, diagnostics_dense_panel,
-        direct_io_reads_label, disk_pressure_lines, eta_confidence_label, footer_hint_line,
-        footer_status_message, format_age_secs, format_last_round_age, format_num,
-        format_num_commas, format_num_compact, format_rate_expanded, format_signed_num_i128,
-        format_stage_commit_gap_ms, header_right_line, header_title_line, heartbeat_is_on,
-        io_fetch_write_jitter_line, is_rate_drop, merged_sparkline_p95_line, network_summary_line,
-        network_summary_row, network_switcher_line, overview_log_min_height,
+        direct_io_reads_label, disk_pressure_lines, draw_peers_status, eta_confidence_label,
+        footer_hint_line, footer_status_message, format_age_secs, format_last_round_age,
+        format_num, format_num_commas, format_num_compact, format_rate_expanded,
+        format_signed_num_i128, format_stage_commit_gap_ms, header_right_line, header_title_line,
+        heartbeat_is_on, io_fetch_write_jitter_line, is_rate_drop, merged_sparkline_p95_line,
+        network_summary_line, network_summary_row, network_switcher_line, overview_log_min_height,
         overview_services_min_height, peers_trend_series, peers_view_state,
         percentile_from_history, pipeline_bottleneck, pipeline_flow_state, rate_jitter,
         render_gauge, runtime_health_state, runtime_live_delta, service_log_tails_line, sparkline,
@@ -6310,8 +6369,10 @@ mod tests {
         MemoryStatsData,
     };
     use ckbadger_store::StoreRuntimeConfig;
+    use ratatui::backend::TestBackend;
     use ratatui::layout::{Constraint, Direction, Layout, Rect};
     use ratatui::text::Line;
+    use ratatui::Terminal;
     use std::collections::VecDeque;
     use std::time::Instant;
 
@@ -6369,18 +6430,64 @@ mod tests {
     }
 
     #[test]
-    fn trend_series_zips_and_skips_invariant_violations() {
+    fn trend_series_returns_verified_unavailable_for_aligned_points() {
         use crate::db::NetworkHistoryPoint as P;
-        let total = vec![
-            P { ts: 1, scalar: 4 },
-            P { ts: 2, scalar: 6 },
-            P { ts: 3, scalar: 2 },
-        ];
-        // ts=2 reachable(7) > total(6) => skip; ts=3 has no reachable point => skip
-        let reachable = vec![P { ts: 1, scalar: 3 }, P { ts: 2, scalar: 7 }];
-        let (r, u) = peers_trend_series(&total, &reachable);
-        assert_eq!(Vec::from(r), vec![3.0]); // only ts=1 survives
-        assert_eq!(Vec::from(u), vec![1.0]); // 4 - 3
+        let verified = vec![P { ts: 1, scalar: 4 }, P { ts: 2, scalar: 6 }];
+        let reachable = vec![P { ts: 1, scalar: 3 }, P { ts: 2, scalar: 4 }];
+        let (r, unavailable) = peers_trend_series(&verified, &reachable).unwrap();
+        assert_eq!(Vec::from(r), vec![3.0, 4.0]);
+        assert_eq!(Vec::from(unavailable), vec![1.0, 2.0]);
+    }
+
+    #[test]
+    fn trend_series_rejects_reachable_above_verified() {
+        use crate::db::NetworkHistoryPoint as P;
+        let verified = vec![P { ts: 2, scalar: 6 }];
+        let reachable = vec![P { ts: 2, scalar: 7 }];
+        let error = peers_trend_series(&verified, &reachable).unwrap_err();
+        assert!(error.contains("ts=2"));
+        assert!(error.contains("reachablePeers=7 exceeds verifiedPeers=6"));
+    }
+
+    #[test]
+    fn trend_series_rejects_missing_matching_bucket() {
+        use crate::db::NetworkHistoryPoint as P;
+        let verified = vec![P { ts: 1, scalar: 4 }, P { ts: 2, scalar: 6 }];
+        let reachable = vec![P { ts: 1, scalar: 3 }];
+        let error = peers_trend_series(&verified, &reachable).unwrap_err();
+        assert!(error.contains("missing reachablePeers point: ts=2"));
+    }
+
+    #[test]
+    fn peers_status_uses_evidence_terminology() {
+        use crate::db::{NetworkSummary, PeersData};
+
+        let summary: NetworkSummary = serde_json::from_str(
+            r#"{"enabled":true,"hasData":true,"lastRound":{"roundId":5,"startedAt":1,"finishedAt":2,"candidatePeers":144,"verifiedRetainedPeers":58,"reachablePeers":57,"verifiedUnavailablePeers":1,"exhaustedCandidates":87,"foreignPeers":0,"addressAttempts":416,"nonSuccessfulAddressAttempts":359,"malformedAddresses":0,"newVerifiedPeers":1},"activeRound":null}"#,
+        )
+        .unwrap();
+        let data = PeersData {
+            summary: Some(summary),
+            ..Default::default()
+        };
+        let mut terminal = Terminal::new(TestBackend::new(180, 8)).unwrap();
+        terminal
+            .draw(|frame| draw_peers_status(frame, &data, frame.area()))
+            .unwrap();
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+
+        assert!(rendered.contains("Advertised candidates"));
+        assert!(rendered.contains("Same-network reachable"));
+        assert!(rendered.contains("Verified retained"));
+        assert!(rendered.contains("Verified unavailable"));
+        assert!(!rendered.contains("Total Known"));
+        assert!(!rendered.contains("Unreachable"));
     }
 
     #[test]
@@ -6443,7 +6550,7 @@ mod tests {
         }
         // has_data true with a lastRound => Dashboard.
         let dash_summary: NetworkSummary = serde_json::from_str(
-            r#"{"enabled":true,"hasData":true,"lastRound":{"roundId":5,"startedAt":1,"finishedAt":2,"candidatePeers":4,"attemptedPeers":4,"reachablePeers":3,"unreachablePeers":1,"addressAttempts":8,"failedAddressAttempts":1,"foreignPeers":0,"malformedAddresses":0,"newNodes":2,"totalKnown":4},"activeRound":null}"#,
+            r#"{"enabled":true,"hasData":true,"lastRound":{"roundId":5,"startedAt":1,"finishedAt":2,"candidatePeers":4,"verifiedRetainedPeers":4,"reachablePeers":3,"verifiedUnavailablePeers":1,"exhaustedCandidates":1,"foreignPeers":0,"addressAttempts":8,"nonSuccessfulAddressAttempts":1,"malformedAddresses":0,"newVerifiedPeers":2},"activeRound":null}"#,
         )
         .unwrap();
         let dashboard = PeersData {
@@ -6460,7 +6567,7 @@ mod tests {
         // render the Dashboard — the crawler status block is the tab's primary content and
         // must not be hidden behind a full-screen Error for a missing chart endpoint.
         let summary: NetworkSummary = serde_json::from_str(
-            r#"{"enabled":true,"hasData":true,"lastRound":{"roundId":1,"startedAt":0,"finishedAt":0,"candidatePeers":0,"attemptedPeers":0,"reachablePeers":0,"unreachablePeers":0,"addressAttempts":0,"failedAddressAttempts":0,"foreignPeers":0,"malformedAddresses":0,"newNodes":0,"totalKnown":0},"activeRound":null}"#,
+            r#"{"enabled":true,"hasData":true,"lastRound":{"roundId":1,"startedAt":0,"finishedAt":0,"candidatePeers":0,"verifiedRetainedPeers":0,"reachablePeers":0,"verifiedUnavailablePeers":0,"exhaustedCandidates":0,"foreignPeers":0,"addressAttempts":0,"nonSuccessfulAddressAttempts":0,"malformedAddresses":0,"newVerifiedPeers":0},"activeRound":null}"#,
         )
         .unwrap();
         let data = PeersData {

@@ -755,15 +755,15 @@ pub struct NetworkLastRound {
     pub started_at: u64,
     pub finished_at: u64,
     pub candidate_peers: u64,
-    pub attempted_peers: u64,
+    pub verified_retained_peers: u64,
     pub reachable_peers: u64,
-    pub unreachable_peers: u64,
-    pub address_attempts: u64,
-    pub failed_address_attempts: u64,
+    pub verified_unavailable_peers: u64,
+    pub exhausted_candidates: u64,
     pub foreign_peers: u64,
+    pub address_attempts: u64,
+    pub non_successful_address_attempts: u64,
     pub malformed_addresses: u64,
-    pub new_nodes: u64,
-    pub total_known: u64,
+    pub new_verified_peers: u64,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -797,9 +797,9 @@ pub struct LabelCount {
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NetworkDistributions {
-    pub total_known: u64,
-    pub reachable: u64,
-    pub unreachable: u64,
+    pub verified_retained: u64,
+    pub same_network_reachable: u64,
+    pub verified_unavailable: u64,
     pub versions: Vec<LabelCount>,
     pub countries: Vec<LabelCount>,
     pub asns: Vec<LabelCount>,
@@ -821,7 +821,7 @@ pub struct NetworkHistory {
 pub struct PeersData {
     pub summary: Option<NetworkSummary>,
     pub distributions: Option<NetworkDistributions>,
-    pub total_history: Vec<NetworkHistoryPoint>,
+    pub verified_history: Vec<NetworkHistoryPoint>,
     pub reachable_history: Vec<NetworkHistoryPoint>,
     pub error: Option<String>,
 }
@@ -864,11 +864,11 @@ impl TuiDb {
             .map(|d| d.as_secs())
             .unwrap_or(0);
         let from = now.saturating_sub(PEERS_TREND_WINDOW_SECS);
-        let total_path = peers_history_path("totalNodes", from);
-        let reach_path = peers_history_path("reachableNodes", from);
-        let (dist, total, reach) = tokio::join!(
+        let verified_path = peers_history_path("verifiedPeers", from);
+        let reach_path = peers_history_path("reachablePeers", from);
+        let (dist, verified, reach) = tokio::join!(
             self.fetch_json::<NetworkDistributions>("/network/distributions"),
-            self.fetch_json::<NetworkHistory>(&total_path),
+            self.fetch_json::<NetworkHistory>(&verified_path),
             self.fetch_json::<NetworkHistory>(&reach_path),
         );
         // Best-effort: set field on success, leave empty on error. Per the status-first
@@ -876,8 +876,8 @@ impl TuiDb {
         if let Ok(d) = dist {
             out.distributions = Some(d);
         }
-        if let Ok(h) = total {
-            out.total_history = h.points;
+        if let Ok(h) = verified {
+            out.verified_history = h.points;
         }
         if let Ok(h) = reach {
             out.reachable_history = h.points;
@@ -994,7 +994,7 @@ mod tests {
         assert!(!off.enabled && !off.has_data && off.last_round.is_none());
 
         let on: NetworkSummary = serde_json::from_str(
-            r#"{"enabled":true,"hasData":true,"lastRound":{"roundId":5,"startedAt":1,"finishedAt":2,"candidatePeers":4,"attemptedPeers":4,"reachablePeers":3,"unreachablePeers":1,"addressAttempts":8,"failedAddressAttempts":1,"foreignPeers":0,"malformedAddresses":0,"newNodes":2,"totalKnown":4},"activeRound":{"roundId":6,"startedAt":3,"lastCheckpointAt":4,"candidatePeers":5,"completedPeers":2,"addressAttempts":2,"blockedReason":"frontier capacity exceeded"}}"#,
+            r#"{"enabled":true,"hasData":true,"lastRound":{"roundId":5,"startedAt":1,"finishedAt":2,"candidatePeers":4,"verifiedRetainedPeers":4,"reachablePeers":3,"verifiedUnavailablePeers":1,"exhaustedCandidates":1,"foreignPeers":0,"addressAttempts":8,"nonSuccessfulAddressAttempts":1,"malformedAddresses":0,"newVerifiedPeers":2,"peerOutcomes":{"sameNetworkIdentified":3,"exhausted":{"withRetainedVerification":1,"withoutRetainedVerification":0},"foreignNetwork":{"withRetainedVerification":0,"withoutRetainedVerification":0}},"addressObservations":{"dialRequestFailed":1,"noAuthenticatedSessionBeforeDeadline":0,"authenticatedSessionWithoutIdentifyBeforeDeadline":0,"malformedIdentify":0,"foreignNetwork":0,"sameNetworkIdentified":3},"discovery":{"validNodesMessages":3,"malformedMessages":0,"unexpectedMessages":0,"normalizedAdvertisedAddresses":4,"rejectedAdvertisedAddresses":0}},"activeRound":{"roundId":6,"startedAt":3,"lastCheckpointAt":4,"candidatePeers":5,"completedPeers":2,"addressAttempts":2,"blockedReason":"frontier capacity exceeded"}}"#,
         ).unwrap();
         let active = on.active_round.as_ref().unwrap();
         assert_eq!(active.completed_peers, 2);
@@ -1003,15 +1003,16 @@ mod tests {
             Some("frontier capacity exceeded")
         );
         let lr = on.last_round.unwrap();
-        assert_eq!(lr.total_known, 4);
+        assert_eq!(lr.verified_retained_peers, 4);
         assert_eq!(lr.reachable_peers, 3);
+        assert_eq!(lr.verified_unavailable_peers, 1);
         assert_eq!(lr.address_attempts, 8);
     }
 
     #[test]
     fn parse_distributions_and_history() {
         let d: NetworkDistributions = serde_json::from_str(
-            r#"{"totalKnown":4,"reachable":3,"unreachable":1,"versions":[{"label":"0.119.0","count":3}],"countries":[{"label":"US","count":2}],"asns":[],"protocols":[]}"#,
+            r#"{"verifiedRetained":4,"sameNetworkReachable":3,"verifiedUnavailable":1,"versions":[{"label":"0.119.0","count":3}],"countries":[{"label":"US","count":2}],"asns":[],"protocols":[]}"#,
         ).unwrap();
         assert_eq!(d.versions[0].label, "0.119.0");
         assert_eq!(d.countries[0].count, 2);
@@ -1058,8 +1059,8 @@ mod tests {
     #[test]
     fn peers_history_path_bounds_window() {
         assert_eq!(
-            peers_history_path("totalNodes", 1000),
-            "/network/history?metric=totalNodes&granularity=hour&from=1000"
+            peers_history_path("verifiedPeers", 1000),
+            "/network/history?metric=verifiedPeers&granularity=hour&from=1000"
         );
     }
 

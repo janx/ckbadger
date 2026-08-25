@@ -37,15 +37,35 @@ const DASHBOARD_SUMMARY = {
     startedAt: 0,
     finishedAt: 0,
     candidatePeers: 2,
-    attemptedPeers: 2,
+    verifiedRetainedPeers: 2,
     reachablePeers: 1,
-    unreachablePeers: 1,
+    verifiedUnavailablePeers: 1,
+    exhaustedCandidates: 1,
     addressAttempts: 2,
-    failedAddressAttempts: 1,
+    nonSuccessfulAddressAttempts: 1,
     foreignPeers: 0,
     malformedAddresses: 0,
-    newNodes: 0,
-    totalKnown: 2,
+    newVerifiedPeers: 0,
+    peerOutcomes: {
+      sameNetworkIdentified: 1,
+      exhausted: { withRetainedVerification: 1, withoutRetainedVerification: 0 },
+      foreignNetwork: { withRetainedVerification: 0, withoutRetainedVerification: 0 },
+    },
+    addressObservations: {
+      dialRequestFailed: 1,
+      noAuthenticatedSessionBeforeDeadline: 0,
+      authenticatedSessionWithoutIdentifyBeforeDeadline: 0,
+      malformedIdentify: 0,
+      foreignNetwork: 0,
+      sameNetworkIdentified: 1,
+    },
+    discovery: {
+      validNodesMessages: 1,
+      malformedMessages: 0,
+      unexpectedMessages: 0,
+      normalizedAdvertisedAddresses: 2,
+      rejectedAdvertisedAddresses: 0,
+    },
   },
   activeRound: null,
 };
@@ -66,9 +86,9 @@ describe('MaxMind attribution', () => {
       http.get(`${API_BASE}/network/summary`, () => HttpResponse.json(DASHBOARD_SUMMARY)),
       http.get(`${API_BASE}/network/distributions`, () =>
         HttpResponse.json({
-          totalKnown: 2,
-          reachable: 1,
-          unreachable: 1,
+          verifiedRetained: 2,
+          sameNetworkReachable: 1,
+          verifiedUnavailable: 1,
           versions: [{ label: '0.114.0', count: 2 }],
           countries: [{ label: 'United States', count: 2 }],
           asns: [{ label: 'AS24940 Hetzner', count: 2 }],
@@ -95,9 +115,9 @@ describe('MaxMind attribution', () => {
       http.get(`${API_BASE}/network/summary`, () => HttpResponse.json(DASHBOARD_SUMMARY)),
       http.get(`${API_BASE}/network/distributions`, () =>
         HttpResponse.json({
-          totalKnown: 2,
-          reachable: 1,
-          unreachable: 1,
+          verifiedRetained: 2,
+          sameNetworkReachable: 1,
+          verifiedUnavailable: 1,
           versions: [{ label: '0.114.0', count: 2 }],
           countries: [{ label: 'Unknown', count: 2 }],
           asns: [],
@@ -109,7 +129,7 @@ describe('MaxMind attribution', () => {
     render(<NetworkClientPage />);
 
     // The dashboard mounts (summary has data) but geo is only "Unknown" => no attribution.
-    expect(await screen.findByText('Discovered Reachable')).toBeInTheDocument();
+    expect(await screen.findByText('Same-network reachable')).toBeInTheDocument();
     expect(screen.queryByText(ATTRIBUTION)).not.toBeInTheDocument();
   });
 });

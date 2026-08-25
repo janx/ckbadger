@@ -579,7 +579,7 @@ describe('renderMarkdownPage', () => {
 
     expect(result.status).toBe(200);
     expect(result.body).toContain('# Peers');
-    expect(result.body).toContain('discoverable / reachable');
+    expect(result.body).toContain('advertised candidate is not verified');
     expect(result.body).toContain('Crawler disabled');
     expect(result.body).toContain('/network/summary');
   });
@@ -593,15 +593,35 @@ describe('renderMarkdownPage', () => {
         startedAt: 0,
         finishedAt: 1700000000,
         candidatePeers: 2,
-        attemptedPeers: 2,
+        verifiedRetainedPeers: 2,
         reachablePeers: 1,
-        unreachablePeers: 1,
+        verifiedUnavailablePeers: 1,
+        exhaustedCandidates: 1,
         addressAttempts: 2,
-        failedAddressAttempts: 1,
+        nonSuccessfulAddressAttempts: 1,
         foreignPeers: 0,
         malformedAddresses: 0,
-        newNodes: 0,
-        totalKnown: 2,
+        newVerifiedPeers: 0,
+        peerOutcomes: {
+          sameNetworkIdentified: 1,
+          exhausted: { withRetainedVerification: 1, withoutRetainedVerification: 0 },
+          foreignNetwork: { withRetainedVerification: 0, withoutRetainedVerification: 0 },
+        },
+        addressObservations: {
+          dialRequestFailed: 1,
+          noAuthenticatedSessionBeforeDeadline: 0,
+          authenticatedSessionWithoutIdentifyBeforeDeadline: 0,
+          malformedIdentify: 0,
+          foreignNetwork: 0,
+          sameNetworkIdentified: 1,
+        },
+        discovery: {
+          validNodesMessages: 1,
+          malformedMessages: 0,
+          unexpectedMessages: 0,
+          normalizedAdvertisedAddresses: 2,
+          rejectedAdvertisedAddresses: 0,
+        },
       },
       activeRound: null,
     });
@@ -615,7 +635,8 @@ describe('renderMarkdownPage', () => {
     expect(result.status).toBe(200);
     expect(result.body).toContain('## Last Round');
     expect(result.body).toContain('reachablePeers');
-    expect(result.body).toContain('| totalKnown | 2 |');
+    expect(result.body).toContain('| verifiedRetainedPeers | 2 |');
+    expect(result.body).not.toContain('totalKnown');
   });
 
   it('renders tx detail markdown with witness summary', async () => {

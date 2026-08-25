@@ -5,19 +5,42 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use anyhow::Context;
 use ckbadger_store::network_keys::{bucket_of, Granularity, Metric};
 use ckbadger_store::{
-    ActiveCrawl, CkbadgerStore, CrawlAddress, CrawlCandidate, CrawlCandidateResult, CrawlProgress,
-    HistoryPoint, LatestStatus, NodeRecord, StagedProbeOutcome,
+    checked_candidate_alias_map, checked_resolve_known_peers, ActiveCandidateProbe,
+    ActiveCandidateState, ActiveCrawl, AddressProbeEvidence, AddressProbeResult, CkbadgerStore,
+    CompletedCandidateEvidence, CompletedCandidateOutcome, CompletedPeerOutcomes, CrawlAddress,
+    CrawlCandidate, CrawlProgress, DiscoveryEvidence, HistoryPoint, LatestStatus, NodeRecord,
+    StagedProbeOutcome,
 };
 use futures::stream::{FuturesUnordered, StreamExt};
 
 use crate::geoip::GeoIp;
-use crate::prober::{ProbeCandidate, ProbeObservation, Prober};
+use crate::prober::{ProbeCandidate, Prober};
+
+fn checked_histogram_increment(
+    count: &mut u64,
+    round_id: u64,
+    metric: Metric,
+    label: &str,
+) -> anyhow::Result<()> {
+    *count = count.checked_add(1).with_context(|| {
+        format!(
+            "crawler histogram count overflow: round_id={round_id}, metric={metric:?}, label={label}"
+        )
+    })?;
+    Ok(())
+}
 
 /// Top-N (label, count), sorted by count desc then label asc for determinism.
-pub fn top_n_histogram<'a>(labels: impl Iterator<Item = &'a str>, n: usize) -> Vec<(String, u64)> {
+pub fn top_n_histogram<'a>(
+    labels: impl Iterator<Item = &'a str>,
+    n: usize,
+    round_id: u64,
+    metric: Metric,
+) -> anyhow::Result<Vec<(String, u64)>> {
     let mut counts: HashMap<&str, u64> = HashMap::new();
     for label in labels {
-        *counts.entry(label).or_insert(0) += 1;
+        let count = counts.entry(label).or_insert(0);
+        checked_histogram_increment(count, round_id, metric, label)?;
     }
     let mut values: Vec<(String, u64)> = counts
         .into_iter()
@@ -25,22 +48,7 @@ pub fn top_n_histogram<'a>(labels: impl Iterator<Item = &'a str>, n: usize) -> V
         .collect();
     values.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
     values.truncate(n);
-    values
-}
-
-/// Map advertised addresses to peer ids. These are address-book references,
-/// not proof that the referenced peer was reachable in the same round.
-pub fn resolve_known_peers(
-    discovered: &[String],
-    addr_to_peer: &HashMap<String, Vec<u8>>,
-) -> Vec<Vec<u8>> {
-    let mut peers: Vec<Vec<u8>> = discovered
-        .iter()
-        .filter_map(|addr| addr_to_peer.get(addr).cloned())
-        .collect();
-    peers.sort();
-    peers.dedup();
-    peers
+    Ok(values)
 }
 
 /// Extract a literal IP from a multiaddr for GeoIP lookup. `None` for DNS addrs.
@@ -125,11 +133,15 @@ fn checked_inc(value: &mut u64, field: &str, round_id: u64) -> anyhow::Result<()
 }
 
 fn prepare_candidate_for_round(candidate: &mut CrawlCandidate, round_id: u64) {
-    if candidate.round_id != round_id {
-        candidate.round_id = round_id;
-        candidate.result = CrawlCandidateResult::Pending;
-        candidate.foreign_observed = false;
-        candidate.staged_success = None;
+    if candidate
+        .active
+        .as_ref()
+        .is_none_or(|active| active.round_id != round_id)
+    {
+        candidate.active = Some(ActiveCandidateProbe {
+            round_id,
+            ..Default::default()
+        });
     }
 }
 
@@ -144,11 +156,12 @@ fn merge_candidate(
         addresses: Vec::new(),
         first_discovered_at: advertised_at,
         last_advertised_at: advertised_at,
-        round_id,
         last_scheduled_sequence: 0,
-        result: CrawlCandidateResult::Pending,
-        foreign_observed: false,
-        staged_success: None,
+        active: Some(ActiveCandidateProbe {
+            round_id,
+            ..Default::default()
+        }),
+        last_completed: None,
     });
     prepare_candidate_for_round(record, round_id);
 
@@ -171,15 +184,17 @@ fn merge_candidate(
         None => {
             record.addresses.push(CrawlAddress {
                 addr: candidate.addr,
+                first_advertised_at: advertised_at,
                 last_advertised_at: advertised_at,
-                attempted_round: 0,
             });
             record.addresses.sort_by(|a, b| a.addr.cmp(&b.addr));
-            if matches!(
-                record.result,
-                CrawlCandidateResult::Exhausted | CrawlCandidateResult::ForeignNetwork
-            ) {
-                record.result = CrawlCandidateResult::RetryAlias;
+            if let Some(active) = record.active.as_mut() {
+                if matches!(
+                    active.state,
+                    ActiveCandidateState::Exhausted | ActiveCandidateState::ForeignNetwork
+                ) {
+                    active.state = ActiveCandidateState::RetryAlias;
+                }
             }
             changed = true;
         }
@@ -206,10 +221,13 @@ fn ingest_addr(
         });
         let first = matches.next();
         if let Some(second) = matches.next() {
+            let first = first.as_ref().context(
+                "candidate address duplicate scan produced a second peer without a first peer",
+            )?;
             anyhow::bail!(
                 "candidate address maps to multiple peers: addr={}, first=0x{}, second=0x{}",
                 addr,
-                hex::encode(first.as_ref().unwrap()),
+                hex::encode(first),
                 hex::encode(second)
             );
         }
@@ -310,10 +328,19 @@ fn ensure_frontier_bound(
 }
 
 fn candidate_has_untried_addr(candidate: &CrawlCandidate, round_id: u64) -> bool {
-    candidate
-        .addresses
-        .iter()
-        .any(|address| address.attempted_round != round_id)
+    let Some(active) = candidate
+        .active
+        .as_ref()
+        .filter(|active| active.round_id == round_id)
+    else {
+        return false;
+    };
+    candidate.addresses.iter().any(|address| {
+        !active
+            .observations
+            .iter()
+            .any(|e| e.address == address.addr)
+    })
 }
 
 fn select_next_candidate(
@@ -323,20 +350,32 @@ fn select_next_candidate(
 ) -> Option<(Vec<u8>, String)> {
     let mut selected: Option<(u8, u64, Vec<u8>, String)> = None;
     for (peer_id, candidate) in candidates {
-        if candidate.round_id != round_id || in_flight.contains(peer_id) {
+        let Some(active) = candidate
+            .active
+            .as_ref()
+            .filter(|active| active.round_id == round_id)
+        else {
+            continue;
+        };
+        if in_flight.contains(peer_id) {
             continue;
         }
-        let tier = match candidate.result {
-            CrawlCandidateResult::Pending => 0,
-            CrawlCandidateResult::RetryAlias => 1,
-            CrawlCandidateResult::Succeeded
-            | CrawlCandidateResult::Exhausted
-            | CrawlCandidateResult::ForeignNetwork => continue,
+        let tier = match active.state {
+            ActiveCandidateState::Pending => 0,
+            ActiveCandidateState::RetryAlias => 1,
+            ActiveCandidateState::Succeeded
+            | ActiveCandidateState::Exhausted
+            | ActiveCandidateState::ForeignNetwork => continue,
         };
         let Some(addr) = candidate
             .addresses
             .iter()
-            .filter(|address| address.attempted_round != round_id)
+            .filter(|address| {
+                !active
+                    .observations
+                    .iter()
+                    .any(|evidence| evidence.address == address.addr)
+            })
             .map(|address| address.addr.as_str())
             .min()
         else {
@@ -356,45 +395,51 @@ fn select_next_candidate(
 }
 
 fn candidate_is_terminal(candidate: &CrawlCandidate, round_id: u64) -> bool {
-    candidate.round_id == round_id
-        && matches!(
-            candidate.result,
-            CrawlCandidateResult::Succeeded
-                | CrawlCandidateResult::Exhausted
-                | CrawlCandidateResult::ForeignNetwork
-        )
-}
-
-fn refresh_foreign_peer_count(
-    active: &mut ActiveCrawl,
-    candidates: &BTreeMap<Vec<u8>, CrawlCandidate>,
-) -> anyhow::Result<()> {
-    active.foreign_peers = u64::try_from(
-        candidates
-            .values()
-            .filter(|candidate| candidate.result == CrawlCandidateResult::ForeignNetwork)
-            .count(),
-    )
-    .context("crawler foreign peer count exceeds u64")?;
-    Ok(())
+    candidate.active.as_ref().is_some_and(|active| {
+        active.round_id == round_id
+            && matches!(
+                active.state,
+                ActiveCandidateState::Succeeded
+                    | ActiveCandidateState::Exhausted
+                    | ActiveCandidateState::ForeignNetwork
+            )
+    })
 }
 
 fn progress_from(
     active: &ActiveCrawl,
     candidates: &BTreeMap<Vec<u8>, CrawlCandidate>,
-) -> CrawlProgress {
-    CrawlProgress {
+) -> anyhow::Result<CrawlProgress> {
+    let candidate_peers = u64::try_from(
+        candidates
+            .values()
+            .filter(|candidate| {
+                candidate
+                    .active
+                    .as_ref()
+                    .is_some_and(|probe| probe.round_id == active.round_id)
+            })
+            .count(),
+    )
+    .context("active crawler candidate count exceeds u64")?;
+    let completed_peers = u64::try_from(
+        candidates
+            .values()
+            .filter(|candidate| candidate_is_terminal(candidate, active.round_id))
+            .count(),
+    )
+    .context("active crawler completed peer count exceeds u64")?;
+    Ok(CrawlProgress {
         round_id: active.round_id,
         started_at: active.started_at,
         last_checkpoint_at: active.last_checkpoint_at,
-        candidate_peers: candidates.len() as u64,
-        completed_peers: candidates
-            .values()
-            .filter(|candidate| candidate_is_terminal(candidate, active.round_id))
-            .count() as u64,
-        address_attempts: active.address_attempts,
+        candidate_peers,
+        completed_peers,
+        address_attempts: active
+            .address_observations
+            .address_attempts(active.round_id)?,
         blocked_reason: active.blocked_reason.clone(),
-    }
+    })
 }
 
 fn changed_candidates(
@@ -424,15 +469,26 @@ fn initialize_or_resume(
     let now = clock.now()?;
     let mut candidates: BTreeMap<Vec<u8>, CrawlCandidate> =
         store.scan_crawl_candidates()?.into_iter().collect();
+    let node_rows = store.scan_nodes()?;
+    let retained_node_ids: HashSet<Vec<u8>> = node_rows
+        .iter()
+        .map(|(peer_id, _)| peer_id.clone())
+        .collect();
     let checkpoint_address_count = frontier_address_count(&candidates)?;
     let mut dirty = HashSet::new();
     let mut active = match store.get_active_crawl()? {
         Some(mut active) => {
             active.blocked_reason = None;
-            for (peer_id, candidate) in &mut candidates {
-                if candidate.round_id != active.round_id {
-                    prepare_candidate_for_round(candidate, active.round_id);
-                    dirty.insert(peer_id.clone());
+            for (peer_id, candidate) in &candidates {
+                if let Some(probe) = candidate.active.as_ref() {
+                    if probe.round_id != active.round_id {
+                        anyhow::bail!(
+                            "candidate active round mismatch while resuming: active_round={}, peer_id=0x{}, candidate_round={}",
+                            active.round_id,
+                            hex::encode(peer_id),
+                            probe.round_id
+                        );
+                    }
                 }
             }
             active
@@ -445,9 +501,22 @@ fn initialize_or_resume(
             let round_id = last_round
                 .checked_add(1)
                 .context("crawler round id overflow")?;
+            let candidate_cutoff = now.checked_sub(cfg.node_ttl_secs);
             for (peer_id, candidate) in &mut candidates {
-                prepare_candidate_for_round(candidate, round_id);
-                dirty.insert(peer_id.clone());
+                if let Some(orphan) = candidate.active.as_ref() {
+                    anyhow::bail!(
+                        "candidate has active evidence without an active crawl: next_round={}, peer_id=0x{}, candidate_round={}",
+                        round_id,
+                        hex::encode(peer_id),
+                        orphan.round_id
+                    );
+                }
+                let eligible = retained_node_ids.contains(peer_id)
+                    || candidate_cutoff.is_none_or(|cutoff| candidate.last_advertised_at >= cutoff);
+                if eligible {
+                    prepare_candidate_for_round(candidate, round_id);
+                    dirty.insert(peer_id.clone());
+                }
             }
             ActiveCrawl {
                 round_id,
@@ -471,7 +540,7 @@ fn initialize_or_resume(
         .with_context(|| format!("crawler bootnode is malformed or lacks peer id: {addr}"))?;
         dirty.insert(candidate.peer_id);
     }
-    for (peer_id, node) in store.scan_nodes()? {
+    for (peer_id, node) in node_rows {
         for addr in node.own_addrs {
             if let Some(candidate) = ingest_addr(
                 prober,
@@ -487,7 +556,6 @@ fn initialize_or_resume(
         }
     }
 
-    refresh_foreign_peer_count(&mut active, &candidates)?;
     ensure_frontier_bound(
         store,
         &active,
@@ -502,29 +570,43 @@ fn initialize_or_resume(
     Ok((active, candidates))
 }
 
-fn mark_address_attempted(
+fn record_address_observation(
     candidate: &mut CrawlCandidate,
-    addr: &str,
-    round_id: u64,
+    evidence: AddressProbeEvidence,
 ) -> anyhow::Result<()> {
-    let address = candidate
+    let round_id = evidence.round_id;
+    candidate
         .addresses
-        .iter_mut()
-        .find(|candidate_addr| candidate_addr.addr == addr)
+        .iter()
+        .find(|candidate_addr| candidate_addr.addr == evidence.address)
         .with_context(|| {
             format!(
                 "scheduled address missing from candidate: round_id={}, addr={}",
-                round_id, addr
+                round_id, evidence.address
             )
         })?;
-    if address.attempted_round == round_id {
+    let active = candidate
+        .active
+        .as_mut()
+        .filter(|active| active.round_id == round_id)
+        .with_context(|| {
+            format!(
+                "candidate missing active probe state: round_id={}, addr={}",
+                round_id, evidence.address
+            )
+        })?;
+    if active
+        .observations
+        .iter()
+        .any(|prior| prior.address == evidence.address)
+    {
         anyhow::bail!(
             "candidate address attempted twice in one round: round_id={}, addr={}",
             round_id,
-            addr
+            evidence.address
         );
     }
-    address.attempted_round = round_id;
+    active.observations.push(evidence);
     Ok(())
 }
 
@@ -550,12 +632,24 @@ fn apply_probe_result(
             hex::encode(&peer_id)
         )
     })?;
-    mark_address_attempted(candidate, &addr, round_id)?;
-    checked_inc(&mut active.address_attempts, "address_attempts", round_id)?;
+    let observation = result.observation;
+    record_address_observation(
+        candidate,
+        AddressProbeEvidence {
+            address: addr.clone(),
+            round_id,
+            observed_at,
+            elapsed_ms: result.elapsed_ms,
+            result: observation,
+        },
+    )?;
+    active
+        .address_observations
+        .checked_record(observation, round_id)?;
 
     let mut dirty = HashSet::from([peer_id.clone()]);
-    match result.observation {
-        ProbeObservation::Reachable => {
+    match observation {
+        AddressProbeResult::SameNetworkIdentified => {
             let mut outcome = result.outcome.with_context(|| {
                 format!(
                     "reachable observation missing outcome: round_id={}, peer_id=0x{}",
@@ -599,10 +693,34 @@ fn apply_probe_result(
                 )? {
                     normalized_discovered.push(normalized.addr);
                     dirty.insert(normalized.peer_id);
+                } else {
+                    outcome.discovery.rejected_advertised_addresses = outcome
+                        .discovery
+                        .rejected_advertised_addresses
+                        .checked_add(1)
+                        .with_context(|| {
+                            format!(
+                                "Discovery rejected-address counter overflow: round_id={}, peer_id=0x{}",
+                                round_id,
+                                hex::encode(&peer_id)
+                            )
+                        })?;
                 }
             }
             normalized_discovered.sort();
             normalized_discovered.dedup();
+            if outcome.discovery.normalized_advertised_addresses != 0 {
+                anyhow::bail!(
+                    "prober populated crawler-owned normalized Discovery counter: round_id={}, peer_id=0x{}, value={}",
+                    round_id,
+                    hex::encode(&peer_id),
+                    outcome.discovery.normalized_advertised_addresses
+                );
+            }
+            outcome.discovery.normalized_advertised_addresses = u64::try_from(
+                normalized_discovered.len(),
+            )
+            .context("normalized Discovery address count exceeds u64 during crawler commit")?;
             outcome.discovered_addrs = normalized_discovered;
 
             let candidate = candidates.get_mut(&peer_id).with_context(|| {
@@ -611,9 +729,13 @@ fn apply_probe_result(
                     hex::encode(&peer_id)
                 )
             })?;
-            candidate.last_advertised_at = candidate.last_advertised_at.max(observed_at);
-            candidate.result = CrawlCandidateResult::Succeeded;
-            candidate.staged_success = Some(StagedProbeOutcome {
+            let active_probe = candidate
+                .active
+                .as_mut()
+                .filter(|active_probe| active_probe.round_id == round_id)
+                .context("successful candidate lost active round state")?;
+            active_probe.state = ActiveCandidateState::Succeeded;
+            active_probe.staged_success = Some(StagedProbeOutcome {
                 observed_at,
                 client_version: outcome.client_version,
                 flags: outcome.flags,
@@ -621,19 +743,31 @@ fn apply_probe_result(
                 own_addrs: outcome.own_addrs,
                 rtt_ms: outcome.rtt_ms,
                 discovered_addrs: outcome.discovered_addrs,
+                discovery: outcome.discovery,
             });
         }
-        ProbeObservation::ForeignNetwork => {
+        AddressProbeResult::ForeignNetwork => {
             if result.outcome.is_some() {
                 anyhow::bail!("foreign-network observation unexpectedly carried an outcome");
             }
-            let candidate = candidates.get_mut(&peer_id).unwrap();
-            candidate.foreign_observed = true;
-            candidate.staged_success = None;
-            candidate.result = if candidate_has_untried_addr(candidate, round_id) {
-                CrawlCandidateResult::RetryAlias
+            let candidate = candidates.get_mut(&peer_id).with_context(|| {
+                format!(
+                    "foreign candidate disappeared: round_id={}, peer_id=0x{}",
+                    round_id,
+                    hex::encode(&peer_id)
+                )
+            })?;
+            let has_untried = candidate_has_untried_addr(candidate, round_id);
+            let active_probe = candidate
+                .active
+                .as_mut()
+                .filter(|probe| probe.round_id == round_id)
+                .context("foreign candidate lost active round state")?;
+            active_probe.staged_success = None;
+            active_probe.state = if has_untried {
+                ActiveCandidateState::RetryAlias
             } else {
-                CrawlCandidateResult::ForeignNetwork
+                ActiveCandidateState::ForeignNetwork
             };
         }
         failure => {
@@ -643,31 +777,38 @@ fn apply_probe_result(
                     failure
                 );
             }
-            checked_inc(
-                &mut active.failed_address_attempts,
-                "failed_address_attempts",
-                round_id,
-            )?;
-            if failure == ProbeObservation::MalformedAddress {
-                checked_inc(
-                    &mut active.malformed_addresses,
-                    "malformed_addresses",
+            let candidate = candidates.get_mut(&peer_id).with_context(|| {
+                format!(
+                    "failed candidate disappeared: round_id={}, peer_id=0x{}",
                     round_id,
-                )?;
-            }
-            let candidate = candidates.get_mut(&peer_id).unwrap();
-            candidate.staged_success = None;
-            candidate.result = if candidate_has_untried_addr(candidate, round_id) {
-                CrawlCandidateResult::RetryAlias
-            } else if candidate.foreign_observed {
-                CrawlCandidateResult::ForeignNetwork
+                    hex::encode(&peer_id)
+                )
+            })?;
+            let has_untried = candidate_has_untried_addr(candidate, round_id);
+            let foreign_observed = candidate
+                .active
+                .as_ref()
+                .filter(|probe| probe.round_id == round_id)
+                .context("failed candidate lost active round state")?
+                .observations
+                .iter()
+                .any(|evidence| evidence.result == AddressProbeResult::ForeignNetwork);
+            let active_probe = candidate
+                .active
+                .as_mut()
+                .filter(|probe| probe.round_id == round_id)
+                .context("failed candidate lost mutable active round state")?;
+            active_probe.staged_success = None;
+            active_probe.state = if has_untried {
+                ActiveCandidateState::RetryAlias
+            } else if foreign_observed {
+                ActiveCandidateState::ForeignNetwork
             } else {
-                CrawlCandidateResult::Exhausted
+                ActiveCandidateState::Exhausted
             };
         }
     }
 
-    refresh_foreign_peer_count(active, candidates)?;
     ensure_frontier_bound(
         store,
         active,
@@ -695,8 +836,8 @@ fn history_deletes(
     let cutoff = bucket_of(cutoff_secs, Granularity::Hour);
     let mut deletes = Vec::new();
     for metric in [
-        Metric::TotalNodes,
-        Metric::ReachableNodes,
+        Metric::VerifiedPeers,
+        Metric::ReachablePeers,
         Metric::VersionShare,
         Metric::CountryShare,
     ] {
@@ -718,13 +859,42 @@ fn publish_completed_round(
     mut candidates: BTreeMap<Vec<u8>, CrawlCandidate>,
 ) -> anyhow::Result<LatestStatus> {
     for (peer_id, candidate) in &candidates {
-        if !candidate_is_terminal(candidate, active.round_id) {
-            anyhow::bail!(
-                "cannot publish undrained crawl round: round_id={}, peer_id=0x{}, result={:?}",
-                active.round_id,
-                hex::encode(peer_id),
-                candidate.result
-            );
+        match candidate.active.as_ref() {
+            Some(probe) if probe.round_id != active.round_id => {
+                anyhow::bail!(
+                    "cannot publish candidate from another active round: round_id={}, peer_id=0x{}, candidate_round={}",
+                    active.round_id,
+                    hex::encode(peer_id),
+                    probe.round_id
+                );
+            }
+            Some(_) if !candidate_is_terminal(candidate, active.round_id) => {
+                let state = candidate.active.as_ref().map(|probe| probe.state);
+                anyhow::bail!(
+                    "cannot publish undrained crawl round: round_id={}, peer_id=0x{}, result={:?}",
+                    active.round_id,
+                    hex::encode(peer_id),
+                    state
+                );
+            }
+            Some(_) => {}
+            None => {
+                let prior = candidate.last_completed.as_ref().with_context(|| {
+                    format!(
+                        "inactive candidate lacks completed evidence during deferred prune: round_id={}, peer_id=0x{}",
+                        active.round_id,
+                        hex::encode(peer_id)
+                    )
+                })?;
+                if prior.round_id >= active.round_id {
+                    anyhow::bail!(
+                        "inactive candidate completed round is not prior to publish: round_id={}, peer_id=0x{}, candidate_round={}",
+                        active.round_id,
+                        hex::encode(peer_id),
+                        prior.round_id
+                    );
+                }
+            }
         }
     }
 
@@ -741,19 +911,17 @@ fn publish_completed_round(
     let existing_rows = store.scan_nodes()?;
     let existing: BTreeMap<Vec<u8>, NodeRecord> = existing_rows.iter().cloned().collect();
     let mut next_nodes = existing.clone();
-    let mut addr_to_peer = HashMap::new();
-    for (peer_id, candidate) in &candidates {
-        for address in &candidate.addresses {
-            addr_to_peer.insert(address.addr.clone(), peer_id.clone());
-        }
-    }
+    let addr_to_peer = checked_candidate_alias_map(&candidates, active.round_id)?;
 
-    let mut new_nodes = 0u64;
+    let mut new_verified_peers = 0u64;
     for (peer_id, candidate) in &candidates {
-        if candidate.result != CrawlCandidateResult::Succeeded {
+        let Some(active_probe) = candidate.active.as_ref() else {
+            continue;
+        };
+        if active_probe.state != ActiveCandidateState::Succeeded {
             continue;
         }
-        let staged = candidate.staged_success.as_ref().with_context(|| {
+        let staged = active_probe.staged_success.as_ref().with_context(|| {
             format!(
                 "successful candidate missing staged outcome: round_id={}, peer_id=0x{}",
                 active.round_id,
@@ -773,7 +941,11 @@ fn publish_completed_round(
             }
         }
         if prior.is_none() {
-            checked_inc(&mut new_nodes, "new_nodes", active.round_id)?;
+            checked_inc(
+                &mut new_verified_peers,
+                "new_verified_peers",
+                active.round_id,
+            )?;
         }
         let first_seen = prior
             .map(|record| record.first_seen)
@@ -813,14 +985,24 @@ fn publish_completed_round(
                 geo,
                 asn: lookup.1,
                 last_rtt_ms: staged.rtt_ms,
-                known_peers: resolve_known_peers(&staged.discovered_addrs, &addr_to_peer),
+                discovery: staged.discovery.clone(),
+                known_peers: checked_resolve_known_peers(
+                    &staged.discovered_addrs,
+                    &addr_to_peer,
+                    active.round_id,
+                    peer_id,
+                )?,
             },
         );
     }
 
     let successful: HashSet<Vec<u8>> = candidates
         .iter()
-        .filter(|(_, candidate)| candidate.result == CrawlCandidateResult::Succeeded)
+        .filter(|(_, candidate)| {
+            candidate.active.as_ref().is_some_and(|probe| {
+                probe.round_id == active.round_id && probe.state == ActiveCandidateState::Succeeded
+            })
+        })
         .map(|(peer_id, _)| peer_id.clone())
         .collect();
     for (peer_id, record) in &mut next_nodes {
@@ -842,37 +1024,78 @@ fn publish_completed_round(
         .map(|(peer_id, record)| (peer_id.clone(), record.clone()))
         .collect();
 
-    let candidate_peers = candidates.len() as u64;
-    let attempted_peers = candidates
-        .values()
-        .filter(|candidate| candidate_is_terminal(candidate, active.round_id))
-        .count() as u64;
-    let reachable_peers = candidates
-        .values()
-        .filter(|candidate| candidate.result == CrawlCandidateResult::Succeeded)
-        .count() as u64;
-    let unreachable_peers = candidates
-        .values()
-        .filter(|candidate| candidate.result == CrawlCandidateResult::Exhausted)
-        .count() as u64;
-    let foreign_peers = candidates
-        .values()
-        .filter(|candidate| candidate.result == CrawlCandidateResult::ForeignNetwork)
-        .count() as u64;
-    if foreign_peers != active.foreign_peers {
-        anyhow::bail!(
-            "foreign peer counter invariant failed: round_id={}, candidates={}, counter={}",
+    let mut peer_outcomes = CompletedPeerOutcomes::default();
+    let mut evidence_histogram = ckbadger_store::AddressObservationHistogram::default();
+    let mut discovery = DiscoveryEvidence::default();
+    for (peer_id, candidate) in &candidates {
+        let Some(probe) = candidate.active.as_ref() else {
+            continue;
+        };
+        let completed_outcome = match probe.state {
+            ActiveCandidateState::Succeeded => CompletedCandidateOutcome::SameNetworkIdentified,
+            ActiveCandidateState::Exhausted => CompletedCandidateOutcome::Exhausted,
+            ActiveCandidateState::ForeignNetwork => CompletedCandidateOutcome::ForeignNetwork,
+            ActiveCandidateState::Pending | ActiveCandidateState::RetryAlias => {
+                anyhow::bail!(
+                    "non-terminal candidate reached completed classification: round_id={}, peer_id=0x{}, state={:?}",
+                    active.round_id,
+                    hex::encode(peer_id),
+                    probe.state
+                );
+            }
+        };
+        evidence_histogram.checked_record_candidate(
+            &probe.observations,
+            &candidate.addresses,
+            completed_outcome,
             active.round_id,
-            foreign_peers,
-            active.foreign_peers
+            peer_id,
+        )?;
+        let retained = next_nodes.contains_key(peer_id);
+        peer_outcomes.checked_record(completed_outcome, retained, active.round_id, peer_id)?;
+        if completed_outcome == CompletedCandidateOutcome::SameNetworkIdentified {
+            discovery.checked_add_assign(
+                &probe
+                    .staged_success
+                    .as_ref()
+                    .context("successful candidate missing staged Discovery evidence")?
+                    .discovery,
+                active.round_id,
+            )?;
+        }
+    }
+    if evidence_histogram != active.address_observations {
+        anyhow::bail!(
+            "address observation histogram invariant failed: round_id={}, candidate_evidence={:?}, active={:?}",
+            active.round_id,
+            evidence_histogram,
+            active.address_observations
         );
     }
 
-    let total_known = next_nodes.len() as u64;
-    let published_reachable = next_nodes
-        .values()
-        .filter(|record| record.reachable)
-        .count() as u64;
+    let verified_retained_peers =
+        u64::try_from(next_nodes.len()).context("retained verified peer count exceeds u64")?;
+    if peer_outcomes.verified_retained_peers(active.round_id)? != verified_retained_peers {
+        anyhow::bail!(
+            "verified retained invariant failed: round_id={}, matrix={}, published={}",
+            active.round_id,
+            peer_outcomes.verified_retained_peers(active.round_id)?,
+            verified_retained_peers
+        );
+    }
+    let reachable_peers = peer_outcomes.reachable_peers();
+    let published_reachable = u64::try_from(
+        next_nodes
+            .values()
+            .filter(|record| record.reachable)
+            .count(),
+    )
+    .with_context(|| {
+        format!(
+            "published reachable peer count exceeds u64: round_id={}",
+            active.round_id
+        )
+    })?;
     if published_reachable != reachable_peers {
         anyhow::bail!(
             "reachable snapshot invariant failed: round_id={}, candidate_successes={}, published_reachable={}",
@@ -887,43 +1110,42 @@ fn publish_completed_round(
             .values()
             .map(|record| record.client_version.as_str()),
         cfg.top_n,
-    );
+        active.round_id,
+        Metric::VersionShare,
+    )?;
     let countries = top_n_histogram(
         next_nodes
             .values()
             .filter_map(|record| record.geo.as_ref().map(|geo| geo.country.as_str())),
         cfg.top_n,
-    );
+        active.round_id,
+        Metric::CountryShare,
+    )?;
     let status = LatestStatus {
         round_id: active.round_id,
         started: active.started_at,
         finished,
-        candidate_peers,
-        attempted_peers,
-        reachable_peers,
-        unreachable_peers,
-        address_attempts: active.address_attempts,
-        failed_address_attempts: active.failed_address_attempts,
-        foreign_peers,
+        peer_outcomes,
+        address_observations: active.address_observations.clone(),
+        discovery,
         malformed_addresses: active.malformed_addresses,
-        new_nodes,
-        total_known,
+        new_verified_peers,
     };
 
     let mut history_puts = Vec::new();
     for granularity in [Granularity::Hour, Granularity::Day] {
         let bucket = bucket_of(finished, granularity);
         history_puts.push((
-            Metric::TotalNodes,
+            Metric::VerifiedPeers,
             granularity,
             bucket,
             HistoryPoint {
-                scalar: total_known,
+                scalar: verified_retained_peers,
                 buckets: vec![],
             },
         ));
         history_puts.push((
-            Metric::ReachableNodes,
+            Metric::ReachablePeers,
             granularity,
             bucket,
             HistoryPoint {
@@ -952,16 +1174,56 @@ fn publish_completed_round(
     }
     let history_deletes = history_deletes(store, finished, cfg.hourly_retention_days)?;
 
-    let candidate_cutoff = finished.checked_sub(cfg.node_ttl_secs);
     let mut candidate_deletes = Vec::new();
     let mut candidate_puts = Vec::new();
     for (peer_id, candidate) in &mut candidates {
-        candidate.staged_success = None;
-        if candidate_cutoff.is_some_and(|cutoff| candidate.last_advertised_at < cutoff) {
-            candidate_deletes.push(peer_id.clone());
+        let Some(active_probe) = candidate.active.take() else {
+            if next_nodes.contains_key(peer_id) {
+                anyhow::bail!(
+                    "deferred-prune candidate still has a retained verified node: round_id={}, peer_id=0x{}",
+                    active.round_id,
+                    hex::encode(peer_id)
+                );
+            }
+            candidate_deletes.push((peer_id.clone(), candidate.clone()));
+            continue;
+        };
+        let outcome = match active_probe.state {
+            ActiveCandidateState::Succeeded => CompletedCandidateOutcome::SameNetworkIdentified,
+            ActiveCandidateState::Exhausted => CompletedCandidateOutcome::Exhausted,
+            ActiveCandidateState::ForeignNetwork => CompletedCandidateOutcome::ForeignNetwork,
+            state => anyhow::bail!(
+                "candidate became non-terminal before commit: round_id={}, peer_id=0x{}, state={:?}",
+                active.round_id,
+                hex::encode(peer_id),
+                state
+            ),
+        };
+        let consecutive_exhausted_rounds = if outcome == CompletedCandidateOutcome::Exhausted {
+            candidate
+                .last_completed
+                .as_ref()
+                .filter(|prior| prior.outcome == CompletedCandidateOutcome::Exhausted)
+                .map(|prior| prior.consecutive_exhausted_rounds)
+                .unwrap_or(0)
+                .checked_add(1)
+                .with_context(|| {
+                    format!(
+                        "consecutive exhausted round counter overflow: round_id={}, peer_id=0x{}",
+                        active.round_id,
+                        hex::encode(peer_id)
+                    )
+                })?
         } else {
-            candidate_puts.push((peer_id.clone(), candidate.clone()));
-        }
+            0
+        };
+        candidate.last_completed = Some(CompletedCandidateEvidence {
+            round_id: active.round_id,
+            outcome,
+            observations: active_probe.observations,
+            consecutive_exhausted_rounds,
+        });
+        candidate_puts.push((peer_id.clone(), candidate.clone()));
     }
 
     store.commit_crawl_round(
@@ -1018,7 +1280,13 @@ pub async fn run_crawl_slice(
                 .context("crawler schedule sequence overflow")?;
             candidates
                 .get_mut(&peer_id)
-                .expect("selected candidate must exist")
+                .with_context(|| {
+                    format!(
+                        "selected candidate disappeared before scheduling: round_id={}, peer_id=0x{}",
+                        active.round_id,
+                        hex::encode(&peer_id)
+                    )
+                })?
                 .last_scheduled_sequence = active.next_schedule_sequence;
             in_flight_peers.insert(peer_id.clone());
             admitted += 1;
@@ -1065,7 +1333,7 @@ pub async fn run_crawl_slice(
         return Ok(CrawlSliceReport::Partial(progress_from(
             &active,
             &candidates,
-        )));
+        )?));
     }
 
     Ok(CrawlSliceReport::Completed(publish_completed_round(
@@ -1143,9 +1411,9 @@ mod tests {
             }
             self.attempts.lock().unwrap().push(addr.to_string());
             if addr == "a1" || !self.second_reachable {
-                Ok(ProbeResult::failed(ProbeObservation::ForeignNetwork))
+                ProbeResult::failed(AddressProbeResult::ForeignNetwork, 1)
             } else {
-                Ok(ProbeResult::reachable(outcome(b"A", "a2", &[])))
+                Ok(ProbeResult::reachable(outcome(b"A", "a2", &[]), 1))
             }
         }
 
@@ -1254,10 +1522,10 @@ mod tests {
                 let peer_current = in_flight.get_mut(peer_id).unwrap();
                 *peer_current -= 1;
             }
-            Ok(match self.outcomes.get(addr).cloned() {
-                Some(outcome) => ProbeResult::reachable(outcome),
-                None => ProbeResult::failed(ProbeObservation::DialFailed),
-            })
+            match self.outcomes.get(addr).cloned() {
+                Some(outcome) => Ok(ProbeResult::reachable(outcome, 1)),
+                None => ProbeResult::failed(AddressProbeResult::DialRequestFailed, 1),
+            }
         }
 
         fn bootnodes(&self) -> Vec<String> {
@@ -1274,6 +1542,7 @@ mod tests {
             own_addrs: vec![own.to_string()],
             rtt_ms: Some(5),
             discovered_addrs: discovered.iter().map(|addr| addr.to_string()).collect(),
+            discovery: DiscoveryEvidence::default(),
         }
     }
 
@@ -1286,23 +1555,73 @@ mod tests {
         }
     }
 
+    fn reachable(status: &LatestStatus) -> u64 {
+        status.peer_outcomes.reachable_peers()
+    }
+
+    fn exhausted(status: &LatestStatus) -> u64 {
+        status
+            .peer_outcomes
+            .exhausted_candidates(status.round_id)
+            .unwrap()
+    }
+
+    fn foreign(status: &LatestStatus) -> u64 {
+        status.peer_outcomes.foreign_peers(status.round_id).unwrap()
+    }
+
+    fn verified_retained(status: &LatestStatus) -> u64 {
+        status
+            .peer_outcomes
+            .verified_retained_peers(status.round_id)
+            .unwrap()
+    }
+
+    fn address_attempts(status: &LatestStatus) -> u64 {
+        status
+            .address_observations
+            .address_attempts(status.round_id)
+            .unwrap()
+    }
+
     #[test]
     fn histogram_top_n_desc_ties_by_label() {
         let labels = vec!["a", "b", "a", "c", "b", "a"];
         assert_eq!(
-            top_n_histogram(labels.into_iter(), 2),
+            top_n_histogram(labels.into_iter(), 2, 1, Metric::VersionShare).unwrap(),
             vec![("a".to_string(), 3), ("b".to_string(), 2)]
         );
     }
 
     #[test]
-    fn resolve_edges_only_to_known_peer_candidates() {
-        let mut index = HashMap::new();
-        index.insert("addrB".to_string(), vec![b'B']);
+    fn histogram_counter_overflow_fails_with_round_and_metric_context() {
+        let mut count = u64::MAX;
+        let error =
+            checked_histogram_increment(&mut count, 53, Metric::CountryShare, "US").unwrap_err();
+        let message = error.to_string();
+        assert!(message.contains("round_id=53"));
+        assert!(message.contains("metric=CountryShare"));
+        assert!(message.contains("label=US"));
+    }
+
+    #[test]
+    fn resolve_edges_through_the_checked_candidate_alias_index() {
+        let candidates = BTreeMap::from([(
+            vec![b'B'],
+            CrawlCandidate {
+                addresses: vec![CrawlAddress {
+                    addr: "addrB".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+        )]);
+        let index = checked_candidate_alias_map(&candidates, 1).unwrap();
         assert_eq!(
-            resolve_known_peers(&["addrB".into(), "addrX".into()], &index),
+            checked_resolve_known_peers(&["addrB".into()], &index, 1, b"A").unwrap(),
             vec![vec![b'B']]
         );
+        assert!(checked_resolve_known_peers(&["addrX".into()], &index, 1, b"A").is_err());
     }
 
     #[test]
@@ -1338,16 +1657,16 @@ mod tests {
             .await
             .unwrap(),
         );
-        assert_eq!(status.reachable_peers, 2);
-        assert_eq!(status.unreachable_peers, 1);
-        assert_eq!(status.total_known, 2);
+        assert_eq!(reachable(&status), 2);
+        assert_eq!(exhausted(&status), 1);
+        assert_eq!(verified_retained(&status), 2);
         assert!(store.get_active_crawl().unwrap().is_none());
         assert_eq!(store.scan_nodes().unwrap().len(), 2);
         let b = store.get_node(b"B").unwrap().unwrap();
         assert_eq!(b.known_peers, vec![b"A".to_vec(), b"addrC".to_vec()]);
         assert_eq!(
             store
-                .scan_history(Metric::TotalNodes, Granularity::Hour, 0, u64::MAX)
+                .scan_history(Metric::VerifiedPeers, Granularity::Hour, 0, u64::MAX)
                 .unwrap()
                 .len(),
             1
@@ -1378,7 +1697,7 @@ mod tests {
 
         assert_eq!(prober.attempts(), vec!["addrA", "addrB"]);
         let status = completed(second);
-        assert_eq!(status.reachable_peers, 2);
+        assert_eq!(reachable(&status), 2);
         assert_eq!(status.started, 10_000);
         assert_eq!(status.finished, 10_001);
         assert!(store.get_node(b"B").unwrap().is_some());
@@ -1537,8 +1856,146 @@ mod tests {
                 .await
                 .unwrap(),
         );
-        assert_eq!(status.reachable_peers, 1);
+        assert_eq!(reachable(&status), 1);
         assert!(!store.get_node(b"B").unwrap().unwrap().reachable);
+    }
+
+    #[tokio::test]
+    async fn exhausted_evidence_counts_completed_rounds_and_survives_next_active_round() {
+        let prober = MockProber::new(vec!["addrA".into()], HashMap::new());
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_network(dir.path()).unwrap();
+        let clock = TestClock::new(1_000);
+
+        let first = completed(
+            run_crawl_slice(
+                &store,
+                &prober,
+                &NoGeo,
+                &clock,
+                &RoundConfig::test_defaults(),
+            )
+            .await
+            .unwrap(),
+        );
+        assert_eq!(exhausted(&first), 1);
+        let peer_id = b"addrA";
+        let evidence = store
+            .get_crawl_candidate(peer_id)
+            .unwrap()
+            .unwrap()
+            .last_completed
+            .unwrap();
+        assert_eq!(evidence.round_id, 1);
+        assert_eq!(evidence.consecutive_exhausted_rounds, 1);
+        assert_eq!(evidence.observations.len(), 1);
+
+        clock.set(2_000);
+        completed(
+            run_crawl_slice(
+                &store,
+                &prober,
+                &NoGeo,
+                &clock,
+                &RoundConfig::test_defaults(),
+            )
+            .await
+            .unwrap(),
+        );
+        let evidence = store
+            .get_crawl_candidate(peer_id)
+            .unwrap()
+            .unwrap()
+            .last_completed
+            .unwrap();
+        assert_eq!(evidence.round_id, 2);
+        assert_eq!(evidence.consecutive_exhausted_rounds, 2);
+
+        let partial = RoundConfig {
+            slice_budget: Some(Duration::ZERO),
+            ..RoundConfig::test_defaults()
+        };
+        clock.set(3_000);
+        assert!(matches!(
+            run_crawl_slice(&store, &prober, &NoGeo, &clock, &partial)
+                .await
+                .unwrap(),
+            CrawlSliceReport::Partial(_)
+        ));
+        let candidate = store.get_crawl_candidate(peer_id).unwrap().unwrap();
+        assert_eq!(candidate.last_completed.unwrap().round_id, 2);
+        assert_eq!(candidate.active.unwrap().round_id, 3);
+    }
+
+    #[tokio::test]
+    async fn latest_round_retains_stale_attempt_evidence_then_prunes_without_retrying_it() {
+        let prober = MockProber::new(Vec::new(), HashMap::new());
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_network(dir.path()).unwrap();
+        let clock = TestClock::new(1_000);
+        let cfg = RoundConfig {
+            node_ttl_secs: 10,
+            ..RoundConfig::test_defaults()
+        };
+        store
+            .checkpoint_crawl(
+                &ActiveCrawl {
+                    round_id: 1,
+                    started_at: 1,
+                    last_checkpoint_at: 1,
+                    ..Default::default()
+                },
+                &[(
+                    (b"A").to_vec(),
+                    CrawlCandidate {
+                        addresses: vec![CrawlAddress {
+                            addr: "addrA".into(),
+                            first_advertised_at: 1,
+                            last_advertised_at: 1,
+                        }],
+                        first_discovered_at: 1,
+                        last_advertised_at: 1,
+                        active: Some(ActiveCandidateProbe {
+                            round_id: 1,
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    },
+                )],
+            )
+            .unwrap();
+
+        let first = completed(
+            run_crawl_slice(&store, &prober, &NoGeo, &clock, &cfg)
+                .await
+                .unwrap(),
+        );
+        let first_candidates = store.scan_crawl_candidates().unwrap();
+        assert_eq!(first.peer_outcomes.candidate_peers(1).unwrap(), 1);
+        assert_eq!(
+            first_candidates
+                .iter()
+                .filter(|(_, candidate)| {
+                    candidate
+                        .last_completed
+                        .as_ref()
+                        .is_some_and(|completed| completed.round_id == 1)
+                })
+                .count(),
+            1
+        );
+        assert_eq!(first_candidates[0].1.last_advertised_at, 1);
+        assert_eq!(prober.attempts(), vec!["addrA"]);
+
+        clock.set(1_001);
+        let second = completed(
+            run_crawl_slice(&store, &prober, &NoGeo, &clock, &cfg)
+                .await
+                .unwrap(),
+        );
+        assert_eq!(second.peer_outcomes.candidate_peers(2).unwrap(), 0);
+        assert_eq!(prober.attempts(), vec!["addrA"]);
+        assert!(store.scan_crawl_candidates().unwrap().is_empty());
     }
 
     #[tokio::test]
@@ -1561,7 +2018,13 @@ mod tests {
         assert!(store.get_network_status().unwrap().is_none());
         assert!(store.scan_nodes().unwrap().is_empty());
         let blocked = store.get_active_crawl().unwrap().unwrap();
-        assert_eq!(blocked.address_attempts, 0);
+        assert_eq!(
+            blocked
+                .address_observations
+                .address_attempts(blocked.round_id)
+                .unwrap(),
+            0
+        );
         let reason = blocked.blocked_reason.unwrap();
         assert!(reason.contains("checkpoint_candidate_addresses=1"));
         assert!(reason.contains("attempted_added=4"));
@@ -1569,7 +2032,10 @@ mod tests {
         let candidates = store.scan_crawl_candidates().unwrap();
         assert_eq!(candidates.len(), 1);
         assert_eq!(candidates[0].1.addresses[0].addr, "addrA");
-        assert_eq!(candidates[0].1.result, CrawlCandidateResult::Pending);
+        assert_eq!(
+            candidates[0].1.active.as_ref().unwrap().state,
+            ActiveCandidateState::Pending
+        );
 
         let resumed = RoundConfig {
             max_frontier: Some(5),
@@ -1580,10 +2046,16 @@ mod tests {
                 .await
                 .unwrap(),
         );
-        assert_eq!(status.candidate_peers, 5);
-        assert_eq!(status.address_attempts, 5);
-        assert_eq!(status.reachable_peers, 1);
-        assert_eq!(status.unreachable_peers, 4);
+        assert_eq!(
+            status
+                .peer_outcomes
+                .candidate_peers(status.round_id)
+                .unwrap(),
+            5
+        );
+        assert_eq!(address_attempts(&status), 5);
+        assert_eq!(reachable(&status), 1);
+        assert_eq!(exhausted(&status), 4);
     }
 
     #[tokio::test]
@@ -1612,7 +2084,7 @@ mod tests {
                 .await
                 .unwrap(),
         );
-        assert_eq!(status.reachable_peers, 6);
+        assert_eq!(reachable(&status), 6);
         assert_eq!(prober.peak_in_flight(), 3);
     }
 
@@ -1649,6 +2121,7 @@ mod tests {
                         geo: None,
                         asn: None,
                         last_rtt_ms: None,
+                        discovery: DiscoveryEvidence::default(),
                         known_peers: vec![],
                     },
                 )
@@ -1692,9 +2165,24 @@ mod tests {
             .unwrap(),
         );
         assert_eq!(*reachable_prober.attempts.lock().unwrap(), vec!["a1", "a2"]);
-        assert_eq!(reachable_status.reachable_peers, 1);
-        assert_eq!(reachable_status.foreign_peers, 0);
-        assert_eq!(reachable_status.address_attempts, 2);
+        assert_eq!(reachable(&reachable_status), 1);
+        assert_eq!(foreign(&reachable_status), 0);
+        assert_eq!(address_attempts(&reachable_status), 2);
+        let evidence = reachable_store
+            .get_crawl_candidate(b"A")
+            .unwrap()
+            .unwrap()
+            .last_completed
+            .unwrap();
+        assert_eq!(evidence.observations.len(), 2);
+        assert_eq!(
+            evidence.observations[0].result,
+            AddressProbeResult::ForeignNetwork
+        );
+        assert_eq!(
+            evidence.observations[1].result,
+            AddressProbeResult::SameNetworkIdentified
+        );
 
         let foreign_dir = tempfile::tempdir().unwrap();
         let foreign_store = CkbadgerStore::open_test_network(foreign_dir.path()).unwrap();
@@ -1714,10 +2202,10 @@ mod tests {
             .unwrap(),
         );
         assert_eq!(*foreign_prober.attempts.lock().unwrap(), vec!["a1", "a2"]);
-        assert_eq!(foreign_status.reachable_peers, 0);
-        assert_eq!(foreign_status.unreachable_peers, 0);
-        assert_eq!(foreign_status.foreign_peers, 1);
-        assert_eq!(foreign_status.address_attempts, 2);
+        assert_eq!(reachable(&foreign_status), 0);
+        assert_eq!(exhausted(&foreign_status), 0);
+        assert_eq!(foreign(&foreign_status), 1);
+        assert_eq!(address_attempts(&foreign_status), 2);
     }
 
     #[tokio::test]

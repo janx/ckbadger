@@ -757,9 +757,9 @@ export async function renderMarkdownPage(
       const sections: string[] = [
         '# Peers',
         '',
-        'Whole-network CKB L1 peer discovery. Honest caveat: these are discoverable / reachable',
-        'nodes only — not the full network. Nodes behind NAT or firewalls, or that refuse dials,',
-        'stay hidden.',
+        'CKB L1 peer advertisements and same-network reachability evidence from this crawler.',
+        'An advertised candidate is not verified until an authenticated, same-network Identify',
+        'exchange completes. These local observations are not the full network.',
         '',
         '## Status',
         '',
@@ -782,11 +782,13 @@ export async function renderMarkdownPage(
             [
               ['roundId', round.roundId],
               ['candidatePeers', round.candidatePeers],
+              ['verifiedRetainedPeers', round.verifiedRetainedPeers],
               ['reachablePeers', round.reachablePeers],
-              ['unreachablePeers', round.unreachablePeers],
+              ['verifiedUnavailablePeers', round.verifiedUnavailablePeers],
+              ['exhaustedCandidates', round.exhaustedCandidates],
               ['addressAttempts', round.addressAttempts],
-              ['failedAddressAttempts', round.failedAddressAttempts],
-              ['totalKnown', round.totalKnown],
+              ['nonSuccessfulAddressAttempts', round.nonSuccessfulAddressAttempts],
+              ['foreignPeers', round.foreignPeers],
               ['finishedAt', round.finishedAt],
             ]
           )
@@ -827,8 +829,9 @@ export async function renderMarkdownPage(
           [
             ['/network/summary', 'onboarding vs dashboard switch (this page)'],
             ['/network/distributions', 'version / country / ASN / protocol counts'],
-            ['/network/history', 'historical node / reachable / share trends'],
-            ['/network/nodes', 'filterable, cursor-paginated node table'],
+            ['/network/history', 'historical verified / reachable / share trends'],
+            ['/network/peers', 'filterable, cursor-paginated peer evidence'],
+            ['/network/peers/{peerId}', 'address-level observations and advertiser evidence'],
           ]
         )
       );

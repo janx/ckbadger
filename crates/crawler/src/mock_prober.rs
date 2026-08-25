@@ -2,8 +2,9 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
+use ckbadger_store::AddressProbeResult;
 
-use crate::prober::{ProbeCandidate, ProbeObservation, ProbeOutcome, ProbeResult, Prober};
+use crate::prober::{ProbeCandidate, ProbeOutcome, ProbeResult, Prober};
 
 /// Deterministic in-memory prober for tests. `graph` maps addr -> outcome for
 /// reachable addresses; any addr not present returns a typed dial failure.
@@ -72,9 +73,9 @@ impl Prober for MockProber {
                         outcome.peer_id
                     );
                 }
-                Ok(ProbeResult::reachable(outcome))
+                Ok(ProbeResult::reachable(outcome, 1))
             }
-            None => Ok(ProbeResult::failed(ProbeObservation::DialFailed)),
+            None => ProbeResult::failed(AddressProbeResult::DialRequestFailed, 1),
         }
     }
     fn bootnodes(&self) -> Vec<String> {
@@ -86,6 +87,7 @@ impl Prober for MockProber {
 mod tests {
     use super::*;
     use crate::prober::Prober;
+    use ckbadger_store::DiscoveryEvidence;
 
     #[tokio::test]
     async fn reachable_addr_returns_outcome_absent_returns_dial_failure() {
@@ -95,11 +97,11 @@ mod tests {
         assert_eq!(p.bootnodes(), vec!["a".to_string()]);
         assert_eq!(
             p.probe(b"A", "a").await.unwrap().observation,
-            ProbeObservation::Reachable
+            AddressProbeResult::SameNetworkIdentified
         );
         assert_eq!(
             p.probe(b"missing", "missing").await.unwrap().observation,
-            ProbeObservation::DialFailed
+            AddressProbeResult::DialRequestFailed
         );
     }
 
@@ -112,6 +114,7 @@ mod tests {
             own_addrs: vec![],
             rtt_ms: Some(1),
             discovered_addrs: disc.iter().map(|s| s.to_string()).collect(),
+            discovery: DiscoveryEvidence::default(),
         }
     }
 }

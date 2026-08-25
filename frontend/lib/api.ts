@@ -1851,15 +1851,46 @@ export interface NetworkLastRound {
   startedAt: number;
   finishedAt: number;
   candidatePeers: number;
-  attemptedPeers: number;
+  verifiedRetainedPeers: number;
   reachablePeers: number;
-  unreachablePeers: number;
-  addressAttempts: number;
-  failedAddressAttempts: number;
+  verifiedUnavailablePeers: number;
+  exhaustedCandidates: number;
   foreignPeers: number;
+  addressAttempts: number;
+  nonSuccessfulAddressAttempts: number;
   malformedAddresses: number;
-  newNodes: number;
-  totalKnown: number;
+  newVerifiedPeers: number;
+  peerOutcomes: NetworkPeerOutcomes;
+  addressObservations: NetworkAddressObservations;
+  discovery: NetworkDiscoveryEvidence;
+}
+
+export interface NetworkRetentionSplit {
+  withRetainedVerification: number;
+  withoutRetainedVerification: number;
+}
+
+export interface NetworkPeerOutcomes {
+  sameNetworkIdentified: number;
+  exhausted: NetworkRetentionSplit;
+  foreignNetwork: NetworkRetentionSplit;
+}
+
+export interface NetworkAddressObservations {
+  dialRequestFailed: number;
+  noAuthenticatedSessionBeforeDeadline: number;
+  authenticatedSessionWithoutIdentifyBeforeDeadline: number;
+  malformedIdentify: number;
+  foreignNetwork: number;
+  sameNetworkIdentified: number;
+}
+
+export interface NetworkDiscoveryEvidence {
+  validNodesMessages: number;
+  malformedMessages: number;
+  unexpectedMessages: number;
+  normalizedAdvertisedAddresses: number;
+  rejectedAdvertisedAddresses: number;
 }
 
 export interface NetworkActiveRound {
@@ -1880,9 +1911,9 @@ export interface NetworkSummary {
 }
 
 export interface NetworkDistributions {
-  totalKnown: number;
-  reachable: number;
-  unreachable: number;
+  verifiedRetained: number;
+  sameNetworkReachable: number;
+  verifiedUnavailable: number;
   versions: LabelCount[];
   countries: LabelCount[];
   asns: LabelCount[];
@@ -1901,21 +1932,96 @@ export interface NetworkHistory {
   points: NetworkHistoryPoint[];
 }
 
-export interface NodeSummary {
+export type NetworkPeerDisplayState =
+  | 'reachable'
+  | 'verifiedUnavailable'
+  | 'advertisedUnverified'
+  | 'foreignNetwork'
+  | 'noCompletedObservation';
+
+export type NetworkAddressProbeResult =
+  | 'dialRequestFailed'
+  | 'noAuthenticatedSessionBeforeDeadline'
+  | 'authenticatedSessionWithoutIdentifyBeforeDeadline'
+  | 'malformedIdentify'
+  | 'foreignNetwork'
+  | 'sameNetworkIdentified';
+
+export interface NetworkPeerSummary {
   peerId: string;
-  addr: string;
-  version: string;
-  country: string;
-  asn: string;
-  reachable: boolean;
-  lastSeen: number;
-  lastReachableAt: number;
+  displayState: NetworkPeerDisplayState;
+  primaryAddr: string;
+  version: string | null;
+  country: string | null;
+  asn: string | null;
+  lastAdvertisedAt: number;
+  lastObservedAt: number | null;
+  lastReachableAt: number | null;
   rttMs: number | null;
 }
 
-export interface NetworkNodesPage {
-  items: NodeSummary[];
+export interface NetworkPeersPage {
+  items: NetworkPeerSummary[];
   nextCursor: string | null;
+}
+
+export interface NetworkAddressProbeEvidence {
+  address: string;
+  roundId: number;
+  observedAt: number;
+  elapsedMs: number;
+  result: NetworkAddressProbeResult;
+}
+
+export interface NetworkCompletedPeerEvidence {
+  roundId: number;
+  outcome: 'sameNetworkIdentified' | 'exhausted' | 'foreignNetwork';
+  observations: NetworkAddressProbeEvidence[];
+  consecutiveExhaustedRounds: number;
+}
+
+export interface NetworkActivePeerEvidence {
+  roundId: number;
+  state: 'pending' | 'retryAlias' | 'succeeded' | 'exhausted' | 'foreignNetwork';
+  observations: NetworkAddressProbeEvidence[];
+}
+
+export interface NetworkPeerAliasEvidence {
+  address: string;
+  firstAdvertisedAt: number;
+  lastAdvertisedAt: number;
+}
+
+export interface NetworkVerifiedPeerEvidence {
+  ownAddrs: string[];
+  clientVersion: string;
+  flags: number;
+  protocols: string[];
+  firstSeen: number;
+  lastSeen: number;
+  lastReachableAt: number;
+  country: string;
+  asn: string;
+  rttMs: number | null;
+  discovery: NetworkDiscoveryEvidence;
+}
+
+export interface NetworkAdvertiserEvidence {
+  advertiserPeerId: string;
+  observedAt: number;
+}
+
+export interface NetworkPeerDetail {
+  peerId: string;
+  observationVantage: string;
+  displayState: NetworkPeerDisplayState;
+  firstDiscoveredAt: number;
+  lastAdvertisedAt: number;
+  aliases: NetworkPeerAliasEvidence[];
+  lastCompleted: NetworkCompletedPeerEvidence | null;
+  active: NetworkActivePeerEvidence | null;
+  verified: NetworkVerifiedPeerEvidence | null;
+  advertisers: NetworkAdvertiserEvidence[];
 }
 
 export const api = {
@@ -2893,18 +2999,25 @@ export const api = {
     return fetchApi(`/network/history?${p.toString()}`);
   },
 
-  getNetworkNodes: async (params?: {
+  getNetworkPeers: async (params?: {
     cursor?: string;
-    reachable?: boolean;
+    limit?: number;
+    state?: NetworkPeerDisplayState;
+    observation?: NetworkAddressProbeResult;
     country?: string;
     version?: string;
-  }): Promise<NetworkNodesPage> => {
+  }): Promise<NetworkPeersPage> => {
     const p = new URLSearchParams();
     if (params?.cursor) p.set('cursor', params.cursor);
-    if (params?.reachable != null) p.set('reachable', String(params.reachable));
+    if (params?.limit != null) p.set('limit', String(params.limit));
+    if (params?.state) p.set('state', params.state);
+    if (params?.observation) p.set('observation', params.observation);
     if (params?.country) p.set('country', params.country);
     if (params?.version) p.set('version', params.version);
     const qs = p.toString();
-    return fetchApi(`/network/nodes${qs ? `?${qs}` : ''}`);
+    return fetchApi(`/network/peers${qs ? `?${qs}` : ''}`);
   },
+
+  getNetworkPeer: async (peerId: string): Promise<NetworkPeerDetail> =>
+    fetchApi(`/network/peers/${encodeURIComponent(peerId)}`),
 };
