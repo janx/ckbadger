@@ -96,8 +96,10 @@ const TESTNET_BOOTNODES: &[&str] = &[
     "/ip4/13.236.13.195/tcp/8111/p2p/QmfUTZxsse7rFJTJfoUv8bbStoDLETxst5nJEpJozNuAnH",
 ];
 
-/// Version string used to build the discovery `GetNodes` request (`REUSE_PORT_VERSION`).
-const GET_NODES_VERSION: u32 = 1;
+/// Discovery v1 tells the remote to treat our ephemeral outbound source port as
+/// a reusable listen address. This crawler has no listener, so it must use the
+/// baseline v0 contract and must not cause peers to gossip an undialable alias.
+const GET_NODES_VERSION: u32 = 0;
 /// Maximum number of addresses to request in one `GetNodes` (matches `MAX_ADDR_TO_SEND`).
 const GET_NODES_COUNT: u32 = 1000;
 /// After the handshake completes (node is reachable), how long to wait for the `Nodes` reply
@@ -158,6 +160,7 @@ fn encode_get_nodes() -> Bytes {
 #[derive(Debug, PartialEq, Eq)]
 enum DiscoveryMessageObservation {
     Nodes {
+        announce: bool,
         addrs: Vec<String>,
         rejected_addrs: u64,
     },
@@ -176,6 +179,11 @@ fn decode_discovery_message(data: &Bytes) -> Result<DiscoveryMessageObservation>
     let mut rejected_addrs = 0u64;
     match reader.payload().to_enum() {
         packed::DiscoveryPayloadUnionReader::Nodes(nodes) => {
+            let announce = match nodes.announce().as_slice()[0] {
+                0 => false,
+                1 => true,
+                _ => return Ok(DiscoveryMessageObservation::Malformed),
+            };
             for node in nodes.items().iter() {
                 for addr in node.addresses().iter() {
                     match Multiaddr::try_from(addr.raw_data().to_vec()) {
@@ -189,6 +197,7 @@ fn decode_discovery_message(data: &Bytes) -> Result<DiscoveryMessageObservation>
                 }
             }
             Ok(DiscoveryMessageObservation::Nodes {
+                announce,
                 addrs: out,
                 rejected_addrs,
             })
@@ -247,6 +256,7 @@ struct PeerCapture {
     opened_protocols: BTreeSet<String>,
     discovered_addrs: Vec<String>,
     discovery: DiscoveryEvidence,
+    received_discovery_response: bool,
     session_opened_at: Option<Instant>,
     /// First authenticated Identify message, timestamped at callback delivery so
     /// executor polling latency cannot move it across the absolute deadline.
@@ -279,6 +289,7 @@ impl PeerCapture {
             opened_protocols: BTreeSet::new(),
             discovered_addrs: Vec::new(),
             discovery: DiscoveryEvidence::default(),
+            received_discovery_response: false,
             session_opened_at: None,
             identify: None,
             dial_request_failed_at: None,
@@ -331,22 +342,50 @@ impl PeerCapture {
         }
     }
 
-    fn record_discovery_nodes(&mut self, addrs: Vec<String>, rejected_addrs: u64) -> Result<()> {
+    fn record_discovery_nodes(
+        &mut self,
+        announce: bool,
+        addrs: Vec<String>,
+        rejected_addrs: u64,
+    ) -> Result<()> {
         let valid_nodes_messages = self
             .discovery
             .valid_nodes_messages
             .checked_add(1)
             .context("Discovery valid-Nodes message counter overflow")?;
+        let classified_messages = if announce {
+            self.discovery
+                .valid_announce_messages
+                .checked_add(1)
+                .context("Discovery valid-announce message counter overflow")?
+        } else {
+            self.discovery
+                .valid_response_messages
+                .checked_add(1)
+                .context("Discovery valid-response message counter overflow")?
+        };
         let rejected_advertised_addresses = self
             .discovery
             .rejected_advertised_addresses
             .checked_add(rejected_addrs)
             .context("Discovery rejected-address counter overflow")?;
         self.discovery.valid_nodes_messages = valid_nodes_messages;
+        if announce {
+            self.discovery.valid_announce_messages = classified_messages;
+        } else {
+            self.discovery.valid_response_messages = classified_messages;
+        }
         self.discovery.rejected_advertised_addresses = rejected_advertised_addresses;
-        // `known_peers` is derived from the most recent valid Nodes payload;
-        // message counters still preserve every response seen during the grace window.
-        self.discovered_addrs = addrs;
+        if !announce {
+            self.received_discovery_response = true;
+        }
+        // A regular GetNodes response and later announce messages are both
+        // positive address observations. Union every valid payload received in
+        // the grace window; omission from a later random payload is not negative
+        // evidence and must not erase an earlier address.
+        self.discovered_addrs.extend(addrs);
+        self.discovered_addrs.sort();
+        self.discovered_addrs.dedup();
         Ok(())
     }
 }
@@ -569,12 +608,15 @@ impl ServiceProtocol for CrawlerHandler {
         } else if proto_id == self.discovery_id {
             match decode_discovery_message(&data) {
                 Ok(DiscoveryMessageObservation::Nodes {
+                    announce,
                     addrs,
                     rejected_addrs,
                 }) => {
                     let mut record_error = None;
                     let matched = self.record_session_event(&key, address, session_id, |capture| {
-                        if let Err(error) = capture.record_discovery_nodes(addrs, rejected_addrs) {
+                        if let Err(error) =
+                            capture.record_discovery_nodes(announce, addrs, rejected_addrs)
+                        {
                             record_error = Some(error);
                         }
                     });
@@ -883,7 +925,9 @@ impl CkbProber {
         }
     }
 
-    /// Wait a bounded grace period for at least one discovery `Nodes` reply.
+    /// Wait a bounded grace period for the non-announce response to our
+    /// GetNodes request. Announcements received first are retained but cannot
+    /// close the probe before the requested response arrives.
     async fn await_discovery(&self, key: &[u8]) -> Result<()> {
         let deadline = Instant::now() + DISCOVERY_GRACE;
         loop {
@@ -893,7 +937,7 @@ impl CkbProber {
                 .lock()
                 .map_err(|_| anyhow!("crawler peer-capture state is poisoned"))?
                 .get(key)
-                .is_some_and(|c| c.discovery.valid_nodes_messages > 0);
+                .is_some_and(|c| c.received_discovery_response);
             if has_valid_response || Instant::now() >= deadline {
                 return Ok(());
             }
@@ -1163,6 +1207,16 @@ mod tests {
             decode_discovery_message(&bytes).unwrap(),
             DiscoveryMessageObservation::Unexpected
         );
+        let reader = packed::DiscoveryMessageReader::from_compatible_slice(bytes.as_ref()).unwrap();
+        let packed::DiscoveryPayloadUnionReader::GetNodes(get_nodes) = reader.payload().to_enum()
+        else {
+            panic!("crawler GetNodes request encoded another Discovery payload");
+        };
+        assert_eq!(
+            u32::from_le_bytes(get_nodes.version().raw_data().try_into().unwrap()),
+            0
+        );
+        assert!(get_nodes.listen_port().to_opt().is_none());
     }
 
     #[test]
@@ -1248,8 +1302,10 @@ mod tests {
     };
 
     /// Encode a discovery `Nodes` reply advertising `addrs` (mirrors `ckb-network`'s encoding).
-    fn encode_nodes(addrs: &[&str]) -> Bytes {
-        let announce = packed::Bool::new_builder().set([0u8.into()]).build();
+    fn encode_nodes_with_announce(addrs: &[&str], is_announce: bool) -> Bytes {
+        let announce = packed::Bool::new_builder()
+            .set([u8::from(is_announce).into()])
+            .build();
         let mut items = Vec::new();
         for a in addrs {
             let ma: Multiaddr = a.parse().unwrap();
@@ -1274,11 +1330,16 @@ mod tests {
         Bytes::from(msg.as_bytes().to_vec())
     }
 
+    fn encode_nodes(addrs: &[&str]) -> Bytes {
+        encode_nodes_with_announce(addrs, false)
+    }
+
     #[test]
     fn discovery_decoder_distinguishes_empty_and_non_empty_nodes() {
         assert_eq!(
             decode_discovery_message(&encode_nodes(&[])).unwrap(),
             DiscoveryMessageObservation::Nodes {
+                announce: false,
                 addrs: vec![],
                 rejected_addrs: 0,
             }
@@ -1287,6 +1348,15 @@ mod tests {
         assert_eq!(
             decode_discovery_message(&encode_nodes(&[advertised])).unwrap(),
             DiscoveryMessageObservation::Nodes {
+                announce: false,
+                addrs: vec![advertised.to_string()],
+                rejected_addrs: 0,
+            }
+        );
+        assert_eq!(
+            decode_discovery_message(&encode_nodes_with_announce(&[advertised], true)).unwrap(),
+            DiscoveryMessageObservation::Nodes {
+                announce: true,
                 addrs: vec![advertised.to_string()],
                 rejected_addrs: 0,
             }
@@ -1294,16 +1364,22 @@ mod tests {
     }
 
     #[test]
-    fn peer_capture_retains_last_valid_nodes_payload_and_exact_message_counts() {
+    fn peer_capture_unions_response_and_announce_payloads_with_exact_message_counts() {
         let mut capture = PeerCapture::new("/ip4/127.0.0.1/tcp/8114".parse().unwrap());
         capture
-            .record_discovery_nodes(vec!["addrA".into()], 1)
+            .record_discovery_nodes(true, vec!["addrA".into()], 1)
             .unwrap();
-        capture.record_discovery_nodes(Vec::new(), 2).unwrap();
+        assert!(!capture.received_discovery_response);
+        capture
+            .record_discovery_nodes(false, vec!["addrB".into(), "addrA".into()], 2)
+            .unwrap();
 
         assert_eq!(capture.discovery.valid_nodes_messages, 2);
+        assert_eq!(capture.discovery.valid_response_messages, 1);
+        assert_eq!(capture.discovery.valid_announce_messages, 1);
         assert_eq!(capture.discovery.rejected_advertised_addresses, 3);
-        assert!(capture.discovered_addrs.is_empty());
+        assert_eq!(capture.discovered_addrs, vec!["addrA", "addrB"]);
+        assert!(capture.received_discovery_response);
     }
 
     fn capture_test_handler(captures: Captures) -> CrawlerHandler {

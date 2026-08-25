@@ -1276,7 +1276,7 @@ fn draw_peers_dashboard(f: &mut Frame, data: &PeersData, area: Rect) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(8),  // status block
+            Constraint::Length(9),  // status block
             Constraint::Length(12), // version + country distributions
             Constraint::Min(6),     // reachable/verified-unavailable trend
         ])
@@ -1360,9 +1360,9 @@ fn draw_peers_status(f: &mut Frame, data: &PeersData, area: Rect) {
         ));
     }
 
-    // Lines 2-3 keep advertised candidates distinct from retained cryptographic verification.
+    // Lines 2-3 keep crawler dial candidates distinct from retained cryptographic verification.
     let line2 = Line::from(vec![
-        Span::styled("Advertised candidates ", Style::default().fg(SLATE_500)),
+        Span::styled("Crawler dial candidates ", Style::default().fg(SLATE_500)),
         Span::styled(
             format_num_u64(lr.candidate_peers),
             Style::default().fg(AMBER).add_modifier(Modifier::BOLD),
@@ -1425,8 +1425,23 @@ fn draw_peers_status(f: &mut Frame, data: &PeersData, area: Rect) {
             Style::default().fg(SLATE_500),
         ),
     ]);
+    let line6 = Line::from(vec![
+        Span::styled(
+            "Direct sessions (peer → configured observer) ",
+            Style::default().fg(SLATE_500),
+        ),
+        Span::styled(
+            format_num_u64(lr.direct_session_observations.peer_initiated),
+            Style::default().fg(TERMINAL_GREEN),
+        ),
+        Span::styled("  ·  (observer → peer) ", Style::default().fg(SLATE_700)),
+        Span::styled(
+            format_num_u64(lr.direct_session_observations.observer_initiated),
+            Style::default().fg(FOREGROUND),
+        ),
+    ]);
 
-    let mut lines = vec![Line::from(line1), line2, line3, line4, line5];
+    let mut lines = vec![Line::from(line1), line2, line3, line4, line5, line6];
     if let Some(reason) = data
         .summary
         .as_ref()
@@ -6463,7 +6478,7 @@ mod tests {
         use crate::db::{NetworkSummary, PeersData};
 
         let summary: NetworkSummary = serde_json::from_str(
-            r#"{"enabled":true,"hasData":true,"lastRound":{"roundId":5,"startedAt":1,"finishedAt":2,"candidatePeers":144,"verifiedRetainedPeers":58,"reachablePeers":57,"verifiedUnavailablePeers":1,"exhaustedCandidates":87,"foreignPeers":0,"addressAttempts":416,"nonSuccessfulAddressAttempts":359,"malformedAddresses":0,"newVerifiedPeers":1},"activeRound":null}"#,
+            r#"{"enabled":true,"hasData":true,"lastRound":{"roundId":5,"startedAt":1,"finishedAt":2,"candidatePeers":144,"verifiedRetainedPeers":58,"reachablePeers":57,"verifiedUnavailablePeers":1,"exhaustedCandidates":87,"foreignPeers":0,"addressAttempts":416,"nonSuccessfulAddressAttempts":359,"malformedAddresses":0,"newVerifiedPeers":1,"directSessionObservations":{"observerInitiated":8,"peerInitiated":13}},"activeRound":null}"#,
         )
         .unwrap();
         let data = PeersData {
@@ -6482,10 +6497,12 @@ mod tests {
             .map(|cell| cell.symbol())
             .collect::<String>();
 
-        assert!(rendered.contains("Advertised candidates"));
+        assert!(rendered.contains("Crawler dial candidates"));
         assert!(rendered.contains("Same-network reachable"));
         assert!(rendered.contains("Verified retained"));
         assert!(rendered.contains("Verified unavailable"));
+        assert!(rendered.contains("peer → configured observer"));
+        assert!(rendered.contains("13"));
         assert!(!rendered.contains("Total Known"));
         assert!(!rendered.contains("Unreachable"));
     }
@@ -6550,7 +6567,7 @@ mod tests {
         }
         // has_data true with a lastRound => Dashboard.
         let dash_summary: NetworkSummary = serde_json::from_str(
-            r#"{"enabled":true,"hasData":true,"lastRound":{"roundId":5,"startedAt":1,"finishedAt":2,"candidatePeers":4,"verifiedRetainedPeers":4,"reachablePeers":3,"verifiedUnavailablePeers":1,"exhaustedCandidates":1,"foreignPeers":0,"addressAttempts":8,"nonSuccessfulAddressAttempts":1,"malformedAddresses":0,"newVerifiedPeers":2},"activeRound":null}"#,
+            r#"{"enabled":true,"hasData":true,"lastRound":{"roundId":5,"startedAt":1,"finishedAt":2,"candidatePeers":4,"verifiedRetainedPeers":4,"reachablePeers":3,"verifiedUnavailablePeers":1,"exhaustedCandidates":1,"foreignPeers":0,"addressAttempts":8,"nonSuccessfulAddressAttempts":1,"malformedAddresses":0,"newVerifiedPeers":2,"directSessionObservations":{"observerInitiated":0,"peerInitiated":0}},"activeRound":null}"#,
         )
         .unwrap();
         let dashboard = PeersData {
@@ -6567,7 +6584,7 @@ mod tests {
         // render the Dashboard — the crawler status block is the tab's primary content and
         // must not be hidden behind a full-screen Error for a missing chart endpoint.
         let summary: NetworkSummary = serde_json::from_str(
-            r#"{"enabled":true,"hasData":true,"lastRound":{"roundId":1,"startedAt":0,"finishedAt":0,"candidatePeers":0,"verifiedRetainedPeers":0,"reachablePeers":0,"verifiedUnavailablePeers":0,"exhaustedCandidates":0,"foreignPeers":0,"addressAttempts":0,"nonSuccessfulAddressAttempts":0,"malformedAddresses":0,"newVerifiedPeers":0},"activeRound":null}"#,
+            r#"{"enabled":true,"hasData":true,"lastRound":{"roundId":1,"startedAt":0,"finishedAt":0,"candidatePeers":0,"verifiedRetainedPeers":0,"reachablePeers":0,"verifiedUnavailablePeers":0,"exhaustedCandidates":0,"foreignPeers":0,"addressAttempts":0,"nonSuccessfulAddressAttempts":0,"malformedAddresses":0,"newVerifiedPeers":0,"directSessionObservations":{"observerInitiated":0,"peerInitiated":0}},"activeRound":null}"#,
         )
         .unwrap();
         let data = PeersData {

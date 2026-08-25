@@ -8,8 +8,11 @@ use ckbadger_config::{CkbadgerConfig, CrawlerConfig};
 use ckbadger_store::{CkbadgerStore, StoreRuntimeConfig};
 
 use crate::ckb_prober::CkbProber;
-use crate::engine::{run_crawl_slice, CrawlSliceReport, RoundConfig, SystemCrawlClock};
+use crate::engine::{
+    run_crawl_slice_with_observer, CrawlSliceReport, RoundConfig, SystemCrawlClock,
+};
 use crate::geoip::{GeoIp, MaxmindGeoIp, NoGeo};
+use crate::rpc_observer::CkbRpcPeerObserver;
 
 #[derive(Debug, PartialEq, Eq)]
 struct CompletedRoundLogFields {
@@ -78,6 +81,7 @@ pub async fn run_crawler(
     )?;
     let geoip = select_geoip(&cfg.crawler)?;
     let prober = CkbProber::new(&cfg.ckb.network, &cfg.crawler)?; // fail-fast on no bootnodes
+    let peer_observer = CkbRpcPeerObserver::new(&cfg.ckb.rpc_url, &cfg.ckb.network)?;
 
     let round_cfg = RoundConfig {
         node_ttl_secs: 2_592_000,
@@ -94,7 +98,16 @@ pub async fn run_crawler(
 
     loop {
         loop {
-            match run_crawl_slice(&store, &prober, geoip.as_ref(), &clock, &round_cfg).await? {
+            match run_crawl_slice_with_observer(
+                &store,
+                &prober,
+                &peer_observer,
+                geoip.as_ref(),
+                &clock,
+                &round_cfg,
+            )
+            .await?
+            {
                 CrawlSliceReport::Partial(progress) => {
                     tracing::info!(
                         round_id = progress.round_id,

@@ -12,10 +12,13 @@ anyhow = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 async-trait = { workspace = true }
 futures = { workspace = true }
 hex = { workspace = true }
 maxminddb = { workspace = true }
+reqwest = { workspace = true }
+ckb-jsonrpc-types = { workspace = true }
 ckb-network = { workspace = true }
 ckb-types = { workspace = true }
 # Direct tentacle handle: the crawler builds the p2p Service itself so Discovery is

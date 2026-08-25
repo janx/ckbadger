@@ -23,10 +23,13 @@ use crate::network_keys::{
 };
 use crate::store::{CkbadgerStore, CF_NET_CRAWL, CF_NET_NODES, CF_NET_STATS};
 use crate::{
-    bytes_to_hex, checked_candidate_alias_map, checked_resolve_known_peers, ActiveCandidateState,
-    ActiveCrawl, AddressObservationHistogram, CompletedCandidateEvidence,
+    bytes_to_hex, checked_apply_alias_verifications, checked_candidate_alias_map,
+    checked_merge_advertisement_evidence, checked_merge_direct_session_evidence,
+    checked_merge_local_observer_evidence, checked_prune_candidate_aliases,
+    checked_prune_direct_session_evidence, checked_resolve_known_peers, ActiveCandidateState,
+    ActiveCrawl, AddressObservationHistogram, AdvertisementEvidence, CompletedCandidateEvidence,
     CompletedCandidateOutcome, CompletedPeerOutcomes, CrawlCandidate, CrawlProgress,
-    DiscoveryEvidence, HistoryPoint, LatestStatus, NodeRecord,
+    DirectSessionObservationSummary, DiscoveryEvidence, HistoryPoint, LatestStatus, NodeRecord,
 };
 
 struct CompletedCrawlCommit<'a> {
@@ -524,6 +527,198 @@ impl CkbadgerStore {
         }
         let alias_to_peer = checked_candidate_alias_map(&persisted_candidates, round_id)?;
 
+        // Rebuild target-centric advertisement staging exclusively from the
+        // durable source probe outcomes. Target staging is a checkpoint cache,
+        // never an authority that the completed commit may trust.
+        let mut expected_staged_advertisements: BTreeMap<Vec<u8>, Vec<AdvertisementEvidence>> =
+            BTreeMap::new();
+        for (advertiser_peer_id, source) in &persisted_candidates {
+            let Some(source_active) = source
+                .active
+                .as_ref()
+                .filter(|probe| probe.round_id == round_id)
+            else {
+                continue;
+            };
+            let Some(staged_success) = source_active.staged_success.as_ref() else {
+                continue;
+            };
+            if staged_success
+                .discovered_addrs
+                .windows(2)
+                .any(|window| window[0] >= window[1])
+            {
+                anyhow::bail!(
+                    "staged Discovery aliases are duplicate or not canonically sorted: round_id={}, advertiser_peer_id=0x{}",
+                    round_id,
+                    bytes_to_hex(advertiser_peer_id)
+                );
+            }
+            for alias in &staged_success.discovered_addrs {
+                let target_peer_id = alias_to_peer.get(alias).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "staged Discovery alias has no target candidate: round_id={}, advertiser_peer_id=0x{}, alias={}",
+                        round_id,
+                        bytes_to_hex(advertiser_peer_id),
+                        alias
+                    )
+                })?;
+                expected_staged_advertisements
+                    .entry(target_peer_id.clone())
+                    .or_default()
+                    .push(AdvertisementEvidence {
+                        advertiser_peer_id: advertiser_peer_id.clone(),
+                        alias: alias.clone(),
+                        first_observed_at: staged_success.observed_at,
+                        last_observed_at: staged_success.observed_at,
+                        first_observed_round: round_id,
+                        last_observed_round: round_id,
+                        observation_count: 1,
+                    });
+            }
+        }
+        for evidence in expected_staged_advertisements.values_mut() {
+            evidence.sort_by(|left, right| {
+                (&left.advertiser_peer_id, &left.alias)
+                    .cmp(&(&right.advertiser_peer_id, &right.alias))
+            });
+        }
+        for (target_peer_id, candidate) in &persisted_candidates {
+            let actual = candidate
+                .active
+                .as_ref()
+                .filter(|probe| probe.round_id == round_id)
+                .map(|probe| probe.staged_advertisements.as_slice())
+                .unwrap_or_default();
+            let expected = expected_staged_advertisements
+                .get(target_peer_id)
+                .map(Vec::as_slice)
+                .unwrap_or_default();
+            if actual != expected {
+                anyhow::bail!(
+                    "target advertisement staging invariant failed: round_id={}, target_peer_id=0x{}, expected={:?}, actual={:?}",
+                    round_id,
+                    bytes_to_hex(target_peer_id),
+                    expected,
+                    actual
+                );
+            }
+        }
+
+        if active
+            .direct_session_targets
+            .windows(2)
+            .any(|window| window[0] >= window[1])
+            || active.direct_session_targets.iter().any(Vec::is_empty)
+        {
+            anyhow::bail!(
+                "active direct-session targets are empty, duplicate, or not canonically sorted: round_id={}",
+                round_id
+            );
+        }
+        let staged_direct_targets: Vec<Vec<u8>> = persisted_candidates
+            .iter()
+            .filter_map(|(peer_id, candidate)| {
+                (!candidate.staged_direct_sessions.is_empty()).then_some(peer_id.clone())
+            })
+            .collect();
+        if staged_direct_targets != active.direct_session_targets {
+            anyhow::bail!(
+                "direct-session target inventory invariant failed: round_id={}, marker_targets={}, staged_targets={}",
+                round_id,
+                active.direct_session_targets.len(),
+                staged_direct_targets.len()
+            );
+        }
+        let prior_status = self.get_network_status()?;
+        let expected_local_observer = match active.local_observer_observation.as_ref() {
+            Some(observation) => {
+                if observation.observed_at < active.started_at
+                    || observation.observed_at > active.last_checkpoint_at
+                    || observation.observed_at > status.finished
+                {
+                    anyhow::bail!(
+                        "local observer clock invariant failed: round_id={}, started_at={}, observed_at={}, checkpoint_at={}, finished_at={}",
+                        round_id,
+                        active.started_at,
+                        observation.observed_at,
+                        active.last_checkpoint_at,
+                        status.finished
+                    );
+                }
+                Some(checked_merge_local_observer_evidence(
+                    prior_status
+                        .as_ref()
+                        .and_then(|status| status.local_observer.as_ref()),
+                    observation,
+                    round_id,
+                )?)
+            }
+            None => {
+                if !staged_direct_targets.is_empty() {
+                    anyhow::bail!(
+                        "direct-session rows exist without a local observer observation: round_id={}",
+                        round_id
+                    );
+                }
+                prior_status.and_then(|status| status.local_observer)
+            }
+        };
+        if status.local_observer != expected_local_observer {
+            anyhow::bail!(
+                "local observer publication invariant failed: round_id={}",
+                round_id
+            );
+        }
+        let mut direct_session_observations = DirectSessionObservationSummary::default();
+        for target_peer_id in &staged_direct_targets {
+            let candidate = persisted_candidates.get(target_peer_id).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "staged direct-session target is missing: round_id={}, target_peer_id=0x{}",
+                    round_id,
+                    bytes_to_hex(target_peer_id)
+                )
+            })?;
+            for observation in &candidate.staged_direct_sessions {
+                let observer = active.local_observer_observation.as_ref().ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "direct-session row lacks observer marker: round_id={}, target_peer_id=0x{}",
+                        round_id,
+                        bytes_to_hex(target_peer_id)
+                    )
+                })?;
+                if observation.observer_peer_id != observer.peer_id
+                    || observation.observed_at != observer.observed_at
+                {
+                    anyhow::bail!(
+                        "direct-session row disagrees with observer snapshot: round_id={}, target_peer_id=0x{}",
+                        round_id,
+                        bytes_to_hex(target_peer_id)
+                    );
+                }
+                direct_session_observations.checked_record(
+                    observation.initiator,
+                    round_id,
+                    target_peer_id,
+                )?;
+            }
+            let mut expected = candidate.direct_sessions.clone();
+            checked_merge_direct_session_evidence(
+                &mut expected,
+                &candidate.staged_direct_sessions,
+                round_id,
+                target_peer_id,
+            )?;
+        }
+        if status.direct_session_observations != direct_session_observations {
+            anyhow::bail!(
+                "direct-session observation summary invariant failed: round_id={}, candidate_evidence={:?}, status={:?}",
+                round_id,
+                direct_session_observations,
+                status.direct_session_observations
+            );
+        }
+
         let mut put_node_ids = HashSet::new();
         for (peer_id, _) in node_puts {
             if peer_id.is_empty() {
@@ -600,55 +795,6 @@ impl CkbadgerStore {
                     bytes_to_hex(peer_id)
                 );
             }
-            let completed = candidate.last_completed.as_ref().ok_or_else(|| {
-                anyhow::anyhow!(
-                    "completed candidate is missing evidence: round_id={}, peer_id=0x{}",
-                    round_id,
-                    bytes_to_hex(peer_id)
-                )
-            })?;
-            if completed.round_id != round_id {
-                if !deleted || completed.round_id > round_id {
-                    anyhow::bail!(
-                        "completed candidate evidence round mismatch: round_id={}, peer_id=0x{}, evidence_round={}, deleted={}",
-                        round_id,
-                        bytes_to_hex(peer_id),
-                        completed.round_id,
-                        deleted
-                    );
-                }
-                let prior_candidate = persisted_candidates.get(peer_id).ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "deferred-prune candidate is missing from persisted inventory: round_id={}, peer_id=0x{}",
-                        round_id,
-                        bytes_to_hex(peer_id)
-                    )
-                })?;
-                if candidate != prior_candidate {
-                    anyhow::bail!(
-                        "deferred-prune candidate evidence changed before deletion: round_id={}, peer_id=0x{}, evidence_round={}",
-                        round_id,
-                        bytes_to_hex(peer_id),
-                        completed.round_id
-                    );
-                }
-                if final_nodes.contains_key(peer_id) {
-                    anyhow::bail!(
-                        "cannot prune candidate evidence for a retained verified peer: round_id={}, peer_id=0x{}, evidence_round={}",
-                        round_id,
-                        bytes_to_hex(peer_id),
-                        completed.round_id
-                    );
-                }
-                continue;
-            }
-            if deleted {
-                anyhow::bail!(
-                    "cannot delete candidate evidence from the latest completed round: round_id={}, peer_id=0x{}",
-                    round_id,
-                    bytes_to_hex(peer_id)
-                );
-            }
             let prior_candidate = persisted_candidates.get(peer_id).ok_or_else(|| {
                 anyhow::anyhow!(
                     "completed candidate is missing from persisted inventory: round_id={}, peer_id=0x{}",
@@ -656,13 +802,72 @@ impl CkbadgerStore {
                     bytes_to_hex(peer_id)
                 )
             })?;
-            let prior_active = prior_candidate.active.as_ref().ok_or_else(|| {
+            let mut expected_candidate = prior_candidate.clone();
+            checked_merge_direct_session_evidence(
+                &mut expected_candidate.direct_sessions,
+                &prior_candidate.staged_direct_sessions,
+                round_id,
+                peer_id,
+            )?;
+            expected_candidate.staged_direct_sessions.clear();
+            checked_prune_direct_session_evidence(
+                &mut expected_candidate.direct_sessions,
+                active.direct_session_freshness_cutoff,
+                round_id,
+                peer_id,
+            )?;
+
+            let Some(prior_active) = prior_candidate.active.as_ref() else {
+                checked_prune_candidate_aliases(
+                    &mut expected_candidate,
+                    active.alias_freshness_cutoff,
+                    round_id,
+                    peer_id,
+                )?;
+                let expected_retained = final_nodes.contains_key(peer_id)
+                    || !expected_candidate.addresses.is_empty()
+                    || !expected_candidate.advertisements.is_empty()
+                    || !expected_candidate.direct_sessions.is_empty();
+                if deleted == expected_retained {
+                    anyhow::bail!(
+                        "inactive candidate retention invariant failed: round_id={}, peer_id=0x{}, expected_retained={}, deleted={}",
+                        round_id,
+                        bytes_to_hex(peer_id),
+                        expected_retained,
+                        deleted
+                    );
+                }
+                if candidate != &expected_candidate {
+                    anyhow::bail!(
+                        "inactive candidate transition invariant failed: round_id={}, peer_id=0x{}",
+                        round_id,
+                        bytes_to_hex(peer_id)
+                    );
+                }
+                continue;
+            };
+            let completed = candidate.last_completed.as_ref().ok_or_else(|| {
                 anyhow::anyhow!(
-                    "completed candidate lacks durable active evidence: round_id={}, peer_id=0x{}",
+                    "completed dial candidate is missing evidence: round_id={}, peer_id=0x{}",
                     round_id,
                     bytes_to_hex(peer_id)
                 )
             })?;
+            if completed.round_id != round_id {
+                anyhow::bail!(
+                    "completed dial candidate evidence round mismatch: round_id={}, peer_id=0x{}, evidence_round={}",
+                    round_id,
+                    bytes_to_hex(peer_id),
+                    completed.round_id
+                );
+            }
+            if deleted {
+                anyhow::bail!(
+                    "cannot delete dial candidate evidence from the latest completed round: round_id={}, peer_id=0x{}",
+                    round_id,
+                    bytes_to_hex(peer_id)
+                );
+            }
             if prior_active.round_id != round_id {
                 anyhow::bail!(
                     "durable candidate active round mismatch: round_id={}, peer_id=0x{}, candidate_round={}",
@@ -753,9 +958,30 @@ impl CkbadgerStore {
                 observations: prior_active.observations.clone(),
                 consecutive_exhausted_rounds: expected_consecutive_exhausted_rounds,
             };
-            let mut expected_candidate = prior_candidate.clone();
+            checked_apply_alias_verifications(
+                &mut expected_candidate.addresses,
+                &prior_active.observations,
+                round_id,
+                peer_id,
+            )?;
+            checked_prune_candidate_aliases(
+                &mut expected_candidate,
+                active.alias_freshness_cutoff,
+                round_id,
+                peer_id,
+            )?;
             expected_candidate.active = None;
             expected_candidate.last_completed = Some(expected_completed.clone());
+            checked_merge_advertisement_evidence(
+                &mut expected_candidate.advertisements,
+                expected_staged_advertisements
+                    .get(peer_id)
+                    .map(Vec::as_slice)
+                    .unwrap_or_default(),
+                &expected_candidate.addresses,
+                round_id,
+                peer_id,
+            )?;
             if candidate != &expected_candidate {
                 anyhow::bail!(
                     "candidate transition invariant failed: round_id={}, peer_id=0x{}",
@@ -765,7 +991,7 @@ impl CkbadgerStore {
             }
             address_observations.checked_record_candidate(
                 &prior_active.observations,
-                &prior_candidate.addresses,
+                &expected_candidate.addresses,
                 expected_outcome,
                 round_id,
                 peer_id,
@@ -1104,6 +1330,98 @@ mod tests {
     }
 
     #[test]
+    fn completed_commit_rejects_forged_direct_session_merge() {
+        use crate::{
+            DirectSessionEvidence, DirectSessionObservation, DirectSessionObservationSummary,
+            LocalObserverObservation, SessionInitiator,
+        };
+
+        let dir = tempfile::tempdir().unwrap();
+        let s = CkbadgerStore::open_test_network(dir.path()).unwrap();
+        let observer = LocalObserverObservation {
+            round_id: 1,
+            observed_at: 10,
+            peer_id: b"observer".to_vec(),
+            client_version: "ckb-observer".into(),
+            active: true,
+            addresses: vec![],
+            protocols: vec![],
+            connections: 1,
+        };
+        let staged = DirectSessionObservation {
+            round_id: 1,
+            observed_at: 10,
+            observer_peer_id: b"observer".to_vec(),
+            initiator: SessionInitiator::Peer,
+            client_version: "ckb-peer".into(),
+            session_addresses: vec![],
+            connected_duration_ms: 1,
+            last_ping_duration_ms: None,
+            protocols: vec![],
+        };
+        let active = ActiveCrawl {
+            round_id: 1,
+            started_at: 10,
+            last_checkpoint_at: 10,
+            local_observer_observation: Some(observer.clone()),
+            direct_session_targets: vec![b"target".to_vec()],
+            ..Default::default()
+        };
+        let checkpoint = CrawlCandidate {
+            staged_direct_sessions: vec![staged],
+            ..Default::default()
+        };
+        s.checkpoint_crawl(&active, &[(b"target".to_vec(), checkpoint)])
+            .unwrap();
+
+        let forged = CrawlCandidate {
+            direct_sessions: vec![DirectSessionEvidence {
+                observer_peer_id: b"observer".to_vec(),
+                initiator: SessionInitiator::Peer,
+                first_observed_at: 10,
+                last_observed_at: 10,
+                first_observed_round: 1,
+                last_observed_round: 1,
+                observation_count: 2,
+                client_version: "ckb-peer".into(),
+                session_addresses: vec![],
+                connected_duration_ms: 1,
+                last_ping_duration_ms: None,
+                protocols: vec![],
+            }],
+            ..Default::default()
+        };
+        let status = LatestStatus {
+            round_id: 1,
+            started: 10,
+            finished: 10,
+            local_observer: Some(
+                checked_merge_local_observer_evidence(None, &observer, 1).unwrap(),
+            ),
+            direct_session_observations: DirectSessionObservationSummary {
+                peer_initiated: 1,
+                observer_initiated: 0,
+            },
+            ..Default::default()
+        };
+        let error = s
+            .commit_crawl_round(
+                1,
+                &[],
+                &[],
+                &[(b"target".to_vec(), forged)],
+                &[],
+                &status,
+                &[],
+                &[],
+            )
+            .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("inactive candidate transition invariant failed"));
+    }
+
+    #[test]
     fn crawl_checkpoint_and_round_commit_are_durable_and_atomic() {
         use crate::network_keys::{Granularity, Metric};
         use crate::{
@@ -1125,6 +1443,7 @@ mod tests {
                 addr: "addrA".into(),
                 first_advertised_at: 10,
                 last_advertised_at: 10,
+                last_verified_at: None,
             }],
             first_discovered_at: 10,
             last_advertised_at: 10,
@@ -1157,6 +1476,7 @@ mod tests {
                 client_version: "0.119.0".into(),
                 ..Default::default()
             }),
+            staged_advertisements: vec![],
         });
         s.checkpoint_crawl(&active, &[(b"A".to_vec(), candidate.clone())])
             .unwrap();
@@ -1187,6 +1507,7 @@ mod tests {
             }],
             consecutive_exhausted_rounds: 0,
         });
+        candidate.addresses[0].last_verified_at = Some(11);
         let mut published = rec(11);
         published.first_seen = 11;
         let error = s
@@ -1316,6 +1637,7 @@ mod tests {
                 addr: "addrA".into(),
                 first_advertised_at: 10,
                 last_advertised_at: 10,
+                last_verified_at: None,
             }],
             first_discovered_at: 10,
             last_advertised_at: 10,
@@ -1352,6 +1674,7 @@ mod tests {
                 client_version: "0.119.0".into(),
                 ..Default::default()
             }),
+            staged_advertisements: vec![],
         });
         primary
             .checkpoint_crawl(&active, &[(b"A".to_vec(), candidate.clone())])
@@ -1363,6 +1686,7 @@ mod tests {
             observations: vec![observation],
             consecutive_exhausted_rounds: 0,
         });
+        candidate.addresses[0].last_verified_at = Some(11);
         let status = LatestStatus {
             round_id: 1,
             started: 10,
@@ -1420,6 +1744,7 @@ mod tests {
                 addr: "addrA".into(),
                 first_advertised_at: 1,
                 last_advertised_at: 1,
+                last_verified_at: None,
             }],
             active: Some(crate::ActiveCandidateProbe {
                 round_id: 1,
@@ -1430,10 +1755,11 @@ mod tests {
                     client_version: "0.119.0".into(),
                     ..Default::default()
                 }),
+                staged_advertisements: vec![],
             }),
             ..Default::default()
         };
-        let candidate = CrawlCandidate {
+        let mut candidate = CrawlCandidate {
             active: None,
             last_completed: Some(CompletedCandidateEvidence {
                 round_id: 1,
@@ -1443,6 +1769,7 @@ mod tests {
             }),
             ..checkpoint.clone()
         };
+        candidate.addresses[0].last_verified_at = Some(10);
         store
             .checkpoint_crawl(
                 &ActiveCrawl {
@@ -1513,6 +1840,7 @@ mod tests {
                 addr: "addrA".into(),
                 first_advertised_at: 1,
                 last_advertised_at: 1,
+                last_verified_at: None,
             }],
             active: Some(crate::ActiveCandidateProbe {
                 round_id: 1,
@@ -1523,6 +1851,7 @@ mod tests {
                     client_version: "0.119.0".into(),
                     ..Default::default()
                 }),
+                staged_advertisements: vec![],
             }),
             ..Default::default()
         };
@@ -1604,6 +1933,7 @@ mod tests {
                 addr: "addrA".into(),
                 first_advertised_at: 1,
                 last_advertised_at: 1,
+                last_verified_at: None,
             }],
             active: Some(crate::ActiveCandidateProbe {
                 round_id: 1,
@@ -1614,6 +1944,7 @@ mod tests {
                     client_version: "0.119.0".into(),
                     ..Default::default()
                 }),
+                staged_advertisements: vec![],
             }),
             ..Default::default()
         };
@@ -1687,6 +2018,7 @@ mod tests {
                     addr: address.clone(),
                     first_advertised_at: 1,
                     last_advertised_at: 1,
+                    last_verified_at: None,
                 }],
                 first_discovered_at: 1,
                 last_advertised_at: 1,
@@ -1701,6 +2033,7 @@ mod tests {
                         result: AddressProbeResult::DialRequestFailed,
                     }],
                     staged_success: None,
+                    staged_advertisements: vec![],
                 }),
                 ..Default::default()
             }
@@ -1803,6 +2136,7 @@ mod tests {
                 addr: "addrA".into(),
                 first_advertised_at: 1,
                 last_advertised_at: 1,
+                last_verified_at: None,
             }],
             last_completed: Some(CompletedCandidateEvidence {
                 round_id: 1,
@@ -1872,6 +2206,7 @@ mod tests {
                 addr: "addrA".into(),
                 first_advertised_at: 1,
                 last_advertised_at: 20,
+                last_verified_at: None,
             }],
             first_discovered_at: 1,
             last_advertised_at: 20,
@@ -1886,6 +2221,7 @@ mod tests {
                 state: ActiveCandidateState::Exhausted,
                 observations: vec![observation.clone()],
                 staged_success: None,
+                staged_advertisements: vec![],
             }),
             ..Default::default()
         };
@@ -1971,6 +2307,7 @@ mod tests {
                 addr: "addrA".into(),
                 first_advertised_at: 10,
                 last_advertised_at: 10,
+                last_verified_at: None,
             }],
             first_discovered_at: 10,
             last_advertised_at: 10,
@@ -1979,6 +2316,7 @@ mod tests {
                 state: ActiveCandidateState::Exhausted,
                 observations: vec![observation.clone()],
                 staged_success: None,
+                staged_advertisements: vec![],
             }),
             ..Default::default()
         };
@@ -2062,6 +2400,7 @@ mod tests {
                 addr: "addrA".into(),
                 first_advertised_at: 10,
                 last_advertised_at: 10,
+                last_verified_at: None,
             }],
             first_discovered_at: 10,
             last_advertised_at: 10,
@@ -2070,6 +2409,7 @@ mod tests {
                 state: ActiveCandidateState::Exhausted,
                 observations: vec![observation.clone()],
                 staged_success: None,
+                staged_advertisements: vec![],
             }),
             ..Default::default()
         };
@@ -2154,6 +2494,7 @@ mod tests {
                 addr: "addrA".into(),
                 first_advertised_at: 10,
                 last_advertised_at: 10,
+                last_verified_at: None,
             }],
             first_discovered_at: 10,
             last_advertised_at: 10,
@@ -2170,6 +2511,7 @@ mod tests {
                     rtt_ms: Some(1),
                     ..Default::default()
                 }),
+                staged_advertisements: vec![],
             }),
             ..Default::default()
         };
@@ -2189,7 +2531,7 @@ mod tests {
                 &[(b"A".to_vec(), checkpoint.clone())],
             )
             .unwrap();
-        let submitted = CrawlCandidate {
+        let mut submitted = CrawlCandidate {
             active: None,
             last_completed: Some(CompletedCandidateEvidence {
                 round_id: 1,
@@ -2199,6 +2541,7 @@ mod tests {
             }),
             ..checkpoint
         };
+        submitted.addresses[0].last_verified_at = Some(11);
         let status = LatestStatus {
             round_id: 1,
             started: 10,
@@ -2262,6 +2605,7 @@ mod tests {
                 addr: "addrA".into(),
                 first_advertised_at: 10,
                 last_advertised_at: 10,
+                last_verified_at: None,
             }],
             first_discovered_at: 10,
             last_advertised_at: 10,
@@ -2274,6 +2618,7 @@ mod tests {
                     client_version: "0.119.0".into(),
                     ..Default::default()
                 }),
+                staged_advertisements: vec![],
             }),
             ..Default::default()
         };
@@ -2293,7 +2638,7 @@ mod tests {
                 &[(b"A".to_vec(), checkpoint.clone())],
             )
             .unwrap();
-        let submitted = CrawlCandidate {
+        let mut submitted = CrawlCandidate {
             active: None,
             last_completed: Some(CompletedCandidateEvidence {
                 round_id: 1,
@@ -2303,6 +2648,7 @@ mod tests {
             }),
             ..checkpoint
         };
+        submitted.addresses[0].last_verified_at = Some(11);
         let status = LatestStatus {
             round_id: 1,
             started: 10,
@@ -2361,6 +2707,7 @@ mod tests {
                 addr: "addrA".into(),
                 first_advertised_at: 8,
                 last_advertised_at: 8,
+                last_verified_at: None,
             }],
             first_discovered_at: 8,
             last_advertised_at: 8,
@@ -2369,6 +2716,7 @@ mod tests {
                 state: ActiveCandidateState::Exhausted,
                 observations: vec![observation.clone()],
                 staged_success: None,
+                staged_advertisements: vec![],
             }),
             ..Default::default()
         };
@@ -2456,6 +2804,7 @@ mod tests {
                 addr: "addrA".into(),
                 first_advertised_at: 10,
                 last_advertised_at: 10,
+                last_verified_at: None,
             }],
             first_discovered_at: 10,
             last_advertised_at: 10,
@@ -2464,6 +2813,7 @@ mod tests {
                 state: ActiveCandidateState::Exhausted,
                 observations: vec![observation.clone()],
                 staged_success: None,
+                staged_advertisements: vec![],
             }),
             ..Default::default()
         };

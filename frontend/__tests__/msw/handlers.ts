@@ -573,25 +573,58 @@ export const handlers = [
     const peers = [
       {
         peerId: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-        displayState: 'reachable',
+        crawlerDialState: 'reachable',
+        participation: {
+          discoveryAdvertised: false,
+          directSessionObserved: false,
+          crawlerIdentified: true,
+        },
+        sessionInitiators: [],
         primaryAddr: '/ip4/1.2.3.4/tcp/8115',
         version: '0.114.0',
         country: 'United States',
         asn: 'AS24940 Hetzner',
         lastAdvertisedAt: 1751500800,
-        lastObservedAt: 1751500800,
+        lastDialObservedAt: 1751500800,
+        latestPositiveObservedAt: 1751500800,
         lastReachableAt: 1751500800,
         rttMs: 42,
       },
       {
         peerId: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
-        displayState: 'advertisedUnverified',
+        crawlerDialState: 'advertisedUnverified',
+        participation: {
+          discoveryAdvertised: true,
+          directSessionObserved: false,
+          crawlerIdentified: false,
+        },
+        sessionInitiators: [],
         primaryAddr: '/ip4/5.6.7.8/tcp/8115',
         version: null,
         country: null,
         asn: null,
         lastAdvertisedAt: 1751414400,
-        lastObservedAt: 1751414400,
+        lastDialObservedAt: 1751414400,
+        latestPositiveObservedAt: 1751414400,
+        lastReachableAt: null,
+        rttMs: null,
+      },
+      {
+        peerId: 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+        crawlerDialState: 'noCompletedObservation',
+        participation: {
+          discoveryAdvertised: false,
+          directSessionObserved: true,
+          crawlerIdentified: false,
+        },
+        sessionInitiators: ['peerInitiated'],
+        primaryAddr: null,
+        version: null,
+        country: null,
+        asn: null,
+        lastAdvertisedAt: null,
+        lastDialObservedAt: null,
+        latestPositiveObservedAt: 1751500900,
         lastReachableAt: null,
         rttMs: null,
       },
@@ -601,11 +634,14 @@ export const handlers = [
     const observation = searchParams.get('observation');
     const items = peers.filter((peer) => {
       const peerObservation =
-        peer.displayState === 'reachable'
+        peer.crawlerDialState === 'reachable'
           ? 'sameNetworkIdentified'
-          : 'noAuthenticatedSessionBeforeDeadline';
+          : peer.crawlerDialState === 'advertisedUnverified'
+            ? 'noAuthenticatedSessionBeforeDeadline'
+            : null;
       return (
-        (!state || peer.displayState === state) && (!observation || peerObservation === observation)
+        (!state || peer.crawlerDialState === state) &&
+        (!observation || peerObservation === observation)
       );
     });
     return HttpResponse.json({ items, nextCursor: null });
@@ -613,35 +649,52 @@ export const handlers = [
 
   http.get(`${API_BASE}/network/peers/:peerId`, ({ params }) => {
     const peerId = String(params.peerId);
+    const directOnly = peerId.startsWith('c');
     return HttpResponse.json({
       peerId,
-      observationVantage: 'thisCkbadgerInstance',
-      displayState: peerId.startsWith('a') ? 'reachable' : 'advertisedUnverified',
-      firstDiscoveredAt: 1751328000,
-      lastAdvertisedAt: 1751500800,
-      aliases: [
-        {
-          address: peerId.startsWith('a') ? '/ip4/1.2.3.4/tcp/8115' : '/ip4/5.6.7.8/tcp/8115',
-          firstAdvertisedAt: 1751328000,
-          lastAdvertisedAt: 1751500800,
-        },
-      ],
-      lastCompleted: {
-        roundId: 5,
-        outcome: peerId.startsWith('a') ? 'sameNetworkIdentified' : 'exhausted',
-        observations: [
-          {
-            address: peerId.startsWith('a') ? '/ip4/1.2.3.4/tcp/8115' : '/ip4/5.6.7.8/tcp/8115',
-            roundId: 5,
-            observedAt: 1751500800,
-            elapsedMs: peerId.startsWith('a') ? 42 : 10000,
-            result: peerId.startsWith('a')
-              ? 'sameNetworkIdentified'
-              : 'noAuthenticatedSessionBeforeDeadline',
-          },
-        ],
-        consecutiveExhaustedRounds: peerId.startsWith('a') ? 0 : 2,
+      observationVantage: 'configuredLocalCkbRpcObserverAndThisCrawler',
+      crawlerDialState: peerId.startsWith('a')
+        ? 'reachable'
+        : directOnly
+          ? 'noCompletedObservation'
+          : 'advertisedUnverified',
+      participation: {
+        discoveryAdvertised: !peerId.startsWith('a') && !directOnly,
+        directSessionObserved: directOnly,
+        crawlerIdentified: peerId.startsWith('a'),
       },
+      sessionInitiators: directOnly ? ['peerInitiated'] : [],
+      firstDiscoveredAt: directOnly ? null : 1751328000,
+      lastAdvertisedAt: directOnly ? null : 1751500800,
+      latestPositiveObservedAt: directOnly ? 1751500900 : 1751500800,
+      aliases: directOnly
+        ? []
+        : [
+            {
+              address: peerId.startsWith('a') ? '/ip4/1.2.3.4/tcp/8115' : '/ip4/5.6.7.8/tcp/8115',
+              firstAdvertisedAt: 1751328000,
+              lastAdvertisedAt: 1751500800,
+              lastVerifiedAt: peerId.startsWith('a') ? 1751500800 : null,
+            },
+          ],
+      lastCompleted: directOnly
+        ? null
+        : {
+            roundId: 5,
+            outcome: peerId.startsWith('a') ? 'sameNetworkIdentified' : 'exhausted',
+            observations: [
+              {
+                address: peerId.startsWith('a') ? '/ip4/1.2.3.4/tcp/8115' : '/ip4/5.6.7.8/tcp/8115',
+                roundId: 5,
+                observedAt: 1751500800,
+                elapsedMs: peerId.startsWith('a') ? 42 : 10000,
+                result: peerId.startsWith('a')
+                  ? 'sameNetworkIdentified'
+                  : 'noAuthenticatedSessionBeforeDeadline',
+              },
+            ],
+            consecutiveExhaustedRounds: peerId.startsWith('a') ? 0 : 2,
+          },
       active: null,
       verified: peerId.startsWith('a')
         ? {
@@ -657,6 +710,8 @@ export const handlers = [
             rttMs: 42,
             discovery: {
               validNodesMessages: 1,
+              validResponseMessages: 1,
+              validAnnounceMessages: 0,
               malformedMessages: 0,
               unexpectedMessages: 0,
               normalizedAdvertisedAddresses: 2,
@@ -664,9 +719,38 @@ export const handlers = [
             },
           }
         : null,
-      advertisers: peerId.startsWith('a')
-        ? []
-        : [{ advertiserPeerId: 'aaaaaaaa'.repeat(8), observedAt: 1751414400 }],
+      advertisers:
+        peerId.startsWith('a') || directOnly
+          ? []
+          : [
+              {
+                advertiserPeerId: 'aaaaaaaa'.repeat(8),
+                alias: '/ip4/8.8.8.8/tcp/8114/p2p/peer-c',
+                firstObservedAt: 1751328000,
+                lastObservedAt: 1751414400,
+                firstObservedRound: 4,
+                lastObservedRound: 5,
+                observationCount: 2,
+              },
+            ],
+      directSessions: directOnly
+        ? [
+            {
+              observerPeerId: 'dddddddd'.repeat(8),
+              initiator: 'peerInitiated',
+              firstObservedAt: 1751500900,
+              lastObservedAt: 1751500900,
+              firstObservedRound: 5,
+              lastObservedRound: 5,
+              observationCount: 1,
+              clientVersion: '0.119.0',
+              sessionAddresses: [],
+              connectedDurationMs: 12000,
+              lastPingDurationMs: null,
+              protocols: [],
+            },
+          ]
+        : [],
     });
   }),
 ];

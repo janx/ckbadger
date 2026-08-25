@@ -617,11 +617,15 @@ describe('renderMarkdownPage', () => {
         },
         discovery: {
           validNodesMessages: 1,
+          validResponseMessages: 1,
+          validAnnounceMessages: 0,
           malformedMessages: 0,
           unexpectedMessages: 0,
           normalizedAdvertisedAddresses: 2,
           rejectedAdvertisedAddresses: 0,
         },
+        localObserver: null,
+        directSessionObservations: { observerInitiated: 0, peerInitiated: 0 },
       },
       activeRound: null,
     });

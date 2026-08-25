@@ -5,16 +5,22 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use anyhow::Context;
 use ckbadger_store::network_keys::{bucket_of, Granularity, Metric};
 use ckbadger_store::{
-    checked_candidate_alias_map, checked_resolve_known_peers, ActiveCandidateProbe,
-    ActiveCandidateState, ActiveCrawl, AddressProbeEvidence, AddressProbeResult, CkbadgerStore,
-    CompletedCandidateEvidence, CompletedCandidateOutcome, CompletedPeerOutcomes, CrawlAddress,
-    CrawlCandidate, CrawlProgress, DiscoveryEvidence, HistoryPoint, LatestStatus, NodeRecord,
-    StagedProbeOutcome,
+    checked_apply_alias_verifications, checked_candidate_alias_map,
+    checked_merge_advertisement_evidence, checked_merge_direct_session_evidence,
+    checked_merge_local_observer_evidence, checked_prune_candidate_aliases,
+    checked_prune_direct_session_evidence, checked_resolve_known_peers, crawl_address_is_fresh,
+    ActiveCandidateProbe, ActiveCandidateState, ActiveCrawl, AddressProbeEvidence,
+    AddressProbeResult, AdvertisementEvidence, CkbadgerStore, CompletedCandidateEvidence,
+    CompletedCandidateOutcome, CompletedPeerOutcomes, CrawlAddress, CrawlCandidate, CrawlProgress,
+    DirectSessionObservation, DirectSessionObservationSummary, DirectSessionProtocol,
+    DiscoveryEvidence, HistoryPoint, LatestStatus, LocalObserverObservation, LocalObserverProtocol,
+    NodeRecord, StagedProbeOutcome,
 };
 use futures::stream::{FuturesUnordered, StreamExt};
 
 use crate::geoip::GeoIp;
 use crate::prober::{ProbeCandidate, Prober};
+use crate::rpc_observer::{LocalPeerObserver, LocalPeerSnapshot};
 
 fn checked_histogram_increment(
     count: &mut u64,
@@ -122,7 +128,7 @@ impl RoundConfig {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CrawlSliceReport {
     Partial(CrawlProgress),
-    Completed(LatestStatus),
+    Completed(Box<LatestStatus>),
 }
 
 fn checked_inc(value: &mut u64, field: &str, round_id: u64) -> anyhow::Result<()> {
@@ -145,6 +151,99 @@ fn prepare_candidate_for_round(candidate: &mut CrawlCandidate, round_id: u64) {
     }
 }
 
+fn checked_candidate_has_fresh_alias(
+    candidate: &CrawlCandidate,
+    cutoff: Option<u64>,
+    round_id: u64,
+) -> anyhow::Result<bool> {
+    let mut aliases = HashSet::new();
+    for address in &candidate.addresses {
+        if address.addr.is_empty() {
+            anyhow::bail!("cannot prune an empty candidate alias: round_id={round_id}");
+        }
+        if address.first_advertised_at > address.last_advertised_at {
+            anyhow::bail!(
+                "candidate alias time regressed while pruning: round_id={}, addr={}, first_advertised_at={}, last_advertised_at={}",
+                round_id,
+                address.addr,
+                address.first_advertised_at,
+                address.last_advertised_at
+            );
+        }
+        if !aliases.insert(address.addr.as_str()) {
+            anyhow::bail!(
+                "candidate contains duplicate alias while pruning: round_id={}, addr={}",
+                round_id,
+                address.addr
+            );
+        }
+    }
+    Ok(candidate
+        .addresses
+        .iter()
+        .any(|address| crawl_address_is_fresh(address, cutoff)))
+}
+
+fn stage_advertisement(
+    target: &mut CrawlCandidate,
+    advertiser_peer_id: &[u8],
+    alias: &str,
+    observed_at: u64,
+    round_id: u64,
+) -> anyhow::Result<()> {
+    if advertiser_peer_id.is_empty() {
+        anyhow::bail!(
+            "cannot stage advertisement with empty advertiser: round_id={}, alias={}",
+            round_id,
+            alias
+        );
+    }
+    if !target.addresses.iter().any(|address| address.addr == alias) {
+        anyhow::bail!(
+            "cannot stage advertisement for an unretained target alias: round_id={}, advertiser_peer_id=0x{}, alias={}",
+            round_id,
+            hex::encode(advertiser_peer_id),
+            alias
+        );
+    }
+    let active = target
+        .active
+        .as_mut()
+        .filter(|active| active.round_id == round_id)
+        .with_context(|| {
+            format!(
+                "advertised target is missing active round state: round_id={}, advertiser_peer_id=0x{}, alias={}",
+                round_id,
+                hex::encode(advertiser_peer_id),
+                alias
+            )
+        })?;
+    let key = (advertiser_peer_id, alias);
+    match active.staged_advertisements.binary_search_by(|evidence| {
+        (evidence.advertiser_peer_id.as_slice(), evidence.alias.as_str()).cmp(&key)
+    }) {
+        Ok(_) => anyhow::bail!(
+            "duplicate target advertisement in one source probe: round_id={}, advertiser_peer_id=0x{}, alias={}",
+            round_id,
+            hex::encode(advertiser_peer_id),
+            alias
+        ),
+        Err(index) => active.staged_advertisements.insert(
+            index,
+            AdvertisementEvidence {
+                advertiser_peer_id: advertiser_peer_id.to_vec(),
+                alias: alias.to_string(),
+                first_observed_at: observed_at,
+                last_observed_at: observed_at,
+                first_observed_round: round_id,
+                last_observed_round: round_id,
+                observation_count: 1,
+            },
+        ),
+    }
+    Ok(())
+}
+
 fn merge_candidate(
     candidates: &mut BTreeMap<Vec<u8>, CrawlCandidate>,
     candidate: ProbeCandidate,
@@ -162,6 +261,9 @@ fn merge_candidate(
             ..Default::default()
         }),
         last_completed: None,
+        advertisements: Vec::new(),
+        staged_direct_sessions: Vec::new(),
+        direct_sessions: Vec::new(),
     });
     prepare_candidate_for_round(record, round_id);
 
@@ -186,6 +288,7 @@ fn merge_candidate(
                 addr: candidate.addr,
                 first_advertised_at: advertised_at,
                 last_advertised_at: advertised_at,
+                last_verified_at: None,
             });
             record.addresses.sort_by(|a, b| a.addr.cmp(&b.addr));
             if let Some(active) = record.active.as_mut() {
@@ -327,7 +430,11 @@ fn ensure_frontier_bound(
     anyhow::bail!(reason)
 }
 
-fn candidate_has_untried_addr(candidate: &CrawlCandidate, round_id: u64) -> bool {
+fn candidate_has_untried_addr(
+    candidate: &CrawlCandidate,
+    round_id: u64,
+    cutoff: Option<u64>,
+) -> bool {
     let Some(active) = candidate
         .active
         .as_ref()
@@ -336,16 +443,18 @@ fn candidate_has_untried_addr(candidate: &CrawlCandidate, round_id: u64) -> bool
         return false;
     };
     candidate.addresses.iter().any(|address| {
-        !active
-            .observations
-            .iter()
-            .any(|e| e.address == address.addr)
+        crawl_address_is_fresh(address, cutoff)
+            && !active
+                .observations
+                .iter()
+                .any(|e| e.address == address.addr)
     })
 }
 
 fn select_next_candidate(
     candidates: &BTreeMap<Vec<u8>, CrawlCandidate>,
     round_id: u64,
+    cutoff: Option<u64>,
     in_flight: &HashSet<Vec<u8>>,
 ) -> Option<(Vec<u8>, String)> {
     let mut selected: Option<(u8, u64, Vec<u8>, String)> = None;
@@ -371,10 +480,11 @@ fn select_next_candidate(
             .addresses
             .iter()
             .filter(|address| {
-                !active
-                    .observations
-                    .iter()
-                    .any(|evidence| evidence.address == address.addr)
+                crawl_address_is_fresh(address, cutoff)
+                    && !active
+                        .observations
+                        .iter()
+                        .any(|evidence| evidence.address == address.addr)
             })
             .map(|address| address.addr.as_str())
             .min()
@@ -470,10 +580,6 @@ fn initialize_or_resume(
     let mut candidates: BTreeMap<Vec<u8>, CrawlCandidate> =
         store.scan_crawl_candidates()?.into_iter().collect();
     let node_rows = store.scan_nodes()?;
-    let retained_node_ids: HashSet<Vec<u8>> = node_rows
-        .iter()
-        .map(|(peer_id, _)| peer_id.clone())
-        .collect();
     let checkpoint_address_count = frontier_address_count(&candidates)?;
     let mut dirty = HashSet::new();
     let mut active = match store.get_active_crawl()? {
@@ -511,8 +617,8 @@ fn initialize_or_resume(
                         orphan.round_id
                     );
                 }
-                let eligible = retained_node_ids.contains(peer_id)
-                    || candidate_cutoff.is_none_or(|cutoff| candidate.last_advertised_at >= cutoff);
+                let eligible =
+                    checked_candidate_has_fresh_alias(candidate, candidate_cutoff, round_id)?;
                 if eligible {
                     prepare_candidate_for_round(candidate, round_id);
                     dirty.insert(peer_id.clone());
@@ -522,6 +628,8 @@ fn initialize_or_resume(
                 round_id,
                 started_at: now,
                 last_checkpoint_at: now,
+                alias_freshness_cutoff: candidate_cutoff,
+                direct_session_freshness_cutoff: now.checked_sub(cfg.node_ttl_secs),
                 ..Default::default()
             }
         }
@@ -541,6 +649,12 @@ fn initialize_or_resume(
         dirty.insert(candidate.peer_id);
     }
     for (peer_id, node) in node_rows {
+        if active
+            .alias_freshness_cutoff
+            .is_some_and(|cutoff| node.last_seen < cutoff)
+        {
+            continue;
+        }
         for addr in node.own_addrs {
             if let Some(candidate) = ingest_addr(
                 prober,
@@ -568,6 +682,192 @@ fn initialize_or_resume(
     let updates = changed_candidates(&candidates, &dirty)?;
     store.checkpoint_crawl(&active, &updates)?;
     Ok((active, candidates))
+}
+
+fn validate_staged_direct_snapshot(
+    active: &ActiveCrawl,
+    candidates: &BTreeMap<Vec<u8>, CrawlCandidate>,
+) -> anyhow::Result<()> {
+    if active
+        .direct_session_targets
+        .windows(2)
+        .any(|window| window[0] >= window[1])
+        || active.direct_session_targets.iter().any(Vec::is_empty)
+    {
+        anyhow::bail!(
+            "active direct-session targets are empty, duplicate, or not canonically sorted: round_id={}",
+            active.round_id
+        );
+    }
+
+    let staged_targets: Vec<Vec<u8>> = candidates
+        .iter()
+        .filter_map(|(peer_id, candidate)| {
+            (!candidate.staged_direct_sessions.is_empty()).then_some(peer_id.clone())
+        })
+        .collect();
+    if staged_targets != active.direct_session_targets {
+        anyhow::bail!(
+            "active direct-session target inventory mismatch: round_id={}, marker_targets={}, candidate_targets={}",
+            active.round_id,
+            active.direct_session_targets.len(),
+            staged_targets.len()
+        );
+    }
+
+    let Some(observer) = active.local_observer_observation.as_ref() else {
+        if !staged_targets.is_empty() {
+            anyhow::bail!(
+                "direct-session rows exist without a local observer snapshot: round_id={}",
+                active.round_id
+            );
+        }
+        return Ok(());
+    };
+    if observer.observed_at < active.started_at || observer.observed_at > active.last_checkpoint_at
+    {
+        anyhow::bail!(
+            "local observer checkpoint clock invariant failed: round_id={}, started_at={}, observed_at={}, checkpoint_at={}",
+            active.round_id,
+            active.started_at,
+            observer.observed_at,
+            active.last_checkpoint_at
+        );
+    }
+    checked_merge_local_observer_evidence(None, observer, active.round_id)?;
+    for target_peer_id in &staged_targets {
+        let candidate = candidates.get(target_peer_id).with_context(|| {
+            format!(
+                "staged direct-session target disappeared: round_id={}, peer_id=0x{}",
+                active.round_id,
+                hex::encode(target_peer_id)
+            )
+        })?;
+        if candidate.staged_direct_sessions.iter().any(|observation| {
+            observation.observer_peer_id != observer.peer_id
+                || observation.observed_at != observer.observed_at
+        }) {
+            anyhow::bail!(
+                "direct-session row disagrees with local observer snapshot: round_id={}, target_peer_id=0x{}, observer_peer_id=0x{}",
+                active.round_id,
+                hex::encode(target_peer_id),
+                hex::encode(&observer.peer_id)
+            );
+        }
+        let mut checked = candidate.direct_sessions.clone();
+        checked_merge_direct_session_evidence(
+            &mut checked,
+            &candidate.staged_direct_sessions,
+            active.round_id,
+            target_peer_id,
+        )?;
+    }
+    Ok(())
+}
+
+async fn observe_local_sessions_once(
+    store: &CkbadgerStore,
+    observer: Option<&dyn LocalPeerObserver>,
+    clock: &dyn CrawlClock,
+    active: &mut ActiveCrawl,
+    candidates: &mut BTreeMap<Vec<u8>, CrawlCandidate>,
+) -> anyhow::Result<()> {
+    validate_staged_direct_snapshot(active, candidates)?;
+    let Some(observer_client) = observer else {
+        return Ok(());
+    };
+    if active.local_observer_observation.is_some() {
+        return Ok(());
+    }
+
+    let LocalPeerSnapshot { observer, sessions } =
+        observer_client.observe().await.with_context(|| {
+            format!(
+                "failed to observe configured local CKB peer: round_id={}",
+                active.round_id
+            )
+        })?;
+    let observed_at = clock.now()?;
+    if observed_at < active.started_at {
+        anyhow::bail!(
+            "system clock moved backwards during local peer observation: round_id={}, started_at={}, observed_at={}",
+            active.round_id,
+            active.started_at,
+            observed_at
+        );
+    }
+    let observer_peer_id = observer.peer_id.clone();
+    active.local_observer_observation = Some(LocalObserverObservation {
+        round_id: active.round_id,
+        observed_at,
+        peer_id: observer.peer_id,
+        client_version: observer.client_version,
+        active: observer.active,
+        addresses: observer.addresses,
+        protocols: observer
+            .protocols
+            .into_iter()
+            .map(|protocol| LocalObserverProtocol {
+                id: protocol.id,
+                name: protocol.name,
+                support_versions: protocol.support_versions,
+            })
+            .collect(),
+        connections: observer.connections,
+    });
+
+    let mut dirty = HashSet::new();
+    for session in sessions {
+        if session.peer_id.is_empty() || session.peer_id == observer_peer_id {
+            anyhow::bail!(
+                "local RPC produced an invalid direct-session target: round_id={}, target_peer_id=0x{}, observer_peer_id=0x{}",
+                active.round_id,
+                hex::encode(&session.peer_id),
+                hex::encode(&observer_peer_id)
+            );
+        }
+        let target_peer_id = session.peer_id;
+        let candidate = candidates.entry(target_peer_id.clone()).or_default();
+        candidate
+            .staged_direct_sessions
+            .push(DirectSessionObservation {
+                round_id: active.round_id,
+                observed_at,
+                observer_peer_id: observer_peer_id.clone(),
+                initiator: session.initiator,
+                client_version: session.client_version,
+                session_addresses: session.session_addresses,
+                connected_duration_ms: session.connected_duration_ms,
+                last_ping_duration_ms: session.last_ping_duration_ms,
+                protocols: session
+                    .protocols
+                    .into_iter()
+                    .map(|protocol| DirectSessionProtocol {
+                        id: protocol.id,
+                        version: protocol.version,
+                    })
+                    .collect(),
+            });
+        candidate.staged_direct_sessions.sort_by(|left, right| {
+            (&left.observer_peer_id, left.initiator)
+                .cmp(&(&right.observer_peer_id, right.initiator))
+        });
+        dirty.insert(target_peer_id);
+    }
+    active.direct_session_targets = dirty.iter().cloned().collect();
+    active.direct_session_targets.sort();
+    active.last_checkpoint_at = clock.now()?;
+    if active.last_checkpoint_at < observed_at {
+        anyhow::bail!(
+            "system clock moved backwards while checkpointing local peer observation: round_id={}, observed_at={}, checkpoint_at={}",
+            active.round_id,
+            observed_at,
+            active.last_checkpoint_at
+        );
+    }
+    validate_staged_direct_snapshot(active, candidates)?;
+    let updates = changed_candidates(candidates, &dirty)?;
+    store.checkpoint_crawl(active, &updates)
 }
 
 fn record_address_observation(
@@ -680,7 +980,7 @@ fn apply_probe_result(
                     dirty.insert(bound.peer_id);
                 }
             }
-            let mut normalized_discovered = Vec::new();
+            let mut normalized_advertisements = Vec::new();
             for discovered in &outcome.discovered_addrs {
                 if let Some(normalized) = ingest_addr(
                     prober,
@@ -691,7 +991,7 @@ fn apply_probe_result(
                     active,
                     &mut dirty,
                 )? {
-                    normalized_discovered.push(normalized.addr);
+                    normalized_advertisements.push((normalized.peer_id.clone(), normalized.addr));
                     dirty.insert(normalized.peer_id);
                 } else {
                     outcome.discovery.rejected_advertised_addresses = outcome
@@ -707,8 +1007,25 @@ fn apply_probe_result(
                         })?;
                 }
             }
-            normalized_discovered.sort();
-            normalized_discovered.dedup();
+            normalized_advertisements.sort();
+            normalized_advertisements.dedup();
+            for (target_peer_id, alias) in &normalized_advertisements {
+                let target = candidates.get_mut(target_peer_id).with_context(|| {
+                    format!(
+                        "normalized advertised target disappeared: round_id={}, advertiser_peer_id=0x{}, target_peer_id=0x{}, alias={}",
+                        round_id,
+                        hex::encode(&peer_id),
+                        hex::encode(target_peer_id),
+                        alias
+                    )
+                })?;
+                stage_advertisement(target, &peer_id, alias, observed_at, round_id)?;
+                dirty.insert(target_peer_id.clone());
+            }
+            let normalized_discovered: Vec<String> = normalized_advertisements
+                .into_iter()
+                .map(|(_, alias)| alias)
+                .collect();
             if outcome.discovery.normalized_advertised_addresses != 0 {
                 anyhow::bail!(
                     "prober populated crawler-owned normalized Discovery counter: round_id={}, peer_id=0x{}, value={}",
@@ -757,7 +1074,8 @@ fn apply_probe_result(
                     hex::encode(&peer_id)
                 )
             })?;
-            let has_untried = candidate_has_untried_addr(candidate, round_id);
+            let has_untried =
+                candidate_has_untried_addr(candidate, round_id, active.alias_freshness_cutoff);
             let active_probe = candidate
                 .active
                 .as_mut()
@@ -784,7 +1102,8 @@ fn apply_probe_result(
                     hex::encode(&peer_id)
                 )
             })?;
-            let has_untried = candidate_has_untried_addr(candidate, round_id);
+            let has_untried =
+                candidate_has_untried_addr(candidate, round_id, active.alias_freshness_cutoff);
             let foreign_observed = candidate
                 .active
                 .as_ref()
@@ -879,19 +1198,22 @@ fn publish_completed_round(
             }
             Some(_) => {}
             None => {
-                let prior = candidate.last_completed.as_ref().with_context(|| {
-                    format!(
-                        "inactive candidate lacks completed evidence during deferred prune: round_id={}, peer_id=0x{}",
+                if let Some(prior) = candidate.last_completed.as_ref() {
+                    if prior.round_id >= active.round_id {
+                        anyhow::bail!(
+                            "inactive candidate completed round is not prior to publish: round_id={}, peer_id=0x{}, candidate_round={}",
+                            active.round_id,
+                            hex::encode(peer_id),
+                            prior.round_id
+                        );
+                    }
+                } else if candidate.staged_direct_sessions.is_empty()
+                    && candidate.direct_sessions.is_empty()
+                {
+                    anyhow::bail!(
+                        "inactive candidate lacks dial or direct-session evidence: round_id={}, peer_id=0x{}",
                         active.round_id,
                         hex::encode(peer_id)
-                    )
-                })?;
-                if prior.round_id >= active.round_id {
-                    anyhow::bail!(
-                        "inactive candidate completed round is not prior to publish: round_id={}, peer_id=0x{}, candidate_round={}",
-                        active.round_id,
-                        hex::encode(peer_id),
-                        prior.round_id
                     );
                 }
             }
@@ -906,6 +1228,26 @@ fn publish_completed_round(
             active.started_at,
             finished
         );
+    }
+
+    // Verification freshness and TTL deletion become visible only together
+    // with the completed node/status snapshot. Partial checkpoints retain the
+    // last completed aliases and advertisement history unchanged.
+    for (peer_id, candidate) in &mut candidates {
+        if let Some(active_probe) = candidate.active.as_ref() {
+            checked_apply_alias_verifications(
+                &mut candidate.addresses,
+                &active_probe.observations,
+                active.round_id,
+                peer_id,
+            )?;
+        }
+        checked_prune_candidate_aliases(
+            candidate,
+            active.alias_freshness_cutoff,
+            active.round_id,
+            peer_id,
+        )?;
     }
 
     let existing_rows = store.scan_nodes()?;
@@ -1121,6 +1463,48 @@ fn publish_completed_round(
         active.round_id,
         Metric::CountryShare,
     )?;
+    let prior_status = store.get_network_status()?;
+    let local_observer = match active.local_observer_observation.as_ref() {
+        Some(observation) => {
+            if observation.observed_at < active.started_at || observation.observed_at > finished {
+                anyhow::bail!(
+                    "local observer publication clock invariant failed: round_id={}, started_at={}, observed_at={}, finished_at={}",
+                    active.round_id,
+                    active.started_at,
+                    observation.observed_at,
+                    finished
+                );
+            }
+            Some(checked_merge_local_observer_evidence(
+                prior_status
+                    .as_ref()
+                    .and_then(|status| status.local_observer.as_ref()),
+                observation,
+                active.round_id,
+            )?)
+        }
+        None => prior_status.and_then(|status| status.local_observer),
+    };
+    let mut direct_session_observations = DirectSessionObservationSummary::default();
+    for (target_peer_id, candidate) in &candidates {
+        for observation in &candidate.staged_direct_sessions {
+            if observation.observed_at < active.started_at || observation.observed_at > finished {
+                anyhow::bail!(
+                    "direct-session publication clock invariant failed: round_id={}, target_peer_id=0x{}, observed_at={}, started_at={}, finished_at={}",
+                    active.round_id,
+                    hex::encode(target_peer_id),
+                    observation.observed_at,
+                    active.started_at,
+                    finished
+                );
+            }
+            direct_session_observations.checked_record(
+                observation.initiator,
+                active.round_id,
+                target_peer_id,
+            )?;
+        }
+    }
     let status = LatestStatus {
         round_id: active.round_id,
         started: active.started_at,
@@ -1130,6 +1514,8 @@ fn publish_completed_round(
         discovery,
         malformed_addresses: active.malformed_addresses,
         new_verified_peers,
+        local_observer,
+        direct_session_observations,
     };
 
     let mut history_puts = Vec::new();
@@ -1177,15 +1563,29 @@ fn publish_completed_round(
     let mut candidate_deletes = Vec::new();
     let mut candidate_puts = Vec::new();
     for (peer_id, candidate) in &mut candidates {
+        checked_merge_direct_session_evidence(
+            &mut candidate.direct_sessions,
+            &candidate.staged_direct_sessions,
+            active.round_id,
+            peer_id,
+        )?;
+        candidate.staged_direct_sessions.clear();
+        checked_prune_direct_session_evidence(
+            &mut candidate.direct_sessions,
+            active.direct_session_freshness_cutoff,
+            active.round_id,
+            peer_id,
+        )?;
         let Some(active_probe) = candidate.active.take() else {
-            if next_nodes.contains_key(peer_id) {
-                anyhow::bail!(
-                    "deferred-prune candidate still has a retained verified node: round_id={}, peer_id=0x{}",
-                    active.round_id,
-                    hex::encode(peer_id)
-                );
+            let retain = next_nodes.contains_key(peer_id)
+                || !candidate.addresses.is_empty()
+                || !candidate.advertisements.is_empty()
+                || !candidate.direct_sessions.is_empty();
+            if retain {
+                candidate_puts.push((peer_id.clone(), candidate.clone()));
+            } else {
+                candidate_deletes.push((peer_id.clone(), candidate.clone()));
             }
-            candidate_deletes.push((peer_id.clone(), candidate.clone()));
             continue;
         };
         let outcome = match active_probe.state {
@@ -1217,6 +1617,13 @@ fn publish_completed_round(
         } else {
             0
         };
+        checked_merge_advertisement_evidence(
+            &mut candidate.advertisements,
+            &active_probe.staged_advertisements,
+            &candidate.addresses,
+            active.round_id,
+            peer_id,
+        )?;
         candidate.last_completed = Some(CompletedCandidateEvidence {
             round_id: active.round_id,
             outcome,
@@ -1239,11 +1646,10 @@ fn publish_completed_round(
     Ok(status)
 }
 
-/// Run one bounded execution slice. Partial slices checkpoint only operational
-/// state; a drained logical round is atomically published.
-pub async fn run_crawl_slice(
+async fn run_crawl_slice_inner(
     store: &CkbadgerStore,
     prober: &dyn Prober,
+    observer: Option<&dyn LocalPeerObserver>,
     geoip: &dyn GeoIp,
     clock: &dyn CrawlClock,
     cfg: &RoundConfig,
@@ -1258,6 +1664,7 @@ pub async fn run_crawl_slice(
         })
         .transpose()?;
     let (mut active, mut candidates) = initialize_or_resume(store, prober, clock, cfg)?;
+    observe_local_sessions_once(store, observer, clock, &mut active, &mut candidates).await?;
     let mut admitted = 0usize;
     let mut in_flight_peers = HashSet::new();
     let mut in_flight = FuturesUnordered::new();
@@ -1269,9 +1676,12 @@ pub async fn run_crawl_slice(
             if address_cap_reached || deadline_reached {
                 break;
             }
-            let Some((peer_id, addr)) =
-                select_next_candidate(&candidates, active.round_id, &in_flight_peers)
-            else {
+            let Some((peer_id, addr)) = select_next_candidate(
+                &candidates,
+                active.round_id,
+                active.alias_freshness_cutoff,
+                &in_flight_peers,
+            ) else {
                 break;
             };
             active.next_schedule_sequence = active
@@ -1327,7 +1737,14 @@ pub async fn run_crawl_slice(
         )?;
     }
 
-    if select_next_candidate(&candidates, active.round_id, &HashSet::new()).is_some() {
+    if select_next_candidate(
+        &candidates,
+        active.round_id,
+        active.alias_freshness_cutoff,
+        &HashSet::new(),
+    )
+    .is_some()
+    {
         active.last_checkpoint_at = clock.now()?;
         store.checkpoint_crawl(&active, &[])?;
         return Ok(CrawlSliceReport::Partial(progress_from(
@@ -1336,9 +1753,36 @@ pub async fn run_crawl_slice(
         )?));
     }
 
-    Ok(CrawlSliceReport::Completed(publish_completed_round(
-        store, geoip, clock, cfg, &active, candidates,
-    )?))
+    Ok(CrawlSliceReport::Completed(Box::new(
+        publish_completed_round(store, geoip, clock, cfg, &active, candidates)?,
+    )))
+}
+
+/// Run one bounded execution slice without a configured local RPC observer.
+/// This entrypoint remains useful for deterministic engine tests and embedders;
+/// the production service uses [`run_crawl_slice_with_observer`].
+pub async fn run_crawl_slice(
+    store: &CkbadgerStore,
+    prober: &dyn Prober,
+    geoip: &dyn GeoIp,
+    clock: &dyn CrawlClock,
+    cfg: &RoundConfig,
+) -> anyhow::Result<CrawlSliceReport> {
+    run_crawl_slice_inner(store, prober, None, geoip, clock, cfg).await
+}
+
+/// Run one bounded execution slice and atomically stage exactly one configured
+/// local CKB RPC snapshot per logical round. A resumed slice reuses the durable
+/// marker and never samples the same logical round twice.
+pub async fn run_crawl_slice_with_observer(
+    store: &CkbadgerStore,
+    prober: &dyn Prober,
+    observer: &dyn LocalPeerObserver,
+    geoip: &dyn GeoIp,
+    clock: &dyn CrawlClock,
+    cfg: &RoundConfig,
+) -> anyhow::Result<CrawlSliceReport> {
+    run_crawl_slice_inner(store, prober, Some(observer), geoip, clock, cfg).await
 }
 
 #[cfg(test)]
@@ -1350,6 +1794,9 @@ mod tests {
     use crate::geoip::NoGeo;
     use crate::mock_prober::MockProber;
     use crate::prober::{ProbeOutcome, ProbeResult};
+    use crate::rpc_observer::{
+        DirectSessionSnapshot, LocalObserverSnapshot, LocalPeerSnapshot, LocalProtocolSnapshot,
+    };
     use async_trait::async_trait;
 
     struct TestClock(AtomicU64);
@@ -1367,6 +1814,58 @@ mod tests {
     impl CrawlClock for TestClock {
         fn now(&self) -> anyhow::Result<u64> {
             Ok(self.0.load(Ordering::SeqCst))
+        }
+    }
+
+    struct CountingObserver {
+        snapshot: LocalPeerSnapshot,
+        calls: AtomicUsize,
+    }
+
+    impl CountingObserver {
+        fn addressless_peer_initiated(target_peer_id: &[u8]) -> Self {
+            Self::peer_initiated(target_peer_id, Vec::new())
+        }
+
+        fn peer_initiated(target_peer_id: &[u8], session_addresses: Vec<String>) -> Self {
+            Self {
+                snapshot: LocalPeerSnapshot {
+                    observer: LocalObserverSnapshot {
+                        peer_id: b"observer".to_vec(),
+                        client_version: "ckb-observer".into(),
+                        active: true,
+                        addresses: vec!["/ip4/127.0.0.1/tcp/8115".into()],
+                        protocols: vec![LocalProtocolSnapshot {
+                            id: 1,
+                            name: "identify".into(),
+                            support_versions: vec!["0.0.1".into()],
+                        }],
+                        connections: 1,
+                    },
+                    sessions: vec![DirectSessionSnapshot {
+                        peer_id: target_peer_id.to_vec(),
+                        client_version: "ckb-direct".into(),
+                        session_addresses,
+                        initiator: ckbadger_store::SessionInitiator::Peer,
+                        connected_duration_ms: 10,
+                        last_ping_duration_ms: None,
+                        protocols: Vec::new(),
+                    }],
+                },
+                calls: AtomicUsize::new(0),
+            }
+        }
+
+        fn calls(&self) -> usize {
+            self.calls.load(Ordering::SeqCst)
+        }
+    }
+
+    #[async_trait]
+    impl LocalPeerObserver for CountingObserver {
+        async fn observe(&self) -> anyhow::Result<LocalPeerSnapshot> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(self.snapshot.clone())
         }
     }
 
@@ -1548,7 +2047,7 @@ mod tests {
 
     fn completed(report: CrawlSliceReport) -> LatestStatus {
         match report {
-            CrawlSliceReport::Completed(status) => status,
+            CrawlSliceReport::Completed(status) => *status,
             CrawlSliceReport::Partial(progress) => {
                 panic!("expected completed round, got progress: {progress:?}")
             }
@@ -1671,6 +2170,303 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    #[tokio::test]
+    async fn addressless_direct_session_is_published_without_dial_or_node_inference() {
+        let graph = HashMap::from([("addrA".to_string(), outcome(b"A", "addrA", &[]))]);
+        let prober = MockProber::new(vec!["addrA".into()], graph);
+        let observer = CountingObserver::addressless_peer_initiated(b"direct-only");
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_network(dir.path()).unwrap();
+        let clock = TestClock::new(10_000);
+
+        let status = completed(
+            run_crawl_slice_with_observer(
+                &store,
+                &prober,
+                &observer,
+                &NoGeo,
+                &clock,
+                &RoundConfig::test_defaults(),
+            )
+            .await
+            .unwrap(),
+        );
+
+        assert_eq!(observer.calls(), 1);
+        assert_eq!(status.direct_session_observations.peer_initiated, 1);
+        assert_eq!(status.direct_session_observations.observer_initiated, 0);
+        assert_eq!(
+            status
+                .peer_outcomes
+                .candidate_peers(status.round_id)
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            status
+                .address_observations
+                .address_attempts(status.round_id)
+                .unwrap(),
+            1
+        );
+        assert!(store.get_node(b"direct-only").unwrap().is_none());
+        let candidate = store.get_crawl_candidate(b"direct-only").unwrap().unwrap();
+        assert!(candidate.addresses.is_empty());
+        assert!(candidate.active.is_none());
+        assert!(candidate.last_completed.is_none());
+        assert!(candidate.staged_direct_sessions.is_empty());
+        assert_eq!(candidate.direct_sessions.len(), 1);
+        assert_eq!(
+            candidate.direct_sessions[0].initiator,
+            ckbadger_store::SessionInitiator::Peer
+        );
+        assert!(candidate.direct_sessions[0].session_addresses.is_empty());
+    }
+
+    #[tokio::test]
+    async fn direct_session_addresses_never_enter_the_dial_frontier() {
+        let graph = HashMap::from([("addrA".to_string(), outcome(b"A", "addrA", &[]))]);
+        let prober = MockProber::new(vec!["addrA".into()], graph);
+        let session_addr = "/ip4/198.51.100.9/tcp/54321";
+        let observer =
+            CountingObserver::peer_initiated(b"direct-only", vec![session_addr.to_string()]);
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_network(dir.path()).unwrap();
+        let clock = TestClock::new(10_000);
+
+        completed(
+            run_crawl_slice_with_observer(
+                &store,
+                &prober,
+                &observer,
+                &NoGeo,
+                &clock,
+                &RoundConfig::test_defaults(),
+            )
+            .await
+            .unwrap(),
+        );
+
+        assert_eq!(prober.attempts(), vec!["addrA".to_string()]);
+        let candidate = store.get_crawl_candidate(b"direct-only").unwrap().unwrap();
+        assert!(candidate.addresses.is_empty());
+        assert_eq!(candidate.direct_sessions.len(), 1);
+        assert_eq!(
+            candidate.direct_sessions[0].session_addresses,
+            vec![session_addr.to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn resumed_logical_round_reuses_the_checkpointed_rpc_snapshot() {
+        let graph = HashMap::from([("addrA".to_string(), outcome(b"A", "addrA", &[]))]);
+        let prober = MockProber::new(vec!["addrA".into()], graph);
+        let observer = CountingObserver::addressless_peer_initiated(b"direct-only");
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_network(dir.path()).unwrap();
+        let clock = TestClock::new(10_000);
+        let paused = RoundConfig {
+            max_addrs: Some(0),
+            ..RoundConfig::test_defaults()
+        };
+
+        assert!(matches!(
+            run_crawl_slice_with_observer(&store, &prober, &observer, &NoGeo, &clock, &paused,)
+                .await
+                .unwrap(),
+            CrawlSliceReport::Partial(_)
+        ));
+        assert!(matches!(
+            run_crawl_slice_with_observer(&store, &prober, &observer, &NoGeo, &clock, &paused,)
+                .await
+                .unwrap(),
+            CrawlSliceReport::Partial(_)
+        ));
+        assert_eq!(observer.calls(), 1);
+
+        completed(
+            run_crawl_slice_with_observer(
+                &store,
+                &prober,
+                &observer,
+                &NoGeo,
+                &clock,
+                &RoundConfig::test_defaults(),
+            )
+            .await
+            .unwrap(),
+        );
+        assert_eq!(observer.calls(), 1);
+    }
+
+    #[tokio::test]
+    async fn missing_later_rpc_snapshot_is_not_negative_but_direct_ttl_expires_independently() {
+        let graph = HashMap::from([("addrA".to_string(), outcome(b"A", "addrA", &[]))]);
+        let prober = MockProber::new(vec!["addrA".into()], graph);
+        let first_observer = CountingObserver::addressless_peer_initiated(b"direct-only");
+        let mut empty_observer = CountingObserver::addressless_peer_initiated(b"unused");
+        empty_observer.snapshot.sessions.clear();
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_network(dir.path()).unwrap();
+        let clock = TestClock::new(1_000);
+        let cfg = RoundConfig {
+            node_ttl_secs: 100,
+            ..RoundConfig::test_defaults()
+        };
+
+        completed(
+            run_crawl_slice_with_observer(&store, &prober, &first_observer, &NoGeo, &clock, &cfg)
+                .await
+                .unwrap(),
+        );
+        clock.set(1_050);
+        let second = completed(
+            run_crawl_slice_with_observer(&store, &prober, &empty_observer, &NoGeo, &clock, &cfg)
+                .await
+                .unwrap(),
+        );
+        assert_eq!(second.direct_session_observations.total(2).unwrap(), 0);
+        assert_eq!(
+            store
+                .get_crawl_candidate(b"direct-only")
+                .unwrap()
+                .unwrap()
+                .direct_sessions
+                .len(),
+            1
+        );
+
+        clock.set(1_101);
+        completed(
+            run_crawl_slice_with_observer(&store, &prober, &empty_observer, &NoGeo, &clock, &cfg)
+                .await
+                .unwrap(),
+        );
+        assert!(store.get_crawl_candidate(b"direct-only").unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn advertisement_evidence_is_staged_then_merged_and_not_erased_by_absence() {
+        let mut graph = HashMap::new();
+        graph.insert("addrA".to_string(), outcome(b"A", "addrA", &["addrB"]));
+        graph.insert("addrB".to_string(), outcome(b"addrB", "addrB", &[]));
+        let first_prober = MockProber::new(vec!["addrA".into()], graph);
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_network(dir.path()).unwrap();
+        let clock = TestClock::new(10_000);
+        let partial_cfg = RoundConfig {
+            max_addrs: Some(1),
+            ..RoundConfig::test_defaults()
+        };
+
+        assert!(matches!(
+            run_crawl_slice(&store, &first_prober, &NoGeo, &clock, &partial_cfg)
+                .await
+                .unwrap(),
+            CrawlSliceReport::Partial(_)
+        ));
+        let staged = store.get_crawl_candidate(b"addrB").unwrap().unwrap();
+        assert!(staged.advertisements.is_empty());
+        assert_eq!(
+            staged.active.as_ref().unwrap().staged_advertisements.len(),
+            1
+        );
+
+        clock.set(10_001);
+        completed(
+            run_crawl_slice(&store, &first_prober, &NoGeo, &clock, &partial_cfg)
+                .await
+                .unwrap(),
+        );
+        let published = store.get_crawl_candidate(b"addrB").unwrap().unwrap();
+        assert_eq!(published.advertisements.len(), 1);
+        let evidence = &published.advertisements[0];
+        assert_eq!(evidence.advertiser_peer_id, b"A");
+        assert_eq!(evidence.alias, "addrB");
+        assert_eq!(evidence.first_observed_at, 10_000);
+        assert_eq!(evidence.last_observed_at, 10_000);
+        assert_eq!(evidence.first_observed_round, 1);
+        assert_eq!(evidence.last_observed_round, 1);
+        assert_eq!(evidence.observation_count, 1);
+
+        let second_graph = HashMap::from([
+            ("addrA".to_string(), outcome(b"A", "addrA", &[])),
+            ("addrB".to_string(), outcome(b"addrB", "addrB", &[])),
+        ]);
+        let second_prober = MockProber::new(vec!["addrA".into()], second_graph);
+        clock.set(20_000);
+        completed(
+            run_crawl_slice(
+                &store,
+                &second_prober,
+                &NoGeo,
+                &clock,
+                &RoundConfig::test_defaults(),
+            )
+            .await
+            .unwrap(),
+        );
+        assert_eq!(
+            store
+                .get_crawl_candidate(b"addrB")
+                .unwrap()
+                .unwrap()
+                .advertisements,
+            published.advertisements
+        );
+    }
+
+    #[test]
+    fn completed_alias_pruning_uses_exact_advertisement_or_dial_freshness() {
+        let mut candidate = CrawlCandidate {
+            addresses: vec![
+                CrawlAddress {
+                    addr: "stale".into(),
+                    first_advertised_at: 1,
+                    last_advertised_at: 10,
+                    last_verified_at: None,
+                },
+                CrawlAddress {
+                    addr: "fresh".into(),
+                    first_advertised_at: 2,
+                    last_advertised_at: 20,
+                    last_verified_at: Some(90),
+                },
+            ],
+            last_advertised_at: 90,
+            advertisements: vec![
+                AdvertisementEvidence {
+                    advertiser_peer_id: b"source".to_vec(),
+                    alias: "fresh".into(),
+                    first_observed_at: 2,
+                    last_observed_at: 90,
+                    first_observed_round: 1,
+                    last_observed_round: 2,
+                    observation_count: 2,
+                },
+                AdvertisementEvidence {
+                    advertiser_peer_id: b"source".to_vec(),
+                    alias: "stale".into(),
+                    first_observed_at: 1,
+                    last_observed_at: 10,
+                    first_observed_round: 1,
+                    last_observed_round: 1,
+                    observation_count: 1,
+                },
+            ],
+            ..Default::default()
+        };
+
+        checked_prune_candidate_aliases(&mut candidate, Some(50), 53, b"target").unwrap();
+        assert_eq!(candidate.addresses.len(), 1);
+        assert_eq!(candidate.addresses[0].addr, "fresh");
+        assert_eq!(candidate.addresses[0].last_advertised_at, 20);
+        assert_eq!(candidate.addresses[0].last_verified_at, Some(90));
+        assert_eq!(candidate.advertisements.len(), 1);
+        assert_eq!(candidate.advertisements[0].alias, "fresh");
+        assert_eq!(candidate.last_advertised_at, 90);
     }
 
     #[tokio::test]
@@ -1821,6 +2617,74 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn successful_dial_keeps_exact_alias_fresh_without_identify_own_addrs() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_network(dir.path()).unwrap();
+        store
+            .checkpoint_crawl(
+                &ActiveCrawl {
+                    round_id: 1,
+                    started_at: 1,
+                    last_checkpoint_at: 1,
+                    ..Default::default()
+                },
+                &[(
+                    b"A".to_vec(),
+                    CrawlCandidate {
+                        addresses: vec![CrawlAddress {
+                            addr: "addrA".into(),
+                            first_advertised_at: 1,
+                            last_advertised_at: 1,
+                            last_verified_at: None,
+                        }],
+                        first_discovered_at: 1,
+                        last_advertised_at: 1,
+                        active: Some(ActiveCandidateProbe {
+                            round_id: 1,
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    },
+                )],
+            )
+            .unwrap();
+        let prober = MockProber::new(
+            Vec::new(),
+            HashMap::from([(
+                "addrA".to_string(),
+                ProbeOutcome {
+                    own_addrs: Vec::new(),
+                    ..outcome(b"A", "addrA", &[])
+                },
+            )]),
+        );
+        let clock = TestClock::new(100);
+        let cfg = RoundConfig {
+            node_ttl_secs: 50,
+            ..RoundConfig::test_defaults()
+        };
+
+        completed(
+            run_crawl_slice(&store, &prober, &NoGeo, &clock, &cfg)
+                .await
+                .unwrap(),
+        );
+        let first = store.get_crawl_candidate(b"A").unwrap().unwrap();
+        assert_eq!(first.addresses[0].last_advertised_at, 1);
+        assert_eq!(first.addresses[0].last_verified_at, Some(100));
+
+        clock.set(120);
+        completed(
+            run_crawl_slice(&store, &prober, &NoGeo, &clock, &cfg)
+                .await
+                .unwrap(),
+        );
+        let second = store.get_crawl_candidate(b"A").unwrap().unwrap();
+        assert_eq!(second.addresses[0].last_verified_at, Some(120));
+        assert_eq!(store.get_node(b"A").unwrap().unwrap().last_seen, 120);
+    }
+
+    #[tokio::test]
     async fn unreachable_node_is_downgraded_only_after_complete_round() {
         let mut graph = HashMap::new();
         graph.insert("addrA".to_string(), outcome(b"A", "addrA", &["addrB"]));
@@ -1952,6 +2816,7 @@ mod tests {
                             addr: "addrA".into(),
                             first_advertised_at: 1,
                             last_advertised_at: 1,
+                            last_verified_at: None,
                         }],
                         first_discovered_at: 1,
                         last_advertised_at: 1,

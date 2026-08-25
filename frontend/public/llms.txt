@@ -30,10 +30,14 @@ Machine-friendly endpoints:
 - Exact live-cell inventory: `/api/{network}/v1/cells/live-summary` (constant-size JSON; verify
   `tip.block`/`tip.hash` against the local CKB node)
 - Optional local peer evidence: `/api/{network}/v1/network/summary`,
-  `/api/{network}/v1/network/peers`, and `/api/{network}/v1/network/peers/{peerId}`. An advertised
-  candidate is verified only after an authenticated,
-  same-network CKB Identify; exhausted means this crawler did not verify its retained aliases in
-  that completed round, not that the peer is globally invalid or offline.
+  `/api/{network}/v1/network/peers`, and `/api/{network}/v1/network/peers/{peerId}`. Evidence keeps
+  Discovery advertisements, configured-local-node direct sessions, session initiation direction,
+  and `crawlerDialState` separate through explicit `participation` booleans. `observerInitiated`
+  means local RPC `get_peers.is_outbound` was true; `peerInitiated` means it was false. A
+  direct-only peer can have no dial address, and session addresses are never crawler aliases.
+  `exhausted` means only that this crawler did not
+  verify retained aliases in that completed round; it does not imply NAT/firewall, “home node”,
+  global invalidity, or offline status.
 
 Core page groups below are relative to `/{network}`:
 

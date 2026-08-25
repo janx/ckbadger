@@ -4,7 +4,11 @@ ckbadger runs three logical RocksDB store classes (all backed by `ckbadger-store
 
 - **Domain store** (`[store].domain_data_path`, 59 CFs) — canonical chain view, all mutable state including activities, addr_txs, live/consumed cell markers, indexes, stats, and aggregates. May perform create/update/delete as required by chain progression and reorg handling.
 - **Append-only store** (`[store].append_only_data_path`, 1 CF: `cells`) — immutable cell payloads, content-addressed by outpoint. Write-once, never updated or deleted.
-- **Network store** (`[store].network_data_path`, 3 CFs: `net_nodes`, `net_stats`, `net_crawl`) — whole-network p2p-crawler observations plus durable in-progress crawl state: non-chain, non-deterministic, TTL-retained. Written solely by the opt-in `ckbadger-crawler` service; it is the **only store class EXEMPT from rebuild-from-genesis**. See the [Network Store](#network-store) section below.
+- **Network store** (`[store].network_data_path`, 3 CFs: `net_nodes`, `net_stats`, `net_crawl`) —
+  crawler p2p probes, configured-local-node session observations, and durable in-progress crawl
+  state: non-chain, non-deterministic, TTL-retained. Written solely by the opt-in
+  `ckbadger-crawler` service; it is the **only store class EXEMPT from rebuild-from-genesis**. See
+  the [Network Store](#network-store) section below.
 
 The indexer opens the two chain stores (domain + append-only) read-write and the API opens them secondary (read-only). The network store follows the same sole-writer + secondary-reader model: the crawler opens it read-write (sole writer), read consumers (API) open it secondary (read-only). Cell reads are cross-store: live/consumed markers in domain, cell payloads in append-only.
 
@@ -72,9 +76,9 @@ The indexer opens the two chain stores (domain + append-only) read-write and the
 | `sync_meta`                      | fixed keys                                                        | Typed records / JSON monitoring bytes                                | Tip/status/runtime/progress/memory, reorg/deep-fork state, bulk session marker, background tasks, network identity, and genesis economic baseline                                      |
 | `dob_decoded`                    | spore_id (32B)                                                    | DecodeOutcome (Decoded(DobDecodedEntry) \| Failed(DobDecodeFailure)) | Cached CKB-VM DOB decode outcome (bulk-disabled, populated after sync catches up to tip). Failed is written only for deterministic failures; transient RPC failures are not persisted. |
 | `lock_scripts`                   | lock_hash (32B)                                                   | LockScriptEntry                                                      | Lock script components by hash (survives cell consumption for address resolution)                                                                                                      |
-| `net_nodes` **(network store)**  | peer_id (raw bytes)                                               | NodeRecord                                                           | TTL-retained same-network verification, latest reachability, exact Discovery evidence, and advertised peer references                                                                  |
-| `net_stats` **(network store)**  | `0x00` singleton, or metric(1B)+gran(1B)+bucket(8B BE)            | LatestStatus / HistoryPoint                                          | Checked completed outcome/address/Discovery aggregates plus time-bucketed verified/reachable/share history                                                                             |
-| `net_crawl` **(network store)**  | `0x00` singleton, or `0x01` + peer_id                             | ActiveCrawl / CrawlCandidate                                         | Durable logical-round scheduler state: aliases, active probe state, stable completed peer/address evidence, and staged success                                                         |
+| `net_nodes` **(network store)**  | peer_id (raw bytes)                                               | NodeRecord                                                           | TTL-retained same-network crawler-Identify records, latest dialability, and exact Discovery evidence                                                                                   |
+| `net_stats` **(network store)**  | `0x00` singleton, or metric(1B)+gran(1B)+bucket(8B BE)            | LatestStatus / HistoryPoint                                          | Checked completed dial/session/Discovery aggregates plus time-bucketed verified/reachable/share history                                                                                |
+| `net_crawl` **(network store)**  | `0x00` singleton, or `0x01` + peer_id                             | ActiveCrawl / CrawlCandidate                                         | Durable logical-round state: dial aliases, target-centric advertisements, direct sessions, active probes, and stable completed evidence                                                |
 
 ### Cell-by-Code Index Note
 
@@ -170,28 +174,37 @@ Cell distribution and address cohort snapshots are materialized by the indexer d
 
 ## Network Store
 
-The **network store** (`[store].network_data_path`, default `data/network`, CFs `net_nodes` + `net_stats` + `net_crawl`) is a distinct third RocksDB store class holding whole-network CKB L1 p2p-crawler observations and resumable crawl state. Unlike the two chain stores it is:
+The **network store** (`[store].network_data_path`, default `data/network`, CFs `net_nodes` + `net_stats` + `net_crawl`) is a distinct third RocksDB store class holding whole-network CKB L1 crawler observations, configured-local-node session observations, and resumable crawl state. This remains exactly 3 network CFs and 63 CFs overall; the richer evidence model adds no CF. Unlike the two chain stores it is:
 
-- **Non-chain / non-deterministic** — contents are derived from live peer-to-peer observation (reachability probes, discovery responses), not from deterministic block replay.
+- **Non-chain / non-deterministic** — contents are derived from live peer-to-peer observation
+  (crawler Identify/Discovery probes and configured-node `local_node_info`/`get_peers` sessions),
+  not from deterministic block replay.
 - **TTL-retained** — node records and history rollups are pruned on a rolling retention window; it is not a permanent append log.
 - **The only store class EXEMPT from rebuild-from-genesis** — it cannot be reconstructed by replaying the chain, so deleting/rebuilding chain data does not touch it.
 - **Single-writer** — written exclusively by the opt-in `ckbadger-crawler` service (`ckbadger crawl`; enabled via `[crawler].enabled`, default `false`). The indexer never writes it. Read consumers (API) open it secondary (read-only), the same access model as the chain stores.
 
 ### `net_nodes`
 
-Key = raw `peer_id` bytes → `NodeRecord`. A record exists only after an authenticated peer returns
-a valid Identify for the configured CKB network. Fields are `own_addrs`, `client_version`, `flags`,
+Key = raw `peer_id` bytes → `NodeRecord`. A record exists only after an outbound crawler probe's
+authenticated peer returns a valid Identify for the configured CKB network. Fields are
+`own_addrs`, `client_version`, `flags`,
 `protocols`, `first_seen`, `last_seen`, `last_reachable_at`, latest completed-round `reachable`,
 optional `geo`/`asn`/`last_rtt_ms`, exact `DiscoveryEvidence`, and `known_peers` resolved from the
-last Discovery observation. `known_peers` is source-centric address-book gossip, not a live edge.
+last Discovery observation. `known_peers` is source-centric address-book gossip, not a live edge;
+the durable source for a detail response's advertisers is the target candidate described below.
+`DiscoveryEvidence` separately counts all valid `Nodes` messages, regular responses, announces,
+malformed/unexpected messages, normalized advertised addresses, and rejected addresses; checked
+validation requires responses plus announces to equal total valid `Nodes` messages.
 
 ### `net_stats` key layout
 
 - `0x00` (single reserved byte) → `LatestStatus` singleton — latest completed round id/times;
   `CompletedPeerOutcomes`; `AddressObservationHistogram`; aggregate `DiscoveryEvidence`;
-  `malformed_addresses`; and `new_verified_peers`. Candidate, retained, reachable, unavailable,
-  exhausted, foreign, and address-attempt totals are checked projections from the two matrices,
-  not separately persisted counters.
+  `malformed_addresses`; `new_verified_peers`; the longitudinal `local_observer`; and the current
+  completed round's exact `direct_session_observations` split into `observer_initiated` and
+  `peer_initiated`. Candidate, retained, reachable, unavailable, exhausted, foreign, and
+  address-attempt totals are checked projections from the two dial matrices, not separately
+  persisted counters.
 - `metric(1B) + granularity(1B) + ts_bucket(8B big-endian)` → `HistoryPoint` — time-bucketed
   rollups. Metric ids are `VerifiedPeers=1`, `ReachablePeers=2`, `VersionShare=3`, and
   `CountryShare=4`; granularities are hour/day. Big-endian buckets preserve chronological key
@@ -201,18 +214,49 @@ last Discovery observation. `known_peers` is source-centric address-book gossip,
 ### `net_crawl` key layout
 
 - `0x00` → `ActiveCrawl` singleton — current logical round id, start/checkpoint times, exact active
-  address-observation histogram, scheduling sequence, malformed-address count, and actionable
-  blocked reason.
-- `0x01 + peer_id` → `CrawlCandidate` — retained `CrawlAddress` aliases and advertisement times,
-  fairness sequence, optional resumable `ActiveCandidateProbe`, and optional immutable
-  `CompletedCandidateEvidence` for the last completed round. Each address observation includes
-  address, round/time, exact elapsed milliseconds, and typed `AddressProbeResult`.
+  address-observation histogram, independent `alias_freshness_cutoff` and
+  `direct_session_freshness_cutoff`, staged `local_observer_observation`, sorted
+  `direct_session_targets`, scheduling sequence, malformed-address count, and actionable blocked
+  reason. Presence of the observer observation is the durable marker that the round sampled RPC
+  exactly once.
+- `0x01 + peer_id` → `CrawlCandidate` — retained `CrawlAddress` dial aliases, target-centric
+  `AdvertisementEvidence`, current-round `staged_direct_sessions`, completed longitudinal
+  `direct_sessions`, fairness sequence, optional resumable `ActiveCandidateProbe`, and optional
+  immutable `CompletedCandidateEvidence` for the last completed round. Each address observation
+  includes address, round/time, exact elapsed milliseconds, and typed `AddressProbeResult`.
 
-A slice checkpoint atomically updates `ActiveCrawl` and changed candidates in `net_crawl`; it does
-not erase their `last_completed` evidence. Partial slices never modify the published `net_nodes`
-snapshot or `net_stats` status. Once every candidate is terminal, the crawler moves active evidence
-to `last_completed`, and one RocksDB batch publishes candidate updates/deletes, verified-node
-changes, checked status/history, and deletion of the active singleton.
+`AdvertisementEvidence` is keyed canonically within the target candidate by
+`(advertiser_peer_id, alias)`. It preserves exact first/latest positive-observation times,
+first/latest completed rounds, and count. A later randomized Discovery payload's omission is not
+negative evidence and does not erase the prior fact. Alias TTL expiry removes evidence referring
+to that alias. This target-centric layout answers “who advertised this peer?” with one candidate
+lookup and no new CF.
+
+`DirectSessionEvidence` is target-centric and keyed canonically by
+`(observer_peer_id, initiator)`. It preserves exact first/latest positive-observation times and
+rounds, observation count, and latest client version, session addresses, connected/ping durations,
+and protocol rows. `get_peers.is_outbound` is interpreted from the configured local CKB observer's
+vantage: `true` means the observer initiated the session; `false` means the remote peer initiated
+it. A session may have no reusable address and remains valid evidence. Addresses reported for an
+RPC session describe that connection only (an inbound source port may be ephemeral), so they are
+stored only as session evidence and are never promoted to `CrawlAddress` dial aliases.
+Missing a peer from a later `get_peers` snapshot is not negative evidence. Only the independent
+direct-session time cutoff expires a completed fact; neither advertisement time nor successful
+crawler dialing refreshes it.
+
+`LocalObserverEvidence` similarly preserves exact first/latest observation times and rounds,
+observation count, and the latest `local_node_info` client version, active flag, advertised
+addresses, supported protocols, and connection count. It describes the configured CKB observer,
+not a crawler probe result.
+
+A slice checkpoint atomically updates `ActiveCrawl` and changed candidates in `net_crawl`; new
+advertisements and direct sessions remain staged, and the checkpoint does not erase durable prior
+evidence or `last_completed`. Partial slices never modify the published `net_nodes` snapshot or
+`net_stats` status. Once every schedulable dial candidate is terminal, the crawler moves active
+probe evidence to `last_completed`, merges staged positive advertisement/direct-session
+observations into the target candidates, and one RocksDB batch publishes candidate
+updates/deletes, verified-node changes, checked status/history, and deletion of the active
+singleton. Addressless direct-only candidates never acquire dial-probe state.
 
 Before building that batch, `commit_crawl_round` validates the candidate evidence through the same
 checked classification helpers used by the crawler. It rejects unknown/duplicate aliases,
@@ -222,13 +266,24 @@ round candidate publication must also be the exact terminal `active` → `last_c
 from its persisted checkpoint; the persisted active histogram, rebuilt candidate histogram, and
 status histogram must agree. A store-owned checked alias index is the single path used by both the
 crawler and commit validator to resolve staged Discovery addresses into sorted/deduplicated
-`known_peers`. Staged success uniquely fixes every published node field except Geo/ASN; retained
-exhausted/foreign nodes may change only `reachable` to false. Observation times must lie inside the
+`known_peers`, while separate target-centric validators reconstruct staged advertisements and
+direct sessions and their canonical merges. Staged success uniquely fixes every published node
+field except Geo/ASN; retained exhausted/foreign nodes may change only `reachable` to false.
+Observation times must lie inside the
 durable round clock and the successful address timestamp must equal the staged-success timestamp.
-An inactive, expired candidate is deleted unchanged in the following round so the latest completed
-evidence remains inspectable for one full publication interval.
+An inactive candidate keeps its previously published evidence through every partial checkpoint.
+At the following completed-round commit, the crawler applies the exact alias/advertisement and
+direct-session TTL transitions, then retains the candidate only while a verified node or positive
+evidence remains; otherwise that same atomic commit deletes it. This keeps the previous completed
+view inspectable until a replacement completed view is ready.
+Participation, session-initiation direction, and crawler dialability remain orthogonal facts; the
+store does not derive NAT/firewall status, “home node”, or global reachability from them. Before
+accepting `local_node_info`/`get_peers`, the crawler verifies `get_block_hash(0)` against the exact
+configured-network genesis hash and publishes nothing from a mismatched RPC node.
+
 Readers therefore observe either the previous completed round or the next internally coherent
-completed round. If the API starts before the store exists, it keeps an empty read-only slot and
+completed round. The crawler is the only writer of all three network CFs; the API remains a
+read-only secondary. If the API starts before the store exists, it keeps an empty read-only slot and
 retries the secondary open; crawler creation becomes visible without an API restart.
 
 This serialized schema is not backward compatible. Recreate only the network primary and its API

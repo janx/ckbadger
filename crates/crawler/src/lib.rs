@@ -4,3 +4,4 @@ pub mod entry;
 pub mod geoip;
 pub mod mock_prober;
 pub mod prober;
+pub mod rpc_observer;

@@ -11,7 +11,8 @@ use serde::{Deserialize, Serialize};
 use ckbadger_store::network_keys::{bucket_of, Granularity, Metric};
 use ckbadger_store::{
     ActiveCandidateState, AddressObservationHistogram, AddressProbeEvidence, AddressProbeResult,
-    CrawlCandidate, CrawlProgress, DiscoveryEvidence, LatestStatus, NodeRecord,
+    CrawlCandidate, CrawlProgress, DirectSessionEvidence, DirectSessionObservationSummary,
+    DiscoveryEvidence, LatestStatus, LocalObserverEvidence, NodeRecord, SessionInitiator,
 };
 
 use crate::response::{ok, ApiError, ApiResult, ApiRouteError};
@@ -51,6 +52,74 @@ pub struct LatestStatusResponse {
     pub peer_outcomes: PeerOutcomesResponse,
     pub address_observations: AddressObservationHistogramResponse,
     pub discovery: DiscoveryEvidenceResponse,
+    pub local_observer: Option<LocalObserverEvidenceResponse>,
+    pub direct_session_observations: DirectSessionObservationSummaryResponse,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalObserverProtocolResponse {
+    pub id: u64,
+    pub name: String,
+    pub support_versions: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalObserverEvidenceResponse {
+    pub peer_id: String,
+    pub first_observed_at: u64,
+    pub last_observed_at: u64,
+    pub first_observed_round: u64,
+    pub last_observed_round: u64,
+    pub observation_count: u64,
+    pub client_version: String,
+    pub active: bool,
+    pub addresses: Vec<String>,
+    pub protocols: Vec<LocalObserverProtocolResponse>,
+    pub connections: u64,
+}
+
+impl From<LocalObserverEvidence> for LocalObserverEvidenceResponse {
+    fn from(evidence: LocalObserverEvidence) -> Self {
+        Self {
+            peer_id: hex(&evidence.peer_id),
+            first_observed_at: evidence.first_observed_at,
+            last_observed_at: evidence.last_observed_at,
+            first_observed_round: evidence.first_observed_round,
+            last_observed_round: evidence.last_observed_round,
+            observation_count: evidence.observation_count,
+            client_version: evidence.client_version,
+            active: evidence.active,
+            addresses: evidence.addresses,
+            protocols: evidence
+                .protocols
+                .into_iter()
+                .map(|protocol| LocalObserverProtocolResponse {
+                    id: protocol.id,
+                    name: protocol.name,
+                    support_versions: protocol.support_versions,
+                })
+                .collect(),
+            connections: evidence.connections,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DirectSessionObservationSummaryResponse {
+    pub observer_initiated: u64,
+    pub peer_initiated: u64,
+}
+
+impl From<DirectSessionObservationSummary> for DirectSessionObservationSummaryResponse {
+    fn from(summary: DirectSessionObservationSummary) -> Self {
+        Self {
+            observer_initiated: summary.observer_initiated,
+            peer_initiated: summary.peer_initiated,
+        }
+    }
 }
 
 impl TryFrom<LatestStatus> for LatestStatusResponse {
@@ -97,6 +166,8 @@ impl TryFrom<LatestStatus> for LatestStatusResponse {
             },
             address_observations: status.address_observations.into(),
             discovery: status.discovery.into(),
+            local_observer: status.local_observer.map(Into::into),
+            direct_session_observations: status.direct_session_observations.into(),
         })
     }
 }
@@ -467,15 +538,28 @@ pub struct PeersQuery {
 #[serde(rename_all = "camelCase")]
 pub struct PeerSummary {
     pub peer_id: String,
-    pub display_state: PeerDisplayState,
-    pub primary_addr: String,
+    /// Result of this crawler's dial/Identify path only. Direct-session and
+    /// advertisement facts are exposed independently below.
+    pub crawler_dial_state: PeerDisplayState,
+    pub participation: ParticipationEvidenceResponse,
+    pub session_initiators: Vec<String>,
+    pub primary_addr: Option<String>,
     pub version: Option<String>,
     pub country: Option<String>,
     pub asn: Option<String>,
-    pub last_advertised_at: u64,
-    pub last_observed_at: Option<u64>,
+    pub last_advertised_at: Option<u64>,
+    pub last_dial_observed_at: Option<u64>,
+    pub latest_positive_observed_at: u64,
     pub last_reachable_at: Option<u64>,
     pub rtt_ms: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ParticipationEvidenceResponse {
+    pub discovery_advertised: bool,
+    pub direct_session_observed: bool,
+    pub crawler_identified: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -497,16 +581,49 @@ fn validate_limit(limit: Option<usize>) -> Result<usize, ApiRouteError> {
     Ok(limit)
 }
 
-fn require_primary_alias<'a>(
+fn session_initiator_name(initiator: SessionInitiator) -> &'static str {
+    match initiator {
+        SessionInitiator::Observer => "observerInitiated",
+        SessionInitiator::Peer => "peerInitiated",
+    }
+}
+
+fn has_published_positive_evidence(candidate: &CrawlCandidate, node: Option<&NodeRecord>) -> bool {
+    !candidate.addresses.is_empty()
+        || !candidate.advertisements.is_empty()
+        || !candidate.direct_sessions.is_empty()
+        || node.is_some()
+}
+
+fn latest_positive_observed_at(
     peer_id: &[u8],
-    candidate: &'a CrawlCandidate,
-) -> Result<&'a ckbadger_store::CrawlAddress, ApiRouteError> {
-    candidate.addresses.first().ok_or_else(|| {
-        ApiError::internal(format!(
-            "network candidate has no retained alias: peerId={}",
-            hex(peer_id)
-        ))
-    })
+    candidate: &CrawlCandidate,
+    node: Option<&NodeRecord>,
+) -> Result<u64, ApiRouteError> {
+    candidate
+        .addresses
+        .iter()
+        .map(|address| address.last_advertised_at)
+        .chain(
+            candidate
+                .advertisements
+                .iter()
+                .map(|evidence| evidence.last_observed_at),
+        )
+        .chain(
+            candidate
+                .direct_sessions
+                .iter()
+                .map(|evidence| evidence.last_observed_at),
+        )
+        .chain(node.into_iter().map(|record| record.last_seen))
+        .max()
+        .ok_or_else(|| {
+            ApiError::internal(format!(
+                "network candidate has no positive retained evidence: peerId={}",
+                hex(peer_id)
+            ))
+        })
 }
 
 fn peer_summary(
@@ -521,16 +638,38 @@ fn peer_summary(
             .map(|observation| observation.observed_at)
             .max()
     });
-    let primary_addr = require_primary_alias(peer_id, candidate)?.addr.clone();
+    let primary_addr = candidate
+        .addresses
+        .first()
+        .map(|address| address.addr.clone());
+    let last_advertised_at = candidate
+        .addresses
+        .iter()
+        .map(|address| address.last_advertised_at)
+        .max();
+    let mut session_initiators: Vec<String> = candidate
+        .direct_sessions
+        .iter()
+        .map(|evidence| session_initiator_name(evidence.initiator).to_string())
+        .collect();
+    session_initiators.sort();
+    session_initiators.dedup();
     Ok(PeerSummary {
         peer_id: hex(peer_id),
-        display_state: display_state(candidate, node),
+        crawler_dial_state: display_state(candidate, node),
+        participation: ParticipationEvidenceResponse {
+            discovery_advertised: !candidate.advertisements.is_empty(),
+            direct_session_observed: !candidate.direct_sessions.is_empty(),
+            crawler_identified: node.is_some(),
+        },
+        session_initiators,
         primary_addr,
         version: node.map(|record| record.client_version.clone()),
         country: node.map(country_label),
         asn: node.map(asn_label),
-        last_advertised_at: candidate.last_advertised_at,
-        last_observed_at,
+        last_advertised_at,
+        last_dial_observed_at: last_observed_at,
+        latest_positive_observed_at: latest_positive_observed_at(peer_id, candidate, node)?,
         last_reachable_at: node.map(|record| record.last_reachable_at),
         rtt_ms: node.and_then(|record| record.last_rtt_ms),
     })
@@ -570,8 +709,16 @@ async fn peers(
     let mut rows = Vec::new();
     for (peer_id, candidate) in &candidates {
         let node = nodes.get(peer_id);
+        if !has_published_positive_evidence(candidate, node)
+            && !candidate.staged_direct_sessions.is_empty()
+        {
+            // Current-round RPC facts remain operational until the complete
+            // round commits. A brand-new addressless target has no published
+            // peer row yet and must not make the completed list inconsistent.
+            continue;
+        }
         let summary = peer_summary(peer_id, candidate, node)?;
-        let matches = state_filter.is_none_or(|state| state == summary.display_state)
+        let matches = state_filter.is_none_or(|state| state == summary.crawler_dial_state)
             && observation_filter.is_none_or(|observation| {
                 candidate.last_completed.as_ref().is_some_and(|completed| {
                     completed
@@ -598,8 +745,8 @@ async fn peers(
     }
     rows.sort_by(|left, right| {
         right
-            .last_advertised_at
-            .cmp(&left.last_advertised_at)
+            .latest_positive_observed_at
+            .cmp(&left.latest_positive_observed_at)
             .then_with(|| left.peer_id.cmp(&right.peer_id))
     });
     let start = match query.cursor.as_deref() {
@@ -624,6 +771,8 @@ async fn peers(
 #[serde(rename_all = "camelCase")]
 pub struct DiscoveryEvidenceResponse {
     pub valid_nodes_messages: u64,
+    pub valid_response_messages: u64,
+    pub valid_announce_messages: u64,
     pub malformed_messages: u64,
     pub unexpected_messages: u64,
     pub normalized_advertised_addresses: u64,
@@ -634,6 +783,8 @@ impl From<DiscoveryEvidence> for DiscoveryEvidenceResponse {
     fn from(evidence: DiscoveryEvidence) -> Self {
         Self {
             valid_nodes_messages: evidence.valid_nodes_messages,
+            valid_response_messages: evidence.valid_response_messages,
+            valid_announce_messages: evidence.valid_announce_messages,
             malformed_messages: evidence.malformed_messages,
             unexpected_messages: evidence.unexpected_messages,
             normalized_advertised_addresses: evidence.normalized_advertised_addresses,
@@ -713,6 +864,7 @@ pub struct AliasEvidenceResponse {
     pub address: String,
     pub first_advertised_at: u64,
     pub last_advertised_at: u64,
+    pub last_verified_at: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -735,7 +887,63 @@ pub struct VerifiedPeerResponse {
 #[serde(rename_all = "camelCase")]
 pub struct AdvertiserResponse {
     pub advertiser_peer_id: String,
-    pub observed_at: u64,
+    pub alias: String,
+    pub first_observed_at: u64,
+    pub last_observed_at: u64,
+    pub first_observed_round: u64,
+    pub last_observed_round: u64,
+    pub observation_count: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DirectSessionProtocolResponse {
+    pub id: u64,
+    pub version: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DirectSessionEvidenceResponse {
+    pub observer_peer_id: String,
+    pub initiator: String,
+    pub first_observed_at: u64,
+    pub last_observed_at: u64,
+    pub first_observed_round: u64,
+    pub last_observed_round: u64,
+    pub observation_count: u64,
+    pub client_version: String,
+    /// Session metadata only; never a crawler dial/advertisement alias.
+    pub session_addresses: Vec<String>,
+    pub connected_duration_ms: u64,
+    pub last_ping_duration_ms: Option<u64>,
+    pub protocols: Vec<DirectSessionProtocolResponse>,
+}
+
+impl From<&DirectSessionEvidence> for DirectSessionEvidenceResponse {
+    fn from(evidence: &DirectSessionEvidence) -> Self {
+        Self {
+            observer_peer_id: hex(&evidence.observer_peer_id),
+            initiator: session_initiator_name(evidence.initiator).to_string(),
+            first_observed_at: evidence.first_observed_at,
+            last_observed_at: evidence.last_observed_at,
+            first_observed_round: evidence.first_observed_round,
+            last_observed_round: evidence.last_observed_round,
+            observation_count: evidence.observation_count,
+            client_version: evidence.client_version.clone(),
+            session_addresses: evidence.session_addresses.clone(),
+            connected_duration_ms: evidence.connected_duration_ms,
+            last_ping_duration_ms: evidence.last_ping_duration_ms,
+            protocols: evidence
+                .protocols
+                .iter()
+                .map(|protocol| DirectSessionProtocolResponse {
+                    id: protocol.id,
+                    version: protocol.version.clone(),
+                })
+                .collect(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -743,14 +951,18 @@ pub struct AdvertiserResponse {
 pub struct PeerDetailResponse {
     pub peer_id: String,
     pub observation_vantage: String,
-    pub display_state: PeerDisplayState,
-    pub first_discovered_at: u64,
-    pub last_advertised_at: u64,
+    pub crawler_dial_state: PeerDisplayState,
+    pub participation: ParticipationEvidenceResponse,
+    pub session_initiators: Vec<String>,
+    pub first_discovered_at: Option<u64>,
+    pub last_advertised_at: Option<u64>,
+    pub latest_positive_observed_at: u64,
     pub aliases: Vec<AliasEvidenceResponse>,
     pub last_completed: Option<CandidateEvidenceResponse>,
     pub active: Option<ActiveCandidateEvidenceResponse>,
     pub verified: Option<VerifiedPeerResponse>,
     pub advertisers: Vec<AdvertiserResponse>,
+    pub direct_sessions: Vec<DirectSessionEvidenceResponse>,
 }
 
 fn completed_outcome_name(outcome: ckbadger_store::CompletedCandidateOutcome) -> &'static str {
@@ -784,18 +996,30 @@ async fn peer_by_id(
         .get_crawl_candidate(&peer_id)
         .map_err(|error| ApiError::internal(error.to_string()))?
         .ok_or_else(|| ApiError::not_found("peer not found"))?;
-    require_primary_alias(&peer_id, &candidate)?;
     let node = store
         .get_node(&peer_id)
         .map_err(|error| ApiError::internal(error.to_string()))?;
-    let advertisers = store
-        .scan_nodes()
-        .map_err(|error| ApiError::internal(error.to_string()))?
-        .into_iter()
-        .filter(|(_, record)| record.known_peers.iter().any(|known| known == &peer_id))
-        .map(|(advertiser_peer_id, record)| AdvertiserResponse {
-            advertiser_peer_id: hex(&advertiser_peer_id),
-            observed_at: record.last_seen,
+    if !has_published_positive_evidence(&candidate, node.as_ref())
+        && !candidate.staged_direct_sessions.is_empty()
+    {
+        return Err(ApiError::not_found(
+            "peer has no completed positive evidence",
+        ));
+    }
+    // Target-centric completed evidence is authoritative. `NodeRecord.known_peers`
+    // remains only the latest source-side Discovery snapshot and must not erase
+    // prior positive observations when a later random response omits a target.
+    let advertisers = candidate
+        .advertisements
+        .iter()
+        .map(|evidence| AdvertiserResponse {
+            advertiser_peer_id: hex(&evidence.advertiser_peer_id),
+            alias: evidence.alias.clone(),
+            first_observed_at: evidence.first_observed_at,
+            last_observed_at: evidence.last_observed_at,
+            first_observed_round: evidence.first_observed_round,
+            last_observed_round: evidence.last_observed_round,
+            observation_count: evidence.observation_count,
         })
         .collect();
     let verified = node.as_ref().map(|record| VerifiedPeerResponse {
@@ -839,12 +1063,40 @@ async fn peer_by_id(
                 .map(Into::into)
                 .collect(),
         });
+    let first_discovered_at = candidate
+        .addresses
+        .iter()
+        .map(|address| address.first_advertised_at)
+        .min();
+    let last_advertised_at = candidate
+        .addresses
+        .iter()
+        .map(|address| address.last_advertised_at)
+        .max();
+    let latest_positive_observed_at =
+        latest_positive_observed_at(&peer_id, &candidate, node.as_ref())?;
+    let mut session_initiators: Vec<String> = candidate
+        .direct_sessions
+        .iter()
+        .map(|evidence| session_initiator_name(evidence.initiator).to_string())
+        .collect();
+    session_initiators.sort();
+    session_initiators.dedup();
+    let participation = ParticipationEvidenceResponse {
+        discovery_advertised: !candidate.advertisements.is_empty(),
+        direct_session_observed: !candidate.direct_sessions.is_empty(),
+        crawler_identified: node.is_some(),
+    };
+    let direct_sessions = candidate.direct_sessions.iter().map(Into::into).collect();
     ok(PeerDetailResponse {
         peer_id: peer_hex.to_ascii_lowercase(),
-        observation_vantage: "thisCkbadgerInstance".to_string(),
-        display_state: display_state(&candidate, node.as_ref()),
-        first_discovered_at: candidate.first_discovered_at,
-        last_advertised_at: candidate.last_advertised_at,
+        observation_vantage: "configuredLocalCkbRpcObserverAndThisCrawler".to_string(),
+        crawler_dial_state: display_state(&candidate, node.as_ref()),
+        participation,
+        session_initiators,
+        first_discovered_at,
+        last_advertised_at,
+        latest_positive_observed_at,
         aliases: candidate
             .addresses
             .into_iter()
@@ -852,11 +1104,13 @@ async fn peer_by_id(
                 address: address.addr,
                 first_advertised_at: address.first_advertised_at,
                 last_advertised_at: address.last_advertised_at,
+                last_verified_at: address.last_verified_at,
             })
             .collect(),
         last_completed,
         active,
         verified,
         advertisers,
+        direct_sessions,
     })
 }

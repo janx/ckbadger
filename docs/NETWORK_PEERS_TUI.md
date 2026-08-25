@@ -9,8 +9,8 @@ store.
 ## Goal
 
 - Give local operators an immediate view of crawler state and exact peer categories.
-- Keep advertisement, same-network reachability, and retained verification distinct in limited
-  terminal space.
+- Keep crawler dial results, configured-node session direction, and retained verification distinct
+  in limited terminal space.
 - Render an actionable error when history buckets cannot support an exact trend.
 
 ## Principle Alignment
@@ -34,6 +34,7 @@ NetworkLastRound {
     exhausted_candidates, foreign_peers,
     address_attempts, non_successful_address_attempts,
     malformed_addresses, new_verified_peers,
+    direct_session_observations { observer_initiated, peer_initiated },
 }
 
 NetworkActiveRound {
@@ -79,11 +80,12 @@ a separately labeled `CRAWLING` or `BLOCKED` badge with that active round's id a
 The status panel shows:
 
 1. completed round id/age plus optional active badge;
-2. **Advertised candidates** and **Same-network reachable**;
+2. **Crawler dial candidates** and **Same-network reachable**;
 3. **Verified retained** and **Verified unavailable**;
 4. exact address attempts, non-successful observations, exhausted candidates, and newly verified;
 5. foreign-network candidates and malformed advertised addresses;
-6. active blocked reason, when present.
+6. exact current-round **peer → configured observer** and **observer → peer** session counts;
+7. active blocked reason, when present.
 
 The removed terms “Total Known”, “Failed Peer Candidates”, and a bare “Unreachable” state must not
 appear.
@@ -123,12 +125,13 @@ height is verified retained.
 - View-state tests cover disabled, waiting, active, blocked, dashboard, and error cases.
 - Trend tests cover aligned buckets, missing peers, duplicate timestamps, and
   `reachablePeers > verifiedPeers`.
-- Render tests assert the canonical labels and prohibit ambiguous legacy labels.
+- Render tests assert the crawler-dial label and both observer-vantage direction counts, and
+  prohibit ambiguous legacy labels.
 
 ## Result
 
-- **Behavior change** — the Peers tab now reports exact evidence categories and checked trends
-  rather than conflating exhausted candidates with retained unavailable peers.
+- **Behavior change** — the Peers tab reports exact crawler-dial categories, configured-observer
+  session direction counts, and checked trends without inferring NAT, hosting, or global liveness.
 - **Re-sync required** — no chain re-sync. Recreate only the network primary and API secondary for
   the serialized evidence schema, then crawl again.
 - **What to do next** — compare the TUI counts with `/network/summary` after the first rebuilt

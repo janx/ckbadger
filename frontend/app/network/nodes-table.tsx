@@ -18,6 +18,7 @@ import {
   type NetworkPeerDetail,
   type NetworkPeerDisplayState,
   type NetworkPeerSummary,
+  type NetworkSessionInitiator,
 } from '@/lib/api';
 import { formatTimeAgo, truncateHash } from '@/lib/utils';
 
@@ -28,27 +29,28 @@ interface PeerFilters {
   version?: string;
 }
 
-const GRID_TEMPLATE = '13rem 15rem 15rem 7rem 9rem 12rem 8rem 8rem 8rem 5rem';
-const GRID_MIN_WIDTH = '110rem';
+const GRID_TEMPLATE = '13rem 15rem 18rem 14rem 17rem 7rem 9rem 9rem 8rem 8rem 5rem';
+const GRID_MIN_WIDTH = '132rem';
 const COLUMNS = [
   'Peer ID',
-  'Address',
-  'Evidence state',
+  'Dial alias',
+  'Participation evidence',
+  'Session initiation',
+  'Crawler dial result',
   'Version',
   'Country',
-  'ASN',
-  'Advertised',
-  'Observed',
+  'Latest evidence',
+  'Last dial',
   'Last verified',
   'RTT',
 ];
 
 const STATE_OPTIONS: Array<{ value: NetworkPeerDisplayState; label: string }> = [
-  { value: 'reachable', label: 'Reachable' },
-  { value: 'verifiedUnavailable', label: 'Verified unavailable' },
-  { value: 'advertisedUnverified', label: 'Advertised · unverified' },
-  { value: 'foreignNetwork', label: 'Foreign network' },
-  { value: 'noCompletedObservation', label: 'No completed observation' },
+  { value: 'reachable', label: 'Same-network Identify completed' },
+  { value: 'verifiedUnavailable', label: 'Latest aliases exhausted · previously verified' },
+  { value: 'advertisedUnverified', label: 'Aliases exhausted · no retained verification' },
+  { value: 'foreignNetwork', label: 'Foreign-network Identify' },
+  { value: 'noCompletedObservation', label: 'Not dialed by this crawler' },
 ];
 
 const OBSERVATION_OPTIONS: Array<{ value: NetworkAddressProbeResult; label: string }> = [
@@ -74,21 +76,21 @@ function optionalAge(timestamp: number | null): string {
   return timestamp == null ? '—' : formatTimeAgo(timestamp * 1000);
 }
 
-function displayState(state: NetworkPeerDisplayState): {
+function crawlerDialStateBadge(state: NetworkPeerDisplayState): {
   label: string;
   variant: 'green' | 'gold' | 'blue' | 'red' | 'gray';
 } {
   switch (state) {
     case 'reachable':
-      return { label: 'Reachable', variant: 'green' };
+      return { label: 'Same-network Identify', variant: 'green' };
     case 'verifiedUnavailable':
-      return { label: 'Verified unavailable', variant: 'gold' };
+      return { label: 'Aliases exhausted · prior verification', variant: 'gold' };
     case 'advertisedUnverified':
-      return { label: 'Advertised · unverified', variant: 'gray' };
+      return { label: 'Aliases exhausted', variant: 'gray' };
     case 'foreignNetwork':
-      return { label: 'Foreign network', variant: 'red' };
+      return { label: 'Foreign-network Identify', variant: 'red' };
     case 'noCompletedObservation':
-      return { label: 'No completed observation', variant: 'blue' };
+      return { label: 'Not dialed by this crawler', variant: 'blue' };
   }
 }
 
@@ -121,7 +123,13 @@ function outcomeLabel(outcome: NetworkCompletedPeerEvidence['outcome']): string 
 }
 
 function vantageLabel(vantage: string): string {
-  return vantage === 'thisCkbadgerInstance' ? 'this ckbadger instance' : vantage;
+  return vantage === 'configuredLocalCkbRpcObserverAndThisCrawler'
+    ? 'configured local CKB RPC observer + this crawler'
+    : vantage;
+}
+
+function sessionInitiatorLabel(initiator: NetworkSessionInitiator): string {
+  return initiator === 'peerInitiated' ? 'peer → observer' : 'observer → peer';
 }
 
 function ObservationList({ observations }: { observations: NetworkAddressProbeEvidence[] }) {
@@ -154,7 +162,11 @@ function EvidenceDetail({ detail }: { detail: NetworkPeerDetail }) {
         </span>
         <span className="text-text-dim">
           First advertised:{' '}
-          <span className="text-text">{formatTimeAgo(detail.firstDiscoveredAt * 1000)}</span>
+          <span className="text-text">{optionalAge(detail.firstDiscoveredAt)}</span>
+        </span>
+        <span className="text-text-dim">
+          Latest positive evidence:{' '}
+          <span className="text-text">{formatTimeAgo(detail.latestPositiveObservedAt * 1000)}</span>
         </span>
       </div>
 
@@ -169,12 +181,42 @@ function EvidenceDetail({ detail }: { detail: NetworkPeerDetail }) {
                 {alias.address}{' '}
                 <span className="text-text-dim">
                   · first advertised {formatTimeAgo(alias.firstAdvertisedAt * 1000)} · last
-                  advertised {formatTimeAgo(alias.lastAdvertisedAt * 1000)}
+                  advertised {formatTimeAgo(alias.lastAdvertisedAt * 1000)} · last verified{' '}
+                  {optionalAge(alias.lastVerifiedAt)}
                 </span>
               </li>
             ))}
           </ul>
         )}
+      </div>
+
+      <div>
+        <h4 className="text-text-bright mb-1 font-bold">Direct CKB session evidence</h4>
+        {detail.directSessions.length === 0 ? (
+          <p className="text-text-dim">No retained direct-session observation</p>
+        ) : (
+          <ul className="space-y-1">
+            {detail.directSessions.map((session) => (
+              <li key={`${session.observerPeerId}-${session.initiator}`} className="text-text-dim">
+                <span className="text-text">{sessionInitiatorLabel(session.initiator)}</span> ·
+                observer{' '}
+                <span className="text-aqua" title={session.observerPeerId}>
+                  {truncateHash(session.observerPeerId)}
+                </span>{' '}
+                · {session.clientVersion || 'unknown client'} · observed {session.observationCount}{' '}
+                completed round{session.observationCount === 1 ? '' : 's'} · latest{' '}
+                {formatTimeAgo(session.lastObservedAt * 1000)} · session address metadata:{' '}
+                {session.sessionAddresses.length === 0
+                  ? 'none reported'
+                  : session.sessionAddresses.join(', ')}
+              </li>
+            ))}
+          </ul>
+        )}
+        <p className="text-text-dim mt-1">
+          Direction is from the configured observer&apos;s vantage. Session addresses are not used
+          as crawler dial aliases.
+        </p>
       </div>
 
       {detail.lastCompleted ? (
@@ -219,6 +261,8 @@ function EvidenceDetail({ detail }: { detail: NetworkPeerDetail }) {
           <h5 className="text-text-bright mb-1 mt-2 font-bold">Discovery</h5>
           <ul className="text-text-dim grid gap-x-6 gap-y-1 sm:grid-cols-2">
             <li>Valid Nodes replies: {detail.verified.discovery.validNodesMessages}</li>
+            <li>GetNodes responses: {detail.verified.discovery.validResponseMessages}</li>
+            <li>Announce messages: {detail.verified.discovery.validAnnounceMessages}</li>
             <li>
               Normalized advertisements: {detail.verified.discovery.normalizedAdvertisedAddresses}
             </li>
@@ -238,11 +282,18 @@ function EvidenceDetail({ detail }: { detail: NetworkPeerDetail }) {
         ) : (
           <ul className="space-y-1">
             {detail.advertisers.map((advertiser) => (
-              <li key={advertiser.advertiserPeerId} className="text-text-dim">
+              <li
+                key={`${advertiser.advertiserPeerId}-${advertiser.alias}`}
+                className="text-text-dim"
+              >
                 <span className="text-aqua" title={advertiser.advertiserPeerId}>
                   {truncateHash(advertiser.advertiserPeerId)}
                 </span>{' '}
-                · observed {formatTimeAgo(advertiser.observedAt * 1000)}
+                · <span className="break-all">{advertiser.alias}</span> · observed{' '}
+                {advertiser.observationCount} completed round
+                {advertiser.observationCount === 1 ? '' : 's'} · first round #
+                {advertiser.firstObservedRound} · latest round #{advertiser.lastObservedRound} ·{' '}
+                {formatTimeAgo(advertiser.lastObservedAt * 1000)}
               </li>
             ))}
           </ul>
@@ -259,7 +310,12 @@ function PeerRow({ peer }: { peer: NetworkPeerSummary }) {
     queryFn: () => api.getNetworkPeer(peer.peerId),
     enabled: expanded,
   });
-  const state = displayState(peer.displayState);
+  const state = crawlerDialStateBadge(peer.crawlerDialState);
+  const participation = [
+    peer.participation.discoveryAdvertised ? 'Discovery ad' : null,
+    peer.participation.directSessionObserved ? 'Direct CKB session' : null,
+    peer.participation.crawlerIdentified ? 'Identify' : null,
+  ].filter((value): value is string => value != null);
 
   return (
     <Fragment>
@@ -279,8 +335,17 @@ function PeerRow({ peer }: { peer: NetworkPeerSummary }) {
             {expanded ? '▾ ' : '▸ '}
             <span>{truncateHash(peer.peerId)}</span>
           </button>
-          <span className="text-text truncate font-mono text-xs" title={peer.primaryAddr}>
+          <span
+            className="text-text truncate font-mono text-xs"
+            title={peer.primaryAddr ?? undefined}
+          >
             {orDash(peer.primaryAddr)}
+          </span>
+          <span className="text-text-dim truncate text-xs" title={participation.join(' · ')}>
+            {participation.join(' · ') || '—'}
+          </span>
+          <span className="text-text-dim truncate font-mono text-xs">
+            {peer.sessionInitiators.map(sessionInitiatorLabel).join(' · ') || '—'}
           </span>
           <span>
             <Badge variant={state.variant}>{state.label}</Badge>
@@ -289,13 +354,10 @@ function PeerRow({ peer }: { peer: NetworkPeerSummary }) {
           <span className="text-text truncate text-xs" title={peer.country ?? undefined}>
             {orDash(peer.country)}
           </span>
-          <span className="text-text-dim truncate font-mono text-xs" title={peer.asn ?? undefined}>
-            {orDash(peer.asn)}
-          </span>
           <span className="text-text-dim text-xs">
-            {formatTimeAgo(peer.lastAdvertisedAt * 1000)}
+            {formatTimeAgo(peer.latestPositiveObservedAt * 1000)}
           </span>
-          <span className="text-text-dim text-xs">{optionalAge(peer.lastObservedAt)}</span>
+          <span className="text-text-dim text-xs">{optionalAge(peer.lastDialObservedAt)}</span>
           <span className="text-text-dim text-xs">{optionalAge(peer.lastReachableAt)}</span>
           <span className="text-text-dim text-right font-mono text-xs tabular-nums">
             {peer.rttMs == null ? '—' : `${peer.rttMs} ms`}
@@ -354,7 +416,7 @@ export function PeersTable() {
 
       <TerminalPanel>
         <TerminalPanelHeader indicator={isFetching ? 'active' : 'none'}>
-          Advertised peer candidates
+          Observed network peers
         </TerminalPanelHeader>
         <TerminalPanelContent padding="none">
           <div className="border-base-border flex flex-wrap items-center gap-3 border-b px-4 py-2">
@@ -366,10 +428,10 @@ export function PeersTable() {
                   state: (event.target.value || undefined) as NetworkPeerDisplayState | undefined,
                 })
               }
-              aria-label="Filter by peer state"
+              aria-label="Filter by crawler dial state"
               className="border-base-border bg-base-bg text-text rounded border px-2 py-0.5 font-mono text-xs"
             >
-              <option value="">All evidence states</option>
+              <option value="">All crawler dial states</option>
               {STATE_OPTIONS.map((option) => (
                 <option key={option.value} value={option.value}>
                   {option.label}

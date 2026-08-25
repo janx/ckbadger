@@ -764,6 +764,14 @@ pub struct NetworkLastRound {
     pub non_successful_address_attempts: u64,
     pub malformed_addresses: u64,
     pub new_verified_peers: u64,
+    pub direct_session_observations: NetworkDirectSessionObservations,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NetworkDirectSessionObservations {
+    pub observer_initiated: u64,
+    pub peer_initiated: u64,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -994,7 +1002,7 @@ mod tests {
         assert!(!off.enabled && !off.has_data && off.last_round.is_none());
 
         let on: NetworkSummary = serde_json::from_str(
-            r#"{"enabled":true,"hasData":true,"lastRound":{"roundId":5,"startedAt":1,"finishedAt":2,"candidatePeers":4,"verifiedRetainedPeers":4,"reachablePeers":3,"verifiedUnavailablePeers":1,"exhaustedCandidates":1,"foreignPeers":0,"addressAttempts":8,"nonSuccessfulAddressAttempts":1,"malformedAddresses":0,"newVerifiedPeers":2,"peerOutcomes":{"sameNetworkIdentified":3,"exhausted":{"withRetainedVerification":1,"withoutRetainedVerification":0},"foreignNetwork":{"withRetainedVerification":0,"withoutRetainedVerification":0}},"addressObservations":{"dialRequestFailed":1,"noAuthenticatedSessionBeforeDeadline":0,"authenticatedSessionWithoutIdentifyBeforeDeadline":0,"malformedIdentify":0,"foreignNetwork":0,"sameNetworkIdentified":3},"discovery":{"validNodesMessages":3,"malformedMessages":0,"unexpectedMessages":0,"normalizedAdvertisedAddresses":4,"rejectedAdvertisedAddresses":0}},"activeRound":{"roundId":6,"startedAt":3,"lastCheckpointAt":4,"candidatePeers":5,"completedPeers":2,"addressAttempts":2,"blockedReason":"frontier capacity exceeded"}}"#,
+            r#"{"enabled":true,"hasData":true,"lastRound":{"roundId":5,"startedAt":1,"finishedAt":2,"candidatePeers":4,"verifiedRetainedPeers":4,"reachablePeers":3,"verifiedUnavailablePeers":1,"exhaustedCandidates":1,"foreignPeers":0,"addressAttempts":8,"nonSuccessfulAddressAttempts":1,"malformedAddresses":0,"newVerifiedPeers":2,"directSessionObservations":{"observerInitiated":2,"peerInitiated":1},"peerOutcomes":{"sameNetworkIdentified":3,"exhausted":{"withRetainedVerification":1,"withoutRetainedVerification":0},"foreignNetwork":{"withRetainedVerification":0,"withoutRetainedVerification":0}},"addressObservations":{"dialRequestFailed":1,"noAuthenticatedSessionBeforeDeadline":0,"authenticatedSessionWithoutIdentifyBeforeDeadline":0,"malformedIdentify":0,"foreignNetwork":0,"sameNetworkIdentified":3},"discovery":{"validNodesMessages":3,"malformedMessages":0,"unexpectedMessages":0,"normalizedAdvertisedAddresses":4,"rejectedAdvertisedAddresses":0}},"activeRound":{"roundId":6,"startedAt":3,"lastCheckpointAt":4,"candidatePeers":5,"completedPeers":2,"addressAttempts":2,"blockedReason":"frontier capacity exceeded"}}"#,
         ).unwrap();
         let active = on.active_round.as_ref().unwrap();
         assert_eq!(active.completed_peers, 2);
@@ -1007,6 +1015,8 @@ mod tests {
         assert_eq!(lr.reachable_peers, 3);
         assert_eq!(lr.verified_unavailable_peers, 1);
         assert_eq!(lr.address_attempts, 8);
+        assert_eq!(lr.direct_session_observations.peer_initiated, 1);
+        assert_eq!(lr.direct_session_observations.observer_initiated, 2);
     }
 
     #[test]

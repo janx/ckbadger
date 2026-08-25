@@ -557,15 +557,19 @@ proposal-window scan used by `blocks.rs` and `graph.rs`).
 
 ### network (crates/api/src/routes/network.rs)
 
-These endpoints read the optional, non-chain network store written by `ckbadger-crawler`.
+These endpoints read the optional, non-chain network store written solely by
+`ckbadger-crawler`; all handlers remain secondary/read-only. Participation evidence,
+configured-node session direction, and crawler dial results are orthogonal. The API does not
+claim global network completeness or infer NAT, firewall, “home node”, offline, or other remote
+causes.
 
 | Method | Path                              | Handler         | Purpose                                                              |
 | ------ | --------------------------------- | --------------- | -------------------------------------------------------------------- |
 | GET    | `/api/v1/network/summary`         | `summary`       | Checked completed evidence projections plus separate active progress |
 | GET    | `/api/v1/network/distributions`   | `distributions` | Histograms scoped explicitly to retained verified peer records       |
 | GET    | `/api/v1/network/history`         | `history`       | Verified/reachable counts and distribution shares by hour/day        |
-| GET    | `/api/v1/network/peers`           | `peers`         | Unified candidate list with optional verified-record metadata        |
-| GET    | `/api/v1/network/peers/{peer_id}` | `peer_by_id`    | Aliases, typed probe evidence, verification, and advertisers         |
+| GET    | `/api/v1/network/peers`           | `peers`         | Unified observed-peer list with optional crawler-verified metadata   |
+| GET    | `/api/v1/network/peers/{peer_id}` | `peer_by_id`    | Advertisements, sessions, dial probes, and verification evidence     |
 
 **Params**
 
@@ -579,6 +583,9 @@ These endpoints read the optional, non-chain network store written by `ckbadger-
   `authenticatedSessionWithoutIdentifyBeforeDeadline`, `malformedIdentify`, `foreignNetwork`, or
   `sameNetworkIdentified`), `country`, and exact `version`
 
+`state` filters `crawlerDialState` only. It does not filter or reinterpret the independent
+`participation` or `sessionInitiators` facts.
+
 Unknown `state` or `observation` values return `400` before any network-store read. History bucket
 timestamps use checked multiplication; an unrepresentable persisted bucket is an explicit `500`
 store invariant failure rather than a wrapped timestamp.
@@ -588,25 +595,60 @@ store invariant failure rather than a wrapped timestamp.
 **Responses**
 
 - `NetworkSummary` — `enabled`, `hasData`, optional completed `lastRound`, and optional separate
-  `activeRound`. `lastRound` exposes checked `candidatePeers`, `verifiedRetainedPeers`,
-  `reachablePeers`, `verifiedUnavailablePeers`, `exhaustedCandidates`, `foreignPeers`,
-  `addressAttempts`, and `nonSuccessfulAddressAttempts`, plus the persisted peer outcome matrix,
+  `activeRound`. The completed summary includes nullable `localObserver` longitudinal evidence
+  (`peerId`, first/latest observation time and round, count, latest client/active/address/protocol/
+  connection metadata) and exact current-round `directSessionObservations` split into
+  `observerInitiated` and `peerInitiated`. `lastRound` also exposes checked `candidatePeers`,
+  `verifiedRetainedPeers`, `reachablePeers`, `verifiedUnavailablePeers`, `exhaustedCandidates`,
+  `foreignPeers`, `addressAttempts`, and `nonSuccessfulAddressAttempts`, plus the persisted peer outcome matrix,
   address-result histogram, Discovery counters, malformed-address count, and newly verified count.
   `activeRound` reports exact checkpoint progress without replacing completed evidence.
 - `NetworkDistributions` — `verifiedRetained`, `sameNetworkReachable`,
   `verifiedUnavailable`, and sorted version/country/ASN/protocol buckets over verified records only
 - `NetworkHistory` — requested metric/granularity and ascending points; daily data excludes the
   incomplete current day
-- `NetworkPeersPage` — unified candidate `items` and optional `nextCursor`. Candidate-only
-  version/country/ASN/RTT fields are `null`; the API does not fabricate node metadata.
-- `PeerDetailResponse` — observation vantage, retained aliases, immutable `lastCompleted` typed
-  address evidence, optional separately labeled `active` evidence, optional retained `verified`
-  record with exact Discovery counters, and retained `{advertiserPeerId, observedAt}` references
-  inverted from verified peers' `known_peers` lists
+- `NetworkPeersPage` — unified observed-peer `items` and optional `nextCursor`, sorted by
+  `latestPositiveObservedAt` descending. That timestamp is the checked maximum of retained alias
+  advertisement time, target-centric advertisement evidence, direct-session evidence, and
+  crawler-identified `lastSeen`. Each item keeps `crawlerDialState` separate from the three exact
+  `participation` booleans (`discoveryAdvertised`, `directSessionObserved`,
+  `crawlerIdentified`) and the distinct `sessionInitiators` values. It also exposes nullable
+  `primaryAddr`, `lastAdvertisedAt`, and `lastDialObservedAt`; a direct-only peer does not fabricate
+  those fields from its session connection. Candidate-only version/country/ASN/RTT fields are
+  `null` as well.
+- `PeerDetailResponse` —
+  `observationVantage="configuredLocalCkbRpcObserverAndThisCrawler"`, the same orthogonal
+  `crawlerDialState`/`participation`/`sessionInitiators`, nullable `firstDiscoveredAt` and
+  `lastAdvertisedAt`, exact `latestPositiveObservedAt`, retained aliases (including nullable
+  per-alias `lastVerifiedAt`), immutable `lastCompleted` typed dial evidence, optional separately
+  labeled `active` evidence, and optional retained `verified` crawler record.
+- `PeerDetailResponse.directSessions[]` — target-centric positive session evidence with
+  `observerPeerId`, `initiator`, first/latest observation time and round, exact
+  `observationCount`, latest `clientVersion`, `sessionAddresses`, `connectedDurationMs`, nullable
+  `lastPingDurationMs`, and `{id, version}` protocol rows. `sessionAddresses` are never dial
+  aliases.
+- `PeerDetailResponse.advertisers[]` — durable target-centric advertiser references. Each entry
+  exposes `advertiserPeerId`, `alias`, `firstObservedAt`, `lastObservedAt`,
+  `firstObservedRound`, `lastObservedRound`, and exact `observationCount`; it is not reconstructed
+  by inverting verified peers' latest `knownPeers`.
+
+`DiscoveryEvidenceResponse` exposes `validNodesMessages`, `validResponseMessages`,
+`validAnnounceMessages`, `malformedMessages`, `unexpectedMessages`,
+`normalizedAdvertisedAddresses`, and `rejectedAdvertisedAddresses`. Checked persisted evidence
+requires response plus announce counts to equal the valid-Nodes total. Valid response and announce
+addresses are a positive union, not last-message-wins state.
 
 The old `/network/nodes` routes and ambiguous fields such as `totalKnown` and
-`unreachablePeers` are intentionally removed. `advertisedUnverified` means all retained aliases
-were exhausted without a retained same-network verification; it is not a global liveness claim.
+`unreachablePeers` are intentionally removed. `advertisedUnverified` means all retained dial
+aliases were exhausted without a retained same-network crawler verification; it is not a global
+liveness claim and does not negate direct-session participation evidence. Session direction is
+named from the configured local CKB observer's vantage: `observerInitiated` corresponds to RPC
+`is_outbound=true`, while `peerInitiated` corresponds to `is_outbound=false`. RPC session
+addresses are connection facts only and are never crawler dial aliases.
+
+The crawler accepts local-node session observations only after `get_block_hash(0)` matches the
+configured network's exact genesis hash. A mismatched RPC node is an error, not foreign-network
+peer evidence.
 
 When the crawler/store is disabled, summary and aggregate/list endpoints return an honest
 disabled or empty state. A point lookup still returns not found.

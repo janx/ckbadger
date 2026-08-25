@@ -116,15 +116,33 @@ API:
 - Optional local CKB L1 peer evidence uses `/api/{network}/v1/network/summary`,
   `/network/distributions`, `/network/history`, `/network/peers`, and
   `/network/peers/{peerId}` (the last four are relative to the same API base). Summary distinguishes
-  advertised candidates, same-network reachable, verified retained, and verified unavailable.
-  The unified peer list includes advertised-unverified candidates with nullable node metadata;
-  detail exposes retained aliases, exact typed address observations, separately labeled active
-  evidence, last verification, Discovery counters, and advertiser references. Verification means
-  an authenticated same-network CKB Identify from this ckbadger instance. `exhausted` is a scoped
-  completed-round observation, never a claim that a peer is globally invalid or offline. History
+  advertised candidates, same-network reachable, verified retained, and verified unavailable;
+  `lastRound.localObserver` preserves the configured node's latest longitudinal evidence and
+  `lastRound.directSessionObservations` gives exact observer-/peer-initiated counts for that round.
+  The unified peer list also retains direct-session-only peers and sorts by
+  `latestPositiveObservedAt`. `crawlerDialState` is separate from the exact
+  `participation.{discoveryAdvertised,directSessionObserved,crawlerIdentified}` booleans and
+  `sessionInitiators`. `primaryAddr`, `lastAdvertisedAt`, and `lastDialObservedAt` are nullable
+  because a positive CKB session need not provide a reusable dial address. Detail exposes
+  target-centric advertiser evidence, configured-node `directSessions`, retained dial aliases,
+  exact typed address observations, separately labeled active evidence, last crawler verification,
+  and Discovery counters. Direct sessions preserve observer peer ID, initiator, first/latest
+  observation times/rounds, count, and latest session metadata; their `sessionAddresses` are never
+  dial aliases. Advertiser entries preserve alias, first/latest positive
+  observation time and completed round, and exact observation count; omission from a later random
+  Discovery payload is not negative evidence. The crawler has no listener, sends Discovery
+  `GetNodes` v0 with no listen port, unions valid response and announce addresses, and reports
+  their message counts separately. Verification means an outbound crawler probe
+  received an authenticated same-network CKB Identify. `exhausted` is a scoped completed-round
+  observation, never a claim that a peer is globally invalid or offline. History
   count metrics are `verifiedPeers` and `reachablePeers`; the UI pairs them into the disjoint
   same-network-reachable and verified-unavailable stack. The peer list accepts exact state and all
-  six typed address-observation filters.
+  six typed address-observation filters. Session direction is named from the configured local CKB
+  observer's vantage: `observerInitiated` is RPC `get_peers.is_outbound=true`, and
+  `peerInitiated` is `false`. RPC session addresses are never promoted to crawler dial aliases.
+  Participation, session direction, and crawler dialability are orthogonal; no combination proves
+  NAT/firewall status, hosting environment, “home node”, or global reachability. Local RPC session
+  evidence is accepted only after the node's genesis hash exactly matches the configured network.
 - Capability descriptor: `/capabilities` (formats, profiles, route matrix, and strict error codes).
 
 Notes for agents:

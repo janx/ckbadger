@@ -1863,6 +1863,33 @@ export interface NetworkLastRound {
   peerOutcomes: NetworkPeerOutcomes;
   addressObservations: NetworkAddressObservations;
   discovery: NetworkDiscoveryEvidence;
+  localObserver: NetworkLocalObserverEvidence | null;
+  directSessionObservations: NetworkDirectSessionObservationSummary;
+}
+
+export interface NetworkLocalObserverProtocol {
+  id: number;
+  name: string;
+  supportVersions: string[];
+}
+
+export interface NetworkLocalObserverEvidence {
+  peerId: string;
+  firstObservedAt: number;
+  lastObservedAt: number;
+  firstObservedRound: number;
+  lastObservedRound: number;
+  observationCount: number;
+  clientVersion: string;
+  active: boolean;
+  addresses: string[];
+  protocols: NetworkLocalObserverProtocol[];
+  connections: number;
+}
+
+export interface NetworkDirectSessionObservationSummary {
+  observerInitiated: number;
+  peerInitiated: number;
 }
 
 export interface NetworkRetentionSplit {
@@ -1887,6 +1914,8 @@ export interface NetworkAddressObservations {
 
 export interface NetworkDiscoveryEvidence {
   validNodesMessages: number;
+  validResponseMessages: number;
+  validAnnounceMessages: number;
   malformedMessages: number;
   unexpectedMessages: number;
   normalizedAdvertisedAddresses: number;
@@ -1949,16 +1978,27 @@ export type NetworkAddressProbeResult =
 
 export interface NetworkPeerSummary {
   peerId: string;
-  displayState: NetworkPeerDisplayState;
-  primaryAddr: string;
+  crawlerDialState: NetworkPeerDisplayState;
+  participation: NetworkParticipationEvidence;
+  sessionInitiators: NetworkSessionInitiator[];
+  primaryAddr: string | null;
   version: string | null;
   country: string | null;
   asn: string | null;
-  lastAdvertisedAt: number;
-  lastObservedAt: number | null;
+  lastAdvertisedAt: number | null;
+  lastDialObservedAt: number | null;
+  latestPositiveObservedAt: number;
   lastReachableAt: number | null;
   rttMs: number | null;
 }
+
+export interface NetworkParticipationEvidence {
+  discoveryAdvertised: boolean;
+  directSessionObserved: boolean;
+  crawlerIdentified: boolean;
+}
+
+export type NetworkSessionInitiator = 'observerInitiated' | 'peerInitiated';
 
 export interface NetworkPeersPage {
   items: NetworkPeerSummary[];
@@ -1990,6 +2030,7 @@ export interface NetworkPeerAliasEvidence {
   address: string;
   firstAdvertisedAt: number;
   lastAdvertisedAt: number;
+  lastVerifiedAt: number | null;
 }
 
 export interface NetworkVerifiedPeerEvidence {
@@ -2008,20 +2049,49 @@ export interface NetworkVerifiedPeerEvidence {
 
 export interface NetworkAdvertiserEvidence {
   advertiserPeerId: string;
-  observedAt: number;
+  alias: string;
+  firstObservedAt: number;
+  lastObservedAt: number;
+  firstObservedRound: number;
+  lastObservedRound: number;
+  observationCount: number;
+}
+
+export interface NetworkDirectSessionProtocol {
+  id: number;
+  version: string;
+}
+
+export interface NetworkDirectSessionEvidence {
+  observerPeerId: string;
+  initiator: NetworkSessionInitiator;
+  firstObservedAt: number;
+  lastObservedAt: number;
+  firstObservedRound: number;
+  lastObservedRound: number;
+  observationCount: number;
+  clientVersion: string;
+  sessionAddresses: string[];
+  connectedDurationMs: number;
+  lastPingDurationMs: number | null;
+  protocols: NetworkDirectSessionProtocol[];
 }
 
 export interface NetworkPeerDetail {
   peerId: string;
   observationVantage: string;
-  displayState: NetworkPeerDisplayState;
-  firstDiscoveredAt: number;
-  lastAdvertisedAt: number;
+  crawlerDialState: NetworkPeerDisplayState;
+  participation: NetworkParticipationEvidence;
+  sessionInitiators: NetworkSessionInitiator[];
+  firstDiscoveredAt: number | null;
+  lastAdvertisedAt: number | null;
+  latestPositiveObservedAt: number;
   aliases: NetworkPeerAliasEvidence[];
   lastCompleted: NetworkCompletedPeerEvidence | null;
   active: NetworkActivePeerEvidence | null;
   verified: NetworkVerifiedPeerEvidence | null;
   advertisers: NetworkAdvertiserEvidence[];
+  directSessions: NetworkDirectSessionEvidence[];
 }
 
 export const api = {

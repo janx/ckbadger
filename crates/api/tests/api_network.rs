@@ -5,7 +5,8 @@ use std::sync::Arc;
 use axum::http::StatusCode;
 use ckbadger_store::{
     ActiveCandidateProbe, ActiveCrawl, AddressObservationHistogram, CompletedPeerOutcomes,
-    LatestStatus,
+    DirectSessionEvidence, DirectSessionObservation, DirectSessionObservationSummary, LatestStatus,
+    LocalObserverEvidence, LocalObserverProtocol, SessionInitiator,
 };
 use common::*;
 
@@ -38,6 +39,55 @@ async fn summary_uses_exact_verification_terms_and_checked_projections() {
     assert_eq!(body["lastRound"]["nonSuccessfulAddressAttempts"], 2);
     assert!(body["lastRound"].get("totalKnown").is_none());
     assert!(body["lastRound"].get("unreachablePeers").is_none());
+}
+
+#[tokio::test]
+async fn summary_exposes_local_observer_and_directional_session_evidence() {
+    let dir = tempfile::tempdir().unwrap();
+    let network = Arc::new(ckbadger_store::CkbadgerStore::open_test_network(dir.path()).unwrap());
+    std::mem::forget(dir);
+    network
+        .put_network_status(&LatestStatus {
+            round_id: 9,
+            started: 100,
+            finished: 200,
+            local_observer: Some(LocalObserverEvidence {
+                peer_id: b"observer".to_vec(),
+                first_observed_at: 100,
+                last_observed_at: 200,
+                first_observed_round: 8,
+                last_observed_round: 9,
+                observation_count: 2,
+                client_version: "ckb-observer".into(),
+                active: true,
+                addresses: vec!["/ip4/127.0.0.1/tcp/8115".into()],
+                protocols: vec![LocalObserverProtocol {
+                    id: 1,
+                    name: "identify".into(),
+                    support_versions: vec!["0.0.1".into()],
+                }],
+                connections: 5,
+            }),
+            direct_session_observations: DirectSessionObservationSummary {
+                observer_initiated: 2,
+                peer_initiated: 3,
+            },
+            ..Default::default()
+        })
+        .unwrap();
+    let app = create_router_without_warmup(test_config_with_network(test_store(), network, true));
+
+    let (code, body) = get_json(&app, "/network/summary").await;
+    assert_eq!(code, StatusCode::OK);
+    let round = &body["lastRound"];
+    assert_eq!(round["localObserver"]["peerId"], "6f62736572766572");
+    assert_eq!(round["localObserver"]["observationCount"], 2);
+    assert_eq!(
+        round["localObserver"]["protocols"][0]["supportVersions"][0],
+        "0.0.1"
+    );
+    assert_eq!(round["directSessionObservations"]["observerInitiated"], 2);
+    assert_eq!(round["directSessionObservations"]["peerInitiated"], 3);
 }
 
 #[tokio::test]
@@ -284,7 +334,7 @@ async fn peers_reject_unknown_state_and_observation_before_store_access() {
 }
 
 #[tokio::test]
-async fn peers_fail_when_persisted_candidate_has_no_alias() {
+async fn peers_fail_when_persisted_candidate_has_no_positive_evidence() {
     let dir = tempfile::tempdir().unwrap();
     let network = Arc::new(ckbadger_store::CkbadgerStore::open_test_network(dir.path()).unwrap());
     std::mem::forget(dir);
@@ -323,8 +373,11 @@ async fn peer_detail_exposes_typed_alias_evidence_and_advertisers() {
     ));
     let (code, body) = get_json(&app, "/network/peers/7065657243").await;
     assert_eq!(code, StatusCode::OK);
-    assert_eq!(body["displayState"], "advertisedUnverified");
-    assert_eq!(body["observationVantage"], "thisCkbadgerInstance");
+    assert_eq!(body["crawlerDialState"], "advertisedUnverified");
+    assert_eq!(
+        body["observationVantage"],
+        "configuredLocalCkbRpcObserverAndThisCrawler"
+    );
     assert!(body["verified"].is_null());
     assert_eq!(body["lastCompleted"]["outcome"], "exhausted");
     assert_eq!(
@@ -332,7 +385,124 @@ async fn peer_detail_exposes_typed_alias_evidence_and_advertisers() {
         "dialRequestFailed"
     );
     assert_eq!(body["advertisers"][0]["advertiserPeerId"], "7065657241");
-    assert_eq!(body["advertisers"][0]["observedAt"], 200);
+    assert_eq!(body["advertisers"][0]["alias"], "addrpeerC");
+    assert_eq!(body["advertisers"][0]["firstObservedAt"], 200);
+    assert_eq!(body["advertisers"][0]["lastObservedAt"], 200);
+    assert_eq!(body["advertisers"][0]["firstObservedRound"], 5);
+    assert_eq!(body["advertisers"][0]["lastObservedRound"], 5);
+    assert_eq!(body["advertisers"][0]["observationCount"], 1);
+}
+
+#[tokio::test]
+async fn peer_routes_expose_addressless_direct_session_as_orthogonal_positive_evidence() {
+    let network = test_network_store();
+    network
+        .checkpoint_crawl(
+            &ActiveCrawl {
+                round_id: 6,
+                started_at: 240,
+                last_checkpoint_at: 250,
+                ..Default::default()
+            },
+            &[(
+                b"peerD".to_vec(),
+                ckbadger_store::CrawlCandidate {
+                    direct_sessions: vec![DirectSessionEvidence {
+                        observer_peer_id: b"local-observer".to_vec(),
+                        initiator: SessionInitiator::Peer,
+                        first_observed_at: 250,
+                        last_observed_at: 250,
+                        first_observed_round: 5,
+                        last_observed_round: 5,
+                        observation_count: 1,
+                        client_version: "ckb-direct".into(),
+                        session_addresses: vec![],
+                        connected_duration_ms: 12_000,
+                        last_ping_duration_ms: Some(3),
+                        protocols: vec![],
+                    }],
+                    ..Default::default()
+                },
+            )],
+        )
+        .unwrap();
+    let app = create_router_without_warmup(test_config_with_network(test_store(), network, true));
+
+    let (list_code, list) = get_json(&app, "/network/peers").await;
+    assert_eq!(list_code, StatusCode::OK);
+    let item = list["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["peerId"] == "7065657244")
+        .unwrap();
+    assert!(item["primaryAddr"].is_null());
+    assert!(item["lastAdvertisedAt"].is_null());
+    assert_eq!(item["latestPositiveObservedAt"], 250);
+    assert_eq!(item["crawlerDialState"], "noCompletedObservation");
+    assert_eq!(item["participation"]["directSessionObserved"], true);
+    assert_eq!(item["participation"]["crawlerIdentified"], false);
+    assert_eq!(item["sessionInitiators"][0], "peerInitiated");
+
+    let (detail_code, detail) = get_json(&app, "/network/peers/7065657244").await;
+    assert_eq!(detail_code, StatusCode::OK);
+    assert!(detail["firstDiscoveredAt"].is_null());
+    assert!(detail["lastAdvertisedAt"].is_null());
+    assert!(detail["verified"].is_null());
+    assert!(detail["lastCompleted"].is_null());
+    assert_eq!(detail["directSessions"][0]["initiator"], "peerInitiated");
+    assert_eq!(
+        detail["directSessions"][0]["observerPeerId"],
+        "6c6f63616c2d6f62736572766572"
+    );
+    assert!(detail["directSessions"][0]["sessionAddresses"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+}
+
+#[tokio::test]
+async fn staged_addressless_direct_session_is_hidden_until_completed_publication() {
+    let dir = tempfile::tempdir().unwrap();
+    let network = Arc::new(ckbadger_store::CkbadgerStore::open_test_network(dir.path()).unwrap());
+    std::mem::forget(dir);
+    network
+        .checkpoint_crawl(
+            &ActiveCrawl {
+                round_id: 1,
+                started_at: 10,
+                last_checkpoint_at: 10,
+                direct_session_targets: vec![b"peerD".to_vec()],
+                ..Default::default()
+            },
+            &[(
+                b"peerD".to_vec(),
+                ckbadger_store::CrawlCandidate {
+                    staged_direct_sessions: vec![DirectSessionObservation {
+                        round_id: 1,
+                        observed_at: 10,
+                        observer_peer_id: b"observer".to_vec(),
+                        initiator: SessionInitiator::Peer,
+                        client_version: "ckb-direct".into(),
+                        session_addresses: vec![],
+                        connected_duration_ms: 1,
+                        last_ping_duration_ms: None,
+                        protocols: vec![],
+                    }],
+                    ..Default::default()
+                },
+            )],
+        )
+        .unwrap();
+    let app = create_router_without_warmup(test_config_with_network(test_store(), network, true));
+
+    let (list_code, list) = get_json(&app, "/network/peers").await;
+    assert_eq!(list_code, StatusCode::OK);
+    assert!(list["items"].as_array().unwrap().is_empty());
+    assert_eq!(
+        get_json(&app, "/network/peers/7065657244").await.0,
+        StatusCode::NOT_FOUND
+    );
 }
 
 #[tokio::test]

@@ -137,19 +137,21 @@ ckbadger run (orchestrator supervisor)
 ├── Shared frontend + network-aware reverse proxy (:8100)
 │   └── /api/{network}/v1 + /ws/{network} ──▶ matching per-network API
 └── Per-network stack (mainnet, testnet, …)
-    ├── CKB node / RPC ──▶ indexer ──▶ domain + append-only stores ──┐
-    ├── CKB p2p network ──▶ crawler (opt-in) ──▶ network store ──────┤
-    └── API (read-only) ◀────────────────────────────────────────────┘
+    ├── CKB node / RPC ──▶ indexer ──▶ domain + append-only stores ──────────────┐
+    ├── configured CKB RPC ── local_node_info/get_peers ──┐                     │
+    ├── CKB p2p network ── Identify/Discovery ─────────────┴─▶ crawler (opt-in)  │
+    │                                                         └─▶ network store ┤
+    └── API (read-only) ◀───────────────────────────────────────────────────────┘
 ```
 
 ### Services
 
-| Service           | Description                                                            | Default port               |
-| ----------------- | ---------------------------------------------------------------------- | -------------------------- |
-| `indexer`         | Per-network blockchain sync daemon                                     | -                          |
-| `api`             | Per-network REST/WebSocket API server                                  | mainnet 8101, testnet 8102 |
-| `frontend-server` | Shared SPA server and network-aware reverse proxy                      | 8100                       |
-| `crawler`         | Opt-in per-network CKB L1 peer crawler (writes only the network store) | outbound p2p only          |
+| Service           | Description                                                                      | Default port               |
+| ----------------- | -------------------------------------------------------------------------------- | -------------------------- |
+| `indexer`         | Per-network blockchain sync daemon                                               | -                          |
+| `api`             | Per-network REST/WebSocket API server                                            | mainnet 8101, testnet 8102 |
+| `frontend-server` | Shared SPA server and network-aware reverse proxy                                | 8100                       |
+| `crawler`         | Opt-in CKB L1 dial + configured-node session observer; sole network-store writer | outbound p2p + local RPC   |
 
 ### Tech Stack
 
@@ -164,6 +166,19 @@ ckbadger run (orchestrator supervisor)
 | **Storage**       | RocksDB (59 domain + 1 append-only + 3 network CFs, ckbadger-store) | Embedded three-store data engine |
 | **Cache**         | In-memory LRU                                                       | API response cache               |
 | **IPC**           | Unix domain sockets                                                 | Inter-process communication      |
+
+The crawler keeps three independent kinds of evidence: Discovery advertisements, direct sessions
+seen by the configured local CKB node, and this crawler's outbound dial results. RPC
+`get_peers.is_outbound` is interpreted from that local node's vantage (`true` means the local node
+initiated the session; `false` means the remote peer did). A direct-only peer remains visible even
+without a reusable address, and RPC session addresses are never turned into crawler dial aliases.
+These facts do not prove NAT/firewall status, hosting environment, “home node”, or global
+reachability. The configured RPC node's genesis hash must match the selected network before its
+session observations are accepted.
+
+All of this remains inside the existing 3-CF network store; ckbadger-store still has 63 CFs total
+(59 domain + 1 append-only + 3 network). The crawler is its sole writer and the API opens it only
+as a read-only secondary.
 
 ### Deployment
 
@@ -182,7 +197,7 @@ CKBadger is designed local-first, but the architecture doesn't lock you in. The 
 │   ├── data/
 │   │   ├── domain/            #   Mutable canonical state (RocksDB)
 │   │   ├── append-only/       #   Immutable cell payloads (RocksDB)
-│   │   └── network/           #   Opt-in crawler p2p observations (exempt from rebuild-from-genesis)
+│   │   └── network/           #   Opt-in p2p/session observations (exempt from chain replay)
 │   ├── media/                 #   Content-addressed decoded media blobs (DOB artwork)
 │   ├── run/                   #   Runtime state — supervisor.pid, indexer.sock, logs/ (gitignored)
 │   └── perf/                  #   Auto-generated bulk-sync perf artifacts + latest baseline

@@ -8,8 +8,8 @@ contract lives in `docs/API.md`; this document owns the browser presentation and
 
 ## Goal
 
-- Keep advertised candidates, same-network verification, current-round reachability, and retained
-  verification visibly distinct.
+- Keep Discovery advertisements, configured-node direct sessions, crawler dial results, and
+  retained same-network verification visibly distinct.
 - Let a summary count drill down to a candidate and then to exact aliases, typed observations,
   timestamps, elapsed time, and Discovery advertisers.
 - Preserve the completed snapshot while a later crawl round is active.
@@ -23,8 +23,8 @@ contract lives in `docs/API.md`; this document owns the browser presentation and
   configured CKB network. A parseable multiaddr, open TCP port, or advertisement is insufficient.
 - **Single Calculation Path** — summary totals are checked API projections of the persisted
   outcome matrices. The browser renders them and does not independently reinterpret the matrix.
-- **Exact Evidence** — the UI presents typed address milestones and Discovery counters, not a
-  confidence score.
+- **Exact Evidence** — the UI presents typed address milestones, Discovery counters, and session
+  initiation direction, not a confidence score or NAT/home-node inference.
 - **Honest Empty State** — crawler disabled/not-yet-completed is onboarding, while request or
   invariant failures remain errors.
 
@@ -34,7 +34,8 @@ The API reads the three network column families through one pinned secondary vie
 
 - `CF_NET_NODES`: optional TTL-retained verification metadata;
 - `CF_NET_STATS`: last completed outcome/address/Discovery aggregates and history;
-- `CF_NET_CRAWL`: unified candidates, stable last-completed evidence, and optional active evidence.
+- `CF_NET_CRAWL`: unified candidates, target-centric advertisements/direct sessions, stable
+  last-completed evidence, and optional active evidence.
 
 The crawler remains the sole writer. The frontend never writes RocksDB.
 
@@ -46,7 +47,7 @@ The crawler remains the sole writer. The frontend never writes RocksDB.
 | `GET /network/distributions`                                 | version/country/ASN/protocol buckets scoped to retained verified records            |
 | `GET /network/history?metric=verifiedPeers&granularity=day`  | verified retained trend                                                             |
 | `GET /network/history?metric=reachablePeers&granularity=day` | same-network reachable trend                                                        |
-| `GET /network/peers`                                         | unified candidate table, filters, cursor pagination                                 |
+| `GET /network/peers`                                         | unified observed-peer table, filters, cursor pagination                             |
 | `GET /network/peers/{peerId}`                                | on-demand evidence drawer                                                           |
 
 The page uses TanStack Query and a 30-second refresh interval for summary/distributions. Peer
@@ -108,13 +109,15 @@ pairing uses matching timestamps and checked subtraction; missing/duplicate buck
 
 ## Unified Peer Table
 
-`/network/peers` returns candidates whether or not a `NodeRecord` exists. Rows sort by
-`lastAdvertisedAt` descending and then peer id, and support cursor pagination plus exact state,
-typed address-observation, country, and version filters. The observation selector exposes all six
-`AddressProbeResult` values; an unknown state or observation is an API `400`, including when the
-network store is not attached yet.
+`/network/peers` returns retained/published positive peer evidence whether or not an advertised
+dial alias or `NodeRecord` exists; any active dial evidence is labeled separately from completed
+evidence. Rows sort by `latestPositiveObservedAt` descending and then peer id. A current-round
+staged direct-only row remains hidden until atomic completed publication. Cursor
+pagination and exact crawler-dial-state, typed address-observation, country, and version filters
+remain supported. The observation selector exposes all six `AddressProbeResult` values; an
+unknown state or observation is an API `400`, including when the network store is not attached yet.
 
-| Display state            | Derivation                                                                |
+| `crawlerDialState`       | Derivation                                                                |
 | ------------------------ | ------------------------------------------------------------------------- |
 | `reachable`              | last completed outcome is same-network Identify                           |
 | `verifiedUnavailable`    | aliases exhausted and a retained verification record exists               |
@@ -122,24 +125,30 @@ network store is not attached yet.
 | `foreignNetwork`         | at least one authenticated foreign Identify, with no same-network success |
 | `noCompletedObservation` | candidate has no completed evidence yet                                   |
 
-The table columns are peer id, primary retained alias, evidence state, version, country, ASN,
-advertisement time, observation time, last verification, and RTT. Candidate-only metadata is API
-`null` and renders as `—`.
+The table columns are peer id, nullable dial alias, participation evidence, session initiation,
+crawler dial result, version, country, latest positive evidence time, last dial observation, last
+verification, and RTT. `participation` independently exposes Discovery advertisement,
+direct-session, and crawler-Identify facts. `sessionInitiators` renders literally as
+**observer → peer** or **peer → observer** from the configured observer's vantage. Addressless
+direct-only metadata is API `null` and renders as `—` rather than borrowing a session source port.
 
 ## Evidence Drawer
 
 Expanding a row fetches `/network/peers/{peerId}` and shows:
 
-- observation vantage: **this ckbadger instance**;
+- observation vantage: **configured local CKB RPC observer + this crawler**;
 - first/last advertisement times for every retained alias;
 - last completed round/outcome, with the consecutive exhaustion count only for an exhausted
   outcome;
 - each completed alias observation with typed result, observation time, and exact elapsed ms;
 - separately labeled active-round state and observations, if present;
 - optional retained verification metadata and last same-network Identify time;
+- target-centric direct-session evidence with observer peer id, initiation direction,
+  first/latest observation time and round, count, and session-only metadata;
 - exact valid, malformed, and unexpected Discovery message counts plus normalized and rejected
   advertised-address counts from the last successful probe;
-- exact retained advertiser peer ids and advertiser observation times.
+- exact retained advertiser peer ids, aliases, first/latest observation times and rounds, and
+  observation counts.
 
 Typed observation labels are: Dial request failed; No authenticated session before deadline;
 Authenticated session without Identify before deadline; Malformed Identify; Foreign network; and
@@ -155,8 +164,8 @@ Same-network Identify completed. None is expanded into an unobserved root cause.
 
 ## Verification
 
-- API tests cover the 144/57/87/58 projection, unified candidates, nullable candidate metadata,
-  filters/pagination, detail advertisers, and active/completed separation.
+- API tests cover the 144/57/87/58 projection, addressless direct-only peers, nullable dial
+  metadata, filters/pagination, detail advertisers/sessions, and active/completed separation.
 - Component tests cover exact labels, onboarding, active progress, distributions/trends, state and
   typed-observation filters, evidence expansion, null metadata rendering, command discovery, and
   MaxMind attribution.
@@ -165,8 +174,9 @@ Same-network Identify completed. None is expanded into an unobserved root cause.
 
 ## Result
 
-- **Behavior change** — the browser now exposes one evidence-oriented candidate/verified view with
-  traceable address observations instead of relabeling verified records as all known peers.
+- **Behavior change** — the browser exposes orthogonal participation, configured-session
+  direction, crawler-dial, advertisement, and verification evidence without classifying peers as
+  home/NAT/firewall nodes.
 - **Re-sync required** — no chain re-sync. The backing schema change requires recreating only the
   network primary and API secondary, then crawling again.
 - **What to do next** — after a rebuilt crawl, compare the summary matrix with its derived cards

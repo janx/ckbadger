@@ -549,9 +549,10 @@ pub fn test_network_store() -> std::sync::Arc<ckbadger_store::CkbadgerStore> {
     use ckbadger_store::network_keys::{Granularity, Metric};
     use ckbadger_store::{
         ActiveCandidateProbe, ActiveCandidateState, ActiveCrawl, AddressObservationHistogram,
-        AddressProbeEvidence, AddressProbeResult, CkbadgerStore, CompletedCandidateEvidence,
-        CompletedCandidateOutcome, CompletedPeerOutcomes, CrawlAddress, CrawlCandidate,
-        DiscoveryEvidence, HistoryPoint, LatestStatus, NodeRecord, StagedProbeOutcome,
+        AddressProbeEvidence, AddressProbeResult, AdvertisementEvidence, CkbadgerStore,
+        CompletedCandidateEvidence, CompletedCandidateOutcome, CompletedPeerOutcomes, CrawlAddress,
+        CrawlCandidate, DiscoveryEvidence, HistoryPoint, LatestStatus, NodeRecord,
+        StagedProbeOutcome,
     };
     let dir = tempfile::tempdir().expect("tmp");
     let s = std::sync::Arc::new(CkbadgerStore::open_test_network(dir.path()).unwrap());
@@ -578,6 +579,7 @@ pub fn test_network_store() -> std::sync::Arc<ckbadger_store::CkbadgerStore> {
         last_rtt_ms: Some(9),
         discovery: DiscoveryEvidence {
             valid_nodes_messages: 1,
+            valid_response_messages: 1,
             normalized_advertised_addresses: 1,
             ..Default::default()
         },
@@ -608,6 +610,7 @@ pub fn test_network_store() -> std::sync::Arc<ckbadger_store::CkbadgerStore> {
         },
         discovery: DiscoveryEvidence {
             valid_nodes_messages: 1,
+            valid_response_messages: 1,
             normalized_advertised_addresses: 1,
             ..Default::default()
         },
@@ -633,6 +636,8 @@ pub fn test_network_store() -> std::sync::Arc<ckbadger_store::CkbadgerStore> {
                 addr: address,
                 first_advertised_at: 100,
                 last_advertised_at: 200,
+                last_verified_at: (outcome == CompletedCandidateOutcome::SameNetworkIdentified)
+                    .then_some(200),
             }],
             first_discovered_at: 100,
             last_advertised_at: 200,
@@ -650,11 +655,13 @@ pub fn test_network_store() -> std::sync::Arc<ckbadger_store::CkbadgerStore> {
                         discovered_addrs: vec!["addrpeerC".into()],
                         discovery: DiscoveryEvidence {
                             valid_nodes_messages: 1,
+                            valid_response_messages: 1,
                             normalized_advertised_addresses: 1,
                             ..Default::default()
                         },
                         flags: 0,
                     }),
+                staged_advertisements: vec![],
             }),
             ..Default::default()
         };
@@ -672,7 +679,7 @@ pub fn test_network_store() -> std::sync::Arc<ckbadger_store::CkbadgerStore> {
         };
         (checkpoint, completed)
     };
-    let transitions = vec![
+    let mut transitions = vec![
         (
             b"peerA".to_vec(),
             durable_transition(
@@ -698,6 +705,25 @@ pub fn test_network_store() -> std::sync::Arc<ckbadger_store::CkbadgerStore> {
             ),
         ),
     ];
+    let (_, (advertised_checkpoint, advertised_completed)) = transitions
+        .iter_mut()
+        .find(|(peer_id, _)| peer_id.as_slice() == b"peerC")
+        .expect("peerC transition");
+    let advertisement = AdvertisementEvidence {
+        advertiser_peer_id: b"peerA".to_vec(),
+        alias: "addrpeerC".into(),
+        first_observed_at: 200,
+        last_observed_at: 200,
+        first_observed_round: 5,
+        last_observed_round: 5,
+        observation_count: 1,
+    };
+    advertised_checkpoint
+        .active
+        .as_mut()
+        .expect("peerC active checkpoint")
+        .staged_advertisements = vec![advertisement.clone()];
+    advertised_completed.advertisements = vec![advertisement];
     let checkpoint_candidates = transitions
         .iter()
         .map(|(peer_id, (checkpoint, _))| (peer_id.clone(), checkpoint.clone()))
