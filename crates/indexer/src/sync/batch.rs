@@ -5222,12 +5222,6 @@ mod tests {
     }
 
     #[test]
-    fn test_parser_unresolved_retry_defaults() {
-        assert_eq!(PARSER_UNRESOLVED_RETRY_DELAY_MS, 500);
-        assert_eq!(PARSER_UNRESOLVED_MAX_RETRIES, 240);
-    }
-
-    #[test]
     fn test_should_abort_unresolved_retry_on_epoch_change() {
         assert!(!should_abort_unresolved_retry_on_epoch_change(10, 10));
         assert!(should_abort_unresolved_retry_on_epoch_change(10, 11));

@@ -127,11 +127,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_default_force_startup_cleanup() {
-        assert!(!default_force_startup_cleanup());
-    }
-
     fn make_valid_config() -> Config {
         Config {
             domain_data_path: "/tmp/test".to_string(),

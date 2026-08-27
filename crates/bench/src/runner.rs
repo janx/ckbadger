@@ -203,38 +203,6 @@ mod tests {
     use super::*;
     use crate::registry;
 
-    #[test]
-    fn test_run_config_defaults() {
-        let config = RunConfig {
-            iterations: 10,
-            concurrency: 1,
-            warmup: 2,
-        };
-        assert_eq!(config.iterations, 10);
-        assert_eq!(config.concurrency, 1);
-        assert_eq!(config.warmup, 2);
-    }
-
-    #[test]
-    fn test_endpoint_result_skipped() {
-        let result = EndpointResult {
-            module: "test".to_string(),
-            method: "GET".to_string(),
-            path_template: "/test".to_string(),
-            description: "test endpoint".to_string(),
-            resolved_url: String::new(),
-            read_pattern: "KeyLookup".to_string(),
-            risk_tier: "Low".to_string(),
-            samples: Vec::new(),
-            metrics: ComputedMetrics::from_samples(&[], Duration::ZERO),
-            wall_clock: Duration::ZERO,
-            skipped: true,
-            skip_reason: Some("missing param".to_string()),
-        };
-        assert!(result.skipped);
-        assert_eq!(result.skip_reason.as_deref(), Some("missing param"));
-    }
-
     #[tokio::test]
     async fn test_bench_endpoint_skip_on_unresolvable() {
         let client = reqwest::Client::new();

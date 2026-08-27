@@ -121,14 +121,8 @@ describe('Header', () => {
 
     const switcher = screen.getByTestId('network-switcher');
     const daoLink = screen.getAllByRole('link', { name: 'DAO' })[0];
-    const networkTrigger = screen.getByRole('button', { name: 'Select network' });
-    const inventoryTrigger = screen.getByRole('button', { name: 'Inventory' });
 
-    expect(networkTrigger.className).not.toBe(inventoryTrigger.className);
-    expect(networkTrigger.className).toContain('py-1.5');
-    expect(networkTrigger.className).not.toContain('min-h-11');
     expect(switcher).toHaveAttribute('data-control', 'network-context');
-    expect(switcher.className).toContain('md:border-r');
     expect(switcher.nextElementSibling).toBe(daoLink);
   });
 

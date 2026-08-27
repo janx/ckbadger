@@ -32,15 +32,3 @@ pub struct LabelImportResult {
     pub script_labels_imported: i64,
     pub errors: Vec<String>,
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_default_label_import_config() {
-        let cfg = LabelImportConfig::default();
-        assert!(cfg.metadata_path.is_none());
-        assert_eq!(cfg.network, "mainnet");
-    }
-}

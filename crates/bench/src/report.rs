@@ -590,17 +590,4 @@ mod tests {
         let blocks = &report.results[2];
         assert!(blocks.error_statuses.is_empty());
     }
-
-    #[test]
-    fn test_print_table_does_not_panic() {
-        let results = vec![
-            make_result("blocks", "GET", "/blocks/{number}", 50.0, 0.0, false),
-            make_result("blocks", "GET", "/blocks/latest", 150.0, 0.0, false),
-            make_result("txs", "GET", "/txs/{hash}", 600.0, 0.0, false),
-            make_result("fiber", "GET", "/fiber/channels", 0.0, 0.0, true),
-        ];
-        let report = build_report(&results, "http://localhost:8101/api/v1", 10, 1, 2);
-        // Smoke test: should not panic
-        print_table(&report);
-    }
 }

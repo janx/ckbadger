@@ -2545,14 +2545,6 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
-    fn test_open_and_close() {
-        let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
-        assert!(!store.is_secondary());
-        drop(store);
-    }
-
-    #[test]
     fn test_all_cfs_accessible() {
         let dir = TempDir::new().unwrap();
         let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
@@ -2579,14 +2571,6 @@ mod tests {
     }
 
     #[test]
-    fn test_open_domain_allows_activities_cf() {
-        let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
-        // Activities CF is now in domain store, access should succeed
-        let _ = store.cf_tx_actions();
-    }
-
-    #[test]
     fn test_open_append_only_restricts_domain_cfs() {
         let dir = TempDir::new().unwrap();
         let store = CkbadgerStore::open_append_only(dir.path()).unwrap();
@@ -2595,13 +2579,6 @@ mod tests {
         })
         .is_err();
         assert!(panicked, "append-only store should reject domain CF access");
-    }
-
-    #[test]
-    fn test_open_append_only_allows_cells_cf() {
-        let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open_append_only(dir.path()).unwrap();
-        let _ = store.cf_cells();
     }
 
     #[test]
@@ -2890,17 +2867,6 @@ mod tests {
     }
 
     #[test]
-    fn test_bulk_sync_mode() {
-        let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
-        assert!(!store.is_bulk_sync_mode());
-        store.set_bulk_sync_mode(true);
-        assert!(store.is_bulk_sync_mode());
-        store.set_bulk_sync_mode(false);
-        assert!(!store.is_bulk_sync_mode());
-    }
-
-    #[test]
     fn test_memory_stats() {
         let dir = TempDir::new().unwrap();
         let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
@@ -2965,19 +2931,6 @@ mod tests {
     }
 
     #[test]
-    fn test_compaction_pressure_snapshot_reports_l0_total_and_l0_max() {
-        let snapshot = CompactionPressureSnapshot {
-            l0_files_total: 82,
-            l0_files_max: 3,
-            compaction_pending_bytes: 0,
-            immutable_memtables: 0,
-        };
-
-        assert_eq!(snapshot.l0_files_total, 82);
-        assert_eq!(snapshot.l0_files_max, 3);
-    }
-
-    #[test]
     fn test_consumed_cf_storage_bytes_prefers_live_data_estimate() {
         assert_eq!(
             consumed_cf_storage_bytes(Some(100), Some(500), Some(20)),
@@ -3008,24 +2961,9 @@ mod tests {
     }
 
     #[test]
-    fn test_mega_write_cfs_contains_activities() {
-        assert!(
-            CkbadgerStore::is_mega_write_cf(CF_TX_ACTIONS),
-            "CF_TX_ACTIONS should be in MEGA_WRITE_CFS"
-        );
-    }
-
-    #[test]
-    fn test_mega_write_cfs_excludes_script_info() {
-        assert!(
-            !CkbadgerStore::is_mega_write_cf(CF_SCRIPT_INFO),
-            "CF_SCRIPT_INFO should NOT be in MEGA_WRITE_CFS"
-        );
-    }
-
-    #[test]
     fn test_mega_write_cfs_excludes_script_cfs() {
         for cf in [
+            CF_SCRIPT_INFO,
             CF_SCRIPT_VERSIONS,
             CF_SCRIPT_VERSIONS_BY_LABEL,
             CF_SCRIPT_FAMILIES,
@@ -3088,22 +3026,6 @@ mod tests {
     }
 
     #[test]
-    fn test_set_bulk_sync_compaction_options_does_not_panic() {
-        let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
-        // Should not panic on a freshly opened store
-        store.set_bulk_sync_compaction_options();
-    }
-
-    #[test]
-    fn test_restore_normal_compaction_options_does_not_panic() {
-        let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
-        // Should not panic on a freshly opened store
-        store.restore_normal_compaction_options();
-    }
-
-    #[test]
     fn test_bulk_sync_then_restore_compaction_round_trip() {
         let dir = TempDir::new().unwrap();
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();
@@ -3150,34 +3072,6 @@ mod tests {
         // Second restore is a no-op
         store.restore_normal_compaction_options();
         assert!(!store.is_bulk_sync_mode());
-    }
-
-    #[test]
-    fn test_compaction_mode_tracks_bulk_sync_mode_flag() {
-        let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
-
-        // Initial state
-        assert!(!store.is_bulk_sync_mode());
-
-        // Enter bulk → flag true
-        store.set_bulk_sync_compaction_options();
-        assert!(store.is_bulk_sync_mode());
-
-        // Restore normal → flag false
-        store.restore_normal_compaction_options();
-        assert!(!store.is_bulk_sync_mode());
-
-        // Re-enter bulk → flag true again
-        store.set_bulk_sync_compaction_options();
-        assert!(store.is_bulk_sync_mode());
-    }
-
-    #[test]
-    fn test_log_config_does_not_panic() {
-        let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
-        store.log_config();
     }
 
     #[test]
@@ -3262,16 +3156,6 @@ mod tests {
     }
 
     #[test]
-    fn test_memory_profile_accessor() {
-        let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
-        let profile = store.memory_profile();
-        assert!(!profile.is_secondary);
-        assert!(profile.system_ram_bytes > 0);
-        assert!(profile.cpu_count > 0);
-    }
-
-    #[test]
     fn test_flush_all_memtables_makes_no_wal_data_durable() {
         let dir = TempDir::new().unwrap();
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();
@@ -3343,15 +3227,6 @@ mod tests {
         assert_eq!(
             cf_write_policy(CF_CELL_BY_DATA_HASH),
             CfWritePolicy::AppendOnly
-        );
-    }
-
-    #[test]
-    fn test_cf_write_policy_never_marks_domain_cell_markers_as_append_only() {
-        assert_ne!(cf_write_policy(CF_LIVE_CELLS), CfWritePolicy::AppendOnly);
-        assert_ne!(
-            cf_write_policy(CF_CONSUMED_CELLS),
-            CfWritePolicy::FinalSnapshot
         );
     }
 

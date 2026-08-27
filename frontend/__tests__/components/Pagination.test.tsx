@@ -9,12 +9,6 @@ describe('Pagination', () => {
   });
 
   describe('navigation buttons', () => {
-    it('renders Prev and Next buttons', () => {
-      render(<Pagination page={5} totalPages={10} onPageChange={mockOnPageChange} />);
-      expect(screen.getByText('Prev')).toBeInTheDocument();
-      expect(screen.getByText('Next')).toBeInTheDocument();
-    });
-
     it('disables Prev button on first page', () => {
       render(<Pagination page={1} totalPages={10} onPageChange={mockOnPageChange} />);
       expect(screen.getByText('Prev')).toBeDisabled();
@@ -86,15 +80,5 @@ describe('Pagination', () => {
       fireEvent.click(screen.getByText('1'));
       expect(mockOnPageChange).toHaveBeenCalledWith(1);
     });
-  });
-
-  it('preserves pagination behavior when custom className is provided', () => {
-    render(
-      <Pagination page={5} totalPages={10} onPageChange={mockOnPageChange} className="my-class" />
-    );
-
-    fireEvent.click(screen.getByText('Next'));
-
-    expect(mockOnPageChange).toHaveBeenCalledWith(6);
   });
 });

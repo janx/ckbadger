@@ -1099,19 +1099,6 @@ mod tests {
     }
 
     #[test]
-    fn test_compaction_pressure_snapshot_reports_l0_total_and_l0_max() {
-        let snapshot = ckbadger_store::store::CompactionPressureSnapshot {
-            l0_files_total: 82,
-            l0_files_max: 3,
-            compaction_pending_bytes: 0,
-            immutable_memtables: 0,
-        };
-
-        assert_eq!(snapshot.l0_files_total, 82);
-        assert_eq!(snapshot.l0_files_max, 3);
-    }
-
-    #[test]
     fn test_should_trim_cell_cache_threshold() {
         assert!(!should_trim_cell_cache(CELL_CACHE_CAPACITY * 2));
         assert!(should_trim_cell_cache(CELL_CACHE_CAPACITY * 2 + 1));
@@ -1575,11 +1562,6 @@ mod tests {
         assert_eq!(finalize_step_label(13), "sync_status");
         assert_eq!(finalize_step_label(0), "unknown");
         assert_eq!(finalize_step_label(14), "unknown");
-    }
-
-    #[test]
-    fn test_finalize_total_steps_constant() {
-        assert_eq!(FINALIZE_TOTAL_STEPS, 13);
     }
 
     #[test]

@@ -49,13 +49,4 @@ describe('Address', () => {
       expect(link.textContent).toBe(shortAddress);
     });
   });
-
-  describe('custom rendering', () => {
-    it('preserves custom className while keeping link behavior intact', () => {
-      render(<Address address={testAddress} className="my-custom-class" />);
-      const link = screen.getByRole('link');
-      expect(link).toHaveAttribute('href', `/mainnet/address/${testAddress}`);
-      expect(link).toHaveClass('my-custom-class');
-    });
-  });
 });

@@ -1,16 +1,8 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { render, screen } from '../utils/test-utils';
 import { NotFoundPage } from '@/components/not-found-page';
 
 describe('NotFoundPage', () => {
-  beforeEach(() => {
-    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null);
-  });
-
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
   it('renders 404 with poetry and terminal error', () => {
     render(<NotFoundPage />);
 

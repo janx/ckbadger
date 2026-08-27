@@ -152,18 +152,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_cache_invalidator_is_always_enabled() {
-        let invalidator = make_test_invalidator();
-        assert!(invalidator.is_enabled());
-    }
-
-    #[tokio::test]
-    async fn test_invalidate_does_not_panic() {
-        let invalidator = make_test_invalidator();
-        invalidator.invalidate_chart_caches().await;
-    }
-
-    #[tokio::test]
     async fn test_publish_sync_progress_writes_to_store() {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());

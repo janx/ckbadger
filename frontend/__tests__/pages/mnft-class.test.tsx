@@ -79,6 +79,20 @@ describe('MnftClassDetailPage', () => {
       data: [],
       series: [],
     });
+    vi.mocked(api.getObjectCollectionItems).mockResolvedValue({
+      data: [],
+      total: 0,
+      limit: 50,
+      hasMore: false,
+      nextCursor: null,
+    });
+    vi.mocked(api.getObjectCollectionHolders).mockResolvedValue({
+      data: [],
+      total: 0,
+      limit: 50,
+      hasMore: false,
+      nextCursor: null,
+    });
     vi.mocked(api.getObjectCollectionActivities).mockResolvedValue({
       data: [],
       total: 0,

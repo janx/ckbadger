@@ -104,12 +104,4 @@ mod tests {
         assert!(!path_looks_like_file("identities/.bit"));
         assert!(!path_looks_like_file(".hidden"));
     }
-
-    #[test]
-    fn test_has_embedded_assets_without_frontend_build() {
-        // In test builds, frontend/dist/ typically doesn't exist,
-        // so we expect no embedded assets.
-        // This test just verifies the function doesn't panic.
-        let _has = has_embedded_assets();
-    }
 }

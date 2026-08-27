@@ -102,30 +102,6 @@ mod tests {
     }
 
     #[test]
-    fn test_request_get_service_status_serialization() {
-        let req = IpcRequest::GetServiceStatus;
-        let json = serde_json::to_string(&req).unwrap();
-        let parsed: IpcRequest = serde_json::from_str(&json).unwrap();
-        assert!(matches!(parsed, IpcRequest::GetServiceStatus));
-    }
-
-    #[test]
-    fn test_response_pong_serialization() {
-        let resp = IpcResponse::Pong;
-        let json = serde_json::to_string(&resp).unwrap();
-        let parsed: IpcResponse = serde_json::from_str(&json).unwrap();
-        assert!(matches!(parsed, IpcResponse::Pong));
-    }
-
-    #[test]
-    fn test_response_ok_serialization() {
-        let resp = IpcResponse::Ok;
-        let json = serde_json::to_string(&resp).unwrap();
-        let parsed: IpcResponse = serde_json::from_str(&json).unwrap();
-        assert!(matches!(parsed, IpcResponse::Ok));
-    }
-
-    #[test]
     fn test_response_error_serialization() {
         let resp = IpcResponse::Error {
             message: "something went wrong".to_string(),

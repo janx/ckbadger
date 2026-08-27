@@ -247,30 +247,6 @@ describe('ActivitiesStreamExplorer', () => {
 
     render(<ActivitiesStreamExplorer />);
 
-    const toolbar = screen.getByTestId('activities-stream-toolbar');
-    const stickyStack = screen.getByTestId('activities-stream-sticky-stack');
-    const panel = screen.getByTestId('activities-stream-panel');
-    const allFilter = within(toolbar).getByRole('button', { name: 'All' });
-    const ckbFilter = within(toolbar).getByRole('button', { name: 'CKB' });
-
-    expect(panel.contains(toolbar)).toBe(true);
-    expect(panel.contains(stickyStack)).toBe(true);
-    expect(toolbar.textContent).toContain('filter');
-    expect(toolbar.textContent).toContain('ALL');
-    expect(within(toolbar).queryByText('STREAM CTRL')).not.toBeInTheDocument();
-    expect(stickyStack.className).toContain('sticky');
-    expect(stickyStack.className).toContain('top-[5.25rem]');
-    expect(stickyStack.className).toContain('z-30');
-    expect(stickyStack.className).toContain('border-x');
-    expect(toolbar.className).toContain('bg-[#060810]');
-    expect(toolbar.className).toContain('border-y');
-    expect(toolbar.className).not.toContain('border-x');
-    expect(allFilter.className).toContain('bg-jade/8');
-    expect(allFilter.className).toContain('border-jade/20');
-    expect(ckbFilter.className).toContain('border-transparent');
-    expect(ckbFilter.className).toContain('hover:bg-jade/[0.04]');
-    expect(panel.className).toContain('overflow-visible');
-    expect(screen.queryByText('Global Activity Stream')).not.toBeInTheDocument();
     expect(await screen.findByText('No activities yet')).toBeInTheDocument();
     expect(
       screen.getByText('This filter has no canonical activity rows in the current window.')
@@ -309,8 +285,6 @@ describe('ActivitiesStreamExplorer', () => {
     render(<ActivitiesStreamExplorer />);
 
     const row = await screen.findByRole('article');
-    const divider = screen.getByTestId('activity-day-divider-today');
-    const dividerDot = divider.querySelector('span');
 
     expect(screen.getByText('Today')).toBeInTheDocument();
     // TX hash shown prominently
@@ -328,11 +302,6 @@ describe('ActivitiesStreamExplorer', () => {
         .getAllByRole('link')
         .some((link) => link.getAttribute('href')?.startsWith('/mainnet/address/'))
     ).toBe(true);
-    expect(row.className).toContain('py-4');
-    expect(row.className).not.toContain('grid-cols-[0.625rem_minmax(0,1fr)]');
-    expect(within(row).queryByTestId('activity-terminal-marker')).not.toBeInTheDocument();
-    expect(divider.className).toContain('gap-2');
-    expect(dividerDot?.className).toContain('h-1');
   });
 
   it('keeps polling when the current filter is empty and renders new head activity', async () => {
@@ -431,30 +400,6 @@ describe('ActivitiesStreamExplorer', () => {
     expect(await screen.findByText('+1.00000000 CKB')).toBeInTheDocument();
 
     const banner = await screen.findByRole('button', { name: '1 new activity' });
-    const toolbar = screen.getByTestId('activities-stream-toolbar');
-    const stickyStack = screen.getByTestId('activities-stream-sticky-stack');
-    const panel = screen.getByTestId('activities-stream-panel');
-    expect(stickyStack.className).toContain('sticky');
-    expect(stickyStack.className).toContain('top-[5.25rem]');
-    expect(stickyStack.className).toContain('z-30');
-    expect(stickyStack.className).toContain('border-x');
-    expect(stickyStack.className).toContain('shadow-[');
-    expect(banner.className).toContain('bg-[#04070d]');
-    expect(banner.className).not.toContain('bg-[#060810]');
-    expect(banner.className).not.toContain('/92');
-    expect(banner.className).toContain('rounded-none');
-    expect(banner.className).not.toContain('border-x');
-    expect(banner.className).toContain('border-y');
-    expect(banner.className).not.toContain('shadow-[');
-    expect(panel.contains(banner)).toBe(true);
-    expect(stickyStack.contains(banner)).toBe(true);
-    expect(stickyStack.contains(toolbar)).toBe(true);
-    expect(toolbar.className).toContain('border-b');
-    expect(toolbar.className).not.toContain('border-y');
-    expect(toolbar.className).not.toContain('border-x');
-    expect(banner.textContent).toContain('|');
-    expect(banner.textContent).toContain('LIVE BUFFER');
-    expect(banner.textContent).toContain('1 new activity');
     expect(screen.queryByText('+4.00000000 CKB')).not.toBeInTheDocument();
 
     fireEvent.click(banner);

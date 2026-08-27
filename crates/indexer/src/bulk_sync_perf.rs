@@ -3164,21 +3164,6 @@ mod tests {
         assert!(report.contains("peak_live_cell_count"));
     }
 
-    #[test]
-    fn test_pipeline_batch_sample_defaults_to_pipeline_engine() {
-        let sample = test_batch_sample(10, 1.0, 40.0, 100, 4, 1);
-        assert_eq!(sample.engine, "pipeline");
-        assert_eq!(sample.fetch_ms, 0.0);
-        assert_eq!(sample.facts_ms, 0.0);
-        assert_eq!(sample.resolve_ms, 0.0);
-        assert_eq!(sample.reduce_ms, 0.0);
-        assert_eq!(sample.interner_gc_ms, 0.0);
-        assert_eq!(sample.memory_accounting_ms, 0.0);
-        assert_eq!(sample.flush_ms, 0.0);
-        assert_eq!(sample.live_cell_count, 0);
-        assert_eq!(sample.cumulative_history_rows, 0);
-    }
-
     // ── Wall Clock Breakdown tests ──────────────────────────────────────
 
     #[test]

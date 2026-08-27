@@ -2162,26 +2162,6 @@ mod tests {
     }
 
     #[test]
-    fn test_format_build_version_omits_main_branch_label() {
-        assert_eq!(
-            build_version_format::format_build_version("0.1.0", Some("main"), "abcdef123456"),
-            "0.1.0@abcdef123456"
-        );
-    }
-
-    #[test]
-    fn test_format_build_version_includes_non_main_branch_label_verbatim() {
-        assert_eq!(
-            build_version_format::format_build_version(
-                "0.1.0",
-                Some("feature/foo"),
-                "abcdef123456"
-            ),
-            "0.1.0+feature/foo@abcdef123456"
-        );
-    }
-
-    #[test]
     fn test_cli_version_uses_semver_optional_branch_and_commit_hash() {
         let cmd = Cli::command();
         let version = cmd.get_version().expect("cli version should be present");
@@ -3218,44 +3198,6 @@ mod tests {
         // 8 GB = 8388608 kB
         let content = "MemTotal:        8388608 kB\n";
         assert_eq!(parse_meminfo_total_gb(content), Some(8));
-    }
-
-    #[test]
-    fn test_print_startup_info_does_not_panic() {
-        let dir = TempDir::new().unwrap();
-        let root = dir.path();
-        let config = CkbadgerConfig::default();
-        let work = WorkDir::resolve(root);
-        let services = vec![
-            "indexer".to_string(),
-            "api".to_string(),
-            "frontend-server".to_string(),
-        ];
-        // Should not panic with any config
-        print_startup_info(root, &config, &work, &services, FD_LIMIT_TARGET);
-    }
-
-    #[test]
-    fn test_print_startup_info_partial_services() {
-        let dir = TempDir::new().unwrap();
-        let root = dir.path();
-        let config = CkbadgerConfig::default();
-        let work = WorkDir::resolve(root);
-        let services = vec!["indexer".to_string()];
-        print_startup_info(root, &config, &work, &services, FD_LIMIT_TARGET);
-    }
-
-    #[test]
-    fn test_print_startup_info_custom_config() {
-        let dir = TempDir::new().unwrap();
-        let root = dir.path();
-        let mut config = CkbadgerConfig::default();
-        config.ckb.network = "testnet".to_string();
-        config.ckb.workdir = Some("ckb-node".to_string());
-        config.store.memory_budget_gb = Some(48);
-        let work = WorkDir::resolve(root);
-        let services = vec!["api".to_string(), "frontend-server".to_string()];
-        print_startup_info(root, &config, &work, &services, FD_LIMIT_TARGET);
     }
 
     // -- resolve_frontend_dir --

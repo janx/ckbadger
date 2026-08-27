@@ -709,41 +709,6 @@ mod tests {
     use http_body_util::BodyExt;
     use tower::ServiceExt;
 
-    #[test]
-    fn test_api_service_config_fields() {
-        let config = ApiServiceConfig {
-            domain_data_path: "/data/domain".to_string(),
-            append_only_data_path: "/data/append".to_string(),
-            ckb_rpc_url: "http://localhost:8114".to_string(),
-            ckb_network: "mainnet".to_string(),
-            host: "0.0.0.0".to_string(),
-            port: 3001,
-            rate_limit: 100,
-            rate_limit_burst: 200,
-            slow_request_threshold_ms: 100,
-            ckb_db_path: "/ckb/data/db".to_string(),
-            store_runtime_config: StoreRuntimeConfig::default(),
-            dob_decode_dir: PathBuf::from("/data/media"),
-            cycles_request_dir: None,
-            network_data_path: "/data/network".to_string(),
-            crawler_enabled: false,
-        };
-
-        assert_eq!(config.domain_data_path, "/data/domain");
-        assert_eq!(config.append_only_data_path, "/data/append");
-        assert_eq!(config.ckb_rpc_url, "http://localhost:8114");
-        assert_eq!(config.ckb_network, "mainnet");
-        assert_eq!(config.host, "0.0.0.0");
-        assert_eq!(config.port, 3001);
-        assert_eq!(config.rate_limit, 100);
-        assert_eq!(config.rate_limit_burst, 200);
-        assert_eq!(config.ckb_db_path, "/ckb/data/db");
-        assert_eq!(config.store_runtime_config, StoreRuntimeConfig::default());
-        assert_eq!(config.dob_decode_dir, PathBuf::from("/data/media"));
-        assert_eq!(config.network_data_path, "/data/network");
-        assert!(!config.crawler_enabled);
-    }
-
     #[tokio::test]
     async fn network_secondary_attaches_when_primary_appears_after_api_start() {
         use ckbadger_store::LatestStatus;
@@ -787,60 +752,6 @@ mod tests {
                 .round_id,
             9
         );
-    }
-
-    #[test]
-    fn test_frontend_service_config_fields() {
-        let config = FrontendServiceConfig {
-            host: "127.0.0.1".to_string(),
-            port: 8100,
-            api_port: 8101,
-            ckb_network: "mainnet".to_string(),
-            ckb_rpc_url: "http://127.0.0.1:8114".to_string(),
-            build_version: "0.1.0+testbuild".to_string(),
-            frontend_dir: Some(PathBuf::from("/work/frontend")),
-            default_network: "mainnet".to_string(),
-            networks: vec![FrontendNetwork {
-                name: "mainnet".to_string(),
-                api_host: "127.0.0.1".to_string(),
-                api_port: 8101,
-            }],
-        };
-
-        assert_eq!(config.host, "127.0.0.1");
-        assert_eq!(config.port, 8100);
-        assert_eq!(config.api_port, 8101);
-        assert_eq!(config.ckb_network, "mainnet");
-        assert_eq!(config.ckb_rpc_url, "http://127.0.0.1:8114");
-        assert_eq!(
-            config.frontend_dir.as_ref().unwrap(),
-            &PathBuf::from("/work/frontend")
-        );
-        assert_eq!(config.default_network, "mainnet");
-        assert_eq!(config.networks.len(), 1);
-        assert_eq!(config.networks[0].name, "mainnet");
-        assert_eq!(config.networks[0].api_port, 8101);
-    }
-
-    #[test]
-    fn test_frontend_service_config_no_dir() {
-        let config = FrontendServiceConfig {
-            host: "0.0.0.0".to_string(),
-            port: 3000,
-            api_port: 8101,
-            ckb_network: "mainnet".to_string(),
-            ckb_rpc_url: "http://127.0.0.1:8114".to_string(),
-            build_version: "0.1.0+testbuild".to_string(),
-            frontend_dir: None,
-            default_network: "mainnet".to_string(),
-            networks: vec![FrontendNetwork {
-                name: "mainnet".to_string(),
-                api_host: "127.0.0.1".to_string(),
-                api_port: 8101,
-            }],
-        };
-
-        assert!(config.frontend_dir.is_none());
     }
 
     #[test]
