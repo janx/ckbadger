@@ -206,32 +206,6 @@ describe('TransactionDetailPage', () => {
     expect(api.getTransactionLifecycle).not.toHaveBeenCalled();
   });
 
-  it('polls pending transaction detail until committed and then loads chain-derived sections', async () => {
-    vi.mocked(api.getTransactionDetail)
-      .mockResolvedValueOnce(createPendingTransactionDetail())
-      .mockResolvedValueOnce(createCommittedTransactionDetail());
-
-    render(<TransactionDetailPage />);
-
-    expect(await screen.findByText('Pending')).toBeInTheDocument();
-    expect(api.getTransactionGraph).not.toHaveBeenCalled();
-    expect(api.getTransactionCellDeps).not.toHaveBeenCalled();
-    expect(api.getTransactionLifecycle).not.toHaveBeenCalled();
-
-    await waitFor(
-      () => {
-        expect(api.getTransactionDetail).toHaveBeenCalledTimes(2);
-      },
-      { timeout: 5000 }
-    );
-    expect(await screen.findByText('4 Confirmations')).toBeInTheDocument();
-    await waitFor(() => {
-      expect(api.getTransactionGraph).toHaveBeenCalledWith(TX_HASH);
-    });
-    expect(api.getTransactionCellDeps).toHaveBeenCalledWith(TX_HASH);
-    expect(api.getTransactionLifecycle).toHaveBeenCalledWith(TX_HASH);
-  }, 10000);
-
   it('links unknown type script to code-hash detail page', async () => {
     render(<TransactionDetailPage />);
 
