@@ -414,7 +414,8 @@ pub(crate) fn parse_block_to_facts(
                 | CellSemanticTag::Cluster
                 | CellSemanticTag::Mnft
                 | CellSemanticTag::Dotbit
-                | CellSemanticTag::BitCell => {
+                | CellSemanticTag::BitCell
+                | CellSemanticTag::DidCkb => {
                     let parsed_cell = ParsedCell {
                         capacity,
                         lock_code_hash: lock_code_hash_bytes.to_vec(),
@@ -437,7 +438,13 @@ pub(crate) fn parse_block_to_facts(
                         output_index_i16,
                     )?
                 }
-                _ => None,
+                // These tags are fully represented by the scalar fields above.
+                // Keep this match exhaustive so adding a protocol-backed semantic
+                // tag cannot silently drop its protocol facts again.
+                CellSemanticTag::Plain
+                | CellSemanticTag::Dao
+                | CellSemanticTag::Sudt
+                | CellSemanticTag::Xudt => None,
             };
 
             // -- Interned identities (after protocol_facts to avoid ownership conflict) --
@@ -1302,6 +1309,82 @@ mod tests {
                 "did:ckb code_hash {hex} must classify as DidCkb in bulk build"
             );
         }
+    }
+
+    #[test]
+    fn binary_facts_emit_protocol_facts_for_real_testnet_did_ckb() {
+        use crate::parser::test_helpers::real_did_ckb as fixture;
+        use ckb_types::{bytes::Bytes, packed};
+
+        let code_hash = packed::Byte32::from_slice(&crate::rpc::parse_hex_to_bytes(
+            fixture::TYPE_CODE_HASH_TESTNET,
+        ))
+        .unwrap();
+        let type_script = packed::Script::new_builder()
+            .code_hash(code_hash)
+            .hash_type(packed::Byte::new(1))
+            .args(Bytes::from(crate::rpc::parse_hex_to_bytes(fixture::CELL_20_ARGS)).pack())
+            .build();
+        let lock = packed::Script::new_builder()
+            .code_hash(
+                packed::Byte32::from_slice(&crate::rpc::parse_hex_to_bytes(
+                    fixture::CELL_20_LOCK_CODE_HASH,
+                ))
+                .unwrap(),
+            )
+            .hash_type(packed::Byte::new(1))
+            .args(Bytes::from(crate::rpc::parse_hex_to_bytes(fixture::CELL_20_LOCK_ARGS)).pack())
+            .build();
+        let capacity =
+            u64::from_str_radix(fixture::CELL_20_CAPACITY.trim_start_matches("0x"), 16).unwrap();
+        let output = packed::CellOutput::new_builder()
+            .capacity(packed::Uint64::from_slice(&capacity.to_le_bytes()).unwrap())
+            .lock(lock)
+            .type_(Some(type_script).pack())
+            .build();
+        let tx = packed::Transaction::new_builder()
+            .raw(
+                packed::RawTransaction::new_builder()
+                    .outputs(packed::CellOutputVec::new_builder().push(output).build())
+                    .outputs_data(
+                        packed::BytesVec::new_builder()
+                            .push(
+                                Bytes::from(crate::rpc::parse_hex_to_bytes(fixture::CELL_20_DATA))
+                                    .pack(),
+                            )
+                            .build(),
+                    )
+                    .build(),
+            )
+            .build();
+        let block = packed::Block::new_builder()
+            .header(
+                packed::Header::new_builder()
+                    .raw(packed::RawHeader::new_builder().build())
+                    .build(),
+            )
+            .transactions(packed::TransactionVec::new_builder().push(tx).build())
+            .build();
+        let raw = RawCkbBlock {
+            block: block.into_view(),
+            cycles: Vec::new(),
+        };
+
+        let (_, _, cells) = parse_block_to_facts(&raw, &IdentityInterner::default())
+            .expect("production binary facts path must parse the real testnet did:ckb cell");
+        assert_eq!(cells.len(), 1);
+        assert_eq!(cells[0].semantic_tag, CellSemanticTag::DidCkb);
+        let crate::sync::bulk_build::facts::CellProtocolFacts::DidCkb(did) = cells[0]
+            .protocol_facts
+            .as_ref()
+            .expect("did:ckb semantic tags must carry did:ckb protocol facts")
+        else {
+            panic!("expected did:ckb protocol facts");
+        };
+        assert_eq!(
+            did.did_id,
+            crate::rpc::parse_hex_to_bytes(fixture::CELL_20_ARGS)
+        );
     }
 
     /// Cross-path parity: for every code_hash the protocol registry knows, the

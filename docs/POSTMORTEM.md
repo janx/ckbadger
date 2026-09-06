@@ -2306,6 +2306,41 @@ by two owners" from "two events that happen to look alike".
 
 ---
 
+### PROTO-009: A semantic tag whose protocol facts were discarded
+
+**Date**: 2026-09-06
+
+**Symptom**: Testnet live sync repeatedly failed while consuming did:ckb cell
+`0x324a483e…bb22:0` at block 22,326,864 because its outpoint-to-identity mapping
+was absent. The API listed only two did:ckb identities, both created after the
+bulk-to-live handoff, while identities created during the from-genesis bulk run
+were missing.
+
+**Root Cause**: PROTO-007 fixed the first half of binary bulk classification:
+`code_hash_to_semantic_tag` returned `CellSemanticTag::DidCkb`. The immediately
+following `protocol_facts` match still admitted only Spore, Cluster, mNFT,
+.bit, and .bit Cell, with `_ => None`. Every bulk did:ckb cell therefore kept
+its semantic tag but silently lost the `DidCkbProtocolFacts` required by
+`ObjectOwner`; no identity rows or historical outpoint mappings were ever
+materialized. Live sync used a different extraction path and correctly indexed
+new identities, hiding the gap until one of the omitted historical cells was
+consumed.
+
+**Fix**: Route `CellSemanticTag::DidCkb` through the existing single
+`parse_protocol_facts` path. Replace the wildcard with explicit scalar-only
+tags, making the match exhaustive so a future protocol-backed tag cannot be
+silently discarded. Add a regression using a real 20-byte testnet did:ckb cell
+through `parse_block_to_facts`, asserting both the semantic tag and its DID
+protocol facts.
+
+**Re-sync required**: Yes. The missing identity entries and outpoint mappings
+belong to the indexer-owned domain store and were never written during bulk
+sync. Fix the writer path, purge the chain stores, and re-sync from genesis;
+do not repair or backfill the existing RocksDB. The append-only cell store
+format and write semantics are unchanged.
+
+---
+
 ### API-014: A size that could not reproduce its own fee rate
 
 **Date**: 2026-08-04
@@ -2415,4 +2450,4 @@ does not take.
 
 ---
 
-_Last updated: 2026-08-23_
+_Last updated: 2026-09-06_
