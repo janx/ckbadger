@@ -8,68 +8,52 @@ export function SiteFooter() {
 
   return (
     <footer className="border-base-border bg-base-void/95 border-t">
-      <div className="container mx-auto px-4 py-3">
-        <div className="font-mono text-[11px] leading-relaxed">
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-            <div className="flex items-center gap-3">
-              <span className="text-text-ghost select-none">&gt;</span>
-              <span className="text-text">
-                Designed by{' '}
-                <a
-                  href="https://x.com/busyforking"
-                  target="_blank"
-                  rel="noreferrer"
-                  className="text-jade hover:text-jade-dim transition-colors"
-                >
-                  @busyforking
-                </a>
-                , coded by <span className="text-aqua">Claude</span>
-                {' and '}
-                <span className="text-aqua">Codex</span>. ❤️✌️
-              </span>
-            </div>
+      <div className="container mx-auto grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-6 gap-y-3 px-4 py-3 font-mono text-[11px] leading-relaxed lg:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]">
+        <a
+          href="https://github.com/janx/ckbadger"
+          target="_blank"
+          rel="noreferrer"
+          title={`CKBadger ${buildVersion}`}
+          className="text-text-dim hover:text-jade group flex min-w-0 max-w-full items-center gap-2 justify-self-start py-1 transition-colors"
+        >
+          <span className="live-dot shrink-0" aria-hidden="true" />
+          <span className="text-text group-hover:text-jade shrink-0 transition-colors">
+            CKBadger
+          </span>
+          <span className="truncate">{buildVersion}</span>
+        </a>
 
-            <div className="flex flex-wrap items-center gap-3">
-              <span className="text-text-ghost hidden sm:inline">|</span>
-              <a
-                href="https://github.com/janx/ckbadger"
-                target="_blank"
-                rel="noreferrer"
-                className="text-text hover:text-jade transition-colors"
-              >
-                {buildVersion}
-              </a>
-              <span className="live-dot" />
-              <span className="text-text-ghost">|</span>
-              <Link
-                href="/hardforks"
-                className="text-text hover:text-jade border-base-border hover:border-jade/30 rounded border px-1.5 py-0.5 transition-colors"
-              >
-                Hardforks
-              </Link>
-              <a
-                href="https://dashboard.fiber.channel/"
-                target="_blank"
-                rel="noreferrer"
-                className="text-text hover:text-jade border-base-border hover:border-jade/30 rounded border px-1.5 py-0.5 transition-colors"
-              >
-                Fiber Dashboard
-              </a>
-              <a
-                href="https://web5.info"
-                target="_blank"
-                rel="noreferrer"
-                className="text-text hover:text-jade border-base-border hover:border-jade/30 rounded border px-1.5 py-0.5 transition-colors"
-              >
-                Web5
-              </a>
-              <span className="text-text-ghost">|</span>
-              <span className="text-text">
-                <span className="text-text-dim">?</span> keys
-              </span>
-            </div>
-          </div>
-        </div>
+        <nav
+          aria-label="Footer"
+          className="col-span-2 row-start-2 flex flex-wrap items-center justify-center gap-x-5 gap-y-2 lg:col-span-1 lg:col-start-2 lg:row-start-1"
+        >
+          <Link href="/hardforks" className="text-text hover:text-jade py-1 transition-colors">
+            Hardforks
+          </Link>
+          <a
+            href="https://dashboard.fiber.channel/"
+            target="_blank"
+            rel="noreferrer"
+            className="text-text hover:text-jade py-1 transition-colors"
+          >
+            Fiber Dashboard
+          </a>
+          <a
+            href="https://web5.info"
+            target="_blank"
+            rel="noreferrer"
+            className="text-text hover:text-jade py-1 transition-colors"
+          >
+            Web5
+          </a>
+        </nav>
+
+        <span className="text-text-dim col-start-2 row-start-1 flex items-center gap-2 justify-self-end lg:col-start-3">
+          <kbd className="border-base-border text-text rounded border px-1.5 py-0.5 font-mono text-[10px]">
+            ?
+          </kbd>
+          <span>keys</span>
+        </span>
       </div>
     </footer>
   );

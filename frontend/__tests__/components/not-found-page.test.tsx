@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { render, screen } from '../utils/test-utils';
+import { render, screen } from '@/__tests__/utils/test-utils';
 import { NotFoundPage } from '@/components/not-found-page';
 
 describe('NotFoundPage', () => {
@@ -34,5 +34,21 @@ describe('NotFoundPage', () => {
     // No debug UI
     expect(screen.queryByText('Ocean Tuning')).not.toBeInTheDocument();
     expect(screen.queryByText('Track Blocks')).not.toBeInTheDocument();
+  });
+
+  it('omits the design and coding attribution from its footer', () => {
+    render(<NotFoundPage />);
+
+    expect(screen.getByRole('main')).not.toHaveTextContent(
+      /designed by|coded by|busyforking|Claude|Codex/i
+    );
+    expect(screen.getByRole('link', { name: 'Hardforks' })).toHaveAttribute(
+      'href',
+      '/mainnet/hardforks'
+    );
+    expect(screen.getByRole('link', { name: 'Fiber Dashboard' })).toHaveAttribute(
+      'href',
+      'https://dashboard.fiber.channel/'
+    );
   });
 });

@@ -192,24 +192,9 @@ export function NotFoundPage({ errMessage }: NotFoundPageProps = {}) {
           </span>
         </div>
 
-        {/* Footer — matches SiteFooter style */}
+        {/* Compact footer */}
         <div className="flex flex-wrap items-center justify-center gap-3 font-mono text-[11px]">
           <span className="text-text-ghost select-none">&gt;</span>
-          <span className="text-text">
-            Designed by{' '}
-            <a
-              href="https://x.com/busyforking"
-              target="_blank"
-              rel="noreferrer"
-              className="text-jade hover:text-jade-dim transition-colors"
-            >
-              @busyforking
-            </a>
-            , coded by <span className="text-aqua">Claude</span>
-            {' and '}
-            <span className="text-aqua">Codex</span>
-          </span>
-          <span className="text-text-ghost">|</span>
           <span className="text-text-ghost">
             tip: <span className="text-jade/50 tabular-nums">{blockNumber}</span>
           </span>
