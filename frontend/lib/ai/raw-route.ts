@@ -1,3 +1,5 @@
+import { PAGE_ROUTES, matchPageRoute } from '@/lib/ai/page-registry';
+
 export type ParsedRawPage =
   | { kind: 'block_detail'; pathname: string; id: string }
   | { kind: 'cell_detail'; pathname: string; outpoint: string }
@@ -8,102 +10,10 @@ export type ParsedRawPage =
   | { kind: 'tx_detail'; pathname: string; hash: string }
   | { kind: 'unknown'; pathname: string };
 
-export const RAW_ROUTE_PATTERNS = [
-  '/blocks/{id}',
-  '/cell/{outpoint}',
-  '/identities/dotbit/{identityId}',
-  '/identities/did/{identityId}',
-  '/identities/bit-cell/{identityId}',
-  '/objects/mnft/{objectId}',
-  '/tx/{hash}',
-] as const;
-
-function normalizePathname(pathname: string): string {
-  if (!pathname.startsWith('/')) {
-    return `/${pathname}`;
-  }
-  if (pathname !== '/' && pathname.endsWith('/')) {
-    return pathname.replace(/\/+$/, '');
-  }
-  return pathname;
-}
-
-function decodeParam(raw: string): string {
-  try {
-    return decodeURIComponent(raw);
-  } catch {
-    return raw;
-  }
-}
+export const RAW_ROUTE_PATTERNS = PAGE_ROUTES.filter((route) => route.rawProfiles.length > 0).map(
+  (route) => route.pattern
+);
 
 export function parseRawSourcePath(pathname: string): ParsedRawPage {
-  const normalized = normalizePathname(pathname);
-
-  const blockMatch = normalized.match(/^\/blocks\/([^/]+)$/);
-  if (blockMatch) {
-    return {
-      kind: 'block_detail',
-      pathname: normalized,
-      id: decodeParam(blockMatch[1]),
-    };
-  }
-
-  const cellMatch = normalized.match(/^\/cell\/([^/]+)$/);
-  if (cellMatch) {
-    return {
-      kind: 'cell_detail',
-      pathname: normalized,
-      outpoint: decodeParam(cellMatch[1]),
-    };
-  }
-
-  const txMatch = normalized.match(/^\/tx\/([^/]+)$/);
-  if (txMatch) {
-    return {
-      kind: 'tx_detail',
-      pathname: normalized,
-      hash: decodeParam(txMatch[1]),
-    };
-  }
-
-  const dotbitMatch = normalized.match(/^\/identities\/dotbit\/([^/]+)$/);
-  if (dotbitMatch) {
-    return {
-      kind: 'dotbit_item_detail',
-      pathname: normalized,
-      identityId: decodeParam(dotbitMatch[1]),
-    };
-  }
-
-  const didMatch = normalized.match(/^\/identities\/did\/([^/]+)$/);
-  if (didMatch) {
-    return {
-      kind: 'did_ckb_item_detail',
-      pathname: normalized,
-      identityId: decodeParam(didMatch[1]),
-    };
-  }
-
-  const bitCellMatch = normalized.match(/^\/identities\/bit-cell\/([^/]+)$/);
-  if (bitCellMatch) {
-    return {
-      kind: 'bit_cell_item_detail',
-      pathname: normalized,
-      identityId: decodeParam(bitCellMatch[1]),
-    };
-  }
-
-  const mnftMatch = normalized.match(/^\/objects\/mnft\/([^/]+)$/);
-  if (mnftMatch) {
-    return {
-      kind: 'mnft_item_detail',
-      pathname: normalized,
-      objectId: decodeParam(mnftMatch[1]),
-    };
-  }
-
-  return {
-    kind: 'unknown',
-    pathname: normalized,
-  };
+  return matchPageRoute(pathname, true) as ParsedRawPage;
 }

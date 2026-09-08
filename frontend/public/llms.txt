@@ -39,24 +39,6 @@ Machine-friendly endpoints:
   verify retained aliases in that completed round; it does not imply NAT/firewall, “home node”,
   global invalidity, or offline status.
 
-Core page groups below are relative to `/{network}`:
-
-- `/activities`
-- `/blocks`, `/blocks/{id}`
-- `/transactions`, `/tx/{hash}`
-- `/address/{addr}`, `/cell/{txHash-outputIndex}`
-- `/tokens`, `/tokens/{typeHash}`
-- `/inventory/tokens`, `/inventory/objects`, `/inventory/identities`
-- `/objects`, `/objects/{sporeId}`, `/objects/mnft/{objectId}`
-- `/clusters/{clusterId}`, `/classes/{classId}`
-- `/identities/{collectionId}`, `/identities/dotbit/{identityId}`,
-  `/identities/did/{identityId}`, `/identities/bit-cell/{identityId}`
-- `/scripts`, `/scripts/{name}`, `/script/{codeHash}`
-- `/dao`, `/dao/charts`
-- `/fiber/channels`, `/fiber/channels/{channelId}`
-- `/charts`, `/charts/{slug}`
-- `/forks`, `/forks/{id}`
-- `/hardforks`
-- `/network`
+<!-- REGISTERED_PAGE_FORMATS -->
 
 For a fuller capability map see: `/llms-full.txt`

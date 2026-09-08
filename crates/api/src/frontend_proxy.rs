@@ -51,13 +51,13 @@ const UPSTREAM_API_PREFIX: &str = "/api/v1/";
 
 /// One configured `ckbadger-api` upstream.
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct UpstreamTarget {
+pub(crate) struct UpstreamTarget {
     host: String,
     port: u16,
 }
 
 impl UpstreamTarget {
-    fn from_bind_host(host: String, port: u16) -> Self {
+    pub(crate) fn from_bind_host(host: String, port: u16) -> Self {
         let unbracketed = host
             .strip_prefix('[')
             .and_then(|value| value.strip_suffix(']'))
@@ -78,7 +78,7 @@ impl UpstreamTarget {
         }
     }
 
-    fn http_url(&self, rest: &str, query: &str) -> Option<reqwest::Url> {
+    pub(crate) fn http_url(&self, rest: &str, query: &str) -> Option<reqwest::Url> {
         reqwest::Url::parse(&format!(
             "http://{}{UPSTREAM_API_PREFIX}{rest}{query}",
             self.authority()

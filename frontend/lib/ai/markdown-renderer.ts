@@ -1,3 +1,4 @@
+import { CHART_ROUTES } from '@/lib/ai/page-registry';
 import type { ScriptRefHashType } from '@/lib/script-ref';
 import {
   api,
@@ -387,60 +388,10 @@ function renderMarkdownForChart(slug: string, payload: MarkdownChartPayload): st
 }
 
 function selectChartFetcher(slug: string): (() => Promise<MarkdownChartPayload>) | null {
-  switch (slug) {
-    case 'address-cohort-retention':
-      return () => api.getAddressCohortRetentionChart();
-    case 'average-block-time':
-      return () => api.getAverageBlockTimeChart();
-    case 'block-time-distribution':
-      return () => api.getBlockTimeDistributionChart();
-    case 'capacity-turnover-ratio':
-      return () => api.getCapacityTurnoverRatioChart();
-    case 'cell-count':
-      return () => api.getCellCountChart();
-    case 'cell-size-distribution':
-      return () => api.getCellSizeDistributionChart();
-    case 'circulation-ratio':
-      return () => api.getDaoCirculationRatioChart();
-    case 'common-knowledge-composition':
-      return () => api.getCommonKnowledgeCompositionChart();
-    case 'daily-deposit':
-      return () => api.getDaoDailyDepositChart();
-    case 'difficulty':
-      return () => api.getDifficultyChart();
-    case 'epoch-time-distribution':
-      return () => api.getEpochTimeDistributionChart();
-    case 'epoch-time-length':
-      return () => api.getEpochTimeLengthChart();
-    case 'hash-rate':
-      return () => api.getHashRateChart();
-    case 'hodl-wave':
-      return () => api.getHodlWaveChart();
-    case 'inflation-rate':
-      return () => api.getInflationRateChart();
-    case 'knowledge-size':
-      return () => api.getKnowledgeSizeChart();
-    case 'miner-address-distribution':
-      return () => api.getMinerAddressDistributionChart();
-    case 'most-utilized-assets':
-      return () => api.getMostUtilizedAssetsChart();
-    case 'most-utilized-scripts':
-      return () => api.getMostUtilizedScriptsChart();
-    case 'nominal-apc':
-      return () => api.getNominalApcChart();
-    case 'secondary-issuance':
-      return () => api.getSecondaryIssuanceChart();
-    case 'total-deposit':
-      return () => api.getDaoTotalDepositChart();
-    case 'total-supply':
-      return () => api.getTotalSupplyChart();
-    case 'transaction-count':
-      return () => api.getTransactionCountChart();
-    case 'uncle-rate':
-      return () => api.getUncleRateChart();
-    default:
-      return null;
-  }
+  const method = Object.hasOwn(CHART_ROUTES, slug)
+    ? CHART_ROUTES[slug as keyof typeof CHART_ROUTES]
+    : undefined;
+  return method ? () => api[method]() : null;
 }
 
 function renderAddressSummary(address: Address) {
@@ -1859,19 +1810,65 @@ export async function renderMarkdownPage(
     }
 
     case 'fiber_channels_list': {
+      const channels = await api.getFiberChannels({
+        limit: parseLimit(searchParams),
+        cursor: searchParams.get('cursor') ?? undefined,
+      });
       const body = buildMarkdownDocument(buildMeta(page.pathname, page.kind, origin), [
         '# Fiber Channels',
         '',
-        'List of Fiber payment channels on CKB.',
+        renderCursorMeta(searchParams),
+        '',
+        markdownTable(
+          ['channelId', 'state', 'capacity', 'udtTypeHash', 'udtAmount', 'openBlock'],
+          channels.data.map((channel) => [
+            channel.channelId,
+            channel.state,
+            channel.capacity,
+            channel.udtTypeHash,
+            channel.udtAmount,
+            channel.openBlock,
+          ])
+        ),
+        '',
+        `Next cursor: ${channels.nextCursor ?? '-'}`,
       ]);
       return { status: 200, body };
     }
 
     case 'fiber_channel_detail': {
+      const channel = await api.getFiberChannel(page.channelId);
       const body = buildMarkdownDocument(buildMeta(page.pathname, page.kind, origin), [
         `# Fiber Channel ${page.channelId}`,
         '',
-        'Channel detail page.',
+        markdownTable(
+          ['field', 'value'],
+          [
+            ['channelId', channel.channelId],
+            ['state', channel.state],
+            ['capacity', channel.capacity],
+            ['udtTypeHash', channel.udtTypeHash],
+            ['udtAmount', channel.udtAmount],
+            ['fundingTxHash', channel.fundingTxHash],
+            ['fundingOutputIndex', channel.fundingOutputIndex],
+            ['openBlock', channel.openBlock],
+            ['closeBlock', channel.closeBlock],
+            ['settlementBlock', channel.settlementBlock],
+            ['participants', channel.participants.join(', ')],
+          ]
+        ),
+        '',
+        '## Timeline',
+        '',
+        markdownTable(
+          ['event', 'blockNumber', 'txHash', 'timestamp'],
+          channel.timeline.map((event) => [
+            event.event,
+            event.blockNumber,
+            event.txHash,
+            event.timestamp,
+          ])
+        ),
       ]);
       return { status: 200, body };
     }

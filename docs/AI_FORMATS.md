@@ -17,6 +17,14 @@ Priority order (strict):
 2. URL suffix (`.md` / `.raw`)
 3. `Accept` header
 
+`format=html` explicitly selects HTML, including on a suffixed URL. Accept quality weights
+are respected; `q=0` does not select a representation and browsers prefer HTML on ties.
+Duplicate/unknown `format` values return `400 invalid_format`.
+Negotiated pages and HTML page responses use `Vary: Accept` and `Cache-Control: no-store`.
+Static hashed assets retain their immutable cache policy. `HEAD` returns the same headers
+as `GET` without a body. Errors are JSON with `error.code` and `error.message`, including
+`unknown_page`, `unknown_network`, `invalid_profile`, and `profile_not_supported`.
+
 ### Markdown Output
 
 1. URL suffix `.md` (e.g. `/mainnet/blocks/123.md`)
@@ -40,6 +48,9 @@ Priority order (strict):
 - `frontend/public/llms.txt` — short discovery doc
 - `frontend/public/llms-full.txt` — full discovery doc
 - `http://localhost:8100/capabilities` — machine-readable format/profile/route matrix
+
+The production router and built static discovery files generate their route/profile tables
+from `frontend/lib/ai/page-registry.ts`. `/capabilities.chartSlugs` enumerates registered charts.
 
 `/capabilities.site` advertises `pageBasePattern`, the shared `apiBasePattern`/`wsUrlPattern`
 (`{network}` placeholder), and the concrete `networks` list plus `defaultNetwork` that make the
@@ -111,17 +122,56 @@ CONTINUE_ON_ERROR=1 \
 
 ## Implementation Boundary
 
-- Markdown/raw output is handled in frontend only (Vite SPA middleware)
+- Axum negotiates page requests before both embedded-asset and filesystem SPA fallbacks.
+  The TypeScript renderers are bundled by `pnpm --dir frontend build` and embedded in the
+  CLI with QuickJS. No Node process or external renderer is required at runtime. Vite dev
+  and preview forward format requests to this same Axum server at `127.0.0.1:8100`.
+- Each render has a fresh context, its own selected network, a 64 MiB JS heap limit and a
+  30-second deadline. Four requests can render concurrently; excess requests receive
+  `503 renderer_busy`. Rust limits upstream reads to eight at a time, 256 requests, 16 MiB
+  per response and 64 MiB total per render, and allows
+  only read-only API requests and the debugger's read-only RPC methods, without redirects.
+- Renderers read each network's configured API/RPC; no RocksDB write paths change.
 - Direct API JSON under `/api/v1` and shared-proxy JSON under `/api/{network}/v1` are not
   rewritten to markdown/raw
 - Static files are not rewritten
 - Raw responses include `x-ckbadger-format`, `x-ckbadger-profile`, and `x-ckbadger-schema`
 
+## Public Origin
+
+Set this in the shared orchestrator `ckbadger.toml` (or single-network `config.toml`):
+
+```toml
+[frontend]
+public_origin = "https://explorer.example.org"
+```
+
+This HTTP(S) origin must have no path, query, fragment or credentials. It takes priority
+for `/capabilities.origin` and canonical Markdown/raw metadata. Without it, the server
+uses `Host` and HTTP, accepting `X-Forwarded-Host`/`X-Forwarded-Proto` only from a loopback
+socket peer. A local reverse proxy must overwrite those headers. Configure `public_origin`
+when the reverse proxy is on another host. Forwarded headers from remote peers are ignored.
+
+## Production Verification
+
+```bash
+pnpm --dir frontend build
+cargo test -p ckbadger-api --test api_frontend_formats
+cargo build --release -p ckbadger
+python3 scripts/test_frontend_release.py --binary target/release/ckbadger
+```
+
+The binary test starts the actual CLI frontend in an empty workdir with two fixture API/RPC
+servers. It checks success responses, format priority, HTML, HEAD, profile errors, network
+isolation, HTTPS canonical metadata and debugger dep-group expansion. Every advertised route
+and profile also runs against a pre-sync API to verify that its error reaches the client.
+CI tests embedded assets in debug builds too; release packaging requires the release-binary test.
+
 ## Checklist: Adding/Changing Routes or Formats (MANDATORY)
 
-1. Update markdown route parsing in `frontend/lib/ai/markdown-route.ts` if markdown coverage changes
-2. Update raw route parsing in `frontend/lib/ai/raw-route.ts` if raw coverage changes
+1. Register page patterns, kinds and raw profiles in `frontend/lib/ai/page-registry.ts`
+2. Register chart slugs and API methods in that same registry if chart coverage changes
 3. Update renderer(s): `frontend/lib/ai/markdown-renderer.ts` and/or `frontend/lib/ai/raw-renderer.ts`
 4. Update rewrite negotiation in `frontend/lib/ai/markdown-request.ts` if format rules change
-5. Update capability/discovery files: `frontend/lib/ai/capabilities.ts`, `frontend/public/llms.txt`, and `frontend/public/llms-full.txt`
+5. Rebuild the frontend to regenerate the embedded renderer and discovery route tables; update discovery prose only when the contract changes
 6. Add/adjust tests in `frontend/__tests__/lib/markdown-*.test.ts`, `frontend/__tests__/lib/raw-*.test.ts`, and `frontend/__tests__/lib/capabilities.test.ts`

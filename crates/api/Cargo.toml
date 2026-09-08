@@ -74,8 +74,9 @@ ckb-types = { workspace = true }
 rocksdb = { workspace = true }
 
 # Embedded frontend assets
-rust-embed = { workspace = true }
+rust-embed = { workspace = true, features = ["debug-embed"] }
 mime_guess = { workspace = true }
+rquickjs = { version = "0.12", features = ["futures"] }
 
 [dev-dependencies]
 tokio-test = { workspace = true }

@@ -24,12 +24,60 @@ vi.mock('@/lib/api', () => ({
     getMnftItemDetail: vi.fn(),
     getMnftItemActivities: vi.fn(),
     getNetworkSummary: vi.fn(),
+    getFiberChannels: vi.fn(),
+    getFiberChannel: vi.fn(),
   },
   isWarmupPendingError: vi.fn(() => false),
   isNetworkInitializingError: vi.fn(() => false),
 }));
 
 describe('renderMarkdownPage', () => {
+  it('renders Fiber channel records and their on-chain lifecycle', async () => {
+    const channel = {
+      channelId: '0xchannel',
+      state: 'open' as const,
+      capacity: '9007199254740993',
+      udtTypeHash: null,
+      udtAmount: null,
+      fundingTxHash: '0xfunding',
+      fundingOutputIndex: 0,
+      openBlock: 42,
+      openTimestamp: '2026-09-08T00:00:00Z',
+      closeBlock: null,
+      closeTimestamp: null,
+      closeTxHash: null,
+      commitmentTxHash: null,
+      delayEpoch: null,
+      settlementBlock: null,
+      settlementTimestamp: null,
+      settlementTxHash: null,
+      participants: ['ckb1owner'],
+      timeline: [
+        { event: 'open', blockNumber: 42, txHash: '0xfunding', timestamp: '2026-09-08T00:00:00Z' },
+      ],
+    };
+    vi.mocked(api.getFiberChannels).mockResolvedValue({
+      data: [channel],
+      limit: 20,
+      hasMore: true,
+      nextCursor: 'next',
+    });
+    vi.mocked(api.getFiberChannel).mockResolvedValue(channel);
+    const list = await renderMarkdownPage({
+      page: parseMarkdownSourcePath('/fiber/channels'),
+      searchParams: new URLSearchParams('limit=20'),
+      origin: 'https://explorer.example',
+    });
+    expect(list.body).toContain('9007199254740993');
+    expect(list.body).toContain('Next cursor: next');
+    const detail = await renderMarkdownPage({
+      page: parseMarkdownSourcePath('/fiber/channels/0xchannel'),
+      searchParams: new URLSearchParams(),
+      origin: 'https://explorer.example',
+    });
+    expect(detail.body).toContain('| open | 42 | 0xfunding |');
+    expect(detail.body).toContain('ckb1owner');
+  });
   beforeEach(() => {
     vi.clearAllMocks();
     window.__CKBADGER_RUNTIME_CONFIG__ = {

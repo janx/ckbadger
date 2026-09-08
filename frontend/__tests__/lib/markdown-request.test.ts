@@ -5,6 +5,55 @@ function params(query: string = ''): URLSearchParams {
 }
 
 describe('resolveMarkdownRewrite', () => {
+  it('negotiates registered page parameters containing dots', () => {
+    expect(
+      resolveMarkdownRewrite({
+        method: 'GET',
+        pathname: '/mainnet/scripts/deployed.v1',
+        searchParams: params(),
+        acceptHeader: 'text/markdown',
+      }).rewrite
+    ).toBe(true);
+  });
+  it('uses Accept quality weights and keeps browsers on HTML', () => {
+    const resolve = (acceptHeader: string) =>
+      resolveMarkdownRewrite({
+        method: 'GET',
+        pathname: '/mainnet/blocks/42',
+        searchParams: params(),
+        acceptHeader,
+      });
+    expect(resolve('text/html, text/markdown;q=0.5').rewrite).toBe(false);
+    expect(resolve('text/markdown;q=0').rewrite).toBe(false);
+    expect(resolve('text/markdown, application/vnd.ckbadger.raw+json;q=0.2').internalPrefix).toBe(
+      '/ai-md'
+    );
+    expect(resolve('TEXT/MARKDOWN').internalPrefix).toBe('/ai-md');
+  });
+
+  it('explicit HTML overrides suffix and Accept', () => {
+    expect(
+      resolveMarkdownRewrite({
+        method: 'HEAD',
+        pathname: '/testnet/blocks/42.raw',
+        searchParams: params('format=html'),
+        acceptHeader: 'text/markdown',
+      })
+    ).toEqual({ rewrite: false, sourcePath: '/testnet/blocks/42', removeFormatParam: true });
+  });
+
+  it('rejects invalid and ambiguous format requests', () => {
+    for (const query of ['format=json', 'format=', 'format=raw&format=md']) {
+      expect(() =>
+        resolveMarkdownRewrite({
+          method: 'GET',
+          pathname: '/mainnet/blocks/42',
+          searchParams: params(query),
+          acceptHeader: 'text/html',
+        })
+      ).toThrow('Invalid query format');
+    }
+  });
   it('rewrites .md suffix to markdown source path', () => {
     const decision = resolveMarkdownRewrite({
       method: 'GET',

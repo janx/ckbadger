@@ -119,10 +119,13 @@ For a fresh db, `ckbadger run` will kick off bulk-sync mode, read data from the 
 
 ### Agent-Friendly Page Output
 
-Every supported explorer page exposes `.md` (markdown summary) and `.raw` (structured JSON)
-formats for agent consumption. In orchestrator mode, page paths start with the network
+Registered explorer pages expose `.md` summaries; the raw route/profile matrix is published
+at `/capabilities`. Both formats run in the single binary's Axum frontend server.
+Page paths start with the network
 (`/<network>/...`). See [docs/AI_FORMATS.md](docs/AI_FORMATS.md) for format negotiation, raw
 profiles, debugger workflow, and examples.
+For an HTTPS reverse proxy, set `[frontend].public_origin = "https://explorer.example.org"`
+in `ckbadger.toml` (or single-network `config.toml`) to publish the external canonical origin.
 
 ## Dive Deeper
 

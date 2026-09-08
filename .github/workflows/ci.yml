@@ -14,7 +14,6 @@ on:
       - '.github/workflows/claude*.yml'
       - '.github/workflows/release.yml'
       - '.github/workflows/perf-nightly.yml'
-      - 'scripts/**'
   pull_request:
     branches: [main]
 
@@ -45,6 +44,9 @@ jobs:
           filters: |
             rust:
               - 'crates/**'
+              - 'frontend/**'
+              - 'pnpm-lock.yaml'
+              - 'scripts/test_frontend_release.py'
               - 'Cargo.toml'
               - 'Cargo.lock'
               - '.github/workflows/ci.yml'
@@ -92,6 +94,14 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: pnpm
+      - name: Build embedded frontend and agent renderer
+        run: pnpm install --frozen-lockfile && pnpm --dir frontend build
+
       - name: Check formatting
         run: cargo fmt --all -- --check
 
@@ -102,6 +112,9 @@ jobs:
         run: cargo test --all
         env:
           CKBADGER_DATA_PATH: /tmp/ckbadger-test-store
+
+      - name: Exercise the embedded CLI frontend
+        run: cargo build -p ckbadger && python3 scripts/test_frontend_release.py --binary target/debug/ckbadger
 
   # Single Frontend job: lint + type-check + test
   frontend:

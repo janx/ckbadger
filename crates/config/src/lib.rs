@@ -69,6 +69,9 @@ pub struct ApiConfig {
 pub struct FrontendConfig {
     pub host: String,
     pub port: u16,
+    /// External HTTP(S) origin used by agent discovery and canonical page metadata.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub public_origin: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -171,6 +174,7 @@ impl Default for FrontendConfig {
         Self {
             host: "127.0.0.1".to_string(),
             port: 8100,
+            public_origin: None,
         }
     }
 }
@@ -405,6 +409,7 @@ slow_request_threshold_ms = 100
 [frontend]
 host = "127.0.0.1"
 port = 8100
+# public_origin = "https://explorer.example.org"
 
 [indexer]
 bulk_sync_threshold = 1000
@@ -446,6 +451,7 @@ pub fn default_orchestrator_toml(networks: &[&str]) -> String {
         r#"[frontend]
 host = "127.0.0.1"
 port = 8100
+# public_origin = "https://explorer.example.org"
 
 [log]
 level = "info"
@@ -613,6 +619,20 @@ mod tests {
     use tempfile::TempDir;
 
     // -- Default values --
+
+    #[test]
+    fn frontend_public_origin_is_optional_and_round_trips() {
+        let defaults = parse_config("").unwrap();
+        assert_eq!(defaults.frontend.public_origin, None);
+        let config =
+            parse_config("[frontend]\npublic_origin = \"https://explorer.example\"\n").unwrap();
+        assert_eq!(
+            config.frontend.public_origin.as_deref(),
+            Some("https://explorer.example")
+        );
+        let serialized = toml::to_string(&config).unwrap();
+        assert_eq!(parse_config(&serialized).unwrap(), config);
+    }
 
     #[test]
     fn test_default_config_values() {

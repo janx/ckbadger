@@ -2,6 +2,7 @@ pub mod cache;
 pub mod cycles;
 pub mod embedded_frontend;
 pub mod entry;
+mod frontend_formats;
 pub mod frontend_proxy;
 pub mod middleware;
 pub mod response;

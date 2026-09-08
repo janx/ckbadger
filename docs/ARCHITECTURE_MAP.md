@@ -17,6 +17,11 @@ Quick navigation map for humans and agents working in `ckbadger`.
 5. The shared frontend serves pages under `/{network}/...` and proxies
    `/api/{network}/v1/*` → that network's `/api/v1/*`, plus
    `/ws/{network}` → that network's `/ws`.
+   `frontend_formats.rs` negotiates Markdown/raw before the SPA fallback and runs
+   the bundled TypeScript renderers in per-request QuickJS contexts. Rust forwards
+   their read-only API/RPC requests to the selected network. The renderer registry
+   also generates capabilities and LLM discovery; `frontend.public_origin` owns
+   external canonical URLs. See [AI_FORMATS.md](AI_FORMATS.md).
 6. The opt-in crawler observes the selected CKB p2p network and is the sole writer of that
    network's separate, TTL-retained network store. The API reads it as a secondary.
 

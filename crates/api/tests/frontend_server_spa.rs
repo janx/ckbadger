@@ -20,6 +20,7 @@ async fn frontend_server_falls_back_to_index_html_for_spa_route() {
     .unwrap();
 
     let router = build_frontend_router(FrontendServiceConfig {
+        public_origin: None,
         host: "127.0.0.1".to_string(),
         port: 8100,
         api_port: 8101,
@@ -29,6 +30,7 @@ async fn frontend_server_falls_back_to_index_html_for_spa_route() {
         frontend_dir: Some(PathBuf::from(dir.path())),
         default_network: "mainnet".to_string(),
         networks: vec![FrontendNetwork {
+            ckb_rpc_url: "http://127.0.0.1:8114".into(),
             name: "mainnet".to_string(),
             api_host: "127.0.0.1".to_string(),
             api_port: 8101,
@@ -94,6 +96,7 @@ async fn frontend_server_routes_api_paths_to_the_proxy_not_the_spa_fallback() {
     drop(dead_listener);
 
     let router = build_frontend_router(FrontendServiceConfig {
+        public_origin: None,
         host: "127.0.0.1".to_string(),
         port: 8100,
         api_port: dead_port,
@@ -103,6 +106,7 @@ async fn frontend_server_routes_api_paths_to_the_proxy_not_the_spa_fallback() {
         frontend_dir: Some(PathBuf::from(dir.path())),
         default_network: "mainnet".to_string(),
         networks: vec![FrontendNetwork {
+            ckb_rpc_url: "http://127.0.0.1:8114".into(),
             name: "mainnet".to_string(),
             api_host: "127.0.0.1".to_string(),
             api_port: dead_port,

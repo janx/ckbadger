@@ -818,6 +818,7 @@ fn build_orchestrator_frontend_config(
             name: network.to_string(),
             api_host: cfg.api.host.clone(),
             api_port: cfg.api.port,
+            ckb_rpc_url: cfg.ckb.rpc_url.clone(),
         });
     }
     let default_network = networks
@@ -827,6 +828,7 @@ fn build_orchestrator_frontend_config(
     Ok(FrontendServiceConfig {
         host: orch.frontend.host.clone(),
         port: orch.frontend.port,
+        public_origin: orch.frontend.public_origin.clone(),
         api_port: networks[0].api_port, // legacy field; proxy uses `networks`
         ckb_network: default_network.clone(),
         ckb_rpc_url: String::new(), // per-network rpc not surfaced to the frontend proxy
@@ -934,10 +936,12 @@ async fn cmd_internal(workdir: &Path, args: &InternalArgs) -> Result<()> {
                 name: config.ckb.network.clone(),
                 api_host: config.api.host.clone(),
                 api_port: config.api.port,
+                ckb_rpc_url: config.ckb.rpc_url.clone(),
             }];
             let frontend_config = FrontendServiceConfig {
                 host: config.frontend.host.clone(),
                 port: config.frontend.port,
+                public_origin: config.frontend.public_origin.clone(),
                 api_port: config.api.port,
                 ckb_network: config.ckb.network.clone(),
                 ckb_rpc_url: config.ckb.rpc_url.clone(),
@@ -2627,7 +2631,8 @@ mod tests {
         // workdir with a distinct [api].port.
         std::fs::write(
             root.join("ckbadger.toml"),
-            default_orchestrator_toml(&["mainnet", "testnet"]),
+            default_orchestrator_toml(&["mainnet", "testnet"])
+                .replace("# public_origin", "public_origin"),
         )
         .unwrap();
         std::fs::create_dir_all(root.join("mainnet")).unwrap();
@@ -2639,7 +2644,7 @@ mod tests {
         .unwrap();
         std::fs::write(
             root.join("testnet").join("config.toml"),
-            default_config_toml("testnet", 8102),
+            default_config_toml("testnet", 8102).replace("8114", "18114"),
         )
         .unwrap();
 
@@ -2658,6 +2663,12 @@ mod tests {
         assert_eq!(cfg.api_port, 8101);
         // Shared frontend host/port come from the orchestrator [frontend] section.
         assert_eq!(cfg.port, 8100);
+        assert_eq!(
+            cfg.public_origin.as_deref(),
+            Some("https://explorer.example.org")
+        );
+        assert_eq!(cfg.networks[0].ckb_rpc_url, "http://127.0.0.1:8114");
+        assert_eq!(cfg.networks[1].ckb_rpc_url, "http://127.0.0.1:18114");
         // No frontend assets dir was passed through.
         assert!(cfg.frontend_dir.is_none());
     }

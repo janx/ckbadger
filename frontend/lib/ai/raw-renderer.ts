@@ -1,3 +1,4 @@
+import { PAGE_ROUTES, RAW_ROUTE_PROFILES } from '@/lib/ai/page-registry';
 import type {
   Cell,
   CellDep,
@@ -27,20 +28,14 @@ const DEFAULT_PROFILE = 'default';
 const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 200;
 
-const RAW_PROFILES = ['default', 'debugger'] as const;
-type RawProfile = (typeof RAW_PROFILES)[number];
+const RAW_PROFILES = [...new Set(Object.values(RAW_ROUTE_PROFILES).flat())];
+type RawProfile = 'default' | 'debugger';
 
-type RouteKind = Exclude<ParsedRawPage['kind'], 'unknown'>;
-
-const ROUTE_PROFILE_MATRIX: Record<RouteKind, RawProfile[]> = {
-  block_detail: ['default'],
-  cell_detail: ['default'],
-  dotbit_item_detail: ['default'],
-  did_ckb_item_detail: ['default'],
-  bit_cell_item_detail: ['default'],
-  mnft_item_detail: ['default'],
-  tx_detail: ['default', 'debugger'],
-};
+function routeProfiles(kind: ParsedRawPage['kind']): readonly string[] {
+  const route = PAGE_ROUTES.find((route) => route.kind === kind);
+  if (!route) throw new Error(`No registered raw route for ${kind}`);
+  return route.rawProfiles;
+}
 
 interface RenderRawInput {
   page: ParsedRawPage;
@@ -389,7 +384,7 @@ function profileAllowedForRoute(page: ParsedRawPage, profile: RawProfile): boole
   if (page.kind === 'unknown') {
     return true;
   }
-  return ROUTE_PROFILE_MATRIX[page.kind].includes(profile);
+  return routeProfiles(page.kind).includes(profile);
 }
 
 function buildErrorBody(meta: RawMeta, error: RawRenderError): RenderRawOutput['body'] {
@@ -822,7 +817,7 @@ export async function renderRawPage(input: RenderRawInput): Promise<RenderRawOut
   }
 
   if (!profileAllowedForRoute(page, profile)) {
-    const allowedProfiles = ROUTE_PROFILE_MATRIX[page.kind];
+    const allowedProfiles = routeProfiles(page.kind);
     throw new RawRenderError(
       400,
       'profile_not_supported',

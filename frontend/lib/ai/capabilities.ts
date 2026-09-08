@@ -1,4 +1,5 @@
-import { MARKDOWN_ROUTE_PATTERNS } from '@/lib/ai/markdown-route';
+import { RAW_ROUTE_PROFILES } from '@/lib/ai/page-registry';
+import { CHART_PAGE_SLUGS, MARKDOWN_ROUTE_PATTERNS } from '@/lib/ai/markdown-route';
 import { RAW_ROUTE_PATTERNS } from '@/lib/ai/raw-route';
 import {
   resolveApiBasePattern,
@@ -11,16 +12,6 @@ const RAW_MEDIA_TYPE = 'application/vnd.ckbadger.raw+json';
 const MARKDOWN_MEDIA_TYPE = 'text/markdown';
 
 const RAW_DEFAULT_PROFILE = 'default';
-const RAW_ROUTE_PROFILES: Record<string, readonly string[]> = {
-  '/blocks/{id}': ['default'],
-  '/cell/{outpoint}': ['default'],
-  '/identities/dotbit/{identityId}': ['default'],
-  '/identities/did/{identityId}': ['default'],
-  '/identities/bit-cell/{identityId}': ['default'],
-  '/objects/mnft/{objectId}': ['default'],
-  '/tx/{hash}': ['default', 'debugger'],
-};
-
 export interface AiCapabilities {
   site: {
     name: 'ckbadger';
@@ -95,6 +86,7 @@ export interface AiCapabilities {
     ];
     historyMetrics: readonly ['verifiedPeers', 'reachablePeers', 'versionShare', 'countryShare'];
   };
+  chartSlugs: readonly string[];
   routes: {
     markdown: readonly string[];
     raw: readonly string[];
@@ -192,6 +184,7 @@ export function buildAiCapabilities(origin?: string): AiCapabilities & { origin?
       ],
       historyMetrics: ['verifiedPeers', 'reachablePeers', 'versionShare', 'countryShare'],
     },
+    chartSlugs: CHART_PAGE_SLUGS,
     routes: {
       markdown: MARKDOWN_ROUTE_PATTERNS,
       raw: RAW_ROUTE_PATTERNS,

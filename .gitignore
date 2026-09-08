@@ -84,3 +84,6 @@ mise.toml
 .superpowers/
 docs/plans/
 docs/superpowers/
+
+# Embedded agent renderer build output
+frontend/server-dist/

@@ -1,7 +1,7 @@
 use anyhow::{bail, Result};
 use arc_swap::ArcSwapOption;
 use axum::extract::State;
-use axum::http::{header, HeaderMap, StatusCode, Uri};
+use axum::http::{header, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::{routing::get, Router};
 use std::net::SocketAddr;
@@ -115,6 +115,8 @@ async fn wait_for_network_store_secondary(
 /// One backend network the frontend proxy can route to.
 #[derive(Clone, Debug)]
 pub struct FrontendNetwork {
+    /// Read-only node RPC used by the debugger export, private to the renderer.
+    pub ckb_rpc_url: String,
     pub name: String,
     pub api_host: String,
     pub api_port: u16,
@@ -123,6 +125,7 @@ pub struct FrontendNetwork {
 /// Configuration for the standalone frontend server.
 #[derive(Clone)]
 pub struct FrontendServiceConfig {
+    pub public_origin: Option<String>,
     pub host: String,
     pub port: u16,
     pub api_port: u16,
@@ -357,11 +360,6 @@ pub fn build_frontend_router(config: FrontendServiceConfig) -> Result<Router> {
         default_network: config.default_network.clone(),
     };
 
-    // Network-aware reverse proxy for `/api/{network}/v1/*` + `/ws/{network}`.
-    // Built as a self-contained `Router<()>` (its state is erased by `.with_state`)
-    // so it can be merged into either serving branch ahead of the SPA fallback.
-    // Only one branch runs (each `return`s), so moving it into the first branch
-    // that executes and again in the next is sound — the earlier move diverges.
     let proxy_state = Arc::new(crate::frontend_proxy::ProxyState::new(
         config
             .networks
@@ -369,14 +367,7 @@ pub fn build_frontend_router(config: FrontendServiceConfig) -> Result<Router> {
             .map(|n| (n.name.clone(), (n.api_host.clone(), n.api_port)))
             .collect(),
     ));
-    let proxy_router = crate::frontend_proxy::proxy_router(proxy_state);
-
-    // The capabilities document describes THIS origin, so it needs the concrete
-    // networks the proxy above routes to.
-    let capability_networks: Vec<String> = config.networks.iter().map(|n| n.name.clone()).collect();
-    let capability_default_network = config.default_network.clone();
-
-    if let Some(frontend_dir) = config.frontend_dir {
+    let app = if let Some(frontend_dir) = &config.frontend_dir {
         let index_path = frontend_dir.join("index.html");
         if !index_path.is_file() {
             bail!(
@@ -384,72 +375,39 @@ pub fn build_frontend_router(config: FrontendServiceConfig) -> Result<Router> {
                 frontend_dir.display()
             );
         }
-
         info!(
             "Frontend server: serving from filesystem at {}",
             frontend_dir.display()
         );
-
         let state = FrontendFsState {
-            root_dir: frontend_dir,
+            root_dir: frontend_dir.clone(),
             index_path,
         };
-
-        return Ok(Router::new()
-            .route(
-                "/runtime-config.js",
-                get({
-                    let runtime_config = runtime_config.clone();
-                    move || frontend_runtime_config_handler(runtime_config.clone())
-                }),
-            )
-            .route(
-                "/capabilities",
-                get(move |headers| {
-                    frontend_capabilities_handler(
-                        headers,
-                        capability_networks.clone(),
-                        capability_default_network.clone(),
-                    )
-                }),
-            )
-            .merge(proxy_router)
-            .fallback({
-                let state = state.clone();
-                move |uri| frontend_filesystem_handler(State(state.clone()), uri)
-            }));
-    }
-
-    if embedded_frontend::has_embedded_assets() {
+        Router::new().fallback(move |uri| frontend_filesystem_handler(State(state.clone()), uri))
+    } else if embedded_frontend::has_embedded_assets() {
         info!("Frontend server: serving embedded assets");
-        return Ok(Router::new()
-            .route(
-                "/runtime-config.js",
-                get({
-                    let runtime_config = runtime_config.clone();
-                    move || frontend_runtime_config_handler(runtime_config.clone())
-                }),
-            )
-            .route(
-                "/capabilities",
-                get(move |headers| {
-                    frontend_capabilities_handler(
-                        headers,
-                        capability_networks.clone(),
-                        capability_default_network.clone(),
-                    )
-                }),
-            )
-            .merge(proxy_router)
-            .fallback(embedded_frontend::embedded_frontend_handler));
-    }
-
-    bail!(
-        "No frontend assets available. Either:\n  \
-         - Build the frontend: cd frontend && pnpm build\n  \
-         - Then rebuild the binary: cargo build -p ckbadger\n  \
-         - Or place assets in workdir/frontend/dist or workdir/frontend/"
-    );
+        Router::new().fallback(embedded_frontend::embedded_frontend_handler)
+    } else {
+        bail!("No frontend assets available. Run pnpm --dir frontend build, then cargo build -p ckbadger; or place assets in workdir/frontend/dist");
+    };
+    let formats = crate::frontend_formats::FormatState::new(config)?;
+    Ok(app
+        .route(
+            "/runtime-config.js",
+            get(move || frontend_runtime_config_handler(runtime_config.clone())),
+        )
+        .merge(
+            Router::new()
+                .route("/capabilities", get(crate::frontend_formats::capabilities))
+                .route("/llms.txt", get(crate::frontend_formats::llms))
+                .route("/llms-full.txt", get(crate::frontend_formats::llms))
+                .with_state(formats.clone()),
+        )
+        .merge(crate::frontend_proxy::proxy_router(proxy_state))
+        .layer(axum::middleware::from_fn_with_state(
+            formats,
+            crate::frontend_formats::negotiate,
+        )))
 }
 
 async fn frontend_runtime_config_handler(config: FrontendRuntimeConfig) -> Response {
@@ -495,142 +453,6 @@ async fn frontend_runtime_config_handler(config: FrontendRuntimeConfig) -> Respo
         body,
     )
         .into_response()
-}
-
-async fn frontend_capabilities_handler(
-    headers: HeaderMap,
-    networks: Vec<String>,
-    default_network: String,
-) -> Response {
-    let origin = headers
-        .get(header::HOST)
-        .and_then(|v| v.to_str().ok())
-        .map(|host| format!("http://{}", host))
-        .unwrap_or_default();
-    let body = build_capabilities_json(&origin, &networks, &default_network);
-    (
-        StatusCode::OK,
-        [
-            (header::CONTENT_TYPE, "application/json; charset=utf-8"),
-            (
-                header::CACHE_CONTROL,
-                "public, s-maxage=10, stale-while-revalidate=30",
-            ),
-        ],
-        body,
-    )
-        .into_response()
-}
-
-/// Build the `/capabilities` JSON payload.
-///
-/// This is the Rust equivalent of `frontend/lib/ai/capabilities.ts` `buildAiCapabilities()`.
-/// The route patterns are kept in sync manually — they change infrequently.
-///
-/// Every path here must be a real route on the origin serving the document. This
-/// origin is the shared frontend server, where only the network-prefixed
-/// patterns exist: `/api/v1` and `/ws` match no route, fall through to the SPA
-/// fallback and answer `200 text/html`, so advertising them would hand any agent
-/// that trusts this document a path that "succeeds" with a web page. The
-/// concrete `networks` list is what makes the `{network}` placeholder usable.
-fn build_capabilities_json(origin: &str, networks: &[String], default_network: &str) -> String {
-    serde_json::json!({
-        "origin": origin,
-        "site": {
-            "name": "ckbadger",
-            "pageBasePattern": "/{network}",
-            "apiBasePattern": "/api/{network}/v1",
-            "wsUrlPattern": "/ws/{network}",
-            "networks": networks,
-            "defaultNetwork": default_network
-        },
-        "formatNegotiation": {
-            "priority": ["query.format", "path.suffix", "accept.header"],
-            "supportedFormats": ["html", "md", "raw"],
-            "markdown": {
-                "suffix": ".md",
-                "query": "format=md",
-                "accept": "text/markdown"
-            },
-            "raw": {
-                "suffix": ".raw",
-                "query": "format=raw",
-                "accept": "application/vnd.ckbadger.raw+json",
-                "profileQuery": "profile=<name>",
-                "defaultProfile": "default"
-            }
-        },
-        "responseHeaders": {
-            "raw": {
-                "formatHeader": "x-ckbadger-format",
-                "profileHeader": "x-ckbadger-profile",
-                "schemaHeader": "x-ckbadger-schema"
-            }
-        },
-        "responseMetadata": {
-            "markdown": {
-                "frontmatterFields": [
-                    "title", "path", "canonical", "pageType",
-                    "generatedAt", "buildVersion", "formatVersion"
-                ]
-            },
-            "raw": {
-                "metaFields": [
-                    "format", "profile", "schemaVersion", "buildVersion",
-                    "network", "path", "canonical", "pageType", "generatedAt"
-                ]
-            }
-        },
-        "routes": {
-            "markdown": [
-                "/", "/activities", "/address/{addr}",
-                "/inventory/tokens", "/inventory/objects", "/inventory/identities",
-                "/blocks", "/blocks/{id}", "/cell/{outpoint}",
-                "/charts", "/charts/{slug}",
-                "/classes/{classId}", "/clusters/{clusterId}",
-                "/dao", "/dao/charts",
-                "/forks", "/forks/{id}", "/hardforks", "/network",
-                "/identities/{collectionId}",
-                "/identities/dotbit/{identityId}", "/identities/did/{identityId}",
-                "/objects", "/objects/{sporeId}", "/objects/mnft/{objectId}",
-                "/script/{codeHash}", "/scripts", "/scripts/{name}",
-                "/tokens", "/tokens/{typeHash}",
-                "/fiber/channels", "/fiber/channels/{channelId}",
-                "/transactions", "/tx/{hash}"
-            ],
-            "raw": [
-                "/blocks/{id}", "/cell/{outpoint}",
-                "/identities/dotbit/{identityId}", "/identities/did/{identityId}",
-                "/objects/mnft/{objectId}", "/tx/{hash}"
-            ]
-        },
-        "rawProfiles": {
-            "routes": {
-                "/blocks/{id}": ["default"],
-                "/cell/{outpoint}": ["default"],
-                "/identities/dotbit/{identityId}": ["default"],
-                "/identities/did/{identityId}": ["default"],
-                "/objects/mnft/{objectId}": ["default"],
-                "/tx/{hash}": ["default", "debugger"]
-            },
-            "strictErrors": {
-                "invalidProfile": "invalid_profile",
-                "profileNotSupported": "profile_not_supported"
-            },
-            "txDebuggerProfile": {
-                "route": "/tx/{hash}",
-                "profile": "debugger",
-                "payloadPath": "data.txDebugger.mockTransaction",
-                "debuggerCommandTemplate": "curl \"<url>.raw?profile=debugger\" | jq '.data.txDebugger.mockTransaction' > mock_tx.json && ckb-debugger --tx-file mock_tx.json --cell-index 0 --cell-type input --script-group-type lock --script-version <2|1|0: VM ceiling at the tx's commit epoch; 0 pre-Mirana, 1 pre-Meepo, else 2>"
-            },
-            "txWitnessPayload": {
-                "route": "/tx/{hash}",
-                "payloadPath": "data.txWitness",
-                "fields": ["available", "witnessesCount", "inputCount", "analyses", "inference"]
-            }
-        }
-    })
-    .to_string()
 }
 
 async fn frontend_filesystem_handler(State(state): State<FrontendFsState>, uri: Uri) -> Response {
@@ -770,6 +592,7 @@ mod tests {
     async fn test_build_frontend_router_bails_without_index_html() {
         let dir = tempfile::tempdir().unwrap();
         let err = build_frontend_router(FrontendServiceConfig {
+            public_origin: None,
             host: "127.0.0.1".to_string(),
             port: 8100,
             api_port: 8101,
@@ -779,6 +602,7 @@ mod tests {
             frontend_dir: Some(dir.path().to_path_buf()),
             default_network: "mainnet".to_string(),
             networks: vec![FrontendNetwork {
+                ckb_rpc_url: "http://127.0.0.1:8114".into(),
                 name: "mainnet".to_string(),
                 api_host: "127.0.0.1".to_string(),
                 api_port: 8101,
@@ -794,6 +618,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("index.html"), "<html>spa</html>").unwrap();
         let router = build_frontend_router(FrontendServiceConfig {
+            public_origin: None,
             host: "127.0.0.1".to_string(),
             port: 8100,
             api_port: 8101,
@@ -803,6 +628,7 @@ mod tests {
             frontend_dir: Some(dir.path().to_path_buf()),
             default_network: "mainnet".to_string(),
             networks: vec![FrontendNetwork {
+                ckb_rpc_url: "http://127.0.0.1:8114".into(),
                 name: "mainnet".to_string(),
                 api_host: "127.0.0.1".to_string(),
                 api_port: 8101,
@@ -832,6 +658,7 @@ mod tests {
 
         // Orchestrator-shape config: two live networks, default mainnet.
         let router = build_frontend_router(FrontendServiceConfig {
+            public_origin: None,
             host: "127.0.0.1".to_string(),
             port: 8100,
             api_port: 8101,
@@ -842,11 +669,13 @@ mod tests {
             default_network: "mainnet".to_string(),
             networks: vec![
                 FrontendNetwork {
+                    ckb_rpc_url: "http://127.0.0.1:8114".into(),
                     name: "mainnet".to_string(),
                     api_host: "127.0.0.1".to_string(),
                     api_port: 8101,
                 },
                 FrontendNetwork {
+                    ckb_rpc_url: "http://127.0.0.1:8114".into(),
                     name: "testnet".to_string(),
                     api_host: "127.0.0.1".to_string(),
                     api_port: 8102,
@@ -936,6 +765,7 @@ mod tests {
         // An orchestrator-shape config carrying two networks must build a router
         // without panic (single-network is just the one-element case).
         let router = build_frontend_router(FrontendServiceConfig {
+            public_origin: None,
             host: "127.0.0.1".to_string(),
             port: 8100,
             api_port: 8101,
@@ -946,11 +776,13 @@ mod tests {
             default_network: "mainnet".to_string(),
             networks: vec![
                 FrontendNetwork {
+                    ckb_rpc_url: "http://127.0.0.1:8114".into(),
                     name: "mainnet".to_string(),
                     api_host: "127.0.0.1".to_string(),
                     api_port: 8101,
                 },
                 FrontendNetwork {
+                    ckb_rpc_url: "http://127.0.0.1:8114".into(),
                     name: "testnet".to_string(),
                     api_host: "127.0.0.1".to_string(),
                     api_port: 8102,
@@ -973,6 +805,7 @@ mod tests {
         std::fs::write(dir.path().join("index.html"), "<html>spa</html>").unwrap();
 
         let router = build_frontend_router(FrontendServiceConfig {
+            public_origin: None,
             host: "127.0.0.1".to_string(),
             port: 8100,
             api_port: 8101,
@@ -983,11 +816,13 @@ mod tests {
             default_network: "mainnet".to_string(),
             networks: vec![
                 FrontendNetwork {
+                    ckb_rpc_url: "http://127.0.0.1:8114".into(),
                     name: "mainnet".to_string(),
                     api_host: "127.0.0.1".to_string(),
                     api_port: 8101,
                 },
                 FrontendNetwork {
+                    ckb_rpc_url: "http://127.0.0.1:8114".into(),
                     name: "testnet".to_string(),
                     api_host: "127.0.0.1".to_string(),
                     api_port: 8102,
