@@ -39,6 +39,14 @@ export function SiteFooter() {
             Fiber Dashboard
           </a>
           <a
+            href="https://cknerv.web5.info"
+            target="_blank"
+            rel="noreferrer"
+            className="text-text hover:text-jade py-1 transition-colors"
+          >
+            cknerv
+          </a>
+          <a
             href="https://web5.info"
             target="_blank"
             rel="noreferrer"

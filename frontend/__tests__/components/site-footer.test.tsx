@@ -23,11 +23,18 @@ describe('SiteFooter', () => {
     expect(versionLink).toHaveAttribute('title', 'CKBadger 0.1.0+feature/foo@abcdef123456');
     const fiberLink = within(navigation).getByRole('link', { name: 'Fiber Dashboard' });
     expect(fiberLink).toHaveAttribute('href', 'https://dashboard.fiber.channel/');
-    expect(within(navigation).getByRole('link', { name: 'Web5' })).toHaveAttribute(
-      'href',
-      'https://web5.info'
-    );
-    expect(within(navigation).getAllByRole('link')).toHaveLength(3);
+    const cknervLink = within(navigation).getByRole('link', { name: 'cknerv' });
+    expect(cknervLink).toHaveAttribute('href', 'https://cknerv.web5.info');
+    expect(cknervLink).toHaveAttribute('target', '_blank');
+    expect(cknervLink).toHaveAttribute('rel', 'noreferrer');
+    const web5Link = within(navigation).getByRole('link', { name: 'Web5' });
+    expect(web5Link).toHaveAttribute('href', 'https://web5.info');
+    expect(within(navigation).getAllByRole('link')).toEqual([
+      hardforksLink,
+      fiberLink,
+      cknervLink,
+      web5Link,
+    ]);
     expect(navigation).not.toContainElement(versionLink);
     const shortcutHint = within(footer).getByText('keys');
     expect(shortcutHint).toBeInTheDocument();
