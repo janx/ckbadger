@@ -94,5 +94,11 @@ describe('PipelinePreview', () => {
     expect(screen.getByTestId('mempool-blocks')).toHaveTextContent('lens:true');
     expect(screen.getByTestId('mempool-blocks')).toHaveTextContent('header:false');
     expect(screen.getByTestId('mempool-blocks')).toHaveTextContent('legend:none');
+
+    const track = screen.getByTestId('pipeline-preview-track');
+    expect(track).toHaveClass('min-w-0');
+    expect(track).not.toHaveClass('w-screen');
+    expect(track).not.toHaveClass('-ml-[50vw]');
+    expect(track).not.toHaveClass('-mr-[50vw]');
   });
 });
