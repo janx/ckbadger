@@ -59,7 +59,7 @@ export function PipelinePreview({ initialBlocks = [] }: PipelinePreviewProps) {
 
   return (
     <section className="overflow-visible">
-      <div className="mb-2 px-4">
+      <div className="container mx-auto mb-2 px-4">
         <h2 className="text-text-bright text-base font-semibold sm:text-lg">
           Transaction Pipeline
         </h2>
@@ -80,8 +80,7 @@ export function PipelinePreview({ initialBlocks = [] }: PipelinePreviewProps) {
         </div>
       </div>
 
-      {/* Break out of container to full viewport width */}
-      <div className="relative left-1/2 right-1/2 -ml-[50vw] -mr-[50vw] w-screen">
+      <div data-testid="pipeline-preview-track" className="min-w-0">
         <MempoolBlocks
           latestBlocks={initialBlocks}
           chrome="flat"
