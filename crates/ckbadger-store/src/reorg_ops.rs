@@ -5905,6 +5905,221 @@ mod tests {
         assert_eq!(result.blocks_removed, 0);
     }
 
+    /// Pin for the Task 0.2 responsibility table: `HODL_WAVE`,
+    /// `CELL_DISTRIBUTION` and `ADDR_COHORT` stay owned by the day-boundary
+    /// snapshot contract, NOT by the entity-stats undo log.
+    ///
+    /// The trackers seal a snapshot keyed by day D only when the first block of
+    /// D+1 opens (`HodlWaveTracker::maybe_snapshot`,
+    /// `CellDistributionTracker::maybe_snapshot`, both called from
+    /// `sync/reorg.rs::begin_*_block` before the block's transactions apply).
+    /// The replay cutoff is the date of the FIRST ROLLED-BACK block
+    /// (`replay_start = rollback_to + 1`), so:
+    ///
+    /// A. a fork entirely inside day D has cutoff D, and the row keyed D does
+    ///    not exist yet — nothing to lose; the row keyed D-1 has `date < cutoff`
+    ///    and is never selected for deletion;
+    /// B. orphaning the sealer block (first block of D+1) has cutoff D+1, so the
+    ///    row keyed D — the one that sealer wrote — is likewise `date < cutoff`
+    ///    and survives byte-for-byte; replay re-seals the identical content from
+    ///    the tracker state that stage 11/12 truncated back to the fork point.
+    ///
+    /// If either leg ever fails, these three prefixes have lost their owner and
+    /// must be moved to the EntityStats undo scope like the other eight.
+    #[test]
+    fn test_day_boundary_snapshots_survive_same_day_and_sealer_rollback() {
+        // UTC+8 wall clock → epoch ms. Day D-1 = 20260920, D = 20260921,
+        // D+1 = 20260922.
+        const TS_D_MINUS_1_A: i64 = 1_789_869_600_000; // 20260920 10:00 +08
+        const TS_D_MINUS_1_B: i64 = 1_789_905_600_000; // 20260920 20:00 +08
+        const TS_D_FIRST: i64 = 1_789_920_300_000; // 20260921 00:05 +08
+        const TS_D_LATER: i64 = 1_789_963_200_000; // 20260921 12:00 +08
+        const TS_D_PLUS_1_FIRST: i64 = 1_790_006_820_000; // 20260922 00:07 +08
+        const TS_D_PLUS_1_LATER: i64 = 1_790_038_800_000; // 20260922 09:00 +08
+
+        let header = |n: i64, ts: i64| CachedBlockHeader {
+            hash: {
+                let mut h = vec![0u8; 32];
+                h[0] = n as u8;
+                h
+            },
+            parent_hash: vec![0u8; 32],
+            timestamp: ts,
+            epoch_number: 7,
+            epoch_index: (n - 1) as i32,
+            epoch_length: 1800,
+            dao: vec![0; 32],
+            transactions_count: 0,
+            uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0x1a08a97e,
+            miner_lock_hash: None,
+            cycles: None,
+        };
+
+        let wave = |seed: i128| DailyHodlWave {
+            band_24h: seed,
+            band_1d_1w: seed * 2,
+            band_1w_1m: seed * 3,
+            band_1m_3m: 0,
+            band_3m_6m: 0,
+            band_6m_1y: 0,
+            band_1y_3y: 0,
+            band_gt_3y: 0,
+            holder_count: seed as i64,
+        };
+        let dist = |seed: i64| DailyCellDistribution {
+            size_bucket_counts: [seed, seed + 1, 0, 0, 0, 0],
+            size_bucket_capacities: [seed as i128 * 100, 0, 0, 0, 0, 0],
+        };
+        let cohort = |seed: i128| DailyAddressCohort {
+            cohorts: vec![AddressCohortEntry {
+                cohort_month: "2026-09".to_string(),
+                used_capacity: seed,
+                total_balance: seed * 10,
+            }],
+        };
+
+        // Raw bytes of the three snapshot rows for one date, or None.
+        let snapshot_bytes = |store: &CkbadgerStore, date: &str| {
+            [
+                keys::STATS_PREFIX_HODL_WAVE,
+                keys::STATS_PREFIX_CELL_DISTRIBUTION,
+                keys::STATS_PREFIX_ADDR_COHORT,
+            ]
+            .map(|prefix| {
+                let key = keys::encode_stats_key(prefix, date.as_bytes());
+                let cf = store.cf_for_stats_key(&key).unwrap();
+                store.get_cf(cf, &key).unwrap()
+            })
+        };
+
+        let seed_epoch7 = |store: &CkbadgerStore, end_block: i64, blocks: i32| {
+            seed_epoch_row(
+                store,
+                &EpochStats {
+                    epoch_number: 7,
+                    start_block: 1,
+                    end_block: Some(end_block),
+                    blocks_count: blocks,
+                    length: 1800,
+                    start_timestamp: chrono::DateTime::from_timestamp_millis(TS_D_MINUS_1_A)
+                        .unwrap(),
+                    end_timestamp: None,
+                    transactions_count: 0,
+                },
+            );
+        };
+
+        // ---- Leg A: fork entirely inside day D (no D+1 block exists yet) ----
+        {
+            let dir = tempfile::tempdir().unwrap();
+            let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+
+            let mut batch = StoreBatch::new(&store);
+            batch.put_block_header(1, &header(1, TS_D_MINUS_1_A));
+            batch.put_block_header(2, &header(2, TS_D_MINUS_1_B));
+            batch.put_block_header(3, &header(3, TS_D_FIRST));
+            batch.put_block_header(4, &header(4, TS_D_LATER));
+            batch.commit().unwrap();
+            seed_epoch7(&store, 4, 4);
+
+            // Block 3 (first block of D) sealed the snapshot keyed D-1.
+            // Nothing has sealed a row keyed D: no block of D+1 exists.
+            store.put_hodl_wave("20260920", &wave(11)).unwrap();
+            store.put_cell_distribution("20260920", &dist(11)).unwrap();
+            store.put_address_cohort("20260920", &cohort(11)).unwrap();
+
+            let before = snapshot_bytes(&store, "20260920");
+            assert!(
+                before.iter().all(Option::is_some),
+                "fixture must seed all three D-1 snapshot rows"
+            );
+            assert!(
+                snapshot_bytes(&store, "20260921")
+                    .iter()
+                    .all(Option::is_none),
+                "the row keyed D must not exist before D+1's first block seals it"
+            );
+
+            // Fork inside day D: rollback_to=3, replay_start=4, cutoff=20260921.
+            store.rollback_to_block(3).unwrap();
+
+            assert_eq!(
+                snapshot_bytes(&store, "20260920"),
+                before,
+                "the D-1 snapshot rows have date < cutoff and must survive byte-for-byte"
+            );
+            assert!(
+                snapshot_bytes(&store, "20260921")
+                    .iter()
+                    .all(Option::is_none),
+                "no row keyed D may be fabricated by rollback"
+            );
+        }
+
+        // ---- Leg B: the sealer block (first block of D+1) is orphaned ----
+        {
+            let dir = tempfile::tempdir().unwrap();
+            let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+
+            let mut batch = StoreBatch::new(&store);
+            batch.put_block_header(1, &header(1, TS_D_MINUS_1_A));
+            batch.put_block_header(2, &header(2, TS_D_MINUS_1_B));
+            batch.put_block_header(3, &header(3, TS_D_FIRST));
+            batch.put_block_header(4, &header(4, TS_D_LATER));
+            batch.put_block_header(5, &header(5, TS_D_PLUS_1_FIRST));
+            batch.put_block_header(6, &header(6, TS_D_PLUS_1_LATER));
+            batch.commit().unwrap();
+            seed_epoch7(&store, 6, 6);
+
+            store.put_hodl_wave("20260920", &wave(11)).unwrap();
+            store.put_cell_distribution("20260920", &dist(11)).unwrap();
+            store.put_address_cohort("20260920", &cohort(11)).unwrap();
+            // Block 5 — the sealer that the rollback orphans — wrote these.
+            store.put_hodl_wave("20260921", &wave(22)).unwrap();
+            store.put_cell_distribution("20260921", &dist(22)).unwrap();
+            store.put_address_cohort("20260921", &cohort(22)).unwrap();
+
+            let before_d_minus_1 = snapshot_bytes(&store, "20260920");
+            let before_d = snapshot_bytes(&store, "20260921");
+            assert!(before_d.iter().all(Option::is_some));
+
+            // Orphan block 5 and 6: rollback_to=4, replay_start=5, cutoff=20260922.
+            store.rollback_to_block(4).unwrap();
+
+            assert_eq!(
+                snapshot_bytes(&store, "20260920"),
+                before_d_minus_1,
+                "D-1 rows must survive"
+            );
+            assert_eq!(
+                snapshot_bytes(&store, "20260921"),
+                before_d,
+                "the row the orphaned sealer wrote is keyed D < cutoff D+1 and must survive"
+            );
+            assert!(
+                snapshot_bytes(&store, "20260922")
+                    .iter()
+                    .all(Option::is_none),
+                "no row keyed D+1 exists — only D+2's first block could seal it"
+            );
+
+            // Replay of block 5 re-seals day D from the tracker state that
+            // stage 11/12 truncated back to block 4 — the same tracker state
+            // that produced these bytes — so the re-seal is a byte-identical
+            // rewrite, never a double count.
+            store.put_hodl_wave("20260921", &wave(22)).unwrap();
+            store.put_cell_distribution("20260921", &dist(22)).unwrap();
+            store.put_address_cohort("20260921", &cohort(22)).unwrap();
+            assert_eq!(
+                snapshot_bytes(&store, "20260921"),
+                before_d,
+                "rollback + replay must equal direct sync for the day-boundary snapshots"
+            );
+        }
+    }
+
     fn seed_epoch_row(store: &CkbadgerStore, stats: &EpochStats) {
         let key =
             keys::encode_stats_key(keys::STATS_PREFIX_EPOCH, &stats.epoch_number.to_be_bytes());
