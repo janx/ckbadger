@@ -4869,22 +4869,12 @@ fn build_activity_protocol_detectors(
         }
     }
 
-    Ok(vec![
-        Box::new(crate::db::writer::rgbpp_detector::RgbppDetector::new())
-            as Box<dyn crate::db::writer::activities::ProtocolDetector>,
-        Box::new(crate::db::writer::fiber_detector::FiberDetector::new(
-            is_mainnet,
-        )),
-        Box::new(crate::db::writer::stablepp_detector::StableppDetector::new(
-            is_mainnet,
-        )),
-        Box::new(crate::db::writer::utxoswap_detector::UtxoSwapDetector::new(
-            is_mainnet,
-        )),
-    ]
-    .into_iter()
-    .filter(|detector| detector.might_apply_batch(&lock_code_hashes, &type_code_hashes))
-    .collect())
+    Ok(
+        crate::db::writer::activities::production_detectors(is_mainnet)
+            .into_iter()
+            .filter(|detector| detector.might_apply_batch(&lock_code_hashes, &type_code_hashes))
+            .collect(),
+    )
 }
 
 fn activity_code_hash(

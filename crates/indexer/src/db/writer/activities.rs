@@ -190,7 +190,7 @@ pub struct TxView<'a> {
 }
 
 /// Detects protocol-level actions by analyzing cross-layer signals.
-pub(crate) trait ProtocolDetector: Send + Sync {
+pub trait ProtocolDetector: Send + Sync {
     /// Batch-level pre-filter: returns false if no code_hash in the entire batch
     /// matches this detector. Called once per batch (not per TX).
     /// Default implementation returns true (opt-in optimization).
@@ -255,9 +255,41 @@ pub fn build_tx_actions_for_block(
         .collect()
 }
 
+/// The protocol detectors production runs, for one network.
+///
+/// This is the ONLY place the production list exists. Live sync, bulk build and
+/// the API's tx-pool mirror all take it from here, so a transaction is
+/// interpreted identically no matter which path reaches it. Callers that
+/// already know a batch's code hashes may narrow the returned list with
+/// [`ProtocolDetector::might_apply_batch`]; that is a pre-filter over this
+/// list, never a second definition of it.
+pub fn production_detectors(is_mainnet: bool) -> Vec<Box<dyn ProtocolDetector>> {
+    vec![
+        Box::new(super::rgbpp_detector::RgbppDetector::new()) as Box<dyn ProtocolDetector>,
+        Box::new(super::fiber_detector::FiberDetector::new(is_mainnet)),
+        Box::new(super::stablepp_detector::StableppDetector::new(is_mainnet)),
+        Box::new(super::utxoswap_detector::UtxoSwapDetector::new(is_mainnet)),
+    ]
+}
+
+/// Build `TxActions` with the production detector list for `is_mainnet`.
+///
+/// The entry point for callers that hold transactions but no batch-wide code
+/// hash sets — notably the API's tx-pool mirror, which interprets one pool
+/// transaction at a time.
+pub fn build_tx_actions_with_production_detectors(
+    txs: &[TxView<'_>],
+    is_mainnet: bool,
+) -> Result<Vec<TxActions>> {
+    build_tx_actions_for_block(txs, &production_detectors(is_mainnet))
+}
+
 /// Accumulator for per-owner position within one transaction.
+///
+/// Public because it appears in [`ProtocolDetector::detect`]; its fields stay
+/// crate-private, so only the activity builder can construct or mutate one.
 #[derive(Default)]
-pub(crate) struct OwnerAccum<'a> {
+pub struct OwnerAccum<'a> {
     pub(crate) lock_code_hash: Option<&'a [u8]>,
     pub(crate) lock_hash_type: Option<i16>,
     pub(crate) lock_args: Option<&'a [u8]>,
@@ -2811,5 +2843,117 @@ mod tests {
         assert!(!FiberDetector::new(true).might_apply_batch(&locks, &types));
         assert!(!StableppDetector::new(true).might_apply_batch(&locks, &types));
         assert!(!UtxoSwapDetector::new(true).might_apply_batch(&locks, &types));
+    }
+
+    /// The production detector list is defined once and every production caller
+    /// (live sync, bulk build, the API's pool mirror) takes it from here. If a
+    /// detector is dropped from that single list, the protocol it recognises
+    /// silently disappears from activities — so assert each one is present by
+    /// its own batch pre-filter, which is the cheapest observable proof.
+    #[test]
+    fn test_production_detectors_contain_every_protocol() {
+        use crate::parser::fiber::FUNDING_LOCK_CODE_HASH_MAINNET;
+        use crate::parser::rgbpp::RGBPP_LOCK_CODE_HASH_MAINNET;
+        use crate::parser::stablepp::INTENT_LOCK_CODE_HASH_MAINNET as STABLEPP_INTENT_LOCK_CODE_HASH_MAINNET;
+        use crate::parser::utxoswap::INTENT_LOCK_CODE_HASH_MAINNET;
+        use crate::rpc::parse_hex_to_bytes;
+        use std::collections::HashSet;
+
+        for is_mainnet in [true, false] {
+            let detectors = production_detectors(is_mainnet);
+            let empty_types: HashSet<[u8; 32]> = HashSet::new();
+
+            for (label, code_hash_hex) in [
+                ("rgbpp", RGBPP_LOCK_CODE_HASH_MAINNET),
+                ("fiber", FUNDING_LOCK_CODE_HASH_MAINNET),
+                ("stablepp", STABLEPP_INTENT_LOCK_CODE_HASH_MAINNET),
+                ("utxoswap", INTENT_LOCK_CODE_HASH_MAINNET),
+            ] {
+                let mut lock_code_hash = [0u8; 32];
+                lock_code_hash.copy_from_slice(&parse_hex_to_bytes(code_hash_hex));
+                let mut locks: HashSet<[u8; 32]> = HashSet::new();
+                locks.insert(lock_code_hash);
+
+                assert!(
+                    detectors
+                        .iter()
+                        .any(|d| d.might_apply_batch(&locks, &empty_types)),
+                    "production detector list (is_mainnet={is_mainnet}) is missing the {label} detector"
+                );
+            }
+        }
+    }
+
+    /// The production entry point must run the production list, not an empty
+    /// one: a tx that only a detector can explain has to come back explained.
+    #[test]
+    fn test_build_tx_actions_with_production_detectors_runs_the_detectors() {
+        use crate::parser::rgbpp::RGBPP_LOCK_CODE_HASH_MAINNET;
+        use crate::rpc::parse_hex_to_bytes;
+
+        let rgbpp_lock_code_hash = parse_hex_to_bytes(RGBPP_LOCK_CODE_HASH_MAINNET);
+        let type_script_hash = vec![0x77u8; 32];
+        let type_code_hash = parse_hex_to_bytes(
+            "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95",
+        );
+        let owner_lock_hash = vec![0xB1u8; 32];
+        let rgbpp_lock_script_hash = vec![0xA1u8; 32];
+        let btc_txid_args = vec![0x01u8; 36];
+        let owner_args = vec![0x02u8; 20];
+        let amount_le = 1000u128.to_le_bytes().to_vec();
+        let tx_hash = vec![0x01u8; 32];
+        let block_hash = vec![0x02u8; 32];
+
+        let tx = TxView {
+            tx_hash: &tx_hash,
+            block_hash: &block_hash,
+            tx_index: 0,
+            block_number: 100,
+            timestamp: 1_700_000_000_000,
+            is_cellbase: false,
+            inputs: vec![InputCellView {
+                previous_tx_hash: &tx_hash,
+                previous_output_index: 0,
+                lock_script_hash: &rgbpp_lock_script_hash,
+                lock_code_hash: &rgbpp_lock_code_hash,
+                lock_hash_type: 1,
+                lock_args: &btc_txid_args,
+                capacity: 20_000_000_000,
+                occupied_capacity: 15_000_000_000,
+                type_code_hash: Some(&type_code_hash),
+                type_hash_type: Some(1),
+                type_script_hash: Some(&type_script_hash),
+                type_args: Some(&[]),
+                udt_amount: Some(1000),
+                bit_cell_identity_id: None,
+                data: &[],
+                is_dao_withdraw_request: false,
+                dao_compensation: None,
+            }],
+            outputs: vec![OutputCellView {
+                capacity: 20_000_000_000,
+                lock_code_hash: &[0x99u8; 32],
+                lock_hash_type: 1,
+                lock_args: &owner_args,
+                lock_script_hash: &owner_lock_hash,
+                type_code_hash: Some(&type_code_hash),
+                type_hash_type: Some(1),
+                type_args: Some(&[]),
+                type_script_hash: Some(&type_script_hash),
+                data_hash: &[0u8; 32],
+                data_size: 16,
+                data: &amount_le,
+            }],
+        };
+
+        let actions_list = build_tx_actions_with_production_detectors(&[tx], true).unwrap();
+        assert!(
+            actions_list[0]
+                .protocol_actions
+                .iter()
+                .any(|a| a.protocol == "rgbpp"),
+            "production entry point must run the production detectors; got {:?}",
+            actions_list[0].protocol_actions
+        );
     }
 }
