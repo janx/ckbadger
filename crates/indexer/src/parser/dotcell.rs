@@ -395,6 +395,13 @@ mod tests {
         );
         assert!(!d.is_root());
         assert_eq!(d.parent_id(), None);
+        // `support` was registered with no records, and its own-index witness
+        // says so: an empty payload that still hashes to the cell's value.
+        assert!(
+            DotCellParser::parse_witness_records(fixture::M2_WITNESS_1, &d.records_hash)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
