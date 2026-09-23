@@ -1538,6 +1538,48 @@ mod tests {
         ));
     }
 
+    /// The watchdog loop as it actually runs: 3 s ticks, a committed tip that
+    /// cannot move until the batch commits, and a writer that marks a phase per
+    /// staged block. Two minutes of staging must produce no warning.
+    #[test]
+    fn a_long_staging_body_that_keeps_marking_phases_never_warns() {
+        let start = Instant::now();
+        let mut last_writer_phase_seq = 0u64;
+        let mut last_writer_phase_advanced_at = start;
+        let mut warned = false;
+
+        for tick in 1..=40u64 {
+            let now = start + Duration::from_secs(3 * tick);
+            // The writer marked at least one phase since the last tick.
+            let seq = tick;
+            if seq != last_writer_phase_seq {
+                last_writer_phase_seq = seq;
+                last_writer_phase_advanced_at = now;
+            }
+            warned |= should_warn_progress_stall(
+                start,
+                last_writer_phase_advanced_at,
+                now,
+                100,
+                200,
+                Duration::from_secs(60),
+            );
+        }
+        assert!(
+            !warned,
+            "a batch still staging blocks is progress, not a stall"
+        );
+
+        // The same loop with the writer wedged does warn.
+        let mut warned_when_wedged = false;
+        for tick in 1..=40u64 {
+            let now = start + Duration::from_secs(3 * tick);
+            warned_when_wedged |=
+                should_warn_progress_stall(start, start, now, 100, 200, Duration::from_secs(60));
+        }
+        assert!(warned_when_wedged);
+    }
+
     #[test]
     fn stall_warning_fires_when_the_writer_phase_heartbeat_also_stops() {
         let now = Instant::now();

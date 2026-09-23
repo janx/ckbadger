@@ -2500,6 +2500,10 @@ impl Indexer {
 
             let mut block_tx_idx = 0usize;
             for (block_idx, block_response) in blocks.iter().enumerate() {
+                // Staging a 5,000-block batch takes minutes; the watchdog must
+                // see the writer moving through it, not just at the phase
+                // boundaries around it.
+                self.perf.mark_writer_phase();
                 let parsed = &all_parsed_blocks[block_idx];
                 let tx_count_for_block =
                     checked_tx_count(parsed.transactions_count, parsed.number)?;
@@ -2808,6 +2812,9 @@ impl Indexer {
             // --- Main pass: per-tx with inputs-before-outputs ---
             let mut block_tx_idx = 0usize;
             for (block_idx, block_response) in blocks.iter().enumerate() {
+                // Protocol state for one block: the longest stretch of the
+                // staging body. Beat the heartbeat per block here too.
+                self.perf.mark_writer_phase();
                 let parsed = &all_parsed_blocks[block_idx];
                 let tx_count_for_block =
                     checked_tx_count(parsed.transactions_count, parsed.number)?;
@@ -3668,6 +3675,7 @@ impl Indexer {
 
         let mut block_tx_idx = 0usize;
         for parsed in all_parsed_blocks {
+            self.perf.mark_writer_phase();
             let block_date = ckbadger_common::block_date(parsed.timestamp);
             let tx_count_for_block = checked_tx_count(parsed.transactions_count, parsed.number)?;
             let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
@@ -4131,6 +4139,10 @@ impl Indexer {
             }
             append_only_commit_synced_ms = append_only_started.elapsed().as_secs_f64() * 1000.0;
 
+            // The last markable point before the batch leaves this process.
+            // A single `db.write()` cannot be marked from inside — RocksDB
+            // gives no progress callback — so a genuinely wedged commit still
+            // trips the watchdog, which is exactly what it is for.
             let domain_commit_started = Instant::now();
             self.perf.mark_writer_phase();
             data_batch.commit().with_context(|| {
@@ -6109,7 +6121,16 @@ mod tests {
             block: BlockResponseWithCycles,
             token_daily_changes: EntityDailyChanges<EntityDateKey>,
         ) -> Result<crate::sync::types::BatchWriteMetrics> {
-            let blocks = vec![block];
+            write_live_blocks_with_entity_changes(indexer, vec![block], token_daily_changes).await
+        }
+
+        /// Same live write path with SEVERAL blocks in ONE batch — the shape a
+        /// live catch-up actually uses (up to 5,000 blocks per batch).
+        pub(super) async fn write_live_blocks_with_entity_changes(
+            indexer: &Indexer,
+            blocks: Vec<BlockResponseWithCycles>,
+            token_daily_changes: EntityDailyChanges<EntityDateKey>,
+        ) -> Result<crate::sync::types::BatchWriteMetrics> {
             let (all_parsed_blocks, mut all_tx_data, all_input_outpoints) =
                 parse_blocks_parallel(&blocks)?;
 
@@ -6273,6 +6294,57 @@ mod tests {
                 metrics.tracker_state_bytes,
                 hodl_bytes + cell_dist_bytes,
                 "tracker_state_bytes must be the bytes actually written: {metrics:?}"
+            );
+        }
+
+        /// P3.2 (review m1): the writer-phase heartbeat must beat inside the
+        /// staging body, not only at the six phase boundaries.
+        ///
+        /// A live catch-up batch of 5,000 blocks spends minutes between
+        /// `t_write` and `t_finalize`. If only the boundaries mark a phase, the
+        /// watchdog sees no writer progress for that whole stretch and warns
+        /// exactly where P3.2 was supposed to stop warning.
+        #[tokio::test]
+        async fn staging_body_marks_a_writer_phase_for_every_block_in_the_batch() {
+            let dir = tempfile::tempdir().unwrap();
+            let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+            let indexer = indexer_for_live_write_test(store.clone());
+            store
+                .set_secondary_epoch_reward(61_369_863_013_698)
+                .unwrap();
+
+            let before_one = indexer.writer_phase_seq();
+            write_live_blocks_with_entity_changes(
+                &indexer,
+                vec![block(
+                    100,
+                    AR_DEPOSIT,
+                    vec![cellbase_tx(0xc0, FUNDING_CAPACITY)],
+                )],
+                EntityDailyChanges::new(),
+            )
+            .await
+            .unwrap();
+            let one_block_marks = indexer.writer_phase_seq() - before_one;
+
+            let before_three = indexer.writer_phase_seq();
+            write_live_blocks_with_entity_changes(
+                &indexer,
+                vec![
+                    block(101, AR_DEPOSIT, vec![cellbase_tx(0xc1, FUNDING_CAPACITY)]),
+                    block(102, AR_DEPOSIT, vec![cellbase_tx(0xc2, FUNDING_CAPACITY)]),
+                    block(103, AR_DEPOSIT, vec![cellbase_tx(0xc3, FUNDING_CAPACITY)]),
+                ],
+                EntityDailyChanges::new(),
+            )
+            .await
+            .unwrap();
+            let three_block_marks = indexer.writer_phase_seq() - before_three;
+
+            assert!(
+                three_block_marks >= one_block_marks + 2,
+                "the heartbeat must beat per staged block: 1-block batch marked \
+                 {one_block_marks}, 3-block batch marked {three_block_marks}"
             );
         }
 
