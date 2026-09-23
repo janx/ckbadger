@@ -61,16 +61,24 @@ impl BatchWriter {
         block_number: i64,
         batch: &mut StoreBatch,
         state: &mut SporeBatchState,
-    ) {
+    ) -> Result<()> {
         for key in [
             keys::encode_spore_outpoint_key(tx_hash, output_index).to_vec(),
             keys::encode_spore_outpoint_by_id_key(id, tx_hash, output_index),
         ] {
+            // A failed read is NOT "the row did not exist": recording `None`
+            // for it would make the rollback delete a row that had a value.
             let previous = self
                 .store
                 .get_cf(self.store.cf_stats_spore(), &key)
-                .ok()
-                .flatten();
+                .map_err(|e| {
+                    anyhow!(
+                        "failed to read the dotcell outpoint reverse-index pre-image: id=0x{}, key=0x{}, block={}, {e}",
+                        hex::encode(id),
+                        hex::encode(&key),
+                        block_number
+                    )
+                })?;
             self.record_object_undo(
                 batch,
                 block_number,
@@ -82,6 +90,7 @@ impl BatchWriter {
         }
         batch.put_spore_outpoint(tx_hash, output_index, id);
         state.put_spore_outpoint(tx_hash, output_index, id);
+        Ok(())
     }
 
     /// A network runs exactly one `.cell` namespace. Two would make bare
@@ -162,7 +171,7 @@ impl BatchWriter {
                 block_number,
                 batch,
                 state,
-            );
+            )?;
             return Ok(());
         }
 
@@ -221,7 +230,14 @@ impl BatchWriter {
         };
         batch.put_identity(&name.id, &entry);
         state.put_identity(&name.id, entry);
-        self.put_dotcell_outpoint_rows(&name.id, tx_hash, output_index, block_number, batch, state);
+        self.put_dotcell_outpoint_rows(
+            &name.id,
+            tx_hash,
+            output_index,
+            block_number,
+            batch,
+            state,
+        )?;
 
         // Owner index. The row's value is empty, so its pre-image is
         // `Some(empty)` when the row existed and `None` when it did not.
