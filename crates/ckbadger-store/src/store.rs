@@ -1893,6 +1893,12 @@ impl CkbadgerStore {
         }
     }
 
+    /// Resolve a column family handle by its name, the way
+    /// `rollback_via_undo_log` does when replaying a `KeyMutation` entry.
+    pub fn cf_handle_by_name(&self, cf_name: &str) -> Option<&ColumnFamily> {
+        self.db.cf_handle(cf_name)
+    }
+
     /// Resolve the stats CF **name** for a stats key prefix.
     ///
     /// `stats_cf_by_prefix` hands back a live `&ColumnFamily` handle, which an

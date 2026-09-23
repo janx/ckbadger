@@ -6026,6 +6026,20 @@ mod tests {
             indexer: &Indexer,
             block: BlockResponseWithCycles,
         ) -> Result<()> {
+            write_live_block_with_entity_changes(indexer, block, EntityDailyChanges::new()).await
+        }
+
+        /// Same live write path, but with NON-EMPTY entity daily/hourly changes.
+        ///
+        /// Without this, no test drives `write_parsed_batch` with entity rows to
+        /// write, so deleting `entity_stats.stage_final` — the single place the
+        /// overlay's values reach RocksDB — would leave every test green while
+        /// silently dropping all eight families.
+        pub(super) async fn write_live_block_with_entity_changes(
+            indexer: &Indexer,
+            block: BlockResponseWithCycles,
+            token_daily_changes: EntityDailyChanges<EntityDateKey>,
+        ) -> Result<()> {
             let blocks = vec![block];
             let (all_parsed_blocks, mut all_tx_data, all_input_outpoints) =
                 parse_blocks_parallel(&blocks)?;
@@ -6100,7 +6114,7 @@ mod tests {
                     HashMap::new(),
                     HashMap::new(),
                     EntityDailyChanges::new(),
-                    EntityDailyChanges::new(),
+                    token_daily_changes,
                     HashMap::new(),
                     EntityDailyChanges::new(),
                     EntityDailyChanges::new(),
@@ -6110,6 +6124,138 @@ mod tests {
                 )
                 .await?;
             Ok(())
+        }
+
+        /// Review m10: drive the real live write path with NON-EMPTY entity
+        /// changes, so the single place the overlay's values reach RocksDB —
+        /// `entity_stats.stage_final` in `write_parsed_batch` — is actually
+        /// exercised. Before this, every test passed empty `EntityDailyChanges`,
+        /// so deleting that call would have dropped all eight families silently.
+        #[tokio::test]
+        async fn live_batch_persists_entity_daily_and_hourly_rows_with_undo() {
+            const TYPE_ARGS: &str =
+                "0xa92deeb134132d493d340f2cc4e7b62f930bcd037f0fb7f06b48f931f36f9fc2";
+
+            let dir = tempfile::tempdir().unwrap();
+            let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+            let indexer = indexer_for_live_write_test(store.clone());
+            store
+                .set_secondary_epoch_reward(61_369_863_013_698)
+                .unwrap();
+
+            // Block 100 funds a cell through the live path, so the HODL tracker
+            // and address balances know about it — exactly how a real chain
+            // reaches the state block 101 consumes.
+            write_live_block(
+                &indexer,
+                block(100, AR_DEPOSIT, vec![cellbase_tx(0xc0, FUNDING_CAPACITY)]),
+            )
+            .await
+            .unwrap();
+
+            // Block 101 spends it into an sUDT mint: the UDT writer bumps
+            // TOKEN_HOURLY through the same overlay the daily writers use.
+            let sudt_type = crate::rpc::Script {
+                code_hash: crate::parser::udt::SUDT_CODE_HASH.to_string(),
+                hash_type: "type".to_string(),
+                args: TYPE_ARGS.to_string(),
+            };
+            let type_script_hash = crate::parser::ScriptParser::compute_script_hash(&sudt_type);
+            let mint_tx = TransactionView {
+                hash: format!("0x{}", hex::encode([0xe7; 32])),
+                version: "0x0".to_string(),
+                cell_deps: vec![],
+                header_deps: vec![],
+                inputs: vec![CellInput {
+                    since: "0x0".to_string(),
+                    previous_output: OutPoint {
+                        tx_hash: format!("0x{}", hex::encode([0xc0; 32])),
+                        index: "0x0".to_string(),
+                    },
+                }],
+                outputs: vec![CellOutput {
+                    capacity: format!("0x{:x}", FUNDING_CAPACITY - 100_000_000),
+                    lock: lock_script(),
+                    type_: Some(sudt_type),
+                }],
+                outputs_data: vec!["0x2a000000000000000000000000000000".to_string()],
+                witnesses: vec![],
+            };
+
+            // Same timestamp the `header` fixture gives block 101.
+            let date =
+                ckbadger_store::keys::timestamp_ms_to_date(1_700_000_000_000i64 + 101 * 1000);
+            let mut token_daily = EntityDailyChanges::<EntityDateKey>::new();
+            token_daily
+                .add(
+                    101,
+                    (type_script_hash.clone(), date),
+                    20_000_000_000,
+                    14_300_000_000,
+                )
+                .unwrap();
+
+            write_live_block_with_entity_changes(
+                &indexer,
+                block(101, AR_DEPOSIT, vec![cellbase_tx(0xc1, 100), mint_tx]),
+                token_daily,
+            )
+            .await
+            .unwrap();
+
+            // The daily row reached RocksDB with the exact value.
+            let daily = store
+                .get_token_daily_delta(&type_script_hash, date)
+                .unwrap()
+                .expect("token daily row must be persisted by stage_final");
+            assert_eq!(daily.owned_capacity_delta, 20_000_000_000);
+            assert_eq!(daily.owned_knowledge_delta, 14_300_000_000);
+
+            // And so did the hourly counter the UDT writer bumped.
+            let hourly_rows: Vec<(Vec<u8>, i64)> = store
+                .iterator_cf(
+                    store.cf_stats_token(),
+                    rocksdb::IteratorMode::From(
+                        &[ckbadger_store::keys::STATS_PREFIX_TOKEN_HOURLY],
+                        rocksdb::Direction::Forward,
+                    ),
+                )
+                .map(|item| item.unwrap())
+                .take_while(|(key, _)| {
+                    key.first() == Some(&ckbadger_store::keys::STATS_PREFIX_TOKEN_HOURLY)
+                })
+                .map(|(key, value)| {
+                    (
+                        key.to_vec(),
+                        i64::from_le_bytes(value[..8].try_into().unwrap()),
+                    )
+                })
+                .collect();
+            assert_eq!(
+                hourly_rows.len(),
+                1,
+                "the mint must leave exactly one TOKEN_HOURLY row, got {hourly_rows:?}"
+            );
+            assert_eq!(hourly_rows[0].1, 1);
+            assert_eq!(&hourly_rows[0].0[1..33], type_script_hash.as_slice());
+
+            // Both carry an EntityStats undo entry for block 101, so a shallow
+            // fork can take them back.
+            let mut entity_undo = 0usize;
+            for item in store.iterator_cf(
+                store.cf_reorg_undo_log_by_block(),
+                rocksdb::IteratorMode::Start,
+            ) {
+                let (key, _) = item.unwrap();
+                let (block_num, seq) = ckbadger_store::keys::decode_reorg_undo_log_key(&key);
+                if block_num == 101 && seq >> 48 == 0x0004 {
+                    entity_undo += 1;
+                }
+            }
+            assert_eq!(
+                entity_undo, 2,
+                "one undo entry each for the daily row and the hourly counter"
+            );
         }
 
         /// Blocks 100-102: funding cellbase, DAO deposit, withdraw request.

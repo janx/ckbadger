@@ -40,6 +40,9 @@ pub struct EntityStatsOverlay {
     touched: HashSet<(i64, Vec<u8>)>,
     /// Keys `stage_final` must write.
     dirty: HashSet<Vec<u8>>,
+    /// Highest block that has mutated each key, so the per-block pre-image
+    /// contract can be enforced rather than assumed from caller loop order.
+    last_block_by_key: HashMap<Vec<u8>, i64>,
 }
 
 impl EntityStatsOverlay {
@@ -101,6 +104,22 @@ impl EntityStatsOverlay {
         key: &[u8],
         next: Option<Vec<u8>>,
     ) -> Result<()> {
+        // Block N's pre-image must be the value at the end of N-1, which only
+        // holds while blocks arrive in ascending order. Several call sites
+        // (`spore.rs`, `mnft.rs`, `dotbit.rs`, the token hourly flush) get that
+        // order from their own loops; a future reordering there would silently
+        // record a pre-image from the future.
+        if let Some(last_block) = self.last_block_by_key.get(key) {
+            if block < *last_block {
+                bail!(
+                    "entity stats overlay requires ascending block order per key: \
+                     key=0x{}, last_block={}, block={}",
+                    hex::encode(key),
+                    last_block,
+                    block
+                );
+            }
+        }
         let previous_value = self.current(store, key)?;
         if self.touched.insert((block, key.to_vec())) && !store.is_bulk_sync_mode() {
             let Some(prefix) = key.first().copied() else {
@@ -121,6 +140,7 @@ impl EntityStatsOverlay {
         }
         self.values.insert(key.to_vec(), next);
         self.dirty.insert(key.to_vec());
+        self.last_block_by_key.insert(key.to_vec(), block);
         Ok(())
     }
 
@@ -458,6 +478,72 @@ mod tests {
         );
     }
 
+    /// The per-block pre-image is only correct if blocks arrive in ascending
+    /// order: block N's undo entry must hold the value at the end of N-1. If a
+    /// caller's loop ever goes backwards, the earlier block's entry would record
+    /// a value from the future and rolling back to it would restore the wrong
+    /// bytes — silently. The overlay refuses instead of trusting its callers.
+    #[test]
+    fn mutate_rejects_a_block_going_backwards_for_the_same_key() {
+        let (_dir, store) = open_store();
+        let key = keys::encode_token_daily_key(&[0x22; 32], 20_260_922).to_vec();
+
+        let mut overlay = EntityStatsOverlay::new();
+        let mut undo_seq: HashMap<i64, u64> = HashMap::new();
+        let mut batch = StoreBatch::new(&store);
+
+        overlay
+            .mutate(
+                &store,
+                &mut batch,
+                &mut undo_seq,
+                7,
+                &key,
+                Some(daily(10, 1)),
+            )
+            .unwrap();
+        // Same block again is fine (many txs per block).
+        overlay
+            .mutate(
+                &store,
+                &mut batch,
+                &mut undo_seq,
+                7,
+                &key,
+                Some(daily(20, 2)),
+            )
+            .unwrap();
+        let err = overlay
+            .mutate(
+                &store,
+                &mut batch,
+                &mut undo_seq,
+                6,
+                &key,
+                Some(daily(30, 3)),
+            )
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("ascending block order")
+                && err.to_string().contains("last_block=7")
+                && err.to_string().contains("block=6"),
+            "got: {err}"
+        );
+
+        // A different key is independent — its own first block may be lower.
+        let other = keys::encode_token_daily_key(&[0x23; 32], 20_260_922).to_vec();
+        overlay
+            .mutate(
+                &store,
+                &mut batch,
+                &mut undo_seq,
+                3,
+                &other,
+                Some(daily(5, 1)),
+            )
+            .unwrap();
+    }
+
     #[test]
     fn stage_final_writes_each_key_once() {
         let (_dir, store) = open_store();
@@ -716,10 +802,17 @@ mod tests {
                 expected,
                 "prefix {prefix:#04x}"
             );
-            // The name must address the same CF the handle lookup resolves.
-            let handle = store.stats_cf_by_prefix(prefix).unwrap();
-            let named = store.stats_cf_by_prefix(prefix).unwrap();
-            assert!(std::ptr::eq(handle, named));
+            // The name must address the same CF the handle lookup resolves —
+            // an undo entry stores the name and re-resolves the handle from it
+            // in whichever process replays it.
+            let by_prefix = store.stats_cf_by_prefix(prefix).unwrap();
+            let by_name = store
+                .cf_handle_by_name(CkbadgerStore::stats_cf_name_by_prefix(prefix).unwrap())
+                .unwrap();
+            assert!(
+                std::ptr::eq(by_prefix, by_name),
+                "prefix {prefix:#04x}: the name and the handle must address one CF"
+            );
         }
         assert!(CkbadgerStore::stats_cf_name_by_prefix(0xFE).is_err());
     }

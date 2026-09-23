@@ -1038,6 +1038,24 @@ impl BatchWriter {
         undo_seq: &mut HashMap<i64, u64>,
         batch: &mut StoreBatch,
     ) -> Result<()> {
+        // One `multi_get` for every key this family touches, instead of a point
+        // read per key inside the loop. The overlay keeps whatever a previous
+        // writer already computed, so warming it can never resurrect a stale
+        // pre-batch value (`prefetch_never_overwrites_a_value_the_batch_computed`).
+        let mut prefetch_keys: Vec<Vec<u8>> = Vec::new();
+        for (_, map) in changes.by_block() {
+            for (key_parts, (capacity_delta, knowledge_delta)) in map {
+                if *capacity_delta == 0 && *knowledge_delta == 0 {
+                    continue;
+                }
+                let (spore_id, date_yyyymmdd) = key_parts;
+                prefetch_keys.push(keys::encode_spore_daily_key(spore_id, *date_yyyymmdd).to_vec());
+            }
+        }
+        prefetch_keys.sort_unstable();
+        prefetch_keys.dedup();
+        overlay.prefetch(self.store.as_ref(), &prefetch_keys)?;
+
         for (block, map) in changes.by_block() {
             for (key_parts, (capacity_delta, knowledge_delta)) in map {
                 if *capacity_delta == 0 && *knowledge_delta == 0 {
@@ -1098,6 +1116,25 @@ impl BatchWriter {
         undo_seq: &mut HashMap<i64, u64>,
         batch: &mut StoreBatch,
     ) -> Result<()> {
+        // One `multi_get` for every key this family touches, instead of a point
+        // read per key inside the loop. The overlay keeps whatever a previous
+        // writer already computed, so warming it can never resurrect a stale
+        // pre-batch value (`prefetch_never_overwrites_a_value_the_batch_computed`).
+        let mut prefetch_keys: Vec<Vec<u8>> = Vec::new();
+        for (_, map) in changes.by_block() {
+            for (key_parts, (capacity_delta, knowledge_delta)) in map {
+                if *capacity_delta == 0 && *knowledge_delta == 0 {
+                    continue;
+                }
+                let (cluster_id, date_yyyymmdd) = key_parts;
+                prefetch_keys
+                    .push(keys::encode_cluster_daily_key(cluster_id, *date_yyyymmdd).to_vec());
+            }
+        }
+        prefetch_keys.sort_unstable();
+        prefetch_keys.dedup();
+        overlay.prefetch(self.store.as_ref(), &prefetch_keys)?;
+
         for (block, map) in changes.by_block() {
             for (key_parts, (capacity_delta, knowledge_delta)) in map {
                 if *capacity_delta == 0 && *knowledge_delta == 0 {
