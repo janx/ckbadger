@@ -40,16 +40,27 @@ pub struct SourceAnchor {
 /// Read from `<network workdir>/verify-source.toml`. Nothing here is inferred:
 /// the runtime can confirm or contradict a declaration, but it cannot discover
 /// that history was continuously indexed from genesis.
+///
+/// The field names are the operator's, not this module's — the file is
+/// maintained by hand alongside each network's config, so the loader follows
+/// its shape rather than imposing one.
 #[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SourceDeclaration {
     pub genesis_hash: String,
     pub node_version: String,
+    /// The node and its built-in indexer are one binary, so this must equal
+    /// `node_version`; a declaration naming two describes something that
+    /// cannot exist.
+    pub indexer_version: String,
     /// First block the index covers. Anything above 0 leaves a hole the
     /// verifier cannot see into.
-    pub index_start_block: u64,
-    pub built_from_genesis: bool,
-    pub declared_by: String,
-    pub declared_at: String,
+    pub build_start_block: u64,
+    pub continuous_from_genesis: bool,
+    /// The operator's statement of how the index was built. This is the whole
+    /// evidence for coverage the runtime cannot re-derive, so it is carried
+    /// into the report and the manifest verbatim.
+    pub provenance: String,
     #[serde(default)]
     pub block_filter: Option<String>,
     #[serde(default)]
@@ -79,8 +90,7 @@ pub struct SourceProfile {
     pub indexer_tip: u64,
     pub index_start_block: u64,
     pub declaration_path: String,
-    pub declared_by: String,
-    pub declared_at: String,
+    pub provenance: String,
     pub block_filter: Option<String>,
     pub cell_filter: Option<String>,
 }
@@ -101,8 +111,7 @@ impl SourceQualification {
                 node_version: Some(profile.node_version.clone()),
                 indexer_tip: Some(profile.indexer_tip),
                 declaration_path: Some(profile.declaration_path.clone()),
-                declared_by: Some(profile.declared_by.clone()),
-                declared_at: Some(profile.declared_at.clone()),
+                provenance: Some(profile.provenance.clone()),
                 block_filter: profile.block_filter.clone(),
                 cell_filter: profile.cell_filter.clone(),
             },
@@ -113,8 +122,7 @@ impl SourceQualification {
                 node_version: None,
                 indexer_tip: None,
                 declaration_path: None,
-                declared_by: None,
-                declared_at: None,
+                provenance: None,
                 block_filter: None,
                 cell_filter: None,
             },
@@ -141,17 +149,27 @@ pub async fn qualify_source(
         )));
     };
 
-    if !declaration.built_from_genesis {
+    if !declaration.continuous_from_genesis {
         return Ok(SourceQualification::Inconclusive(format!(
-            "{} declares built_from_genesis = false; history below the index start is not covered",
+            "{} declares continuousFromGenesis = false; history below the build start is not \
+             covered",
             declaration_path.display()
         )));
     }
-    if declaration.index_start_block != 0 {
+    if declaration.build_start_block != 0 {
         return Ok(SourceQualification::Inconclusive(format!(
-            "{} declares index_start_block = {}; blocks below it are not enumerable",
+            "{} declares buildStartBlock = {}; blocks below it are not enumerable",
             declaration_path.display(),
-            declaration.index_start_block
+            declaration.build_start_block
+        )));
+    }
+    if declaration.indexer_version != declaration.node_version {
+        return Ok(SourceQualification::Inconclusive(format!(
+            "{} declares indexerVersion '{}' but nodeVersion '{}': the node and its in-process \
+             indexer are one binary and cannot be two versions",
+            declaration_path.display(),
+            declaration.indexer_version,
+            declaration.node_version
         )));
     }
     if let Some(filter) = declaration
@@ -220,10 +238,9 @@ pub async fn qualify_source(
         genesis_hash,
         node_version,
         indexer_tip: indexer_tip.block_number,
-        index_start_block: declaration.index_start_block,
+        index_start_block: declaration.build_start_block,
         declaration_path: declaration_path.to_string_lossy().into_owned(),
-        declared_by: declaration.declared_by.clone(),
-        declared_at: declaration.declared_at.clone(),
+        provenance: declaration.provenance.clone(),
         block_filter: declaration.block_filter.clone(),
         cell_filter: declaration.cell_filter.clone(),
     }))
@@ -443,14 +460,14 @@ mod tests {
     const GENESIS: &str = "0x92b197aa1fba0f63633922c61c92375c9c074a93e85963554f5499fe1450d0e5";
     const NODE_VERSION: &str = "0.119.0 (abcdef1 2026-01-01)";
 
-    fn declaration_toml(genesis: &str, node_version: &str, index_start_block: u64) -> String {
+    fn declaration_toml(genesis: &str, node_version: &str, build_start_block: u64) -> String {
         format!(
-            r#"genesis_hash = "{genesis}"
-node_version = "{node_version}"
-index_start_block = {index_start_block}
-built_from_genesis = true
-declared_by = "operator"
-declared_at = "2026-09-22T00:00:00Z"
+            r#"genesisHash = "{genesis}"
+nodeVersion = "{node_version}"
+indexerVersion = "{node_version}"
+buildStartBlock = {build_start_block}
+continuousFromGenesis = true
+provenance = "operator declared, 2026-09-22"
 "#
         )
     }
@@ -541,8 +558,10 @@ declared_at = "2026-09-22T00:00:00Z"
         // The operator's statement is the evidence for coverage the runtime
         // cannot re-derive, so the report must carry it, not just the file.
         assert_eq!(report.status, "qualified");
-        assert_eq!(report.declared_by.as_deref(), Some("operator"));
-        assert_eq!(report.declared_at.as_deref(), Some("2026-09-22T00:00:00Z"));
+        assert_eq!(
+            report.provenance.as_deref(),
+            Some("operator declared, 2026-09-22")
+        );
         assert_eq!(report.block_filter, None);
         assert_eq!(report.cell_filter, None);
         assert_eq!(report.indexer_tip, Some(1_000));
@@ -723,10 +742,115 @@ declared_at = "2026-09-22T00:00:00Z"
         assert!(moved.contains("899"), "{moved}");
     }
 
+    /// The operator's own `verify-source.toml`, verbatim from
+    /// `work/mainnet/verify-source.toml`. The loader must read the file the
+    /// operator maintains, not a schema invented alongside it: a rename here
+    /// silently turns a qualified source into an Error on every run.
+    const OPERATOR_DECLARATION: &str = r#"# Source qualification confirmed by the operator in this task on 2026-09-22.
+genesisHash = "0x92b197aa1fba0f63633922c61c92375c9c074a93e85963554f5499fe1450d0e5"
+nodeVersion = "0.209.0 (d166e28 2026-07-29)"
+indexerVersion = "0.209.0 (d166e28 2026-07-29)"
+buildStartBlock = 0
+continuousFromGenesis = true
+provenance = "Operator confirmed both currently running, self-operated CKB indexers were continuously built from genesis; no additional build records are required. Current unfiltered configuration and runtime identity are separately checked."
+"#;
+
+    #[test]
+    fn the_operators_declaration_format_is_what_the_loader_reads() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_declaration(dir.path(), OPERATOR_DECLARATION);
+
+        let declaration = SourceDeclaration::load(&path)
+            .expect("the operator's file must parse")
+            .expect("the file exists");
+
+        assert_eq!(
+            declaration.genesis_hash,
+            "0x92b197aa1fba0f63633922c61c92375c9c074a93e85963554f5499fe1450d0e5"
+        );
+        assert_eq!(declaration.node_version, "0.209.0 (d166e28 2026-07-29)");
+        assert_eq!(declaration.indexer_version, "0.209.0 (d166e28 2026-07-29)");
+        assert_eq!(declaration.build_start_block, 0);
+        assert!(declaration.continuous_from_genesis);
+        assert!(declaration
+            .provenance
+            .contains("continuously built from genesis"));
+    }
+
+    #[tokio::test]
+    async fn the_operators_declaration_qualifies_against_a_matching_node() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_declaration(dir.path(), OPERATOR_DECLARATION);
+        let server = MockServer::start().await;
+        mount_node(
+            &server,
+            "0x92b197aa1fba0f63633922c61c92375c9c074a93e85963554f5499fe1450d0e5",
+            "0.209.0 (d166e28 2026-07-29)",
+            20_600_000,
+            "0xanchor",
+        )
+        .await;
+
+        let declaration = SourceDeclaration::load(&path).unwrap().unwrap();
+        let qualification = qualify_source(
+            &CkbRpcClient::new(server.uri()),
+            Some(&declaration),
+            &path,
+            &anchor(20_530_435, "0xanchor"),
+        )
+        .await
+        .unwrap();
+
+        let report = qualification.to_report();
+        assert_eq!(report.status, "qualified", "{report:?}");
+        assert_eq!(
+            report.provenance.as_deref().map(|p| p.contains("genesis")),
+            Some(true)
+        );
+    }
+
+    /// The node and its built-in indexer are one binary, so a declaration that
+    /// names two different versions describes something that cannot exist.
+    #[tokio::test]
+    async fn a_declaration_whose_indexer_version_differs_from_its_node_version_is_inconclusive() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_declaration(
+            dir.path(),
+            &OPERATOR_DECLARATION.replace(
+                r#"indexerVersion = "0.209.0 (d166e28 2026-07-29)""#,
+                r#"indexerVersion = "0.208.0 (older)""#,
+            ),
+        );
+        let server = MockServer::start().await;
+        mount_node(
+            &server,
+            "0x92b197aa1fba0f63633922c61c92375c9c074a93e85963554f5499fe1450d0e5",
+            "0.209.0 (d166e28 2026-07-29)",
+            20_600_000,
+            "0xanchor",
+        )
+        .await;
+
+        let declaration = SourceDeclaration::load(&path).unwrap().unwrap();
+        let qualification = qualify_source(
+            &CkbRpcClient::new(server.uri()),
+            Some(&declaration),
+            &path,
+            &anchor(20_530_435, "0xanchor"),
+        )
+        .await
+        .unwrap();
+
+        let SourceQualification::Inconclusive(reason) = qualification else {
+            panic!("a node and its in-process indexer cannot be two versions");
+        };
+        assert!(reason.contains("0.208.0"), "{reason}");
+    }
+
     #[tokio::test]
     async fn a_malformed_declaration_is_an_error_not_missing_evidence() {
         let dir = tempfile::tempdir().unwrap();
-        let path = write_declaration(dir.path(), "genesis_hash = ");
+        let path = write_declaration(dir.path(), "genesisHash = ");
         let error = SourceDeclaration::load(&path)
             .expect_err("an unparseable declaration is a local failure, not an absent one");
         assert!(error.to_string().contains("verify-source.toml"), "{error}");

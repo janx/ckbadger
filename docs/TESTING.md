@@ -179,13 +179,16 @@ from the chain and compares it against the index, with **zero tolerance** —
 
 ```toml
 # work/mainnet/verify-source.toml
-genesis_hash = "0x92b197aa1fba0f63633922c61c92375c9c074a93e85963554f5499fe1450d0e5"
-node_version = "0.119.0 (a1b2c3d 2026-01-01)"
-index_start_block = 0
-built_from_genesis = true
-declared_by = "operator"
-declared_at = "2026-09-22T00:00:00Z"
+genesisHash = "0x92b197aa1fba0f63633922c61c92375c9c074a93e85963554f5499fe1450d0e5"
+nodeVersion = "0.209.0 (d166e28 2026-07-29)"
+indexerVersion = "0.209.0 (d166e28 2026-07-29)"
+buildStartBlock = 0
+continuousFromGenesis = true
+provenance = "Operator confirmed the running, self-operated CKB indexer was continuously built from genesis."
 ```
+
+`nodeVersion` and `indexerVersion` must agree — the node and its in-process
+indexer are one binary — and both are checked against the live node.
 
 > **Coverage limits.** Only the **token** family has an adapter in this
 > delivery. Script, Spore, cluster and object families, independent candidate
