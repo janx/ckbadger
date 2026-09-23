@@ -1893,6 +1893,56 @@ impl CkbadgerStore {
         }
     }
 
+    /// Resolve the stats CF **name** for a stats key prefix.
+    ///
+    /// `stats_cf_by_prefix` hands back a live `&ColumnFamily` handle, which an
+    /// undo-log entry cannot carry: `UndoLogEntry::KeyMutation` is CF-name
+    /// addressed so `rollback_via_undo_log` can re-resolve the handle in
+    /// whichever process replays it. Both must stay in step — a prefix that
+    /// resolves to a handle here but not to a name would silently lose its
+    /// pre-images.
+    pub fn stats_cf_name_by_prefix(prefix: u8) -> anyhow::Result<&'static str> {
+        match prefix {
+            keys::STATS_PREFIX_DAILY
+            | keys::STATS_PREFIX_HOURLY
+            | keys::STATS_PREFIX_EPOCH
+            | keys::STATS_PREFIX_MINER
+            | keys::STATS_PREFIX_BLOCK_TIME_DIST
+            | keys::STATS_PREFIX_EPOCH_TIME_DIST
+            | keys::STATS_PREFIX_DAILY_BLOCK
+            | keys::STATS_PREFIX_ACTIVITY_DAILY
+            | keys::STATS_PREFIX_ACTIVITY_HOURLY
+            | keys::STATS_PREFIX_ACTIVITY_DAILY_ADDR_SET
+            | keys::STATS_PREFIX_ACTIVITY_HOURLY_ADDR_SET => Ok(CF_STATS_CHAIN),
+            keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT
+            | keys::STATS_PREFIX_DAO_LATEST_STATS
+            | keys::STATS_PREFIX_DAO_TOP_DEPOSITORS => Ok(CF_STATS_DAO),
+            keys::STATS_PREFIX_HODL_WAVE
+            | keys::STATS_PREFIX_CELL_DISTRIBUTION
+            | keys::STATS_PREFIX_ADDR_COHORT => Ok(CF_STATS_HODL),
+            keys::STATS_PREFIX_SCRIPT_DAILY => Ok(CF_STATS_SCRIPT),
+            keys::STATS_PREFIX_TOKEN_TRANSFERS
+            | keys::STATS_PREFIX_TOKEN_HOURLY
+            | keys::STATS_PREFIX_TOKEN_DAILY => Ok(CF_STATS_TOKEN),
+            keys::STATS_PREFIX_CLUSTER_OWNER
+            | keys::STATS_PREFIX_SPORE_HOURLY
+            | keys::STATS_PREFIX_CLUSTER_DAILY
+            | keys::STATS_PREFIX_SPORE_DAILY
+            | keys::STATS_PREFIX_SPORE_OUTPOINT
+            | keys::STATS_PREFIX_SPORE_TYPE_INDEX
+            | keys::STATS_PREFIX_SPORE_OUTPOINT_BY_ID => Ok(CF_STATS_SPORE),
+            keys::STATS_PREFIX_OBJECT_HOURLY
+            | keys::STATS_PREFIX_OBJECT_DAILY
+            | keys::STATS_PREFIX_OBJECT_TYPE_INDEX
+            | keys::STATS_PREFIX_MNFT_CLASS_OUTPOINT
+            | keys::STATS_PREFIX_MNFT_TOKEN_OUTPOINT
+            | keys::STATS_PREFIX_DOTBIT_ACCOUNT_OUTPOINT
+            | keys::STATS_PREFIX_DOTBIT_OUTPOINT_BY_ACCOUNT_ID
+            | keys::STATS_PREFIX_OBJECT_COLLECTION_OWNER => Ok(CF_STATS_MNFT),
+            _ => anyhow::bail!("unsupported stats prefix: 0x{:02x}", prefix),
+        }
+    }
+
     /// Resolve target stats CF for a full key.
     pub fn cf_for_stats_key(&self, key: &[u8]) -> anyhow::Result<&ColumnFamily> {
         let Some(prefix) = key.first().copied() else {

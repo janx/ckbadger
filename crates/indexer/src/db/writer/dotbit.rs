@@ -13,7 +13,8 @@ use ckbadger_store::{CkbadgerStore, CF_IDENTITY_AGG, CF_IDENTITY_DATA, CF_STATS_
 
 use crate::parser::dotbit::ParsedDotbitAccountOutput;
 use crate::sync::types::UndoSeqScope;
-use crate::sync::undo::next_undo_seq;
+
+use crate::sync::undo::SharedUndoSeq;
 
 use super::BatchWriter;
 
@@ -277,7 +278,7 @@ pub(crate) struct DotbitBatchState {
     hourly_transfers: HashMap<Vec<u8>, i64>,
     identity_aggs: HashMap<Vec<u8>, IdentityCollectionAggregate>,
     identity_owner_counts: HashMap<(Vec<u8>, Vec<u8>), i64>,
-    undo_seq_by_block: HashMap<i64, u64>,
+    undo_seq_by_block: SharedUndoSeq,
 }
 
 impl DotbitBatchState {
@@ -405,12 +406,12 @@ impl BatchWriter {
         cf_name: &'static str,
         key: &[u8],
         previous_value: Option<Vec<u8>>,
-        undo_seq: &mut HashMap<i64, u64>,
+        undo_seq: &SharedUndoSeq,
     ) {
         if self.store.is_bulk_sync_mode() {
             return;
         }
-        let seq = next_undo_seq(undo_seq, block_number, UndoSeqScope::DotBit);
+        let seq = undo_seq.next(block_number, UndoSeqScope::DotBit);
         batch.put_reorg_undo_log_by_block(
             block_number,
             seq,
@@ -429,7 +430,7 @@ impl BatchWriter {
         block_number: i64,
         account_id: &[u8],
         previous_entry: Option<&IdentityEntry>,
-        undo_seq: &mut HashMap<i64, u64>,
+        undo_seq: &SharedUndoSeq,
     ) {
         let previous_value = previous_entry.map(|entry| {
             bincode::serialize(entry).expect("serialize previous dotbit identity entry for undo")
@@ -451,7 +452,7 @@ impl BatchWriter {
         collection_id: &[u8],
         previous_agg: &IdentityCollectionAggregate,
         existed: bool,
-        undo_seq: &mut HashMap<i64, u64>,
+        undo_seq: &SharedUndoSeq,
     ) {
         let previous_value = existed.then(|| {
             bincode::serialize(previous_agg)
@@ -474,7 +475,7 @@ impl BatchWriter {
         collection_id: &[u8],
         lock_hash: &[u8],
         previous_count: i64,
-        undo_seq: &mut HashMap<i64, u64>,
+        undo_seq: &SharedUndoSeq,
     ) {
         let key = ckbadger_store::keys::encode_identity_owner_key(collection_id, lock_hash);
         let previous_value = (previous_count > 0).then(|| previous_count.to_le_bytes().to_vec());
@@ -494,7 +495,7 @@ impl BatchWriter {
         block_number: i64,
         key: &[u8],
         previous_value: Option<Vec<u8>>,
-        undo_seq: &mut HashMap<i64, u64>,
+        undo_seq: &SharedUndoSeq,
     ) {
         self.record_dotbit_domain_undo(
             batch,
@@ -506,8 +507,11 @@ impl BatchWriter {
         );
     }
 
-    pub(crate) fn new_dotbit_batch_state(&self) -> DotbitBatchState {
-        DotbitBatchState::default()
+    pub(crate) fn new_dotbit_batch_state(&self, undo_seq: SharedUndoSeq) -> DotbitBatchState {
+        DotbitBatchState {
+            undo_seq_by_block: undo_seq,
+            ..Default::default()
+        }
     }
 
     fn apply_dotbit_identity_owner_transition(
@@ -569,7 +573,7 @@ impl BatchWriter {
                     collection_id,
                     old_lock,
                     old_count,
-                    &mut state.undo_seq_by_block,
+                    &state.undo_seq_by_block,
                 );
                 if agg.holders_count <= 0 {
                     bail!(
@@ -593,7 +597,7 @@ impl BatchWriter {
                     collection_id,
                     old_lock,
                     old_count,
-                    &mut state.undo_seq_by_block,
+                    &state.undo_seq_by_block,
                 );
                 state.put_identity_owner_count(collection_id, old_lock, old_count - 1, batch);
             }
@@ -608,7 +612,7 @@ impl BatchWriter {
                 collection_id,
                 new_lock,
                 cur_count,
-                &mut state.undo_seq_by_block,
+                &state.undo_seq_by_block,
             );
             if cur_count == 0 {
                 agg.holders_count = agg
@@ -633,7 +637,7 @@ impl BatchWriter {
         timestamp_ms: i64,
         batch: &mut StoreBatch,
     ) -> Result<()> {
-        let mut state = self.new_dotbit_batch_state();
+        let mut state = self.new_dotbit_batch_state(SharedUndoSeq::default());
         self.insert_dotbit_account_with_state(
             account_output,
             tx_hash,
@@ -692,7 +696,7 @@ impl BatchWriter {
             block_number,
             &account.account_id,
             existing.as_ref(),
-            &mut state.undo_seq_by_block,
+            &state.undo_seq_by_block,
         );
         batch.put_identity(&account.account_id, &entry);
         state.put_account(&account.account_id, entry);
@@ -707,7 +711,7 @@ impl BatchWriter {
             cid,
             &agg_before,
             agg_existed,
-            &mut state.undo_seq_by_block,
+            &state.undo_seq_by_block,
         );
         let mut agg = agg_before;
         if agg.standard == IdentityStandard::default() && agg.total_count == 0 {
@@ -799,7 +803,7 @@ impl BatchWriter {
             block_number,
             &fwd_key,
             fwd_previous,
-            &mut state.undo_seq_by_block,
+            &state.undo_seq_by_block,
         );
         batch.put_dotbit_account_outpoint(
             tx_hash,
@@ -817,7 +821,7 @@ impl BatchWriter {
             block_number,
             &rev_key,
             rev_previous,
-            &mut state.undo_seq_by_block,
+            &state.undo_seq_by_block,
         );
         batch.put_dotbit_outpoint_by_account_id(
             &account.account_id,
@@ -834,7 +838,7 @@ impl BatchWriter {
         tx_hash: &[u8],
         batch: &mut StoreBatch,
     ) -> Result<Option<Vec<u8>>> {
-        let mut state = self.new_dotbit_batch_state();
+        let mut state = self.new_dotbit_batch_state(SharedUndoSeq::default());
         self.consume_dotbit_account_with_state(account_id, block_number, tx_hash, batch, &mut state)
     }
 
@@ -877,7 +881,7 @@ impl BatchWriter {
                 block_number,
                 account_id,
                 Some(&entry_snapshot),
-                &mut state.undo_seq_by_block,
+                &state.undo_seq_by_block,
             );
             batch.put_identity(account_id, &entry);
             state.put_account(account_id, entry);
@@ -892,7 +896,7 @@ impl BatchWriter {
                 cid,
                 &agg_before,
                 agg_existed,
-                &mut state.undo_seq_by_block,
+                &state.undo_seq_by_block,
             );
             let mut agg = agg_before;
             if agg.live_count <= 0 {
@@ -1139,7 +1143,7 @@ mod tests {
         let recreate_tx_hash = vec![0x43; 32];
 
         let mut batch = StoreBatch::new(writer.store());
-        let mut state = writer.new_dotbit_batch_state();
+        let mut state = writer.new_dotbit_batch_state(SharedUndoSeq::default());
         writer
             .insert_dotbit_account_with_state(
                 &account,
@@ -1153,7 +1157,7 @@ mod tests {
         batch.commit().unwrap();
 
         let mut batch = StoreBatch::new(writer.store());
-        let mut state = writer.new_dotbit_batch_state();
+        let mut state = writer.new_dotbit_batch_state(SharedUndoSeq::default());
         writer
             .consume_dotbit_account_with_state(
                 &account.account.account_id,
@@ -1166,7 +1170,7 @@ mod tests {
         batch.commit().unwrap();
 
         let mut batch = StoreBatch::new(writer.store());
-        let mut state = writer.new_dotbit_batch_state();
+        let mut state = writer.new_dotbit_batch_state(SharedUndoSeq::default());
         writer
             .insert_dotbit_account_with_state(
                 &account,
@@ -1210,7 +1214,7 @@ mod tests {
         let tx_hash = vec![0x41; 32];
 
         let mut batch = StoreBatch::new(writer.store());
-        let mut state = writer.new_dotbit_batch_state();
+        let mut state = writer.new_dotbit_batch_state(SharedUndoSeq::default());
         writer
             .insert_dotbit_account_with_state(&account, &tx_hash, 1, 0, &mut batch, &mut state)
             .unwrap();
@@ -1239,7 +1243,7 @@ mod tests {
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         let store = Arc::new(store);
         let writer = BatchWriter::new(store.clone(), store.clone());
-        let mut state = writer.new_dotbit_batch_state();
+        let mut state = writer.new_dotbit_batch_state(SharedUndoSeq::default());
 
         let key = ckbadger_store::keys::encode_object_hourly_key(&DOTBIT_SENTINEL_COLLECTION, 1);
         let mut seed = StoreBatch::new(writer.store());
@@ -1386,7 +1390,7 @@ mod tests {
         let owner_b = vec![0xB2; 32];
 
         let mut batch = StoreBatch::new(writer.store());
-        let mut state = writer.new_dotbit_batch_state();
+        let mut state = writer.new_dotbit_batch_state(SharedUndoSeq::default());
         writer
             .insert_dotbit_account_with_state(
                 &make_test_account(&[0x01; 20], &owner_a, "alice.bit"),
@@ -1430,7 +1434,7 @@ mod tests {
         let account_id = [0x01u8; 20];
 
         let mut batch = StoreBatch::new(writer.store());
-        let mut state = writer.new_dotbit_batch_state();
+        let mut state = writer.new_dotbit_batch_state(SharedUndoSeq::default());
         writer
             .insert_dotbit_account_with_state(
                 &make_test_account(&account_id, &owner, "alice.bit"),
@@ -1444,7 +1448,7 @@ mod tests {
         batch.commit().unwrap();
 
         let mut batch = StoreBatch::new(writer.store());
-        let mut state = writer.new_dotbit_batch_state();
+        let mut state = writer.new_dotbit_batch_state(SharedUndoSeq::default());
         let result = writer
             .consume_dotbit_account_with_state(
                 &account_id,
@@ -1477,7 +1481,7 @@ mod tests {
         let owner = vec![0xA1; 32];
 
         let mut batch = StoreBatch::new(writer.store());
-        let mut state = writer.new_dotbit_batch_state();
+        let mut state = writer.new_dotbit_batch_state(SharedUndoSeq::default());
         writer
             .insert_dotbit_account_with_state(
                 &make_test_account(&[0x01; 20], &owner, "alice.bit"),

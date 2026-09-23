@@ -1922,14 +1922,18 @@ impl Indexer {
         let mut hourly_activity_accum: HashMap<String, DailyActivityStats> = HashMap::new();
         let mut hourly_activity_addrs: HashMap<String, HashSet<[u8; 32]>> = HashMap::new();
         let mut data_batch = StoreBatch::new(self.writer.store());
-        // Live sync: serial writes in a single batch
-        let mut append_undo_seq_by_block: HashMap<i64, u64> = HashMap::new();
+        // Live sync: serial writes in a single batch.
+        //
+        // ONE block-scoped undo sequence counter for the whole batch. Every
+        // writer that records an undo entry draws from it — TxContext, .bit,
+        // object and entity stats alike — so two entries for the same block can
+        // never compute the same undo key and silently overwrite each other
+        // (POSTMORTEM IDX-008).
+        let batch_undo_seq = SharedUndoSeq::default();
         if !all_tx_data.is_empty() {
-            put_tx_context_undo_entries(
-                &mut data_batch,
-                &mut append_undo_seq_by_block,
-                &all_tx_data,
-            )?;
+            batch_undo_seq.with(|undo_seq| {
+                put_tx_context_undo_entries(&mut data_batch, undo_seq, &all_tx_data)
+            })?;
         }
         if !txs_for_batch.is_empty() {
             self.writer
@@ -2558,9 +2562,9 @@ impl Indexer {
             let mut batch_mnft_last_output_tx_index: HashMap<Vec<u8>, usize> = HashMap::new();
             let mut batch_dotbit_outpoints: HashMap<(Vec<u8>, i16), Vec<u8>> = HashMap::new();
             let mut batch_dotbit_latest_create_order: HashMap<Vec<u8>, u64> = HashMap::new();
-            let mut spore_state = self.writer.new_spore_batch_state();
-            let mut dotbit_state = self.writer.new_dotbit_batch_state();
-            let mut mnft_state = self.writer.new_mnft_batch_state();
+            let mut spore_state = self.writer.new_spore_batch_state(batch_undo_seq.clone());
+            let mut dotbit_state = self.writer.new_dotbit_batch_state(batch_undo_seq.clone());
+            let mut mnft_state = self.writer.new_mnft_batch_state(batch_undo_seq.clone());
             let mut object_activity_acc = ObjectCollectionActivityAccumulator::new();
             let mut identity_activity_acc = ObjectCollectionActivityAccumulator::new();
             let mut dotbit_tx_activity_data: HashMap<[u8; 32], DotbitTxActivityData> =
@@ -3322,12 +3326,14 @@ impl Indexer {
                         continue;
                     }
 
-                    put_tx_actions(
-                        &mut activity_batch,
-                        &mut append_undo_seq_by_block,
-                        tx_actions.block_number,
-                        tx_actions,
-                    );
+                    batch_undo_seq.with(|undo_seq| {
+                        put_tx_actions(
+                            &mut activity_batch,
+                            undo_seq,
+                            tx_actions.block_number,
+                            tx_actions,
+                        )
+                    });
 
                     // Process Fiber channel lifecycle events
                     crate::db::writer::fiber::process_fiber_channel_events(
@@ -3358,15 +3364,17 @@ impl Indexer {
                 entry.has_out,
                 tags,
             );
-            put_addr_tx(
-                &mut append_history_batch,
-                &mut append_undo_seq_by_block,
-                &entry.lock_hash,
-                entry.block_number,
-                entry.tx_index,
-                &entry.tx_hash,
-                &addr_tx_value,
-            );
+            batch_undo_seq.with(|undo_seq| {
+                put_addr_tx(
+                    &mut append_history_batch,
+                    undo_seq,
+                    &entry.lock_hash,
+                    entry.block_number,
+                    entry.tx_index,
+                    &entry.tx_hash,
+                    &addr_tx_value,
+                )
+            });
         }
 
         // Merge all secondary domain batches into data_batch for atomic commit

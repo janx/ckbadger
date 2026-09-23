@@ -29,6 +29,11 @@ pub(crate) enum UndoSeqScope {
     TxContext = 0x0001,
     DotBit = 0x0002,
     Object = 0x0003,
+    /// Entity daily/hourly stats buckets (`SCRIPT_DAILY`, `TOKEN_DAILY`,
+    /// `CLUSTER_DAILY`, `SPORE_DAILY`, `OBJECT_DAILY`, `TOKEN_HOURLY`,
+    /// `SPORE_HOURLY`, `OBJECT_HOURLY`). Its own scope so the retention window
+    /// can prune exactly these entries without touching the other three.
+    EntityStats = 0x0004,
 }
 
 // ── Sync / Reorg action enums ──────────────────────────────────────────

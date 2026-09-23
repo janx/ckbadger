@@ -13,6 +13,8 @@ use ckbadger_store::CkbadgerStore;
 use crate::parser::media_source::analyze_renderer_tier;
 use crate::parser::mnft::{ParsedMnftClass, ParsedMnftIssuer, ParsedMnftToken};
 
+use crate::sync::undo::SharedUndoSeq;
+
 use super::BatchWriter;
 
 #[derive(Default)]
@@ -21,7 +23,7 @@ pub(crate) struct MnftBatchState {
     collection_aggs: HashMap<Vec<u8>, Option<MnftCollectionAggregate>>,
     collection_owner_counts: HashMap<(Vec<u8>, Vec<u8>), i64>,
     hourly_transfers: HashMap<Vec<u8>, i64>,
-    pub(crate) undo_seq_by_block: HashMap<i64, u64>,
+    pub(crate) undo_seq_by_block: SharedUndoSeq,
 }
 
 impl MnftBatchState {
@@ -144,8 +146,11 @@ impl MnftBatchState {
 }
 
 impl BatchWriter {
-    pub(crate) fn new_mnft_batch_state(&self) -> MnftBatchState {
-        MnftBatchState::default()
+    pub(crate) fn new_mnft_batch_state(&self, undo_seq: SharedUndoSeq) -> MnftBatchState {
+        MnftBatchState {
+            undo_seq_by_block: undo_seq,
+            ..Default::default()
+        }
     }
 
     fn apply_mnft_owner_transition(
@@ -292,7 +297,7 @@ impl BatchWriter {
             CF_MNFT_DATA,
             &issuer.issuer_id,
             existing.as_ref().and_then(|e| bincode::serialize(e).ok()),
-            &mut state.undo_seq_by_block,
+            &state.undo_seq_by_block,
         );
         let entry = ObjectEntry {
             standard: ObjectStandard::MnftIssuer,
@@ -329,7 +334,7 @@ impl BatchWriter {
         block_number: i64,
         batch: &mut StoreBatch,
     ) -> Result<()> {
-        let mut state = self.new_mnft_batch_state();
+        let mut state = self.new_mnft_batch_state(SharedUndoSeq::default());
         self.insert_mnft_class_with_state(
             class,
             tx_hash,
@@ -356,7 +361,7 @@ impl BatchWriter {
             CF_MNFT_DATA,
             &class.class_id,
             existing.as_ref().and_then(|e| bincode::serialize(e).ok()),
-            &mut state.undo_seq_by_block,
+            &state.undo_seq_by_block,
         );
         let new_tier = analyze_renderer_tier(class.renderer.as_deref());
         let old_tier = existing.as_ref().and_then(|e| match &e.extra {
@@ -442,7 +447,7 @@ impl BatchWriter {
         timestamp_ms: i64,
         batch: &mut StoreBatch,
     ) -> Result<()> {
-        let mut state = self.new_mnft_batch_state();
+        let mut state = self.new_mnft_batch_state(SharedUndoSeq::default());
         self.insert_mnft_token_with_state(
             token,
             tx_hash,
@@ -471,7 +476,7 @@ impl BatchWriter {
             CF_MNFT_DATA,
             &token.token_id,
             existing.as_ref().and_then(|e| bincode::serialize(e).ok()),
-            &mut state.undo_seq_by_block,
+            &state.undo_seq_by_block,
         );
         let was_live = existing.as_ref().is_some_and(|entry| entry.is_live);
         let old_owner = if was_live {
@@ -642,7 +647,7 @@ impl BatchWriter {
         tx_hash: &[u8],
         batch: &mut StoreBatch,
     ) -> Result<Option<Vec<u8>>> {
-        let mut state = self.new_mnft_batch_state();
+        let mut state = self.new_mnft_batch_state(SharedUndoSeq::default());
         self.consume_mnft_token_with_state(token_id, block_number, tx_hash, batch, &mut state)
     }
 
@@ -669,7 +674,7 @@ impl BatchWriter {
                 CF_MNFT_DATA,
                 token_id,
                 bincode::serialize(&entry).ok(),
-                &mut state.undo_seq_by_block,
+                &state.undo_seq_by_block,
             );
             let collection_id = entry.collection_id.clone();
             let old_owner = entry.owner_lock_hash.clone();
@@ -973,7 +978,7 @@ mod tests {
         let tx_hash = vec![0x51; 32];
 
         let mut batch = StoreBatch::new(writer.store());
-        let mut state = writer.new_mnft_batch_state();
+        let mut state = writer.new_mnft_batch_state(SharedUndoSeq::default());
         writer
             .insert_mnft_class(&class, &tx_hash, 7, 1, &mut batch)
             .unwrap();
@@ -1017,7 +1022,7 @@ mod tests {
         seed.commit().unwrap();
 
         let mut batch = StoreBatch::new(writer.store());
-        let mut state = writer.new_mnft_batch_state();
+        let mut state = writer.new_mnft_batch_state(SharedUndoSeq::default());
         let transfer_a = sample_token(0x12, class.class_id.clone(), 0x55);
         let transfer_b = sample_token(0x12, class.class_id.clone(), 0x66);
         writer
@@ -1064,7 +1069,7 @@ mod tests {
 
         // Seed class with one token so the DB aggregate starts at 1.
         let mut seed = StoreBatch::new(writer.store());
-        let mut seed_state = writer.new_mnft_batch_state();
+        let mut seed_state = writer.new_mnft_batch_state(SharedUndoSeq::default());
         writer
             .insert_mnft_class_with_state(&class, &tx_hash, 7, 1, &mut seed, &mut seed_state)
             .unwrap();
@@ -1076,7 +1081,7 @@ mod tests {
         // In one uncommitted batch, add a new token then re-write class metadata.
         // Class upsert must not clobber collection counts already updated in this batch.
         let mut batch = StoreBatch::new(writer.store());
-        let mut state = writer.new_mnft_batch_state();
+        let mut state = writer.new_mnft_batch_state(SharedUndoSeq::default());
         writer
             .insert_mnft_token_with_state(&token_b, &tx_hash, 9, 2, 0, &mut batch, &mut state)
             .unwrap();
@@ -1101,7 +1106,7 @@ mod tests {
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         let store = Arc::new(store);
         let writer = BatchWriter::new(store.clone(), store.clone());
-        let mut state = writer.new_mnft_batch_state();
+        let mut state = writer.new_mnft_batch_state(SharedUndoSeq::default());
 
         let collection_id = vec![0x88; 24];
         let key = ckbadger_store::keys::encode_object_hourly_key(&collection_id, 1);
@@ -1128,7 +1133,7 @@ mod tests {
         let tx_hash = vec![0x51; 32];
 
         let mut seed = StoreBatch::new(writer.store());
-        let mut seed_state = writer.new_mnft_batch_state();
+        let mut seed_state = writer.new_mnft_batch_state(SharedUndoSeq::default());
         writer
             .insert_mnft_class_with_state(&class, &tx_hash, 7, 1, &mut seed, &mut seed_state)
             .unwrap();
@@ -1141,7 +1146,7 @@ mod tests {
         seed.commit().unwrap();
 
         let mut batch = StoreBatch::new(writer.store());
-        let mut state = writer.new_mnft_batch_state();
+        let mut state = writer.new_mnft_batch_state(SharedUndoSeq::default());
         writer
             .consume_mnft_token_with_state(&token_a.token_id, 2, &tx_hash, &mut batch, &mut state)
             .unwrap();
@@ -1209,7 +1214,7 @@ mod tests {
         let tx_hash = vec![0x51; 32];
 
         let mut batch = StoreBatch::new(writer.store());
-        let mut state = writer.new_mnft_batch_state();
+        let mut state = writer.new_mnft_batch_state(SharedUndoSeq::default());
         writer
             .insert_mnft_class_with_state(&class, &tx_hash, 7, 1, &mut batch, &mut state)
             .unwrap();

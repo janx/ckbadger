@@ -2,7 +2,6 @@
 #![allow(clippy::too_many_arguments)]
 #![allow(clippy::manual_is_multiple_of)]
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use ckbadger_store::batch::StoreBatch;
@@ -11,7 +10,7 @@ use ckbadger_store::CkbadgerStore;
 
 use crate::cache::CacheInvalidator;
 use crate::sync::types::UndoSeqScope;
-use crate::sync::undo::next_undo_seq;
+use crate::sync::undo::SharedUndoSeq;
 
 #[derive(Clone)]
 pub struct BatchWriter {
@@ -63,12 +62,12 @@ impl BatchWriter {
         cf_name: &'static str,
         key: &[u8],
         previous_value: Option<Vec<u8>>,
-        undo_seq: &mut HashMap<i64, u64>,
+        undo_seq: &SharedUndoSeq,
     ) {
         if self.store.is_bulk_sync_mode() {
             return;
         }
-        let seq = next_undo_seq(undo_seq, block_number, UndoSeqScope::Object);
+        let seq = undo_seq.next(block_number, UndoSeqScope::Object);
         batch.put_reorg_undo_log_by_block(
             block_number,
             seq,
@@ -124,6 +123,7 @@ pub(super) mod cells;
 mod chain;
 pub(crate) mod dao;
 pub(crate) mod dotbit;
+pub mod entity_stats;
 pub(crate) mod fiber;
 pub(crate) mod fiber_detector;
 pub mod hodl_wave;
@@ -159,6 +159,8 @@ mod undo_seq_tests {
     use crate::parser::mnft::ParsedMnftIssuer;
     use crate::parser::spore::ParsedClusterCell;
 
+    use crate::sync::undo::SharedUndoSeq;
+
     use super::BatchWriter;
 
     /// Task 1.5: `SporeBatchState` and `MnftBatchState` each own a private
@@ -178,8 +180,11 @@ mod undo_seq_tests {
 
         const BLOCK: i64 = 4_242;
         let mut batch = StoreBatch::new(store.as_ref());
-        let mut spore_state = writer.new_spore_batch_state();
-        let mut mnft_state = writer.new_mnft_batch_state();
+        // Exactly what `write_parsed_batch` does: ONE counter for the batch,
+        // handed to every entity batch state.
+        let batch_undo_seq = SharedUndoSeq::default();
+        let mut spore_state = writer.new_spore_batch_state(batch_undo_seq.clone());
+        let mut mnft_state = writer.new_mnft_batch_state(batch_undo_seq.clone());
 
         writer
             .insert_spore_cluster(

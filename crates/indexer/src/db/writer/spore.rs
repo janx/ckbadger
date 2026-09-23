@@ -20,6 +20,8 @@ use ckbadger_store::CkbadgerStore;
 #[cfg(test)]
 use ckbadger_store::types::SporeMediaProfile;
 
+use crate::sync::undo::SharedUndoSeq;
+
 use super::BatchWriter;
 
 #[derive(Default)]
@@ -32,7 +34,7 @@ pub(crate) struct SporeBatchState {
     identity_owner_counts: HashMap<(Vec<u8>, Vec<u8>), i64>,
     spore_hourly_transfers: HashMap<Vec<u8>, i64>,
     spore_outpoints: HashMap<(Vec<u8>, i16), Vec<u8>>,
-    undo_seq_by_block: HashMap<i64, u64>,
+    undo_seq_by_block: SharedUndoSeq,
 }
 
 impl SporeBatchState {
@@ -252,8 +254,11 @@ impl SporeBatchState {
 }
 
 impl BatchWriter {
-    pub(crate) fn new_spore_batch_state(&self) -> SporeBatchState {
-        SporeBatchState::default()
+    pub(crate) fn new_spore_batch_state(&self, undo_seq: SharedUndoSeq) -> SporeBatchState {
+        SporeBatchState {
+            undo_seq_by_block: undo_seq,
+            ..Default::default()
+        }
     }
 
     fn apply_identity_owner_transition(
@@ -432,7 +437,7 @@ impl BatchWriter {
             CF_SPORE_DATA,
             &cluster.cluster_id,
             existing.as_ref().and_then(|e| bincode::serialize(e).ok()),
-            &mut state.undo_seq_by_block,
+            &state.undo_seq_by_block,
         );
         let entry = ObjectEntry {
             standard: ObjectStandard::SporeCluster,
@@ -490,7 +495,7 @@ impl BatchWriter {
             CF_IDENTITY_DATA,
             &did.did_id,
             existing.as_ref().and_then(|e| bincode::serialize(e).ok()),
-            &mut state.undo_seq_by_block,
+            &state.undo_seq_by_block,
         );
         let was_live = existing.as_ref().is_some_and(|e| e.is_live);
         let old_owner = if was_live {
@@ -597,7 +602,7 @@ impl BatchWriter {
             CF_SPORE_DATA,
             &spore.spore_id,
             existing.as_ref().and_then(|e| bincode::serialize(e).ok()),
-            &mut state.undo_seq_by_block,
+            &state.undo_seq_by_block,
         );
         let was_live = existing.as_ref().is_some_and(|e| e.is_live);
         let old_live_tier = if was_live {
@@ -837,7 +842,7 @@ impl BatchWriter {
             existing
                 .as_ref()
                 .and_then(|entry| bincode::serialize(entry).ok()),
-            &mut state.undo_seq_by_block,
+            &state.undo_seq_by_block,
         );
         let was_live = existing.as_ref().is_some_and(|entry| entry.is_live);
         let old_owner = if was_live {
@@ -940,7 +945,7 @@ impl BatchWriter {
                 CF_IDENTITY_DATA,
                 spore_id,
                 bincode::serialize(&identity).ok(),
-                &mut state.undo_seq_by_block,
+                &state.undo_seq_by_block,
             );
             let old_owner = identity.owner_lock_hash.clone();
             let identity_standard = identity.standard;
@@ -987,7 +992,7 @@ impl BatchWriter {
                 CF_SPORE_DATA,
                 spore_id,
                 bincode::serialize(&entry).ok(),
-                &mut state.undo_seq_by_block,
+                &state.undo_seq_by_block,
             );
 
             let old_owner = entry.owner_lock_hash.clone();
@@ -1387,7 +1392,7 @@ mod tests {
         }
 
         let mut batch = StoreBatch::new(writer.store());
-        let mut state = writer.new_spore_batch_state();
+        let mut state = writer.new_spore_batch_state(SharedUndoSeq::default());
         writer
             .insert_spore_cell(
                 &make_parsed_spore(&spore_id, &cluster_id, &owner_b),
@@ -1459,7 +1464,7 @@ mod tests {
         }
 
         let mut batch = StoreBatch::new(writer.store());
-        let mut state = writer.new_spore_batch_state();
+        let mut state = writer.new_spore_batch_state(SharedUndoSeq::default());
         let err = writer
             .insert_spore_cell(
                 &make_parsed_spore(&spore_id, &cluster_id, &owner_new),
@@ -1504,7 +1509,7 @@ mod tests {
         }
 
         let mut batch = StoreBatch::new(writer.store());
-        let mut state = writer.new_spore_batch_state();
+        let mut state = writer.new_spore_batch_state(SharedUndoSeq::default());
         let err = writer
             .insert_spore_cell(
                 &make_parsed_spore(&spore_id, &new_cluster, &owner_new),
@@ -1547,7 +1552,7 @@ mod tests {
         }
 
         let mut batch = StoreBatch::new(writer.store());
-        let mut state = writer.new_spore_batch_state();
+        let mut state = writer.new_spore_batch_state(SharedUndoSeq::default());
         let err = writer
             .consume_spore(&spore_id, 100, &[0xAA; 32], &mut batch, &mut state)
             .unwrap_err();
@@ -1584,7 +1589,7 @@ mod tests {
         }
 
         let mut batch = StoreBatch::new(writer.store());
-        let mut state = writer.new_spore_batch_state();
+        let mut state = writer.new_spore_batch_state(SharedUndoSeq::default());
         writer
             .insert_spore_cell(
                 &make_parsed_spore(&spore_id, &new_cluster, &owner_new),
@@ -1626,7 +1631,7 @@ mod tests {
         for bad_width in [16usize, 31, 33, 64] {
             let cluster_id = vec![0x81; bad_width];
             let mut batch = StoreBatch::new(writer.store());
-            let mut state = writer.new_spore_batch_state();
+            let mut state = writer.new_spore_batch_state(SharedUndoSeq::default());
             let err = writer
                 .insert_spore_cell(
                     &make_parsed_spore(&spore_id, &cluster_id, &owner),
@@ -1662,7 +1667,7 @@ mod tests {
         let output_index = 3i16;
 
         let mut batch = StoreBatch::new(writer.store());
-        let mut state = writer.new_spore_batch_state();
+        let mut state = writer.new_spore_batch_state(SharedUndoSeq::default());
         writer
             .insert_spore_cell(
                 &make_parsed_spore(&spore_id, &cluster_id, &owner),
@@ -1701,7 +1706,7 @@ mod tests {
         let owner = vec![0xE1; 32];
 
         let mut batch = StoreBatch::new(writer.store());
-        let mut state = writer.new_spore_batch_state();
+        let mut state = writer.new_spore_batch_state(SharedUndoSeq::default());
         writer
             .insert_did_ckb_cell(
                 &make_parsed_did(&did_id, &owner),
@@ -1741,7 +1746,7 @@ mod tests {
         let item_id = crate::rpc::parse_hex_to_bytes(real_did_ckb::CELL_32_ARGS);
 
         let mut batch = StoreBatch::new(writer.store());
-        let mut state = writer.new_spore_batch_state();
+        let mut state = writer.new_spore_batch_state(SharedUndoSeq::default());
         writer
             .insert_did_ckb_cell(&parsed, &tx_hash, 0, 18_082_860, &mut batch, &mut state)
             .unwrap();
@@ -1807,7 +1812,7 @@ mod tests {
         assert_eq!(item_id.len(), 20);
 
         let mut batch = StoreBatch::new(writer.store());
-        let mut state = writer.new_spore_batch_state();
+        let mut state = writer.new_spore_batch_state(SharedUndoSeq::default());
         writer
             .insert_did_ckb_cell(&parsed, &tx_hash, 0, 21_080_336, &mut batch, &mut state)
             .unwrap();
@@ -1851,7 +1856,7 @@ mod tests {
 
         for bad_id in [Vec::new(), vec![0x01; 33]] {
             let mut batch = StoreBatch::new(writer.store());
-            let mut state = writer.new_spore_batch_state();
+            let mut state = writer.new_spore_batch_state(SharedUndoSeq::default());
             let err = writer
                 .insert_did_ckb_cell(
                     &make_parsed_did(&bad_id, &[0xE1; 32]),
@@ -1887,7 +1892,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone(), store.clone());
-        let mut state = writer.new_spore_batch_state();
+        let mut state = writer.new_spore_batch_state(SharedUndoSeq::default());
 
         let cluster_id = vec![0xCC; 32];
         let key = ckbadger_store::keys::encode_spore_hourly_key(&cluster_id, 5);
@@ -1914,7 +1919,7 @@ mod tests {
 
         {
             let mut batch = StoreBatch::new(writer.store());
-            let mut state = writer.new_spore_batch_state();
+            let mut state = writer.new_spore_batch_state(SharedUndoSeq::default());
             writer
                 .insert_did_ckb_cell(
                     &make_parsed_did(&did_id, &owner),
@@ -1929,7 +1934,7 @@ mod tests {
         }
 
         let mut batch = StoreBatch::new(writer.store());
-        let mut state = writer.new_spore_batch_state();
+        let mut state = writer.new_spore_batch_state(SharedUndoSeq::default());
         let result = writer
             .consume_spore(&did_id, 301, &[0x23; 32], &mut batch, &mut state)
             .unwrap();
@@ -1970,7 +1975,7 @@ mod tests {
         }
 
         let mut batch = StoreBatch::new(writer.store());
-        let mut state = writer.new_spore_batch_state();
+        let mut state = writer.new_spore_batch_state(SharedUndoSeq::default());
         let err = writer
             .insert_spore_cell(
                 &make_parsed_spore(&spore_id, &cluster_id, &owner),
@@ -2020,7 +2025,7 @@ mod tests {
         }
 
         let mut batch = StoreBatch::new(writer.store());
-        let mut state = writer.new_spore_batch_state();
+        let mut state = writer.new_spore_batch_state(SharedUndoSeq::default());
         let err = writer
             .insert_spore_cell(
                 &make_parsed_spore(&spore_id, &cluster_id, &owner),
@@ -2053,7 +2058,7 @@ mod tests {
         let tx_hash_b = vec![0xF2; 32];
 
         let mut batch = StoreBatch::new(writer.store());
-        let mut state = writer.new_spore_batch_state();
+        let mut state = writer.new_spore_batch_state(SharedUndoSeq::default());
         writer
             .insert_did_ckb_cell(
                 &make_parsed_did(&spore_id_a, &owner_a),
@@ -2098,7 +2103,7 @@ mod tests {
 
         // Insert
         let mut batch = StoreBatch::new(writer.store());
-        let mut state = writer.new_spore_batch_state();
+        let mut state = writer.new_spore_batch_state(SharedUndoSeq::default());
         writer
             .insert_did_ckb_cell(
                 &make_parsed_did(&spore_id, &owner),
@@ -2113,7 +2118,7 @@ mod tests {
 
         // Consume
         let mut batch = StoreBatch::new(writer.store());
-        let mut state = writer.new_spore_batch_state();
+        let mut state = writer.new_spore_batch_state(SharedUndoSeq::default());
         let result = writer
             .consume_spore(&spore_id, 200, &[0xFF; 32], &mut batch, &mut state)
             .unwrap();
@@ -2140,7 +2145,7 @@ mod tests {
         let owner = vec![0xA1; 32];
 
         let mut batch = StoreBatch::new(writer.store());
-        let mut state = writer.new_spore_batch_state();
+        let mut state = writer.new_spore_batch_state(SharedUndoSeq::default());
         writer
             .insert_did_ckb_cell(
                 &make_parsed_did(&[0x01; 32], &owner),
@@ -2183,7 +2188,7 @@ mod tests {
 
         // Insert
         let mut batch = StoreBatch::new(writer.store());
-        let mut state = writer.new_spore_batch_state();
+        let mut state = writer.new_spore_batch_state(SharedUndoSeq::default());
         writer
             .insert_did_ckb_cell(
                 &make_parsed_did(&spore_id, &owner),
@@ -2198,7 +2203,7 @@ mod tests {
 
         // Consume
         let mut batch = StoreBatch::new(writer.store());
-        let mut state = writer.new_spore_batch_state();
+        let mut state = writer.new_spore_batch_state(SharedUndoSeq::default());
         writer
             .consume_spore(&spore_id, 200, &[0xFF; 32], &mut batch, &mut state)
             .unwrap();
@@ -2206,7 +2211,7 @@ mod tests {
 
         // Reactivate
         let mut batch = StoreBatch::new(writer.store());
-        let mut state = writer.new_spore_batch_state();
+        let mut state = writer.new_spore_batch_state(SharedUndoSeq::default());
         writer
             .insert_did_ckb_cell(
                 &make_parsed_did(&spore_id, &owner),
@@ -2239,7 +2244,7 @@ mod tests {
         let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone(), store.clone());
         let mut batch = StoreBatch::new(writer.store());
-        let mut state = writer.new_spore_batch_state();
+        let mut state = writer.new_spore_batch_state(SharedUndoSeq::default());
 
         let spore_id = [0x11u8; 32];
         let owner = [0x22u8; 32];
@@ -2281,7 +2286,7 @@ mod tests {
         let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone(), store.clone());
         let mut batch = StoreBatch::new(writer.store());
-        let mut state = writer.new_spore_batch_state();
+        let mut state = writer.new_spore_batch_state(SharedUndoSeq::default());
 
         let spore_id = [0x11u8; 32];
         let owner = [0x22u8; 32];
@@ -2346,7 +2351,7 @@ mod tests {
         changes.insert((cluster_b.clone(), 20260101), (300, 100));
 
         let mut batch = StoreBatch::new(writer.store());
-        let mut state = writer.new_spore_batch_state();
+        let mut state = writer.new_spore_batch_state(SharedUndoSeq::default());
         writer
             .apply_cluster_capacity_deltas(&changes, &mut batch, &mut state)
             .unwrap();
