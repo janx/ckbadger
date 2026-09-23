@@ -531,6 +531,10 @@ fn build_activity_input_views<'a>(
                     .bit_cell_identity_ids
                     .get(&key)
                     .map(Vec::as_slice),
+                // Filled by the consume path in Task 1b.5: an input reaches the
+                // builder without its data, so the consumed name's prior state
+                // comes from the identity entry the consume just read.
+                dotcell: None,
                 data,
                 is_dao_withdraw_request,
                 dao_compensation,

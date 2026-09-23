@@ -13,7 +13,9 @@ use ckbadger_store::types::{
     TAG_IDENTITY, TAG_LOCK_CALL, TAG_OBJECT, TAG_PROTOCOL, TAG_TOKEN, TAG_TYPE_CALL,
 };
 
-use crate::parser::{bit_cell::BitCellParser, dotbit::DotbitParser, udt::UdtParser};
+use crate::parser::{
+    bit_cell::BitCellParser, dotbit::DotbitParser, dotcell::DotCellNameData, udt::UdtParser,
+};
 
 static CODE_HASHES: OnceLock<CodeHashes> = OnceLock::new();
 
@@ -162,6 +164,11 @@ pub struct InputCellView<'a> {
     /// Pre-parsed `.bit Cell` identity ID carried by the bulk live-cell arena.
     /// Live sync leaves this unset because it retains the input cell data.
     pub bit_cell_identity_id: Option<&'a [u8]>,
+    /// The `.cell` name this input consumed, as it stood before the spend.
+    /// Both sync paths must fill it — bulk from the cell's stored protocol
+    /// facts, live from the identity entry the consume path just read — because
+    /// an input cell reaches the activity builder without its data.
+    pub dotcell: Option<&'a DotCellNameData>,
     pub data: &'a [u8],
     pub is_dao_withdraw_request: bool,
     pub dao_compensation: Option<i64>,
@@ -256,7 +263,7 @@ pub trait ProtocolDetector: Send + Sync {
 }
 
 /// A party a protocol names in transaction data, with what it did to their items.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NamedParticipant {
     pub id: ParticipantId,
     pub item_deltas: Vec<ItemDelta>,
@@ -436,6 +443,7 @@ pub fn production_detectors(is_mainnet: bool) -> Vec<Box<dyn ProtocolDetector>> 
         Box::new(super::fiber_detector::FiberDetector::new(is_mainnet)),
         Box::new(super::stablepp_detector::StableppDetector::new(is_mainnet)),
         Box::new(super::utxoswap_detector::UtxoSwapDetector::new(is_mainnet)),
+        Box::new(super::dotcell_detector::DotCellDetector::new()),
     ]
 }
 
@@ -1437,6 +1445,7 @@ pub(crate) mod test_fixtures {
 
     /// Owned data for constructing test InputCellView instances.
     pub(crate) struct OwnedInput {
+        pub(crate) dotcell: Option<super::DotCellNameData>,
         pub(crate) lock_script_hash: Vec<u8>,
         pub(crate) lock_code_hash: Vec<u8>,
         pub(crate) lock_args: Vec<u8>,
@@ -1469,6 +1478,7 @@ pub(crate) mod test_fixtures {
                 type_args: self.type_args.as_deref(),
                 udt_amount: self.udt_amount,
                 bit_cell_identity_id: None,
+                dotcell: self.dotcell.as_ref(),
                 data: &self.data,
                 is_dao_withdraw_request: self.is_dao_withdraw_request,
                 dao_compensation: self.dao_compensation,
@@ -1478,6 +1488,7 @@ pub(crate) mod test_fixtures {
 
     pub(crate) fn make_input(lock_hash_byte: u8, capacity: i64, occupied: i64) -> OwnedInput {
         OwnedInput {
+            dotcell: None,
             lock_script_hash: vec![lock_hash_byte; 32],
             lock_code_hash: vec![0x11; 32],
             lock_args: vec![0x22; 20],
@@ -2852,6 +2863,7 @@ mod tests {
         type_args: Option<Vec<u8>>,
     ) -> OwnedInput {
         OwnedInput {
+            dotcell: None,
             lock_script_hash: vec![lock_hash_byte; 32],
             lock_code_hash,
             lock_args,
@@ -3109,6 +3121,7 @@ mod tests {
             type_args: None,
             udt_amount: None,
             bit_cell_identity_id: None,
+            dotcell: None,
             data: &input_data,
             is_dao_withdraw_request: false,
             dao_compensation: None,
@@ -3295,6 +3308,31 @@ mod tests {
                     "production detector list (is_mainnet={is_mainnet}) is missing the {label} detector"
                 );
             }
+
+            // `.cell` is detected from the name cell's TYPE script, not a lock.
+            let empty_locks: HashSet<[u8; 32]> = HashSet::new();
+            for (label, code_hash_hex) in [
+                (
+                    "dotcell mainnet",
+                    crate::parser::test_helpers::real_dotcell::ACCOUNT_TYPE_CODE_HASH_MAINNET,
+                ),
+                (
+                    "dotcell testnet",
+                    crate::parser::test_helpers::real_dotcell::ACCOUNT_TYPE_CODE_HASH_TESTNET,
+                ),
+            ] {
+                let mut type_code_hash = [0u8; 32];
+                type_code_hash.copy_from_slice(&parse_hex_to_bytes(code_hash_hex));
+                let mut types: HashSet<[u8; 32]> = HashSet::new();
+                types.insert(type_code_hash);
+
+                assert!(
+                    detectors
+                        .iter()
+                        .any(|d| d.might_apply_batch(&empty_locks, &types)),
+                    "production detector list (is_mainnet={is_mainnet}) is missing the {label} detector"
+                );
+            }
         }
     }
 
@@ -3340,6 +3378,7 @@ mod tests {
                 type_args: Some(&[]),
                 udt_amount: Some(1000),
                 bit_cell_identity_id: None,
+                dotcell: None,
                 data: &[],
                 is_dao_withdraw_request: false,
                 dao_compensation: None,
@@ -3478,8 +3517,11 @@ mod tests {
         );
     }
 
+    /// A transaction no protocol is involved in gets no named participants
+    /// from any production detector — naming is a protocol fact, never a
+    /// default.
     #[test]
-    fn existing_production_detectors_never_name_participants() {
+    fn production_detectors_name_nobody_in_a_plain_transfer() {
         let input = make_input(0x11, 1000, 61);
         let output = make_output(0x22, 990, None, None, None, vec![]);
         let tx = one_transfer_tx(&input, &output);
@@ -3487,7 +3529,7 @@ mod tests {
             for d in production_detectors(is_mainnet) {
                 assert!(
                     d.name_participants(&tx).unwrap().is_empty(),
-                    "Phase 1a: no production detector may name participants"
+                    "a plain transfer names nobody"
                 );
             }
         }

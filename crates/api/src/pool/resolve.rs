@@ -239,6 +239,7 @@ impl ResolvedPoolTx {
                 // the live cell), so `.bit Cell` identity IDs are parsed from it
                 // exactly as they are for outputs. No pre-parsed override.
                 bit_cell_identity_id: None,
+                dotcell: None,
                 data: &cell.data,
                 // Phase-2 DAO compensation is not derivable without header AR
                 // arithmetic, and `classify_input` refuses a withdraw-request

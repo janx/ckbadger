@@ -1811,7 +1811,7 @@ pub const ITEM_KIND_TOKEN: u8 = 0;
 pub const ITEM_KIND_OBJECT: u8 = 1;
 pub const ITEM_KIND_IDENTITY: u8 = 2;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ItemDelta {
     pub item_id: Vec<u8>,
     pub kind: u8,
@@ -2001,7 +2001,7 @@ impl ProtocolAction {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AssetAction {
     Mint,
     Transfer,

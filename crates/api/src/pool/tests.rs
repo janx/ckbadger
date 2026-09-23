@@ -788,6 +788,7 @@ async fn test_interpretation_parity_between_live_sync_and_pool_resolution() {
             type_args: input_cell.type_args.as_deref(),
             udt_amount: Some(amount_in),
             bit_cell_identity_id: None,
+            dotcell: None,
             // Live sync retains no input cell data.
             data: &[],
             is_dao_withdraw_request: false,
