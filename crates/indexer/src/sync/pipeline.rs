@@ -25,7 +25,7 @@ use crate::parser::{
     BitCellParser, DidCkbParser, DotbitParser, MnftParser, SporeParser, UdtParser,
 };
 use crate::rpc::BlockResponseWithCycles;
-use ckbadger_store::types::{DOTBIT_SENTINEL_COLLECTION, SOLE_SPORES_SENTINEL_COLLECTION};
+use ckbadger_store::types::SOLE_SPORES_SENTINEL_COLLECTION;
 
 use ckb_store_reader::CkbChainReader;
 use rayon::prelude::*;
@@ -735,27 +735,21 @@ fn parse_script_reference_hash_type(
 /// build). A protocol classified on creation but not on consumption leaves its
 /// collection's daily row permanently inflated by the consumed cell.
 pub(crate) fn consumed_object_collection_id(
-    store: &ckbadger_store::CkbadgerStore,
-    cache: &mut HashMap<Vec<u8>, Option<MnftTypeIndex>>,
     type_code_hash: &[u8],
     type_args: Option<&[u8]>,
-    type_script_hash: &[u8],
-) -> Result<Option<Vec<u8>>> {
-    let _ = type_args;
-    if DotbitParser::is_account_cell_type_script(type_code_hash) {
-        return Ok(Some(DOTBIT_SENTINEL_COLLECTION.to_vec()));
-    }
-    if DidCkbParser::is_type_script(type_code_hash) {
-        return Ok(Some(DID_CKB_SENTINEL_COLLECTION.to_vec()));
-    }
-    if MnftParser::is_token_type_script(type_code_hash) {
-        let loaded =
-            load_optional_index_from_store(cache, type_script_hash, "object_type", || {
-                store.get_mnft_type_index(type_script_hash)
-            })?;
-        return Ok(loaded.map(|idx| idx.collection_id));
-    }
-    Ok(None)
+) -> Option<Vec<u8>> {
+    // ONE classifier for all three sides. The consume side used to carry its
+    // own predicate list that omitted `.bit Cell`, so every consumed `.bit Cell`
+    // left its capacity in the sentinel collection's daily row forever
+    // (mainnet: +45,699,990,586 shannons by 2026-09-23).
+    //
+    // It also resolved the mNFT collection through `mnft_type_index` rather
+    // than the type args. Both yield `type_args[..24]` — the index is written
+    // as `token.class_id`, which `MnftParser` parses from exactly those bytes
+    // (`parser/mnft.rs:201`) — but the lookup answers `None` for a cell the
+    // index never captured while creation still counted it. Pinned by
+    // `consumed_mnft_collection_matches_the_type_index`.
+    classify_object_collection_id(type_code_hash, type_args.unwrap_or(&[]))
 }
 
 impl Indexer {
@@ -2108,32 +2102,10 @@ impl Indexer {
                                             }
                                         }
                                     }
-                                    let collection_id = match consumed_object_collection_id(
-                                        writer_for_parser.store(),
-                                        &mut object_type_index_cache,
+                                    if let Some(collection_id) = consumed_object_collection_id(
                                         type_code_hash,
                                         info.type_args.as_deref(),
-                                        type_script_hash,
                                     ) {
-                                        Ok(collection_id) => collection_id,
-                                        Err(e) => {
-                                            error!(
-                                                start_block,
-                                                end_block,
-                                                "Parser: failed to load object type index: {}",
-                                                e
-                                            );
-                                            record_worker_exit_reason(
-                                                &parser_exit_reason_for_parser,
-                                                format!(
-                                                    "failed to load object type index for range {}-{}: {}",
-                                                    start_block, end_block, e
-                                                ),
-                                            );
-                                            return;
-                                        }
-                                    };
-                                    if let Some(collection_id) = collection_id {
                                         accumulate_daily!(
                                             object_daily_changes,
                                             tx_data.block_number,
@@ -3254,11 +3226,6 @@ mod tests {
         use crate::parser::bit_cell::{BIT_CELL_CODE_HASH_MAINNET, BIT_CELL_CODE_HASH_TESTNET};
         use ckbadger_store::types::BIT_CELL_SENTINEL_COLLECTION;
 
-        let dir = tempfile::tempdir().unwrap();
-        let store = ckbadger_store::CkbadgerStore::open_domain(dir.path()).unwrap();
-        let mut cache: HashMap<Vec<u8>, Option<MnftTypeIndex>> = HashMap::new();
-        let type_script_hash = [0x77u8; 32];
-
         for code_hash_hex in [BIT_CELL_CODE_HASH_MAINNET, BIT_CELL_CODE_HASH_TESTNET] {
             let code_hash = hex::decode(code_hash_hex.trim_start_matches("0x")).unwrap();
             let created = classify_object_collection_id(&code_hash, &[]);
@@ -3267,19 +3234,79 @@ mod tests {
                 Some(BIT_CELL_SENTINEL_COLLECTION.to_vec()),
                 "the creation side already classifies `.bit Cell` ({code_hash_hex})"
             );
-            let consumed = consumed_object_collection_id(
-                &store,
-                &mut cache,
-                &code_hash,
-                Some(&[]),
-                &type_script_hash,
-            )
-            .unwrap();
+            let consumed = consumed_object_collection_id(&code_hash, Some(&[]));
             assert_eq!(
                 consumed, created,
                 "consume must classify `.bit Cell` exactly as creation does ({code_hash_hex})"
             );
         }
+    }
+
+    /// Task 2.8 Step 1: before deleting the consume side's `mnft_type_index`
+    /// lookup, prove the shared helper gives the same collection id for every
+    /// fixture the lookup would have answered.
+    ///
+    /// They agree by construction — the index value is `token.class_id`, which
+    /// `MnftParser` parses from `type_args[..24]`, and the helper returns
+    /// exactly those bytes — so the lookup was a second path to one answer,
+    /// with a strictly worse failure mode: it returns `None` for a cell the
+    /// index never captured, while the creation side still counted it.
+    #[test]
+    fn consumed_mnft_collection_matches_the_type_index() {
+        use crate::parser::mnft::MNFT_TOKEN_CODE_HASH;
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = ckbadger_store::CkbadgerStore::open_domain(dir.path()).unwrap();
+        let code_hash = hex::decode(MNFT_TOKEN_CODE_HASH.trim_start_matches("0x")).unwrap();
+
+        for (label, class_id, token_index) in [
+            ("low ids", vec![0x00u8; 24], 0u32),
+            ("mixed", vec![0x5Au8; 24], 42),
+            ("high ids", vec![0xFFu8; 24], u32::MAX),
+        ] {
+            let mut type_args = class_id.clone();
+            type_args.extend_from_slice(&token_index.to_be_bytes());
+            let type_script_hash = {
+                let mut hash = [0u8; 32];
+                hash[..24].copy_from_slice(&class_id);
+                hash
+            };
+            // What the forward path would have written into the index.
+            store
+                .put_mnft_type_index_direct(
+                    &type_script_hash,
+                    &MnftTypeIndex {
+                        collection_id: class_id.clone(),
+                    },
+                )
+                .unwrap();
+
+            let from_index = store
+                .get_mnft_type_index(&type_script_hash)
+                .unwrap()
+                .map(|index| index.collection_id);
+            let from_helper = consumed_object_collection_id(&code_hash, Some(&type_args));
+            assert_eq!(
+                from_helper, from_index,
+                "{label}: the shared helper must agree with the index it replaces"
+            );
+            assert_eq!(from_helper, Some(class_id), "{label}");
+        }
+
+        // The failure mode the lookup had and the helper does not: a cell whose
+        // type index was never written is still classified on consumption, so
+        // the creation it matches is withdrawn.
+        let mut orphan_args = vec![0x77u8; 24];
+        orphan_args.extend_from_slice(&7u32.to_be_bytes());
+        assert!(
+            store.get_mnft_type_index(&[0x99u8; 32]).unwrap().is_none(),
+            "fixture: no index row for this cell"
+        );
+        assert_eq!(
+            consumed_object_collection_id(&code_hash, Some(&orphan_args)),
+            Some(vec![0x77u8; 24]),
+            "an un-indexed mNFT cell must still be withdrawn from its collection"
+        );
     }
 
     /// Create in block A, consume the same cell in block B on the same UTC+8
@@ -3295,11 +3322,7 @@ mod tests {
         const CAPACITY: i128 = 20_600_000_000;
         const OCCUPIED: i128 = 14_100_000_000;
 
-        let dir = tempfile::tempdir().unwrap();
-        let store = ckbadger_store::CkbadgerStore::open_domain(dir.path()).unwrap();
-        let mut cache: HashMap<Vec<u8>, Option<MnftTypeIndex>> = HashMap::new();
         let code_hash = hex::decode(BIT_CELL_CODE_HASH_TESTNET.trim_start_matches("0x")).unwrap();
-        let type_script_hash = [0x78u8; 32];
 
         let mut object_daily: HashMap<(Vec<u8>, u32), (i128, i128)> = HashMap::new();
 
@@ -3310,14 +3333,7 @@ mod tests {
             entry.1 += OCCUPIED;
         }
         // Block B input — the live consume branch.
-        let consumed = consumed_object_collection_id(
-            &store,
-            &mut cache,
-            &code_hash,
-            Some(&[]),
-            &type_script_hash,
-        )
-        .unwrap();
+        let consumed = consumed_object_collection_id(&code_hash, Some(&[]));
         if let Some(collection_id) = consumed {
             let entry = object_daily.entry((collection_id, DATE)).or_insert((0, 0));
             entry.0 -= CAPACITY;
@@ -3347,7 +3363,6 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let store = ckbadger_store::CkbadgerStore::open_domain(dir.path()).unwrap();
-        let mut cache: HashMap<Vec<u8>, Option<MnftTypeIndex>> = HashMap::new();
 
         // mNFT: bulk reads the class id straight out of the parsed facts, and
         // the live creation side out of `type_args[..24]`.
@@ -3409,21 +3424,14 @@ mod tests {
             ),
         ];
 
-        for (label, code_hash, type_args, type_script_hash, expected) in cases {
+        for (label, code_hash, type_args, _type_script_hash, expected) in cases {
             assert_eq!(
                 classify_object_collection_id(code_hash, type_args),
                 Some(expected.clone()),
                 "{label}: creation side"
             );
             assert_eq!(
-                consumed_object_collection_id(
-                    &store,
-                    &mut cache,
-                    code_hash,
-                    Some(type_args),
-                    &type_script_hash,
-                )
-                .unwrap(),
+                consumed_object_collection_id(code_hash, Some(type_args)),
                 Some(expected),
                 "{label}: live consume side must match bulk and creation"
             );
