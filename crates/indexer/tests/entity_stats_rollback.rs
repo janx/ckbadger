@@ -1791,3 +1791,119 @@ async fn reorg_without_a_contract_fails_fast() {
     );
     assert_eq!(dump_entity_stats(&domain), before);
 }
+
+// ---------------------------------------------------------------------------
+// Task 5.1 — recovery is persisted, not merely in-process
+// ---------------------------------------------------------------------------
+
+/// Everything above runs against a store that stays open for the whole test, so
+/// a rollback that only looked right because of an in-memory overlay, an
+/// unflushed memtable or a batch-scoped cache would still pass. This one closes
+/// the RocksDB handles and reopens the same directory before asserting.
+///
+/// The shape is the production symptom: a day of accumulation, a depth-1 fork
+/// inside that day, then a consumption day on the surviving branch. If the
+/// cutoff day's bucket were lost, the replayed consumption alone would drive
+/// the running total negative and `find_first_invalid_token_daily_delta` — the
+/// check `reconcile_token_daily_deltas_on_startup` runs at every indexer start
+/// — would refuse to start the store, exactly as testnet did on 2026-09-15.
+#[tokio::test]
+async fn recovered_entity_stats_survive_close_and_reopen() {
+    let domain_dir = tempfile::tempdir().unwrap();
+    let append_dir = tempfile::tempdir().unwrap();
+
+    let in_process = {
+        let domain = Arc::new(CkbadgerStore::open_domain(domain_dir.path()).unwrap());
+        let append = Arc::new(CkbadgerStore::open_append_only(append_dir.path()).unwrap());
+        let writer = BatchWriter::new(domain.clone(), append.clone());
+
+        // Blocks 1..=3, all on the previous UTC+8 day: the history the fork
+        // must not touch.
+        for n in 1..=3i64 {
+            apply_commit(
+                &writer,
+                &domain,
+                &[blk(n)
+                    .at(TS_PREV_DAY + n * 1_000)
+                    .token(TOKEN_X, PREV_DAY, 10_000_000_000, 6_100_000_000)
+                    .token_hour(TOKEN_X, TS_PREV_DAY, 1)],
+            );
+        }
+        // Orphan block 4, same day, moves TOKEN_X and creates TOKEN_Y.
+        apply_commit(
+            &writer,
+            &domain,
+            &[blk(4)
+                .at(TS_PREV_DAY + 4_000)
+                .token(TOKEN_X, PREV_DAY, 25_000_000_000, 13_000_000_000)
+                .token(TOKEN_Y, PREV_DAY, 9_000_000_000, 4_200_000_000)
+                .token_hour(TOKEN_X, TS_PREV_DAY, 1)],
+        );
+
+        rollback(&domain, &append, 3);
+
+        // The surviving branch replays block 4 as a consumption on the next day.
+        apply_commit(
+            &writer,
+            &domain,
+            &[blk(4)
+                .at(TS_DAY)
+                .token(TOKEN_X, DAY, -20_000_000_000, -12_000_000_000)
+                .token_hour(TOKEN_X, TS_DAY, 1)],
+        );
+
+        assert_eq!(
+            domain
+                .get_token_daily_delta(&TOKEN_X, PREV_DAY)
+                .unwrap()
+                .unwrap()
+                .owned_capacity_delta,
+            30_000_000_000,
+            "the three pre-fork blocks, without the orphan's 25_000_000_000"
+        );
+        assert!(
+            domain
+                .find_first_invalid_token_daily_delta()
+                .unwrap()
+                .is_none(),
+            "the startup validator must pass before the store is closed"
+        );
+
+        let dump = dump_entity_stats(&domain);
+        drop(writer);
+        dump
+    };
+
+    // Reopen the same directories with fresh RocksDB handles — no overlay, no
+    // memtable from the writing process, nothing cached.
+    let reopened = CkbadgerStore::open_domain(domain_dir.path()).unwrap();
+
+    assert!(
+        reopened
+            .find_first_invalid_token_daily_delta()
+            .unwrap()
+            .is_none(),
+        "`reconcile_token_daily_deltas_on_startup`'s check must pass on a \
+         reopened store: recovery has to be on disk, not in the writer's overlay"
+    );
+    assert_eq!(
+        dump_entity_stats(&reopened),
+        in_process,
+        "every entity stats row must be byte-identical after close and reopen"
+    );
+    assert_eq!(
+        reopened
+            .get_token_daily_delta(&TOKEN_X, PREV_DAY)
+            .unwrap()
+            .unwrap()
+            .owned_capacity_delta,
+        30_000_000_000
+    );
+    assert!(
+        reopened
+            .get_token_daily_delta(&TOKEN_Y, PREV_DAY)
+            .unwrap()
+            .is_none(),
+        "the orphan-only row must still be absent after reopen"
+    );
+}

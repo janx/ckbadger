@@ -19,7 +19,9 @@ pub use ckbadger_api::{
     create_router, dispatch_initial_warmup, AppConfig, AppState, CleanupPathGuard,
 };
 pub use ckbadger_common::{BackgroundTaskKind, BackgroundTaskState};
+pub use ckbadger_indexer::db::{BatchWriter, EntityStatsOverlay};
 pub use ckbadger_indexer::label_import::run_label_import_bundled;
+pub use ckbadger_indexer::sync::types::{EntityDailyChanges, EntityDateKey};
 pub use ckbadger_store::batch::StoreBatch;
 pub use ckbadger_store::types::{
     AddrTxValue, AssetAction, CachedBlockHeader, ClusterAggregate, ClusterDailyDelta,
@@ -770,4 +772,124 @@ fn network_store_helper_seeds_two_nodes() {
     let s = test_network_store();
     assert_eq!(s.scan_nodes().unwrap().len(), 2);
     assert!(s.get_network_status().unwrap().is_some());
+}
+
+// ---------------------------------------------------------------------------
+// Real indexer writer fixtures (Task 5.1)
+//
+// These drive the production `BatchWriter` daily writer and the production
+// `EntityStatsOverlay`/undo-log rollback, so an API test can assert what the
+// endpoints serve after a REAL shallow fork instead of after a hand-seeded
+// `put_token_daily_delta`. Seeding rows directly cannot pin this behaviour:
+// it never writes an undo pre-image, so it cannot tell a correct rollback
+// from one that deletes the bucket.
+// ---------------------------------------------------------------------------
+
+/// 2026-09-22 09:00:00 UTC+8 — the UTC+8 calendar day every fixture block lands on.
+pub const WRITER_FIXTURE_TS_MS: i64 = 1_790_038_800_000;
+/// The `date_yyyymmdd` key component `WRITER_FIXTURE_TS_MS` belongs to.
+pub const WRITER_FIXTURE_DATE: u32 = 20_260_922;
+
+/// One block's token daily contribution: `(block, type_hash, capacity, knowledge)`.
+pub type TokenDailyBlock = (i64, [u8; 32], i128, i128);
+
+fn writer_fixture_header(block_num: i64) -> CachedBlockHeader {
+    let mut hash = vec![0u8; 32];
+    hash[0..8].copy_from_slice(&block_num.to_le_bytes());
+    CachedBlockHeader {
+        hash,
+        parent_hash: vec![0u8; 32],
+        timestamp: WRITER_FIXTURE_TS_MS + block_num * 1_000,
+        epoch_number: 11,
+        epoch_index: (block_num % 1800) as i32,
+        epoch_length: 1800,
+        dao: vec![0u8; 32],
+        transactions_count: 0,
+        uncles_count: 0,
+        proposals_count: 0,
+        compact_target: 0,
+        miner_lock_hash: None,
+        cycles: None,
+    }
+}
+
+/// Rollback fails fast when the boundary epoch row is missing, so a fixture has
+/// to uphold the same invariant the real write path does.
+fn seed_writer_fixture_epoch(store: &CkbadgerStore, blocks: &[TokenDailyBlock]) {
+    let Some(lo) = blocks.iter().map(|(b, ..)| *b).min() else {
+        return;
+    };
+    let hi = blocks.iter().map(|(b, ..)| *b).max().unwrap();
+    let existing = store.get_epoch_stats(11).unwrap();
+    let (start_block, start_timestamp) = match &existing {
+        Some(row) => (row.start_block.min(lo), row.start_timestamp),
+        None => (
+            lo,
+            chrono::DateTime::from_timestamp_millis(WRITER_FIXTURE_TS_MS + lo * 1_000).unwrap(),
+        ),
+    };
+    let end_block = existing
+        .as_ref()
+        .and_then(|row| row.end_block)
+        .unwrap_or(hi)
+        .max(hi);
+    store
+        .put_epoch_stats(
+            11,
+            &EpochStats {
+                epoch_number: 11,
+                start_block,
+                end_block: Some(end_block),
+                blocks_count: (end_block - start_block + 1) as i32,
+                length: 1800,
+                start_timestamp,
+                end_timestamp: None,
+                transactions_count: 0,
+            },
+        )
+        .unwrap();
+}
+
+/// Commit one batch of blocks through the real per-block token daily writer:
+/// one `StoreBatch`, one `EntityStatsOverlay`, one shared `undo_seq_by_block`,
+/// per-block undo pre-images, one final write per touched key — the exact shape
+/// `write_parsed_batch` uses in production.
+pub fn commit_token_daily_blocks(
+    writer: &BatchWriter,
+    store: &CkbadgerStore,
+    blocks: &[TokenDailyBlock],
+) {
+    let mut batch = StoreBatch::new(store);
+    let mut overlay = EntityStatsOverlay::new();
+    let mut undo_seq: std::collections::HashMap<i64, u64> = std::collections::HashMap::new();
+
+    let mut changes = EntityDailyChanges::<EntityDateKey>::new();
+    for (block, type_hash, capacity, knowledge) in blocks {
+        changes
+            .add(
+                *block,
+                (type_hash.to_vec(), WRITER_FIXTURE_DATE),
+                *capacity,
+                *knowledge,
+            )
+            .unwrap();
+    }
+    writer
+        .update_token_daily_deltas_batch(&changes, &mut overlay, &mut undo_seq, &mut batch)
+        .unwrap();
+    overlay.stage_final(&mut batch).unwrap();
+    for (block, ..) in blocks {
+        batch.put_block_header(*block, &writer_fixture_header(*block));
+    }
+    batch.commit().unwrap();
+    seed_writer_fixture_epoch(store, blocks);
+}
+
+/// The production two-phase rollback, in `BatchWriter::execute_reorg`'s order:
+/// replay the undo log first, then drop everything above the fork point.
+pub fn rollback_entity_stats(store: &CkbadgerStore, fork_point: i64) {
+    store.rollback_via_undo_log(store, fork_point).unwrap();
+    store
+        .rollback_to_block_with_append_only_store(fork_point, None)
+        .unwrap();
 }

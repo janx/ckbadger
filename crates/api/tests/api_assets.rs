@@ -3410,3 +3410,108 @@ async fn test_object_collection_items_serves_spore_cluster_rows_matching_totals(
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
 }
+
+/// Task 5.1 — `/assets?type=token` after a REAL shallow fork.
+///
+/// Companion to `test_get_token_reports_pre_fork_capacity_after_real_writer_rollback`
+/// on the warmup-cache path: the asset list's `ownedCapacity` comes from
+/// `accumulate_owned_capacity` over the same `TOKEN_DAILY` rows, so a rollback
+/// that deletes the cutoff day's bucket silently reports a token's whole
+/// pre-fork history as zero. Both tokens' rows are written by the production
+/// `BatchWriter` per-block writer, never by `put_token_daily_delta`.
+///
+/// `test_assets_list_token_errors_when_daily_deltas_invalid` stays as the
+/// fail-fast counterpart: a genuinely invalid series must still 500.
+#[tokio::test]
+async fn test_assets_list_token_capacity_after_real_writer_rollback() {
+    let store = test_store();
+    let surviving = [0x71u8; 32];
+    let orphan_only = [0x72u8; 32];
+
+    for (hash, name, symbol) in [
+        (surviving, "Surviving Token", "SRV"),
+        (orphan_only, "Orphan Only Token", "ORP"),
+    ] {
+        store
+            .put_token_direct(
+                &hash,
+                &TokenInfo {
+                    type_code_hash: vec![0xAA; 32],
+                    hash_type: 1,
+                    type_args: vec![0x01; 20],
+                    standard: "xudt".to_string(),
+                    name: Some(name.to_string()),
+                    symbol: Some(symbol.to_string()),
+                    decimals: Some(8),
+                    max_supply: None,
+                    first_seen_block: 1,
+                    icon_url: None,
+                    description: None,
+                    transfers_count: 1,
+                },
+            )
+            .unwrap();
+    }
+
+    let writer = BatchWriter::new(store.clone(), store.clone());
+
+    // Blocks 1..=3: only the surviving token moves.
+    for block in 1..=3i64 {
+        commit_token_daily_blocks(
+            &writer,
+            &store,
+            &[(block, surviving, 10_000_000_000, 6_100_000_000)],
+        );
+    }
+    // Orphan block 4: a row the fork created from nothing, plus more of the
+    // surviving token on the same UTC+8 day.
+    commit_token_daily_blocks(
+        &writer,
+        &store,
+        &[
+            (4, surviving, 25_000_000_000, 13_000_000_000),
+            (4, orphan_only, 9_000_000_000, 4_200_000_000),
+        ],
+    );
+
+    rollback_entity_stats(&store, 3);
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/assets?type=token&sort_key=capacity&sort_direction=desc")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let rows = json["data"].as_array().unwrap();
+    assert_eq!(rows.len(), 2);
+
+    let row_of = |hash: [u8; 32]| -> &serde_json::Value {
+        let id = format!("0x{}", hex::encode(hash));
+        rows.iter()
+            .find(|row| row["id"] == serde_json::Value::String(id.clone()))
+            .unwrap_or_else(|| panic!("asset row for {id} missing"))
+    };
+
+    assert_eq!(
+        row_of(surviving)["ownedCapacity"],
+        "30000000000",
+        "the three blocks the fork never touched must survive the rollback"
+    );
+    assert_eq!(row_of(surviving)["ownedKnowledge"], "18300000000");
+    assert_eq!(
+        row_of(orphan_only)["ownedCapacity"],
+        "0",
+        "a row only the orphan ever created must be gone"
+    );
+    assert_eq!(row_of(orphan_only)["ownedKnowledge"], "0");
+}
