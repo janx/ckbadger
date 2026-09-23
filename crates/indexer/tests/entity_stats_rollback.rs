@@ -1418,3 +1418,179 @@ async fn clock_rollback_does_not_lower_executed_cutoff() {
         "executed_cutoff_hour is monotonic; a backwards clock must not lower it"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Task 2.7 — interrupted rollback recovery
+// ---------------------------------------------------------------------------
+
+/// `execute_reorg` replays the undo log and THEN runs the domain rollback. A
+/// crash between the two leaves the entity stats already restored and their
+/// undo entries already consumed. The startup cleanup path must finish the same
+/// rollback without undoing anything a second time.
+#[tokio::test]
+async fn crash_between_undo_replay_and_domain_rollback_is_recoverable() {
+    let original = vec![vec![
+        blk(1)
+            .token(TOKEN_X, DAY, 9_000_000_000, 6_100_000_000)
+            .script(CODE_A, false, DAY, 9_000_000_000, 6_100_000_000)
+            .token_hour(TOKEN_X, TS_DAY, 2),
+        blk(2)
+            .token(TOKEN_X, DAY, 3_000_000_000, 2_000_000_000)
+            .object(COLLECTION_ID, DAY, 5_000_000_000, 4_800_000_000),
+        // Orphans from here.
+        blk(3)
+            .token(TOKEN_X, DAY, 100_000_000_000, 90_000_000_000)
+            .token(TOKEN_Y, DAY, 6_000_000_000, 5_000_000_000)
+            .token_hour(TOKEN_X, TS_DAY, 4),
+        blk(4)
+            .object(COLLECTION_ID, DAY, -5_000_000_000, -4_800_000_000)
+            .spore(SPORE_ID, DAY, 1_000_000_000, 800_000_000),
+    ]];
+
+    // Branch A: apply everything, replay the undo log, then CRASH — no
+    // `rollback_to_block`, no refreshes. Recovery runs the startup path.
+    let (domain_a, append_a) = setup_split_stores();
+    let writer_a = BatchWriter::new(domain_a.clone(), append_a.clone());
+    let (cell_key, cell_bytes) = seed_append_only_witness(&append_a);
+    for commit in &original {
+        apply_commit(&writer_a, &domain_a, commit);
+    }
+    domain_a
+        .set_genesis_baseline(&ckbadger_store::GenesisBaseline {
+            total_issuance: 3_360_000_000_000_000_000,
+            burnt: 840_000_000_000_000_000,
+            virtual_occupied: 0,
+        })
+        .unwrap();
+    // The startup cleanup path also re-derives the DAO singleton stats, which
+    // need a daily snapshot to exist. Seed one on a day BEFORE the cutoff, the
+    // way a real chain would have it; it is untouched by this rollback.
+    domain_a
+        .put_stats_key(
+            &keys::encode_stats_key(
+                keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT,
+                PREV_DAY.to_string().as_bytes(),
+            ),
+            &bincode::serialize(&ckbadger_store::types::DaoDailySnapshot {
+                date: PREV_DAY.to_string(),
+                total_deposited: 0,
+                depositors_count: 0,
+                new_deposits: 0,
+                withdrawals: 0,
+                compensation: 0,
+                cumulative_deposit_amount: 0,
+                total_issuance: 0,
+                secondary_pool: 0,
+                occupied_capacity: 0,
+                cum_miner_secondary: 0,
+                cum_dao_compensation: 0,
+                cum_treasury: 0,
+                unclaimed_compensation: 0,
+                frozen_phase1_compensation: 0,
+                cumulative_depositors: 0,
+                daily_depositor_addresses: 0,
+                protocol_deposited: None,
+            })
+            .unwrap(),
+        )
+        .unwrap();
+
+    let undo = domain_a.rollback_via_undo_log(&append_a, 2).unwrap();
+    assert!(
+        undo.undo_entries_applied > 0,
+        "the fixture must exercise the undo path"
+    );
+    let after_undo_only = dump_entity_stats(&domain_a);
+    assert!(
+        !domain_a.has_undo_log_entries_after(2).unwrap(),
+        "the replayed entries are consumed before the crash"
+    );
+
+    // Recovery: the startup cleanup path with the same target.
+    writer_a
+        .init_sync_start_with_options(append_a.as_ref(), 2, false, true)
+        .expect("startup cleanup must finish the interrupted rollback");
+
+    assert_eq!(
+        dump_entity_stats(&domain_a),
+        after_undo_only,
+        "recovery must not undo the already-applied restoration a second time"
+    );
+    assert_eq!(
+        append_a.get_cf(append_a.cf_cells(), &cell_key).unwrap(),
+        Some(cell_bytes),
+        "append-only payload bytes must be unchanged by crash recovery"
+    );
+
+    // Branch B: the same surviving history, synced directly.
+    let (domain_b, append_b) = setup_split_stores();
+    let writer_b = BatchWriter::new(domain_b.clone(), append_b.clone());
+    seed_append_only_witness(&append_b);
+    let surviving: Vec<BlockChanges> = original[0]
+        .iter()
+        .filter(|b| b.block <= 2)
+        .cloned()
+        .collect();
+    apply_commit(&writer_b, &domain_b, &surviving);
+
+    assert_eq!(
+        dump_entity_stats(&domain_a),
+        dump_entity_stats(&domain_b),
+        "a crash between undo replay and domain rollback must still land on the \
+         same eight entity stats families as a node that never saw the orphans"
+    );
+}
+
+/// If the domain rollback fails after the undo log was replayed, the restored
+/// values must stay visible and the cleanup marker must stay set, so the next
+/// start finishes the same rollback instead of publishing an inconsistent tip.
+#[tokio::test]
+async fn rollback_to_block_failure_leaves_undo_replay_visible_and_marker_set() {
+    let (domain, append) = setup_split_stores();
+    let writer = BatchWriter::new(domain.clone(), append.clone());
+
+    apply_commit(
+        &writer,
+        &domain,
+        &[
+            blk(1).token(TOKEN_X, DAY, 9_000_000_000, 6_100_000_000),
+            blk(2).token(TOKEN_X, DAY, 3_000_000_000, 2_000_000_000),
+            blk(3).token(TOKEN_X, DAY, 100_000_000_000, 90_000_000_000),
+        ],
+    );
+    let key = keys::encode_token_daily_key(&TOKEN_X, DAY).to_vec();
+    let after_block_3 = read_stats(&domain, &key).unwrap();
+
+    // Corrupt block 3's header so the domain rollback cannot decode it.
+    domain
+        .put_cf(
+            domain.cf_block_headers(),
+            &keys::encode_block_num(3),
+            b"invalid-header-payload",
+        )
+        .unwrap();
+
+    let undo = domain.rollback_via_undo_log(&append, 2).unwrap();
+    assert!(undo.undo_entries_applied > 0);
+    let restored = read_stats(&domain, &key).unwrap();
+    assert_ne!(
+        restored, after_block_3,
+        "the undo replay must have rolled the row back to its end-of-block-2 value"
+    );
+
+    let err = domain
+        .rollback_to_block_with_tx_contexts(2, Some(append.as_ref()), undo.tx_contexts)
+        .expect_err("a corrupt header must fail the domain rollback");
+    assert!(!err.to_string().is_empty());
+
+    assert_eq!(
+        read_stats(&domain, &key),
+        Some(restored),
+        "a failed domain rollback must leave the undo replay's result intact — the next \
+         start finishes the same rollback, it does not redo it"
+    );
+    assert!(
+        !domain.has_undo_log_entries_after(2).unwrap(),
+        "consumed undo entries must not reappear and be applied twice"
+    );
+}
