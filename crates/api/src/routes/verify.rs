@@ -81,31 +81,111 @@ pub struct Anchor {
     pub block_hash: String,
 }
 
-/// The coverage contract for entity-statistics undo, once the write path
-/// publishes one.
+/// The coverage contract for entity-statistics undo, as the write path stored
+/// it.
+///
+/// `coverageFloorBlock` is the lowest block a shallow reorg can still be undone
+/// to; `updatedAtBlock` is the committed tip when that floor was last advanced.
+/// Both are published because a floor without the tip it was written at cannot
+/// be told from a stale one.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EntityStatsUndoContract {
     pub version: u32,
     pub coverage_floor_block: i64,
+    pub updated_at_block: i64,
 }
 
-/// What the primary's hourly-bucket retention boundary is.
+/// What the primary's hourly-bucket retention boundary is, per family.
 ///
-/// A store with no boundary evidence answers `"unknown"`: the API's own clock
-/// is not a substitute for the deletion the primary actually performed.
+/// Retention is executed, and recorded, one family at a time. There is
+/// deliberately no cross-family verdict here: `token` being settled says
+/// nothing about `mnft`, and one collapsed answer would hide exactly the
+/// half-swept family a verifier has to look at.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HourlyRetentionReport {
+    pub token: HourlyRetentionFamilyReport,
+    pub mnft: HourlyRetentionFamilyReport,
+}
+
+/// One family's retention evidence.
+///
+/// A family the store holds no row for answers `"unknown"`: the API's own clock
+/// is not a substitute for the deletion the primary actually performed, and a
+/// zero boundary would read as "nothing was ever pruned".
 #[derive(Debug, Serialize)]
 #[serde(untagged)]
-pub enum HourlyRetentionReport {
+pub enum HourlyRetentionFamilyReport {
     State(HourlyRetentionState),
     Unknown(&'static str),
 }
 
+/// One family's retention state, exactly as the writer stored it.
+///
+/// `executedCutoffHour` is a boundary a reader may trust **only** when
+/// `authoritative` is true. The writer advances it only when a round reaches
+/// the end of the family; a round that stopped at `cursor` has deleted just the
+/// keys before that cursor, so between `executedCutoffHour` and
+/// `roundInProgressCutoffHour` some buckets are gone and some are not. Nothing
+/// here is repaired or defaulted — a family whose first round never finished
+/// reports the sentinel the store holds, with `authoritative: false` saying not
+/// to read it as an hour.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HourlyRetentionState {
-    pub retained_from_hour: String,
-    pub last_pruned_at: i64,
+    /// True only when the last recorded round ran to the end of this family.
+    pub authoritative: bool,
+    pub policy_version: u32,
+    pub executed_cutoff_hour: i64,
+    /// The cutoff an in-flight round is sweeping towards; `null` when no round
+    /// is in flight. Diagnostic only — never a retention boundary.
+    pub round_in_progress_cutoff_hour: Option<i64>,
+    /// Where the in-flight round stopped, hex-encoded; `null` once complete.
+    pub cursor: Option<String>,
+    pub round_started_at: i64,
+    pub round_completed_at: Option<i64>,
+}
+
+/// Whether the last recorded round for a family ran to the end of it.
+///
+/// The writer clears `cursor` and sets `round_completed_at` at the one moment a
+/// round reaches the end of the family, which is also the only moment
+/// `executed_cutoff_hour` advances. Requiring both is the same condition read
+/// twice, and a store where they disagree is one this endpoint must not call
+/// settled.
+fn round_is_complete(state: &ckbadger_store::types::HourlyRetentionState) -> bool {
+    state.cursor.is_none() && state.round_completed_at.is_some()
+}
+
+/// Read one family's retention row, or report that there is none.
+///
+/// A row filed under one family that claims to be another is a corrupt key or a
+/// corrupt value; it is an error rather than a relabelled answer, because the
+/// whole point of this field is to tell legitimate retention from corruption.
+fn read_hourly_retention(
+    store: &ckbadger_store::CkbadgerStore,
+    family: ckbadger_store::types::HourlyRetentionFamily,
+) -> anyhow::Result<HourlyRetentionFamilyReport> {
+    let Some(state) = store.get_hourly_retention_state(family)? else {
+        return Ok(HourlyRetentionFamilyReport::Unknown("unknown"));
+    };
+    if state.family != family {
+        return Err(anyhow::anyhow!(
+            "hourly retention row stored under family '{}' reports family '{}'",
+            family.as_str(),
+            state.family.as_str()
+        ));
+    }
+    Ok(HourlyRetentionFamilyReport::State(HourlyRetentionState {
+        authoritative: round_is_complete(&state),
+        policy_version: state.policy_version,
+        executed_cutoff_hour: state.executed_cutoff_hour,
+        round_in_progress_cutoff_hour: state.round_in_progress_cutoff_hour,
+        cursor: state.cursor.as_deref().map(hex0x),
+        round_started_at: state.round_started_at,
+        round_completed_at: state.round_completed_at,
+    }))
 }
 
 #[derive(Debug, Serialize)]
@@ -326,12 +406,26 @@ async fn export_entity_statistics(
             rollback_cleanup_in_progress: store.is_rollback_cleanup_in_progress()?,
             live_cell_summary_initialized: store.is_live_cell_summary_initialized()?,
             deep_fork_detected: sync.deep_fork_detected,
-            // TODO(phase2 merge): publish the persisted
-            // ENTITY_STATS_UNDO_CONTRACT and the HOURLY_RETENTION_STATE here
-            // once the write path stores them. Until then the export reports
-            // that it has no evidence rather than implying coverage.
-            entity_stats_undo_contract: None,
-            hourly_retention: HourlyRetentionReport::Unknown("unknown"),
+            // Both come from the same pin as the rows they qualify: a coverage
+            // floor read from a later view would describe a store the exported
+            // numbers never came from.
+            entity_stats_undo_contract: store.get_entity_stats_undo_contract()?.map(|contract| {
+                EntityStatsUndoContract {
+                    version: contract.version,
+                    coverage_floor_block: contract.coverage_floor_block,
+                    updated_at_block: contract.updated_at_block,
+                }
+            }),
+            hourly_retention: HourlyRetentionReport {
+                token: read_hourly_retention(
+                    &store,
+                    ckbadger_store::types::HourlyRetentionFamily::Token,
+                )?,
+                mnft: read_hourly_retention(
+                    &store,
+                    ckbadger_store::types::HourlyRetentionFamily::Mnft,
+                )?,
+            },
         };
 
         // A pinned anchor the store has moved past is the chain moving, not a
@@ -535,7 +629,10 @@ mod tests {
             live_cell_summary_initialized: false,
             deep_fork_detected: false,
             entity_stats_undo_contract: None,
-            hourly_retention: HourlyRetentionReport::Unknown("unknown"),
+            hourly_retention: HourlyRetentionReport {
+                token: HourlyRetentionFamilyReport::Unknown("unknown"),
+                mnft: HourlyRetentionFamilyReport::Unknown("unknown"),
+            },
         };
         assert!(!base().mid_write());
         assert!(ExportState {
@@ -571,8 +668,34 @@ mod tests {
     }
 
     #[test]
-    fn hourly_retention_serializes_as_a_bare_string_until_phase_2() {
-        let json = serde_json::to_value(HourlyRetentionReport::Unknown("unknown")).unwrap();
+    fn a_family_with_no_retention_row_serializes_as_a_bare_string() {
+        let json = serde_json::to_value(HourlyRetentionFamilyReport::Unknown("unknown")).unwrap();
         assert_eq!(json, serde_json::json!("unknown"));
+    }
+
+    /// `authoritative` is the one derived bit this endpoint publishes, so the
+    /// exact condition is pinned here rather than only through the store.
+    #[test]
+    fn only_a_finished_round_is_authoritative() {
+        let state = |cursor: Option<Vec<u8>>, completed_at: Option<i64>| {
+            ckbadger_store::types::HourlyRetentionState {
+                policy_version: 1,
+                family: ckbadger_store::types::HourlyRetentionFamily::Token,
+                executed_cutoff_hour: 1,
+                round_in_progress_cutoff_hour: None,
+                cursor,
+                round_started_at: 0,
+                round_completed_at: completed_at,
+            }
+        };
+        assert!(round_is_complete(&state(None, Some(1))));
+        assert!(
+            !round_is_complete(&state(Some(vec![0x01]), Some(1))),
+            "a cursor means the sweep stopped part-way"
+        );
+        assert!(
+            !round_is_complete(&state(None, None)),
+            "a round that never completed has no boundary to offer"
+        );
     }
 }

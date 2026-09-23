@@ -40,6 +40,13 @@ fn seed_anchor(store: &Arc<CkbadgerStore>, tip: i64, hash: &[u8]) {
         .unwrap();
 }
 
+/// Write one family's retention state through the only path the writer uses.
+fn seed_retention(store: &Arc<CkbadgerStore>, state: &ckbadger_store::types::HourlyRetentionState) {
+    let mut batch = StoreBatch::new(store);
+    batch.put_hourly_retention_state(state);
+    batch.commit().unwrap();
+}
+
 fn seed_token(store: &Arc<CkbadgerStore>, type_hash: &[u8], rows: &[(u32, i128, i128)]) {
     let mut batch = StoreBatch::new(store);
     batch.put_token(
@@ -438,10 +445,11 @@ async fn an_unfinished_bulk_session_withholds_the_numbers() {
     assert!(body["entities"][0]["daily"].as_array().unwrap().is_empty());
 }
 
-/// Until Phase 2 writes the coverage contract and the hourly retention
-/// boundary, the export must say it has no evidence rather than imply one.
+/// A store that has never written the coverage contract or a retention round
+/// must say it has no evidence rather than imply one. Absence is reported per
+/// family, because retention runs per family.
 #[tokio::test]
-async fn phase2_state_fields_report_absence_of_evidence() {
+async fn absent_contract_and_retention_rows_report_absence_of_evidence() {
     let store = test_store();
     seed_anchor(&store, 42, &token_hash(0x08));
 
@@ -457,9 +465,192 @@ async fn phase2_state_fields_report_absence_of_evidence() {
         body["state"]["entityStatsUndoContract"].is_null(),
         "no contract is written yet; null is the honest answer"
     );
-    assert_eq!(body["state"]["hourlyRetention"], "unknown");
+    assert_eq!(
+        body["state"]["hourlyRetention"],
+        serde_json::json!({ "token": "unknown", "mnft": "unknown" }),
+        "a family with no row is unknown, not a zero boundary"
+    );
     assert_eq!(body["state"]["liveCellSummaryInitialized"], false);
     assert_eq!(body["state"]["deepForkDetected"], false);
+}
+
+/// The stored coverage contract is published field for field, including the
+/// tip it was last advanced at: a floor without the block it was written at
+/// cannot be told from a stale one.
+#[tokio::test]
+async fn the_undo_contract_is_published_with_every_stored_field() {
+    let store = test_store();
+    seed_anchor(&store, 9_001, &token_hash(0x11));
+    store
+        .put_entity_stats_undo_contract(&ckbadger_store::types::EntityStatsUndoContract {
+            version: 1,
+            coverage_floor_block: 8_800,
+            updated_at_block: 9_000,
+        })
+        .unwrap();
+
+    let app = create_router_without_warmup(test_config(store));
+    let (status, body) = post(
+        app,
+        serde_json::json!({ "entities": [{ "kind": "token", "id": hex0x(&token_hash(1)) }] }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body["state"]["entityStatsUndoContract"],
+        serde_json::json!({
+            "version": 1,
+            "coverageFloorBlock": 8_800,
+            "updatedAtBlock": 9_000,
+        })
+    );
+}
+
+/// A round that reached the end of its family is the only state whose
+/// `executedCutoffHour` is a boundary a reader may trust.
+#[tokio::test]
+async fn a_completed_retention_round_is_authoritative() {
+    let store = test_store();
+    seed_anchor(&store, 500, &token_hash(0x12));
+    seed_retention(
+        &store,
+        &ckbadger_store::types::HourlyRetentionState {
+            policy_version: 1,
+            family: ckbadger_store::types::HourlyRetentionFamily::Token,
+            executed_cutoff_hour: 480_000,
+            round_in_progress_cutoff_hour: None,
+            cursor: None,
+            round_started_at: 1_700_000_000_000,
+            round_completed_at: Some(1_700_000_060_000),
+        },
+    );
+
+    let app = create_router_without_warmup(test_config(store));
+    let (status, body) = post(
+        app,
+        serde_json::json!({ "entities": [{ "kind": "token", "id": hex0x(&token_hash(1)) }] }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body["state"]["hourlyRetention"]["token"],
+        serde_json::json!({
+            "authoritative": true,
+            "policyVersion": 1,
+            "executedCutoffHour": 480_000,
+            "roundInProgressCutoffHour": null,
+            "cursor": null,
+            "roundStartedAt": 1_700_000_000_000i64,
+            "roundCompletedAt": 1_700_000_060_000i64,
+        })
+    );
+}
+
+/// A round that stopped at a cursor has deleted only the keys before it, so the
+/// family is reported in full — and reported as not a boundary.
+///
+/// The two families are read independently: `token` being half-swept says
+/// nothing about `mnft`, and a single collapsed verdict would hide exactly the
+/// family a verifier has to look at.
+#[tokio::test]
+async fn an_interrupted_retention_round_is_reported_but_not_authoritative() {
+    let store = test_store();
+    seed_anchor(&store, 501, &token_hash(0x13));
+    seed_retention(
+        &store,
+        &ckbadger_store::types::HourlyRetentionState {
+            policy_version: 1,
+            family: ckbadger_store::types::HourlyRetentionFamily::Mnft,
+            executed_cutoff_hour: 470_000,
+            round_in_progress_cutoff_hour: Some(480_000),
+            cursor: Some(vec![0xde, 0xad, 0xbe, 0xef]),
+            round_started_at: 1_700_000_000_000,
+            round_completed_at: None,
+        },
+    );
+
+    let app = create_router_without_warmup(test_config(store));
+    let (status, body) = post(
+        app,
+        serde_json::json!({ "entities": [{ "kind": "token", "id": hex0x(&token_hash(1)) }] }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body["state"]["hourlyRetention"]["mnft"],
+        serde_json::json!({
+            "authoritative": false,
+            "policyVersion": 1,
+            "executedCutoffHour": 470_000,
+            "roundInProgressCutoffHour": 480_000,
+            "cursor": "0xdeadbeef",
+            "roundStartedAt": 1_700_000_000_000i64,
+            "roundCompletedAt": null,
+        })
+    );
+    assert_eq!(
+        body["state"]["hourlyRetention"]["token"], "unknown",
+        "the other family has no row and must stay unknown, not inherit this one"
+    );
+}
+
+/// Two families with different histories are reported as two answers.
+#[tokio::test]
+async fn each_family_reports_its_own_retention_state() {
+    let store = test_store();
+    seed_anchor(&store, 502, &token_hash(0x14));
+    seed_retention(
+        &store,
+        &ckbadger_store::types::HourlyRetentionState {
+            policy_version: 1,
+            family: ckbadger_store::types::HourlyRetentionFamily::Token,
+            executed_cutoff_hour: 480_000,
+            round_in_progress_cutoff_hour: None,
+            cursor: None,
+            round_started_at: 1_700_000_000_000,
+            round_completed_at: Some(1_700_000_060_000),
+        },
+    );
+    seed_retention(
+        &store,
+        &ckbadger_store::types::HourlyRetentionState {
+            policy_version: 1,
+            family: ckbadger_store::types::HourlyRetentionFamily::Mnft,
+            executed_cutoff_hour: 460_000,
+            round_in_progress_cutoff_hour: Some(480_000),
+            cursor: Some(vec![0x01]),
+            round_started_at: 1_700_000_010_000,
+            round_completed_at: None,
+        },
+    );
+
+    let app = create_router_without_warmup(test_config(store));
+    let (status, body) = post(
+        app,
+        serde_json::json!({ "entities": [{ "kind": "token", "id": hex0x(&token_hash(1)) }] }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body["state"]["hourlyRetention"]["token"]["authoritative"],
+        true
+    );
+    assert_eq!(
+        body["state"]["hourlyRetention"]["token"]["executedCutoffHour"],
+        480_000
+    );
+    assert_eq!(
+        body["state"]["hourlyRetention"]["mnft"]["authoritative"],
+        false
+    );
+    assert_eq!(
+        body["state"]["hourlyRetention"]["mnft"]["executedCutoffHour"],
+        460_000
+    );
 }
 
 /// The export must read the pinned store, never the background warmup cache.

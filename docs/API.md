@@ -722,9 +722,9 @@ disabled or empty state. A point lookup still returns not found.
 
 ### verify (crates/api/src/routes/verify.rs)
 
-| Method | Path                                | Handler                     | Purpose                                                          |
-| ------ | ----------------------------------- | --------------------------- | ---------------------------------------------------------------- |
-| POST   | `/api/v1/verify/entity-statistics`  | `export_entity_statistics`  | Bounded, read-only export of raw entity daily deltas for the verifier |
+| Method | Path                               | Handler                    | Purpose                                                               |
+| ------ | ---------------------------------- | -------------------------- | --------------------------------------------------------------------- |
+| POST   | `/api/v1/verify/entity-statistics` | `export_entity_statistics` | Bounded, read-only export of raw entity daily deltas for the verifier |
 
 A verification-only endpoint, not part of the public explorer surface. Every
 read happens inside the request's single read-view pin, so the anchor and the
@@ -735,30 +735,49 @@ writes nothing.
 
 - `EntityStatisticsRequest` (JSON body) — `entities: [{kind, id}]` (≤ 16, `kind`
   must be `token` in this delivery), optional `expectedAnchor: {blockNumber,
-  blockHash}`, optional `maxDailyRows` (≤ 8192, default 8192)
+blockHash}`, optional `maxDailyRows` (≤ 8192, default 8192)
 
 **Responses**
 
 - `EntityStatisticsResponse`
   - `anchor` — `{blockNumber, blockHash}` of the store's sync tip
   - `state` — `{bulkSessionInProgress, rollbackCleanupInProgress,
-    liveCellSummaryInitialized, deepForkDetected, entityStatsUndoContract,
-    hourlyRetention}`. `entityStatsUndoContract` is `null` and `hourlyRetention`
-    is `"unknown"` until the write path publishes those keys — absence of
-    evidence, not an implied guarantee.
+liveCellSummaryInitialized, deepForkDetected, entityStatsUndoContract,
+hourlyRetention}`, all read under the same pin as the rows they qualify.
+    - `entityStatsUndoContract` — `{version, coverageFloorBlock,
+updatedAtBlock}`, or `null` when the write path has published no
+      contract. `coverageFloorBlock` is the lowest block entity-stats undo can
+      still roll back to; `updatedAtBlock` is the committed tip when that floor
+      was last advanced, so a stale floor is distinguishable from a current one.
+    - `hourlyRetention` — one answer **per hourly family**, keyed by family
+      name: `{"token": …, "mnft": …}`. There is deliberately no cross-family
+      verdict; one family being settled says nothing about the other. Each
+      value is either `"unknown"` (the store holds no retention row for that
+      family — absence of evidence, never a zero boundary) or
+      `{authoritative, policyVersion, executedCutoffHour,
+roundInProgressCutoffHour, cursor, roundStartedAt, roundCompletedAt}`.
+      `authoritative` is `true` only when the last recorded round ran to the
+      end of that family (`cursor` cleared _and_ `roundCompletedAt` set);
+      `executedCutoffHour` is a retention boundary a reader may trust only
+      then, because an interrupted round has deleted just the keys before
+      `cursor`. `roundInProgressCutoffHour` is diagnostic — never a boundary —
+      and `cursor` is the hex-encoded resume key of an in-flight round.
+      Values are published as stored: a family whose first round never finished
+      reports the sentinel the store holds, with `authoritative: false` saying
+      not to read it as an hour.
   - `complete` — false whenever a write-path phase is in flight or any entity
     could not be exported in full
   - `anchorMismatch` — present only when `expectedAnchor` did not match:
     `{expected, actual}`, with nothing exported
   - `entities[]` — `{kind, id, present, rowCount, typeScript, complete,
-    currentCapacity, currentKnowledge, currentError, daily}`, where
+currentCapacity, currentKnowledge, currentError, daily}`, where
     `typeScript` is `{codeHash, hashType, args}` read from the same pin (so the
     verifier can build a chain query without asking an endpoint that computes
     aggregates), and `daily[]` is
     `{date, capacityDelta, knowledgeDelta}` with every value an exact decimal
     string in shannons. `present`/`rowCount`/`current*` are `null` when the
     state withheld the numbers. `currentCapacity`/`currentKnowledge` accumulate
-    *every* stored row, not just the returned page; a token has no separately
+    _every_ stored row, not just the returned page; a token has no separately
     stored current value, so these are the same checked accumulation the public
     token endpoint performs. `currentError` carries why that accumulation
     failed (a corrupt row series), with the daily rows still exported so the
