@@ -417,6 +417,56 @@ Memory sizing is per network rather than a fixed host-wide peak:
   process physical footprint on macOS during bulk build; otherwise the per-network RAM share is
   used.
 
+### Live Write Buffers and Flush Frequency
+
+`atomic_flush = 1` means any single CF hitting its write buffer switches memtables for the
+**whole** database, so the smallest per-CF buffer decides how often all 59 CFs flush together.
+
+- Per-CF write buffers come from the memory profile, in three tiers: `write_buffer_mega_bytes`
+  (base 256 MB, clamped 64 MB-1 GB), `write_buffer_high_bytes` (base 128 MB, clamped 32-512 MB)
+  and `write_buffer_low_bytes` (base 32 MB, clamped 8-128 MB), each scaled by
+  `wbm_normal_bytes / 8 GB`. `live_cf_write_buffer(name, profile)` is the one function used by both
+  the open-time CF options and the live profile restored by `apply_normal_compaction_options`, so
+  a CF cannot be opened at one size and live-tuned to another. Live sync no longer pins the tiers
+  to fixed 8/4/2 MB — that is what produced the 2026-09-22 flush storm (POSTMORTEM `IDX-007`).
+- `max_write_buffer_number` is unchanged: 4 for the mega and high tiers, 2 for the low tier.
+- The live WriteBufferManager cap is unchanged at **384 MB** (`LIVE_WBM_CAP_BYTES`, applied as
+  `min(wbm_normal_bytes, 384 MB)`). Total memtable memory stays governed by that cap rather than by
+  per-CF minimums, so raising the per-CF tiers does not raise the ceiling.
+- `max_manifest_file_size` is 64 MB (`configured_options`). The MANIFEST is an append-only log of
+  every version edit and RocksDB only rolls it once it exceeds this size; the 1 GB default never
+  rolled. The option matters to the **primary only** — a secondary never writes a MANIFEST, it
+  replays the primary's — so a secondary opens faster because the primary's MANIFEST is bounded,
+  not because the option takes effect on the secondary.
+
+### Append-Only Commit Probe
+
+A non-bulk commit to the append-only store probes every put key for an existing value to enforce
+replay idempotency. That probe is one `multi_get_cf` per 4,096-key chunk
+(`APPEND_PROBE_CHUNK_KEYS` in `batch.rs`), not one `get_cf` per key — during the 2026-09-22
+catch-up it was 14,000-17,000 point reads per batch, inside the commit window.
+
+The append-only invariants are unchanged: duplicate keys within one batch fail before the probe
+runs; an existing key with the same value is skipped; an existing key with a different value fails
+the batch; deletes still go through `validate_append_delete_by_cf_name`. The chunking exists so
+peak memory is bounded by the chunk rather than by the batch, because the probe materializes the
+existing value of every key it asks for. Bulk sync is constrained to fresh-DB rebuilds and skips
+the probe entirely.
+
+### Flush and MANIFEST Diagnostics
+
+`memory_stats()` reports two exact standing consequences of flush behaviour:
+
+| Field             | Meaning                                                                                                                                                                                                                                                                        |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `sst_files_total` | SST files summed over L0-L6 of every CF. Recomputed at most every 30 s (`SST_FILE_COUNT_MAX_AGE`): the sweep is ~420 property reads per store under the DB mutex, and `memory_stats()` is sampled every 3 s during bulk sync.                                                  |
+| `manifest_bytes`  | Size of the MANIFEST named by this store's `CURRENT` file; 0 when it cannot be read (a just-created directory, or a rotation between the two reads). `MemoryStatsData` additionally carries `domain_manifest_bytes`, since the domain MANIFEST is the one a secondary replays. |
+
+Flush **round** counts are deliberately not exposed. RocksDB has no cumulative flush property
+(`num-running-flushes` and `mem-table-flush-pending` are instantaneous values), so a sampled gauge
+cannot see a millisecond-scale flush. Flush rounds are counted from `flush_started` in the RocksDB
+LOG.
+
 ## Config Keys
 
 | Parameter                         | Default            | Description                                                                    |
