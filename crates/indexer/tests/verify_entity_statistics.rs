@@ -389,6 +389,7 @@ fn context(wiring: &Wiring) -> CheckContext {
         }],
         verify_source_path: Some(wiring.declaration_path.clone()),
         evidence_dir: None,
+        source_profile: std::sync::Mutex::new(None),
     }
 }
 

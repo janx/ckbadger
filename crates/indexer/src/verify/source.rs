@@ -100,6 +100,10 @@ impl SourceQualification {
                 node_version: Some(profile.node_version.clone()),
                 indexer_tip: Some(profile.indexer_tip),
                 declaration_path: Some(profile.declaration_path.clone()),
+                declared_by: Some(profile.declared_by.clone()),
+                declared_at: Some(profile.declared_at.clone()),
+                block_filter: profile.block_filter.clone(),
+                cell_filter: profile.cell_filter.clone(),
             },
             SourceQualification::Inconclusive(reason) => SourceProfileReport {
                 status: "inconclusive".to_string(),
@@ -108,6 +112,10 @@ impl SourceQualification {
                 node_version: None,
                 indexer_tip: None,
                 declaration_path: None,
+                declared_by: None,
+                declared_at: None,
+                block_filter: None,
+                cell_filter: None,
             },
         }
     }
@@ -262,6 +270,7 @@ pub async fn collect_transactions(
 ) -> anyhow::Result<TransactionHistoryPage> {
     let mut records: Vec<IndexerTxRecord> = Vec::new();
     let mut cursor: Option<String> = None;
+    let mut seen_cursors: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut pages = 0usize;
 
     loop {
@@ -286,9 +295,13 @@ pub async fn collect_transactions(
             });
         }
 
-        if cursor.as_deref() == Some(page.last_cursor.as_str()) {
+        // Any repeat, not just a consecutive one: a cursor that cycles through
+        // a set of values would otherwise loop forever, re-appending the same
+        // records and inventing capacity out of one page.
+        if !seen_cursors.insert(page.last_cursor.clone()) {
             anyhow::bail!(
-                "node indexer cursor did not advance past '{}' after {} page(s) and {} record(s)",
+                "node indexer cursor '{}' repeated after {} page(s) and {} record(s): the \
+                 enumeration is cycling rather than advancing",
                 page.last_cursor,
                 pages,
                 records.len()
@@ -406,14 +419,24 @@ declared_at = "2026-09-22T00:00:00Z"
         .await
         .unwrap();
 
+        let report = qualification.to_report();
         let SourceQualification::Qualified(profile) = qualification else {
-            panic!("a declaration matching the live node must qualify: {qualification:?}");
+            panic!("a declaration matching the live node must qualify");
         };
         assert_eq!(profile.genesis_hash, GENESIS);
         assert_eq!(profile.node_version, NODE_VERSION);
         assert_eq!(profile.indexer_tip, 1_000);
         assert_eq!(profile.index_start_block, 0);
         assert_eq!(profile.declaration_path, path.to_string_lossy());
+
+        // The operator's statement is the evidence for coverage the runtime
+        // cannot re-derive, so the report must carry it, not just the file.
+        assert_eq!(report.status, "qualified");
+        assert_eq!(report.declared_by.as_deref(), Some("operator"));
+        assert_eq!(report.declared_at.as_deref(), Some("2026-09-22T00:00:00Z"));
+        assert_eq!(report.block_filter, None);
+        assert_eq!(report.cell_filter, None);
+        assert_eq!(report.indexer_tip, Some(1_000));
     }
 
     #[tokio::test]
@@ -685,6 +708,37 @@ declared_at = "2026-09-22T00:00:00Z"
         .expect_err("a repeating cursor would loop forever or silently duplicate history");
         assert!(error.to_string().contains("cursor"), "{error}");
         assert!(error.to_string().contains("0xc1"), "{error}");
+    }
+
+    /// A cursor that cycles through several values never repeats consecutively,
+    /// so comparing only neighbours would loop until the budget ran out and
+    /// report the same records many times over.
+    #[tokio::test]
+    async fn a_cursor_that_cycles_is_an_error_even_when_it_never_repeats_consecutively() {
+        let server = MockServer::start().await;
+        mount_pages(
+            &server,
+            vec![
+                json!({"objects":[record(1,0)], "last_cursor":"0xc1"}),
+                json!({"objects":[record(2,0)], "last_cursor":"0xc2"}),
+                json!({"objects":[record(3,0)], "last_cursor":"0xc1"}),
+            ],
+        )
+        .await;
+
+        let error = collect_transactions(
+            &CkbRpcClient::new(server.uri()),
+            &search_key(),
+            100,
+            PaginationBudget {
+                max_pages: 10,
+                max_records: 100,
+            },
+        )
+        .await
+        .expect_err("a cycling cursor must not be mistaken for progress");
+        assert!(error.to_string().contains("0xc1"), "{error}");
+        assert!(error.to_string().contains("cycling"), "{error}");
     }
 
     #[tokio::test]

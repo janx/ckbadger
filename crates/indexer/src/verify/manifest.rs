@@ -136,6 +136,10 @@ mod tests {
                 node_version: Some("0.119.0".to_string()),
                 indexer_tip: Some(1_100),
                 declaration_path: Some("/w/verify-source.toml".to_string()),
+                declared_by: Some("operator".to_string()),
+                declared_at: Some("2026-09-22T00:00:00Z".to_string()),
+                block_filter: None,
+                cell_filter: None,
             },
         )
     }

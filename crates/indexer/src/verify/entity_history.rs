@@ -864,6 +864,12 @@ impl Check for EntityCapacityHistoryMatchesChain {
             &scripts,
         ))?;
 
+        // Publish what the expected values rest on, whether or not it
+        // qualified: a run whose source was rejected must say so in its report.
+        *ctx.source_profile
+            .lock()
+            .expect("verify source profile lock poisoned") = Some(work.qualification.to_report());
+
         let SourceQualification::Qualified(profile) = &work.qualification else {
             let SourceQualification::Inconclusive(reason) = &work.qualification else {
                 unreachable!("qualification is one of two variants")

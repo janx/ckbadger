@@ -150,6 +150,12 @@ fn parse_format(s: &str) -> Result<OutputFormat, String> {
     }
 }
 
+/// The registry, for tests that assert properties across every check.
+#[cfg(test)]
+pub(crate) fn all_checks_for_test() -> Vec<Box<dyn Check>> {
+    all_checks()
+}
+
 /// Collect all registered checks.
 fn all_checks() -> Vec<Box<dyn Check>> {
     let mut checks: Vec<Box<dyn Check>> = Vec::new();
@@ -269,10 +275,8 @@ pub fn run(args: VerifyArgs) -> anyhow::Result<VerifyReport> {
         cache_dir,
         entities,
         verify_source_path: args.verify_source.as_ref().map(PathBuf::from),
-        evidence_dir: evidence_root
-            .as_ref()
-            .map(|root| root.join(&run_id))
-            .clone(),
+        evidence_dir: evidence_root.as_ref().map(|root| root.join(&run_id)),
+        source_profile: std::sync::Mutex::new(None),
     };
 
     validate_check_selection(&all, args.checks.as_deref(), args.depth)?;
@@ -352,6 +356,13 @@ pub fn run(args: VerifyArgs) -> anyhow::Result<VerifyReport> {
     }
 
     let mut verify_report = VerifyReport::new(run_id, network, results, start.elapsed());
+    // Whatever history source the chain-derived checks qualified is what this
+    // report's expected values rest on, so it is reported alongside them.
+    verify_report.source = ctx
+        .source_profile
+        .lock()
+        .expect("verify source profile lock poisoned")
+        .take();
 
     // Persisting the evidence is part of the run: a report that could not be
     // written is an Error, not a silently unrecorded pass.

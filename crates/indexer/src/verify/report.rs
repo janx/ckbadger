@@ -294,6 +294,15 @@ pub struct SourceProfileReport {
     pub indexer_tip: Option<u64>,
     /// Operator declaration file this profile was read from.
     pub declaration_path: Option<String>,
+    /// Who declared the index's coverage, and when. The operator's statement is
+    /// the evidence for history the runtime cannot re-derive, so it is reported
+    /// rather than left in a file nobody reads back.
+    pub declared_by: Option<String>,
+    pub declared_at: Option<String>,
+    /// Declared block/cell filters. A filtered index can omit records, so an
+    /// empty value here is part of what makes the source qualified.
+    pub block_filter: Option<String>,
+    pub cell_filter: Option<String>,
 }
 
 /// One network's verification result.

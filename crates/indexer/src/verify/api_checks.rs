@@ -1193,6 +1193,11 @@ impl Check for BlockHashRoundtrip {
     fn name(&self) -> &'static str {
         "block_hash_roundtrip"
     }
+
+    /// Reads the sample count: at 0 it has nothing to select.
+    fn requires_sampling(&self) -> bool {
+        true
+    }
     fn description(&self) -> &'static str {
         "Block number → hash → number roundtrip consistency"
     }
@@ -1246,6 +1251,11 @@ pub struct BlockParentChain;
 impl Check for BlockParentChain {
     fn name(&self) -> &'static str {
         "block_parent_chain"
+    }
+
+    /// Reads the sample count: at 0 it has nothing to select.
+    fn requires_sampling(&self) -> bool {
+        true
     }
     fn description(&self) -> &'static str {
         "Block parentHash matches previous block hash"
@@ -1468,6 +1478,11 @@ pub struct AddressBalanceSpotCheck;
 impl Check for AddressBalanceSpotCheck {
     fn name(&self) -> &'static str {
         "address_balance_spot_check"
+    }
+
+    /// Reads the sample count: at 0 it has nothing to select.
+    fn requires_sampling(&self) -> bool {
+        true
     }
     fn description(&self) -> &'static str {
         "Bounded address samples match their exact live-cell balances"
@@ -2898,6 +2913,11 @@ impl Check for RpcBlockSpotCheck {
     fn name(&self) -> &'static str {
         "rpc_block_spot_check"
     }
+
+    /// Reads the sample count: at 0 it has nothing to select.
+    fn requires_sampling(&self) -> bool {
+        true
+    }
     fn description(&self) -> &'static str {
         "Compare block data against CKB RPC node"
     }
@@ -2972,6 +2992,11 @@ pub struct TokenActivityTransferBidirectional;
 impl Check for TokenActivityTransferBidirectional {
     fn name(&self) -> &'static str {
         "token_activity_transfer_bidirectional"
+    }
+
+    /// Reads the sample count: at 0 it has nothing to select.
+    fn requires_sampling(&self) -> bool {
+        true
     }
     fn description(&self) -> &'static str {
         "Token activity net delta matches token transfers (address/tx/token)"
@@ -3205,6 +3230,11 @@ impl Check for SporeOwnerRoundtrip {
     fn name(&self) -> &'static str {
         "spore_owner_roundtrip"
     }
+
+    /// Reads the sample count: at 0 it has nothing to select.
+    fn requires_sampling(&self) -> bool {
+        true
+    }
     fn description(&self) -> &'static str {
         "Spore cluster items roundtrip through owner endpoint"
     }
@@ -3362,6 +3392,11 @@ pub struct ObjectAssetCollectionConsistency;
 impl Check for ObjectAssetCollectionConsistency {
     fn name(&self) -> &'static str {
         "object_asset_collection_consistency"
+    }
+
+    /// Reads the sample count: at 0 it has nothing to select.
+    fn requires_sampling(&self) -> bool {
+        true
     }
     fn description(&self) -> &'static str {
         "Object list/detail/items totals are consistent"
@@ -4487,6 +4522,7 @@ mod tests {
             entities: Vec::new(),
             verify_source_path: None,
             evidence_dir: None,
+            source_profile: std::sync::Mutex::new(None),
         }
     }
 
@@ -4822,6 +4858,7 @@ mod tests {
             entities: Vec::new(),
             verify_source_path: None,
             evidence_dir: None,
+            source_profile: std::sync::Mutex::new(None),
         }
     }
 
@@ -5047,6 +5084,7 @@ mod tests {
             entities: Vec::new(),
             verify_source_path: None,
             evidence_dir: None,
+            source_profile: std::sync::Mutex::new(None),
         };
 
         let response: CursorPageWithTotal<serde_json::Value> =
@@ -5406,6 +5444,7 @@ mod tests {
             entities: Vec::new(),
             verify_source_path: None,
             evidence_dir: None,
+            source_profile: std::sync::Mutex::new(None),
         }
     }
 

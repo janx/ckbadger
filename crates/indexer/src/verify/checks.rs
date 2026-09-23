@@ -74,6 +74,12 @@ pub struct CheckContext {
     pub verify_source_path: Option<PathBuf>,
     /// Where this run's manifest and evidence are written.
     pub evidence_dir: Option<PathBuf>,
+    /// Where a chain-derived check publishes the history source it qualified.
+    ///
+    /// The run report has to say what its expected values were derived from,
+    /// and only the check that qualified the source knows; this is the one
+    /// channel back, rather than a second qualification in the runner.
+    pub source_profile: std::sync::Mutex<Option<super::report::SourceProfileReport>>,
 }
 
 /// Progress reporter wrapping indicatif. Checks call .inc() to advance progress.
@@ -329,11 +335,16 @@ pub trait Check: Send + Sync {
     fn requires_explorer(&self) -> bool {
         false
     }
-    /// Whether this check draws a sample. A sampling check run with
-    /// `--sample-count 0` has nothing to verify, which is a request error, not
-    /// a pass over an empty set.
+    /// Whether this check actually reads `--sample-count`. Only those checks
+    /// have nothing to verify at `--sample-count 0`, which is then a request
+    /// error rather than a pass over an empty set.
+    ///
+    /// Deliberately not "is it in the sampling tier": most sampling-tier checks
+    /// validate a whole chart or index and never look at `sample_count`, so
+    /// tying the two would report them as parameter errors for a parameter they
+    /// ignore.
     fn requires_sampling(&self) -> bool {
-        self.tier() == CheckTier::Sampling
+        false
     }
     /// Estimated total items (for progress bar length). None = use spinner instead.
     fn estimated_total(&self, _ctx: &CheckContext) -> Option<u64> {
@@ -453,7 +464,9 @@ pub(super) fn api_get<T: serde::de::DeserializeOwned>(
             let detail = if body.is_empty() {
                 String::new()
             } else {
-                format!(": {}", &body[..body.len().min(512)])
+                // Truncate on character boundaries: a byte slice can split a
+                // multi-byte sequence and panic while reporting an error.
+                format!(": {}", body.chars().take(512).collect::<String>())
             };
             anyhow::bail!("GET {} returned {}{}", path, status, detail);
         }
@@ -489,7 +502,7 @@ pub(super) fn api_post<B: serde::Serialize, T: serde::de::DeserializeOwned>(
             if body.is_empty() {
                 String::new()
             } else {
-                format!(": {}", &body[..body.len().min(512)])
+                format!(": {}", body.chars().take(512).collect::<String>())
             }
         );
     }
@@ -529,6 +542,7 @@ mod status_model_tests {
             entities: Vec::new(),
             verify_source_path: None,
             evidence_dir: None,
+            source_profile: std::sync::Mutex::new(None),
         }
     }
 
@@ -536,6 +550,7 @@ mod status_model_tests {
         tier: CheckTier,
         rpc: bool,
         explorer: bool,
+        sampling: bool,
         outcome: fn() -> anyhow::Result<CheckResult>,
     }
 
@@ -555,6 +570,9 @@ mod status_model_tests {
         fn requires_explorer(&self) -> bool {
             self.explorer
         }
+        fn requires_sampling(&self) -> bool {
+            self.sampling
+        }
         fn run(
             &self,
             _ctx: &CheckContext,
@@ -569,6 +587,7 @@ mod status_model_tests {
             tier,
             rpc: false,
             explorer: false,
+            sampling: false,
             outcome,
         }
     }
@@ -689,17 +708,30 @@ mod status_model_tests {
     }
 
     #[test]
-    fn a_sampling_check_with_zero_samples_is_a_parameter_error() {
-        let check = stub(CheckTier::Sampling, || Ok(CheckResult::pass(1)));
+    fn a_check_that_reads_the_sample_count_errors_when_it_is_zero() {
+        let check = Stub {
+            sampling: true,
+            ..stub(CheckTier::Sampling, || Ok(CheckResult::pass(1)))
+        };
         let completed = execute_check(&check, &ctx(None, None, 0), &progress());
 
         assert_eq!(
             completed.status,
             CheckStatus::Error,
-            "sample_count=0 on a sampling check is a request error, never a pass"
+            "sample_count=0 for a check that samples is a request error, never a pass"
         );
         let reason = completed.status_reason.clone().unwrap_or_default();
         assert!(reason.contains("sample-count"), "{reason}");
+    }
+
+    /// Most sampling-tier checks validate a whole chart or index and never read
+    /// `sample_count`. Reporting them as parameter errors would mislabel ~30
+    /// checks over a parameter they ignore.
+    #[test]
+    fn a_sampling_tier_check_that_ignores_the_sample_count_is_unaffected() {
+        let check = stub(CheckTier::Sampling, || Ok(CheckResult::pass(1)));
+        let completed = execute_check(&check, &ctx(None, None, 0), &progress());
+        assert_eq!(completed.status, CheckStatus::Pass);
     }
 
     #[test]
@@ -707,5 +739,30 @@ mod status_model_tests {
         let check = stub(CheckTier::Fast, || Ok(CheckResult::pass(1)));
         let completed = execute_check(&check, &ctx(None, None, 0), &progress());
         assert_eq!(completed.status, CheckStatus::Pass);
+    }
+
+    /// Exactly the checks that read `--sample-count` declare it. A check added
+    /// later that samples but does not declare it would pass over an empty
+    /// selection at `--sample-count 0`.
+    #[test]
+    fn the_registry_declares_sampling_only_where_the_count_is_read() {
+        let declared: Vec<&str> = crate::verify::all_checks_for_test()
+            .iter()
+            .filter(|c| c.requires_sampling())
+            .map(|c| c.name())
+            .collect();
+        let mut expected = vec![
+            "block_hash_roundtrip",
+            "block_parent_chain",
+            "address_balance_spot_check",
+            "rpc_block_spot_check",
+            "token_activity_transfer_bidirectional",
+            "spore_owner_roundtrip",
+            "object_asset_collection_consistency",
+        ];
+        let mut declared = declared;
+        declared.sort_unstable();
+        expected.sort_unstable();
+        assert_eq!(declared, expected);
     }
 }
