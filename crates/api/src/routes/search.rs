@@ -120,6 +120,31 @@ fn object_collection_href(standard: &str, collection_hex: &str) -> String {
     }
 }
 
+/// The `.cell` label a query names, if it could be one.
+///
+/// The grammar is spec §1.2: `[a-z0-9-]`, at most one dot (a sub-name), at
+/// most 40 characters. The `.cell` suffix is optional — `alice` and
+/// `alice.cell` are the same name — and the empty label is the ring root, not
+/// an identity.
+fn dotcell_label_from_query(query: &str) -> Option<String> {
+    let label = query
+        .trim()
+        .to_ascii_lowercase()
+        .strip_suffix(".cell")
+        .map(str::to_string)
+        .unwrap_or_else(|| query.trim().to_ascii_lowercase());
+    if label.is_empty() || label.chars().count() > 40 || label.matches('.').count() > 1 {
+        return None;
+    }
+    if !label
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '.')
+    {
+        return None;
+    }
+    Some(label)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SearchScope {
     All,
@@ -287,6 +312,31 @@ async fn search(
     }
 
     // Batch all blocking store reads into spawn_blocking calls
+
+    // 0) `.cell` name — a name hashes straight to its id, so this is one point
+    //    lookup, never a scan or a cache read.
+    if scope_allows(scope, &[SearchScope::Asset]) {
+        if let Some(label) = dotcell_label_from_query(scoped_query) {
+            let identity_id = ckbadger_store::types::derive_dotcell_id(&label);
+            let store = state.store.clone();
+            let entry = tokio::task::spawn_blocking(move || store.get_identity(&identity_id))
+                .await
+                .map_err(|e| ApiError::internal(e.to_string()))?
+                .map_err(|e| ApiError::internal(e.to_string()))?;
+            if entry.is_some_and(|entry| {
+                entry.standard == ckbadger_store::types::IdentityStandard::DotCell
+            }) {
+                let id_hex = format!("0x{}", hex::encode(identity_id));
+                results.push(SearchResult {
+                    result_type: "identity".to_string(),
+                    id: id_hex.clone(),
+                    label: format!("{label}.cell"),
+                    url: format!("/identities/dotcell/{id_hex}"),
+                    match_kind: "exact".to_string(),
+                });
+            }
+        }
+    }
 
     // 1) Block number lookup
     if scope_allows(scope, &[SearchScope::Block]) {

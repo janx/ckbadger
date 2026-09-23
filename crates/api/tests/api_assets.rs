@@ -3515,3 +3515,645 @@ async fn test_assets_list_token_capacity_after_real_writer_rollback() {
     );
     assert_eq!(row_of(orphan_only)["ownedKnowledge"], "0");
 }
+
+// ── `.cell` (DotCell) identity ────────────────────────────────────────────
+//
+// Ownership is a 20-byte lock-hash prefix in the cell's data, so every one of
+// these asserts what the chain says and what the API could resolve from it —
+// never a fabricated lock hash or address.
+
+const DOTCELL_ACCOUNT_CODE_HASH_MAINNET: &str =
+    "0xd96cee56727a2bb9a21408c154d278df5095fb4b4dcfd50516156424479bfe54";
+const DOTCELL_ACCOUNT_LOCK_CODE_HASH_MAINNET: &str =
+    "0x9f0f0ba142b58cba2fe047546cfd8481d5b1769437cd3533e6458b21b61871ab";
+const DOTCELL_SALE_LOCK_CODE_HASH_TESTNET: &str =
+    "0x498ab6b49b6b25b3c47fcea74bd8a4447bc4efda6417809152a846e058ad0ae4";
+const DOTCELL_NAMESPACE_MAINNET: &str = "0xb4f4302965b7d6421481a520ee7eb5971a5e808c";
+/// `blake2b("support")[..20]`, the real mainnet name id.
+const SUPPORT_ID: &str = "0x62d71147ac82b83c8531126cacb0d2f072bfd94a";
+/// The mainnet owner of `support.cell` — a 20-byte prefix, as stored on chain.
+const SUPPORT_OWNER20: &str = "0x57d926a44d83fc13b21ce037b1e31f4223e3c867";
+/// The full secp lock hash that prefix resolves to.
+const SUPPORT_OWNER_LOCK_HASH: &str =
+    "0x57d926a44d83fc13b21ce037b1e31f4223e3c867cfa3f60e1324d5bfd5cd742d";
+const DOTCELL_EXPIRY: u64 = 1_821_507_678;
+
+fn hex20(hex: &str) -> [u8; 20] {
+    hex::decode(hex.trim_start_matches("0x"))
+        .unwrap()
+        .try_into()
+        .unwrap()
+}
+
+fn hex32(hex: &str) -> [u8; 32] {
+    hex::decode(hex.trim_start_matches("0x"))
+        .unwrap()
+        .try_into()
+        .unwrap()
+}
+
+fn dotcell_extra(label: &str, owner20: [u8; 20], manager20: [u8; 20]) -> IdentityExtra {
+    IdentityExtra::DotCell {
+        label: label.to_string(),
+        namespace_args: hex20(DOTCELL_NAMESPACE_MAINNET),
+        layout_version: 3,
+        expired_at: DOTCELL_EXPIRY,
+        owner_hash20: owner20,
+        manager_hash20: manager20,
+        next_id: [0x65; 20],
+        records_hash: [0x72; 32],
+        records: Vec::new(),
+        parent_id: None,
+    }
+}
+
+/// Seed one `.cell` name, its collection rows and the tip header the expiry
+/// state is measured against.
+fn seed_dotcell_name(
+    store: &Arc<CkbadgerStore>,
+    id: [u8; 20],
+    label: &str,
+    owner20: [u8; 20],
+    extra: IdentityExtra,
+    is_live: bool,
+    tip_timestamp_ms: i64,
+) {
+    let create_tx = vec![0xD1; 32];
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_identity(
+        &id,
+        &IdentityEntry {
+            standard: IdentityStandard::DotCell,
+            owner_lock_hash: None,
+            name: Some(format!("{label}.cell")),
+            is_live,
+            created_at_block: 20_518_306,
+            created_at_tx: create_tx.clone(),
+            extra,
+        },
+    );
+    batch.put_identity_by_collection(&ckbadger_store::types::DOTCELL_SENTINEL_COLLECTION, &id);
+    batch.put_identity_collection_aggregate(
+        &ckbadger_store::types::DOTCELL_SENTINEL_COLLECTION,
+        &IdentityCollectionAggregate {
+            standard: IdentityStandard::DotCell,
+            name: Some(".cell".to_string()),
+            total_count: 1,
+            live_count: if is_live { 1 } else { 0 },
+            holders_count: if is_live { 1 } else { 0 },
+            activities_count: 1,
+        },
+    );
+    if is_live {
+        batch.put_dotcell_name_by_owner(&owner20, &id);
+        batch.put_identity_owner20_count(
+            &ckbadger_store::types::DOTCELL_SENTINEL_COLLECTION,
+            &owner20,
+            1,
+        );
+        batch.put_spore_outpoint(&create_tx, 1, &id);
+        let name_cell = LiveCellInfo {
+            capacity: 240_00000000,
+            lock_script_hash: vec![0x0A; 32],
+            lock_code_hash: hex::decode(
+                DOTCELL_ACCOUNT_LOCK_CODE_HASH_MAINNET.trim_start_matches("0x"),
+            )
+            .unwrap(),
+            lock_hash_type: 1,
+            lock_args: Vec::new(),
+            type_script_hash: Some(vec![0x0B; 32]),
+            type_code_hash: Some(
+                hex::decode(DOTCELL_ACCOUNT_CODE_HASH_MAINNET.trim_start_matches("0x")).unwrap(),
+            ),
+            type_hash_type: Some(1),
+            type_args: Some(hex20(DOTCELL_NAMESPACE_MAINNET).to_vec()),
+            data_size: 105,
+            occupied_capacity: 200_00000000,
+            udt_amount: None,
+            data_hash: None,
+        };
+        batch.put_cell_payload_by_outpoint(&create_tx, 1, &name_cell);
+        batch.put_live_cell_marker_by_outpoint(&create_tx, 1, 20_518_306);
+    }
+    batch.put_block_header(
+        20_518_306,
+        &CachedBlockHeader {
+            hash: vec![0xB0; 32],
+            parent_hash: vec![0xB1; 32],
+            timestamp: tip_timestamp_ms,
+            epoch_number: 10,
+            epoch_index: 0,
+            epoch_length: 1800,
+            dao: vec![0u8; 32],
+            transactions_count: 1,
+            uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
+            cycles: None,
+        },
+    );
+    batch.commit().unwrap();
+}
+
+/// Make the owner prefix resolvable to a real secp lock.
+fn seed_owner_lock(store: &Arc<CkbadgerStore>) {
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_lock_script(
+        &hex32(SUPPORT_OWNER_LOCK_HASH),
+        &ckbadger_store::types::LockScriptEntry {
+            code_hash: hex::decode(
+                "9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+            )
+            .unwrap(),
+            hash_type: 1,
+            args: vec![0xE1; 20],
+        },
+    );
+    batch.commit().unwrap();
+}
+
+async fn dotcell_get(app: axum::Router, uri: &str) -> (StatusCode, serde_json::Value) {
+    let response = app
+        .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json = if body.is_empty() {
+        serde_json::Value::Null
+    } else {
+        serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null)
+    };
+    (status, json)
+}
+
+#[tokio::test]
+async fn test_assets_identities_dotcell_collection_aliases() {
+    let store = test_store();
+    seed_dotcell_name(
+        &store,
+        hex20(SUPPORT_ID),
+        "support",
+        hex20(SUPPORT_OWNER20),
+        dotcell_extra("support", hex20(SUPPORT_OWNER20), hex20(SUPPORT_OWNER20)),
+        true,
+        1_700_000_000_000,
+    );
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    for alias in [
+        "dotcell",
+        ".cell",
+        &format!(
+            "0x{}",
+            hex::encode(ckbadger_store::types::DOTCELL_SENTINEL_COLLECTION)
+        ),
+    ] {
+        let (status, body) = dotcell_get(
+            app.clone(),
+            &format!("/api/v1/assets/identities/{}", alias.replace('.', "%2E")),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "alias {alias}: {body}");
+        assert_eq!(body["standard"], "dotcell", "alias {alias}");
+        assert_eq!(body["liveCount"], 1);
+    }
+}
+
+#[tokio::test]
+async fn test_assets_dotcell_item_detail_by_id_and_by_name() {
+    let store = test_store();
+    seed_dotcell_name(
+        &store,
+        hex20(SUPPORT_ID),
+        "support",
+        hex20(SUPPORT_OWNER20),
+        dotcell_extra("support", hex20(SUPPORT_OWNER20), hex20(SUPPORT_OWNER20)),
+        true,
+        1_700_000_000_000,
+    );
+    seed_owner_lock(&store);
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let mut seen: Vec<serde_json::Value> = Vec::new();
+    for reference in [SUPPORT_ID, "support", "support.cell"] {
+        let (status, body) = dotcell_get(
+            app.clone(),
+            &format!("/api/v1/assets/identities/dotcell/items/{reference}"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{reference}: {body}");
+        seen.push(body.clone());
+    }
+    assert_eq!(seen[0], seen[1], "a bare label resolves to the same name");
+    assert_eq!(seen[1], seen[2], "the .cell suffix is optional");
+
+    let item = &seen[0];
+    assert_eq!(item["identityId"], SUPPORT_ID);
+    assert_eq!(item["label"], "support");
+    assert_eq!(item["name"], "support.cell");
+    assert_eq!(item["isLive"], true);
+    assert_eq!(item["expiredAt"], DOTCELL_EXPIRY);
+    assert_eq!(item["state"], "active");
+    assert_eq!(item["graceEndsAt"], DOTCELL_EXPIRY + 2_592_000);
+    assert_eq!(item["owner"]["hashPrefix"], SUPPORT_OWNER20);
+    assert_eq!(item["owner"]["lockHash"], SUPPORT_OWNER_LOCK_HASH);
+    assert!(
+        item["owner"]["address"]
+            .as_str()
+            .unwrap()
+            .starts_with("ckb"),
+        "{item}"
+    );
+    assert_eq!(item["manager"]["hashPrefix"], SUPPORT_OWNER20);
+    assert_eq!(item["records"].as_array().unwrap().len(), 0);
+    assert_eq!(item["parent"], serde_json::Value::Null);
+    assert_eq!(item["children"].as_array().unwrap().len(), 0);
+    assert_eq!(item["liveOutPoint"]["index"], 1);
+    assert_eq!(item["sale"], serde_json::Value::Null);
+}
+
+#[tokio::test]
+async fn test_assets_dotcell_item_state_grace_free_and_recycled() {
+    for (tip_secs, expected) in [
+        (DOTCELL_EXPIRY - 10, "active"),
+        (DOTCELL_EXPIRY + 10 * 86_400, "grace"),
+        (DOTCELL_EXPIRY + 40 * 86_400, "free"),
+    ] {
+        let store = test_store();
+        seed_dotcell_name(
+            &store,
+            hex20(SUPPORT_ID),
+            "support",
+            hex20(SUPPORT_OWNER20),
+            dotcell_extra("support", hex20(SUPPORT_OWNER20), hex20(SUPPORT_OWNER20)),
+            true,
+            (tip_secs * 1000) as i64,
+        );
+        let config = test_config(store);
+        let app = create_router(config).await;
+        let (status, body) =
+            dotcell_get(app, "/api/v1/assets/identities/dotcell/items/support").await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["state"], expected, "tip={tip_secs}");
+    }
+
+    let store = test_store();
+    seed_dotcell_name(
+        &store,
+        hex20(SUPPORT_ID),
+        "support",
+        hex20(SUPPORT_OWNER20),
+        dotcell_extra("support", hex20(SUPPORT_OWNER20), hex20(SUPPORT_OWNER20)),
+        false,
+        1_700_000_000_000,
+    );
+    let config = test_config(store);
+    let app = create_router(config).await;
+    let (_, body) = dotcell_get(app, "/api/v1/assets/identities/dotcell/items/support").await;
+    assert_eq!(body["state"], "recycled");
+    assert_eq!(body["liveOutPoint"], serde_json::Value::Null);
+}
+
+#[tokio::test]
+async fn test_assets_dotcell_item_sale_state_resolves_through_sale_lock() {
+    let store = test_store();
+    // The Sale Lock instance: args = seller lock hash ‖ price (u64 LE).
+    let seller32 = hex32(SUPPORT_OWNER_LOCK_HASH);
+    let mut sale_args = seller32.to_vec();
+    sale_args.extend_from_slice(&10_000_000_000u64.to_le_bytes());
+    let sale_lock = ckbadger_store::types::LockScriptEntry {
+        code_hash: hex::decode(DOTCELL_SALE_LOCK_CODE_HASH_TESTNET.trim_start_matches("0x"))
+            .unwrap(),
+        hash_type: 1,
+        args: sale_args,
+    };
+    let sale_lock_hash = compute_script_hash(&sale_lock.code_hash, 1, &sale_lock.args);
+    let sale20: [u8; 20] = sale_lock_hash[..20].try_into().unwrap();
+
+    seed_dotcell_name(
+        &store,
+        hex20(SUPPORT_ID),
+        "support",
+        sale20,
+        dotcell_extra("support", sale20, sale20),
+        true,
+        1_700_000_000_000,
+    );
+    seed_owner_lock(&store);
+    {
+        let mut batch = StoreBatch::new(store.as_ref());
+        batch.put_lock_script(&sale_lock_hash, &sale_lock);
+        batch.commit().unwrap();
+    }
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+    let (status, body) = dotcell_get(app, "/api/v1/assets/identities/dotcell/items/support").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let sale = &body["sale"];
+    assert_eq!(sale["priceShannons"], "10000000000");
+    assert_eq!(sale["seller"]["lockHash"], SUPPORT_OWNER_LOCK_HASH);
+    assert!(sale["seller"]["address"]
+        .as_str()
+        .unwrap()
+        .starts_with("ckb"));
+    assert_eq!(
+        body["owner"]["hashPrefix"],
+        format!("0x{}", hex::encode(sale20)),
+        "the chain says a Sale Lock instance owns the name while it is listed"
+    );
+}
+
+#[tokio::test]
+async fn test_assets_dotcell_unresolved_owner_prefix_is_reported_not_fabricated() {
+    let store = test_store();
+    let unknown = hex20("0x1e3a88ca5cc39f1bd38c091b53e33b7c29ebd019");
+    seed_dotcell_name(
+        &store,
+        hex20(SUPPORT_ID),
+        "support",
+        unknown,
+        dotcell_extra("support", unknown, unknown),
+        true,
+        1_700_000_000_000,
+    );
+    let config = test_config(store);
+    let app = create_router(config).await;
+    let (status, body) = dotcell_get(app, "/api/v1/assets/identities/dotcell/items/support").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body["owner"]["hashPrefix"],
+        "0x1e3a88ca5cc39f1bd38c091b53e33b7c29ebd019"
+    );
+    assert_eq!(body["owner"]["lockHash"], serde_json::Value::Null);
+    assert_eq!(body["owner"]["address"], serde_json::Value::Null);
+}
+
+#[tokio::test]
+async fn test_assets_dotcell_records_decode_ckb_address_values() {
+    let store = test_store();
+    let extra = IdentityExtra::DotCell {
+        label: "maria".to_string(),
+        namespace_args: hex20(DOTCELL_NAMESPACE_MAINNET),
+        layout_version: 3,
+        expired_at: DOTCELL_EXPIRY,
+        owner_hash20: hex20(SUPPORT_OWNER20),
+        manager_hash20: hex20(SUPPORT_OWNER20),
+        next_id: [0x65; 20],
+        records_hash: [0x3b; 32],
+        records: vec![
+            ckbadger_store::types::DotCellRecord {
+                key: "address.309".to_string(),
+                label: String::new(),
+                value: b"ckt1qrfrwcdnvssswdwpn3s9v8fp87emat306ctjwsm3nmlkjg8qyza2cqgqq9x75zu4l7gld606r6eyd00m4lzy3zkxkq4nywzu".to_vec(),
+                ttl: 300,
+            },
+            ckbadger_store::types::DotCellRecord {
+                key: "profile.email".to_string(),
+                label: String::new(),
+                value: b"maria@example.com".to_vec(),
+                ttl: 300,
+            },
+        ],
+        parent_id: None,
+    };
+    let maria_id = hex20("0x2224948f63975a7a0741139cd5d2a45b9fb02c03");
+    seed_dotcell_name(
+        &store,
+        maria_id,
+        "maria",
+        hex20(SUPPORT_OWNER20),
+        extra,
+        true,
+        1_700_000_000_000,
+    );
+    let config = test_config(store);
+    let app = create_router(config).await;
+    let (status, body) = dotcell_get(app, "/api/v1/assets/identities/dotcell/items/maria").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let records = body["records"].as_array().unwrap();
+    assert_eq!(records.len(), 2);
+    assert_eq!(records[0]["key"], "address.309");
+    assert_eq!(records[0]["ttl"], 300);
+    assert_eq!(
+        records[0]["valueUtf8"],
+        "ckt1qrfrwcdnvssswdwpn3s9v8fp87emat306ctjwsm3nmlkjg8qyza2cqgqq9x75zu4l7gld606r6eyd00m4lzy3zkxkq4nywzu"
+    );
+    assert_eq!(
+        records[0]["decodedAddress"]["address"],
+        "ckt1qrfrwcdnvssswdwpn3s9v8fp87emat306ctjwsm3nmlkjg8qyza2cqgqq9x75zu4l7gld606r6eyd00m4lzy3zkxkq4nywzu"
+    );
+    assert!(records[0]["decodedAddress"]["lockHash"]
+        .as_str()
+        .unwrap()
+        .starts_with("0x"));
+    assert_eq!(records[1]["decodedAddress"], serde_json::Value::Null);
+}
+
+#[tokio::test]
+async fn test_assets_dotcell_holders_are_owner20() {
+    let store = test_store();
+    seed_dotcell_name(
+        &store,
+        hex20(SUPPORT_ID),
+        "support",
+        hex20(SUPPORT_OWNER20),
+        dotcell_extra("support", hex20(SUPPORT_OWNER20), hex20(SUPPORT_OWNER20)),
+        true,
+        1_700_000_000_000,
+    );
+    seed_owner_lock(&store);
+    let config = test_config(store);
+    let app = create_router(config).await;
+    let (status, body) = dotcell_get(app, "/api/v1/assets/identities/dotcell/holders").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let rows = body["data"].as_array().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["ownerHashPrefix"], SUPPORT_OWNER20);
+    assert_eq!(rows[0]["itemCount"], 1);
+    assert_eq!(
+        rows[0]["lockScriptHash"], SUPPORT_OWNER_LOCK_HASH,
+        "a resolvable prefix still reports the full hash"
+    );
+}
+
+#[tokio::test]
+async fn test_assets_dotcell_children_of_parent() {
+    let store = test_store();
+    let parent_id = hex20("0x4144e782dfaadeeb07625e11e4b6de717893aacb");
+    let child_id = hex20("0xbb008a3e9045554d5b1b609c072b59b404320f9f");
+    seed_dotcell_name(
+        &store,
+        parent_id,
+        "v3-first-name",
+        hex20(SUPPORT_OWNER20),
+        dotcell_extra(
+            "v3-first-name",
+            hex20(SUPPORT_OWNER20),
+            hex20(SUPPORT_OWNER20),
+        ),
+        true,
+        1_700_000_000_000,
+    );
+    {
+        let extra = dotcell_extra(
+            "shop.v3-first-name",
+            hex20(SUPPORT_OWNER20),
+            hex20(SUPPORT_OWNER20),
+        );
+        let extra = match extra {
+            IdentityExtra::DotCell {
+                label,
+                namespace_args,
+                layout_version,
+                expired_at,
+                owner_hash20,
+                manager_hash20,
+                next_id,
+                records_hash,
+                records,
+                ..
+            } => IdentityExtra::DotCell {
+                label,
+                namespace_args,
+                layout_version,
+                expired_at,
+                owner_hash20,
+                manager_hash20,
+                next_id,
+                records_hash,
+                records,
+                parent_id: Some(parent_id),
+            },
+            other => other,
+        };
+        let mut batch = StoreBatch::new(store.as_ref());
+        batch.put_identity(
+            &child_id,
+            &IdentityEntry {
+                standard: IdentityStandard::DotCell,
+                owner_lock_hash: None,
+                name: Some("shop.v3-first-name.cell".to_string()),
+                is_live: true,
+                created_at_block: 20_518_307,
+                created_at_tx: vec![0xD2; 32],
+                extra,
+            },
+        );
+        batch.put_identity_by_collection(&ckbadger_store::keys::pad_id_32(&parent_id), &child_id);
+        batch.put_identity_by_collection(
+            &ckbadger_store::types::DOTCELL_SENTINEL_COLLECTION,
+            &child_id,
+        );
+        batch.commit().unwrap();
+    }
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+    let (status, body) = dotcell_get(
+        app.clone(),
+        "/api/v1/assets/identities/dotcell/items/v3-first-name",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let children = body["children"].as_array().unwrap();
+    assert_eq!(children.len(), 1);
+    assert_eq!(children[0]["label"], "shop.v3-first-name");
+    assert_eq!(children[0]["name"], "shop.v3-first-name.cell");
+
+    let (_, child) = dotcell_get(
+        app,
+        "/api/v1/assets/identities/dotcell/items/shop.v3-first-name",
+    )
+    .await;
+    assert_eq!(child["parent"]["label"], "v3-first-name");
+}
+
+#[tokio::test]
+async fn test_assets_dotcell_ring_endpoint() {
+    let store = test_store();
+    seed_dotcell_name(
+        &store,
+        hex20(SUPPORT_ID),
+        "support",
+        hex20(SUPPORT_OWNER20),
+        dotcell_extra("support", hex20(SUPPORT_OWNER20), hex20(SUPPORT_OWNER20)),
+        true,
+        1_700_000_000_000,
+    );
+    {
+        let mut batch = StoreBatch::new(store.as_ref());
+        batch.put_dotcell_ring(
+            &hex20(DOTCELL_NAMESPACE_MAINNET),
+            &ckbadger_store::types::DotCellRingRoot {
+                root_tx_hash: vec![0xA0; 32],
+                root_output_index: 0,
+                first_id: hex20(SUPPORT_ID),
+                created_at_block: 20_515_882,
+            },
+        );
+        batch.commit().unwrap();
+    }
+    let config = test_config(store);
+    let app = create_router(config).await;
+    let (status, body) = dotcell_get(app, "/api/v1/assets/identities/dotcell/ring").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["namespaceArgs"], DOTCELL_NAMESPACE_MAINNET);
+    assert_eq!(body["firstId"], SUPPORT_ID);
+    assert_eq!(body["rootOutPoint"]["index"], 0);
+    assert_eq!(body["liveCount"], 1);
+}
+
+#[tokio::test]
+async fn test_assets_dotcell_item_not_found_and_bad_name() {
+    let store = test_store();
+    let config = test_config(store);
+    let app = create_router(config).await;
+    let (status, _) = dotcell_get(
+        app.clone(),
+        "/api/v1/assets/identities/dotcell/items/nosuchname",
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    let (status, _) = dotcell_get(
+        app,
+        "/api/v1/assets/identities/dotcell/items/Not%20A%20Name%21",
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn test_assets_dotcell_items_listing() {
+    let store = test_store();
+    seed_dotcell_name(
+        &store,
+        hex20(SUPPORT_ID),
+        "support",
+        hex20(SUPPORT_OWNER20),
+        dotcell_extra("support", hex20(SUPPORT_OWNER20), hex20(SUPPORT_OWNER20)),
+        true,
+        1_700_000_000_000,
+    );
+    let config = test_config(store);
+    let app = create_router(config).await;
+    let (status, body) = dotcell_get(app, "/api/v1/assets/identities/dotcell/items").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let rows = body["data"].as_array().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["nftId"], SUPPORT_ID);
+    assert_eq!(rows[0]["name"], "support.cell");
+    assert_eq!(rows[0]["standard"], "dotcell");
+    assert_eq!(rows[0]["expiredAt"], DOTCELL_EXPIRY);
+    assert_eq!(
+        rows[0]["ownerLockHash"],
+        serde_json::Value::Null,
+        "the chain gives a 20-byte prefix, so there is no lock hash to report here"
+    );
+    assert_eq!(rows[0]["outputIndex"], 1);
+}

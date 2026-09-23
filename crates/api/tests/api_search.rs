@@ -587,3 +587,92 @@ async fn test_search_address_result_url_is_the_canonical_encoding() {
         "an uppercase input must canonicalize to the lowercase bech32m the page uses"
     );
 }
+
+/// A `.cell` name hashes straight to its id, so an existing name is an exact
+/// hit and a name that was never registered is simply not a result.
+#[tokio::test]
+async fn test_search_dotcell_name_hashes_to_direct_hit() {
+    let store = test_store();
+    let support_id: [u8; 20] = hex::decode("62d71147ac82b83c8531126cacb0d2f072bfd94a")
+        .unwrap()
+        .try_into()
+        .unwrap();
+    {
+        let mut batch = StoreBatch::new(store.as_ref());
+        batch.put_identity(
+            &support_id,
+            &IdentityEntry {
+                standard: IdentityStandard::DotCell,
+                owner_lock_hash: None,
+                name: Some("support.cell".to_string()),
+                is_live: true,
+                created_at_block: 20_518_306,
+                created_at_tx: vec![0xD1; 32],
+                extra: IdentityExtra::DotCell {
+                    label: "support".to_string(),
+                    namespace_args: [0xb4; 20],
+                    layout_version: 3,
+                    expired_at: 1_821_507_678,
+                    owner_hash20: [0x57; 20],
+                    manager_hash20: [0x57; 20],
+                    next_id: [0x65; 20],
+                    records_hash: [0x72; 32],
+                    records: Vec::new(),
+                    parent_id: None,
+                },
+            },
+        );
+        batch.commit().unwrap();
+    }
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    for query in ["support.cell", "support"] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/v1/search?q={query}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let hit = json["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["resultType"] == "identity")
+            .unwrap_or_else(|| panic!("no identity hit for {query}: {json}"));
+        assert_eq!(hit["label"], "support.cell");
+        assert_eq!(
+            hit["url"],
+            "/identities/dotcell/0x62d71147ac82b83c8531126cacb0d2f072bfd94a"
+        );
+        assert_eq!(hit["matchKind"], "exact");
+    }
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/search?q=neverregistered")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(
+        !json["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["resultType"] == "identity"),
+        "a name nobody registered is not a hit: {json}"
+    );
+}

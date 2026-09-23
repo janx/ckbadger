@@ -1395,6 +1395,10 @@ pub fn routes() -> Router<Arc<AppState>> {
             "/addresses/prefix/{prefix}/transactions",
             get(get_prefix_transactions),
         )
+        .route(
+            "/addresses/{addr}/dotcell-names",
+            get(get_address_dotcell_names),
+        )
         .route("/addresses/{addr}/tokens", get(get_address_tokens))
 }
 
@@ -3186,6 +3190,101 @@ async fn get_prefix_transactions(
 
     ok(CursorPaginatedResponse::without_total(
         txs,
+        limit as i64,
+        next_cursor,
+    ))
+}
+
+/// One `.cell` name an address holds.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AddressDotCellNameResponse {
+    pub identity_id: String,
+    pub label: String,
+    pub name: String,
+    pub expired_at: u64,
+}
+
+/// `GET /addresses/{addr}/dotcell-names` — the `.cell` names this address owns.
+///
+/// A name's owner is the first 20 bytes of its owner's lock script hash, so
+/// the lookup is a prefix seek on the address's own lock hash — no scan, and
+/// no guess about which full hash a prefix belongs to.
+async fn get_address_dotcell_names(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Path(addr): axum::extract::Path<String>,
+    Query(params): Query<AddressTxParams>,
+) -> ApiResult<CursorPaginatedResponse<AddressDotCellNameResponse>> {
+    let lock_hash = if is_ckb_address(&addr) {
+        address_to_lock_script_hash(&addr)
+            .map_err(|e| ApiError::bad_request(format!("Invalid CKB address: {}", e)))?
+    } else {
+        parse_hash32(&addr, "address/lock script hash")?
+    };
+    let owner20: [u8; 20] = lock_hash[..20].try_into().expect("20 bytes");
+    let limit = params.limit.clamp(1, 100) as usize;
+    let cursor: Option<[u8; 20]> = match params.cursor.as_deref() {
+        Some(raw) => {
+            let bytes = crate::utils::hash::parse_lock_hash_prefix20(raw, ".cell name cursor")?;
+            Some(
+                bytes
+                    .as_slice()
+                    .try_into()
+                    .map_err(|_| ApiError::bad_request(".cell name cursor must be 20 bytes"))?,
+            )
+        }
+        None => None,
+    };
+
+    let store = state.store.clone();
+    let ids = tokio::task::spawn_blocking(move || {
+        store.list_dotcell_names_by_owner20(&owner20, cursor, limit + 1)
+    })
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?
+    .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    let has_more = ids.len() > limit;
+    let page = &ids[..ids.len().min(limit)];
+    let next_cursor = if has_more {
+        page.last().map(|id| format!("0x{}", hex::encode(id)))
+    } else {
+        None
+    };
+
+    let mut rows = Vec::with_capacity(page.len());
+    for id in page {
+        let entry = state
+            .store
+            .get_identity(id)
+            .map_err(|e| ApiError::internal(e.to_string()))?
+            .ok_or_else(|| {
+                ApiError::internal(format!(
+                    ".cell owner index points at a missing identity: identity_id=0x{}",
+                    hex::encode(id)
+                ))
+            })?;
+        let (label, expired_at) = match &entry.extra {
+            ckbadger_store::types::IdentityExtra::DotCell {
+                label, expired_at, ..
+            } => (label.clone(), *expired_at),
+            _ => {
+                return Err(ApiError::internal(format!(
+                    ".cell identity has wrong extra variant: identity_id=0x{}",
+                    hex::encode(id)
+                )))
+            }
+        };
+        rows.push(AddressDotCellNameResponse {
+            identity_id: format!("0x{}", hex::encode(id)),
+            name: format!("{label}.cell"),
+            label,
+            expired_at,
+        });
+    }
+
+    ok(CursorPaginatedResponse::without_total(
+        rows,
         limit as i64,
         next_cursor,
     ))

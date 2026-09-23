@@ -1531,3 +1531,84 @@ async fn test_prefix_transactions_endpoint_lists_named_participations() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
+
+/// `.cell` names an address owns are found by prefix-seeking its own lock hash.
+#[tokio::test]
+async fn test_address_dotcell_names_lists_names_owned_by_prefix() {
+    let store = test_store();
+    let lock_hash: [u8; 32] =
+        hex::decode("57d926a44d83fc13b21ce037b1e31f4223e3c867cfa3f60e1324d5bfd5cd742d")
+            .unwrap()
+            .try_into()
+            .unwrap();
+    let owner20: [u8; 20] = lock_hash[..20].try_into().unwrap();
+    let support_id: [u8; 20] = hex::decode("62d71147ac82b83c8531126cacb0d2f072bfd94a")
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let other_id: [u8; 20] = hex::decode("a8d5f7507b9f3d30090253a741c1c80cb0cb121c")
+        .unwrap()
+        .try_into()
+        .unwrap();
+
+    {
+        let mut batch = StoreBatch::new(store.as_ref());
+        for (id, label, owner) in [
+            (support_id, "support", owner20),
+            (other_id, "abuse", [0xAAu8; 20]),
+        ] {
+            batch.put_identity(
+                &id,
+                &IdentityEntry {
+                    standard: IdentityStandard::DotCell,
+                    owner_lock_hash: None,
+                    name: Some(format!("{label}.cell")),
+                    is_live: true,
+                    created_at_block: 20_518_306,
+                    created_at_tx: vec![0xD1; 32],
+                    extra: IdentityExtra::DotCell {
+                        label: label.to_string(),
+                        namespace_args: [0xb4; 20],
+                        layout_version: 3,
+                        expired_at: 1_821_507_678,
+                        owner_hash20: owner,
+                        manager_hash20: owner,
+                        next_id: [0x65; 20],
+                        records_hash: [0x72; 32],
+                        records: Vec::new(),
+                        parent_id: None,
+                    },
+                },
+            );
+            batch.put_dotcell_name_by_owner(&owner, &id);
+        }
+        batch.commit().unwrap();
+    }
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/api/v1/addresses/0x{}/dotcell-names",
+                    hex::encode(lock_hash)
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let rows = json["data"].as_array().unwrap();
+    assert_eq!(rows.len(), 1, "only this address's names: {json}");
+    assert_eq!(rows[0]["label"], "support");
+    assert_eq!(rows[0]["name"], "support.cell");
+    assert_eq!(
+        rows[0]["identityId"],
+        "0x62d71147ac82b83c8531126cacb0d2f072bfd94a"
+    );
+    assert_eq!(rows[0]["expiredAt"], 1_821_507_678u64);
+}

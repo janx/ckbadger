@@ -61,6 +61,34 @@ pub fn entries() -> Vec<EndpointEntry> {
         EndpointEntry {
             module: "identities",
             method: Method::Get,
+            path_template: "/assets/identities/dotcell/items/{id_or_name}",
+            description: "Get a .cell name",
+            resolve: Box::new(|base, p| {
+                let id = p.dotcell_item_id.as_ref()?;
+                Some(get(&format!("{base}/assets/identities/dotcell/items/{id}")))
+            }),
+            expect_status: 200,
+            risk_tier: RiskTier::Medium,
+            read_pattern: ReadPattern::KeyLookup,
+        },
+        EndpointEntry {
+            module: "identities",
+            method: Method::Get,
+            path_template: "/assets/identities/dotcell/items/{id_or_name}/activities",
+            description: "List activities for a .cell name",
+            resolve: Box::new(|base, p| {
+                let id = p.dotcell_item_id.as_ref()?;
+                Some(get(&format!(
+                    "{base}/assets/identities/dotcell/items/{id}/activities"
+                )))
+            }),
+            expect_status: 200,
+            risk_tier: RiskTier::Medium,
+            read_pattern: ReadPattern::PrefixScan,
+        },
+        EndpointEntry {
+            module: "identities",
+            method: Method::Get,
             path_template: "/assets/identities/{collection_id}",
             description: "Get identity collection",
             resolve: Box::new(|base, p| {

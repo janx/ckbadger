@@ -8,6 +8,7 @@ use ckbadger_store::{
     types::{
         IdentityStandard, MnftCollectionAggregate, ObjectCollectionActivityEntry,
         BIT_CELL_SENTINEL_COLLECTION, DID_CKB_SENTINEL_COLLECTION, DOTBIT_SENTINEL_COLLECTION,
+        DOTCELL_SENTINEL_COLLECTION,
     },
     CkbadgerStore,
 };
@@ -415,7 +416,13 @@ pub struct MnftItemActivityResponse {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CollectionHolderResponse {
-    pub lock_script_hash: String,
+    /// `None` when the chain only gave a 20-byte prefix that resolves to no
+    /// known lock — a holder the API can name but not address.
+    pub lock_script_hash: Option<String>,
+    /// Set only for collections whose chain-level owner is a 20-byte lock-hash
+    /// prefix (`.cell`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner_hash_prefix: Option<String>,
     pub address: Option<String>,
     pub item_count: i64,
 }
@@ -1643,6 +1650,7 @@ pub(super) enum NftLifecycleStandard {
     DotBit,
     BitCell,
     DidCkb,
+    DotCell,
     Spore,
 }
 
@@ -1662,6 +1670,7 @@ fn collect_nft_item_lifecycle_actions(
             .map_err(|e| ApiError::internal(e.to_string()))?,
         NftLifecycleStandard::BitCell
         | NftLifecycleStandard::DidCkb
+        | NftLifecycleStandard::DotCell
         | NftLifecycleStandard::Spore => state
             .store
             .list_spore_outpoints_by_spore_id(nft_id_bytes)
@@ -2167,6 +2176,7 @@ pub(crate) fn list_identity_items_inner(
         id if id == DOTBIT_SENTINEL_COLLECTION => IdentityStandard::DotBit,
         id if id == BIT_CELL_SENTINEL_COLLECTION => IdentityStandard::BitCell,
         id if id == DID_CKB_SENTINEL_COLLECTION => IdentityStandard::DidCkb,
+        id if id == DOTCELL_SENTINEL_COLLECTION => IdentityStandard::DotCell,
         _ => {
             return Err(ApiError::internal(format!(
                 "unsupported identity collection sentinel: collection_id=0x{}",
@@ -2365,6 +2375,60 @@ pub(crate) fn list_identity_items_inner(
                     .owner_lock_hash
                     .as_ref()
                     .map(|h| format!("0x{}", hex::encode(h))),
+                is_live: entry.is_live,
+                created_at_block: entry.created_at_block,
+                expired_at,
+                registered_at: None,
+                status: None,
+                tx_hash,
+                output_index,
+            });
+        }
+    } else if identity_standard == IdentityStandard::DotCell {
+        // A `.cell` name's owner is a 20-byte prefix, so `ownerLockHash` stays
+        // null here; the item detail route resolves and reports the prefix.
+        let live_identity_ids: Vec<Vec<u8>> = page_items
+            .iter()
+            .filter(|(_, entry)| entry.is_live)
+            .map(|(identity_id, _)| identity_id.clone())
+            .collect();
+        let live_outpoints = get_live_bit_cell_outpoints_by_identity_ids(
+            store,
+            append_only_store,
+            &live_identity_ids,
+        )?;
+
+        for (identity_id, entry) in &page_items {
+            let expired_at = match &entry.extra {
+                ckbadger_store::types::IdentityExtra::DotCell { expired_at, .. } => {
+                    Some(*expired_at)
+                }
+                _ => {
+                    return Err(ApiError::internal(format!(
+                        ".cell identity has wrong extra variant: identity_id=0x{}",
+                        hex::encode(identity_id)
+                    )))
+                }
+            };
+            let (tx_hash, output_index) = if entry.is_live {
+                let (tx_hash, output_index) = live_outpoints.get(identity_id).ok_or_else(|| {
+                    ApiError::internal(format!(
+                        "live .cell name missing outpoint index: identity_id=0x{}",
+                        hex::encode(identity_id)
+                    ))
+                })?;
+                (
+                    Some(format!("0x{}", hex::encode(tx_hash))),
+                    Some(*output_index),
+                )
+            } else {
+                (None, None)
+            };
+            rows.push(CollectionItemResponse {
+                nft_id: format!("0x{}", hex::encode(identity_id)),
+                name: entry.name.clone(),
+                standard: IdentityStandard::DotCell.asset_standard().to_string(),
+                owner_lock_hash: None,
                 is_live: entry.is_live,
                 created_at_block: entry.created_at_block,
                 expired_at,
@@ -2885,7 +2949,8 @@ async fn list_object_collection_holders(
     let rows: Vec<CollectionHolderResponse> = page
         .into_iter()
         .map(|(lock_hash, count)| CollectionHolderResponse {
-            lock_script_hash: format!("0x{}", hex::encode(lock_hash)),
+            lock_script_hash: Some(format!("0x{}", hex::encode(lock_hash))),
+            owner_hash_prefix: None,
             address: None,
             item_count: *count,
         })
