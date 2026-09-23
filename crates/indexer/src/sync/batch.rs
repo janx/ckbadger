@@ -16,7 +16,7 @@ use ckbadger_store::keys;
 use ckbadger_store::types::{
     DailyActivityStats, DaoDailySnapshot, IdentityCollectionAggregate, LiveCellSummary,
     MnftTypeIndex, ParticipantId, PositionedCellInfo, ScriptReferenceInfo, SporeTypeIndex,
-    SOLE_SPORES_SENTINEL_COLLECTION,
+    DOTCELL_SENTINEL_COLLECTION, SOLE_SPORES_SENTINEL_COLLECTION,
 };
 use ckbadger_store::CkbadgerStore;
 
@@ -25,8 +25,8 @@ use crate::db::writer::object_activity_acc::ObjectCollectionActivityAccumulator;
 use crate::db::writer::DaoSnapshotBoundary;
 use crate::db::{BatchWriter, DaoWithdrawalContext};
 use crate::parser::{
-    BitCellParser, BlockParser, CellParser, DaoParser, DidCkbParser, DotbitParser, MnftParser,
-    ScriptParser, SporeParser, TransactionParser, UdtParser,
+    BitCellParser, BlockParser, CellParser, DaoParser, DidCkbParser, DotCellParser, DotbitParser,
+    MnftParser, ScriptParser, SporeParser, TransactionParser, UdtParser,
 };
 
 use crate::rpc::{BlockResponseWithCycles, CkbRpcClient};
@@ -442,6 +442,9 @@ struct ActivityInputIndexes<'a> {
     dao_compensations: &'a HashMap<(Vec<u8>, i16), i64>,
     dotbit_ids: &'a HashMap<(Vec<u8>, i16), Vec<u8>>,
     bit_cell_identity_ids: &'a HashMap<(Vec<u8>, i16), Vec<u8>>,
+    /// The `.cell` name each consumed name cell carried, captured by the
+    /// consume path. An input reaches the activity builder without its data.
+    dotcell_inputs: &'a HashMap<(Vec<u8>, i16), crate::parser::DotCellNameData>,
 }
 
 fn build_activity_input_views<'a>(
@@ -531,10 +534,7 @@ fn build_activity_input_views<'a>(
                     .bit_cell_identity_ids
                     .get(&key)
                     .map(Vec::as_slice),
-                // Filled by the consume path in Task 1b.5: an input reaches the
-                // builder without its data, so the consumed name's prior state
-                // comes from the identity entry the consume just read.
-                dotcell: None,
+                dotcell: indexes.dotcell_inputs.get(&key),
                 data,
                 is_dao_withdraw_request,
                 dao_compensation,
@@ -2603,6 +2603,9 @@ impl Indexer {
         // testnet cells have empty type args, so the activity builder must use
         // the parser result retained by the identity write path.
         let mut resolved_bit_cell_ids: HashMap<(Vec<u8>, i16), Vec<u8>> = HashMap::new();
+        // The `.cell` name each consumed name cell carried before it was spent.
+        let mut resolved_dotcell_inputs: HashMap<(Vec<u8>, i16), crate::parser::DotCellNameData> =
+            HashMap::new();
 
         // Group C: Object/Spore processing
         //
@@ -2783,12 +2786,53 @@ impl Indexer {
                             }
 
                             if !bulk_sync_active {
+                                let consumed_type_code_hash = input_cell_info
+                                    .get(&key)
+                                    .or_else(|| batch_cell_infos.get(&key))
+                                    .and_then(|info| info.type_code_hash.clone());
+                                let consumed_is_dotcell = consumed_type_code_hash
+                                    .as_deref()
+                                    .is_some_and(DotCellParser::is_account_type_script);
+
+                                // `.cell` consumption. It shares the outpoint
+                                // reverse index with spores but NOT the spore
+                                // consume path: a `.cell` name's ownership is in
+                                // its data, and its collection feed comes from
+                                // the state diff, not from a create/consume pair.
+                                if consumed_is_dotcell {
+                                    let name_id = spore_map.get(&key).ok_or_else(|| {
+                                        anyhow!(
+                                            "dotcell outpoint-id mapping missing for consumed name cell: block={}, tx=0x{}, prev_outpoint=0x{}:{}",
+                                            parsed.number,
+                                            hex::encode(tx_data.hash),
+                                            hex::encode(&key.0),
+                                            key.1
+                                        )
+                                    })?;
+                                    let name_id: [u8; 20] =
+                                        name_id.as_slice().try_into().map_err(|_| {
+                                            anyhow!(
+                                                "dotcell name id must be 20 bytes, got {}: block={}, tx=0x{}, prev_outpoint=0x{}:{}",
+                                                name_id.len(),
+                                                parsed.number,
+                                                hex::encode(tx_data.hash),
+                                                hex::encode(&key.0),
+                                                key.1
+                                            )
+                                        })?;
+                                    if let Some(previous) = self.writer.consume_dotcell_name(
+                                        &name_id,
+                                        parsed.number,
+                                        &mut data_batch,
+                                        &mut spore_state,
+                                    )? {
+                                        resolved_dotcell_inputs.insert(key.clone(), previous);
+                                    }
+                                }
                                 // Spore consumption
-                                if let Some(spore_id) = spore_map.get(&key) {
-                                    let identity_collection_id = input_cell_info
-                                        .get(&key)
-                                        .or_else(|| batch_cell_infos.get(&key))
-                                        .and_then(|info| info.type_code_hash.as_deref())
+                                else if let Some(spore_id) = spore_map.get(&key) {
+                                    let identity_collection_id = consumed_type_code_hash
+                                        .as_deref()
                                         .and_then(|type_code_hash| {
                                             if BitCellParser::is_type_script(type_code_hash) {
                                                 Some(BIT_CELL_SENTINEL_COLLECTION.as_slice())
@@ -2832,23 +2876,18 @@ impl Indexer {
                                             false,
                                         );
                                     }
-                                } else if let Some(info) = input_cell_info
-                                    .get(&key)
-                                    .or_else(|| batch_cell_infos.get(&key))
-                                {
-                                    if let Some(tch) = info.type_code_hash.as_ref() {
-                                        if SporeParser::is_spore_nft_type_script(tch)
-                                            || DidCkbParser::is_type_script(tch)
-                                            || BitCellParser::is_type_script(tch)
-                                        {
-                                            bail!(
-                                                "spore outpoint-id mapping missing for consumed spore cell: block={}, tx=0x{}, prev_outpoint=0x{}:{}",
-                                                parsed.number,
-                                                hex::encode(tx_data.hash),
-                                                hex::encode(&key.0),
-                                                key.1
-                                            );
-                                        }
+                                } else if let Some(tch) = consumed_type_code_hash.as_deref() {
+                                    if SporeParser::is_spore_nft_type_script(tch)
+                                        || DidCkbParser::is_type_script(tch)
+                                        || BitCellParser::is_type_script(tch)
+                                    {
+                                        bail!(
+                                            "spore outpoint-id mapping missing for consumed spore cell: block={}, tx=0x{}, prev_outpoint=0x{}:{}",
+                                            parsed.number,
+                                            hex::encode(tx_data.hash),
+                                            hex::encode(&key.0),
+                                            key.1
+                                        );
                                     }
                                 }
 
@@ -3051,6 +3090,62 @@ impl Indexer {
                             true,
                         );
                     }
+                    // `.cell` names. The collection feed is NOT accumulated
+                    // here: `identity_activity_acc` reads a create/consume pair
+                    // as a Transfer, while a `.cell` transaction's meaning comes
+                    // from the state diff (`DotCellDetector`). The feed entry is
+                    // derived from the written protocol actions below.
+                    for (output_index, name, records) in
+                        DotCellParser::parse_name_cells_with_output_indices(tx)?
+                    {
+                        let output_index_i16 = checked_usize_to_i16(
+                            output_index,
+                            "dotcell output index while processing grouped blocks",
+                        )
+                        .map_err(|e| {
+                            anyhow!(
+                                "{}: block={}, tx_hash=0x{}",
+                                e,
+                                parsed.number,
+                                hex::encode(tx_data.hash)
+                            )
+                        })?;
+                        let type_script = tx.outputs[output_index]
+                            .type_
+                            .as_ref()
+                            .ok_or_else(|| {
+                                anyhow!(
+                                    "dotcell output has no type script: block={}, tx_hash=0x{}, output_index={}",
+                                    parsed.number,
+                                    hex::encode(tx_data.hash),
+                                    output_index
+                                )
+                            })?;
+                        let namespace_args: [u8; 20] =
+                            crate::rpc::parse_hex_to_bytes(&type_script.args)
+                                .try_into()
+                                .map_err(
+                                |args: Vec<u8>| {
+                                    anyhow!(
+                                        "dotcell namespace args must be 20 bytes, got {}: block={}, tx_hash=0x{}, output_index={}",
+                                        args.len(),
+                                        parsed.number,
+                                        hex::encode(tx_data.hash),
+                                        output_index
+                                    )
+                                },
+                            )?;
+                        self.writer.insert_dotcell_name(
+                            &name,
+                            &records,
+                            &namespace_args,
+                            &tx_data.hash,
+                            output_index_i16,
+                            parsed.number,
+                            &mut data_batch,
+                            &mut spore_state,
+                        )?;
+                    }
                     for (output_index, issuer) in MnftParser::parse_issuers_with_output_indices(tx)
                     {
                         let output_index_i16 = i16::try_from(output_index).map_err(|_| {
@@ -3249,12 +3344,6 @@ impl Indexer {
             &pending_object_collection_aggs,
             &pending_cluster_ids,
         )?;
-        apply_identity_collection_activity_count_deltas(
-            self.writer.store(),
-            &mut data_batch,
-            identity_activity_count_deltas,
-            &pending_identity_aggs,
-        )?;
 
         // Activity writes (live sync)
         #[allow(unused_mut)]
@@ -3292,6 +3381,7 @@ impl Indexer {
                                 dao_compensations: &dao_compensations,
                                 dotbit_ids: &resolved_dotbit_ids,
                                 bit_cell_identity_ids: &resolved_bit_cell_ids,
+                                dotcell_inputs: &resolved_dotcell_inputs,
                             },
                         )?;
                         let outputs: Vec<crate::db::writer::activities::OutputCellView<'_>> = td
@@ -3372,6 +3462,32 @@ impl Indexer {
                         *prefix_tx_counts.entry(prefix).or_insert(0) += 1;
                     }
 
+                    // The `.cell` collection feed is derived from the
+                    // `dotcell:*` actions already in this tx's `TxActions`, by
+                    // the same function bulk build uses — one meaning of a
+                    // `.cell` transaction, not two.
+                    if let Some(entry) =
+                        crate::db::writer::dotcell_detector::build_dotcell_tx_activity_entry(
+                            &tx_actions.protocol_actions,
+                            &tx_actions.tx_hash,
+                            &tx_actions.block_hash,
+                            tx_actions.timestamp,
+                        )
+                    {
+                        identity_activity_batch.put_identity_collection_activity(
+                            &DOTCELL_SENTINEL_COLLECTION,
+                            tx_actions.block_number,
+                            tx_actions.tx_index,
+                            &entry,
+                        );
+                        let delta = identity_activity_count_deltas
+                            .entry(DOTCELL_SENTINEL_COLLECTION.to_vec())
+                            .or_insert(0);
+                        *delta = delta
+                            .checked_add(1)
+                            .ok_or_else(|| anyhow!("dotcell identity activity delta overflow"))?;
+                    }
+
                     // Accumulate daily activity stats
                     let date = ckbadger_common::block_date_from_ms(tx_actions.timestamp)
                         .format("%Y%m%d")
@@ -3432,6 +3548,16 @@ impl Indexer {
                 }
             }
         }
+
+        // The `.cell` collection feed is derived from the protocol actions the
+        // activity loop just wrote, so its counter is applied here rather than
+        // beside the create/consume accumulators above.
+        apply_identity_collection_activity_count_deltas(
+            self.writer.store(),
+            &mut data_batch,
+            identity_activity_count_deltas,
+            &pending_identity_aggs,
+        )?;
 
         // Per-prefix participation counters. Read-modify-write against the
         // committed value. No undo pre-image: rollback reverses this counter by
@@ -4944,6 +5070,7 @@ mod tests {
         let empty_dao_outpoints = HashSet::new();
         let empty_dao_comp = HashMap::new();
         let empty_dotbit = HashMap::new();
+        let empty_dotcell = HashMap::new();
         let err = match build_activity_input_views(
             &tx,
             99,
@@ -4954,6 +5081,7 @@ mod tests {
                 dao_compensations: &empty_dao_comp,
                 dotbit_ids: &empty_dotbit,
                 bit_cell_identity_ids: &empty_dotbit,
+                dotcell_inputs: &empty_dotcell,
             },
         ) {
             Ok(_) => panic!("missing input cell info should fail fast"),
@@ -4997,6 +5125,7 @@ mod tests {
         let empty_dao_outpoints = HashSet::new();
         let empty_dao_comp = HashMap::new();
         let empty_dotbit = HashMap::new();
+        let empty_dotcell = HashMap::new();
         let inputs = build_activity_input_views(
             &tx,
             100,
@@ -5007,6 +5136,7 @@ mod tests {
                 dao_compensations: &empty_dao_comp,
                 dotbit_ids: &empty_dotbit,
                 bit_cell_identity_ids: &empty_dotbit,
+                dotcell_inputs: &empty_dotcell,
             },
         )
         .expect("input lookup should fall back to same-batch cell cache");
@@ -5052,6 +5182,7 @@ mod tests {
 
         let empty_batch_info = HashMap::new();
         let empty_dotbit = HashMap::new();
+        let empty_dotcell = HashMap::new();
         let inputs = build_activity_input_views(
             &tx,
             200,
@@ -5062,6 +5193,7 @@ mod tests {
                 dao_compensations: &dao_compensations,
                 dotbit_ids: &empty_dotbit,
                 bit_cell_identity_ids: &empty_dotbit,
+                dotcell_inputs: &empty_dotcell,
             },
         )
         .unwrap();
@@ -5099,6 +5231,7 @@ mod tests {
         let empty_dao_outpoints = HashSet::new();
         let empty_dao_compensations = HashMap::new();
         let empty_dotbit_ids = HashMap::new();
+        let empty_dotcell = HashMap::new();
 
         let inputs = build_activity_input_views(
             &tx,
@@ -5110,6 +5243,7 @@ mod tests {
                 dao_compensations: &empty_dao_compensations,
                 dotbit_ids: &empty_dotbit_ids,
                 bit_cell_identity_ids: &bit_cell_ids,
+                dotcell_inputs: &empty_dotcell,
             },
         )
         .unwrap();
@@ -5714,11 +5848,11 @@ mod tests {
         /// (102). With a 1000 CKB deposit whose occupied capacity is the
         /// standard 102 CKB, free capacity is 898 CKB and the compensation is
         /// exactly 898_00000000 * 101/100 - 898_00000000 = 8_98000000.
-        const AR_DEPOSIT: u64 = 10_000_000_000_000_000;
+        pub(super) const AR_DEPOSIT: u64 = 10_000_000_000_000_000;
         const AR_REQUEST: u64 = 10_100_000_000_000_000;
         const DAO_COMPENSATION: i64 = 8_98000000;
         const DEPOSIT_CAPACITY: u64 = 1000_00000000;
-        const FUNDING_CAPACITY: u64 = 3000_00000000;
+        pub(super) const FUNDING_CAPACITY: u64 = 3000_00000000;
         const CHANGE_CAPACITY: u64 = 1800_00000000;
 
         pub(super) fn lock_script() -> Script {
@@ -6770,7 +6904,7 @@ mod tests {
             out
         }
 
-        fn prefix_rows(
+        pub(super) fn prefix_rows(
             store: &CkbadgerStore,
         ) -> Vec<([u8; 20], i64, i32, ckbadger_store::types::AddrTxValue)> {
             let mut out = Vec::new();
@@ -7158,6 +7292,300 @@ mod tests {
                 store.get_addr_prefix_stats(&NAMED_PREFIX).unwrap(),
                 None,
                 "a counter that reaches zero is deleted, not stored as 0"
+            );
+        }
+    }
+
+    /// `.cell` names through the real live write path.
+    ///
+    /// The registration is the testnet transaction 0x89191ea4… replayed as a
+    /// two-block chain: block 101 creates the ring predecessor `maria`, block
+    /// 102 is the registration that relinks it and creates `joaom`. Every name
+    /// cell's data and its own-index witness are the bytes the node served.
+    pub(crate) mod dotcell_live {
+        use super::live_dao_fee::{
+            block, cellbase_tx, lock_script, prefix_rows, AR_DEPOSIT, FUNDING_CAPACITY,
+        };
+        use super::*;
+        use crate::parser::test_helpers::real_dotcell as fixture;
+        use crate::parser::DotCellParser;
+        use crate::rpc::{CellInput, CellOutput, OutPoint, Script, TransactionView};
+
+        pub(crate) fn account_type_script() -> Script {
+            Script {
+                code_hash: fixture::ACCOUNT_TYPE_CODE_HASH_TESTNET.to_string(),
+                hash_type: "type".to_string(),
+                args: fixture::NAMESPACE_ARGS_TESTNET.to_string(),
+            }
+        }
+
+        fn account_lock_script() -> Script {
+            Script {
+                code_hash: fixture::ACCOUNT_LOCK_CODE_HASH_TESTNET.to_string(),
+                hash_type: "type".to_string(),
+                args: "0x".to_string(),
+            }
+        }
+
+        fn name_output(capacity: u64) -> CellOutput {
+            CellOutput {
+                capacity: format!("0x{capacity:x}"),
+                lock: account_lock_script(),
+                type_: Some(account_type_script()),
+            }
+        }
+
+        fn plain_output(capacity: u64) -> CellOutput {
+            CellOutput {
+                capacity: format!("0x{capacity:x}"),
+                lock: lock_script(),
+                type_: None,
+            }
+        }
+
+        fn input(prev_hash_byte: u8, index: u32) -> CellInput {
+            CellInput {
+                since: "0x0".to_string(),
+                previous_output: OutPoint {
+                    tx_hash: format!("0x{}", hex::encode([prev_hash_byte; 32])),
+                    index: format!("0x{index:x}"),
+                },
+            }
+        }
+
+        const NAME_CAPACITY: u64 = 240_00000000;
+
+        /// The pre-state of `maria`, exactly as the node served the input cell
+        /// the registration consumed.
+        fn maria_pre_data() -> &'static str {
+            fixture::T2_REGISTER_JOAOM.inputs[0].data
+        }
+
+        pub(crate) fn dotcell_registration_blocks() -> Vec<BlockResponseWithCycles> {
+            // 100: cellbase funds the secp lock that pays for everything.
+            let funding = block(100, AR_DEPOSIT, vec![cellbase_tx(0xc0, FUNDING_CAPACITY)]);
+
+            // 101: create `maria` with its own records witness.
+            let create_maria = TransactionView {
+                hash: format!("0x{}", hex::encode([0xd1u8; 32])),
+                version: "0x0".to_string(),
+                cell_deps: vec![],
+                header_deps: vec![],
+                inputs: vec![input(0xc0, 0)],
+                outputs: vec![
+                    name_output(NAME_CAPACITY),
+                    plain_output(FUNDING_CAPACITY - NAME_CAPACITY - 100_000_000),
+                ],
+                outputs_data: vec![maria_pre_data().to_string(), "0x".to_string()],
+                witnesses: vec![fixture::T2_WITNESS_0.to_string(), String::new()],
+            };
+
+            // 102: the registration itself — `maria` relinks, `joaom` is born.
+            let register_joaom = TransactionView {
+                hash: format!("0x{}", hex::encode([0xd2u8; 32])),
+                version: "0x0".to_string(),
+                cell_deps: vec![],
+                header_deps: vec![],
+                inputs: vec![input(0xd1, 0), input(0xd1, 1)],
+                outputs: vec![
+                    name_output(NAME_CAPACITY),
+                    name_output(NAME_CAPACITY),
+                    plain_output(FUNDING_CAPACITY - 3 * NAME_CAPACITY - 300_000_000),
+                ],
+                outputs_data: vec![
+                    fixture::T2_OUT0_DATA.to_string(),
+                    fixture::T2_OUT1_DATA.to_string(),
+                    "0x".to_string(),
+                ],
+                witnesses: vec![
+                    fixture::T2_WITNESS_0.to_string(),
+                    fixture::T2_WITNESS_1.to_string(),
+                    String::new(),
+                ],
+            };
+
+            vec![
+                funding,
+                block(
+                    101,
+                    AR_DEPOSIT,
+                    vec![cellbase_tx(0xc1, 100_000_000), create_maria],
+                ),
+                block(
+                    102,
+                    AR_DEPOSIT,
+                    vec![cellbase_tx(0xc2, 100_000_000), register_joaom],
+                ),
+            ]
+        }
+
+        pub(crate) fn maria_id() -> [u8; 20] {
+            DotCellParser::derive_id("maria")
+        }
+
+        pub(crate) fn joaom_id() -> [u8; 20] {
+            DotCellParser::derive_id("joaom")
+        }
+
+        #[tokio::test]
+        async fn live_sync_indexes_a_real_dotcell_registration() {
+            use ckbadger_store::types::{
+                AssetAction, IdentityExtra, IdentityStandard, DOTCELL_SENTINEL_COLLECTION,
+            };
+
+            let _guard =
+                crate::db::writer::activities::test_detector_override::without_extra_detectors();
+            let dir = tempfile::tempdir().unwrap();
+            let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+            let indexer = super::live_dao_fee::indexer_for_live_write_test(store.clone());
+            store
+                .set_secondary_epoch_reward(61_369_863_013_698)
+                .unwrap();
+
+            for block in dotcell_registration_blocks() {
+                super::live_dao_fee::write_live_block(&indexer, block)
+                    .await
+                    .unwrap();
+            }
+
+            // Both names are identities of the `.cell` collection.
+            let maria = store
+                .get_identity(&maria_id())
+                .unwrap()
+                .expect("maria.cell indexed");
+            assert_eq!(maria.standard, IdentityStandard::DotCell);
+            assert_eq!(maria.name.as_deref(), Some("maria.cell"));
+            assert!(maria.is_live);
+            let (maria_owner, maria_records, maria_next) = match &maria.extra {
+                IdentityExtra::DotCell {
+                    owner_hash20,
+                    records,
+                    next_id,
+                    ..
+                } => (*owner_hash20, records.len(), *next_id),
+                other => panic!("{other:?}"),
+            };
+            assert_eq!(
+                maria_owner.to_vec(),
+                crate::rpc::parse_hex_to_bytes("0x58e6c6f873af57732daae458be3c56c2c847b141")
+            );
+            assert_eq!(maria_records, 6, "records come from the own-index witness");
+            assert_eq!(
+                maria_next,
+                joaom_id(),
+                "the registration relinked the ring predecessor"
+            );
+
+            let joaom = store
+                .get_identity(&joaom_id())
+                .unwrap()
+                .expect("joaom.cell indexed");
+            let joaom_owner = match &joaom.extra {
+                IdentityExtra::DotCell { owner_hash20, .. } => *owner_hash20,
+                other => panic!("{other:?}"),
+            };
+            assert_eq!(
+                joaom_owner.to_vec(),
+                crate::rpc::parse_hex_to_bytes("0x69e8165efb4cb3b2cd62300e7d16f41a1c65ceab")
+            );
+
+            // Aggregate, owner index and per-owner counters.
+            let agg = store
+                .get_identity_collection_aggregate(&DOTCELL_SENTINEL_COLLECTION)
+                .unwrap()
+                .expect("dotcell aggregate");
+            assert_eq!(agg.total_count, 2);
+            assert_eq!(agg.live_count, 2);
+            assert_eq!(agg.holders_count, 2);
+            assert_eq!(
+                store
+                    .list_dotcell_names_by_owner20(&maria_owner, None, 10)
+                    .unwrap(),
+                vec![maria_id()]
+            );
+            assert_eq!(
+                store
+                    .list_dotcell_names_by_owner20(&joaom_owner, None, 10)
+                    .unwrap(),
+                vec![joaom_id()]
+            );
+            assert_eq!(
+                store
+                    .get_dotcell_owner20_count(&DOTCELL_SENTINEL_COLLECTION, &joaom_owner)
+                    .unwrap(),
+                1
+            );
+
+            // The collection feed is derived from the protocol actions, one
+            // Mint per registering transaction — the ring relink adds nothing.
+            let feed = store
+                .list_identity_collection_activities(&DOTCELL_SENTINEL_COLLECTION, 10, None, None)
+                .unwrap();
+            assert_eq!(feed.len(), 2, "{feed:?}");
+            for (_, _, entry) in &feed {
+                assert_eq!(entry.actions, vec![AssetAction::Mint]);
+            }
+            assert_eq!(agg.activities_count, 2);
+
+            // The registrant holds no cell in this transaction, so it is a
+            // standalone prefix participant with a prefix row of its own.
+            let prefix_positions: Vec<([u8; 20], i64, i32)> = prefix_rows(&store)
+                .iter()
+                .map(|(p, b, t, _)| (*p, *b, *t))
+                .collect();
+            assert!(
+                prefix_positions.contains(&(joaom_owner, 102, 1)),
+                "the registrant must have an addr_txs_by_prefix row: {prefix_positions:?}"
+            );
+            assert_eq!(
+                store
+                    .get_addr_prefix_stats(&joaom_owner)
+                    .unwrap()
+                    .unwrap()
+                    .txs_count,
+                1
+            );
+
+            // The Account Lock holds every name cell and owns none of them.
+            let account_lock =
+                crate::parser::ScriptParser::compute_script_hash(&account_lock_script());
+            let tx_actions = store
+                .get_tx_actions(102, 1, &[0xd2u8; 32])
+                .unwrap()
+                .expect("tx actions for the registration");
+            // Exactly ONE action: `maria` only relinked the ring. Getting two
+            // here means the consumed name's prior state never reached the
+            // classifier, so every touch would read as a fresh registration.
+            let dotcell_actions: Vec<_> = tx_actions
+                .protocol_actions
+                .iter()
+                .filter(|a| a.protocol == "dotcell")
+                .collect();
+            assert_eq!(
+                dotcell_actions.len(),
+                1,
+                "the ring relink must be suppressed: {dotcell_actions:?}"
+            );
+            let register = dotcell_actions[0];
+            assert_eq!(register.action, "register");
+            assert_eq!(
+                register.metadata.to_value().unwrap()["label"],
+                serde_json::json!("joaom")
+            );
+            // And the relinked predecessor names nobody: its owner gets no
+            // second participation out of this transaction.
+            assert!(
+                !prefix_positions.contains(&(maria_owner, 102, 1)),
+                "a ring relink is infrastructure, not a party's activity: {prefix_positions:?}"
+            );
+            let account_lock_party = tx_actions
+                .participants
+                .iter()
+                .find(|p| p.id.as_bytes() == account_lock.as_slice())
+                .expect("the Account Lock participates");
+            assert!(
+                account_lock_party.item_deltas.is_empty(),
+                "the protocol's own lock never owns the names it holds"
             );
         }
     }

@@ -9,8 +9,8 @@ use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::keys;
 use ckbadger_store::store::{CF_IDENTITY_DATA, CF_SPORE_DATA};
 use ckbadger_store::types::{
-    ClusterAggregate, CompositionTier, IdentityCollectionAggregate, IdentityEntry, IdentityExtra,
-    IdentityStandard, ObjectEntry, ObjectExtra, ObjectStandard, SporeTypeIndex,
+    ClusterAggregate, CompositionTier, DotCellRingRoot, IdentityCollectionAggregate, IdentityEntry,
+    IdentityExtra, IdentityStandard, ObjectEntry, ObjectExtra, ObjectStandard, SporeTypeIndex,
 };
 use ckbadger_store::types::{
     BIT_CELL_SENTINEL_COLLECTION, DID_CKB_SENTINEL_COLLECTION, SOLE_SPORES_SENTINEL_COLLECTION,
@@ -26,6 +26,18 @@ use crate::sync::undo::SharedUndoSeq;
 
 use super::BatchWriter;
 
+/// How a collection's per-owner counter key encodes its owner.
+///
+/// Every identity standard but `.cell` stores a full 32-byte lock hash. `.cell`
+/// stores what the chain stores: the first 20 bytes of the owner's lock hash,
+/// written into the same fixed-width key as an explicit `owner20 ‖ 0^12`.
+/// One transition algorithm, two key encodings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum IdentityOwnerKeyKind {
+    LockHash32,
+    Prefix20,
+}
+
 #[derive(Default)]
 pub(crate) struct SporeBatchState {
     spores: HashMap<Vec<u8>, Option<ObjectEntry>>,
@@ -36,7 +48,12 @@ pub(crate) struct SporeBatchState {
     identity_owner_counts: HashMap<(Vec<u8>, Vec<u8>), i64>,
     stats: SharedEntityStatsOverlay,
     spore_outpoints: HashMap<(Vec<u8>, i16), Vec<u8>>,
-    undo_seq_by_block: SharedUndoSeq,
+    /// `.cell` namespaces seen in this batch, plus the ones already on disk.
+    /// A network runs exactly one.
+    dotcell_namespaces: HashSet<[u8; 20]>,
+    dotcell_namespaces_loaded: bool,
+    dotcell_rings: HashMap<[u8; 20], DotCellRingRoot>,
+    pub(super) undo_seq_by_block: SharedUndoSeq,
 }
 
 impl SporeBatchState {
@@ -53,7 +70,7 @@ impl SporeBatchState {
         self.spores.insert(spore_id.to_vec(), Some(entry));
     }
 
-    fn get_identity(
+    pub(super) fn get_identity(
         &mut self,
         store: &CkbadgerStore,
         identity_id: &[u8],
@@ -66,7 +83,7 @@ impl SporeBatchState {
         Ok(loaded)
     }
 
-    fn put_identity(&mut self, identity_id: &[u8], entry: IdentityEntry) {
+    pub(super) fn put_identity(&mut self, identity_id: &[u8], entry: IdentityEntry) {
         self.identities.insert(identity_id.to_vec(), Some(entry));
     }
 
@@ -132,7 +149,7 @@ impl SporeBatchState {
             .insert((cluster_id.to_vec(), lock_hash.to_vec()), 0);
     }
 
-    fn get_identity_agg(
+    pub(super) fn get_identity_agg(
         &mut self,
         store: &CkbadgerStore,
         collection_id: &[u8],
@@ -148,7 +165,7 @@ impl SporeBatchState {
         Ok(loaded)
     }
 
-    fn put_identity_agg(
+    pub(super) fn put_identity_agg(
         &mut self,
         collection_id: &[u8],
         agg: IdentityCollectionAggregate,
@@ -161,39 +178,66 @@ impl SporeBatchState {
     fn get_identity_owner_count(
         &mut self,
         store: &CkbadgerStore,
+        kind: IdentityOwnerKeyKind,
         collection_id: &[u8],
-        lock_hash: &[u8],
+        owner: &[u8],
     ) -> Result<i64> {
-        let key = (collection_id.to_vec(), lock_hash.to_vec());
+        let key = (collection_id.to_vec(), owner.to_vec());
         if let Some(cached) = self.identity_owner_counts.get(&key) {
             return Ok(*cached);
         }
-        let loaded = store.get_identity_owner_count(collection_id, lock_hash)?;
+        let loaded = match kind {
+            IdentityOwnerKeyKind::LockHash32 => {
+                store.get_identity_owner_count(collection_id, owner)?
+            }
+            IdentityOwnerKeyKind::Prefix20 => {
+                let owner20: [u8; 20] = owner.try_into().map_err(|_| {
+                    anyhow::anyhow!(
+                        "identity owner prefix must be 20 bytes, got {}: collection_id=0x{}",
+                        owner.len(),
+                        hex::encode(collection_id)
+                    )
+                })?;
+                store.get_dotcell_owner20_count(collection_id, &owner20)?
+            }
+        };
         self.identity_owner_counts.insert(key, loaded);
         Ok(loaded)
     }
 
     fn put_identity_owner_count(
         &mut self,
+        kind: IdentityOwnerKeyKind,
         collection_id: &[u8],
-        lock_hash: &[u8],
+        owner: &[u8],
         count: i64,
         batch: &mut StoreBatch,
     ) {
-        batch.put_identity_owner_count(collection_id, lock_hash, count);
+        match kind {
+            IdentityOwnerKeyKind::LockHash32 => {
+                batch.put_identity_owner_count(collection_id, owner, count)
+            }
+            IdentityOwnerKeyKind::Prefix20 => {
+                batch.put_identity_owner20_count(collection_id, owner, count)
+            }
+        }
         self.identity_owner_counts
-            .insert((collection_id.to_vec(), lock_hash.to_vec()), count);
+            .insert((collection_id.to_vec(), owner.to_vec()), count);
     }
 
     fn delete_identity_owner(
         &mut self,
+        kind: IdentityOwnerKeyKind,
         collection_id: &[u8],
-        lock_hash: &[u8],
+        owner: &[u8],
         batch: &mut StoreBatch,
     ) {
-        batch.delete_identity_owner(collection_id, lock_hash);
+        match kind {
+            IdentityOwnerKeyKind::LockHash32 => batch.delete_identity_owner(collection_id, owner),
+            IdentityOwnerKeyKind::Prefix20 => batch.delete_identity_owner20(collection_id, owner),
+        }
         self.identity_owner_counts
-            .insert((collection_id.to_vec(), lock_hash.to_vec()), 0);
+            .insert((collection_id.to_vec(), owner.to_vec()), 0);
     }
 
     pub(crate) fn pending_identity_aggs(&self) -> &HashMap<Vec<u8>, IdentityCollectionAggregate> {
@@ -212,6 +256,42 @@ impl SporeBatchState {
     ) {
         self.spore_outpoints
             .insert((tx_hash.to_vec(), output_index), spore_id.to_vec());
+    }
+
+    /// Every `.cell` namespace this store knows: the committed ring rows plus
+    /// anything this batch has already written.
+    pub(super) fn dotcell_known_namespaces(
+        &mut self,
+        store: &CkbadgerStore,
+    ) -> Result<Vec<[u8; 20]>> {
+        if !self.dotcell_namespaces_loaded {
+            for (namespace, root) in store.list_dotcell_rings()? {
+                self.dotcell_namespaces.insert(namespace);
+                self.dotcell_rings.insert(namespace, root);
+            }
+            self.dotcell_namespaces_loaded = true;
+        }
+        Ok(self.dotcell_namespaces.iter().copied().collect())
+    }
+
+    pub(super) fn remember_dotcell_namespace(&mut self, namespace: [u8; 20]) {
+        self.dotcell_namespaces.insert(namespace);
+    }
+
+    pub(super) fn get_dotcell_ring(
+        &mut self,
+        store: &CkbadgerStore,
+        namespace: &[u8; 20],
+    ) -> Result<Option<DotCellRingRoot>> {
+        if !self.dotcell_namespaces_loaded {
+            self.dotcell_known_namespaces(store)?;
+        }
+        Ok(self.dotcell_rings.get(namespace).cloned())
+    }
+
+    pub(super) fn put_dotcell_ring(&mut self, namespace: &[u8; 20], root: DotCellRingRoot) {
+        self.dotcell_namespaces.insert(*namespace);
+        self.dotcell_rings.insert(*namespace, root);
     }
 
     pub(crate) fn get_cached_spore_id_by_outpoint(
@@ -238,9 +318,10 @@ impl BatchWriter {
         }
     }
 
-    fn apply_identity_owner_transition(
+    pub(super) fn apply_identity_owner_transition(
         &self,
         collection_id: &[u8],
+        kind: IdentityOwnerKeyKind,
         old_owner: Option<&[u8]>,
         new_owner: Option<&[u8]>,
         agg: &mut IdentityCollectionAggregate,
@@ -252,8 +333,12 @@ impl BatchWriter {
         }
 
         if let Some(old_lock) = old_owner {
-            let old_count =
-                state.get_identity_owner_count(self.store.as_ref(), collection_id, old_lock)?;
+            let old_count = state.get_identity_owner_count(
+                self.store.as_ref(),
+                kind,
+                collection_id,
+                old_lock,
+            )?;
             if old_count <= 0 {
                 bail!(
                     "identity owner count underflow: collection_id=0x{}, lock_hash=0x{}, owner_count={}",
@@ -269,16 +354,20 @@ impl BatchWriter {
                         agg.holders_count
                     );
                 }
-                state.delete_identity_owner(collection_id, old_lock, batch);
+                state.delete_identity_owner(kind, collection_id, old_lock, batch);
                 agg.holders_count -= 1;
             } else {
-                state.put_identity_owner_count(collection_id, old_lock, old_count - 1, batch);
+                state.put_identity_owner_count(kind, collection_id, old_lock, old_count - 1, batch);
             }
         }
 
         if let Some(new_lock) = new_owner {
-            let cur_count =
-                state.get_identity_owner_count(self.store.as_ref(), collection_id, new_lock)?;
+            let cur_count = state.get_identity_owner_count(
+                self.store.as_ref(),
+                kind,
+                collection_id,
+                new_lock,
+            )?;
             if cur_count == 0 {
                 agg.holders_count = agg
                     .holders_count
@@ -288,7 +377,7 @@ impl BatchWriter {
             let next = cur_count
                 .checked_add(1)
                 .ok_or_else(|| anyhow::anyhow!("identity owner count overflow"))?;
-            state.put_identity_owner_count(collection_id, new_lock, next, batch);
+            state.put_identity_owner_count(kind, collection_id, new_lock, next, batch);
         }
 
         Ok(())
@@ -534,6 +623,7 @@ impl BatchWriter {
         let owner_from = if was_live { old_owner.as_deref() } else { None };
         self.apply_identity_owner_transition(
             cid,
+            IdentityOwnerKeyKind::LockHash32,
             owner_from,
             Some(did.owner_lock_hash.as_slice()),
             &mut agg,
@@ -887,6 +977,7 @@ impl BatchWriter {
         }
         self.apply_identity_owner_transition(
             collection_id,
+            IdentityOwnerKeyKind::LockHash32,
             if was_live { old_owner.as_deref() } else { None },
             Some(bit_cell.owner_lock_hash.as_slice()),
             &mut aggregate,
@@ -950,6 +1041,7 @@ impl BatchWriter {
             agg.live_count -= 1;
             self.apply_identity_owner_transition(
                 cid,
+                IdentityOwnerKeyKind::LockHash32,
                 old_owner.as_deref(),
                 None,
                 &mut agg,
