@@ -120,6 +120,11 @@ pub fn test_config_with_ckb_db_path(
         ckb_db_cleanup,
         dob_decode_dir: std::path::PathBuf::from("/tmp/ckbadger-test-media"),
         cycles_request_dir: None,
+        // Tests drive the mirror explicitly (install a snapshot, or run one
+        // refresh against wiremock); no background loop polls a node.
+        pool_mirror_enabled: true,
+        pool_poll_interval_ms: 1000,
+        pool_max_tracked_txs: 50_000,
     }
 }
 
@@ -160,6 +165,10 @@ pub fn test_app_state(config: AppConfig) -> Arc<AppState> {
         spore_cache: Arc::new(arc_swap::ArcSwap::from_pointee(None)),
         token_cache: Arc::new(arc_swap::ArcSwap::from_pointee(None)),
         object_cache: Arc::new(arc_swap::ArcSwap::from_pointee(None)),
+        pool_mirror: Arc::new(ckbadger_api::pool::PoolMirror::new(
+            config.pool_mirror_enabled,
+        )),
+        pool_max_tracked_txs: config.pool_max_tracked_txs,
     })
 }
 

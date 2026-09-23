@@ -36,6 +36,10 @@ pub(crate) struct TransactionLookup {
     pub fee: Option<u64>,
     pub time_added_to_pool: Option<u64>,
     pub tx_size: Option<i32>,
+    /// Set by the node only for `committed`. The tx-pool mirror needs them to
+    /// hold a committed record until this process's store has indexed it.
+    pub block_number: Option<i64>,
+    pub block_hash: Option<[u8; 32]>,
 }
 
 impl TransactionLookup {
@@ -224,6 +228,18 @@ pub(crate) async fn fetch_transaction_lookup(
         None => (None, None),
     };
 
+    let block_number = result
+        .tx_status
+        .block_number
+        .map(|number| i64::try_from(u64::from(number)))
+        .transpose()
+        .map_err(|_| "get_transaction returned a block number beyond i64".to_string())?;
+    let block_hash = result
+        .tx_status
+        .block_hash
+        .as_ref()
+        .map(|hash| <[u8; 32]>::from(hash.clone()));
+
     Ok(Some(TransactionLookup {
         status: result.tx_status.status,
         transaction,
@@ -231,6 +247,8 @@ pub(crate) async fn fetch_transaction_lookup(
         fee: result.fee.map(Into::into),
         time_added_to_pool: result.time_added_to_pool.map(Into::into),
         tx_size,
+        block_number,
+        block_hash,
     }))
 }
 

@@ -5,6 +5,7 @@ pub mod entry;
 mod frontend_formats;
 pub mod frontend_proxy;
 pub mod middleware;
+pub mod pool;
 pub mod response;
 pub mod routes;
 pub mod utils;
@@ -29,6 +30,7 @@ use cache::{CacheBackend, InMemoryCache};
 use ckb_store_reader::CkbChainReader;
 use cycles::CyclesClient;
 use middleware::IpRateLimitLayer;
+use pool::PoolMirror;
 use response::{ApiError, ApiRouteError};
 use warmup::SporeCache;
 use ws::WsManager;
@@ -92,6 +94,13 @@ pub struct AppState {
     pub token_cache: Arc<ArcSwap<Option<Vec<warmup::CachedAssetEntry>>>>,
     /// Object asset cache, replaced atomically by warmup loop (no TTL expiry).
     pub object_cache: Arc<ArcSwap<Option<Vec<warmup::CachedAssetEntry>>>>,
+    /// In-memory mirror of the node's transaction pool. Memory only: it writes
+    /// to no store, and no value it holds enters a balance, holder list or
+    /// statistic. Disabled mirrors publish `enabled: false` rather than an
+    /// empty pool.
+    pub pool_mirror: Arc<PoolMirror>,
+    /// Upper bound on mirrored pool transactions (`[api] pool_max_tracked_txs`).
+    pub pool_max_tracked_txs: usize,
 }
 
 impl AppState {
@@ -211,6 +220,12 @@ pub struct AppConfig {
     pub dob_decode_dir: PathBuf,
     /// Directory where API writes cycles calculation request files for the indexer worker.
     pub cycles_request_dir: Option<PathBuf>,
+    /// Mirror the node's tx pool in process memory (`[api] pool_mirror_enabled`).
+    pub pool_mirror_enabled: bool,
+    /// Poll interval for that mirror (`[api] pool_poll_interval_ms`).
+    pub pool_poll_interval_ms: u64,
+    /// Tracking cap for that mirror (`[api] pool_max_tracked_txs`).
+    pub pool_max_tracked_txs: usize,
 }
 
 /// Seed the asset/address/script caches at startup *only when no background
@@ -278,6 +293,9 @@ pub async fn create_router(config: AppConfig) -> Router {
 
     let mem_cache = InMemoryCache::new();
 
+    let pool_mirror = Arc::new(PoolMirror::new(config.pool_mirror_enabled));
+    let pool_poll_interval = std::time::Duration::from_millis(config.pool_poll_interval_ms.max(1));
+
     let state = Arc::new(AppState {
         store: config.store,
         append_only_store: config.append_only_store,
@@ -297,6 +315,8 @@ pub async fn create_router(config: AppConfig) -> Router {
         spore_cache: Arc::new(ArcSwap::from_pointee(None)),
         token_cache: Arc::new(ArcSwap::from_pointee(None)),
         object_cache: Arc::new(ArcSwap::from_pointee(None)),
+        pool_mirror,
+        pool_max_tracked_txs: config.pool_max_tracked_txs,
     });
 
     dispatch_initial_warmup(state.clone(), config.start_background_tasks).await;
@@ -356,6 +376,11 @@ pub async fn create_router(config: AppConfig) -> Router {
         let address_cache_state = state.clone();
         tokio::spawn(async move {
             warmup::refresh_address_cache_loop(address_cache_state).await;
+        });
+
+        let pool_mirror_state = state.clone();
+        tokio::spawn(async move {
+            pool::refresh_pool_mirror_loop(pool_mirror_state, pool_poll_interval).await;
         });
     }
 

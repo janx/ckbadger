@@ -954,6 +954,9 @@ async fn cmd_internal(workdir: &Path, args: &InternalArgs) -> Result<()> {
                 // primary. Opening is opt-in and handled in run_api.
                 network_data_path: store_paths.network_data.to_string_lossy().to_string(),
                 crawler_enabled: config.crawler.enabled,
+                pool_mirror_enabled: config.api.pool_mirror_enabled,
+                pool_poll_interval_ms: config.api.pool_poll_interval_ms,
+                pool_max_tracked_txs: config.api.pool_max_tracked_txs,
             };
             run_api(api_config).await
         }

@@ -40,6 +40,10 @@ pub struct ApiServiceConfig {
     pub network_data_path: String,
     /// Whether the network crawler is enabled in config (surfaced to the UI).
     pub crawler_enabled: bool,
+    /// Mirror the node's tx pool in API process memory (`[api] pool_mirror_enabled`).
+    pub pool_mirror_enabled: bool,
+    pub pool_poll_interval_ms: u64,
+    pub pool_max_tracked_txs: usize,
 }
 
 const NETWORK_STORE_RETRY_INTERVAL: Duration = Duration::from_secs(1);
@@ -239,6 +243,9 @@ pub async fn run_api(config: ApiServiceConfig) -> Result<()> {
         ckb_db_cleanup: None,
         dob_decode_dir: config.dob_decode_dir,
         cycles_request_dir: config.cycles_request_dir.clone(),
+        pool_mirror_enabled: config.pool_mirror_enabled,
+        pool_poll_interval_ms: config.pool_poll_interval_ms,
+        pool_max_tracked_txs: config.pool_max_tracked_txs,
     };
     let app = create_router(app_config).await;
 
