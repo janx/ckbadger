@@ -2015,7 +2015,16 @@ impl Indexer {
         let mut batch_new_addresses = 0i64;
 
         let t_write = Instant::now();
-        let mut write_commit_ms = 0.0_f64;
+        self.perf.mark_writer_phase();
+        // Commit-window split (P3.2). Assigned exactly once, in the finalize
+        // block below; declared without a value so a missing assignment is a
+        // compile error rather than a silent zero.
+        let commit_prepare_ms: f64;
+        let script_rollup_ms: f64;
+        let append_only_commit_synced_ms: f64;
+        let domain_commit_ms: f64;
+        let commit_phase_total_ms: f64;
+        let tracker_state_bytes: usize;
         let mut batch_stats;
         // Post-batch DAO lifecycle view of everything this batch stages, used to
         // materialize completed-day snapshots exactly before the atomic commit.
@@ -2491,6 +2500,10 @@ impl Indexer {
 
             let mut block_tx_idx = 0usize;
             for (block_idx, block_response) in blocks.iter().enumerate() {
+                // Staging a 5,000-block batch takes minutes; the watchdog must
+                // see the writer moving through it, not just at the phase
+                // boundaries around it.
+                self.perf.mark_writer_phase();
                 let parsed = &all_parsed_blocks[block_idx];
                 let tx_count_for_block =
                     checked_tx_count(parsed.transactions_count, parsed.number)?;
@@ -2799,6 +2812,9 @@ impl Indexer {
             // --- Main pass: per-tx with inputs-before-outputs ---
             let mut block_tx_idx = 0usize;
             for (block_idx, block_response) in blocks.iter().enumerate() {
+                // Protocol state for one block: the longest stretch of the
+                // staging body. Beat the heartbeat per block here too.
+                self.perf.mark_writer_phase();
                 let parsed = &all_parsed_blocks[block_idx];
                 let tx_count_for_block =
                     checked_tx_count(parsed.transactions_count, parsed.number)?;
@@ -3659,6 +3675,7 @@ impl Indexer {
 
         let mut block_tx_idx = 0usize;
         for parsed in all_parsed_blocks {
+            self.perf.mark_writer_phase();
             let block_date = ckbadger_common::block_date(parsed.timestamp);
             let tx_count_for_block = checked_tx_count(parsed.transactions_count, parsed.number)?;
             let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
@@ -3904,6 +3921,7 @@ impl Indexer {
 
         // Finalization: block headers + stats
         let t_finalize = Instant::now();
+        self.perf.mark_writer_phase();
         {
             let mut core_batch = StoreBatch::new(self.writer.store());
             self.writer
@@ -4026,7 +4044,11 @@ impl Indexer {
                 )?;
             }
 
+            // The commit window, split into five non-overlapping parts. Each
+            // part also beats the writer-phase heartbeat, so a multi-minute
+            // catch-up batch is visibly progressing instead of looking stalled.
             let commit_started = Instant::now();
+            self.perf.mark_writer_phase();
             // Live sync: merge headers and stats into the single data_batch
             // that already holds all domain writes, then commit atomically.
             data_batch.merge_from(core_batch);
@@ -4037,7 +4059,7 @@ impl Indexer {
             } else {
                 self.writer.read_address_balances(&lock_hash_refs)?
             };
-            let prepared_hodl_tracker = self.prepare_hodl_wave_batch(
+            let (prepared_hodl_tracker, hodl_state_bytes) = self.prepare_hodl_wave_batch(
                 all_parsed_blocks,
                 &all_tx_data,
                 &input_cell_info,
@@ -4045,17 +4067,27 @@ impl Indexer {
                 &prefetched_address_balances,
                 &mut data_batch,
             )?;
-            let prepared_cell_dist_tracker = self.prepare_cell_distribution_batch(
-                all_parsed_blocks,
-                &all_tx_data,
-                &input_cell_info,
-                &batch_cell_infos,
-                &prefetched_address_balances,
-                &mut data_batch,
-            )?;
+            let (prepared_cell_dist_tracker, cell_dist_state_bytes) = self
+                .prepare_cell_distribution_batch(
+                    all_parsed_blocks,
+                    &all_tx_data,
+                    &input_cell_info,
+                    &batch_cell_infos,
+                    &prefetched_address_balances,
+                    &mut data_batch,
+                )?;
+            commit_prepare_ms = commit_started.elapsed().as_secs_f64() * 1000.0;
+            // Both trackers serialize their WHOLE state into `sync_meta` every
+            // batch (~220 KB mainnet / ~175 KB testnet per block in 2026-09).
+            // Reported so the share of the prepare phase it costs is a measured
+            // number, not a guess (P3.4 step 3).
+            tracker_state_bytes = hodl_state_bytes + cell_dist_state_bytes;
+
             // Merge script reference rollup writes into the same atomic batch,
             // eliminating the crash window between data_batch.commit() and a
             // separate post-commit refresh.
+            let script_rollup_started = Instant::now();
+            self.perf.mark_writer_phase();
             self.writer
                 .materialize_script_versions_and_families(
                     &updated_script_references,
@@ -4067,6 +4099,7 @@ impl Indexer {
                         first_block, last_block
                     )
                 })?;
+            script_rollup_ms = script_rollup_started.elapsed().as_secs_f64() * 1000.0;
 
             debug!(
                 phase = "domain_atomic_commit",
@@ -4094,6 +4127,8 @@ impl Indexer {
             // harmless: if the domain batch is lost, the tip rolls back and the now
             // orphan payloads (content-addressed by outpoint, never referenced
             // without a marker) are re-written identically on re-sync.
+            let append_only_started = Instant::now();
+            self.perf.mark_writer_phase();
             if !cells_batch.is_empty() {
                 cells_batch.commit_synced().with_context(|| {
                     format!(
@@ -4102,14 +4137,24 @@ impl Indexer {
                     )
                 })?;
             }
+            append_only_commit_synced_ms = append_only_started.elapsed().as_secs_f64() * 1000.0;
+
+            // The last markable point before the batch leaves this process.
+            // A single `db.write()` cannot be marked from inside — RocksDB
+            // gives no progress callback — so a genuinely wedged commit still
+            // trips the watchdog, which is exactly what it is for.
+            let domain_commit_started = Instant::now();
+            self.perf.mark_writer_phase();
             data_batch.commit().with_context(|| {
                 format!(
                     "atomic domain commit failed for blocks {}-{}",
                     first_block, last_block
                 )
             })?;
+            domain_commit_ms = domain_commit_started.elapsed().as_secs_f64() * 1000.0;
+
             let commit_ms = commit_started.elapsed().as_secs_f64() * 1000.0;
-            write_commit_ms += commit_ms;
+            commit_phase_total_ms = commit_ms;
             if commit_ms >= BULK_PHASE_COMMIT_SLOW_WARN_MS {
                 warn!(
                     phase = "finalize_commit",
@@ -4195,7 +4240,16 @@ impl Indexer {
         info!(
             precompute_ms = format!("{:.1}", precompute_ms),
             write_ms = format!("{:.1}", write_ms),
-            write_commit_ms = format!("{:.1}", write_commit_ms),
+            // `write_commit_ms` is the wide window under its old name, so old
+            // and new logs compare directly; it is the same measurement as
+            // `commit_phase_total_ms`, not a second one.
+            write_commit_ms = format!("{:.1}", commit_phase_total_ms),
+            commit_phase_total_ms = format!("{:.1}", commit_phase_total_ms),
+            commit_prepare_ms = format!("{:.1}", commit_prepare_ms),
+            script_rollup_ms = format!("{:.1}", script_rollup_ms),
+            append_only_commit_synced_ms = format!("{:.1}", append_only_commit_synced_ms),
+            domain_commit_ms = format!("{:.1}", domain_commit_ms),
+            tracker_state_bytes,
             finalize_ms = format!("{:.1}", finalize_ms),
             txs = batch_tx_count,
             cells = batch_cell_count,
@@ -4203,10 +4257,15 @@ impl Indexer {
             "Batch write breakdown"
         );
         Ok(BatchWriteMetrics {
-            commit_ms: write_commit_ms,
             write_ms,
-            prefetch_ms: 0.0,
+            precompute_ms,
             finalize_ms,
+            commit_prepare_ms,
+            script_rollup_ms,
+            append_only_commit_synced_ms,
+            domain_commit_ms,
+            commit_phase_total_ms,
+            tracker_state_bytes,
             txs: u64::try_from(batch_tx_count).expect("parsed batch tx count exceeds u64"),
             cells: u64::try_from(batch_cell_count).expect("parsed batch cell count exceeds u64"),
             inputs: u64::try_from(batch_input_count).expect("parsed batch input count exceeds u64"),
@@ -5926,6 +5985,13 @@ mod tests {
                 last_cache_invalidation: tokio::sync::Mutex::new(0),
                 was_bulk_sync_active: AtomicBool::new(false),
                 bulk_sync_allowed: AtomicBool::new(false),
+                startup_decision: crate::sync::decide_startup_sync(
+                    0,
+                    99,
+                    &Some(vec![0x99; 32]),
+                    72,
+                )
+                .expect("live-write fixture startup decision"),
                 rebuild_pause_flag: Arc::new(AtomicBool::new(false)),
                 pipeline_reset_notify_flag: Arc::new(AtomicBool::new(false)),
                 pipeline_reset_reason_code: Arc::new(AtomicU8::new(0)),
@@ -6039,7 +6105,9 @@ mod tests {
             indexer: &Indexer,
             block: BlockResponseWithCycles,
         ) -> Result<()> {
-            write_live_block_with_entity_changes(indexer, block, EntityDailyChanges::new()).await
+            write_live_block_with_entity_changes(indexer, block, EntityDailyChanges::new())
+                .await
+                .map(|_metrics| ())
         }
 
         /// Same live write path, but with NON-EMPTY entity daily/hourly changes.
@@ -6052,8 +6120,17 @@ mod tests {
             indexer: &Indexer,
             block: BlockResponseWithCycles,
             token_daily_changes: EntityDailyChanges<EntityDateKey>,
-        ) -> Result<()> {
-            let blocks = vec![block];
+        ) -> Result<crate::sync::types::BatchWriteMetrics> {
+            write_live_blocks_with_entity_changes(indexer, vec![block], token_daily_changes).await
+        }
+
+        /// Same live write path with SEVERAL blocks in ONE batch — the shape a
+        /// live catch-up actually uses (up to 5,000 blocks per batch).
+        pub(super) async fn write_live_blocks_with_entity_changes(
+            indexer: &Indexer,
+            blocks: Vec<BlockResponseWithCycles>,
+            token_daily_changes: EntityDailyChanges<EntityDateKey>,
+        ) -> Result<crate::sync::types::BatchWriteMetrics> {
             let (all_parsed_blocks, mut all_tx_data, all_input_outpoints) =
                 parse_blocks_parallel(&blocks)?;
 
@@ -6116,7 +6193,7 @@ mod tests {
             )?;
 
             let chain_tip = u64::try_from(all_parsed_blocks.last().unwrap().number)?;
-            indexer
+            let metrics = indexer
                 .write_parsed_batch(
                     &blocks,
                     &all_parsed_blocks,
@@ -6136,7 +6213,203 @@ mod tests {
                     chain_tip,
                 )
                 .await?;
-            Ok(())
+            Ok(metrics)
+        }
+
+        /// P3.2: the commit window is reported as five non-overlapping parts.
+        ///
+        /// Before this, one `write_commit_ms` covered merge + balance reads +
+        /// both trackers + the script rollup + both commits, so a 66-383 s
+        /// catch-up commit window could not be attributed to anything.
+        #[tokio::test]
+        async fn live_batch_splits_the_commit_window_into_five_phases() {
+            let dir = tempfile::tempdir().unwrap();
+            let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+            let indexer = indexer_for_live_write_test(store.clone());
+            store
+                .set_secondary_epoch_reward(61_369_863_013_698)
+                .unwrap();
+
+            let metrics = write_live_block_with_entity_changes(
+                &indexer,
+                block(100, AR_DEPOSIT, vec![cellbase_tx(0xc0, FUNDING_CAPACITY)]),
+                EntityDailyChanges::new(),
+            )
+            .await
+            .unwrap();
+
+            assert!(
+                metrics.commit_phase_total_ms > 0.0,
+                "the commit window must be measured: {metrics:?}"
+            );
+            let parts = metrics.commit_prepare_ms
+                + metrics.script_rollup_ms
+                + metrics.append_only_commit_synced_ms
+                + metrics.domain_commit_ms;
+            assert!(
+                parts <= metrics.commit_phase_total_ms + 1e-9,
+                "the parts must not exceed the whole: parts={parts}, total={}, {metrics:?}",
+                metrics.commit_phase_total_ms
+            );
+            for (name, value) in [
+                ("commit_prepare_ms", metrics.commit_prepare_ms),
+                ("script_rollup_ms", metrics.script_rollup_ms),
+                (
+                    "append_only_commit_synced_ms",
+                    metrics.append_only_commit_synced_ms,
+                ),
+                ("domain_commit_ms", metrics.domain_commit_ms),
+            ] {
+                assert!(value >= 0.0, "{name} must be non-negative: {metrics:?}");
+                assert!(
+                    value <= metrics.commit_phase_total_ms,
+                    "{name} must fit inside the commit window: {metrics:?}"
+                );
+            }
+            assert_eq!(
+                metrics.commit_ms(),
+                metrics.commit_phase_total_ms,
+                "write_commit_ms stays the wide-window alias of commit_phase_total_ms"
+            );
+            // The writer's own pre-batch CPU phase now reaches the metrics
+            // instead of the constant-zero `prefetch_ms` the health monitor
+            // was fed as `precompute_ms`.
+            assert!(
+                metrics.precompute_ms > 0.0,
+                "precompute_ms must carry the measured pre-batch phase: {metrics:?}"
+            );
+            // Both trackers serialize their whole state every batch; the cost
+            // of that rule is reported, not assumed.
+            let committed_len = |key: &[u8]| -> usize {
+                store
+                    .get_cf(store.cf_sync_meta(), key)
+                    .expect("read sync_meta")
+                    .expect("tracker state must be committed")
+                    .len()
+            };
+            let hodl_bytes = committed_len(ckbadger_store::keys::sync_meta_keys::HODL_TRACKER);
+            let cell_dist_bytes =
+                committed_len(ckbadger_store::keys::sync_meta_keys::CELL_DIST_TRACKER);
+            assert_eq!(
+                metrics.tracker_state_bytes,
+                hodl_bytes + cell_dist_bytes,
+                "tracker_state_bytes must be the bytes actually written: {metrics:?}"
+            );
+        }
+
+        /// P3.2 (review m1): the writer-phase heartbeat must beat inside the
+        /// staging body, not only at the six phase boundaries.
+        ///
+        /// A live catch-up batch of 5,000 blocks spends minutes between
+        /// `t_write` and `t_finalize`. If only the boundaries mark a phase, the
+        /// watchdog sees no writer progress for that whole stretch and warns
+        /// exactly where P3.2 was supposed to stop warning.
+        #[tokio::test]
+        async fn staging_body_marks_a_writer_phase_for_every_block_in_the_batch() {
+            let dir = tempfile::tempdir().unwrap();
+            let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+            let indexer = indexer_for_live_write_test(store.clone());
+            store
+                .set_secondary_epoch_reward(61_369_863_013_698)
+                .unwrap();
+
+            let before_one = indexer.writer_phase_seq();
+            write_live_blocks_with_entity_changes(
+                &indexer,
+                vec![block(
+                    100,
+                    AR_DEPOSIT,
+                    vec![cellbase_tx(0xc0, FUNDING_CAPACITY)],
+                )],
+                EntityDailyChanges::new(),
+            )
+            .await
+            .unwrap();
+            let one_block_marks = indexer.writer_phase_seq() - before_one;
+
+            let before_three = indexer.writer_phase_seq();
+            write_live_blocks_with_entity_changes(
+                &indexer,
+                vec![
+                    block(101, AR_DEPOSIT, vec![cellbase_tx(0xc1, FUNDING_CAPACITY)]),
+                    block(102, AR_DEPOSIT, vec![cellbase_tx(0xc2, FUNDING_CAPACITY)]),
+                    block(103, AR_DEPOSIT, vec![cellbase_tx(0xc3, FUNDING_CAPACITY)]),
+                ],
+                EntityDailyChanges::new(),
+            )
+            .await
+            .unwrap();
+            let three_block_marks = indexer.writer_phase_seq() - before_three;
+
+            assert!(
+                three_block_marks >= one_block_marks + 2,
+                "the heartbeat must beat per staged block: 1-block batch marked \
+                 {one_block_marks}, 3-block batch marked {three_block_marks}"
+            );
+        }
+
+        /// P3.4 step 3 measurement: how much of the commit prepare phase is
+        /// the two trackers serializing their whole state into `sync_meta`.
+        ///
+        /// The decision rule from the plan is "change the persistence only if
+        /// this exceeds 20% of `commit_prepare_ms`". The smallest per-block
+        /// commit window measured in production was 1,100 ms (testnet, near
+        /// tip), so 20% of it is 220 ms; a production-scale state (2,495 date
+        /// entries, the number both trackers carried on 2026-09-22) must
+        /// serialize far below that. If it ever does not, this fails and the
+        /// decision has to be revisited rather than silently outgrown.
+        #[test]
+        fn tracker_state_serialization_is_a_minor_share_of_commit_prepare() {
+            use ckbadger_store::types::{CellDistributionTrackerState, HodlTrackerState};
+
+            const DATE_ENTRIES: usize = 2_495;
+            let capacity_by_date: Vec<(String, i128)> = (0..DATE_ENTRIES)
+                .map(|i| (format!("2026{:04}", i), 1_234_567_890_123_i128 + i as i128))
+                .collect();
+            let date_transitions: Vec<(i64, String)> = (0..DATE_ENTRIES)
+                .map(|i| (20_000_000 + i as i64, format!("2026{i:04}")))
+                .collect();
+            let hodl = HodlTrackerState {
+                capacity_by_date,
+                date_transitions: date_transitions.clone(),
+                holder_count: 1_234_567,
+                last_snapshot_date: Some("20260922".to_string()),
+                last_processed_block: Some(20_530_767),
+            };
+            let cell_dist = CellDistributionTrackerState {
+                count_by_bucket: [1, 2, 3, 4, 5, 6],
+                total_capacity_by_bucket: [1, 2, 3, 4, 5, 6],
+                date_transitions,
+                last_snapshot_date: Some("20260922".to_string()),
+                cohort_accum: (0..DATE_ENTRIES)
+                    .map(|i| (format!("2026-{:02}", i % 12 + 1), i as i128, i as i128))
+                    .collect(),
+                last_processed_block: Some(20_530_767),
+            };
+
+            let mut bytes = 0usize;
+            let mut best = std::time::Duration::MAX;
+            for _ in 0..5 {
+                let started = std::time::Instant::now();
+                let hodl_bytes = bincode::serialize(&hodl).unwrap();
+                let cell_dist_bytes = bincode::serialize(&cell_dist).unwrap();
+                let elapsed = started.elapsed();
+                bytes = hodl_bytes.len() + cell_dist_bytes.len();
+                best = best.min(elapsed);
+            }
+            eprintln!(
+                "tracker_state_bytes={bytes} serialize_us={} (date_entries={DATE_ENTRIES})",
+                best.as_micros()
+            );
+
+            const COMMIT_PREPARE_20_PCT_MS: u128 = 220;
+            assert!(bytes > 0);
+            assert!(
+                best.as_millis() < COMMIT_PREPARE_20_PCT_MS,
+                "tracker state serialization ({} ms for {bytes} bytes) reached 20% of the \
+                 smallest measured commit prepare window; revisit the P3.4 step 3 decision",
+                best.as_millis()
+            );
         }
 
         /// Review m10: drive the real live write path with NON-EMPTY entity

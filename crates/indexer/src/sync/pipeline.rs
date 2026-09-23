@@ -2819,23 +2819,35 @@ impl Indexer {
                     let db_elapsed = db_start.elapsed();
                     self.perf.add_db_write(db_elapsed);
                     self.perf
-                        .add_db_commit(duration_from_millis(write_metrics.commit_ms));
+                        .add_db_commit(duration_from_millis(write_metrics.commit_ms()));
                     // Per-phase decomposition: precompute (CPU pre-batch),
                     // build (CPU batch construction), finalize (post-build
                     // including the inner db.write() commit). The health
                     // monitor subtracts commit_ms from finalize_ms to
                     // attribute the I/O vs CPU split inside finalize.
                     self.perf.add_write_phase_ms(
-                        write_metrics.prefetch_ms,
+                        write_metrics.precompute_ms,
                         write_metrics.write_ms,
                         write_metrics.finalize_ms,
+                    );
+                    self.perf.add_commit_phase_ms(
+                        write_metrics.commit_prepare_ms,
+                        write_metrics.script_rollup_ms,
+                        write_metrics.append_only_commit_synced_ms,
+                        write_metrics.domain_commit_ms,
                     );
 
                     if db_elapsed.as_secs() >= 5 {
                         let stats = self.writer.store().memory_stats();
                         warn!(
                             db_stage_ms = format!("{:.1}", db_elapsed.as_secs_f64() * 1000.0),
-                            commit_ms = format!("{:.1}", write_metrics.commit_ms),
+                            commit_ms = format!("{:.1}", write_metrics.commit_ms()),
+                            commit_prepare_ms = format!("{:.1}", write_metrics.commit_prepare_ms),
+                            script_rollup_ms = format!("{:.1}", write_metrics.script_rollup_ms),
+                            append_only_commit_synced_ms =
+                                format!("{:.1}", write_metrics.append_only_commit_synced_ms),
+                            domain_commit_ms = format!("{:.1}", write_metrics.domain_commit_ms),
+                            tracker_state_bytes = write_metrics.tracker_state_bytes,
                             compaction_pending_mb = stats.compaction_pending_bytes / (1024 * 1024),
                             running_compactions = stats.num_running_compactions,
                             l0_total = stats.l0_files_count,
@@ -2869,7 +2881,7 @@ impl Indexer {
                             - parse_tx_for_writer_depth.capacity();
                         self.pipeline_perf.record_write(
                             db_elapsed,
-                            write_metrics.commit_ms,
+                            write_metrics.commit_ms(),
                             recv_wait_ms,
                             writer_queue,
                             parse_tx_for_writer_depth.max_capacity(),
@@ -2888,13 +2900,17 @@ impl Indexer {
                             parse_ms: parser_perf_sample.parse_ms,
                             precompute_ms: parser_perf_sample.precompute_ms,
                             build_ms: write_metrics.write_ms,
-                            prefetch_ms: write_metrics.prefetch_ms,
+                            // The pipeline writer stage has no prefetch phase of
+                            // its own — the parser's DB prefetch is inside
+                            // `parse_ms`, and the writer's pre-batch CPU work is
+                            // `write_metrics.precompute_ms`, reported above.
+                            prefetch_ms: 0.0,
                             finalize_ms: write_metrics.finalize_ms,
                             ..BatchSample::new(
                                 u64::try_from(all_parsed_blocks.len())
                                     .expect("parsed block count exceeds u64"),
                                 db_elapsed.as_secs_f64(),
-                                write_metrics.commit_ms,
+                                write_metrics.commit_ms(),
                                 perf_stats.compaction_pending_bytes / (1024 * 1024),
                                 perf_stats.l0_files_count,
                                 perf_stats.immutable_memtables,
@@ -2913,7 +2929,7 @@ impl Indexer {
                             end_block,
                             blocks_remaining,
                             db_elapsed.as_secs_f64(),
-                            write_metrics.commit_ms,
+                            write_metrics.commit_ms(),
                             writer_queue,
                             recv_wait_ms,
                             mode

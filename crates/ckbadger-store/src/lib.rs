@@ -90,5 +90,6 @@ pub use store::{
     CF_STATS_TOKEN, CF_SYNC_META, CF_TOKENS, CF_TOKEN_HOLDERS, CF_TOKEN_HOLDERS_BY_BALANCE,
     CF_TX_ACTIONS, CF_TX_HASH_MAP, CF_TX_INDEX, DOMAIN_CFS, NETWORK_CFS,
 };
+pub use sync_ops::HeartbeatTick;
 pub use types::*;
 pub use undo_log_ops::UndoRollbackResult;

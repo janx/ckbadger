@@ -158,9 +158,14 @@ impl BatchWriter {
             Some(append_store),
             undo_result.tx_contexts,
         )?;
-        // Flush memtables after rollback so that the subsequent refresh reads
-        // (script rollups, DAO statistics) hit sorted SSTs instead of
-        // triggering O(N log N) VectorRep sorts on the un-flushed memtable.
+        // Flush both stores after the rollback. The original reason — avoiding
+        // O(N log N) VectorRep sorts on the un-flushed memtable during the
+        // refresh reads below — no longer applies: a live process is the only
+        // one that reorgs, and it now always opens with a skiplist (P3.1).
+        // The flush stays for durability and cross-store consistency: the
+        // rolled-back tip of BOTH stores must be on disk before the refresh
+        // reads re-derive aggregates from it and before an API secondary can
+        // catch up to a half-rolled-back view.
         self.store.flush_all_memtables()?;
         append_store.flush_all_memtables()?;
         // Re-derive script version/family rollups from the corrected reference info.
