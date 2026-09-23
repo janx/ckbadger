@@ -1241,6 +1241,53 @@ pub(super) fn should_abort_unresolved_retry_on_epoch_change(
 /// (block, entity-stats key).
 pub const ENTITY_STATS_UNDO_RETAIN_BLOCKS: i64 = 1_000;
 
+/// Run one bounded hourly-retention step for each per-entity hourly family that
+/// has a retention policy, staging deletions and state into `batch`.
+///
+/// Spore hourly buckets have no retention policy today and are deliberately not
+/// touched: inventing one would delete data no contract promises to expire (see
+/// `docs/STORE_SCHEMA.md`).
+///
+/// Bulk build is refused here rather than only at the call site: bulk has no
+/// reorg workflow and no undo entries, so it has nothing to protect the
+/// deletions against, and a maintenance write inside a bulk batch would break
+/// `BULK_SYNC.md`'s "bulk runs no maintenance" rule wherever it were called
+/// from.
+pub fn stage_hourly_retention(
+    writer: &BatchWriter,
+    batch: &mut StoreBatch,
+    committed_tip: i64,
+    now_ms: i64,
+) -> Result<()> {
+    use ckbadger_store::types::HourlyRetentionFamily;
+
+    if writer.store().is_bulk_sync_mode() {
+        return Ok(());
+    }
+
+    for family in [HourlyRetentionFamily::Token, HourlyRetentionFamily::Mnft] {
+        let already_executed = writer
+            .store()
+            .get_hourly_retention_state(family)?
+            .map(|state| state.executed_cutoff_hour)
+            .unwrap_or(i64::MIN);
+        let cutoff_hour =
+            writer.hourly_retention_cutoff_hour(now_ms, committed_tip, already_executed)?;
+        let result = writer.stage_hourly_retention_step(batch, family, cutoff_hour, now_ms)?;
+        if result.deleted > 0 || result.completed {
+            debug!(
+                family = family.as_str(),
+                cutoff_hour,
+                deleted = result.deleted,
+                scanned = result.scanned,
+                completed = result.completed,
+                "Hourly retention step staged"
+            );
+        }
+    }
+    Ok(())
+}
+
 /// Stage the coverage-floor advance and the matching undo deletions.
 ///
 /// Returns the number of undo entries staged for deletion.
@@ -3947,6 +3994,25 @@ impl Indexer {
                 )?;
             }
 
+            // One bounded hourly-retention step, if the periodic task asked for
+            // one. Deletions and the advanced retention state go into the same
+            // batch as the blocks, so the persisted boundary always matches
+            // what was actually deleted, and no background task can delete a
+            // bucket while a rollback is restoring it. Bulk build never runs
+            // this maintenance path.
+            if !bulk_sync_mode
+                && self
+                    .hourly_retention_requested
+                    .swap(false, Ordering::Relaxed)
+            {
+                stage_hourly_retention(
+                    &self.writer,
+                    &mut data_batch,
+                    last_block,
+                    Utc::now().timestamp_millis(),
+                )?;
+            }
+
             let commit_started = Instant::now();
             // Live sync: merge headers and stats into the single data_batch
             // that already holds all domain writes, then commit atomically.
@@ -5862,6 +5928,7 @@ mod tests {
                 ckb_store: None,
                 hodl_tracker: std::sync::Mutex::new(HodlWaveTracker::new()),
                 cell_dist_tracker: std::sync::Mutex::new(CellDistributionTracker::new()),
+                hourly_retention_requested: Arc::new(AtomicBool::new(false)),
             }
         }
 

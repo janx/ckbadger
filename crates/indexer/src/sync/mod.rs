@@ -24,6 +24,8 @@ pub(crate) mod undo;
 #[doc(hidden)]
 pub use batch::stage_entity_stats_undo_retention;
 #[doc(hidden)]
+pub use batch::stage_hourly_retention;
+#[doc(hidden)]
 pub use batch::ENTITY_STATS_UNDO_RETAIN_BLOCKS;
 #[doc(hidden)]
 pub use bulk_build::facts::{CellFactsSnapshot, CellSemanticTag, FactsArenaSnapshot};

@@ -12,6 +12,23 @@ use crate::types::{
 };
 
 impl CkbadgerStore {
+    pub fn get_hourly_retention_state(
+        &self,
+        family: crate::types::HourlyRetentionFamily,
+    ) -> anyhow::Result<Option<crate::types::HourlyRetentionState>> {
+        let key = keys::encode_hourly_retention_state_key(family.as_str());
+        match self.get_cf(self.cf_sync_meta(), &key)? {
+            Some(value) => Ok(Some(bincode::deserialize(&value).map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to decode hourly retention state for {}: {}",
+                    family.as_str(),
+                    e
+                )
+            })?)),
+            None => Ok(None),
+        }
+    }
+
     pub fn get_entity_stats_undo_contract(
         &self,
     ) -> anyhow::Result<Option<crate::types::EntityStatsUndoContract>> {

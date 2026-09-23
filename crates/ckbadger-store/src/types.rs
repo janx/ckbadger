@@ -1579,6 +1579,46 @@ pub struct EntityStatsUndoContract {
 /// existing entries unreadable; the startup check then rejects older stores.
 pub const ENTITY_STATS_UNDO_CONTRACT_VERSION: u32 = 1;
 
+/// Which per-entity hourly family a retention state row describes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum HourlyRetentionFamily {
+    /// `TOKEN_HOURLY` in `CF_STATS_TOKEN`.
+    Token,
+    /// `OBJECT_HOURLY` in `CF_STATS_MNFT`.
+    Mnft,
+}
+
+impl HourlyRetentionFamily {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Token => "token",
+            Self::Mnft => "mnft",
+        }
+    }
+}
+
+/// What this store has actually deleted from one hourly family.
+///
+/// This is the evidence that a missing hourly bucket is legitimate retention
+/// rather than corruption. A verifier that cannot see it must report
+/// `unknown`, never "zero" — which is why the boundary is persisted rather
+/// than recomputed from the reader's wall clock.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HourlyRetentionState {
+    pub policy_version: u32,
+    pub family: HourlyRetentionFamily,
+    /// Highest cutoff hour whose deletions have begun. Monotonic: a clock that
+    /// goes backwards does not un-delete anything, so the boundary must not
+    /// claim data that is already gone.
+    pub executed_cutoff_hour: i64,
+    /// Where the current round stopped; `None` once the round is complete.
+    pub cursor: Option<Vec<u8>>,
+    pub round_started_at: i64,
+    pub round_completed_at: Option<i64>,
+}
+
+pub const HOURLY_RETENTION_POLICY_VERSION: u32 = 1;
+
 /// Memory/storage statistics for monitoring.
 #[derive(Debug, Clone, Default)]
 pub struct MemoryStats {

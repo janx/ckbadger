@@ -716,6 +716,14 @@ impl<'a> StoreBatch<'a> {
         self.delete_cf(self.store.cf_reorg_undo_log_by_block(), key);
     }
 
+    /// Persist one hourly family's retention state in the same atomic batch as
+    /// the deletions it describes.
+    pub fn put_hourly_retention_state(&mut self, state: &crate::types::HourlyRetentionState) {
+        let key = keys::encode_hourly_retention_state_key(state.family.as_str());
+        let value = bincode::serialize(state).expect("serialize HourlyRetentionState");
+        self.put_sync_meta(&key, &value);
+    }
+
     /// Persist the entity-stats rollback coverage contract in the same atomic
     /// batch as the writes it describes.
     pub fn put_entity_stats_undo_contract(

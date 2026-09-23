@@ -1216,3 +1216,205 @@ async fn bulk_completion_writes_contract() {
     // And a store built that way now passes the startup gate.
     ckbadger_indexer::entry::ensure_entity_stats_undo_contract_on_startup(&domain).unwrap();
 }
+
+// ---------------------------------------------------------------------------
+// Task 2.6 — hourly retention runs inside the writer
+// ---------------------------------------------------------------------------
+
+/// Seed `count` hourly buckets for one entity, one per hour ending at
+/// `newest_hour`, and return their keys oldest-first.
+fn seed_token_hourly(domain: &CkbadgerStore, newest_hour: i64, count: i64) -> Vec<Vec<u8>> {
+    let mut batch = StoreBatch::new(domain);
+    let mut keys = Vec::new();
+    for i in (0..count).rev() {
+        let key = keys::encode_token_hourly_key(&TOKEN_X, newest_hour - i);
+        batch.put_stats(&key, &1i64.to_le_bytes());
+        keys.push(key);
+    }
+    batch.commit().unwrap();
+    keys
+}
+
+/// A chain that stopped producing blocks: the clock says "48h ago" but the
+/// block at `tip - ENTITY_STATS_UNDO_RETAIN_BLOCKS` is far older, and every
+/// hourly key an undo entry in that window could restore must survive.
+#[tokio::test]
+async fn retention_step_protects_undo_window() {
+    let (domain, append) = setup_split_stores();
+    let writer = BatchWriter::new(domain.clone(), append.clone());
+
+    // Tip 5000; the undo-window floor block 4000 has a timestamp 200 hours old.
+    let now_ms = TS_DAY;
+    let now_hour = now_ms / 3_600_000;
+    let floor_block_hour = now_hour - 200;
+    {
+        let mut batch = StoreBatch::new(&domain);
+        batch.put_block_header(
+            5_000 - ckbadger_indexer::sync::ENTITY_STATS_UNDO_RETAIN_BLOCKS,
+            &make_header(4_000, floor_block_hour * 3_600_000),
+        );
+        batch.commit().unwrap();
+    }
+
+    let cutoff = writer
+        .hourly_retention_cutoff_hour(now_ms, 5_000, i64::MIN)
+        .unwrap();
+    assert_eq!(
+        cutoff, floor_block_hour,
+        "the block-derived bound must win over the 48h clock bound when the chain stalls; \
+         assuming 36 blocks is always under 48 hours is exactly what breaks here"
+    );
+
+    // Buckets between the block bound and the clock bound must survive.
+    seed_token_hourly(&domain, now_hour, 1);
+    let protected = keys::encode_token_hourly_key(&TOKEN_X, floor_block_hour + 1);
+    let expired = keys::encode_token_hourly_key(&TOKEN_X, floor_block_hour - 1);
+    {
+        let mut batch = StoreBatch::new(&domain);
+        batch.put_stats(&protected, &7i64.to_le_bytes());
+        batch.put_stats(&expired, &7i64.to_le_bytes());
+        batch.commit().unwrap();
+    }
+
+    let mut batch = StoreBatch::new(&domain);
+    ckbadger_indexer::sync::stage_hourly_retention(&writer, &mut batch, 5_000, now_ms).unwrap();
+    batch.commit().unwrap();
+
+    assert!(
+        domain.get_stats_key(&protected).unwrap().is_some(),
+        "a bucket inside the undo window must survive even though it is older than 48h"
+    );
+    assert!(
+        domain.get_stats_key(&expired).unwrap().is_none(),
+        "a bucket older than both bounds must go"
+    );
+}
+
+#[tokio::test]
+async fn retention_state_committed_with_deletes() {
+    let (domain, append) = setup_split_stores();
+    let writer = BatchWriter::new(domain.clone(), append.clone());
+
+    let now_ms = TS_DAY;
+    let now_hour = now_ms / 3_600_000;
+    // No header at the undo floor block → no honest block bound → delete nothing.
+    let hourly = seed_token_hourly(&domain, now_hour, 200);
+
+    let mut batch = StoreBatch::new(&domain);
+    ckbadger_indexer::sync::stage_hourly_retention(&writer, &mut batch, 5_000, now_ms).unwrap();
+    // Nothing is durable until the batch commits: state and deletions alike.
+    assert!(
+        domain
+            .get_hourly_retention_state(ckbadger_store::types::HourlyRetentionFamily::Token)
+            .unwrap()
+            .is_none(),
+        "an uncommitted step must leave no retention state behind"
+    );
+    assert!(domain.get_stats_key(&hourly[0]).unwrap().is_some());
+    drop(batch); // simulate a failed commit
+
+    assert!(domain
+        .get_hourly_retention_state(ckbadger_store::types::HourlyRetentionFamily::Token)
+        .unwrap()
+        .is_none());
+    assert!(
+        domain.get_stats_key(&hourly[0]).unwrap().is_some(),
+        "a dropped batch must delete nothing"
+    );
+
+    // Now with a header at the floor block, so there IS a bound, and commit.
+    {
+        let mut batch = StoreBatch::new(&domain);
+        batch.put_block_header(
+            5_000 - ckbadger_indexer::sync::ENTITY_STATS_UNDO_RETAIN_BLOCKS,
+            &make_header(4_000, now_ms),
+        );
+        batch.commit().unwrap();
+    }
+    let mut batch = StoreBatch::new(&domain);
+    ckbadger_indexer::sync::stage_hourly_retention(&writer, &mut batch, 5_000, now_ms).unwrap();
+    batch.commit().unwrap();
+
+    let state = domain
+        .get_hourly_retention_state(ckbadger_store::types::HourlyRetentionFamily::Token)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        state.policy_version,
+        ckbadger_store::types::HOURLY_RETENTION_POLICY_VERSION
+    );
+    assert_eq!(state.executed_cutoff_hour, now_hour - 48);
+    assert!(state.round_completed_at.is_some());
+    assert!(state.cursor.is_none());
+
+    // Everything older than the boundary is gone; the last 48 hours remain.
+    for key in &hourly {
+        let hour = i64::from_be_bytes(key[33..41].try_into().unwrap());
+        let present = domain.get_stats_key(key).unwrap().is_some();
+        assert_eq!(
+            present,
+            hour >= state.executed_cutoff_hour,
+            "bucket at hour {hour} present={present} but boundary is {}",
+            state.executed_cutoff_hour
+        );
+    }
+}
+
+#[tokio::test]
+async fn retention_never_runs_in_bulk_mode() {
+    let (domain, append) = setup_split_stores();
+    let writer = BatchWriter::new(domain.clone(), append.clone());
+    let now_ms = TS_DAY;
+    let now_hour = now_ms / 3_600_000;
+    let hourly = seed_token_hourly(&domain, now_hour - 500, 10);
+    {
+        let mut batch = StoreBatch::new(&domain);
+        batch.put_block_header(
+            5_000 - ckbadger_indexer::sync::ENTITY_STATS_UNDO_RETAIN_BLOCKS,
+            &make_header(4_000, TS_DAY),
+        );
+        batch.commit().unwrap();
+    }
+
+    domain.set_bulk_sync_mode(true);
+    let mut batch = StoreBatch::new(&domain);
+    ckbadger_indexer::sync::stage_hourly_retention(&writer, &mut batch, 5_000, now_ms).unwrap();
+    batch.commit().unwrap();
+    assert!(domain
+        .get_hourly_retention_state(ckbadger_store::types::HourlyRetentionFamily::Token)
+        .unwrap()
+        .is_none());
+    for key in &hourly {
+        assert!(domain.get_stats_key(key).unwrap().is_some());
+    }
+    domain.set_bulk_sync_mode(false);
+}
+
+#[tokio::test]
+async fn clock_rollback_does_not_lower_executed_cutoff() {
+    let (domain, append) = setup_split_stores();
+    let writer = BatchWriter::new(domain.clone(), append.clone());
+
+    let now_ms = TS_DAY;
+    {
+        let mut batch = StoreBatch::new(&domain);
+        batch.put_block_header(
+            5_000 - ckbadger_indexer::sync::ENTITY_STATS_UNDO_RETAIN_BLOCKS,
+            &make_header(4_000, now_ms),
+        );
+        batch.commit().unwrap();
+    }
+    let forward = writer
+        .hourly_retention_cutoff_hour(now_ms, 5_000, i64::MIN)
+        .unwrap();
+
+    // The clock jumps a week backwards; the boundary must not follow it, or the
+    // store would claim to still hold hours it has already deleted.
+    let rolled_back = writer
+        .hourly_retention_cutoff_hour(now_ms - 7 * 24 * 3_600_000, 5_000, forward)
+        .unwrap();
+    assert_eq!(
+        rolled_back, forward,
+        "executed_cutoff_hour is monotonic; a backwards clock must not lower it"
+    );
+}

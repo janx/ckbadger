@@ -1714,6 +1714,16 @@ pub mod sync_meta_keys {
     /// store predates per-block entity-stats undo and cannot be rolled back
     /// correctly — the indexer refuses to write to it.
     pub const ENTITY_STATS_UNDO_CONTRACT: &[u8] = b"entity_stats_undo_contract";
+    /// Per-family hourly retention state (bincode `HourlyRetentionState`).
+    /// The family name is appended: `hourly_retention_state:token`.
+    pub const HOURLY_RETENTION_STATE_PREFIX: &[u8] = b"hourly_retention_state:";
+}
+
+/// `sync_meta` key for one hourly family's retention state.
+pub fn encode_hourly_retention_state_key(family: &str) -> Vec<u8> {
+    let mut key = sync_meta_keys::HOURLY_RETENTION_STATE_PREFIX.to_vec();
+    key.extend_from_slice(family.as_bytes());
+    key
 }
 
 /// Block-end summary history used only for bounded shallow-reorg restoration.

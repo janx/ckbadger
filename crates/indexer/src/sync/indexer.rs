@@ -391,6 +391,10 @@ pub struct Indexer {
     pub(crate) ckb_store: Option<Arc<CkbChainReader>>,
     pub(crate) hodl_tracker: std::sync::Mutex<HodlWaveTracker>,
     pub(crate) cell_dist_tracker: std::sync::Mutex<CellDistributionTracker>,
+    /// Set by the periodic task; consumed by the writer, which is the only
+    /// thing allowed to delete hourly buckets. A background task deleting them
+    /// directly could race an undo replay restoring the same key.
+    pub(crate) hourly_retention_requested: Arc<AtomicBool>,
 }
 
 impl Indexer {
@@ -499,6 +503,7 @@ impl Indexer {
             ckb_store,
             hodl_tracker: std::sync::Mutex::new(hodl_tracker),
             cell_dist_tracker: std::sync::Mutex::new(cell_dist_tracker),
+            hourly_retention_requested: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -1258,11 +1263,14 @@ impl Indexer {
         self.reconcile_cell_dist_tracker_with_tip(actual_start)?;
         self.start_bulk_sync_perf_run(bulk_sync_mode)?;
 
-        // Periodic 24h transfer refresh
-        let store_for_task = Arc::clone(self.writer.store());
-        let append_store_for_task = Arc::clone(&self.append_only_store);
+        // Periodic hourly-retention REQUEST. The task no longer deletes
+        // anything itself: expired hourly buckets are removed by the same
+        // writer that commits blocks and replays undo entries, inside the
+        // block batch, so a deletion can never race a rollback restoring the
+        // same key.
         let progress_for_task = Arc::clone(&self.progress);
         let bulk_sync_threshold = self.config.bulk_sync_threshold;
+        let retention_flag = Arc::clone(&self.hourly_retention_requested);
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(600));
             loop {
@@ -1270,21 +1278,12 @@ impl Indexer {
                 let blocks_remaining = progress_for_task.blocks_remaining();
                 if blocks_remaining > bulk_sync_threshold {
                     debug!(
-                        "Skipping token 24h refresh ({} blocks remaining > {} threshold)",
+                        "Skipping hourly retention request ({} blocks remaining > {} threshold)",
                         blocks_remaining, bulk_sync_threshold
                     );
                     continue;
                 }
-                let writer =
-                    BatchWriter::new(store_for_task.clone(), append_store_for_task.clone());
-                match writer.refresh_token_24h_transfers() {
-                    Ok(count) => info!("Refreshed 24h transfers for {} tokens", count),
-                    Err(e) => warn!("Failed to refresh token 24h transfers: {}", e),
-                }
-                match writer.refresh_mnft_24h_transfers() {
-                    Ok(count) => info!("Refreshed 24h transfers for {} object classes", count),
-                    Err(e) => warn!("Failed to refresh object 24h transfers: {}", e),
-                }
+                retention_flag.store(true, Ordering::Relaxed);
             }
         });
 
