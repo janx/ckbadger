@@ -186,10 +186,7 @@ pub(super) fn blocks_behind_tip(chain_tip: u64, base_tip: i64, context: &str) ->
     })
 }
 
-pub(super) fn is_fresh_sync_tip_state(
-    sync_tip_block: i64,
-    sync_tip_hash: &Option<Vec<u8>>,
-) -> bool {
+pub fn is_fresh_sync_tip_state(sync_tip_block: i64, sync_tip_hash: &Option<Vec<u8>>) -> bool {
     sync_tip_block == 0 && sync_tip_hash.is_none()
 }
 
@@ -328,6 +325,15 @@ pub(crate) fn persist_bulk_sync_completion_status(
             chain_tip,
             i64::MAX
         )
+    })?;
+    // Bulk build never records undo entries (`BULK_SYNC.md`: bulk is empty-store
+    // only and never rolls back), so its completion block IS the coverage floor
+    // the live process starts from. Writing the contract here is what makes a
+    // freshly built store eligible for live writes at all.
+    store.put_entity_stats_undo_contract(&ckbadger_store::types::EntityStatsUndoContract {
+        version: ckbadger_store::types::ENTITY_STATS_UNDO_CONTRACT_VERSION,
+        coverage_floor_block: chain_tip_i64,
+        updated_at_block: chain_tip_i64,
     })?;
     store.update_sync_status(|status| {
         status.mark_bulk_sync_completed(chain_tip_i64);

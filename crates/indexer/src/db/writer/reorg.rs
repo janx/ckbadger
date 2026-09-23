@@ -134,6 +134,23 @@ impl BatchWriter {
                 ));
             }
         }
+        // Entity daily/hourly stats are restored ONLY by the undo log, and the
+        // undo log is pruned behind a coverage floor. A fork point below that
+        // floor cannot be undone — fail with the numbers rather than replay a
+        // rollback that would silently leave those buckets wrong.
+        if let Some(contract) = self.store.get_entity_stats_undo_contract()? {
+            if fork_point < contract.coverage_floor_block {
+                return Err(anyhow!(
+                    "entity stats undo coverage floor {} is above fork point {}; rebuild required \
+                     (contract version {}, floor last advanced at block {})",
+                    contract.coverage_floor_block,
+                    fork_point,
+                    contract.version,
+                    contract.updated_at_block
+                ));
+            }
+        }
+
         // Revert domain mutations from undo-log first so that entity data
         // (Spore, mNFT, dotbit) is restored to pre-fork state before the
         // multi-stage rollback rebuilds aggregates from it.

@@ -22,6 +22,10 @@ pub mod types;
 pub(crate) mod undo;
 
 #[doc(hidden)]
+pub use batch::stage_entity_stats_undo_retention;
+#[doc(hidden)]
+pub use batch::ENTITY_STATS_UNDO_RETAIN_BLOCKS;
+#[doc(hidden)]
 pub use bulk_build::facts::{CellFactsSnapshot, CellSemanticTag, FactsArenaSnapshot};
 #[doc(hidden)]
 pub use bulk_build::live_cells::{
@@ -29,7 +33,19 @@ pub use bulk_build::live_cells::{
 };
 #[doc(hidden)]
 pub use bulk_build::materialize::MaterializationReport;
+pub use indexer::is_fresh_sync_tip_state;
 pub use indexer::Indexer;
+
+/// Test hook for the bulk-build completion commit point, which writes the
+/// entity-stats coverage contract alongside the bulk-complete status.
+#[doc(hidden)]
+pub fn persist_bulk_sync_completion_status_for_test(
+    store: &ckbadger_store::CkbadgerStore,
+    chain_tip: u64,
+) -> anyhow::Result<()> {
+    indexer::persist_bulk_sync_completion_status(store, chain_tip)
+}
+
 #[doc(hidden)]
 pub use indexer::StartupSyncPathSnapshot;
 pub use progress::SyncProgress;

@@ -216,6 +216,11 @@ pub async fn run_indexer_sync(mut config: Config) -> Result<()> {
             "Forcing startup rollback cleanup to reconcile append-only state"
         );
     }
+    // Before any business write — and before label import, statistics and the
+    // token reconciliation below — refuse a non-empty store that predates the
+    // entity-stats undo contract. Such a store cannot roll a shallow fork back
+    // correctly, and writing more blocks into it only buries the problem.
+    ensure_entity_stats_undo_contract_on_startup(&store)?;
     reconcile_token_daily_deltas_on_startup(&store)?;
 
     let repo = Repository::new(store.clone());
@@ -1114,6 +1119,33 @@ fn bytes_to_hex(bytes: &[u8]) -> String {
         let _ = write!(&mut out, "{:02x}", b);
     }
     out
+}
+
+/// A non-empty chain store must declare how far back its entity daily/hourly
+/// stats can be rolled back.
+///
+/// An empty store has nothing to protect and gets its contract from whichever
+/// path fills it: bulk build writes it at its completion block, live sync at
+/// its first commit. A store with a tip but no contract was written by a
+/// binary that deleted entity stats buckets on rollback instead of undoing
+/// them, so its history is already wrong wherever a shallow fork touched it.
+/// There is no honest migration; the only correct outcome is a rebuild.
+pub fn ensure_entity_stats_undo_contract_on_startup(store: &CkbadgerStore) -> Result<()> {
+    if store.get_entity_stats_undo_contract()?.is_some() {
+        return Ok(());
+    }
+    let (tip, tip_hash) = store.get_sync_tip()?;
+    if crate::sync::is_fresh_sync_tip_state(tip, &tip_hash) {
+        // Fresh store: the first bulk completion or live commit writes it.
+        return Ok(());
+    }
+    Err(anyhow::Error::new(
+        crate::lifecycle::RebuildRequiredError::new(format!(
+            "chain store has tip {tip} but no entity stats undo contract: it was written by a \
+             build that deleted entity daily/hourly stats buckets on shallow rollback instead of \
+             undoing them, so those buckets are already missing main-chain contributions"
+        )),
+    ))
 }
 
 fn reconcile_token_daily_deltas_on_startup(store: &CkbadgerStore) -> Result<()> {

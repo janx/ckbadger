@@ -1558,6 +1558,27 @@ pub enum UndoLogEntry {
     TxContext(UndoTxContext),
 }
 
+/// What this store guarantees about rolling entity daily/hourly stats back.
+///
+/// `coverage_floor_block` is the lowest block a shallow reorg can still be
+/// undone to: `EntityStats` undo entries at or below it have been pruned. A
+/// rollback target below the floor is a hard error — there is no honest way to
+/// reconstruct those buckets, and fabricating one would be exactly the silent
+/// repair this whole change removes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EntityStatsUndoContract {
+    /// Format version of the entity-stats undo contract.
+    pub version: u32,
+    /// Lowest block still coverable by `EntityStats` undo entries.
+    pub coverage_floor_block: i64,
+    /// Committed tip when the floor was last advanced.
+    pub updated_at_block: i64,
+}
+
+/// Current contract version. Bump only alongside a format change that makes
+/// existing entries unreadable; the startup check then rejects older stores.
+pub const ENTITY_STATS_UNDO_CONTRACT_VERSION: u32 = 1;
+
 /// Memory/storage statistics for monitoring.
 #[derive(Debug, Clone, Default)]
 pub struct MemoryStats {

@@ -1709,6 +1709,11 @@ pub mod sync_meta_keys {
     /// Presence marker distinguishing a pre-feature/rebuild-required store
     /// from corruption that removed both current and history records.
     pub const LIVE_CELL_SUMMARY_INITIALIZED: &[u8] = b"live_cell_summary:initialized";
+    /// Entity-stats rollback coverage contract (bincode
+    /// `EntityStatsUndoContract`). Its absence on a non-empty store means the
+    /// store predates per-block entity-stats undo and cannot be rolled back
+    /// correctly — the indexer refuses to write to it.
+    pub const ENTITY_STATS_UNDO_CONTRACT: &[u8] = b"entity_stats_undo_contract";
 }
 
 /// Block-end summary history used only for bounded shallow-reorg restoration.

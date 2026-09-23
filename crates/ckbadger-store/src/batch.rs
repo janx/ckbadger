@@ -711,6 +711,21 @@ impl<'a> StoreBatch<'a> {
         self.put_cf(self.store.cf_reorg_undo_log_by_block(), key, &value);
     }
 
+    /// Remove one undo-log entry by its full `block + seq` key.
+    pub fn delete_reorg_undo_log_key(&mut self, key: &[u8]) {
+        self.delete_cf(self.store.cf_reorg_undo_log_by_block(), key);
+    }
+
+    /// Persist the entity-stats rollback coverage contract in the same atomic
+    /// batch as the writes it describes.
+    pub fn put_entity_stats_undo_contract(
+        &mut self,
+        contract: &crate::types::EntityStatsUndoContract,
+    ) {
+        let value = bincode::serialize(contract).expect("serialize EntityStatsUndoContract");
+        self.put_sync_meta(keys::sync_meta_keys::ENTITY_STATS_UNDO_CONTRACT, &value);
+    }
+
     // ---- DAO ----
 
     fn delete_dao_secondary_indexes(&mut self, outpoint_key: &[u8], entry: &DaoDepositCacheEntry) {

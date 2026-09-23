@@ -1231,6 +1231,48 @@ pub(super) fn should_abort_unresolved_retry_on_epoch_change(
     batch_epoch != current_epoch
 }
 
+/// How many blocks behind the committed tip keep their `EntityStats` undo
+/// entries.
+///
+/// Must exceed `DEEP_FORK_DEPTH` (36) by a wide margin: a shallow fork is
+/// detected only once the indexer catches up, and one commit can span thousands
+/// of blocks, so the floor can jump by a whole batch at a time. 1000 blocks is
+/// ~2.7 hours of mainnet chain and costs one undo entry per touched
+/// (block, entity-stats key).
+pub const ENTITY_STATS_UNDO_RETAIN_BLOCKS: i64 = 1_000;
+
+/// Stage the coverage-floor advance and the matching undo deletions.
+///
+/// Returns the number of undo entries staged for deletion.
+pub fn stage_entity_stats_undo_retention(
+    store: &CkbadgerStore,
+    batch: &mut StoreBatch,
+    committed_tip: i64,
+) -> Result<u64> {
+    let existing = store.get_entity_stats_undo_contract()?;
+    let current_floor = existing
+        .as_ref()
+        .map(|contract| contract.coverage_floor_block)
+        .unwrap_or(-1);
+    let target_floor = committed_tip - ENTITY_STATS_UNDO_RETAIN_BLOCKS;
+
+    if existing.is_some() && target_floor <= current_floor {
+        // Nothing to prune and nothing to promise that is not already
+        // promised. The floor never moves backwards: a shorter chain after a
+        // rollback does not resurrect entries this store already deleted.
+        return Ok(0);
+    }
+
+    let effective_floor = target_floor.max(current_floor);
+    let pruned = store.prune_entity_stats_undo_below(batch, current_floor, effective_floor)?;
+    batch.put_entity_stats_undo_contract(&ckbadger_store::types::EntityStatsUndoContract {
+        version: ckbadger_store::types::ENTITY_STATS_UNDO_CONTRACT_VERSION,
+        coverage_floor_block: effective_floor,
+        updated_at_block: committed_tip,
+    });
+    Ok(pruned)
+}
+
 pub(super) fn load_optional_index_from_store<T, F>(
     cache: &mut HashMap<Vec<u8>, Option<T>>,
     type_script_hash: &[u8],
@@ -3888,6 +3930,21 @@ impl Indexer {
                     ckbadger_store::keys::sync_meta_keys::SYNC_STATUS,
                     &status_bytes,
                 );
+            }
+
+            // Advance the entity-stats undo coverage floor and drop the
+            // entries it leaves behind — in THIS batch, so the floor and its
+            // deletions are never separately durable. A fresh store gets its
+            // first contract here (bulk build writes its own at completion).
+            //
+            // Bulk build records no undo entries at all and has no reorg
+            // workflow, so it neither prunes nor needs a window.
+            if !bulk_sync_mode {
+                stage_entity_stats_undo_retention(
+                    self.writer.store(),
+                    &mut data_batch,
+                    last_block,
+                )?;
             }
 
             let commit_started = Instant::now();

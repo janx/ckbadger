@@ -12,6 +12,32 @@ use crate::types::{
 };
 
 impl CkbadgerStore {
+    pub fn get_entity_stats_undo_contract(
+        &self,
+    ) -> anyhow::Result<Option<crate::types::EntityStatsUndoContract>> {
+        match self.get_cf(
+            self.cf_sync_meta(),
+            sync_meta_keys::ENTITY_STATS_UNDO_CONTRACT,
+        )? {
+            Some(value) => Ok(Some(bincode::deserialize(&value).map_err(|e| {
+                anyhow::anyhow!("failed to decode entity stats undo contract: {}", e)
+            })?)),
+            None => Ok(None),
+        }
+    }
+
+    pub fn put_entity_stats_undo_contract(
+        &self,
+        contract: &crate::types::EntityStatsUndoContract,
+    ) -> anyhow::Result<()> {
+        let value = bincode::serialize(contract)?;
+        self.put_cf(
+            self.cf_sync_meta(),
+            sync_meta_keys::ENTITY_STATS_UNDO_CONTRACT,
+            &value,
+        )
+    }
+
     pub fn get_bulk_build_session_marker(&self) -> anyhow::Result<Option<BulkBuildSessionMarker>> {
         match self.get_cf(
             self.cf_sync_meta(),

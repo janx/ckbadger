@@ -1010,3 +1010,209 @@ async fn ickb_three_day_gap_shape_is_preserved() {
         "the startup validator must find no negative running total"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Task 2.5 — coverage contract, bounded window, floor enforcement
+// ---------------------------------------------------------------------------
+
+/// A store with a tip but no contract was written by a build that deleted
+/// entity stats buckets on rollback. There is no honest migration.
+#[tokio::test]
+async fn startup_fails_on_nonfresh_store_without_contract() {
+    let (domain, _append) = setup_split_stores();
+
+    // Fresh store: nothing to protect, the first commit writes the contract.
+    ckbadger_indexer::entry::ensure_entity_stats_undo_contract_on_startup(&domain)
+        .expect("a fresh store must be allowed to start");
+
+    // Give it a tip and nothing else.
+    let mut batch = StoreBatch::new(&domain);
+    batch.put_block_header(500, &make_header(500, TS_DAY));
+    batch.put_sync_meta(
+        keys::sync_meta_keys::SYNC_STATUS,
+        &bincode::serialize(&ckbadger_store::types::SyncStatus {
+            tip_block_number: 500,
+            tip_block_hash: make_header(500, TS_DAY).hash,
+            ..Default::default()
+        })
+        .unwrap(),
+    );
+    batch.commit().unwrap();
+
+    let err = ckbadger_indexer::entry::ensure_entity_stats_undo_contract_on_startup(&domain)
+        .expect_err("a non-fresh store without a contract must refuse to start");
+    assert!(
+        ckbadger_indexer::lifecycle::is_rebuild_required(&err),
+        "must be a rebuild-required error, got: {err:#}"
+    );
+    assert!(
+        err.to_string().contains("entity stats undo contract"),
+        "got: {err:#}"
+    );
+
+    // With the contract present it starts.
+    domain
+        .put_entity_stats_undo_contract(&ckbadger_store::types::EntityStatsUndoContract {
+            version: ckbadger_store::types::ENTITY_STATS_UNDO_CONTRACT_VERSION,
+            coverage_floor_block: 0,
+            updated_at_block: 500,
+        })
+        .unwrap();
+    ckbadger_indexer::entry::ensure_entity_stats_undo_contract_on_startup(&domain).unwrap();
+}
+
+#[tokio::test]
+async fn prune_keeps_window_and_updates_floor() {
+    let (domain, _append) = setup_split_stores();
+
+    const ENTITY: u64 = 0x0004 << 48;
+    const TX_CONTEXT: u64 = 0x0001 << 48;
+    let mut batch = StoreBatch::new(&domain);
+    for block in 1..=1_200i64 {
+        batch.put_reorg_undo_log_by_block(
+            block,
+            ENTITY,
+            &ckbadger_store::types::UndoLogEntry::KeyMutation {
+                target_store: ckbadger_store::types::UndoLogStoreTarget::Domain,
+                cf_name: ckbadger_store::CF_STATS_TOKEN.to_string(),
+                key: keys::encode_token_daily_key(&TOKEN_X, DAY).to_vec(),
+                previous_value: None,
+            },
+        );
+        batch.put_reorg_undo_log_by_block(
+            block,
+            TX_CONTEXT,
+            &ckbadger_store::types::UndoLogEntry::TxContext(ckbadger_store::types::UndoTxContext {
+                tx_hash: vec![block as u8; 32],
+                outputs_count: 1,
+                inputs: vec![],
+            }),
+        );
+    }
+    batch.commit().unwrap();
+
+    let mut batch = StoreBatch::new(&domain);
+    let pruned =
+        ckbadger_indexer::sync::stage_entity_stats_undo_retention(&domain, &mut batch, 1_200)
+            .unwrap();
+    batch.commit().unwrap();
+    assert_eq!(
+        pruned, 200,
+        "blocks 1..=200 fall out of the 1000-block window"
+    );
+
+    let mut entity_blocks = Vec::new();
+    let mut tx_context_entries = 0usize;
+    let iter = domain.iterator_cf(domain.cf_reorg_undo_log_by_block(), IteratorMode::Start);
+    for item in iter {
+        let (key, _) = item.unwrap();
+        let (block, seq) = keys::decode_reorg_undo_log_key(&key);
+        if seq >> 48 == 0x0004 {
+            entity_blocks.push(block);
+        } else {
+            tx_context_entries += 1;
+        }
+    }
+    assert_eq!(entity_blocks.len(), 1_000);
+    assert_eq!(*entity_blocks.iter().min().unwrap(), 201);
+    assert_eq!(*entity_blocks.iter().max().unwrap(), 1_200);
+    assert_eq!(
+        tx_context_entries, 1_200,
+        "retention must not touch the TxContext scope"
+    );
+
+    let contract = domain.get_entity_stats_undo_contract().unwrap().unwrap();
+    assert_eq!(contract.coverage_floor_block, 200);
+    assert_eq!(contract.updated_at_block, 1_200);
+
+    // The floor never moves backwards, even if the tip does.
+    let mut batch = StoreBatch::new(&domain);
+    assert_eq!(
+        ckbadger_indexer::sync::stage_entity_stats_undo_retention(&domain, &mut batch, 900)
+            .unwrap(),
+        0
+    );
+    batch.commit().unwrap();
+    assert_eq!(
+        domain
+            .get_entity_stats_undo_contract()
+            .unwrap()
+            .unwrap()
+            .coverage_floor_block,
+        200
+    );
+}
+
+#[tokio::test]
+async fn reorg_below_floor_fails_fast() {
+    let (domain, append) = setup_split_stores();
+    let writer = BatchWriter::new(domain.clone(), append.clone());
+
+    apply_commit(
+        &writer,
+        &domain,
+        &[
+            blk(1).token(TOKEN_X, DAY, 9_000_000_000, 6_100_000_000),
+            blk(2).token(TOKEN_X, DAY, 3_000_000_000, 2_000_000_000),
+        ],
+    );
+    domain
+        .put_entity_stats_undo_contract(&ckbadger_store::types::EntityStatsUndoContract {
+            version: ckbadger_store::types::ENTITY_STATS_UNDO_CONTRACT_VERSION,
+            coverage_floor_block: 200,
+            updated_at_block: 1_200,
+        })
+        .unwrap();
+
+    let before = dump_entity_stats(&domain);
+    assert!(!before.is_empty());
+
+    let result = writer
+        .execute_reorg(
+            append.as_ref(),
+            150,
+            &[0x96; 32],
+            1_200,
+            &[0x11; 32],
+            1_201,
+            &[0x22; 32],
+        )
+        .await;
+    let err = match result {
+        Ok(_) => panic!("a fork point below the coverage floor must fail fast"),
+        Err(err) => err,
+    };
+    assert!(
+        err.to_string().contains("coverage floor 200")
+            && err.to_string().contains("fork point 150")
+            && err.to_string().contains("rebuild required"),
+        "got: {err:#}"
+    );
+    assert_eq!(
+        dump_entity_stats(&domain),
+        before,
+        "a refused reorg must not have modified any entity stats row"
+    );
+}
+
+#[tokio::test]
+async fn bulk_completion_writes_contract() {
+    let (domain, _append) = setup_split_stores();
+    assert!(domain.get_entity_stats_undo_contract().unwrap().is_none());
+
+    ckbadger_indexer::sync::persist_bulk_sync_completion_status_for_test(&domain, 22_500_000)
+        .unwrap();
+
+    let contract = domain.get_entity_stats_undo_contract().unwrap().unwrap();
+    assert_eq!(
+        contract.version,
+        ckbadger_store::types::ENTITY_STATS_UNDO_CONTRACT_VERSION
+    );
+    assert_eq!(
+        contract.coverage_floor_block, 22_500_000,
+        "bulk records no undo entries, so its completion block IS the floor"
+    );
+    assert_eq!(contract.updated_at_block, 22_500_000);
+    // And a store built that way now passes the startup gate.
+    ckbadger_indexer::entry::ensure_entity_stats_undo_contract_on_startup(&domain).unwrap();
+}
