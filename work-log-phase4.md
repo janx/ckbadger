@@ -149,3 +149,36 @@ Check count is now 58 (31 api + 26 explorer + 1 new), matching the plan.
   scope names only `docs/TESTING.md` and `docs/API.md`. It needs the same 57 →
   58 update when Phase 7 is finished.
 
+## Final gate (all green)
+
+```
+cargo fmt --all -- --check                                              OK (no diff)
+cargo clippy -p ckbadger-indexer -p ckbadger-api -p ckbadger --all-targets
+                                                                        0 warnings
+cargo test -p ckbadger-indexer --lib verify           150 passed; 0 failed
+cargo test -p ckbadger-indexer --test verify_entity_statistics
+                                                        9 passed; 0 failed
+cargo test -p ckbadger-api --test api_verify           11 passed; 0 failed
+cargo test -p ckbadger                       127 + 4 passed; 0 failed
+```
+
+Wider suites, for context: `cargo test -p ckbadger-indexer` (all targets) 0
+failed; `cargo test -p ckbadger-api` has 5 pre-existing failures unrelated to
+this work ("Missing embedded agent renderer" — no `frontend/dist` in the
+worktree).
+
+## Scope notes
+
+- One file outside the stated scope: `crates/indexer/src/rpc/mod.rs` (+2 lines).
+  `rpc::client` and `rpc::types` are private modules, so the new indexer-RPC
+  types had to be added to the existing `pub use client::{…}` list for
+  `verify/source.rs` to reach them. Purely additive.
+- Task 4.1's "一网 Inconclusive → 2" CLI row is covered at the unit level
+  (`report.rs::error_outranks_inconclusive_and_both_exit_two`,
+  `a_scope_where_nothing_ran_is_inconclusive_not_a_pass`). The CLI-level exit-2
+  case uses `--sample-count 0` (Error), because there is no way to force a
+  specific `Inconclusive` from outside the binary without a live chain source;
+  both statuses share exit code 2 and the merge is one function.
+- Task 4.5 not started, as instructed (needs the old production databases and
+  the merged binary).
+
