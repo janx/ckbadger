@@ -304,20 +304,32 @@ impl CkbadgerStore {
     /// cost three `sync_meta` writes per tick, on top of the per-block tracker
     /// state already rewritten there.
     pub fn commit_heartbeat_tick(&self, tick: HeartbeatTick<'_>) -> anyhow::Result<()> {
-        let status = self.next_runtime_heartbeat_status(
+        // A run-identity failure belongs to the RUNTIME_STATUS part alone.
+        // Sync progress and memory stats were independent writes before the
+        // three were batched; dropping them on that error would turn one bad
+        // run id into "the indexer looks dead" for every reader. Stage them
+        // regardless, commit, and still surface the error to the caller.
+        let heartbeat = self.next_runtime_heartbeat_status(
             tick.run_id,
             tick.current_block,
             tick.target_block,
             tick.stage,
             tick.oom_events,
             tick.oom_kill_events,
-        )?;
+        );
 
         let mut batch = StoreBatch::new(self);
-        if let Some(status) = status {
-            let value = bincode::serialize(&status)?;
-            batch.put_sync_meta(sync_meta_keys::RUNTIME_STATUS, &value);
-        }
+        let identity_error = match heartbeat {
+            Ok(Some(status)) => {
+                let value = bincode::serialize(&status)?;
+                batch.put_sync_meta(sync_meta_keys::RUNTIME_STATUS, &value);
+                None
+            }
+            // A shutdown for this same run is already recorded: no heartbeat
+            // write, and that is correct.
+            Ok(None) => None,
+            Err(error) => Some(error),
+        };
         batch.put_sync_meta(sync_meta_keys::SYNC_PROGRESS, tick.sync_progress);
         // Absent memory stats mean "this tick did not resample them" (live mode
         // samples the two-store CF sweep every 30 s), so the previous sample
@@ -325,7 +337,12 @@ impl CkbadgerStore {
         if let Some(memory_stats) = tick.memory_stats {
             batch.put_sync_meta(sync_meta_keys::MEMORY_STATS, memory_stats);
         }
-        batch.commit()
+        batch.commit()?;
+
+        match identity_error {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
     }
 
     pub fn mark_runtime_shutdown(
@@ -1498,6 +1515,7 @@ mod tests {
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         store.mark_runtime_run_start("run-tick-3", 0).unwrap();
 
+        let before = store.get_runtime_status().unwrap();
         let err = store
             .commit_heartbeat_tick(HeartbeatTick {
                 run_id: "some-other-run",
@@ -1507,9 +1525,24 @@ mod tests {
                 oom_events: None,
                 oom_kill_events: None,
                 sync_progress: b"x",
-                memory_stats: None,
+                memory_stats: Some(b"m"),
             })
             .unwrap_err();
         assert!(err.to_string().contains("runtime heartbeat run mismatch"));
+
+        // The identity failure belongs to the RUNTIME_STATUS part alone.
+        // Sync progress and memory stats were independent writes before the
+        // three were batched, and they must stay published — the TUI and API
+        // read them, and blanking them would turn one bad run id into "the
+        // indexer looks dead".
+        assert_eq!(store.get_sync_progress().unwrap().unwrap(), b"x");
+        assert_eq!(store.get_memory_stats().unwrap().unwrap(), b"m");
+        let after = store.get_runtime_status().unwrap();
+        assert_eq!(
+            after.active_run_id, before.active_run_id,
+            "a foreign run id must not touch the runtime status"
+        );
+        assert_eq!(after.last_heartbeat_block, before.last_heartbeat_block);
+        assert_eq!(after.last_heartbeat_at, before.last_heartbeat_at);
     }
 }
