@@ -1668,10 +1668,14 @@ pub struct MemoryStats {
     /// Size of the MANIFEST this DB is currently writing. A secondary replays
     /// it on open, so an unbounded MANIFEST is what made the API domain
     /// secondary take 596 s to open (51 MB MANIFEST).
+    ///
+    /// Flush ROUND counts are deliberately absent: RocksDB exposes no
+    /// cumulative flush counter (`num-running-flushes` and
+    /// `mem-table-flush-pending` are instantaneous gauges), so the
+    /// authoritative number is the `flush_started` events in the RocksDB LOG.
+    /// `sst_files_total` and `manifest_bytes` are the exact standing
+    /// consequences of flush frequency, and are what P3.3 compares.
     pub manifest_bytes: u64,
-    /// Flush rounds OBSERVED by sampling — a lower bound, see
-    /// `CkbadgerStore::flush_rounds_observed`.
-    pub flush_rounds_observed: u64,
     /// Top column families by estimated live data size: (name, bytes)
     pub top_cf_sizes: Vec<(String, u64)>,
     /// WriteBufferManager current usage in bytes

@@ -84,7 +84,6 @@ struct Sample {
     // Flush-storm outcome signals (P3.3).
     sst_files_total: u64,
     manifest_bytes: u64,
-    flush_rounds_observed: u64,
 }
 
 /// Spawn the health monitor as a long-running background task. Returns
@@ -171,7 +170,6 @@ async fn run(indexer: Arc<Indexer>, csv_path: PathBuf) -> anyhow::Result<()> {
             commit_phase_total_ms: db_commit_ms,
             sst_files_total: memory.sst_files_total,
             manifest_bytes: memory.manifest_bytes,
-            flush_rounds_observed: memory.flush_rounds_observed,
         };
 
         // Per-minute degradation alert (debounced).
@@ -246,6 +244,12 @@ fn check_degradation(sample: &Sample, last_warn_at: &mut Option<Instant>) {
 /// CSV schema version. Bump together with [`csv_header`] whenever the column
 /// set changes: an existing file whose first line is a different header is
 /// never appended to, the monitor starts a schema-suffixed file instead.
+///
+/// There is deliberately no flush-ROUND column. RocksDB exposes no cumulative
+/// flush counter, so flush rounds are counted from the `flush_started` events
+/// in the RocksDB LOG; `sst_files_last` and `manifest_mb_last` are the exact
+/// standing consequences of flush frequency, and `flush_pending_peak` /
+/// `flush_observed_in_window` remain the sampled activity signals.
 const CSV_SCHEMA_VERSION: u32 = 3;
 
 /// The one definition of the column set. Every row is produced by
@@ -261,7 +265,7 @@ fn csv_header() -> &'static str {
      precompute_ms_avg,build_ms_avg,finalize_ms_avg,\
      commit_prepare_ms_avg,script_rollup_ms_avg,append_only_commit_synced_ms_avg,\
      domain_commit_ms_avg,commit_phase_total_ms_avg,\
-     sst_files_last,manifest_mb_last,flush_rounds_observed_per_hour\n"
+     sst_files_last,manifest_mb_last\n"
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -409,17 +413,9 @@ fn format_hourly_row(buffer: &[Sample]) -> String {
     let avg_domain_commit = buffer.iter().map(|s| s.domain_commit_ms).sum::<f64>() / n;
     let avg_commit_total = buffer.iter().map(|s| s.commit_phase_total_ms).sum::<f64>() / n;
     let last = buffer.last().expect("buffer is non-empty");
-    // `flush_rounds_observed` is a monotonic counter: report the delta across
-    // the window, not the running total.
-    let flush_rounds_in_window = last.flush_rounds_observed.saturating_sub(
-        buffer
-            .first()
-            .expect("buffer is non-empty")
-            .flush_rounds_observed,
-    );
     format!(
         "{},{},{},{},{:.1},{:.1},{:.0},{:.1},{},{:.2},{},{},{},{},{:.0},{},{:.0},{:.0},{},{},\
-         {:.1},{:.1},{:.1},{:.1},{:.1},{:.1},{:.1},{:.1},{},{},{}\n",
+         {:.1},{:.1},{:.1},{:.1},{:.1},{:.1},{:.1},{:.1},{},{}\n",
         CSV_SCHEMA_VERSION,
         Utc::now().to_rfc3339(),
         last.current_block,
@@ -450,7 +446,6 @@ fn format_hourly_row(buffer: &[Sample]) -> String {
         avg_commit_total,
         last.sst_files_total,
         last.manifest_bytes / (1024 * 1024),
-        flush_rounds_in_window,
     )
 }
 
@@ -511,7 +506,6 @@ mod tests {
             commit_phase_total_ms: 26.0,
             sst_files_total: 27,
             manifest_bytes: 28 * 1024 * 1024,
-            flush_rounds_observed: 29,
         };
         let row = format_hourly_row(&[sample]);
         assert_eq!(

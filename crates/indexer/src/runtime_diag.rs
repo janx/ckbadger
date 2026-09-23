@@ -80,7 +80,6 @@ pub struct ChainStoreMemorySnapshot {
     pub sst_files_total: u64,
     pub domain_manifest_bytes: u64,
     pub total_manifest_bytes: u64,
-    pub flush_rounds_observed: u64,
     pub top_cf_sizes: Vec<(String, u64)>,
     pub shared_wbm_usage_bytes: u64,
     pub shared_wbm_budget_bytes: u64,
@@ -161,11 +160,6 @@ pub fn aggregate_chain_store_memory(
         domain.manifest_bytes,
         append_only.manifest_bytes,
     )?;
-    let flush_rounds_observed = checked_memory_add(
-        "flush_rounds_observed",
-        domain.flush_rounds_observed,
-        append_only.flush_rounds_observed,
-    )?;
 
     let (l0_files_max, l0_worst_cf) = if append_only.l0_files_max > domain.l0_files_max {
         (
@@ -207,7 +201,6 @@ pub fn aggregate_chain_store_memory(
         sst_files_total,
         domain_manifest_bytes: domain.manifest_bytes,
         total_manifest_bytes,
-        flush_rounds_observed,
         top_cf_sizes,
         shared_wbm_usage_bytes: usize_memory_to_u64(
             "shared.wbm_usage_bytes",

@@ -1192,7 +1192,6 @@ impl Indexer {
             sst_files_total: chain_store_memory.sst_files_total,
             manifest_bytes: chain_store_memory.total_manifest_bytes,
             domain_manifest_bytes: chain_store_memory.domain_manifest_bytes,
-            flush_rounds_observed: chain_store_memory.flush_rounds_observed,
             top_cf_sizes: chain_store_memory.top_cf_sizes,
             wbm_usage_bytes: chain_store_memory.shared_wbm_usage_bytes,
             wbm_budget_bytes: chain_store_memory.shared_wbm_budget_bytes,

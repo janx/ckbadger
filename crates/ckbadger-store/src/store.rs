@@ -775,13 +775,6 @@ pub struct CkbadgerStore {
     is_secondary: bool,
     memory_profile: MemoryProfile,
     runtime_config: StoreRuntimeConfig,
-    /// Flush rounds OBSERVED by sampling (`memory_stats` / `flush_stats`):
-    /// incremented when a sample finds flush activity after a sample that found
-    /// none. A sampled lower bound on RocksDB's internal flush count — the
-    /// authoritative number is `flush_started` in the RocksDB LOG — kept in
-    /// process so the live-sync trend is visible without parsing the LOG.
-    flush_rounds_observed: AtomicU64,
-    flush_active_last_sample: AtomicBool,
     /// Test-only read-call counters, so a test can prove a hot path issues one
     /// batched read instead of N point reads. Never compiled into the binary.
     #[cfg(any(test, feature = "read-call-counters"))]
@@ -979,8 +972,6 @@ impl CkbadgerStore {
             is_secondary: false,
             memory_profile,
             runtime_config,
-            flush_rounds_observed: AtomicU64::new(0),
-            flush_active_last_sample: AtomicBool::new(false),
             #[cfg(any(test, feature = "read-call-counters"))]
             read_calls: ReadCallCounters::default(),
         })
@@ -1068,8 +1059,6 @@ impl CkbadgerStore {
             is_secondary: true,
             memory_profile,
             runtime_config,
-            flush_rounds_observed: AtomicU64::new(0),
-            flush_active_last_sample: AtomicBool::new(false),
             #[cfg(any(test, feature = "read-call-counters"))]
             read_calls: ReadCallCounters::default(),
         })
@@ -2518,7 +2507,6 @@ impl CkbadgerStore {
         let mut l0_worst_cf = String::new();
         let mut immutable_memtables = 0u64;
         let mut sst_files_total = 0u64;
-        let mut mem_table_flush_pending_total = 0u64;
         let mut cf_sizes: Vec<(String, u64)> = Vec::new();
 
         for &cf_name in ALL_CFS {
@@ -2592,12 +2580,6 @@ impl CkbadgerStore {
                         sst_files_total += v;
                     }
                 }
-                if let Ok(Some(v)) = self
-                    .db
-                    .property_int_value_cf(cf, "rocksdb.mem-table-flush-pending")
-                {
-                    mem_table_flush_pending_total += v;
-                }
                 // Immutable memtables waiting for flush — high values indicate
                 // flush can't keep up and writes will stall when all buffers fill.
                 if let Ok(Some(v)) = self
@@ -2642,14 +2624,6 @@ impl CkbadgerStore {
             .ok()
             .flatten()
             .unwrap_or(num_running_compactions_fallback);
-        let num_running_flushes = self
-            .db
-            .property_int_value("rocksdb.num-running-flushes")
-            .ok()
-            .flatten()
-            .unwrap_or(0);
-        let flush_rounds_observed =
-            self.observe_flush_activity(num_running_flushes, mem_table_flush_pending_total);
 
         MemoryStats {
             live_cells_count,
@@ -2672,7 +2646,6 @@ impl CkbadgerStore {
             immutable_memtables,
             sst_files_total,
             manifest_bytes: self.manifest_bytes(),
-            flush_rounds_observed,
             top_cf_sizes: cf_sizes,
             wbm_usage_bytes: self.write_buffer_manager.get_usage(),
             wbm_budget_bytes: self.write_buffer_manager.get_buffer_size(),
@@ -2696,25 +2669,6 @@ impl CkbadgerStore {
         std::fs::metadata(self.db_path.join(manifest_name))
             .map(|meta| meta.len())
             .unwrap_or(0)
-    }
-
-    /// Edge-triggered flush-round observation shared by `memory_stats` and
-    /// `flush_stats`: count a round when a sample finds flush activity after a
-    /// sample that found none. Returns the running count.
-    fn observe_flush_activity(
-        &self,
-        num_running_flushes: u64,
-        mem_table_flush_pending: u64,
-    ) -> u64 {
-        let active = num_running_flushes > 0 || mem_table_flush_pending > 0;
-        let was_active = self
-            .flush_active_last_sample
-            .swap(active, Ordering::Relaxed);
-        if active && !was_active {
-            self.flush_rounds_observed.fetch_add(1, Ordering::Relaxed) + 1
-        } else {
-            self.flush_rounds_observed.load(Ordering::Relaxed)
-        }
     }
 
     /// Cheap snapshot of write-side flush activity. Used by the live-sync
@@ -2756,8 +2710,6 @@ impl CkbadgerStore {
             active_memtable_bytes,
             wbm_usage_bytes: self.write_buffer_manager.get_usage() as u64,
             wbm_budget_bytes: self.write_buffer_manager.get_buffer_size() as u64,
-            flush_rounds_observed: self
-                .observe_flush_activity(num_running_flushes, mem_table_flush_pending),
         }
     }
 }
@@ -2771,9 +2723,6 @@ pub struct FlushStats {
     pub active_memtable_bytes: u64,
     pub wbm_usage_bytes: u64,
     pub wbm_budget_bytes: u64,
-    /// Sampled lower bound on flush rounds; see
-    /// `CkbadgerStore::flush_rounds_observed`.
-    pub flush_rounds_observed: u64,
 }
 
 #[cfg(test)]

@@ -511,15 +511,13 @@ pub struct MemoryStatsData {
     pub sst_files_total: u64,
     /// MANIFEST bytes across both chain stores. A secondary replays the
     /// MANIFEST on open, so this is what a slow API secondary open costs.
+    /// Flush ROUND counts come from `flush_started` in the RocksDB LOG, not
+    /// from any sampled gauge: RocksDB has no cumulative flush counter.
     #[serde(default)]
     pub manifest_bytes: u64,
     /// Domain-store MANIFEST bytes (the one the API secondary replays).
     #[serde(default)]
     pub domain_manifest_bytes: u64,
-    /// Flush rounds observed by sampling — a lower bound; the authoritative
-    /// count is `flush_started` in the RocksDB LOG.
-    #[serde(default)]
-    pub flush_rounds_observed: u64,
     /// Top column families by estimated live data size: (name, bytes)
     #[serde(default)]
     pub top_cf_sizes: Vec<(String, u64)>,
@@ -718,7 +716,6 @@ mod tests {
             sst_files_total: 7_148,
             manifest_bytes: 53_477_376,
             domain_manifest_bytes: 51_380_224,
-            flush_rounds_observed: 42,
             top_cf_sizes: vec![
                 ("live_cells".to_string(), 3_000_000_000),
                 ("consumed_cells".to_string(), 2_500_000_000),

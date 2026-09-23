@@ -606,7 +606,6 @@ pub async fn run_indexer_sync(mut config: Config) -> Result<()> {
                     sst_files = memory_stats.sst_files_total,
                     manifest_mb = memory_stats.manifest_bytes / (1024 * 1024),
                     domain_manifest_mb = memory_stats.domain_manifest_bytes / (1024 * 1024),
-                    flush_rounds_observed = memory_stats.flush_rounds_observed,
                     "RocksDB stats"
                 );
             }
