@@ -148,3 +148,94 @@ pub use reorg::ReorgResult;
 pub use statistics::calculate_knowledge_size;
 pub(crate) use statistics::DaoSnapshotBoundary;
 pub use statistics::DaoSnapshotInput;
+
+#[cfg(test)]
+mod undo_seq_tests {
+    use std::sync::Arc;
+
+    use ckbadger_store::batch::StoreBatch;
+    use ckbadger_store::CkbadgerStore;
+
+    use crate::parser::mnft::ParsedMnftIssuer;
+    use crate::parser::spore::ParsedClusterCell;
+
+    use super::BatchWriter;
+
+    /// Task 1.5: `SporeBatchState` and `MnftBatchState` each own a private
+    /// `undo_seq_by_block` that starts at 0, and both hand it to
+    /// `record_object_undo`, which stamps every entry with the same
+    /// `UndoSeqScope::Object`. Two object writes in one block therefore compute
+    /// the identical undo key `(block, (0x0003 << 48) | 0)` and the second
+    /// silently overwrites the first inside the same `StoreBatch` — one
+    /// entity's pre-image is lost before rollback ever runs.
+    ///
+    /// The undo log must hold one entry per `record_object_undo` call.
+    #[test]
+    fn object_scope_undo_seq_is_shared_across_entity_batch_states() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone(), store.clone());
+
+        const BLOCK: i64 = 4_242;
+        let mut batch = StoreBatch::new(store.as_ref());
+        let mut spore_state = writer.new_spore_batch_state();
+        let mut mnft_state = writer.new_mnft_batch_state();
+
+        writer
+            .insert_spore_cluster(
+                &ParsedClusterCell {
+                    cluster_id: vec![0x33; 32],
+                    type_script_hash: vec![0x34; 32],
+                    name: Some("cluster".to_string()),
+                    description: Some("task 1.5".to_string()),
+                    owner_lock_hash: vec![0x35; 32],
+                },
+                BLOCK,
+                &[0xAA; 32],
+                &mut batch,
+                &mut spore_state,
+            )
+            .unwrap();
+        writer
+            .insert_mnft_issuer(
+                &ParsedMnftIssuer {
+                    issuer_id: vec![0x55; 20],
+                    type_script_hash: vec![0x56; 32],
+                    name: Some("issuer".to_string()),
+                    info: None,
+                    class_count: 0,
+                    set_count: 0,
+                    owner_lock_hash: vec![0x57; 32],
+                },
+                &[0xBB; 32],
+                0,
+                BLOCK,
+                &mut batch,
+                &mut mnft_state,
+            )
+            .unwrap();
+        batch.commit().unwrap();
+
+        let start = ckbadger_store::keys::encode_reorg_undo_log_key(BLOCK, 0);
+        let mut entries = 0usize;
+        let iter = store.iterator_cf(
+            store.cf_reorg_undo_log_by_block(),
+            rocksdb::IteratorMode::From(&start, rocksdb::Direction::Forward),
+        );
+        for item in iter {
+            let (key, _) = item.unwrap();
+            let (block, _seq) = ckbadger_store::keys::decode_reorg_undo_log_key(&key);
+            if block != BLOCK {
+                break;
+            }
+            entries += 1;
+        }
+
+        assert_eq!(
+            entries, 2,
+            "two object writes in one block recorded {entries} undo entries; each \
+             `record_object_undo` call must keep its own pre-image, but the two \
+             `*BatchState`s number the `Object` scope independently from 0 and collide"
+        );
+    }
+}
