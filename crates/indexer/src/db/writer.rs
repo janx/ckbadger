@@ -161,6 +161,7 @@ mod undo_seq_tests {
 
     use crate::sync::undo::SharedUndoSeq;
 
+    use super::entity_stats::SharedEntityStatsOverlay;
     use super::BatchWriter;
 
     /// Task 1.5: `SporeBatchState` and `MnftBatchState` each own a private
@@ -183,8 +184,10 @@ mod undo_seq_tests {
         // Exactly what `write_parsed_batch` does: ONE counter for the batch,
         // handed to every entity batch state.
         let batch_undo_seq = SharedUndoSeq::default();
-        let mut spore_state = writer.new_spore_batch_state(batch_undo_seq.clone());
-        let mut mnft_state = writer.new_mnft_batch_state(batch_undo_seq.clone());
+        let mut spore_state =
+            writer.new_spore_batch_state(SharedEntityStatsOverlay::new(), batch_undo_seq.clone());
+        let mut mnft_state =
+            writer.new_mnft_batch_state(SharedEntityStatsOverlay::new(), batch_undo_seq.clone());
 
         writer
             .insert_spore_cluster(

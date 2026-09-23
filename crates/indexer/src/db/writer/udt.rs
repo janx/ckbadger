@@ -1,143 +1,99 @@
-use anyhow::{bail, Result};
+use anyhow::Result;
 use std::collections::HashMap;
 use tracing::warn;
 
 use ckbadger_common::TokenBalance;
 use ckbadger_store::batch::StoreBatch;
-use ckbadger_store::types::{TokenDailyDelta, TokenInfo, TokenTransferRecord};
-use ckbadger_store::CkbadgerStore;
+use ckbadger_store::types::{TokenInfo, TokenTransferRecord};
 
 use crate::parser::ParsedUdtTransfer;
 
+use ckbadger_store::keys;
+
+use super::entity_stats::{apply_daily_pair, EntityStatsOverlay, SharedEntityStatsOverlay};
+use crate::sync::types::{EntityDailyChanges, EntityDateKey};
+use crate::sync::undo::SharedUndoSeq;
+
 use super::BatchWriter;
 
-#[derive(Default)]
+/// Batch state for UDT writes.
+///
+/// The hourly transfer counters are no longer cached here: they live in the
+/// batch-wide `EntityStatsOverlay`, which is also what records their per-block
+/// undo pre-images. A private cache beside the overlay would be a second source
+/// of "the current value".
 pub(crate) struct UdtBatchState {
-    hourly_transfers: HashMap<Vec<u8>, i64>,
-}
-
-impl UdtBatchState {
-    fn get_hourly_transfer(&mut self, store: &CkbadgerStore, key: &[u8]) -> Result<i64> {
-        if let Some(cached) = self.hourly_transfers.get(key) {
-            return Ok(*cached);
-        }
-        let loaded = match store.get_stats_key(key)? {
-            Some(v) => {
-                if v.len() != 8 {
-                    bail!(
-                        "invalid token hourly transfer value length: key=0x{}, len={}",
-                        hex::encode(key),
-                        v.len()
-                    );
-                }
-                i64::from_le_bytes(v[..8].try_into().map_err(|_| {
-                    anyhow::anyhow!(
-                        "failed to decode token hourly transfer value as i64: key=0x{}",
-                        hex::encode(key)
-                    )
-                })?)
-            }
-            None => 0,
-        };
-        self.hourly_transfers.insert(key.to_vec(), loaded);
-        Ok(loaded)
-    }
-
-    fn put_hourly_transfer(&mut self, key: Vec<u8>, count: i64) {
-        self.hourly_transfers.insert(key, count);
-    }
+    stats: SharedEntityStatsOverlay,
+    undo_seq: SharedUndoSeq,
 }
 
 impl BatchWriter {
-    pub(crate) fn new_udt_batch_state(&self) -> UdtBatchState {
-        UdtBatchState::default()
+    pub(crate) fn new_udt_batch_state(
+        &self,
+        stats: SharedEntityStatsOverlay,
+        undo_seq: SharedUndoSeq,
+    ) -> UdtBatchState {
+        UdtBatchState { stats, undo_seq }
     }
 
+    /// Per-block token daily capacity/knowledge deltas.
+    ///
+    /// Every mutation goes through the batch overlay, which records the value
+    /// as of the end of the previous block the first time a given block touches
+    /// a given key. That undo entry is the ONLY thing that restores these rows
+    /// after a shallow fork — `should_delete_stats_for_replay` no longer deletes
+    /// them (Task 2.4).
     pub fn update_token_daily_deltas_batch(
+        &self,
+        changes: &EntityDailyChanges<EntityDateKey>,
+        overlay: &mut EntityStatsOverlay,
+        undo_seq: &mut HashMap<i64, u64>,
+        batch: &mut StoreBatch,
+    ) -> Result<()> {
+        for (block, map) in changes.by_block() {
+            for (key_parts, (capacity_delta, knowledge_delta)) in map {
+                if *capacity_delta == 0 && *knowledge_delta == 0 {
+                    continue;
+                }
+                let (type_hash, date_yyyymmdd) = key_parts;
+                let key = keys::encode_token_daily_key(type_hash, *date_yyyymmdd).to_vec();
+                let ctx = || {
+                    format!(
+                        "token_daily type_hash=0x{} date={}",
+                        hex::encode(type_hash),
+                        date_yyyymmdd
+                    )
+                };
+                let prev = overlay.current(self.store.as_ref(), &key)?;
+                let next =
+                    apply_daily_pair(prev.as_deref(), *capacity_delta, *knowledge_delta, &ctx)?;
+                overlay.mutate(self.store.as_ref(), batch, undo_seq, *block, &key, next)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Test-only adapter: run a flat `(entity, delta)` map through the real
+    /// per-block writer as a single block, then stage the overlay.
+    ///
+    /// The value semantics these callers assert (accumulate, delete on net
+    /// zero, fail on a corrupt existing row) are unchanged by Task 2.3; the
+    /// per-block undo semantics are covered by `entity_stats`' own unit tests
+    /// and by `tests/entity_stats_rollback.rs`.
+    #[cfg(test)]
+    pub(crate) fn update_token_daily_deltas_batch_flat_for_test(
         &self,
         changes: &HashMap<(Vec<u8>, u32), (i128, i128)>,
         batch: &mut StoreBatch,
     ) -> Result<()> {
-        if changes.is_empty() {
-            return Ok(());
+        let mut by_block = EntityDailyChanges::new();
+        for (key, (capacity_delta, knowledge_delta)) in changes {
+            by_block.add(1, key.clone(), *capacity_delta, *knowledge_delta)?;
         }
-
-        let mut keyed_changes: Vec<(Vec<u8>, i128, i128)> = Vec::with_capacity(changes.len());
-        for ((type_hash, date_yyyymmdd), (owned_cap_delta, owned_knowledge_delta)) in changes {
-            if *owned_cap_delta == 0 && *owned_knowledge_delta == 0 {
-                continue;
-            }
-            keyed_changes.push((
-                ckbadger_store::keys::encode_token_daily_key(type_hash, *date_yyyymmdd).to_vec(),
-                *owned_cap_delta,
-                *owned_knowledge_delta,
-            ));
-        }
-
-        if keyed_changes.is_empty() {
-            return Ok(());
-        }
-
-        let cf_keys: Vec<_> = keyed_changes
-            .iter()
-            .map(|(key, _, _)| {
-                let cf = self.store.cf_for_stats_key(key)?;
-                Ok((cf, key.as_slice()))
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let existing_results = self.store.multi_get_cf(cf_keys);
-
-        for ((key, owned_cap_delta, owned_knowledge_delta), existing_res) in
-            keyed_changes.into_iter().zip(existing_results)
-        {
-            let mut existing: TokenDailyDelta = match existing_res {
-                Ok(Some(value)) => bincode::deserialize(&value).map_err(|e| {
-                    anyhow::anyhow!(
-                        "failed to deserialize token daily delta: key=0x{}, error={}",
-                        hex::encode(&key),
-                        e
-                    )
-                })?,
-                Ok(None) => TokenDailyDelta::default(),
-                Err(e) => {
-                    bail!(
-                        "failed to read token daily delta: key=0x{}, error={}",
-                        hex::encode(&key),
-                        e
-                    );
-                }
-            };
-            existing.owned_capacity_delta = existing
-                .owned_capacity_delta
-                .checked_add(owned_cap_delta)
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "token daily capacity delta overflow: key=0x{}, current={}, delta={}",
-                        hex::encode(&key),
-                        existing.owned_capacity_delta,
-                        owned_cap_delta
-                    )
-                })?;
-            existing.owned_knowledge_delta = existing
-                .owned_knowledge_delta
-                .checked_add(owned_knowledge_delta)
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "token daily used delta overflow: key=0x{}, current={}, delta={}",
-                        hex::encode(&key),
-                        existing.owned_knowledge_delta,
-                        owned_knowledge_delta
-                    )
-                })?;
-            if existing.owned_capacity_delta == 0 && existing.owned_knowledge_delta == 0 {
-                batch.delete_stats(&key);
-            } else {
-                let value = bincode::serialize(&existing)?;
-                batch.put_stats(&key, &value);
-            }
-        }
-
-        Ok(())
+        let mut overlay = EntityStatsOverlay::new();
+        let mut undo_seq = HashMap::new();
+        self.update_token_daily_deltas_batch(&by_block, &mut overlay, &mut undo_seq, batch)?;
+        overlay.stage_final(batch)
     }
 
     /// Look up UDT cell info for multiple outpoints.
@@ -242,7 +198,10 @@ impl BatchWriter {
         block_timestamps: &HashMap<i64, i64>,
         batch: &mut StoreBatch,
     ) -> Result<()> {
-        let mut state = self.new_udt_batch_state();
+        // Standalone convenience path: its own overlay, staged into the same
+        // batch so the hourly counters it computes are actually written.
+        let entity_stats = SharedEntityStatsOverlay::new();
+        let mut state = self.new_udt_batch_state(entity_stats.clone(), SharedUndoSeq::default());
         self.process_udt_transfers_batch_with_state(
             transfers,
             max_supply_observations,
@@ -250,7 +209,8 @@ impl BatchWriter {
             block_timestamps,
             batch,
             &mut state,
-        )
+        )?;
+        entity_stats.stage_final(batch)
     }
 
     pub(crate) fn process_udt_transfers_batch_with_state(
@@ -287,7 +247,9 @@ impl BatchWriter {
 
         // Step 1: Collect unique tokens and aggregate stats
         let mut token_updates: HashMap<Vec<u8>, TokenUpdate> = HashMap::new();
-        let mut hourly_transfer_updates: HashMap<(Vec<u8>, i64), i64> = HashMap::new();
+        // Keyed by block so the overlay can record one pre-image per block —
+        // a batch-flat `(type_hash, hour)` key cannot say which block moved it.
+        let mut hourly_transfer_updates: HashMap<(i64, Vec<u8>, i64), i64> = HashMap::new();
 
         for (transfer, tx_hash, block_number) in transfers {
             let entry = token_updates
@@ -319,7 +281,11 @@ impl BatchWriter {
                 })?;
             let hour_bucket = ts_ms / 3_600_000;
             *hourly_transfer_updates
-                .entry((transfer.type_script_hash.clone(), hour_bucket))
+                .entry((
+                    *block_number,
+                    transfer.type_script_hash.clone(),
+                    hour_bucket,
+                ))
                 .or_insert(0) += 1;
         }
 
@@ -384,21 +350,30 @@ impl BatchWriter {
             }
         }
 
-        // Step 2.6: Update per-hour transfer counts using each transfer's block timestamp.
-        for ((type_hash, hour_bucket), count_delta) in hourly_transfer_updates {
+        // Step 2.6: Update per-hour transfer counts using each transfer's block
+        // timestamp, in ascending block order so each block's undo pre-image is
+        // the previous block's value.
+        let mut hourly_in_block_order: Vec<((i64, Vec<u8>, i64), i64)> =
+            hourly_transfer_updates.into_iter().collect();
+        hourly_in_block_order.sort_by(|a, b| a.0.cmp(&b.0));
+        for ((block_number, type_hash, hour_bucket), count_delta) in hourly_in_block_order {
             let key = ckbadger_store::keys::encode_token_hourly_key(&type_hash, hour_bucket);
-            let current_hourly = state.get_hourly_transfer(self.store.as_ref(), &key)?;
-            let updated_hourly = current_hourly.checked_add(count_delta).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "token hourly transfer overflow: type_hash=0x{}, hour_bucket={}, current={}, delta={}",
-                    hex::encode(&type_hash),
-                    hour_bucket,
-                    current_hourly,
-                    count_delta
-                )
-            })?;
-            batch.put_token_hourly_transfer(&type_hash, hour_bucket, updated_hourly);
-            state.put_hourly_transfer(key, updated_hourly);
+            state.stats.mutate_hourly(
+                self.store.as_ref(),
+                batch,
+                &state.undo_seq,
+                block_number,
+                &key,
+                count_delta,
+                &|| {
+                    format!(
+                        "token_hourly type_hash=0x{} hour_bucket={} block={}",
+                        hex::encode(&type_hash),
+                        hour_bucket,
+                        block_number
+                    )
+                },
+            )?;
         }
 
         // Step 3: Aggregate balance changes per (type_hash, lock_hash) as exact
@@ -668,7 +643,7 @@ mod tests {
         first.insert((type_hash.clone(), 20240115u32), (100i128, 60i128));
         let mut batch = StoreBatch::new(&store);
         writer
-            .update_token_daily_deltas_batch(&first, &mut batch)
+            .update_token_daily_deltas_batch_flat_for_test(&first, &mut batch)
             .unwrap();
         batch.commit().unwrap();
 
@@ -676,7 +651,7 @@ mod tests {
         second.insert((type_hash.clone(), 20240115u32), (-20i128, -10i128));
         let mut batch = StoreBatch::new(&store);
         writer
-            .update_token_daily_deltas_batch(&second, &mut batch)
+            .update_token_daily_deltas_batch_flat_for_test(&second, &mut batch)
             .unwrap();
         batch.commit().unwrap();
 
@@ -691,7 +666,7 @@ mod tests {
         third.insert((type_hash.clone(), 20240115u32), (-80i128, -50i128));
         let mut batch = StoreBatch::new(&store);
         writer
-            .update_token_daily_deltas_batch(&third, &mut batch)
+            .update_token_daily_deltas_batch_flat_for_test(&third, &mut batch)
             .unwrap();
         batch.commit().unwrap();
 
@@ -716,11 +691,16 @@ mod tests {
         changes.insert((type_hash, date), (1i128, 1i128));
         let mut batch = StoreBatch::new(&store);
         let err = writer
-            .update_token_daily_deltas_batch(&changes, &mut batch)
+            .update_token_daily_deltas_batch_flat_for_test(&changes, &mut batch)
             .unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("failed to deserialize token daily delta"));
+        // Same guard, now raised by the single daily codec, which still names
+        // the family and the entity.
+        assert!(
+            err.to_string()
+                .contains("failed to deserialize entity daily delta")
+                && err.to_string().contains("token_daily type_hash="),
+            "got: {err}"
+        );
     }
 
     #[test]
@@ -1331,7 +1311,8 @@ mod tests {
         let first = vec![(&transfer_a, tx_hash_a.as_slice(), 401i64)];
         let second = vec![(&transfer_b, tx_hash_b.as_slice(), 402i64)];
         let mut batch = StoreBatch::new(&store);
-        let mut state = writer.new_udt_batch_state();
+        let entity_stats = SharedEntityStatsOverlay::new();
+        let mut state = writer.new_udt_batch_state(entity_stats.clone(), SharedUndoSeq::default());
         writer
             .process_udt_transfers_batch_with_state(
                 &first,
@@ -1352,6 +1333,7 @@ mod tests {
                 &mut state,
             )
             .unwrap();
+        entity_stats.stage_final(&mut batch).unwrap();
         batch.commit().unwrap();
 
         let hour0_key = ckbadger_store::keys::encode_token_hourly_key(&type_hash, 0);

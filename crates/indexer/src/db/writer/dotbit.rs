@@ -14,6 +14,7 @@ use ckbadger_store::{CkbadgerStore, CF_IDENTITY_AGG, CF_IDENTITY_DATA, CF_STATS_
 use crate::parser::dotbit::ParsedDotbitAccountOutput;
 use crate::sync::types::UndoSeqScope;
 
+use super::entity_stats::SharedEntityStatsOverlay;
 use crate::sync::undo::SharedUndoSeq;
 
 use super::BatchWriter;
@@ -275,7 +276,7 @@ struct OwnerTransitionContext<'a> {
 #[derive(Default)]
 pub(crate) struct DotbitBatchState {
     accounts: HashMap<Vec<u8>, Option<IdentityEntry>>,
-    hourly_transfers: HashMap<Vec<u8>, i64>,
+    stats: SharedEntityStatsOverlay,
     identity_aggs: HashMap<Vec<u8>, IdentityCollectionAggregate>,
     identity_owner_counts: HashMap<(Vec<u8>, Vec<u8>), i64>,
     undo_seq_by_block: SharedUndoSeq,
@@ -297,36 +298,6 @@ impl DotbitBatchState {
 
     fn put_account(&mut self, account_id: &[u8], entry: IdentityEntry) {
         self.accounts.insert(account_id.to_vec(), Some(entry));
-    }
-
-    fn get_hourly_transfer(&mut self, store: &CkbadgerStore, key: &[u8]) -> Result<i64> {
-        if let Some(cached) = self.hourly_transfers.get(key) {
-            return Ok(*cached);
-        }
-        let loaded = match store.get_stats_key(key)? {
-            Some(v) => {
-                if v.len() != 8 {
-                    bail!(
-                        "invalid .bit hourly transfer value length in stats CF: key=0x{}, len={}",
-                        hex::encode(key),
-                        v.len()
-                    );
-                }
-                i64::from_le_bytes(v[..8].try_into().map_err(|_| {
-                    anyhow!(
-                        "failed to decode .bit hourly transfer value as i64: key=0x{}",
-                        hex::encode(key)
-                    )
-                })?)
-            }
-            None => 0,
-        };
-        self.hourly_transfers.insert(key.to_vec(), loaded);
-        Ok(loaded)
-    }
-
-    fn put_hourly_transfer(&mut self, key: Vec<u8>, count: i64) {
-        self.hourly_transfers.insert(key, count);
     }
 
     fn get_identity_agg_with_existence(
@@ -507,8 +478,13 @@ impl BatchWriter {
         );
     }
 
-    pub(crate) fn new_dotbit_batch_state(&self, undo_seq: SharedUndoSeq) -> DotbitBatchState {
+    pub(crate) fn new_dotbit_batch_state(
+        &self,
+        stats: SharedEntityStatsOverlay,
+        undo_seq: SharedUndoSeq,
+    ) -> DotbitBatchState {
         DotbitBatchState {
+            stats,
             undo_seq_by_block: undo_seq,
             ..Default::default()
         }
@@ -637,7 +613,8 @@ impl BatchWriter {
         timestamp_ms: i64,
         batch: &mut StoreBatch,
     ) -> Result<()> {
-        let mut state = self.new_dotbit_batch_state(SharedUndoSeq::default());
+        let entity_stats = SharedEntityStatsOverlay::new();
+        let mut state = self.new_dotbit_batch_state(entity_stats.clone(), SharedUndoSeq::default());
         self.insert_dotbit_account_with_state(
             account_output,
             tx_hash,
@@ -645,7 +622,8 @@ impl BatchWriter {
             timestamp_ms,
             batch,
             &mut state,
-        )
+        )?;
+        entity_stats.stage_final(batch)
     }
 
     pub(crate) fn insert_dotbit_account_with_state(
@@ -782,15 +760,19 @@ impl BatchWriter {
                     &DOTBIT_SENTINEL_COLLECTION,
                     hour_bucket,
                 );
-                let current = state.get_hourly_transfer(self.store.as_ref(), &key)?;
-                let next = current.checked_add(1).ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "hourly transfer counter overflow for .bit collection at hour_bucket={}",
-                        hour_bucket
-                    )
-                })?;
-                batch.put_mnft_hourly_transfer(&DOTBIT_SENTINEL_COLLECTION, hour_bucket, next);
-                state.put_hourly_transfer(key, next);
+                state.stats.mutate_hourly(
+                    self.store.as_ref(),
+                    batch,
+                    &state.undo_seq_by_block,
+                    block_number,
+                    &key,
+                    1,
+                    &|| {
+                        format!(
+                            "object_hourly .bit collection hour_bucket={hour_bucket} block={block_number}"
+                        )
+                    },
+                )?;
             }
         }
         let fwd_key = ckbadger_store::keys::encode_dotbit_account_outpoint_key(
@@ -838,8 +820,17 @@ impl BatchWriter {
         tx_hash: &[u8],
         batch: &mut StoreBatch,
     ) -> Result<Option<Vec<u8>>> {
-        let mut state = self.new_dotbit_batch_state(SharedUndoSeq::default());
-        self.consume_dotbit_account_with_state(account_id, block_number, tx_hash, batch, &mut state)
+        let entity_stats = SharedEntityStatsOverlay::new();
+        let mut state = self.new_dotbit_batch_state(entity_stats.clone(), SharedUndoSeq::default());
+        let consumed = self.consume_dotbit_account_with_state(
+            account_id,
+            block_number,
+            tx_hash,
+            batch,
+            &mut state,
+        )?;
+        entity_stats.stage_final(batch)?;
+        Ok(consumed)
     }
 
     /// Consume a .bit account. Returns `Some(DOTBIT_SENTINEL_COLLECTION)` if consumed.
@@ -1143,7 +1134,8 @@ mod tests {
         let recreate_tx_hash = vec![0x43; 32];
 
         let mut batch = StoreBatch::new(writer.store());
-        let mut state = writer.new_dotbit_batch_state(SharedUndoSeq::default());
+        let mut state = writer
+            .new_dotbit_batch_state(SharedEntityStatsOverlay::new(), SharedUndoSeq::default());
         writer
             .insert_dotbit_account_with_state(
                 &account,
@@ -1157,7 +1149,8 @@ mod tests {
         batch.commit().unwrap();
 
         let mut batch = StoreBatch::new(writer.store());
-        let mut state = writer.new_dotbit_batch_state(SharedUndoSeq::default());
+        let mut state = writer
+            .new_dotbit_batch_state(SharedEntityStatsOverlay::new(), SharedUndoSeq::default());
         writer
             .consume_dotbit_account_with_state(
                 &account.account.account_id,
@@ -1170,7 +1163,8 @@ mod tests {
         batch.commit().unwrap();
 
         let mut batch = StoreBatch::new(writer.store());
-        let mut state = writer.new_dotbit_batch_state(SharedUndoSeq::default());
+        let mut state = writer
+            .new_dotbit_batch_state(SharedEntityStatsOverlay::new(), SharedUndoSeq::default());
         writer
             .insert_dotbit_account_with_state(
                 &account,
@@ -1214,7 +1208,8 @@ mod tests {
         let tx_hash = vec![0x41; 32];
 
         let mut batch = StoreBatch::new(writer.store());
-        let mut state = writer.new_dotbit_batch_state(SharedUndoSeq::default());
+        let mut state = writer
+            .new_dotbit_batch_state(SharedEntityStatsOverlay::new(), SharedUndoSeq::default());
         writer
             .insert_dotbit_account_with_state(&account, &tx_hash, 1, 0, &mut batch, &mut state)
             .unwrap();
@@ -1243,17 +1238,21 @@ mod tests {
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         let store = Arc::new(store);
         let writer = BatchWriter::new(store.clone(), store.clone());
-        let mut state = writer.new_dotbit_batch_state(SharedUndoSeq::default());
+        let state = writer
+            .new_dotbit_batch_state(SharedEntityStatsOverlay::new(), SharedUndoSeq::default());
 
         let key = ckbadger_store::keys::encode_object_hourly_key(&DOTBIT_SENTINEL_COLLECTION, 1);
         let mut seed = StoreBatch::new(writer.store());
         seed.put_stats(&key, &[1, 2, 3, 4]);
         seed.commit().unwrap();
 
-        let err = state.get_hourly_transfer(writer.store(), &key).unwrap_err();
+        let err = state
+            .stats
+            .current_hourly(writer.store(), &key)
+            .unwrap_err();
         assert!(err
             .to_string()
-            .contains("invalid .bit hourly transfer value length"));
+            .contains("invalid entity hourly transfer value length"));
     }
 
     #[test]
@@ -1390,7 +1389,8 @@ mod tests {
         let owner_b = vec![0xB2; 32];
 
         let mut batch = StoreBatch::new(writer.store());
-        let mut state = writer.new_dotbit_batch_state(SharedUndoSeq::default());
+        let mut state = writer
+            .new_dotbit_batch_state(SharedEntityStatsOverlay::new(), SharedUndoSeq::default());
         writer
             .insert_dotbit_account_with_state(
                 &make_test_account(&[0x01; 20], &owner_a, "alice.bit"),
@@ -1434,7 +1434,8 @@ mod tests {
         let account_id = [0x01u8; 20];
 
         let mut batch = StoreBatch::new(writer.store());
-        let mut state = writer.new_dotbit_batch_state(SharedUndoSeq::default());
+        let mut state = writer
+            .new_dotbit_batch_state(SharedEntityStatsOverlay::new(), SharedUndoSeq::default());
         writer
             .insert_dotbit_account_with_state(
                 &make_test_account(&account_id, &owner, "alice.bit"),
@@ -1448,7 +1449,8 @@ mod tests {
         batch.commit().unwrap();
 
         let mut batch = StoreBatch::new(writer.store());
-        let mut state = writer.new_dotbit_batch_state(SharedUndoSeq::default());
+        let mut state = writer
+            .new_dotbit_batch_state(SharedEntityStatsOverlay::new(), SharedUndoSeq::default());
         let result = writer
             .consume_dotbit_account_with_state(
                 &account_id,
@@ -1481,7 +1483,8 @@ mod tests {
         let owner = vec![0xA1; 32];
 
         let mut batch = StoreBatch::new(writer.store());
-        let mut state = writer.new_dotbit_batch_state(SharedUndoSeq::default());
+        let mut state = writer
+            .new_dotbit_batch_state(SharedEntityStatsOverlay::new(), SharedUndoSeq::default());
         writer
             .insert_dotbit_account_with_state(
                 &make_test_account(&[0x01; 20], &owner, "alice.bit"),

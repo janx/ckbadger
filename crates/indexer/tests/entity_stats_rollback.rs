@@ -314,7 +314,7 @@ fn apply_commit(writer: &BatchWriter, domain: &CkbadgerStore, blocks: &[BlockCha
 }
 
 /// Byte-exact dump of the eight entity stats families.
-fn dump_entity_stats(domain: &CkbadgerStore) -> BTreeMap<Vec<u8>, Vec<u8>> {
+fn dump_entity_stats(domain: &CkbadgerStore) -> EntityStatsDump {
     let families: [(&rocksdb::ColumnFamily, u8); 8] = [
         (domain.cf_stats_script(), keys::STATS_PREFIX_SCRIPT_DAILY),
         (domain.cf_stats_token(), keys::STATS_PREFIX_TOKEN_DAILY),
@@ -351,6 +351,9 @@ fn rollback(domain: &CkbadgerStore, append: &CkbadgerStore, fork_point: i64) {
         .unwrap();
 }
 
+/// Byte-exact dump of the eight entity stats families, keyed by full stats key.
+type EntityStatsDump = BTreeMap<Vec<u8>, Vec<u8>>;
+
 /// The core driver: build the original branch, roll back to `fork_point`,
 /// replay the new branch — and build the same surviving history directly in a
 /// second pair of stores. Returns `(after_rollback_replay, direct)`.
@@ -358,7 +361,7 @@ fn run_scenario(
     original: &[Vec<BlockChanges>],
     fork_point: i64,
     new_branch: &[Vec<BlockChanges>],
-) -> (BTreeMap<Vec<u8>, Vec<u8>>, BTreeMap<Vec<u8>, Vec<u8>>) {
+) -> (EntityStatsDump, EntityStatsDump) {
     // Branch A: full original history, then rollback, then replay.
     let (domain_a, append_a) = setup_split_stores();
     let writer_a = BatchWriter::new(domain_a.clone(), append_a.clone());
@@ -516,7 +519,7 @@ async fn same_block_create_then_consume_nets_zero_row() {
     let (replayed, direct) = run_scenario(&original, 2, &[]);
     assert_eq!(replayed, direct);
     assert_eq!(
-        direct.get(&keys::encode_token_daily_key(&TOKEN_Y, DAY).to_vec()),
+        direct.get(keys::encode_token_daily_key(&TOKEN_Y, DAY).as_slice()),
         None,
         "a create+consume inside one block leaves no row"
     );
@@ -614,8 +617,8 @@ async fn multi_entity_same_day_isolation() {
         replayed, direct,
         "entities the orphan never touched must be bit-identical"
     );
-    assert!(direct.contains_key(&keys::encode_token_daily_key(&TOKEN_X, DAY).to_vec()));
-    assert!(!direct.contains_key(&keys::encode_token_daily_key(&TOKEN_Y, DAY).to_vec()));
+    assert!(direct.contains_key(keys::encode_token_daily_key(&TOKEN_X, DAY).as_slice()));
+    assert!(!direct.contains_key(keys::encode_token_daily_key(&TOKEN_Y, DAY).as_slice()));
 }
 
 #[tokio::test]
@@ -645,8 +648,8 @@ async fn utc8_day_and_hour_boundary() {
         replayed, direct,
         "recovery must follow the keys actually written, not assume dates rise with block height"
     );
-    assert!(direct.contains_key(&keys::encode_token_daily_key(&TOKEN_X, PREV_DAY).to_vec()));
-    assert!(direct.contains_key(&keys::encode_token_daily_key(&TOKEN_X, DAY).to_vec()));
+    assert!(direct.contains_key(keys::encode_token_daily_key(&TOKEN_X, PREV_DAY).as_slice()));
+    assert!(direct.contains_key(keys::encode_token_daily_key(&TOKEN_X, DAY).as_slice()));
 }
 
 #[tokio::test]
@@ -910,12 +913,12 @@ async fn ickb_three_day_gap_shape_is_preserved() {
     let writer = BatchWriter::new(domain.clone(), append.clone());
 
     let mut block = 1i64;
-    let mut push = |writer: &BatchWriter,
-                    domain: &CkbadgerStore,
-                    block: &mut i64,
-                    ts: i64,
-                    date: u32,
-                    cap: i128| {
+    let push = |writer: &BatchWriter,
+                domain: &CkbadgerStore,
+                block: &mut i64,
+                ts: i64,
+                date: u32,
+                cap: i128| {
         apply_commit(
             writer,
             domain,
@@ -936,8 +939,8 @@ async fn ickb_three_day_gap_shape_is_preserved() {
                 .at(ts + 1_000)
                 .token(TOKEN_Y, *date, 1_000_000_000, 100_000_000)],
         );
-        block += 1;
         rollback(&domain, &append, fork_point);
+        // Replay resumes at the fork point's successor.
         block = fork_point + 1;
     }
 
@@ -952,7 +955,6 @@ async fn ickb_three_day_gap_shape_is_preserved() {
             .at(ts3 + 1_000)
             .token(TOKEN_Y, DAY_3, 1_000_000_000, 100_000_000)],
     );
-    block += 1;
     rollback(&domain, &append, fork_point);
     block = fork_point + 1;
     push(

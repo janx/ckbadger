@@ -52,6 +52,7 @@ use super::types::{
     UnresolvedRpcProbeSummary,
 };
 use super::undo::*;
+use crate::db::writer::entity_stats::SharedEntityStatsOverlay;
 
 /// Marks an invariant failure that occurred while constructing the atomic
 /// domain batch, before either store commit can run. Retrying or rolling back
@@ -2055,44 +2056,60 @@ impl Indexer {
                 )?;
             }
         }
-        if !script_daily_changes.is_empty() {
-            self.writer.update_script_daily_deltas_batch(
-                &script_daily_changes.fold_total()?,
-                &mut domain_analytics_batch,
-            )?;
-        }
-        if !token_daily_changes.is_empty() {
-            self.writer.update_token_daily_deltas_batch(
-                &token_daily_changes.fold_total()?,
-                &mut domain_analytics_batch,
-            )?;
-        }
+        // ONE overlay for the batch. Every entity daily/hourly mutation goes
+        // through it, so each key is read once, carries one undo pre-image per
+        // block that moves it, and is written exactly once in `stage_final`.
+        let entity_stats = SharedEntityStatsOverlay::new();
+        entity_stats.with(|overlay| -> Result<()> {
+            batch_undo_seq.with(|undo_seq| {
+                self.writer.update_script_daily_deltas_batch(
+                    &script_daily_changes,
+                    overlay,
+                    undo_seq,
+                    &mut domain_analytics_batch,
+                )?;
+                self.writer.update_token_daily_deltas_batch(
+                    &token_daily_changes,
+                    overlay,
+                    undo_seq,
+                    &mut domain_analytics_batch,
+                )
+            })
+        })?;
         if !spore_type_index_changes.is_empty() {
             self.writer
                 .update_spore_type_index_batch(&spore_type_index_changes, &mut data_batch)?;
         }
-        if !spore_daily_changes.is_empty() {
-            self.writer.update_spore_daily_deltas_batch(
-                &spore_daily_changes.fold_total()?,
-                &mut domain_analytics_batch,
-            )?;
-        }
+        entity_stats.with(|overlay| -> Result<()> {
+            batch_undo_seq.with(|undo_seq| {
+                self.writer.update_spore_daily_deltas_batch(
+                    &spore_daily_changes,
+                    overlay,
+                    undo_seq,
+                    &mut domain_analytics_batch,
+                )
+            })
+        })?;
         if !object_type_index_changes.is_empty() {
             self.writer
                 .update_object_type_index_batch(&object_type_index_changes, &mut data_batch)?;
         }
-        if !object_daily_changes.is_empty() {
-            self.writer.update_object_daily_deltas_batch(
-                &object_daily_changes.fold_total()?,
-                &mut domain_analytics_batch,
-            )?;
-        }
-        if !cluster_daily_changes.is_empty() {
-            self.writer.update_cluster_daily_deltas_batch(
-                &cluster_daily_changes.fold_total()?,
-                &mut domain_analytics_batch,
-            )?;
-        }
+        entity_stats.with(|overlay| -> Result<()> {
+            batch_undo_seq.with(|undo_seq| {
+                self.writer.update_object_daily_deltas_batch(
+                    &object_daily_changes,
+                    overlay,
+                    undo_seq,
+                    &mut domain_analytics_batch,
+                )?;
+                self.writer.update_cluster_daily_deltas_batch(
+                    &cluster_daily_changes,
+                    overlay,
+                    undo_seq,
+                    &mut domain_analytics_batch,
+                )
+            })
+        })?;
 
         // addr_tx writes are deferred until participant tags are known (see
         // tags_by_addr_tx construction during TxActions processing below).
@@ -2518,7 +2535,9 @@ impl Indexer {
                         .iter()
                         .map(|p| (p.number, p.timestamp.timestamp_millis()))
                         .collect();
-                    let mut udt_state = self.writer.new_udt_batch_state();
+                    let mut udt_state = self
+                        .writer
+                        .new_udt_batch_state(entity_stats.clone(), batch_undo_seq.clone());
                     self.writer.process_udt_transfers_batch_with_state(
                         &transfer_refs,
                         &max_supply_observations,
@@ -2563,9 +2582,15 @@ impl Indexer {
             let mut batch_mnft_last_output_tx_index: HashMap<Vec<u8>, usize> = HashMap::new();
             let mut batch_dotbit_outpoints: HashMap<(Vec<u8>, i16), Vec<u8>> = HashMap::new();
             let mut batch_dotbit_latest_create_order: HashMap<Vec<u8>, u64> = HashMap::new();
-            let mut spore_state = self.writer.new_spore_batch_state(batch_undo_seq.clone());
-            let mut dotbit_state = self.writer.new_dotbit_batch_state(batch_undo_seq.clone());
-            let mut mnft_state = self.writer.new_mnft_batch_state(batch_undo_seq.clone());
+            let mut spore_state = self
+                .writer
+                .new_spore_batch_state(entity_stats.clone(), batch_undo_seq.clone());
+            let mut dotbit_state = self
+                .writer
+                .new_dotbit_batch_state(entity_stats.clone(), batch_undo_seq.clone());
+            let mut mnft_state = self
+                .writer
+                .new_mnft_batch_state(entity_stats.clone(), batch_undo_seq.clone());
             let mut object_activity_acc = ObjectCollectionActivityAccumulator::new();
             let mut identity_activity_acc = ObjectCollectionActivityAccumulator::new();
             let mut dotbit_tx_activity_data: HashMap<[u8; 32], DotbitTxActivityData> =
@@ -3377,6 +3402,13 @@ impl Indexer {
                 )
             });
         }
+
+        // Every entity daily/hourly key this batch touched is written exactly
+        // once, here, with its final value. This must happen after the last
+        // hourly write point (the protocol batch states above) and before the
+        // analytics batch is merged, so the stats rows, their undo pre-images
+        // and the sync tip all land in one atomic domain commit.
+        entity_stats.stage_final(&mut domain_analytics_batch)?;
 
         // Merge all secondary domain batches into data_batch for atomic commit
         data_batch.merge_from(domain_analytics_batch);

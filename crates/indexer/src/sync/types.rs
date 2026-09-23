@@ -229,9 +229,12 @@ pub type EntityDateKey = (Vec<u8>, u32);
 /// built block by block in ascending order. A block going backwards means that
 /// invariant broke upstream, and silently re-opening an earlier block's map
 /// would attribute its deltas to the wrong undo entry.
+/// One block's contributions: entity key → `(capacity_delta, knowledge_delta)`.
+pub type EntityDailyBlockMap<K> = std::collections::HashMap<K, (i128, i128)>;
+
 #[derive(Debug, Clone)]
 pub struct EntityDailyChanges<K: Eq + std::hash::Hash> {
-    by_block: Vec<(i64, std::collections::HashMap<K, (i128, i128)>)>,
+    by_block: Vec<(i64, EntityDailyBlockMap<K>)>,
 }
 
 impl<K: Eq + std::hash::Hash> Default for EntityDailyChanges<K> {
@@ -263,9 +266,7 @@ impl<K: Eq + std::hash::Hash + Clone> EntityDailyChanges<K> {
                 );
             }
             Some((last, _)) if *last == block => {}
-            _ => self
-                .by_block
-                .push((block, std::collections::HashMap::new())),
+            _ => self.by_block.push((block, EntityDailyBlockMap::new())),
         }
         let entry = self
             .by_block
@@ -290,16 +291,15 @@ impl<K: Eq + std::hash::Hash + Clone> EntityDailyChanges<K> {
     }
 
     /// Blocks in ascending order with their per-block contributions.
-    pub fn by_block(&self) -> &[(i64, std::collections::HashMap<K, (i128, i128)>)] {
+    pub fn by_block(&self) -> &[(i64, EntityDailyBlockMap<K>)] {
         &self.by_block
     }
 
     /// Whole-batch totals, for downstream aggregates (cluster capacity, …)
     /// that are batch-scoped. Folded from the same per-block collection — never
     /// a second, independently accumulated copy.
-    pub fn fold_total(&self) -> anyhow::Result<std::collections::HashMap<K, (i128, i128)>> {
-        let mut total: std::collections::HashMap<K, (i128, i128)> =
-            std::collections::HashMap::new();
+    pub fn fold_total(&self) -> anyhow::Result<EntityDailyBlockMap<K>> {
+        let mut total: EntityDailyBlockMap<K> = std::collections::HashMap::new();
         for (block, map) in &self.by_block {
             for (key, (cap, know)) in map {
                 let entry = total.entry(key.clone()).or_insert((0, 0));

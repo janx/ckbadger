@@ -21,6 +21,7 @@
 //! `stats_cf_name_by_prefix` resolves stats prefixes and nothing else.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, Mutex};
 
 use anyhow::{bail, Result};
 use ckbadger_store::batch::StoreBatch;
@@ -28,7 +29,7 @@ use ckbadger_store::types::{TokenDailyDelta, UndoLogEntry, UndoLogStoreTarget};
 use ckbadger_store::CkbadgerStore;
 
 use crate::sync::types::UndoSeqScope;
-use crate::sync::undo::next_undo_seq;
+use crate::sync::undo::{next_undo_seq, SharedUndoSeq};
 
 /// Batch-scoped view of the entity stats keys a batch touches.
 #[derive(Default)]
@@ -141,6 +142,78 @@ impl EntityStatsOverlay {
     #[cfg(test)]
     pub(crate) fn dirty_len(&self) -> usize {
         self.dirty.len()
+    }
+}
+
+/// The one `EntityStatsOverlay` of a committed batch, shared with the four
+/// protocol batch states that write hourly transfer counters.
+///
+/// The daily writers take `&mut EntityStatsOverlay` directly (via
+/// [`SharedEntityStatsOverlay::with`]); the hourly write points live deep
+/// inside `SporeBatchState` / `MnftBatchState` / `DotbitBatchState` /
+/// `UdtBatchState`, so they hold a clone of this handle instead of threading
+/// two more parameters through a dozen signatures. Either way there is exactly
+/// one overlay per batch and one `stage_final`.
+///
+/// `Arc<Mutex<_>>` rather than `Rc<RefCell<_>>`: the batch write future must
+/// stay `Send`.
+#[derive(Clone, Default)]
+pub struct SharedEntityStatsOverlay(Arc<Mutex<EntityStatsOverlay>>);
+
+impl SharedEntityStatsOverlay {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with<R>(&self, f: impl FnOnce(&mut EntityStatsOverlay) -> R) -> R {
+        let mut guard = self.0.lock().expect("entity stats overlay mutex poisoned");
+        f(&mut guard)
+    }
+
+    /// Bump an hourly transfer counter through the overlay, recording this
+    /// block's pre-image the first time the block touches the key.
+    pub fn mutate_hourly(
+        &self,
+        store: &CkbadgerStore,
+        batch: &mut StoreBatch,
+        undo_seq: &SharedUndoSeq,
+        block: i64,
+        key: &[u8],
+        by: i64,
+        ctx: &dyn Fn() -> String,
+    ) -> Result<()> {
+        self.with(|overlay| {
+            let prev = overlay.current(store, key)?;
+            let next = apply_hourly_increment(prev.as_deref(), by, ctx)?;
+            undo_seq.with(|seq| overlay.mutate(store, batch, seq, block, key, next))
+        })
+    }
+
+    /// Current value of an hourly counter as this batch sees it.
+    #[cfg(test)]
+    pub fn current_hourly(&self, store: &CkbadgerStore, key: &[u8]) -> Result<i64> {
+        self.with(|overlay| match overlay.current(store, key)? {
+            Some(bytes) => {
+                if bytes.len() != 8 {
+                    bail!(
+                        "invalid entity hourly transfer value length: key=0x{}, len={}",
+                        hex::encode(key),
+                        bytes.len()
+                    );
+                }
+                Ok(i64::from_le_bytes(bytes[..8].try_into().map_err(|_| {
+                    anyhow::anyhow!(
+                        "failed to decode entity hourly transfer value: key=0x{}",
+                        hex::encode(key)
+                    )
+                })?))
+            }
+            None => Ok(0),
+        })
+    }
+
+    pub fn stage_final(&self, batch: &mut StoreBatch) -> Result<()> {
+        self.with(|overlay| overlay.stage_final(batch))
     }
 }
 
@@ -591,7 +664,9 @@ mod tests {
                 Some(daily(99, 9)),
             )
             .unwrap();
-        overlay.prefetch(&store, &[key.clone()]).unwrap();
+        overlay
+            .prefetch(&store, std::slice::from_ref(&key))
+            .unwrap();
         assert_eq!(
             overlay.current(&store, &key).unwrap(),
             Some(daily(99, 9)),
