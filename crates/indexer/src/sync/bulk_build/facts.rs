@@ -9,6 +9,7 @@ use crate::parser::bit_cell::BitCellParser;
 use crate::parser::cell::ParsedCell;
 use crate::parser::did_ckb::DidCkbParser;
 use crate::parser::dotbit::{DotbitParser, DotbitWitnessBundle};
+use crate::parser::dotcell::{DotCellNameData, DotCellRecord};
 use crate::parser::mnft::MnftParser;
 use crate::parser::spore::SporeParser;
 use crate::sync::types::InternId;
@@ -111,6 +112,16 @@ pub(crate) struct BitCellProtocolFacts {
     pub(crate) expired_at: u64,
 }
 
+/// A `.cell` name cell: the decoded header/label plus the records payload from
+/// the `WitnessArgs.output_type` at this output's own index, whose blake2b is
+/// `data[1..33]`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct DotCellProtocolFacts {
+    pub(crate) name: DotCellNameData,
+    pub(crate) namespace_args: [u8; 20],
+    pub(crate) records: Vec<DotCellRecord>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) enum CellProtocolFacts {
     Spore(SporeProtocolFacts),
@@ -121,6 +132,7 @@ pub(crate) enum CellProtocolFacts {
     MnftToken(MnftTokenProtocolFacts),
     Dotbit(DotbitProtocolFacts),
     BitCell(BitCellProtocolFacts),
+    DotCell(DotCellProtocolFacts),
 }
 
 #[derive(Debug, Clone, Default)]
@@ -166,6 +178,7 @@ pub enum CellSemanticTag {
     Mnft,
     Spore,
     Cluster,
+    DotCell,
 }
 
 impl CellSemanticTag {
@@ -183,6 +196,7 @@ impl CellSemanticTag {
             Self::Mnft => semantic_tags::MNFT,
             Self::Spore => semantic_tags::SPORE,
             Self::Cluster => semantic_tags::CLUSTER,
+            Self::DotCell => semantic_tags::DOTCELL,
         }
     }
 }
@@ -338,6 +352,11 @@ pub(crate) fn parse_protocol_facts(
         | CellSemanticTag::Dao
         | CellSemanticTag::Sudt
         | CellSemanticTag::Xudt => Ok(None),
+        CellSemanticTag::DotCell => Err(anyhow!(
+            "DotCell protocol facts land in Task 1b.2 — do not run an indexer on this build: tx=0x{}, output_index={}",
+            hex::encode(tx_hash),
+            output_index
+        )),
         CellSemanticTag::BitCell => {
             let cell = BitCellParser::parse_parsed_cell(cell).ok_or_else(|| {
                 anyhow!(

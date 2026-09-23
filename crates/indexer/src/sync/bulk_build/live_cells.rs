@@ -312,6 +312,17 @@ fn protocol_facts_heap_bytes(facts: &CellProtocolFacts) -> u64 {
         }
         CellProtocolFacts::Dotbit(facts) => string_bytes(&facts.account),
         CellProtocolFacts::BitCell(facts) => facts.account.capacity() as u64,
+        CellProtocolFacts::DotCell(facts) => {
+            facts.name.label.capacity() as u64
+                + facts
+                    .records
+                    .iter()
+                    .map(|record| {
+                        (record.key.capacity() + record.label.capacity() + record.value.capacity())
+                            as u64
+                    })
+                    .sum::<u64>()
+        }
     }
 }
 

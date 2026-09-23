@@ -97,6 +97,9 @@ fn script_labels_from_semantic_tags(semantic_tags: u16) -> Vec<String> {
     if semantic_tags & st::DID_CKB != 0 {
         labels.push("did:ckb".to_string());
     }
+    if semantic_tags & st::DOTCELL != 0 {
+        labels.push(".cell".to_string());
+    }
     labels
 }
 

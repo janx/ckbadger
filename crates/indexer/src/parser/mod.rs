@@ -4,6 +4,7 @@ pub mod cell;
 pub mod dao;
 pub mod did_ckb;
 pub mod dotbit;
+pub mod dotcell;
 pub mod fiber;
 pub mod media_source;
 pub mod mnft;
@@ -22,6 +23,7 @@ pub use cell::CellParser;
 pub use dao::{DaoParser, DaoState, ParsedDaoDeposit, ParsedDaoWithdrawRequest};
 pub use did_ckb::{DidCkbParser, ParsedDidCkbCell};
 pub use dotbit::{DotbitParser, ParsedDotbitAccount, ParsedDotbitAccountOutput};
+pub use dotcell::{DotCellNameData, DotCellParser, DotCellRecord};
 pub use media_source::{analyze_spore_media_profile, build_dob1_svg, extract_dob1_pattern};
 pub use mnft::{MnftParser, ParsedMnftClass, ParsedMnftIssuer, ParsedMnftToken};
 pub use rgbpp::{RgbppLockArgs, RgbppLockType, RgbppParser};
@@ -160,6 +162,42 @@ pub(crate) mod test_helpers {
                 CELL_20_DATA,
             )
         }
+    }
+
+    /// Real `.cell` (DotCell) transactions, fetched 2026-09-24 from the local
+    /// nodes (mainnet `127.0.0.1:8114`, testnet `127.0.0.1:8124`) with
+    /// `get_transaction`, and archived under
+    /// `docs/superpowers/fixtures/dotcell/`.
+    ///
+    /// Every byte below is chain data: output cell data, the `WitnessArgs`
+    /// witness at the cell's own output index (which carries the records
+    /// payload whose blake2b is `data[1..33]`), and Sale Lock script args.
+    /// Nothing here is constructed from the parser's own assumptions
+    /// (POSTMORTEM PROTO-005).
+    pub mod real_dotcell {
+        /// docs/metadata/scripts/dotcell-account.toml `[mainnet]`.
+        pub const ACCOUNT_TYPE_CODE_HASH_MAINNET: &str =
+            "0xd96cee56727a2bb9a21408c154d278df5095fb4b4dcfd50516156424479bfe54";
+        /// docs/metadata/scripts/dotcell-account.toml `[testnet]`.
+        pub const ACCOUNT_TYPE_CODE_HASH_TESTNET: &str =
+            "0xe0706b176678181d982290d93dfcd82098e60cceaa4a87f10f32dcbcc91df1d9";
+        pub const ACCOUNT_LOCK_CODE_HASH_MAINNET: &str =
+            "0x9f0f0ba142b58cba2fe047546cfd8481d5b1769437cd3533e6458b21b61871ab";
+        pub const ACCOUNT_LOCK_CODE_HASH_TESTNET: &str =
+            "0xede6a3d80717c3d7927eea678d095abbe68dbb08ca6fdbbbdd9de906455a4afd";
+        pub const SALE_LOCK_CODE_HASH_MAINNET: &str =
+            "0x086c8f4e9d4272e3dfbaca399792f730e6604591e87931ee6d67047a3c900879";
+        pub const SALE_LOCK_CODE_HASH_TESTNET: &str =
+            "0x498ab6b49b6b25b3c47fcea74bd8a4447bc4efda6417809152a846e058ad0ae4";
+        pub const PRICE_TYPE_CODE_HASH_MAINNET: &str =
+            "0x97bf5f760cf72f918f13704d7184933b79d4ddc1fd85075762373e531152d4f9";
+        pub const PRICE_TYPE_CODE_HASH_TESTNET: &str =
+            "0xe1057caf161b3c720fcdb80190e89c6efc36b6b4256b3c99635fda63a9dd4294";
+
+        /// The one namespace each network's Cells Account deployment uses
+        /// (the type script's constant 20-byte args).
+        pub const NAMESPACE_ARGS_MAINNET: &str = "0xb4f4302965b7d6421481a520ee7eb5971a5e808c";
+        pub const NAMESPACE_ARGS_TESTNET: &str = "0x2510c78057479c9b023fe6e98ce43979e92a1353";
     }
 }
 

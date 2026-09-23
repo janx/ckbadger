@@ -147,6 +147,7 @@ pub mod semantic_tags {
     pub const CLUSTER: u16 = 1 << 6;
     pub const BIT_CELL: u16 = 1 << 7;
     pub const DID_CKB: u16 = 1 << 8;
+    pub const DOTCELL: u16 = 1 << 9;
 }
 
 /// Aggregated cell statistics for a token.
@@ -831,8 +832,72 @@ pub const DOTBIT_SENTINEL_COLLECTION: [u8; 32] = *b"dotbit_collection___________
 pub const BIT_CELL_SENTINEL_COLLECTION: [u8; 32] = *b"bit_cell_collection_____________";
 /// Sentinel collection key for the did:ckb identity collection (32 bytes).
 pub const DID_CKB_SENTINEL_COLLECTION: [u8; 32] = *b"did_ckb_collection______________";
+/// Sentinel collection key for the `.cell` (DotCell) identity collection (32 bytes).
+pub const DOTCELL_SENTINEL_COLLECTION: [u8; 32] = *b"dotcell_collection______________";
 /// Sentinel collection key for clusterless Spore objects (32 bytes).
 pub const SOLE_SPORES_SENTINEL_COLLECTION: [u8; 32] = *b"sole_spores_collection__________";
+
+// ── `.cell` (DotCell) name cell types ───────────────────────────────────────
+//
+// The cell layout these describe is spec §1.2, verified byte-for-byte on both
+// networks on 2026-09-23. They live in the store crate because the identity
+// entry (`IdentityExtra::DotCell`) is built from exactly these fields and both
+// the indexer's parser and the API's read path must speak one vocabulary.
+
+/// One decoded record from a name cell's witness payload.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DotCellRecord {
+    pub key: String,
+    pub label: String,
+    pub value: Vec<u8>,
+    pub ttl: u32,
+}
+
+/// The decoded header + label of a `.cell` name cell.
+///
+/// `id` is derived, not stored on chain: `blake2b(label)[..20]`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DotCellNameData {
+    pub layout_version: u8,
+    pub records_hash: [u8; 32],
+    pub next_id: [u8; 20],
+    pub expired_at: u64,
+    pub owner_hash20: [u8; 20],
+    pub manager_hash20: [u8; 20],
+    pub label: String,
+    pub id: [u8; 20],
+}
+
+/// The ONE definition of a `.cell` name id: `blake2b(label)[..20]` under CKB's
+/// default personalization. Everything that needs a name id — the parser, the
+/// sub-name parent link, API name lookups and the verify check — calls this.
+pub fn derive_dotcell_id(label: &str) -> [u8; 20] {
+    let mut hasher = ckb_hash::new_blake2b();
+    hasher.update(label.as_bytes());
+    let mut out = [0u8; 32];
+    hasher.finalize(&mut out);
+    let mut id = [0u8; 20];
+    id.copy_from_slice(&out[..20]);
+    id
+}
+
+impl DotCellNameData {
+    /// The ring root carries an empty label. It is protocol infrastructure,
+    /// not an identity.
+    pub fn is_root(&self) -> bool {
+        self.label.is_empty()
+    }
+
+    /// `shop.alice` is a sub-name of `alice`; the grammar allows at most one
+    /// dot, so the parent is everything after the first one.
+    pub fn parent_label(&self) -> Option<&str> {
+        self.label.split_once('.').map(|(_, parent)| parent)
+    }
+
+    pub fn parent_id(&self) -> Option<[u8; 20]> {
+        self.parent_label().map(derive_dotcell_id)
+    }
+}
 
 /// Standard-specific data for Identity entries, stored inline via bincode.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2130,6 +2195,78 @@ pub struct TokenActivityTransfer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every semantic tag owns one bit of `TxIndexEntry.semantic_tags`. A
+    /// duplicated bit would make one protocol's cells report as another's on
+    /// every transaction row.
+    #[test]
+    fn semantic_tag_bits_are_distinct_and_dotcell_is_bit_nine() {
+        use semantic_tags as st;
+        assert_eq!(st::DOTCELL, 1 << 9);
+        let bits = [
+            ("DAO", st::DAO),
+            ("SUDT", st::SUDT),
+            ("XUDT", st::XUDT),
+            ("DOTBIT", st::DOTBIT),
+            ("MNFT", st::MNFT),
+            ("SPORE", st::SPORE),
+            ("CLUSTER", st::CLUSTER),
+            ("BIT_CELL", st::BIT_CELL),
+            ("DID_CKB", st::DID_CKB),
+            ("DOTCELL", st::DOTCELL),
+        ];
+        let mut seen: u16 = st::PLAIN;
+        for (name, bit) in bits {
+            assert_eq!(bit.count_ones(), 1, "{name} must be a single bit");
+            assert_eq!(seen & bit, 0, "{name} reuses an already-assigned bit");
+            seen |= bit;
+        }
+    }
+
+    /// The `.cell` name id is `blake2b(label)[..20]` — vectors read off chain
+    /// (the ring root's empty label, a mainnet name, a testnet sub-name).
+    #[test]
+    fn dotcell_id_derivation_matches_chain_vectors() {
+        for (label, expected) in [
+            ("", "44f4c69744d5f8c55d642062949dcae49bc4e7ef"),
+            ("support", "62d71147ac82b83c8531126cacb0d2f072bfd94a"),
+            (
+                "shop.v3-first-name",
+                "bb008a3e9045554d5b1b609c072b59b404320f9f",
+            ),
+        ] {
+            assert_eq!(hex::encode(derive_dotcell_id(label)), expected, "{label:?}");
+        }
+    }
+
+    #[test]
+    fn dotcell_name_data_reports_root_and_sub_name_parent() {
+        let mut name = DotCellNameData {
+            layout_version: 3,
+            records_hash: [0u8; 32],
+            next_id: [0u8; 20],
+            expired_at: 0,
+            owner_hash20: [0u8; 20],
+            manager_hash20: [0u8; 20],
+            label: String::new(),
+            id: derive_dotcell_id(""),
+        };
+        assert!(name.is_root());
+        assert_eq!(name.parent_id(), None);
+
+        name.label = "shop.v3-first-name".to_string();
+        name.id = derive_dotcell_id(&name.label);
+        assert!(!name.is_root());
+        assert_eq!(name.parent_label(), Some("v3-first-name"));
+        assert_eq!(
+            hex::encode(name.parent_id().unwrap()),
+            "4144e782dfaadeeb07625e11e4b6de717893aacb"
+        );
+
+        name.label = "v3-first-name".to_string();
+        name.id = derive_dotcell_id(&name.label);
+        assert_eq!(name.parent_id(), None, "a top-level name has no parent");
+    }
 
     fn sample_live_cell_info() -> LiveCellInfo {
         LiveCellInfo {

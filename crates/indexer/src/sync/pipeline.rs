@@ -22,7 +22,7 @@ use crate::parser::transaction::TransactionParser;
 use crate::parser::udt::UdtStandard;
 use crate::parser::{
     dotbit::{may_contain_das_witness, parse_dotbit_witness_bundle, DotbitWitnessBundle},
-    BitCellParser, DidCkbParser, DotbitParser, MnftParser, SporeParser, UdtParser,
+    BitCellParser, DidCkbParser, DotCellParser, DotbitParser, MnftParser, SporeParser, UdtParser,
 };
 use crate::rpc::BlockResponseWithCycles;
 use ckbadger_store::types::SOLE_SPORES_SENTINEL_COLLECTION;
@@ -181,6 +181,10 @@ pub fn classify_type_script_semantic_tag(
 
     if DidCkbParser::is_type_script(type_code_hash) {
         return CellSemanticTag::DidCkb;
+    }
+
+    if DotCellParser::is_account_type_script(type_code_hash) {
+        return CellSemanticTag::DotCell;
     }
 
     if SporeParser::is_spore_nft_type_script(type_code_hash) {

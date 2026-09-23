@@ -32,6 +32,7 @@ enum AssetKind {
     MnftToken,
     Dotbit,
     BitCell,
+    DotCell,
 }
 
 /// Pre-computed code hashes for asset detection via HashMap lookup.
@@ -71,6 +72,13 @@ impl CodeHashes {
                 ProtocolScript::MnftToken => AssetKind::MnftToken,
                 ProtocolScript::DotbitAccount => AssetKind::Dotbit,
                 ProtocolScript::BitCell => AssetKind::BitCell,
+                ProtocolScript::DotCellAccount => AssetKind::DotCell,
+                // The `.cell` Account Lock and Sale Lock are locks, and the
+                // Price cell is a protocol parameter: none of them is an asset
+                // a party owns, so none gets an AssetKind.
+                ProtocolScript::DotCellAccountLock
+                | ProtocolScript::DotCellSaleLock
+                | ProtocolScript::DotCellPrice => continue,
                 _ => continue,
             };
             type_lookup.insert(code_hash.clone(), kind);
@@ -1132,6 +1140,12 @@ fn classify_input<'a>(
                 accum.dotbit_inputs.push(account_id);
             }
         }
+        // `.cell` ownership lives in the cell's DATA, not in its lock: every
+        // name cell carries the same Account Lock, so attributing the name to
+        // the lock of the cell would credit the protocol's own lock for every
+        // name. `DotCellDetector` names the real parties instead, so nothing
+        // is collected per lock owner here.
+        Some(AssetKind::DotCell) => {}
         Some(AssetKind::BitCell) => {
             let identity_id = if let Some(identity_id) = bit_cell_identity_id {
                 if identity_id.len() != 32 || identity_id.iter().all(|byte| *byte == 0) {
@@ -1256,6 +1270,9 @@ fn classify_output<'a>(
             })?;
             accum.bit_cell_outputs.push(identity_id);
         }
+        // See `classify_input`: `.cell` ownership is in the data, never in the
+        // lock, so the name never becomes an item of the cell's lock owner.
+        Some(AssetKind::DotCell) => {}
         None => {
             record_script_call(accum, type_code_hash, type_hash_type, type_args)?;
         }

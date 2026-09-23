@@ -1230,21 +1230,51 @@ disabled = true
         }
     }
 
+    /// Phase 1b: the four Cells scripts are protocol identities, not just
+    /// labels. Both networks' code hashes must resolve, or the indexer sees
+    /// `.cell` cells as plain cells (PROTO-003).
     #[test]
-    fn dotcell_labels_are_label_only_in_phase_0() {
-        use crate::parser::registry::PROTOCOL_REGISTRY;
+    fn dotcell_scripts_classify_on_both_networks() {
+        use crate::parser::registry::{ProtocolScript, PROTOCOL_REGISTRY};
         use crate::rpc::parse_hex_to_bytes;
-        for hash in [
-            "0xd96cee56727a2bb9a21408c154d278df5095fb4b4dcfd50516156424479bfe54",
-            "0xe0706b176678181d982290d93dfcd82098e60cceaa4a87f10f32dcbcc91df1d9",
-            "0x9f0f0ba142b58cba2fe047546cfd8481d5b1769437cd3533e6458b21b61871ab",
-            "0x086c8f4e9d4272e3dfbaca399792f730e6604591e87931ee6d67047a3c900879",
-            "0x97bf5f760cf72f918f13704d7184933b79d4ddc1fd85075762373e531152d4f9",
+        for (hash, expected) in [
+            (
+                "0xd96cee56727a2bb9a21408c154d278df5095fb4b4dcfd50516156424479bfe54",
+                ProtocolScript::DotCellAccount,
+            ),
+            (
+                "0xe0706b176678181d982290d93dfcd82098e60cceaa4a87f10f32dcbcc91df1d9",
+                ProtocolScript::DotCellAccount,
+            ),
+            (
+                "0x9f0f0ba142b58cba2fe047546cfd8481d5b1769437cd3533e6458b21b61871ab",
+                ProtocolScript::DotCellAccountLock,
+            ),
+            (
+                "0xede6a3d80717c3d7927eea678d095abbe68dbb08ca6fdbbbdd9de906455a4afd",
+                ProtocolScript::DotCellAccountLock,
+            ),
+            (
+                "0x086c8f4e9d4272e3dfbaca399792f730e6604591e87931ee6d67047a3c900879",
+                ProtocolScript::DotCellSaleLock,
+            ),
+            (
+                "0x498ab6b49b6b25b3c47fcea74bd8a4447bc4efda6417809152a846e058ad0ae4",
+                ProtocolScript::DotCellSaleLock,
+            ),
+            (
+                "0x97bf5f760cf72f918f13704d7184933b79d4ddc1fd85075762373e531152d4f9",
+                ProtocolScript::DotCellPrice,
+            ),
+            (
+                "0xe1057caf161b3c720fcdb80190e89c6efc36b6b4256b3c99635fda63a9dd4294",
+                ProtocolScript::DotCellPrice,
+            ),
         ] {
             assert_eq!(
                 PROTOCOL_REGISTRY.get(&parse_hex_to_bytes(hash)),
-                None,
-                "Phase 0 must not change indexer classification"
+                Some(expected),
+                "{hash} must classify as {expected:?}"
             );
         }
     }

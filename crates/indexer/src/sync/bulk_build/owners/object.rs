@@ -10,7 +10,7 @@ use ckbadger_store::types::{
     IdentityEntry, IdentityExtra, IdentityStandard, MnftCollectionAggregate, MnftDailyDelta,
     MnftTypeIndex, ObjectEntry, ObjectExtra, ObjectStandard, SporeDailyDelta, SporeTypeIndex,
     BIT_CELL_SENTINEL_COLLECTION, DID_CKB_SENTINEL_COLLECTION, DOTBIT_SENTINEL_COLLECTION,
-    SOLE_SPORES_SENTINEL_COLLECTION,
+    DOTCELL_SENTINEL_COLLECTION, SOLE_SPORES_SENTINEL_COLLECTION,
 };
 use ckbadger_store::{
     CkbadgerStore, CF_CLUSTER_AGG, CF_IDENTITY_AGG, CF_IDENTITY_DATA, CF_MNFT_COLLECTION_AGG,
@@ -613,6 +613,10 @@ impl ObjectOwner {
             CellProtocolFacts::Cluster(cluster) => self.consume_cluster(&cluster.cluster_id),
             CellProtocolFacts::Dotbit(dotbit) => self.consume_dotbit(&dotbit.account_id),
             CellProtocolFacts::BitCell(bit_cell) => self.consume_bit_cell(&bit_cell.identity_id),
+            CellProtocolFacts::DotCell(facts) => bail!(
+                "DotCell bulk reducer lands in Task 1b.6 — do not run an indexer on this build: name id=0x{}",
+                hex::encode(facts.name.id)
+            ),
         }
     }
 
@@ -658,6 +662,10 @@ impl ObjectOwner {
                     .map(Vec::as_slice),
             ),
             CellProtocolFacts::BitCell(bit_cell) => self.insert_bit_cell(bit_cell, cell, ctx, tx),
+            CellProtocolFacts::DotCell(facts) => bail!(
+                "DotCell bulk reducer lands in Task 1b.6 — do not run an indexer on this build: name id=0x{}",
+                hex::encode(facts.name.id)
+            ),
         }
     }
 
@@ -2463,12 +2471,19 @@ impl ObjectOwner {
 fn classify_nft_collection_from_protocol(
     protocol_facts: &Option<CellProtocolFacts>,
 ) -> Option<Vec<u8>> {
+    // Exhaustive on purpose: a protocol classified on one side but not the
+    // other leaves its collection's daily row permanently wrong, and a
+    // wildcard here would hide that at compile time.
     match protocol_facts.as_ref()? {
         CellProtocolFacts::MnftToken(token) => Some(token.class_id.clone()),
         CellProtocolFacts::Dotbit(_) => Some(DOTBIT_SENTINEL_COLLECTION.to_vec()),
         CellProtocolFacts::BitCell(_) => Some(BIT_CELL_SENTINEL_COLLECTION.to_vec()),
         CellProtocolFacts::DidCkb(_) => Some(DID_CKB_SENTINEL_COLLECTION.to_vec()),
-        _ => None,
+        CellProtocolFacts::DotCell(_) => Some(DOTCELL_SENTINEL_COLLECTION.to_vec()),
+        CellProtocolFacts::Spore(_)
+        | CellProtocolFacts::Cluster(_)
+        | CellProtocolFacts::MnftIssuer(_)
+        | CellProtocolFacts::MnftClass(_) => None,
     }
 }
 
