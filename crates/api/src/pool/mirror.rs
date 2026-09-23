@@ -18,8 +18,7 @@ use ckbadger_store::types::{AddrTxValue, TxActions};
 use ckbadger_store::{read_view, CkbadgerStore};
 
 use super::resolve::{
-    resolve_pool_tx, resolve_previous_outputs, OutPointKey, PoolParentCells, ResolvedCell,
-    ResolvedPoolTx,
+    resolve_pool_tx, resolve_previous_outputs, PoolParentCells, ResolvedCell, ResolvedPoolTx,
 };
 use super::snapshot::{
     Interpretation, MirrorStatus, PartialReason, PoolEntryError, PoolParticipant, PoolSnapshot,
@@ -708,14 +707,7 @@ fn build_record(
     now_ms: i64,
     is_mainnet: bool,
 ) -> Result<PoolTxRecord, String> {
-    let mut reasons: Vec<PartialReason> = resolved
-        .unresolved_inputs()
-        .into_iter()
-        .map(|(tx_hash, index)| PartialReason::UnresolvedInput { tx_hash, index })
-        .collect();
-    if resolved.completes_dao_withdrawal() {
-        reasons.push(PartialReason::DaoCompensationUnavailable);
-    }
+    let interpretation = interpretation_of(resolved);
 
     let zero_block_hash = [0u8; 32];
     let time_added_ms = i64::try_from(entry.time_added_to_pool_ms).map_err(|_| {
@@ -767,11 +759,7 @@ fn build_record(
         outputs_count,
         semantic_tags: resolved.semantic_tags(),
         is_cellbase: resolved.is_cellbase,
-        interpretation: if reasons.is_empty() {
-            Interpretation::Complete
-        } else {
-            Interpretation::Partial { reasons }
-        },
+        interpretation,
         first_seen_ms,
         last_seen_ms: now_ms,
     })
@@ -821,8 +809,22 @@ fn participants_from(
         .collect()
 }
 
-/// The outpoints a resolved transaction still needs. Exposed for the
-/// `/tx/{hash}` branch, which reports the same gap.
-pub fn unresolved_outpoints(resolved: &ResolvedPoolTx) -> Vec<OutPointKey> {
-    resolved.unresolved_inputs()
+/// How completely a resolved transaction could be interpreted.
+///
+/// The ONE place that judgement is made: the mirror records it on every pool
+/// record, and `/tx/{hash}` reports the same verdict for the same transaction.
+pub fn interpretation_of(resolved: &ResolvedPoolTx) -> Interpretation {
+    let mut reasons: Vec<PartialReason> = resolved
+        .unresolved_inputs()
+        .into_iter()
+        .map(|(tx_hash, index)| PartialReason::UnresolvedInput { tx_hash, index })
+        .collect();
+    if resolved.completes_dao_withdrawal() {
+        reasons.push(PartialReason::DaoCompensationUnavailable);
+    }
+    if reasons.is_empty() {
+        Interpretation::Complete
+    } else {
+        Interpretation::Partial { reasons }
+    }
 }

@@ -356,6 +356,61 @@ pub fn pending_transaction_rpc_response(hash: &str, status: &str) -> serde_json:
     })
 }
 
+/// secp256k1-blake160, the standard lock used by pending-transaction fixtures.
+pub const TEST_SECP_LOCK_CODE_HASH: &str =
+    "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8";
+
+/// The node reports the pending transaction's previous output as live.
+///
+/// Pending inputs resolve through `get_live_cell(out_point, with_data = true)`
+/// — live cells are primitive truth in the node's own database, and unlike the
+/// store's `LiveCellInfo` the node returns the data bytes that DAO / `.bit` /
+/// UDT interpretation needs.
+pub async fn mount_live_cell_rpc(server: &MockServer, capacity_hex: &str, lock_args_hex: &str) {
+    let response = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+            "cell": {
+                "data": { "content": "0x", "hash": format!("0x{}", "00".repeat(32)) },
+                "output": {
+                    "capacity": capacity_hex,
+                    "lock": {
+                        "code_hash": TEST_SECP_LOCK_CODE_HASH,
+                        "hash_type": "type",
+                        "args": lock_args_hex
+                    },
+                    "type": null
+                }
+            },
+            "status": "live"
+        }
+    });
+    Mock::given(method("POST"))
+        .and(body_partial_json(
+            serde_json::json!({ "method": "get_live_cell" }),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(response))
+        .mount(server)
+        .await;
+}
+
+/// The node reports the previous output as already spent.
+pub async fn mount_dead_cell_rpc(server: &MockServer) {
+    let response = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": { "cell": null, "status": "dead" }
+    });
+    Mock::given(method("POST"))
+        .and(body_partial_json(
+            serde_json::json!({ "method": "get_live_cell" }),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(response))
+        .mount(server)
+        .await;
+}
+
 pub async fn mount_pending_transaction_rpc(server: &MockServer, hash: &str, status: &str) {
     Mock::given(method("POST"))
         .and(body_partial_json(serde_json::json!({

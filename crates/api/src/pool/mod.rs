@@ -21,7 +21,9 @@ pub mod source;
 #[cfg(test)]
 mod tests;
 
-pub use mirror::{PoolMirror, PoolRefresher, PoolRefresherConfig, RefreshOutcome};
+pub use mirror::{
+    interpretation_of, PoolMirror, PoolRefresher, PoolRefresherConfig, RefreshOutcome,
+};
 pub use refresh::{refresh_pool_mirror_loop, POOL_MIRROR_TASK};
 pub use resolve::{
     resolve_pool_tx, resolve_previous_outputs, NoPoolParents, OutPointKey, PoolParentCells,

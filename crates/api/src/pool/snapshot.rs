@@ -29,11 +29,15 @@ pub enum PoolStatus {
 }
 
 impl PoolStatus {
+    /// The wire value for a transaction the node has committed and the local
+    /// store has not indexed yet.
+    pub const COMMITTED_AWAITING_INDEX: &'static str = "committed_awaiting_index";
+
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Pending => "pending",
             Self::Proposed => "proposed",
-            Self::CommittedAwaitingIndex { .. } => "committed_awaiting_index",
+            Self::CommittedAwaitingIndex { .. } => Self::COMMITTED_AWAITING_INDEX,
         }
     }
 }
@@ -225,6 +229,16 @@ impl PoolSnapshot {
             .get(&lock_hash)
             .map(|hashes| hashes.len())
             .unwrap_or(0)
+    }
+}
+
+/// A published snapshot answers step 1 of the input-resolution order: the
+/// outputs of transactions that are themselves still in the pool.
+impl super::resolve::PoolParentCells for PoolSnapshot {
+    fn output_cell(&self, tx_hash: &[u8; 32], index: u32) -> Option<ResolvedCell> {
+        self.records
+            .get(tx_hash)
+            .and_then(|record| record.outputs.get(index as usize).cloned())
     }
 }
 
