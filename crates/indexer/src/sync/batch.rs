@@ -5926,6 +5926,13 @@ mod tests {
                 last_cache_invalidation: tokio::sync::Mutex::new(0),
                 was_bulk_sync_active: AtomicBool::new(false),
                 bulk_sync_allowed: AtomicBool::new(false),
+                startup_decision: crate::sync::decide_startup_sync(
+                    0,
+                    99,
+                    &Some(vec![0x99; 32]),
+                    72,
+                )
+                .expect("live-write fixture startup decision"),
                 rebuild_pause_flag: Arc::new(AtomicBool::new(false)),
                 pipeline_reset_notify_flag: Arc::new(AtomicBool::new(false)),
                 pipeline_reset_reason_code: Arc::new(AtomicU8::new(0)),

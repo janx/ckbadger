@@ -37,6 +37,7 @@ pub use bulk_build::live_cells::{
 pub use bulk_build::materialize::MaterializationReport;
 pub use indexer::is_fresh_sync_tip_state;
 pub use indexer::Indexer;
+pub(crate) use indexer::{decide_startup_sync, StartupSyncDecision};
 
 /// Test hook for the bulk-build completion commit point, which writes the
 /// entity-stats coverage contract alongside the bulk-complete status.

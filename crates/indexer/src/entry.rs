@@ -16,7 +16,7 @@ use crate::lifecycle::{
 use crate::network_guard::{establish_db_network_identity, verify_genesis_hash};
 use crate::rpc::CkbRpcClient;
 use crate::runtime_diag::{generate_run_id, read_cgroup_memory_snapshot};
-use crate::sync::Indexer;
+use crate::sync::{decide_startup_sync, Indexer, StartupSyncDecision};
 use crate::Config;
 
 /// Process exit code signalling an **unrecoverable** indexer error — one a
@@ -151,40 +151,47 @@ pub async fn run_indexer_sync(mut config: Config) -> Result<()> {
         .ok_or_else(|| anyhow::anyhow!("CKB node returned no genesis block (block 0)"))?;
     verify_genesis_hash(&config.network, &node_genesis)?;
 
-    // Use VectorRep memtable (O(1) insert) for the indexer. The indexer is
-    // the sole writer — no concurrent memtable access. Sort deferred to
-    // background memtable→SST flush. Safe for both bulk sync and live sync
-    // (live sync has low write rate, so deferred sort cost is negligible).
-    config.store_runtime_config.vector_memtable = true;
-
-    info!(
-        "Opening ckbadger domain store at: {}",
-        config.domain_data_path
-    );
-    let store = Arc::new(CkbadgerStore::open_domain_with_runtime(
+    // The memtable representation is fixed at DB open time and cannot be
+    // changed afterwards, so the sync path must be decided BEFORE the stores
+    // are opened for real. `open_chain_stores_for_startup` probes with the safe
+    // default (skiplist), decides once, and only reopens with VectorRep when
+    // this process is actually going to bulk build a fresh store.
+    let chain_tip = guard_rpc
+        .get_tip_block_number()
+        .await
+        .context("failed to fetch chain tip from CKB node for the startup decision")?;
+    let opened = open_chain_stores_for_startup(
         &config.domain_data_path,
-        config.store_runtime_config,
-    )?);
-
-    // A partial bulk artifact is never a supported startup state. Check it
-    // before network tagging, sync-status repair, runtime markers, or labels
-    // can mutate the domain store.
-    fail_fast_if_bulk_build_session_incomplete(store.as_ref())
-        .map_err(|error| annotate_rebuild_required(error, &store_location))?;
-
-    // This is the first domain-store mutation on startup. Existing tagged DBs
-    // must match; old untagged DBs must prove their chain through persisted
-    // block 0 before the canonical identity is written.
-    establish_db_network_identity(&store, &config.network, &node_genesis)?;
-
-    info!(
-        "Opening ckbadger append-only store at: {}",
-        config.append_only_data_path
-    );
-    let append_only_store = Arc::new(CkbadgerStore::open_append_only_with_runtime(
         &config.append_only_data_path,
         config.store_runtime_config,
-    )?);
+        chain_tip,
+        config.bulk_sync_threshold,
+    )
+    .map_err(|error| annotate_rebuild_required(error, &store_location))?;
+    let StartupStores {
+        store,
+        append_only_store,
+        decision: startup_decision,
+    } = opened;
+    // Keep the config honest about what the stores were actually opened with.
+    config.store_runtime_config.vector_memtable = startup_decision.memtable.vector_memtable();
+    info!(
+        network = %config.network,
+        build_version = %config.build_version,
+        sync_path = startup_decision.path_str(),
+        fresh = startup_decision.fresh,
+        blocks_behind = startup_decision.blocks_behind,
+        memtable = startup_decision.memtable.as_str(),
+        chain_tip,
+        bulk_sync_threshold = config.bulk_sync_threshold,
+        "Startup sync decision"
+    );
+
+    // This is the first domain-store mutation on startup, and it happens on the
+    // FINAL handle (the probe handle only reads). Existing tagged DBs must
+    // match; old untagged DBs must prove their chain through persisted block 0
+    // before the canonical identity is written.
+    establish_db_network_identity(&store, &config.network, &node_genesis)?;
     store.log_config();
 
     let mut sync_status = store.get_sync_status()?;
@@ -419,6 +426,7 @@ pub async fn run_indexer_sync(mut config: Config) -> Result<()> {
         config.clone(),
         store.clone(),
         append_only_store.clone(),
+        startup_decision,
     )
     .await?;
     let indexer = Arc::new(indexer);
@@ -832,6 +840,97 @@ pub async fn run_indexer_sync(mut config: Config) -> Result<()> {
         }
     }
     run_result.map_err(|error| annotate_rebuild_required(error, &store_location))
+}
+
+/// Both chain stores, opened with the memtable the startup decision selected.
+pub(crate) struct StartupStores {
+    pub(crate) store: Arc<CkbadgerStore>,
+    pub(crate) append_only_store: Arc<CkbadgerStore>,
+    pub(crate) decision: StartupSyncDecision,
+}
+
+/// Open the two chain stores for this process, deciding the sync path exactly
+/// once on the way.
+///
+/// 1. Probe-open the domain store with the safe default (skiplist) and read
+///    only: the bulk-build session marker and the writer's resume tip
+///    (`block_headers`, the authoritative source `Repository::get_sync_tip`
+///    uses — never `sync_status`, which is repaired later in startup).
+/// 2. Decide path + memtable from that state and the node's chain tip.
+/// 3. Keep the probe handle when the decision is a skiplist; otherwise drop it
+///    (the handle is owned here, never shared, so the drop closes the DB) and
+///    reopen the domain store with VectorRep. Either way the append-only store
+///    is opened once, with the same decision.
+///
+/// The per-process RocksDB block cache and WriteBufferManager are a
+/// `OnceLock` (`SHARED_BUDGET`) sized from the runtime config, and
+/// `vector_memtable` is not an input to that sizing — so probing and reopening
+/// provisions exactly one budget, not two.
+pub(crate) fn open_chain_stores_for_startup(
+    domain_data_path: &str,
+    append_only_data_path: &str,
+    runtime_config: StoreRuntimeConfig,
+    chain_tip: u64,
+    bulk_sync_threshold: u64,
+) -> Result<StartupStores> {
+    let mut probe_config = runtime_config;
+    probe_config.vector_memtable = false;
+
+    info!(
+        path = domain_data_path,
+        "Probe-opening ckbadger domain store for the startup decision"
+    );
+    let probe_store = CkbadgerStore::open_domain_with_runtime(domain_data_path, probe_config)?;
+
+    // A partial bulk artifact is never a supported startup state. Check it
+    // before network tagging, sync-status repair, runtime markers, or labels
+    // can mutate the domain store.
+    fail_fast_if_bulk_build_session_incomplete(&probe_store)?;
+
+    let (sync_tip_block, sync_tip_hash) = match probe_store.get_sync_tip_block()? {
+        Some((block_number, header)) => (block_number, Some(header.hash)),
+        None => (0, None),
+    };
+    let decision = decide_startup_sync(
+        chain_tip,
+        sync_tip_block,
+        &sync_tip_hash,
+        bulk_sync_threshold,
+    )?;
+
+    let mut final_config = runtime_config;
+    final_config.vector_memtable = decision.memtable.vector_memtable();
+
+    let store = if final_config.vector_memtable {
+        drop(probe_store);
+        info!(
+            path = domain_data_path,
+            memtable = decision.memtable.as_str(),
+            "Reopening ckbadger domain store for the decided sync path"
+        );
+        Arc::new(CkbadgerStore::open_domain_with_runtime(
+            domain_data_path,
+            final_config,
+        )?)
+    } else {
+        Arc::new(probe_store)
+    };
+
+    info!(
+        path = append_only_data_path,
+        memtable = decision.memtable.as_str(),
+        "Opening ckbadger append-only store"
+    );
+    let append_only_store = Arc::new(CkbadgerStore::open_append_only_with_runtime(
+        append_only_data_path,
+        final_config,
+    )?);
+
+    Ok(StartupStores {
+        store,
+        append_only_store,
+        decision,
+    })
 }
 
 /// Identity of the chain stores this indexer process owns.
@@ -1724,5 +1823,143 @@ mod tests {
         assert!(!config.store_runtime_config.direct_io_reads);
         assert_eq!(config.decoder_cache_path, "/data/decoder-cache");
         assert_eq!(config.dob_decode_dir, "/workdir/media");
+    }
+
+    // ── P3.1: the startup open decides the memtable once ───────────────────
+
+    fn startup_runtime_config() -> StoreRuntimeConfig {
+        // `vector_memtable: true` on the way in proves the caller's value never
+        // decides anything: the startup decision does.
+        StoreRuntimeConfig {
+            memory_budget_gb: Some(2),
+            direct_io_reads: false,
+            vector_memtable: true,
+            network_count: std::num::NonZeroUsize::MIN,
+        }
+    }
+
+    fn seed_domain_tip(domain_path: &std::path::Path, block_number: i64) {
+        use ckbadger_store::{types::CachedBlockHeader, StoreBatch};
+
+        let store =
+            CkbadgerStore::open_domain_with_runtime(domain_path, startup_runtime_config()).unwrap();
+        let header = CachedBlockHeader {
+            hash: vec![0x7f; 32],
+            parent_hash: vec![0u8; 32],
+            timestamp: 1_704_067_200_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+            uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
+            cycles: None,
+        };
+        let mut batch = StoreBatch::new(&store);
+        batch.put_block_header(block_number, &header);
+        batch.commit().unwrap();
+    }
+
+    #[test]
+    fn startup_open_uses_vector_memtable_only_for_a_fresh_bulk_build() {
+        let domain = tempfile::tempdir().unwrap();
+        let append_only = tempfile::tempdir().unwrap();
+
+        let opened = open_chain_stores_for_startup(
+            domain.path().to_str().unwrap(),
+            append_only.path().to_str().unwrap(),
+            startup_runtime_config(),
+            10_000,
+            1_000,
+        )
+        .unwrap();
+
+        assert_eq!(opened.decision.memtable.as_str(), "Vector");
+        assert!(opened.decision.fresh);
+        assert_eq!(opened.decision.blocks_behind, 10_000);
+        assert!(opened.store.runtime_config().vector_memtable);
+        assert!(opened.append_only_store.runtime_config().vector_memtable);
+        // The rest of the runtime config (and therefore the shared memory
+        // budget) survives the probe → reopen round trip untouched.
+        assert_eq!(opened.store.runtime_config().memory_budget_gb, Some(2));
+        assert!(!opened.store.runtime_config().direct_io_reads);
+    }
+
+    #[test]
+    fn startup_open_uses_skiplist_for_an_existing_store_far_behind_tip() {
+        let domain = tempfile::tempdir().unwrap();
+        let append_only = tempfile::tempdir().unwrap();
+        seed_domain_tip(domain.path(), 22_426_153);
+
+        let opened = open_chain_stores_for_startup(
+            domain.path().to_str().unwrap(),
+            append_only.path().to_str().unwrap(),
+            startup_runtime_config(),
+            22_502_980,
+            1_000,
+        )
+        .unwrap();
+
+        assert_eq!(opened.decision.memtable.as_str(), "SkipList");
+        assert!(!opened.decision.fresh);
+        assert_eq!(opened.decision.blocks_behind, 76_827);
+        assert!(!opened.store.runtime_config().vector_memtable);
+        assert!(!opened.append_only_store.runtime_config().vector_memtable);
+    }
+
+    #[test]
+    fn startup_open_uses_skiplist_for_a_fresh_store_near_tip() {
+        let domain = tempfile::tempdir().unwrap();
+        let append_only = tempfile::tempdir().unwrap();
+
+        let opened = open_chain_stores_for_startup(
+            domain.path().to_str().unwrap(),
+            append_only.path().to_str().unwrap(),
+            startup_runtime_config(),
+            900,
+            1_000,
+        )
+        .unwrap();
+
+        assert_eq!(opened.decision.memtable.as_str(), "SkipList");
+        assert!(opened.decision.fresh);
+        assert!(!opened.store.runtime_config().vector_memtable);
+    }
+
+    #[test]
+    fn startup_open_fails_fast_on_an_incomplete_bulk_build_session() {
+        let domain = tempfile::tempdir().unwrap();
+        let append_only = tempfile::tempdir().unwrap();
+        {
+            let store =
+                CkbadgerStore::open_domain_with_runtime(domain.path(), startup_runtime_config())
+                    .unwrap();
+            store
+                .set_bulk_build_session_marker(Some(
+                    &ckbadger_store::types::BulkBuildSessionMarker {
+                        run_id: "run-bulk-partial".to_string(),
+                        started_at: 1_710_000_000,
+                        start_block: 0,
+                    },
+                ))
+                .unwrap();
+        }
+
+        let err = match open_chain_stores_for_startup(
+            domain.path().to_str().unwrap(),
+            append_only.path().to_str().unwrap(),
+            startup_runtime_config(),
+            10_000,
+            1_000,
+        ) {
+            Ok(_) => panic!("an incomplete bulk build session must fail startup"),
+            Err(err) => err,
+        };
+
+        assert!(is_rebuild_required(&err), "{err:#}");
+        assert!(err.to_string().contains("incomplete bulk build session"));
     }
 }
