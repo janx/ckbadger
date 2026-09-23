@@ -52,3 +52,28 @@ strong assertions):
 - explorer comparisons with zero overlapping dates are `Inconclusive`, not
   `Fail` (nothing was compared).
 
+Commit: 0b399d39
+
+## Task 4.2 — read-only entity statistics export under one read pin
+
+RED (`cargo test -p ckbadger-api --test api_verify`): first a compile error
+(`set_bulk_build_session_marker` takes `Option<&_>`), then
+`test result: FAILED. 1 passed; 10 failed` — every case panicked with
+"response body must be JSON (EOF while parsing a value at line 1 column 0)"
+because the route did not exist (404, empty body).
+
+GREEN: `cargo test -p ckbadger-api --test api_verify` → 11 passed; 0 failed.
+`cargo clippy -p ckbadger-api --all-targets` clean after deriving `Debug` on
+`ResolvedEntity` and making `routes::verify` a `pub` module (the
+`HourlyRetentionReport::State` variant is constructed only by Phase 2, so a
+`pub(crate)` module would have needed a dead-code allow).
+
+Phase-2 placeholders pinned by `phase2_state_fields_report_absence_of_evidence`:
+`state.entityStatsUndoContract == null` and `state.hourlyRetention == "unknown"`,
+both carrying `// TODO(phase2 merge)` in `routes/verify.rs`.
+
+Pre-existing, unrelated failures in this worktree: 5 `ckbadger-api --lib` tests
+(`entry::tests::*`, `frontend_formats::tests::origin_uses_...`) fail with
+"Missing embedded agent renderer: run pnpm --dir frontend build" — the worktree
+has no built `frontend/dist`. Not touched by this work.
+
