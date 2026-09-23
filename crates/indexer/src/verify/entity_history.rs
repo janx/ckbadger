@@ -23,7 +23,7 @@
 //! invariant, so a report says which of them differed and where.
 
 use std::collections::{BTreeMap, HashMap};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::{anyhow, Context as _};
 
@@ -32,7 +32,7 @@ use super::checks::{
 };
 use super::manifest::{EntityCoverage, VerifyManifest};
 use super::source::{
-    collect_transactions, qualify_source, reverify_anchor, PaginationBudget, SourceAnchor,
+    collect_transactions, qualify_source, reverify_anchor, RunBudget, SourceAnchor,
     SourceDeclaration, SourceQualification,
 };
 use crate::rpc::{CkbRpcClient, IndexerIoType, IndexerSearchKey, IndexerTxRecord, Script};
@@ -97,7 +97,6 @@ pub struct TokenHistoryExpectation {
     /// Live totals at the anchor.
     pub current: DeltaPair,
     pub records: usize,
-    pub rpc_requests: usize,
 }
 
 impl TokenHistoryExpectation {
@@ -326,27 +325,27 @@ pub struct TokenExpectationOutcome {
     pub uncovered: Vec<String>,
 }
 
-struct Collector<'a> {
+/// The run's chain-fact cache and budget.
+///
+/// One collector serves every entity in the run: a transaction or header
+/// fetched for one entity is reused by the next, and every request they make
+/// spends the same run-wide allowance. Per-entity collectors re-fetched shared
+/// facts and silently multiplied the budget by the entity count.
+pub(crate) struct Collector<'a> {
     client: &'a CkbRpcClient,
     txs: HashMap<String, crate::rpc::TransactionView>,
     headers: HashMap<u64, i64>,
-    rpc_requests: usize,
-    deadline: Instant,
+    budget: &'a mut RunBudget,
 }
 
 impl<'a> Collector<'a> {
-    fn new(client: &'a CkbRpcClient) -> Self {
+    pub(crate) fn new(client: &'a CkbRpcClient, budget: &'a mut RunBudget) -> Self {
         Self {
             client,
             txs: HashMap::new(),
             headers: HashMap::new(),
-            rpc_requests: 0,
-            deadline: Instant::now() + Duration::from_secs(MAX_WALL_SECONDS),
+            budget,
         }
-    }
-
-    fn budget_left(&self) -> bool {
-        self.rpc_requests < MAX_RPC_REQUESTS && Instant::now() < self.deadline
     }
 
     /// Fetch and cache a committed transaction. `None` means the node does not
@@ -358,7 +357,7 @@ impl<'a> Collector<'a> {
         if let Some(tx) = self.txs.get(hash) {
             return Ok(Some(tx.clone()));
         }
-        self.rpc_requests += 1;
+        self.budget.charge_request();
         let Some(with_status) = self.client.get_transaction(hash).await? else {
             return Ok(None);
         };
@@ -374,7 +373,7 @@ impl<'a> Collector<'a> {
         if let Some(ts) = self.headers.get(&block) {
             return Ok(Some(*ts));
         }
-        self.rpc_requests += 1;
+        self.budget.charge_request();
         let Some(header) = self.client.get_header_by_number(block).await? else {
             return Ok(None);
         };
@@ -435,46 +434,48 @@ fn date_key(timestamp_ms: i64) -> anyhow::Result<u32> {
 }
 
 /// Collect the full `[0, anchor]` history of one token type script.
-pub async fn collect_token_expectation(
-    client: &CkbRpcClient,
+///
+/// Takes the run's collector so this entity reuses what earlier entities
+/// already fetched and spends the same run-wide budget.
+pub(crate) async fn collect_token_expectation(
+    collector: &mut Collector<'_>,
     type_script: &Script,
     anchor_height: u64,
 ) -> anyhow::Result<TokenExpectationOutcome> {
-    let search_key = IndexerSearchKey::exact_type(
-        type_script.clone(),
-        // `block_range` is half-open, so `anchor + 1` includes the anchor.
-        Some((0, anchor_height.saturating_add(1))),
-    );
-    let page = collect_transactions(
-        client,
-        &search_key,
-        PAGE_LIMIT,
-        PaginationBudget {
-            max_pages: MAX_PAGES,
-            max_records: MAX_HISTORY_RECORDS,
-        },
-    )
-    .await?;
+    // `block_range` is half-open, so `anchor + 1` includes the anchor.
+    let range_end = anchor_height.checked_add(1).ok_or_else(|| {
+        anyhow!("anchor height {anchor_height} has no successor: cannot build a block range")
+    })?;
+    let search_key = IndexerSearchKey::exact_type(type_script.clone(), Some((0, range_end)));
 
-    let mut collector = Collector::new(client);
+    let client = collector.client;
+    let page =
+        collect_transactions(client, &search_key, PAGE_LIMIT, MAX_PAGES, collector.budget).await?;
+
     let mut expectation = TokenHistoryExpectation::default();
     let mut uncovered: Vec<String> = Vec::new();
     let mut complete = page.complete;
     let mut seen: HashMap<(String, u8, u32), u64> = HashMap::new();
 
     for record in &page.records {
-        if !collector.budget_left() {
+        if let Some(reason) = collector.budget.exhausted() {
             complete = false;
             uncovered.push(format!(
-                "budget exhausted after {} record(s) and {} RPC request(s)",
-                expectation.records, collector.rpc_requests
+                "{reason}; stopped after folding in {} record(s) for this entity",
+                expectation.records
             ));
             break;
         }
         if record.block_number > anchor_height {
-            // The node's index has moved past the anchor; those records belong
-            // to blocks the export never saw.
-            continue;
+            // Impossible under the half-open block_range: a node that ignores
+            // the filter is returning records the export never saw, and
+            // skipping them quietly would hide that.
+            anyhow::bail!(
+                "node indexer returned record {} at block {} above the requested range \
+                 [0, {anchor_height}]: the block_range filter was not applied",
+                record.tx_hash,
+                record.block_number
+            );
         }
 
         let identity = (
@@ -510,7 +511,7 @@ pub async fn collect_token_expectation(
         };
         let date = date_key(timestamp_ms)?;
 
-        match resolve_cell(&mut collector, record).await? {
+        match resolve_cell(collector, record).await? {
             Some((capacity, occupied)) => {
                 let signed = match record.io_type {
                     IndexerIoType::Output => (capacity, occupied),
@@ -534,15 +535,20 @@ pub async fn collect_token_expectation(
     }
 
     if !page.complete {
+        // Say which limit stopped it: "incomplete" without a cause reads as a
+        // short history rather than an exhausted allowance.
+        let cause = collector
+            .budget
+            .exhausted()
+            .unwrap_or_else(|| format!("page limit of {MAX_PAGES} reached"));
         uncovered.push(format!(
-            "enumeration stopped after {} page(s) with {} record(s): the history is not complete",
+            "enumeration stopped after {} page(s) with {} record(s): {cause}",
             page.pages,
             page.records.len()
         ));
     }
 
     expectation.finish()?;
-    expectation.rpc_requests = collector.rpc_requests;
     Ok(TokenExpectationOutcome {
         expectation,
         complete,
@@ -694,6 +700,10 @@ struct ChainWork {
     /// One outcome per script, in the order given. Empty when the source did
     /// not qualify — an unqualified source must not produce numbers at all.
     outcomes: Vec<TokenExpectationOutcome>,
+    /// Run-wide totals, so the manifest reports what the run actually spent
+    /// rather than the sum of per-entity counters over a shared cache.
+    rpc_requests: usize,
+    history_records: usize,
 }
 
 async fn qualify_and_collect(
@@ -702,18 +712,27 @@ async fn qualify_and_collect(
     declaration_path: &std::path::Path,
     anchor: &SourceAnchor,
     scripts: &[(EntitySelector, Script)],
+    budget: &mut RunBudget,
 ) -> anyhow::Result<ChainWork> {
+    budget.charge_request();
     let qualification = qualify_source(client, declaration, declaration_path, anchor).await?;
     if matches!(qualification, SourceQualification::Inconclusive(_)) {
         return Ok(ChainWork {
             qualification,
             outcomes: Vec::new(),
+            rpc_requests: budget.rpc_requests,
+            history_records: budget.records,
         });
     }
 
     let mut outcomes = Vec::with_capacity(scripts.len());
-    for (_, script) in scripts {
-        outcomes.push(collect_token_expectation(client, script, anchor.block_number).await?);
+    {
+        let mut collector = Collector::new(client, budget);
+        for (_, script) in scripts {
+            outcomes.push(
+                collect_token_expectation(&mut collector, script, anchor.block_number).await?,
+            );
+        }
     }
 
     // The anchor was canonical when the walk started; a walk can take minutes,
@@ -724,10 +743,14 @@ async fn qualify_and_collect(
         return Ok(ChainWork {
             qualification: SourceQualification::Inconclusive(reason),
             outcomes: Vec::new(),
+            rpc_requests: budget.rpc_requests,
+            history_records: budget.records,
         });
     }
 
     Ok(ChainWork {
+        rpc_requests: budget.rpc_requests,
+        history_records: budget.records,
         qualification,
         outcomes,
     })
@@ -868,12 +891,18 @@ impl Check for EntityCapacityHistoryMatchesChain {
         }
 
         let client = CkbRpcClient::new(rpc_url);
+        let mut budget = RunBudget::new(
+            MAX_HISTORY_RECORDS,
+            MAX_RPC_REQUESTS,
+            Duration::from_secs(MAX_WALL_SECONDS),
+        );
         let work = run_on_dedicated_runtime(qualify_and_collect(
             &client,
             declaration.as_ref(),
             &declaration_path,
             &anchor,
             &scripts,
+            &mut budget,
         ))?;
 
         // Publish what the expected values rest on, whether or not it
@@ -901,6 +930,10 @@ impl Check for EntityCapacityHistoryMatchesChain {
         manifest.budget_rpc_requests = MAX_RPC_REQUESTS;
         manifest.budget_seconds = MAX_WALL_SECONDS;
         manifest.index_start_block = profile.index_start_block;
+        // Run-wide, counted once: summing per-entity counters over a shared
+        // cache would report requests that were never made.
+        manifest.rpc_requests = work.rpc_requests;
+        manifest.history_records = work.history_records;
 
         for selector in &supported {
             if let Some(reason) = inconclusive
@@ -923,9 +956,6 @@ impl Check for EntityCapacityHistoryMatchesChain {
                 .iter()
                 .find(|entity| entity.id.eq_ignore_ascii_case(&selector.id))
                 .expect("only exported entities reach the chain phase");
-
-            manifest.rpc_requests += outcome.expectation.rpc_requests;
-            manifest.history_records += outcome.expectation.records;
 
             if !outcome.complete {
                 inconclusive.push(format!(
@@ -1200,6 +1230,222 @@ mod tests {
         })
         .unwrap_err();
         assert!(error.to_string().contains("type2"), "{error}");
+    }
+
+    // -----------------------------------------------------------------
+    // Run-wide budget and shared chain facts
+    // -----------------------------------------------------------------
+
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    use wiremock::matchers::method as http_method;
+    use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
+
+    fn test_hash(seed: u64) -> String {
+        format!("0x{seed:064x}")
+    }
+
+    /// One transaction creating two differently-typed token cells, so two
+    /// entities' histories genuinely share a chain fact.
+    struct SharedTxNode {
+        tx_calls: Arc<AtomicUsize>,
+        header_calls: Arc<AtomicUsize>,
+        page_calls: Arc<AtomicUsize>,
+        code_a: String,
+        code_b: String,
+    }
+
+    impl Respond for SharedTxNode {
+        fn respond(&self, request: &Request) -> ResponseTemplate {
+            let body: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
+            let method = body["method"].as_str().unwrap_or_default();
+            let params = &body["params"];
+            let result = match method {
+                "get_transactions" => {
+                    let n = self.page_calls.fetch_add(1, Ordering::SeqCst);
+                    // Which script is being asked for decides which output.
+                    let code = params[0]["script"]["code_hash"].as_str().unwrap();
+                    let io_index = if code == self.code_a { "0x0" } else { "0x1" };
+                    if n.is_multiple_of(2) {
+                        serde_json::json!({
+                            "objects": [{
+                                "block_number": "0xa",
+                                "io_index": io_index,
+                                "io_type": "output",
+                                "tx_hash": test_hash(1),
+                                "tx_index": "0x0"
+                            }],
+                            "last_cursor": format!("0xc{n}")
+                        })
+                    } else {
+                        serde_json::json!({"objects": [], "last_cursor": "0x"})
+                    }
+                }
+                "get_transaction" => {
+                    self.tx_calls.fetch_add(1, Ordering::SeqCst);
+                    let output = |code: &str| {
+                        serde_json::json!({
+                            "capacity": "0x3b9aca00",
+                            "lock": {"code_hash": test_hash(0xaa), "hash_type": "type", "args": "0x"},
+                            "type": {"code_hash": code, "hash_type": "type", "args": "0x"}
+                        })
+                    };
+                    serde_json::json!({
+                        "transaction": {
+                            "hash": test_hash(1),
+                            "version": "0x0",
+                            "cell_deps": [], "header_deps": [], "inputs": [],
+                            "outputs": [output(&self.code_a), output(&self.code_b)],
+                            "outputs_data": ["0x", "0x"],
+                            "witnesses": []
+                        },
+                        "tx_status": {"status": "committed", "block_hash": test_hash(9), "block_number": "0xa"}
+                    })
+                }
+                "get_header_by_number" => {
+                    self.header_calls.fetch_add(1, Ordering::SeqCst);
+                    serde_json::json!({
+                        "version": "0x0", "compact_target": "0x1a08a97e",
+                        "timestamp": "0x1a0a8b0b880", "number": "0xa", "epoch": "0x0",
+                        "parent_hash": test_hash(0), "transactions_root": test_hash(0),
+                        "proposals_hash": test_hash(0), "extra_hash": test_hash(0),
+                        "dao": format!("0x{}", "00".repeat(32)), "nonce": "0x0",
+                        "hash": test_hash(9)
+                    })
+                }
+                other => panic!("unexpected RPC {other}"),
+            };
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({"jsonrpc":"2.0","id":1,"result":result}))
+        }
+    }
+
+    struct SharedTxFixture {
+        server: MockServer,
+        tx_calls: Arc<AtomicUsize>,
+        header_calls: Arc<AtomicUsize>,
+        page_calls: Arc<AtomicUsize>,
+        script_a: Script,
+        script_b: Script,
+    }
+
+    async fn shared_tx_fixture() -> SharedTxFixture {
+        let code_a = test_hash(0xa1);
+        let code_b = test_hash(0xb2);
+        let tx_calls = Arc::new(AtomicUsize::new(0));
+        let header_calls = Arc::new(AtomicUsize::new(0));
+        let page_calls = Arc::new(AtomicUsize::new(0));
+        let server = MockServer::start().await;
+        Mock::given(http_method("POST"))
+            .respond_with(SharedTxNode {
+                tx_calls: tx_calls.clone(),
+                header_calls: header_calls.clone(),
+                page_calls: page_calls.clone(),
+                code_a: code_a.clone(),
+                code_b: code_b.clone(),
+            })
+            .mount(&server)
+            .await;
+        let script = |code: String| Script {
+            code_hash: code,
+            hash_type: "type".to_string(),
+            args: "0x".to_string(),
+        };
+        SharedTxFixture {
+            server,
+            tx_calls,
+            header_calls,
+            page_calls,
+            script_a: script(code_a),
+            script_b: script(code_b),
+        }
+    }
+
+    /// V0 requires one fetched chain fact to serve every item that needs it.
+    /// Per-entity caches re-fetch the same transaction and header for each
+    /// entity, which also makes the RPC budget a per-entity budget.
+    #[tokio::test]
+    async fn chain_facts_are_shared_across_entities() {
+        let fixture = shared_tx_fixture().await;
+        let client = CkbRpcClient::new(fixture.server.uri());
+        let mut budget = RunBudget::new(
+            MAX_HISTORY_RECORDS,
+            MAX_RPC_REQUESTS,
+            Duration::from_secs(MAX_WALL_SECONDS),
+        );
+        let mut collector = Collector::new(&client, &mut budget);
+
+        collect_token_expectation(&mut collector, &fixture.script_a, 100)
+            .await
+            .unwrap();
+        collect_token_expectation(&mut collector, &fixture.script_b, 100)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            fixture.tx_calls.load(Ordering::SeqCst),
+            1,
+            "the second entity must reuse the transaction the first already fetched"
+        );
+        assert_eq!(
+            fixture.header_calls.load(Ordering::SeqCst),
+            1,
+            "the block header is the same chain fact for both entities"
+        );
+    }
+
+    /// Pagination used to run before the collector existed, so its requests
+    /// were counted in neither the RPC budget nor the deadline.
+    #[tokio::test]
+    async fn pagination_requests_count_against_the_run_budget() {
+        let fixture = shared_tx_fixture().await;
+        let client = CkbRpcClient::new(fixture.server.uri());
+        let mut budget = RunBudget::new(
+            MAX_HISTORY_RECORDS,
+            MAX_RPC_REQUESTS,
+            Duration::from_secs(MAX_WALL_SECONDS),
+        );
+        let mut collector = Collector::new(&client, &mut budget);
+        collect_token_expectation(&mut collector, &fixture.script_a, 100)
+            .await
+            .unwrap();
+
+        let pages = fixture.page_calls.load(Ordering::SeqCst);
+        assert_eq!(pages, 2, "one page of records plus the terminating page");
+        assert_eq!(
+            budget.rpc_requests, 4,
+            "2 pages + 1 header + 1 transaction all spend the same budget"
+        );
+    }
+
+    /// The budget is one run-wide allowance across all entities, so an entity
+    /// that exhausts it leaves the next one uncovered rather than starting
+    /// again with a fresh allowance.
+    #[tokio::test]
+    async fn a_spent_run_budget_leaves_the_next_entity_uncovered() {
+        let fixture = shared_tx_fixture().await;
+        let client = CkbRpcClient::new(fixture.server.uri());
+        // Enough for the first entity's walk, not for a second.
+        let mut budget = RunBudget::new(MAX_HISTORY_RECORDS, 4, Duration::from_secs(600));
+        let mut collector = Collector::new(&client, &mut budget);
+
+        let first = collect_token_expectation(&mut collector, &fixture.script_a, 100)
+            .await
+            .unwrap();
+        assert!(first.complete, "{:?}", first.uncovered);
+
+        let second = collect_token_expectation(&mut collector, &fixture.script_b, 100)
+            .await
+            .unwrap();
+        assert!(
+            !second.complete,
+            "a spent run budget must not be refilled per entity"
+        );
+        assert!(
+            second.uncovered.iter().any(|r| r.contains("budget")),
+            "{:?}",
+            second.uncovered
+        );
     }
 
     #[test]

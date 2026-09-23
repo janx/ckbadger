@@ -21,6 +21,7 @@
 //! budget that runs out is an incomplete page, never a short history.
 
 use std::path::Path;
+use std::time::{Duration, Instant};
 
 use anyhow::Context as _;
 
@@ -285,11 +286,68 @@ fn hash_eq(left: &str, right: &str) -> bool {
     normalize(left) == normalize(right)
 }
 
-/// How much of one enumeration the caller is willing to pay for.
-#[derive(Debug, Clone, Copy)]
-pub struct PaginationBudget {
-    pub max_pages: usize,
-    pub max_records: usize,
+/// One run-wide allowance, shared by every entity and every phase.
+///
+/// V3 defines the budget per *run*, not per entity: sixteen entities that each
+/// got a fresh 10,000-request allowance would be a 160,000-request run. Every
+/// RPC call — pagination included — spends the same counters, so what the
+/// manifest reports as spent is what was actually spent.
+#[derive(Debug)]
+pub struct RunBudget {
+    max_records: usize,
+    max_rpc_requests: usize,
+    deadline: Instant,
+    /// RPC requests made so far, across pagination and point lookups.
+    pub rpc_requests: usize,
+    /// History records folded in so far, across entities.
+    pub records: usize,
+}
+
+impl RunBudget {
+    pub fn new(max_records: usize, max_rpc_requests: usize, wall: Duration) -> Self {
+        Self {
+            max_records,
+            max_rpc_requests,
+            deadline: Instant::now() + wall,
+            rpc_requests: 0,
+            records: 0,
+        }
+    }
+
+    /// Why the budget is spent, if it is. `None` means there is room left.
+    pub fn exhausted(&self) -> Option<String> {
+        if self.rpc_requests >= self.max_rpc_requests {
+            return Some(format!(
+                "RPC budget exhausted after {} request(s)",
+                self.rpc_requests
+            ));
+        }
+        if self.records >= self.max_records {
+            return Some(format!(
+                "record budget exhausted after {} record(s)",
+                self.records
+            ));
+        }
+        if Instant::now() >= self.deadline {
+            return Some(format!(
+                "time budget exhausted after {} RPC request(s) and {} record(s)",
+                self.rpc_requests, self.records
+            ));
+        }
+        None
+    }
+
+    pub fn charge_request(&mut self) {
+        self.rpc_requests += 1;
+    }
+
+    pub fn charge_records(&mut self, count: usize) {
+        self.records += count;
+    }
+
+    pub fn max_records(&self) -> usize {
+        self.max_records
+    }
 }
 
 /// One entity's history as the node indexer enumerated it.
@@ -311,7 +369,8 @@ pub async fn collect_transactions(
     client: &CkbRpcClient,
     search_key: &IndexerSearchKey,
     page_limit: u32,
-    budget: PaginationBudget,
+    max_pages: usize,
+    budget: &mut RunBudget,
 ) -> anyhow::Result<TransactionHistoryPage> {
     let mut records: Vec<IndexerTxRecord> = Vec::new();
     let mut cursor: Option<String> = None;
@@ -319,7 +378,10 @@ pub async fn collect_transactions(
     let mut pages = 0usize;
 
     loop {
-        if pages >= budget.max_pages {
+        // Pagination is part of the run, not free of it: a wide entity whose
+        // enumeration alone spends the allowance must stop here rather than
+        // hand the caller a short history that looks complete.
+        if pages >= max_pages || budget.exhausted().is_some() {
             return Ok(TransactionHistoryPage {
                 records,
                 pages,
@@ -327,6 +389,7 @@ pub async fn collect_transactions(
             });
         }
 
+        budget.charge_request();
         let page = client
             .get_transactions(search_key, "asc", page_limit, cursor.as_deref())
             .await?;
@@ -353,10 +416,11 @@ pub async fn collect_transactions(
             );
         }
 
+        budget.charge_records(page.objects.len());
         records.extend(page.objects);
         cursor = Some(page.last_cursor);
 
-        if records.len() >= budget.max_records {
+        if budget.records >= budget.max_records() {
             return Ok(TransactionHistoryPage {
                 records,
                 pages,
@@ -737,10 +801,8 @@ declared_at = "2026-09-22T00:00:00Z"
             &CkbRpcClient::new(server.uri()),
             &search_key(),
             100,
-            PaginationBudget {
-                max_pages: 10,
-                max_records: 100,
-            },
+            10,
+            &mut RunBudget::new(100, 10_000, Duration::from_secs(600)),
         )
         .await
         .unwrap();
@@ -777,10 +839,8 @@ declared_at = "2026-09-22T00:00:00Z"
             &CkbRpcClient::new(server.uri()),
             &search_key(),
             100,
-            PaginationBudget {
-                max_pages: 10,
-                max_records: 100,
-            },
+            10,
+            &mut RunBudget::new(100, 10_000, Duration::from_secs(600)),
         )
         .await
         .expect_err("a repeating cursor would loop forever or silently duplicate history");
@@ -808,15 +868,47 @@ declared_at = "2026-09-22T00:00:00Z"
             &CkbRpcClient::new(server.uri()),
             &search_key(),
             100,
-            PaginationBudget {
-                max_pages: 10,
-                max_records: 100,
-            },
+            10,
+            &mut RunBudget::new(100, 10_000, Duration::from_secs(600)),
         )
         .await
         .expect_err("a cycling cursor must not be mistaken for progress");
         assert!(error.to_string().contains("0xc1"), "{error}");
         assert!(error.to_string().contains("cycling"), "{error}");
+    }
+
+    /// Every page request spends the run's RPC allowance, so a walk that could
+    /// not even finish paginating is reported incomplete rather than short.
+    #[tokio::test]
+    async fn an_rpc_budget_spent_on_pagination_stops_the_walk() {
+        let server = MockServer::start().await;
+        mount_pages(
+            &server,
+            vec![
+                json!({"objects":[record(1,0)], "last_cursor":"0xc1"}),
+                json!({"objects":[record(2,0)], "last_cursor":"0xc2"}),
+                json!({"objects":[record(3,0)], "last_cursor":"0xc3"}),
+            ],
+        )
+        .await;
+
+        let mut budget = RunBudget::new(1_000, 2, Duration::from_secs(600));
+        let page = collect_transactions(
+            &CkbRpcClient::new(server.uri()),
+            &search_key(),
+            100,
+            10,
+            &mut budget,
+        )
+        .await
+        .unwrap();
+
+        assert!(!page.complete);
+        assert_eq!(page.pages, 2);
+        assert_eq!(
+            budget.rpc_requests, 2,
+            "page requests are charged to the same allowance as point lookups"
+        );
     }
 
     #[tokio::test]
@@ -835,10 +927,8 @@ declared_at = "2026-09-22T00:00:00Z"
             &CkbRpcClient::new(server.uri()),
             &search_key(),
             100,
-            PaginationBudget {
-                max_pages: 10,
-                max_records: 3,
-            },
+            10,
+            &mut RunBudget::new(3, 10_000, Duration::from_secs(600)),
         )
         .await
         .unwrap();
@@ -867,10 +957,8 @@ declared_at = "2026-09-22T00:00:00Z"
             &CkbRpcClient::new(server.uri()),
             &search_key(),
             100,
-            PaginationBudget {
-                max_pages: 2,
-                max_records: 100,
-            },
+            2,
+            &mut RunBudget::new(100, 10_000, Duration::from_secs(600)),
         )
         .await
         .unwrap();
