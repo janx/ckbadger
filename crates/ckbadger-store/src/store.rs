@@ -2,7 +2,7 @@
 
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use tracing::{error, info, warn};
 
@@ -45,6 +45,11 @@ const MB: u64 = 1024 * 1024;
 /// less RAM, not more. So the invariant is "homogeneous per single-network stack",
 /// which every writer process satisfies exactly.
 static SHARED_BUDGET: OnceLock<(rocksdb::Cache, WriteBufferManager)> = OnceLock::new();
+
+/// Highest LSM level counted by `sst_files_total`. RocksDB's default
+/// `num_levels` is 7 (L0..L6); a level that does not exist simply reports no
+/// value.
+const MAX_LEVEL_FOR_FILE_COUNT: usize = 6;
 
 /// Serde default for `StoreRuntimeConfig::network_count`, applied when the field
 /// is absent. `NonZeroUsize` has no `Default`, so this must be named explicitly.
@@ -753,6 +758,9 @@ fn short_hex(bytes: &[u8], max_len: usize) -> String {
 pub struct CkbadgerStore {
     db: DB,
     store_class: StoreClass,
+    /// The path this handle opened. For a secondary this is the PRIMARY path,
+    /// whose MANIFEST the secondary replays on open and on every catch-up.
+    db_path: PathBuf,
     domain_path: PathBuf,
     append_path: PathBuf,
     /// Keep block cache alive for the lifetime of the store.
@@ -767,6 +775,13 @@ pub struct CkbadgerStore {
     is_secondary: bool,
     memory_profile: MemoryProfile,
     runtime_config: StoreRuntimeConfig,
+    /// Flush rounds OBSERVED by sampling (`memory_stats` / `flush_stats`):
+    /// incremented when a sample finds flush activity after a sample that found
+    /// none. A sampled lower bound on RocksDB's internal flush count — the
+    /// authoritative number is `flush_started` in the RocksDB LOG — kept in
+    /// process so the live-sync trend is visible without parsing the LOG.
+    flush_rounds_observed: AtomicU64,
+    flush_active_last_sample: AtomicBool,
 }
 
 impl CkbadgerStore {
@@ -942,6 +957,7 @@ impl CkbadgerStore {
         Ok(Self {
             db,
             store_class,
+            db_path,
             domain_path,
             append_path,
             block_cache: Mutex::new(block_cache),
@@ -950,6 +966,8 @@ impl CkbadgerStore {
             is_secondary: false,
             memory_profile,
             runtime_config,
+            flush_rounds_observed: AtomicU64::new(0),
+            flush_active_last_sample: AtomicBool::new(false),
         })
     }
 
@@ -1026,6 +1044,7 @@ impl CkbadgerStore {
         Ok(Self {
             db,
             store_class,
+            db_path,
             domain_path,
             append_path,
             block_cache: Mutex::new(block_cache),
@@ -1034,6 +1053,8 @@ impl CkbadgerStore {
             is_secondary: true,
             memory_profile,
             runtime_config,
+            flush_rounds_observed: AtomicU64::new(0),
+            flush_active_last_sample: AtomicBool::new(false),
         })
     }
 
@@ -1274,6 +1295,27 @@ impl CkbadgerStore {
         Self::HISTORICAL_APPEND_CFS.contains(&name)
     }
 
+    /// Per-CF write buffer for the live profile: `(max_write_buffer_number,
+    /// write_buffer_size)`.
+    ///
+    /// The single source for both the open-time CF options and the live
+    /// profile restored by [`Self::apply_normal_compaction_options`], so the
+    /// two can never disagree about a CF's tier.
+    ///
+    /// `atomic_flush = 1` means ANY CF hitting its buffer switches memtables
+    /// for the whole DB, so the smallest tier here sets the flush frequency of
+    /// all 59 CFs — which is why the tier comes from the memory profile and is
+    /// never hardcoded below it.
+    fn live_cf_write_buffer(name: &str, profile: &MemoryProfile) -> (i32, usize) {
+        if Self::is_mega_write_cf(name) {
+            (4, profile.write_buffer_mega_bytes)
+        } else if Self::is_high_write_cf(name) {
+            (4, profile.write_buffer_high_bytes)
+        } else {
+            (2, profile.write_buffer_low_bytes)
+        }
+    }
+
     fn default_block_options(block_cache: &rocksdb::Cache) -> rocksdb::BlockBasedOptions {
         let mut block_opts = rocksdb::BlockBasedOptions::default();
         block_opts.set_block_size(16 * 1024);
@@ -1298,6 +1340,14 @@ impl CkbadgerStore {
 
         // Favor throughput during bulk sync while still smoothing fsync pressure.
         opts.set_bytes_per_sync(4 * 1024 * 1024);
+
+        // Bound the MANIFEST. It is an append-only log of every version edit
+        // (every flush and compaction writes one), and RocksDB only rolls it
+        // when it exceeds this size — the 1 GB default never rolled, so the
+        // 2026-09-22 flush storm grew it to 51 MB and a secondary spent 596 s
+        // replaying it before serving a single read. 64 MB is the roll point;
+        // the live file stays far below it once flush frequency is sane.
+        opts.set_max_manifest_file_size(64 * MB as usize);
 
         opts.set_write_buffer_size(profile.write_buffer_high_bytes);
         opts.set_max_write_buffer_number(4);
@@ -1389,16 +1439,10 @@ impl CkbadgerStore {
             opts.set_memtable_factory(rocksdb::MemtableFactory::Vector);
         }
 
-        if Self::is_mega_write_cf(name) {
-            opts.set_write_buffer_size(profile.write_buffer_mega_bytes);
-            opts.set_max_write_buffer_number(4);
-        } else if Self::is_high_write_cf(name) {
-            opts.set_write_buffer_size(profile.write_buffer_high_bytes);
-            opts.set_max_write_buffer_number(4);
-        } else {
-            opts.set_write_buffer_size(profile.write_buffer_low_bytes);
-            opts.set_max_write_buffer_number(2);
-        }
+        let (max_write_buffer_number, write_buffer_size) =
+            Self::live_cf_write_buffer(name, profile);
+        opts.set_write_buffer_size(write_buffer_size);
+        opts.set_max_write_buffer_number(max_write_buffer_number);
 
         opts.set_level_zero_file_num_compaction_trigger(4);
         opts.set_level_zero_slowdown_writes_trigger(12);
@@ -2276,22 +2320,28 @@ impl CkbadgerStore {
             .expect("block_cache lock poisoned")
             .set_capacity(p.block_cache_normal_bytes);
 
+        // Per-CF write buffers come from the memory profile, the same tiering
+        // used at open time. They are NOT shrunk to fixed small values here:
+        // with `atomic_flush = 1` the smallest CF buffer decides how often the
+        // WHOLE database switches memtables, so an 8/4/2 MB live profile made
+        // `script_versions` (testnet ~2.0 MB/block) and `sync_meta` (mainnet
+        // ~1.97 MB/block) trigger a 26-CF flush every 5-9 blocks: 15,548 /
+        // 7,395 flushes on 2026-09-22, 7,148 / 5,343 SSTs and a 51 MB MANIFEST
+        // that cost the API secondary 596 s to open. Total memtable memory
+        // stays governed by the capped WBM above, not by per-CF minimums.
         for &cf_name in ALL_CFS {
             if let Some(cf) = self.db.cf_handle(cf_name) {
-                let (max_wb, wb_size) = if Self::is_mega_write_cf(cf_name) {
-                    ("4", "8388608") // 8 MB
-                } else if Self::is_high_write_cf(cf_name) {
-                    ("4", "4194304") // 4 MB
-                } else {
-                    ("2", "2097152") // 2 MB
-                };
+                let (max_write_buffer_number, write_buffer_size) =
+                    Self::live_cf_write_buffer(cf_name, p);
+                let max_wb = max_write_buffer_number.to_string();
+                let wb_size = write_buffer_size.to_string();
                 if let Err(e) = self.db.set_options_cf(
                     cf,
                     &[
                         ("level0_slowdown_writes_trigger", "12"),
                         ("level0_stop_writes_trigger", "24"),
-                        ("max_write_buffer_number", max_wb),
-                        ("write_buffer_size", wb_size),
+                        ("max_write_buffer_number", &max_wb),
+                        ("write_buffer_size", &wb_size),
                         ("max_bytes_for_level_base", &level_base_str),
                         ("target_file_size_base", &file_base_str),
                     ],
@@ -2303,6 +2353,9 @@ impl CkbadgerStore {
         info!(
             wbm_budget_mb = live_wbm / (1024 * 1024),
             block_cache_mb = p.block_cache_normal_bytes / (1024 * 1024),
+            write_buffer_mega_mb = p.write_buffer_mega_bytes / (1024 * 1024),
+            write_buffer_high_mb = p.write_buffer_high_bytes / (1024 * 1024),
+            write_buffer_low_mb = p.write_buffer_low_bytes / (1024 * 1024),
             flush_first,
             "Live compaction options applied: l0_slowdown=12, l0_stop=24"
         );
@@ -2407,6 +2460,8 @@ impl CkbadgerStore {
         let mut l0_files_max: u64 = 0;
         let mut l0_worst_cf = String::new();
         let mut immutable_memtables = 0u64;
+        let mut sst_files_total = 0u64;
+        let mut mem_table_flush_pending_total = 0u64;
         let mut cf_sizes: Vec<(String, u64)> = Vec::new();
 
         for &cf_name in ALL_CFS {
@@ -2471,6 +2526,21 @@ impl CkbadgerStore {
                         l0_worst_cf = cf_name.to_string();
                     }
                 }
+                // Files at every level: the standing cost of flush frequency.
+                for level in 0..=MAX_LEVEL_FOR_FILE_COUNT {
+                    if let Ok(Some(v)) = self
+                        .db
+                        .property_int_value_cf(cf, &format!("rocksdb.num-files-at-level{level}"))
+                    {
+                        sst_files_total += v;
+                    }
+                }
+                if let Ok(Some(v)) = self
+                    .db
+                    .property_int_value_cf(cf, "rocksdb.mem-table-flush-pending")
+                {
+                    mem_table_flush_pending_total += v;
+                }
                 // Immutable memtables waiting for flush — high values indicate
                 // flush can't keep up and writes will stall when all buffers fill.
                 if let Ok(Some(v)) = self
@@ -2515,6 +2585,14 @@ impl CkbadgerStore {
             .ok()
             .flatten()
             .unwrap_or(num_running_compactions_fallback);
+        let num_running_flushes = self
+            .db
+            .property_int_value("rocksdb.num-running-flushes")
+            .ok()
+            .flatten()
+            .unwrap_or(0);
+        let flush_rounds_observed =
+            self.observe_flush_activity(num_running_flushes, mem_table_flush_pending_total);
 
         MemoryStats {
             live_cells_count,
@@ -2535,9 +2613,50 @@ impl CkbadgerStore {
             l0_files_max,
             l0_worst_cf,
             immutable_memtables,
+            sst_files_total,
+            manifest_bytes: self.manifest_bytes(),
+            flush_rounds_observed,
             top_cf_sizes: cf_sizes,
             wbm_usage_bytes: self.write_buffer_manager.get_usage(),
             wbm_budget_bytes: self.write_buffer_manager.get_buffer_size(),
+        }
+    }
+
+    /// Size of the MANIFEST named by this DB's `CURRENT` file, in bytes.
+    ///
+    /// 0 when `CURRENT` or the MANIFEST it names cannot be read — a
+    /// just-created DB directory, or a secondary whose primary rotated the
+    /// MANIFEST between the two reads. This is a diagnostic gauge, never an
+    /// input to chain state.
+    pub fn manifest_bytes(&self) -> u64 {
+        let Ok(current) = std::fs::read_to_string(self.db_path.join("CURRENT")) else {
+            return 0;
+        };
+        let manifest_name = current.trim();
+        if manifest_name.is_empty() {
+            return 0;
+        }
+        std::fs::metadata(self.db_path.join(manifest_name))
+            .map(|meta| meta.len())
+            .unwrap_or(0)
+    }
+
+    /// Edge-triggered flush-round observation shared by `memory_stats` and
+    /// `flush_stats`: count a round when a sample finds flush activity after a
+    /// sample that found none. Returns the running count.
+    fn observe_flush_activity(
+        &self,
+        num_running_flushes: u64,
+        mem_table_flush_pending: u64,
+    ) -> u64 {
+        let active = num_running_flushes > 0 || mem_table_flush_pending > 0;
+        let was_active = self
+            .flush_active_last_sample
+            .swap(active, Ordering::Relaxed);
+        if active && !was_active {
+            self.flush_rounds_observed.fetch_add(1, Ordering::Relaxed) + 1
+        } else {
+            self.flush_rounds_observed.load(Ordering::Relaxed)
         }
     }
 
@@ -2580,6 +2699,8 @@ impl CkbadgerStore {
             active_memtable_bytes,
             wbm_usage_bytes: self.write_buffer_manager.get_usage() as u64,
             wbm_budget_bytes: self.write_buffer_manager.get_buffer_size() as u64,
+            flush_rounds_observed: self
+                .observe_flush_activity(num_running_flushes, mem_table_flush_pending),
         }
     }
 }
@@ -2593,12 +2714,161 @@ pub struct FlushStats {
     pub active_memtable_bytes: u64,
     pub wbm_usage_bytes: u64,
     pub wbm_budget_bytes: u64,
+    /// Sampled lower bound on flush rounds; see
+    /// `CkbadgerStore::flush_rounds_observed`.
+    pub flush_rounds_observed: u64,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    // ── P3.3: live write buffers, flush storm, MANIFEST ────────────────
+
+    fn small_primary_profile() -> MemoryProfile {
+        // 2 GB budget: mega 64 MB, high 32 MB, low 8 MB (all above the 8/4/2 MB
+        // the live profile used to force).
+        MemoryProfile::compute(2 * GB, 8, 16, false)
+    }
+
+    /// The live profile must never shrink a CF's write buffer below the
+    /// profile's low tier. With `atomic_flush = 1` the SMALLEST per-CF buffer
+    /// decides how often the WHOLE DB switches memtables: a 2 MB low tier made
+    /// `script_versions` (testnet, ~2.0 MB rewritten per block) and `sync_meta`
+    /// (mainnet, ~1.97 MB per block) trigger a 26-CF flush every 5-9 blocks —
+    /// 15,548 / 7,395 flushes on 2026-09-22, 7,148 / 5,343 SSTs, 51 MB MANIFEST.
+    #[test]
+    fn live_options_never_set_cf_write_buffer_below_profile_low() {
+        let profile = small_primary_profile();
+        assert!(profile.write_buffer_low_bytes >= 8 * MB as usize);
+
+        for &cf_name in ALL_CFS {
+            let (max_write_buffer_number, write_buffer_size) =
+                CkbadgerStore::live_cf_write_buffer(cf_name, &profile);
+            assert!(
+                write_buffer_size >= profile.write_buffer_low_bytes,
+                "{cf_name}: live write_buffer_size {write_buffer_size} is below the profile low tier {}",
+                profile.write_buffer_low_bytes
+            );
+            let expected = if CkbadgerStore::is_mega_write_cf(cf_name) {
+                (4, profile.write_buffer_mega_bytes)
+            } else if CkbadgerStore::is_high_write_cf(cf_name) {
+                (4, profile.write_buffer_high_bytes)
+            } else {
+                (2, profile.write_buffer_low_bytes)
+            };
+            assert_eq!(
+                (max_write_buffer_number, write_buffer_size),
+                expected,
+                "{cf_name}: live tiering must match the open-time tiering"
+            );
+        }
+    }
+
+    /// Small live batches must not cost one flush round each.
+    ///
+    /// Writes 24 MB in ~0.5 MB batches into a low-tier CF after applying the
+    /// live profile, with auto-compaction off so L0 files count flush rounds
+    /// 1:1. The old hardcoded 2 MB low tier switched the memtable every ~4
+    /// batches (~12 rounds here) and, under `atomic_flush`, took every other
+    /// CF with it; the profile's 8 MB low tier must stay in single digits.
+    #[test]
+    fn live_write_buffers_do_not_flush_once_per_small_batch() {
+        let dir = TempDir::new().unwrap();
+        let runtime_config = StoreRuntimeConfig {
+            memory_budget_gb: Some(2),
+            direct_io_reads: false,
+            vector_memtable: false,
+            network_count: NonZeroUsize::MIN,
+        };
+        let store = CkbadgerStore::open_domain_with_runtime(dir.path(), runtime_config).unwrap();
+        store.apply_normal_compaction_options(false);
+        let profile = &store.memory_profile;
+        assert_eq!(profile.write_buffer_low_bytes, 8 * MB as usize);
+
+        // L0 files then count flush rounds directly instead of being merged
+        // away by compaction mid-test.
+        let cf = store.cf(CF_SYNC_META);
+        store
+            .db
+            .set_options_cf(cf, &[("disable_auto_compactions", "true")])
+            .unwrap();
+
+        const BATCHES: u32 = 48;
+        const KEYS_PER_BATCH: u32 = 8;
+        let payload = vec![0xAB_u8; 64 * 1024];
+        for batch_index in 0..BATCHES {
+            let mut batch = crate::batch::StoreBatch::new(&store);
+            for key_index in 0..KEYS_PER_BATCH {
+                let key = format!("p3.3-flush-probe-{batch_index:04}-{key_index:04}");
+                batch
+                    .put_raw_cf_by_name(CF_SYNC_META, key.as_bytes(), &payload)
+                    .unwrap();
+            }
+            batch.commit().unwrap();
+        }
+        let written_bytes = u64::from(BATCHES) * u64::from(KEYS_PER_BATCH) * (64 * 1024 + 32);
+
+        // Flushes are asynchronous: let any scheduled round land before
+        // counting.
+        for _ in 0..60 {
+            let running = store
+                .db
+                .property_int_value("rocksdb.num-running-flushes")
+                .unwrap()
+                .unwrap_or(0);
+            let pending = store
+                .db
+                .property_int_value_cf(cf, "rocksdb.mem-table-flush-pending")
+                .unwrap()
+                .unwrap_or(0);
+            if running == 0 && pending == 0 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        let l0_files = store
+            .db
+            .property_int_value_cf(cf, "rocksdb.num-files-at-level0")
+            .unwrap()
+            .unwrap_or(0);
+
+        // One round per full write buffer, plus one for the tail.
+        let max_rounds = written_bytes / profile.write_buffer_low_bytes as u64 + 1;
+        assert!(
+            l0_files <= max_rounds,
+            "flush rounds must follow the profile's write buffer, not one per batch: \
+             l0_files={l0_files}, max_rounds={max_rounds}, written_bytes={written_bytes}, \
+             write_buffer_low={}",
+            profile.write_buffer_low_bytes
+        );
+    }
+
+    /// The flush-storm outcome signals must be visible in-process, not only in
+    /// the RocksDB LOG: SST file count and MANIFEST size are what made the API
+    /// domain secondary take 596 s to open.
+    #[test]
+    fn memory_stats_report_sst_count_and_manifest_size() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        let mut batch = crate::batch::StoreBatch::new(&store);
+        batch
+            .put_raw_cf_by_name(CF_SYNC_META, b"p3.3-manifest-probe", b"v")
+            .unwrap();
+        batch.commit().unwrap();
+        store.flush_all_memtables().unwrap();
+
+        let stats = store.memory_stats();
+        assert!(
+            stats.sst_files_total >= 1,
+            "a flushed store must report at least one SST file: {stats:?}"
+        );
+        assert!(
+            stats.manifest_bytes > 0,
+            "an open store must report its MANIFEST size: {stats:?}"
+        );
+    }
 
     #[test]
     fn test_all_cfs_accessible() {

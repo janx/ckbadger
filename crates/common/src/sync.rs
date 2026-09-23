@@ -504,6 +504,22 @@ pub struct MemoryStatsData {
     /// Total immutable memtables across all CFs (waiting for flush)
     #[serde(default)]
     pub immutable_memtables: u64,
+    /// SST files across every level of both chain stores. With atomic flush
+    /// one flush round writes one file per written CF, so this is the standing
+    /// cost of flush frequency.
+    #[serde(default)]
+    pub sst_files_total: u64,
+    /// MANIFEST bytes across both chain stores. A secondary replays the
+    /// MANIFEST on open, so this is what a slow API secondary open costs.
+    #[serde(default)]
+    pub manifest_bytes: u64,
+    /// Domain-store MANIFEST bytes (the one the API secondary replays).
+    #[serde(default)]
+    pub domain_manifest_bytes: u64,
+    /// Flush rounds observed by sampling — a lower bound; the authoritative
+    /// count is `flush_started` in the RocksDB LOG.
+    #[serde(default)]
+    pub flush_rounds_observed: u64,
     /// Top column families by estimated live data size: (name, bytes)
     #[serde(default)]
     pub top_cf_sizes: Vec<(String, u64)>,
@@ -699,6 +715,10 @@ mod tests {
             l0_files_max: 5,
             l0_worst_cf: "live_cells".to_string(),
             immutable_memtables: 3,
+            sst_files_total: 7_148,
+            manifest_bytes: 53_477_376,
+            domain_manifest_bytes: 51_380_224,
+            flush_rounds_observed: 42,
             top_cf_sizes: vec![
                 ("live_cells".to_string(), 3_000_000_000),
                 ("consumed_cells".to_string(), 2_500_000_000),

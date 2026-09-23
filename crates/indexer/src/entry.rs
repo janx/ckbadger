@@ -579,6 +579,13 @@ pub async fn run_indexer_sync(mut config: Config) -> Result<()> {
                     "{:.1}",
                     memory_stats.sst_files_size as f64 / (1024.0 * 1024.0 * 1024.0)
                 ),
+                // Flush-storm signals (P3.3): file count and MANIFEST size are
+                // the standing cost of how often the DB flushes, and the
+                // MANIFEST is what an API secondary replays on open.
+                sst_files = memory_stats.sst_files_total,
+                manifest_mb = memory_stats.manifest_bytes / (1024 * 1024),
+                domain_manifest_mb = memory_stats.domain_manifest_bytes / (1024 * 1024),
+                flush_rounds_observed = memory_stats.flush_rounds_observed,
                 "RocksDB stats"
             );
 

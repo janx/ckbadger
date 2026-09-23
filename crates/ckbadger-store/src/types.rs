@@ -1661,6 +1661,17 @@ pub struct MemoryStats {
     pub l0_worst_cf: String,
     /// Total immutable memtables across all CFs (waiting for flush)
     pub immutable_memtables: u64,
+    /// Total SST files across every level of every CF. With `atomic_flush` one
+    /// flush round creates one file per written CF, so this is the direct
+    /// outcome of flush frequency (7,148 / 5,343 files on 2026-09-22).
+    pub sst_files_total: u64,
+    /// Size of the MANIFEST this DB is currently writing. A secondary replays
+    /// it on open, so an unbounded MANIFEST is what made the API domain
+    /// secondary take 596 s to open (51 MB MANIFEST).
+    pub manifest_bytes: u64,
+    /// Flush rounds OBSERVED by sampling — a lower bound, see
+    /// `CkbadgerStore::flush_rounds_observed`.
+    pub flush_rounds_observed: u64,
     /// Top column families by estimated live data size: (name, bytes)
     pub top_cf_sizes: Vec<(String, u64)>,
     /// WriteBufferManager current usage in bytes
