@@ -287,11 +287,13 @@ impl CkbadgerStore {
         match filter {
             None | Some("all") => true,
             Some(f) => {
-                // Find the participant matching this lock_hash
-                let participant = actions
-                    .participants
-                    .iter()
-                    .find(|p| p.lock_hash == lock_hash);
+                // Find the participant matching this lock_hash. One matcher for
+                // both participant identities: a full lock hash compares whole,
+                // a protocol-named 20-byte prefix compares its first 20 bytes.
+                let Ok(lock) = <&[u8; 32]>::try_from(lock_hash) else {
+                    return false;
+                };
+                let participant = actions.participants.iter().find(|p| p.id.matches(lock));
                 let Some(p) = participant else {
                     // No matching participant — should not happen if data is consistent,
                     // but don't match any filter if participant is missing.
@@ -351,11 +353,12 @@ mod tests {
             type_calls: vec![],
             lock_calls: vec![],
             participants: vec![ParticipantDelta {
-                lock_hash: vec![0xAA; 32],
+                id: ParticipantId::Lock([0xAA; 32]),
                 ckb_delta: 100,
                 used_delta: 0,
                 item_deltas: vec![],
                 tags: 0,
+                roles: 0,
             }],
         }
     }
@@ -526,11 +529,12 @@ mod tests {
             type_calls: vec![],
             lock_calls: vec![],
             participants: vec![ParticipantDelta {
-                lock_hash: lock.clone(),
+                id: ParticipantId::lock(&lock).unwrap(),
                 ckb_delta: 50,
                 used_delta: 0,
                 item_deltas: vec![],
                 tags: TAG_TOKEN,
+                roles: 0,
             }],
         };
         batch.put_tx_actions(&matching_actions);

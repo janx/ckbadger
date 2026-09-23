@@ -99,6 +99,8 @@ impl AddrTxValue {
     pub const TX_TYPE_SENT: u8 = 1;
     pub const TX_TYPE_INTERNAL: u8 = 2;
     pub const TX_TYPE_TRANSFER: u8 = 3;
+    /// A party the protocol named that holds no cell in this transaction.
+    pub const TX_TYPE_NAMED: u8 = 4;
 
     pub fn new(capacity_change: i64, has_inputs: bool, has_outputs: bool, tags: u16) -> Self {
         let tx_type = match (has_inputs, has_outputs) {
@@ -113,7 +115,7 @@ impl AddrTxValue {
             }
             (false, true) => Self::TX_TYPE_RECEIVED,
             (true, false) => Self::TX_TYPE_SENT,
-            (false, false) => Self::TX_TYPE_TRANSFER,
+            (false, false) => Self::TX_TYPE_NAMED,
         };
         Self {
             capacity_change,
@@ -127,6 +129,7 @@ impl AddrTxValue {
             Self::TX_TYPE_RECEIVED => "received",
             Self::TX_TYPE_SENT => "sent",
             Self::TX_TYPE_INTERNAL => "internal",
+            Self::TX_TYPE_NAMED => "named",
             _ => "transfer",
         }
     }
@@ -1715,13 +1718,93 @@ pub struct ItemDelta {
     pub negative: bool,
 }
 
+/// 交易影响到的一方。`Lock` 是交易里某个 cell 的 lock hash；`LockPrefix` 是协议在
+/// 数据或 args 里以 lock hash 前 20 字节指名的一方。变体顺序即排序顺序。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum ParticipantId {
+    Lock([u8; 32]),
+    LockPrefix([u8; 20]),
+}
+
+impl ParticipantId {
+    pub fn lock(hash: &[u8]) -> anyhow::Result<Self> {
+        let arr: [u8; 32] = hash.try_into().map_err(|_| {
+            anyhow::anyhow!("ParticipantId::lock expects 32 bytes, got {}", hash.len())
+        })?;
+        Ok(Self::Lock(arr))
+    }
+
+    pub fn prefix(prefix: &[u8]) -> anyhow::Result<Self> {
+        let arr: [u8; 20] = prefix.try_into().map_err(|_| {
+            anyhow::anyhow!(
+                "ParticipantId::prefix expects 20 bytes, got {}",
+                prefix.len()
+            )
+        })?;
+        Ok(Self::LockPrefix(arr))
+    }
+
+    /// 一个地址（完整 lock hash）是否就是这个参与方。
+    pub fn matches(&self, lock_hash: &[u8; 32]) -> bool {
+        match self {
+            Self::Lock(h) => h == lock_hash,
+            Self::LockPrefix(p) => p[..] == lock_hash[..20],
+        }
+    }
+
+    pub fn as_bytes(&self) -> &[u8] {
+        match self {
+            Self::Lock(h) => &h[..],
+            Self::LockPrefix(p) => &p[..],
+        }
+    }
+
+    pub fn prefix20(&self) -> [u8; 20] {
+        let mut out = [0u8; 20];
+        out.copy_from_slice(&self.as_bytes()[..20]);
+        out
+    }
+}
+
+/// 协议赋予参与方的角色，bitmask，落盘 1 字节。
+pub mod participant_roles {
+    pub const OWNER_FROM: u8 = 1 << 0;
+    pub const OWNER_TO: u8 = 1 << 1;
+    pub const MANAGER_TO: u8 = 1 << 2;
+
+    pub fn names(mask: u8) -> Vec<&'static str> {
+        let mut out = Vec::new();
+        if mask & OWNER_FROM != 0 {
+            out.push("owner_from");
+        }
+        if mask & OWNER_TO != 0 {
+            out.push("owner_to");
+        }
+        if mask & MANAGER_TO != 0 {
+            out.push("manager_to");
+        }
+        out
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ParticipantDelta {
-    pub lock_hash: Vec<u8>,
+    pub id: ParticipantId,
     pub ckb_delta: i128,
     pub used_delta: i64,
     pub item_deltas: Vec<ItemDelta>,
     pub tags: u16,
+    pub roles: u8,
+}
+
+/// 按 20 字节前缀记录的参与统计（domain，`CF_ADDR_PREFIX_STATS`）。
+///
+/// 只统计"被协议指名、且在这笔交易里没有任何 cell"的参与（独立前缀参与方）；
+/// 有 cell 的参与仍然由 `addr_balance.txs_count` 计数。两者相加的唯一求和点是
+/// [`crate::store::CkbadgerStore::address_tx_count`]。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AddrPrefixStats {
+    pub txs_count: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2240,7 +2323,7 @@ mod tests {
                 lock_args: vec![0x11; 20],
             }],
             participants: vec![ParticipantDelta {
-                lock_hash: vec![0xAA; 32],
+                id: ParticipantId::Lock([0xAA; 32]),
                 ckb_delta: -500_00000000,
                 used_delta: 0,
                 item_deltas: vec![ItemDelta {
@@ -2250,6 +2333,7 @@ mod tests {
                     negative: false,
                 }],
                 tags: TAG_TOKEN | TAG_PROTOCOL,
+                roles: 0,
             }],
         };
         let bytes = bincode::serialize(&actions).unwrap();
@@ -2288,11 +2372,12 @@ mod tests {
             type_calls: vec![],
             lock_calls: vec![],
             participants: vec![ParticipantDelta {
-                lock_hash: vec![0xAB; 32],
+                id: ParticipantId::Lock([0xAB; 32]),
                 ckb_delta: 7,
                 used_delta: 0,
                 item_deltas: vec![],
                 tags: TAG_PROTOCOL,
+                roles: 0,
             }],
         };
 
@@ -2715,5 +2800,79 @@ mod tests {
 
         assert_eq!(status.sync_started_block, 128);
         assert!(status.sync_started_at.is_some());
+    }
+}
+
+#[cfg(test)]
+mod participant_model_tests {
+    use super::*;
+
+    #[test]
+    fn participant_id_matches_full_hash_and_prefix() {
+        let h = [0xABu8; 32];
+        let mut other = h;
+        other[31] = 0x00;
+        assert!(ParticipantId::Lock(h).matches(&h));
+        assert!(!ParticipantId::Lock(h).matches(&other));
+        let mut p = [0u8; 20];
+        p.copy_from_slice(&h[..20]);
+        assert!(ParticipantId::LockPrefix(p).matches(&h));
+        assert!(ParticipantId::LockPrefix(p).matches(&other)); // 只比前 20 字节
+        let mut q = p;
+        q[0] ^= 1;
+        assert!(!ParticipantId::LockPrefix(q).matches(&h));
+    }
+
+    #[test]
+    fn participant_id_sorts_lock_before_prefix_then_bytes() {
+        let a = ParticipantId::Lock([0xFF; 32]);
+        let b = ParticipantId::LockPrefix([0x00; 20]);
+        let c = ParticipantId::Lock([0x01; 32]);
+        let mut v = vec![b, a, c];
+        v.sort();
+        assert_eq!(v, vec![c, a, b]);
+    }
+
+    #[test]
+    fn participant_delta_bincode_roundtrip_and_size() {
+        let lock = ParticipantDelta {
+            id: ParticipantId::Lock([0x11; 32]),
+            ckb_delta: -5,
+            used_delta: 0,
+            item_deltas: vec![],
+            tags: TAG_IDENTITY,
+            roles: participant_roles::OWNER_FROM,
+        };
+        let bytes = bincode::serialize(&lock).unwrap();
+        // 4 (variant u32) + 32 + 16 (i128) + 8 (i64) + 8 (空 Vec 长度) + 2 (u16) + 1 (u8) = 71
+        assert_eq!(
+            bytes.len(),
+            71,
+            "Lock 参与方序列化大小必须比旧 40 字节 Vec 版小"
+        );
+        let back: ParticipantDelta = bincode::deserialize(&bytes).unwrap();
+        assert_eq!(back.id, lock.id);
+        assert_eq!(back.roles, lock.roles);
+        let prefix = ParticipantDelta {
+            id: ParticipantId::LockPrefix([0x22; 20]),
+            ..lock.clone()
+        };
+        let back: ParticipantDelta =
+            bincode::deserialize(&bincode::serialize(&prefix).unwrap()).unwrap();
+        assert_eq!(back.id, ParticipantId::LockPrefix([0x22; 20]));
+    }
+
+    #[test]
+    fn addr_tx_value_named_party_has_its_own_tx_type() {
+        let v = AddrTxValue::new(0, false, false, TAG_IDENTITY);
+        assert_eq!(v.flags, AddrTxValue::TX_TYPE_NAMED);
+        assert_eq!(v.tx_type_str(), "named");
+        // 既有三种不受影响
+        assert_eq!(
+            AddrTxValue::new(1, false, true, 0).tx_type_str(),
+            "received"
+        );
+        assert_eq!(AddrTxValue::new(-1, true, false, 0).tx_type_str(), "sent");
+        assert_eq!(AddrTxValue::new(0, true, true, 0).tx_type_str(), "internal");
     }
 }

@@ -949,11 +949,13 @@ fn rebuild_cutoff_activity_addr_sets(
             continue;
         }
         for participant in &tx_actions.participants {
-            if participant.lock_hash.len() != 32 {
+            // Unique-address counts are per address, and one address can appear
+            // in the same day under both identities; counting the prefix form
+            // too would double-count it. Being named by a protocol is also not
+            // that address's own activity. So: `Lock` participants only.
+            let ParticipantId::Lock(lock_hash) = participant.id else {
                 continue;
-            }
-            let mut lock_hash = [0u8; 32];
-            lock_hash.copy_from_slice(&participant.lock_hash);
+            };
             if in_date {
                 sets.date.insert(lock_hash);
             }
@@ -5110,11 +5112,12 @@ mod tests {
             type_calls: vec![],
             lock_calls: vec![],
             participants: vec![ParticipantDelta {
-                lock_hash: vec![0xAA; 32],
+                id: ParticipantId::Lock([0xAA; 32]),
                 ckb_delta: 0,
                 used_delta: 0,
                 item_deltas: vec![],
                 tags: 0,
+                roles: 0,
             }],
         }
     }

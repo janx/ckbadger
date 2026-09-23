@@ -513,6 +513,72 @@ pub fn decode_addr_tx_key(key: &[u8]) -> (Vec<u8>, i64, i32, Vec<u8>) {
     (lock_hash, block_num, tx_idx, tx_hash)
 }
 
+/// Address-tx key for a party a protocol named by the first 20 bytes of its lock
+/// hash: prefix20 + block_num_desc(8B BE) + tx_idx_desc(4B BE) + tx_hash(32B) = 64.
+///
+/// A separate CF (and therefore a separate fixed width) keeps `ADDR_TX_KEY_SIZE`
+/// and every length assert on the full-hash index intact.
+pub const ADDR_TX_BY_PREFIX_KEY_SIZE: usize = 64;
+const LOCK_PREFIX_LEN: usize = 20;
+
+pub fn encode_addr_tx_by_prefix_key(
+    prefix: &[u8],
+    block_num: i64,
+    tx_idx: i32,
+    tx_hash: &[u8],
+) -> Vec<u8> {
+    assert_key_component_len(
+        "encode_addr_tx_by_prefix_key",
+        "prefix",
+        prefix.len(),
+        LOCK_PREFIX_LEN,
+    );
+    assert_key_component_len(
+        "encode_addr_tx_by_prefix_key",
+        "tx_hash",
+        tx_hash.len(),
+        HASH32_LEN,
+    );
+    let mut key = Vec::with_capacity(ADDR_TX_BY_PREFIX_KEY_SIZE);
+    key.extend_from_slice(prefix);
+    // Reuse the full-hash encoder's descending position suffix verbatim, so the
+    // two indexes can never drift in ordering.
+    key.extend_from_slice(&encode_addr_tx_key(&[0u8; 32], block_num, tx_idx, tx_hash)[32..]);
+    key
+}
+
+pub fn encode_addr_tx_by_prefix_seek_after_key(
+    prefix: &[u8],
+    block_num: i64,
+    tx_idx: i32,
+) -> Vec<u8> {
+    assert_key_component_len(
+        "encode_addr_tx_by_prefix_seek_after_key",
+        "prefix",
+        prefix.len(),
+        LOCK_PREFIX_LEN,
+    );
+    let mut key = Vec::with_capacity(ADDR_TX_BY_PREFIX_KEY_SIZE);
+    key.extend_from_slice(prefix);
+    key.extend_from_slice(&encode_addr_tx_seek_after_key(&[0u8; 32], block_num, tx_idx)[32..]);
+    key
+}
+
+pub fn decode_addr_tx_by_prefix_key(key: &[u8]) -> ([u8; 20], i64, i32, Vec<u8>) {
+    assert!(
+        key.len() == ADDR_TX_BY_PREFIX_KEY_SIZE,
+        "decode_addr_tx_by_prefix_key: expected {} bytes, got {}",
+        ADDR_TX_BY_PREFIX_KEY_SIZE,
+        key.len()
+    );
+    let mut prefix = [0u8; LOCK_PREFIX_LEN];
+    prefix.copy_from_slice(&key[..LOCK_PREFIX_LEN]);
+    let mut padded = vec![0u8; 32];
+    padded.extend_from_slice(&key[LOCK_PREFIX_LEN..]);
+    let (_, block_num, tx_idx, tx_hash) = decode_addr_tx_key(&padded);
+    (prefix, block_num, tx_idx, tx_hash)
+}
+
 /// Encode a token_holders key: type_hash(32B) + lock_hash(32B) = 64 bytes
 pub fn encode_token_holder_key(type_hash: &[u8], lock_hash: &[u8]) -> [u8; 64] {
     assert_key_component_len(
@@ -3861,5 +3927,30 @@ mod tests {
     )]
     fn test_dotbit_outpoint_by_account_id_key_rejects_oversized_account_id() {
         let _ = encode_dotbit_outpoint_by_account_id_key(&[0x9B; 21], &[0xAB; 32], 0);
+    }
+}
+
+#[cfg(test)]
+mod addr_tx_by_prefix_key_tests {
+    use super::*;
+
+    #[test]
+    fn addr_tx_by_prefix_key_roundtrip_is_64_bytes_and_descending() {
+        let prefix = [0x5Au8; 20];
+        let tx_hash = [0x77u8; 32];
+        let k1 = encode_addr_tx_by_prefix_key(&prefix, 100, 3, &tx_hash);
+        let k2 = encode_addr_tx_by_prefix_key(&prefix, 101, 0, &tx_hash);
+        assert_eq!(k1.len(), ADDR_TX_BY_PREFIX_KEY_SIZE);
+        assert!(k2 < k1, "更高的块必须排在前面（desc 编码）");
+        let (p, b, t, h) = decode_addr_tx_by_prefix_key(&k1);
+        assert_eq!((p, b, t, h.as_slice()), (prefix, 100, 3, &tx_hash[..]));
+        let seek = encode_addr_tx_by_prefix_seek_after_key(&prefix, 100, 3);
+        assert!(seek > k1 && seek.starts_with(&prefix));
+    }
+
+    #[test]
+    #[should_panic(expected = "prefix must be exactly 20 bytes")]
+    fn addr_tx_by_prefix_key_rejects_wrong_prefix_width() {
+        encode_addr_tx_by_prefix_key(&[0u8; 32], 1, 0, &[0u8; 32]);
     }
 }

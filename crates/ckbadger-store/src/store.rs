@@ -443,6 +443,10 @@ pub const CF_FIBER_CHANNEL_BY_COMMITMENT: &str = "fiber_channel_by_commitment";
 pub const CF_ADDR_FIBER_CHANNELS: &str = "addr_fiber_channels";
 pub const CF_DOB_DECODED: &str = "dob_decoded";
 pub const CF_LOCK_SCRIPTS: &str = "lock_scripts";
+/// Address-tx index for parties a protocol named by a 20-byte lock-hash prefix.
+pub const CF_ADDR_TXS_BY_PREFIX: &str = "addr_txs_by_prefix";
+/// Per-prefix participation counters for protocol-named parties holding no cell.
+pub const CF_ADDR_PREFIX_STATS: &str = "addr_prefix_stats";
 
 // Network crawler store column families (mutable / domain-like — NOT append-only).
 // These live in the standalone "network" store class, not in domain or append-only.
@@ -466,6 +470,7 @@ const CF_WRITE_POLICY_APPEND_ONLY: &[&str] = &[
     CF_CONSUMED_CELLS,
     CF_CELL_BY_DATA_HASH,
     CF_ADDR_TXS,
+    CF_ADDR_TXS_BY_PREFIX,
     CF_TOKEN_TRANSFERS,
     CF_TX_ACTIONS,
     CF_OBJECT_COLLECTION_ACTIVITIES,
@@ -494,6 +499,7 @@ const CF_WRITE_POLICY_FINAL_SNAPSHOT: &[&str] = &[
     CF_CELL_BY_LOCK,
     CF_CELL_BY_TYPE,
     CF_ADDR_BALANCE,
+    CF_ADDR_PREFIX_STATS,
     CF_DAO_DEPOSITS,
     CF_DAO_BY_WITHDRAW_TX,
     CF_DAO_BY_BLOCK,
@@ -633,6 +639,8 @@ pub const ALL_CFS: &[&str] = &[
     CF_ADDR_FIBER_CHANNELS,
     CF_DOB_DECODED,
     CF_LOCK_SCRIPTS,
+    CF_ADDR_TXS_BY_PREFIX,
+    CF_ADDR_PREFIX_STATS,
 ];
 
 /// Column families intended for the domain mutable store.
@@ -697,6 +705,8 @@ pub const DOMAIN_CFS: &[&str] = &[
     CF_ADDR_FIBER_CHANNELS,
     CF_DOB_DECODED,
     CF_LOCK_SCRIPTS,
+    CF_ADDR_TXS_BY_PREFIX,
+    CF_ADDR_PREFIX_STATS,
 ];
 
 /// Column families for the append-only store (immutable, hash-keyed cell payloads).
@@ -1689,6 +1699,12 @@ impl CkbadgerStore {
     }
     pub fn cf_lock_scripts(&self) -> &ColumnFamily {
         self.cf(CF_LOCK_SCRIPTS)
+    }
+    pub fn cf_addr_txs_by_prefix(&self) -> &ColumnFamily {
+        self.cf(CF_ADDR_TXS_BY_PREFIX)
+    }
+    pub fn cf_addr_prefix_stats(&self) -> &ColumnFamily {
+        self.cf(CF_ADDR_PREFIX_STATS)
     }
 
     // ---- Raw DB operations ----
@@ -2968,7 +2984,7 @@ mod tests {
 
     #[test]
     fn test_domain_schema_has_no_ambiguous_fiber_funding_args_index() {
-        assert_eq!(DOMAIN_CFS.len(), 59);
+        assert_eq!(DOMAIN_CFS.len(), 61);
         assert!(!DOMAIN_CFS.contains(&"fiber_channel_by_funding_args"));
     }
 

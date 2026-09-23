@@ -765,6 +765,33 @@ impl<'a> StoreBatch<'a> {
         self.put_cf(self.store.cf_addr_txs(), &key, &encoded);
     }
 
+    /// Address-tx row for a party the protocol named by a 20-byte lock-hash prefix.
+    ///
+    /// Same append-only semantics as [`Self::put_addr_tx`]; rollback deletes the
+    /// row rather than restoring a pre-image.
+    pub fn put_addr_tx_by_prefix(
+        &mut self,
+        prefix: &[u8],
+        block_num: i64,
+        tx_idx: i32,
+        tx_hash: &[u8],
+        value: &AddrTxValue,
+    ) {
+        let key = keys::encode_addr_tx_by_prefix_key(prefix, block_num, tx_idx, tx_hash);
+        let encoded = bincode::serialize(value).expect("serialize AddrTxValue");
+        self.put_cf(self.store.cf_addr_txs_by_prefix(), &key, &encoded);
+    }
+
+    pub fn put_addr_prefix_stats(&mut self, prefix: &[u8], stats: &AddrPrefixStats) {
+        assert_eq!(
+            prefix.len(),
+            20,
+            "put_addr_prefix_stats expects a 20-byte prefix"
+        );
+        let encoded = bincode::serialize(stats).expect("serialize AddrPrefixStats");
+        self.put_cf(self.store.cf_addr_prefix_stats(), prefix, &encoded);
+    }
+
     pub fn put_reorg_undo_log_by_block(&mut self, block_num: i64, seq: u64, entry: &UndoLogEntry) {
         let key = keys::encode_reorg_undo_log_key(block_num, seq);
         let value = bincode::serialize(entry).expect("serialize UndoLogEntry");
