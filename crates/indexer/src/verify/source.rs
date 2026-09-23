@@ -228,6 +228,51 @@ pub async fn qualify_source(
     }))
 }
 
+/// Re-verify the anchor after the history walk has finished.
+///
+/// `qualify_source` only proves the anchor was canonical when the walk
+/// *started*. A reorg landing underneath it while the walk runs makes
+/// `get_transactions` enumerate one chain while the export describes another,
+/// and comparing those would produce a confident `Fail` with exact numbers —
+/// blaming ckbadger for a chain that moved. So the canonical hash at `H` and
+/// the node indexer's coverage of `H` are checked again at the end.
+///
+/// The tip growing is expected and fine; only the hash at `H` and an index
+/// that no longer reaches `H` invalidate the case.
+///
+/// `Ok(None)` means the anchor still holds. `Ok(Some(reason))` means it moved.
+pub async fn reverify_anchor(
+    client: &CkbRpcClient,
+    anchor: &SourceAnchor,
+) -> anyhow::Result<Option<String>> {
+    let anchor_hash = client
+        .get_block_hash(anchor.block_number)
+        .await?
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "node returned no block hash for the anchor height {} after the walk",
+                anchor.block_number
+            )
+        })?;
+    if !hash_eq(&anchor_hash, &anchor.block_hash) {
+        return Ok(Some(format!(
+            "anchor {} moved during the walk: it hashed to {} at the start and {} at the end",
+            anchor.block_number, anchor.block_hash, anchor_hash
+        )));
+    }
+
+    let indexer_tip = client.get_indexer_tip().await?;
+    if indexer_tip.block_number < anchor.block_number {
+        return Ok(Some(format!(
+            "node indexer tip fell to {} during the walk, below the anchor {}: part of the \
+             enumeration ran against an index that no longer covers [0, {}]",
+            indexer_tip.block_number, anchor.block_number, anchor.block_number
+        )));
+    }
+
+    Ok(None)
+}
+
 /// Case-insensitive hash comparison that tolerates a missing `0x`.
 fn hash_eq(left: &str, right: &str) -> bool {
     let normalize = |value: &str| {
@@ -579,6 +624,39 @@ declared_at = "2026-09-22T00:00:00Z"
             panic!("the chain moved under the anchor; nothing can be concluded");
         };
         assert!(reason.contains("0xreorged"), "{reason}");
+    }
+
+    #[tokio::test]
+    async fn an_unchanged_anchor_passes_reverification() {
+        let server = MockServer::start().await;
+        mount_node(&server, GENESIS, NODE_VERSION, 1_000, "0xanchor").await;
+        let moved = reverify_anchor(&CkbRpcClient::new(server.uri()), &anchor(900, "0xanchor"))
+            .await
+            .unwrap();
+        assert_eq!(moved, None, "a growing tip is not a moved anchor");
+    }
+
+    #[tokio::test]
+    async fn an_anchor_hash_that_changed_during_the_walk_is_detected() {
+        let server = MockServer::start().await;
+        mount_node(&server, GENESIS, NODE_VERSION, 1_000, "0xreorged").await;
+        let moved = reverify_anchor(&CkbRpcClient::new(server.uri()), &anchor(900, "0xanchor"))
+            .await
+            .unwrap()
+            .expect("a different hash at H is a moved anchor");
+        assert!(moved.contains("0xreorged"), "{moved}");
+        assert!(moved.contains("during the walk"), "{moved}");
+    }
+
+    #[tokio::test]
+    async fn an_index_that_fell_below_the_anchor_during_the_walk_is_detected() {
+        let server = MockServer::start().await;
+        mount_node(&server, GENESIS, NODE_VERSION, 899, "0xanchor").await;
+        let moved = reverify_anchor(&CkbRpcClient::new(server.uri()), &anchor(900, "0xanchor"))
+            .await
+            .unwrap()
+            .expect("an index that no longer reaches H did not enumerate [0, H]");
+        assert!(moved.contains("899"), "{moved}");
     }
 
     #[tokio::test]

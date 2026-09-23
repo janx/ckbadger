@@ -201,6 +201,10 @@ struct NodeResponder {
     headers: HashMap<u64, Value>,
     records: Vec<Value>,
     calls: Arc<Mutex<usize>>,
+    /// When set, the block hash at this height changes after the first lookup —
+    /// a reorg landing underneath the anchor while the walk is running.
+    reorg_at_anchor: Option<u64>,
+    anchor_lookups: Arc<Mutex<usize>>,
 }
 
 impl Respond for NodeResponder {
@@ -220,6 +224,16 @@ impl Respond for NodeResponder {
                         16,
                     )
                     .unwrap();
+                    if self.reorg_at_anchor == Some(number) {
+                        let mut seen = self.anchor_lookups.lock().unwrap();
+                        *seen += 1;
+                        if *seen > 1 {
+                            return ResponseTemplate::new(200).set_body_json(json!({
+                                "jsonrpc": "2.0", "id": 1,
+                                "result": format!("0xdead{number:059x}")
+                            }));
+                        }
+                    }
                     json!(format!("0xb{number:063x}"))
                 }
             }
@@ -257,6 +271,10 @@ impl Respond for NodeResponder {
 }
 
 async fn mock_node(fixture: &ChainFixture) -> MockServer {
+    mock_node_with_reorg(fixture, None).await
+}
+
+async fn mock_node_with_reorg(fixture: &ChainFixture, reorg_at_anchor: Option<u64>) -> MockServer {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .respond_with(NodeResponder {
@@ -264,6 +282,8 @@ async fn mock_node(fixture: &ChainFixture) -> MockServer {
             headers: fixture.headers.clone(),
             records: fixture.records.clone(),
             calls: Arc::new(Mutex::new(0)),
+            reorg_at_anchor,
+            anchor_lookups: Arc::new(Mutex::new(0)),
         })
         .mount(&server)
         .await;
@@ -575,6 +595,41 @@ async fn a_source_that_does_not_qualify_is_inconclusive_not_a_failure() {
     assert_eq!(result.status, CheckStatus::Inconclusive);
     let detail = result.detail.clone().unwrap_or_default();
     assert!(detail.contains("0.118.0-different"), "{detail}");
+}
+
+/// A reorg landing under the anchor while the walk runs makes the node
+/// enumerate one chain while the export describes another. Comparing the two
+/// would produce a confident `Fail` with exact numbers and exit 1, blaming
+/// ckbadger for a chain that moved.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_anchor_that_moves_during_the_walk_is_inconclusive_not_a_failure() {
+    let code_hash = hash_of(0xc0de);
+    let type_hash = type_hash_of(&code_hash);
+    let fixture = standard_fixture(&code_hash);
+    // Deliberately wrong rows: a moved anchor must outrank them.
+    let mut rows = fixture.daily_rows();
+    rows[0].1 -= 100;
+
+    let node = mock_node_with_reorg(&fixture, Some(100)).await;
+    let api = mock_api(&type_hash, &code_hash, &rows, 100, true).await;
+    let dir = tempfile::tempdir().unwrap();
+    let declaration_path = declaration(dir.path(), NODE_VERSION);
+
+    let result = run_check(wiring(&api, &node, &declaration_path, &type_hash)).await;
+
+    assert_eq!(
+        result.status,
+        CheckStatus::Inconclusive,
+        "the chain moved under the case; its numbers prove nothing"
+    );
+    assert!(
+        result.findings.is_empty(),
+        "no confident finding may survive a moved anchor: {:?}",
+        result.findings
+    );
+    let detail = result.detail.clone().unwrap_or_default();
+    assert!(detail.contains("anchor"), "{detail}");
+    assert!(detail.contains("during the walk"), "{detail}");
 }
 
 #[tokio::test(flavor = "multi_thread")]

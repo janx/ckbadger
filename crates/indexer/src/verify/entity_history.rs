@@ -32,8 +32,8 @@ use super::checks::{
 };
 use super::manifest::{EntityCoverage, VerifyManifest};
 use super::source::{
-    collect_transactions, qualify_source, PaginationBudget, SourceAnchor, SourceDeclaration,
-    SourceQualification,
+    collect_transactions, qualify_source, reverify_anchor, PaginationBudget, SourceAnchor,
+    SourceDeclaration, SourceQualification,
 };
 use crate::rpc::{CkbRpcClient, IndexerIoType, IndexerSearchKey, IndexerTxRecord, Script};
 
@@ -715,6 +715,18 @@ async fn qualify_and_collect(
     for (_, script) in scripts {
         outcomes.push(collect_token_expectation(client, script, anchor.block_number).await?);
     }
+
+    // The anchor was canonical when the walk started; a walk can take minutes,
+    // and a reorg underneath it would have the node enumerating a different
+    // chain than the export describes. Re-verifying it here is what keeps a
+    // moved chain from being reported as a proven inconsistency.
+    if let Some(reason) = reverify_anchor(client, anchor).await? {
+        return Ok(ChainWork {
+            qualification: SourceQualification::Inconclusive(reason),
+            outcomes: Vec::new(),
+        });
+    }
+
     Ok(ChainWork {
         qualification,
         outcomes,
