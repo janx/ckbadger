@@ -2555,6 +2555,166 @@ for the whole life of the bug because they encoded the defect as the contract.
 
 ---
 
+### IDX-007: Live sync opened every store for a build it was not doing
+
+**Date**: 2026-09-23
+
+**Symptom**: After eight days stopped, both networks took the live path to catch
+up — 76,827 blocks on mainnet, 85,564 on testnet — and were slow in a way
+nothing in the batch sizing explained: 84 min (mainnet) and 64 min (testnet) to
+reach the tip, `Sync progress stalled` 74 (mainnet) / 49 (testnet) times on the
+way, and — once caught up — testnet still spent 1.2-3.7 s committing a
+one-transaction block. The API came off worse than the indexer: opening the
+domain secondary took 596 s on testnet, ten minutes before it could serve a
+single read.
+
+Measured on 2026-09-22 (`work/run/logs/restart-sync-analysis-20260923.md`):
+
+| Signal                                 | testnet    | mainnet          |
+| -------------------------------------- | ---------- | ---------------- |
+| flushes in one day                     | **15,548** | **7,395**        |
+| compactions in one day                 | 4,919      | 2,072            |
+| SST files                              | 7,148      | 5,343            |
+| domain MANIFEST (never rolled)         | 51 MB      | —                |
+| API domain secondary open              | **596 s**  | 116 s            |
+| parser cell miss, inside this process  | —          | **13.15 ms/key** |
+| same files, separate secondary process | —          | 0.04-1.7 ms/key  |
+
+The domain store ran an all-CF atomic flush round about every 40 s, on memtables
+holding kilobytes. The mainnet parser spent 741 s on 56,334 cell-lookup misses
+during the catch-up; the same files read from a separate secondary process cost
+0.04-0.8 ms per cell without direct I/O and 1.7 ms cold with it.
+
+**Root Cause**: Three independent decisions, each defensible for bulk sync, all
+applied unconditionally to a process doing live sync.
+
+1. **VectorRep for every process.** `entry.rs:158` set
+   `vector_memtable = true` before opening the domain store, with no condition,
+   and the option applies to all CFs. VectorRep is an unsorted memtable: O(1)
+   append, and a `Get` that sorts the whole memtable under a write lock. Bulk
+   build never reads back what it writes, so it pays nothing; live sync reads
+   back keys it just wrote in every batch, so parser lookups and writer inserts
+   blocked each other. The repeatable release microbenchmark
+   (`cargo run --release -p ckbadger-store --example memtable_read_bench`,
+   20,000 rows then 512 point reads) puts the whole cost in the unflushed
+   memtable — the regime live sync reads in:
+
+   | regime  | skiplist    | vector       |
+   | ------- | ----------- | ------------ |
+   | hot     | **0.47 ms** | **4,915 ms** |
+   | flushed | 2.46 ms     | 3.06 ms      |
+   | reopen  | 1.29 ms     | 1.32 ms      |
+
+2. **A 2 MB buffer under `atomic_flush = 1`.** `apply_normal_compaction_options`
+   shrank the live per-CF write buffers to fixed 8/4/2 MB — while the same CFs
+   had been _opened_ at profile sizes (up to 392 MB). With atomic flush, the
+   smallest buffer in the database decides when the whole database switches
+   memtables, so 2 MB became a global setting. Two per-block full rewrites kept
+   hitting it: `materialize_script_versions_and_families` had no diff and
+   rewrote its whole rollup every block — on testnet 3,403 rows (1,903 reference
+   mappings + 1,556 versions + 56 families, ~700 KB), on mainnet 438 — and both
+   trackers serialized their entire state into `sync_meta` every batch
+   (~1.97 MB/block on mainnet). The result was a 26-CF flush round
+   every ~40 s on KB-sized memtables, and the SST and MANIFEST counts above.
+   `max_manifest_file_size` had never been set, so the 1 GB default never
+   rolled the MANIFEST — and a secondary replays the primary's MANIFEST on open,
+   which is the 596 s.
+
+3. **A commit timer that wrapped the reads.** `commit_started` was taken before
+   the address-balance `multi_get`, both tracker preparations, the full script
+   rollup, and an append-only existence probe that issued one `get_cf` per key
+   (14,000-17,000 per batch). The 66-383 s "commit" reported for a 5,000-block
+   batch was mostly reading, so the number pointed at RocksDB writes — where the
+   domain WAL was fsyncing zero times a day. The stall warning had the mirrored
+   problem: it watched only the committed tip, which a minutes-long batch cannot
+   advance, so it cried stall 74 (mainnet) / 49 (testnet) times while the
+   writer was working.
+
+**Why the tests missed it**: nothing asserted a _rate_. No test pinned which
+memtable a live store opens with, no test bounded flush rounds per byte written,
+and no test asserted that an unchanged rollup stages zero writes. The
+measurement that motivated the change — the original memtable microbench — was a
+debug-build, single-shot throwaway outside the tree, so there was nothing later
+runs could be compared against.
+
+**Fix**: Tasks 3.1-3.4 of the 2026-09-23 sync correctness and performance plan.
+
+- **3.1 — decide once, before opening.** `open_chain_stores_for_startup()`
+  probes with a skiplist, reads the bulk marker and the resume tip, calls
+  `decide_startup_sync()`, and only reopens with VectorRep when this process is
+  actually going to bulk build a fresh store. `Indexer::run` reuses that
+  decision instead of re-sampling the node tip. Pinned by
+  `startup_decision_fresh_store_far_behind_builds_in_bulk_with_vector_memtable`,
+  `startup_decision_fresh_store_near_tip_uses_pipeline_with_skiplist`,
+  `startup_decision_existing_store_far_behind_stays_live_with_skiplist`,
+  `startup_decision_after_durable_bulk_handoff_uses_pipeline_with_skiplist`,
+  `startup_decision_reports_a_node_behind_the_store_tip_without_clamping`, and
+  the four `startup_open_*` integration tests on real stores.
+- **3.2 — name what is being measured.** The commit window is five
+  non-overlapping fields (`commit_prepare_ms`, `script_rollup_ms`,
+  `append_only_commit_synced_ms`, `domain_commit_ms`, `commit_phase_total_ms`);
+  `write_commit_ms` stays as the wide window's old name and is the same stored
+  value. `precompute_ms` now carries a real measurement instead of a field the
+  pipeline writer never set. The stall warning needs a frozen tip **and** a
+  frozen writer-phase counter, which every commit part, the finalize step and
+  every block of the staging body bump. Pinned by
+  `live_batch_splits_the_commit_window_into_five_phases`,
+  `staging_body_marks_a_writer_phase_for_every_block_in_the_batch`,
+  `stall_warning_is_suppressed_while_the_writer_keeps_advancing_phases`,
+  `stall_warning_fires_when_the_writer_phase_heartbeat_also_stops`, and the CSV
+  schema tests `csv_header_declares_the_schema_version` /
+  `an_old_header_rotates_to_a_schema_suffixed_file`.
+- **3.3 — one source for the buffer size.** `live_cf_write_buffer(name, profile)`
+  serves both the open-time CF options and the live restore, so a CF can no
+  longer be opened at 392 MB and live-tuned to 2 MB; the 384 MB WBM cap still
+  governs total memtable memory. `max_manifest_file_size` is 64 MB on the
+  primary. `memory_stats()` gained `sst_files_total` (30 s cached) and
+  `manifest_bytes`. Pinned by
+  `live_options_never_set_cf_write_buffer_below_profile_low`,
+  `live_write_buffers_do_not_flush_once_per_small_batch` (red: 24 MB of writes
+  produced 9 L0 files against a ceiling of 4) and
+  `memory_stats_report_sst_count_and_manifest_size`.
+- **3.4 — stop rewriting what did not change.** The rollup stages only rows
+  whose value differs (no empty-input early return — the single computation path
+  still runs); the append-only probe is one `multi_get_cf` per 4,096-key chunk;
+  the 3-second loop commits one `StoreBatch` per tick and resamples the all-CF
+  memory sweep every 30 s in live mode. Pinned by
+  `materialize_writes_only_changed_rollup_rows` (red: 5 staged writes for an
+  unchanged rollup), `commit_inner_probe_uses_single_multi_get` (red: 64
+  `get_cf` calls), `commit_inner_probe_chunks_a_batch_larger_than_the_probe_chunk`,
+  the three `heartbeat_tick_*` tests,
+  `memory_stats_are_sampled_every_30s_in_live_and_every_tick_in_bulk`, and
+  `stale_age_follows_the_runtime_heartbeat_not_the_memory_sample`.
+- **Measured, not assumed.** `tracker_state_serialization_is_a_minor_share_of_commit_prepare`
+  put the whole-state tracker writes at 317,101 bytes and 1.67 ms — 0.15% of the
+  smallest observed per-block commit window — so that persistence was left
+  unchanged and `tracker_state_bytes` went into the log instead.
+
+**Still unattributed**: testnet's 1.1-2.7 s per-block commit window at the tip.
+Neither fsync, write volume, flush duration, rollup SST reads, tracker cloning,
+direct I/O nor another in-process reader explains it — all were ruled out before
+this work, and the residual does not correlate with memtable age (r=0.05) or
+block content. Task 3.5
+— replaying the same blocks against copies of the rebuilt stores with each
+memtable kind and diffing the five commit parts — needs the post-rebuild
+database and has not run.
+
+**Lesson**: an option chosen for one execution mode must be attached to that
+mode's decision, not to the process. All three parts of this are the same shape:
+VectorRep was right for the build and wrong for the reader, a 2 MB buffer is a
+local choice until `atomic_flush` makes it global, and a timer named `commit`
+measured everything that happened to sit before the commit. Rates need tests
+too: "does it still work" was green the whole time.
+
+**Files**: `crates/indexer/src/entry.rs`,
+`crates/indexer/src/sync/{indexer,batch,diagnostics}.rs`,
+`crates/indexer/src/health_monitor.rs`,
+`crates/indexer/src/db/writer/addresses.rs`,
+`crates/ckbadger-store/src/{store,batch,sync_ops}.rs`,
+`crates/ckbadger-store/examples/memtable_read_bench.rs`, `crates/tui/src/ui.rs`
+
+---
+
 ### IDX-008: Three object writers, one undo sequence, second write overwrote the first
 
 **Date**: 2026-09-23
