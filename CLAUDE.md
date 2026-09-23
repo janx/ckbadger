@@ -353,7 +353,7 @@ const DAO_CODE_HASH: &str = "0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d
 | Config           | `crates/config/src/lib.rs` (per-network `config.toml`); `crates/config/src/orchestrator.rs` (orchestrator `ckbadger.toml`, `[[network]]`)                                       |
 | IPC protocol     | `crates/ipc/src/` (Unix socket server/client)                                                                                                                                   |
 | Storage engine   | `crates/ckbadger-store/src/` (types, store, keys, \*\_ops.rs)                                                                                                                   |
-| API routes       | `crates/api/src/routes/*.rs` (18 mounted modules + `tx_lookup`/`proposal_window` helpers)                                                                                       |
+| API routes       | `crates/api/src/routes/*.rs` (19 mounted modules + `tx_lookup`/`proposal_window` helpers)                                                                                       |
 | Response types   | `crates/api/src/response.rs`                                                                                                                                                    |
 | WebSocket        | `crates/api/src/ws/`                                                                                                                                                            |
 | RPC client       | `crates/indexer/src/rpc/client.rs`                                                                                                                                              |
