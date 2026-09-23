@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use ckbadger_store::types::{AddrTxValue, TxActions};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use super::resolve::ResolvedCell;
 use super::source::PoolEntryMeta;
@@ -302,7 +302,7 @@ impl super::resolve::PoolParentCells for PoolSnapshot {
 ///
 /// Separate from `total`, which stays the committed count: chain truth and
 /// provisional state are reported side by side, never summed.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct PoolSummaryResponse {
     pub enabled: bool,
@@ -319,7 +319,7 @@ pub struct PoolSummaryResponse {
 }
 
 /// The interpretation attached to a pool row.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct InterpretationResponse {
     /// `complete` or `partial`.
@@ -328,7 +328,7 @@ pub struct InterpretationResponse {
     pub reasons: Vec<InterpretationReasonResponse>,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct InterpretationReasonResponse {
     pub code: String,

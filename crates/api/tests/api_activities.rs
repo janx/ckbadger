@@ -829,3 +829,261 @@ async fn test_address_activities_accepts_uppercase_address() {
         "uppercase input must enumerate the identical activities"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Tx-pool rows on page one
+//
+// A pool transaction can only land in a FUTURE block, so it is later than every
+// committed transaction in canonical order. That makes pool rows a page-one-only
+// segment: above the committed rows, never inside a cursor.
+// ---------------------------------------------------------------------------
+
+const POOL_LOCK_HASH: [u8; 32] = [0x41; 32];
+
+#[tokio::test]
+async fn test_address_activities_page_one_puts_pool_rows_above_committed_rows() {
+    let store = test_store();
+    seed_committed_activity(&store, &POOL_LOCK_HASH, &[0xc1; 32], 10, 0, 100, 0);
+
+    let state = test_app_state(test_config(store));
+    state
+        .pool_mirror
+        .publish(healthy_pool_snapshot(vec![make_test_pool_record(
+            &[0xf1; 32],
+            &POOL_LOCK_HASH,
+            -500,
+            1_700_000_500_000,
+            ckbadger_api::pool::PoolStatus::Pending,
+        )]));
+    let app = create_router_with_state(state).await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/api/v1/addresses/0x{}/activities",
+                    hex::encode(POOL_LOCK_HASH)
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let rows = json["data"].as_array().unwrap();
+    assert_eq!(rows.len(), 2, "pool row then committed row: {json:?}");
+
+    let pool_row = &rows[0];
+    assert_eq!(pool_row["txHash"], format!("0x{}", "f1".repeat(32)));
+    assert_eq!(pool_row["blockNumber"], serde_json::Value::Null);
+    assert_eq!(pool_row["txIndex"], serde_json::Value::Null);
+    assert_eq!(pool_row["timestamp"], serde_json::Value::Null);
+    assert_eq!(pool_row["poolStatus"], "pending");
+    assert!(pool_row["timeAddedToPool"].as_str().is_some());
+    assert_eq!(pool_row["interpretation"]["status"], "complete");
+    assert_eq!(pool_row["ckbDelta"], "-500");
+
+    let committed_row = &rows[1];
+    assert_eq!(committed_row["blockNumber"], 10);
+    assert_eq!(committed_row["poolStatus"], serde_json::Value::Null);
+
+    let pool = &json["pool"];
+    assert_eq!(pool["enabled"], true);
+    assert_eq!(pool["healthy"], true);
+    assert_eq!(pool["count"], 1);
+    assert_eq!(pool["pendingCkbDelta"], "-500");
+    assert_eq!(pool["truncated"], false);
+}
+
+#[tokio::test]
+async fn test_address_activities_cursor_page_contains_no_pool_rows() {
+    let store = test_store();
+    seed_committed_activity(&store, &POOL_LOCK_HASH, &[0xc1; 32], 10, 0, 100, 0);
+
+    let state = test_app_state(test_config(store));
+    state
+        .pool_mirror
+        .publish(healthy_pool_snapshot(vec![make_test_pool_record(
+            &[0xf1; 32],
+            &POOL_LOCK_HASH,
+            -500,
+            1_700_000_500_000,
+            ckbadger_api::pool::PoolStatus::Pending,
+        )]));
+    let app = create_router_with_state(state).await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/api/v1/addresses/0x{}/activities?cursor=999:0",
+                    hex::encode(POOL_LOCK_HASH)
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let rows = json["data"].as_array().unwrap();
+    assert!(
+        rows.iter().all(|row| row["poolStatus"].is_null()),
+        "cursor pages must stay stable while the pool churns: {json:?}"
+    );
+    assert!(
+        json["pool"].is_null(),
+        "the pool summary belongs to page one only"
+    );
+}
+
+#[tokio::test]
+async fn test_address_activities_filter_applies_to_pool_rows() {
+    use ckbadger_store::types::TAG_TOKEN;
+
+    let store = test_store();
+    let state = test_app_state(test_config(store));
+    state
+        .pool_mirror
+        .publish(healthy_pool_snapshot(vec![make_test_pool_record_with(
+            &[0xf1; 32],
+            &POOL_LOCK_HASH,
+            -500,
+            1_700_000_500_000,
+            ckbadger_api::pool::PoolStatus::Pending,
+            TAG_TOKEN,
+            ckbadger_api::pool::Interpretation::Complete,
+        )]));
+    let app = create_router_with_state(state).await;
+
+    for (filter, expected) in [("token", 1usize), ("dao", 0), ("all", 1)] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/api/v1/addresses/0x{}/activities?filter={filter}",
+                        hex::encode(POOL_LOCK_HASH)
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            json["data"].as_array().unwrap().len(),
+            expected,
+            "filter={filter} must apply to pool rows through the same tag bitmap"
+        );
+        assert_eq!(json["pool"]["count"], expected);
+    }
+}
+
+#[tokio::test]
+async fn test_address_activities_omit_pool_rows_the_store_already_has() {
+    let store = test_store();
+    let tx_hash = [0xc1; 32];
+    seed_committed_activity(&store, &POOL_LOCK_HASH, &tx_hash, 10, 0, 100, 0);
+
+    let state = test_app_state(test_config(store));
+    // The mirror still holds the record while it waits for the local index;
+    // this request's store view already has the transaction.
+    state
+        .pool_mirror
+        .publish(healthy_pool_snapshot(vec![make_test_pool_record(
+            &tx_hash,
+            &POOL_LOCK_HASH,
+            100,
+            1_700_000_500_000,
+            ckbadger_api::pool::PoolStatus::CommittedAwaitingIndex {
+                block_number: 10,
+                block_hash: [0xba; 32],
+            },
+        )]));
+    let app = create_router_with_state(state).await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/api/v1/addresses/0x{}/activities",
+                    hex::encode(POOL_LOCK_HASH)
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let rows = json["data"].as_array().unwrap();
+    assert_eq!(rows.len(), 1, "committed wins, exactly once: {json:?}");
+    assert_eq!(rows[0]["blockNumber"], 10);
+    assert_eq!(json["pool"]["count"], 0);
+}
+
+#[tokio::test]
+async fn test_address_activities_report_an_unhealthy_mirror_and_still_serve_committed_rows() {
+    let store = test_store();
+    seed_committed_activity(&store, &POOL_LOCK_HASH, &[0xc1; 32], 10, 0, 100, 0);
+
+    let state = test_app_state(test_config(store));
+    state.pool_mirror.publish(unhealthy_pool_snapshot());
+    let app = create_router_with_state(state).await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/api/v1/addresses/0x{}/activities",
+                    hex::encode(POOL_LOCK_HASH)
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["data"].as_array().unwrap().len(), 1);
+    assert_eq!(json["pool"]["enabled"], true);
+    assert_eq!(
+        json["pool"]["healthy"], false,
+        "an unreachable node must never read as an empty pool"
+    );
+}
+
+#[tokio::test]
+async fn test_address_activities_report_a_disabled_mirror() {
+    let store = test_store();
+    let mut config = test_config(store);
+    config.pool_mirror_enabled = false;
+    let app = create_router(config).await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/api/v1/addresses/0x{}/activities",
+                    hex::encode(POOL_LOCK_HASH)
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["pool"]["enabled"], false);
+    assert_eq!(json["pool"]["healthy"], false);
+    assert_eq!(json["pool"]["count"], 0);
+}

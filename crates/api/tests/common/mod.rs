@@ -505,6 +505,81 @@ pub fn make_test_tx_actions(
     }
 }
 
+/// Seed one committed transaction for `lock_hash`: the block header, the tx
+/// location/index, its `TxActions` and its `addr_txs` row — everything the
+/// address activity feed and transaction list read.
+#[allow(clippy::too_many_arguments)]
+pub fn seed_committed_activity(
+    store: &Arc<CkbadgerStore>,
+    lock_hash: &[u8],
+    tx_hash: &[u8],
+    block_number: i64,
+    tx_index: i32,
+    ckb_delta: i128,
+    tags: u16,
+) {
+    let block_hash = vec![0xba; 32];
+    let timestamp = 1_700_000_000_000 + block_number;
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_tx_hash_map(tx_hash, block_number, tx_index);
+    batch.put_tx_index(
+        block_number,
+        tx_index,
+        &TxIndexEntry {
+            is_cellbase: false,
+            timestamp,
+            inputs_count: 1,
+            outputs_count: 1,
+            fee: 1_234,
+            tx_size: 222,
+            cycles: Some(333),
+            semantic_tags: 0,
+        },
+    );
+    batch.put_block_header(
+        block_number,
+        &CachedBlockHeader {
+            hash: block_hash.clone(),
+            parent_hash: vec![0u8; 32],
+            timestamp,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+            uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
+            cycles: None,
+        },
+    );
+    let actions = make_test_tx_actions(
+        lock_hash,
+        tx_hash,
+        &block_hash,
+        block_number,
+        tx_index,
+        ckb_delta,
+        tags,
+    );
+    batch.put_tx_actions(&actions);
+    let capacity_change = i64::try_from(ckb_delta).expect("test ckb_delta fits i64");
+    batch.put_addr_tx(
+        lock_hash,
+        block_number,
+        tx_index,
+        tx_hash,
+        &AddrTxValue::new(capacity_change, false, true, tags),
+    );
+    batch.commit().unwrap();
+    store
+        .update_sync_status(|status| {
+            status.tip_block_number = status.tip_block_number.max(block_number);
+        })
+        .unwrap();
+}
+
 /// One mirrored pool transaction for this lock, interpreted and attributed.
 ///
 /// Built through the same `AddrTxValue::new` constructor the indexer uses for
