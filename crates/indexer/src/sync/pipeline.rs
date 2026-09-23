@@ -723,6 +723,38 @@ fn parse_script_reference_hash_type(
     }
 }
 
+/// Collection id for a **consumed** object cell — the input side of the object
+/// daily deltas.
+///
+/// This must agree, protocol for protocol, with the two other classifiers:
+/// `dao_helpers::classify_object_collection_id` (the output/creation side) and
+/// `bulk_build::owners::object::classify_nft_collection_from_protocol` (bulk
+/// build). A protocol classified on creation but not on consumption leaves its
+/// collection's daily row permanently inflated by the consumed cell.
+pub(crate) fn consumed_object_collection_id(
+    store: &ckbadger_store::CkbadgerStore,
+    cache: &mut HashMap<Vec<u8>, Option<MnftTypeIndex>>,
+    type_code_hash: &[u8],
+    type_args: Option<&[u8]>,
+    type_script_hash: &[u8],
+) -> Result<Option<Vec<u8>>> {
+    let _ = type_args;
+    if DotbitParser::is_account_cell_type_script(type_code_hash) {
+        return Ok(Some(DOTBIT_SENTINEL_COLLECTION.to_vec()));
+    }
+    if DidCkbParser::is_type_script(type_code_hash) {
+        return Ok(Some(DID_CKB_SENTINEL_COLLECTION.to_vec()));
+    }
+    if MnftParser::is_token_type_script(type_code_hash) {
+        let loaded =
+            load_optional_index_from_store(cache, type_script_hash, "object_type", || {
+                store.get_mnft_type_index(type_script_hash)
+            })?;
+        return Ok(loaded.map(|idx| idx.collection_id));
+    }
+    Ok(None)
+}
+
 impl Indexer {
     pub(crate) async fn run_pipeline(&self) -> Result<()> {
         use tokio::sync::mpsc;
@@ -2037,60 +2069,37 @@ impl Indexer {
                                             }
                                         }
                                     }
-                                    if DotbitParser::is_account_cell_type_script(type_code_hash)
-                                        || MnftParser::is_token_type_script(type_code_hash)
-                                        || DidCkbParser::is_type_script(type_code_hash)
-                                    {
-                                        let collection_id =
-                                            if DotbitParser::is_account_cell_type_script(
-                                                type_code_hash,
-                                            ) {
-                                                Some(DOTBIT_SENTINEL_COLLECTION.to_vec())
-                                            } else if DidCkbParser::is_type_script(type_code_hash) {
-                                                Some(DID_CKB_SENTINEL_COLLECTION.to_vec())
-                                            } else if let Some(cached) =
-                                                object_type_index_cache.get(type_script_hash)
-                                            {
-                                                cached.clone().map(|idx| idx.collection_id)
-                                            } else {
-                                                match load_optional_index_from_store(
-                                                    &mut object_type_index_cache,
-                                                    type_script_hash,
-                                                    "object_type",
-                                                    || {
-                                                        writer_for_parser
-                                                            .store()
-                                                            .get_mnft_type_index(type_script_hash)
-                                                    },
-                                                ) {
-                                                    Ok(loaded) => {
-                                                        loaded.map(|idx| idx.collection_id)
-                                                    }
-                                                    Err(e) => {
-                                                        error!(
-                                                            start_block,
-                                                            end_block,
-                                                            "Parser: failed to load object type index: {}",
-                                                            e
-                                                        );
-                                                        record_worker_exit_reason(
-                                                            &parser_exit_reason_for_parser,
-                                                            format!(
-                                                                "failed to load object type index for range {}-{}: {}",
-                                                                start_block, end_block, e
-                                                            ),
-                                                        );
-                                                        return;
-                                                    }
-                                                }
-                                            };
-                                        if let Some(collection_id) = collection_id {
-                                            let object_daily = object_daily_changes
-                                                .entry((collection_id, date_yyyymmdd))
-                                                .or_insert((0, 0));
-                                            object_daily.0 -= i128::from(info.capacity);
-                                            object_daily.1 -= i128::from(info.occupied_capacity);
+                                    let collection_id = match consumed_object_collection_id(
+                                        writer_for_parser.store(),
+                                        &mut object_type_index_cache,
+                                        type_code_hash,
+                                        info.type_args.as_deref(),
+                                        type_script_hash,
+                                    ) {
+                                        Ok(collection_id) => collection_id,
+                                        Err(e) => {
+                                            error!(
+                                                start_block,
+                                                end_block,
+                                                "Parser: failed to load object type index: {}",
+                                                e
+                                            );
+                                            record_worker_exit_reason(
+                                                &parser_exit_reason_for_parser,
+                                                format!(
+                                                    "failed to load object type index for range {}-{}: {}",
+                                                    start_block, end_block, e
+                                                ),
+                                            );
+                                            return;
                                         }
+                                    };
+                                    if let Some(collection_id) = collection_id {
+                                        let object_daily = object_daily_changes
+                                            .entry((collection_id, date_yyyymmdd))
+                                            .or_insert((0, 0));
+                                        object_daily.0 -= i128::from(info.capacity);
+                                        object_daily.1 -= i128::from(info.occupied_capacity);
                                     }
                                 }
                             }
@@ -3189,6 +3198,196 @@ mod tests {
         TransactionView,
     };
     use crate::sync::TEST_CELLBASE_WITNESS;
+
+    // -----------------------------------------------------------------------
+    // Task 1.3 — `.bit Cell` create → consume classification symmetry
+    // -----------------------------------------------------------------------
+
+    /// The live consume path must classify every object sub-protocol the
+    /// creation path classifies. `classify_object_collection_id` (outputs) and
+    /// bulk build's `classify_nft_collection_from_protocol` both cover mNFT,
+    /// `.bit account`, `.bit Cell` and did:ckb; the live input side listed only
+    /// three of the four.
+    #[test]
+    fn live_consume_classifies_bit_cell_like_creation() {
+        use crate::parser::bit_cell::{BIT_CELL_CODE_HASH_MAINNET, BIT_CELL_CODE_HASH_TESTNET};
+        use ckbadger_store::types::BIT_CELL_SENTINEL_COLLECTION;
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = ckbadger_store::CkbadgerStore::open_domain(dir.path()).unwrap();
+        let mut cache: HashMap<Vec<u8>, Option<MnftTypeIndex>> = HashMap::new();
+        let type_script_hash = [0x77u8; 32];
+
+        for code_hash_hex in [BIT_CELL_CODE_HASH_MAINNET, BIT_CELL_CODE_HASH_TESTNET] {
+            let code_hash = hex::decode(code_hash_hex.trim_start_matches("0x")).unwrap();
+            let created = classify_object_collection_id(&code_hash, &[]);
+            assert_eq!(
+                created,
+                Some(BIT_CELL_SENTINEL_COLLECTION.to_vec()),
+                "the creation side already classifies `.bit Cell` ({code_hash_hex})"
+            );
+            let consumed = consumed_object_collection_id(
+                &store,
+                &mut cache,
+                &code_hash,
+                Some(&[]),
+                &type_script_hash,
+            )
+            .unwrap();
+            assert_eq!(
+                consumed, created,
+                "consume must classify `.bit Cell` exactly as creation does ({code_hash_hex})"
+            );
+        }
+    }
+
+    /// Create in block A, consume the same cell in block B on the same UTC+8
+    /// day: the object daily row for the `.bit Cell` sentinel must net to zero.
+    /// With the consume side blind to `.bit Cell`, the `+capacity/+occupied` of
+    /// the creation is never withdrawn.
+    #[test]
+    fn live_bit_cell_create_then_consume_nets_zero_object_daily() {
+        use crate::parser::bit_cell::BIT_CELL_CODE_HASH_TESTNET;
+        use ckbadger_store::types::BIT_CELL_SENTINEL_COLLECTION;
+
+        const DATE: u32 = 20_260_922;
+        const CAPACITY: i128 = 20_600_000_000;
+        const OCCUPIED: i128 = 14_100_000_000;
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = ckbadger_store::CkbadgerStore::open_domain(dir.path()).unwrap();
+        let mut cache: HashMap<Vec<u8>, Option<MnftTypeIndex>> = HashMap::new();
+        let code_hash = hex::decode(BIT_CELL_CODE_HASH_TESTNET.trim_start_matches("0x")).unwrap();
+        let type_script_hash = [0x78u8; 32];
+
+        let mut object_daily: HashMap<(Vec<u8>, u32), (i128, i128)> = HashMap::new();
+
+        // Block A output — the live creation branch.
+        if let Some(collection_id) = classify_object_collection_id(&code_hash, &[]) {
+            let entry = object_daily.entry((collection_id, DATE)).or_insert((0, 0));
+            entry.0 += CAPACITY;
+            entry.1 += OCCUPIED;
+        }
+        // Block B input — the live consume branch.
+        let consumed = consumed_object_collection_id(
+            &store,
+            &mut cache,
+            &code_hash,
+            Some(&[]),
+            &type_script_hash,
+        )
+        .unwrap();
+        if let Some(collection_id) = consumed {
+            let entry = object_daily.entry((collection_id, DATE)).or_insert((0, 0));
+            entry.0 -= CAPACITY;
+            entry.1 -= OCCUPIED;
+        }
+
+        assert_eq!(
+            object_daily.get(&(BIT_CELL_SENTINEL_COLLECTION.to_vec(), DATE)),
+            Some(&(0i128, 0i128)),
+            "a `.bit Cell` created and consumed on the same day must leave a net-zero \
+             object daily delta; a non-zero value is capacity that never comes back"
+        );
+    }
+
+    /// Bulk build classifies all four object sub-protocols
+    /// (`classify_nft_collection_from_protocol`). Live consume must produce the
+    /// identical collection id for the same cell, or a rebuilt database
+    /// disagrees with an incrementally synced one.
+    #[test]
+    fn live_consume_matches_bulk_classification_for_every_object_protocol() {
+        use crate::parser::bit_cell::BIT_CELL_CODE_HASH_TESTNET;
+        use crate::parser::did_ckb::DidCkbParser;
+        use crate::parser::mnft::MNFT_TOKEN_CODE_HASH;
+        use ckbadger_store::types::{
+            BIT_CELL_SENTINEL_COLLECTION, DID_CKB_SENTINEL_COLLECTION, DOTBIT_SENTINEL_COLLECTION,
+        };
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = ckbadger_store::CkbadgerStore::open_domain(dir.path()).unwrap();
+        let mut cache: HashMap<Vec<u8>, Option<MnftTypeIndex>> = HashMap::new();
+
+        // mNFT: bulk reads the class id straight out of the parsed facts, and
+        // the live creation side out of `type_args[..24]`.
+        let mnft_code = hex::decode(MNFT_TOKEN_CODE_HASH.trim_start_matches("0x")).unwrap();
+        let mnft_args = vec![0x5Au8; 24];
+        let mnft_type_hash = [0x79u8; 32];
+        store
+            .put_mnft_type_index_direct(
+                &mnft_type_hash,
+                &MnftTypeIndex {
+                    collection_id: mnft_args.clone(),
+                },
+            )
+            .unwrap();
+
+        let dotbit_code =
+            hex::decode(DOTBIT_ACCOUNT_CELL_TYPE_ID.trim_start_matches("0x")).unwrap();
+        let bit_cell_code =
+            hex::decode(BIT_CELL_CODE_HASH_TESTNET.trim_start_matches("0x")).unwrap();
+        let did_ckb_code = crate::parser::test_helpers::real_did_ckb::cell_32()
+            .0
+            .type_
+            .as_ref()
+            .map(|t| crate::rpc::parse_hex_to_bytes(&t.code_hash))
+            .expect("did:ckb fixture must carry a type script");
+        assert!(
+            DidCkbParser::is_type_script(&did_ckb_code),
+            "fixture must actually be a did:ckb type script"
+        );
+
+        let cases: [(&str, &[u8], &[u8], [u8; 32], Vec<u8>); 4] = [
+            (
+                "mNFT token",
+                &mnft_code,
+                &mnft_args,
+                mnft_type_hash,
+                mnft_args.clone(),
+            ),
+            (
+                ".bit account",
+                &dotbit_code,
+                &[],
+                [0x7Au8; 32],
+                DOTBIT_SENTINEL_COLLECTION.to_vec(),
+            ),
+            (
+                ".bit Cell",
+                &bit_cell_code,
+                &[],
+                [0x7Bu8; 32],
+                BIT_CELL_SENTINEL_COLLECTION.to_vec(),
+            ),
+            (
+                "did:ckb",
+                &did_ckb_code,
+                &[],
+                [0x7Cu8; 32],
+                DID_CKB_SENTINEL_COLLECTION.to_vec(),
+            ),
+        ];
+
+        for (label, code_hash, type_args, type_script_hash, expected) in cases {
+            assert_eq!(
+                classify_object_collection_id(code_hash, type_args),
+                Some(expected.clone()),
+                "{label}: creation side"
+            );
+            assert_eq!(
+                consumed_object_collection_id(
+                    &store,
+                    &mut cache,
+                    code_hash,
+                    Some(type_args),
+                    &type_script_hash,
+                )
+                .unwrap(),
+                Some(expected),
+                "{label}: live consume side must match bulk and creation"
+            );
+        }
+    }
 
     #[test]
     fn bulk_semantic_tag_classifies_real_did_ckb_cells() {
