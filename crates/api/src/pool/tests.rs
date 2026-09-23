@@ -250,7 +250,7 @@ async fn test_new_pool_tx_is_indexed_by_participant_lock() {
     let receiver_delta = actions
         .participants
         .iter()
-        .find(|p| p.lock_hash == lock_hash(SECP_LOCK_CODE_HASH, receiver).to_vec())
+        .find(|p| p.id.as_bytes() == lock_hash(SECP_LOCK_CODE_HASH, receiver))
         .expect("receiver is a participant");
     assert_eq!(receiver_delta.ckb_delta, 9_900_000_000);
 
@@ -259,7 +259,7 @@ async fn test_new_pool_tx_is_indexed_by_participant_lock() {
     let sender_delta = actions
         .participants
         .iter()
-        .find(|p| p.lock_hash == lock_hash(SECP_LOCK_CODE_HASH, sender).to_vec())
+        .find(|p| p.id.as_bytes() == lock_hash(SECP_LOCK_CODE_HASH, sender))
         .expect("sender is a participant");
     assert_eq!(sender_delta.ckb_delta, -10_000_000_000);
 
@@ -311,7 +311,7 @@ async fn test_chained_child_resolves_its_parent_from_the_pool() {
     let spender = actions
         .participants
         .iter()
-        .find(|p| p.lock_hash == lock_hash(SECP_LOCK_CODE_HASH, 0xBB).to_vec())
+        .find(|p| p.id.as_bytes() == lock_hash(SECP_LOCK_CODE_HASH, 0xBB))
         .expect("the parent's receiver is the child's spender");
     assert_eq!(spender.ckb_delta, -9_900_000_000);
 

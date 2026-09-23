@@ -496,11 +496,12 @@ pub fn make_test_tx_actions(
         type_calls: vec![],
         lock_calls: vec![],
         participants: vec![ParticipantDelta {
-            lock_hash: lock_hash.to_vec(),
+            id: ckbadger_store::types::ParticipantId::lock(lock_hash).unwrap(),
             ckb_delta,
             used_delta: 0,
             item_deltas: vec![],
             tags,
+            roles: 0,
         }],
     }
 }
@@ -683,11 +684,12 @@ pub fn make_test_participant(
     tags: u16,
 ) -> ckbadger_store::types::ParticipantDelta {
     ckbadger_store::types::ParticipantDelta {
-        lock_hash: vec![lock_byte; 32],
+        id: ckbadger_store::types::ParticipantId::Lock([lock_byte; 32]),
         ckb_delta,
         used_delta: 0,
         item_deltas: vec![],
         tags,
+        roles: 0,
     }
 }
 

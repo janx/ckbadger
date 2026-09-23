@@ -4,13 +4,13 @@
 //! type/lock calls, and per-participant deltas (CKB, items, tags).
 
 use anyhow::{anyhow, bail, Result};
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::OnceLock;
 
 use ckbadger_store::types::{
-    ItemDelta, LockCallEntry, ParticipantDelta, ProtocolAction, TxActions, TypeCallEntry,
-    ITEM_KIND_IDENTITY, ITEM_KIND_OBJECT, ITEM_KIND_TOKEN, TAG_CELLBASE, TAG_DAO, TAG_IDENTITY,
-    TAG_LOCK_CALL, TAG_OBJECT, TAG_PROTOCOL, TAG_TOKEN, TAG_TYPE_CALL,
+    ItemDelta, LockCallEntry, ParticipantDelta, ParticipantId, ProtocolAction, TxActions,
+    TypeCallEntry, ITEM_KIND_IDENTITY, ITEM_KIND_OBJECT, ITEM_KIND_TOKEN, TAG_CELLBASE,
+    TAG_DAO, TAG_IDENTITY, TAG_LOCK_CALL, TAG_OBJECT, TAG_PROTOCOL, TAG_TOKEN, TAG_TYPE_CALL,
 };
 
 use crate::parser::{bit_cell::BitCellParser, dotbit::DotbitParser, udt::UdtParser};
@@ -236,6 +236,99 @@ pub trait ProtocolDetector: Send + Sync {
     fn emits_tx_level_actions(&self) -> bool {
         true
     }
+
+    /// Name the parties this transaction affects that may hold no cell in it.
+    ///
+    /// A protocol that writes a party's identity into cell data or script args
+    /// (a `.cell` owner/manager, a cheque lock's receiver and sender) knows that
+    /// party even when no cell of theirs appears. Default: names nobody.
+    fn name_participants(&self, _tx: &TxView<'_>) -> Result<Vec<NamedParticipant>> {
+        Ok(Vec::new())
+    }
+}
+
+/// A party a protocol names in transaction data, with what it did to their items.
+#[derive(Debug, Clone)]
+pub struct NamedParticipant {
+    pub id: ParticipantId,
+    pub item_deltas: Vec<ItemDelta>,
+    pub roles: u8,
+}
+
+/// Whether a participant holds an input / output cell in this transaction.
+///
+/// Never persisted: it is what the row emitter needs to pick an `AddrTxValue`
+/// tx_type, and it travels beside `TxActions.participants` rather than inside
+/// each `ParticipantDelta`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ParticipantIo {
+    pub has_inputs: bool,
+    pub has_outputs: bool,
+}
+
+/// `TxActions` plus the per-participant IO flags the row emitter needs.
+#[derive(Debug, Clone)]
+pub struct BuiltTxActions {
+    pub actions: TxActions,
+    pub participant_io: Vec<ParticipantIo>,
+}
+
+/// Detectors that exist only to drive the participant-model tests.
+///
+/// Phase 1a ships no production detector that names participants, so the live
+/// and bulk write paths are exercised through an injected one. Kept beside the
+/// builder (rather than in one test module) because `sync/batch.rs` and
+/// `bulk_build/mod.rs` both need it.
+#[cfg(test)]
+pub(crate) mod test_detectors {
+    use super::LockCallEntry;
+    use super::{
+        ItemDelta, NamedParticipant, OwnerAccum, ParticipantId, ProtocolAction, ProtocolDetector,
+        Result, TxView, TypeCallEntry,
+    };
+    use ckbadger_store::types::ITEM_KIND_IDENTITY;
+
+    /// Names exactly one party, with one identity item delta.
+    pub(crate) struct NamingDetector {
+        pub(crate) id: ParticipantId,
+        pub(crate) delta_negative: bool,
+        pub(crate) roles: u8,
+    }
+
+    impl ProtocolDetector for NamingDetector {
+        fn might_apply(&self, _tx: &TxView<'_>) -> bool {
+            true
+        }
+
+        fn detect(
+            &self,
+            _tx: &TxView<'_>,
+            _owner_lock_hash: &[u8],
+            _accum: &OwnerAccum<'_>,
+            _item_deltas: &[ItemDelta],
+            _type_calls: &[TypeCallEntry],
+            _lock_calls: &[LockCallEntry],
+        ) -> Result<Vec<ProtocolAction>> {
+            Ok(vec![ProtocolAction::new(
+                "test",
+                "named",
+                serde_json::json!({}),
+            )])
+        }
+
+        fn name_participants(&self, _tx: &TxView<'_>) -> Result<Vec<NamedParticipant>> {
+            Ok(vec![NamedParticipant {
+                id: self.id,
+                item_deltas: vec![ItemDelta {
+                    item_id: vec![0xEE; 20],
+                    kind: ITEM_KIND_IDENTITY,
+                    magnitude: 1,
+                    negative: self.delta_negative,
+                }],
+                roles: self.roles,
+            }])
+        }
+    }
 }
 
 /// Build `TxActions` for all transactions in a block (no protocol detectors).
@@ -249,6 +342,18 @@ pub fn build_tx_actions_for_block(
     txs: &[TxView<'_>],
     detectors: &[Box<dyn ProtocolDetector>],
 ) -> Result<Vec<TxActions>> {
+    Ok(build_tx_actions_for_block_with_io(txs, detectors)?
+        .into_iter()
+        .map(|b| b.actions)
+        .collect())
+}
+
+/// Build `TxActions` for all transactions in a block, keeping each participant's
+/// input/output presence beside it. The addr_txs row emitters take this form.
+pub fn build_tx_actions_for_block_with_io(
+    txs: &[TxView<'_>],
+    detectors: &[Box<dyn ProtocolDetector>],
+) -> Result<Vec<BuiltTxActions>> {
     let hashes = code_hashes();
     txs.iter()
         .map(|tx| build_tx_actions(tx, hashes, detectors))
@@ -388,7 +493,7 @@ fn build_tx_actions<'a>(
     tx: &TxView<'a>,
     hashes: &CodeHashes,
     detectors: &[Box<dyn ProtocolDetector>],
-) -> Result<TxActions> {
+) -> Result<BuiltTxActions> {
     let mut owners: HashMap<&'a [u8], OwnerAccum<'a>> = HashMap::new();
 
     // Process inputs — lock_script_hash must always be exactly 32 bytes
@@ -500,6 +605,61 @@ fn build_tx_actions<'a>(
         .map(|d| d.as_ref())
         .collect();
 
+    // --- Named participants: parties the protocol points at, cell or no cell ---
+    //
+    // One party may be named more than once in the same tx (owner_to and
+    // manager_to of the same name), so collapse by id first; then decide, per
+    // named party, whether it IS one of the cell owners.
+    let mut named_by_id: BTreeMap<ParticipantId, NamedParticipant> = BTreeMap::new();
+    for detector in &applicable_detectors {
+        for n in detector.name_participants(tx)? {
+            let e = named_by_id.entry(n.id).or_insert_with(|| NamedParticipant {
+                id: n.id,
+                item_deltas: Vec::new(),
+                roles: 0,
+            });
+            e.item_deltas.extend(n.item_deltas);
+            e.roles |= n.roles;
+        }
+    }
+    let mut attached: HashMap<&'a [u8], NamedParticipant> = HashMap::new();
+    let mut standalone: Vec<NamedParticipant> = Vec::new();
+    for (id, n) in named_by_id {
+        let matches: Vec<&'a [u8]> = match id {
+            ParticipantId::Lock(h) => owners.keys().filter(|k| ***k == h[..]).copied().collect(),
+            ParticipantId::LockPrefix(p) => owners
+                .keys()
+                .filter(|k| k[..20] == p[..])
+                .copied()
+                .collect(),
+        };
+        match matches.len() {
+            // Nobody in the tx holds this lock: a full participant whose CKB
+            // position happens to be exactly zero.
+            0 => standalone.push(n),
+            // Exactly one cell owner shares this identity — it IS that party.
+            1 => {
+                let e = attached
+                    .entry(matches[0])
+                    .or_insert_with(|| NamedParticipant {
+                        id,
+                        item_deltas: Vec::new(),
+                        roles: 0,
+                    });
+                e.item_deltas.extend(n.item_deltas);
+                e.roles |= n.roles;
+            }
+            _ => bail!(
+                "ambiguous participant prefix in tx 0x{}: 0x{} matches {} lock participants (0x{}, 0x{})",
+                hex::encode(tx.tx_hash),
+                hex::encode(id.as_bytes()),
+                matches.len(),
+                hex::encode(matches[0]),
+                hex::encode(matches[1])
+            ),
+        }
+    }
+
     // --- Phase 1: Per-owner item deltas and DAO protocol actions ---
     // `all_protocol_actions` holds per-CELL DAO actions (deposit/withdraw_request/
     // withdraw_complete below) and must keep every legitimate repeat — one tx can
@@ -513,6 +673,7 @@ fn build_tx_actions<'a>(
     let mut tx_type_calls: BTreeSet<(&[u8], i16, &[u8])> = BTreeSet::new();
     let mut tx_lock_calls: BTreeSet<(&[u8], i16, &[u8])> = BTreeSet::new();
     let mut participants = Vec::with_capacity(owner_hashes.len());
+    let mut participant_io: Vec<ParticipantIo> = Vec::with_capacity(owner_hashes.len());
 
     for lock_hash in &owner_hashes {
         let accum = owners
@@ -522,7 +683,7 @@ fn build_tx_actions<'a>(
         let used_delta = accum.output_used - accum.input_used;
 
         // Build item deltas
-        let mut item_deltas = Vec::new();
+        let mut item_deltas: Vec<ItemDelta> = Vec::new();
 
         // UDT changes → ItemDelta (token). Net-difference (u128, no intermediate overflow).
         for (type_script_hash, (input_amt, output_amt)) in &accum.udt_deltas {
@@ -684,13 +845,84 @@ fn build_tx_actions<'a>(
             tags |= TAG_LOCK_CALL;
         }
 
+        // A named party that IS this cell owner contributes its item deltas and
+        // roles here rather than becoming a second participant for one person.
+        let mut roles: u8 = 0;
+        if let Some(n) = attached.get(*lock_hash) {
+            item_deltas.extend(n.item_deltas.iter().cloned());
+            roles |= n.roles;
+            if n.item_deltas.iter().any(|d| d.kind == ITEM_KIND_TOKEN) {
+                tags |= TAG_TOKEN;
+            }
+            if n.item_deltas.iter().any(|d| d.kind == ITEM_KIND_OBJECT) {
+                tags |= TAG_OBJECT;
+            }
+            if n.item_deltas.iter().any(|d| d.kind == ITEM_KIND_IDENTITY) {
+                tags |= TAG_IDENTITY;
+            }
+        }
+
         participants.push(ParticipantDelta {
-            lock_hash: lock_hash.to_vec(),
+            id: ParticipantId::lock(lock_hash)?,
             ckb_delta,
             used_delta,
             item_deltas,
             tags,
+            roles,
         });
+        // Cell capacities are always >= 61 CKB, so a non-zero capacity sum is
+        // exactly "this participant had a cell on that side". Cellbase has no
+        // inputs, which reads as `has_inputs: false` on its own.
+        participant_io.push(ParticipantIo {
+            has_inputs: accum.input_capacity > 0,
+            has_outputs: accum.output_capacity > 0,
+        });
+    }
+
+    // Parties nobody in the tx shares a lock with: zero CKB position, their own
+    // row. Their tags come from their item deltas alone.
+    for n in standalone {
+        let mut tags = 0u16;
+        if n.item_deltas.iter().any(|d| d.kind == ITEM_KIND_TOKEN) {
+            tags |= TAG_TOKEN;
+        }
+        if n.item_deltas.iter().any(|d| d.kind == ITEM_KIND_OBJECT) {
+            tags |= TAG_OBJECT;
+        }
+        if n.item_deltas.iter().any(|d| d.kind == ITEM_KIND_IDENTITY) {
+            tags |= TAG_IDENTITY;
+        }
+        if tx.is_cellbase {
+            tags |= TAG_CELLBASE;
+        }
+        participants.push(ParticipantDelta {
+            id: n.id,
+            ckb_delta: 0,
+            used_delta: 0,
+            item_deltas: n.item_deltas,
+            tags,
+            roles: n.roles,
+        });
+        participant_io.push(ParticipantIo {
+            has_inputs: false,
+            has_outputs: false,
+        });
+    }
+
+    // `participants` and `participant_io` are two views of one list and must stay
+    // index-aligned: sort them together. For Lock-only txs this is the same order
+    // `owner_hashes.sort()` already produced, so existing output is unchanged.
+    {
+        let mut order: Vec<usize> = (0..participants.len()).collect();
+        order.sort_by_key(|i| participants[*i].id);
+        let mut sorted_participants = Vec::with_capacity(participants.len());
+        let mut sorted_io = Vec::with_capacity(participant_io.len());
+        for i in order {
+            sorted_participants.push(participants[i].clone());
+            sorted_io.push(participant_io[i]);
+        }
+        participants = sorted_participants;
+        participant_io = sorted_io;
     }
 
     // Deduplicate tx-level detector output only: those detectors re-derive one
@@ -731,17 +963,20 @@ fn build_tx_actions<'a>(
         })
         .collect();
 
-    Ok(TxActions {
-        tx_hash: tx.tx_hash.to_vec(),
-        block_hash: tx.block_hash.to_vec(),
-        block_number: tx.block_number,
-        tx_index: tx.tx_index,
-        timestamp: tx.timestamp,
-        is_cellbase: tx.is_cellbase,
-        protocol_actions: all_protocol_actions,
-        type_calls,
-        lock_calls,
-        participants,
+    Ok(BuiltTxActions {
+        actions: TxActions {
+            tx_hash: tx.tx_hash.to_vec(),
+            block_hash: tx.block_hash.to_vec(),
+            block_number: tx.block_number,
+            tx_index: tx.tx_index,
+            timestamp: tx.timestamp,
+            is_cellbase: tx.is_cellbase,
+            protocol_actions: all_protocol_actions,
+            type_calls,
+            lock_calls,
+            participants,
+        },
+        participant_io,
     })
 }
 
@@ -1062,6 +1297,7 @@ fn emit_identity_item_deltas<T: AsRef<[u8]>>(
 #[allow(clippy::useless_vec)]
 mod tests {
     use super::*;
+    use ckbadger_store::types::participant_roles;
 
     /// Owned data for constructing test OutputCellView instances.
     struct OwnedOutput {
@@ -1180,7 +1416,7 @@ mod tests {
         actions
             .participants
             .iter()
-            .find(|p| p.lock_hash == vec![lock_byte; 32])
+            .find(|p| p.id == ParticipantId::Lock([lock_byte; 32]))
             .unwrap_or_else(|| panic!("participant 0x{:02x} not found", lock_byte))
     }
 
@@ -1203,7 +1439,10 @@ mod tests {
         let actions_list = build_tx_actions_for_block_no_detectors(&[tx]).unwrap();
         assert_eq!(actions_list.len(), 1);
         assert_eq!(actions_list[0].participants.len(), 1);
-        assert_eq!(actions_list[0].participants[0].lock_hash, vec![owner; 32]);
+        assert_eq!(
+            actions_list[0].participants[0].id,
+            ParticipantId::Lock([owner; 32])
+        );
     }
 
     #[test]
@@ -1232,7 +1471,7 @@ mod tests {
         let hashes: Vec<Vec<u8>> = actions_list[0]
             .participants
             .iter()
-            .map(|p| p.lock_hash.clone())
+            .map(|p| p.id.as_bytes().to_vec())
             .collect();
         assert_eq!(hashes, vec![vec![alice; 32], vec![bob; 32]]);
     }
@@ -2954,6 +3193,148 @@ mod tests {
                 .any(|a| a.protocol == "rgbpp"),
             "production entry point must run the production detectors; got {:?}",
             actions_list[0].protocol_actions
+        );
+    }
+
+    // ---- Phase 1a: protocol-named participants ----
+
+    fn one_transfer_tx<'a>(input: &'a OwnedInput, output: &'a OwnedOutput) -> TxView<'a> {
+        TxView {
+            tx_hash: &[0xAA; 32],
+            block_hash: &[0xBB; 32],
+            tx_index: 1,
+            block_number: 7,
+            timestamp: 0,
+            is_cellbase: false,
+            inputs: vec![input.view()],
+            outputs: vec![output.view()],
+        }
+    }
+
+    #[test]
+    fn named_prefix_participant_without_cell_becomes_standalone_participant() {
+        let input = make_input(0x11, 1000, 61);
+        let output = make_output(0x11, 990, None, None, None, vec![]);
+        let tx = one_transfer_tx(&input, &output);
+        let detectors: Vec<Box<dyn ProtocolDetector>> =
+            vec![Box::new(test_detectors::NamingDetector {
+                id: ParticipantId::LockPrefix([0x77; 20]),
+                delta_negative: false,
+                roles: participant_roles::OWNER_TO,
+            })];
+        let built = build_tx_actions_for_block_with_io(&[tx], &detectors)
+            .unwrap()
+            .remove(0);
+        let a = &built.actions;
+        assert_eq!(a.participants.len(), 2);
+        assert_eq!(a.participants[0].id, ParticipantId::Lock([0x11; 32])); // Lock 先
+        let named = &a.participants[1];
+        assert_eq!(named.id, ParticipantId::LockPrefix([0x77; 20]));
+        assert_eq!((named.ckb_delta, named.used_delta), (0, 0));
+        assert_eq!(named.item_deltas.len(), 1);
+        assert_eq!(named.roles, participant_roles::OWNER_TO);
+        assert_ne!(named.tags & TAG_IDENTITY, 0);
+        assert_ne!(named.tags & TAG_PROTOCOL, 0);
+        assert_eq!(
+            built.participant_io[1],
+            ParticipantIo {
+                has_inputs: false,
+                has_outputs: false
+            }
+        );
+        assert_eq!(
+            built.participant_io[0],
+            ParticipantIo {
+                has_inputs: true,
+                has_outputs: true
+            }
+        );
+    }
+
+    #[test]
+    fn named_prefix_participant_merges_into_matching_lock_participant() {
+        let input = make_input(0x11, 1000, 61);
+        let output = make_output(0x11, 990, None, None, None, vec![]);
+        let tx = one_transfer_tx(&input, &output);
+        let mut p = [0u8; 20];
+        p.copy_from_slice(&[0x11; 20]);
+        let detectors: Vec<Box<dyn ProtocolDetector>> =
+            vec![Box::new(test_detectors::NamingDetector {
+                id: ParticipantId::LockPrefix(p),
+                delta_negative: true,
+                roles: participant_roles::OWNER_FROM,
+            })];
+        let built = build_tx_actions_for_block_with_io(&[tx], &detectors)
+            .unwrap()
+            .remove(0);
+        assert_eq!(
+            built.actions.participants.len(),
+            1,
+            "前缀参与方并入同前缀的 Lock 参与方"
+        );
+        let only = &built.actions.participants[0];
+        assert_eq!(only.id, ParticipantId::Lock([0x11; 32]));
+        assert_eq!(only.ckb_delta, -10);
+        assert!(only
+            .item_deltas
+            .iter()
+            .any(|d| d.kind == ITEM_KIND_IDENTITY && d.negative));
+        assert_eq!(only.roles, participant_roles::OWNER_FROM);
+    }
+
+    #[test]
+    fn two_lock_participants_sharing_a_prefix_is_an_error() {
+        let input = make_input(0x11, 1000, 61);
+        let mut other = make_output(0x11, 990, None, None, None, vec![]);
+        other.lock_script_hash[31] = 0x00; // 同前 20 字节，不同完整哈希
+        let tx = one_transfer_tx(&input, &other);
+        let mut p = [0u8; 20];
+        p.copy_from_slice(&[0x11; 20]);
+        let detectors: Vec<Box<dyn ProtocolDetector>> =
+            vec![Box::new(test_detectors::NamingDetector {
+                id: ParticipantId::LockPrefix(p),
+                delta_negative: false,
+                roles: 0,
+            })];
+        let err = build_tx_actions_for_block_with_io(&[tx], &detectors).unwrap_err();
+        assert!(
+            err.to_string().contains("ambiguous participant prefix"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn existing_production_detectors_never_name_participants() {
+        let input = make_input(0x11, 1000, 61);
+        let output = make_output(0x22, 990, None, None, None, vec![]);
+        let tx = one_transfer_tx(&input, &output);
+        for is_mainnet in [true, false] {
+            for d in production_detectors(is_mainnet) {
+                assert!(
+                    d.name_participants(&tx).unwrap().is_empty(),
+                    "Phase 1a: no production detector may name participants"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn build_tx_actions_for_block_still_returns_plain_actions() {
+        // 兼容包装：无 detector 时与旧函数逐字段一致（participants 用 id 表达）
+        let input = make_input(0x11, 1000, 61);
+        let output = make_output(0x22, 990, None, None, None, vec![]);
+        let tx = one_transfer_tx(&input, &output);
+        let plain = build_tx_actions_for_block(&[tx], &[]).unwrap();
+        assert_eq!(
+            plain[0]
+                .participants
+                .iter()
+                .map(|p| p.id)
+                .collect::<Vec<_>>(),
+            vec![
+                ParticipantId::Lock([0x11; 32]),
+                ParticipantId::Lock([0x22; 32])
+            ]
         );
     }
 }

@@ -214,7 +214,7 @@ async fn test_address_activities_return_type_calls_and_support_type_call_filter(
         hex::encode(compute_script_hash(&type_code_hash, 1, &type_args))
     );
 
-    use ckbadger_store::types::{ParticipantDelta, TAG_TYPE_CALL};
+    use ckbadger_store::types::{ParticipantDelta, ParticipantId, TAG_TYPE_CALL};
     let actions = TxActions {
         tx_hash: tx_hash.clone(),
         block_hash: block_hash.clone(),
@@ -230,11 +230,12 @@ async fn test_address_activities_return_type_calls_and_support_type_call_filter(
         }],
         lock_calls: vec![],
         participants: vec![ParticipantDelta {
-            lock_hash: lock_hash.clone(),
+            id: ParticipantId::lock(&lock_hash).unwrap(),
             ckb_delta: 0,
             used_delta: 0,
             item_deltas: vec![],
             tags: TAG_TYPE_CALL,
+            roles: 0,
         }],
     };
 
@@ -329,7 +330,7 @@ async fn test_address_activities_return_type_calls_and_support_type_call_filter(
 
 #[tokio::test]
 async fn test_latest_activities_return_type_calls() {
-    use ckbadger_store::types::{ParticipantDelta, TAG_DAO, TAG_TYPE_CALL};
+    use ckbadger_store::types::{ParticipantDelta, ParticipantId, TAG_DAO, TAG_TYPE_CALL};
     let core_store = test_store();
     let append_only_store = test_append_only_store();
     let tx_hash = vec![0x68; 32];
@@ -360,11 +361,12 @@ async fn test_latest_activities_return_type_calls() {
         }],
         lock_calls: vec![],
         participants: vec![ParticipantDelta {
-            lock_hash: vec![0x13; 32],
+            id: ParticipantId::Lock([0x13; 32]),
             ckb_delta: -30000,
             used_delta: 0,
             item_deltas: vec![],
             tags: TAG_TYPE_CALL | TAG_DAO,
+            roles: 0,
         }],
     };
 

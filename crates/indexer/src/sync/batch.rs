@@ -15,7 +15,7 @@ use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::keys;
 use ckbadger_store::types::{
     DailyActivityStats, DaoDailySnapshot, IdentityCollectionAggregate, LiveCellSummary,
-    MnftTypeIndex, PositionedCellInfo, ScriptReferenceInfo, SporeTypeIndex,
+    MnftTypeIndex, ParticipantId, PositionedCellInfo, ScriptReferenceInfo, SporeTypeIndex,
     SOLE_SPORES_SENTINEL_COLLECTION,
 };
 use ckbadger_store::CkbadgerStore;
@@ -3411,7 +3411,7 @@ impl Indexer {
                             (
                                 tx_actions.block_number,
                                 tx_actions.tx_index,
-                                participant.lock_hash.clone(),
+                                participant.id.as_bytes().to_vec(),
                             ),
                             participant.tags,
                         );
@@ -3436,9 +3436,10 @@ impl Indexer {
                     // Unique address counts (exclude coinbase)
                     if !tx_actions.is_cellbase {
                         for participant in &tx_actions.participants {
-                            if participant.lock_hash.len() == 32 {
-                                let mut hash = [0u8; 32];
-                                hash.copy_from_slice(&participant.lock_hash);
+                            // Unique-address counts are `Lock` participants only:
+                            // see `rebuild_cutoff_addr_sets` for why a named
+                            // prefix must not be counted as its own address.
+                            if let ParticipantId::Lock(hash) = participant.id {
                                 daily_activity_addrs
                                     .entry(date.clone())
                                     .or_default()

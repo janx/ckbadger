@@ -713,7 +713,7 @@ mod tests {
         let participant_p = actions
             .participants
             .iter()
-            .find(|p| p.lock_hash == vec![participant; 32])
+            .find(|p| p.id == ckbadger_store::types::ParticipantId::Lock([participant; 32]))
             .expect("participant should be present");
         assert!(participant_p.tags & TAG_PROTOCOL != 0);
 
@@ -740,7 +740,7 @@ mod tests {
         assert!(actions
             .participants
             .iter()
-            .any(|p| p.lock_hash == vec![funding_owner; 32]));
+            .any(|p| p.id == ckbadger_store::types::ParticipantId::Lock([funding_owner; 32])));
     }
 
     #[test]
@@ -812,7 +812,7 @@ mod tests {
         assert!(actions
             .participants
             .iter()
-            .any(|p| p.lock_hash == vec![funding_owner; 32]));
+            .any(|p| p.id == ckbadger_store::types::ParticipantId::Lock([funding_owner; 32])));
     }
 
     #[test]
@@ -906,11 +906,11 @@ mod tests {
         assert!(actions
             .participants
             .iter()
-            .any(|p| p.lock_hash == vec![funding_owner; 32]));
+            .any(|p| p.id == ckbadger_store::types::ParticipantId::Lock([funding_owner; 32])));
         assert!(actions
             .participants
             .iter()
-            .any(|p| p.lock_hash == vec![commitment_owner; 32]));
+            .any(|p| p.id == ckbadger_store::types::ParticipantId::Lock([commitment_owner; 32])));
     }
 
     #[test]
@@ -982,7 +982,7 @@ mod tests {
         assert!(actions
             .participants
             .iter()
-            .any(|p| p.lock_hash == vec![commitment_owner; 32]));
+            .any(|p| p.id == ckbadger_store::types::ParticipantId::Lock([commitment_owner; 32])));
     }
 
     /// Splice shape: one tx CONSUMES a funding-lock cell and CREATES a new one.

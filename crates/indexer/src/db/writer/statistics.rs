@@ -3078,11 +3078,12 @@ mod activity_stats_tests {
 
     fn make_participant(ckb_delta: i128, tags: u16) -> ParticipantDelta {
         ParticipantDelta {
-            lock_hash: vec![0xAA; 32],
+            id: ckbadger_store::types::ParticipantId::Lock([0xAA; 32]),
             ckb_delta,
             used_delta: 0,
             item_deltas: vec![],
             tags,
+            roles: 0,
         }
     }
 

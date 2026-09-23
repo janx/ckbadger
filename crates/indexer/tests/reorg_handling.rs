@@ -4,7 +4,7 @@ use ckbadger_common::TokenBalance;
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::types::{
     AddrTxValue, AddressBalance, FiberChannel, FiberChannelState, HourlyStats, ParticipantDelta,
-    ScriptInfo, ScriptReferenceInfo, TokenInfo, TxActions,
+    ParticipantId, ScriptInfo, ScriptReferenceInfo, TokenInfo, TxActions,
 };
 use ckbadger_store::CkbadgerStore;
 use ckbadger_store::{
@@ -465,11 +465,12 @@ fn test_rollback_deletes_activities_for_rolled_back_blocks() {
             type_calls: vec![],
             lock_calls: vec![],
             participants: vec![ParticipantDelta {
-                lock_hash: lock_hash.clone(),
+                id: ParticipantId::lock(&lock_hash).unwrap(),
                 ckb_delta: block as i128 * 100_000_000,
                 used_delta: 0,
                 item_deltas: vec![],
                 tags: 0,
+                roles: 0,
             }],
         };
         domain_batch.put_tx_actions(&tx_actions);
@@ -1053,11 +1054,12 @@ fn test_rollback_deletes_multi_participant_activities() {
         type_calls: vec![],
         lock_calls: vec![],
         participants: vec![ParticipantDelta {
-            lock_hash: lock_a.clone(),
+            id: ParticipantId::lock(&lock_a).unwrap(),
             ckb_delta: -5_000_000_000,
             used_delta: 0,
             item_deltas: vec![],
             tags: 0,
+            roles: 0,
         }],
     };
     batch.put_tx_actions(&actions_2);
@@ -1084,18 +1086,20 @@ fn test_rollback_deletes_multi_participant_activities() {
         lock_calls: vec![],
         participants: vec![
             ParticipantDelta {
-                lock_hash: lock_a.clone(),
+                id: ParticipantId::lock(&lock_a).unwrap(),
                 ckb_delta: -10_000_000_000,
                 used_delta: 0,
                 item_deltas: vec![],
                 tags: 0,
+                roles: 0,
             },
             ParticipantDelta {
-                lock_hash: lock_b.clone(),
+                id: ParticipantId::lock(&lock_b).unwrap(),
                 ckb_delta: 10_000_000_000,
                 used_delta: 0,
                 item_deltas: vec![],
                 tags: 0,
+                roles: 0,
             },
         ],
     };
@@ -1130,18 +1134,20 @@ fn test_rollback_deletes_multi_participant_activities() {
         lock_calls: vec![],
         participants: vec![
             ParticipantDelta {
-                lock_hash: lock_a.clone(),
+                id: ParticipantId::lock(&lock_a).unwrap(),
                 ckb_delta: 5_000_000_000,
                 used_delta: 0,
                 item_deltas: vec![],
                 tags: 0,
+                roles: 0,
             },
             ParticipantDelta {
-                lock_hash: lock_b.clone(),
+                id: ParticipantId::lock(&lock_b).unwrap(),
                 ckb_delta: -5_000_000_000,
                 used_delta: 0,
                 item_deltas: vec![],
                 tags: 0,
+                roles: 0,
             },
         ],
     };
@@ -1586,11 +1592,12 @@ fn test_rollback_resets_cutoff_bucket_unique_addr_sets() {
         participants: participants
             .iter()
             .map(|lh| ParticipantDelta {
-                lock_hash: lh.to_vec(),
+                id: ParticipantId::lock(lh).unwrap(),
                 ckb_delta: 100_000_000,
                 used_delta: 0,
                 item_deltas: vec![],
                 tags: 0,
+                roles: 0,
             })
             .collect(),
     };
@@ -1668,7 +1675,7 @@ fn test_rollback_resets_cutoff_bucket_unique_addr_sets() {
         );
         for p in &row.participants {
             let mut lh = [0u8; 32];
-            lh.copy_from_slice(&p.lock_hash);
+            lh.copy_from_slice(p.id.as_bytes());
             day_addrs.insert(lh);
             hour_addrs
                 .entry(hour_key.to_string())

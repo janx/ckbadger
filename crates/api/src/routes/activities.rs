@@ -549,8 +549,10 @@ pub(crate) fn build_activity_response(
     let participants = actions
         .participants
         .iter()
-        .filter(|p| p.lock_hash != participant.lock_hash)
-        .map(|p| resolve_lock_hash_address(store, ao_store, network, &p.lock_hash, address_cache))
+        .filter(|p| p.id != participant.id)
+        .map(|p| {
+            resolve_lock_hash_address(store, ao_store, network, p.id.as_bytes(), address_cache)
+        })
         .collect();
 
     Ok(ActivityResponse {
@@ -594,7 +596,7 @@ pub(crate) fn build_global_activity_response(
         .iter()
         .map(|p| {
             let address =
-                resolve_lock_hash_address(store, ao_store, network, &p.lock_hash, address_cache);
+                resolve_lock_hash_address(store, ao_store, network, p.id.as_bytes(), address_cache);
             let item_deltas = p
                 .item_deltas
                 .iter()
@@ -879,7 +881,7 @@ pub(crate) fn build_pool_activity_rows(
         let participant = actions
             .participants
             .iter()
-            .find(|p| p.lock_hash == lock_hash)
+            .find(|p| p.id.as_bytes() == lock_hash)
             .ok_or_else(|| {
                 anyhow::anyhow!(
                     "pool record indexed by lock 0x{} has no participant for it: tx=0x{}",
@@ -1024,7 +1026,7 @@ async fn get_address_activities(
                 let Some(participant) = actions
                     .participants
                     .iter()
-                    .find(|p| p.lock_hash == lock_hash_clone)
+                    .find(|p| p.id.as_bytes() == lock_hash_clone.as_slice())
                 else {
                     continue;
                 };

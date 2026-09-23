@@ -745,7 +745,7 @@ fn participants_from(
         .participants
         .iter()
         .map(|participant| {
-            let lock_hash = <[u8; 32]>::try_from(participant.lock_hash.as_slice())
+            let lock_hash = <[u8; 32]>::try_from(participant.id.as_bytes())
                 .map_err(|_| "participant lock hash is not 32 bytes".to_string())?;
             let capacity_change = i64::try_from(participant.ckb_delta).map_err(|_| {
                 format!(
@@ -758,8 +758,8 @@ fn participants_from(
                 lock_hash,
                 addr_tx: AddrTxValue::new(
                     capacity_change,
-                    has_input.contains(participant.lock_hash.as_slice()),
-                    has_output.contains(participant.lock_hash.as_slice()),
+                    has_input.contains(participant.id.as_bytes()),
+                    has_output.contains(participant.id.as_bytes()),
                     participant.tags,
                 ),
             })

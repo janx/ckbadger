@@ -340,11 +340,12 @@ mod tests {
             type_calls: vec![],
             lock_calls: vec![],
             participants: vec![ckbadger_store::types::ParticipantDelta {
-                lock_hash: vec![0x44; 32],
+                id: ckbadger_store::types::ParticipantId::Lock([0x44; 32]),
                 ckb_delta: 0,
                 used_delta: 0,
                 item_deltas: vec![],
                 tags: 0,
+                roles: 0,
             }],
         };
 

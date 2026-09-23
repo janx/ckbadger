@@ -17,9 +17,9 @@ use ckbadger_store::types::{
     CellDistributionTrackerState, ConsumedCellMeta, DailyActivityStats, DailyAddressCohort,
     DailyCellDistribution, DailyHodlWave, DaoDailySnapshot, DaoLatestStatistics, DaoTopDepositors,
     HodlTrackerState, HourlyStats, LiveCellInfo, LiveCellSummary, LockScriptEntry, MinerStats,
-    ObjectStandard, ScriptDailyDelta, SporeTypeIndex, SyncStatus, TokenTransferRecord, TxActions,
-    TxIndexEntry, BIT_CELL_SENTINEL_COLLECTION, DID_CKB_SENTINEL_COLLECTION,
-    DOTBIT_SENTINEL_COLLECTION, SOLE_SPORES_SENTINEL_COLLECTION,
+    ObjectStandard, ParticipantId, ScriptDailyDelta, SporeTypeIndex, SyncStatus,
+    TokenTransferRecord, TxActions, TxIndexEntry, BIT_CELL_SENTINEL_COLLECTION,
+    DID_CKB_SENTINEL_COLLECTION, DOTBIT_SENTINEL_COLLECTION, SOLE_SPORES_SENTINEL_COLLECTION,
 };
 use ckbadger_store::{
     AddressBalance, CkbadgerStore, ScriptInfo, CF_ADDR_TXS, CF_BLOCK_HASH_INDEX, CF_BLOCK_HEADERS,
@@ -1505,9 +1505,8 @@ impl ActivityStatsAccumulator {
 
             if !tx_actions.is_cellbase {
                 for participant in &tx_actions.participants {
-                    if participant.lock_hash.len() == 32 {
-                        let mut lock_hash = [0u8; 32];
-                        lock_hash.copy_from_slice(&participant.lock_hash);
+                    // `Lock` participants only — same rule as the live path.
+                    if let ParticipantId::Lock(lock_hash) = participant.id {
                         self.daily_addrs
                             .entry(cached_date.clone())
                             .or_default()
@@ -4094,7 +4093,7 @@ fn build_history_rows_for_block(
             actions
                 .participants
                 .iter()
-                .map(|p| (p.lock_hash.as_slice(), p.tags))
+                .map(|p| (p.id.as_bytes(), p.tags))
                 .collect()
         })
         .collect();
@@ -6729,14 +6728,14 @@ mod tests {
         let participant_a = split_actions
             .participants
             .iter()
-            .find(|p| p.lock_hash == lock_a_hash)
+            .find(|p| p.id.as_bytes() == lock_a_hash.as_slice())
             .expect("participant a");
         assert_eq!(participant_a.ckb_delta, -100_00000000);
 
         let participant_b = split_actions
             .participants
             .iter()
-            .find(|p| p.lock_hash == lock_b_hash)
+            .find(|p| p.id.as_bytes() == lock_b_hash.as_slice())
             .expect("participant b");
         assert!(participant_b.ckb_delta > 0);
 
@@ -7804,11 +7803,12 @@ mod tests {
             type_calls: vec![],
             lock_calls: vec![],
             participants: vec![ckbadger_store::types::ParticipantDelta {
-                lock_hash: vec![0x33; 32],
+                id: ParticipantId::Lock([0x33; 32]),
                 ckb_delta: 100_00000000,
                 used_delta: 0,
                 item_deltas: vec![],
                 tags: 0,
+                roles: 0,
             }],
         };
 
@@ -7844,11 +7844,12 @@ mod tests {
             type_calls: vec![],
             lock_calls: vec![],
             participants: vec![ckbadger_store::types::ParticipantDelta {
-                lock_hash: vec![0x33; 32],
+                id: ParticipantId::Lock([0x33; 32]),
                 ckb_delta: 100_00000000,
                 used_delta: 0,
                 item_deltas: vec![],
                 tags: 0,
+                roles: 0,
             }],
         };
 
@@ -7883,11 +7884,12 @@ mod tests {
             type_calls: vec![],
             lock_calls: vec![],
             participants: vec![ckbadger_store::types::ParticipantDelta {
-                lock_hash: vec![0x33; 32],
+                id: ParticipantId::Lock([0x33; 32]),
                 ckb_delta: 1,
                 used_delta: 0,
                 item_deltas: vec![],
                 tags: 0,
+                roles: 0,
             }],
         };
         let block = |number, timestamp_ms| facts::BlockFacts {
@@ -7939,11 +7941,12 @@ mod tests {
             type_calls: vec![],
             lock_calls: vec![],
             participants: vec![ckbadger_store::types::ParticipantDelta {
-                lock_hash: vec![0x43; 32],
+                id: ParticipantId::Lock([0x43; 32]),
                 ckb_delta: 123,
                 used_delta: 45,
                 item_deltas: vec![],
                 tags: 0,
+                roles: 0,
             }],
         };
         let block = |number, timestamp_ms| facts::BlockFacts {
@@ -8936,11 +8939,12 @@ mod tests {
             type_calls: vec![],
             lock_calls: vec![],
             participants: vec![ckbadger_store::types::ParticipantDelta {
-                lock_hash: vec![0x33; 32],
+                id: ParticipantId::Lock([0x33; 32]),
                 ckb_delta: 100_00000000,
                 used_delta: 0,
                 item_deltas: vec![],
                 tags: 0,
+                roles: 0,
             }],
         };
 
