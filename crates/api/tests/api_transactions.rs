@@ -10,6 +10,9 @@ async fn test_transaction_detail_returns_pending_mempool_transaction() {
     let server = MockServer::start().await;
     let hash = pending_tx_hash_hex();
     mount_pending_transaction_rpc(&server, &hash, "pending").await;
+    // The store is empty: the input can only come from the node's live-cell
+    // set, which is where pending inputs are resolved from.
+    mount_live_cell_rpc(&server, "0x174876e974", &format!("0x{}", "33".repeat(20))).await;
 
     let mut config = test_config(store);
     config.ckb_rpc_url = server.uri();
@@ -27,6 +30,8 @@ async fn test_transaction_detail_returns_pending_mempool_transaction() {
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["hash"], hash);
     assert_eq!(json["status"], "pending");
+    assert_eq!(json["poolStatus"], "pending");
+    assert_eq!(json["interpretation"]["status"], "complete");
     assert!(json["pendingSince"].as_str().is_some());
     assert_eq!(json["blockNumber"], serde_json::Value::Null);
     assert_eq!(json["blockHash"], serde_json::Value::Null);
@@ -36,10 +41,29 @@ async fn test_transaction_detail_returns_pending_mempool_transaction() {
     assert_eq!(json["inputsCount"], 1);
     assert_eq!(json["outputsCount"], 1);
     assert_eq!(json["fee"], "372");
-    assert_eq!(json["inputsCommonKnowledgeSize"], serde_json::Value::Null);
+    // Resolved from the node, so the input side is now reported exactly:
+    // 100_000_000_000 output + 372 fee, and 8 + 32 + 1 + 20 occupied bytes.
+    assert_eq!(json["inputsCapacity"], "100000000372");
+    assert_eq!(
+        json["inputsCommonKnowledgeSize"],
+        serde_json::Value::from("61")
+    );
     assert_eq!(
         json["outputsCommonKnowledgeSize"],
         serde_json::Value::from("61")
+    );
+    assert_eq!(json["inputs"][0]["capacity"], "100000000372");
+    assert_eq!(
+        json["inputs"][0]["lock"]["codeHash"],
+        TEST_SECP_LOCK_CODE_HASH
+    );
+    assert!(
+        json["inputs"][0]["address"]
+            .as_str()
+            .unwrap()
+            .starts_with("ckb1"),
+        "a resolved input must carry its owner's address: {:?}",
+        json["inputs"][0]["address"]
     );
     assert!(json["txSize"].as_i64().unwrap() > 0);
     assert_eq!(json["cycles"], 21000);
@@ -130,6 +154,7 @@ async fn test_pending_transaction_genesis_satoshi_output_tagged() {
         .respond_with(ResponseTemplate::new(200).set_body_json(rpc_response))
         .mount(&server)
         .await;
+    mount_live_cell_rpc(&server, "0x174876e974", &format!("0x{}", "33".repeat(20))).await;
 
     let mut config = test_config(store);
     config.ckb_rpc_url = server.uri();
@@ -149,6 +174,136 @@ async fn test_pending_transaction_genesis_satoshi_output_tagged() {
         json["outputs"][0]["virtualCommonKnowledgeSize"],
         "504000000000000000"
     );
+}
+
+/// An input the node does not report as live is left unresolved and SAID to be
+/// unresolved. No zero capacity, no store fallback, no invented fee.
+#[tokio::test]
+async fn test_pending_transaction_with_a_spent_input_reports_partial_interpretation() {
+    let store = test_store();
+    seed_genesis_baseline(&store);
+    let server = MockServer::start().await;
+    let hash = pending_tx_hash_hex();
+    mount_pending_transaction_rpc(&server, &hash, "pending").await;
+    mount_dead_cell_rpc(&server).await;
+
+    let mut config = test_config(store);
+    config.ckb_rpc_url = server.uri();
+    let app = create_router(config).await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/v1/transactions/{hash}/detail"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["inputsCapacity"], serde_json::Value::Null);
+    assert_eq!(json["inputs"][0]["capacity"], serde_json::Value::Null);
+    assert_eq!(json["interpretation"]["status"], "partial");
+    assert_eq!(
+        json["interpretation"]["reasons"][0]["code"],
+        "unresolved_input"
+    );
+    assert_eq!(
+        json["interpretation"]["reasons"][0]["detail"],
+        format!("{}:0", pending_previous_output_hash_hex())
+    );
+}
+
+/// A node that cannot answer is an error with context, not an input silently
+/// reported as missing.
+#[tokio::test]
+async fn test_pending_transaction_fails_loudly_when_the_node_cannot_resolve_inputs() {
+    let store = test_store();
+    seed_genesis_baseline(&store);
+    let server = MockServer::start().await;
+    let hash = pending_tx_hash_hex();
+    mount_pending_transaction_rpc(&server, &hash, "pending").await;
+    Mock::given(method("POST"))
+        .and(body_partial_json(
+            serde_json::json!({ "method": "get_live_cell" }),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "error": { "code": -32000, "message": "node is busy" }
+        })))
+        .mount(&server)
+        .await;
+
+    let mut config = test_config(store);
+    config.ckb_rpc_url = server.uri();
+    let app = create_router(config).await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/v1/transactions/{hash}/detail"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(
+        json["message"].as_str().unwrap().contains("node is busy"),
+        "the node's own failure must reach the caller: {:?}",
+        json["message"]
+    );
+}
+
+/// The window between node commit and local index: the node has the
+/// transaction in a block, this process's store does not have it yet. It is
+/// served provisionally rather than 404, so the pool row that links here is not
+/// a dead link for those seconds.
+#[tokio::test]
+async fn test_committed_but_unindexed_transaction_is_served_provisionally() {
+    let store = test_store();
+    seed_genesis_baseline(&store);
+    let server = MockServer::start().await;
+    let hash = pending_tx_hash_hex();
+    let mut response_json = pending_transaction_rpc_response(&hash, "committed");
+    response_json["result"]["tx_status"]["block_number"] = serde_json::json!("0x1092");
+    response_json["result"]["tx_status"]["block_hash"] =
+        serde_json::json!(format!("0x{}", "33".repeat(32)));
+    Mock::given(method("POST"))
+        .and(body_partial_json(
+            serde_json::json!({ "method": "get_transaction" }),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(response_json))
+        .mount(&server)
+        .await;
+    mount_live_cell_rpc(&server, "0x174876e974", &format!("0x{}", "33".repeat(20))).await;
+
+    let mut config = test_config(store);
+    config.ckb_rpc_url = server.uri();
+    let app = create_router(config).await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/v1/transactions/{hash}/detail"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["status"], "committed");
+    assert_eq!(json["poolStatus"], "committed_awaiting_index");
+    assert_eq!(json["blockNumber"], 4242);
+    assert_eq!(json["blockHash"], format!("0x{}", "33".repeat(32)));
 }
 
 #[tokio::test]

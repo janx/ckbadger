@@ -38,6 +38,9 @@ ckb-jsonrpc-types = { workspace = true }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
 
+# Async trait objects (PoolSource)
+async-trait = { workspace = true }
+
 # Logging
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }

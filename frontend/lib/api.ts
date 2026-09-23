@@ -95,10 +95,35 @@ interface PaginatedResponse<T> {
 
 interface CursorPaginatedResponse<T> {
   data: T[];
+  /** Always the COMMITTED count. Unconfirmed rows are reported in `pool`, never added to it. */
   total?: number;
   limit: number;
   hasMore: boolean;
   nextCursor: string | null;
+  /** State of the tx-pool segment. Present only on page one of the address lists. */
+  pool?: PoolSummary;
+}
+
+/** How far a transaction still in the node's pool could be interpreted. */
+interface PoolInterpretation {
+  status: 'complete' | 'partial';
+  reasons?: { code: string; detail?: string }[];
+}
+
+/** Where an unconfirmed transaction stands. */
+type PoolStatus = 'pending' | 'proposed' | 'committed_awaiting_index';
+
+/** The `pool` object on a page-one address list response. */
+interface PoolSummary {
+  enabled: boolean;
+  /** False when the mirror cannot reach the node — show "pool view unavailable", never "0 pending". */
+  healthy: boolean;
+  lastPolledAt: string | null;
+  /** Unconfirmed rows served for this address on this page. */
+  count: number;
+  /** Net CKB this address would gain or lose if every pool transaction committed. Never added to Balance. */
+  pendingCkbDelta: string;
+  truncated: boolean;
 }
 
 interface Block {
@@ -507,10 +532,15 @@ interface ActiveAddress {
 
 interface AddressTransaction {
   txHash: string;
-  blockNumber: number;
+  /** Null while the transaction is still in the node's pool: it has no block yet. */
+  blockNumber: number | null;
   txType: 'received' | 'sent' | 'internal';
   capacityChange: string;
-  timestamp: string;
+  /** Block time. Null for a pool row, which carries `timeAddedToPool` instead. */
+  timestamp: string | null;
+  poolStatus?: PoolStatus;
+  timeAddedToPool?: string;
+  interpretation?: PoolInterpretation;
   inputsCount: number;
   outputsCount: number;
   fee: string;
@@ -600,9 +630,14 @@ const TAG_CELLBASE = 32;
 /** Address activity response (GET /addresses/{addr}/activities). */
 interface Activity {
   txHash: string;
-  blockNumber: number;
-  txIndex: number;
-  timestamp: string;
+  /** Null while the transaction is still in the node's pool. */
+  blockNumber: number | null;
+  txIndex: number | null;
+  /** Block time. Null for a pool row, which carries `timeAddedToPool` instead. */
+  timestamp: string | null;
+  poolStatus?: PoolStatus;
+  timeAddedToPool?: string;
+  interpretation?: PoolInterpretation;
   ckbDelta: string;
   usedDelta: string;
   isCellbase: boolean;
@@ -1784,6 +1819,9 @@ export type {
   MostUtilizedAssetsChartResponse,
   CursorPaginatedResponse,
   PaginatedResponse,
+  PoolSummary,
+  PoolStatus,
+  PoolInterpretation,
   MempoolInfo,
   MempoolTransaction,
   MempoolBlock,

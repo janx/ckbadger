@@ -62,13 +62,26 @@ pub struct ActivityParams {
 }
 
 /// Per-address activity response: shows one participant's perspective of a transaction.
+///
+/// Chain position is nullable because the same shape serves transactions that
+/// are still in the node's tx pool. Those have no block, no index and no block
+/// time — only `poolStatus`, `timeAddedToPool` and how far they could be
+/// interpreted. Nothing downstream can mistake one for a committed row.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ActivityResponse {
     pub tx_hash: String,
-    pub block_number: i64,
-    pub tx_index: i32,
-    pub timestamp: String,
+    pub block_number: Option<i64>,
+    pub tx_index: Option<i32>,
+    pub timestamp: Option<String>,
+    /// `pending`, `proposed` or `committed_awaiting_index` for a tx-pool row;
+    /// absent for a committed one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pool_status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub time_added_to_pool: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub interpretation: Option<crate::pool::InterpretationResponse>,
     // This participant's Layer 1
     pub ckb_delta: String,
     pub used_delta: String,
@@ -500,7 +513,21 @@ fn convert_protocol_action(
     })
 }
 
+/// What a pool row adds to an activity response.
+///
+/// Its presence is what turns the chain-position fields null: a transaction the
+/// pool holds has no block to report, and reporting the mirror's provisional
+/// zeros would let a caller mistake it for genesis.
+pub(crate) struct PoolRowMeta {
+    pub status: String,
+    pub time_added_to_pool: String,
+    pub interpretation: crate::pool::InterpretationResponse,
+}
+
 /// Build an address-scoped activity response from a TxActions for a specific participant.
+///
+/// The SAME builder serves committed rows and tx-pool rows: a transaction must
+/// read identically before and after commit, and only its truth status changes.
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub(crate) fn build_activity_response(
     store: &CkbadgerStore,
@@ -511,6 +538,7 @@ pub(crate) fn build_activity_response(
     script_info_cache: &mut HashMap<Vec<u8>, Option<ScriptInfo>>,
     token_cache: &mut HashMap<Vec<u8>, Option<(Option<String>, Option<u8>)>>,
     address_cache: &mut HashMap<Vec<u8>, String>,
+    pool: Option<PoolRowMeta>,
 ) -> anyhow::Result<ActivityResponse> {
     let item_deltas = participant
         .item_deltas
@@ -527,9 +555,12 @@ pub(crate) fn build_activity_response(
 
     Ok(ActivityResponse {
         tx_hash: format!("0x{}", hex::encode(&actions.tx_hash)),
-        block_number: actions.block_number,
-        tx_index: actions.tx_index,
-        timestamp: actions.timestamp.to_string(),
+        block_number: pool.is_none().then_some(actions.block_number),
+        tx_index: pool.is_none().then_some(actions.tx_index),
+        timestamp: pool.is_none().then(|| actions.timestamp.to_string()),
+        pool_status: pool.as_ref().map(|meta| meta.status.clone()),
+        time_added_to_pool: pool.as_ref().map(|meta| meta.time_added_to_pool.clone()),
+        interpretation: pool.as_ref().map(|meta| meta.interpretation.clone()),
         ckb_delta: participant.ckb_delta.to_string(),
         used_delta: participant.used_delta.to_string(),
         is_cellbase: actions.is_cellbase,
@@ -800,6 +831,120 @@ fn list_canonical_global_activities_page(
     Ok(out)
 }
 
+/// How many tx-pool rows one address's page one may carry.
+///
+/// A bound, not a sample: beyond it the response reports `truncated` so a
+/// caller is never shown a silently partial pool segment.
+pub(crate) const POOL_ROWS_PER_ADDRESS: usize = 200;
+
+/// Build this lock's tx-pool segment: the rows, and the summary describing them.
+///
+/// Blocking (reads the store for dedup and for script/address resolution).
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
+pub(crate) fn build_pool_activity_rows(
+    store: &CkbadgerStore,
+    ao_store: &CkbadgerStore,
+    network: &str,
+    snapshot: &crate::pool::PoolSnapshot,
+    lock_hash: &[u8],
+    filter: Option<&str>,
+    script_info_cache: &mut HashMap<Vec<u8>, Option<ScriptInfo>>,
+    token_cache: &mut HashMap<Vec<u8>, Option<(Option<String>, Option<u8>)>>,
+    address_cache: &mut HashMap<Vec<u8>, String>,
+) -> anyhow::Result<(Vec<ActivityResponse>, crate::pool::PoolSummaryResponse)> {
+    let (records, truncated) = pool_records_for_page(snapshot, lock_hash);
+
+    let mut rows = Vec::with_capacity(records.len());
+    let mut pending_ckb_delta: i128 = 0;
+    for record in records {
+        // One dedup rule, committed wins: a transaction this request's pinned
+        // store view already has is served from the committed segment.
+        if store.get_tx_by_hash(&record.tx_hash)?.is_some() {
+            continue;
+        }
+        // `by_lock` is built from a record's interpreted participants, so a
+        // record reached through it must have both. Either missing is a mirror
+        // invariant violation, not a row to skip quietly.
+        let actions = record.actions.as_ref().ok_or_else(|| {
+            anyhow::anyhow!(
+                "pool record indexed by lock 0x{} carries no interpretation: tx=0x{}",
+                hex::encode(lock_hash),
+                hex::encode(record.tx_hash)
+            )
+        })?;
+        // The same filter → tag-bitmap mapping the committed index uses.
+        if !CkbadgerStore::matches_activity_filter(actions, lock_hash, filter) {
+            continue;
+        }
+        let participant = actions
+            .participants
+            .iter()
+            .find(|p| p.lock_hash == lock_hash)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "pool record indexed by lock 0x{} has no participant for it: tx=0x{}",
+                    hex::encode(lock_hash),
+                    hex::encode(record.tx_hash)
+                )
+            })?;
+
+        pending_ckb_delta += participant.ckb_delta;
+        rows.push(build_activity_response(
+            store,
+            ao_store,
+            network,
+            actions,
+            participant,
+            script_info_cache,
+            token_cache,
+            address_cache,
+            Some(PoolRowMeta {
+                status: record.pool_status.as_str().to_string(),
+                time_added_to_pool: crate::pool::pool_timestamp_rfc3339(i64::try_from(
+                    record.entry.time_added_to_pool_ms,
+                )?)
+                .map_err(|e| anyhow::anyhow!("{e}"))?,
+                interpretation: crate::pool::InterpretationResponse::from(&record.interpretation),
+            }),
+        )?);
+    }
+
+    let summary = pool_summary(snapshot, rows.len(), pending_ckb_delta, truncated);
+    Ok((rows, summary))
+}
+
+/// This lock's pool records for page one, newest first, capped — and whether
+/// anything was left out.
+pub(crate) fn pool_records_for_page(
+    snapshot: &crate::pool::PoolSnapshot,
+    lock_hash: &[u8],
+) -> (Vec<std::sync::Arc<crate::pool::PoolTxRecord>>, bool) {
+    let mut records = snapshot.records_for_lock(lock_hash);
+    let over_cap = records.len() > POOL_ROWS_PER_ADDRESS;
+    records.truncate(POOL_ROWS_PER_ADDRESS);
+    (records, over_cap || snapshot.status.truncated)
+}
+
+/// The `pool` object for a page-one response.
+pub(crate) fn pool_summary(
+    snapshot: &crate::pool::PoolSnapshot,
+    count: usize,
+    pending_ckb_delta: i128,
+    truncated: bool,
+) -> crate::pool::PoolSummaryResponse {
+    crate::pool::PoolSummaryResponse {
+        enabled: snapshot.status.enabled,
+        healthy: snapshot.status.healthy,
+        last_polled_at: snapshot
+            .status
+            .last_polled_at_ms
+            .and_then(|ms| crate::pool::pool_timestamp_rfc3339(ms).ok()),
+        count,
+        pending_ckb_delta: pending_ckb_delta.to_string(),
+        truncated,
+    }
+}
+
 async fn get_address_activities(
     State(state): State<Arc<AppState>>,
     Path(addr): Path<String>,
@@ -824,36 +969,66 @@ async fn get_address_activities(
     let ao_store = state.append_only_store.clone();
     let network = state.ckb_network.clone();
     let lock_hash_clone = lock_hash.clone();
-    let (next_cursor, activities) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
-        let results = list_canonical_activities_page(
-            store.as_ref(),
-            &lock_hash,
-            limit + 1,
-            cursor,
-            filter.as_deref(),
-        )?;
+    // Pool rows are a page-one-only segment: a pool transaction can only land
+    // in a future block, so it is later than every committed transaction in
+    // canonical order. Keeping it out of cursors is what keeps pagination
+    // stable while the pool churns.
+    let pool_snapshot = if cursor.is_none() {
+        Some(state.pool_mirror.load())
+    } else {
+        None
+    };
+    let (next_cursor, activities, pool) =
+        tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+            let results = list_canonical_activities_page(
+                store.as_ref(),
+                &lock_hash,
+                limit + 1,
+                cursor,
+                filter.as_deref(),
+            )?;
 
-        let has_more = results.len() > limit;
-        let page: Vec<_> = results.into_iter().take(limit).collect();
+            let has_more = results.len() > limit;
+            let page: Vec<_> = results.into_iter().take(limit).collect();
 
-        let next_cursor = if has_more {
-            page.last()
-                .map(|actions| format!("{}:{}", actions.block_number, actions.tx_index))
-        } else {
-            None
-        };
+            let next_cursor = if has_more {
+                page.last()
+                    .map(|actions| format!("{}:{}", actions.block_number, actions.tx_index))
+            } else {
+                None
+            };
 
-        let mut script_info_cache = HashMap::new();
-        let mut token_cache = HashMap::new();
-        let mut address_cache = HashMap::new();
-        let activities: Vec<ActivityResponse> = page
-            .iter()
-            .filter_map(|actions| {
-                let participant = actions
+            let mut script_info_cache = HashMap::new();
+            let mut token_cache = HashMap::new();
+            let mut address_cache = HashMap::new();
+
+            let (mut activities, pool) = match pool_snapshot.as_deref() {
+                Some(snapshot) => {
+                    let (rows, summary) = build_pool_activity_rows(
+                        store.as_ref(),
+                        ao_store.as_ref(),
+                        &network,
+                        snapshot,
+                        &lock_hash_clone,
+                        filter.as_deref(),
+                        &mut script_info_cache,
+                        &mut token_cache,
+                        &mut address_cache,
+                    )?;
+                    (rows, Some(summary))
+                }
+                None => (Vec::new(), None),
+            };
+
+            for actions in &page {
+                let Some(participant) = actions
                     .participants
                     .iter()
-                    .find(|p| p.lock_hash == lock_hash_clone)?;
-                Some(build_activity_response(
+                    .find(|p| p.lock_hash == lock_hash_clone)
+                else {
+                    continue;
+                };
+                activities.push(build_activity_response(
                     store.as_ref(),
                     ao_store.as_ref(),
                     &network,
@@ -862,15 +1037,15 @@ async fn get_address_activities(
                     &mut script_info_cache,
                     &mut token_cache,
                     &mut address_cache,
-                ))
-            })
-            .collect::<anyhow::Result<Vec<_>>>()?;
+                    None,
+                )?);
+            }
 
-        Ok((next_cursor, activities))
-    })
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?
-    .map_err(|e| ApiError::internal(e.to_string()))?;
+            Ok((next_cursor, activities, pool))
+        })
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
     // No total: an activity count per address is not stored anywhere, and the
     // one count that is — `AddressBalance.txs_count` — counts *transactions*.
@@ -883,11 +1058,11 @@ async fn get_address_activities(
     // over the whole address — unbounded exactly where it matters most.
     // `has_more`/`next_cursor` remain the honest bound, as they already are for
     // the filtered case and for /tokens.
-    ok(CursorPaginatedResponse::without_total(
-        activities,
-        limit as i64,
-        next_cursor,
-    ))
+    let response = CursorPaginatedResponse::without_total(activities, limit as i64, next_cursor);
+    ok(match pool {
+        Some(pool) => response.with_pool(pool),
+        None => response,
+    })
 }
 
 async fn get_global_activities(

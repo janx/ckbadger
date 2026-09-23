@@ -120,6 +120,11 @@ pub fn test_config_with_ckb_db_path(
         ckb_db_cleanup,
         dob_decode_dir: std::path::PathBuf::from("/tmp/ckbadger-test-media"),
         cycles_request_dir: None,
+        // Tests drive the mirror explicitly (install a snapshot, or run one
+        // refresh against wiremock); no background loop polls a node.
+        pool_mirror_enabled: true,
+        pool_poll_interval_ms: 1000,
+        pool_max_tracked_txs: 50_000,
     }
 }
 
@@ -160,12 +165,28 @@ pub fn test_app_state(config: AppConfig) -> Arc<AppState> {
         spore_cache: Arc::new(arc_swap::ArcSwap::from_pointee(None)),
         token_cache: Arc::new(arc_swap::ArcSwap::from_pointee(None)),
         object_cache: Arc::new(arc_swap::ArcSwap::from_pointee(None)),
+        pool_mirror: Arc::new(ckbadger_api::pool::PoolMirror::new(
+            config.pool_mirror_enabled,
+        )),
+        pool_max_tracked_txs: config.pool_max_tracked_txs,
     })
 }
 
 pub fn create_router_without_warmup(config: AppConfig) -> axum::Router {
-    let state = test_app_state(config);
+    router_from_state(test_app_state(config))
+}
 
+/// Mount the route stack over a state the test still holds — so it can install
+/// a tx-pool snapshot first — and warm the caches the way `create_router` does
+/// for tests, so warmup-gated endpoints answer instead of returning 503.
+pub async fn create_router_with_state(state: Arc<AppState>) -> axum::Router {
+    dispatch_initial_warmup(state.clone(), false).await;
+    router_from_state(state)
+}
+
+/// Mount the production route stack over a state the test still holds, so it
+/// can install a tx-pool snapshot (or any other in-memory state) first.
+pub fn router_from_state(state: Arc<AppState>) -> axum::Router {
     axum::Router::new()
         .nest("/api/v1", api_routes())
         // Same read-view pin production mounts, so integration tests exercise
@@ -347,6 +368,61 @@ pub fn pending_transaction_rpc_response(hash: &str, status: &str) -> serde_json:
     })
 }
 
+/// secp256k1-blake160, the standard lock used by pending-transaction fixtures.
+pub const TEST_SECP_LOCK_CODE_HASH: &str =
+    "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8";
+
+/// The node reports the pending transaction's previous output as live.
+///
+/// Pending inputs resolve through `get_live_cell(out_point, with_data = true)`
+/// — live cells are primitive truth in the node's own database, and unlike the
+/// store's `LiveCellInfo` the node returns the data bytes that DAO / `.bit` /
+/// UDT interpretation needs.
+pub async fn mount_live_cell_rpc(server: &MockServer, capacity_hex: &str, lock_args_hex: &str) {
+    let response = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+            "cell": {
+                "data": { "content": "0x", "hash": format!("0x{}", "00".repeat(32)) },
+                "output": {
+                    "capacity": capacity_hex,
+                    "lock": {
+                        "code_hash": TEST_SECP_LOCK_CODE_HASH,
+                        "hash_type": "type",
+                        "args": lock_args_hex
+                    },
+                    "type": null
+                }
+            },
+            "status": "live"
+        }
+    });
+    Mock::given(method("POST"))
+        .and(body_partial_json(
+            serde_json::json!({ "method": "get_live_cell" }),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(response))
+        .mount(server)
+        .await;
+}
+
+/// The node reports the previous output as already spent.
+pub async fn mount_dead_cell_rpc(server: &MockServer) {
+    let response = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": { "cell": null, "status": "dead" }
+    });
+    Mock::given(method("POST"))
+        .and(body_partial_json(
+            serde_json::json!({ "method": "get_live_cell" }),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(response))
+        .mount(server)
+        .await;
+}
+
 pub async fn mount_pending_transaction_rpc(server: &MockServer, hash: &str, status: &str) {
     Mock::given(method("POST"))
         .and(body_partial_json(serde_json::json!({
@@ -427,6 +503,176 @@ pub fn make_test_tx_actions(
             tags,
         }],
     }
+}
+
+/// Seed one committed transaction for `lock_hash`: the block header, the tx
+/// location/index, its `TxActions` and its `addr_txs` row — everything the
+/// address activity feed and transaction list read.
+#[allow(clippy::too_many_arguments)]
+pub fn seed_committed_activity(
+    store: &Arc<CkbadgerStore>,
+    lock_hash: &[u8],
+    tx_hash: &[u8],
+    block_number: i64,
+    tx_index: i32,
+    ckb_delta: i128,
+    tags: u16,
+) {
+    let block_hash = vec![0xba; 32];
+    let timestamp = 1_700_000_000_000 + block_number;
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_tx_hash_map(tx_hash, block_number, tx_index);
+    batch.put_tx_index(
+        block_number,
+        tx_index,
+        &TxIndexEntry {
+            is_cellbase: false,
+            timestamp,
+            inputs_count: 1,
+            outputs_count: 1,
+            fee: 1_234,
+            tx_size: 222,
+            cycles: Some(333),
+            semantic_tags: 0,
+        },
+    );
+    batch.put_block_header(
+        block_number,
+        &CachedBlockHeader {
+            hash: block_hash.clone(),
+            parent_hash: vec![0u8; 32],
+            timestamp,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+            uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
+            cycles: None,
+        },
+    );
+    let actions = make_test_tx_actions(
+        lock_hash,
+        tx_hash,
+        &block_hash,
+        block_number,
+        tx_index,
+        ckb_delta,
+        tags,
+    );
+    batch.put_tx_actions(&actions);
+    let capacity_change = i64::try_from(ckb_delta).expect("test ckb_delta fits i64");
+    batch.put_addr_tx(
+        lock_hash,
+        block_number,
+        tx_index,
+        tx_hash,
+        &AddrTxValue::new(capacity_change, false, true, tags),
+    );
+    batch.commit().unwrap();
+    store
+        .update_sync_status(|status| {
+            status.tip_block_number = status.tip_block_number.max(block_number);
+        })
+        .unwrap();
+}
+
+/// One mirrored pool transaction for this lock, interpreted and attributed.
+///
+/// Built through the same `AddrTxValue::new` constructor the indexer uses for
+/// committed rows, so a fixture cannot assert a `txType` the production path
+/// would not produce.
+pub fn make_test_pool_record(
+    tx_hash: &[u8],
+    lock_hash: &[u8],
+    ckb_delta: i128,
+    time_added_to_pool_ms: u64,
+    pool_status: ckbadger_api::pool::PoolStatus,
+) -> ckbadger_api::pool::PoolTxRecord {
+    make_test_pool_record_with(
+        tx_hash,
+        lock_hash,
+        ckb_delta,
+        time_added_to_pool_ms,
+        pool_status,
+        0,
+        ckbadger_api::pool::Interpretation::Complete,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn make_test_pool_record_with(
+    tx_hash: &[u8],
+    lock_hash: &[u8],
+    ckb_delta: i128,
+    time_added_to_pool_ms: u64,
+    pool_status: ckbadger_api::pool::PoolStatus,
+    tags: u16,
+    interpretation: ckbadger_api::pool::Interpretation,
+) -> ckbadger_api::pool::PoolTxRecord {
+    let actions = make_test_tx_actions(lock_hash, tx_hash, &[0u8; 32], 0, 0, ckb_delta, tags);
+    let capacity_change = i64::try_from(ckb_delta).expect("test ckb_delta fits i64");
+    ckbadger_api::pool::PoolTxRecord {
+        tx_hash: <[u8; 32]>::try_from(tx_hash).expect("tx hash is 32 bytes"),
+        pool_status,
+        entry: ckbadger_api::pool::PoolEntryMeta {
+            fee: 1_000,
+            size: 500,
+            cycles: 200_000,
+            ancestors_count: 0,
+            time_added_to_pool_ms,
+        },
+        outputs: vec![],
+        actions: Some(actions),
+        participants: vec![ckbadger_api::pool::PoolParticipant {
+            lock_hash: <[u8; 32]>::try_from(lock_hash).expect("lock hash is 32 bytes"),
+            addr_tx: AddrTxValue::new(
+                capacity_change,
+                capacity_change < 0,
+                capacity_change > 0,
+                tags,
+            ),
+        }],
+        inputs_count: 1,
+        outputs_count: 1,
+        semantic_tags: 0,
+        is_cellbase: false,
+        interpretation,
+        first_seen_ms: time_added_to_pool_ms as i64,
+        last_seen_ms: time_added_to_pool_ms as i64,
+    }
+}
+
+/// A healthy published snapshot holding exactly these records.
+pub fn healthy_pool_snapshot(
+    records: Vec<ckbadger_api::pool::PoolTxRecord>,
+) -> ckbadger_api::pool::PoolSnapshot {
+    ckbadger_api::pool::PoolSnapshot::from_records(
+        records.into_iter().map(Arc::new).collect(),
+        ckbadger_api::pool::MirrorStatus {
+            enabled: true,
+            healthy: true,
+            last_polled_at_ms: Some(1_700_000_000_000),
+            ..Default::default()
+        },
+    )
+}
+
+/// A snapshot from a mirror that cannot reach the node.
+pub fn unhealthy_pool_snapshot() -> ckbadger_api::pool::PoolSnapshot {
+    ckbadger_api::pool::PoolSnapshot::from_records(
+        vec![],
+        ckbadger_api::pool::MirrorStatus {
+            enabled: true,
+            healthy: false,
+            last_polled_at_ms: Some(1_700_000_000_000),
+            last_error: Some("connection refused".to_string()),
+            ..Default::default()
+        },
+    )
 }
 
 /// Create a participant delta for multi-participant TxActions.

@@ -71,12 +71,20 @@ pub struct CursorPaginatedResponse<T> {
     pub data: Vec<T>,
     /// Total count of items. Null when count is expensive (large table scans).
     /// Use pre-aggregated counts from sync:status or address_balances when available.
+    ///
+    /// Always the COMMITTED count. Provisional tx-pool rows are reported beside
+    /// it in `pool`, never added to it: chain truth and unconfirmed state are
+    /// two different facts.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub total: Option<i64>,
     pub limit: i64,
     pub has_more: bool,
     /// Cursor for the next page (null if no more data)
     pub next_cursor: Option<String>,
+    /// State of the tx-pool segment on this page. Present only on page one of
+    /// the endpoints that serve pool rows; pool rows never enter a cursor.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pool: Option<crate::pool::PoolSummaryResponse>,
 }
 
 impl<T: Serialize + Clone> CursorPaginatedResponse<T> {
@@ -88,6 +96,7 @@ impl<T: Serialize + Clone> CursorPaginatedResponse<T> {
             limit,
             has_more,
             next_cursor,
+            pool: None,
         }
     }
 
@@ -101,7 +110,14 @@ impl<T: Serialize + Clone> CursorPaginatedResponse<T> {
             limit,
             has_more,
             next_cursor,
+            pool: None,
         }
+    }
+
+    /// Attach the tx-pool segment's state to a page-one response.
+    pub fn with_pool(mut self, pool: crate::pool::PoolSummaryResponse) -> Self {
+        self.pool = Some(pool);
+        self
     }
 }
 

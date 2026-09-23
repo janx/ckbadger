@@ -121,27 +121,9 @@ async fn test_network_stats_includes_api_background_tasks() {
     let store = test_store();
     let config = test_config(store);
 
-    // Build AppState manually so we can hold a reference to it.
-    let state = Arc::new(AppState {
-        store: config.store,
-        append_only_store: config.append_only_store,
-        network_store: config.network_store,
-        crawler_enabled: config.crawler_enabled,
-        ws_manager: Arc::new(WsManager::new()),
-        cache: CacheBackend::new(),
-        ckb_rpc_url: config.ckb_rpc_url,
-        ckb_network: config.ckb_network,
-        cycles_client: CyclesClient::disabled(),
-        ckb_store: None,
-        ckb_db_cleanup: config.ckb_db_cleanup,
-        mem_cache: InMemoryCache::new(),
-        asset_cache_warmup_error: Arc::new(std::sync::RwLock::new(None)),
-        background_tasks: Arc::new(std::sync::RwLock::new(Default::default())),
-        dob_decode_dir: config.dob_decode_dir,
-        spore_cache: Arc::new(arc_swap::ArcSwap::from_pointee(None)),
-        token_cache: Arc::new(arc_swap::ArcSwap::from_pointee(None)),
-        object_cache: Arc::new(arc_swap::ArcSwap::from_pointee(None)),
-    });
+    // Build AppState through the shared helper so this test keeps compiling as
+    // state fields are added, and holds a reference to the state it serves.
+    let state = test_app_state(config);
 
     // Register a watcher-shaped background task.
     state.update_background_task("api_cache_refresh", |entry| {

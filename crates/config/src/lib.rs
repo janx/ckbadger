@@ -62,6 +62,17 @@ pub struct ApiConfig {
     pub rate_limit: u32,
     pub rate_limit_burst: u32,
     pub slow_request_threshold_ms: u64,
+    /// Mirror the local node's transaction pool in API process memory, so
+    /// uncommitted transactions can be shown on address pages and found by
+    /// search. Memory only — the mirror never writes to any store, so
+    /// switching it off changes no persisted state and needs no re-sync.
+    pub pool_mirror_enabled: bool,
+    /// How often the mirror polls the node. Idle polls cost one
+    /// `tx_pool_info` call.
+    pub pool_poll_interval_ms: u64,
+    /// Upper bound on mirrored transactions. Past it the newest by
+    /// `time_added_to_pool` are kept and responses report `truncated`.
+    pub pool_max_tracked_txs: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -165,6 +176,9 @@ impl Default for ApiConfig {
             rate_limit: 100,
             rate_limit_burst: 200,
             slow_request_threshold_ms: 100,
+            pool_mirror_enabled: true,
+            pool_poll_interval_ms: 1000,
+            pool_max_tracked_txs: 50_000,
         }
     }
 }
@@ -405,6 +419,9 @@ port = {api_port}
 rate_limit = 100
 rate_limit_burst = 200
 slow_request_threshold_ms = 100
+pool_mirror_enabled = true        # Mirror the node tx-pool in API memory (no store writes)
+pool_poll_interval_ms = 1000
+pool_max_tracked_txs = 50000
 
 [frontend]
 host = "127.0.0.1"
@@ -647,6 +664,9 @@ mod tests {
         assert_eq!(cfg.api.rate_limit, 100);
         assert_eq!(cfg.api.rate_limit_burst, 200);
         assert_eq!(cfg.api.slow_request_threshold_ms, 100);
+        assert!(cfg.api.pool_mirror_enabled);
+        assert_eq!(cfg.api.pool_poll_interval_ms, 1000);
+        assert_eq!(cfg.api.pool_max_tracked_txs, 50_000);
 
         assert_eq!(cfg.frontend.host, "127.0.0.1");
         assert_eq!(cfg.frontend.port, 8100);
@@ -748,6 +768,9 @@ port = 3001
 rate_limit = 50
 rate_limit_burst = 100
 slow_request_threshold_ms = 50
+pool_mirror_enabled = false
+pool_poll_interval_ms = 2500
+pool_max_tracked_txs = 1234
 
 [frontend]
 host = "0.0.0.0"
@@ -776,6 +799,9 @@ level = "debug"
         assert_eq!(cfg.api.rate_limit, 50);
         assert_eq!(cfg.api.rate_limit_burst, 100);
         assert_eq!(cfg.api.slow_request_threshold_ms, 50);
+        assert!(!cfg.api.pool_mirror_enabled);
+        assert_eq!(cfg.api.pool_poll_interval_ms, 2500);
+        assert_eq!(cfg.api.pool_max_tracked_txs, 1234);
         assert_eq!(cfg.frontend.host, "0.0.0.0");
         assert_eq!(cfg.frontend.port, 3000);
         assert_eq!(cfg.indexer.bulk_sync_threshold, 500);

@@ -1151,3 +1151,183 @@ async fn test_get_address_lock_script_info_reports_deprecated_version() {
         "store marks this script version deprecated; the address response must reflect it"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Tx-pool rows on the address transaction list
+// ---------------------------------------------------------------------------
+
+const TX_POOL_LOCK_HASH: [u8; 32] = [0x51; 32];
+
+fn seed_pool_address_balance(store: &Arc<CkbadgerStore>, lock_hash: &[u8], txs_count: i64) {
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_addr_balance(
+        lock_hash,
+        &ckbadger_store::types::AddressBalance {
+            balance: 10_000_000_000,
+            used_capacity: 6_100_000_000,
+            live_cells_count: 1,
+            total_cells_count: 1,
+            txs_count,
+            first_seen_block: 1,
+            first_seen_tx: vec![0x01; 32],
+            last_activity_block: 10,
+            last_activity_tx: vec![0x02; 32],
+        },
+    );
+    batch.commit().unwrap();
+}
+
+#[tokio::test]
+async fn test_address_transactions_page_one_puts_pool_rows_above_committed_rows() {
+    use ckbadger_store::types::semantic_tags;
+
+    let store = test_store();
+    seed_committed_activity(&store, &TX_POOL_LOCK_HASH, &[0xc1; 32], 10, 0, 100, 0);
+    seed_pool_address_balance(&store, &TX_POOL_LOCK_HASH, 1);
+
+    let state = test_app_state(test_config(store));
+    let mut record = make_test_pool_record(
+        &[0xf1; 32],
+        &TX_POOL_LOCK_HASH,
+        -500,
+        1_700_000_500_000,
+        ckbadger_api::pool::PoolStatus::Pending,
+    );
+    record.semantic_tags = semantic_tags::DAO;
+    state
+        .pool_mirror
+        .publish(healthy_pool_snapshot(vec![record]));
+    let app = create_router_with_state(state).await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/api/v1/addresses/0x{}/transactions",
+                    hex::encode(TX_POOL_LOCK_HASH)
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let rows = json["data"].as_array().unwrap();
+    assert_eq!(rows.len(), 2, "pool row then committed row: {json:?}");
+
+    let pool_row = &rows[0];
+    assert_eq!(pool_row["txHash"], format!("0x{}", "f1".repeat(32)));
+    assert_eq!(pool_row["blockNumber"], serde_json::Value::Null);
+    assert_eq!(pool_row["timestamp"], serde_json::Value::Null);
+    assert_eq!(pool_row["poolStatus"], "pending");
+    assert!(pool_row["timeAddedToPool"].as_str().is_some());
+    // capacityChange and txType come from the same AddrTxValue constructor the
+    // indexer uses for committed rows.
+    assert_eq!(pool_row["capacityChange"], "-500");
+    assert_eq!(pool_row["txType"], "sent");
+    // fee / size / cycles are the node's own pool-entry values.
+    assert_eq!(pool_row["fee"], "1000");
+    assert_eq!(pool_row["txSize"], 500);
+    assert_eq!(pool_row["cycles"], 200000);
+    // scriptLabels come from the same semantic-tag derivation the tx_index
+    // writer uses.
+    assert_eq!(pool_row["scriptLabels"][0], "NervosDAO");
+
+    assert_eq!(rows[1]["blockNumber"], 10);
+    assert_eq!(
+        json["total"], 1,
+        "total stays the committed count; pool rows are reported beside it"
+    );
+    assert_eq!(json["pool"]["count"], 1);
+    assert_eq!(json["pool"]["pendingCkbDelta"], "-500");
+    assert_eq!(json["pool"]["healthy"], true);
+}
+
+#[tokio::test]
+async fn test_address_transactions_cursor_page_contains_no_pool_rows() {
+    let store = test_store();
+    seed_committed_activity(&store, &TX_POOL_LOCK_HASH, &[0xc1; 32], 10, 0, 100, 0);
+    seed_pool_address_balance(&store, &TX_POOL_LOCK_HASH, 1);
+
+    let state = test_app_state(test_config(store));
+    state
+        .pool_mirror
+        .publish(healthy_pool_snapshot(vec![make_test_pool_record(
+            &[0xf1; 32],
+            &TX_POOL_LOCK_HASH,
+            -500,
+            1_700_000_500_000,
+            ckbadger_api::pool::PoolStatus::Pending,
+        )]));
+    let app = create_router_with_state(state).await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/api/v1/addresses/0x{}/transactions?cursor=999:0",
+                    hex::encode(TX_POOL_LOCK_HASH)
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(
+        json["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|row| row["poolStatus"].is_null()),
+        "cursor pages carry committed rows only: {json:?}"
+    );
+    assert!(json["pool"].is_null());
+}
+
+#[tokio::test]
+async fn test_address_transactions_omit_pool_rows_the_store_already_has() {
+    let store = test_store();
+    let tx_hash = [0xc1; 32];
+    seed_committed_activity(&store, &TX_POOL_LOCK_HASH, &tx_hash, 10, 0, 100, 0);
+    seed_pool_address_balance(&store, &TX_POOL_LOCK_HASH, 1);
+
+    let state = test_app_state(test_config(store));
+    state
+        .pool_mirror
+        .publish(healthy_pool_snapshot(vec![make_test_pool_record(
+            &tx_hash,
+            &TX_POOL_LOCK_HASH,
+            100,
+            1_700_000_500_000,
+            ckbadger_api::pool::PoolStatus::CommittedAwaitingIndex {
+                block_number: 10,
+                block_hash: [0xba; 32],
+            },
+        )]));
+    let app = create_router_with_state(state).await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/api/v1/addresses/0x{}/transactions",
+                    hex::encode(TX_POOL_LOCK_HASH)
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let rows = json["data"].as_array().unwrap();
+    assert_eq!(rows.len(), 1, "committed wins, exactly once: {json:?}");
+    assert_eq!(rows[0]["blockNumber"], 10);
+    assert_eq!(json["pool"]["count"], 0);
+}

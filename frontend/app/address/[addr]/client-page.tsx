@@ -25,6 +25,13 @@ import {
   type FiberChannel,
 } from '@/lib/api';
 import { ActivityEventGroup } from '@/components/activity-event-row';
+import {
+  PoolInterpretationNotice,
+  PoolStatusBadge,
+  PoolUnavailableNotice,
+} from '@/components/ui/pool-status';
+import { poolRefetchInterval } from '@/lib/pool-polling';
+import { formatPoolDuration } from '@/components/ui/pool-status';
 import { useParams } from '@/src/navigation';
 import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
 import { formatTimeAgo, formatCkbAmount, formatCkbCompact } from '@/lib/utils';
@@ -106,6 +113,13 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
       }),
     enabled: !!address,
     placeholderData: keepPreviousData,
+    // Unconfirmed rows live only on page one, and only the tab in view is
+    // worth re-asking for.
+    refetchInterval: poolRefetchInterval({
+      isPageOne: !activitiesPagination.cursor,
+      isActiveTab: activeTab === 'activities',
+    }),
+    refetchOnWindowFocus: true,
   });
   const tokenMap = useMemo(() => {
     const map = new Map<string, AddressToken>();
@@ -161,6 +175,11 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
       }),
     enabled: !!address,
     placeholderData: keepPreviousData,
+    refetchInterval: poolRefetchInterval({
+      isPageOne: !txPagination.cursor,
+      isActiveTab: activeTab === 'transactions',
+    }),
+    refetchOnWindowFocus: true,
   });
   const { data: fiberChannels } = useQuery({
     queryKey: ['address-fiber-channels', address?.lockScriptHash, fiberPagination.cursor],
@@ -172,6 +191,15 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
     enabled: !!address,
     placeholderData: keepPreviousData,
   });
+  // The pool segment belongs to whichever list the user is looking at; both
+  // page-one responses carry the same summary for this address.
+  const pool =
+    activeTab === 'transactions' && !txPagination.cursor
+      ? transactions?.pool
+      : activeTab === 'activities' && !activitiesPagination.cursor
+        ? activities?.pool
+        : undefined;
+
   const handleTokenSelect = (token: AddressToken | null) => {
     setSelectedToken(token);
     setSelectedDao(false);
@@ -300,6 +328,23 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
               <StatBlock label="Live Cells" value={address.liveCellsCount} color="gold" />
               <StatBlock label="Transactions" value={address.transactionsCount} color="default" />
             </div>
+            {pool?.enabled && pool.healthy && pool.count > 0 && (
+              <div className="border-base-border mt-4 flex items-baseline gap-3 border-t pt-4">
+                {/* Deliberately apart from Balance and never added to it: a
+                    transaction in the node's pool is a proposed transition that
+                    proof-of-work has not confirmed. */}
+                <StatBlock label="Unconfirmed" value={`${pool.count} tx`} color="gold" size="sm" />
+                <span className="text-warning font-mono text-sm">
+                  {formatCkbAmount(pool.pendingCkbDelta).isNegative ? '' : '+'}
+                  {formatCkbAmount(pool.pendingCkbDelta).full} CKB pending
+                </span>
+                {pool.truncated && (
+                  <span className="text-text-dim font-mono text-xs">
+                    (more unconfirmed transactions than shown)
+                  </span>
+                )}
+              </div>
+            )}
             {(() => {
               const balanceBig = BigInt(address.balance);
               const usedBig = BigInt(address.commonKnowledgeSize);
@@ -848,6 +893,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                     <option value="protocol:rgbpp">RGB++</option>
                   </select>
                 </div>
+                {pool?.enabled && !pool.healthy && <PoolUnavailableNotice />}
                 {activitiesLoading ? (
                   <div className="text-text-dim py-12 text-center">Loading activities...</div>
                 ) : activitiesError ? (
@@ -860,7 +906,10 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                     >
                       {activities?.data.map((activity: Activity, idx: number) => (
                         <ActivityEventGroup
-                          key={`${activity.txHash}-${activity.txIndex}`}
+                          // Keyed by txHash alone: when an unconfirmed row
+                          // commits it keeps its hash and gains a block, so the
+                          // same row updates in place instead of remounting.
+                          key={activity.txHash}
                           activity={activity}
                           formatTimeAgo={(ts) => formatTimeAgo(Number(ts))}
                           isFirst={idx === 0}
@@ -877,7 +926,13 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                           total={activities?.total ?? undefined}
                           totalLabel="activities"
                           pageSize={DEFAULT_PAGE_SIZE}
-                          currentCount={activities?.data?.length ?? 0}
+                          // The enumerated range is over COMMITTED rows; the
+                          // unconfirmed segment is not part of the paged set.
+                          // Counted from the rows themselves, so it cannot go
+                          // negative and needs no clamp to hide it if it did.
+                          currentCount={
+                            activities?.data?.filter((a) => a.poolStatus === undefined).length ?? 0
+                          }
                           hasMore={activities?.hasMore ?? false}
                           hasPrevious={activitiesPagination.hasPrevious}
                           page={activitiesPagination.page}
@@ -1079,6 +1134,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
             )}
             {activeTab === 'transactions' && (
               <>
+                {pool?.enabled && !pool.healthy && <PoolUnavailableNotice />}
                 {txLoading ? (
                   <div className="text-text-dim py-12 text-center">Loading transactions...</div>
                 ) : transactions?.data && transactions.data.length > 0 ? (
@@ -1096,6 +1152,32 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                       const fee = Number(tx.fee);
                       const feeRate =
                         tx.txSize && tx.txSize > 0 && fee > 0 ? fee / tx.txSize : null;
+                      // A transaction still in the node's pool has no block and
+                      // no block time. It reports where it stands and how long
+                      // it has waited instead. Keying by txHash is what lets the
+                      // row update in place when it commits.
+                      const inPool = tx.blockNumber === null;
+                      const position =
+                        inPool && tx.poolStatus ? (
+                          <PoolStatusBadge status={tx.poolStatus} />
+                        ) : (
+                          <Link
+                            href={`/blocks/${tx.blockNumber}`}
+                            className="text-text-dim hover:text-text block font-mono text-xs"
+                          >
+                            #{tx.blockNumber?.toLocaleString()}
+                          </Link>
+                        );
+                      const when =
+                        inPool && tx.timeAddedToPool ? (
+                          <span className="text-warning font-mono text-xs">
+                            in pool for {formatPoolDuration(tx.timeAddedToPool)}
+                          </span>
+                        ) : (
+                          <span>
+                            {tx.timestamp === null ? '\u2014' : formatTimeAgo(tx.timestamp)}
+                          </span>
+                        );
                       return (
                         <TerminalRow key={tx.txHash}>
                           <div className="hidden w-full items-center gap-4 lg:flex">
@@ -1116,12 +1198,8 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                                   </Badge>
                                 ))}
                               </div>
-                              <Link
-                                href={`/blocks/${tx.blockNumber}`}
-                                className="text-text-dim hover:text-text block font-mono text-xs"
-                              >
-                                #{tx.blockNumber.toLocaleString()}
-                              </Link>
+                              {position}
+                              <PoolInterpretationNotice interpretation={tx.interpretation} />
                             </div>
                             <div className="text-text w-20 text-center font-mono">
                               <span className="text-emphasis/70">{tx.inputsCount}</span>
@@ -1170,9 +1248,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                                 showSign
                               />
                             </div>
-                            <div className="text-text-dim w-20 text-right text-sm">
-                              {formatTimeAgo(tx.timestamp)}
-                            </div>
+                            <div className="text-text-dim w-20 text-right text-sm">{when}</div>
                           </div>
                           <div className="space-y-1.5 lg:hidden">
                             <div className="flex items-center justify-between gap-2">
@@ -1184,9 +1260,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                                   endChars={6}
                                 />
                               </Link>
-                              <span className="text-text-dim shrink-0 text-xs">
-                                {formatTimeAgo(tx.timestamp)}
-                              </span>
+                              <span className="text-text-dim shrink-0 text-xs">{when}</span>
                             </div>
                             <div className="flex items-center justify-between gap-2">
                               <div className="text-text-dim flex items-center gap-3 font-mono text-xs">

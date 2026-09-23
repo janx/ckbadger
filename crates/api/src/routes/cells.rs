@@ -1700,10 +1700,19 @@ pub struct ActiveAddressResponse {
 #[serde(rename_all = "camelCase")]
 pub struct AddressTransactionResponse {
     pub tx_hash: String,
-    pub block_number: i64,
+    /// Null for a transaction still in the node's tx pool: it has no block yet.
+    pub block_number: Option<i64>,
     pub tx_type: String,
     pub capacity_change: String,
-    pub timestamp: String,
+    /// Block time. Null for a tx-pool row, which reports `timeAddedToPool`
+    /// instead — when the node accepted it, not when a block confirmed it.
+    pub timestamp: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pool_status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub time_added_to_pool: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub interpretation: Option<crate::pool::InterpretationResponse>,
     pub inputs_count: i16,
     pub outputs_count: i16,
     pub fee: String,
@@ -3113,6 +3122,24 @@ async fn get_address_transactions(
 
     let cursor = parse_optional_block_tx_cursor(params.cursor.as_deref(), "cursor")?;
 
+    // Tx-pool rows are a page-one-only segment, above every committed row: a
+    // pool transaction can only land in a future block. They never enter a
+    // cursor, so pagination stays stable while the pool churns.
+    let pool_rows = if cursor.is_none() {
+        let snapshot = state.pool_mirror.load();
+        let store = state.store.clone();
+        let lock_hash_c = lock_hash.clone();
+        let (rows, summary) = tokio::task::spawn_blocking(move || {
+            build_pool_transaction_rows(store.as_ref(), snapshot.as_ref(), &lock_hash_c)
+        })
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+        Some((rows, summary))
+    } else {
+        None
+    };
+
     // Fetch canonical recent transactions for this address (newest first).
     // Each row now includes the materialized AddrTxValue with capacity_change and tx_type.
     let store = state.store.clone();
@@ -3164,7 +3191,7 @@ async fn get_address_transactions(
         block_timestamps.insert(block_num, ts);
     }
 
-    let txs: Vec<AddressTransactionResponse> = addr_txs
+    let committed_txs: Vec<AddressTransactionResponse> = addr_txs
         .into_iter()
         .map(
             |(block_number, tx_idx, tx_hash, addr_val)| -> Result<
@@ -3218,10 +3245,13 @@ async fn get_address_transactions(
 
                 Ok(AddressTransactionResponse {
                     tx_hash: format!("0x{}", hex::encode(&tx_hash)),
-                    block_number,
+                    block_number: Some(block_number),
                     tx_type: tx_type.to_string(),
                     capacity_change: (capacity_change as i128).to_string(),
-                    timestamp,
+                    timestamp: Some(timestamp),
+                    pool_status: None,
+                    time_added_to_pool: None,
+                    interpretation: None,
                     inputs_count,
                     outputs_count,
                     fee: fee.to_string(),
@@ -3234,6 +3264,8 @@ async fn get_address_transactions(
         )
         .collect::<Result<Vec<_>, _>>()?;
 
+    // `total` stays the COMMITTED transaction count. Pool rows are reported
+    // beside it in `pool`, never added to it.
     let total = state
         .store
         .get_addr_balance(&lock_hash)
@@ -3242,12 +3274,85 @@ async fn get_address_transactions(
         .map(|ab| ab.txs_count)
         .unwrap_or(0);
 
-    ok(CursorPaginatedResponse::new(
-        txs,
-        total,
-        limit as i64,
-        next_cursor,
-    ))
+    let (mut txs, pool) = match pool_rows {
+        Some((rows, summary)) => (rows, Some(summary)),
+        None => (Vec::new(), None),
+    };
+    txs.extend(committed_txs);
+
+    let response = CursorPaginatedResponse::new(txs, total, limit as i64, next_cursor);
+    ok(match pool {
+        Some(pool) => response.with_pool(pool),
+        None => response,
+    })
+}
+
+/// This lock's tx-pool rows for page one, and the summary describing them.
+///
+/// Every value is either the node's own exact pool-entry figure (fee, size,
+/// cycles) or comes from the same derivation the indexer uses for committed
+/// rows — `AddrTxValue::new` for capacity change and tx type, the semantic-tag
+/// bitmap for script labels — so a row cannot change meaning when it commits.
+///
+/// Blocking: reads the store for the committed-wins dedup.
+fn build_pool_transaction_rows(
+    store: &CkbadgerStore,
+    snapshot: &crate::pool::PoolSnapshot,
+    lock_hash: &[u8],
+) -> anyhow::Result<(
+    Vec<AddressTransactionResponse>,
+    crate::pool::PoolSummaryResponse,
+)> {
+    let (records, truncated) =
+        crate::routes::activities::pool_records_for_page(snapshot, lock_hash);
+
+    let mut rows = Vec::with_capacity(records.len());
+    let mut pending_ckb_delta: i128 = 0;
+    for record in records {
+        // One dedup rule, committed wins.
+        if store.get_tx_by_hash(&record.tx_hash)?.is_some() {
+            continue;
+        }
+        // `by_lock` is built from the record's participants, so one reached
+        // through it must have an entry for this lock.
+        let participant = record.participant(lock_hash).ok_or_else(|| {
+            anyhow::anyhow!(
+                "pool record indexed by lock 0x{} has no participant for it: tx=0x{}",
+                hex::encode(lock_hash),
+                hex::encode(record.tx_hash)
+            )
+        })?;
+
+        pending_ckb_delta += participant.addr_tx.capacity_change as i128;
+        rows.push(AddressTransactionResponse {
+            tx_hash: format!("0x{}", hex::encode(record.tx_hash)),
+            block_number: None,
+            tx_type: participant.addr_tx.tx_type_str().to_string(),
+            capacity_change: (participant.addr_tx.capacity_change as i128).to_string(),
+            timestamp: None,
+            pool_status: Some(record.pool_status.as_str().to_string()),
+            time_added_to_pool: Some(
+                crate::pool::pool_timestamp_rfc3339(i64::try_from(
+                    record.entry.time_added_to_pool_ms,
+                )?)
+                .map_err(|e| anyhow::anyhow!("{e}"))?,
+            ),
+            interpretation: Some(crate::pool::InterpretationResponse::from(
+                &record.interpretation,
+            )),
+            inputs_count: record.inputs_count,
+            outputs_count: record.outputs_count,
+            fee: record.entry.fee.to_string(),
+            is_cellbase: record.is_cellbase,
+            tx_size: Some(i32::try_from(record.entry.size)?),
+            cycles: Some(i64::try_from(record.entry.cycles)?),
+            script_labels: script_labels_from_semantic_tags(record.semantic_tags),
+        });
+    }
+
+    let summary =
+        crate::routes::activities::pool_summary(snapshot, rows.len(), pending_ckb_delta, truncated);
+    Ok((rows, summary))
 }
 
 async fn get_address_tokens(

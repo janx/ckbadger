@@ -1,4 +1,5 @@
 pub(crate) mod activities;
+pub(crate) mod address_presence;
 pub mod assets;
 mod blocks;
 pub(crate) mod cells;
@@ -17,7 +18,7 @@ mod spore;
 pub(crate) mod statistics;
 mod tokens;
 mod transactions;
-mod tx_lookup;
+pub(crate) mod tx_lookup;
 /// Public so the verifier's own wire types can be kept in step with the
 /// endpoint's, and so the export's shape is part of the crate's API surface.
 pub mod verify;

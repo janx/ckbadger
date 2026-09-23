@@ -507,6 +507,15 @@ pub struct TransactionOutputResponse {
 pub struct TransactionDetailResponse {
     pub hash: String,
     pub status: String,
+    /// Where an uncommitted transaction stands: `pending`, `proposed`, or
+    /// `committed_awaiting_index` (the node has it in a block, this process's
+    /// store has not indexed it yet). Absent once the store has it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pool_status: Option<String>,
+    /// How completely an uncommitted transaction could be interpreted, with the
+    /// reasons when it could not be interpreted fully.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub interpretation: Option<crate::pool::InterpretationResponse>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pending_since: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -743,7 +752,10 @@ async fn get_transaction_detail(
             return Err(missing_tx_lookup_error(&hash_bytes, ckb_block_number));
         };
 
-        if !tx_lookup.is_pending_like() {
+        // A transaction the node has committed but this process's store has not
+        // indexed yet is served provisionally too. That window is seconds long,
+        // and a pool row that links here must not become a dead link for them.
+        if !tx_lookup.is_pending_like() && !tx_lookup.is_committed() {
             let ckb_block_number =
                 lookup_tx_block_number_in_ckb_store(state.ckb_store.as_ref(), &hash_bytes);
             return Err(missing_tx_lookup_error(&hash_bytes, ckb_block_number));
@@ -756,11 +768,43 @@ async fn get_transaction_detail(
             )));
         };
 
-        let io = build_inputs_outputs_from_rpc_pending(
-            rpc_tx,
-            &state.store,
-            &state.append_only_store,
-            &state.store,
+        // One resolver, one order: a parent still in the pool, then the node's
+        // live cell. The mirror's snapshot supplies the pool parents so a
+        // chained unconfirmed spend resolves here exactly as it does there.
+        let pool_source = crate::pool::HttpPoolSource::new(state.ckb_rpc_url.clone());
+        let pool_snapshot = state.pool_mirror.load();
+        let previous_outputs =
+            crate::pool::resolve_previous_outputs(&pool_source, rpc_tx, pool_snapshot.as_ref())
+                .await
+                .map_err(|e| {
+                    ApiError::internal(format!(
+                        "failed to resolve inputs of uncommitted transaction {hash}: {e}"
+                    ))
+                })?;
+        let resolved = crate::pool::resolve_pool_tx(rpc_tx, &previous_outputs).map_err(|e| {
+            ApiError::internal(format!(
+                "failed to read uncommitted transaction {hash}: {e}"
+            ))
+        })?;
+
+        let interpretation = crate::pool::interpretation_of(&resolved);
+        // The mirror is authoritative for the pool status when it tracks this
+        // transaction (only it knows `committed_awaiting_index`); otherwise the
+        // node's own status stands.
+        let pool_status = pool_snapshot
+            .records
+            .get(&resolved.tx_hash)
+            .map(|record| record.pool_status.as_str().to_string())
+            .unwrap_or_else(|| {
+                if tx_lookup.is_committed() {
+                    crate::pool::PoolStatus::COMMITTED_AWAITING_INDEX.to_string()
+                } else {
+                    tx_lookup.status_str().to_string()
+                }
+            });
+
+        let io = build_inputs_outputs_from_pool_tx(
+            &resolved,
             &state.ckb_network,
             0,
             state.genesis_baseline()?.virtual_occupied,
@@ -791,16 +835,19 @@ async fn get_transaction_detail(
         });
 
         let pool_cycles = tx_lookup.cycles.map(|value| value as i64);
-        let pool_is_cellbase = rpc_tx.inputs.first().is_some_and(|input| {
-            input.previous_output.tx_hash
-                == "0x0000000000000000000000000000000000000000000000000000000000000000"
-        });
+        let pool_is_cellbase = resolved.is_cellbase;
         return ok(TransactionDetailResponse {
             hash: format!("0x{}", hex::encode(&hash_bytes)),
             status: tx_lookup.status_str().to_string(),
+            pool_status: Some(pool_status),
+            interpretation: Some(crate::pool::InterpretationResponse::from(&interpretation)),
             pending_since,
-            block_number: None,
-            block_hash: None,
+            // Present only while the node reports a committing block this
+            // process's store has not indexed yet.
+            block_number: tx_lookup.block_number,
+            block_hash: tx_lookup
+                .block_hash
+                .map(|hash| format!("0x{}", hex::encode(hash))),
             index: None,
             inputs_count: rpc_tx.inputs.len() as i32,
             outputs_count: rpc_tx.outputs.len() as i32,
@@ -924,6 +971,9 @@ async fn get_transaction_detail(
     ok(TransactionDetailResponse {
         hash: tx_hash_hex,
         status: "committed".to_string(),
+        // A transaction the local store has indexed is no longer provisional.
+        pool_status: None,
+        interpretation: None,
         pending_since: None,
         block_number: Some(block_number),
         block_hash: Some(format!("0x{}", hex::encode(&block_hash))),
@@ -953,150 +1003,103 @@ fn empty_inputs_outputs() -> TxIoBundle {
     (vec![], vec![], 0, 0, 0, 0, vec![], false)
 }
 
-fn build_inputs_outputs_from_rpc_pending(
-    rpc_tx: &ckb_store_reader::RpcTransactionView,
-    core_store: &ckbadger_store::CkbadgerStore,
-    cells_store: &ckbadger_store::CkbadgerStore,
-    store: &ckbadger_store::CkbadgerStore,
+/// Build the `/tx/{hash}` response's inputs and outputs from a transaction the
+/// shared pool resolver has already resolved.
+///
+/// The previous store-based lookup (live cell, else consumed cell) is gone: an
+/// uncommitted transaction's inputs are resolved in exactly ONE place — the
+/// pool resolver's fixed order of pool parent, then the node's live cell — so
+/// the pending view and the address-page pool rows can never disagree about
+/// what a transaction spends.
+fn build_inputs_outputs_from_pool_tx(
+    resolved: &crate::pool::ResolvedPoolTx,
     network: &str,
     block_number: i64,
     virtual_occupied: i128,
 ) -> Result<PendingTxIoBundle, ApiRouteError> {
-    if rpc_tx.outputs.len() != rpc_tx.outputs_data.len() {
-        return Err(ApiError::internal(format!(
-            "pending transaction outputs mismatch: tx_hash={}, outputs={}, outputs_data={}",
-            rpc_tx.hash,
-            rpc_tx.outputs.len(),
-            rpc_tx.outputs_data.len()
-        )));
-    }
-
-    let tx_hash = decode_hex_bytes_with_context(
-        &rpc_tx.hash,
-        "transaction.hash",
-        "building pending transaction detail",
-        Some(32),
-    )?;
-    let tx_hash_hex = format!("0x{}", hex::encode(&tx_hash));
-
     let mut inputs_capacity: u128 = 0;
     let mut inputs_occupied_capacity: u128 = 0;
     let mut inputs_complete = true;
     let mut has_dao_type_input = false;
 
-    let inputs = rpc_tx
+    let inputs = resolved
         .inputs
         .iter()
         .map(|input| -> Result<TransactionInputResponse, ApiRouteError> {
-            let prev_tx_hash_hex = &input.previous_output.tx_hash;
-            let prev_index_hex = &input.previous_output.index;
-            let input_context = format!(
-                "building pending input for tx={} prev_outpoint=({}, {})",
-                tx_hash_hex, prev_tx_hash_hex, prev_index_hex
-            );
-            let prev_index = u32::from_str_radix(
-                prev_index_hex.strip_prefix("0x").unwrap_or(prev_index_hex),
-                16,
-            )
-            .map_err(|e| {
+            let previous_output = Some(PreviousOutput {
+                tx_hash: format!("0x{}", hex::encode(input.previous_tx_hash)),
+                index: i32::try_from(input.previous_output_index).map_err(|_| {
+                    ApiError::internal(format!(
+                        "previous output index {} exceeds i32 for tx 0x{}",
+                        input.previous_output_index,
+                        hex::encode(resolved.tx_hash)
+                    ))
+                })?,
+            });
+
+            let Some(cell) = input.cell.as_ref() else {
+                // Either the cellbase pseudo-input, or an outpoint the node
+                // does not report as live. Both are reported as unresolved
+                // rather than filled in with a zero.
+                inputs_complete = false;
+                return Ok(TransactionInputResponse {
+                    previous_output,
+                    since: input.since.clone(),
+                    capacity: None,
+                    lock: None,
+                    r#type: None,
+                    address: None,
+                });
+            };
+
+            inputs_capacity += cell.capacity as u128;
+            inputs_occupied_capacity += occupied_capacity_bytes(
+                cell.lock_args.len(),
+                cell.type_code_hash
+                    .as_ref()
+                    .map(|_| cell.type_args.as_deref().unwrap_or(&[]).len()),
+                cell.data.len(),
+            ) as u128;
+
+            let lock_hash_type_str = hash_type_to_str(cell.lock_hash_type).ok_or_else(|| {
                 ApiError::internal(format!(
-                    "invalid previous_output.index while {}: value='{}', error={}",
-                    input_context, prev_index_hex, e
+                    "unknown lock hash_type {} for resolved pool input",
+                    cell.lock_hash_type
                 ))
             })?;
+            let lock = Some(ScriptResponse {
+                code_hash: format!("0x{}", hex::encode(&cell.lock_code_hash)),
+                hash_type: lock_hash_type_str.to_string(),
+                args: format!("0x{}", hex::encode(&cell.lock_args)),
+            });
 
-            let prev_tx_hash_bytes = decode_hex_bytes_with_context(
-                prev_tx_hash_hex,
-                "input.previous_output.tx_hash",
-                &input_context,
-                Some(32),
-            )?;
-
-            // Cellbase input: prev_tx_hash is all zeros, index is 0xffffffff.
-            let is_cellbase_input = prev_tx_hash_bytes.iter().all(|&b| b == 0);
-
-            let cell_info = if is_cellbase_input {
-                None
-            } else {
-                let prev_index_i16 = i16::try_from(prev_index).map_err(|_| {
-                    ApiError::internal(format!(
-                        "output index {} exceeds i16 range while {}",
-                        prev_index, input_context
-                    ))
-                })?;
-                core_store
-                    .get_cell(&prev_tx_hash_bytes, prev_index_i16, cells_store)
-                    .ok()
-                    .flatten()
-                    .or_else(|| {
-                        core_store
-                            .get_consumed_cell(&prev_tx_hash_bytes, prev_index_i16, cells_store)
-                            .ok()
-                            .flatten()
+            let type_script = cell
+                .type_code_hash
+                .as_ref()
+                .map(|type_code_hash| -> Result<ScriptResponse, ApiRouteError> {
+                    // The node returned the script itself, so the hash_type is
+                    // known exactly — no store lookup, no "unknown" label.
+                    let hash_type = cell.type_hash_type.ok_or_else(|| {
+                        ApiError::internal(
+                            "resolved pool input has a type code_hash without a hash_type"
+                                .to_string(),
+                        )
+                    })?;
+                    let hash_type_str = hash_type_to_str(hash_type).ok_or_else(|| {
+                        ApiError::internal(format!(
+                            "unknown type hash_type {hash_type} for resolved pool input"
+                        ))
+                    })?;
+                    Ok(ScriptResponse {
+                        code_hash: format!("0x{}", hex::encode(type_code_hash)),
+                        hash_type: hash_type_str.to_string(),
+                        args: format!(
+                            "0x{}",
+                            hex::encode(cell.type_args.as_deref().unwrap_or(&[]))
+                        ),
                     })
-            };
-
-            let (capacity, lock, type_script, address) = match cell_info {
-                Some(info) => {
-                    let cap = info.capacity as u128;
-                    inputs_capacity += cap;
-
-                    let occ = occupied_capacity_bytes(
-                        info.lock_args.len(),
-                        info.type_code_hash
-                            .as_ref()
-                            .map(|_| info.type_args.as_deref().unwrap_or(&[]).len()),
-                        info.data_size as usize,
-                    );
-                    inputs_occupied_capacity += occ as u128;
-
-                    let lock_hash_type_str =
-                        hash_type_to_str(info.lock_hash_type).ok_or_else(|| {
-                            ApiError::internal(format!(
-                                "unknown lock hash_type {} for input cell",
-                                info.lock_hash_type
-                            ))
-                        })?;
-                    let lock_resp = ScriptResponse {
-                        code_hash: format!("0x{}", hex::encode(&info.lock_code_hash)),
-                        hash_type: lock_hash_type_str.to_string(),
-                        args: format!("0x{}", hex::encode(&info.lock_args)),
-                    };
-                    let type_resp = info
-                        .type_code_hash
-                        .as_ref()
-                        .map(|type_code_hash| -> Result<ScriptResponse, ApiRouteError> {
-                            Ok(ScriptResponse {
-                                code_hash: format!("0x{}", hex::encode(type_code_hash)),
-                                hash_type: resolve_stored_input_type_hash_type(
-                                    core_store,
-                                    store,
-                                    info.type_script_hash.as_deref(),
-                                    type_code_hash,
-                                )?,
-                                args: format!(
-                                    "0x{}",
-                                    hex::encode(info.type_args.as_deref().unwrap_or(&[]))
-                                ),
-                            })
-                        })
-                        .transpose()?;
-
-                    let addr = script_to_address(
-                        &info.lock_code_hash,
-                        info.lock_hash_type,
-                        &info.lock_args,
-                        network,
-                    )
-                    .ok();
-
-                    (Some(cap.to_string()), Some(lock_resp), type_resp, addr)
-                }
-                None => {
-                    inputs_complete = false;
-                    (None, None, None, None)
-                }
-            };
+                })
+                .transpose()?;
 
             if type_script
                 .as_ref()
@@ -1106,129 +1109,104 @@ fn build_inputs_outputs_from_rpc_pending(
             }
 
             Ok(TransactionInputResponse {
-                previous_output: Some(PreviousOutput {
-                    tx_hash: prev_tx_hash_hex.clone(),
-                    index: prev_index as i32,
-                }),
+                previous_output,
                 since: input.since.clone(),
-                capacity,
+                capacity: Some(cell.capacity.to_string()),
                 lock,
                 r#type: type_script,
-                address,
+                address: script_to_address(
+                    &cell.lock_code_hash,
+                    cell.lock_hash_type,
+                    &cell.lock_args,
+                    network,
+                )
+                .ok(),
             })
         })
         .collect::<Result<Vec<_>, _>>()?;
 
     let mut outputs_capacity: u128 = 0;
     let mut outputs_occupied_capacity: u128 = 0;
-    let outputs = rpc_tx
+    let outputs = resolved
         .outputs
         .iter()
-        .enumerate()
-        .map(
-            |(output_idx, output)| -> Result<TransactionOutputResponse, ApiRouteError> {
-                let output_context = format!(
-                    "building pending output for tx={} output_index={}",
-                    tx_hash_hex, output_idx
-                );
-                let cap = parse_u64_hex_field_with_context(
-                    &output.capacity,
-                    "output.capacity",
-                    &output_context,
-                )?;
-                outputs_capacity += cap as u128;
-
-                let code_hash_bytes = decode_hex_bytes_with_context(
-                    &output.lock.code_hash,
-                    "output.lock.code_hash",
-                    &output_context,
-                    Some(32),
-                )?;
-                let hash_type = parse_hash_type_label_to_i16(&output.lock.hash_type)?;
-                let args_bytes = decode_hex_bytes_with_context(
-                    &output.lock.args,
-                    "output.lock.args",
-                    &output_context,
-                    None,
-                )?;
-
-                let lock_resp = ScriptResponse {
-                    code_hash: output.lock.code_hash.clone(),
-                    hash_type: output.lock.hash_type.clone(),
-                    args: output.lock.args.clone(),
-                };
-
-                let address =
-                    script_to_address(&code_hash_bytes, hash_type, &args_bytes, network).ok();
-
-                let type_resp = output.type_.as_ref().map(|script| ScriptResponse {
-                    code_hash: script.code_hash.clone(),
-                    hash_type: script.hash_type.clone(),
-                    args: script.args.clone(),
-                });
-
-                let type_args_len = output
-                    .type_
+        .map(|cell| -> Result<TransactionOutputResponse, ApiRouteError> {
+            outputs_capacity += cell.capacity as u128;
+            let occupied = occupied_capacity_bytes(
+                cell.lock_args.len(),
+                cell.type_code_hash
                     .as_ref()
-                    .map(|script| {
-                        decode_hex_bytes_with_context(
-                            &script.args,
-                            "output.type.args",
-                            &output_context,
-                            None,
+                    .map(|_| cell.type_args.as_deref().unwrap_or(&[]).len()),
+                cell.data.len(),
+            );
+            outputs_occupied_capacity += occupied as u128;
+
+            let lock_hash_type_str = hash_type_to_str(cell.lock_hash_type).ok_or_else(|| {
+                ApiError::internal(format!(
+                    "unknown lock hash_type {} for pool output",
+                    cell.lock_hash_type
+                ))
+            })?;
+            let type_script = cell
+                .type_code_hash
+                .as_ref()
+                .map(|type_code_hash| -> Result<ScriptResponse, ApiRouteError> {
+                    let hash_type = cell.type_hash_type.ok_or_else(|| {
+                        ApiError::internal(
+                            "pool output has a type code_hash without a hash_type".to_string(),
                         )
-                        .map(|bytes| bytes.len())
+                    })?;
+                    let hash_type_str = hash_type_to_str(hash_type).ok_or_else(|| {
+                        ApiError::internal(format!(
+                            "unknown type hash_type {hash_type} for pool output"
+                        ))
+                    })?;
+                    Ok(ScriptResponse {
+                        code_hash: format!("0x{}", hex::encode(type_code_hash)),
+                        hash_type: hash_type_str.to_string(),
+                        args: format!(
+                            "0x{}",
+                            hex::encode(cell.type_args.as_deref().unwrap_or(&[]))
+                        ),
                     })
-                    .transpose()?;
-
-                let output_data = rpc_tx.outputs_data.get(output_idx).ok_or_else(|| {
-                    ApiError::internal(format!(
-                        "missing output data while {}: output_index={}",
-                        output_context, output_idx
-                    ))
-                })?;
-                let data_size = decode_hex_bytes_with_context(
-                    output_data,
-                    "output.data",
-                    &output_context,
-                    None,
-                )?
-                .len();
-
-                let occ = occupied_capacity_bytes(args_bytes.len(), type_args_len, data_size);
-                outputs_occupied_capacity += occ as u128;
-
-                let is_satoshi = block_number == 0
-                    && ckbadger_common::burn_policy::burn_policy(network)
-                        .is_some_and(|p| args_bytes.as_slice() == p.lock_args);
-                let (cell_type, virtual_occupied_capacity) = if is_satoshi {
-                    (
-                        Some("genesis_special_burn".to_string()),
-                        Some(virtual_occupied.to_string()),
-                    )
-                } else {
-                    (None, None)
-                };
-
-                Ok(TransactionOutputResponse {
-                    capacity: cap.to_string(),
-                    used_capacity: occ as i64,
-                    virtual_used_capacity: virtual_occupied_capacity,
-                    cell_type,
-                    lock: Some(lock_resp),
-                    r#type: type_resp,
-                    address,
                 })
-            },
-        )
+                .transpose()?;
+
+            let is_satoshi = block_number == 0
+                && ckbadger_common::burn_policy::burn_policy(network)
+                    .is_some_and(|p| cell.lock_args.as_slice() == p.lock_args);
+            let (cell_type, virtual_occupied_capacity) = if is_satoshi {
+                (
+                    Some("genesis_special_burn".to_string()),
+                    Some(virtual_occupied.to_string()),
+                )
+            } else {
+                (None, None)
+            };
+
+            Ok(TransactionOutputResponse {
+                capacity: cell.capacity.to_string(),
+                used_capacity: occupied as i64,
+                virtual_used_capacity: virtual_occupied_capacity,
+                cell_type,
+                lock: Some(ScriptResponse {
+                    code_hash: format!("0x{}", hex::encode(&cell.lock_code_hash)),
+                    hash_type: lock_hash_type_str.to_string(),
+                    args: format!("0x{}", hex::encode(&cell.lock_args)),
+                }),
+                r#type: type_script,
+                address: script_to_address(
+                    &cell.lock_code_hash,
+                    cell.lock_hash_type,
+                    &cell.lock_args,
+                    network,
+                )
+                .ok(),
+            })
+        })
         .collect::<Result<Vec<_>, _>>()?;
 
-    let is_cellbase = rpc_tx.inputs.first().is_some_and(|input| {
-        input.previous_output.tx_hash
-            == "0x0000000000000000000000000000000000000000000000000000000000000000"
-    });
-
-    let computed_fee = if is_cellbase {
+    let computed_fee = if resolved.is_cellbase {
         Some(0)
     } else if inputs_complete {
         compute_tx_fee_from_io(
@@ -1237,7 +1215,7 @@ fn build_inputs_outputs_from_rpc_pending(
             false,
             has_dao_type_input,
             block_number,
-            &tx_hash,
+            &resolved.tx_hash,
         )?
     } else {
         None
@@ -1251,7 +1229,7 @@ fn build_inputs_outputs_from_rpc_pending(
         inputs_used_capacity: inputs_complete.then_some(inputs_occupied_capacity),
         outputs_used_capacity: outputs_occupied_capacity,
         computed_fee,
-        witnesses: rpc_tx.witnesses.clone(),
+        witnesses: resolved.witnesses.clone(),
         witnesses_available: true,
     })
 }
@@ -2381,6 +2359,8 @@ mod tests {
         let detail = TransactionDetailResponse {
             hash: "0xabc".to_string(),
             status: "committed".to_string(),
+            pool_status: None,
+            interpretation: None,
             pending_since: None,
             block_number: Some(100),
             block_hash: Some("0xdef".to_string()),

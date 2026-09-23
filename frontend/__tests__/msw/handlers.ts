@@ -286,6 +286,72 @@ export const handlers = [
     });
   }),
 
+  // Page one of an address activity feed: one unconfirmed row above one
+  // committed row, exactly the shape the API serves.
+  http.get(`${API_BASE}/addresses/:addr/activities`, ({ request }) => {
+    const cursor = new URL(request.url).searchParams.get('cursor');
+    const committed = {
+      txHash: `0x${'c1'.repeat(32)}`,
+      blockNumber: 12345,
+      txIndex: 0,
+      timestamp: '1700000000000',
+      ckbDelta: '100000000',
+      usedDelta: '0',
+      isCellbase: false,
+      itemDeltas: [],
+      typeCalls: [],
+      lockCalls: [],
+      protocolActions: [],
+      participants: [],
+      tags: 0,
+    };
+    if (cursor) {
+      return HttpResponse.json({
+        data: [committed],
+        limit: 50,
+        hasMore: false,
+        nextCursor: null,
+      });
+    }
+    return HttpResponse.json({
+      data: [
+        {
+          txHash: `0x${'f1'.repeat(32)}`,
+          blockNumber: null,
+          txIndex: null,
+          timestamp: null,
+          poolStatus: 'pending',
+          timeAddedToPool: '2026-09-23T12:00:00+00:00',
+          interpretation: {
+            status: 'partial',
+            reasons: [{ code: 'dao_compensation_unavailable' }],
+          },
+          ckbDelta: '-50000000000',
+          usedDelta: '0',
+          isCellbase: false,
+          itemDeltas: [],
+          typeCalls: [],
+          lockCalls: [],
+          protocolActions: [],
+          participants: [],
+          tags: 0,
+        },
+        committed,
+      ],
+      limit: 50,
+      hasMore: false,
+      nextCursor: null,
+      pool: {
+        enabled: true,
+        healthy: true,
+        lastPolledAt: '2026-09-23T12:00:05+00:00',
+        count: 1,
+        pendingCkbDelta: '-50000000000',
+        truncated: false,
+      },
+    });
+  }),
+
   http.get(`${API_BASE}/dao/summary/:lockHash`, () => {
     return HttpResponse.json({
       hasDaoActivity: false,

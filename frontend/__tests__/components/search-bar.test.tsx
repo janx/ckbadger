@@ -177,6 +177,39 @@ describe('SearchBar', () => {
     expect(pushMock).toHaveBeenCalledWith('/script/0xabc');
   });
 
+  /// Every valid CKB address now comes back as exactly one result, whatever
+  /// the chain knows about it, so pasting one always lands on its page —
+  /// including a brand-new address whose only transaction is still in the
+  /// node's pool. The bar itself needs no special case for that.
+  it('navigates to an address whose only presence is the tx pool', async () => {
+    const address =
+      'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqdnnw7qkdnnclfkg59uzn8umtfd2kwxceqxwquc4';
+    vi.mocked(api.search).mockResolvedValueOnce({
+      query: address,
+      results: [
+        {
+          resultType: 'address',
+          id: address,
+          label: 'Address (0 cells, 1 pending)',
+          url: `/address/${address}`,
+        },
+      ],
+    });
+
+    render(<SearchBar />);
+
+    const input = screen.getByPlaceholderText(SHARED_PLACEHOLDER);
+    fireEvent.focus(input);
+    fireEvent.change(input, { target: { value: address } });
+
+    await waitFor(() => {
+      expect(screen.getByText('Address (0 cells, 1 pending)')).toBeInTheDocument();
+    });
+
+    fireEvent.submit(input.closest('form')!);
+    expect(pushMock).toHaveBeenCalledWith(`/address/${address}`);
+  });
+
   it('shows no-match feedback instead of navigating on empty result set', async () => {
     vi.mocked(api.search).mockResolvedValueOnce({
       query: 'not-found',

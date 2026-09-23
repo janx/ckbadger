@@ -3336,22 +3336,10 @@ impl Indexer {
 
         // Activity writes (live sync)
         let protocol_detectors: Vec<Box<dyn crate::db::writer::activities::ProtocolDetector>> =
-            vec![
-                Box::new(crate::db::writer::rgbpp_detector::RgbppDetector::new())
-                    as Box<dyn crate::db::writer::activities::ProtocolDetector>,
-                Box::new(crate::db::writer::fiber_detector::FiberDetector::new(
-                    self.config.is_mainnet(),
-                )),
-                Box::new(crate::db::writer::stablepp_detector::StableppDetector::new(
-                    self.config.is_mainnet(),
-                )),
-                Box::new(crate::db::writer::utxoswap_detector::UtxoSwapDetector::new(
-                    self.config.is_mainnet(),
-                )),
-            ]
-            .into_iter()
-            .filter(|d| d.might_apply_batch(&batch_lock_code_hashes, &batch_type_code_hashes))
-            .collect();
+            crate::db::writer::activities::production_detectors(self.config.is_mainnet())
+                .into_iter()
+                .filter(|d| d.might_apply_batch(&batch_lock_code_hashes, &batch_type_code_hashes))
+                .collect();
         let mut activity_batch = StoreBatch::new(self.writer.store());
         // Per-(block, tx_idx, lock_hash) participant tag bitmap. Populated as
         // TxActions are built below, then consumed by the deferred addr_tx
