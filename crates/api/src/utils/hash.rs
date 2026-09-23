@@ -53,6 +53,33 @@ pub fn parse_hash32(raw: &str, field: &str) -> Result<Vec<u8>, ApiRouteError> {
     Ok(bytes)
 }
 
+/// Parse a user-supplied 20-byte lock-hash prefix, with or without `0x`.
+///
+/// A protocol that names a party by the first 20 bytes of its lock hash gives
+/// the API a 20-byte identifier, and the prefix index is keyed by exactly that
+/// width. Same reasoning as [`parse_hash32`]: a shorter value would widen a
+/// prefix scan into other parties' rows, a longer one would be truncated into
+/// somebody else's key.
+pub fn parse_lock_hash_prefix20(raw: &str, field: &str) -> Result<Vec<u8>, ApiRouteError> {
+    const PREFIX20_LEN: usize = 20;
+    let stripped = raw.strip_prefix("0x").unwrap_or(raw);
+
+    let bytes = hex::decode(stripped).map_err(|e| {
+        ApiError::bad_request(format!(
+            "Invalid {field}: expected a 20-byte hex lock hash prefix (40 hex characters, optional 0x prefix), got invalid hex ({e})"
+        ))
+    })?;
+
+    if bytes.len() != PREFIX20_LEN {
+        return Err(ApiError::bad_request(format!(
+            "Invalid {field}: expected {PREFIX20_LEN} bytes (40 hex characters, optional 0x prefix), got {} bytes",
+            bytes.len()
+        )));
+    }
+
+    Ok(bytes)
+}
+
 /// Parse a user-supplied asset identifier that is *not* a 32-byte hash.
 ///
 /// Some on-chain asset IDs are shorter by construction — an mNFT class ID is 24

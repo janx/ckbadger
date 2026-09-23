@@ -7156,6 +7156,129 @@ mod tests {
             );
         }
 
+        /// End-to-end equivalence: with no detector naming anybody, the rows the
+        /// live path writes are exactly the rows the old cell-derived writer
+        /// produced, and the prefix index stays empty.
+        ///
+        /// `addr_tx_rows` is proven equal to the legacy derivation at the
+        /// builder level in `participant_rows`; this closes the loop through the
+        /// real write path. Tags are cross-checked against CF_TX_ACTIONS — an
+        /// independent record — rather than against the row being verified.
+        #[tokio::test]
+        async fn live_rows_equal_legacy_for_real_block_fixture() {
+            let _guard =
+                crate::db::writer::activities::test_detector_override::without_extra_detectors();
+            let blocks = parity_blocks();
+            let dir = tempfile::tempdir().unwrap();
+            let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+            store
+                .set_secondary_epoch_reward(61_369_863_013_698)
+                .unwrap();
+            let indexer = indexer_for_live_write_test(store.clone());
+            for b in &blocks {
+                write_live_block(&indexer, b.clone()).await.unwrap();
+            }
+
+            // The legacy derivation, from cells: every lock touched by a tx's
+            // outputs, plus (for non-cellbase) by its inputs.
+            let mut outputs_by_outpoint: HashMap<(Vec<u8>, usize), (Vec<u8>, i64)> = HashMap::new();
+            for block in &blocks {
+                for tx in &block.block.transactions {
+                    let tx_hash = crate::rpc::parse_hex_to_bytes(&tx.hash);
+                    for (index, output) in tx.outputs.iter().enumerate() {
+                        outputs_by_outpoint.insert(
+                            (tx_hash.clone(), index),
+                            (
+                                crate::parser::ScriptParser::compute_script_hash(&output.lock),
+                                i64::from_str_radix(output.capacity.trim_start_matches("0x"), 16)
+                                    .unwrap(),
+                            ),
+                        );
+                    }
+                }
+            }
+
+            let mut expected: BTreeMap<
+                (Vec<u8>, i64, i32, Vec<u8>),
+                ckbadger_store::types::AddrTxValue,
+            > = BTreeMap::new();
+            for block in &blocks {
+                let block_number =
+                    i64::from_str_radix(block.block.header.number.trim_start_matches("0x"), 16)
+                        .unwrap();
+                for (tx_index, tx) in block.block.transactions.iter().enumerate() {
+                    let is_cellbase = tx_index == 0;
+                    let tx_hash = crate::rpc::parse_hex_to_bytes(&tx.hash);
+                    let tx_index = tx_index as i32;
+                    // (out_cap, in_cap, has_out, has_in)
+                    let mut per_addr: BTreeMap<Vec<u8>, (i64, i64, bool, bool)> = BTreeMap::new();
+                    for output in &tx.outputs {
+                        let lock = crate::parser::ScriptParser::compute_script_hash(&output.lock);
+                        let e = per_addr.entry(lock).or_default();
+                        e.0 += i64::from_str_radix(output.capacity.trim_start_matches("0x"), 16)
+                            .unwrap();
+                        e.2 = true;
+                    }
+                    if !is_cellbase {
+                        for input in &tx.inputs {
+                            let prev_hash =
+                                crate::rpc::parse_hex_to_bytes(&input.previous_output.tx_hash);
+                            let prev_index = usize::from_str_radix(
+                                input.previous_output.index.trim_start_matches("0x"),
+                                16,
+                            )
+                            .unwrap();
+                            let (lock, capacity) = outputs_by_outpoint
+                                .get(&(prev_hash, prev_index))
+                                .expect("fixture input must be a fixture output")
+                                .clone();
+                            let e = per_addr.entry(lock).or_default();
+                            e.1 += capacity;
+                            e.3 = true;
+                        }
+                    }
+                    // Tags from CF_TX_ACTIONS, which the write path records
+                    // independently of the addr_txs row. Cellbase has no such row
+                    // by design and carries exactly TAG_CELLBASE here.
+                    let actions = store
+                        .get_tx_actions(block_number, tx_index, &tx_hash)
+                        .unwrap();
+                    for (lock, (out_cap, in_cap, has_out, has_in)) in per_addr {
+                        let tags = match &actions {
+                            Some(actions) => {
+                                actions
+                                    .participants
+                                    .iter()
+                                    .find(|p| p.id.as_bytes() == lock.as_slice())
+                                    .expect("every touched lock is a participant")
+                                    .tags
+                            }
+                            None => ckbadger_store::types::TAG_CELLBASE,
+                        };
+                        expected.insert(
+                            (lock, block_number, tx_index, tx_hash.clone()),
+                            ckbadger_store::types::AddrTxValue::new(
+                                out_cap - in_cap,
+                                has_in,
+                                has_out,
+                                tags,
+                            ),
+                        );
+                    }
+                }
+            }
+
+            let (actual, by_prefix) = live_rows(&store);
+            assert_eq!(
+                actual, expected,
+                "participant-derived rows must equal the legacy cell derivation"
+            );
+            assert!(
+                by_prefix.is_empty(),
+                "no production detector names participants in Phase 1a: {by_prefix:?}"
+            );
+        }
+
         #[tokio::test]
         async fn bulk_and_live_produce_identical_participant_rows_for_the_same_block() {
             let blocks = parity_blocks();

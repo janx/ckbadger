@@ -1465,3 +1465,69 @@ async fn test_address_transactions_list_merges_prefix_rows_with_named_tx_type() 
     assert_eq!(rows[1]["blockNumber"], 10);
     assert_eq!(json["total"], 2, "cell + named participations");
 }
+
+#[tokio::test]
+async fn test_prefix_transactions_endpoint_lists_named_participations() {
+    let store = test_store();
+    let prefix = [0x99u8; 20];
+    let mut batch = StoreBatch::new(store.as_ref());
+    for (block, tx_byte) in [(10i64, 0xa1u8), (11, 0xa2)] {
+        batch.put_addr_tx_by_prefix(
+            &prefix,
+            block,
+            0,
+            &[tx_byte; 32],
+            &ckbadger_store::types::AddrTxValue::new(
+                0,
+                false,
+                false,
+                ckbadger_store::types::TAG_IDENTITY,
+            ),
+        );
+    }
+    // Another prefix's row must not leak into this one's page.
+    batch.put_addr_tx_by_prefix(
+        &[0x11u8; 20],
+        12,
+        0,
+        &[0xa3; 32],
+        &ckbadger_store::types::AddrTxValue::new(0, false, false, 0),
+    );
+    batch.commit().unwrap();
+    let app = create_router(test_config(store)).await;
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/api/v1/addresses/prefix/0x{}/transactions",
+                    hex::encode(prefix)
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let rows = json["data"].as_array().unwrap();
+    assert_eq!(rows.len(), 2, "{json:?}");
+    assert_eq!(rows[0]["blockNumber"], 11, "descending by block");
+    assert_eq!(rows[0]["txType"], "named");
+    assert_eq!(rows[0]["capacityChange"], "0");
+    assert_eq!(rows[1]["blockNumber"], 10);
+
+    // A prefix of the wrong width is a 400, never a widened scan.
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/addresses/prefix/0x9999/transactions")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}

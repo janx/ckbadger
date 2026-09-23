@@ -305,6 +305,20 @@ pub(crate) mod test_detector_override {
         Guard(serial)
     }
 
+    /// Take the same lock without installing anything.
+    ///
+    /// The override is process-wide, so a test that asserts on the *absence* of
+    /// named participants must hold this for its duration — otherwise a
+    /// concurrently installed override is visible to it and the assertion is a
+    /// coin flip. Any in-crate test that drives a live write or a bulk build and
+    /// asserts on participants or addr_txs rows needs one of the two guards.
+    #[must_use = "the lock is released when the guard drops"]
+    pub(crate) fn without_extra_detectors() -> Guard {
+        let serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        *FACTORY.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        Guard(serial)
+    }
+
     pub(crate) fn extra_detectors() -> Vec<Box<dyn ProtocolDetector>> {
         match *FACTORY.lock().unwrap_or_else(|e| e.into_inner()) {
             Some(factory) => factory(),

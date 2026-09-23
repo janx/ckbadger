@@ -1388,6 +1388,10 @@ pub fn routes() -> Router<Arc<AppState>> {
             "/addresses/{addr}/transactions",
             get(get_address_transactions),
         )
+        .route(
+            "/addresses/prefix/{prefix}/transactions",
+            get(get_prefix_transactions),
+        )
         .route("/addresses/{addr}/tokens", get(get_address_tokens))
 }
 
@@ -3116,6 +3120,72 @@ fn list_canonical_addr_txs_page(
     }
 
     Ok(out)
+}
+
+/// One `addr_txs_by_prefix` row.
+///
+/// The prefix index is the half of an address's history that a protocol named
+/// rather than a cell recorded, so it has its own read path: verification and
+/// debugging need to see it as itself, not merged into an address that may not
+/// even be resolvable.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrefixTransactionResponse {
+    pub tx_hash: String,
+    pub block_number: i64,
+    pub tx_index: i32,
+    pub capacity_change: String,
+    pub tx_type: String,
+    pub tags: u16,
+}
+
+/// `GET /addresses/prefix/{prefix}/transactions` — the transactions a protocol
+/// named this 20-byte lock-hash prefix in.
+async fn get_prefix_transactions(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Path(prefix): axum::extract::Path<String>,
+    Query(params): Query<AddressTxParams>,
+) -> ApiResult<CursorPaginatedResponse<PrefixTransactionResponse>> {
+    let bytes = crate::utils::hash::parse_lock_hash_prefix20(&prefix, "lock hash prefix")?;
+    let limit = params.limit.clamp(1, 100) as usize;
+    let cursor = parse_optional_block_tx_cursor(params.cursor.as_deref(), "cursor")?;
+
+    let store = state.store.clone();
+    let rows = tokio::task::spawn_blocking(move || {
+        store.list_addr_txs_by_prefix_recent(&bytes, limit + 1, cursor)
+    })
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?
+    .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    let has_more = rows.len() > limit;
+    let page = &rows[..rows.len().min(limit)];
+    let next_cursor = if has_more {
+        page.last()
+            .map(|(block_num, tx_idx, _, _)| format!("{}:{}", block_num, tx_idx))
+    } else {
+        None
+    };
+
+    let txs = page
+        .iter()
+        .map(
+            |(block_number, tx_index, tx_hash, value)| PrefixTransactionResponse {
+                tx_hash: format!("0x{}", hex::encode(tx_hash)),
+                block_number: *block_number,
+                tx_index: *tx_index,
+                capacity_change: value.capacity_change.to_string(),
+                tx_type: value.tx_type_str().to_string(),
+                tags: value.tags,
+            },
+        )
+        .collect();
+
+    ok(CursorPaginatedResponse::without_total(
+        txs,
+        limit as i64,
+        next_cursor,
+    ))
 }
 
 async fn get_address_transactions(

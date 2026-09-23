@@ -159,6 +159,28 @@ struct AddressActivityRecord {
     item_deltas: Vec<serde_json::Value>,
 }
 
+/// One party of a global activity row.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GlobalParticipantApiRecord {
+    lock_hash: Option<String>,
+    lock_hash_prefix: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GlobalActivityApiRecord {
+    tx_hash: String,
+    block_number: i64,
+    participants: Vec<GlobalParticipantApiRecord>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AddressTxHashRecord {
+    tx_hash: String,
+}
+
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct TokenTransferApiRecord {
@@ -4362,6 +4384,101 @@ impl Check for DaoStatusIndexMatchesDeposits {
     }
 }
 
+/// Every participant of a transaction must be able to find it again.
+///
+/// The whole point of the participant model is that `addr_txs` rows are derived
+/// from `TxActions.participants` rather than from cells: one derivation, no
+/// join to drift. This check reads it back from the other end — for each party
+/// a recent activity lists, the party's own transaction index must contain that
+/// transaction. A `Lock` party is looked up by address, a protocol-named party
+/// by its 20-byte prefix.
+pub struct ParticipantRowsConsistency;
+
+/// How many recent activities the check walks, and how deep it pages each
+/// party's transaction list looking for the transaction.
+const PARTICIPANT_ROWS_ACTIVITY_LIMIT: usize = 50;
+const PARTICIPANT_ROWS_TX_LOOKUP_LIMIT: usize = 100;
+
+impl Check for ParticipantRowsConsistency {
+    fn name(&self) -> &'static str {
+        "participant_rows_consistency"
+    }
+    fn description(&self) -> &'static str {
+        "Every participant of a recent activity finds that transaction in its own tx index"
+    }
+    fn tier(&self) -> CheckTier {
+        CheckTier::Sampling
+    }
+    fn requires_rpc(&self) -> bool {
+        false
+    }
+    fn estimated_total(&self, ctx: &CheckContext) -> Option<u64> {
+        Some(ctx.sample_count.min(PARTICIPANT_ROWS_ACTIVITY_LIMIT) as u64)
+    }
+    fn run(&self, ctx: &CheckContext, progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
+        let limit = ctx.sample_count.min(PARTICIPANT_ROWS_ACTIVITY_LIMIT);
+        if limit == 0 {
+            return Ok(CheckResult::pass(0));
+        }
+        let page: CursorPage<GlobalActivityApiRecord> =
+            api_get(ctx, &format!("activities?limit={}", limit))?;
+
+        let mut findings = vec![];
+        let mut checked = 0u64;
+        for activity in &page.data {
+            for participant in &activity.participants {
+                let (path, entity) = match (&participant.lock_hash, &participant.lock_hash_prefix) {
+                    // Resolved or plain cell participant: its full lock hash is
+                    // the address index key.
+                    (Some(lock_hash), _) => (
+                        format!(
+                            "addresses/{}/transactions?limit={}",
+                            lock_hash, PARTICIPANT_ROWS_TX_LOOKUP_LIMIT
+                        ),
+                        format!("lock_hash={}", lock_hash),
+                    ),
+                    // Named but unresolved: only the prefix index can answer.
+                    (None, Some(prefix)) => (
+                        format!(
+                            "addresses/prefix/{}/transactions?limit={}",
+                            prefix, PARTICIPANT_ROWS_TX_LOOKUP_LIMIT
+                        ),
+                        format!("lock_hash_prefix={}", prefix),
+                    ),
+                    (None, None) => {
+                        findings.push(Finding {
+                            entity: format!("tx={}", activity.tx_hash),
+                            details: vec![
+                                "participant carries neither lockHash nor lockHashPrefix"
+                                    .to_string(),
+                            ],
+                        });
+                        continue;
+                    }
+                };
+                let rows: CursorPage<AddressTxHashRecord> = api_get(ctx, &path)?;
+                if !rows.data.iter().any(|row| row.tx_hash == activity.tx_hash) {
+                    findings.push(Finding {
+                        entity,
+                        details: vec![format!(
+                            "participant of tx={} (block {}) has no row for it in its own transaction index",
+                            activity.tx_hash, activity.block_number
+                        )],
+                    });
+                }
+            }
+            checked += 1;
+            progress.inc(1);
+        }
+
+        if findings.is_empty() {
+            Ok(CheckResult::pass(checked))
+        } else {
+            Ok(CheckResult::fail(checked, findings))
+        }
+    }
+}
+
 pub fn api_checks() -> Vec<Box<dyn Check>> {
     vec![
         // Fast
@@ -4397,6 +4514,7 @@ pub fn api_checks() -> Vec<Box<dyn Check>> {
         Box::new(AssetTopHoldersAddressConsistency),
         Box::new(IdentityCollectionHolderConsistency),
         Box::new(DaoStatusIndexMatchesDeposits),
+        Box::new(ParticipantRowsConsistency),
     ]
 }
 
@@ -4583,7 +4701,7 @@ mod tests {
     #[test]
     fn test_api_checks_registered() {
         let checks = api_checks();
-        assert_eq!(checks.len(), 31);
+        assert_eq!(checks.len(), 32);
         // Verify names are unique
         let names: Vec<&str> = checks.iter().map(|c| c.name()).collect();
         let unique: std::collections::HashSet<&str> = names.iter().copied().collect();
@@ -4606,6 +4724,7 @@ mod tests {
         assert!(names.contains(&"asset_top_holders_address_consistency"));
         assert!(names.contains(&"identity_collection_holder_consistency"));
         assert!(names.contains(&"dao_status_index_matches_deposits"));
+        assert!(names.contains(&"participant_rows_consistency"));
     }
 
     #[test]
@@ -4620,7 +4739,7 @@ mod tests {
             .filter(|c| c.tier() == CheckTier::Sampling)
             .count();
         assert_eq!(fast_count, 7);
-        assert_eq!(sampling_count, 24);
+        assert_eq!(sampling_count, 25);
     }
 
     #[test]
