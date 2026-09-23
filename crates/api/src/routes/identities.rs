@@ -4,8 +4,8 @@ use axum::{
     Json, Router,
 };
 use ckbadger_store::types::{
-    BIT_CELL_SENTINEL_COLLECTION, DID_CKB_SENTINEL_COLLECTION, DOTBIT_SENTINEL_COLLECTION,
-    DOTCELL_SENTINEL_COLLECTION,
+    LockScriptEntry, BIT_CELL_SENTINEL_COLLECTION, DID_CKB_SENTINEL_COLLECTION,
+    DOTBIT_SENTINEL_COLLECTION, DOTCELL_SENTINEL_COLLECTION,
 };
 use ckbadger_store::CkbadgerStore;
 use serde::{Deserialize, Serialize};
@@ -887,6 +887,12 @@ fn dotcell_state(is_live: bool, expired_at: u64, tip_seconds: u64) -> &'static s
     }
 }
 
+/// The lock a 20-byte owner prefix resolved to: its hash and its script.
+struct ResolvedLock {
+    lock_hash: Vec<u8>,
+    entry: LockScriptEntry,
+}
+
 struct DotCellPartyResolver<'a> {
     store: &'a CkbadgerStore,
     network: &'a str,
@@ -896,18 +902,34 @@ impl DotCellPartyResolver<'_> {
     /// Resolve one 20-byte owner/manager prefix. An ambiguous prefix (two
     /// known locks share it) is an internal error naming both, never a guess.
     fn resolve(&self, prefix: &[u8; 20]) -> Result<PartyRef, ApiRouteError> {
+        Ok(self.resolve_with_lock(prefix)?.0)
+    }
+
+    /// The same resolution, keeping the lock script it resolved to.
+    ///
+    /// The sale check needs that script, and re-reading it by hash would be a
+    /// second read of the row this one just returned — two reads that can only
+    /// ever disagree if something is broken, and a disagreement the caller
+    /// would then have to invent a meaning for.
+    fn resolve_with_lock(
+        &self,
+        prefix: &[u8; 20],
+    ) -> Result<(PartyRef, Option<ResolvedLock>), ApiRouteError> {
         let hash_prefix = format!("0x{}", hex::encode(prefix));
         let resolved = self
             .store
             .resolve_lock_hash_prefix(prefix)
             .map_err(|e| ApiError::internal(e.to_string()))?;
         let Some((lock_hash, entry)) = resolved else {
-            return Ok(PartyRef {
-                hash_prefix,
-                lock_hash: None,
-                address: None,
-                script_name: None,
-            });
+            return Ok((
+                PartyRef {
+                    hash_prefix,
+                    lock_hash: None,
+                    address: None,
+                    script_name: None,
+                },
+                None,
+            ));
         };
         let address = ckbadger_common::address::script_to_address(
             &entry.code_hash,
@@ -921,12 +943,18 @@ impl DotCellPartyResolver<'_> {
             .get_script_info(&entry.code_hash)
             .map_err(|e| ApiError::internal(e.to_string()))?
             .and_then(|info| info.name);
-        Ok(PartyRef {
-            hash_prefix,
-            lock_hash: Some(format!("0x{}", hex::encode(lock_hash))),
-            address,
-            script_name,
-        })
+        Ok((
+            PartyRef {
+                hash_prefix,
+                lock_hash: Some(format!("0x{}", hex::encode(lock_hash))),
+                address,
+                script_name,
+            },
+            Some(ResolvedLock {
+                lock_hash: lock_hash.to_vec(),
+                entry,
+            }),
+        ))
     }
 
     /// Resolve a full 32-byte lock hash (a sale's seller).
@@ -1075,53 +1103,48 @@ async fn get_dotcell_item_detail(
         store,
         network: &state.ckb_network,
     };
-    let owner = resolver.resolve(&owner_hash20)?;
+    let (owner, owner_lock) = resolver.resolve_with_lock(&owner_hash20)?;
     let manager = resolver.resolve(&manager_hash20)?;
 
     // A name is for sale when its owner prefix IS a Sale Lock instance's hash
     // prefix — a property of the name, never of an offer cell's existence.
-    let sale = match owner.lock_hash.as_deref() {
-        Some(lock_hash_hex) => {
-            let lock_hash = hex::decode(lock_hash_hex.trim_start_matches("0x"))
-                .map_err(|e| ApiError::internal(e.to_string()))?;
-            let lock_entry = store
-                .get_lock_script(&lock_hash)
-                .map_err(|e| ApiError::internal(e.to_string()))?;
-            match lock_entry {
-                Some(lock_entry)
-                    if ckbadger_indexer::parser::DotCellParser::is_sale_lock(
-                        &lock_entry.code_hash,
-                    ) =>
-                {
-                    let (seller32, price) =
-                        ckbadger_indexer::parser::DotCellParser::parse_sale_lock_args(
-                            &lock_entry.args,
-                        )
-                        .map_err(|e| {
-                            ApiError::internal(format!(
-                                "listed .cell name has malformed sale lock args: identity_id=0x{}, {e}",
-                                hex::encode(identity_id)
-                            ))
-                        })?;
-                    let offer_out_point = store
-                        .list_cells_by_lock(&lock_hash, 1, None, state.append_only_store.as_ref())
-                        .map_err(|e| ApiError::internal(e.to_string()))?
-                        .into_iter()
-                        .next()
-                        .map(|(tx_hash, index, _)| DotCellOutPointResponse {
-                            tx_hash: format!("0x{}", hex::encode(tx_hash)),
-                            index,
-                        });
-                    Some(DotCellSaleResponse {
-                        price_shannons: price.to_string(),
-                        seller: resolver.resolve_full(&seller32)?,
-                        offer_out_point,
-                    })
-                }
-                _ => None,
-            }
-        }
+    //
+    // The three cases are distinguished by what the owner's lock IS, never by
+    // a read failing: the prefix resolves to no known lock at all; it resolves
+    // to an ordinary lock; or it resolves to a Sale Lock, whose args must then
+    // decode or the name's state is unknown and saying "not for sale" would be
+    // a guess.
+    let sale = match owner_lock {
         None => None,
+        Some(ResolvedLock { entry, .. })
+            if !ckbadger_indexer::parser::DotCellParser::is_sale_lock(&entry.code_hash) =>
+        {
+            None
+        }
+        Some(ResolvedLock { lock_hash, entry }) => {
+            let (seller32, price) =
+                ckbadger_indexer::parser::DotCellParser::parse_sale_lock_args(&entry.args)
+                    .map_err(|e| {
+                        ApiError::internal(format!(
+                            "listed .cell name has malformed sale lock args: identity_id=0x{}, {e}",
+                            hex::encode(identity_id)
+                        ))
+                    })?;
+            let offer_out_point = store
+                .list_cells_by_lock(&lock_hash, 1, None, state.append_only_store.as_ref())
+                .map_err(|e| ApiError::internal(e.to_string()))?
+                .into_iter()
+                .next()
+                .map(|(tx_hash, index, _)| DotCellOutPointResponse {
+                    tx_hash: format!("0x{}", hex::encode(tx_hash)),
+                    index,
+                });
+            Some(DotCellSaleResponse {
+                price_shannons: price.to_string(),
+                seller: resolver.resolve_full(&seller32)?,
+                offer_out_point,
+            })
+        }
     };
 
     let parent = match parent_id {

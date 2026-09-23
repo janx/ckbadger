@@ -3868,6 +3868,72 @@ async fn test_assets_dotcell_item_sale_state_resolves_through_sale_lock() {
     );
 }
 
+/// A listed name whose Sale Lock args do not decode is an error, not a name
+/// quietly reported as not for sale.
+#[tokio::test]
+async fn test_assets_dotcell_malformed_sale_lock_args_is_500() {
+    let store = test_store();
+    let sale_lock = ckbadger_store::types::LockScriptEntry {
+        code_hash: hex::decode(DOTCELL_SALE_LOCK_CODE_HASH_TESTNET.trim_start_matches("0x"))
+            .unwrap(),
+        hash_type: 1,
+        // 39 bytes: one short of `seller32 ‖ price u64 LE`.
+        args: vec![0x11; 39],
+    };
+    let sale_lock_hash = compute_script_hash(&sale_lock.code_hash, 1, &sale_lock.args);
+    let sale20: [u8; 20] = sale_lock_hash[..20].try_into().unwrap();
+
+    seed_dotcell_name(
+        &store,
+        hex20(SUPPORT_ID),
+        "support",
+        sale20,
+        dotcell_extra("support", sale20, sale20),
+        true,
+        1_700_000_000_000,
+    );
+    {
+        let mut batch = StoreBatch::new(store.as_ref());
+        batch.put_lock_script(&sale_lock_hash, &sale_lock);
+        batch.commit().unwrap();
+    }
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+    let (status, body) = dotcell_get(app, "/api/v1/assets/identities/dotcell/items/support").await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+    assert!(
+        body["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("sale lock args"),
+        "{body}"
+    );
+}
+
+/// An owner prefix that resolves to an ordinary lock is simply not for sale —
+/// the two cases are distinguished by what the lock IS, not by a read failing.
+#[tokio::test]
+async fn test_assets_dotcell_owner_on_an_ordinary_lock_is_not_a_sale() {
+    let store = test_store();
+    seed_dotcell_name(
+        &store,
+        hex20(SUPPORT_ID),
+        "support",
+        hex20(SUPPORT_OWNER20),
+        dotcell_extra("support", hex20(SUPPORT_OWNER20), hex20(SUPPORT_OWNER20)),
+        true,
+        1_700_000_000_000,
+    );
+    seed_owner_lock(&store);
+    let config = test_config(store);
+    let app = create_router(config).await;
+    let (status, body) = dotcell_get(app, "/api/v1/assets/identities/dotcell/items/support").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["sale"], serde_json::Value::Null);
+    assert_eq!(body["owner"]["lockHash"], SUPPORT_OWNER_LOCK_HASH);
+}
+
 #[tokio::test]
 async fn test_assets_dotcell_unresolved_owner_prefix_is_reported_not_fabricated() {
     let store = test_store();

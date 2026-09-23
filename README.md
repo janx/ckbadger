@@ -179,7 +179,7 @@ These facts do not prove NAT/firewall status, hosting environment, â€œhome nodeâ
 reachability. The configured RPC node's genesis hash must match the selected network before its
 session observations are accepted.
 
-All of this remains inside the existing 3-CF network store; ckbadger-store still has 65 CFs total
+All of this remains inside the existing 3-CF network store; ckbadger-store still has 67 CFs total
 (63 domain + 1 append-only + 3 network). The crawler is its sole writer and the API opens it only
 as a read-only secondary.
 
