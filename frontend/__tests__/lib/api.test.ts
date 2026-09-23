@@ -1402,4 +1402,43 @@ describe('api', () => {
       expect(result.deepFork.depth).toBe(50);
     });
   });
+
+  describe('address activities carry the unconfirmed segment', () => {
+    it('reads pool rows with null chain position on page one', async () => {
+      const page = await api.getAddressActivities('0x' + '11'.repeat(32), { limit: 50 });
+
+      const poolRow = page.data[0];
+      expect(poolRow.blockNumber).toBeNull();
+      expect(poolRow.txIndex).toBeNull();
+      expect(poolRow.timestamp).toBeNull();
+      expect(poolRow.poolStatus).toBe('pending');
+      expect(poolRow.timeAddedToPool).toBe('2026-09-23T12:00:00+00:00');
+      expect(poolRow.interpretation?.status).toBe('partial');
+      expect(poolRow.interpretation?.reasons?.[0].code).toBe('dao_compensation_unavailable');
+
+      // The committed row keeps its chain position and carries no pool fields.
+      const committedRow = page.data[1];
+      expect(committedRow.blockNumber).toBe(12345);
+      expect(committedRow.poolStatus).toBeUndefined();
+
+      expect(page.pool).toEqual({
+        enabled: true,
+        healthy: true,
+        lastPolledAt: '2026-09-23T12:00:05+00:00',
+        count: 1,
+        pendingCkbDelta: '-50000000000',
+        truncated: false,
+      });
+    });
+
+    it('has no pool segment on a cursor page', async () => {
+      const page = await api.getAddressActivities('0x' + '11'.repeat(32), {
+        limit: 50,
+        cursor: '12345:0',
+      });
+
+      expect(page.pool).toBeUndefined();
+      expect(page.data.every((row) => row.poolStatus === undefined)).toBe(true);
+    });
+  });
 });

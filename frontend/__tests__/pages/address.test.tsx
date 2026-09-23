@@ -699,3 +699,173 @@ describe('AddressDetailPage', () => {
     );
   });
 });
+
+// ---------------------------------------------------------------------------
+// Unconfirmed (tx-pool) state on the address page
+// ---------------------------------------------------------------------------
+
+const poolSummary = {
+  enabled: true,
+  healthy: true,
+  lastPolledAt: '2026-09-23T12:00:00+00:00',
+  count: 1,
+  pendingCkbDelta: '-50000000000',
+  truncated: false,
+};
+
+function poolActivityRow() {
+  return {
+    txHash: '0xfeed000000000000000000000000000000000000000000000000000000000001',
+    blockNumber: null,
+    txIndex: null,
+    timestamp: null,
+    poolStatus: 'pending' as const,
+    timeAddedToPool: new Date(Date.now() - 5 * 60 * 1000).toISOString(),
+    interpretation: { status: 'complete' as const },
+    ckbDelta: '-50000000000',
+    usedDelta: '0',
+    isCellbase: false,
+    itemDeltas: [],
+    typeCalls: [],
+    lockCalls: [],
+    protocolActions: [],
+    participants: [],
+    tags: 0,
+  };
+}
+
+describe('AddressDetailPage — unconfirmed transactions', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockRouteAddr = 'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq';
+    vi.mocked(api.getAddress).mockResolvedValue(mockAddressWithLockScriptInfo);
+    vi.mocked(api.getAddressTokens).mockResolvedValue(emptyTokens);
+    vi.mocked(api.getLiveCells).mockResolvedValue(emptyCells);
+    vi.mocked(api.getAddressTransactions).mockResolvedValue(emptyTransactions);
+    vi.mocked(api.getAddressDaoSummary).mockResolvedValue(noDaoActivity);
+    vi.mocked(api.getDaoDepositsByAddress).mockResolvedValue(emptyDaoDeposits);
+    vi.mocked(api.getAddressActivities).mockResolvedValue({
+      data: [],
+      total: 0,
+      limit: 50,
+      hasMore: false,
+      nextCursor: null,
+    });
+  });
+
+  it('shows an Unconfirmed stat separate from Balance, never folded into it', async () => {
+    vi.mocked(api.getAddressActivities).mockResolvedValue({
+      data: [poolActivityRow()],
+      limit: 50,
+      hasMore: false,
+      nextCursor: null,
+      pool: poolSummary,
+    });
+
+    render(<AddressDetailPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Unconfirmed')).toBeInTheDocument();
+    });
+    // Balance stands on its own; the pool figure is reported beside it as a
+    // separate "pending" amount and is never summed into the balance.
+    expect(screen.getByText('Balance')).toBeInTheDocument();
+    expect(screen.getByText(/^-500\.00000000 CKB pending$/)).toBeInTheDocument();
+  });
+
+  it('renders the pool badge instead of a block link for an unconfirmed activity', async () => {
+    vi.mocked(api.getAddressActivities).mockResolvedValue({
+      data: [poolActivityRow()],
+      limit: 50,
+      hasMore: false,
+      nextCursor: null,
+      pool: poolSummary,
+    });
+
+    render(<AddressDetailPage />);
+
+    await waitFor(() => {
+      expect(screen.getAllByText('Pending').length).toBeGreaterThan(0);
+    });
+    expect(screen.getAllByText(/in pool for 5m/).length).toBeGreaterThan(0);
+  });
+
+  it('says the pool view is unavailable rather than showing an empty segment', async () => {
+    vi.mocked(api.getAddressActivities).mockResolvedValue({
+      data: [],
+      limit: 50,
+      hasMore: false,
+      nextCursor: null,
+      pool: { ...poolSummary, healthy: false, count: 0, pendingCkbDelta: '0' },
+    });
+
+    render(<AddressDetailPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Pool view unavailable/i)).toBeInTheDocument();
+    });
+    expect(screen.queryByText('Unconfirmed')).not.toBeInTheDocument();
+  });
+
+  it('does not mention the pool when the mirror is disabled', async () => {
+    vi.mocked(api.getAddressActivities).mockResolvedValue({
+      data: [],
+      limit: 50,
+      hasMore: false,
+      nextCursor: null,
+      pool: { ...poolSummary, enabled: false, healthy: false, count: 0, pendingCkbDelta: '0' },
+    });
+
+    render(<AddressDetailPage />);
+
+    await waitFor(() => {
+      expect(screen.getAllByText('Live Cells').length).toBeGreaterThan(0);
+    });
+    expect(screen.queryByText(/Pool view unavailable/i)).not.toBeInTheDocument();
+    expect(screen.queryByText('Unconfirmed')).not.toBeInTheDocument();
+  });
+
+  it('marks an unconfirmed row in the transactions table instead of linking to a block', async () => {
+    vi.mocked(api.getAddressTransactions).mockResolvedValue({
+      data: [
+        {
+          txHash: '0xfeed000000000000000000000000000000000000000000000000000000000002',
+          blockNumber: null,
+          txType: 'sent' as const,
+          capacityChange: '-50000000000',
+          timestamp: null,
+          poolStatus: 'proposed' as const,
+          timeAddedToPool: new Date(Date.now() - 2 * 60 * 1000).toISOString(),
+          interpretation: { status: 'complete' as const },
+          inputsCount: 1,
+          outputsCount: 2,
+          fee: '1000',
+          isCellbase: false,
+          txSize: 500,
+          cycles: 200000,
+          scriptLabels: [],
+        },
+      ],
+      total: 0,
+      limit: 50,
+      hasMore: false,
+      nextCursor: null,
+      pool: { ...poolSummary, count: 1 },
+    });
+
+    render(<AddressDetailPage />);
+    await waitFor(() => {
+      expect(screen.getAllByText('Transactions').length).toBeGreaterThan(0);
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Transactions/ }));
+
+    await waitFor(() => {
+      expect(screen.getAllByText('Proposed').length).toBeGreaterThan(0);
+    });
+    expect(screen.getAllByText(/in pool for 2m/).length).toBeGreaterThan(0);
+    const blockLinks = screen
+      .getAllByRole('link')
+      .filter((link) => link.getAttribute('href')?.includes('/blocks/'));
+    expect(blockLinks).toHaveLength(0);
+  });
+});

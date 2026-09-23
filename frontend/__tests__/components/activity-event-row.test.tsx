@@ -3,22 +3,25 @@ import { render, screen } from '../utils/test-utils';
 import { ActivityEventGroup } from '@/components/activity-event-row';
 import type { Activity } from '@/lib/api';
 
+// Spread the overrides rather than `??`-ing each field: a pool row's
+// `blockNumber` is explicitly null, and `null ?? default` would quietly hand it
+// a block it does not have.
 function makeActivity(overrides: Partial<Activity> = {}): Activity {
   return {
-    txHash:
-      overrides.txHash ?? '0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890',
-    blockNumber: overrides.blockNumber ?? 10_000,
-    txIndex: overrides.txIndex ?? 0,
-    timestamp: overrides.timestamp ?? '1700000000',
-    ckbDelta: overrides.ckbDelta ?? '0',
-    usedDelta: overrides.usedDelta ?? '0',
-    isCellbase: overrides.isCellbase ?? false,
-    itemDeltas: overrides.itemDeltas ?? [],
-    typeCalls: overrides.typeCalls ?? [],
-    lockCalls: overrides.lockCalls ?? [],
-    protocolActions: overrides.protocolActions ?? [],
-    participants: overrides.participants ?? [],
-    tags: overrides.tags ?? 0,
+    txHash: '0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890',
+    blockNumber: 10_000,
+    txIndex: 0,
+    timestamp: '1700000000',
+    ckbDelta: '0',
+    usedDelta: '0',
+    isCellbase: false,
+    itemDeltas: [],
+    typeCalls: [],
+    lockCalls: [],
+    protocolActions: [],
+    participants: [],
+    tags: 0,
+    ...overrides,
   };
 }
 
@@ -302,5 +305,66 @@ describe('ActivityEventGroup', () => {
     expect(screen.getAllByText(/Script Call \(lock\)/).length).toBeGreaterThan(0);
     expect(screen.getAllByRole('link', { name: '0x87654321' }).length).toBeGreaterThan(0);
     expect(screen.queryByText('type:0x87654321')).not.toBeInTheDocument();
+  });
+});
+
+describe('ActivityEventGroup — tx-pool rows', () => {
+  function makePoolActivity(overrides: Partial<Activity> = {}): Activity {
+    return makeActivity({
+      blockNumber: null,
+      txIndex: null,
+      timestamp: null,
+      poolStatus: 'pending',
+      timeAddedToPool: new Date(Date.now() - 5 * 60 * 1000).toISOString(),
+      interpretation: { status: 'complete' },
+      ...overrides,
+    });
+  }
+
+  it('shows the pool status instead of a block link', () => {
+    render(<ActivityEventGroup activity={makePoolActivity()} formatTimeAgo={mockFormatTimeAgo} />);
+    expect(screen.getAllByText('Pending').length).toBeGreaterThan(0);
+    expect(screen.queryByText(/^#/)).not.toBeInTheDocument();
+  });
+
+  it('reports how long the transaction has been in the pool instead of a block time', () => {
+    render(<ActivityEventGroup activity={makePoolActivity()} formatTimeAgo={mockFormatTimeAgo} />);
+    expect(screen.getAllByText(/in pool for 5m/).length).toBeGreaterThan(0);
+    expect(screen.queryByText('2 hrs ago')).not.toBeInTheDocument();
+  });
+
+  it('still links to the transaction, which renders pending transactions', () => {
+    const activity = makePoolActivity();
+    render(<ActivityEventGroup activity={activity} formatTimeAgo={mockFormatTimeAgo} />);
+    const links = screen.getAllByRole('link');
+    expect(
+      links.some((link) => link.getAttribute('href')?.endsWith(`/tx/${activity.txHash}`))
+    ).toBe(true);
+  });
+
+  it('shows why an interpretation is incomplete', () => {
+    render(
+      <ActivityEventGroup
+        activity={makePoolActivity({
+          interpretation: {
+            status: 'partial',
+            reasons: [{ code: 'dao_compensation_unavailable' }],
+          },
+        })}
+        formatTimeAgo={mockFormatTimeAgo}
+      />
+    );
+    expect(screen.getAllByText(/DAO compensation not yet known/).length).toBeGreaterThan(0);
+  });
+
+  it('keeps rendering a committed row with its block link', () => {
+    render(
+      <ActivityEventGroup
+        activity={makeActivity({ blockNumber: 12345 })}
+        formatTimeAgo={mockFormatTimeAgo}
+      />
+    );
+    expect(screen.getAllByText(/12,345/).length).toBeGreaterThan(0);
+    expect(screen.queryByText('Pending')).not.toBeInTheDocument();
   });
 });

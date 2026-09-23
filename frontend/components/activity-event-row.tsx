@@ -10,6 +10,7 @@ import {
 } from '@/lib/detail-routes';
 import { formatCkbAmount, truncateHash, cn } from '@/lib/utils';
 import { formatTokenBalanceWithRawMarker } from '@/lib/format-asset';
+import { PoolInterpretationNotice, PoolStatusBadge, TimeInPool } from '@/components/ui/pool-status';
 import type {
   Activity,
   GlobalActivity,
@@ -424,8 +425,28 @@ export function ActivityEventGroup({
   events.push(getCkbEventParts(activity.ckbDelta, activity.isCellbase, isPrimaryCkb));
 
   const txLink = `/tx/${activity.txHash}`;
+  // A transaction still in the node's pool has no block and no block time. It
+  // reports where it stands and how long it has waited instead — never a
+  // block link, and never a timestamp it does not have.
+  const isInPool = activity.blockNumber === null;
   const blockLink = `/blocks/${activity.blockNumber}`;
-  const time = formatTimeAgo(Number(activity.timestamp));
+  const time = activity.timestamp === null ? null : formatTimeAgo(Number(activity.timestamp));
+
+  const position =
+    isInPool && activity.poolStatus ? (
+      <PoolStatusBadge status={activity.poolStatus} />
+    ) : (
+      <Link href={blockLink} className="text-text-dim hover:text-text transition-colors">
+        #{activity.blockNumber?.toLocaleString()}
+      </Link>
+    );
+
+  const when =
+    isInPool && activity.timeAddedToPool ? (
+      <TimeInPool since={activity.timeAddedToPool} className="text-warning font-mono text-[10px]" />
+    ) : (
+      <span className="text-text-dim font-mono text-[10px]">{time}</span>
+    );
 
   // Vertical padding helper — first/last rows of a group get more padding
   const cellPy = (i: number): string => {
@@ -447,12 +468,14 @@ export function ActivityEventGroup({
               {truncateHash(activity.txHash, 8, 6)}
             </Link>
             <span className="text-text-dim">{'\u00B7'}</span>
-            <Link href={blockLink} className="text-text-dim hover:text-text transition-colors">
-              #{activity.blockNumber.toLocaleString()}
-            </Link>
+            {position}
           </div>
-          <span className="text-text-dim shrink-0 font-mono text-[10px]">{time}</span>
+          <span className="shrink-0">{when}</span>
         </div>
+        <PoolInterpretationNotice
+          interpretation={activity.interpretation}
+          className="text-warning mt-1 block font-mono text-[10px]"
+        />
         <div className="mt-1 space-y-0.5 pl-2">
           {events.map((event, i) => (
             <div key={i} className="flex items-center justify-between gap-2">
@@ -481,9 +504,7 @@ export function ActivityEventGroup({
                   {truncateHash(activity.txHash, 8, 6)}
                 </Link>
                 <span className="text-text-dim">{'\u00B7'}</span>
-                <Link href={blockLink} className="text-text-dim hover:text-text transition-colors">
-                  #{activity.blockNumber.toLocaleString()}
-                </Link>
+                {position}
               </div>
             ) : null}
           </div>
@@ -498,10 +519,15 @@ export function ActivityEventGroup({
 
           {/* Col 4: Time — first row only */}
           <div className={cn('hidden pr-4 text-right md:block', cellPy(i))}>
-            {i === 0 ? <span className="text-text-dim font-mono text-[10px]">{time}</span> : null}
+            {i === 0 ? when : null}
           </div>
         </Fragment>
       ))}
+      {activity.interpretation?.status === 'partial' && (
+        <div className="hidden px-4 pb-2 text-right md:block" style={{ gridColumn: '1 / -1' }}>
+          <PoolInterpretationNotice interpretation={activity.interpretation} />
+        </div>
+      )}
     </>
   );
 }
