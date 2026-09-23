@@ -1297,18 +1297,28 @@ async fn retention_state_committed_with_deletes() {
 
     let now_ms = TS_DAY;
     let now_hour = now_ms / 3_600_000;
-    // No header at the undo floor block → no honest block bound → delete nothing.
     let hourly = seed_token_hourly(&domain, now_hour, 200);
 
+    // A canonical block at or below the tip with no header is store corruption,
+    // not a reason to skip the round: without that header there is no honest
+    // block bound, and answering "delete nothing" would hide the corruption
+    // behind a sweep that quietly stopped working.
     let mut batch = StoreBatch::new(&domain);
-    ckbadger_indexer::sync::stage_hourly_retention(&writer, &mut batch, 5_000, now_ms).unwrap();
-    // Nothing is durable until the batch commits: state and deletions alike.
+    let err = ckbadger_indexer::sync::stage_hourly_retention(&writer, &mut batch, 5_000, now_ms)
+        .expect_err("a missing undo-window header must fail the retention step");
+    assert!(
+        err.to_string()
+            .contains("missing header for the entity-stats undo window block")
+            && err.to_string().contains("block=4000")
+            && err.to_string().contains("committed_tip=5000"),
+        "got: {err:#}"
+    );
     assert!(
         domain
             .get_hourly_retention_state(ckbadger_store::types::HourlyRetentionFamily::Token)
             .unwrap()
             .is_none(),
-        "an uncommitted step must leave no retention state behind"
+        "a failed step must leave no retention state behind"
     );
     assert!(domain.get_stats_key(&hourly[0]).unwrap().is_some());
     drop(batch); // simulate a failed commit

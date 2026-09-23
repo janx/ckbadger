@@ -1237,7 +1237,14 @@ pub fn encode_identity_owner_prefix(collection_id: &[u8]) -> [u8; 32] {
 /// Zero-pad an ID to exactly 32 bytes. IDs shorter than 32 bytes (e.g. mNFT class_id = 24B)
 /// are right-padded with zeros. Panics if the ID exceeds 32 bytes to prevent silent key
 /// collisions from truncation.
-fn pad_id_32(id: &[u8]) -> [u8; 32] {
+/// Pad a variable-width entity id to the fixed 32 bytes every `*_daily` /
+/// `*_hourly` stats key uses.
+///
+/// Callers that join a stats key back to a CF keyed by the RAW id (for example
+/// `cf_mnft_collection_agg`, keyed by the 24-byte mNFT class id) must pad the
+/// raw id with this function rather than truncating the stats key — truncating
+/// guesses a width the key does not record.
+pub fn pad_id_32(id: &[u8]) -> [u8; 32] {
     assert!(
         id.len() <= 32,
         "pad_id_32: ID exceeds 32 bytes (got {}), which would cause key collisions from truncation",

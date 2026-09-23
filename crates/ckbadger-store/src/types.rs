@@ -1607,10 +1607,17 @@ impl HourlyRetentionFamily {
 pub struct HourlyRetentionState {
     pub policy_version: u32,
     pub family: HourlyRetentionFamily,
-    /// Highest cutoff hour whose deletions have begun. Monotonic: a clock that
-    /// goes backwards does not un-delete anything, so the boundary must not
-    /// claim data that is already gone.
+    /// Highest cutoff hour whose deletions are COMPLETE for this family, i.e.
+    /// the boundary a reader may trust: every bucket below it is gone, every
+    /// bucket above it is either present or was never written. Advanced only
+    /// when a round reaches the end of the family, and monotonic — a clock that
+    /// goes backwards does not un-delete anything.
     pub executed_cutoff_hour: i64,
+    /// Cutoff the in-flight round is sweeping towards, `None` when no round is
+    /// in flight. Deletions below it have happened only up to `cursor`, so this
+    /// is diagnostic: never use it as the retention boundary.
+    #[serde(default)]
+    pub round_in_progress_cutoff_hour: Option<i64>,
     /// Where the current round stopped; `None` once the round is complete.
     pub cursor: Option<Vec<u8>>,
     pub round_started_at: i64,
