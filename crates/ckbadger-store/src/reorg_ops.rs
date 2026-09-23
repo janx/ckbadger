@@ -828,9 +828,11 @@ fn repair_cutoff_date_stats(
             batch.put_cf(cf, key, &encoded);
             Ok(true)
         }
-        // Remaining prefixes (per-entity daily stats, distribution, etc.)
-        // are either cumulative or per-entity-per-date and not worth repairing
-        // for shallow reorgs. Fall through to deletion.
+        // Remaining prefixes fall through to deletion. The eight per-entity
+        // families no longer reach here at all: they are not in
+        // `STATS_REPLAY_CANDIDATE_PREFIXES`, `should_delete_stats_for_replay`
+        // answers `false` for them, and the `EntityStats` undo log restores
+        // them exactly. Nothing in this function needs an entity branch.
         _ => Ok(false),
     }
 }
@@ -991,7 +993,16 @@ fn parse_cutoff_date_yyyymmdd(cutoff_yyyymmdd: &[u8]) -> anyhow::Result<u32> {
 /// decides every visited key); being a subset would silently leave stale
 /// aggregates behind, which is what
 /// `test_replay_candidate_prefixes_cover_every_deletable_stats_family` pins.
-const STATS_REPLAY_CANDIDATE_PREFIXES: [u8; 21] = [
+///
+/// The eight per-entity families — `SCRIPT_DAILY`, `TOKEN_DAILY`,
+/// `CLUSTER_DAILY`, `SPORE_DAILY`, `OBJECT_DAILY`, `TOKEN_HOURLY`,
+/// `SPORE_HOURLY`, `OBJECT_HOURLY` — are deliberately NOT here. They are keyed
+/// per entity and per time bucket, and a bucket holds contributions from both
+/// sides of the fork point; deleting the whole bucket threw away the surviving
+/// main-chain part, which replay never rebuilds because it only re-applies
+/// blocks after the fork point. They are restored exactly, per block, by the
+/// `EntityStats` undo log instead (POSTMORTEM STATS-010).
+const STATS_REPLAY_CANDIDATE_PREFIXES: [u8; 13] = [
     keys::STATS_PREFIX_DAILY,
     keys::STATS_PREFIX_DAILY_BLOCK,
     keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT,
@@ -1000,18 +1011,10 @@ const STATS_REPLAY_CANDIDATE_PREFIXES: [u8; 21] = [
     keys::STATS_PREFIX_ADDR_COHORT,
     keys::STATS_PREFIX_HOURLY,
     keys::STATS_PREFIX_MINER,
-    keys::STATS_PREFIX_SCRIPT_DAILY,
-    keys::STATS_PREFIX_TOKEN_DAILY,
-    keys::STATS_PREFIX_CLUSTER_DAILY,
-    keys::STATS_PREFIX_SPORE_DAILY,
-    keys::STATS_PREFIX_OBJECT_DAILY,
     keys::STATS_PREFIX_ACTIVITY_DAILY,
     keys::STATS_PREFIX_ACTIVITY_DAILY_ADDR_SET,
     keys::STATS_PREFIX_ACTIVITY_HOURLY,
     keys::STATS_PREFIX_ACTIVITY_HOURLY_ADDR_SET,
-    keys::STATS_PREFIX_TOKEN_HOURLY,
-    keys::STATS_PREFIX_SPORE_HOURLY,
-    keys::STATS_PREFIX_OBJECT_HOURLY,
     keys::STATS_PREFIX_EPOCH,
 ];
 
@@ -1020,7 +1023,6 @@ fn should_delete_stats_for_replay(
     cutoff_yyyymmdd: &[u8],
     cutoff_yyyymmddhh_utc8: &[u8],
     cutoff_yyyymmddhh_utc: &[u8],
-    cutoff_hour: i64,
     cutoff_epoch: i64,
     delete_cutoff_epoch: bool,
 ) -> anyhow::Result<bool> {
@@ -1032,12 +1034,20 @@ fn should_delete_stats_for_replay(
 
     match prefix {
         // date scoped: YYYYMMDD (UTC+8 calendar dates)
+        //
+        // The cutoff is validated before the byte comparison: a malformed
+        // cutoff would silently mis-order against real `YYYYMMDD` ASCII and
+        // either spare rows that must go or delete rows that must stay. This
+        // guard used to sit on the per-entity daily arms; they have moved to
+        // the undo log, so it lives here now and covers every remaining
+        // date-scoped family.
         keys::STATS_PREFIX_DAILY
         | keys::STATS_PREFIX_DAILY_BLOCK
         | keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT
         | keys::STATS_PREFIX_HODL_WAVE
         | keys::STATS_PREFIX_CELL_DISTRIBUTION
         | keys::STATS_PREFIX_ADDR_COHORT => {
+            parse_cutoff_date_yyyymmdd(cutoff_yyyymmdd)?;
             Ok(suffix.len() >= 8 && &suffix[..8] >= cutoff_yyyymmdd)
         }
         // hour scoped: YYYYMMDDHH on the UTC clock (chain-level hourly stats
@@ -1046,62 +1056,22 @@ fn should_delete_stats_for_replay(
             Ok(suffix.len() >= 10 && &suffix[..10] >= cutoff_yyyymmddhh_utc)
         }
         // date+miner hash: YYYYMMDD + 32-byte lock hash
-        keys::STATS_PREFIX_MINER => Ok(suffix.len() >= 40 && &suffix[..8] >= cutoff_yyyymmdd),
-        // code_hash(32) + hash_type(1) + kind(1) + date(4B u32 YYYYMMDD BE)
-        keys::STATS_PREFIX_SCRIPT_DAILY => {
-            let cutoff_date = parse_cutoff_date_yyyymmdd(cutoff_yyyymmdd)?;
-            if suffix.len() < 38 {
-                return Ok(false);
-            }
-            let date = u32::from_be_bytes(suffix[34..38].try_into().map_err(|_| {
-                anyhow::anyhow!("invalid script_daily suffix length: {}", suffix.len())
-            })?);
-            Ok(date >= cutoff_date)
+        keys::STATS_PREFIX_MINER => {
+            parse_cutoff_date_yyyymmdd(cutoff_yyyymmdd)?;
+            Ok(suffix.len() >= 40 && &suffix[..8] >= cutoff_yyyymmdd)
         }
-        // type_hash(32) + date(4B u32 YYYYMMDD BE)
-        keys::STATS_PREFIX_TOKEN_DAILY => {
-            let cutoff_date = parse_cutoff_date_yyyymmdd(cutoff_yyyymmdd)?;
-            if suffix.len() < 36 {
-                return Ok(false);
-            }
-            let date = u32::from_be_bytes(suffix[32..36].try_into().map_err(|_| {
-                anyhow::anyhow!("invalid token_daily suffix length: {}", suffix.len())
-            })?);
-            Ok(date >= cutoff_date)
-        }
-        // cluster_id(32) + date(4B u32 YYYYMMDD BE)
-        keys::STATS_PREFIX_CLUSTER_DAILY => {
-            let cutoff_date = parse_cutoff_date_yyyymmdd(cutoff_yyyymmdd)?;
-            if suffix.len() < 36 {
-                return Ok(false);
-            }
-            let date = u32::from_be_bytes(suffix[32..36].try_into().map_err(|_| {
-                anyhow::anyhow!("invalid cluster_daily suffix length: {}", suffix.len())
-            })?);
-            Ok(date >= cutoff_date)
-        }
-        // spore_id(32) + date(4B u32 YYYYMMDD BE)
-        keys::STATS_PREFIX_SPORE_DAILY => {
-            let cutoff_date = parse_cutoff_date_yyyymmdd(cutoff_yyyymmdd)?;
-            if suffix.len() < 36 {
-                return Ok(false);
-            }
-            let date = u32::from_be_bytes(suffix[32..36].try_into().map_err(|_| {
-                anyhow::anyhow!("invalid spore_daily suffix length: {}", suffix.len())
-            })?);
-            Ok(date >= cutoff_date)
-        }
-        // collection_id(32 padded) + date(4B u32 YYYYMMDD BE)
-        keys::STATS_PREFIX_OBJECT_DAILY => {
-            let cutoff_date = parse_cutoff_date_yyyymmdd(cutoff_yyyymmdd)?;
-            if suffix.len() < 36 {
-                return Ok(false);
-            }
-            let date = u32::from_be_bytes(suffix[32..36].try_into().map_err(|_| {
-                anyhow::anyhow!("invalid object_daily suffix length: {}", suffix.len())
-            })?);
-            Ok(date >= cutoff_date)
-        }
+        // Per-entity daily families: NEVER deleted here.
+        //
+        // Their rows are keyed (entity, date) and one date bucket carries
+        // contributions from both sides of the fork point. Deleting the bucket
+        // discarded the surviving part for good, because replay only re-applies
+        // blocks after the fork point. The `EntityStats` undo log restores the
+        // exact pre-block bytes instead — see `db/writer/entity_stats.rs`.
+        keys::STATS_PREFIX_SCRIPT_DAILY
+        | keys::STATS_PREFIX_TOKEN_DAILY
+        | keys::STATS_PREFIX_CLUSTER_DAILY
+        | keys::STATS_PREFIX_SPORE_DAILY
+        | keys::STATS_PREFIX_OBJECT_DAILY => Ok(false),
         // activity daily: YYYYMMDD
         keys::STATS_PREFIX_ACTIVITY_DAILY => {
             Ok(suffix.len() >= 8 && &suffix[..8] >= cutoff_yyyymmdd)
@@ -1119,21 +1089,13 @@ fn should_delete_stats_for_replay(
         keys::STATS_PREFIX_ACTIVITY_HOURLY_ADDR_SET => {
             Ok(suffix.len() >= 10 && &suffix[..10] > cutoff_yyyymmddhh_utc8)
         }
-        // per-asset hourly transfer counters: entity_hash(32B) + hour_bucket(8B BE i64)
+        // Per-entity hourly transfer counters: NEVER deleted here, for the
+        // same reason as the daily families above. Restored by the
+        // `EntityStats` undo log; expired buckets are removed by the hourly
+        // retention sweep, which is a separate, forward-only concern.
         keys::STATS_PREFIX_TOKEN_HOURLY
         | keys::STATS_PREFIX_SPORE_HOURLY
-        | keys::STATS_PREFIX_OBJECT_HOURLY => {
-            if suffix.len() < 40 {
-                return Ok(false);
-            }
-            let hour_bucket = i64::from_be_bytes(suffix[32..40].try_into().map_err(|_| {
-                anyhow::anyhow!(
-                    "invalid per-asset hourly key suffix length: {}",
-                    suffix.len()
-                )
-            })?);
-            Ok(hour_bucket >= cutoff_hour)
-        }
+        | keys::STATS_PREFIX_OBJECT_HOURLY => Ok(false),
         // epoch-scoped: prefix(1B) + epoch_number(8B BE i64)
         //
         // Epochs that BEGIN inside the replayed range are deleted (replay
@@ -2003,9 +1965,6 @@ impl CkbadgerStore {
                 .format("%Y%m%d")
                 .to_string()
         });
-        let replay_cutoff_hour = replay_start_header
-            .as_ref()
-            .map(|h| h.timestamp / 3_600_000);
         let replay_cutoff_epoch = replay_start_header.as_ref().map(|h| h.epoch_number);
         // UTC+8 hour cutoff — governs the ACTIVITY_HOURLY bucket family.
         let replay_cutoff_hour_str_utc8 = replay_start_header.as_ref().map(|h| {
@@ -2991,8 +2950,6 @@ impl CkbadgerStore {
         // retained portion of that day is preserved.
         let mut stats_scanned = 0u64;
         if let Some(cutoff) = replay_cutoff_date.as_deref() {
-            let cutoff_hour =
-                replay_cutoff_hour.expect("cutoff_hour must be set when cutoff_date is set");
             let cutoff_epoch =
                 replay_cutoff_epoch.expect("cutoff_epoch must be set when cutoff_date is set");
             let cutoff_hour_str_utc8 = replay_cutoff_hour_str_utc8
@@ -3146,7 +3103,6 @@ impl CkbadgerStore {
                             cutoff.as_bytes(),
                             cutoff_hour_str_utc8.as_bytes(),
                             cutoff_hour_str_utc.as_bytes(),
-                            cutoff_hour,
                             cutoff_epoch,
                             delete_cutoff_epoch,
                         )? {
@@ -5235,7 +5191,7 @@ mod tests {
                 let mut key = vec![prefix];
                 key.extend_from_slice(probe);
                 assert!(
-                    !should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, 0, true)
+                    !should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, true)
                         .unwrap(),
                     "prefix {prefix:#04x} is selectable but missing from \
                      STATS_REPLAY_CANDIDATE_PREFIXES — the rollback sweep would never visit it"
@@ -5258,7 +5214,7 @@ mod tests {
         ] {
             let key = crate::keys::encode_stats_key(prefix, b"latest");
             assert!(
-                !should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, 0, false)
+                !should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, false)
                     .unwrap(),
                 "DAO singleton prefix 0x{:02x} must survive rollback",
                 prefix
@@ -5272,15 +5228,14 @@ mod tests {
         let cutoff_hh = b"2026021000";
         let key = crate::keys::encode_stats_key(crate::keys::STATS_PREFIX_DAILY, b"20260211");
         assert!(
-            should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, 0, false)
-                .unwrap()
+            should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, false).unwrap()
         );
 
         let key_old = crate::keys::encode_stats_key(crate::keys::STATS_PREFIX_DAILY, b"20260209");
-        assert!(!should_delete_stats_for_replay(
-            &key_old, cutoff, cutoff_hh, cutoff_hh, 0, 0, false
-        )
-        .unwrap());
+        assert!(
+            !should_delete_stats_for_replay(&key_old, cutoff, cutoff_hh, cutoff_hh, 0, false)
+                .unwrap()
+        );
     }
 
     #[test]
@@ -5289,15 +5244,14 @@ mod tests {
         let cutoff_hh = b"2026021000";
         let hourly = crate::keys::encode_stats_key(crate::keys::STATS_PREFIX_HOURLY, b"2026021001");
         assert!(
-            should_delete_stats_for_replay(&hourly, cutoff, cutoff_hh, cutoff_hh, 0, 0, false)
+            should_delete_stats_for_replay(&hourly, cutoff, cutoff_hh, cutoff_hh, 0, false)
                 .unwrap()
         );
 
         let miner_suffix = [b"20260210".as_slice(), &[0xAA; 32]].concat();
         let miner = crate::keys::encode_stats_key(crate::keys::STATS_PREFIX_MINER, &miner_suffix);
         assert!(
-            should_delete_stats_for_replay(&miner, cutoff, cutoff_hh, cutoff_hh, 0, 0, false)
-                .unwrap()
+            should_delete_stats_for_replay(&miner, cutoff, cutoff_hh, cutoff_hh, 0, false).unwrap()
         );
     }
 
@@ -5313,7 +5267,7 @@ mod tests {
         let cutoff_hh_utc = b"2026021007";
         let check = |prefix: u8, hour: &[u8]| {
             let key = crate::keys::encode_stats_key(prefix, hour);
-            should_delete_stats_for_replay(&key, cutoff, cutoff_hh_utc8, cutoff_hh_utc, 0, 0, false)
+            should_delete_stats_for_replay(&key, cutoff, cutoff_hh_utc8, cutoff_hh_utc, 0, false)
                 .unwrap()
         };
 
@@ -5508,65 +5462,52 @@ mod tests {
 
     #[test]
     fn test_should_delete_stats_for_replay_script_daily_prefix() {
+        // Was: "a SCRIPT_DAILY row at or after the cutoff is deleted". That
+        // expectation WAS the bug — the cutoff bucket also holds every
+        // contribution the surviving chain made before the fork point, and
+        // replay never re-applies those blocks. The `EntityStats` undo log now
+        // owns this family, so the sweep must not touch it at ANY date.
         let cutoff = b"20260210";
         let cutoff_hh = b"2026021000";
         let code_hash = [0xAA; 32];
 
-        let new_key = crate::keys::encode_script_daily_key(&code_hash, 1, false, 20260211);
-        assert!(should_delete_stats_for_replay(
-            &new_key, cutoff, cutoff_hh, cutoff_hh, 0, 0, false
-        )
-        .unwrap());
-
-        let old_key = crate::keys::encode_script_daily_key(&code_hash, 1, true, 20260209);
-        assert!(!should_delete_stats_for_replay(
-            &old_key, cutoff, cutoff_hh, cutoff_hh, 0, 0, false
-        )
-        .unwrap());
-
-        // The hash_type byte shifts the date offset; a data-form key at the
-        // cutoff date must be classified by its date, not by a misread field.
-        let data_form_key = crate::keys::encode_script_daily_key(&code_hash, 0, false, 20260210);
-        assert!(should_delete_stats_for_replay(
-            &data_form_key,
-            cutoff,
-            cutoff_hh,
-            cutoff_hh,
-            0,
-            0,
-            false
-        )
-        .unwrap());
-        let data_form_old = crate::keys::encode_script_daily_key(&code_hash, 0, false, 20260209);
-        assert!(!should_delete_stats_for_replay(
-            &data_form_old,
-            cutoff,
-            cutoff_hh,
-            cutoff_hh,
-            0,
-            0,
-            false
-        )
-        .unwrap());
+        for (hash_type, is_type, date) in [
+            (1u8, false, 20260211u32), // strictly after the cutoff
+            (1, true, 20260210),       // the cutoff date itself
+            (1, true, 20260209),       // before the cutoff
+            (0, false, 20260210),      // data-form key, cutoff date
+            (0, false, 20260209),
+        ] {
+            let key = crate::keys::encode_script_daily_key(&code_hash, hash_type, is_type, date);
+            assert!(
+                !should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, false)
+                    .unwrap(),
+                "script_daily must never be swept: hash_type={hash_type} is_type={is_type} date={date}"
+            );
+        }
+        assert!(
+            !STATS_REPLAY_CANDIDATE_PREFIXES.contains(&crate::keys::STATS_PREFIX_SCRIPT_DAILY),
+            "script_daily must not even be visited by the sweep"
+        );
     }
 
     #[test]
     fn test_should_delete_stats_for_replay_token_daily_prefix() {
+        // See `..._script_daily_prefix`: deleting the cutoff bucket is what
+        // cost testnet iCKB 232,171,655,021,955 shannons across three days.
         let cutoff = b"20260210";
         let cutoff_hh = b"2026021000";
         let type_hash = [0xBB; 32];
 
-        let new_key = crate::keys::encode_token_daily_key(&type_hash, 20260211);
-        assert!(should_delete_stats_for_replay(
-            &new_key, cutoff, cutoff_hh, cutoff_hh, 0, 0, false
-        )
-        .unwrap());
-
-        let old_key = crate::keys::encode_token_daily_key(&type_hash, 20260209);
-        assert!(!should_delete_stats_for_replay(
-            &old_key, cutoff, cutoff_hh, cutoff_hh, 0, 0, false
-        )
-        .unwrap());
+        for date in [20260211u32, 20260210, 20260209] {
+            let key = crate::keys::encode_token_daily_key(&type_hash, date);
+            assert!(
+                !should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, false)
+                    .unwrap(),
+                "token_daily must never be swept: date={date}"
+            );
+        }
+        assert!(!STATS_REPLAY_CANDIDATE_PREFIXES.contains(&crate::keys::STATS_PREFIX_TOKEN_DAILY));
     }
 
     #[test]
@@ -5575,17 +5516,15 @@ mod tests {
         let cutoff_hh = b"2026021000";
         let cluster_id = [0xCC; 32];
 
-        let new_key = crate::keys::encode_cluster_daily_key(&cluster_id, 20260211);
-        assert!(should_delete_stats_for_replay(
-            &new_key, cutoff, cutoff_hh, cutoff_hh, 0, 0, false
-        )
-        .unwrap());
-
-        let old_key = crate::keys::encode_cluster_daily_key(&cluster_id, 20260209);
-        assert!(!should_delete_stats_for_replay(
-            &old_key, cutoff, cutoff_hh, cutoff_hh, 0, 0, false
-        )
-        .unwrap());
+        for date in [20260211u32, 20260210, 20260209] {
+            let key = crate::keys::encode_cluster_daily_key(&cluster_id, date);
+            assert!(
+                !should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, false)
+                    .unwrap(),
+                "cluster_daily must never be swept: date={date}"
+            );
+        }
+        assert!(!STATS_REPLAY_CANDIDATE_PREFIXES.contains(&crate::keys::STATS_PREFIX_CLUSTER_DAILY));
     }
 
     #[test]
@@ -5594,17 +5533,15 @@ mod tests {
         let cutoff_hh = b"2026021000";
         let spore_id = [0xDD; 32];
 
-        let new_key = crate::keys::encode_spore_daily_key(&spore_id, 20260211);
-        assert!(should_delete_stats_for_replay(
-            &new_key, cutoff, cutoff_hh, cutoff_hh, 0, 0, false
-        )
-        .unwrap());
-
-        let old_key = crate::keys::encode_spore_daily_key(&spore_id, 20260209);
-        assert!(!should_delete_stats_for_replay(
-            &old_key, cutoff, cutoff_hh, cutoff_hh, 0, 0, false
-        )
-        .unwrap());
+        for date in [20260211u32, 20260210, 20260209] {
+            let key = crate::keys::encode_spore_daily_key(&spore_id, date);
+            assert!(
+                !should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, false)
+                    .unwrap(),
+                "spore_daily must never be swept: date={date}"
+            );
+        }
+        assert!(!STATS_REPLAY_CANDIDATE_PREFIXES.contains(&crate::keys::STATS_PREFIX_SPORE_DAILY));
     }
 
     #[test]
@@ -5613,17 +5550,15 @@ mod tests {
         let cutoff_hh = b"2026021000";
         let collection_id = [0xEE; 24];
 
-        let new_key = crate::keys::encode_object_daily_key(&collection_id, 20260211);
-        assert!(should_delete_stats_for_replay(
-            &new_key, cutoff, cutoff_hh, cutoff_hh, 0, 0, false
-        )
-        .unwrap());
-
-        let old_key = crate::keys::encode_object_daily_key(&collection_id, 20260209);
-        assert!(!should_delete_stats_for_replay(
-            &old_key, cutoff, cutoff_hh, cutoff_hh, 0, 0, false
-        )
-        .unwrap());
+        for date in [20260211u32, 20260210, 20260209] {
+            let key = crate::keys::encode_object_daily_key(&collection_id, date);
+            assert!(
+                !should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, false)
+                    .unwrap(),
+                "object_daily must never be swept: date={date}"
+            );
+        }
+        assert!(!STATS_REPLAY_CANDIDATE_PREFIXES.contains(&crate::keys::STATS_PREFIX_OBJECT_DAILY));
     }
 
     #[test]
@@ -5640,7 +5575,6 @@ mod tests {
             cutoff,
             cutoff_hh,
             cutoff_hh,
-            0,
             cutoff_epoch,
             false
         )
@@ -5652,7 +5586,6 @@ mod tests {
             cutoff,
             cutoff_hh,
             cutoff_hh,
-            0,
             cutoff_epoch,
             true
         )
@@ -5666,7 +5599,6 @@ mod tests {
             cutoff,
             cutoff_hh,
             cutoff_hh,
-            0,
             cutoff_epoch,
             false
         )
@@ -5680,7 +5612,6 @@ mod tests {
             cutoff,
             cutoff_hh,
             cutoff_hh,
-            0,
             cutoff_epoch,
             false
         )
@@ -5701,38 +5632,32 @@ mod tests {
 
         let key = crate::keys::encode_spore_outpoint_key(&tx_hash, output_index);
         assert!(
-            !should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, 0, false)
-                .unwrap()
+            !should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, false).unwrap()
         );
 
         let key = crate::keys::encode_spore_outpoint_by_id_key(&spore_id, &tx_hash, output_index);
         assert!(
-            !should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, 0, false)
-                .unwrap()
+            !should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, false).unwrap()
         );
 
         let key = crate::keys::encode_spore_type_index_key(&type_script_hash);
         assert!(
-            !should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, 0, false)
-                .unwrap()
+            !should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, false).unwrap()
         );
 
         let key = crate::keys::encode_mnft_class_outpoint_key(&tx_hash, output_index);
         assert!(
-            !should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, 0, false)
-                .unwrap()
+            !should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, false).unwrap()
         );
 
         let key = crate::keys::encode_mnft_token_outpoint_key(&tx_hash, output_index);
         assert!(
-            !should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, 0, false)
-                .unwrap()
+            !should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, false).unwrap()
         );
 
         let key = crate::keys::encode_dotbit_account_outpoint_key(&tx_hash, output_index);
         assert!(
-            !should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, 0, false)
-                .unwrap()
+            !should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, false).unwrap()
         );
 
         let key = crate::keys::encode_dotbit_outpoint_by_account_id_key(
@@ -5741,115 +5666,82 @@ mod tests {
             output_index,
         );
         assert!(
-            !should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, 0, false)
-                .unwrap()
+            !should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, false).unwrap()
         );
 
         let key = crate::keys::encode_object_type_index_key(&type_script_hash);
         assert!(
-            !should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, 0, false)
-                .unwrap()
+            !should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, false).unwrap()
         );
     }
 
     #[test]
     fn test_should_delete_stats_for_replay_per_asset_hourly_prefixes() {
+        // Was: "a per-asset hourly bucket at or after `cutoff_hour` is
+        // deleted". Same defect as the daily families — the cutoff hour holds
+        // transfers from both sides of the fork point. The `EntityStats` undo
+        // log restores them; the retention sweep, not rollback, removes expired
+        // ones.
         let cutoff = b"20260210";
         let cutoff_hh = b"2026021000";
         let type_hash = [0xAA; 32];
         let cluster_id = [0xBB; 32];
         let collection_id = [0xCC; 24];
-        // cutoff_hour = 492_960 (arbitrary, corresponds to ~2026-03-10)
         let cutoff_hour: i64 = 492_960;
 
-        // TOKEN_HOURLY at cutoff_hour → deleted
-        let key = crate::keys::encode_token_hourly_key(&type_hash, cutoff_hour);
-        assert!(should_delete_stats_for_replay(
-            &key,
-            cutoff,
-            cutoff_hh,
-            cutoff_hh,
-            cutoff_hour,
-            0,
-            false
-        )
-        .unwrap());
-
-        // TOKEN_HOURLY before cutoff → preserved
-        let key = crate::keys::encode_token_hourly_key(&type_hash, cutoff_hour - 1);
-        assert!(!should_delete_stats_for_replay(
-            &key,
-            cutoff,
-            cutoff_hh,
-            cutoff_hh,
-            cutoff_hour,
-            0,
-            false
-        )
-        .unwrap());
-
-        // SPORE_HOURLY at cutoff_hour → deleted
-        let key = crate::keys::encode_spore_hourly_key(&cluster_id, cutoff_hour);
-        assert!(should_delete_stats_for_replay(
-            &key,
-            cutoff,
-            cutoff_hh,
-            cutoff_hh,
-            cutoff_hour,
-            0,
-            false
-        )
-        .unwrap());
-
-        // SPORE_HOURLY before cutoff → preserved
-        let key = crate::keys::encode_spore_hourly_key(&cluster_id, cutoff_hour - 1);
-        assert!(!should_delete_stats_for_replay(
-            &key,
-            cutoff,
-            cutoff_hh,
-            cutoff_hh,
-            cutoff_hour,
-            0,
-            false
-        )
-        .unwrap());
-
-        // OBJECT_HOURLY at cutoff_hour → deleted
-        let key = crate::keys::encode_object_hourly_key(&collection_id, cutoff_hour);
-        assert!(should_delete_stats_for_replay(
-            &key,
-            cutoff,
-            cutoff_hh,
-            cutoff_hh,
-            cutoff_hour,
-            0,
-            false
-        )
-        .unwrap());
-
-        // OBJECT_HOURLY before cutoff → preserved
-        let key = crate::keys::encode_object_hourly_key(&collection_id, cutoff_hour - 1);
-        assert!(!should_delete_stats_for_replay(
-            &key,
-            cutoff,
-            cutoff_hh,
-            cutoff_hh,
-            cutoff_hour,
-            0,
-            false
-        )
-        .unwrap());
+        for hour in [cutoff_hour + 1, cutoff_hour, cutoff_hour - 1] {
+            for key in [
+                crate::keys::encode_token_hourly_key(&type_hash, hour),
+                crate::keys::encode_spore_hourly_key(&cluster_id, hour),
+                crate::keys::encode_object_hourly_key(&collection_id, hour),
+            ] {
+                assert!(
+                    !should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, false)
+                        .unwrap(),
+                    "per-asset hourly must never be swept: prefix={:#04x} hour={hour}",
+                    key[0]
+                );
+            }
+        }
+        for prefix in [
+            crate::keys::STATS_PREFIX_TOKEN_HOURLY,
+            crate::keys::STATS_PREFIX_SPORE_HOURLY,
+            crate::keys::STATS_PREFIX_OBJECT_HOURLY,
+        ] {
+            assert!(!STATS_REPLAY_CANDIDATE_PREFIXES.contains(&prefix));
+        }
     }
 
     #[test]
     fn test_should_delete_stats_for_replay_errors_on_invalid_cutoff_date() {
+        // A malformed cutoff must fail fast rather than mis-order against real
+        // `YYYYMMDD` ASCII. The guard used to hang off `SCRIPT_DAILY`, which is
+        // no longer swept at all; it now covers every date-scoped family that
+        // rollback still deletes.
         let cutoff = b"invalid-cutoff";
         let cutoff_hh = b"invalid-cutoff";
-        let code_hash = [0xAA; 32];
-        let key = crate::keys::encode_script_daily_key(&code_hash, 1, false, 20260211);
-        let err = should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, 0, false)
-            .unwrap_err();
-        assert!(err.to_string().contains("invalid cutoff date"));
+        let mut miner_suffix = b"20260211".to_vec();
+        miner_suffix.extend_from_slice(&[0x44; 32]);
+        for key in [
+            crate::keys::encode_stats_key(crate::keys::STATS_PREFIX_DAILY, b"20260211"),
+            crate::keys::encode_stats_key(crate::keys::STATS_PREFIX_DAILY_BLOCK, b"20260211"),
+            crate::keys::encode_stats_key(crate::keys::STATS_PREFIX_HODL_WAVE, b"20260211"),
+            crate::keys::encode_stats_key(crate::keys::STATS_PREFIX_CELL_DISTRIBUTION, b"20260211"),
+            crate::keys::encode_stats_key(crate::keys::STATS_PREFIX_ADDR_COHORT, b"20260211"),
+            crate::keys::encode_stats_key(
+                crate::keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT,
+                b"20260211",
+            ),
+            crate::keys::encode_stats_key(crate::keys::STATS_PREFIX_MINER, &miner_suffix),
+        ] {
+            let err = should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, false)
+                .unwrap_err();
+            assert!(
+                err.to_string().contains("invalid cutoff date"),
+                "prefix {:#04x} must reject a malformed cutoff, got: {err}",
+                key[0]
+            );
+        }
     }
 
     #[test]
@@ -10044,12 +9936,152 @@ mod tests {
         batch.put_cluster_owner_count(&cluster_id, &owner, 1);
         batch.commit().unwrap();
 
-        // Run rollback (rollback_to > created_at_block so spore survives)
+        // An orphaned block 201 moved the 20260102 row; its pre-image is in the
+        // undo log, exactly as the `EntityStats` overlay now writes it.
+        {
+            let mut batch = StoreBatch::new(&store);
+            let key = keys::encode_cluster_daily_key(&cluster_id, 20260102);
+            batch.put_stats(
+                &key,
+                &bincode::serialize(&ClusterDailyDelta {
+                    owned_capacity_delta: 999_999,
+                    owned_knowledge_delta: 888_888,
+                })
+                .unwrap(),
+            );
+            batch.put_reorg_undo_log_by_block(
+                201,
+                0x0004_0000_0000_0000,
+                &UndoLogEntry::KeyMutation {
+                    target_store: UndoLogStoreTarget::Domain,
+                    cf_name: crate::store::CF_STATS_SPORE.to_string(),
+                    key: key.to_vec(),
+                    previous_value: Some(
+                        bincode::serialize(&ClusterDailyDelta {
+                            owned_capacity_delta: 300,
+                            owned_knowledge_delta: 100,
+                        })
+                        .unwrap(),
+                    ),
+                },
+            );
+            batch.commit().unwrap();
+        }
+
+        // `execute_reorg` replays the undo log first, then runs
+        // `rollback_to_block`. Stage 10 therefore recomputes cluster capacity
+        // from rows that are already exact — the sweep no longer deletes them,
+        // and the undo entry has restored the one the orphan moved.
+        store.rollback_via_undo_log(&store, 200).unwrap();
         store.rollback_to_block(200).unwrap();
 
         let agg = store.get_cluster_aggregate(&cluster_id).unwrap().unwrap();
         assert_eq!(agg.owned_capacity, 800); // 500 + 300
         assert_eq!(agg.owned_knowledge, 300); // 200 + 100
+
+        // Both surviving daily rows are still there, byte for byte.
+        assert_eq!(
+            store
+                .get_cluster_daily_delta(&cluster_id, 20260101)
+                .unwrap()
+                .unwrap()
+                .owned_capacity_delta,
+            500
+        );
+        assert_eq!(
+            store
+                .get_cluster_daily_delta(&cluster_id, 20260102)
+                .unwrap()
+                .unwrap()
+                .owned_capacity_delta,
+            300
+        );
+    }
+
+    /// Task 0.2's responsibility table, executable: every prefix the rollback
+    /// sweep can reach has exactly one owner, and the eight per-entity families
+    /// belong to the `EntityStats` undo log — neither swept nor repaired.
+    #[test]
+    fn test_stats_prefix_rollback_owner_table() {
+        // (prefix, owner) for every prefix in the table. "Sweep" families are
+        // visited by `should_delete_stats_for_replay`; "Undo" families are not.
+        #[derive(Debug, PartialEq, Eq)]
+        enum Owner {
+            /// Deleted from the cutoff onward, cutoff bucket delta-repaired or
+            /// rebuilt in place; replay regenerates the rest.
+            Sweep,
+            /// Restored byte-exactly by the `EntityStats` undo log.
+            EntityStatsUndo,
+        }
+
+        let table: [(u8, Owner); 21] = [
+            (keys::STATS_PREFIX_DAILY, Owner::Sweep),
+            (keys::STATS_PREFIX_DAILY_BLOCK, Owner::Sweep),
+            (keys::STATS_PREFIX_HOURLY, Owner::Sweep),
+            (keys::STATS_PREFIX_MINER, Owner::Sweep),
+            (keys::STATS_PREFIX_ACTIVITY_DAILY, Owner::Sweep),
+            (keys::STATS_PREFIX_ACTIVITY_HOURLY, Owner::Sweep),
+            (keys::STATS_PREFIX_ACTIVITY_DAILY_ADDR_SET, Owner::Sweep),
+            (keys::STATS_PREFIX_ACTIVITY_HOURLY_ADDR_SET, Owner::Sweep),
+            (keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT, Owner::Sweep),
+            (keys::STATS_PREFIX_EPOCH, Owner::Sweep),
+            (keys::STATS_PREFIX_HODL_WAVE, Owner::Sweep),
+            (keys::STATS_PREFIX_CELL_DISTRIBUTION, Owner::Sweep),
+            (keys::STATS_PREFIX_ADDR_COHORT, Owner::Sweep),
+            (keys::STATS_PREFIX_SCRIPT_DAILY, Owner::EntityStatsUndo),
+            (keys::STATS_PREFIX_TOKEN_DAILY, Owner::EntityStatsUndo),
+            (keys::STATS_PREFIX_CLUSTER_DAILY, Owner::EntityStatsUndo),
+            (keys::STATS_PREFIX_SPORE_DAILY, Owner::EntityStatsUndo),
+            (keys::STATS_PREFIX_OBJECT_DAILY, Owner::EntityStatsUndo),
+            (keys::STATS_PREFIX_TOKEN_HOURLY, Owner::EntityStatsUndo),
+            (keys::STATS_PREFIX_SPORE_HOURLY, Owner::EntityStatsUndo),
+            (keys::STATS_PREFIX_OBJECT_HOURLY, Owner::EntityStatsUndo),
+        ];
+
+        // Exactly one owner each: no prefix appears twice.
+        let mut seen = std::collections::HashSet::new();
+        for (prefix, _) in &table {
+            assert!(seen.insert(*prefix), "prefix {prefix:#04x} listed twice");
+        }
+
+        let swept: Vec<u8> = table
+            .iter()
+            .filter(|(_, owner)| *owner == Owner::Sweep)
+            .map(|(prefix, _)| *prefix)
+            .collect();
+        assert_eq!(
+            swept.len(),
+            STATS_REPLAY_CANDIDATE_PREFIXES.len(),
+            "the sweep candidate set and the table's Sweep rows must agree"
+        );
+        for prefix in &swept {
+            assert!(
+                STATS_REPLAY_CANDIDATE_PREFIXES.contains(prefix),
+                "prefix {prefix:#04x} is owned by the sweep but never visited by it"
+            );
+        }
+        for (prefix, _) in table.iter().filter(|(_, o)| *o == Owner::EntityStatsUndo) {
+            assert!(
+                !STATS_REPLAY_CANDIDATE_PREFIXES.contains(prefix),
+                "prefix {prefix:#04x} is owned by the undo log but the sweep still visits it"
+            );
+            // And the predicate refuses it at any date/hour, so a future
+            // re-addition to the candidate set still cannot delete it.
+            let mut key = vec![*prefix];
+            key.extend_from_slice(&[0xFFu8; 64]);
+            assert!(
+                !should_delete_stats_for_replay(
+                    &key,
+                    b"20260210",
+                    b"2026021000",
+                    b"2026021000",
+                    0,
+                    true
+                )
+                .unwrap(),
+                "prefix {prefix:#04x} must never be deletable"
+            );
+        }
     }
 
     #[test]
@@ -10771,7 +10803,6 @@ mod tests {
             cutoff_hh,
             cutoff_hh,
             0,
-            0,
             false
         )
         .unwrap());
@@ -10779,16 +10810,16 @@ mod tests {
         // Hour 15 (cutoff hour) — should be deleted (repair handles it)
         let key_at = keys::encode_stats_key(keys::STATS_PREFIX_HOURLY, b"2026021015");
         assert!(
-            should_delete_stats_for_replay(&key_at, cutoff, cutoff_hh, cutoff_hh, 0, 0, false)
+            should_delete_stats_for_replay(&key_at, cutoff, cutoff_hh, cutoff_hh, 0, false)
                 .unwrap()
         );
 
         // Hour 16 — after cutoff, should be deleted
         let key_after = keys::encode_stats_key(keys::STATS_PREFIX_HOURLY, b"2026021016");
-        assert!(should_delete_stats_for_replay(
-            &key_after, cutoff, cutoff_hh, cutoff_hh, 0, 0, false
-        )
-        .unwrap());
+        assert!(
+            should_delete_stats_for_replay(&key_after, cutoff, cutoff_hh, cutoff_hh, 0, false)
+                .unwrap()
+        );
 
         // Previous day — should NOT be deleted
         let key_prev_day = keys::encode_stats_key(keys::STATS_PREFIX_HOURLY, b"2026020923");
@@ -10797,7 +10828,6 @@ mod tests {
             cutoff,
             cutoff_hh,
             cutoff_hh,
-            0,
             0,
             false
         )
@@ -10812,22 +10842,19 @@ mod tests {
         // Hour 14 — canonical, NOT deleted
         let key = keys::encode_stats_key(keys::STATS_PREFIX_ACTIVITY_HOURLY, b"2026021014");
         assert!(
-            !should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, 0, false)
-                .unwrap()
+            !should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, false).unwrap()
         );
 
         // Hour 15 (cutoff) — deleted
         let key = keys::encode_stats_key(keys::STATS_PREFIX_ACTIVITY_HOURLY, b"2026021015");
         assert!(
-            should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, 0, false)
-                .unwrap()
+            should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, false).unwrap()
         );
 
         // Hour 16 — deleted
         let key = keys::encode_stats_key(keys::STATS_PREFIX_ACTIVITY_HOURLY, b"2026021016");
         assert!(
-            should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, 0, false)
-                .unwrap()
+            should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, false).unwrap()
         );
     }
 
@@ -10839,39 +10866,34 @@ mod tests {
         // Daily ADDR_SET on cutoff date — preserved (strict >)
         let key = keys::encode_stats_key(keys::STATS_PREFIX_ACTIVITY_DAILY_ADDR_SET, b"20260210");
         assert!(
-            !should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, 0, false)
-                .unwrap()
+            !should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, false).unwrap()
         );
 
         // Daily ADDR_SET day after — deleted
         let key = keys::encode_stats_key(keys::STATS_PREFIX_ACTIVITY_DAILY_ADDR_SET, b"20260211");
         assert!(
-            should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, 0, false)
-                .unwrap()
+            should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, false).unwrap()
         );
 
         // Hourly ADDR_SET at cutoff hour — preserved (strict >)
         let key =
             keys::encode_stats_key(keys::STATS_PREFIX_ACTIVITY_HOURLY_ADDR_SET, b"2026021015");
         assert!(
-            !should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, 0, false)
-                .unwrap()
+            !should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, false).unwrap()
         );
 
         // Hourly ADDR_SET hour before cutoff — preserved
         let key =
             keys::encode_stats_key(keys::STATS_PREFIX_ACTIVITY_HOURLY_ADDR_SET, b"2026021014");
         assert!(
-            !should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, 0, false)
-                .unwrap()
+            !should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, false).unwrap()
         );
 
         // Hourly ADDR_SET hour after cutoff — deleted
         let key =
             keys::encode_stats_key(keys::STATS_PREFIX_ACTIVITY_HOURLY_ADDR_SET, b"2026021016");
         assert!(
-            should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, 0, false)
-                .unwrap()
+            should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hh, 0, false).unwrap()
         );
     }
 
