@@ -73,14 +73,14 @@ struct Sample {
     precompute_ms: f64,
     build_ms: f64,
     finalize_ms: f64,
-    // Commit window split (P3.2). `db_commit_ms` above stays the wide window;
-    // these four are its non-overlapping parts and `commit_phase_total_ms` is
-    // the same window under its explicit name.
+    // Commit window split (P3.2). `db_commit_ms` above IS the wide window
+    // (`commit_phase_total_ms` in the writer's own metrics); these four are its
+    // non-overlapping parts and sum to at most it. There is deliberately no
+    // second column for the total.
     commit_prepare_ms: f64,
     script_rollup_ms: f64,
     append_only_commit_synced_ms: f64,
     domain_commit_ms: f64,
-    commit_phase_total_ms: f64,
     // Flush-storm outcome signals (P3.3).
     sst_files_total: u64,
     manifest_bytes: u64,
@@ -165,9 +165,6 @@ async fn run(indexer: Arc<Indexer>, csv_path: PathBuf) -> anyhow::Result<()> {
             script_rollup_ms,
             append_only_commit_synced_ms,
             domain_commit_ms,
-            // The wide window, sampled from the same accumulator the old
-            // `db_commit_ms_avg` column reports.
-            commit_phase_total_ms: db_commit_ms,
             sst_files_total: memory.sst_files_total,
             manifest_bytes: memory.manifest_bytes,
         };
@@ -264,7 +261,7 @@ fn csv_header() -> &'static str {
      flush_observed_in_window,\
      precompute_ms_avg,build_ms_avg,finalize_ms_avg,\
      commit_prepare_ms_avg,script_rollup_ms_avg,append_only_commit_synced_ms_avg,\
-     domain_commit_ms_avg,commit_phase_total_ms_avg,\
+     domain_commit_ms_avg,\
      sst_files_last,manifest_mb_last\n"
 }
 
@@ -411,11 +408,10 @@ fn format_hourly_row(buffer: &[Sample]) -> String {
         .sum::<f64>()
         / n;
     let avg_domain_commit = buffer.iter().map(|s| s.domain_commit_ms).sum::<f64>() / n;
-    let avg_commit_total = buffer.iter().map(|s| s.commit_phase_total_ms).sum::<f64>() / n;
     let last = buffer.last().expect("buffer is non-empty");
     format!(
         "{},{},{},{},{:.1},{:.1},{:.0},{:.1},{},{:.2},{},{},{},{},{:.0},{},{:.0},{:.0},{},{},\
-         {:.1},{:.1},{:.1},{:.1},{:.1},{:.1},{:.1},{:.1},{},{}\n",
+         {:.1},{:.1},{:.1},{:.1},{:.1},{:.1},{:.1},{},{}\n",
         CSV_SCHEMA_VERSION,
         Utc::now().to_rfc3339(),
         last.current_block,
@@ -443,7 +439,6 @@ fn format_hourly_row(buffer: &[Sample]) -> String {
         avg_script_rollup,
         avg_append_only_commit,
         avg_domain_commit,
-        avg_commit_total,
         last.sst_files_total,
         last.manifest_bytes / (1024 * 1024),
     )
@@ -503,7 +498,6 @@ mod tests {
             script_rollup_ms: 23.0,
             append_only_commit_synced_ms: 24.0,
             domain_commit_ms: 25.0,
-            commit_phase_total_ms: 26.0,
             sst_files_total: 27,
             manifest_bytes: 28 * 1024 * 1024,
         };

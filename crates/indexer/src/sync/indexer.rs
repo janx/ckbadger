@@ -312,15 +312,28 @@ pub(crate) fn decide_startup_sync(
         )
     })?;
     let fresh = is_fresh_sync_tip_state(sync_tip_block, sync_tip_hash);
-    // The lag only decides anything on the fresh branch, and a fresh store has
-    // `sync_tip_block == 0`, so there the lag IS the chain tip. Passing it keeps
-    // one decision function instead of a second copy of the threshold rule.
-    let path = select_startup_sync_path(
-        chain_tip,
-        bulk_sync_threshold,
-        sync_tip_block,
-        sync_tip_hash,
-    );
+    let path = match u64::try_from(blocks_behind) {
+        // The normal case: we are behind the node, and the shared threshold
+        // rule decides.
+        Ok(lag) => {
+            select_startup_sync_path(lag, bulk_sync_threshold, sync_tip_block, sync_tip_hash)
+        }
+        // The node reports a tip BELOW ours (it restarted from a snapshot, or
+        // reorged). That is only possible on a non-fresh store — a fresh one
+        // has `sync_tip_block == 0`, so its lag is the chain tip and cannot be
+        // negative — and a non-fresh store is live sync at any lag. No lag
+        // value is invented for this branch.
+        Err(_) => {
+            if fresh {
+                bail!(
+                    "negative startup lag on a fresh store: chain_tip={}, sync_tip={}",
+                    chain_tip_i64,
+                    sync_tip_block
+                );
+            }
+            SyncPath::Pipeline
+        }
+    };
     let memtable = match path {
         SyncPath::BulkBuild => MemtableKind::Vector,
         SyncPath::Pipeline => MemtableKind::SkipList,

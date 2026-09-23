@@ -2856,9 +2856,11 @@ mod tests {
         }
         let written_bytes = u64::from(BATCHES) * u64::from(KEYS_PER_BATCH) * (64 * 1024 + 32);
 
-        // Flushes are asynchronous: let any scheduled round land before
-        // counting.
-        for _ in 0..60 {
+        // Flushes are asynchronous: wait for quiescence before counting, and
+        // FAIL if it is not reached — counting mid-flush would silently under
+        // report rounds and make this test pass for the wrong reason.
+        let mut quiesced = false;
+        for _ in 0..200 {
             let running = store
                 .db
                 .property_int_value("rocksdb.num-running-flushes")
@@ -2870,10 +2872,15 @@ mod tests {
                 .unwrap()
                 .unwrap_or(0);
             if running == 0 && pending == 0 {
+                quiesced = true;
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
+        assert!(
+            quiesced,
+            "flushes never quiesced; the L0 count below would be meaningless"
+        );
         let l0_files = store
             .db
             .property_int_value_cf(cf, "rocksdb.num-files-at-level0")
