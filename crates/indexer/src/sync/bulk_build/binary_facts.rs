@@ -431,10 +431,14 @@ pub(crate) fn parse_block_to_facts(
                         data_size,
                         data: data.clone(),
                     };
+                    // The witness at THIS output's own index: a `.cell` name
+                    // cell keeps its records payload there (spec §1.3).
+                    let own_witness = witnesses.get(output_index).map(|w| w.raw_data());
                     parse_protocol_facts(
                         &parsed_cell,
                         semantic_tag,
                         &witness_bundle,
+                        own_witness.as_deref(),
                         &tx_hash,
                         output_index_i16,
                     )?
@@ -1350,6 +1354,94 @@ mod tests {
                 "did:ckb code_hash {hex} must classify as DidCkb in bulk build"
             );
         }
+    }
+
+    /// PROTO-009: a semantic tag whose protocol facts are discarded leaves the
+    /// cells classified but unindexed. The real testnet registration carries a
+    /// six-record witness on its ring predecessor and an empty one on the new
+    /// name, so this proves the witness is read at each output's OWN index.
+    #[test]
+    fn binary_facts_emit_dotcell_facts_with_records_for_real_testnet_registration() {
+        use crate::parser::test_helpers::real_dotcell as fixture;
+        use crate::sync::bulk_build::facts::CellProtocolFacts;
+        use ckb_types::packed;
+        use ckb_types::prelude::*;
+
+        let block = packed::Block::new_builder()
+            .header(
+                packed::Header::new_builder()
+                    .raw(packed::RawHeader::new_builder().build())
+                    .build(),
+            )
+            .transactions(
+                packed::TransactionVec::new_builder()
+                    .push(fixture::T2_REGISTER_JOAOM.packed_transaction())
+                    .build(),
+            )
+            .build();
+        let raw = RawCkbBlock {
+            block: block.into_view(),
+            cycles: Vec::new(),
+        };
+
+        let (_, _, cells) = parse_block_to_facts(&raw, &IdentityInterner::default())
+            .expect("binary facts must parse the real testnet .cell registration");
+        assert_eq!(cells.len(), fixture::T2_REGISTER_JOAOM.outputs.len());
+        assert_eq!(cells[0].semantic_tag, CellSemanticTag::DotCell);
+        assert_eq!(cells[1].semantic_tag, CellSemanticTag::DotCell);
+
+        match cells[0].protocol_facts.as_ref().expect("out[0] facts") {
+            CellProtocolFacts::DotCell(facts) => {
+                assert_eq!(facts.name.label, "maria");
+                assert_eq!(facts.records.len(), 6);
+                assert_eq!(facts.records[0].key, "address.309");
+                assert_eq!(
+                    facts.namespace_args.to_vec(),
+                    crate::rpc::parse_hex_to_bytes(fixture::NAMESPACE_ARGS_TESTNET)
+                );
+            }
+            other => panic!("out[0] must carry DotCell facts, got {other:?}"),
+        }
+        match cells[1].protocol_facts.as_ref().expect("out[1] facts") {
+            CellProtocolFacts::DotCell(facts) => {
+                assert_eq!(facts.name.label, "joaom");
+                assert!(
+                    facts.records.is_empty(),
+                    "joaom was registered with no records"
+                );
+            }
+            other => panic!("out[1] must carry DotCell facts, got {other:?}"),
+        }
+    }
+
+    /// A name cell says how its records hash; if the witness that holds them is
+    /// gone, the bulk path must stop rather than index a name with no records.
+    #[test]
+    fn bulk_facts_bail_when_dotcell_witness_missing() {
+        use crate::parser::test_helpers::real_dotcell as fixture;
+        use ckb_types::packed;
+        use ckb_types::prelude::*;
+
+        let block = packed::Block::new_builder()
+            .header(
+                packed::Header::new_builder()
+                    .raw(packed::RawHeader::new_builder().build())
+                    .build(),
+            )
+            .transactions(
+                packed::TransactionVec::new_builder()
+                    .push(fixture::T2_REGISTER_JOAOM.packed_transaction_with_witnesses(&[]))
+                    .build(),
+            )
+            .build();
+        let raw = RawCkbBlock {
+            block: block.into_view(),
+            cycles: Vec::new(),
+        };
+
+        let err = parse_block_to_facts(&raw, &IdentityInterner::default())
+            .expect_err("a name cell with no witness at its own index must fail fast");
+        assert!(err.to_string().contains("witness"), "{err}");
     }
 
     #[test]
