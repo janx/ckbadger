@@ -22,6 +22,64 @@ The CKB indexer uses a three-stage pipeline architecture to maximize sync throug
 4. **Use mode-specific failure handling** - Near-tip batches can drain and retry; fresh-store
    bulk build fails fast and must restart from empty chain stores
 
+## Startup Sync Decision
+
+The RocksDB memtable representation is fixed when a store is opened and cannot be changed
+afterwards, so the sync path is decided **once**, before the chain stores are opened for real.
+`open_chain_stores_for_startup()` (`crates/indexer/src/entry.rs`) owns that sequence:
+
+1. **Probe open.** The domain store opens with `vector_memtable = false` (SkipList) — the
+   representation that is correct for every outcome except a fresh bulk build. The probe handle
+   only reads: `fail_fast_if_bulk_build_session_incomplete()` rejects a partial bulk artifact, and
+   `get_sync_tip_block()` reads the writer's resume tip from `block_headers` — the authoritative
+   source `Repository::get_sync_tip` uses, never `sync_status`, which is repaired later in startup.
+2. **Decide.** `decide_startup_sync(chain_tip, sync_tip_block, sync_tip_hash, bulk_sync_threshold)`
+   (`crates/indexer/src/sync/indexer.rs`) returns one
+   `StartupSyncDecision { path, fresh, blocks_behind, memtable }`.
+3. **Open for the decision.** A `Vector` decision drops the probe handle (it is owned here and
+   never shared, so the drop closes the DB) and reopens the domain store with VectorRep; every
+   other decision keeps the probe handle as the final handle. The append-only store is then opened
+   once, with the same decision. The per-process block cache and WriteBufferManager are a
+   `OnceLock` (`SHARED_BUDGET`) and `vector_memtable` is not an input to their sizing, so probing
+   and reopening provisions exactly one memory budget, not two.
+4. **Then write.** `establish_db_network_identity()` — the first domain-store mutation of startup —
+   runs on the final handle, after the decision.
+
+`Indexer::new` receives the decision and `Indexer::run` reuses it instead of re-sampling the node
+tip. A second sample could name a mode the stores were not opened for, and the memtable can no
+longer be changed to match.
+
+### Decision table
+
+| Store state                                   | Lag (`chain_tip - sync_tip`) | Path               | Memtable | Rationale                                                                            |
+| --------------------------------------------- | ---------------------------- | ------------------ | -------- | ------------------------------------------------------------------------------------ |
+| Fresh (`sync_tip_block == 0` and no tip hash) | `> bulk_sync_threshold`      | `BulkBuild`        | Vector   | Append-only build that never reads back what it writes; sorting is deferred to flush |
+| Fresh                                         | `<= bulk_sync_threshold`     | `Pipeline`         | SkipList | Too close to the tip for a build; the pipeline reads back what it writes             |
+| Non-fresh                                     | any lag, at any size         | `Pipeline`         | SkipList | "Live catch-up": bulk is fresh-store only (`BULK_SYNC.md` rule 10)                   |
+| Non-fresh, node tip **below** the store tip   | negative, reported as-is     | `Pipeline`         | SkipList | Node restarted from a snapshot or reorged; the lag is never clamped to 0             |
+| Incomplete bulk-build session marker          | —                            | startup fails fast | —        | A partial bulk artifact is not a supported startup state                             |
+
+The threshold comparison is strict (`blocks_behind > bulk_sync_threshold`), so a fresh store
+exactly at the threshold takes the pipeline. The lag is `i64` throughout and a node reporting a tip
+below the store's is recorded as a negative number, never clamped to 0 — clamping would make a node
+that has fallen behind the store look like an ordinary near-tip startup. A _fresh_ store cannot
+produce a negative lag (its resume tip is 0), so that combination is an error, not a path.
+
+### Startup log line
+
+```
+INFO Startup sync decision network=mainnet build_version=0.7.4@d00ff2eb sync_path=Pipeline
+     fresh=false blocks_behind=76827 memtable=SkipList chain_tip=20530576 bulk_sync_threshold=1000
+```
+
+`sync_path` is `BulkBuild` or `Pipeline`, `memtable` is `Vector` or `SkipList`. When the decision
+is `Vector`, a second line (`Reopening ckbadger domain store for the decided sync path`) records
+the reopen.
+
+Until 2026-09-23 the indexer set `vector_memtable = true` unconditionally, so live sync read its
+own unflushed memtable through VectorRep — an unsorted representation whose `Get` sorts the whole
+memtable under a write lock. See POSTMORTEM `IDX-007`.
+
 ## Pipeline Stages
 
 ### Stage 1: Fetcher (Async I/O)
@@ -100,6 +158,48 @@ type ParsedBatch = (
    - Statistics (hourly, daily, epoch)
 4. Update sync_status LAST (crash recovery guarantee)
 5. Trigger periodic DAO statistics recalculation
+
+#### Commit Window Timing
+
+The commit window was one wide `write_commit_ms` measurement that covered a great deal of
+_reading_: the address-balance `multi_get`, both tracker preparations, the full script rollup and
+the append-only existence probe all ran inside it. During the 2026-09-22 catch-up that made
+"commit" report 66-383 s for a 5,000-block batch whose two RocksDB writes were a small part of it.
+
+It is now split into five non-overlapping fields, all milliseconds:
+
+| Field                          | Covers                                                                                                                                        |
+| ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `commit_prepare_ms`            | Merging the core and stats batches into `data_batch`, the address-balance prefetch, and the HODL-wave + cell-distribution tracker preparation |
+| `script_rollup_ms`             | `materialize_script_versions_and_families` staging the script version/family rollup                                                           |
+| `append_only_commit_synced_ms` | `cells_batch.commit_synced()` — the append-only payload commit **and** its fsync                                                              |
+| `domain_commit_ms`             | `data_batch.commit()` — the single atomic domain write that advances the sync tip                                                             |
+| `commit_phase_total_ms`        | The whole window; the four parts above sum to at most it                                                                                      |
+
+`write_commit_ms` survives in the log under its old name so old and new logs compare directly, and
+it is the _same stored value_ as `commit_phase_total_ms` — `BatchWriteMetrics::commit_ms()` is a
+method returning that field, not a second accumulator that could drift from the parts.
+
+`precompute_ms` is now a real measurement of the writer's own pre-batch phase. It previously
+carried `prefetch_ms`, which the pipeline writer never sets, so every batch logged 0.
+
+`Batch write breakdown` (INFO, one line per batch) carries `precompute_ms`, `write_ms`,
+`write_commit_ms`, `commit_phase_total_ms`, `commit_prepare_ms`, `script_rollup_ms`,
+`append_only_commit_synced_ms`, `domain_commit_ms`, `tracker_state_bytes`, `finalize_ms`, `txs`,
+`cells`, `inputs`. `Batch perf` (the periodic aggregate in `sync/diagnostics.rs`) reports the same
+split, with `db_commit_ms` as the wide window and the four parts beside it.
+
+`tracker_state_bytes` is the serialized size of the two tracker states that `sync_meta` rewrites in
+full every batch. It exists because the cost had to be measured before anything was changed: at
+production scale (2,495 date entries per tracker) it is ~310 KB and ~1.7 ms — 0.15% of the smallest
+observed per-block commit window — so the tracker persistence was left exactly as it is, and the
+field stays in the log so the number can be re-checked against production.
+
+**Writer-phase heartbeat.** Each of the five commit parts, the finalize step, and every block
+inside the staging body bump a monotonic counter (`PerfStats::mark_writer_phase`). A single
+`db.write()` cannot be marked from inside — RocksDB gives no progress callback — so a genuinely
+wedged commit still trips the watchdog, which is exactly what it is for. See
+[Progress Heartbeat and Stall Detection](#progress-heartbeat-and-stall-detection).
 
 #### Entity Statistics Write Path
 
@@ -359,6 +459,58 @@ Key metrics to monitor:
 - `DB time` - writer stage latency
 - `stale batches drained` - indicates mismatch frequency
 
+### Progress Heartbeat and Stall Detection
+
+A 3-second background loop writes the runtime heartbeat, sync progress, and — on the ticks that
+sampled them — memory stats as **one** `StoreBatch` (`CkbadgerStore::commit_heartbeat_tick`),
+where it previously issued three separate `put_cf` calls per tick. A run-identity mismatch belongs
+to the runtime-status part alone: sync progress and memory stats are still staged, so one bad run
+id cannot make the indexer look dead to every reader.
+
+The sweep behind `get_memory_stats()` reads ~8 RocksDB properties across all 60 CFs of **both**
+chain stores. Live sync resamples it every 30 s (`MEMORY_STATS_LIVE_SAMPLE_INTERVAL`), while
+`SYNC_PROGRESS` — what the TUI and API read — keeps the 3-second cadence. Bulk sync still samples
+every tick: its perf heartbeat and memory-pressure log are the point of a build. The `RocksDB
+stats` log line only appears on ticks that sampled.
+
+`Sync progress stalled` now requires **two** frozen signals across the whole 60-second window: the
+committed tip has not moved **and** the writer-phase counter has not moved. A live catch-up batch
+of 5,000 blocks holds one `write_parsed_batch` call for minutes and cannot advance its committed
+tip until it commits; on 2026-09-22 the tip-only rule produced 74 (mainnet) / 49 (testnet) false
+stall warnings in a single catch-up. The warning line carries `writer_phase_idle_seconds`.
+
+The TUI derives liveness the same way: `stale_age_secs` reads `RuntimeDiagData.heartbeat_age_secs`
+— the runtime heartbeat written on every 3-second tick — not the `updated_at` of the memory
+sample, which in live mode lags by up to 30 s and says nothing about whether the writer is alive.
+
+### Live-Sync Health CSV
+
+`crates/indexer/src/health_monitor.rs` samples once a minute and appends one averaged row per hour
+to `live-sync-health.csv` in the parent directory of `bulk_sync_perf_output_root` (e.g.
+`workdir/perf/live-sync-health.csv`).
+
+`csv_header()` is the single definition of the column set, and its first column names the schema
+version:
+
+```csv
+schema=3,timestamp,current_block,target_block,db_stage_write_ms_avg,db_commit_ms_avg,block_cache_mb_avg,l0_files_avg,l0_max_peak,sst_size_gb_last,chunks_per_hour,slow_chunks_per_hour,timeouts_per_hour,keys_per_hour,avg_us_per_chunk,flush_pending_peak,active_memtable_mb_avg,wbm_usage_mb_avg,wbm_budget_mb_last,flush_observed_in_window,precompute_ms_avg,build_ms_avg,finalize_ms_avg,commit_prepare_ms_avg,script_rollup_ms_avg,append_only_commit_synced_ms_avg,domain_commit_ms_avg,sst_files_last,manifest_mb_last
+```
+
+- `db_commit_ms_avg` **is** the wide commit window; `commit_prepare_ms_avg`,
+  `script_rollup_ms_avg`, `append_only_commit_synced_ms_avg` and `domain_commit_ms_avg` are its
+  non-overlapping parts. There is deliberately no second column for the total.
+- `sst_files_last` and `manifest_mb_last` are the standing consequences of flush frequency, and
+  the MANIFEST is what an API secondary replays on open.
+- There is deliberately **no flush-round column**. RocksDB exposes no cumulative flush counter, so
+  flush rounds are counted from `flush_started` in the RocksDB LOG; `flush_pending_peak` and
+  `flush_observed_in_window` stay minute-resolution activity signals, not counts.
+
+**Rotation.** Rows of two different column sets must never share a file. If the existing
+`live-sync-health.csv` begins with a different header, this run writes
+`live-sync-health.schema3.csv` instead of appending. If that schema-suffixed file also exists with
+a different header, the monitor fails rather than mixing: the column set changed without a
+`CSV_SCHEMA_VERSION` bump.
+
 ## Implementation Notes
 
 ### Why Raw Blocks in ParsedBatch?
@@ -392,6 +544,11 @@ All code hash data is now available from `LiveCellInfo` — no separate DB reads
 2. Verify CKB node is synced and responsive
 3. Check for `deep_fork_detected` in sync status
 4. Try restarting indexer
+
+A `Sync progress stalled` warning means both the committed tip and the writer-phase heartbeat have
+been still for 60 s. A long catch-up batch does not trigger it: the tip cannot move mid-batch, but
+the writer phase keeps advancing per block. See
+[Progress Heartbeat and Stall Detection](#progress-heartbeat-and-stall-detection).
 
 ### Data Inconsistency
 
@@ -688,4 +845,4 @@ Sync progress and status are stored directly in RocksDB (no external dependencie
 
 ---
 
-_Last updated: 2026-07-26_
+_Last updated: 2026-09-23_
