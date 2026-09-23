@@ -135,18 +135,21 @@ response shapes describe a party the same way:
 
 ### identities (crates/api/src/routes/identities.rs)
 
-| Method | Path                                                                | Handler                               | Purpose                                                          |
-| ------ | ------------------------------------------------------------------- | ------------------------------------- | ---------------------------------------------------------------- |
-| GET    | `/api/v1/assets/identities/dotbit/items/{identity_id}`              | `get_dotbit_item_detail`              | Get .bit AccountCell item detail                                 |
-| GET    | `/api/v1/assets/identities/dotbit/items/{identity_id}/activities`   | `list_dotbit_item_activities`         | List .bit AccountCell activities                                 |
-| GET    | `/api/v1/assets/identities/did/items/{identity_id}`                 | `get_did_ckb_item_detail`             | Get did:ckb item detail                                          |
-| GET    | `/api/v1/assets/identities/did/items/{identity_id}/activities`      | `list_did_ckb_item_activities`        | List did:ckb item activities                                     |
-| GET    | `/api/v1/assets/identities/bit-cell/items/{identity_id}`            | `get_bit_cell_item_detail`            | Get independent .bit Cell identity detail                        |
-| GET    | `/api/v1/assets/identities/bit-cell/items/{identity_id}/activities` | `list_bit_cell_item_activities`       | List .bit Cell identity activities                               |
-| GET    | `/api/v1/assets/identities/{collection_id}`                         | `get_identity_collection`             | Get .bit AccountCell, .bit Cell, or did:ckb collection aggregate |
-| GET    | `/api/v1/assets/identities/{collection_id}/holders`                 | `list_identity_collection_holders`    | List ranked holders of an identity collection                    |
-| GET    | `/api/v1/assets/identities/{collection_id}/activities`              | `list_identity_collection_activities` | List identity collection activities (cursor, optional `action`)  |
-| GET    | `/api/v1/assets/identities/{collection_id}/items`                   | `list_identity_collection_items`      | List identity items in a collection (search/status/cursor)       |
+| Method | Path                                                                | Handler                               | Purpose                                                                                                                                 |
+| ------ | ------------------------------------------------------------------- | ------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| GET    | `/api/v1/assets/identities/dotbit/items/{identity_id}`              | `get_dotbit_item_detail`              | Get .bit AccountCell item detail                                                                                                        |
+| GET    | `/api/v1/assets/identities/dotbit/items/{identity_id}/activities`   | `list_dotbit_item_activities`         | List .bit AccountCell activities                                                                                                        |
+| GET    | `/api/v1/assets/identities/did/items/{identity_id}`                 | `get_did_ckb_item_detail`             | Get did:ckb item detail                                                                                                                 |
+| GET    | `/api/v1/assets/identities/did/items/{identity_id}/activities`      | `list_did_ckb_item_activities`        | List did:ckb item activities                                                                                                            |
+| GET    | `/api/v1/assets/identities/bit-cell/items/{identity_id}`            | `get_bit_cell_item_detail`            | Get independent .bit Cell identity detail                                                                                               |
+| GET    | `/api/v1/assets/identities/bit-cell/items/{identity_id}/activities` | `list_bit_cell_item_activities`       | List .bit Cell identity activities                                                                                                      |
+| GET    | `/api/v1/assets/identities/dotcell/ring`                            | `get_dotcell_ring`                    | Get the `.cell` uniqueness ring root (namespace, root outpoint, first id, live count)                                                   |
+| GET    | `/api/v1/assets/identities/dotcell/items/{id_or_name}`              | `get_dotcell_item_detail`             | Get a `.cell` name by 20-byte id, `alice` or `alice.cell`                                                                               |
+| GET    | `/api/v1/assets/identities/dotcell/items/{id_or_name}/activities`   | `list_dotcell_item_activities`        | List a `.cell` name's activities                                                                                                        |
+| GET    | `/api/v1/assets/identities/{collection_id}`                         | `get_identity_collection`             | Get .bit AccountCell, .bit Cell, did:ckb or `.cell` collection aggregate (aliases `dotbit`, `bit-cell`, `did_ckb`, `dotcell` / `.cell`) |
+| GET    | `/api/v1/assets/identities/{collection_id}/holders`                 | `list_identity_collection_holders`    | List ranked holders of an identity collection                                                                                           |
+| GET    | `/api/v1/assets/identities/{collection_id}/activities`              | `list_identity_collection_activities` | List identity collection activities (cursor, optional `action`)                                                                         |
+| GET    | `/api/v1/assets/identities/{collection_id}/items`                   | `list_identity_collection_items`      | List identity items in a collection (search/status/cursor)                                                                              |
 
 **Params**
 
@@ -224,17 +227,18 @@ response shapes describe a party the same way:
 
 ### cells (crates/api/src/routes/cells.rs)
 
-| Method | Path                                     | Handler                    | Purpose                                                                                           |
-| ------ | ---------------------------------------- | -------------------------- | ------------------------------------------------------------------------------------------------- |
-| GET    | `/api/v1/cells/live-summary`             | `get_live_cell_summary`    | Exact O(1) live-cell class/data counts at a verifiable canonical tip                              |
-| GET    | `/api/v1/cells/live`                     | `list_live_cells`          | List live cells with optional lock/type/type_code_hash filters (cursor)                           |
-| GET    | `/api/v1/cells/by-script`                | `list_cells_by_script`     | List cells matching a script reference (`code_hash`, `hash_type`, `script_kind=lock\|type\|both`) |
-| GET    | `/api/v1/cells/{tx_hash}/{output_index}` | `get_cell`                 | Get cell detail (live or consumed) including data/dep_group/code_cell_of/DAO info                 |
-| GET    | `/api/v1/addresses/top`                  | `get_top_addresses`        | Top addresses by balance (warmup cache)                                                           |
-| GET    | `/api/v1/addresses/active`               | `get_active_addresses`     | Most-active addresses in last N `days` (warmup cache)                                             |
-| GET    | `/api/v1/addresses/{addr}`               | `get_address`              | Address summary (balance, used_capacity, live_cells_count, lock_script info)                      |
-| GET    | `/api/v1/addresses/{addr}/transactions`  | `get_address_transactions` | List recent transactions for an address (cursor)                                                  |
-| GET    | `/api/v1/addresses/{addr}/tokens`        | `get_address_tokens`       | List token balances for an address (cursor)                                                       |
+| Method | Path                                     | Handler                     | Purpose                                                                                                                                                                   |
+| ------ | ---------------------------------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| GET    | `/api/v1/cells/live-summary`             | `get_live_cell_summary`     | Exact O(1) live-cell class/data counts at a verifiable canonical tip                                                                                                      |
+| GET    | `/api/v1/cells/live`                     | `list_live_cells`           | List live cells with optional lock/type/type_code_hash filters (cursor)                                                                                                   |
+| GET    | `/api/v1/cells/by-script`                | `list_cells_by_script`      | List cells matching a script reference (`code_hash`, `hash_type`, `script_kind=lock\|type\|both`)                                                                         |
+| GET    | `/api/v1/cells/{tx_hash}/{output_index}` | `get_cell`                  | Get cell detail (live or consumed) including data/dep_group/code_cell_of/DAO info                                                                                         |
+| GET    | `/api/v1/addresses/top`                  | `get_top_addresses`         | Top addresses by balance (warmup cache)                                                                                                                                   |
+| GET    | `/api/v1/addresses/active`               | `get_active_addresses`      | Most-active addresses in last N `days` (warmup cache)                                                                                                                     |
+| GET    | `/api/v1/addresses/{addr}`               | `get_address`               | Address summary (balance, used_capacity, live_cells_count, lock_script info)                                                                                              |
+| GET    | `/api/v1/addresses/{addr}/transactions`  | `get_address_transactions`  | List recent transactions for an address (cursor)                                                                                                                          |
+| GET    | `/api/v1/addresses/{addr}/tokens`        | `get_address_tokens`        | List token balances for an address (cursor)                                                                                                                               |
+| GET    | `/api/v1/addresses/{addr}/dotcell-names` | `get_address_dotcell_names` | List the `.cell` names this address owns (cursor). A name's owner is the first 20 bytes of its owner's lock hash, so this is a prefix seek on the address's own lock hash |
 
 **Params**
 
@@ -411,9 +415,9 @@ merged transaction list beneath it. Pool rows stay out of both and are reported 
 
 ### search (crates/api/src/routes/search.rs)
 
-| Method | Path             | Handler  | Purpose                                                                                                          |
-| ------ | ---------------- | -------- | ---------------------------------------------------------------------------------------------------------------- |
-| GET    | `/api/v1/search` | `search` | Universal search across blocks/tx/address/cell/script/token/spore/cluster/asset (supports `scope:term` prefixes) |
+| Method | Path             | Handler  | Purpose                                                                                                                                                                                                                  |
+| ------ | ---------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| GET    | `/api/v1/search` | `search` | Universal search across blocks/tx/address/cell/script/token/spore/cluster/asset (supports `scope:term` prefixes). A `.cell` name (`alice` or `alice.cell`) hashes straight to its id and returns an exact `identity` hit |
 
 **Params**
 

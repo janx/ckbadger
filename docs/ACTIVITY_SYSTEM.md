@@ -127,11 +127,11 @@ pub struct ItemDelta {
 
 **Item kind constants:**
 
-| Constant             | Value | Meaning                                         |
-| -------------------- | ----- | ----------------------------------------------- |
-| `ITEM_KIND_TOKEN`    | 0     | Fungible token (sUDT, xUDT)                     |
-| `ITEM_KIND_OBJECT`   | 1     | Non-fungible object (Spore, mNFT)               |
-| `ITEM_KIND_IDENTITY` | 2     | Identity (.bit AccountCell, .bit Cell, did:ckb) |
+| Constant             | Value | Meaning                                                       |
+| -------------------- | ----- | ------------------------------------------------------------- |
+| `ITEM_KIND_TOKEN`    | 0     | Fungible token (sUDT, xUDT)                                   |
+| `ITEM_KIND_OBJECT`   | 1     | Non-fungible object (Spore, mNFT)                             |
+| `ITEM_KIND_IDENTITY` | 2     | Identity (.bit AccountCell, .bit Cell, did:ckb, `.cell` name) |
 
 **Key design decisions:**
 
@@ -291,6 +291,7 @@ enum AssetKind {
     MnftToken,    // mNFT token
     Dotbit,       // .bit AccountCell (20-byte account ID)
     BitCell,      // .bit Cell (independent 32-byte identity ID)
+    DotCell,      // `.cell` name (20-byte name id, ownership in cell DATA)
 }
 ```
 
@@ -374,6 +375,10 @@ The builder uses an `OwnerAccum` accumulator struct per lock_hash:
 - Spore: extract type args as the object ID
 - DotBit: resolve the canonical 20-byte AccountCell ID
 - BitCell: use the pre-parsed 32-byte identity ID retained with bulk/live-cell facts; legacy cells derive it from the full CKB-personalized account-name hash, while current cells use non-zero 32-byte type args
+- DotCell: **nothing is collected per lock owner.** A `.cell` name's owner is a 20-byte lock-hash
+  prefix in the cell's DATA, and every name cell carries the same Account Lock, so attributing the
+  name to the lock of the cell would credit the protocol's own lock for every name that exists.
+  `DotCellDetector` names the real parties instead (see "Named participants" below)
 - Unrecognized: call `record_type_call()` → stored in `type_calls`
 
 **`classify_output()`**: Processes output cell type script.
@@ -383,6 +388,7 @@ The builder uses an `OwnerAccum` accumulator struct per lock_hash:
 - Spore: extract type args as the object ID
 - DotBit: parse the canonical 20-byte AccountCell ID
 - BitCell: parse the versioned DidCellData/SporeData payload once and emit its independent 32-byte identity ID
+- DotCell: nothing, for the same reason as the input side
 - Unrecognized: call `record_type_call()`
 
 **`emit_object_changes()`**: Set comparison for Object assets.
@@ -392,6 +398,44 @@ The builder uses an `OwnerAccum` accumulator struct per lock_hash:
 - ID in inputs only → `magnitude=1, negative=true`
 
 **`emit_identity_changes()`**: Same logic for Identity assets.
+
+### `.cell` (DotCell) names
+
+`.cell` is the one protocol whose ownership is not the lock of the cell that
+holds it, so it is the one protocol whose Layer-2 deltas come from a detector
+rather than from the per-owner cell scan.
+
+`crates/indexer/src/db/writer/dotcell_detector.rs` diffs the name cells a
+transaction consumes against the ones it creates, once, and that single
+`Vec<DotCellTransition>` produces all four outputs — the Layer-3 action, the
+named participants, the collection `AssetAction` and the per-item feed entry —
+so the two sync paths cannot disagree about what a transaction meant.
+
+| `dotcell:*` action | Collection `AssetAction` | Named participants                                                                                                              | Metadata beyond `label`/`name`/`id`/`changes` |
+| ------------------ | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------- |
+| `register`         | Mint                     | owner `+1` (`owner_to`), and the manager it assigns                                                                             | `to`, `manager`, `expiry`                     |
+| `register_subname` | Mint                     | same                                                                                                                            | `+ parentId`                                  |
+| `transfer`         | Transfer                 | previous owner `-1`, new owner `+1`                                                                                             | `from`, `to`                                  |
+| `list`             | Update                   | seller `-1`, the Sale Lock instance `+1`                                                                                        | `from`, `to`, `seller`, `price`               |
+| `cancel_sale`      | Update                   | Sale Lock instance `-1`, seller `+1`                                                                                            | `from`, `to`, `seller`, `price`               |
+| `buy`              | Transfer                 | Sale Lock instance `-1`, buyer `+1` (the seller is paid in a cell of their own, so it is a LOCK participant with no item delta) | `from`, `to`, `buyer`, `seller`, `price`      |
+| `renew`            | Renew                    | none                                                                                                                            | `expiryFrom`, `expiryTo`                      |
+| `edit_records`     | Update                   | none                                                                                                                            | —                                             |
+| `edit_manager`     | Update                   | new manager, role `manager_to`, NO item delta                                                                                   | `managerFrom`, `managerTo`                    |
+| `touch`            | Update                   | none                                                                                                                            | —                                             |
+| `recycle`          | Recycle                  | owner `-1`                                                                                                                      | `from`                                        |
+| (ring root)        | — suppressed             | none                                                                                                                            | no action at all                              |
+| (ring relink)      | — suppressed             | none                                                                                                                            | no action at all                              |
+
+Layer-2 deltas follow `owner20` uniformly, with no special case for the Sale
+Lock: while a name is listed the chain says a Sale Lock script instance owns
+it, and that instance is a cell participant of the list/buy/cancel transaction,
+so the general merge rule attaches the ±1 to it.
+
+The collection feed entry is derived from the `dotcell:*` actions already
+written to `CF_TX_ACTIONS`, by `build_dotcell_tx_activity_entry`, in both sync
+paths — never from a create/consume pair, which would read a re-created name as
+a Transfer.
 
 ### UDT Amount Parsing
 
