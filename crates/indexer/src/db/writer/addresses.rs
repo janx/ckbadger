@@ -1309,27 +1309,22 @@ impl BatchWriter {
             reference_info_map,
         )?;
 
-        // Stage ONLY the rows whose value changed. The rollup is still
-        // recomputed in full from the same single path — there is no
-        // empty-input early return, because a mapping can be changed by
-        // another writer in this same batch and the version/family totals
-        // still have to be re-derived. What changes is the write volume: a
-        // block that moves nothing writes nothing, instead of rewriting all
-        // 1,903 mappings + 1,556 versions + 56 families (~700 KB on testnet)
-        // and filling the `script_versions` write buffer every ~5.6 blocks.
-        for ((reference_hash, hash_type), version_hash) in rollups.reference_mappings {
-            let committed = self
-                .store
-                .get_script_reference_version_hash(hash_type, &reference_hash)?;
-            if committed == version_hash {
-                continue;
-            }
-            if let Some(version_hash) = version_hash {
-                batch.put_script_reference_to_version(hash_type, &reference_hash, &version_hash);
-            } else {
-                batch.delete_script_reference_to_version(hash_type, &reference_hash);
-            }
-        }
+        // This function does NOT own `script_reference_to_version`: it READS
+        // each mapping above to know which version a reference rolls into, and
+        // never derives a new one. The mappings are written by the reference
+        // usage path (`refresh_type_script_reference_version_mappings`) and by
+        // `refresh_script_reference_rollups`, which resolves them from live
+        // code cells. Staging them back here could only ever rewrite the value
+        // that was just read — and diffing them against the store would mean
+        // reading every mapping a SECOND time inside the commit window
+        // (~1,903 extra point reads per block on testnet).
+        //
+        // What is staged is only the version/family rows whose value changed.
+        // The rollup is still recomputed in full from the same single path —
+        // there is no empty-input early return — so a block that moves nothing
+        // writes nothing, instead of rewriting 1,556 versions + 56 families
+        // (~700 KB on testnet) and filling the `script_versions` write buffer
+        // every ~5.6 blocks.
         for (version_hash, info) in rollups.versions {
             if rollups.existing_versions.get(&version_hash) == Some(&info) {
                 continue;
@@ -2000,6 +1995,7 @@ mod tests {
 
         // Nothing changed -> nothing staged. No early return on empty input:
         // the rollup is still recomputed, it just finds no differences.
+        store.reset_read_call_counters();
         let mut unchanged_batch = StoreBatch::new(&store);
         writer
             .materialize_script_versions_and_families(&HashMap::new(), &mut unchanged_batch)
@@ -2008,6 +2004,20 @@ mod tests {
             unchanged_batch.len(),
             0,
             "an unchanged rollup must stage zero writes"
+        );
+        // Read budget: exactly ONE `script_reference_to_version` point read per
+        // reference, to resolve the mapping the rollup is computed from. The
+        // fixture has two references, so two point reads and nothing else —
+        // reading each mapping a second time to "diff" it against the value it
+        // was just read from is ~1,903 extra reads per block on testnet, inside
+        // the commit window. The CF listings (`list_script_reference_infos`,
+        // `list_script_versions`, `list_script_families`) are iterator scans and
+        // do not count here.
+        let (get_cf_calls, multi_get_cf_calls) = store.read_call_counts();
+        assert_eq!(
+            (get_cf_calls, multi_get_cf_calls),
+            (2, 0),
+            "the rollup must resolve each reference mapping exactly once"
         );
 
         let baseline_version = store.get_script_version(&version_hash).unwrap().unwrap();

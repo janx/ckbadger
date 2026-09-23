@@ -784,11 +784,11 @@ pub struct CkbadgerStore {
     flush_active_last_sample: AtomicBool,
     /// Test-only read-call counters, so a test can prove a hot path issues one
     /// batched read instead of N point reads. Never compiled into the binary.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "read-call-counters"))]
     read_calls: ReadCallCounters,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "read-call-counters"))]
 #[derive(Default)]
 struct ReadCallCounters {
     get_cf: AtomicU64,
@@ -981,7 +981,7 @@ impl CkbadgerStore {
             runtime_config,
             flush_rounds_observed: AtomicU64::new(0),
             flush_active_last_sample: AtomicBool::new(false),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "read-call-counters"))]
             read_calls: ReadCallCounters::default(),
         })
     }
@@ -1070,7 +1070,7 @@ impl CkbadgerStore {
             runtime_config,
             flush_rounds_observed: AtomicU64::new(0),
             flush_active_last_sample: AtomicBool::new(false),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "read-call-counters"))]
             read_calls: ReadCallCounters::default(),
         })
     }
@@ -1695,35 +1695,35 @@ impl CkbadgerStore {
     // ---- Raw DB operations ----
 
     pub fn get_cf(&self, cf: &ColumnFamily, key: &[u8]) -> anyhow::Result<Option<Vec<u8>>> {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "read-call-counters"))]
         self.read_calls.get_cf.fetch_add(1, Ordering::Relaxed);
         Ok(self.db.get_cf(cf, key)?)
     }
 
-    #[cfg(test)]
-    pub(crate) fn reset_read_call_counters(&self) {
+    #[cfg(any(test, feature = "read-call-counters"))]
+    pub fn reset_read_call_counters(&self) {
         self.read_calls.get_cf.store(0, Ordering::Relaxed);
         self.read_calls.multi_get_cf.store(0, Ordering::Relaxed);
     }
 
     /// `(get_cf calls, multi_get_cf calls)` since the last reset.
-    #[cfg(test)]
-    pub(crate) fn read_call_counts(&self) -> (u64, u64) {
+    #[cfg(any(test, feature = "read-call-counters"))]
+    pub fn read_call_counts(&self) -> (u64, u64) {
         (
             self.read_calls.get_cf.load(Ordering::Relaxed),
             self.read_calls.multi_get_cf.load(Ordering::Relaxed),
         )
     }
 
-    #[cfg(test)]
-    pub(crate) fn reset_write_call_counters(&self) {
+    #[cfg(any(test, feature = "read-call-counters"))]
+    pub fn reset_write_call_counters(&self) {
         self.read_calls.put_cf.store(0, Ordering::Relaxed);
         self.read_calls.write_batch.store(0, Ordering::Relaxed);
     }
 
     /// `(put_cf calls, write_batch calls)` since the last reset.
-    #[cfg(test)]
-    pub(crate) fn write_call_counts(&self) -> (u64, u64) {
+    #[cfg(any(test, feature = "read-call-counters"))]
+    pub fn write_call_counts(&self) -> (u64, u64) {
         (
             self.read_calls.put_cf.load(Ordering::Relaxed),
             self.read_calls.write_batch.load(Ordering::Relaxed),
@@ -1731,7 +1731,7 @@ impl CkbadgerStore {
     }
 
     pub fn put_cf(&self, cf: &ColumnFamily, key: &[u8], value: &[u8]) -> anyhow::Result<()> {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "read-call-counters"))]
         self.read_calls.put_cf.fetch_add(1, Ordering::Relaxed);
         if self.is_append_only_store() {
             let cf_name = self.append_cf_name_for_handle(cf)?;
@@ -1752,7 +1752,7 @@ impl CkbadgerStore {
         &self,
         keys: Vec<(&ColumnFamily, &[u8])>,
     ) -> Vec<Result<Option<Vec<u8>>, rocksdb::Error>> {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "read-call-counters"))]
         self.read_calls.multi_get_cf.fetch_add(1, Ordering::Relaxed);
         self.db.multi_get_cf(keys)
     }
@@ -1770,7 +1770,7 @@ impl CkbadgerStore {
         &self,
         keys: Vec<(&ColumnFamily, &[u8])>,
     ) -> Vec<Result<Option<Vec<u8>>, rocksdb::Error>> {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "read-call-counters"))]
         self.read_calls.multi_get_cf.fetch_add(1, Ordering::Relaxed);
         let n = keys.len();
         if n <= 1 {
@@ -1815,7 +1815,7 @@ impl CkbadgerStore {
         batch: WriteBatch,
         intent: StoreWriteIntent,
     ) -> anyhow::Result<()> {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "read-call-counters"))]
         self.read_calls.write_batch.fetch_add(1, Ordering::Relaxed);
         if self.is_append_only_store()
             && !matches!(

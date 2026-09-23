@@ -75,6 +75,9 @@ serde_json = "1"
 toml = "0.8"
 
 [dev-dependencies]
+# Test-only view of the store's read/write call counters (P3.4 regression:
+# the script rollup must not point-read one mapping per reference).
+ckbadger-store = { path = "../ckbadger-store", features = ["read-call-counters"] }
 tokio-test = { workspace = true }
 mockall = { workspace = true }
 proptest = { workspace = true }
