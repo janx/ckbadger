@@ -4522,6 +4522,7 @@ mod tests {
             entities: Vec::new(),
             verify_source_path: None,
             evidence_dir: None,
+            entity_budget: Default::default(),
             source_profile: std::sync::Mutex::new(None),
         }
     }
@@ -4858,6 +4859,7 @@ mod tests {
             entities: Vec::new(),
             verify_source_path: None,
             evidence_dir: None,
+            entity_budget: Default::default(),
             source_profile: std::sync::Mutex::new(None),
         }
     }
@@ -5084,6 +5086,7 @@ mod tests {
             entities: Vec::new(),
             verify_source_path: None,
             evidence_dir: None,
+            entity_budget: Default::default(),
             source_profile: std::sync::Mutex::new(None),
         };
 
@@ -5444,6 +5447,7 @@ mod tests {
             entities: Vec::new(),
             verify_source_path: None,
             evidence_dir: None,
+            entity_budget: Default::default(),
             source_profile: std::sync::Mutex::new(None),
         }
     }

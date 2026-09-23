@@ -365,6 +365,10 @@ impl RunBudget {
     pub fn max_records(&self) -> usize {
         self.max_records
     }
+
+    pub fn max_rpc_requests(&self) -> usize {
+        self.max_rpc_requests
+    }
 }
 
 /// One entity's history as the node indexer enumerated it.

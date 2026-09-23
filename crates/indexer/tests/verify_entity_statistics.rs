@@ -380,12 +380,12 @@ fn declaration(dir: &std::path::Path, node_version: &str) -> std::path::PathBuf 
     std::fs::write(
         &path,
         format!(
-            r#"genesis_hash = "{GENESIS}"
-node_version = "{node_version}"
-index_start_block = 0
-built_from_genesis = true
-declared_by = "test"
-declared_at = "2026-09-23T00:00:00Z"
+            r#"genesisHash = "{GENESIS}"
+nodeVersion = "{node_version}"
+indexerVersion = "{node_version}"
+buildStartBlock = 0
+continuousFromGenesis = true
+provenance = "test fixture"
 "#
         ),
     )
@@ -437,6 +437,7 @@ fn context(wiring: &Wiring) -> CheckContext {
         }],
         verify_source_path: Some(wiring.declaration_path.clone()),
         evidence_dir: None,
+        entity_budget: Default::default(),
         source_profile: std::sync::Mutex::new(None),
     }
 }

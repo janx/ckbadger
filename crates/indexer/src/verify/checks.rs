@@ -1,5 +1,7 @@
 //! Core types and trait for verification checks.
 
+pub use super::entity_history::EntityBudget;
+
 use std::path::PathBuf;
 use std::time::Instant;
 
@@ -74,6 +76,9 @@ pub struct CheckContext {
     pub verify_source_path: Option<PathBuf>,
     /// Where this run's manifest and evidence are written.
     pub evidence_dir: Option<PathBuf>,
+    /// How much a chain-derived check may spend. Explicit so a run that does
+    /// not fit is answered by raising the budget, not by narrowing scope.
+    pub entity_budget: super::entity_history::EntityBudget,
     /// Where a chain-derived check publishes the history source it qualified.
     ///
     /// The run report has to say what its expected values were derived from,
@@ -542,6 +547,7 @@ mod status_model_tests {
             entities: Vec::new(),
             verify_source_path: None,
             evidence_dir: None,
+            entity_budget: Default::default(),
             source_profile: std::sync::Mutex::new(None),
         }
     }

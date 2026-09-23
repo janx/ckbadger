@@ -97,6 +97,20 @@ pub struct VerifyArgs {
     /// (production: `<network workdir>/verify-source.toml`).
     #[arg(long)]
     pub verify_source: Option<String>,
+
+    /// RPC requests the chain-derived checks may spend for the whole run.
+    /// V3's initial value is not a proven default: raise it explicitly rather
+    /// than narrowing scope until a run fits.
+    #[arg(long, default_value_t = entity_history::MAX_RPC_REQUESTS)]
+    pub entity_max_rpc: usize,
+
+    /// History records the chain-derived checks may fold in for the whole run.
+    #[arg(long, default_value_t = entity_history::MAX_HISTORY_RECORDS)]
+    pub entity_max_records: usize,
+
+    /// Wall-clock seconds the chain-derived checks may spend for the whole run.
+    #[arg(long, default_value_t = entity_history::MAX_WALL_SECONDS)]
+    pub entity_budget_seconds: u64,
 }
 
 /// A verification run that did not end in `Pass`.
@@ -276,6 +290,11 @@ pub fn run(args: VerifyArgs) -> anyhow::Result<VerifyReport> {
         entities,
         verify_source_path: args.verify_source.as_ref().map(PathBuf::from),
         evidence_dir: evidence_root.as_ref().map(|root| root.join(&run_id)),
+        entity_budget: checks::EntityBudget {
+            max_records: args.entity_max_records,
+            max_rpc_requests: args.entity_max_rpc,
+            wall_seconds: args.entity_budget_seconds,
+        },
         source_profile: std::sync::Mutex::new(None),
     };
 

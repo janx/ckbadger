@@ -40,11 +40,44 @@ use crate::rpc::{CkbRpcClient, IndexerIoType, IndexerSearchKey, IndexerTxRecord,
 /// Initial independent budget (V3). Not a proven default: it is measured and
 /// revised per network, and exhausting it is `Inconclusive`, never a pass.
 pub const MAX_ENTITIES_PER_RUN: usize = 16;
-const MAX_HISTORY_RECORDS: usize = 200_000;
-const MAX_RPC_REQUESTS: usize = 10_000;
-const MAX_WALL_SECONDS: u64 = 600;
+pub const MAX_HISTORY_RECORDS: usize = 200_000;
+pub const MAX_RPC_REQUESTS: usize = 10_000;
+pub const MAX_WALL_SECONDS: u64 = 600;
 const PAGE_LIMIT: u32 = 1_000;
 const MAX_PAGES: usize = 10_000;
+
+/// The budget one run of the chain-derived checks may spend.
+///
+/// V3 states the initial values are *not* proven defaults: they are measured
+/// per network and raised explicitly. Exposing them is what keeps "the run did
+/// not fit" from being answered by narrowing scope until it does — the only
+/// other way to finish a large entity, and the one the plan forbids.
+#[derive(Debug, Clone, Copy)]
+pub struct EntityBudget {
+    pub max_records: usize,
+    pub max_rpc_requests: usize,
+    pub wall_seconds: u64,
+}
+
+impl Default for EntityBudget {
+    fn default() -> Self {
+        Self {
+            max_records: MAX_HISTORY_RECORDS,
+            max_rpc_requests: MAX_RPC_REQUESTS,
+            wall_seconds: MAX_WALL_SECONDS,
+        }
+    }
+}
+
+impl EntityBudget {
+    pub fn to_run_budget(self) -> RunBudget {
+        RunBudget::new(
+            self.max_records,
+            self.max_rpc_requests,
+            Duration::from_secs(self.wall_seconds),
+        )
+    }
+}
 
 /// Selectors for entities known to have been damaged by the shallow-fork
 /// rollback this verification exists to catch. Always in the default candidate
@@ -1069,11 +1102,7 @@ impl Check for EntityCapacityHistoryMatchesChain {
         }
 
         let client = CkbRpcClient::new(rpc_url);
-        let mut budget = RunBudget::new(
-            MAX_HISTORY_RECORDS,
-            MAX_RPC_REQUESTS,
-            Duration::from_secs(MAX_WALL_SECONDS),
-        );
+        let mut budget = ctx.entity_budget.to_run_budget();
         let work = run_on_dedicated_runtime(qualify_and_collect(
             &client,
             declaration.as_ref(),
@@ -1104,9 +1133,9 @@ impl Check for EntityCapacityHistoryMatchesChain {
             &anchor.block_hash,
             work.qualification.to_report(),
         );
-        manifest.budget_records = MAX_HISTORY_RECORDS;
-        manifest.budget_rpc_requests = MAX_RPC_REQUESTS;
-        manifest.budget_seconds = MAX_WALL_SECONDS;
+        manifest.budget_records = ctx.entity_budget.max_records;
+        manifest.budget_rpc_requests = ctx.entity_budget.max_rpc_requests;
+        manifest.budget_seconds = ctx.entity_budget.wall_seconds;
         manifest.index_start_block = profile.index_start_block;
         // Run-wide, counted once: summing per-entity counters over a shared
         // cache would report requests that were never made.
@@ -1752,6 +1781,27 @@ mod tests {
         assert!(rendered.contains("overflow"), "{rendered}");
         assert!(rendered.contains(&i128::MAX.to_string()), "{rendered}");
         assert!(rendered.contains(&i128::MIN.to_string()), "{rendered}");
+    }
+
+    /// V3 states the initial budget is "not a proven default": it is measured
+    /// per network and raised explicitly. A budget that can only be changed by
+    /// editing a constant forces the alternative the plan forbids — narrowing
+    /// scope until the run finishes.
+    #[test]
+    fn the_budget_is_explicit_and_defaults_to_the_v3_initial_values() {
+        let default = EntityBudget::default();
+        assert_eq!(default.max_rpc_requests, MAX_RPC_REQUESTS);
+        assert_eq!(default.max_records, MAX_HISTORY_RECORDS);
+        assert_eq!(default.wall_seconds, MAX_WALL_SECONDS);
+
+        let raised = EntityBudget {
+            max_rpc_requests: 400_000,
+            max_records: 1_000_000,
+            wall_seconds: 3_600,
+        };
+        let budget = raised.to_run_budget();
+        assert_eq!(budget.max_rpc_requests(), 400_000);
+        assert_eq!(budget.max_records(), 1_000_000);
     }
 
     #[test]

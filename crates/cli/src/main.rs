@@ -190,7 +190,10 @@ enum Command {
     /// Show sync and service status
     Status,
     /// Verify data integrity
-    Verify(VerifyArgs),
+    ///
+    /// Boxed: this is by far the widest subcommand payload, and an unboxed
+    /// variant makes every `Command` value as large as this one.
+    Verify(Box<VerifyArgs>),
     /// Run one or continuous whole-network peer crawl rounds
     Crawl(CrawlArgs),
     /// Import token and script labels
@@ -270,6 +273,19 @@ struct VerifyArgs {
     /// every selected network.
     #[arg(long = "entity", value_name = "KIND:ID")]
     entities: Vec<String>,
+
+    /// RPC requests the chain-derived checks may spend per network. The initial
+    /// value is not a proven default: raise it rather than narrowing scope.
+    #[arg(long, default_value_t = indexer_verify::entity_history::MAX_RPC_REQUESTS)]
+    entity_max_rpc: usize,
+
+    /// History records the chain-derived checks may fold in per network.
+    #[arg(long, default_value_t = indexer_verify::entity_history::MAX_HISTORY_RECORDS)]
+    entity_max_records: usize,
+
+    /// Wall-clock seconds the chain-derived checks may spend per network.
+    #[arg(long, default_value_t = indexer_verify::entity_history::MAX_WALL_SECONDS)]
+    entity_budget_seconds: u64,
 }
 
 #[derive(clap::Args)]
@@ -1650,6 +1666,9 @@ async fn cmd_verify(workdir: &Path, args: &VerifyArgs) -> Result<()> {
                     .into_owned(),
             ),
             entities: args.entities.clone(),
+            entity_max_rpc: args.entity_max_rpc,
+            entity_max_records: args.entity_max_records,
+            entity_budget_seconds: args.entity_budget_seconds,
             // The operator's history-source declaration lives beside the
             // network's config, one per network.
             verify_source: Some(
@@ -2485,7 +2504,7 @@ mod tests {
         argv.extend_from_slice(flags);
         let cli = Cli::try_parse_from(argv).expect("verify flags should parse");
         match cli.command {
-            Command::Verify(args) => args,
+            Command::Verify(args) => *args,
             _ => panic!("expected the verify subcommand"),
         }
     }
