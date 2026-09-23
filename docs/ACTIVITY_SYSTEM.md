@@ -62,32 +62,53 @@ pub struct TxActions {
     pub protocol_actions: Vec<ProtocolAction>,  // Layer 3: TX-level (stored once)
     pub type_calls: Vec<TypeCallEntry>,         // Unrecognized type scripts (stored once)
     pub lock_calls: Vec<LockCallEntry>,         // Non-standard lock scripts (stored once)
-    pub participants: Vec<ParticipantDelta>,    // All participants, sorted by lock_hash
+    pub participants: Vec<ParticipantDelta>,    // All participants, sorted by ParticipantId
 }
 ```
 
 **Key design decisions:**
 
 - **TX-level fields stored once**: `protocol_actions`, `type_calls`, and `lock_calls` are properties of the transaction, not individual participants. Storing them once eliminates redundancy.
-- **`participants` sorted by lock_hash**: Deterministic ordering enables consistent serialization and efficient lookup.
+- **`participants` sorted by `ParticipantId`**: Deterministic ordering enables consistent serialization and efficient lookup. The enum's variant order IS the sort order, so every cell participant sorts before every protocol-named one, and within a variant the bytes decide.
 
 ### ParticipantDelta — Per-Participant Position Change
 
 ```rust
 // crates/ckbadger-store/src/types.rs
+
+/// Who a participant is.
+pub enum ParticipantId {
+    /// Exact lock script hash of a cell the tx consumed or created.
+    Lock([u8; 32]),
+    /// A party a protocol NAMED in cell data or script args by the first 20
+    /// bytes of its lock hash.
+    LockPrefix([u8; 20]),
+}
+
 pub struct ParticipantDelta {
-    pub lock_hash: Vec<u8>,          // 32-byte lock script hash (participant identity)
+    pub id: ParticipantId,           // Participant identity (see above)
     pub ckb_delta: i128,             // Net CKB change (shannons) — i128 for overflow safety
     pub used_delta: i64,             // Net occupied capacity change (shannons)
     pub item_deltas: Vec<ItemDelta>, // Layer 2: position changes for tokens/objects/identities
     pub tags: u16,                   // Bitmask classification for fast filtering
+    pub roles: u8,                   // participant_roles bitmask: owner_from / owner_to / manager_to
 }
 ```
 
 **Key design decisions:**
 
+- **A participant is a party, not a cell owner**: a protocol that writes a party's identity into
+  cell data or script args knows that party even when no cell of theirs appears in the
+  transaction. Such a party is a full participant whose CKB position is exactly zero — the zero is
+  what happened, not a missing value.
 - **`ckb_delta` is i128**: CKB amounts are u64 shannons, but deltas can overflow i64 when a single participant has massive input/output imbalance across many cells.
 - **`tags` bitmask**: Enables O(1) filter matching without inspecting item_deltas or protocol_actions. Set during the build phase.
+- **`roles` is a bitmask, not a `Vec`**: at ~2 participants per transaction and 10^8 participants
+  on mainnet alone, a `Vec<ParticipantRole>` would cost 8 more bytes per participant in
+  `CF_TX_ACTIONS` for information that fits in one.
+- **One matcher**: `ParticipantId::matches(&[u8; 32])` — a `Lock` compares the whole hash, a
+  `LockPrefix` its first 20 bytes. Every "is this participant this address" question in the store,
+  the API and the tx-pool mirror goes through it.
 - **No lock script components**: Unlike the old `OwnerActivityDelta`, `ParticipantDelta` does not carry lock_code_hash, lock_hash_type, lock_args, or peers. Lock script details are resolved from the address store at API response time; peers are all other participants in the same `TxActions` record.
 
 ### ItemDelta — Uniform Item Position Change
@@ -197,7 +218,7 @@ pub struct DailyActivityStats {
     pub script_call_count: u32,           // Unrecognized scripts
     pub unknown_count: u32,               // Fallback (should be 0)
     pub coinbase_count: u32,              // Mining rewards
-    pub unique_address_count: u32,        // Distinct lock_hashes
+    pub unique_address_count: u32,        // Distinct lock_hashes (Lock participants only)
     pub total_ckb_moved: u128,            // Sum of |ckb_delta| across all participants
     pub script_counts: HashMap<String, u32>,  // Per-code_hash counts
     pub protocol_action_counts: HashMap<String, u32>,  // "protocol:action" counts
@@ -236,6 +257,13 @@ pub fn build_tx_actions_for_block(
 pub fn build_tx_actions_for_block_no_detectors(
     txs: &[TxView<'_>],
 ) -> Result<Vec<TxActions>>
+
+/// Same, keeping each participant's input/output presence beside it. The
+/// addr_txs row emitters take this form.
+pub fn build_tx_actions_for_block_with_io(
+    txs: &[TxView<'_>],
+    detectors: &[Box<dyn ProtocolDetector>],
+) -> Result<Vec<BuiltTxActions>>  // { actions: TxActions, participant_io: Vec<ParticipantIo> }
 ```
 
 **Parameters:**
@@ -313,7 +341,17 @@ The builder uses an `OwnerAccum` accumulator struct per lock_hash:
    - Each ProtocolDetector analyzes the full transaction context
    - Emit ProtocolAction entries (TX-level, stored once)
 
-5. Build per-participant deltas (sorted by lock_hash):
+4b. Collect NAMED participants and merge them:
+   - `ProtocolDetector::name_participants(tx)` (default: none) returns the parties the protocol
+     points at, with their item deltas and roles
+   - Collapse repeats by id (one party may be named as both owner_to and manager_to)
+   - A named `LockPrefix` matching exactly ONE cell owner's first 20 bytes IS that owner: its item
+     deltas and roles are attached there, not emitted as a second participant for one person
+   - No match → a standalone participant with ckb_delta = used_delta = 0
+   - Two or more matches → error with tx context. A 2^-160 event; if it ever fires it is a bug or
+     an attack, and neither is something to guess about
+
+5. Build per-participant deltas (sorted by ParticipantId):
    - ckb_delta = Σ output_capacity - Σ input_capacity
    - used_delta = Σ output_occupied - Σ input_occupied
    - Derive item_deltas from accumulated data:
@@ -375,6 +413,8 @@ All activity storage is in the **domain store** (mutable, supports delete on rol
 | ----------------------------------- | --------- | ------------------------------- | ---------------------------------------------------------------- |
 | `CF_TX_ACTIONS`                     | 44 bytes  | `TxActions` (bincode)           | Per-tx actions record                                            |
 | `CF_ADDR_TXS`                       | 76 bytes  | `AddrTxValue` (bincode)         | Address → tx thin index with capacity change, tx flags, and tags |
+| `CF_ADDR_TXS_BY_PREFIX`             | 64 bytes  | `AddrTxValue` (bincode)         | Same index for a party NAMED by its 20-byte lock-hash prefix     |
+| `CF_ADDR_PREFIX_STATS`              | 20 bytes  | `AddrPrefixStats` (bincode)     | Per-prefix count of named participations without a cell          |
 | `CF_OBJECT_COLLECTION_ACTIVITIES`   | 108 bytes | `ObjectCollectionActivityEntry` | Spore/mNFT collection feeds                                      |
 | `CF_IDENTITY_COLLECTION_ACTIVITIES` | 108 bytes | `ObjectCollectionActivityEntry` | .bit AccountCell/.bit Cell/did:ckb collection feeds              |
 | `CF_STATS_CHAIN` (prefixed)         | variable  | `DailyActivityStats` (bincode)  | Hourly/daily aggregation                                         |
@@ -418,6 +458,31 @@ pub fn decode_addr_tx_key(key: &[u8]) -> (Vec<u8>, i64, i32, Vec<u8>);
 pub fn encode_addr_tx_seek_after_key(lock_hash: &[u8], block_num: i64, tx_idx: i32) -> Vec<u8>;
 ```
 
+### Key Encoding — CF_ADDR_TXS_BY_PREFIX
+
+```
+lock_hash_prefix(20B) + block_num_desc(8B BE) + tx_idx_desc(4B BE) + tx_hash(32B) = 64 bytes
+```
+
+A separate fixed-width CF rather than a tag byte on `CF_ADDR_TXS`: `ADDR_TX_KEY_SIZE` and every
+length assert on the full-hash index stay exact, and the descending position suffix is reused
+verbatim from `encode_addr_tx_key`, so the two indexes can never drift in ordering.
+
+### Row Derivation — one source
+
+`crates/indexer/src/db/writer/participant_rows.rs::addr_tx_rows(&TxActions, &[ParticipantIo])` is
+the ONLY derivation of `addr_txs` / `addr_txs_by_prefix` rows. Live sync, bulk build and the API's
+tx-pool mirror all call it; there is no second cell-walking derivation left to disagree with it.
+`ParticipantIo { has_inputs, has_outputs }` travels beside the participants and is never
+persisted — it is what the emitter needs to pick `AddrTxValue`'s tx_type.
+
+`AddrTxValue::new`'s `(has_inputs, has_outputs) == (false, false)` arm is `TX_TYPE_NAMED`
+(`tx_type_str() == "named"`), reachable only by a party holding no cell.
+
+`standalone_prefixes()` returns the prefixes of participants with no cell — exactly the
+participations `addr_balance.txs_count` cannot see, and therefore exactly what
+`CF_ADDR_PREFIX_STATS` counts.
+
 ### Key Encoding — Collection Activities
 
 ```
@@ -434,7 +499,19 @@ All values use `bincode::serialize()` — compact binary, fast to serialize/dese
 
 **`get_latest_activities()`**: Scans `CF_TX_ACTIONS`, skips cellbase transactions, returns up to 64 `TxActions` records for the global feed.
 
-**`list_activities(lock_hash, limit, cursor, filter)`**: Scans `CF_ADDR_TXS` by lock_hash prefix, multi-gets `TxActions` from `CF_TX_ACTIONS`, applies filter via `matches_activity_filter()`.
+**`list_activities(lock_hash, limit, cursor, filter)`**: Scans the address index, multi-gets `TxActions` from `CF_TX_ACTIONS`, applies filter via `matches_activity_filter()`.
+
+**`list_addr_txs_recent(lock_hash, limit, cursor)`**: A descending merge of two scans —
+`CF_ADDR_TXS[lock_hash]` and `CF_ADDR_TXS_BY_PREFIX[lock_hash[..20]]`. The same `(block, tx_idx)`
+cursor seeks both. A (party, tx) pair reaches exactly one of the two because the builder's merge
+pass already unified same-tx appearances, so the same position in both is reported as the upstream
+invariant violation it is, never deduped away.
+
+**`address_tx_count(lock_hash)`**: `addr_balance.txs_count + addr_prefix_stats[lock_hash[..20]].txs_count`.
+The ONE place the two are summed; every consumer calls it.
+
+**`resolve_lock_hash_prefix(prefix20)`**: Prefix-seeks `CF_LOCK_SCRIPTS` (written once per lock
+ever seen, never deleted). 0 hits → unresolved, 1 → the party, ≥2 → an error naming both hashes.
 
 **`get_tx_actions(block_num, tx_idx, tx_hash)`**: Point lookup of a single `TxActions` record.
 
@@ -451,6 +528,15 @@ StoreBatch::put_addr_tx(
     tx_hash: &[u8],
     value: &AddrTxValue,
 )
+StoreBatch::put_addr_tx_by_prefix(
+    &mut self,
+    prefix: &[u8],        // exactly 20 bytes
+    block_num: i64,
+    tx_idx: i32,
+    tx_hash: &[u8],
+    value: &AddrTxValue,
+)
+StoreBatch::put_addr_prefix_stats(&mut self, prefix: &[u8], stats: &AddrPrefixStats)
 ```
 
 ### Activity Filter Matching
@@ -880,7 +966,11 @@ transaction with three token changes is counted once in `token_count`.
 ### Additional Metrics
 
 - **`total_ckb_moved`**: Sum of `|ckb_delta|` across all non-cellbase participants (u128)
-- **`unique_address_count`**: Distinct lock_hashes per day/hour (computed from HashSet of `[u8; 32]`)
+- **`unique_address_count`**: Distinct lock_hashes per day/hour (computed from HashSet of `[u8; 32]`).
+  **`Lock` participants only.** One address can appear in the same bucket under both identities,
+  so counting the prefix form too would double-count it; and being named by a protocol is not that
+  address's own activity. The write paths match the variant explicitly rather than filtering on a
+  32-byte length.
 - **`script_counts`**: Per-code_hash activity counts (hex string keys → u32 counts)
 - **`protocol_action_counts`**: Per-action counts keyed as `protocol:action` (for example,
   `"rgbpp:leap_to_ckb" => 5`, `"dao:deposit" => 12`)

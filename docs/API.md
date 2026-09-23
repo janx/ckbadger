@@ -69,6 +69,32 @@ proposal-window scan used by `blocks.rs` and `graph.rs`).
 - `CursorPaginatedResponse<GlobalActivityResponse>` — tx-level global activity
 - `Vec<GlobalActivityResponse>` — plain vector for latest
 
+**Participants**
+
+A participant is any party the transaction affects, not only a holder of one of its cells. Both
+response shapes describe a party the same way:
+
+```json
+{
+  "address": "ckb1q...",
+  "lockHash": "0x...",
+  "lockHashPrefix": null,
+  "roles": []
+}
+```
+
+- A party that held a cell carries `address` + `lockHash`, and `lockHashPrefix` is `null`.
+- A party a protocol NAMED by the first 20 bytes of its lock hash always carries
+  `lockHashPrefix`. `address` and `lockHash` are filled in when exactly one known lock script
+  starts with that prefix, and are `null` when none does — an unresolved party is reported as its
+  prefix, never as a fabricated address. Two matching lock scripts is a `500`, not a guess.
+- `roles` lists what the protocol said the party did (`owner_from`, `owner_to`, `manager_to`);
+  empty for a plain cell participant.
+- A named party that held no cell has `ckbDelta` and `usedDelta` of exactly `"0"` — that zero is
+  what happened, not a missing value — and its `addr_txs` row reports `txType: "named"`.
+- `ActivityResponse.participants` are the OTHER parties; `ActivityResponse.roles` are this
+  participant's own roles.
+
 ---
 
 ### assets (crates/api/src/routes/assets.rs)
@@ -215,6 +241,14 @@ proposal-window scan used by `blocks.rs` and `graph.rs`).
 - `ListCellsParams` — `limit`, `lock_script_hash`, `type_script_hash`, `type_code_hash`, `cursor`
 - `ListCellsByScriptParams` — `limit`, `code_hash`, `hash_type`, `script_kind` (default `both`), `cursor`
 - `TopAddressesParams` — `limit` (default 100)
+
+**`transactionsCount` / `total`**
+
+`transactionsCount` on `/addresses/{addr}` and `total` on `/addresses/{addr}/transactions` are the
+same number: the address's cell participations (`addr_balance.txs_count`) plus the transactions a
+protocol named it in without it holding a cell (`addr_prefix_stats`). They are added in one store
+helper (`address_tx_count`) that every consumer calls, so the count can never disagree with the
+merged transaction list beneath it. Pool rows stay out of both and are reported in `pool`.
 
 **`/cells/live-summary` response and consistency**
 

@@ -154,10 +154,23 @@ CFs with delta-based state (e.g. `addr_balance`, `script_info`, `token_holders`,
 Activity and event CFs are rolled back via full-CF scan and direct deletion of entries belonging to rolled-back blocks:
 
 - `CF_ACTIVITIES`, `CF_ADDR_TXS` — scan all keys, delete where `block_num > rollback_to`
+- `CF_ADDR_TXS_BY_PREFIX` — same, and with tx-contexts available the exact keys are derived from
+  the rolled-back `TxActions` rows' `LockPrefix` participants (cells cannot enumerate a party that
+  holds none); a missing row aborts the rollback
 - `CF_OBJECT_COLLECTION_ACTIVITIES`, `CF_IDENTITY_COLLECTION_ACTIVITIES` — same approach
 - Stats CFs (`ACTIVITY_DAILY`, `ACTIVITY_HOURLY` prefixes in `CF_STATS_CHAIN`) — deleted via `should_delete_stats_for_replay`
 
 No ghost entries, no canonical filtering needed — direct deletion keeps the domain store clean.
+
+### Prefix Participation Counters (undo-log owned)
+
+`addr_prefix_stats` counts the transactions a protocol named a 20-byte lock-hash prefix in without
+that party holding a cell. It is restored **only** by undo replay, under its own
+`UndoSeqScope::AddrPrefixStats`: the forward path records the counter's value at the end of the
+previous block the first time a batch touches the key, exactly as `EntityStats` does. Stage 8c
+deletes the `addr_txs_by_prefix` rows but does **not** also reverse the counter — doing both would
+subtract the same participations twice. After deletion the rollback asserts the surviving counter
+still covers the surviving rows.
 
 ### Entity Statistics (undo-log owned, never swept)
 
