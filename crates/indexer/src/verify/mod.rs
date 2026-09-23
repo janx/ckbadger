@@ -8,6 +8,7 @@ pub mod checks;
 pub mod explorer;
 pub mod report;
 pub mod sampling;
+pub mod source;
 
 use std::path::PathBuf;
 use std::time::Instant;

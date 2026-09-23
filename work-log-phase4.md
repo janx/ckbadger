@@ -77,3 +77,25 @@ Pre-existing, unrelated failures in this worktree: 5 `ckbadger-api --lib` tests
 "Missing embedded agent renderer: run pnpm --dir frontend build" — the worktree
 has no built `frontend/dist`. Not touched by this work.
 
+Commit: 8e4d8ad2
+
+## Task 4.3 — indexer RPC methods + history source qualification
+
+`wiremock` was already a dev-dependency of `crates/indexer` (workspace 0.6), so
+no Cargo.toml change was needed; recorded in the plan as an 实施记录.
+
+RED (`cargo test -p ckbadger-indexer --lib verify::source`): compile errors —
+`no IndexerSearchKey in rpc::client`, `cannot find type SourceAnchor`,
+`cannot find struct PaginationBudget`, `cannot find function qualify_source /
+collect_transactions / SourceDeclaration::load`.
+
+GREEN:
+
+- `cargo test -p ckbadger-indexer --lib verify::source` → 12 passed.
+- `cargo test -p ckbadger-indexer --lib rpc::client` → 9 passed (4 new).
+- `cargo clippy -p ckbadger-indexer --all-targets` clean.
+
+Note: the new `parse_indexer_hex_u32` is deliberately *not* the existing
+`ckbadger_common::parse_hex_u32`, which panics on bad input — a panic at the
+RPC boundary aborts the release binary.
+
