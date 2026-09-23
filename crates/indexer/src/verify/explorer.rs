@@ -2692,6 +2692,9 @@ mod tests {
             seed: 42,
             tolerance: 0.001,
             cache_dir: None,
+            entities: Vec::new(),
+            verify_source_path: None,
+            evidence_dir: None,
         }
     }
 

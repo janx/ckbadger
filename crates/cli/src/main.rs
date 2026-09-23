@@ -265,6 +265,11 @@ struct VerifyArgs {
     /// Override the explorer response cache directory (single-network workdir only)
     #[arg(long)]
     cache_dir: Option<String>,
+
+    /// Verify these entities exactly, as `<kind>:<id>` (repeatable). Applies to
+    /// every selected network.
+    #[arg(long = "entity", value_name = "KIND:ID")]
+    entities: Vec<String>,
 }
 
 #[derive(clap::Args)]
@@ -1641,6 +1646,16 @@ async fn cmd_verify(workdir: &Path, args: &VerifyArgs) -> Result<()> {
                     .workdir
                     .join("perf")
                     .join("verify")
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
+            entities: args.entities.clone(),
+            // The operator's history-source declaration lives beside the
+            // network's config, one per network.
+            verify_source: Some(
+                target
+                    .workdir
+                    .join("verify-source.toml")
                     .to_string_lossy()
                     .into_owned(),
             ),

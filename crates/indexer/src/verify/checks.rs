@@ -19,6 +19,41 @@ impl std::fmt::Display for CheckTier {
     }
 }
 
+/// One entity a chain-derived check should verify, as `<kind>:<id>`.
+///
+/// The family is part of the selector because an id alone does not say which
+/// adapter owns it, and an adapter that guesses would silently verify the wrong
+/// index.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EntitySelector {
+    pub kind: String,
+    pub id: String,
+}
+
+impl EntitySelector {
+    pub fn parse(raw: &str) -> Result<Self, String> {
+        let (kind, id) = raw.split_once(':').ok_or_else(|| {
+            format!("entity selector '{raw}' must be '<kind>:<id>', e.g. token:0x…")
+        })?;
+        if kind.is_empty() || id.is_empty() {
+            return Err(format!(
+                "entity selector '{raw}' must name both a kind and an id"
+            ));
+        }
+        Ok(Self {
+            kind: kind.to_string(),
+            id: id.to_string(),
+        })
+    }
+}
+
+impl std::fmt::Display for EntitySelector {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}:{}", self.kind, self.id)
+    }
+}
+
 /// Context shared with every check. All data comes via HTTP — no store dependency.
 pub struct CheckContext {
     /// Canonical CKB network name (`mainnet` or `testnet`).
@@ -31,6 +66,14 @@ pub struct CheckContext {
     pub seed: u64,
     pub tolerance: f64,
     pub cache_dir: Option<PathBuf>,
+    /// Entities explicitly selected with `--entity`. Empty means the check
+    /// picks its own candidates.
+    pub entities: Vec<EntitySelector>,
+    /// The operator's `verify-source.toml`, which qualifies the chain-history
+    /// source. Absent means no chain-derived check can reach `Pass`.
+    pub verify_source_path: Option<PathBuf>,
+    /// Where this run's manifest and evidence are written.
+    pub evidence_dir: Option<PathBuf>,
 }
 
 /// Progress reporter wrapping indicatif. Checks call .inc() to advance progress.
@@ -419,6 +462,40 @@ pub(super) fn api_get<T: serde::de::DeserializeOwned>(
     unreachable!()
 }
 
+/// HTTP POST with a JSON body, for the typed verify export.
+///
+/// Deliberately without the warmup/429 retry loop of [`api_get`]: the export is
+/// one request per case and its anchor is only valid inside that request, so a
+/// silent retry would compare rows from one view against an anchor from
+/// another.
+pub(super) fn api_post<B: serde::Serialize, T: serde::de::DeserializeOwned>(
+    ctx: &CheckContext,
+    path: &str,
+    body: &B,
+) -> anyhow::Result<T> {
+    let url = format!(
+        "{}/{}",
+        ctx.api_url.trim_end_matches('/'),
+        path.trim_start_matches('/')
+    );
+    let response = ctx.http.post(&url).json(body).send()?;
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().unwrap_or_default();
+        anyhow::bail!(
+            "POST {} returned {}{}",
+            path,
+            status,
+            if body.is_empty() {
+                String::new()
+            } else {
+                format!(": {}", &body[..body.len().min(512)])
+            }
+        );
+    }
+    Ok(response.json()?)
+}
+
 fn is_warmup_pending_body(body: &str) -> bool {
     serde_json::from_str::<serde_json::Value>(body)
         .ok()
@@ -449,6 +526,9 @@ mod status_model_tests {
             seed: 42,
             tolerance: 0.0,
             cache_dir: None,
+            entities: Vec::new(),
+            verify_source_path: None,
+            evidence_dir: None,
         }
     }
 

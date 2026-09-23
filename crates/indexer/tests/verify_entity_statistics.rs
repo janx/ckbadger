@@ -1,0 +1,633 @@
+//! `entity_capacity_history_matches_chain` — the first chain-derived check.
+//!
+//! Expected values come from a mock CKB node's own indexer; actual values come
+//! from a mock ckbadger typed export. Nothing in this file calls the production
+//! writer, parser or protocol registry, which is the whole point: an oracle
+//! built from the code under test cannot catch that code being wrong.
+
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+
+use ckbadger_indexer::verify::checks::{
+    Check, CheckContext, CheckStatus, EntitySelector, ProgressReporter,
+};
+use ckbadger_indexer::verify::entity_history::EntityCapacityHistoryMatchesChain;
+use serde_json::{json, Value};
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
+
+const NODE_VERSION: &str = "0.119.0 (test)";
+const GENESIS: &str = "0x92b197aa1fba0f63633922c61c92375c9c074a93e85963554f5499fe1450d0e5";
+const SHANNON: i128 = 100_000_000;
+
+/// 2026-09-12 00:00:00 UTC+8 in milliseconds, plus one hour, so the day bucket
+/// is unambiguous under the UTC+8 boundary the daily keys use.
+fn day_ms(day_index: i64) -> i64 {
+    // 2026-09-12T01:00:00+08:00
+    1_789_146_000_000 + day_index * 86_400_000
+}
+
+fn date_for(day_index: i64) -> u32 {
+    let naive = ckbadger_common::block_date_from_ms(day_ms(day_index));
+    naive.format("%Y%m%d").to_string().parse().unwrap()
+}
+
+fn hex(value: u64) -> String {
+    format!("0x{value:x}")
+}
+
+fn hash_of(seed: u64) -> String {
+    format!("0x{seed:064x}")
+}
+
+/// Occupied capacity in shannons: 8 + (33 + lock args) + (33 + type args) + data.
+fn occupied(data_len: usize, lock_args_len: usize, type_args_len: usize) -> i128 {
+    (8 + 33 + lock_args_len as i128 + 33 + type_args_len as i128 + data_len as i128) * SHANNON
+}
+
+/// One token cell's on-chain shape.
+#[derive(Clone, Copy)]
+struct CellShape {
+    capacity_ckb: u64,
+    data_len: usize,
+    lock_args_len: usize,
+}
+
+impl CellShape {
+    fn capacity(&self) -> i128 {
+        self.capacity_ckb as i128 * SHANNON
+    }
+    fn occupied(&self) -> i128 {
+        occupied(self.data_len, self.lock_args_len, 0)
+    }
+}
+
+/// A tiny canonical chain: one transaction per block, each either creating the
+/// token cell at output 0 or consuming an earlier one at input 0.
+struct ChainFixture {
+    code_hash: String,
+    txs: HashMap<String, Value>,
+    headers: HashMap<u64, Value>,
+    records: Vec<Value>,
+    /// (date, capacity delta, occupied delta) the chain actually implies.
+    expected: Vec<(u32, i128, i128)>,
+    next_seed: u64,
+}
+
+impl ChainFixture {
+    fn new(code_hash: &str) -> Self {
+        Self {
+            code_hash: code_hash.to_string(),
+            txs: HashMap::new(),
+            headers: HashMap::new(),
+            records: Vec::new(),
+            expected: Vec::new(),
+            next_seed: 1,
+        }
+    }
+
+    fn type_script(&self) -> Value {
+        json!({"code_hash": self.code_hash, "hash_type": "type", "args": "0x"})
+    }
+
+    fn header(&mut self, block: u64, day_index: i64) {
+        self.headers.entry(block).or_insert_with(|| {
+            json!({
+                "version": "0x0",
+                "compact_target": "0x1a08a97e",
+                "timestamp": hex(day_ms(day_index) as u64),
+                "number": hex(block),
+                "epoch": "0x0",
+                "parent_hash": hash_of(0),
+                "transactions_root": hash_of(0),
+                "proposals_hash": hash_of(0),
+                "extra_hash": hash_of(0),
+                "dao": format!("0x{}", "00".repeat(32)),
+                "nonce": "0x0",
+                "hash": format!("0xb{block:063x}"),
+            })
+        });
+    }
+
+    fn record_expected(&mut self, day_index: i64, capacity: i128, occupied: i128) {
+        let date = date_for(day_index);
+        match self.expected.iter_mut().find(|(d, _, _)| *d == date) {
+            Some(entry) => {
+                entry.1 += capacity;
+                entry.2 += occupied;
+            }
+            None => self.expected.push((date, capacity, occupied)),
+        }
+    }
+
+    /// Create the token cell at output 0 of a fresh transaction.
+    fn create(&mut self, block: u64, day_index: i64, shape: CellShape) -> String {
+        self.header(block, day_index);
+        let tx_hash = hash_of(self.next_seed);
+        self.next_seed += 1;
+        self.txs.insert(
+            tx_hash.clone(),
+            json!({
+                "hash": tx_hash,
+                "version": "0x0",
+                "cell_deps": [],
+                "header_deps": [],
+                "inputs": [],
+                "outputs": [{
+                    "capacity": hex(shape.capacity_ckb * 100_000_000),
+                    "lock": {
+                        "code_hash": hash_of(0xaa),
+                        "hash_type": "type",
+                        "args": format!("0x{}", "11".repeat(shape.lock_args_len)),
+                    },
+                    "type": self.type_script(),
+                }],
+                "outputs_data": [format!("0x{}", "22".repeat(shape.data_len))],
+                "witnesses": [],
+            }),
+        );
+        self.records.push(json!({
+            "block_number": hex(block),
+            "io_index": "0x0",
+            "io_type": "output",
+            "tx_hash": tx_hash,
+            "tx_index": "0x0",
+        }));
+        self.record_expected(day_index, shape.capacity(), shape.occupied());
+        tx_hash
+    }
+
+    /// Consume `prev_tx`'s output 0 at input 0 of a fresh transaction.
+    fn consume(&mut self, block: u64, day_index: i64, prev_tx: &str, shape: CellShape) {
+        self.header(block, day_index);
+        let tx_hash = hash_of(self.next_seed);
+        self.next_seed += 1;
+        self.txs.insert(
+            tx_hash.clone(),
+            json!({
+                "hash": tx_hash,
+                "version": "0x0",
+                "cell_deps": [],
+                "header_deps": [],
+                "inputs": [{
+                    "since": "0x0",
+                    "previous_output": {"tx_hash": prev_tx, "index": "0x0"},
+                }],
+                "outputs": [],
+                "outputs_data": [],
+                "witnesses": [],
+            }),
+        );
+        self.records.push(json!({
+            "block_number": hex(block),
+            "io_index": "0x0",
+            "io_type": "input",
+            "tx_hash": tx_hash,
+            "tx_index": "0x0",
+        }));
+        self.record_expected(day_index, -shape.capacity(), -shape.occupied());
+    }
+
+    fn daily_rows(&self) -> Vec<(u32, i128, i128)> {
+        let mut rows = self.expected.clone();
+        rows.sort_by_key(|(date, _, _)| *date);
+        rows
+    }
+}
+
+/// Serve the fixture's `get_transactions` page(s) and point lookups.
+struct NodeResponder {
+    txs: HashMap<String, Value>,
+    headers: HashMap<u64, Value>,
+    records: Vec<Value>,
+    calls: Arc<Mutex<usize>>,
+}
+
+impl Respond for NodeResponder {
+    fn respond(&self, request: &Request) -> ResponseTemplate {
+        let body: Value = serde_json::from_slice(&request.body).unwrap();
+        let method = body["method"].as_str().unwrap_or_default().to_string();
+        let params = &body["params"];
+        let result = match method.as_str() {
+            "local_node_info" => json!({"version": NODE_VERSION}),
+            "get_indexer_tip" => json!({"block_hash": hash_of(0xff), "block_number": "0xffff"}),
+            "get_block_hash" => {
+                if params[0] == "0x0" {
+                    json!(GENESIS)
+                } else {
+                    let number = u64::from_str_radix(
+                        params[0].as_str().unwrap().trim_start_matches("0x"),
+                        16,
+                    )
+                    .unwrap();
+                    json!(format!("0xb{number:063x}"))
+                }
+            }
+            "get_transactions" => {
+                let mut calls = self.calls.lock().unwrap();
+                let page = *calls;
+                *calls += 1;
+                if page == 0 {
+                    json!({"objects": self.records, "last_cursor": "0xc1"})
+                } else {
+                    json!({"objects": [], "last_cursor": "0x"})
+                }
+            }
+            "get_transaction" => {
+                let hash = params[0].as_str().unwrap();
+                match self.txs.get(hash) {
+                    Some(tx) => json!({
+                        "transaction": tx,
+                        "tx_status": {"status": "committed", "block_hash": hash_of(1), "block_number": "0x1"}
+                    }),
+                    None => Value::Null,
+                }
+            }
+            "get_header_by_number" => {
+                let number =
+                    u64::from_str_radix(params[0].as_str().unwrap().trim_start_matches("0x"), 16)
+                        .unwrap();
+                self.headers.get(&number).cloned().unwrap_or(Value::Null)
+            }
+            other => panic!("unexpected RPC method {other}"),
+        };
+        ResponseTemplate::new(200)
+            .set_body_json(json!({"jsonrpc": "2.0", "id": 1, "result": result}))
+    }
+}
+
+async fn mock_node(fixture: &ChainFixture) -> MockServer {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(NodeResponder {
+            txs: fixture.txs.clone(),
+            headers: fixture.headers.clone(),
+            records: fixture.records.clone(),
+            calls: Arc::new(Mutex::new(0)),
+        })
+        .mount(&server)
+        .await;
+    server
+}
+
+/// Build the typed export body for one token.
+fn export_body(type_hash: &str, rows: &[(u32, i128, i128)], anchor: u64, complete: bool) -> Value {
+    json!({
+        "anchor": {"blockNumber": anchor, "blockHash": format!("0xb{anchor:063x}")},
+        "state": {
+            "bulkSessionInProgress": false,
+            "rollbackCleanupInProgress": false,
+            "liveCellSummaryInitialized": true,
+            "deepForkDetected": false,
+            "entityStatsUndoContract": null,
+            "hourlyRetention": "unknown"
+        },
+        "complete": complete,
+        "entities": [{
+            "kind": "token",
+            "id": type_hash,
+            "present": true,
+            "rowCount": rows.len(),
+            "complete": complete,
+            "daily": rows.iter().map(|(date, capacity, knowledge)| json!({
+                "date": date,
+                "capacityDelta": capacity.to_string(),
+                "knowledgeDelta": knowledge.to_string(),
+            })).collect::<Vec<_>>()
+        }]
+    })
+}
+
+async fn mock_api(
+    type_hash: &str,
+    code_hash: &str,
+    rows: &[(u32, i128, i128)],
+    anchor: u64,
+    complete: bool,
+) -> MockServer {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/v1/verify/entity-statistics"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(export_body(type_hash, rows, anchor, complete)),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/api/v1/tokens/{type_hash}")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "typeScriptHash": type_hash,
+            "typeCodeHash": code_hash,
+            "typeHashType": "type",
+            "typeArgs": "0x",
+        })))
+        .mount(&server)
+        .await;
+    server
+}
+
+fn declaration(dir: &std::path::Path, node_version: &str) -> std::path::PathBuf {
+    let path = dir.join("verify-source.toml");
+    std::fs::write(
+        &path,
+        format!(
+            r#"genesis_hash = "{GENESIS}"
+node_version = "{node_version}"
+index_start_block = 0
+built_from_genesis = true
+declared_by = "test"
+declared_at = "2026-09-23T00:00:00Z"
+"#
+        ),
+    )
+    .unwrap();
+    path
+}
+
+/// Everything the check needs, as plain owned data.
+///
+/// The `CheckContext` itself is built inside the blocking worker: constructing
+/// a `reqwest::blocking::Client` spins up and drops a temporary runtime, which
+/// panics if it happens inside an async test body.
+#[derive(Clone)]
+struct Wiring {
+    api_url: String,
+    rpc_url: String,
+    declaration_path: std::path::PathBuf,
+    type_hash: String,
+}
+
+fn wiring(
+    api: &MockServer,
+    node: &MockServer,
+    declaration_path: &std::path::Path,
+    type_hash: &str,
+) -> Wiring {
+    Wiring {
+        api_url: format!("{}/api/v1", api.uri()),
+        rpc_url: node.uri(),
+        declaration_path: declaration_path.to_path_buf(),
+        type_hash: type_hash.to_string(),
+    }
+}
+
+fn context(wiring: &Wiring) -> CheckContext {
+    CheckContext {
+        network: "mainnet",
+        api_url: wiring.api_url.clone(),
+        rpc_url: Some(wiring.rpc_url.clone()),
+        explorer_url: None,
+        http: reqwest::blocking::Client::new(),
+        sample_count: 10,
+        seed: 42,
+        tolerance: 0.001,
+        cache_dir: None,
+        entities: vec![EntitySelector {
+            kind: "token".to_string(),
+            id: wiring.type_hash.clone(),
+        }],
+        verify_source_path: Some(wiring.declaration_path.clone()),
+        evidence_dir: None,
+    }
+}
+
+/// The script hash of the fixture's type script, computed independently.
+fn type_hash_of(code_hash: &str) -> String {
+    use ckb_types::prelude::*;
+    let code: [u8; 32] = hex::decode(code_hash.trim_start_matches("0x"))
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let script = ckb_types::packed::Script::new_builder()
+        .code_hash(code.pack())
+        .hash_type(ckb_types::packed::Byte::new(1))
+        .args(Vec::<u8>::new().pack())
+        .build();
+    let bytes: [u8; 32] = script.calc_script_hash().unpack();
+    format!("0x{}", hex::encode(bytes))
+}
+
+fn shape(capacity_ckb: u64, data_len: usize, lock_args_len: usize) -> CellShape {
+    CellShape {
+        capacity_ckb,
+        data_len,
+        lock_args_len,
+    }
+}
+
+/// Three creations and one consumption across three UTC+8 days.
+fn standard_fixture(code_hash: &str) -> ChainFixture {
+    let mut fixture = ChainFixture::new(code_hash);
+    let a = shape(1_000, 16, 20);
+    let b = shape(2_500, 32, 20);
+    let first = fixture.create(10, 0, a);
+    fixture.create(20, 1, b);
+    fixture.consume(30, 2, &first, a);
+    fixture
+}
+
+/// Run the check on a blocking worker, building its context there.
+async fn run_check(wiring: Wiring) -> ckbadger_indexer::verify::checks::CheckResult {
+    tokio::task::spawn_blocking(move || {
+        EntityCapacityHistoryMatchesChain
+            .run(&context(&wiring), &ProgressReporter::new(None))
+            .expect("the check itself must not error on a healthy fixture")
+    })
+    .await
+    .unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_index_that_matches_the_chain_passes() {
+    let code_hash = hash_of(0xc0de);
+    let type_hash = type_hash_of(&code_hash);
+    let fixture = standard_fixture(&code_hash);
+    let rows = fixture.daily_rows();
+
+    let node = mock_node(&fixture).await;
+    let api = mock_api(&type_hash, &code_hash, &rows, 100, true).await;
+    let dir = tempfile::tempdir().unwrap();
+    let declaration_path = declaration(dir.path(), NODE_VERSION);
+    let result = run_check(wiring(&api, &node, &declaration_path, &type_hash)).await;
+    assert_eq!(
+        result.status,
+        CheckStatus::Pass,
+        "findings: {:?}",
+        result.findings
+    );
+    assert_eq!(result.items_checked, 1, "items are entities, not rows");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_hundred_shannons_missing_from_one_day_fails_on_the_daily_facet() {
+    let code_hash = hash_of(0xc0de);
+    let type_hash = type_hash_of(&code_hash);
+    let fixture = standard_fixture(&code_hash);
+    let mut rows = fixture.daily_rows();
+    rows[0].1 -= 100;
+
+    let node = mock_node(&fixture).await;
+    let api = mock_api(&type_hash, &code_hash, &rows, 100, true).await;
+    let dir = tempfile::tempdir().unwrap();
+    let declaration_path = declaration(dir.path(), NODE_VERSION);
+    let expected_date = rows[0].0;
+    let result = run_check(wiring(&api, &node, &declaration_path, &type_hash)).await;
+    assert_eq!(result.status, CheckStatus::Fail);
+    assert_eq!(result.items_failed, 1, "one entity failed, not one row");
+    let details = result.findings[0].details.join("\n");
+    assert!(details.contains("daily"), "{details}");
+    assert!(details.contains("capacity"), "{details}");
+    assert!(details.contains(&expected_date.to_string()), "{details}");
+    assert!(details.contains("100"), "{details}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_wrong_occupied_capacity_fails_on_the_knowledge_facet() {
+    let code_hash = hash_of(0xc0de);
+    let type_hash = type_hash_of(&code_hash);
+    let fixture = standard_fixture(&code_hash);
+    let mut rows = fixture.daily_rows();
+    rows[1].2 += SHANNON;
+
+    let node = mock_node(&fixture).await;
+    let api = mock_api(&type_hash, &code_hash, &rows, 100, true).await;
+    let dir = tempfile::tempdir().unwrap();
+    let declaration_path = declaration(dir.path(), NODE_VERSION);
+    let result = run_check(wiring(&api, &node, &declaration_path, &type_hash)).await;
+    assert_eq!(result.status, CheckStatus::Fail);
+    let details = result.findings[0].details.join("\n");
+    assert!(details.contains("knowledge"), "{details}");
+}
+
+/// The classic silent corruption: two days wrong in opposite directions, so the
+/// current total still agrees. Only the per-day facet can catch it.
+#[tokio::test(flavor = "multi_thread")]
+async fn offsetting_daily_errors_with_a_correct_total_still_fail() {
+    let code_hash = hash_of(0xc0de);
+    let type_hash = type_hash_of(&code_hash);
+    let fixture = standard_fixture(&code_hash);
+    let mut rows = fixture.daily_rows();
+    rows[0].1 += 100;
+    rows[1].1 -= 100;
+
+    let node = mock_node(&fixture).await;
+    let api = mock_api(&type_hash, &code_hash, &rows, 100, true).await;
+    let dir = tempfile::tempdir().unwrap();
+    let declaration_path = declaration(dir.path(), NODE_VERSION);
+    let result = run_check(wiring(&api, &node, &declaration_path, &type_hash)).await;
+    assert_eq!(
+        result.status,
+        CheckStatus::Fail,
+        "a matching current total is not evidence the history is right"
+    );
+    let details = result.findings[0].details.join("\n");
+    assert!(details.contains("daily"), "{details}");
+}
+
+/// The iCKB shape: whole days deleted by a shallow-fork rollback. The check must
+/// name the missing days, not just report a total that is off.
+#[tokio::test(flavor = "multi_thread")]
+async fn whole_days_missing_from_the_index_are_named() {
+    let code_hash = hash_of(0xc0de);
+    let type_hash = type_hash_of(&code_hash);
+    let mut fixture = ChainFixture::new(&code_hash);
+    let a = shape(1_000, 16, 20);
+    for day in 0..5 {
+        fixture.create(10 + day as u64, day, a);
+    }
+    let all_rows = fixture.daily_rows();
+    // Days 2, 3 and 4 were wiped by the rollback, exactly as iCKB's were.
+    let rows: Vec<(u32, i128, i128)> = all_rows[..2].to_vec();
+    let missing: Vec<u32> = all_rows[2..].iter().map(|(date, _, _)| *date).collect();
+
+    let node = mock_node(&fixture).await;
+    let api = mock_api(&type_hash, &code_hash, &rows, 100, true).await;
+    let dir = tempfile::tempdir().unwrap();
+    let declaration_path = declaration(dir.path(), NODE_VERSION);
+    let result = run_check(wiring(&api, &node, &declaration_path, &type_hash)).await;
+    assert_eq!(result.status, CheckStatus::Fail);
+    let details = result.findings[0].details.join("\n");
+    for date in &missing {
+        assert!(
+            details.contains(&date.to_string()),
+            "missing day {date} must be named: {details}"
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_source_that_does_not_qualify_is_inconclusive_not_a_failure() {
+    let code_hash = hash_of(0xc0de);
+    let type_hash = type_hash_of(&code_hash);
+    let fixture = standard_fixture(&code_hash);
+    let mut rows = fixture.daily_rows();
+    // Deliberately wrong numbers: an unqualified source must not turn them into
+    // a confident Fail.
+    rows[0].1 -= 100;
+
+    let node = mock_node(&fixture).await;
+    let api = mock_api(&type_hash, &code_hash, &rows, 100, true).await;
+    let dir = tempfile::tempdir().unwrap();
+    let declaration_path = declaration(dir.path(), "0.118.0-different");
+    let result = run_check(wiring(&api, &node, &declaration_path, &type_hash)).await;
+    assert_eq!(result.status, CheckStatus::Inconclusive);
+    let detail = result.detail.clone().unwrap_or_default();
+    assert!(detail.contains("0.118.0-different"), "{detail}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_incomplete_export_is_inconclusive() {
+    let code_hash = hash_of(0xc0de);
+    let type_hash = type_hash_of(&code_hash);
+    let fixture = standard_fixture(&code_hash);
+    let rows = fixture.daily_rows();
+
+    let node = mock_node(&fixture).await;
+    let api = mock_api(&type_hash, &code_hash, &rows, 100, false).await;
+    let dir = tempfile::tempdir().unwrap();
+    let declaration_path = declaration(dir.path(), NODE_VERSION);
+    let result = run_check(wiring(&api, &node, &declaration_path, &type_hash)).await;
+    assert_eq!(
+        result.status,
+        CheckStatus::Inconclusive,
+        "a truncated export cannot be compared against a full history"
+    );
+}
+
+/// Independence from the production protocol registry: the expectation is built
+/// from chain records and the selector alone, so a code hash the registry has
+/// never heard of produces exactly the same numbers.
+#[tokio::test(flavor = "multi_thread")]
+async fn expected_values_do_not_depend_on_the_protocol_registry() {
+    let unregistered = hash_of(0x9999_9999);
+    let type_hash = type_hash_of(&unregistered);
+    let fixture = standard_fixture(&unregistered);
+    let rows = fixture.daily_rows();
+
+    let node = mock_node(&fixture).await;
+    let api = mock_api(&type_hash, &unregistered, &rows, 100, true).await;
+    let dir = tempfile::tempdir().unwrap();
+    let declaration_path = declaration(dir.path(), NODE_VERSION);
+    let result = run_check(wiring(&api, &node, &declaration_path, &type_hash)).await;
+    assert_eq!(
+        result.status,
+        CheckStatus::Pass,
+        "the oracle must not consult PROTOCOL_REGISTRY: {:?}",
+        result.findings
+    );
+}
+
+#[test]
+fn an_entity_selector_names_its_family_and_id() {
+    let id = hash_of(7);
+    let selector = EntitySelector::parse(&format!("token:{id}")).unwrap();
+    assert_eq!(selector.kind, "token");
+    assert_eq!(selector.id, id);
+
+    assert!(
+        EntitySelector::parse(&id).is_err(),
+        "an id with no family is ambiguous"
+    );
+    assert!(EntitySelector::parse("token:").is_err());
+}

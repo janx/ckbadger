@@ -5,7 +5,9 @@
 
 pub mod api_checks;
 pub mod checks;
+pub mod entity_history;
 pub mod explorer;
+pub mod manifest;
 pub mod report;
 pub mod sampling;
 pub mod source;
@@ -85,6 +87,16 @@ pub struct VerifyArgs {
     /// absent.
     #[arg(long)]
     pub evidence_dir: Option<String>,
+
+    /// Verify these entities exactly, as `<kind>:<id>` (repeatable), instead of
+    /// the chain-derived checks' default candidates.
+    #[arg(long = "entity", value_name = "KIND:ID")]
+    pub entities: Vec<String>,
+
+    /// The operator's history-source declaration for this network
+    /// (production: `<network workdir>/verify-source.toml`).
+    #[arg(long)]
+    pub verify_source: Option<String>,
 }
 
 /// A verification run that did not end in `Pass`.
@@ -142,6 +154,7 @@ fn parse_format(s: &str) -> Result<OutputFormat, String> {
 fn all_checks() -> Vec<Box<dyn Check>> {
     let mut checks: Vec<Box<dyn Check>> = Vec::new();
     checks.extend(api_checks::api_checks());
+    checks.push(Box::new(entity_history::EntityCapacityHistoryMatchesChain));
     checks.extend(explorer::explorer_checks());
     checks
 }
@@ -233,6 +246,15 @@ pub fn run(args: VerifyArgs) -> anyhow::Result<VerifyReport> {
         Some(PathBuf::from(".verify-cache"))
     });
 
+    let run_id = args.run_id.clone().unwrap_or_else(new_run_id);
+    let evidence_root = args.evidence_dir.as_ref().map(PathBuf::from);
+    let entities = args
+        .entities
+        .iter()
+        .map(|raw| checks::EntitySelector::parse(raw))
+        .collect::<Result<Vec<_>, String>>()
+        .map_err(|error| anyhow::anyhow!("{error}"))?;
+
     let ctx = CheckContext {
         network,
         api_url: args.api_url.clone(),
@@ -245,6 +267,12 @@ pub fn run(args: VerifyArgs) -> anyhow::Result<VerifyReport> {
         seed: args.seed,
         tolerance: args.tolerance,
         cache_dir,
+        entities,
+        verify_source_path: args.verify_source.as_ref().map(PathBuf::from),
+        evidence_dir: evidence_root
+            .as_ref()
+            .map(|root| root.join(&run_id))
+            .clone(),
     };
 
     validate_check_selection(&all, args.checks.as_deref(), args.depth)?;
@@ -323,13 +351,11 @@ pub fn run(args: VerifyArgs) -> anyhow::Result<VerifyReport> {
         results.push(completed);
     }
 
-    let run_id = args.run_id.clone().unwrap_or_else(new_run_id);
     let mut verify_report = VerifyReport::new(run_id, network, results, start.elapsed());
 
     // Persisting the evidence is part of the run: a report that could not be
     // written is an Error, not a silently unrecorded pass.
-    if let Some(dir) = args.evidence_dir.as_deref() {
-        let root = PathBuf::from(dir);
+    if let Some(root) = evidence_root {
         verify_report.evidence_path = Some(
             report::report_path(&root, &verify_report.run_id)
                 .to_string_lossy()

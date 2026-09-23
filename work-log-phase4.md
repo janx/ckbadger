@@ -99,3 +99,53 @@ Note: the new `parse_indexer_hex_u32` is deliberately *not* the existing
 `ckbadger_common::parse_hex_u32`, which panics on bad input — a panic at the
 RPC boundary aborts the release binary.
 
+Commit: ac7179e6
+
+## Task 4.4 — entity_capacity_history_matches_chain (token family)
+
+RED (`cargo test -p ckbadger-indexer --test verify_entity_statistics`):
+compile errors — `no EntitySelector in verify::checks`, `could not find
+entity_history in verify`, `CheckContext has no field entities /
+verify_source_path / evidence_dir`.
+
+Two intermediate reds worth recording:
+
+1. `the_script_hash_matches_ckbs_own` failed against an invented golden
+   constant. Replaced with a cross-check against an independently written
+   molecule `Script` encoding + blake2b, plus a hash_type-sensitivity test and
+   an unknown-hash_type rejection test — no fabricated golden.
+2. All 8 integration cases failed with "Cannot drop a runtime in a context
+   where blocking is not allowed". Two distinct causes, both real:
+   - **production defect**: the check built a tokio `Runtime` while running on
+     a blocking thread that still carries the caller's tokio context (the CLI
+     calls `verify::run` from `spawn_blocking`). Fixed by
+     `run_on_dedicated_runtime`, which drives the whole chain phase on a plain
+     OS thread, so the runtime's lifetime never touches the caller's context.
+   - **test defect**: `reqwest::blocking::Client::new()` was called from the
+     async test body (it spins up and drops a temporary runtime). The
+     `CheckContext` is now built inside the blocking worker.
+
+GREEN:
+
+- `cargo test -p ckbadger-indexer --test verify_entity_statistics` → 9 passed.
+- `cargo test -p ckbadger-indexer --lib verify` → all green inside
+  1531 lib tests, 0 failed.
+- `cargo test -p ckbadger-indexer` (all targets) → 0 failed.
+- `cargo test -p ckbadger` → 127 + 4, 0 failed.
+- `cargo test -p ckbadger-api --test api_verify` → 11 passed.
+- `cargo fmt --all -- --check` clean; `cargo clippy -p ckbadger-indexer -p
+  ckbadger-api -p ckbadger --all-targets` clean.
+
+Check count is now 58 (31 api + 26 explorer + 1 new), matching the plan.
+
+## Docs (Phase 7 verify bullets only)
+
+- `docs/TESTING.md`: 57 → 58, Sampling S1-S25, new "Check Statuses and Exit
+  Codes" and "Chain-derived Entity Verification (S25)" sections, `--entity`
+  flag, `verify-source.toml` example, file-location rows for the new modules.
+- `docs/API.md`: 18 → 19 modules, 127 → 128 endpoints, new `verify` module
+  section with the full request/response contract and error cases.
+- `CLAUDE.md`'s "57 checks" line is deliberately **not** touched: this task's
+  scope names only `docs/TESTING.md` and `docs/API.md`. It needs the same 57 →
+  58 update when Phase 7 is finished.
+
