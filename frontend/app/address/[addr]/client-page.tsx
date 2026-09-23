@@ -35,6 +35,8 @@ import { formatPoolDuration } from '@/components/ui/pool-status';
 import { useParams } from '@/src/navigation';
 import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
 import { formatTimeAgo, formatCkbAmount, formatCkbCompact } from '@/lib/utils';
+import { formatExpiry } from '@/lib/asset-utils';
+import { getIdentityItemDetailHref } from '@/lib/detail-routes';
 import { formatTokenBalanceWithRawMarker, RAW_AMOUNT_TITLE } from '@/lib/format-asset';
 export default function AddressDetailPage() {
   const params = useParams();
@@ -180,6 +182,17 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
       isActiveTab: activeTab === 'transactions',
     }),
     refetchOnWindowFocus: true,
+  });
+  // `.cell` names an address owns. The lookup is a prefix seek on this
+  // address's own lock hash, so it needs the resolved hash, not the route text.
+  const { data: dotcellNames } = useQuery({
+    queryKey: ['address-dotcell-names', address?.lockScriptHash],
+    queryFn: () =>
+      api.getAddressDotCellNames(address!.lockScriptHash, {
+        limit: DEFAULT_PAGE_SIZE,
+      }),
+    enabled: !!address,
+    placeholderData: keepPreviousData,
   });
   const { data: fiberChannels } = useQuery({
     queryKey: ['address-fiber-channels', address?.lockScriptHash, fiberPagination.cursor],
@@ -656,6 +669,36 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                       </TerminalRow>
                     );
                   })}
+              </div>
+            </TerminalPanelContent>
+          </TerminalPanel>
+        )}
+        {dotcellNames?.data && dotcellNames.data.length > 0 && (
+          <TerminalPanel className="mb-8" variant="elevated">
+            <TerminalPanelHeader>{`Names (${dotcellNames.data.length})`}</TerminalPanelHeader>
+            <TerminalPanelContent padding="none">
+              <div className="min-w-full">
+                <div className="border-base-border bg-base-surface/50 text-text-dim hidden border-b px-4 py-2 font-mono text-xs uppercase tracking-wider sm:flex">
+                  <div className="min-w-0 flex-1">Name</div>
+                  <div className="w-52 shrink-0 text-right">Expires</div>
+                </div>
+                {dotcellNames.data.map((name) => (
+                  <TerminalRow key={name.identityId}>
+                    <div className="flex w-full flex-col gap-1 sm:flex-row sm:items-center">
+                      <div className="min-w-0 flex-1">
+                        <Link
+                          href={getIdentityItemDetailHref('dotcell', name.identityId)}
+                          className="text-emphasis font-mono font-medium hover:underline"
+                        >
+                          {name.name}
+                        </Link>
+                      </div>
+                      <div className="text-text-dim w-52 shrink-0 font-mono text-xs sm:text-right">
+                        {formatExpiry(name.expiredAt)}
+                      </div>
+                    </div>
+                  </TerminalRow>
+                ))}
               </div>
             </TerminalPanelContent>
           </TerminalPanel>

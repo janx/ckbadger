@@ -601,6 +601,28 @@ describe('Identities Inventory Page', () => {
     });
   });
 
+  it('offers .cell as an Identity standard filter', async () => {
+    vi.mocked(api.getAssets).mockResolvedValue(mockDidCkbIdentityAssets);
+
+    render(<IdentitiesPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Identities')).toBeInTheDocument();
+    });
+
+    expect(screen.getByRole('option', { name: 'DOTCELL' })).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText('Filter by standard'), {
+      target: { value: 'dotcell' },
+    });
+    await waitFor(() => {
+      expect(api.getAssets).toHaveBeenLastCalledWith(
+        expect.objectContaining({ type: 'identity', standard: 'dotcell' })
+      );
+      expect(window.location.search).toContain('standard=dotcell');
+    });
+  });
+
   it('shows empty state when no identities found', async () => {
     vi.mocked(api.getAssets).mockResolvedValue(emptyAssets);
 

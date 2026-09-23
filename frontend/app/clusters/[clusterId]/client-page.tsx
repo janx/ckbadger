@@ -834,25 +834,34 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
                   <div className="border-base-border bg-base-surface/30 overflow-hidden rounded border">
                     {clusterHolders.data.map((holder) => (
                       <div
-                        key={holder.lockScriptHash}
+                        key={holder.lockScriptHash ?? holder.ownerHashPrefix}
                         className="row-scan hover:bg-base-elevated/40 border-base-border flex items-center justify-between gap-3 border-b px-3 py-2.5 transition-colors last:border-b-0"
                       >
                         <div className="min-w-0">
-                          <Link
-                            href={`/address/${holder.address ?? holder.lockScriptHash}`}
-                            className="text-text font-mono text-xs hover:underline"
-                          >
-                            {holder.address ? (
-                              holder.address
-                            ) : (
+                          {/* A holder the API can name but not address has no lock
+                              hash; linking one anyway would invent an address. */}
+                          {holder.address ? (
+                            <Link
+                              href={`/address/${holder.address}`}
+                              className="text-text font-mono text-xs hover:underline"
+                            >
+                              {holder.address}
+                            </Link>
+                          ) : holder.lockScriptHash ? (
+                            <Link
+                              href={`/address/${holder.lockScriptHash}`}
+                              className="text-text font-mono text-xs hover:underline"
+                            >
                               <HexDisplay
                                 value={holder.lockScriptHash}
                                 size="sm"
                                 startChars={12}
                                 endChars={10}
                               />
-                            )}
-                          </Link>
+                            </Link>
+                          ) : (
+                            <span className="text-text-dim font-mono text-xs">Unknown holder</span>
+                          )}
                         </div>
                         <div className="text-text-bright shrink-0 font-mono text-sm">
                           {formatNumber(holder.itemCount)}

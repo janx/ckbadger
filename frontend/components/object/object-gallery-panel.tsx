@@ -61,7 +61,9 @@ function isIdentityStandard(standard: string): boolean {
     normalized === 'did_ckb' ||
     normalized === 'did:ckb' ||
     normalized === 'bit_cell' ||
-    normalized === 'bit-cell'
+    normalized === 'bit-cell' ||
+    normalized === 'dotcell' ||
+    normalized === '.cell'
   );
 }
 

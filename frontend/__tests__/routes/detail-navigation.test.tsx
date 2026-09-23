@@ -31,6 +31,10 @@ vi.mock('@/app/identities/bit-cell/[identityId]/client-page', () => ({
   ),
 }));
 
+vi.mock('@/app/identities/dotcell/[identityId]/client-page', () => ({
+  default: ({ identityId }: { identityId: string }) => <div>.cell name detail {identityId}</div>,
+}));
+
 const mockScriptsResponse = {
   data: [
     {
@@ -118,6 +122,20 @@ describe('detail navigation', () => {
 
     expect(
       await screen.findByText('.bit Cell identity detail 0xbitcell', {}, { timeout: 3000 })
+    ).toBeInTheDocument();
+  });
+
+  it('routes .cell name links to the item detail page', async () => {
+    const nameId = '0x62d71147ac82b83c8531126cacb0d2f072bfd94a';
+
+    render(
+      <MemoryRouter initialEntries={[`/mainnet/identities/dotcell/${nameId}`]}>
+        <RouterHarness />
+      </MemoryRouter>
+    );
+
+    expect(
+      await screen.findByText(`.cell name detail ${nameId}`, {}, { timeout: 3000 })
     ).toBeInTheDocument();
   });
 });

@@ -38,6 +38,11 @@ export const PAGE_ROUTES = [
     kind: 'bit_cell_item_detail',
     rawProfiles: ['default'],
   },
+  {
+    pattern: '/identities/dotcell/{identityId}',
+    kind: 'dotcell_item_detail',
+    rawProfiles: ['default'],
+  },
   { pattern: '/objects', kind: 'objects_list', rawProfiles: [] },
   { pattern: '/objects/{sporeId}', kind: 'object_detail', rawProfiles: [] },
   { pattern: '/objects/mnft/{objectId}', kind: 'mnft_item_detail', rawProfiles: ['default'] },

@@ -52,7 +52,7 @@ type AssetSortKey =
   | 'hMultiplier';
 const TOKEN_STANDARD_OPTIONS = ['xudt', 'sudt'];
 const OBJECT_STANDARD_OPTIONS = ['spore', 'm-nft'];
-const IDENTITY_STANDARD_OPTIONS = ['dotbit', 'did:ckb'];
+const IDENTITY_STANDARD_OPTIONS = ['dotbit', 'did:ckb', 'dotcell'];
 const COMPOSITION_TIER_OPTIONS: CompositionTierFilter[] = [
   'all',
   'pure_ckb',

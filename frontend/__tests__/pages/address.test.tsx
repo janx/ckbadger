@@ -13,6 +13,7 @@ vi.mock('@/lib/api', () => ({
     getAddressDaoSummary: vi.fn(),
     getDaoDepositsByAddress: vi.fn(),
     getAddressActivities: vi.fn(),
+    getAddressDotCellNames: vi.fn(),
   },
   isWarmupPendingError: vi.fn(() => false),
   isNetworkInitializingError: vi.fn(() => false),
@@ -160,6 +161,56 @@ describe('AddressDetailPage', () => {
       hasMore: false,
       nextCursor: null,
     });
+    vi.mocked(api.getAddressDotCellNames).mockResolvedValue({
+      data: [],
+      limit: 50,
+      hasMore: false,
+      nextCursor: null,
+    });
+  });
+
+  it('lists the .cell names this address owns', async () => {
+    vi.mocked(api.getAddress).mockResolvedValue(mockAddressWithLockScriptInfo);
+    vi.mocked(api.getAddressDotCellNames).mockResolvedValue({
+      data: [
+        {
+          identityId: '0x62d71147ac82b83c8531126cacb0d2f072bfd94a',
+          label: 'support',
+          name: 'support.cell',
+          expiredAt: 1821507678,
+        },
+      ],
+      limit: 50,
+      hasMore: false,
+      nextCursor: null,
+    });
+
+    render(<AddressDetailPage />);
+
+    await waitFor(() => {
+      expect(api.getAddressDotCellNames).toHaveBeenCalledWith(
+        mockAddressWithLockScriptInfo.lockScriptHash,
+        { limit: 50 }
+      );
+    });
+
+    const link = await screen.findByRole('link', { name: 'support.cell' });
+    expect(link).toHaveAttribute(
+      'href',
+      '/mainnet/identities/dotcell/0x62d71147ac82b83c8531126cacb0d2f072bfd94a'
+    );
+    expect(screen.getByText('Names (1)')).toBeInTheDocument();
+  });
+
+  it('omits the Names section for an address that owns no .cell name', async () => {
+    vi.mocked(api.getAddress).mockResolvedValue(mockAddressWithLockScriptInfo);
+
+    render(<AddressDetailPage />);
+
+    await waitFor(() => {
+      expect(api.getAddressDotCellNames).toHaveBeenCalled();
+    });
+    expect(screen.queryByText(/^Names \(/)).not.toBeInTheDocument();
   });
 
   it('displays lock script name badge when lockScriptInfo is present', async () => {

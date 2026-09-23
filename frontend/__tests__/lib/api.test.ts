@@ -1002,6 +1002,130 @@ describe('api', () => {
       expect(activities.data).toEqual([]);
     });
 
+    it('fetches .cell item detail by name as well as by id', async () => {
+      const seen: string[] = [];
+      server.use(
+        http.get('/api/:network/v1/assets/identities/dotcell/items/:idOrName', ({ params }) => {
+          seen.push(String(params.idOrName));
+          return HttpResponse.json({
+            identityId: '0x62d71147ac82b83c8531126cacb0d2f072bfd94a',
+            label: 'support',
+            name: 'support.cell',
+            isLive: true,
+            createdAtBlock: 18000000,
+            createdAtTx: `0x${'7'.repeat(64)}`,
+            layoutVersion: 3,
+            namespaceArgs: `0x${'5'.repeat(64)}`,
+            expiredAt: 1821507678,
+            state: 'active',
+            graceEndsAt: 1824099678,
+            owner: {
+              hashPrefix: '0x57d926a44d83fc13b21ce037b1e31f4223e3c867',
+              lockHash: '0x57d926a44d83fc13b21ce037b1e31f4223e3c867cfa3f60e1324d5bfd5cd742d',
+              address: null,
+              scriptName: null,
+            },
+            manager: {
+              hashPrefix: '0x1e3a88ca5cc39f1bd38c091b53e33b7c29ebd019',
+              lockHash: null,
+              address: null,
+              scriptName: null,
+            },
+            sale: null,
+            records: [],
+            recordsHash: `0x${'0'.repeat(64)}`,
+            nextId: '0x1e3a88ca5cc39f1bd38c091b53e33b7c29ebd019',
+            parent: null,
+            children: [],
+            liveOutPoint: { txHash: `0x${'7'.repeat(64)}`, index: 0 },
+          });
+        })
+      );
+
+      const byId = await api.getDotCellItemDetail('0x62d71147ac82b83c8531126cacb0d2f072bfd94a');
+      const byName = await api.getDotCellItemDetail('support.cell');
+
+      expect(seen).toEqual(['0x62d71147ac82b83c8531126cacb0d2f072bfd94a', 'support.cell']);
+      expect(byId.name).toBe('support.cell');
+      // An unresolvable prefix stays a prefix: no lock hash, no address.
+      expect(byName.manager.lockHash).toBeNull();
+      expect(byName.manager.address).toBeNull();
+      expect(byName.manager.hashPrefix).toBe('0x1e3a88ca5cc39f1bd38c091b53e33b7c29ebd019');
+    });
+
+    it('fetches .cell item activities with query params', async () => {
+      server.use(
+        http.get(
+          '/api/:network/v1/assets/identities/dotcell/items/:idOrName/activities',
+          ({ request, params }) => {
+            const url = new URL(request.url);
+            expect(params.idOrName).toBe('support.cell');
+            expect(url.searchParams.get('limit')).toBe('20');
+            expect(url.searchParams.get('cursor')).toBe('456:0');
+            expect(url.searchParams.get('action')).toBe('transfer');
+            return HttpResponse.json({
+              data: [],
+              limit: 20,
+              hasMore: false,
+              nextCursor: null,
+            });
+          }
+        )
+      );
+
+      const activities = await api.getDotCellItemActivities('support.cell', {
+        limit: 20,
+        cursor: '456:0',
+        action: 'transfer',
+      });
+      expect(activities.data).toEqual([]);
+    });
+
+    it('fetches the .cell ring', async () => {
+      server.use(
+        http.get('/api/:network/v1/assets/identities/dotcell/ring', () => {
+          return HttpResponse.json({
+            namespaceArgs: `0x${'5'.repeat(64)}`,
+            rootOutPoint: { txHash: `0x${'4'.repeat(64)}`, index: 0 },
+            firstId: '0x62d71147ac82b83c8531126cacb0d2f072bfd94a',
+            liveCount: 42,
+          });
+        })
+      );
+
+      const ring = await api.getDotCellRing();
+      expect(ring.liveCount).toBe(42);
+      expect(ring.rootOutPoint.index).toBe(0);
+    });
+
+    it('fetches the .cell names an address owns', async () => {
+      server.use(
+        http.get('/api/:network/v1/addresses/:addr/dotcell-names', ({ request, params }) => {
+          const url = new URL(request.url);
+          expect(params.addr).toBe('0xlockhash');
+          expect(url.searchParams.get('limit')).toBe('50');
+          return HttpResponse.json({
+            data: [
+              {
+                identityId: '0x62d71147ac82b83c8531126cacb0d2f072bfd94a',
+                label: 'support',
+                name: 'support.cell',
+                expiredAt: 1821507678,
+              },
+            ],
+            limit: 50,
+            hasMore: false,
+            nextCursor: null,
+          });
+        })
+      );
+
+      const names = await api.getAddressDotCellNames('0xlockhash', { limit: 50 });
+      expect(names.data).toHaveLength(1);
+      expect(names.data[0].name).toBe('support.cell');
+      expect(names.data[0].expiredAt).toBe(1821507678);
+    });
+
     it('fetches mnft item detail', async () => {
       server.use(
         http.get('/api/:network/v1/assets/objects/items/:nftId', ({ params }) => {

@@ -18,6 +18,7 @@ import {
 } from '@/components/ui/terminal-panel';
 import { Badge } from '@/components/ui/page-header';
 import { HexDisplay } from '@/components/ui/hex-display';
+import { DotCellParty } from '@/components/identity/dotcell-party';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { CapacityStatisticsSection } from '@/components/ui/capacity-statistics-section';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -31,6 +32,18 @@ const DOTBIT_COLLECTION_ID = '0x646f746269745f636f6c6c656374696f6e5f5f5f5f5f5f5f
 function isDotbitAlias(assetId: string): boolean {
   const normalized = assetId.toLowerCase();
   return normalized === 'dotbit' || normalized === '.bit' || normalized === DOTBIT_COLLECTION_ID;
+}
+/** Each identity standard names what its gallery search box searches. */
+function identitySearchLabel(standard: string | undefined, isDotbit: boolean): string {
+  if (isDotbit) return 'Search .bit';
+  switch ((standard ?? '').toLowerCase()) {
+    case 'bit_cell':
+      return 'Search .bit Cell';
+    case 'dotcell':
+      return 'Search .cell';
+    default:
+      return 'Search did:ckb';
+  }
 }
 import { formatNumber } from '@/lib/utils';
 import { formatActivityTimestamp } from '@/lib/asset-utils';
@@ -77,8 +90,7 @@ export default function IdentityCollectionPage({ collectionId }: IdentityCollect
   const isDotbit = collection
     ? isDotbitAlias(collection.collectionId) || collection.standard.toLowerCase() === 'dotbit'
     : isDotbitAlias(collectionId);
-  const isBitCell = collection?.standard.toLowerCase() === 'bit_cell';
-  const searchLabel = isDotbit ? 'Search .bit' : isBitCell ? 'Search .bit Cell' : 'Search did:ckb';
+  const searchLabel = identitySearchLabel(collection?.standard, isDotbit);
   // Fetch collection items (gallery — always visible)
   const {
     data: collectionItems,
@@ -408,25 +420,22 @@ export default function IdentityCollectionPage({ collectionId }: IdentityCollect
                   <div className="border-base-border bg-base-surface/30 overflow-hidden rounded border">
                     {collectionHolders.data.map((holder: CollectionHolder) => (
                       <div
-                        key={holder.lockScriptHash}
+                        key={holder.lockScriptHash ?? holder.ownerHashPrefix}
                         className="row-scan hover:bg-base-elevated/40 border-base-border flex items-center justify-between gap-3 border-b px-3 py-2.5 transition-colors last:border-b-0"
                       >
                         <div className="min-w-0">
-                          <Link
-                            href={`/address/${holder.address ?? holder.lockScriptHash}`}
-                            className="text-text font-mono text-xs hover:underline"
-                          >
-                            {holder.address ? (
-                              holder.address
-                            ) : (
-                              <HexDisplay
-                                value={holder.lockScriptHash}
-                                size="sm"
-                                startChars={12}
-                                endChars={10}
-                              />
-                            )}
-                          </Link>
+                          {/* A `.cell` holder may be a 20-byte lock-hash prefix
+                              that resolves to no known lock; the shared party
+                              renderer is what keeps that from becoming a link
+                              to an address nobody owns. */}
+                          <DotCellParty
+                            party={{
+                              hashPrefix: holder.ownerHashPrefix ?? null,
+                              lockHash: holder.lockScriptHash,
+                              address: holder.address,
+                            }}
+                            truncate
+                          />
                         </div>
                         <div className="text-text-bright shrink-0 font-mono text-sm">
                           {formatNumber(holder.itemCount)}

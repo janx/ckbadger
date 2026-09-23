@@ -21,6 +21,8 @@ vi.mock('@/lib/api', () => ({
     getDidCkbItemActivities: vi.fn(),
     getBitCellItemDetail: vi.fn(),
     getBitCellItemActivities: vi.fn(),
+    getDotCellItemDetail: vi.fn(),
+    getDotCellItemActivities: vi.fn(),
     getMnftItemDetail: vi.fn(),
     getMnftItemActivities: vi.fn(),
     getNetworkSummary: vi.fn(),
@@ -609,6 +611,79 @@ describe('renderMarkdownPage', () => {
       cursor: undefined,
       action: undefined,
     });
+  });
+
+  it('renders .cell item detail markdown with the owner prefix, never a guessed address', async () => {
+    vi.mocked(api.getDotCellItemDetail).mockResolvedValue({
+      identityId: '0x62d71147ac82b83c8531126cacb0d2f072bfd94a',
+      label: 'support',
+      name: 'support.cell',
+      isLive: true,
+      createdAtBlock: 18_000_000,
+      createdAtTx: `0x${'7'.repeat(64)}`,
+      layoutVersion: 3,
+      namespaceArgs: `0x${'5'.repeat(64)}`,
+      expiredAt: 1_821_507_678,
+      state: 'active',
+      graceEndsAt: 1_824_099_678,
+      owner: {
+        // Unresolved: this prefix belongs to a lock never seen on chain.
+        hashPrefix: '0x1e3a88ca5cc39f1bd38c091b53e33b7c29ebd019',
+        lockHash: null,
+        address: null,
+        scriptName: null,
+      },
+      manager: {
+        hashPrefix: '0x57d926a44d83fc13b21ce037b1e31f4223e3c867',
+        lockHash: '0x57d926a44d83fc13b21ce037b1e31f4223e3c867cfa3f60e1324d5bfd5cd742d',
+        address: 'ckt1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq',
+        scriptName: 'SECP256K1_BLAKE160',
+      },
+      sale: null,
+      records: [],
+      recordsHash: `0x${'0'.repeat(64)}`,
+      nextId: '0x1e3a88ca5cc39f1bd38c091b53e33b7c29ebd019',
+      parent: null,
+      children: [],
+      liveOutPoint: { txHash: `0x${'7'.repeat(64)}`, index: 0 },
+    } as any);
+    vi.mocked(api.getDotCellItemActivities).mockResolvedValue({
+      data: [
+        {
+          txHash: '0xtx',
+          blockNumber: 18_000_001,
+          txIndex: 0,
+          timestamp: '1700000000',
+          actions: ['mint'],
+        },
+      ],
+      limit: 20,
+      hasMore: false,
+      nextCursor: null,
+    } as any);
+
+    const result = await renderMarkdownPage({
+      page: parseMarkdownSourcePath(
+        '/identities/dotcell/0x62d71147ac82b83c8531126cacb0d2f072bfd94a'
+      ),
+      searchParams: new URLSearchParams(),
+      origin: 'http://localhost:3000',
+    });
+
+    expect(result.status).toBe(200);
+    expect(result.body).toContain('# .cell support.cell');
+    expect(result.body).toContain('## Name');
+    expect(result.body).toContain('ownerHashPrefix');
+    expect(result.body).toContain('0x1e3a88ca5cc39f1bd38c091b53e33b7c29ebd019');
+    expect(result.body).toContain('## Activities');
+    expect(api.getDotCellItemActivities).toHaveBeenCalledWith(
+      '0x62d71147ac82b83c8531126cacb0d2f072bfd94a',
+      {
+        limit: 20,
+        cursor: undefined,
+        action: undefined,
+      }
+    );
   });
 
   it('renders peers markdown with the reachability caveat when the crawler is off', async () => {

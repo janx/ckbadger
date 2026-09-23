@@ -2,16 +2,20 @@ import { describe, it, expect } from 'vitest';
 import {
   DID_CKB_COLLECTION_ID,
   DOTBIT_COLLECTION_ID,
+  DOTCELL_COLLECTION_ID,
   getIdentityCollectionHref,
   getIdentityItemDetailHref,
   getMnftClassDetailHref,
   isDidCkbCollectionAlias,
   isDotbitCollectionAlias,
+  isDotCellCollectionAlias,
   resolveObjectRouteTarget,
 } from '@/lib/detail-routes';
 
 const SPORE_ID = '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef';
 const MNFT_CLASS_ID = '0x1234567890abcdef1234567890abcdef1234567890abcdef';
+/** Real testnet `.cell` name id: blake2b('support')[..20]. */
+const DOTCELL_NAME_ID = '0x62d71147ac82b83c8531126cacb0d2f072bfd94a';
 
 describe('resolveObjectRouteTarget', () => {
   it('classifies a 32-byte identifier as a spore object lookup', () => {
@@ -55,6 +59,12 @@ describe('resolveObjectRouteTarget', () => {
         href: '/identities/did:ckb',
       });
     }
+    for (const alias of ['dotcell', '.cell', 'DotCell', DOTCELL_COLLECTION_ID]) {
+      expect(resolveObjectRouteTarget(alias)).toEqual({
+        kind: 'redirect',
+        href: '/identities/dotcell',
+      });
+    }
   });
 
   it('reports identifiers of no known object class as unroutable', () => {
@@ -75,6 +85,17 @@ describe('identity item routes', () => {
     );
     expect(getIdentityCollectionHref('bit_cell', '0xcollection')).toBe('/identities/bit-cell');
   });
+
+  it('routes .cell name IDs to the dotcell identity detail page', () => {
+    expect(getIdentityItemDetailHref('dotcell', DOTCELL_NAME_ID)).toBe(
+      `/identities/dotcell/${DOTCELL_NAME_ID}`
+    );
+    expect(getIdentityItemDetailHref('.cell', DOTCELL_NAME_ID)).toBe(
+      `/identities/dotcell/${DOTCELL_NAME_ID}`
+    );
+    expect(getIdentityCollectionHref('dotcell', DOTCELL_COLLECTION_ID)).toBe('/identities/dotcell');
+    expect(getIdentityCollectionHref('.cell', DOTCELL_COLLECTION_ID)).toBe('/identities/dotcell');
+  });
 });
 
 describe('identity collection aliases', () => {
@@ -85,5 +106,18 @@ describe('identity collection aliases', () => {
     expect(isDidCkbCollectionAlias('DID_CKB')).toBe(true);
     expect(isDidCkbCollectionAlias(DID_CKB_COLLECTION_ID)).toBe(true);
     expect(isDidCkbCollectionAlias(SPORE_ID)).toBe(false);
+    expect(isDotCellCollectionAlias('.CELL')).toBe(true);
+    expect(isDotCellCollectionAlias('dotcell')).toBe(true);
+    expect(isDotCellCollectionAlias(DOTCELL_COLLECTION_ID.toUpperCase())).toBe(true);
+    expect(isDotCellCollectionAlias(SPORE_ID)).toBe(false);
+    // A `.cell` NAME is not the collection — it belongs to an item page.
+    expect(isDotCellCollectionAlias('alice.cell')).toBe(false);
+  });
+
+  it('pins the .cell sentinel collection ID to the ASCII bytes the indexer writes', () => {
+    // `DOTCELL_SENTINEL_COLLECTION` in ckbadger-store is the literal 32-byte
+    // string `dotcell_collection______________`, not a hash of anything.
+    const ascii = Buffer.from(DOTCELL_COLLECTION_ID.slice(2), 'hex').toString('utf8');
+    expect(ascii).toBe('dotcell_collection______________');
   });
 });

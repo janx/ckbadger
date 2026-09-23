@@ -33,6 +33,17 @@ describe('resolveSearchRoute', () => {
     expect(resolveSearchRoute('DID_CKB')).toBe('/identities/did:ckb');
   });
 
+  it('routes .cell aliases to the dotcell collection detail', () => {
+    expect(resolveSearchRoute('.cell')).toBe('/identities/dotcell');
+    expect(resolveSearchRoute('DOTCELL')).toBe('/identities/dotcell');
+  });
+
+  it('leaves a .cell NAME to the API search, which alone can hash it', () => {
+    // A name id is blake2b(label)[..20]; the browser cannot derive it, so
+    // guessing a route here would fabricate a destination.
+    expect(resolveSearchRoute('support.cell')).toBeNull();
+  });
+
   it('returns null for unknown query', () => {
     expect(resolveSearchRoute('hello world')).toBeNull();
   });

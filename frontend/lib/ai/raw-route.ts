@@ -6,6 +6,7 @@ export type ParsedRawPage =
   | { kind: 'dotbit_item_detail'; pathname: string; identityId: string }
   | { kind: 'did_ckb_item_detail'; pathname: string; identityId: string }
   | { kind: 'bit_cell_item_detail'; pathname: string; identityId: string }
+  | { kind: 'dotcell_item_detail'; pathname: string; identityId: string }
   | { kind: 'mnft_item_detail'; pathname: string; objectId: string }
   | { kind: 'tx_detail'; pathname: string; hash: string }
   | { kind: 'unknown'; pathname: string };

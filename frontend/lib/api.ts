@@ -1189,9 +1189,99 @@ interface CollectionItem {
 }
 
 interface CollectionHolder {
-  lockScriptHash: string;
+  /**
+   * `null` when the chain only gave a 20-byte owner prefix (`.cell`) that
+   * resolves to no known lock — a holder the API can name but not address.
+   */
+  lockScriptHash: string | null;
+  /** Set only for collections whose chain-level owner is a lock-hash prefix. */
+  ownerHashPrefix?: string;
   address: string | null;
   itemCount: number;
+}
+
+// ── `.cell` (DotCell) names ────────────────────────────────────────────────
+//
+// A `.cell` name stores its owner and manager as the FIRST 20 BYTES of a lock
+// script hash. The API reports that prefix verbatim and resolves it to a full
+// lock hash/address only when exactly one known lock matches, so an
+// unresolved prefix must never be displayed as an address.
+
+interface DotCellPartyRef {
+  hashPrefix: string;
+  lockHash: string | null;
+  address: string | null;
+  scriptName: string | null;
+}
+
+interface DotCellDecodedAddress {
+  address: string;
+  lockHash: string;
+}
+
+interface DotCellRecord {
+  key: string;
+  label: string;
+  valueHex: string;
+  valueUtf8: string | null;
+  ttl: number;
+  decodedAddress: DotCellDecodedAddress | null;
+}
+
+interface DotCellNameRef {
+  identityId: string;
+  label: string;
+  name: string;
+}
+
+interface DotCellOutPoint {
+  txHash: string;
+  index: number;
+}
+
+interface DotCellSale {
+  priceShannons: string;
+  seller: DotCellPartyRef;
+  offerOutPoint: DotCellOutPoint | null;
+}
+
+type DotCellState = 'active' | 'grace' | 'free' | 'recycled';
+
+interface DotCellItem {
+  identityId: string;
+  label: string;
+  name: string;
+  isLive: boolean;
+  createdAtBlock: number;
+  createdAtTx: string;
+  layoutVersion: number;
+  namespaceArgs: string;
+  expiredAt: number;
+  state: DotCellState;
+  graceEndsAt: number;
+  owner: DotCellPartyRef;
+  manager: DotCellPartyRef;
+  sale: DotCellSale | null;
+  records: DotCellRecord[];
+  recordsHash: string;
+  nextId: string;
+  parent: DotCellNameRef | null;
+  children: DotCellNameRef[];
+  liveOutPoint: DotCellOutPoint | null;
+}
+
+interface DotCellRing {
+  namespaceArgs: string;
+  rootOutPoint: DotCellOutPoint;
+  firstId: string;
+  liveCount: number;
+}
+
+interface AddressDotCellName {
+  identityId: string;
+  label: string;
+  name: string;
+  expiredAt: number;
 }
 
 interface CollectionActivity {
@@ -1816,6 +1906,16 @@ export type {
   CollectionHolder,
   CollectionActivity,
   ItemStatusFilter,
+  DotCellPartyRef,
+  DotCellDecodedAddress,
+  DotCellRecord,
+  DotCellNameRef,
+  DotCellOutPoint,
+  DotCellSale,
+  DotCellState,
+  DotCellItem,
+  DotCellRing,
+  AddressDotCellName,
   MnftClassSummary,
   MnftIssuerSummary,
   MnftLifecycleEvent,
@@ -2255,6 +2355,20 @@ export const api = {
     if (params.limit) query.set('limit', String(params.limit));
     if (params.cursor) query.set('cursor', params.cursor);
     return fetchApi(`/addresses/${addr}/tokens?${query}`);
+  },
+
+  /** The `.cell` names an address owns. `addr` may be an address or lock hash. */
+  getAddressDotCellNames: (
+    addr: string,
+    params: CursorQueryParams = {}
+  ): Promise<CursorPaginatedResponse<AddressDotCellName>> => {
+    const query = new URLSearchParams();
+    if (params.limit) query.set('limit', String(params.limit));
+    if (params.cursor) query.set('cursor', params.cursor);
+    const suffix = query.toString();
+    return fetchApi(
+      `/addresses/${encodeURIComponent(addr)}/dotcell-names${suffix ? `?${suffix}` : ''}`
+    );
   },
 
   getAddressActivities: (
@@ -2735,6 +2849,29 @@ export const api = {
     return fetchApi(
       `/assets/identities/bit-cell/items/${encodeURIComponent(nftId)}/activities${suffix ? `?${suffix}` : ''}`
     );
+  },
+
+  /** `idOrName` accepts a 20-byte `0x…` name id, `alice`, or `alice.cell`. */
+  getDotCellItemDetail: (idOrName: string): Promise<DotCellItem> => {
+    return fetchApi(`/assets/identities/dotcell/items/${encodeURIComponent(idOrName)}`);
+  },
+
+  getDotCellItemActivities: (
+    idOrName: string,
+    params: MnftItemActivitiesParams = {}
+  ): Promise<CursorPaginatedResponse<MnftItemActivity>> => {
+    const query = new URLSearchParams();
+    if (params.limit) query.set('limit', String(params.limit));
+    if (params.cursor) query.set('cursor', params.cursor);
+    if (params.action) query.set('action', params.action);
+    const suffix = query.toString();
+    return fetchApi(
+      `/assets/identities/dotcell/items/${encodeURIComponent(idOrName)}/activities${suffix ? `?${suffix}` : ''}`
+    );
+  },
+
+  getDotCellRing: (): Promise<DotCellRing> => {
+    return fetchApi('/assets/identities/dotcell/ring');
   },
 
   getMnftItemDetail: (nftId: string): Promise<MnftItemDetail> => {
