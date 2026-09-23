@@ -44,7 +44,10 @@ use super::indexer::{
 };
 use super::sync_mode::*;
 use super::token_helpers::*;
-use super::types::{AddressBalanceDelta, CachedCellInfo, ReorgAction, TxData};
+use super::types::{
+    AddressBalanceDelta, CachedCellInfo, EntityDailyChanges, EntityDateKey, ReorgAction,
+    ScriptDailyKey, TxData,
+};
 use crate::bulk_sync_perf::BatchSample;
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -775,13 +778,13 @@ impl Indexer {
             address_balance_changes: HashMap<Vec<u8>, AddressBalanceDelta>,
             script_usage_changes: ScriptUsageChanges,
             script_reference_usage_changes: ScriptReferenceUsageChanges,
-            script_daily_changes: HashMap<(Vec<u8>, u8, bool, u32), (i128, i128)>,
-            token_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)>,
+            script_daily_changes: EntityDailyChanges<ScriptDailyKey>,
+            token_daily_changes: EntityDailyChanges<EntityDateKey>,
             spore_type_index_changes: HashMap<Vec<u8>, SporeTypeIndex>,
-            spore_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)>,
-            cluster_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)>,
+            spore_daily_changes: EntityDailyChanges<EntityDateKey>,
+            cluster_daily_changes: EntityDailyChanges<EntityDateKey>,
             object_type_index_changes: HashMap<Vec<u8>, MnftTypeIndex>,
-            object_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)>,
+            object_daily_changes: EntityDailyChanges<EntityDateKey>,
             parser_perf_sample: ParserBatchPerfSample,
         }
 
@@ -1576,20 +1579,40 @@ impl Indexer {
                 let mut script_usage_changes: ScriptUsageChanges = HashMap::new();
                 let mut script_reference_usage_changes: ScriptReferenceUsageChanges =
                     HashMap::new();
-                let mut script_daily_changes: HashMap<(Vec<u8>, u8, bool, u32), (i128, i128)> =
-                    HashMap::new();
-                let mut token_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)> = HashMap::new();
+                // Entity daily deltas are accumulated PER BLOCK: a committed
+                // batch spans many blocks, and a shallow fork can land in the
+                // middle of one. Flattening them loses the block identity the
+                // undo log needs to restore a key's end-of-block-N value.
+                let mut script_daily_changes = EntityDailyChanges::<ScriptDailyKey>::new();
+                let mut token_daily_changes = EntityDailyChanges::<EntityDateKey>::new();
                 let mut spore_type_index_changes: HashMap<Vec<u8>, SporeTypeIndex> = HashMap::new();
-                let mut spore_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)> = HashMap::new();
-                let mut cluster_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)> =
-                    HashMap::new();
+                let mut spore_daily_changes = EntityDailyChanges::<EntityDateKey>::new();
+                let mut cluster_daily_changes = EntityDailyChanges::<EntityDateKey>::new();
                 let mut object_type_index_changes: HashMap<Vec<u8>, MnftTypeIndex> = HashMap::new();
-                let mut object_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)> =
-                    HashMap::new();
+                let mut object_daily_changes = EntityDailyChanges::<EntityDateKey>::new();
                 let mut spore_type_index_cache: HashMap<Vec<u8>, Option<SporeTypeIndex>> =
                     HashMap::new();
                 let mut object_type_index_cache: HashMap<Vec<u8>, Option<MnftTypeIndex>> =
                     HashMap::new();
+
+                // `EntityDailyChanges::add` fails fast on out-of-order blocks
+                // and on i128 overflow; the parser closure returns `()`, so it
+                // reports the reason and exits the worker like every other
+                // parser invariant violation.
+                macro_rules! accumulate_daily {
+                    ($changes:expr, $block:expr, $key:expr, $cap:expr, $know:expr) => {
+                        if let Err(e) = $changes.add($block, $key, $cap, $know) {
+                            record_worker_exit_reason(
+                                &parser_exit_reason_for_parser,
+                                format!(
+                                    "failed to accumulate entity daily delta for range {}-{}: {}",
+                                    start_block, end_block, e
+                                ),
+                            );
+                            return;
+                        }
+                    };
+                }
 
                 for tx_data in &all_tx_data {
                     let date_yyyymmdd = ckbadger_store::keys::timestamp_ms_to_date(
@@ -1710,16 +1733,18 @@ impl Indexer {
                         entry.3 += i128::from(cell.capacity);
                         entry.4 += i128::from(cell_occupied);
                         entry.5 += i128::from(cell_occupied);
-                        let daily_entry = script_daily_changes
-                            .entry((
+                        accumulate_daily!(
+                            script_daily_changes,
+                            tx_data.block_number,
+                            (
                                 cell.lock_code_hash.clone(),
                                 lock_hash_type,
                                 false,
                                 date_yyyymmdd,
-                            ))
-                            .or_insert((0, 0));
-                        daily_entry.0 += i128::from(cell.capacity);
-                        daily_entry.1 += i128::from(cell_occupied);
+                            ),
+                            i128::from(cell.capacity),
+                            i128::from(cell_occupied)
+                        );
                         if let Some(ref type_code_hash) = cell.type_code_hash {
                             let type_hash_type = match cell.type_hash_type {
                                 Some(hash_type) => match parse_script_reference_hash_type(
@@ -1773,16 +1798,13 @@ impl Indexer {
                             entry.3 += i128::from(cell.capacity);
                             entry.4 += i128::from(cell_occupied);
                             entry.5 += i128::from(cell_occupied);
-                            let daily_entry = script_daily_changes
-                                .entry((
-                                    type_code_hash.clone(),
-                                    type_hash_type,
-                                    true,
-                                    date_yyyymmdd,
-                                ))
-                                .or_insert((0, 0));
-                            daily_entry.0 += i128::from(cell.capacity);
-                            daily_entry.1 += i128::from(cell_occupied);
+                            accumulate_daily!(
+                                script_daily_changes,
+                                tx_data.block_number,
+                                (type_code_hash.clone(), type_hash_type, true, date_yyyymmdd,),
+                                i128::from(cell.capacity),
+                                i128::from(cell_occupied)
+                            );
                         }
                         if let (Some(ref type_script_hash), Some(ref type_code_hash)) =
                             (&cell.type_script_hash, &cell.type_code_hash)
@@ -1794,11 +1816,13 @@ impl Indexer {
                                 })
                                 .is_some()
                             {
-                                let daily_entry = token_daily_changes
-                                    .entry((type_script_hash.clone(), date_yyyymmdd))
-                                    .or_insert((0, 0));
-                                daily_entry.0 += i128::from(cell.capacity);
-                                daily_entry.1 += i128::from(cell_occupied);
+                                accumulate_daily!(
+                                    token_daily_changes,
+                                    tx_data.block_number,
+                                    (type_script_hash.clone(), date_yyyymmdd),
+                                    i128::from(cell.capacity),
+                                    i128::from(cell_occupied)
+                                );
                             }
                         }
                         if let (Some(type_script_hash), Some(type_code_hash), Some(type_args)) = (
@@ -1820,21 +1844,25 @@ impl Indexer {
                                     .insert(type_script_hash.clone(), Some(index.clone()));
                                 spore_type_index_changes.insert(type_script_hash.clone(), index);
 
-                                let spore_daily = spore_daily_changes
-                                    .entry((spore_id, date_yyyymmdd))
-                                    .or_insert((0, 0));
-                                spore_daily.0 += i128::from(cell.capacity);
-                                spore_daily.1 += i128::from(cell_occupied);
+                                accumulate_daily!(
+                                    spore_daily_changes,
+                                    tx_data.block_number,
+                                    (spore_id, date_yyyymmdd),
+                                    i128::from(cell.capacity),
+                                    i128::from(cell_occupied)
+                                );
 
                                 {
                                     let effective_cluster_id = cluster_id.unwrap_or_else(|| {
                                         SOLE_SPORES_SENTINEL_COLLECTION.to_vec()
                                     });
-                                    let cluster_daily = cluster_daily_changes
-                                        .entry((effective_cluster_id, date_yyyymmdd))
-                                        .or_insert((0, 0));
-                                    cluster_daily.0 += i128::from(cell.capacity);
-                                    cluster_daily.1 += i128::from(cell_occupied);
+                                    accumulate_daily!(
+                                        cluster_daily_changes,
+                                        tx_data.block_number,
+                                        (effective_cluster_id, date_yyyymmdd),
+                                        i128::from(cell.capacity),
+                                        i128::from(cell_occupied)
+                                    );
                                 }
                             }
                         }
@@ -1853,11 +1881,13 @@ impl Indexer {
                                     .insert(type_script_hash.clone(), Some(index.clone()));
                                 object_type_index_changes.insert(type_script_hash.clone(), index);
 
-                                let object_daily = object_daily_changes
-                                    .entry((collection_id, date_yyyymmdd))
-                                    .or_insert((0, 0));
-                                object_daily.0 += i128::from(cell.capacity);
-                                object_daily.1 += i128::from(cell_occupied);
+                                accumulate_daily!(
+                                    object_daily_changes,
+                                    tx_data.block_number,
+                                    (collection_id, date_yyyymmdd),
+                                    i128::from(cell.capacity),
+                                    i128::from(cell_occupied)
+                                );
                             }
                         }
                     }
@@ -1931,16 +1961,18 @@ impl Indexer {
                                 entry.1 -= 1;
                                 entry.3 -= i128::from(info.capacity);
                                 entry.5 -= i128::from(info.occupied_capacity);
-                                let daily_entry = script_daily_changes
-                                    .entry((
+                                accumulate_daily!(
+                                    script_daily_changes,
+                                    tx_data.block_number,
+                                    (
                                         info.lock_code_hash.clone(),
                                         lock_hash_type,
                                         false,
                                         date_yyyymmdd,
-                                    ))
-                                    .or_insert((0, 0));
-                                daily_entry.0 -= i128::from(info.capacity);
-                                daily_entry.1 -= i128::from(info.occupied_capacity);
+                                    ),
+                                    -i128::from(info.capacity),
+                                    -i128::from(info.occupied_capacity)
+                                );
                                 if let Some(ref type_code_hash) = info.type_code_hash {
                                     let type_hash_type = match info.type_hash_type {
                                         Some(hash_type) => match parse_script_reference_hash_type(
@@ -1988,16 +2020,18 @@ impl Indexer {
                                     entry.1 -= 1;
                                     entry.3 -= i128::from(info.capacity);
                                     entry.5 -= i128::from(info.occupied_capacity);
-                                    let daily_entry = script_daily_changes
-                                        .entry((
+                                    accumulate_daily!(
+                                        script_daily_changes,
+                                        tx_data.block_number,
+                                        (
                                             type_code_hash.clone(),
                                             type_hash_type,
                                             true,
                                             date_yyyymmdd,
-                                        ))
-                                        .or_insert((0, 0));
-                                    daily_entry.0 -= i128::from(info.capacity);
-                                    daily_entry.1 -= i128::from(info.occupied_capacity);
+                                        ),
+                                        -i128::from(info.capacity),
+                                        -i128::from(info.occupied_capacity)
+                                    );
                                 }
                                 if let (Some(ref type_script_hash), Some(ref type_code_hash)) =
                                     (&info.type_script_hash, &info.type_code_hash)
@@ -2009,11 +2043,13 @@ impl Indexer {
                                         })
                                         .is_some()
                                     {
-                                        let daily_entry = token_daily_changes
-                                            .entry((type_script_hash.clone(), date_yyyymmdd))
-                                            .or_insert((0, 0));
-                                        daily_entry.0 -= i128::from(info.capacity);
-                                        daily_entry.1 -= i128::from(info.occupied_capacity);
+                                        accumulate_daily!(
+                                            token_daily_changes,
+                                            tx_data.block_number,
+                                            (type_script_hash.clone(), date_yyyymmdd),
+                                            -i128::from(info.capacity),
+                                            -i128::from(info.occupied_capacity)
+                                        );
                                     }
                                 }
                                 if let (Some(type_script_hash), Some(type_code_hash)) =
@@ -2049,23 +2085,26 @@ impl Indexer {
                                             }
                                         };
                                         if let Some(index) = spore_index {
-                                            let spore_daily = spore_daily_changes
-                                                .entry((index.spore_id.clone(), date_yyyymmdd))
-                                                .or_insert((0, 0));
-                                            spore_daily.0 -= i128::from(info.capacity);
-                                            spore_daily.1 -= i128::from(info.occupied_capacity);
+                                            accumulate_daily!(
+                                                spore_daily_changes,
+                                                tx_data.block_number,
+                                                (index.spore_id.clone(), date_yyyymmdd),
+                                                -i128::from(info.capacity),
+                                                -i128::from(info.occupied_capacity)
+                                            );
 
                                             {
                                                 let effective_cluster_id =
                                                     index.cluster_id.unwrap_or_else(|| {
                                                         SOLE_SPORES_SENTINEL_COLLECTION.to_vec()
                                                     });
-                                                let cluster_daily = cluster_daily_changes
-                                                    .entry((effective_cluster_id, date_yyyymmdd))
-                                                    .or_insert((0, 0));
-                                                cluster_daily.0 -= i128::from(info.capacity);
-                                                cluster_daily.1 -=
-                                                    i128::from(info.occupied_capacity);
+                                                accumulate_daily!(
+                                                    cluster_daily_changes,
+                                                    tx_data.block_number,
+                                                    (effective_cluster_id, date_yyyymmdd),
+                                                    -i128::from(info.capacity),
+                                                    -i128::from(info.occupied_capacity)
+                                                );
                                             }
                                         }
                                     }
@@ -2095,11 +2134,13 @@ impl Indexer {
                                         }
                                     };
                                     if let Some(collection_id) = collection_id {
-                                        let object_daily = object_daily_changes
-                                            .entry((collection_id, date_yyyymmdd))
-                                            .or_insert((0, 0));
-                                        object_daily.0 -= i128::from(info.capacity);
-                                        object_daily.1 -= i128::from(info.occupied_capacity);
+                                        accumulate_daily!(
+                                            object_daily_changes,
+                                            tx_data.block_number,
+                                            (collection_id, date_yyyymmdd),
+                                            -i128::from(info.capacity),
+                                            -i128::from(info.occupied_capacity)
+                                        );
                                     }
                                 }
                             }

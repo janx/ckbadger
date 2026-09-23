@@ -47,8 +47,9 @@ use super::nft_helpers::*;
 use super::sync_mode::*;
 use super::token_helpers::*;
 use super::types::{
-    AddressBalanceDelta, BatchWriteMetrics, CachedUdtCellInfo, DotbitTxActivityData, TxData,
-    UnresolvedLocalProbeSummary, UnresolvedRpcProbeSummary,
+    AddressBalanceDelta, BatchWriteMetrics, CachedUdtCellInfo, DotbitTxActivityData,
+    EntityDailyChanges, EntityDateKey, ScriptDailyKey, TxData, UnresolvedLocalProbeSummary,
+    UnresolvedRpcProbeSummary,
 };
 use super::undo::*;
 
@@ -1545,13 +1546,13 @@ impl Indexer {
         address_balance_changes: HashMap<Vec<u8>, AddressBalanceDelta>,
         script_usage_changes: ScriptUsageChanges,
         script_reference_usage_changes: ScriptReferenceUsageChanges,
-        script_daily_changes: HashMap<(Vec<u8>, u8, bool, u32), (i128, i128)>,
-        token_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)>,
+        script_daily_changes: EntityDailyChanges<ScriptDailyKey>,
+        token_daily_changes: EntityDailyChanges<EntityDateKey>,
         spore_type_index_changes: HashMap<Vec<u8>, SporeTypeIndex>,
-        spore_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)>,
-        cluster_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)>,
+        spore_daily_changes: EntityDailyChanges<EntityDateKey>,
+        cluster_daily_changes: EntityDailyChanges<EntityDateKey>,
         object_type_index_changes: HashMap<Vec<u8>, MnftTypeIndex>,
-        object_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)>,
+        object_daily_changes: EntityDailyChanges<EntityDateKey>,
         chain_tip: u64,
     ) -> Result<BatchWriteMetrics> {
         if all_parsed_blocks.is_empty() {
@@ -2056,13 +2057,13 @@ impl Indexer {
         }
         if !script_daily_changes.is_empty() {
             self.writer.update_script_daily_deltas_batch(
-                &script_daily_changes,
+                &script_daily_changes.fold_total()?,
                 &mut domain_analytics_batch,
             )?;
         }
         if !token_daily_changes.is_empty() {
             self.writer.update_token_daily_deltas_batch(
-                &token_daily_changes,
+                &token_daily_changes.fold_total()?,
                 &mut domain_analytics_batch,
             )?;
         }
@@ -2072,7 +2073,7 @@ impl Indexer {
         }
         if !spore_daily_changes.is_empty() {
             self.writer.update_spore_daily_deltas_batch(
-                &spore_daily_changes,
+                &spore_daily_changes.fold_total()?,
                 &mut domain_analytics_batch,
             )?;
         }
@@ -2082,13 +2083,13 @@ impl Indexer {
         }
         if !object_daily_changes.is_empty() {
             self.writer.update_object_daily_deltas_batch(
-                &object_daily_changes,
+                &object_daily_changes.fold_total()?,
                 &mut domain_analytics_batch,
             )?;
         }
         if !cluster_daily_changes.is_empty() {
             self.writer.update_cluster_daily_deltas_batch(
-                &cluster_daily_changes,
+                &cluster_daily_changes.fold_total()?,
                 &mut domain_analytics_batch,
             )?;
         }
@@ -3157,7 +3158,7 @@ impl Indexer {
             // Apply cumulative capacity deltas to cluster aggregates
             if !cluster_daily_changes.is_empty() {
                 self.writer.apply_cluster_capacity_deltas(
-                    &cluster_daily_changes,
+                    &cluster_daily_changes.fold_total()?,
                     &mut data_batch,
                     &mut spore_state,
                 )?;
@@ -5942,13 +5943,13 @@ mod tests {
                     address_balance_changes,
                     HashMap::new(),
                     HashMap::new(),
+                    EntityDailyChanges::new(),
+                    EntityDailyChanges::new(),
                     HashMap::new(),
+                    EntityDailyChanges::new(),
+                    EntityDailyChanges::new(),
                     HashMap::new(),
-                    HashMap::new(),
-                    HashMap::new(),
-                    HashMap::new(),
-                    HashMap::new(),
-                    HashMap::new(),
+                    EntityDailyChanges::new(),
                     chain_tip,
                 )
                 .await?;

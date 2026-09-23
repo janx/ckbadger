@@ -208,3 +208,201 @@ impl UnresolvedRpcProbeSummary {
         )
     }
 }
+
+// ── Per-block entity daily deltas ──────────────────────────────────────
+
+/// `SCRIPT_DAILY` identity: `(code_hash, hash_type, is_type, date_yyyymmdd)`.
+pub type ScriptDailyKey = (Vec<u8>, u8, bool, u32);
+/// `TOKEN_DAILY` / `CLUSTER_DAILY` / `SPORE_DAILY` / `OBJECT_DAILY` identity:
+/// `(entity_id, date_yyyymmdd)`.
+pub type EntityDateKey = (Vec<u8>, u32);
+
+/// Entity daily deltas accumulated **per block**, in ascending block order.
+///
+/// A committed batch can span thousands of blocks. Flattening every block's
+/// contribution into one `HashMap<(entity, date), (i128, i128)>` — which is
+/// what the parser used to hand the writer — destroys the block identity, and
+/// with it any possibility of recording what a key's value was at the end of
+/// block N. A shallow fork landing inside a batch then has nothing to restore.
+///
+/// Fail fast on out-of-order blocks: the parser walks `all_tx_data`, which is
+/// built block by block in ascending order. A block going backwards means that
+/// invariant broke upstream, and silently re-opening an earlier block's map
+/// would attribute its deltas to the wrong undo entry.
+#[derive(Debug, Clone)]
+pub struct EntityDailyChanges<K: Eq + std::hash::Hash> {
+    by_block: Vec<(i64, std::collections::HashMap<K, (i128, i128)>)>,
+}
+
+impl<K: Eq + std::hash::Hash> Default for EntityDailyChanges<K> {
+    fn default() -> Self {
+        Self {
+            by_block: Vec::new(),
+        }
+    }
+}
+
+impl<K: Eq + std::hash::Hash + Clone> EntityDailyChanges<K> {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Add one contribution to `key` within `block`.
+    pub fn add(
+        &mut self,
+        block: i64,
+        key: K,
+        capacity_delta: i128,
+        knowledge_delta: i128,
+    ) -> anyhow::Result<()> {
+        match self.by_block.last() {
+            Some((last, _)) if *last > block => {
+                anyhow::bail!(
+                    "entity daily changes must accumulate in ascending block order: \
+                     last_block={last}, block={block}"
+                );
+            }
+            Some((last, _)) if *last == block => {}
+            _ => self
+                .by_block
+                .push((block, std::collections::HashMap::new())),
+        }
+        let entry = self
+            .by_block
+            .last_mut()
+            .expect("by_block is non-empty after the push above")
+            .1
+            .entry(key)
+            .or_insert((0, 0));
+        entry.0 = entry.0.checked_add(capacity_delta).ok_or_else(|| {
+            anyhow::anyhow!(
+                "entity daily capacity delta overflow in block {block}: current={}, delta={capacity_delta}",
+                entry.0
+            )
+        })?;
+        entry.1 = entry.1.checked_add(knowledge_delta).ok_or_else(|| {
+            anyhow::anyhow!(
+                "entity daily knowledge delta overflow in block {block}: current={}, delta={knowledge_delta}",
+                entry.1
+            )
+        })?;
+        Ok(())
+    }
+
+    /// Blocks in ascending order with their per-block contributions.
+    pub fn by_block(&self) -> &[(i64, std::collections::HashMap<K, (i128, i128)>)] {
+        &self.by_block
+    }
+
+    /// Whole-batch totals, for downstream aggregates (cluster capacity, …)
+    /// that are batch-scoped. Folded from the same per-block collection — never
+    /// a second, independently accumulated copy.
+    pub fn fold_total(&self) -> anyhow::Result<std::collections::HashMap<K, (i128, i128)>> {
+        let mut total: std::collections::HashMap<K, (i128, i128)> =
+            std::collections::HashMap::new();
+        for (block, map) in &self.by_block {
+            for (key, (cap, know)) in map {
+                let entry = total.entry(key.clone()).or_insert((0, 0));
+                entry.0 = entry.0.checked_add(*cap).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "entity daily capacity total overflow folding block {block}: current={}, delta={cap}",
+                        entry.0
+                    )
+                })?;
+                entry.1 = entry.1.checked_add(*know).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "entity daily knowledge total overflow folding block {block}: current={}, delta={know}",
+                        entry.1
+                    )
+                })?;
+            }
+        }
+        Ok(total)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.by_block.iter().all(|(_, map)| map.is_empty())
+    }
+}
+
+#[cfg(test)]
+mod entity_daily_changes_tests {
+    use super::*;
+
+    fn key(byte: u8) -> EntityDateKey {
+        (vec![byte; 32], 20_260_922)
+    }
+
+    #[test]
+    fn add_keeps_one_map_per_block_in_ascending_order() {
+        let mut changes = EntityDailyChanges::<EntityDateKey>::new();
+        changes.add(10, key(0x22), 100, 10).unwrap();
+        changes.add(10, key(0x22), 50, 5).unwrap();
+        changes.add(10, key(0x23), 7, 1).unwrap();
+        changes.add(12, key(0x22), -30, -3).unwrap();
+
+        let blocks = changes.by_block();
+        assert_eq!(blocks.len(), 2, "one entry per block that contributed");
+        assert_eq!(blocks[0].0, 10);
+        assert_eq!(blocks[1].0, 12);
+        assert_eq!(blocks[0].1.get(&key(0x22)), Some(&(150i128, 15i128)));
+        assert_eq!(blocks[0].1.get(&key(0x23)), Some(&(7i128, 1i128)));
+        assert_eq!(
+            blocks[1].1.get(&key(0x22)),
+            Some(&(-30i128, -3i128)),
+            "block 12 holds only its own contribution, not a running total"
+        );
+    }
+
+    #[test]
+    fn add_rejects_a_block_going_backwards() {
+        let mut changes = EntityDailyChanges::<EntityDateKey>::new();
+        changes.add(10, key(0x22), 1, 1).unwrap();
+        let err = changes.add(9, key(0x22), 1, 1).unwrap_err();
+        assert!(
+            err.to_string().contains("ascending block order"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn add_detects_overflow_on_both_fields() {
+        let mut changes = EntityDailyChanges::<EntityDateKey>::new();
+        changes.add(1, key(0x22), i128::MAX, 0).unwrap();
+        let err = changes.add(1, key(0x22), 1, 0).unwrap_err();
+        assert!(
+            err.to_string().contains("capacity delta overflow"),
+            "got: {err}"
+        );
+
+        let mut changes = EntityDailyChanges::<EntityDateKey>::new();
+        changes.add(1, key(0x22), 0, i128::MIN).unwrap();
+        let err = changes.add(1, key(0x22), 0, -1).unwrap_err();
+        assert!(
+            err.to_string().contains("knowledge delta overflow"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn fold_total_sums_every_block() {
+        let mut changes = EntityDailyChanges::<EntityDateKey>::new();
+        changes.add(1, key(0x22), 100, 10).unwrap();
+        changes.add(2, key(0x22), -30, -3).unwrap();
+        changes.add(2, key(0x23), 5, 1).unwrap();
+        let total = changes.fold_total().unwrap();
+        assert_eq!(total.get(&key(0x22)), Some(&(70i128, 7i128)));
+        assert_eq!(total.get(&key(0x23)), Some(&(5i128, 1i128)));
+        assert_eq!(total.len(), 2);
+    }
+
+    #[test]
+    fn is_empty_only_when_nothing_was_added() {
+        let mut changes = EntityDailyChanges::<ScriptDailyKey>::new();
+        assert!(changes.is_empty());
+        changes
+            .add(1, (vec![0x11; 32], 1, false, 20_260_922), 1, 1)
+            .unwrap();
+        assert!(!changes.is_empty());
+    }
+}
