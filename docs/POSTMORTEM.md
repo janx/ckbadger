@@ -2450,4 +2450,186 @@ does not take.
 
 ---
 
-_Last updated: 2026-09-06_
+### STATS-010: Shallow rollback deleted whole entity stats buckets, losing the surviving half
+
+**Date**: 2026-09-23
+
+**Symptom**: Per-entity daily and hourly statistics silently lost main-chain
+history wherever a shallow fork had touched the day. The testnet index could no
+longer start at all: `reconcile_token_daily_deltas_on_startup` fail-fasts on
+`20260915 owned_capacity=-14019999853193` — a running total that had gone
+negative because the positive days under it were gone.
+
+Measured against the chain, before any fix (`work/incident-archive/20260923/`):
+
+| Evidence                                           | Value                                                      |
+| -------------------------------------------------- | ---------------------------------------------------------- |
+| testnet iCKB `0xd485c227…`                         | short by **232,171,655,021,955** shannons                  |
+| — 2026-09-12                                       | whole day lost: 29,349,109,967,584                         |
+| — 2026-09-13                                       | whole day lost: 131,195,364,199,711                        |
+| — 2026-09-14                                       | 71,627,180,854,660 of 143,234,681,921,302 lost             |
+| mainnet Clown `0x3390b8cb…`                        | 2026-09-14 short by **14,400,000,000**                     |
+| mainnet `0x17e3a05e…2de8`                          | **+14,800,000,000** above live (a consume-day bucket lost) |
+| mismatched entities across the five daily families | mainnet **65**, testnet **128**                            |
+| shallow forks that re-triggered it on 2026-09-22   | **6**, `stats_removed` 12+2 and 23+4+2+9                   |
+
+The iCKB gap is exactly the three days deleted by three depth-1 forks (fork
+points 22,395,247 / 22,406,040 / 22,413,712); the surviving 2026-09-14 value is
+exactly that day's post-fork-point contribution, and the gap was still
+232,171,655,021,955 at the final tip 22,502,980.
+
+**Root Cause**: The rollback stats sweep visited 21 prefixes, and
+`repair_cutoff_date_stats` had repair branches for only six of them. The other
+fifteen fell through `_ => Ok(false)` (`reorg_ops.rs:834`) to `delete_cf`
+(`:3191`). For the eight per-entity families — `SCRIPT_DAILY`, `TOKEN_DAILY`,
+`CLUSTER_DAILY`, `SPORE_DAILY`, `OBJECT_DAILY`, `TOKEN_HOURLY`, `SPORE_HOURLY`,
+`OBJECT_HOURLY` — `should_delete_stats_for_replay` answered `date >= cutoff`
+(or `hour >= cutoff_hour`), so a depth-1 fork deleted the **entire** bucket for
+that day.
+
+A bucket is keyed `(entity, time bucket)` and carries contributions from both
+sides of the fork point. Replay only re-applies blocks **after** the fork point,
+so everything the bucket held from earlier in the same day was gone for good.
+The loss then propagated: cluster aggregates recompute capacity from the
+surviving `CLUSTER_DAILY` rows (`reorg_ops.rs:4683-4726`).
+
+The forward path could not have fixed it either. The parser flattened all five
+daily delta maps across the whole batch (`pipeline.rs:1547-1556`), erasing block
+identity, so nothing could say what a key was worth at the end of block N.
+
+**Why the tests missed it**: They asserted the bug.
+`test_should_delete_stats_for_replay_{token,script,cluster,spore,object}_daily_prefix`
+and `..._per_asset_hourly_prefixes` all asserted that the cutoff day's and
+cutoff hour's rows **are deleted** — the wrong behaviour, pinned as the
+expectation. And no test anywhere compared "roll back, then replay the new
+branch" against "sync the new branch directly", which is the only assertion that
+catches this class.
+
+**Fix**: One owner per prefix, and for these eight it is the undo log.
+
+- The eight prefixes left `STATS_REPLAY_CANDIDATE_PREFIXES` (21 → 13) and
+  `should_delete_stats_for_replay` now answers `false` for them at any date or
+  hour, so a future re-addition to the candidate set still cannot delete them.
+- The parser accumulates per block into `EntityDailyChanges<K>` in ascending
+  block order.
+- One `EntityStatsOverlay` per batch records, under the new
+  `UndoSeqScope::EntityStats`, the value at the **end of the previous block**
+  the first time a block touches a key, and writes each key exactly once in
+  `stage_final` — called after the last hourly write point and immediately
+  before the analytics batch merges, so rows, pre-images and the sync tip commit
+  atomically.
+- `sync_meta` → `entity_stats_undo_contract` states how far back this store can
+  still roll these families. The floor advances with each live commit and its
+  undo deletions are staged into the same batch; a rollback below it fails
+  rebuild-required at all three entry points instead of half-restoring. A
+  non-empty store without a contract is refused at startup — there is no honest
+  migration for data already missing.
+- Hourly retention moved into the writer, bounded by the undo window, so an
+  expiry sweep can never race a rollback restoring the same key.
+
+**Regressions that now pin it**: `crates/indexer/tests/entity_stats_rollback.rs`
+drives the real writers and `execute_reorg` —
+`rollback_then_replay_equals_direct` compares all eight families byte for byte
+against a second store that only ever saw the canonical chain, plus
+`token_daily_untouched_by_orphan_survives`,
+`consume_in_orphan_restores_capacity_and_occupied`,
+`multi_block_batch_rollback_to_middle`, `utc8_day_and_hour_boundary`,
+`hourly_token_spore_object_symmetry`, `two_consecutive_reorgs`,
+`append_only_bytes_unchanged`, `depth_1_and_36_recover_exactly`, and
+`ickb_three_day_gap_shape_is_preserved` (the incident's exact shape). In the
+store crate, `test_shallow_rollback_preserves_untouched_entity_buckets` and
+`test_stats_prefix_rollback_owner_table` (the executable ownership table, one
+owner per prefix) hold the line.
+
+**Lesson**: A time-bucket row is not owned by the blocks that happen to be
+rolled back — it is shared by both sides of the fork point, so "delete and let
+replay rebuild it" is only correct when replay actually covers everything the
+row contained. And when a test asserts a deletion, check what the deleted bytes
+were, not just that the code did what it currently does: these tests were green
+for the whole life of the bug because they encoded the defect as the contract.
+
+**Files**: `crates/ckbadger-store/src/reorg_ops.rs`,
+`crates/indexer/src/db/writer/entity_stats.rs`,
+`crates/indexer/src/sync/{types,batch,pipeline}.rs`,
+`crates/indexer/src/db/writer/{udt,addresses,spore,mnft,dotbit,statistics}.rs`
+
+---
+
+### IDX-008: Three object writers, one undo sequence, second write overwrote the first
+
+**Date**: 2026-09-23
+
+**Symptom**: Two object entities written in the same block left only **one**
+undo entry for that block. The first entity's pre-image was gone before rollback
+ever ran, so a shallow reorg restored one of them and silently left the other at
+its orphan-block value.
+
+**Root Cause**: `SporeBatchState`, `MnftBatchState` and `DotbitBatchState` each
+owned a private `undo_seq_by_block: HashMap<i64, u64>` counting from 0, while
+`record_object_undo` (`db/writer.rs:59-82`) stamped all three with the same
+`UndoSeqScope::Object`. The undo key is `block + seq` with
+`seq = (scope << 48) | local`, so the second writer in a block computed exactly
+the key the first had used — `(block, (0x0003 << 48) | 0)` — and, inside the same
+`StoreBatch`, overwrote it.
+
+**Fix**: `SharedUndoSeq` (`crates/indexer/src/sync/undo.rs`) — one block-scoped
+counter per committed batch, handed to every writer that records an undo entry,
+including the new `EntityStats` scope. It is `Arc<Mutex<_>>` rather than
+`Rc<RefCell<_>>` because the batch write path is an async fn whose future must
+stay `Send`.
+
+**Regression**:
+`db::writer::undo_seq_tests::object_scope_undo_seq_is_shared_across_entity_batch_states`
+— a Spore cluster and an mNFT issuer in one block must leave two undo entries
+(it found 1).
+
+**Lesson**: A sequence number that must be unique across writers cannot be owned
+by a writer. Sharing the _scope_ while privately owning the _counter_ is the
+same key twice, and the loss is invisible until a reorg needs the entry.
+
+**Files**: `crates/indexer/src/sync/undo.rs`, `crates/indexer/src/db/writer.rs`
+
+---
+
+### IDX-009: Bulk completion recorded the chain tip as the coverage floor
+
+**Date**: 2026-09-23
+
+**Symptom**: After a bulk build, the entity-stats coverage floor named a block
+higher than the last block the store contained. The first shallow reorg after
+handoff whose fork point fell in that gap would be refused as rebuild-required,
+on a store that was in fact fine.
+
+**Root Cause**: `run_bulk_stage_until_pipeline_handoff` stops once
+`blocks_remaining <= bulk_sync_threshold`, so the handoff tip is normally below
+the chain tip it last sampled — by up to a whole threshold. The completion path
+wrote the sampled **chain tip** into `entity_stats_undo_contract`. The floor's
+whole meaning is "the lowest block this store can still undo", which is a
+statement about blocks the store **has**; naming a block bulk never wrote
+claimed coverage over nothing.
+
+**Fix**: The contract is written with `coverage_floor_block` = the handoff tip,
+and `persist_bulk_sync_completion_status` fails fast if the handoff tip is above
+the chain tip. Because bulk records no undo entries at all, live sync needs room
+to build coverage before a legal shallow fork can reach below that floor, so
+`Config::validate` now requires `indexer.bulk_sync_threshold >= DEEP_FORK_DEPTH`
+(36); the generated `config.toml` writes 1000.
+
+A fork below the floor immediately after handoff still demands a rebuild, and
+that is the correct answer rather than a defect: bulk wrote no pre-images, so the
+alternative is silently keeping entity statistics that are known to be wrong.
+
+**Regressions**: `bulk_completion_writes_contract` asserts the floor equals the
+handoff tip and sits at least `DEEP_FORK_DEPTH` below the sampled chain tip;
+`test_bulk_sync_threshold_below_deep_fork_depth_is_rejected` pins the config
+bound.
+
+**Lesson**: A coverage claim must be derived from what was actually written, not
+from the target that was being chased. When two tips are available at a handoff,
+the one that describes the artifact is the one the artifact ends at.
+
+**Files**: `crates/indexer/src/sync/indexer.rs`, `crates/indexer/src/config.rs`
+
+---
+
+_Last updated: 2026-09-23_
