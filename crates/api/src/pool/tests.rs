@@ -26,6 +26,28 @@ const SECP_LOCK_CODE_HASH: &str =
     "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8";
 const SUDT_CODE_HASH: &str = "0x5e7a36a77e68eecc013dfa2fe6a23f3b6c344b04005808694ae6dd45eea4cfd5";
 
+// Mainnet `.cell` (Cells) deployment, and the two states of `abuse.cell` in
+// transaction 0x53a0519e06fc4aac3eca2606e12fc19849919a226af872f687dfb3209a0470fd
+// at block 20,516,391 — a transfer from the operator's secp key to its JoyID.
+// Fetched 2026-09-24 from a local mainnet node.
+const DOTCELL_ACCOUNT_CODE_HASH: &str =
+    "0xd96cee56727a2bb9a21408c154d278df5095fb4b4dcfd50516156424479bfe54";
+const DOTCELL_ACCOUNT_LOCK_CODE_HASH: &str =
+    "0x9f0f0ba142b58cba2fe047546cfd8481d5b1769437cd3533e6458b21b61871ab";
+const DOTCELL_NAMESPACE_ARGS: &str = "0xb4f4302965b7d6421481a520ee7eb5971a5e808c";
+/// `abuse.cell` before the transfer: owner and manager `0x57d926a4…c867`.
+const DOTCELL_ABUSE_BEFORE: &str = "0x0372ad09e23868d88a8e85519ebeee56f60eda6c5a564e8a369a4c9d8ea29087e20000000000000000000000000000000000000000c6c2916c0057d926a44d83fc13b21ce037b1e31f4223e3c86757d926a44d83fc13b21ce037b1e31f4223e3c8676162757365";
+/// And after: owner and manager `0xac55d7da…8182`.
+const DOTCELL_ABUSE_AFTER: &str = "0x0372ad09e23868d88a8e85519ebeee56f60eda6c5a564e8a369a4c9d8ea29087e20000000000000000000000000000000000000000c6c2916c00ac55d7dab2e9a4b85775a811bb4063e94cc98182ac55d7dab2e9a4b85775a811bb4063e94cc981826162757365";
+const DOTCELL_ABUSE_OWNER_BEFORE: [u8; 20] = [
+    0x57, 0xd9, 0x26, 0xa4, 0x4d, 0x83, 0xfc, 0x13, 0xb2, 0x1c, 0xe0, 0x37, 0xb1, 0xe3, 0x1f, 0x42,
+    0x23, 0xe3, 0xc8, 0x67,
+];
+const DOTCELL_ABUSE_OWNER_AFTER: [u8; 20] = [
+    0xac, 0x55, 0xd7, 0xda, 0xb2, 0xe9, 0xa4, 0xb8, 0x57, 0x75, 0xa8, 0x11, 0xbb, 0x40, 0x63, 0xe9,
+    0x4c, 0xc9, 0x81, 0x82,
+];
+
 fn hex32(byte: u8) -> String {
     format!("0x{}", hex::encode([byte; 32]))
 }
@@ -82,6 +104,26 @@ impl TxBuilder {
             script(SECP_LOCK_CODE_HASH, lock_args),
             None,
             "0x".to_string(),
+        ));
+        self
+    }
+
+    /// A `.cell` name cell: Cells Account Lock (empty args) + Cells Account
+    /// type script with the deployment's namespace args.
+    fn dotcell_output(mut self, capacity: u64, data_hex: &str) -> Self {
+        self.outputs.push((
+            capacity,
+            RpcScript {
+                code_hash: DOTCELL_ACCOUNT_LOCK_CODE_HASH.to_string(),
+                hash_type: "type".to_string(),
+                args: "0x".to_string(),
+            },
+            Some(RpcScript {
+                code_hash: DOTCELL_ACCOUNT_CODE_HASH.to_string(),
+                hash_type: "type".to_string(),
+                args: DOTCELL_NAMESPACE_ARGS.to_string(),
+            }),
+            data_hex.to_string(),
         ));
         self
     }
@@ -816,6 +858,190 @@ async fn test_interpretation_parity_between_live_sync_and_pool_resolution() {
         serde_json::to_value(&live_actions).unwrap(),
         "the pool resolver and the live-sync path must interpret the same transaction identically"
     );
+}
+
+/// A `.cell` transfer must read the same in the pool as it does once committed.
+///
+/// A `.cell` name's ownership lives in the cell's DATA, and the classifier
+/// learns the previous owner only from `InputCellView.dotcell`. The mirror
+/// holds the node's resolved previous output — data included — so it can fill
+/// that field; leaving it empty turns every touch of an existing name into a
+/// brand-new `register` with no `owner_from`, which is exactly what a user
+/// watching the mempool must not be told.
+#[tokio::test]
+async fn test_dotcell_transfer_reads_the_same_in_the_pool_as_committed() {
+    use ckbadger_indexer::db::{
+        build_tx_actions_with_production_detectors, InputCellView, OutputCellView, TxView,
+    };
+    use ckbadger_indexer::parser::DotCellParser;
+    use ckbadger_store::types::ParticipantId;
+
+    let name_cell = ResolvedCell::new(
+        24_000_000_000,
+        hex::decode(DOTCELL_ACCOUNT_LOCK_CODE_HASH.trim_start_matches("0x")).unwrap(),
+        1,
+        Vec::new(),
+        Some((
+            hex::decode(DOTCELL_ACCOUNT_CODE_HASH.trim_start_matches("0x")).unwrap(),
+            1,
+            hex::decode(DOTCELL_NAMESPACE_ARGS.trim_start_matches("0x")).unwrap(),
+        )),
+        hex::decode(DOTCELL_ABUSE_BEFORE.trim_start_matches("0x")).unwrap(),
+    )
+    .unwrap();
+    let funding_cell = ResolvedCell::new(
+        8_774_800_000_000,
+        hex::decode(SECP_LOCK_CODE_HASH.trim_start_matches("0x")).unwrap(),
+        1,
+        vec![0xAA; 20],
+        None,
+        Vec::new(),
+    )
+    .unwrap();
+
+    let tx = TxBuilder::new(0x01)
+        .input(&hex32(0xF0), 0)
+        .input(&hex32(0xF1), 0)
+        .dotcell_output(24_000_000_000, DOTCELL_ABUSE_AFTER)
+        .output(8_774_700_000_000, 0xAA)
+        .build();
+
+    let mut previous_outputs = std::collections::HashMap::new();
+    previous_outputs.insert(([0xF0; 32], 0u32), name_cell.clone());
+    previous_outputs.insert(([0xF1; 32], 0u32), funding_cell.clone());
+    let resolved = resolve_pool_tx(&tx, &previous_outputs).unwrap();
+    let zero_block_hash = [0u8; 32];
+    let pool_view = resolved
+        .tx_view(&zero_block_hash, 1_700_000_000_000)
+        .expect("all inputs resolved");
+    let pool_actions = build_tx_actions_with_production_detectors(&[pool_view], true).unwrap();
+
+    // --- Committed path: the input arrives without data, and the consumed
+    // name's prior state comes from the identity entry the indexer read. ---
+    let previous_name =
+        DotCellParser::parse_name_data(&name_cell.data).expect("the real mainnet name cell");
+    let name_out = &resolved.outputs[0];
+    let change_out = &resolved.outputs[1];
+    let live_view = TxView {
+        tx_hash: &resolved.tx_hash,
+        block_hash: &zero_block_hash,
+        tx_index: 0,
+        block_number: 0,
+        timestamp: 1_700_000_000_000,
+        is_cellbase: false,
+        inputs: vec![
+            InputCellView {
+                previous_tx_hash: &[0xF0; 32],
+                previous_output_index: 0,
+                lock_script_hash: &name_cell.lock_script_hash,
+                lock_code_hash: &name_cell.lock_code_hash,
+                lock_hash_type: name_cell.lock_hash_type,
+                lock_args: &name_cell.lock_args,
+                capacity: name_cell.capacity,
+                occupied_capacity: name_cell.occupied_capacity,
+                type_code_hash: name_cell.type_code_hash.as_deref(),
+                type_hash_type: name_cell.type_hash_type,
+                type_script_hash: name_cell.type_script_hash.as_deref(),
+                type_args: name_cell.type_args.as_deref(),
+                udt_amount: None,
+                bit_cell_identity_id: None,
+                dotcell: Some(&previous_name),
+                data: &[],
+                is_dao_withdraw_request: false,
+                dao_compensation: None,
+            },
+            InputCellView {
+                previous_tx_hash: &[0xF1; 32],
+                previous_output_index: 0,
+                lock_script_hash: &funding_cell.lock_script_hash,
+                lock_code_hash: &funding_cell.lock_code_hash,
+                lock_hash_type: funding_cell.lock_hash_type,
+                lock_args: &funding_cell.lock_args,
+                capacity: funding_cell.capacity,
+                occupied_capacity: funding_cell.occupied_capacity,
+                type_code_hash: None,
+                type_hash_type: None,
+                type_script_hash: None,
+                type_args: None,
+                udt_amount: None,
+                bit_cell_identity_id: None,
+                dotcell: None,
+                data: &[],
+                is_dao_withdraw_request: false,
+                dao_compensation: None,
+            },
+        ],
+        outputs: vec![
+            OutputCellView {
+                capacity: name_out.capacity,
+                lock_code_hash: &name_out.lock_code_hash,
+                lock_hash_type: name_out.lock_hash_type,
+                lock_args: &name_out.lock_args,
+                lock_script_hash: &name_out.lock_script_hash,
+                type_code_hash: name_out.type_code_hash.as_deref(),
+                type_hash_type: name_out.type_hash_type,
+                type_args: name_out.type_args.as_deref(),
+                type_script_hash: name_out.type_script_hash.as_deref(),
+                data_hash: &[0u8; 32],
+                data_size: name_out.data.len() as i32,
+                data: &name_out.data,
+            },
+            OutputCellView {
+                capacity: change_out.capacity,
+                lock_code_hash: &change_out.lock_code_hash,
+                lock_hash_type: change_out.lock_hash_type,
+                lock_args: &change_out.lock_args,
+                lock_script_hash: &change_out.lock_script_hash,
+                type_code_hash: None,
+                type_hash_type: None,
+                type_args: None,
+                type_script_hash: None,
+                data_hash: &[0u8; 32],
+                data_size: 0,
+                data: &[],
+            },
+        ],
+    };
+    let live_actions = build_tx_actions_with_production_detectors(&[live_view], true).unwrap();
+
+    assert_eq!(
+        serde_json::to_value(&pool_actions).unwrap(),
+        serde_json::to_value(&live_actions).unwrap(),
+        "a .cell transfer must interpret identically in the pool and once committed"
+    );
+
+    // And it must be a transfer, not a registration: the whole point is that
+    // the previous owner is named.
+    let dotcell_actions: Vec<_> = pool_actions[0]
+        .protocol_actions
+        .iter()
+        .filter(|action| action.protocol == "dotcell")
+        .collect();
+    assert_eq!(dotcell_actions.len(), 1, "{dotcell_actions:?}");
+    assert_eq!(dotcell_actions[0].action, "transfer");
+
+    let from = pool_actions[0]
+        .participants
+        .iter()
+        .find(|p| p.id == ParticipantId::LockPrefix(DOTCELL_ABUSE_OWNER_BEFORE))
+        .expect("the previous owner must be named");
+    assert_eq!(
+        from.roles,
+        ckbadger_store::types::participant_roles::OWNER_FROM
+    );
+    assert_eq!(from.item_deltas.len(), 1);
+    assert!(from.item_deltas[0].negative);
+
+    let to = pool_actions[0]
+        .participants
+        .iter()
+        .find(|p| p.id == ParticipantId::LockPrefix(DOTCELL_ABUSE_OWNER_AFTER))
+        .expect("the new owner must be named");
+    assert_ne!(
+        to.roles & ckbadger_store::types::participant_roles::OWNER_TO,
+        0
+    );
+    assert!(!to.item_deltas[0].negative);
 }
 
 /// A pool transaction that completes a DAO withdrawal declares the one layer it

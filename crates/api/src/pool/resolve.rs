@@ -28,6 +28,8 @@ use ckb_store_reader::RpcTransactionView;
 use ckbadger_indexer::db::{InputCellView, OutputCellView, TxView};
 use ckbadger_indexer::parser::dao::{DaoParser, DaoState};
 use ckbadger_indexer::parser::udt::UdtParser;
+use ckbadger_indexer::parser::DotCellParser;
+use ckbadger_store::types::DotCellNameData;
 
 use super::source::{
     parse_hash_type, parse_hex_bytes, parse_hex_hash32, parse_hex_u64, NodeLiveCell, PoolSource,
@@ -59,6 +61,16 @@ pub struct ResolvedCell {
     /// (code_hash, hash_type), then parse; a short payload yields no amount
     /// rather than a zero.
     pub udt_amount: Option<u128>,
+    /// The `.cell` name this cell carries, when its type script is the Cells
+    /// Account script.
+    ///
+    /// A `.cell` name's ownership lives in the cell's DATA, and the classifier
+    /// learns a consumed name's previous state only from
+    /// `InputCellView.dotcell`. The mirror has the node's resolved previous
+    /// output, data included, so it parses it here with the SAME parser the
+    /// indexer uses — leaving it empty would make every touch of an existing
+    /// name read as a brand-new registration.
+    pub dotcell: Option<DotCellNameData>,
 }
 
 impl ResolvedCell {
@@ -79,21 +91,33 @@ impl ResolvedCell {
         )
         .map_err(|e| format!("occupied capacity for pool cell: {e}"))?;
 
-        let (type_code_hash, type_hash_type, type_args, type_script_hash, udt_amount) =
+        let (type_code_hash, type_hash_type, type_args, type_script_hash, udt_amount, dotcell) =
             match type_script {
                 Some((code_hash, hash_type, args)) => {
                     let script_hash = compute_script_hash(&code_hash, hash_type as u8, &args);
                     let udt_amount = UdtParser::is_udt_code_hash_bytes(&code_hash, hash_type)
                         .and_then(|_| UdtParser::parse_amount(&data));
+                    // A Cells Account cell whose data does not decode is not a
+                    // cell to interpret loosely: say so rather than report the
+                    // transaction as if the name were absent.
+                    let dotcell = if DotCellParser::is_account_type_script(&code_hash) {
+                        Some(
+                            DotCellParser::parse_name_data(&data)
+                                .map_err(|e| format!("pool .cell name cell: {e}"))?,
+                        )
+                    } else {
+                        None
+                    };
                     (
                         Some(code_hash),
                         Some(hash_type),
                         Some(args),
                         Some(script_hash),
                         udt_amount,
+                        dotcell,
                     )
                 }
-                None => (None, None, None, None, None),
+                None => (None, None, None, None, None, None),
             };
 
         Ok(Self {
@@ -109,6 +133,7 @@ impl ResolvedCell {
             data,
             occupied_capacity,
             udt_amount,
+            dotcell,
         })
     }
 
@@ -239,7 +264,9 @@ impl ResolvedPoolTx {
                 // the live cell), so `.bit Cell` identity IDs are parsed from it
                 // exactly as they are for outputs. No pre-parsed override.
                 bit_cell_identity_id: None,
-                dotcell: None,
+                // `.cell` is the exception: the classifier reads a consumed
+                // name's previous state from this field, never from the data.
+                dotcell: cell.dotcell.as_ref(),
                 data: &cell.data,
                 // Phase-2 DAO compensation is not derivable without header AR
                 // arithmetic, and `classify_input` refuses a withdraw-request
