@@ -35,6 +35,8 @@ pub use bulk_build::live_cells::{
 };
 #[doc(hidden)]
 pub use bulk_build::materialize::MaterializationReport;
+pub use pipeline::classify_type_script_semantic_tag;
+
 pub use indexer::is_fresh_sync_tip_state;
 pub use indexer::Indexer;
 pub(crate) use indexer::{decide_startup_sync, StartupSyncDecision};

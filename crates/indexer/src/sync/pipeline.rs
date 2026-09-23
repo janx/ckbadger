@@ -132,8 +132,18 @@ fn classify_batch_write_failure(error: &anyhow::Error) -> BatchWriteFailurePolic
     }
 }
 
-pub(crate) fn classify_bulk_cell_semantic_tag(cell: &ParsedCell) -> CellSemanticTag {
-    let Some(type_code_hash) = cell.type_code_hash.as_deref() else {
+/// Classify a cell's type script into a semantic tag.
+///
+/// The ONE place the type-script → `CellSemanticTag` mapping lives. Every
+/// caller — parsed output cells (bulk/live parse), resolved input cells from
+/// the store, and the API's tx-pool mirror, which has only the raw scripts of
+/// an uncommitted transaction — routes through here, so `semantic_tags` on a
+/// pool row and on the same transaction once committed cannot disagree.
+pub fn classify_type_script_semantic_tag(
+    type_code_hash: Option<&[u8]>,
+    type_hash_type: Option<i16>,
+) -> CellSemanticTag {
+    let Some(type_code_hash) = type_code_hash else {
         return CellSemanticTag::Plain;
     };
 
@@ -141,7 +151,7 @@ pub(crate) fn classify_bulk_cell_semantic_tag(cell: &ParsedCell) -> CellSemantic
         return CellSemanticTag::Dao;
     }
 
-    if let Some(hash_type) = cell.type_hash_type {
+    if let Some(hash_type) = type_hash_type {
         if let Some(standard) = UdtParser::is_udt_code_hash_bytes(type_code_hash, hash_type) {
             return match standard {
                 UdtStandard::Sudt => CellSemanticTag::Sudt,
@@ -180,53 +190,13 @@ pub(crate) fn classify_bulk_cell_semantic_tag(cell: &ParsedCell) -> CellSemantic
     CellSemanticTag::Plain
 }
 
+pub(crate) fn classify_bulk_cell_semantic_tag(cell: &ParsedCell) -> CellSemanticTag {
+    classify_type_script_semantic_tag(cell.type_code_hash.as_deref(), cell.type_hash_type)
+}
+
 /// Classify a resolved input cell (from the store) into a semantic tag.
 pub(crate) fn classify_live_cell_semantic_tag(cell: &LiveCellInfo) -> CellSemanticTag {
-    let Some(type_code_hash) = cell.type_code_hash.as_deref() else {
-        return CellSemanticTag::Plain;
-    };
-
-    if DaoParser::is_dao_code_hash(type_code_hash) {
-        return CellSemanticTag::Dao;
-    }
-
-    if let Some(hash_type) = cell.type_hash_type {
-        if let Some(standard) = UdtParser::is_udt_code_hash_bytes(type_code_hash, hash_type) {
-            return match standard {
-                UdtStandard::Sudt => CellSemanticTag::Sudt,
-                UdtStandard::Xudt => CellSemanticTag::Xudt,
-            };
-        }
-    }
-
-    if DotbitParser::is_account_cell_type_script(type_code_hash) {
-        return CellSemanticTag::Dotbit;
-    }
-
-    if BitCellParser::is_type_script(type_code_hash) {
-        return CellSemanticTag::BitCell;
-    }
-
-    if MnftParser::is_issuer_type_script(type_code_hash)
-        || MnftParser::is_class_type_script(type_code_hash)
-        || MnftParser::is_token_type_script(type_code_hash)
-    {
-        return CellSemanticTag::Mnft;
-    }
-
-    if SporeParser::is_cluster_type_script(type_code_hash) {
-        return CellSemanticTag::Cluster;
-    }
-
-    if DidCkbParser::is_type_script(type_code_hash) {
-        return CellSemanticTag::DidCkb;
-    }
-
-    if SporeParser::is_spore_nft_type_script(type_code_hash) {
-        return CellSemanticTag::Spore;
-    }
-
-    CellSemanticTag::Plain
+    classify_type_script_semantic_tag(cell.type_code_hash.as_deref(), cell.type_hash_type)
 }
 
 fn parse_bulk_dao_cell_state(
@@ -4065,5 +4035,92 @@ mod tests {
             cell.protocol_facts.is_none(),
             "unparseable DotBit cell should have no protocol facts"
         );
+    }
+    /// One classifier, three entry points.
+    ///
+    /// `classify_bulk_cell_semantic_tag` (parsed output cells),
+    /// `classify_live_cell_semantic_tag` (resolved input cells) and the shared
+    /// `classify_type_script_semantic_tag` used by the API's tx-pool mirror
+    /// must answer identically for the same type script. They used to be two
+    /// byte-identical copies of the same predicate chain; a third caller made
+    /// drift a matter of time.
+    #[test]
+    fn test_semantic_tag_classification_agrees_across_entry_points() {
+        use crate::parser::dao::DAO_CODE_HASH;
+        use crate::rpc::parse_hex_to_bytes;
+
+        let cases: Vec<(&str, Option<Vec<u8>>, CellSemanticTag)> = vec![
+            ("no type script", None, CellSemanticTag::Plain),
+            (
+                "dao",
+                Some(parse_hex_to_bytes(DAO_CODE_HASH)),
+                CellSemanticTag::Dao,
+            ),
+            (
+                "sudt",
+                Some(parse_hex_to_bytes(SUDT_CODE_HASH)),
+                CellSemanticTag::Sudt,
+            ),
+            (
+                "dotbit account cell",
+                Some(parse_hex_to_bytes(DOTBIT_ACCOUNT_CELL_TYPE_ID)),
+                CellSemanticTag::Dotbit,
+            ),
+            (
+                "unrecognized",
+                Some(vec![0xEEu8; 32]),
+                CellSemanticTag::Plain,
+            ),
+        ];
+
+        for (label, type_code_hash, expected) in cases {
+            let hash_type = type_code_hash.as_ref().map(|_| 1i16);
+
+            let parsed = ParsedCell {
+                capacity: 0,
+                lock_code_hash: vec![0u8; 32],
+                lock_hash_type: 1,
+                lock_args: vec![],
+                lock_script_hash: vec![0u8; 32],
+                type_code_hash: type_code_hash.clone(),
+                type_hash_type: hash_type,
+                type_args: None,
+                type_script_hash: None,
+                data_hash: [0u8; 32],
+                data_size: 0,
+                data: vec![],
+            };
+            let live = LiveCellInfo {
+                capacity: 0,
+                lock_script_hash: vec![0u8; 32],
+                lock_code_hash: vec![0u8; 32],
+                lock_hash_type: 1,
+                lock_args: vec![],
+                type_script_hash: None,
+                type_code_hash: type_code_hash.clone(),
+                type_hash_type: hash_type,
+                type_args: None,
+                data_size: 0,
+                occupied_capacity: 0,
+                udt_amount: None,
+                data_hash: None,
+            };
+
+            assert_eq!(
+                classify_bulk_cell_semantic_tag(&parsed),
+                expected,
+                "bulk classifier disagrees for {label}"
+            );
+            assert_eq!(
+                classify_live_cell_semantic_tag(&live),
+                expected,
+                "live classifier disagrees for {label}"
+            );
+            assert_eq!(
+                classify_type_script_semantic_tag(type_code_hash.as_deref(), hash_type),
+                expected,
+                "shared classifier disagrees for {label}"
+            );
+        }
     }
 }
