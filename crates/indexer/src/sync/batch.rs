@@ -6724,7 +6724,7 @@ mod tests {
 
         // ---- Phase 1a: participant-derived addr_txs rows ----
 
-        fn lock_script_b() -> Script {
+        pub(super) fn lock_script_b() -> Script {
             Script {
                 code_hash: SECP_CODE_HASH.to_string(),
                 hash_type: "type".to_string(),
@@ -6732,7 +6732,7 @@ mod tests {
             }
         }
 
-        fn lock_script_c() -> Script {
+        pub(super) fn lock_script_c() -> Script {
             Script {
                 code_hash: SECP_CODE_HASH.to_string(),
                 hash_type: "type".to_string(),
@@ -6741,7 +6741,7 @@ mod tests {
         }
 
         /// Spend `prev_tx`'s output 0 into `to`, keeping a 1 CKB fee.
-        fn transfer_tx(
+        pub(super) fn transfer_tx(
             hash_byte: u8,
             prev_tx_hash_byte: u8,
             capacity: u64,
@@ -6771,9 +6771,10 @@ mod tests {
 
         /// The prefix the injected detector names. Deliberately unrelated to any
         /// lock in the fixtures, so it stays a standalone participant.
-        const NAMED_PREFIX: [u8; 20] = [0x77; 20];
+        pub(super) const NAMED_PREFIX: [u8; 20] = [0x77; 20];
 
-        fn naming_detectors() -> Vec<Box<dyn crate::db::writer::activities::ProtocolDetector>> {
+        pub(super) fn naming_detectors(
+        ) -> Vec<Box<dyn crate::db::writer::activities::ProtocolDetector>> {
             vec![Box::new(
                 crate::db::writer::activities::test_detectors::NamingDetector {
                     id: ckbadger_store::types::ParticipantId::LockPrefix(NAMED_PREFIX),
@@ -7040,6 +7041,165 @@ mod tests {
     // The bulk reducer vetoes on all resolved inputs, so the live write path
     // must veto on exactly the same set; otherwise the two sync paths persist
     // different metadata for the same chain.
+
+    /// Bulk build and live sync must produce byte-identical participant rows.
+    mod participant_rows_parity {
+        use super::live_dao_fee::{
+            block, cellbase_tx, indexer_for_live_write_test, lock_script, lock_script_b,
+            naming_detectors, transfer_tx, write_live_block, NAMED_PREFIX,
+        };
+        use super::*;
+        use crate::sync::materialize_bulk_artifacts_for_test;
+        use ckbadger_store::types::AddrTxValue;
+        use std::collections::BTreeMap;
+
+        const AR: u64 = 10_000_000_000_000_000;
+        const FUNDING_CAPACITY: u64 = 3000_00000000;
+
+        /// Block 100 funds lock A; block 101 spends it to lock B, and the
+        /// injected detector names a party holding no cell at all.
+        fn parity_blocks() -> Vec<BlockResponseWithCycles> {
+            vec![
+                block(100, AR, vec![cellbase_tx(0xc0, FUNDING_CAPACITY)]),
+                block(
+                    101,
+                    AR,
+                    vec![
+                        cellbase_tx(0xc1, 100_000_000),
+                        transfer_tx(0xd1, 0xc0, FUNDING_CAPACITY - 100_000_000, lock_script_b()),
+                    ],
+                ),
+            ]
+        }
+
+        #[allow(clippy::type_complexity)]
+        fn live_rows(
+            store: &CkbadgerStore,
+        ) -> (
+            BTreeMap<(Vec<u8>, i64, i32, Vec<u8>), AddrTxValue>,
+            BTreeMap<([u8; 20], i64, i32, Vec<u8>), AddrTxValue>,
+        ) {
+            let mut by_lock = BTreeMap::new();
+            for item in store.iterator_cf(store.cf_addr_txs(), rocksdb::IteratorMode::Start) {
+                let (key, value) = item.unwrap();
+                let (lock_hash, block_num, tx_idx, tx_hash) =
+                    ckbadger_store::keys::decode_addr_tx_key(&key);
+                by_lock.insert(
+                    (lock_hash, block_num, tx_idx, tx_hash),
+                    bincode::deserialize(&value).unwrap(),
+                );
+            }
+            let mut by_prefix = BTreeMap::new();
+            for item in
+                store.iterator_cf(store.cf_addr_txs_by_prefix(), rocksdb::IteratorMode::Start)
+            {
+                let (key, value) = item.unwrap();
+                let (prefix, block_num, tx_idx, tx_hash) =
+                    ckbadger_store::keys::decode_addr_tx_by_prefix_key(&key);
+                by_prefix.insert(
+                    (prefix, block_num, tx_idx, tx_hash),
+                    bincode::deserialize(&value).unwrap(),
+                );
+            }
+            (by_lock, by_prefix)
+        }
+
+        #[test]
+        fn bulk_writes_prefix_rows_and_counters_for_named_participants() {
+            let _guard =
+                crate::db::writer::activities::test_detector_override::install(naming_detectors);
+            let snapshot = materialize_bulk_artifacts_for_test(&parity_blocks())
+                .expect("bulk build must succeed");
+
+            let lock_a = crate::parser::ScriptParser::compute_script_hash(&lock_script());
+            let lock_b = crate::parser::ScriptParser::compute_script_hash(&lock_script_b());
+            let mut positions: Vec<(Vec<u8>, i64, i32)> = snapshot
+                .addr_txs
+                .keys()
+                .map(|(lock_hash, block_num, tx_idx, _)| (lock_hash.clone(), *block_num, *tx_idx))
+                .collect();
+            positions.sort();
+            assert_eq!(
+                positions,
+                vec![
+                    (lock_a.clone(), 100, 0),
+                    (lock_a.clone(), 101, 0),
+                    (lock_a.clone(), 101, 1),
+                    (lock_b.clone(), 101, 1),
+                ]
+            );
+
+            assert_eq!(snapshot.addr_txs_by_prefix.len(), 1);
+            let ((prefix, block_num, tx_idx, _), value) =
+                snapshot.addr_txs_by_prefix.iter().next().unwrap();
+            assert_eq!((*prefix, *block_num, *tx_idx), (NAMED_PREFIX, 101, 1));
+            assert_eq!(value.flags, AddrTxValue::TX_TYPE_NAMED);
+            assert_eq!(value.capacity_change, 0);
+
+            assert_eq!(
+                snapshot
+                    .addr_prefix_stats
+                    .get(&NAMED_PREFIX)
+                    .expect("prefix counter")
+                    .txs_count,
+                1
+            );
+            assert_eq!(
+                snapshot
+                    .core
+                    .address_balances
+                    .get(lock_a.as_slice())
+                    .expect("lock A balance")
+                    .txs_count,
+                3,
+                "addr_balance still counts only cell participations"
+            );
+        }
+
+        #[tokio::test]
+        async fn bulk_and_live_produce_identical_participant_rows_for_the_same_block() {
+            let blocks = parity_blocks();
+
+            let live_store = {
+                let _guard = crate::db::writer::activities::test_detector_override::install(
+                    naming_detectors,
+                );
+                let dir = tempfile::tempdir().unwrap();
+                let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+                std::mem::forget(dir);
+                store
+                    .set_secondary_epoch_reward(61_369_863_013_698)
+                    .unwrap();
+                let indexer = indexer_for_live_write_test(store.clone());
+                for b in &blocks {
+                    write_live_block(&indexer, b.clone()).await.unwrap();
+                }
+                store
+            };
+            let (live_by_lock, live_by_prefix) = live_rows(&live_store);
+
+            let snapshot = {
+                let _guard = crate::db::writer::activities::test_detector_override::install(
+                    naming_detectors,
+                );
+                materialize_bulk_artifacts_for_test(&blocks).expect("bulk build must succeed")
+            };
+
+            assert_eq!(live_by_lock, snapshot.addr_txs, "CF_ADDR_TXS must match");
+            assert_eq!(
+                live_by_prefix, snapshot.addr_txs_by_prefix,
+                "CF_ADDR_TXS_BY_PREFIX must match"
+            );
+            assert_eq!(
+                live_store
+                    .get_addr_prefix_stats(&NAMED_PREFIX)
+                    .unwrap()
+                    .unwrap(),
+                *snapshot.addr_prefix_stats.get(&NAMED_PREFIX).unwrap(),
+                "prefix counters must match"
+            );
+        }
+    }
 
     mod live_token_binding {
         use super::live_dao_fee::{

@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -22,11 +22,12 @@ use ckbadger_store::types::{
     DID_CKB_SENTINEL_COLLECTION, DOTBIT_SENTINEL_COLLECTION, SOLE_SPORES_SENTINEL_COLLECTION,
 };
 use ckbadger_store::{
-    AddressBalance, CkbadgerStore, ScriptInfo, CF_ADDR_TXS, CF_BLOCK_HASH_INDEX, CF_BLOCK_HEADERS,
-    CF_CELLS, CF_CELL_BY_DATA_HASH, CF_CELL_BY_LOCK, CF_CELL_BY_LOCK_CODE, CF_CELL_BY_TYPE,
-    CF_CELL_BY_TYPE_CODE, CF_CONSUMED_CELLS, CF_IDENTITY_COLLECTION_ACTIVITIES, CF_LIVE_CELLS,
-    CF_LOCK_SCRIPTS, CF_OBJECT_COLLECTION_ACTIVITIES, CF_STATS_CHAIN, CF_STATS_HODL, CF_TX_ACTIONS,
-    CF_TX_HASH_MAP, CF_TX_INDEX,
+    AddressBalance, CkbadgerStore, ScriptInfo, CF_ADDR_TXS, CF_ADDR_TXS_BY_PREFIX,
+    CF_BLOCK_HASH_INDEX, CF_BLOCK_HEADERS, CF_CELLS, CF_CELL_BY_DATA_HASH, CF_CELL_BY_LOCK,
+    CF_CELL_BY_LOCK_CODE, CF_CELL_BY_TYPE, CF_CELL_BY_TYPE_CODE, CF_CONSUMED_CELLS,
+    CF_IDENTITY_COLLECTION_ACTIVITIES, CF_LIVE_CELLS, CF_LOCK_SCRIPTS,
+    CF_OBJECT_COLLECTION_ACTIVITIES, CF_STATS_CHAIN, CF_STATS_HODL, CF_TX_ACTIONS, CF_TX_HASH_MAP,
+    CF_TX_INDEX,
 };
 use rayon::prelude::*;
 use rocksdb::IteratorMode;
@@ -2614,6 +2615,9 @@ impl BulkBuildRuntimeState {
         owners
             .object
             .apply_identity_activity_count_deltas(&history.identity_activity_count_deltas)?;
+        owners
+            .address
+            .add_prefix_tx_counts(&history.prefix_tx_count_deltas)?;
         let reduce_elapsed = reduce_started.elapsed();
 
         // Collect sealed rows (pure data, no store dependency).
@@ -2827,6 +2831,9 @@ impl BulkBuildRuntimeState {
         owners
             .object
             .apply_identity_activity_count_deltas(&history.identity_activity_count_deltas)?;
+        owners
+            .address
+            .add_prefix_tx_counts(&history.prefix_tx_count_deltas)?;
         let reduce_elapsed = reduce_started.elapsed();
 
         // Collect sealed rows (pure data, no store dependency).
@@ -3090,6 +3097,7 @@ struct HistoryBuildResult {
     rows: Vec<materialize::EncodedHistoryChunk>,
     object_activity_count_deltas: FxHashMap<Vec<u8>, i64>,
     identity_activity_count_deltas: FxHashMap<Vec<u8>, i64>,
+    prefix_tx_count_deltas: FxHashMap<[u8; 20], i64>,
     tx_actions_list: Vec<ckbadger_store::types::TxActions>,
 }
 
@@ -3214,6 +3222,8 @@ struct BlockHistoryRows {
     lock_script_rows: Vec<(crate::sync::types::InternId, materialize::MaterializedRow)>,
     object_activity_count_deltas: FxHashMap<Vec<u8>, i64>,
     identity_activity_count_deltas: FxHashMap<Vec<u8>, i64>,
+    /// Standalone protocol-named participations per 20-byte lock-hash prefix.
+    prefix_tx_count_deltas: FxHashMap<[u8; 20], i64>,
     tx_actions_list: Vec<ckbadger_store::types::TxActions>,
 }
 
@@ -3243,6 +3253,12 @@ pub struct BulkArtifactSnapshot {
     pub block_numbers_by_hash: HashMap<Vec<u8>, i64>,
     pub txs_by_hash: HashMap<Vec<u8>, (i64, i32, TxIndexEntry)>,
     pub tx_actions_map: HashMap<Vec<u8>, TxActions>,
+    /// `CF_ADDR_TXS` rows, keyed by (lock_hash, block, tx_idx, tx_hash).
+    pub addr_txs: BTreeMap<(Vec<u8>, i64, i32, Vec<u8>), ckbadger_store::types::AddrTxValue>,
+    /// `CF_ADDR_TXS_BY_PREFIX` rows, keyed by (prefix20, block, tx_idx, tx_hash).
+    pub addr_txs_by_prefix:
+        BTreeMap<([u8; 20], i64, i32, Vec<u8>), ckbadger_store::types::AddrTxValue>,
+    pub addr_prefix_stats: HashMap<[u8; 20], ckbadger_store::types::AddrPrefixStats>,
     pub daily_activity_stats: HashMap<String, DailyActivityStats>,
     pub hourly_activity_stats: HashMap<String, DailyActivityStats>,
     /// Chain-level hourly buckets, keyed by their UTC `%Y%m%d%H` strings.
@@ -3616,6 +3632,7 @@ fn collect_bulk_artifact_snapshot(
         cell_by_type_code,
         cell_by_data_hash,
     ) = collect_cell_snapshot(domain_store, append_store)?;
+    let (addr_txs, addr_txs_by_prefix, addr_prefix_stats) = collect_addr_tx_snapshot(domain_store)?;
     let bulk_build_session_marker = domain_store.get_bulk_build_session_marker()?;
     let live_cell_summary = domain_store.get_live_cell_summary()?;
     let hodl_tracker_state = domain_store.get_hodl_tracker_state()?;
@@ -3635,6 +3652,9 @@ fn collect_bulk_artifact_snapshot(
         block_numbers_by_hash,
         txs_by_hash,
         tx_actions_map,
+        addr_txs,
+        addr_txs_by_prefix,
+        addr_prefix_stats,
         daily_activity_stats,
         hourly_activity_stats,
         hourly_chain_stats,
@@ -3820,6 +3840,7 @@ fn build_history_batches(
     let mut all_rows = Vec::with_capacity(block_results.len());
     let mut all_object_deltas: FxHashMap<Vec<u8>, i64> = FxHashMap::default();
     let mut all_identity_deltas: FxHashMap<Vec<u8>, i64> = FxHashMap::default();
+    let mut all_prefix_deltas: FxHashMap<[u8; 20], i64> = FxHashMap::default();
     let mut all_tx_actions: Vec<ckbadger_store::types::TxActions> = Vec::new();
     for result in block_results {
         let mut block_rows = result?;
@@ -3850,12 +3871,22 @@ fn build_history_batches(
                 .checked_add(v)
                 .ok_or_else(|| anyhow!("identity activity delta overflow during parallel merge"))?;
         }
+        for (k, v) in block_rows.prefix_tx_count_deltas {
+            let entry = all_prefix_deltas.entry(k).or_insert(0);
+            *entry = entry.checked_add(v).ok_or_else(|| {
+                anyhow!(
+                    "addr_prefix_stats delta overflow during parallel merge: prefix=0x{}",
+                    hex::encode(k)
+                )
+            })?;
+        }
     }
 
     Ok(HistoryBuildResult {
         rows: all_rows,
         object_activity_count_deltas: all_object_deltas,
         identity_activity_count_deltas: all_identity_deltas,
+        prefix_tx_count_deltas: all_prefix_deltas,
         tx_actions_list: all_tx_actions,
     })
 }
@@ -3874,7 +3905,7 @@ fn build_tx_actions_list_for_bulk(
     block_resolved: &[facts::ResolvedTxFacts<'_>],
     interner: &interner::FrozenIdentityView,
     detectors: &[Box<dyn crate::db::writer::activities::ProtocolDetector>],
-) -> Result<Vec<ckbadger_store::types::TxActions>> {
+) -> Result<Vec<crate::db::writer::activities::BuiltTxActions>> {
     let mut block_inputs = Vec::with_capacity(block_txs.len());
     let mut block_outputs = Vec::with_capacity(block_txs.len());
     for (tx, resolved_tx) in block_txs.iter().zip(block_resolved) {
@@ -3995,7 +4026,7 @@ fn build_tx_actions_list_for_bulk(
         )
         .collect::<Vec<_>>();
 
-    crate::db::writer::activities::build_tx_actions_for_block(&tx_views, detectors)
+    crate::db::writer::activities::build_tx_actions_for_block_with_io(&tx_views, detectors)
 }
 
 /// Serialize into a pre-allocated Vec, avoiding realloc overhead of `bincode::serialize`
@@ -4070,33 +4101,22 @@ fn build_history_rows_for_block(
         );
     }
 
-    // Compute TxActions for the block up-front. The addr_tx materialization below
-    // reads each participant's `tags` from this list to populate `AddrTxValue.tags`,
-    // letting filtered scans of CF_ADDR_TXS skip non-matching entries without
-    // multi_get-ing CF_TX_ACTIONS. CF_TX_ACTIONS rows themselves are still pushed
-    // later in this function, alongside the in-memory list returned for stats.
-    let tx_actions_list =
+    // Compute TxActions for the block up-front: the addr_txs rows below are
+    // derived from its participants through `participant_rows`, the same module
+    // live sync and the tx-pool mirror use. CF_TX_ACTIONS rows themselves are
+    // still pushed later in this function, alongside the in-memory list returned
+    // for stats.
+    let built_list =
         build_tx_actions_list_for_bulk(block_txs, block_resolved, interner, detectors)?;
-    if tx_actions_list.len() != block_txs.len() {
+    if built_list.len() != block_txs.len() {
         bail!(
             "bulk build TxActions count mismatch with block_txs: block={} tx_actions={} block_txs={}",
             block.number,
-            tx_actions_list.len(),
+            built_list.len(),
             block_txs.len()
         );
     }
-    // Per-tx-position participant tag lookup, keyed by 32-byte lock_hash.
-    // Length-prefixed by tx position to keep lookup O(1) per (tx, lock_hash) pair.
-    let participant_tags: Vec<FxHashMap<&[u8], u16>> = tx_actions_list
-        .iter()
-        .map(|actions| {
-            actions
-                .participants
-                .iter()
-                .map(|p| (p.id.as_bytes(), p.tags))
-                .collect()
-        })
-        .collect();
+    let mut prefix_tx_count_deltas: FxHashMap<[u8; 20], i64> = FxHashMap::default();
 
     // Per-tx: tx_index, tx_hash_map, addr_txs, consumed_cells.
     for (tx_position, (tx, resolved_tx)) in block_txs.iter().zip(block_resolved).enumerate() {
@@ -4139,57 +4159,40 @@ fn build_history_rows_for_block(
         rows.push_serialized(CF_TX_INDEX, &tx_location, &entry)?;
         rows.push_raw(CF_TX_HASH_MAP, &tx.hash, &tx_location)?;
 
-        // Compute per-address capacity change (output_cap - input_cap for each lock).
-        let mut per_addr: FxHashMap<crate::sync::types::InternId, (i64, i64, bool, bool)> =
-            FxHashMap::default();
-        // Tuple: (output_cap_sum, input_cap_sum, has_outputs, has_inputs)
-        for output in resolved_tx.cells.iter() {
-            let e = per_addr.entry(output.lock_script_hash_id).or_default();
-            e.0 = e.0.checked_add(output.capacity).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "output capacity sum overflow for addr in tx block={}",
-                    tx.block_number
-                )
-            })?;
-            e.2 = true;
+        // addr_txs rows follow the participants — the ONE derivation, shared with
+        // live sync and the tx-pool mirror. Cellbase is included: it has
+        // participants (its output locks) even though it gets no CF_TX_ACTIONS row.
+        let built = &built_list[tx_position];
+        for (id, value) in crate::db::writer::participant_rows::addr_tx_rows(
+            &built.actions,
+            &built.participant_io,
+        )? {
+            match id {
+                ckbadger_store::types::ParticipantId::Lock(lock_hash) => {
+                    let addr_tx_key = keys::encode_addr_tx_key(
+                        &lock_hash,
+                        tx.block_number,
+                        tx.tx_index,
+                        &tx.hash,
+                    );
+                    rows.push_serialized(CF_ADDR_TXS, &addr_tx_key, &value)?;
+                }
+                ckbadger_store::types::ParticipantId::LockPrefix(prefix) => {
+                    let key = keys::encode_addr_tx_by_prefix_key(
+                        &prefix,
+                        tx.block_number,
+                        tx.tx_index,
+                        &tx.hash,
+                    );
+                    rows.push_serialized(CF_ADDR_TXS_BY_PREFIX, &key, &value)?;
+                }
+            }
         }
-        for input in &resolved_tx.resolved_inputs {
-            let e = per_addr.entry(input.lock_script_hash_id).or_default();
-            e.1 = e.1.checked_add(input.capacity).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "input capacity sum overflow for addr in tx block={}",
-                    tx.block_number
-                )
-            })?;
-            e.3 = true;
-        }
-        let tags_for_tx = &participant_tags[tx_position];
-        for (lock_hash_id, (out_cap, in_cap, has_out, has_in)) in per_addr {
-            let capacity_change = out_cap.checked_sub(in_cap).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "capacity_change overflow: out={} in={} block={}",
-                    out_cap,
-                    in_cap,
-                    tx.block_number
-                )
-            })?;
-            let lock_hash_bytes = interner.resolve_bytes(lock_hash_id);
-            // ParticipantDelta is emitted for every (lock_hash) that touched inputs
-            // or outputs of this tx, which is exactly the same set we iterate here,
-            // so a missing entry is a real invariant violation, not a normal case.
-            let tags = *tags_for_tx.get(lock_hash_bytes).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "missing participant tags for addr_tx: block={}, tx_idx={}, lock_hash=0x{}",
-                    tx.block_number,
-                    tx.tx_index,
-                    hex::encode(lock_hash_bytes)
-                )
-            })?;
-            let value =
-                ckbadger_store::types::AddrTxValue::new(capacity_change, has_in, has_out, tags);
-            let addr_tx_key =
-                keys::encode_addr_tx_key(lock_hash_bytes, tx.block_number, tx.tx_index, &tx.hash);
-            rows.push_serialized(CF_ADDR_TXS, &addr_tx_key, &value)?;
+        for prefix in crate::db::writer::participant_rows::standalone_prefixes(
+            &built.actions,
+            &built.participant_io,
+        ) {
+            *prefix_tx_count_deltas.entry(prefix).or_insert(0) += 1;
         }
 
         if tx.is_cellbase {
@@ -4263,7 +4266,8 @@ fn build_history_rows_for_block(
     // of this function. Cellbase txs are excluded from CF_TX_ACTIONS — the API
     // filters them at read time (activities.rs:795) and they are never displayed.
     // Activity stats accumulation uses the returned in-memory list, not CF_TX_ACTIONS.
-    for tx_actions in &tx_actions_list {
+    for built in &built_list {
+        let tx_actions = &built.actions;
         if !tx_actions.is_cellbase {
             let tx_actions_key = keys::encode_tx_actions_key(
                 tx_actions.block_number,
@@ -4542,7 +4546,8 @@ fn build_history_rows_for_block(
         lock_script_rows,
         object_activity_count_deltas,
         identity_activity_count_deltas,
-        tx_actions_list,
+        prefix_tx_count_deltas,
+        tx_actions_list: built_list.into_iter().map(|b| b.actions).collect(),
     })
 }
 
@@ -4868,12 +4873,15 @@ fn build_activity_protocol_detectors(
         }
     }
 
-    Ok(
+    #[allow(unused_mut)]
+    let mut detectors: Vec<Box<dyn crate::db::writer::activities::ProtocolDetector>> =
         crate::db::writer::activities::production_detectors(is_mainnet)
             .into_iter()
             .filter(|detector| detector.might_apply_batch(&lock_code_hashes, &type_code_hashes))
-            .collect(),
-    )
+            .collect();
+    #[cfg(test)]
+    detectors.extend(crate::db::writer::activities::test_detector_override::extra_detectors());
+    Ok(detectors)
 }
 
 fn activity_code_hash(
@@ -5361,6 +5369,49 @@ fn collect_history_snapshot(
         txs_by_hash,
         tx_actions_map,
     ))
+}
+
+/// The participant-derived address indexes, for the live/bulk parity tests.
+#[allow(clippy::type_complexity)]
+fn collect_addr_tx_snapshot(
+    domain_store: &CkbadgerStore,
+) -> Result<(
+    BTreeMap<(Vec<u8>, i64, i32, Vec<u8>), ckbadger_store::types::AddrTxValue>,
+    BTreeMap<([u8; 20], i64, i32, Vec<u8>), ckbadger_store::types::AddrTxValue>,
+    HashMap<[u8; 20], ckbadger_store::types::AddrPrefixStats>,
+)> {
+    let mut addr_txs = BTreeMap::new();
+    for item in domain_store.iterator_cf(domain_store.cf_addr_txs(), IteratorMode::Start) {
+        let (key, value) = item?;
+        let (lock_hash, block_num, tx_idx, tx_hash) = keys::decode_addr_tx_key(&key);
+        addr_txs.insert(
+            (lock_hash, block_num, tx_idx, tx_hash),
+            bincode::deserialize(&value)?,
+        );
+    }
+    let mut addr_txs_by_prefix = BTreeMap::new();
+    for item in domain_store.iterator_cf(domain_store.cf_addr_txs_by_prefix(), IteratorMode::Start)
+    {
+        let (key, value) = item?;
+        let (prefix, block_num, tx_idx, tx_hash) = keys::decode_addr_tx_by_prefix_key(&key);
+        addr_txs_by_prefix.insert(
+            (prefix, block_num, tx_idx, tx_hash),
+            bincode::deserialize(&value)?,
+        );
+    }
+    let mut addr_prefix_stats = HashMap::new();
+    for item in domain_store.iterator_cf(domain_store.cf_addr_prefix_stats(), IteratorMode::Start) {
+        let (key, value) = item?;
+        let prefix: [u8; 20] = key[..].try_into().map_err(|_| {
+            anyhow!(
+                "addr_prefix_stats key is not 20 bytes: len={}, key=0x{}",
+                key.len(),
+                hex::encode(&key)
+            )
+        })?;
+        addr_prefix_stats.insert(prefix, bincode::deserialize(&value)?);
+    }
+    Ok((addr_txs, addr_txs_by_prefix, addr_prefix_stats))
 }
 
 fn collect_activity_stats_snapshot(

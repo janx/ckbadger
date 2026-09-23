@@ -2,7 +2,8 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 
 use anyhow::{anyhow, bail, Result};
-use ckbadger_store::{AddressBalance, CkbadgerStore, CF_ADDR_BALANCE};
+use ckbadger_store::types::AddrPrefixStats;
+use ckbadger_store::{AddressBalance, CkbadgerStore, CF_ADDR_BALANCE, CF_ADDR_PREFIX_STATS};
 use hashbrown::HashTable;
 use rustc_hash::{FxHashMap, FxHasher};
 
@@ -197,6 +198,9 @@ impl AddressEntries {
 pub(crate) struct AddressOwner {
     index: HashTable<AddressId>,
     entries: AddressEntries,
+    /// Standalone protocol-named participations, per 20-byte lock-hash prefix.
+    /// Written once at finalize as `CF_ADDR_PREFIX_STATS` rows.
+    prefix_tx_counts: FxHashMap<[u8; 20], i64>,
 }
 
 impl AddressOwner {
@@ -215,6 +219,24 @@ impl AddressOwner {
         self.entries.get(*id).map(|entry| &entry.balance)
     }
 
+    /// Fold one batch's standalone protocol-named participations in.
+    ///
+    /// Called at the 3-way join, after the history branch produced the deltas
+    /// and the reduce branch has handed `AddressOwner` back.
+    pub(crate) fn add_prefix_tx_counts(&mut self, deltas: &FxHashMap<[u8; 20], i64>) -> Result<()> {
+        for (prefix, delta) in deltas {
+            let entry = self.prefix_tx_counts.entry(*prefix).or_insert(0);
+            *entry = entry.checked_add(*delta).ok_or_else(|| {
+                anyhow!(
+                    "bulk addr_prefix_stats txs_count overflow: prefix=0x{}, delta={}",
+                    hex::encode(prefix),
+                    delta
+                )
+            })?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn estimated_bytes(&self) -> u64 {
         let owned_bytes = self
             .entries
@@ -222,13 +244,20 @@ impl AddressOwner {
             .unwrap_or_else(|e| panic!("bulk address entry memory accounting failed: {e}"));
         let index_bytes = estimated_hash_table_allocation_bytes::<AddressId>(self.index.capacity())
             .unwrap_or_else(|e| panic!("bulk address index memory accounting failed: {e}"));
+        // 20-byte key + i64 value per slot, through the same SwissTable
+        // accounting the address index uses.
+        let prefix_bytes = estimated_hash_table_allocation_bytes::<([u8; 20], i64)>(
+            self.prefix_tx_counts.capacity(),
+        )
+        .unwrap_or_else(|e| panic!("bulk address prefix-counter memory accounting failed: {e}"));
         (std::mem::size_of::<Self>() as u64)
             .checked_add(owned_bytes)
             .and_then(|bytes| bytes.checked_add(index_bytes))
+            .and_then(|bytes| bytes.checked_add(prefix_bytes))
             .unwrap_or_else(|| {
                 panic!(
-                    "bulk address total memory accounting overflow: entries_bytes={} index_bytes={}",
-                    owned_bytes, index_bytes
+                    "bulk address total memory accounting overflow: entries_bytes={} index_bytes={} prefix_bytes={}",
+                    owned_bytes, index_bytes, prefix_bytes
                 )
             })
     }
@@ -449,6 +478,13 @@ impl AddressOwner {
                 CF_ADDR_BALANCE,
                 entry.lock_hash.to_vec(),
                 bincode::serialize(&stored)?,
+            ))?;
+        }
+        for (prefix, count) in &self.prefix_tx_counts {
+            emit(MaterializedRow::new(
+                CF_ADDR_PREFIX_STATS,
+                prefix.to_vec(),
+                bincode::serialize(&AddrPrefixStats { txs_count: *count })?,
             ))?;
         }
         Ok(())
