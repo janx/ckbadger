@@ -4,13 +4,17 @@ use rustc_hash::FxHashMap;
 
 use anyhow::{anyhow, bail, Result};
 use ckbadger_store::keys;
-use ckbadger_store::store::{CF_IDENTITY_BY_COLLECTION, CF_MNFT_BY_COLLECTION, CF_STATS_IDENTITY};
+use ckbadger_store::store::{
+    CF_DOTCELL_NAME_BY_OWNER, CF_DOTCELL_RING, CF_IDENTITY_BY_COLLECTION, CF_MNFT_BY_COLLECTION,
+    CF_STATS_IDENTITY,
+};
 use ckbadger_store::types::{
-    ClusterAggregate, ClusterDailyDelta, CompositionTier, IdentityCollectionAggregate,
-    IdentityEntry, IdentityExtra, IdentityStandard, MnftCollectionAggregate, MnftDailyDelta,
-    MnftTypeIndex, ObjectEntry, ObjectExtra, ObjectStandard, SporeDailyDelta, SporeTypeIndex,
-    BIT_CELL_SENTINEL_COLLECTION, DID_CKB_SENTINEL_COLLECTION, DOTBIT_SENTINEL_COLLECTION,
-    DOTCELL_SENTINEL_COLLECTION, SOLE_SPORES_SENTINEL_COLLECTION,
+    ClusterAggregate, ClusterDailyDelta, CompositionTier, DotCellRingRoot,
+    IdentityCollectionAggregate, IdentityEntry, IdentityExtra, IdentityStandard,
+    MnftCollectionAggregate, MnftDailyDelta, MnftTypeIndex, ObjectEntry, ObjectExtra,
+    ObjectStandard, SporeDailyDelta, SporeTypeIndex, BIT_CELL_SENTINEL_COLLECTION,
+    DID_CKB_SENTINEL_COLLECTION, DOTBIT_SENTINEL_COLLECTION, DOTCELL_SENTINEL_COLLECTION,
+    SOLE_SPORES_SENTINEL_COLLECTION,
 };
 use ckbadger_store::{
     CkbadgerStore, CF_CLUSTER_AGG, CF_IDENTITY_AGG, CF_IDENTITY_DATA, CF_MNFT_COLLECTION_AGG,
@@ -50,6 +54,15 @@ pub(crate) struct ObjectOwner {
     mnft_hourly_transfers: BTreeMap<Vec<u8>, i64>,
     spore_hourly_transfers: BTreeMap<Vec<u8>, i64>,
     did_owner_counts: BTreeMap<Vec<u8>, i64>,
+    dotcell_agg: Option<IdentityCollectionAggregate>,
+    /// Per-owner live counts keyed by the 20-byte owner prefix the chain
+    /// stores, NOT by a lock hash.
+    dotcell_owner_counts: BTreeMap<Vec<u8>, i64>,
+    /// `CF_DOTCELL_NAME_BY_OWNER` keys: owner_hash20 ‖ name_id.
+    dotcell_name_by_owner: BTreeSet<Vec<u8>>,
+    dotcell_rings: BTreeMap<Vec<u8>, DotCellRingRoot>,
+    /// Every `.cell` namespace seen. A network runs exactly one.
+    dotcell_namespaces: BTreeSet<Vec<u8>>,
     dotbit_owner_counts: BTreeMap<Vec<u8>, i64>,
     bit_cell_owner_counts: BTreeMap<Vec<u8>, i64>,
     dotbit_outpoints: BTreeMap<Vec<u8>, Vec<u8>>,
@@ -355,6 +368,27 @@ impl ObjectOwner {
                 bincode::serialize(agg)?,
             ))?;
         }
+        if let Some(agg) = &self.dotcell_agg {
+            emit(MaterializedRow::new(
+                CF_IDENTITY_AGG,
+                DOTCELL_SENTINEL_COLLECTION.to_vec(),
+                bincode::serialize(agg)?,
+            ))?;
+        }
+        for key in &self.dotcell_name_by_owner {
+            emit(MaterializedRow::new(
+                CF_DOTCELL_NAME_BY_OWNER,
+                key.clone(),
+                Vec::new(),
+            ))?;
+        }
+        for (namespace, root) in &self.dotcell_rings {
+            emit(MaterializedRow::new(
+                CF_DOTCELL_RING,
+                namespace.clone(),
+                bincode::serialize(root)?,
+            ))?;
+        }
         for (cluster_id, agg) in &self.cluster_aggs {
             emit(MaterializedRow::new(
                 CF_CLUSTER_AGG,
@@ -399,6 +433,16 @@ impl ObjectOwner {
                 count.to_le_bytes().to_vec(),
             ))?;
         }
+        for (owner20, count) in &self.dotcell_owner_counts {
+            if *count <= 0 {
+                continue;
+            }
+            emit(MaterializedRow::new(
+                CF_STATS_IDENTITY,
+                keys::encode_identity_owner20_key(&DOTCELL_SENTINEL_COLLECTION, owner20).to_vec(),
+                count.to_le_bytes().to_vec(),
+            ))?;
+        }
         Ok(())
     }
 
@@ -440,6 +484,20 @@ impl ObjectOwner {
                 .bit_cell_agg
                 .as_ref()
                 .map_or(0, crate::sync::bulk_build::accounting::serialized_bytes)
+            + self
+                .dotcell_agg
+                .as_ref()
+                .map_or(0, crate::sync::bulk_build::accounting::serialized_bytes)
+            + crate::sync::bulk_build::accounting::btree_map_serialized_bytes(
+                &self.dotcell_owner_counts,
+            )
+            + crate::sync::bulk_build::accounting::btree_set_serialized_bytes(
+                &self.dotcell_name_by_owner,
+            )
+            + crate::sync::bulk_build::accounting::btree_map_serialized_bytes(&self.dotcell_rings)
+            + crate::sync::bulk_build::accounting::btree_set_serialized_bytes(
+                &self.dotcell_namespaces,
+            )
             + crate::sync::bulk_build::accounting::btree_set_serialized_bytes(
                 &self.identity_by_collection,
             )
@@ -538,6 +596,15 @@ impl ObjectOwner {
                             ..IdentityCollectionAggregate::default()
                         }),
                 ),
+                x if x == DOTCELL_SENTINEL_COLLECTION => (
+                    ".cell",
+                    self.dotcell_agg
+                        .get_or_insert_with(|| IdentityCollectionAggregate {
+                            name: Some(".cell".to_string()),
+                            standard: IdentityStandard::DotCell,
+                            ..IdentityCollectionAggregate::default()
+                        }),
+                ),
                 _ => {
                     bail!(
                         "unsupported identity activity delta in object owner: collection_id=0x{} delta={}",
@@ -613,10 +680,7 @@ impl ObjectOwner {
             CellProtocolFacts::Cluster(cluster) => self.consume_cluster(&cluster.cluster_id),
             CellProtocolFacts::Dotbit(dotbit) => self.consume_dotbit(&dotbit.account_id),
             CellProtocolFacts::BitCell(bit_cell) => self.consume_bit_cell(&bit_cell.identity_id),
-            CellProtocolFacts::DotCell(facts) => bail!(
-                "DotCell bulk reducer lands in Task 1b.6 — do not run an indexer on this build: name id=0x{}",
-                hex::encode(facts.name.id)
-            ),
+            CellProtocolFacts::DotCell(facts) => self.consume_dotcell(&facts.name.id),
         }
     }
 
@@ -662,10 +726,7 @@ impl ObjectOwner {
                     .map(Vec::as_slice),
             ),
             CellProtocolFacts::BitCell(bit_cell) => self.insert_bit_cell(bit_cell, cell, ctx, tx),
-            CellProtocolFacts::DotCell(facts) => bail!(
-                "DotCell bulk reducer lands in Task 1b.6 — do not run an indexer on this build: name id=0x{}",
-                hex::encode(facts.name.id)
-            ),
+            CellProtocolFacts::DotCell(facts) => self.insert_dotcell(facts, cell, tx),
         }
     }
 
@@ -828,14 +889,246 @@ impl ObjectOwner {
             )?;
         }
 
-        Self::apply_did_owner_transition(
+        Self::apply_identity_owner_count_transition(
             did_owner_counts,
+            "did:ckb",
             old_owner.as_deref(),
             Some(owner_lock.as_slice()),
             agg,
         )?;
         self.insert_spore_outpoint_rows(&did_id, cell)?;
         Ok(())
+    }
+
+    /// Index one `.cell` name cell, or record the ring root it is. Mirrors
+    /// `BatchWriter::insert_dotcell_name` field for field; the two are held
+    /// together by `bulk_and_live_write_identical_dotcell_rows_for_real_registration`.
+    fn insert_dotcell(
+        &mut self,
+        facts: &crate::sync::bulk_build::facts::DotCellProtocolFacts,
+        cell: &CellFacts,
+        tx: &ResolvedTxFacts<'_>,
+    ) -> Result<()> {
+        let name = &facts.name;
+        let namespace = facts.namespace_args.to_vec();
+        for known in &self.dotcell_namespaces {
+            if *known != namespace {
+                bail!(
+                    "a second .cell namespace appeared: known=0x{}, new=0x{} — \
+                     bare 20-byte name ids would collide across namespaces",
+                    hex::encode(known),
+                    hex::encode(&namespace)
+                );
+            }
+        }
+        self.dotcell_namespaces.insert(namespace.clone());
+
+        let output_index = Self::as_i16_outpoint_index(&cell.outpoint, "dotcell")?;
+        crate::db::writer::ensure_outpoint_indexable_item_id(
+            &name.id,
+            "dotcell",
+            &cell.outpoint.tx_hash,
+            output_index,
+        )?;
+
+        if name.is_root() {
+            let created_at_block = self
+                .dotcell_rings
+                .get(&namespace)
+                .map(|root| root.created_at_block)
+                .unwrap_or(tx.block_number);
+            self.dotcell_rings.insert(
+                namespace,
+                DotCellRingRoot {
+                    root_tx_hash: cell.outpoint.tx_hash.to_vec(),
+                    root_output_index: output_index,
+                    first_id: name.next_id,
+                    created_at_block,
+                },
+            );
+            let root_id = crate::db::writer::dotcell::dotcell_root_id();
+            self.insert_spore_outpoint_rows(&root_id, cell)?;
+            return Ok(());
+        }
+
+        let id = name.id.to_vec();
+        let existing = self.identities.get(&id).cloned();
+        if let Some(entry) = existing.as_ref() {
+            if entry.standard != IdentityStandard::DotCell {
+                bail!(
+                    "identity id 0x{} already used by standard {} — dotcell id collision",
+                    hex::encode(&id),
+                    entry.standard.as_str()
+                );
+            }
+        }
+        let was_live = existing.as_ref().is_some_and(|entry| entry.is_live);
+        let old_owner20 = existing
+            .as_ref()
+            .filter(|_| was_live)
+            .map(|entry| match &entry.extra {
+                IdentityExtra::DotCell { owner_hash20, .. } => Ok(owner_hash20.to_vec()),
+                other => Err(anyhow!(
+                    "dotcell identity 0x{} carries {:?} instead of DotCell extra",
+                    hex::encode(&id),
+                    std::mem::discriminant(other)
+                )),
+            })
+            .transpose()?;
+
+        self.identities.insert(
+            id.clone(),
+            IdentityEntry {
+                standard: IdentityStandard::DotCell,
+                owner_lock_hash: None,
+                name: Some(format!("{}.cell", name.label)),
+                is_live: true,
+                created_at_block: existing
+                    .as_ref()
+                    .map(|entry| entry.created_at_block)
+                    .unwrap_or(tx.block_number),
+                created_at_tx: existing
+                    .as_ref()
+                    .map(|entry| entry.created_at_tx.clone())
+                    .unwrap_or_else(|| tx.tx_hash.to_vec()),
+                extra: IdentityExtra::DotCell {
+                    label: name.label.clone(),
+                    namespace_args: facts.namespace_args,
+                    layout_version: name.layout_version,
+                    expired_at: name.expired_at,
+                    owner_hash20: name.owner_hash20,
+                    manager_hash20: name.manager_hash20,
+                    next_id: name.next_id,
+                    records_hash: name.records_hash,
+                    records: facts.records.clone(),
+                    parent_id: name.parent_id(),
+                },
+            },
+        );
+
+        if let Some(old) = old_owner20.as_deref() {
+            if old != name.owner_hash20 {
+                self.dotcell_name_by_owner
+                    .remove(&keys::encode_dotcell_name_by_owner_key(old, &name.id)[..]);
+            }
+        }
+        self.dotcell_name_by_owner
+            .insert(keys::encode_dotcell_name_by_owner_key(&name.owner_hash20, &name.id).to_vec());
+
+        if existing.is_none() {
+            if let Some(parent) = name.parent_id() {
+                self.identity_by_collection
+                    .insert(keys::encode_identity_by_collection_key(
+                        &keys::pad_id_32(&parent),
+                        &id,
+                    ));
+            }
+            self.identity_by_collection
+                .insert(keys::encode_identity_by_collection_key(
+                    &DOTCELL_SENTINEL_COLLECTION,
+                    &id,
+                ));
+        }
+
+        let dotcell_owner_counts = &mut self.dotcell_owner_counts;
+        let agg = self
+            .dotcell_agg
+            .get_or_insert_with(|| IdentityCollectionAggregate {
+                name: Some(".cell".to_string()),
+                standard: IdentityStandard::DotCell,
+                ..IdentityCollectionAggregate::default()
+            });
+        if existing.is_none() {
+            agg.total_count = checked_next_i64(
+                agg.total_count,
+                1,
+                "dotcell total_count",
+                &id,
+                tx.block_number,
+            )?;
+            agg.live_count = checked_next_i64(
+                agg.live_count,
+                1,
+                "dotcell live_count",
+                &id,
+                tx.block_number,
+            )?;
+        } else if !was_live {
+            agg.live_count = checked_next_i64(
+                agg.live_count,
+                1,
+                "dotcell live_count reactivate",
+                &id,
+                tx.block_number,
+            )?;
+        }
+        Self::apply_identity_owner_count_transition(
+            dotcell_owner_counts,
+            "dotcell",
+            old_owner20.as_deref(),
+            Some(&name.owner_hash20[..]),
+            agg,
+        )?;
+        self.insert_spore_outpoint_rows(&name.id, cell)?;
+        Ok(())
+    }
+
+    fn consume_dotcell(&mut self, id: &[u8; 20]) -> Result<()> {
+        if *id == crate::db::writer::dotcell::dotcell_root_id() {
+            // The ring root is re-created by every registration and owns no
+            // identity state.
+            return Ok(());
+        }
+        let entry = self.identities.get_mut(&id[..]).ok_or_else(|| {
+            anyhow!(
+                "missing dotcell identity during consume: id=0x{}",
+                hex::encode(id)
+            )
+        })?;
+        if entry.standard != IdentityStandard::DotCell {
+            bail!(
+                "identity id 0x{} is a {} identity, not a .cell name",
+                hex::encode(id),
+                entry.standard.as_str()
+            );
+        }
+        if !entry.is_live {
+            bail!(
+                "dotcell identity already consumed: id=0x{}",
+                hex::encode(id)
+            );
+        }
+        let old_owner20 = match &entry.extra {
+            IdentityExtra::DotCell { owner_hash20, .. } => *owner_hash20,
+            other => bail!(
+                "dotcell identity 0x{} carries {:?} instead of DotCell extra",
+                hex::encode(id),
+                std::mem::discriminant(other)
+            ),
+        };
+        // `owner_hash20` stays as it was so a recycled name still shows its
+        // last owner; only the live index and counters drop it.
+        entry.is_live = false;
+
+        self.dotcell_name_by_owner
+            .remove(&keys::encode_dotcell_name_by_owner_key(&old_owner20, id)[..]);
+
+        let dotcell_owner_counts = &mut self.dotcell_owner_counts;
+        let agg = self
+            .dotcell_agg
+            .get_or_insert_with(|| IdentityCollectionAggregate {
+                name: Some(".cell".to_string()),
+                standard: IdentityStandard::DotCell,
+                ..IdentityCollectionAggregate::default()
+            });
+        agg.live_count = checked_next_i64(agg.live_count, -1, "dotcell live_count consume", id, 0)?;
+        Self::apply_identity_owner_count_transition(
+            dotcell_owner_counts,
+            "dotcell",
+            Some(&old_owner20[..]),
+            None,
+            agg,
+        )
     }
 
     fn insert_spore(
@@ -1681,7 +1974,13 @@ impl ObjectOwner {
             });
         agg.live_count =
             checked_next_i64(agg.live_count, -1, "did:ckb live_count consume", did_id, 0)?;
-        Self::apply_did_owner_transition(did_owner_counts, old_owner.as_deref(), None, agg)
+        Self::apply_identity_owner_count_transition(
+            did_owner_counts,
+            "did:ckb",
+            old_owner.as_deref(),
+            None,
+            agg,
+        )
     }
 
     fn consume_spore(&mut self, spore_id: &[u8]) -> Result<()> {
@@ -2047,8 +2346,12 @@ impl ObjectOwner {
         Ok(())
     }
 
-    fn apply_did_owner_transition(
+    /// Per-owner live counts and the collection's holder count. The owner
+    /// bytes are a lock hash for every identity standard but `.cell`, whose
+    /// owner is the 20-byte prefix the chain stores — one algorithm either way.
+    fn apply_identity_owner_count_transition(
         did_owner_counts: &mut BTreeMap<Vec<u8>, i64>,
+        standard: &str,
         old_owner: Option<&[u8]>,
         new_owner: Option<&[u8]>,
         agg: &mut IdentityCollectionAggregate,
@@ -2061,7 +2364,8 @@ impl ObjectOwner {
             let current = *did_owner_counts.get(old_owner).unwrap_or(&0);
             if current <= 0 {
                 bail!(
-                    "did:ckb owner count underflow: lock_hash=0x{}, current={}",
+                    "{} owner count underflow: owner=0x{}, current={}",
+                    standard,
                     hex::encode(old_owner),
                     current
                 );
@@ -2071,7 +2375,7 @@ impl ObjectOwner {
                 agg.holders_count = checked_next_i64(
                     agg.holders_count,
                     -1,
-                    "did:ckb holders_count remove",
+                    &format!("{standard} holders_count remove"),
                     old_owner,
                     0,
                 )?;
@@ -2086,7 +2390,7 @@ impl ObjectOwner {
                 agg.holders_count = checked_next_i64(
                     agg.holders_count,
                     1,
-                    "did:ckb holders_count add",
+                    &format!("{standard} holders_count add"),
                     new_owner,
                     0,
                 )?;
@@ -2895,13 +3199,14 @@ mod tests {
     /// `classify_nft_collection_from_protocol` — against the helper the live
     /// creation and consume sides use, on the same bytes.
     #[test]
-    fn bulk_and_live_classify_every_object_protocol_identically() {
+    fn bulk_and_live_classify_every_object_protocol_identically_includes_dotcell() {
         use crate::parser::bit_cell::BIT_CELL_CODE_HASH_TESTNET;
         use crate::parser::dotbit::DOTBIT_ACCOUNT_CELL_TYPE_ID;
         use crate::rpc::parse_hex_to_bytes;
         use crate::sync::dao_helpers::classify_object_collection_id;
         use ckbadger_store::types::{
             BIT_CELL_SENTINEL_COLLECTION, DID_CKB_SENTINEL_COLLECTION, DOTBIT_SENTINEL_COLLECTION,
+            DOTCELL_SENTINEL_COLLECTION,
         };
 
         let mnft_class_id = vec![0x5A; 24];
@@ -2969,6 +3274,30 @@ mod tests {
                     did_id: vec![0x22; 32],
                 })),
                 DID_CKB_SENTINEL_COLLECTION.to_vec(),
+            ),
+            (
+                ".cell",
+                parse_hex_to_bytes(
+                    crate::parser::test_helpers::real_dotcell::ACCOUNT_TYPE_CODE_HASH_TESTNET,
+                ),
+                parse_hex_to_bytes(
+                    crate::parser::test_helpers::real_dotcell::NAMESPACE_ARGS_TESTNET,
+                ),
+                Some(CellProtocolFacts::DotCell(
+                    crate::sync::bulk_build::facts::DotCellProtocolFacts {
+                        name: crate::parser::DotCellParser::parse_name_data(&parse_hex_to_bytes(
+                            crate::parser::test_helpers::real_dotcell::T2_OUT1_DATA,
+                        ))
+                        .expect("real testnet name cell"),
+                        namespace_args: parse_hex_to_bytes(
+                            crate::parser::test_helpers::real_dotcell::NAMESPACE_ARGS_TESTNET,
+                        )
+                        .try_into()
+                        .unwrap(),
+                        records: Vec::new(),
+                    },
+                )),
+                DOTCELL_SENTINEL_COLLECTION.to_vec(),
             ),
         ];
 

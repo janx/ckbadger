@@ -7427,6 +7427,99 @@ mod tests {
             DotCellParser::derive_id("joaom")
         }
 
+        /// PROTO-007/009: a from-genesis rebuild and an incremental sync must
+        /// leave the same rows. Same blocks, both paths, byte-for-byte.
+        #[tokio::test]
+        async fn bulk_and_live_write_identical_dotcell_rows_for_real_registration() {
+            let _guard =
+                crate::db::writer::activities::test_detector_override::without_extra_detectors();
+            let blocks = dotcell_registration_blocks();
+
+            let bulk = crate::sync::materialize_bulk_artifacts_for_test(&blocks)
+                .expect("bulk build must index the registration");
+
+            let dir = tempfile::tempdir().unwrap();
+            let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+            let indexer = super::live_dao_fee::indexer_for_live_write_test(store.clone());
+            store
+                .set_secondary_epoch_reward(61_369_863_013_698)
+                .unwrap();
+            for block in blocks {
+                super::live_dao_fee::write_live_block(&indexer, block)
+                    .await
+                    .unwrap();
+            }
+            let live = crate::sync::bulk_build::collect_dotcell_artifacts(store.as_ref())
+                .expect("live rows");
+
+            assert!(
+                !live.identity_data.is_empty(),
+                "the fixture must actually index names"
+            );
+            assert_eq!(
+                live.identity_data, bulk.dotcell.identity_data,
+                "identity_data rows differ between the two sync paths"
+            );
+            assert_eq!(
+                live.identity_by_collection, bulk.dotcell.identity_by_collection,
+                "identity_by_collection rows differ"
+            );
+            assert_eq!(
+                live.identity_agg, bulk.dotcell.identity_agg,
+                "aggregate differs"
+            );
+            assert_eq!(
+                live.stats_identity, bulk.dotcell.stats_identity,
+                "per-owner counters differ"
+            );
+            assert_eq!(
+                live.name_by_owner, bulk.dotcell.name_by_owner,
+                "dotcell_name_by_owner rows differ"
+            );
+            assert_eq!(live.ring, bulk.dotcell.ring, "dotcell_ring rows differ");
+            assert_eq!(
+                live.outpoint_reverse_index, bulk.dotcell.outpoint_reverse_index,
+                "outpoint reverse index rows differ"
+            );
+            assert_eq!(
+                live.collection_activities, bulk.dotcell.collection_activities,
+                "the .cell collection feed differs"
+            );
+        }
+
+        /// In bulk, an input cell reaches the activity builder with `data: &[]`.
+        /// The consumed name's state has to come from the protocol facts the
+        /// creating cell stored, or every relink reads as a fresh registration.
+        #[test]
+        fn bulk_input_view_carries_dotcell_prev_state_from_resolved_inputs() {
+            let _guard =
+                crate::db::writer::activities::test_detector_override::without_extra_detectors();
+            let bulk =
+                crate::sync::materialize_bulk_artifacts_for_test(&dotcell_registration_blocks())
+                    .expect("bulk build");
+
+            let tx_actions = bulk
+                .tx_actions_map
+                .values()
+                .find(|actions| actions.tx_hash == [0xd2u8; 32])
+                .expect("the registration tx has actions");
+            let dotcell_actions: Vec<_> = tx_actions
+                .protocol_actions
+                .iter()
+                .filter(|a| a.protocol == "dotcell")
+                .collect();
+            assert_eq!(
+                dotcell_actions.len(),
+                1,
+                "the ring relink must be suppressed in bulk too: {dotcell_actions:?}"
+            );
+            assert_eq!(dotcell_actions[0].action, "register");
+            assert_eq!(
+                dotcell_actions[0].metadata.to_value().unwrap()["label"],
+                serde_json::json!("joaom")
+            );
+        }
+
         #[tokio::test]
         async fn live_sync_indexes_a_real_dotcell_registration() {
             use ckbadger_store::types::{

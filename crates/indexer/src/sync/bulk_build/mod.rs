@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -19,7 +19,8 @@ use ckbadger_store::types::{
     HodlTrackerState, HourlyStats, LiveCellInfo, LiveCellSummary, LockScriptEntry, MinerStats,
     ObjectStandard, ParticipantId, ScriptDailyDelta, SporeTypeIndex, SyncStatus,
     TokenTransferRecord, TxActions, TxIndexEntry, BIT_CELL_SENTINEL_COLLECTION,
-    DID_CKB_SENTINEL_COLLECTION, DOTBIT_SENTINEL_COLLECTION, SOLE_SPORES_SENTINEL_COLLECTION,
+    DID_CKB_SENTINEL_COLLECTION, DOTBIT_SENTINEL_COLLECTION, DOTCELL_SENTINEL_COLLECTION,
+    SOLE_SPORES_SENTINEL_COLLECTION,
 };
 use ckbadger_store::{
     AddressBalance, CkbadgerStore, ScriptInfo, CF_ADDR_TXS, CF_ADDR_TXS_BY_PREFIX,
@@ -3237,6 +3238,72 @@ pub struct CoreOwnerStateSnapshot {
     pub object_state: owners::object::ObjectStateSnapshot,
 }
 
+/// The raw rows a `.cell` name produces, in every column family it touches.
+///
+/// Collected the same way from either sync path's store, so the two can be
+/// compared byte-for-byte rather than field by field.
+#[doc(hidden)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct DotCellArtifacts {
+    pub identity_data: BTreeMap<Vec<u8>, Vec<u8>>,
+    pub identity_by_collection: BTreeSet<Vec<u8>>,
+    pub identity_agg: Option<Vec<u8>>,
+    pub stats_identity: BTreeMap<Vec<u8>, Vec<u8>>,
+    pub name_by_owner: BTreeSet<Vec<u8>>,
+    pub ring: BTreeMap<Vec<u8>, Vec<u8>>,
+    pub outpoint_reverse_index: BTreeMap<Vec<u8>, Vec<u8>>,
+    pub collection_activities: BTreeMap<Vec<u8>, Vec<u8>>,
+}
+
+#[doc(hidden)]
+pub(crate) fn collect_dotcell_artifacts(domain_store: &CkbadgerStore) -> Result<DotCellArtifacts> {
+    fn scan(
+        store: &CkbadgerStore,
+        cf: &rocksdb::ColumnFamily,
+    ) -> Result<BTreeMap<Vec<u8>, Vec<u8>>> {
+        let mut out = BTreeMap::new();
+        for item in store.iterator_cf(cf, IteratorMode::Start) {
+            let (key, value) = item?;
+            out.insert(key.to_vec(), value.to_vec());
+        }
+        Ok(out)
+    }
+
+    let identity_data = scan(domain_store, domain_store.cf_identity_data())?;
+    let identity_by_collection = scan(domain_store, domain_store.cf_identity_by_collection())?
+        .into_keys()
+        .collect();
+    let identity_agg =
+        domain_store.get_cf(domain_store.cf_identity_agg(), &DOTCELL_SENTINEL_COLLECTION)?;
+    let stats_identity = scan(domain_store, domain_store.cf_stats_identity())?
+        .into_iter()
+        .filter(|(key, _)| key.starts_with(&DOTCELL_SENTINEL_COLLECTION))
+        .collect();
+    let name_by_owner = scan(domain_store, domain_store.cf_dotcell_name_by_owner())?
+        .into_keys()
+        .collect();
+    let ring = scan(domain_store, domain_store.cf_dotcell_ring())?;
+    let outpoint_reverse_index = scan(domain_store, domain_store.cf_stats_spore())?;
+    let collection_activities = scan(
+        domain_store,
+        domain_store.cf_identity_collection_activities(),
+    )?
+    .into_iter()
+    .filter(|(key, _)| key.starts_with(&DOTCELL_SENTINEL_COLLECTION))
+    .collect();
+
+    Ok(DotCellArtifacts {
+        identity_data,
+        identity_by_collection,
+        identity_agg,
+        stats_identity,
+        name_by_owner,
+        ring,
+        outpoint_reverse_index,
+        collection_activities,
+    })
+}
+
 #[doc(hidden)]
 #[derive(Debug, Default, Clone)]
 pub struct BulkArtifactSnapshot {
@@ -3259,6 +3326,9 @@ pub struct BulkArtifactSnapshot {
     pub addr_txs_by_prefix:
         BTreeMap<([u8; 20], i64, i32, Vec<u8>), ckbadger_store::types::AddrTxValue>,
     pub addr_prefix_stats: HashMap<[u8; 20], ckbadger_store::types::AddrPrefixStats>,
+    /// Every row a `.cell` name touches, raw. Compared byte-for-byte against
+    /// the live write path's rows.
+    pub dotcell: DotCellArtifacts,
     pub daily_activity_stats: HashMap<String, DailyActivityStats>,
     pub hourly_activity_stats: HashMap<String, DailyActivityStats>,
     /// Chain-level hourly buckets, keyed by their UTC `%Y%m%d%H` strings.
@@ -3633,6 +3703,7 @@ fn collect_bulk_artifact_snapshot(
         cell_by_data_hash,
     ) = collect_cell_snapshot(domain_store, append_store)?;
     let (addr_txs, addr_txs_by_prefix, addr_prefix_stats) = collect_addr_tx_snapshot(domain_store)?;
+    let dotcell = collect_dotcell_artifacts(domain_store)?;
     let bulk_build_session_marker = domain_store.get_bulk_build_session_marker()?;
     let live_cell_summary = domain_store.get_live_cell_summary()?;
     let hodl_tracker_state = domain_store.get_hodl_tracker_state()?;
@@ -3655,6 +3726,7 @@ fn collect_bulk_artifact_snapshot(
         addr_txs,
         addr_txs_by_prefix,
         addr_prefix_stats,
+        dotcell,
         daily_activity_stats,
         hourly_activity_stats,
         hourly_chain_stats,
@@ -4283,6 +4355,31 @@ fn build_history_rows_for_block(
             );
             rows.push_serialized(CF_TX_ACTIONS, &tx_actions_key, tx_actions)?;
         }
+
+        // The `.cell` collection feed, derived from the `dotcell:*` actions
+        // just written — the same function and the same input live sync uses,
+        // so a rebuilt feed and an incrementally synced one cannot differ.
+        if let Some(entry) = crate::db::writer::dotcell_detector::build_dotcell_tx_activity_entry(
+            &tx_actions.protocol_actions,
+            &tx_actions.tx_hash,
+            &tx_actions.block_hash,
+            tx_actions.timestamp,
+        ) {
+            let activity_key = keys::encode_object_collection_activity_key(
+                &DOTCELL_SENTINEL_COLLECTION,
+                tx_actions.block_number,
+                tx_actions.tx_index,
+                &tx_actions.block_hash,
+                &tx_actions.tx_hash,
+            );
+            rows.push_serialized(CF_IDENTITY_COLLECTION_ACTIVITIES, &activity_key, &entry)?;
+            let delta = identity_activity_count_deltas
+                .entry(DOTCELL_SENTINEL_COLLECTION.to_vec())
+                .or_insert(0);
+            *delta = delta
+                .checked_add(1)
+                .ok_or_else(|| anyhow!("dotcell identity activity delta overflow"))?;
+        }
     }
 
     // Object/identity collection activities for this block's txs.
@@ -4356,7 +4453,14 @@ fn build_history_rows_for_block(
                             false,
                         );
                     }
-                    _ => {}
+                    // `.cell` does NOT go through the create/consume
+                    // accumulator: it would read a re-created name as a
+                    // Transfer. Its feed entry is derived from the `dotcell:*`
+                    // actions below, by the same function live sync uses.
+                    facts::CellProtocolFacts::DotCell(_) => {}
+                    facts::CellProtocolFacts::Cluster(_)
+                    | facts::CellProtocolFacts::MnftIssuer(_)
+                    | facts::CellProtocolFacts::MnftClass(_) => {}
                 }
             }
 
@@ -4420,7 +4524,12 @@ fn build_history_rows_for_block(
                             true,
                         );
                     }
-                    _ => {}
+                    // See the input side: the `.cell` feed is derived from the
+                    // protocol actions, not from create/consume pairs.
+                    facts::CellProtocolFacts::DotCell(_) => {}
+                    facts::CellProtocolFacts::Cluster(_)
+                    | facts::CellProtocolFacts::MnftIssuer(_)
+                    | facts::CellProtocolFacts::MnftClass(_) => {}
                 }
             }
 
