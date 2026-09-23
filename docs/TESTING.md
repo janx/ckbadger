@@ -149,10 +149,20 @@ from the chain and compares it against the index, with **zero tolerance** —
   exact script match, ungrouped, cursor-paged), resolves every input's prevout,
   and recomputes capacity and occupied capacity from the cells. It never calls
   the production writer, parser or `PROTOCOL_REGISTRY`.
-- **Three facets, one scan.** Per-day deltas, running prefix totals and the
-  current live value are diagnostics on the same invariant; a failure names
-  which facet and which day differed. Offsetting per-day errors that leave the
-  total correct still fail.
+- **Three facets, one scan.** Per-day deltas and running prefix totals are
+  compared against the exported rows; the **current** facet compares the
+  chain's *live cell set* — outputs in `[0, H]` whose outpoint is never
+  consumed in that range — against the current capacity/occupied the index
+  itself reports. A token has no separately stored current value, so the index
+  side of that facet is the same checked accumulation the public
+  `/tokens/{hash}` endpoint performs, read under the export's pin; comparing it
+  against an independently computed live set is what makes the facet a real
+  diagnostic rather than a restatement of the daily rows. A failure names which
+  facet, which component (capacity or knowledge) and which day differed, and
+  offsetting per-day errors that leave the total correct still fail.
+  The collector cross-checks its own two passes: the live set and the
+  accumulated daily deltas are the same quantity computed two ways, and a
+  disagreement between them fails the run rather than publishing either.
 - **The source must qualify first.** `<network workdir>/verify-source.toml` is
   the operator's declaration of what the node's index covers (genesis, node
   version, index start block, filters). It is checked against the live node and

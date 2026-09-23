@@ -102,18 +102,16 @@ async fn exports_raw_daily_deltas_as_exact_decimal_strings() {
     let store = test_store();
     let hash = token_hash(0xaa);
     seed_anchor(&store, 1_234, &token_hash(0x01));
-    // i128 values well past f64's exact-integer range: a float round-trip would
-    // change the last digits, which is exactly what this export must not do.
+    // 2^53 + 1 is the smallest integer f64 cannot represent: a float round-trip
+    // turns it back into 2^53, which is exactly what this export must not do.
+    // The series is otherwise a valid live-capacity history, so the index's own
+    // accumulation of it succeeds.
     seed_token(
         &store,
         &hash,
         &[
-            (20260912, 232_171_655_021_955, -14_400_000_000),
-            (
-                20260913,
-                -1,
-                170_141_183_460_469_231_731_687_303_715_884_105_i128,
-            ),
+            (20260912, 9_007_199_254_740_993, 12_345),
+            (20260913, -1, -1),
         ],
     );
 
@@ -136,16 +134,51 @@ async fn exports_raw_daily_deltas_as_exact_decimal_strings() {
     assert_eq!(entity["rowCount"], 2);
     assert_eq!(entity["complete"], true);
 
+    // The index's own current totals, so the verifier can compare them against
+    // the chain's live set rather than against a restatement of these rows.
+    assert_eq!(entity["currentCapacity"], "9007199254740992");
+    assert_eq!(entity["currentKnowledge"], "12344");
+
     let daily = entity["daily"].as_array().unwrap();
     assert_eq!(daily.len(), 2);
     assert_eq!(daily[0]["date"], 20260912);
-    assert_eq!(daily[0]["capacityDelta"], "232171655021955");
-    assert_eq!(daily[0]["knowledgeDelta"], "-14400000000");
+    assert_eq!(daily[0]["capacityDelta"], "9007199254740993");
+    assert_eq!(daily[0]["knowledgeDelta"], "12345");
     assert_eq!(daily[1]["date"], 20260913);
     assert_eq!(daily[1]["capacityDelta"], "-1");
+    assert_eq!(daily[1]["knowledgeDelta"], "-1");
+}
+
+/// A corrupt row series makes the checked accumulation fail. That is evidence
+/// of exactly the bug this endpoint exists to expose, so it is reported — with
+/// the daily rows still exported, so the verifier can name the offending day —
+/// rather than collapsing the request into a 500.
+#[tokio::test]
+async fn an_accumulation_that_cannot_be_computed_is_reported_not_a_server_error() {
+    let store = test_store();
+    let hash = token_hash(0xb7);
+    seed_anchor(&store, 10, &token_hash(0x0b));
+    // Consuming more than was ever created: live capacity would go negative.
+    seed_token(&store, &hash, &[(20260101, 100, 50), (20260102, -300, -50)]);
+
+    let app = create_router_without_warmup(test_config(store));
+    let (status, body) = post(
+        app,
+        serde_json::json!({ "entities": [{ "kind": "token", "id": hex0x(&hash) }] }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    let entity = &body["entities"][0];
+    assert!(entity["currentCapacity"].is_null());
+    assert!(entity["currentError"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("underflow"));
     assert_eq!(
-        daily[1]["knowledgeDelta"],
-        "170141183460469231731687303715884105"
+        entity["daily"].as_array().unwrap().len(),
+        2,
+        "the rows that prove the corruption must still be exported"
     );
 }
 
@@ -165,6 +198,8 @@ async fn an_entity_with_no_index_row_reports_present_false() {
     let entity = &body["entities"][0];
     assert_eq!(entity["present"], false);
     assert_eq!(entity["rowCount"], 0);
+    assert_eq!(entity["currentCapacity"], "0");
+    assert_eq!(entity["currentKnowledge"], "0");
     assert_eq!(
         entity["complete"], true,
         "an absent entity is fully exported: the verifier decides whether absence is a failure"
@@ -198,6 +233,10 @@ async fn a_row_budget_below_the_stored_rows_reports_incomplete_instead_of_trunca
     assert_eq!(entity["rowCount"], 3, "rowCount is what the store holds");
     assert_eq!(entity["daily"].as_array().unwrap().len(), 2);
     assert_eq!(entity["complete"], false);
+    assert_eq!(
+        entity["currentCapacity"], "6",
+        "the current total accumulates every stored row, not just the returned page"
+    );
     assert_eq!(
         body["complete"], false,
         "a truncated entity makes the whole export incomplete"
@@ -261,25 +300,47 @@ async fn a_request_over_the_server_limits_is_rejected() {
     );
 }
 
+/// A pinned anchor the store has moved past is the chain moving, not a
+/// malformed request. Nothing is exported, and the actual anchor comes back
+/// structurally so a client can re-pin without parsing prose.
 #[tokio::test]
-async fn an_expected_anchor_that_no_longer_matches_is_rejected_with_the_actual_anchor() {
+async fn an_expected_anchor_that_no_longer_matches_withholds_the_export() {
     let store = test_store();
+    let hash = token_hash(0xa5);
     seed_anchor(&store, 500, &token_hash(0x05));
+    seed_token(&store, &hash, &[(20260101, 11, 7)]);
 
     let app = create_router_without_warmup(test_config(store));
     let (status, body) = post(
         app,
         serde_json::json!({
-            "entities": [{ "kind": "token", "id": hex0x(&token_hash(1)) }],
-            "expectedAnchor": { "blockNumber": 500, "blockHash": hex0x(&token_hash(0x99)) }
+            "entities": [{ "kind": "token", "id": hex0x(&hash) }],
+            "expectedAnchor": { "blockNumber": 499, "blockHash": hex0x(&token_hash(0x99)) }
         }),
     )
     .await;
 
-    assert_eq!(status, StatusCode::BAD_REQUEST);
-    let message = body["message"].as_str().unwrap();
-    assert!(message.contains(&hex0x(&token_hash(0x05))), "{message}");
-    assert!(message.contains("500"), "{message}");
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["complete"], false);
+    assert_eq!(body["anchorMismatch"]["expected"]["blockNumber"], 499);
+    assert_eq!(
+        body["anchorMismatch"]["expected"]["blockHash"],
+        hex0x(&token_hash(0x99))
+    );
+    assert_eq!(body["anchorMismatch"]["actual"]["blockNumber"], 500);
+    assert_eq!(
+        body["anchorMismatch"]["actual"]["blockHash"],
+        hex0x(&token_hash(0x05))
+    );
+    assert_eq!(body["anchor"]["blockNumber"], 500);
+
+    let entity = &body["entities"][0];
+    assert_eq!(entity["complete"], false);
+    assert!(
+        entity["daily"].as_array().unwrap().is_empty(),
+        "rows from this view must not be handed out against another anchor"
+    );
+    assert!(entity["currentCapacity"].is_null());
 }
 
 #[tokio::test]
@@ -299,6 +360,10 @@ async fn a_matching_expected_anchor_is_accepted() {
 
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["anchor"]["blockNumber"], 500);
+    assert!(
+        body["anchorMismatch"].is_null(),
+        "a matching anchor is not a mismatch"
+    );
 }
 
 #[tokio::test]
@@ -321,6 +386,10 @@ async fn a_rollback_cleanup_in_progress_withholds_the_numbers() {
     assert_eq!(body["complete"], false);
     let entity = &body["entities"][0];
     assert_eq!(entity["complete"], false);
+    assert!(
+        entity["currentCapacity"].is_null(),
+        "a withheld export publishes no totals either"
+    );
     assert!(
         entity["daily"].as_array().unwrap().is_empty(),
         "a mid-rollback view must not be published as raw statistics"

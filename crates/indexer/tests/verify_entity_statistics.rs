@@ -291,7 +291,22 @@ async fn mock_node_with_reorg(fixture: &ChainFixture, reorg_at_anchor: Option<u6
 }
 
 /// Build the typed export body for one token.
-fn export_body(type_hash: &str, rows: &[(u32, i128, i128)], anchor: u64, complete: bool) -> Value {
+///
+/// `current` is what the *index* reports as live now. It defaults to the
+/// accumulation of the rows, which is what the real endpoint publishes; a test
+/// can override it to model an index whose current value disagrees with the
+/// chain's live cell set.
+fn export_body(
+    type_hash: &str,
+    rows: &[(u32, i128, i128)],
+    anchor: u64,
+    complete: bool,
+    current: Option<(i128, i128)>,
+) -> Value {
+    let (current_capacity, current_knowledge) = current.unwrap_or((
+        rows.iter().map(|(_, c, _)| c).sum(),
+        rows.iter().map(|(_, _, k)| k).sum(),
+    ));
     json!({
         "anchor": {"blockNumber": anchor, "blockHash": format!("0xb{anchor:063x}")},
         "state": {
@@ -309,6 +324,8 @@ fn export_body(type_hash: &str, rows: &[(u32, i128, i128)], anchor: u64, complet
             "present": true,
             "rowCount": rows.len(),
             "complete": complete,
+            "currentCapacity": current_capacity.to_string(),
+            "currentKnowledge": current_knowledge.to_string(),
             "daily": rows.iter().map(|(date, capacity, knowledge)| json!({
                 "date": date,
                 "capacityDelta": capacity.to_string(),
@@ -325,12 +342,23 @@ async fn mock_api(
     anchor: u64,
     complete: bool,
 ) -> MockServer {
+    mock_api_with_current(type_hash, code_hash, rows, anchor, complete, None).await
+}
+
+async fn mock_api_with_current(
+    type_hash: &str,
+    code_hash: &str,
+    rows: &[(u32, i128, i128)],
+    anchor: u64,
+    complete: bool,
+    current: Option<(i128, i128)>,
+) -> MockServer {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/api/v1/verify/entity-statistics"))
         .respond_with(
             ResponseTemplate::new(200)
-                .set_body_json(export_body(type_hash, rows, anchor, complete)),
+                .set_body_json(export_body(type_hash, rows, anchor, complete, current)),
         )
         .mount(&server)
         .await;
@@ -501,6 +529,45 @@ async fn a_hundred_shannons_missing_from_one_day_fails_on_the_daily_facet() {
     assert!(details.contains("capacity"), "{details}");
     assert!(details.contains(&expected_date.to_string()), "{details}");
     assert!(details.contains("100"), "{details}");
+}
+
+/// The index's current value is its own answer to "what is live now", so it
+/// can be wrong while every daily row is right — a broken accumulation, or a
+/// current value computed from somewhere else entirely. Only a facet compared
+/// against the chain's live cell set can catch that.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_stored_current_value_that_disagrees_with_the_live_set_fails_on_the_current_facet() {
+    let code_hash = hash_of(0xc0de);
+    let type_hash = type_hash_of(&code_hash);
+    let fixture = standard_fixture(&code_hash);
+    let rows = fixture.daily_rows();
+    let live_capacity: i128 = rows.iter().map(|(_, c, _)| c).sum();
+    let live_knowledge: i128 = rows.iter().map(|(_, _, k)| k).sum();
+
+    let node = mock_node(&fixture).await;
+    // Every day agrees; only the reported current total is off.
+    let api = mock_api_with_current(
+        &type_hash,
+        &code_hash,
+        &rows,
+        100,
+        true,
+        Some((live_capacity + 7, live_knowledge)),
+    )
+    .await;
+    let dir = tempfile::tempdir().unwrap();
+    let declaration_path = declaration(dir.path(), NODE_VERSION);
+
+    let result = run_check(wiring(&api, &node, &declaration_path, &type_hash)).await;
+
+    assert_eq!(result.status, CheckStatus::Fail);
+    let details = result.findings[0].details.join("\n");
+    assert!(details.contains("current"), "{details}");
+    assert!(details.contains("capacity"), "{details}");
+    assert!(
+        !details.contains("daily "),
+        "no day differs; only the index's current value does: {details}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

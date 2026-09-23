@@ -26,6 +26,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use crate::response::{ok, ApiError, ApiResult, ApiRouteError};
+use crate::utils::assets::accumulate_owned_capacity;
 use crate::utils::hash::parse_hash32;
 use crate::AppState;
 
@@ -153,7 +154,37 @@ pub struct EntityStatistics {
     pub row_count: Option<u64>,
     /// True only when every stored row for this entity is in `daily`.
     pub complete: bool,
+    /// The index's current live capacity for this entity, in shannons.
+    ///
+    /// A token has **no separately stored current value**: this is the same
+    /// checked accumulation of the same daily rows that the public
+    /// `/tokens/{hash}` endpoint reports, read under this request's pin. It is
+    /// published so the verifier can compare the index's answer against the
+    /// chain's live cell set, which is computed independently; it is not a
+    /// second stored figure. It accumulates *every* stored row, not just the
+    /// rows returned in `daily`.
+    pub current_capacity: Option<String>,
+    /// As `currentCapacity`, for occupied ("knowledge") capacity.
+    pub current_knowledge: Option<String>,
+    /// Why the current totals could not be computed, when they could not.
+    ///
+    /// The accumulation is checked (no negative live capacity, occupied never
+    /// above capacity), so a corrupt row series makes it fail. That is
+    /// evidence, not a server fault: it is reported here while the daily rows
+    /// are still exported, so the verifier can prove exactly which day is
+    /// wrong instead of receiving a 500.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub current_error: Option<String>,
     pub daily: Vec<DailyDeltaRow>,
+}
+
+/// Why an export was refused: the caller pinned an anchor the store has moved
+/// past. Structured so a client can re-pin without parsing prose.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AnchorMismatch {
+    pub expected: Anchor,
+    pub actual: Anchor,
 }
 
 #[derive(Debug, Serialize)]
@@ -164,6 +195,10 @@ pub struct EntityStatisticsResponse {
     /// True only when every requested entity was exported completely over a
     /// settled view.
     pub complete: bool,
+    /// Present only when `expectedAnchor` did not match, in which case no
+    /// numbers were exported at all.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub anchor_mismatch: Option<AnchorMismatch>,
     pub entities: Vec<EntityStatistics>,
 }
 
@@ -254,24 +289,6 @@ async fn export_entity_statistics(
             block_hash: hex0x(&sync.tip_block_hash),
         };
 
-        if let Some(expected) = expected {
-            let expected_hash = expected.block_hash.to_lowercase();
-            let expected_hash = if expected_hash.starts_with("0x") {
-                expected_hash
-            } else {
-                format!("0x{expected_hash}")
-            };
-            if expected.block_number != anchor.block_number || expected_hash != anchor.block_hash {
-                return Ok(Err(ApiError::bad_request(format!(
-                    "expectedAnchor {}/{} no longer matches the store anchor {}/{}",
-                    expected.block_number,
-                    expected_hash,
-                    anchor.block_number,
-                    anchor.block_hash
-                ))));
-            }
-        }
-
         let export_state = ExportState {
             bulk_session_in_progress: store.get_bulk_build_session_marker()?.is_some(),
             rollback_cleanup_in_progress: store.is_rollback_cleanup_in_progress()?,
@@ -285,7 +302,39 @@ async fn export_entity_statistics(
             hourly_retention: HourlyRetentionReport::Unknown("unknown"),
         };
 
-        let withhold = export_state.mid_write();
+        // A pinned anchor the store has moved past is the chain moving, not a
+        // malformed request: nothing is exported, and the caller is handed the
+        // actual anchor to re-pin to. Comparing rows from this view against an
+        // anchor from another is exactly what the pin exists to prevent.
+        let anchor_mismatch = match expected {
+            Some(expected) => {
+                let expected_hash = expected.block_hash.to_lowercase();
+                let expected_hash = if expected_hash.starts_with("0x") {
+                    expected_hash
+                } else {
+                    format!("0x{expected_hash}")
+                };
+                if expected.block_number != anchor.block_number
+                    || expected_hash != anchor.block_hash
+                {
+                    Some(AnchorMismatch {
+                        expected: Anchor {
+                            block_number: expected.block_number,
+                            block_hash: expected_hash,
+                        },
+                        actual: Anchor {
+                            block_number: anchor.block_number,
+                            block_hash: anchor.block_hash.clone(),
+                        },
+                    })
+                } else {
+                    None
+                }
+            }
+            None => None,
+        };
+
+        let withhold = anchor_mismatch.is_some() || export_state.mid_write();
         let mut budget_bytes = MAX_RESPONSE_BYTES;
         let mut exported = Vec::with_capacity(entities.len());
 
@@ -297,14 +346,37 @@ async fn export_entity_statistics(
                     present: None,
                     row_count: None,
                     complete: false,
+                    current_capacity: None,
+                    current_knowledge: None,
+                    current_error: None,
                     daily: Vec::new(),
                 });
                 continue;
             }
 
             let present = store.get_token(&entity.key)?.is_some();
-            let stored = store.list_token_daily_deltas(&entity.key)?;
+            // One row per day this entity had activity, so the read is bounded
+            // by chain age rather than by anything the request controls.
+            // Streaming it would need a store-side iterator, which this
+            // endpoint does not have; the rows are consumed by value and only
+            // the capped page is retained.
+            let stored = store.list_token_daily_deltas_in_range(&entity.key, None, None)?;
             let row_count = stored.len() as u64;
+
+            // The index's own answer for "what is live now", accumulated over
+            // every stored row with the same checked helper the public token
+            // endpoint uses — never over just the page returned below.
+            let accumulated = accumulate_owned_capacity(
+                stored
+                    .iter()
+                    .map(|(_, delta)| (delta.owned_capacity_delta, delta.owned_knowledge_delta)),
+            );
+            let (current_capacity, current_knowledge, current_error) = match accumulated {
+                Ok((capacity, knowledge)) => {
+                    (Some(capacity.to_string()), Some(knowledge.to_string()), None)
+                }
+                Err(error) => (None, None, Some(format!("{error:#}"))),
+            };
 
             let mut daily = Vec::with_capacity(stored.len().min(max_daily_rows));
             for (date, delta) in stored {
@@ -331,6 +403,9 @@ async fn export_entity_statistics(
                 present: Some(present),
                 row_count: Some(row_count),
                 complete: daily.len() as u64 == row_count,
+                current_capacity,
+                current_knowledge,
+                current_error,
                 daily,
             });
         }
@@ -340,6 +415,7 @@ async fn export_entity_statistics(
             anchor,
             state: export_state,
             complete,
+            anchor_mismatch,
             entities: exported,
         }))
     })

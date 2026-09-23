@@ -100,14 +100,28 @@ pub struct TokenHistoryExpectation {
 }
 
 impl TokenHistoryExpectation {
-    fn finish(&mut self) -> anyhow::Result<()> {
+    /// Build the running prefix totals from the daily map.
+    ///
+    /// Deliberately does **not** set `current`: that comes from the chain's
+    /// live cell set, computed on a different pass over the same scan. Deriving
+    /// it here would make the Current facet a restatement of the daily one.
+    fn build_prefix(&mut self) -> anyhow::Result<()> {
         let mut running = DeltaPair::default();
+        self.prefix.clear();
         for (date, delta) in &self.daily {
             running.add(delta.capacity, delta.occupied)?;
             self.prefix.insert(*date, running);
         }
-        self.current = running;
         Ok(())
+    }
+
+    /// The prefix total at the last day with activity.
+    fn prefix_total(&self) -> DeltaPair {
+        self.prefix
+            .values()
+            .next_back()
+            .copied()
+            .unwrap_or_default()
     }
 }
 
@@ -182,6 +196,14 @@ pub struct ExportedEntity {
     pub present: Option<bool>,
     pub row_count: Option<u64>,
     pub complete: bool,
+    /// The index's own current live totals, as decimal strings.
+    #[serde(default)]
+    pub current_capacity: Option<String>,
+    #[serde(default)]
+    pub current_knowledge: Option<String>,
+    /// Why the index could not compute them, when it could not.
+    #[serde(default)]
+    pub current_error: Option<String>,
     pub daily: Vec<ExportDailyRow>,
 }
 
@@ -194,6 +216,35 @@ pub struct EntityStatisticsExport {
 }
 
 impl ExportedEntity {
+    /// The index's current live totals, as checked `i128`.
+    ///
+    /// An export that publishes none has nothing to compare on this facet;
+    /// substituting the sum of its own daily rows would make the comparison
+    /// vacuous, so this is an error the caller reports as uncovered.
+    fn current_totals(&self) -> anyhow::Result<(i128, i128)> {
+        if let Some(reason) = self.current_error.as_deref() {
+            anyhow::bail!(
+                "the index could not compute a current value for {}: {reason}",
+                self.id
+            );
+        }
+        let parse = |raw: &Option<String>, field: &str| -> anyhow::Result<i128> {
+            let raw = raw.as_deref().ok_or_else(|| {
+                anyhow!(
+                    "the export published no {field} for {}: the current facet cannot be verified",
+                    self.id
+                )
+            })?;
+            raw.parse().with_context(|| {
+                format!("{field} '{raw}' for {} is not a decimal integer", self.id)
+            })
+        };
+        Ok((
+            parse(&self.current_capacity, "currentCapacity")?,
+            parse(&self.current_knowledge, "currentKnowledge")?,
+        ))
+    }
+
     /// Parse the wire strings into checked `i128`. A value that is not an exact
     /// decimal integer is an error, never a coerced zero.
     fn daily_pairs(&self) -> anyhow::Result<BTreeMap<u32, DeltaPair>> {
@@ -222,6 +273,16 @@ impl ExportedEntity {
     }
 }
 
+/// What comparing one entity produced.
+#[derive(Debug, Clone, Default)]
+pub struct HistoryComparison {
+    pub differences: Vec<FacetDifference>,
+    /// Facets that could not be compared at all, and why. Separate from
+    /// `differences`: an uncovered facet is absence of evidence, and must not
+    /// be counted as agreement.
+    pub uncovered: Vec<String>,
+}
+
 /// Compare the chain-derived expectation against the exported index rows.
 ///
 /// A day the chain says is non-zero but the index omits is a difference against
@@ -230,7 +291,7 @@ impl ExportedEntity {
 pub fn compare_token_history(
     expected: &TokenHistoryExpectation,
     exported: &ExportedEntity,
-) -> anyhow::Result<Vec<FacetDifference>> {
+) -> anyhow::Result<HistoryComparison> {
     let actual_daily = exported.daily_pairs()?;
     let mut differences = Vec::new();
 
@@ -291,26 +352,46 @@ pub fn compare_token_history(
         }
     }
 
-    if expected.current.capacity != running.capacity {
+    // The Current facet compares the chain's live cell set against the value
+    // the *index* reports, not against a restatement of the rows just checked.
+    // That is what makes it an independent diagnostic rather than an echo of
+    // the daily one.
+    //
+    // An index that could not compute its own current value has published
+    // evidence, not a verdict: the facet goes uncovered while the daily rows
+    // above still prove exactly which day is wrong.
+    if let Some(reason) = exported.current_error.as_deref() {
+        return Ok(HistoryComparison {
+            differences,
+            uncovered: vec![format!(
+                "current facet not compared: the index could not compute a current value ({reason})"
+            )],
+        });
+    }
+    let (actual_capacity, actual_knowledge) = exported.current_totals()?;
+    if expected.current.capacity != actual_capacity {
         differences.push(FacetDifference {
             facet: Facet::Current,
             component: "capacity",
             date: None,
             expected: expected.current.capacity,
-            actual: running.capacity,
+            actual: actual_capacity,
         });
     }
-    if expected.current.occupied != running.occupied {
+    if expected.current.occupied != actual_knowledge {
         differences.push(FacetDifference {
             facet: Facet::Current,
             component: "knowledge",
             date: None,
             expected: expected.current.occupied,
-            actual: running.occupied,
+            actual: actual_knowledge,
         });
     }
 
-    Ok(differences)
+    Ok(HistoryComparison {
+        differences,
+        uncovered: Vec::new(),
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -456,6 +537,10 @@ pub(crate) async fn collect_token_expectation(
     let mut uncovered: Vec<String> = Vec::new();
     let mut complete = page.complete;
     let mut seen: HashMap<(String, u8, u32), u64> = HashMap::new();
+    // Outpoints created in [0, anchor], and those consumed within it. What
+    // remains is the live set at the anchor.
+    let mut created: HashMap<(String, u32), (i128, i128)> = HashMap::new();
+    let mut consumed: std::collections::HashSet<(String, u32)> = std::collections::HashSet::new();
 
     for record in &page.records {
         if let Some(reason) = collector.budget.exhausted() {
@@ -512,16 +597,27 @@ pub(crate) async fn collect_token_expectation(
         let date = date_key(timestamp_ms)?;
 
         match resolve_cell(collector, record).await? {
-            Some((capacity, occupied)) => {
+            Some(cell) => {
                 let signed = match record.io_type {
-                    IndexerIoType::Output => (capacity, occupied),
-                    IndexerIoType::Input => (-capacity, -occupied),
+                    IndexerIoType::Output => (cell.capacity, cell.occupied),
+                    IndexerIoType::Input => (-cell.capacity, -cell.occupied),
                 };
                 expectation
                     .daily
                     .entry(date)
                     .or_default()
                     .add(signed.0, signed.1)?;
+                // The live set, tracked by outpoint so the current value comes
+                // from the cells that were never consumed rather than from a
+                // sum of the daily map.
+                match record.io_type {
+                    IndexerIoType::Output => {
+                        created.insert(cell.outpoint, (cell.capacity, cell.occupied));
+                    }
+                    IndexerIoType::Input => {
+                        consumed.insert(cell.outpoint);
+                    }
+                }
                 expectation.records += 1;
             }
             None => {
@@ -548,7 +644,39 @@ pub(crate) async fn collect_token_expectation(
         ));
     }
 
-    expectation.finish()?;
+    expectation.build_prefix()?;
+
+    // The current value is the live set: outputs in [0, anchor] whose outpoint
+    // never appears as a consumed input in the same range.
+    let mut live = DeltaPair::default();
+    for (outpoint, (capacity, occupied)) in &created {
+        if !consumed.contains(outpoint) {
+            live.add(*capacity, *occupied)?;
+        }
+    }
+    expectation.current = live;
+
+    // Two independent passes over the same scan must agree: every cell of this
+    // entity was created inside [0, anchor] (the range starts at genesis), so
+    // the live set and the prefix total are the same quantity computed two
+    // ways. A disagreement is a defect in this collector, not in the index, and
+    // publishing either number would be publishing a wrong expectation.
+    if complete {
+        let prefix_total = expectation.prefix_total();
+        if prefix_total != live {
+            anyhow::bail!(
+                "collector invariant violated: the live cell set totals \
+                 (capacity {}, occupied {}) but the daily deltas accumulate to \
+                 (capacity {}, occupied {}) over {} record(s)",
+                live.capacity,
+                live.occupied,
+                prefix_total.capacity,
+                prefix_total.occupied,
+                expectation.records
+            );
+        }
+    }
+
     Ok(TokenExpectationOutcome {
         expectation,
         complete,
@@ -556,18 +684,30 @@ pub(crate) async fn collect_token_expectation(
     })
 }
 
+/// One resolved cell: its own outpoint and its exact capacities.
+struct ResolvedCell {
+    /// The cell's own outpoint — for an input record, the prevout it consumed.
+    outpoint: (String, u32),
+    capacity: i128,
+    occupied: i128,
+}
+
 /// Resolve the cell a history record refers to: the output itself, or the
 /// previous output an input consumed.
 async fn resolve_cell(
     collector: &mut Collector<'_>,
     record: &IndexerTxRecord,
-) -> anyhow::Result<Option<(i128, i128)>> {
+) -> anyhow::Result<Option<ResolvedCell>> {
     let Some(tx) = collector.transaction(&record.tx_hash).await? else {
         return Ok(None);
     };
 
-    let (owner_tx, index) = match record.io_type {
-        IndexerIoType::Output => (tx, record.io_index as usize),
+    let (owner_tx, index, outpoint) = match record.io_type {
+        IndexerIoType::Output => (
+            tx,
+            record.io_index as usize,
+            (record.tx_hash.clone(), record.io_index),
+        ),
         IndexerIoType::Input => {
             let input = tx.inputs.get(record.io_index as usize).ok_or_else(|| {
                 anyhow!(
@@ -585,7 +725,8 @@ async fn resolve_cell(
             let Some(prev_tx) = collector.transaction(&previous.tx_hash).await? else {
                 return Ok(None);
             };
-            (prev_tx, prev_index)
+            let outpoint = (previous.tx_hash.clone(), u32::try_from(prev_index)?);
+            (prev_tx, prev_index, outpoint)
         }
     };
 
@@ -598,10 +739,11 @@ async fn resolve_cell(
         .get(index)
         .ok_or_else(|| anyhow!("transaction {} has no outputs_data {index}", owner_tx.hash))?;
 
-    Ok(Some((
-        parse_capacity_shannons(&output.capacity)?,
-        output_occupied(output, data)?,
-    )))
+    Ok(Some(ResolvedCell {
+        outpoint,
+        capacity: parse_capacity_shannons(&output.capacity)?,
+        occupied: output_occupied(output, data)?,
+    }))
 }
 
 // ---------------------------------------------------------------------------
@@ -969,7 +1111,11 @@ impl Check for EntityCapacityHistoryMatchesChain {
                 continue;
             }
 
-            let differences = compare_token_history(&outcome.expectation, exported)?;
+            let comparison = compare_token_history(&outcome.expectation, exported)?;
+            let differences = comparison.differences;
+            for reason in &comparison.uncovered {
+                inconclusive.push(format!("{selector}: {reason}"));
+            }
             checked += 1;
             manifest.entities.push(EntityCoverage::complete(
                 selector,
@@ -1040,22 +1186,34 @@ mod tests {
         DeltaPair { capacity, occupied }
     }
 
+    /// A consistent expectation: the live set equals the accumulated deltas,
+    /// as a complete chain scan always produces.
     fn expectation(rows: &[(u32, i128, i128)]) -> TokenHistoryExpectation {
-        let mut expectation = TokenHistoryExpectation::default();
-        for (date, capacity, occupied) in rows {
-            expectation.daily.insert(*date, pair(*capacity, *occupied));
-        }
-        expectation.finish().unwrap();
-        expectation
+        let capacity: i128 = rows.iter().map(|(_, c, _)| c).sum();
+        let occupied: i128 = rows.iter().map(|(_, _, o)| o).sum();
+        expectation_with_current(rows, pair(capacity, occupied))
     }
 
     fn exported(rows: &[(u32, i128, i128)]) -> ExportedEntity {
+        let capacity: i128 = rows.iter().map(|(_, c, _)| c).sum();
+        let occupied: i128 = rows.iter().map(|(_, _, o)| o).sum();
+        exported_with_current(rows, Some(capacity), Some(occupied))
+    }
+
+    fn exported_with_current(
+        rows: &[(u32, i128, i128)],
+        current_capacity: Option<i128>,
+        current_knowledge: Option<i128>,
+    ) -> ExportedEntity {
         ExportedEntity {
             kind: "token".to_string(),
             id: "0xaa".to_string(),
             present: Some(true),
             row_count: Some(rows.len() as u64),
             complete: true,
+            current_capacity: current_capacity.map(|v| v.to_string()),
+            current_knowledge: current_knowledge.map(|v| v.to_string()),
+            current_error: None,
             daily: rows
                 .iter()
                 .map(|(date, capacity, occupied)| ExportDailyRow {
@@ -1067,10 +1225,27 @@ mod tests {
         }
     }
 
+    /// An expectation whose current value is the chain's live set, stated
+    /// independently of the daily map.
+    fn expectation_with_current(
+        rows: &[(u32, i128, i128)],
+        current: DeltaPair,
+    ) -> TokenHistoryExpectation {
+        let mut expectation = TokenHistoryExpectation::default();
+        for (date, capacity, occupied) in rows {
+            expectation.daily.insert(*date, pair(*capacity, *occupied));
+        }
+        expectation.build_prefix().unwrap();
+        expectation.current = current;
+        expectation
+    }
+
     #[test]
     fn an_exact_match_produces_no_difference() {
         let rows = [(20260101, 100, 50), (20260102, -40, -20)];
-        let differences = compare_token_history(&expectation(&rows), &exported(&rows)).unwrap();
+        let differences = compare_token_history(&expectation(&rows), &exported(&rows))
+            .unwrap()
+            .differences;
         assert!(differences.is_empty(), "{differences:?}");
     }
 
@@ -1078,7 +1253,9 @@ mod tests {
     fn one_shannon_is_a_difference() {
         let chain = [(20260101, 100, 50)];
         let index = [(20260101, 99, 50)];
-        let differences = compare_token_history(&expectation(&chain), &exported(&index)).unwrap();
+        let differences = compare_token_history(&expectation(&chain), &exported(&index))
+            .unwrap()
+            .differences;
         assert!(differences
             .iter()
             .any(|d| d.facet == Facet::Daily && d.component == "capacity"));
@@ -1089,7 +1266,9 @@ mod tests {
     fn a_zero_net_day_may_legitimately_have_no_row() {
         let chain = [(20260101, 100, 50), (20260102, 0, 0)];
         let index = [(20260101, 100, 50)];
-        let differences = compare_token_history(&expectation(&chain), &exported(&index)).unwrap();
+        let differences = compare_token_history(&expectation(&chain), &exported(&index))
+            .unwrap()
+            .differences;
         assert!(differences.is_empty(), "{differences:?}");
     }
 
@@ -1097,7 +1276,9 @@ mod tests {
     fn a_missing_non_zero_day_is_reported_against_zero() {
         let chain = [(20260101, 100, 50), (20260102, 7, 3)];
         let index = [(20260101, 100, 50)];
-        let differences = compare_token_history(&expectation(&chain), &exported(&index)).unwrap();
+        let differences = compare_token_history(&expectation(&chain), &exported(&index))
+            .unwrap()
+            .differences;
         let daily = differences
             .iter()
             .find(|d| d.facet == Facet::Daily && d.date == Some(20260102))
@@ -1110,7 +1291,9 @@ mod tests {
     fn an_isolated_extra_row_the_chain_does_not_have_is_reported() {
         let chain = [(20260101, 100, 50)];
         let index = [(20260101, 100, 50), (20260103, 5, 5)];
-        let differences = compare_token_history(&expectation(&chain), &exported(&index)).unwrap();
+        let differences = compare_token_history(&expectation(&chain), &exported(&index))
+            .unwrap()
+            .differences;
         assert!(differences
             .iter()
             .any(|d| d.facet == Facet::Daily && d.date == Some(20260103)));
@@ -1120,12 +1303,68 @@ mod tests {
     fn offsetting_days_still_differ_on_the_daily_facet_only() {
         let chain = [(20260101, 100, 0), (20260102, 100, 0)];
         let index = [(20260101, 150, 0), (20260102, 50, 0)];
-        let differences = compare_token_history(&expectation(&chain), &exported(&index)).unwrap();
+        let differences = compare_token_history(&expectation(&chain), &exported(&index))
+            .unwrap()
+            .differences;
         assert!(differences.iter().any(|d| d.facet == Facet::Daily));
         assert!(
             !differences.iter().any(|d| d.facet == Facet::Current),
             "the totals do agree; only the history is wrong: {differences:?}"
         );
+    }
+
+    /// The index's reported current value is compared against the chain's live
+    /// cell set, not against a restatement of the very rows it accumulated. A
+    /// broken accumulation therefore fails on the Current facet while every
+    /// day agrees.
+    #[test]
+    fn a_stored_current_value_off_by_a_constant_fails_only_on_the_current_facet() {
+        let rows = [(20260101, 100, 50), (20260102, 40, 20)];
+        let chain_live = pair(140, 70);
+        let differences = compare_token_history(
+            &expectation_with_current(&rows, chain_live),
+            &exported_with_current(&rows, Some(140 + 7), Some(70)),
+        )
+        .unwrap()
+        .differences;
+
+        assert_eq!(
+            differences.len(),
+            1,
+            "only the current facet differs: {differences:?}"
+        );
+        assert_eq!(differences[0].facet, Facet::Current);
+        assert_eq!(differences[0].component, "capacity");
+        assert_eq!(differences[0].expected, 140);
+        assert_eq!(differences[0].actual, 147);
+        assert!(!differences.iter().any(|d| d.facet == Facet::Daily));
+    }
+
+    #[test]
+    fn a_stored_current_knowledge_off_by_a_constant_fails_on_the_knowledge_component() {
+        let rows = [(20260101, 100, 50)];
+        let differences = compare_token_history(
+            &expectation_with_current(&rows, pair(100, 50)),
+            &exported_with_current(&rows, Some(100), Some(51)),
+        )
+        .unwrap()
+        .differences;
+        assert_eq!(differences.len(), 1);
+        assert_eq!(differences[0].facet, Facet::Current);
+        assert_eq!(differences[0].component, "knowledge");
+    }
+
+    /// Without a published current value there is nothing to compare, and
+    /// inventing one from the rows would make the facet vacuous again.
+    #[test]
+    fn an_export_without_a_current_value_cannot_be_compared_on_that_facet() {
+        let rows = [(20260101, 100, 50)];
+        let error = compare_token_history(
+            &expectation_with_current(&rows, pair(100, 50)),
+            &exported_with_current(&rows, None, None),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("current"), "{error}");
     }
 
     #[test]

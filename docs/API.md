@@ -748,17 +748,28 @@ writes nothing.
     evidence, not an implied guarantee.
   - `complete` — false whenever a write-path phase is in flight or any entity
     could not be exported in full
-  - `entities[]` — `{kind, id, present, rowCount, complete, daily}`, where
-    `daily[]` is `{date, capacityDelta, knowledgeDelta}` with both deltas as
-    exact decimal strings in shannons. `present`/`rowCount` are `null` when the
-    state withheld the numbers.
+  - `anchorMismatch` — present only when `expectedAnchor` did not match:
+    `{expected, actual}`, with nothing exported
+  - `entities[]` — `{kind, id, present, rowCount, complete, currentCapacity,
+    currentKnowledge, currentError, daily}`, where `daily[]` is
+    `{date, capacityDelta, knowledgeDelta}` with every value an exact decimal
+    string in shannons. `present`/`rowCount`/`current*` are `null` when the
+    state withheld the numbers. `currentCapacity`/`currentKnowledge` accumulate
+    *every* stored row, not just the returned page; a token has no separately
+    stored current value, so these are the same checked accumulation the public
+    token endpoint performs. `currentError` carries why that accumulation
+    failed (a corrupt row series), with the daily rows still exported so the
+    offending day can be named.
 
 **Errors**
 
 - `400` — empty selection, more than 16 entities, `maxDailyRows` outside
-  `1..=8192`, an unsupported `kind`, a malformed id, or an `expectedAnchor` that
-  no longer matches (the message echoes the actual anchor)
+  `1..=8192`, an unsupported `kind`, or a malformed id
 - `503 initializing` — the indexer has not published a sync tip yet
+
+An `expectedAnchor` the store has moved past is not an error: the chain moved,
+so the response is `200` with `complete: false`, nothing exported, and
+`anchorMismatch` carrying both anchors so a client can re-pin.
 
 A request over a hard cap is refused rather than silently narrowed; a legal
 request that cannot be exported in full returns `complete: false` instead of a
