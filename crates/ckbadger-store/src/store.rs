@@ -2,8 +2,9 @@
 
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 use tracing::{error, info, warn};
 
 use rocksdb::{
@@ -50,6 +51,11 @@ static SHARED_BUDGET: OnceLock<(rocksdb::Cache, WriteBufferManager)> = OnceLock:
 /// `num_levels` is 7 (L0..L6); a level that does not exist simply reports no
 /// value.
 const MAX_LEVEL_FOR_FILE_COUNT: usize = 6;
+
+/// How long a computed SST file count stays fresh. Bulk sync samples
+/// `memory_stats()` every 3 s; the file count changes on the timescale of
+/// compactions, so it is recomputed at most this often.
+const SST_FILE_COUNT_MAX_AGE: Duration = Duration::from_secs(30);
 
 /// Serde default for `StoreRuntimeConfig::network_count`, applied when the field
 /// is absent. `NonZeroUsize` has no `Default`, so this must be named explicitly.
@@ -775,6 +781,8 @@ pub struct CkbadgerStore {
     is_secondary: bool,
     memory_profile: MemoryProfile,
     runtime_config: StoreRuntimeConfig,
+    /// `(measured_at, files)` for [`Self::sst_files_total_cached`].
+    sst_file_count_cache: Mutex<Option<(Instant, u64)>>,
     /// Test-only read-call counters, so a test can prove a hot path issues one
     /// batched read instead of N point reads. Never compiled into the binary.
     #[cfg(any(test, feature = "read-call-counters"))]
@@ -784,10 +792,10 @@ pub struct CkbadgerStore {
 #[cfg(any(test, feature = "read-call-counters"))]
 #[derive(Default)]
 struct ReadCallCounters {
-    get_cf: AtomicU64,
-    multi_get_cf: AtomicU64,
-    put_cf: AtomicU64,
-    write_batch: AtomicU64,
+    get_cf: std::sync::atomic::AtomicU64,
+    multi_get_cf: std::sync::atomic::AtomicU64,
+    put_cf: std::sync::atomic::AtomicU64,
+    write_batch: std::sync::atomic::AtomicU64,
 }
 
 impl CkbadgerStore {
@@ -972,6 +980,7 @@ impl CkbadgerStore {
             is_secondary: false,
             memory_profile,
             runtime_config,
+            sst_file_count_cache: Mutex::new(None),
             #[cfg(any(test, feature = "read-call-counters"))]
             read_calls: ReadCallCounters::default(),
         })
@@ -1059,6 +1068,7 @@ impl CkbadgerStore {
             is_secondary: true,
             memory_profile,
             runtime_config,
+            sst_file_count_cache: Mutex::new(None),
             #[cfg(any(test, feature = "read-call-counters"))]
             read_calls: ReadCallCounters::default(),
         })
@@ -2506,7 +2516,6 @@ impl CkbadgerStore {
         let mut l0_files_max: u64 = 0;
         let mut l0_worst_cf = String::new();
         let mut immutable_memtables = 0u64;
-        let mut sst_files_total = 0u64;
         let mut cf_sizes: Vec<(String, u64)> = Vec::new();
 
         for &cf_name in ALL_CFS {
@@ -2569,15 +2578,6 @@ impl CkbadgerStore {
                     if v > l0_files_max {
                         l0_files_max = v;
                         l0_worst_cf = cf_name.to_string();
-                    }
-                }
-                // Files at every level: the standing cost of flush frequency.
-                for level in 0..=MAX_LEVEL_FOR_FILE_COUNT {
-                    if let Ok(Some(v)) = self
-                        .db
-                        .property_int_value_cf(cf, &format!("rocksdb.num-files-at-level{level}"))
-                    {
-                        sst_files_total += v;
                     }
                 }
                 // Immutable memtables waiting for flush — high values indicate
@@ -2644,12 +2644,52 @@ impl CkbadgerStore {
             l0_files_max,
             l0_worst_cf,
             immutable_memtables,
-            sst_files_total,
+            sst_files_total: self.sst_files_total_cached(SST_FILE_COUNT_MAX_AGE),
             manifest_bytes: self.manifest_bytes(),
             top_cf_sizes: cf_sizes,
             wbm_usage_bytes: self.write_buffer_manager.get_usage(),
             wbm_budget_bytes: self.write_buffer_manager.get_buffer_size(),
         }
+    }
+
+    /// Total SST files across every level of every CF, recomputed at most once
+    /// per `max_age`.
+    ///
+    /// The sweep costs one property read per level per CF (7 × 60 ≈ 420 calls
+    /// per store, each under the DB mutex), while `memory_stats()` is sampled
+    /// every 3 s during bulk sync. The number moves on the timescale of
+    /// compactions, so a bounded-age cache gives the same signal without
+    /// putting that sweep on every sample.
+    fn sst_files_total_cached(&self, max_age: Duration) -> u64 {
+        let mut cache = self
+            .sst_file_count_cache
+            .lock()
+            .expect("sst_file_count_cache lock poisoned");
+        if let Some((measured_at, value)) = *cache {
+            if measured_at.elapsed() < max_age {
+                return value;
+            }
+        }
+        let value = self.count_sst_files();
+        *cache = Some((Instant::now(), value));
+        value
+    }
+
+    fn count_sst_files(&self) -> u64 {
+        let mut total = 0u64;
+        for &cf_name in ALL_CFS {
+            if let Some(cf) = self.db.cf_handle(cf_name) {
+                for level in 0..=MAX_LEVEL_FOR_FILE_COUNT {
+                    if let Ok(Some(v)) = self
+                        .db
+                        .property_int_value_cf(cf, &format!("rocksdb.num-files-at-level{level}"))
+                    {
+                        total += v;
+                    }
+                }
+            }
+        }
+        total
     }
 
     /// Size of the MANIFEST named by this DB's `CURRENT` file, in bytes.
@@ -2848,6 +2888,40 @@ mod tests {
              l0_files={l0_files}, max_rounds={max_rounds}, written_bytes={written_bytes}, \
              write_buffer_low={}",
             profile.write_buffer_low_bytes
+        );
+    }
+
+    /// The per-level file sweep costs ~420 property reads per store, each
+    /// under the DB mutex, while bulk sync samples `memory_stats()` every 3 s.
+    /// The count is cached for a bounded age instead.
+    #[test]
+    fn sst_file_count_is_recomputed_at_most_once_per_max_age() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        let write_and_flush = |payload: &[u8], key: &str| {
+            let mut batch = crate::batch::StoreBatch::new(&store);
+            batch
+                .put_raw_cf_by_name(CF_SYNC_META, key.as_bytes(), payload)
+                .unwrap();
+            batch.commit().unwrap();
+            store.flush_all_memtables().unwrap();
+        };
+
+        write_and_flush(b"one", "p3.4-sst-cache-1");
+        let first = store.sst_files_total_cached(Duration::from_secs(30));
+        assert!(first >= 1, "a flushed store must have at least one SST");
+
+        // A second flush inside the window is not resampled...
+        write_and_flush(b"two", "p3.4-sst-cache-2");
+        assert_eq!(
+            store.sst_files_total_cached(Duration::from_secs(30)),
+            first,
+            "the count must be served from cache inside its max age"
+        );
+        // ...and is picked up as soon as the cached value is too old.
+        assert!(
+            store.sst_files_total_cached(Duration::ZERO) > first,
+            "an expired cache must recompute"
         );
     }
 
