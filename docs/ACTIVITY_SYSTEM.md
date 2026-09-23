@@ -539,6 +539,13 @@ StoreBatch::put_addr_tx_by_prefix(
 StoreBatch::put_addr_prefix_stats(&mut self, prefix: &[u8], stats: &AddrPrefixStats)
 ```
 
+`CF_ADDR_PREFIX_STATS` carries **no** undo pre-image. Rollback subtracts the number of
+`CF_ADDR_TXS_BY_PREFIX` rows it deletes per prefix and then asserts the counter equals the rows
+that survive (deleting the row when it reaches zero) — the same contract `addr_balance.txs_count`
+has against `CF_ADDR_TXS`. A pre-image would be recorded on one block of a multi-block live batch
+and would not be replayed for a fork point on a later block of that batch, leaving the counter
+above the rows it is supposed to count.
+
 ### Activity Filter Matching
 
 ```rust

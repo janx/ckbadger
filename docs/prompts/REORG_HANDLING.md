@@ -162,15 +162,16 @@ Activity and event CFs are rolled back via full-CF scan and direct deletion of e
 
 No ghost entries, no canonical filtering needed — direct deletion keeps the domain store clean.
 
-### Prefix Participation Counters (undo-log owned)
+### Prefix Participation Counters (reversed by deleted rows)
 
 `addr_prefix_stats` counts the transactions a protocol named a 20-byte lock-hash prefix in without
-that party holding a cell. It is restored **only** by undo replay, under its own
-`UndoSeqScope::AddrPrefixStats`: the forward path records the counter's value at the end of the
-previous block the first time a batch touches the key, exactly as `EntityStats` does. Stage 8c
-deletes the `addr_txs_by_prefix` rows but does **not** also reverse the counter — doing both would
-subtract the same participations twice. After deletion the rollback asserts the surviving counter
-still covers the surviving rows.
+that party holding a cell. It carries **no** undo pre-image. Stage 8c' counts the
+`addr_txs_by_prefix` rows it deletes per prefix, subtracts that from the counter, and asserts the
+result **equals** the rows that survive; a counter reaching zero has its row deleted, and a prefix
+with deleted rows but no counter row aborts the rollback. This is the same contract
+`addr_balance.txs_count` uses against `addr_txs`, and it is the only exact one: a live batch spans
+many blocks, so a pre-image recorded on one block of the batch is not replayed when the fork point
+lands on a later block of that same batch, while the rows written after it are still deleted.
 
 ### Entity Statistics (undo-log owned, never swept)
 

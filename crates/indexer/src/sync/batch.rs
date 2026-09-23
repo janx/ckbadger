@@ -3264,11 +3264,10 @@ impl Indexer {
         protocol_detectors
             .extend(crate::db::writer::activities::test_detector_override::extra_detectors());
         let mut activity_batch = StoreBatch::new(self.writer.store());
-        // Standalone protocol-named participations, per 20-byte prefix:
-        // (first block in this batch that named it, count). The block is where
-        // the counter's undo pre-image is recorded, so rolling back to a block
-        // inside this batch reverses exactly what was written after it.
-        let mut prefix_tx_counts: BTreeMap<[u8; 20], (i64, i64)> = BTreeMap::new();
+        // Standalone protocol-named participations counted per 20-byte prefix
+        // over this whole batch. Rollback reverses the counter from the prefix
+        // rows it deletes, so no per-block bookkeeping is needed here.
+        let mut prefix_tx_counts: BTreeMap<[u8; 20], i64> = BTreeMap::new();
         {
             let mut block_tx_idx = 0usize;
             for parsed in all_parsed_blocks {
@@ -3366,11 +3365,7 @@ impl Indexer {
                         tx_actions,
                         &built.participant_io,
                     ) {
-                        let entry = prefix_tx_counts
-                            .entry(prefix)
-                            .or_insert((tx_actions.block_number, 0));
-                        entry.0 = entry.0.min(tx_actions.block_number);
-                        entry.1 += 1;
+                        *prefix_tx_counts.entry(prefix).or_insert(0) += 1;
                     }
 
                     // Accumulate daily activity stats
@@ -3435,23 +3430,14 @@ impl Indexer {
         }
 
         // Per-prefix participation counters. Read-modify-write against the
-        // committed value, with the pre-image recorded on the first block in
-        // this batch that touched the key — the same contract EntityStats uses,
-        // so a rollback into the middle of a batch is exact.
-        let bulk_sync_active = self.is_bulk_sync_active();
-        for (prefix, (first_block, delta)) in &prefix_tx_counts {
+        // committed value. No undo pre-image: rollback reverses this counter by
+        // the number of `CF_ADDR_TXS_BY_PREFIX` rows it deletes, exactly the way
+        // `addr_balance.txs_count` is reversed from the `CF_ADDR_TXS` rows it
+        // deletes. A pre-image would be recorded on one block of this batch and
+        // would simply not be replayed when the fork point lands on a later
+        // block of the same batch, leaving the counter above the surviving rows.
+        for (prefix, delta) in &prefix_tx_counts {
             let previous = self.writer.store().get_addr_prefix_stats(prefix)?;
-            let previous_bytes = previous
-                .as_ref()
-                .map(bincode::serialize)
-                .transpose()
-                .map_err(|e| {
-                    anyhow!(
-                        "failed to serialize AddrPrefixStats pre-image: prefix=0x{}, error={}",
-                        hex::encode(prefix),
-                        e
-                    )
-                })?;
             let next = ckbadger_store::types::AddrPrefixStats {
                 txs_count: previous
                     .map(|s| s.txs_count)
@@ -3465,22 +3451,6 @@ impl Indexer {
                         )
                     })?,
             };
-            if !bulk_sync_active {
-                let seq = batch_undo_seq.next(
-                    *first_block,
-                    crate::sync::types::UndoSeqScope::AddrPrefixStats,
-                );
-                domain_analytics_batch.put_reorg_undo_log_by_block(
-                    *first_block,
-                    seq,
-                    &ckbadger_store::types::UndoLogEntry::KeyMutation {
-                        target_store: ckbadger_store::types::UndoLogStoreTarget::Domain,
-                        cf_name: ckbadger_store::CF_ADDR_PREFIX_STATS.to_string(),
-                        key: prefix.to_vec(),
-                        previous_value: previous_bytes,
-                    },
-                );
-            }
             domain_analytics_batch.put_addr_prefix_stats(prefix, &next);
         }
 
@@ -6957,13 +6927,14 @@ mod tests {
 
             assert_eq!(
                 prefix_stats_undo_entries(&store),
-                vec![(101, None)],
-                "the first write of a prefix counter records a None pre-image"
+                Vec::new(),
+                "the prefix counter owns no undo pre-images: rollback reverses it \
+                 from the prefix rows it deletes"
             );
         }
 
         #[tokio::test]
-        async fn live_second_block_increments_prefix_stats_with_previous_value_in_undo() {
+        async fn live_second_block_increments_prefix_stats() {
             let _guard =
                 crate::db::writer::activities::test_detector_override::install(naming_detectors);
             let dir = tempfile::tempdir().unwrap();
@@ -7016,18 +6987,173 @@ mod tests {
             );
             assert_eq!(
                 prefix_stats_undo_entries(&store),
+                Vec::new(),
+                "the prefix counter is reversed from the deleted rows, never from undo pre-images"
+            );
+        }
+
+        /// One batch, three blocks: the prefix is named in block 1 and block 3.
+        /// Rolling back into the middle of that batch must leave the counter
+        /// equal to the prefix rows that survive — a batch-granular undo
+        /// pre-image (recorded on the batch's FIRST touching block) is never
+        /// replayed for a fork point above that block, so it cannot do this.
+        #[tokio::test]
+        async fn rollback_into_a_multi_block_batch_leaves_prefix_stats_equal_to_surviving_rows() {
+            let _guard =
+                crate::db::writer::activities::test_detector_override::install(naming_detectors);
+            let dir = tempfile::tempdir().unwrap();
+            let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+            let indexer = indexer_for_live_write_test(store.clone());
+            store
+                .set_secondary_epoch_reward(61_369_863_013_698)
+                .unwrap();
+            // The post-rollback DAO snapshot recompute reads block N-1 of the
+            // first block of the affected day (RFC-0023). The fixture's own
+            // parent is block 99, so its parent needs a header too — dated a
+            // day earlier so block 99 stays the day's first block.
+            {
+                let mut dao = vec![0u8; 32];
+                dao[0..8].copy_from_slice(&3_360_000_000_000_000_000u64.to_le_bytes());
+                dao[8..16].copy_from_slice(&AR_DEPOSIT.to_le_bytes());
+                dao[24..32].copy_from_slice(&100_000_000_000_000u64.to_le_bytes());
+                let mut batch = ckbadger_store::batch::StoreBatch::new(store.as_ref());
+                batch.put_block_header(
+                    98,
+                    &ckbadger_store::types::CachedBlockHeader {
+                        hash: block_hash(98).to_vec(),
+                        parent_hash: block_hash(97).to_vec(),
+                        timestamp: 1_699_900_000_000,
+                        epoch_number: 39,
+                        epoch_index: 1798,
+                        epoch_length: 1800,
+                        dao,
+                        transactions_count: 1,
+                        uncles_count: 0,
+                        proposals_count: 0,
+                        compact_target: 0,
+                        miner_lock_hash: None,
+                        cycles: None,
+                    },
+                );
+                // Stage 9b of the rollback adjusts the lock's script_info from
+                // the cells it deletes; the fixture write path is handed empty
+                // script deltas, so seed the row it will subtract from.
+                let secp_code_hash = hex::decode(&SECP_CODE_HASH[2..]).unwrap();
+                batch.put_script_info(
+                    &secp_code_hash,
+                    &ckbadger_store::types::ScriptInfo {
+                        code_hash: secp_code_hash.clone(),
+                        hash_type: 1,
+                        lock_live_cells_count: 1_000,
+                        lock_owned_capacity_sum: 1_000_000_000_000_000,
+                        lock_owned_knowledge_sum: 1_000_000_000_000_000,
+                        ..Default::default()
+                    },
+                );
+                batch.commit().unwrap();
+            }
+
+            // Funding batch: cellbase only, so no participant is named yet.
+            write_live_block(
+                &indexer,
+                block(100, AR_DEPOSIT, vec![cellbase_tx(0xc0, FUNDING_CAPACITY)]),
+            )
+            .await
+            .unwrap();
+
+            // ONE batch covering blocks 101..103. Block 102 carries a cellbase
+            // only, so the injected detector names the prefix exactly twice:
+            // once in the batch's first block, once in its last.
+            write_live_blocks_with_entity_changes(
+                &indexer,
                 vec![
-                    (101, None),
-                    (
-                        102,
-                        Some(
-                            bincode::serialize(&ckbadger_store::types::AddrPrefixStats {
-                                txs_count: 1
-                            })
-                            .unwrap()
-                        )
+                    block(
+                        101,
+                        AR_DEPOSIT,
+                        vec![
+                            cellbase_tx(0xc1, 100_000_000),
+                            transfer_tx(
+                                0xd1,
+                                0xc0,
+                                FUNDING_CAPACITY - 100_000_000,
+                                lock_script_b(),
+                            ),
+                        ],
                     ),
-                ]
+                    block(102, AR_DEPOSIT, vec![cellbase_tx(0xc2, 100_000_000)]),
+                    block(
+                        103,
+                        AR_DEPOSIT,
+                        vec![
+                            cellbase_tx(0xc3, 100_000_000),
+                            transfer_tx(
+                                0xd3,
+                                0xd1,
+                                FUNDING_CAPACITY - 300_000_000,
+                                lock_script_c(),
+                            ),
+                        ],
+                    ),
+                ],
+                EntityDailyChanges::new(),
+            )
+            .await
+            .unwrap();
+
+            assert_eq!(
+                store
+                    .get_addr_prefix_stats(&NAMED_PREFIX)
+                    .unwrap()
+                    .unwrap()
+                    .txs_count,
+                2,
+                "both named participations are counted"
+            );
+            assert_eq!(
+                prefix_rows(&store)
+                    .iter()
+                    .map(|(p, b, t, _)| (*p, *b, *t))
+                    .collect::<Vec<_>>(),
+                vec![(NAMED_PREFIX, 101, 1), (NAMED_PREFIX, 103, 1)]
+            );
+
+            // Fork at 102: block 103's row goes, block 101's stays.
+            let undo = store.rollback_via_undo_log(store.as_ref(), 102).unwrap();
+            store
+                .rollback_to_block_with_tx_contexts(102, Some(store.as_ref()), undo.tx_contexts)
+                .unwrap();
+
+            assert_eq!(
+                prefix_rows(&store)
+                    .iter()
+                    .map(|(p, b, t, _)| (*p, *b, *t))
+                    .collect::<Vec<_>>(),
+                vec![(NAMED_PREFIX, 101, 1)],
+                "only the rolled-back block's prefix row is deleted"
+            );
+            assert_eq!(
+                store
+                    .get_addr_prefix_stats(&NAMED_PREFIX)
+                    .unwrap()
+                    .unwrap()
+                    .txs_count,
+                1,
+                "the counter must equal the surviving prefix rows"
+            );
+
+            // Fork at 100: the last row goes, and a zero counter is no row.
+            let undo = store.rollback_via_undo_log(store.as_ref(), 100).unwrap();
+            store
+                .rollback_to_block_with_tx_contexts(100, Some(store.as_ref()), undo.tx_contexts)
+                .unwrap();
+            assert!(
+                prefix_rows(&store).is_empty(),
+                "every prefix row is rolled back"
+            );
+            assert_eq!(
+                store.get_addr_prefix_stats(&NAMED_PREFIX).unwrap(),
+                None,
+                "a counter that reaches zero is deleted, not stored as 0"
             );
         }
     }

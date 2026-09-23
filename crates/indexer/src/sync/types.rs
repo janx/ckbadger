@@ -34,10 +34,6 @@ pub(crate) enum UndoSeqScope {
     /// `SPORE_HOURLY`, `OBJECT_HOURLY`). Its own scope so the retention window
     /// can prune exactly these entries without touching the other three.
     EntityStats = 0x0004,
-    /// Per-prefix participation counters (`CF_ADDR_PREFIX_STATS`). Rollback
-    /// restores them ONLY by replaying these pre-images — stage 8c deletes the
-    /// prefix rows but never re-derives the counter from them.
-    AddrPrefixStats = 0x0005,
 }
 
 // ── Sync / Reorg action enums ──────────────────────────────────────────

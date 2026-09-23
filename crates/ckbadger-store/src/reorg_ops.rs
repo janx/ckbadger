@@ -3571,14 +3571,18 @@ impl CkbadgerStore {
             }
         }
 
-        // 8c'. Delete addr_txs_by_prefix entries for rolled-back blocks.
+        // 8c'. Delete addr_txs_by_prefix entries for rolled-back blocks, and
+        // reverse `addr_prefix_stats` by exactly the rows deleted.
         //
         // These rows are NOT counted into `addr_txs_count_deltas`: that map
         // reverses `addr_balance.txs_count`, which only ever counted cell
-        // participations. `addr_prefix_stats` is restored by undo replay alone
-        // (`UndoSeqScope::AddrPrefixStats`); reversing it here as well would
-        // subtract the same participations twice.
-        let mut touched_prefixes: HashSet<[u8; 20]> = HashSet::new();
+        // participations. The prefix counter is reversed here instead, from the
+        // deleted row count — the same shape `addr_balance.txs_count` uses, and
+        // the only one that is exact when a fork point falls inside a write
+        // batch that spanned several blocks (an undo pre-image is recorded on
+        // one block of that batch and is simply not replayed for a higher fork
+        // point, while its later rows still get deleted).
+        let mut deleted_prefix_rows: HashMap<[u8; 20], i64> = HashMap::new();
         let mut deleted_prefix_keys: HashSet<Vec<u8>> = HashSet::new();
         {
             let mut removed = 0u64;
@@ -3607,7 +3611,7 @@ impl CkbadgerStore {
                             );
                         }
                         batch.delete_cf(self.cf_addr_txs_by_prefix(), &key);
-                        touched_prefixes.insert(*prefix);
+                        *deleted_prefix_rows.entry(*prefix).or_insert(0) += 1;
                         deleted_prefix_keys.insert(key);
                         removed += 1;
                         stage.tick(removed);
@@ -3636,7 +3640,7 @@ impl CkbadgerStore {
                         continue;
                     }
                     batch.delete_cf(self.cf_addr_txs_by_prefix(), &key);
-                    touched_prefixes.insert(prefix);
+                    *deleted_prefix_rows.entry(prefix).or_insert(0) += 1;
                     deleted_prefix_keys.insert(key.to_vec());
                     removed += 1;
                     stage.tick(removed);
@@ -3651,15 +3655,37 @@ impl CkbadgerStore {
             }
         }
 
-        // Consistency guard: whatever the undo replay left in the counter must
-        // still cover the prefix rows that survive this rollback. A counter
-        // below that means the pre-images and the rows disagree — say so with
-        // the prefix rather than serving an address a transaction count lower
-        // than the transactions it can already list.
-        for prefix in &touched_prefixes {
-            let Some(stats) = self.get_addr_prefix_stats(prefix)? else {
-                continue;
-            };
+        // Reverse the per-prefix counters by the rows just deleted, and prove
+        // the result against the rows that survive. A prefix row exists only
+        // because the forward path counted that participation, so a missing
+        // counter is a broken invariant, not a value to invent.
+        for (prefix, deleted) in &deleted_prefix_rows {
+            let stats = self.get_addr_prefix_stats(prefix)?.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "missing addr_prefix_stats while rolling back prefix rows: prefix=0x{}, deleted_rows={}, rollback_to={}",
+                    bytes_to_hex(prefix),
+                    deleted,
+                    rollback_to
+                )
+            })?;
+            let next = stats.txs_count.checked_sub(*deleted).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "addr_prefix_stats txs_count underflow during rollback: prefix=0x{}, txs_count={}, deleted_rows={}, rollback_to={}",
+                    bytes_to_hex(prefix),
+                    stats.txs_count,
+                    deleted,
+                    rollback_to
+                )
+            })?;
+            if next < 0 {
+                anyhow::bail!(
+                    "addr_prefix_stats txs_count went negative during rollback: prefix=0x{}, txs_count={}, deleted_rows={}, rollback_to={}",
+                    bytes_to_hex(prefix),
+                    stats.txs_count,
+                    deleted,
+                    rollback_to
+                );
+            }
             let mut surviving: i64 = 0;
             for item in self.prefix_iterator_cf(self.cf_addr_txs_by_prefix(), prefix) {
                 let (key, _) = item.map_err(|e| {
@@ -3677,13 +3703,25 @@ impl CkbadgerStore {
                 }
                 surviving += 1;
             }
-            if stats.txs_count < surviving {
+            if next != surviving {
                 anyhow::bail!(
-                    "addr_prefix_stats is below the surviving row count after rollback: prefix=0x{}, txs_count={}, surviving_rows={}, rollback_to={}",
+                    "addr_prefix_stats disagrees with the surviving row count after rollback: prefix=0x{}, txs_count={}, deleted_rows={}, next={}, surviving_rows={}, rollback_to={}",
                     bytes_to_hex(prefix),
                     stats.txs_count,
+                    deleted,
+                    next,
                     surviving,
                     rollback_to
+                );
+            }
+            if next == 0 {
+                batch.delete_cf(self.cf_addr_prefix_stats(), prefix);
+            } else {
+                batch.put_cf(
+                    self.cf_addr_prefix_stats(),
+                    prefix,
+                    bincode::serialize(&crate::types::AddrPrefixStats { txs_count: next })
+                        .expect("serialize AddrPrefixStats"),
                 );
             }
         }

@@ -1936,7 +1936,7 @@ fn prefix_participant_actions(
 }
 
 #[test]
-fn test_rollback_deletes_prefix_participant_rows_and_restores_prefix_stats_via_undo() {
+fn test_rollback_deletes_prefix_participant_rows_and_reverses_prefix_stats() {
     let (domain, append) = setup_split_stores();
     let lock_a = vec![0xA0u8; 32];
     let tx_hash_2 = {
@@ -2001,20 +2001,6 @@ fn test_rollback_deletes_prefix_participant_rows_and_restores_prefix_stats_via_u
         &ROLLED_BACK_PREFIX,
         &ckbadger_store::types::AddrPrefixStats { txs_count: 2 },
     );
-    // The counter's block-3 pre-image: what it was at the end of block 2.
-    batch.put_reorg_undo_log_by_block(
-        3,
-        0x0005u64 << 48,
-        &ckbadger_store::types::UndoLogEntry::KeyMutation {
-            target_store: ckbadger_store::types::UndoLogStoreTarget::Domain,
-            cf_name: ckbadger_store::CF_ADDR_PREFIX_STATS.to_string(),
-            key: ROLLED_BACK_PREFIX.to_vec(),
-            previous_value: Some(
-                bincode::serialize(&ckbadger_store::types::AddrPrefixStats { txs_count: 1 })
-                    .unwrap(),
-            ),
-        },
-    );
     batch.commit().unwrap();
 
     domain.rollback_via_undo_log(&append, 2).unwrap();
@@ -2042,8 +2028,8 @@ fn test_rollback_deletes_prefix_participant_rows_and_restores_prefix_stats_via_u
         "the rolled-back prefix row must be deleted"
     );
 
-    // The counter is restored by undo replay alone — stage 8c must not also
-    // reverse it from the deleted rows.
+    // The counter is reversed by the rows stage 8c' deleted — it owns no undo
+    // pre-images, so it must end equal to the rows that survive.
     assert_eq!(
         domain
             .get_addr_prefix_stats(&ROLLED_BACK_PREFIX)

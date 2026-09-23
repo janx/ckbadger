@@ -126,13 +126,12 @@ model that future script schema refactors should follow.
 Key = `block_number(8B BE i64) + seq(8B BE u64)`. The sequence number carries its scope in the
 high bits: `seq = (scope << 48) | local`, where `local` counts entries within one block.
 
-| Scope             | Value    | Records                                                                |
-| ----------------- | -------- | ---------------------------------------------------------------------- |
-| `TxContext`       | `0x0001` | Per-tx input/output shape used to derive cell and consumption rollback |
-| `DotBit`          | `0x0002` | `.bit` account/identity entity mutations                               |
-| `Object`          | `0x0003` | Spore, cluster and mNFT entity mutations                               |
-| `EntityStats`     | `0x0004` | The eight per-entity daily/hourly stats buckets                        |
-| `AddrPrefixStats` | `0x0005` | `addr_prefix_stats` — protocol-named participation counters            |
+| Scope         | Value    | Records                                                                |
+| ------------- | -------- | ---------------------------------------------------------------------- |
+| `TxContext`   | `0x0001` | Per-tx input/output shape used to derive cell and consumption rollback |
+| `DotBit`      | `0x0002` | `.bit` account/identity entity mutations                               |
+| `Object`      | `0x0003` | Spore, cluster and mNFT entity mutations                               |
+| `EntityStats` | `0x0004` | The eight per-entity daily/hourly stats buckets                        |
 
 The `local` counter is **per block and shared by every writer in one committed batch**
 (`SharedUndoSeq`). Spore, mNFT and `.bit` batch states used to own three private counters that all
@@ -149,10 +148,12 @@ the **end of the previous block**, recorded once per `(block, key)` by `EntitySt
 (`crates/indexer/src/db/writer/entity_stats.rs`); `previous_value: None` means the row did not
 exist and rollback deletes it.
 
-**`AddrPrefixStats` scope.** `addr_prefix_stats` is restored **only** by undo replay, on the same
-contract: the value at the end of the previous block, recorded once per `(block, key)` by the
-first batch that touches it. Rollback deletes the `addr_txs_by_prefix` rows but never also
-reverses the counter from them — that would subtract the same participations twice.
+**`addr_prefix_stats` owns no undo scope.** Rollback reverses it by the number of
+`addr_txs_by_prefix` rows it deletes — the same shape `addr_balance.txs_count` is reversed from the
+`addr_txs` rows it deletes — and then asserts the counter **equals** the surviving rows. An undo
+pre-image cannot do this: a live batch spans many blocks, the pre-image is recorded on one of them,
+and a fork point on a later block of the same batch would never replay it while still deleting the
+rows written after it.
 
 **Bounded window.** Only the `EntityStats` scope is pruned during normal sync. Every live commit
 advances the coverage floor to `committed_tip - ENTITY_STATS_UNDO_RETAIN_BLOCKS` (1000 blocks,
