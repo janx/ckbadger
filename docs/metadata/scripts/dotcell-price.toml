@@ -1,0 +1,23 @@
+name = "Cells Price"
+description = "Type script of the shared .cell price cell read when a name is registered or renewed; data = version(u8) + fee factor in basis points (u16 LE). Bounds how far and how fast the fee may move."
+website = "https://cellula.id/"
+category = "naming"
+
+[mainnet]
+[[mainnet.versions]]
+# node-verified 2026-09-23 against the mainnet node's live code cell.
+canonical_ref_hash = "0x97bf5f760cf72f918f13704d7184933b79d4ddc1fd85075762373e531152d4f9"
+version_hash = "0x238e74e1d2d5bf8f06f9f4b0bb352c2addd531351a45cfeddf3ff5f6f5662342"
+canonical_hash_type = "type"
+
+[testnet]
+[[testnet.versions]]
+# Current; same binary as mainnet. node-verified 2026-09-23.
+canonical_ref_hash = "0xe1057caf161b3c720fcdb80190e89c6efc36b6b4256b3c99635fda63a9dd4294"
+version_hash = "0x238e74e1d2d5bf8f06f9f4b0bb352c2addd531351a45cfeddf3ff5f6f5662342"
+canonical_hash_type = "type"
+[[testnet.versions]]
+# Earlier testnet binary. node-verified 2026-09-23.
+canonical_ref_hash = "0xe1057caf161b3c720fcdb80190e89c6efc36b6b4256b3c99635fda63a9dd4294"
+version_hash = "0x6c063f012cfdca6beec895974c83bc2f5c89d580b263eb265ee7cdb436c7fb90"
+canonical_hash_type = "type"

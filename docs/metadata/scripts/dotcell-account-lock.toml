@@ -1,0 +1,18 @@
+name = "Cells Account Lock"
+description = "Lock a .cell name sits under. Always-success by design: authority is decided by the Cells Account type script from the owner and manager hashes in the cell."
+website = "https://cellula.id/"
+category = "lock"
+
+[mainnet]
+[[mainnet.versions]]
+# node-verified 2026-09-23 against the mainnet node's live code cell.
+canonical_ref_hash = "0x9f0f0ba142b58cba2fe047546cfd8481d5b1769437cd3533e6458b21b61871ab"
+version_hash = "0xa46c19f2262abc0d0db0de3952b7477792b36b392645e0f60e74637ae3e3f13b"
+canonical_hash_type = "type"
+
+[testnet]
+[[testnet.versions]]
+# Same binary as mainnet, different type-id instance. node-verified 2026-09-23.
+canonical_ref_hash = "0xede6a3d80717c3d7927eea678d095abbe68dbb08ca6fdbbbdd9de906455a4afd"
+version_hash = "0xa46c19f2262abc0d0db0de3952b7477792b36b392645e0f60e74637ae3e3f13b"
+canonical_hash_type = "type"

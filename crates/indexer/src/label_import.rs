@@ -1176,6 +1176,80 @@ disabled = true
     }
 
     #[test]
+    fn bundled_dotcell_labels_present_on_both_networks() {
+        let labels = super::bundled::script_labels();
+        let expected: [(&str, &str, &str); 4] = [
+            (
+                "dotcell-account",
+                "0xd96cee56727a2bb9a21408c154d278df5095fb4b4dcfd50516156424479bfe54",
+                "0xe0706b176678181d982290d93dfcd82098e60cceaa4a87f10f32dcbcc91df1d9",
+            ),
+            (
+                "dotcell-account-lock",
+                "0x9f0f0ba142b58cba2fe047546cfd8481d5b1769437cd3533e6458b21b61871ab",
+                "0xede6a3d80717c3d7927eea678d095abbe68dbb08ca6fdbbbdd9de906455a4afd",
+            ),
+            (
+                "dotcell-sale-lock",
+                "0x086c8f4e9d4272e3dfbaca399792f730e6604591e87931ee6d67047a3c900879",
+                "0x498ab6b49b6b25b3c47fcea74bd8a4447bc4efda6417809152a846e058ad0ae4",
+            ),
+            (
+                "dotcell-price",
+                "0x97bf5f760cf72f918f13704d7184933b79d4ddc1fd85075762373e531152d4f9",
+                "0xe1057caf161b3c720fcdb80190e89c6efc36b6b4256b3c99635fda63a9dd4294",
+            ),
+        ];
+        for (slug, mainnet_ref, testnet_ref) in expected {
+            let label = labels
+                .iter()
+                .find(|l| l.metadata_slug.as_deref() == Some(slug))
+                .unwrap_or_else(|| panic!("missing bundled label {slug}"));
+            let m = label.mainnet.as_ref().expect("mainnet block");
+            let t = label.testnet.as_ref().expect("testnet block");
+            assert!(
+                m.versions
+                    .iter()
+                    .any(|v| v.canonical_ref_hash == mainnet_ref
+                        && v.canonical_hash_type.as_str() == "type"),
+                "{slug} mainnet"
+            );
+            assert!(
+                t.versions
+                    .iter()
+                    .any(|v| v.canonical_ref_hash == testnet_ref
+                        && v.canonical_hash_type.as_str() == "type"),
+                "{slug} testnet"
+            );
+            for v in m.versions.iter().chain(t.versions.iter()) {
+                assert_ne!(
+                    v.version_hash, v.canonical_ref_hash,
+                    "{slug}: type-id 脚本的 version_hash 必须是二进制 data hash"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn dotcell_labels_are_label_only_in_phase_0() {
+        use crate::parser::registry::PROTOCOL_REGISTRY;
+        use crate::rpc::parse_hex_to_bytes;
+        for hash in [
+            "0xd96cee56727a2bb9a21408c154d278df5095fb4b4dcfd50516156424479bfe54",
+            "0xe0706b176678181d982290d93dfcd82098e60cceaa4a87f10f32dcbcc91df1d9",
+            "0x9f0f0ba142b58cba2fe047546cfd8481d5b1769437cd3533e6458b21b61871ab",
+            "0x086c8f4e9d4272e3dfbaca399792f730e6604591e87931ee6d67047a3c900879",
+            "0x97bf5f760cf72f918f13704d7184933b79d4ddc1fd85075762373e531152d4f9",
+        ] {
+            assert_eq!(
+                PROTOCOL_REGISTRY.get(&parse_hex_to_bytes(hash)),
+                None,
+                "Phase 0 must not change indexer classification"
+            );
+        }
+    }
+
+    #[test]
     fn test_run_label_import_bundled_imports_labels() {
         let dir = TempDir::new().unwrap();
         let store = CkbadgerStore::open_domain(dir.path().to_str().unwrap()).unwrap();

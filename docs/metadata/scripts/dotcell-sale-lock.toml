@@ -1,0 +1,18 @@
+name = "Cells Sale Lock"
+description = "Lock of a .cell sale offer cell; args = seller lock hash (32) + asking price in shannons (u64 LE). A listed name records this lock's hash as its owner; the lock releases only in a transaction that pays the seller."
+website = "https://cellula.id/"
+category = "lock"
+
+[mainnet]
+[[mainnet.versions]]
+# node-verified 2026-09-23 against the mainnet node's live code cell.
+canonical_ref_hash = "0x086c8f4e9d4272e3dfbaca399792f730e6604591e87931ee6d67047a3c900879"
+version_hash = "0xf1160f64a82e3509211b2903fc54f9f15cbdc4758d058f107608d30727072a93"
+canonical_hash_type = "type"
+
+[testnet]
+[[testnet.versions]]
+# Current; eight earlier testnet binaries exist and are not listed. node-verified 2026-09-23.
+canonical_ref_hash = "0x498ab6b49b6b25b3c47fcea74bd8a4447bc4efda6417809152a846e058ad0ae4"
+version_hash = "0xa8476c83a6752f9894871f780efcc9530d12e392973e9a3e468c4094c71de4d9"
+canonical_hash_type = "type"
