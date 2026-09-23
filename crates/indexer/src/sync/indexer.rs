@@ -1091,6 +1091,19 @@ impl Indexer {
         self.perf.write_phase_snapshot_ms()
     }
 
+    /// Commit-window decomposition (commit_prepare_ms, script_rollup_ms,
+    /// append_only_commit_synced_ms, domain_commit_ms). Their sum is at most
+    /// the wide `db_commit_ms` from [`Self::perf_snapshot_ms`].
+    pub(crate) fn perf_commit_phase_snapshot_ms(&self) -> (f64, f64, f64, f64) {
+        self.perf.commit_phase_snapshot_ms()
+    }
+
+    /// Monotonic writer-phase heartbeat. Used by the progress watchdog to tell
+    /// "one long batch in flight" apart from "writer stuck".
+    pub fn writer_phase_seq(&self) -> u64 {
+        self.perf.writer_phase_seq()
+    }
+
     /// Cumulative parser cell-info lookup counters (used by health monitor).
     pub(crate) fn parser_cell_lookup_snapshot(&self) -> ParserCellLookupSnapshot {
         self.parser_cell_lookup_stats.snapshot()

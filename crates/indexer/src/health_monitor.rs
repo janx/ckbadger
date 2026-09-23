@@ -9,7 +9,7 @@
 //! the parent directory gains a `live-sync-health.csv` file. The CSV is
 //! append-only; on first run the header is written.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -73,6 +73,14 @@ struct Sample {
     precompute_ms: f64,
     build_ms: f64,
     finalize_ms: f64,
+    // Commit window split (P3.2). `db_commit_ms` above stays the wide window;
+    // these four are its non-overlapping parts and `commit_phase_total_ms` is
+    // the same window under its explicit name.
+    commit_prepare_ms: f64,
+    script_rollup_ms: f64,
+    append_only_commit_synced_ms: f64,
+    domain_commit_ms: f64,
+    commit_phase_total_ms: f64,
 }
 
 /// Spawn the health monitor as a long-running background task. Returns
@@ -99,9 +107,13 @@ async fn run(indexer: Arc<Indexer>, csv_path: PathBuf) -> anyhow::Result<()> {
             tokio::fs::create_dir_all(parent).await.ok();
         }
     }
-    ensure_header(&csv_path).await?;
+    let csv_path = ensure_header(&csv_path).await?;
 
-    info!(path = %csv_path.display(), "live-sync health monitor started");
+    info!(
+        path = %csv_path.display(),
+        schema = CSV_SCHEMA_VERSION,
+        "live-sync health monitor started"
+    );
 
     let mut ticker = interval(Duration::from_secs(SAMPLE_INTERVAL_SECS));
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -119,6 +131,8 @@ async fn run(indexer: Arc<Indexer>, csv_path: PathBuf) -> anyhow::Result<()> {
 
         let (_fetch_ms, db_stage_ms, db_commit_ms) = indexer.perf_snapshot_ms();
         let (precompute_ms, build_ms, finalize_ms) = indexer.perf_write_phase_snapshot_ms();
+        let (commit_prepare_ms, script_rollup_ms, append_only_commit_synced_ms, domain_commit_ms) =
+            indexer.perf_commit_phase_snapshot_ms();
         let memory = indexer.get_memory_stats();
         let flush = indexer.flush_stats();
         let progress = indexer.progress();
@@ -144,6 +158,13 @@ async fn run(indexer: Arc<Indexer>, csv_path: PathBuf) -> anyhow::Result<()> {
             precompute_ms,
             build_ms,
             finalize_ms,
+            commit_prepare_ms,
+            script_rollup_ms,
+            append_only_commit_synced_ms,
+            domain_commit_ms,
+            // The wide window, sampled from the same accumulator the old
+            // `db_commit_ms_avg` column reports.
+            commit_phase_total_ms: db_commit_ms,
         };
 
         // Per-minute degradation alert (debounced).
@@ -215,33 +236,128 @@ fn check_degradation(sample: &Sample, last_warn_at: &mut Option<Instant>) {
     );
 }
 
-async fn ensure_header(path: &PathBuf) -> anyhow::Result<()> {
-    if tokio::fs::try_exists(path).await.unwrap_or(false) {
+/// CSV schema version. Bump together with [`csv_header`] whenever the column
+/// set changes: an existing file whose first line is a different header is
+/// never appended to, the monitor starts a schema-suffixed file instead.
+const CSV_SCHEMA_VERSION: u32 = 2;
+
+/// The one definition of the column set. Every row is produced by
+/// [`format_hourly_row`] from the same list, and a unit test pins the two to
+/// the same column count.
+fn csv_header() -> &'static str {
+    "schema=2,timestamp,current_block,target_block,db_stage_write_ms_avg,db_commit_ms_avg,\
+     block_cache_mb_avg,l0_files_avg,l0_max_peak,sst_size_gb_last,\
+     chunks_per_hour,slow_chunks_per_hour,timeouts_per_hour,\
+     keys_per_hour,avg_us_per_chunk,\
+     flush_pending_peak,active_memtable_mb_avg,wbm_usage_mb_avg,wbm_budget_mb_last,\
+     flush_observed_in_window,\
+     precompute_ms_avg,build_ms_avg,finalize_ms_avg,\
+     commit_prepare_ms_avg,script_rollup_ms_avg,append_only_commit_synced_ms_avg,\
+     domain_commit_ms_avg,commit_phase_total_ms_avg\n"
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum CsvTarget {
+    /// The file already carries this exact header: append rows to it.
+    Append(PathBuf),
+    /// No file with this header yet: create it and write the header first.
+    Create(PathBuf),
+}
+
+impl CsvTarget {
+    fn path(&self) -> &PathBuf {
+        match self {
+            Self::Append(path) | Self::Create(path) => path,
+        }
+    }
+}
+
+/// Decide which file this process writes rows into, given the first line of
+/// the base file (`None` when it does not exist).
+///
+/// Rows of two different column sets must never share a file, so a foreign
+/// header sends this run to `<stem>.schema<N>.csv` instead of appending.
+fn csv_target_path(base: &Path, existing_first_line: Option<&str>) -> CsvTarget {
+    match existing_first_line {
+        None => CsvTarget::Create(base.to_path_buf()),
+        Some(line) if line.trim_end() == csv_header().trim_end() => {
+            CsvTarget::Append(base.to_path_buf())
+        }
+        Some(_) => {
+            let stem = base
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "live-sync-health".to_string());
+            let extension = base
+                .extension()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "csv".to_string());
+            CsvTarget::Create(
+                base.with_file_name(format!("{stem}.schema{CSV_SCHEMA_VERSION}.{extension}")),
+            )
+        }
+    }
+}
+
+async fn first_line_of(path: &Path) -> anyhow::Result<Option<String>> {
+    match tokio::fs::read(path).await {
+        Ok(bytes) => {
+            let text = String::from_utf8_lossy(&bytes).into_owned();
+            Ok(Some(
+                text.split('\n').next().unwrap_or_default().to_string(),
+            ))
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// Resolve the file this run appends to, creating it with the current header
+/// when needed. Returns the resolved path.
+async fn ensure_header(path: &Path) -> anyhow::Result<PathBuf> {
+    let first_line = first_line_of(path).await?;
+    let target = csv_target_path(path, first_line.as_deref());
+    let resolved = target.path().clone();
+    if let CsvTarget::Create(create_path) = &target {
+        // A schema-suffixed file that already exists must carry this exact
+        // header — otherwise the column set changed without a version bump and
+        // mixing would silently corrupt the series.
+        if let Some(existing) = first_line_of(create_path).await? {
+            if existing.trim_end() != csv_header().trim_end() {
+                anyhow::bail!(
+                    "live-sync-health CSV {} exists with a different header for schema {}; \
+                     bump CSV_SCHEMA_VERSION instead of mixing column sets",
+                    create_path.display(),
+                    CSV_SCHEMA_VERSION
+                );
+            }
+            return Ok(resolved);
+        }
+        let mut f = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(create_path)
+            .await?;
+        f.write_all(csv_header().as_bytes()).await?;
+    }
+    Ok(resolved)
+}
+
+async fn write_hourly_row(path: &Path, buffer: &[Sample]) -> anyhow::Result<()> {
+    if buffer.is_empty() {
         return Ok(());
     }
-    let mut f = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-        .await?;
-    f.write_all(
-        b"timestamp,current_block,target_block,db_stage_write_ms_avg,db_commit_ms_avg,\
-          block_cache_mb_avg,l0_files_avg,l0_max_peak,sst_size_gb_last,\
-          chunks_per_hour,slow_chunks_per_hour,timeouts_per_hour,\
-          keys_per_hour,avg_us_per_chunk,\
-          flush_pending_peak,active_memtable_mb_avg,wbm_usage_mb_avg,wbm_budget_mb_last,\
-          flush_observed_in_window,\
-          precompute_ms_avg,build_ms_avg,finalize_ms_avg\n",
-    )
-    .await?;
+    let row = format_hourly_row(buffer);
+    let mut f = OpenOptions::new().append(true).open(path).await?;
+    f.write_all(row.as_bytes()).await?;
     Ok(())
 }
 
-async fn write_hourly_row(path: &PathBuf, buffer: &[Sample]) -> anyhow::Result<()> {
+/// Render one hourly row. Split out from the write so the column count can be
+/// pinned against [`csv_header`] in a unit test.
+fn format_hourly_row(buffer: &[Sample]) -> String {
     let n = buffer.len() as f64;
-    if n == 0.0 {
-        return Ok(());
-    }
+    assert!(n > 0.0, "format_hourly_row requires at least one sample");
     let avg_db_stage = buffer.iter().map(|s| s.db_stage_write_ms).sum::<f64>() / n;
     let avg_db_commit = buffer.iter().map(|s| s.db_commit_ms).sum::<f64>() / n;
     let avg_block_cache = buffer.iter().map(|s| s.block_cache_mb).sum::<u64>() as f64 / n;
@@ -275,10 +391,20 @@ async fn write_hourly_row(path: &PathBuf, buffer: &[Sample]) -> anyhow::Result<(
     let avg_precompute = buffer.iter().map(|s| s.precompute_ms).sum::<f64>() / n;
     let avg_build = buffer.iter().map(|s| s.build_ms).sum::<f64>() / n;
     let avg_finalize = buffer.iter().map(|s| s.finalize_ms).sum::<f64>() / n;
-    let last = buffer.last().unwrap();
-    let row = format!(
-        "{},{},{},{:.1},{:.1},{:.0},{:.1},{},{:.2},{},{},{},{},{:.0},{},{:.0},{:.0},{},{},\
-         {:.1},{:.1},{:.1}\n",
+    let avg_commit_prepare = buffer.iter().map(|s| s.commit_prepare_ms).sum::<f64>() / n;
+    let avg_script_rollup = buffer.iter().map(|s| s.script_rollup_ms).sum::<f64>() / n;
+    let avg_append_only_commit = buffer
+        .iter()
+        .map(|s| s.append_only_commit_synced_ms)
+        .sum::<f64>()
+        / n;
+    let avg_domain_commit = buffer.iter().map(|s| s.domain_commit_ms).sum::<f64>() / n;
+    let avg_commit_total = buffer.iter().map(|s| s.commit_phase_total_ms).sum::<f64>() / n;
+    let last = buffer.last().expect("buffer is non-empty");
+    format!(
+        "{},{},{},{},{:.1},{:.1},{:.0},{:.1},{},{:.2},{},{},{},{},{:.0},{},{:.0},{:.0},{},{},\
+         {:.1},{:.1},{:.1},{:.1},{:.1},{:.1},{:.1},{:.1}\n",
+        CSV_SCHEMA_VERSION,
         Utc::now().to_rfc3339(),
         last.current_block,
         last.target_block,
@@ -301,10 +427,12 @@ async fn write_hourly_row(path: &PathBuf, buffer: &[Sample]) -> anyhow::Result<(
         avg_precompute,
         avg_build,
         avg_finalize,
-    );
-    let mut f = OpenOptions::new().append(true).open(path).await?;
-    f.write_all(row.as_bytes()).await?;
-    Ok(())
+        avg_commit_prepare,
+        avg_script_rollup,
+        avg_append_only_commit,
+        avg_domain_commit,
+        avg_commit_total,
+    )
 }
 
 #[cfg(test)]
@@ -322,6 +450,73 @@ mod tests {
         // Edge case: relative single-segment path falls back to that path's dir.
         let p = derive_csv_path("bulk-sync");
         assert_eq!(p, PathBuf::from("live-sync-health.csv"));
+    }
+
+    #[test]
+    fn csv_header_declares_the_schema_version() {
+        assert!(
+            csv_header().starts_with("schema=2,"),
+            "the header line must declare its schema: {}",
+            csv_header()
+        );
+    }
+
+    #[test]
+    fn csv_row_column_count_matches_the_header() {
+        let sample = Sample {
+            db_stage_write_ms: 1.0,
+            db_commit_ms: 2.0,
+            block_cache_mb: 3,
+            l0_files: 4,
+            l0_max: 5,
+            sst_size_gb: 6.0,
+            chunks_delta: 7,
+            slow_chunks_delta: 8,
+            timeouts_delta: 9,
+            keys_delta: 10,
+            elapsed_us_delta: 11,
+            current_block: 12,
+            target_block: 13,
+            num_running_flushes: 14,
+            mem_table_flush_pending: 15,
+            active_memtable_mb: 16,
+            wbm_usage_mb: 17,
+            wbm_budget_mb: 18,
+            precompute_ms: 19.0,
+            build_ms: 20.0,
+            finalize_ms: 21.0,
+            commit_prepare_ms: 22.0,
+            script_rollup_ms: 23.0,
+            append_only_commit_synced_ms: 24.0,
+            domain_commit_ms: 25.0,
+            commit_phase_total_ms: 26.0,
+        };
+        let row = format_hourly_row(&[sample]);
+        assert_eq!(
+            row.trim_end().split(',').count(),
+            csv_header().trim_end().split(',').count(),
+            "row: {row}"
+        );
+    }
+
+    /// An existing file written by an older column set must never gain rows
+    /// with a different shape: the monitor starts a schema-suffixed file
+    /// instead of mixing.
+    #[test]
+    fn an_old_header_rotates_to_a_schema_suffixed_file() {
+        let base = PathBuf::from("/workdir/perf/live-sync-health.csv");
+        assert_eq!(
+            csv_target_path(&base, None),
+            CsvTarget::Create(base.clone())
+        );
+        assert_eq!(
+            csv_target_path(&base, Some(csv_header())),
+            CsvTarget::Append(base.clone())
+        );
+        assert_eq!(
+            csv_target_path(&base, Some("timestamp,current_block,target_block\n")),
+            CsvTarget::Create(PathBuf::from("/workdir/perf/live-sync-health.schema2.csv"))
+        );
     }
 
     #[test]

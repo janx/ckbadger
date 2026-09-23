@@ -142,13 +142,36 @@ pub struct AddressBalanceDelta {
 
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct BatchWriteMetrics {
-    pub(crate) commit_ms: f64,
     pub(crate) write_ms: f64,
-    pub(crate) prefetch_ms: f64,
+    /// The writer's own pre-batch CPU phase (`t_precompute`). Feeds the health
+    /// monitor's `precompute_ms`; before P3.2 that slot was fed a field that
+    /// was always 0.
+    pub(crate) precompute_ms: f64,
     pub(crate) finalize_ms: f64,
+    // ── commit window, split into five non-overlapping parts ────────────
+    /// Batch merge + address-balance prefetch + HODL and cell-distribution
+    /// tracker preparation (both stage their whole state into the batch).
+    pub(crate) commit_prepare_ms: f64,
+    /// `materialize_script_versions_and_families`.
+    pub(crate) script_rollup_ms: f64,
+    /// Append-only cell payload commit **including** its WAL fsync.
+    pub(crate) append_only_commit_synced_ms: f64,
+    /// The atomic domain batch commit.
+    pub(crate) domain_commit_ms: f64,
+    /// The whole window, from the first merge to the domain commit returning.
+    pub(crate) commit_phase_total_ms: f64,
     pub(crate) txs: u64,
     pub(crate) cells: u64,
     pub(crate) inputs: u64,
+}
+
+impl BatchWriteMetrics {
+    /// The wide commit window under its historical name. Exactly
+    /// [`Self::commit_phase_total_ms`] — one stored value, so `db_commit_ms` in
+    /// logs and CSVs cannot drift from the split that explains it.
+    pub(crate) fn commit_ms(&self) -> f64 {
+        self.commit_phase_total_ms
+    }
 }
 
 // ── Unresolved outpoint probe summaries ────────────────────────────────

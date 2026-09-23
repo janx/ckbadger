@@ -467,6 +467,8 @@ pub async fn run_indexer_sync(mut config: Config) -> Result<()> {
         let mut suppressed_queue_pressure_warns: u64 = 0;
         let mut last_progress_block: Option<u64> = None;
         let mut last_progress_advanced_at = Instant::now();
+        let mut last_writer_phase_seq = indexer_for_progress.writer_phase_seq();
+        let mut last_writer_phase_advanced_at = Instant::now();
         let mut last_stall_warn_at: Option<Instant> = None;
         let mut suppressed_stall_warns: u64 = 0;
         let mut last_bulk_disk_state: Option<String> = None;
@@ -593,6 +595,12 @@ pub async fn run_indexer_sync(mut config: Config) -> Result<()> {
                 pipeline_log.as_ref().and_then(|p| p.writer_queue_capacity),
             );
 
+            let writer_phase_seq = indexer_for_progress.writer_phase_seq();
+            if writer_phase_seq != last_writer_phase_seq {
+                last_writer_phase_seq = writer_phase_seq;
+                last_writer_phase_advanced_at = Instant::now();
+            }
+
             let current_block = progress.current();
             match last_progress_block {
                 None => {
@@ -619,6 +627,7 @@ pub async fn run_indexer_sync(mut config: Config) -> Result<()> {
                     let now = Instant::now();
                     if should_warn_progress_stall(
                         last_progress_advanced_at,
+                        last_writer_phase_advanced_at,
                         now,
                         current_block,
                         progress.target(),
@@ -635,6 +644,8 @@ pub async fn run_indexer_sync(mut config: Config) -> Result<()> {
                                 target = progress.target(),
                                 blocks_remaining = progress.blocks_remaining(),
                                 stalled_seconds = stalled_for.as_secs(),
+                                writer_phase_idle_seconds =
+                                    last_writer_phase_advanced_at.elapsed().as_secs(),
                                 bps = format!("{:.1}", bps),
                                 ema_bps = format!("{:.1}", ema_rate),
                                 db_stage_write_ms = ?(perf_db_stage_ms > 0.0).then_some(format!("{:.1}", perf_db_stage_ms)),
@@ -993,8 +1004,17 @@ fn should_emit_rate_limited(
     }
 }
 
+/// Warn only when BOTH the committed tip and the writer's phase heartbeat have
+/// been still for the whole window.
+///
+/// A live catch-up batch of 5,000 blocks holds one `write_parsed_batch` call for
+/// minutes; its committed tip cannot move until the batch commits, so the tip
+/// alone reported 74 / 49 false stalls during the 2026-09-22 catch-up. The
+/// writer phase heartbeat moves on every phase it enters, so a genuinely wedged
+/// writer still trips this.
 fn should_warn_progress_stall(
     last_progress_advanced_at: Instant,
+    last_writer_phase_advanced_at: Instant,
     now: Instant,
     current_block: u64,
     target_block: u64,
@@ -1002,6 +1022,7 @@ fn should_warn_progress_stall(
 ) -> bool {
     current_block < target_block
         && now.duration_since(last_progress_advanced_at) >= min_stall_duration
+        && now.duration_since(last_writer_phase_advanced_at) >= min_stall_duration
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1381,7 +1402,9 @@ mod tests {
     fn test_should_warn_progress_stall() {
         let now = Instant::now();
         let last_advanced = now - Duration::from_secs(75);
+        // Committed tip AND writer phases both stuck for longer than the window.
         assert!(should_warn_progress_stall(
+            last_advanced,
             last_advanced,
             now,
             100,
@@ -1390,6 +1413,7 @@ mod tests {
         ));
         assert!(!should_warn_progress_stall(
             now - Duration::from_secs(30),
+            last_advanced,
             now,
             100,
             200,
@@ -1397,8 +1421,40 @@ mod tests {
         ));
         assert!(!should_warn_progress_stall(
             last_advanced,
+            last_advanced,
             now,
             200,
+            200,
+            Duration::from_secs(60)
+        ));
+    }
+
+    /// A 5,000-block live catch-up batch spends minutes inside one
+    /// `write_parsed_batch` call, so the committed tip does not move — that is
+    /// work in progress, not a stall. 2026-09-22 logged 74 / 49 such false
+    /// "Sync progress stalled" warnings in one catch-up. The writer phase
+    /// heartbeat distinguishes the two; a genuinely stuck writer still warns.
+    #[test]
+    fn stall_warning_is_suppressed_while_the_writer_keeps_advancing_phases() {
+        let now = Instant::now();
+        assert!(!should_warn_progress_stall(
+            now - Duration::from_secs(300),
+            now - Duration::from_secs(5),
+            now,
+            100,
+            200,
+            Duration::from_secs(60)
+        ));
+    }
+
+    #[test]
+    fn stall_warning_fires_when_the_writer_phase_heartbeat_also_stops() {
+        let now = Instant::now();
+        assert!(should_warn_progress_stall(
+            now - Duration::from_secs(300),
+            now - Duration::from_secs(61),
+            now,
+            100,
             200,
             Duration::from_secs(60)
         ));
