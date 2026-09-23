@@ -66,17 +66,17 @@ second hardcoded protocol-hash list.
 
 ## Common Change Entry Points
 
-| Task                           | Start here                                                                                   | Also update                                                                                             |
-| ------------------------------ | -------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| Orchestrator/network behavior  | `crates/config/src/orchestrator.rs`, `crates/cli/src/main.rs`, `crates/cli/src/sequencer.rs` | `crates/api/src/frontend_proxy.rs`, `frontend/lib/active-network.ts`, README/config docs                |
-| Storage/key design change      | `crates/ckbadger-store/src/types.rs`, `keys.rs`, `*_ops.rs`                                  | Indexer owning writer, API readers, `docs/STORE_SCHEMA.md`; state logical store and re-sync requirement |
-| Script/protocol detection      | `docs/metadata/scripts/*.toml`, `crates/indexer/src/parser/registry.rs`                      | Relevant parsers/writers, activity builder, metadata tests                                              |
-| Script reference/version model | `docs/SCRIPTS_CODE_CELLS_AND_REFS.md`, store types/keys                                      | `db/writer/addresses.rs`, API script resolution/routes, frontend script pages                           |
-| Bulk-build engine              | `docs/prompts/BULK_SYNC.md`, `crates/indexer/src/sync/bulk_build/mod.rs`                     | `bulk_build/owners/`, `live_cells.rs`, `materialize.rs`, memory/perf tests                              |
-| Parser capability              | `crates/indexer/src/parser/*.rs`                                                             | Writer/bulk owner, parser registry when protocol-bound, inline parser tests                             |
-| API endpoint                   | `crates/api/src/routes/*.rs`                                                                 | `routes/mod.rs`, `frontend/lib/api.ts`, API/frontend tests, `docs/API.md`, agent discovery files        |
-| Frontend route/view            | `frontend/src/routes/router.tsx`, `frontend/app/`                                            | components, API client, network-aware route helpers, frontend tests                                     |
-| Verification logic             | `crates/indexer/src/verify/*.rs`                                                             | registration tests and `docs/TESTING.md` counts                                                         |
+| Task                           | Start here                                                                                   | Also update                                                                                                                   |
+| ------------------------------ | -------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| Orchestrator/network behavior  | `crates/config/src/orchestrator.rs`, `crates/cli/src/main.rs`, `crates/cli/src/sequencer.rs` | `crates/api/src/frontend_proxy.rs`, `frontend/lib/active-network.ts`, README/config docs                                      |
+| Storage/key design change      | `crates/ckbadger-store/src/types.rs`, `keys.rs`, `*_ops.rs`                                  | Indexer owning writer, API readers, `docs/STORE_SCHEMA.md`; state logical store and re-sync requirement                       |
+| Script/protocol detection      | `docs/metadata/scripts/*.toml`, `crates/indexer/src/parser/registry.rs`                      | Relevant parsers/writers, activity builder, metadata tests                                                                    |
+| Script reference/version model | `docs/SCRIPTS_CODE_CELLS_AND_REFS.md`, store types/keys                                      | `db/writer/addresses.rs`, API script resolution/routes, frontend script pages                                                 |
+| Bulk-build engine              | `docs/prompts/BULK_SYNC.md`, `crates/indexer/src/sync/bulk_build/mod.rs`                     | `bulk_build/owners/`, `live_cells.rs`, `materialize.rs`, memory/perf tests                                                    |
+| Parser capability              | `crates/indexer/src/parser/*.rs`                                                             | Writer/bulk owner, parser registry when protocol-bound, inline parser tests                                                   |
+| API endpoint                   | `crates/api/src/routes/*.rs`                                                                 | `routes/mod.rs`, `frontend/lib/api.ts`, API/frontend tests, `docs/API.md`, agent discovery files                              |
+| Frontend route/view            | `frontend/src/routes/router.tsx`, `frontend/app/`                                            | components, API client, network-aware route helpers, frontend tests                                                           |
+| Verification logic             | `crates/indexer/src/verify/*.rs`                                                             | `crates/api/src/routes/verify.rs` when the check reads the index, registration tests, `docs/TESTING.md` counts, `docs/API.md` |
 
 ## Fast Validation Shortcuts
 

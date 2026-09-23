@@ -734,28 +734,27 @@ writes nothing.
 **Params**
 
 - `EntityStatisticsRequest` (JSON body) — `entities: [{kind, id}]` (≤ 16, `kind`
-  must be `token` in this delivery), optional `expectedAnchor: {blockNumber,
-blockHash}`, optional `maxDailyRows` (≤ 8192, default 8192)
+  must be `token` in this delivery), optional
+  `expectedAnchor: {blockNumber, blockHash}`, optional `maxDailyRows`
+  (≤ 8192, default 8192)
 
 **Responses**
 
 - `EntityStatisticsResponse`
   - `anchor` — `{blockNumber, blockHash}` of the store's sync tip
-  - `state` — `{bulkSessionInProgress, rollbackCleanupInProgress,
-liveCellSummaryInitialized, deepForkDetected, entityStatsUndoContract,
-hourlyRetention}`, all read under the same pin as the rows they qualify.
-    - `entityStatsUndoContract` — `{version, coverageFloorBlock,
-updatedAtBlock}`, or `null` when the write path has published no
-      contract. `coverageFloorBlock` is the lowest block entity-stats undo can
-      still roll back to; `updatedAtBlock` is the committed tip when that floor
-      was last advanced, so a stale floor is distinguishable from a current one.
+  - `state` — `{bulkSessionInProgress, rollbackCleanupInProgress, liveCellSummaryInitialized, deepForkDetected, entityStatsUndoContract, hourlyRetention}`,
+    all read under the same pin as the rows they qualify.
+    - `entityStatsUndoContract` — `{version, coverageFloorBlock, updatedAtBlock}`,
+      or `null` when the write path has published no contract.
+      `coverageFloorBlock` is the lowest block entity-stats undo can still roll
+      back to; `updatedAtBlock` is the committed tip when that floor was last
+      advanced, so a stale floor is distinguishable from a current one.
     - `hourlyRetention` — one answer **per hourly family**, keyed by family
       name: `{"token": …, "mnft": …}`. There is deliberately no cross-family
       verdict; one family being settled says nothing about the other. Each
       value is either `"unknown"` (the store holds no retention row for that
       family — absence of evidence, never a zero boundary) or
-      `{authoritative, policyVersion, executedCutoffHour,
-roundInProgressCutoffHour, cursor, roundStartedAt, roundCompletedAt}`.
+      `{authoritative, policyVersion, executedCutoffHour, roundInProgressCutoffHour, cursor, roundStartedAt, roundCompletedAt}`.
       `authoritative` is `true` only when the last recorded round ran to the
       end of that family (`cursor` cleared _and_ `roundCompletedAt` set);
       `executedCutoffHour` is a retention boundary a reader may trust only
@@ -769,11 +768,10 @@ roundInProgressCutoffHour, cursor, roundStartedAt, roundCompletedAt}`.
     could not be exported in full
   - `anchorMismatch` — present only when `expectedAnchor` did not match:
     `{expected, actual}`, with nothing exported
-  - `entities[]` — `{kind, id, present, rowCount, typeScript, complete,
-currentCapacity, currentKnowledge, currentError, daily}`, where
-    `typeScript` is `{codeHash, hashType, args}` read from the same pin (so the
-    verifier can build a chain query without asking an endpoint that computes
-    aggregates), and `daily[]` is
+  - `entities[]` — `{kind, id, present, rowCount, typeScript, complete, currentCapacity, currentKnowledge, currentError, daily}`,
+    where `typeScript` is `{codeHash, hashType, args}` read from the same pin
+    (so the verifier can build a chain query without asking an endpoint that
+    computes aggregates), and `daily[]` is
     `{date, capacityDelta, knowledgeDelta}` with every value an exact decimal
     string in shannons. `present`/`rowCount`/`current*` are `null` when the
     state withheld the numbers. `currentCapacity`/`currentKnowledge` accumulate
@@ -799,6 +797,6 @@ truncated list.
 
 ---
 
-**Total endpoints: 128** across 19 modules. Confirm against
+**Total endpoints: 129** across 19 modules. Confirm against
 `crates/api/src/routes/*.rs` for any field-level question; this skeleton is
 intentionally name-and-purpose only.

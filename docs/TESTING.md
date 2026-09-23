@@ -29,11 +29,11 @@ declaration order. Point `-C` at a network subdirectory (for example,
 
 ### Check Tiers
 
-| Tier                  | Checks | Runtime | What it validates                                                                                                                                                                                                                                                             |
-| --------------------- | ------ | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Fast** (F1-F7)      | 7      | seconds | API reachable, sync complete, genesis block, tip block, deep fork clear, DAO statistics sane, genesis-baseline burnt invariant                                                                                                                                                |
+| Tier                  | Checks | Runtime | What it validates                                                                                                                                                                                                                                                                                               |
+| --------------------- | ------ | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Fast** (F1-F7)      | 7      | seconds | API reachable, sync complete, genesis block, tip block, deep fork clear, DAO statistics sane, genesis-baseline burnt invariant                                                                                                                                                                                  |
 | **Sampling** (S1-S25) | 25     | minutes | Block hash roundtrip, parent chain, address balance, chart validations (tx count, cells, supply, block time, epoch, HODL wave, knowledge composition, APC, inflation), supply invariants, RPC compare, tokens, spores, NFTs, holder consistency, DAO status index vs deposits, entity capacity history vs chain |
-| **Explorer** (X1-X26) | 26     | minutes | Compare last 30 days against official CKB explorer API (tx count, DAO deposit, hash rate, difficulty, knowledge size, uncle rate, cell counts, supply, circulation, compensation, mining reward, normalized treasury)                                                         |
+| **Explorer** (X1-X26) | 26     | minutes | Compare last 30 days against official CKB explorer API (tx count, DAO deposit, hash rate, difficulty, knowledge size, uncle rate, cell counts, supply, circulation, compensation, mining reward, normalized treasury)                                                                                           |
 
 Explorer `burnt` and `treasury_amount` are not compared raw: the official explorer leaves phase-1
 frozen DAO interest in treasury while also including it in deposit compensation. The verifier
@@ -86,6 +86,9 @@ OPTIONS:
   --seed <N>               Deterministic sampling seed [default: 42]
   --tolerance <F>          Max explorer deviation, fraction [default: 0.001]
   --entity <KIND:ID>       Verify this entity exactly (repeatable), e.g. token:0x…
+  --entity-max-rpc <N>     RPC requests the chain-derived checks may spend, per network [default: 10000]
+  --entity-max-records <N> History records they may fold in, per network [default: 200000]
+  --entity-budget-seconds <N>  Wall-clock seconds they may spend, per network [default: 600]
   --api-url <URL>          Override the ckbadger API base URL
   --rpc-url <URL>          Override the CKB RPC URL
   --explorer-url <URL>     Override the explorer API URL
@@ -100,23 +103,23 @@ run them against `-C <workdir>/<network>`.
 ### Check Statuses and Exit Codes
 
 A check reports one of six statuses. The distinction the old pass/fail pair
-could not express is between *evidence of an inconsistency* and *absence of
-evidence*: a check that never ran, could not reach the data, or was given
+could not express is between _evidence of an inconsistency_ and _absence of
+evidence_: a check that never ran, could not reach the data, or was given
 nothing to sample proves nothing, and is never rendered green.
 
-| Status          | Meaning                                                                            | Exit contribution |
-| --------------- | ---------------------------------------------------------------------------------- | ----------------- |
-| `pass`          | The check's whole declared scope was verified and agreed                           | 0                 |
-| `fail`          | A difference was proven                                                            | 1                 |
-| `inconclusive`  | Anchor moved, budget exhausted, adapter unsupported, or the source was incomplete  | 2                 |
-| `error`         | RPC/response schema, a cursor that did not advance, a bad parameter, or a local failure | 2            |
-| `skipped`       | The operator narrowed the scope (`--checks`, `--no-explorer`, no `--rpc-url`)      | 0                 |
-| `notApplicable` | Independently proven that the network holds no such object                         | 0                 |
+| Status          | Meaning                                                                                 | Exit contribution |
+| --------------- | --------------------------------------------------------------------------------------- | ----------------- |
+| `pass`          | The check's whole declared scope was verified and agreed                                | 0                 |
+| `fail`          | A difference was proven                                                                 | 1                 |
+| `inconclusive`  | Anchor moved, budget exhausted, adapter unsupported, or the source was incomplete       | 2                 |
+| `error`         | RPC/response schema, a cursor that did not advance, a bad parameter, or a local failure | 2                 |
+| `skipped`       | The operator narrowed the scope (`--checks`, `--no-explorer`, no `--rpc-url`)           | 0                 |
+| `notApplicable` | Independently proven that the network holds no such object                              | 0                 |
 
 The process exit code merges every check of every selected network:
 **`fail` (1) > `error`/`inconclusive` (2) > `pass` (0)**. A skipped check no
 longer counts as a pass; it instead sets `scopeComplete: false`, which is
-reported separately from `status` — a run can be `fail` *and* incomplete at the
+reported separately from `status` — a run can be `fail` _and_ incomplete at the
 same time, and that is not softened in either direction.
 
 Every selected network is verified and reports, even when an earlier one has
@@ -151,7 +154,7 @@ from the chain and compares it against the index, with **zero tolerance** —
   the production writer, parser or `PROTOCOL_REGISTRY`.
 - **Three facets, one scan.** Per-day deltas and running prefix totals are
   compared against the exported rows; the **current** facet compares the
-  chain's *live cell set* — outputs in `[0, H]` whose outpoint is never
+  chain's _live cell set_ — outputs in `[0, H]` whose outpoint is never
   consumed in that range — against the current capacity/occupied the index
   itself reports. A token has no separately stored current value, so the index
   side of that facet is the same checked accumulation the public
@@ -220,19 +223,19 @@ HTTP failure, stale data is used with a warning.
 
 ### File Locations
 
-| What                       | Where                                     |
-| -------------------------- | ----------------------------------------- |
-| Public CLI/target resolver | `crates/cli/src/main.rs`                  |
-| Verification engine        | `crates/indexer/src/verify/mod.rs`        |
-| Check trait & types        | `crates/indexer/src/verify/checks.rs`     |
-| API checks (F+S)           | `crates/indexer/src/verify/api_checks.rs` |
-| Explorer checks (X)        | `crates/indexer/src/verify/explorer.rs`   |
-| Chain-history oracle (S25) | `crates/indexer/src/verify/entity_history.rs` |
-| History source qualification | `crates/indexer/src/verify/source.rs`   |
-| Coverage manifest          | `crates/indexer/src/verify/manifest.rs`   |
-| Report rendering           | `crates/indexer/src/verify/report.rs`     |
-| LCG sampler                | `crates/indexer/src/verify/sampling.rs`   |
-| Typed export endpoint      | `crates/api/src/routes/verify.rs`         |
+| What                         | Where                                         |
+| ---------------------------- | --------------------------------------------- |
+| Public CLI/target resolver   | `crates/cli/src/main.rs`                      |
+| Verification engine          | `crates/indexer/src/verify/mod.rs`            |
+| Check trait & types          | `crates/indexer/src/verify/checks.rs`         |
+| API checks (F+S)             | `crates/indexer/src/verify/api_checks.rs`     |
+| Explorer checks (X)          | `crates/indexer/src/verify/explorer.rs`       |
+| Chain-history oracle (S25)   | `crates/indexer/src/verify/entity_history.rs` |
+| History source qualification | `crates/indexer/src/verify/source.rs`         |
+| Coverage manifest            | `crates/indexer/src/verify/manifest.rs`       |
+| Report rendering             | `crates/indexer/src/verify/report.rs`         |
+| LCG sampler                  | `crates/indexer/src/verify/sampling.rs`       |
+| Typed export endpoint        | `crates/api/src/routes/verify.rs`             |
 
 ---
 
