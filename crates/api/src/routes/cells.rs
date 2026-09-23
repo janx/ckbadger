@@ -2493,19 +2493,31 @@ async fn get_address(
     // Get balance from the store
     let store = state.store.clone();
     let lock_hash_c = lock_hash.clone();
-    let addr_balance = tokio::task::spawn_blocking(move || store.get_addr_balance(&lock_hash_c))
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let lock32: [u8; 32] = lock_hash.as_slice().try_into().map_err(|_| {
+        ApiError::internal(format!(
+            "address lookup expects a 32-byte lock hash, got {} bytes",
+            lock_hash.len()
+        ))
+    })?;
+    let (addr_balance, transactions_count) = tokio::task::spawn_blocking(move || {
+        // `address_tx_count` is the ONE place cell participations and
+        // protocol-named participations are added together.
+        Ok::<_, anyhow::Error>((
+            store.get_addr_balance(&lock_hash_c)?,
+            store.address_tx_count(&lock32)?,
+        ))
+    })
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?
+    .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    let (balance, used_capacity, live_cells_count, transactions_count) = match &addr_balance {
+    let (balance, used_capacity, live_cells_count) = match &addr_balance {
         Some(ab) => (
             ab.balance.to_string(),
             ab.used_capacity.to_string(),
             ab.live_cells_count as i64,
-            ab.txs_count,
         ),
-        None => ("0".to_string(), "0".to_string(), 0, 0),
+        None => ("0".to_string(), "0".to_string(), 0),
     };
 
     // Resolve the lock script through the single canonical path: `CF_LOCK_SCRIPTS`
@@ -3264,15 +3276,19 @@ async fn get_address_transactions(
         )
         .collect::<Result<Vec<_>, _>>()?;
 
-    // `total` stays the COMMITTED transaction count. Pool rows are reported
-    // beside it in `pool`, never added to it.
+    // `total` stays the COMMITTED transaction count — cell participations plus
+    // protocol-named ones, through the one summing helper. Pool rows are
+    // reported beside it in `pool`, never added to it.
+    let total_lock: [u8; 32] = lock_hash.as_slice().try_into().map_err(|_| {
+        ApiError::internal(format!(
+            "address transactions expect a 32-byte lock hash, got {} bytes",
+            lock_hash.len()
+        ))
+    })?;
     let total = state
         .store
-        .get_addr_balance(&lock_hash)
-        .ok()
-        .flatten()
-        .map(|ab| ab.txs_count)
-        .unwrap_or(0);
+        .address_tx_count(&total_lock)
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let (mut txs, pool) = match pool_rows {
         Some((rows, summary)) => (rows, Some(summary)),
@@ -3303,6 +3319,12 @@ fn build_pool_transaction_rows(
     Vec<AddressTransactionResponse>,
     crate::pool::PoolSummaryResponse,
 )> {
+    let lock32: &[u8; 32] = lock_hash.try_into().map_err(|_| {
+        anyhow::anyhow!(
+            "pool address rows expect a 32-byte lock hash, got {} bytes",
+            lock_hash.len()
+        )
+    })?;
     let (records, truncated) =
         crate::routes::activities::pool_records_for_page(snapshot, lock_hash);
 
@@ -3315,7 +3337,7 @@ fn build_pool_transaction_rows(
         }
         // `by_lock` is built from the record's participants, so one reached
         // through it must have an entry for this lock.
-        let participant = record.participant(lock_hash).ok_or_else(|| {
+        let participant = record.participant(lock32).ok_or_else(|| {
             anyhow::anyhow!(
                 "pool record indexed by lock 0x{} has no participant for it: tx=0x{}",
                 hex::encode(lock_hash),

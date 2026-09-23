@@ -629,7 +629,8 @@ pub fn make_test_pool_record_with(
         outputs: vec![],
         actions: Some(actions),
         participants: vec![ckbadger_api::pool::PoolParticipant {
-            lock_hash: <[u8; 32]>::try_from(lock_hash).expect("lock hash is 32 bytes"),
+            id: ckbadger_store::types::ParticipantId::lock(lock_hash)
+                .expect("lock hash is 32 bytes"),
             addr_tx: AddrTxValue::new(
                 capacity_change,
                 capacity_change < 0,

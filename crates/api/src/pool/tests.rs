@@ -854,3 +854,99 @@ async fn test_dao_withdrawal_completion_declares_missing_compensation() {
         "layers 1 and 2 are exact and must still be interpreted"
     );
 }
+
+/// Pool participants come from the same row derivation committed rows use.
+///
+/// The mirror used to re-derive `has_input`/`has_output` from its resolved
+/// cells; that was a second definition of an `addr_txs` row and could drift
+/// from the indexer's. Now it calls `participant_rows::addr_tx_rows`, so a
+/// protocol-named party with no cell lands as a `named` row here exactly as it
+/// does in the store.
+#[test]
+fn pool_participants_come_from_the_shared_row_derivation() {
+    use ckbadger_indexer::db::ParticipantIo;
+    use ckbadger_store::types::{
+        participant_roles, ParticipantDelta, ParticipantId, TxActions, TAG_IDENTITY,
+    };
+
+    let sender = lock_hash(SECP_LOCK_CODE_HASH, 0xAA);
+    let named_prefix = [0x77u8; 20];
+    let actions = TxActions {
+        tx_hash: vec![0x01; 32],
+        block_hash: vec![0u8; 32],
+        block_number: 0,
+        tx_index: 0,
+        timestamp: 0,
+        is_cellbase: false,
+        protocol_actions: vec![],
+        type_calls: vec![],
+        lock_calls: vec![],
+        participants: vec![
+            ParticipantDelta {
+                id: ParticipantId::lock(&sender).unwrap(),
+                ckb_delta: -10_000_000_000,
+                used_delta: 0,
+                item_deltas: vec![],
+                tags: 0,
+                roles: 0,
+            },
+            ParticipantDelta {
+                id: ParticipantId::LockPrefix(named_prefix),
+                ckb_delta: 0,
+                used_delta: 0,
+                item_deltas: vec![],
+                tags: TAG_IDENTITY,
+                roles: participant_roles::OWNER_TO,
+            },
+        ],
+    };
+    let io = vec![
+        ParticipantIo {
+            has_inputs: true,
+            has_outputs: false,
+        },
+        ParticipantIo {
+            has_inputs: false,
+            has_outputs: false,
+        },
+    ];
+
+    let participants = super::mirror::participants_from(&actions, &io).expect("participants");
+    assert_eq!(participants.len(), 2);
+    assert_eq!(participants[0].id, ParticipantId::lock(&sender).unwrap());
+    assert_eq!(participants[0].addr_tx.tx_type_str(), "sent");
+    assert_eq!(participants[1].id, ParticipantId::LockPrefix(named_prefix));
+    assert_eq!(participants[1].addr_tx.tx_type_str(), "named");
+    assert_eq!(participants[1].addr_tx.capacity_change, 0);
+
+    let record = super::snapshot::PoolTxRecord {
+        tx_hash: [0x01; 32],
+        pool_status: PoolStatus::Pending,
+        entry: PoolEntryMeta {
+            fee: 1,
+            size: 1,
+            cycles: 1,
+            ancestors_count: 0,
+            time_added_to_pool_ms: 0,
+        },
+        outputs: vec![],
+        actions: Some(actions),
+        participants,
+        inputs_count: 1,
+        outputs_count: 0,
+        semantic_tags: 0,
+        is_cellbase: false,
+        interpretation: Interpretation::Complete,
+        first_seen_ms: 0,
+        last_seen_ms: 0,
+    };
+
+    // The matcher finds a party by either identity.
+    let mut named_lock = [0x77u8; 32];
+    named_lock[31] = 0x01;
+    assert!(record.participant(&sender).is_some());
+    assert!(
+        record.participant(&named_lock).is_some(),
+        "a 20-byte prefix must match any lock hash starting with it"
+    );
+}

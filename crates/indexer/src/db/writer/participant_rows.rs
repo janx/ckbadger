@@ -15,7 +15,7 @@ use super::activities::ParticipantIo;
 /// `io[i]` describes `actions.participants[i]`; the builder returns the two
 /// index-aligned, and a length mismatch is a bug in the caller, not something
 /// to paper over.
-pub(crate) fn addr_tx_rows(
+pub fn addr_tx_rows(
     actions: &TxActions,
     io: &[ParticipantIo],
 ) -> Result<Vec<(ParticipantId, AddrTxValue)>> {
@@ -56,7 +56,7 @@ pub(crate) fn addr_tx_rows(
 ///
 /// These are the participations `addr_balance.txs_count` cannot see, so they are
 /// what `CF_ADDR_PREFIX_STATS` counts.
-pub(crate) fn standalone_prefixes(actions: &TxActions, io: &[ParticipantIo]) -> Vec<[u8; 20]> {
+pub fn standalone_prefixes(actions: &TxActions, io: &[ParticipantIo]) -> Vec<[u8; 20]> {
     actions
         .participants
         .iter()

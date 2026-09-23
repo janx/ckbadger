@@ -5,8 +5,8 @@ use axum::{
 };
 use ckbadger_store::{
     types::{
-        ItemDelta, LockCallEntry, ParticipantDelta, ScriptInfo, TxActions, TypeCallEntry,
-        ITEM_KIND_IDENTITY, ITEM_KIND_OBJECT, ITEM_KIND_TOKEN,
+        participant_roles, ItemDelta, LockCallEntry, ParticipantDelta, ParticipantId, ScriptInfo,
+        TxActions, TypeCallEntry, ITEM_KIND_IDENTITY, ITEM_KIND_OBJECT, ITEM_KIND_TOKEN,
     },
     CkbadgerStore,
 };
@@ -44,6 +44,57 @@ fn resolve_lock_hash_address(
         .unwrap_or_else(|| format!("0x{}", hex::encode(lock_hash)));
     cache.insert(lock_hash.to_vec(), address.clone());
     address
+}
+
+/// One party of a transaction as the API reports it.
+///
+/// A party the protocol named by a 20-byte lock-hash prefix may or may not be
+/// resolvable to a full lock hash, so `address` and `lockHash` are optional and
+/// `lockHashPrefix` is what the chain actually says. An unresolved party renders
+/// as its prefix — never as a fabricated address.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ParticipantRef {
+    pub address: Option<String>,
+    pub lock_hash: Option<String>,
+    pub lock_hash_prefix: Option<String>,
+    pub roles: Vec<&'static str>,
+}
+
+fn participant_ref(
+    store: &CkbadgerStore,
+    ao_store: &CkbadgerStore,
+    network: &str,
+    participant: &ParticipantDelta,
+    cache: &mut HashMap<Vec<u8>, String>,
+) -> anyhow::Result<ParticipantRef> {
+    let roles = participant_roles::names(participant.roles);
+    match participant.id {
+        ParticipantId::Lock(hash) => Ok(ParticipantRef {
+            address: Some(resolve_lock_hash_address(
+                store, ao_store, network, &hash, cache,
+            )),
+            lock_hash: Some(format!("0x{}", hex::encode(hash))),
+            lock_hash_prefix: None,
+            roles,
+        }),
+        ParticipantId::LockPrefix(prefix) => match store.resolve_lock_hash_prefix(&prefix)? {
+            Some((hash, _entry)) => Ok(ParticipantRef {
+                address: Some(resolve_lock_hash_address(
+                    store, ao_store, network, &hash, cache,
+                )),
+                lock_hash: Some(format!("0x{}", hex::encode(hash))),
+                lock_hash_prefix: Some(format!("0x{}", hex::encode(prefix))),
+                roles,
+            }),
+            None => Ok(ParticipantRef {
+                address: None,
+                lock_hash: None,
+                lock_hash_prefix: Some(format!("0x{}", hex::encode(prefix))),
+                roles,
+            }),
+        },
+    }
 }
 
 pub fn routes() -> Router<Arc<AppState>> {
@@ -93,7 +144,9 @@ pub struct ActivityResponse {
     pub lock_calls: Vec<LockCallResponse>,
     pub protocol_actions: Vec<ProtocolActionResponse>,
     // Other participants
-    pub participants: Vec<String>,
+    pub participants: Vec<ParticipantRef>,
+    /// Roles the protocol gave THIS participant, if any.
+    pub roles: Vec<&'static str>,
     pub tags: u16,
 }
 
@@ -167,7 +220,10 @@ pub struct GlobalActivityResponse {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ParticipantResponse {
-    pub address: String,
+    pub address: Option<String>,
+    pub lock_hash: Option<String>,
+    pub lock_hash_prefix: Option<String>,
+    pub roles: Vec<&'static str>,
     pub ckb_delta: String,
     pub used_delta: String,
     pub item_deltas: Vec<ItemDeltaResponse>,
@@ -550,10 +606,8 @@ pub(crate) fn build_activity_response(
         .participants
         .iter()
         .filter(|p| p.id != participant.id)
-        .map(|p| {
-            resolve_lock_hash_address(store, ao_store, network, p.id.as_bytes(), address_cache)
-        })
-        .collect();
+        .map(|p| participant_ref(store, ao_store, network, p, address_cache))
+        .collect::<anyhow::Result<Vec<_>>>()?;
 
     Ok(ActivityResponse {
         tx_hash: format!("0x{}", hex::encode(&actions.tx_hash)),
@@ -575,6 +629,7 @@ pub(crate) fn build_activity_response(
             .map(convert_protocol_action)
             .collect::<anyhow::Result<Vec<_>>>()?,
         participants,
+        roles: participant_roles::names(participant.roles),
         tags: participant.tags,
     })
 }
@@ -595,15 +650,17 @@ pub(crate) fn build_global_activity_response(
         .participants
         .iter()
         .map(|p| {
-            let address =
-                resolve_lock_hash_address(store, ao_store, network, p.id.as_bytes(), address_cache);
+            let reference = participant_ref(store, ao_store, network, p, address_cache)?;
             let item_deltas = p
                 .item_deltas
                 .iter()
                 .map(|item| convert_item_delta(item, &mut token_cache, store))
                 .collect::<anyhow::Result<Vec<_>>>()?;
             Ok(ParticipantResponse {
-                address,
+                address: reference.address,
+                lock_hash: reference.lock_hash,
+                lock_hash_prefix: reference.lock_hash_prefix,
+                roles: reference.roles,
                 ckb_delta: p.ckb_delta.to_string(),
                 used_delta: p.used_delta.to_string(),
                 item_deltas,
@@ -854,6 +911,12 @@ pub(crate) fn build_pool_activity_rows(
     token_cache: &mut HashMap<Vec<u8>, Option<(Option<String>, Option<u8>)>>,
     address_cache: &mut HashMap<Vec<u8>, String>,
 ) -> anyhow::Result<(Vec<ActivityResponse>, crate::pool::PoolSummaryResponse)> {
+    let lock32: &[u8; 32] = lock_hash.try_into().map_err(|_| {
+        anyhow::anyhow!(
+            "build_pool_activity_rows expects a 32-byte lock hash, got {} bytes",
+            lock_hash.len()
+        )
+    })?;
     let (records, truncated) = pool_records_for_page(snapshot, lock_hash);
 
     let mut rows = Vec::with_capacity(records.len());
@@ -881,7 +944,7 @@ pub(crate) fn build_pool_activity_rows(
         let participant = actions
             .participants
             .iter()
-            .find(|p| p.id.as_bytes() == lock_hash)
+            .find(|p| p.id.matches(lock32))
             .ok_or_else(|| {
                 anyhow::anyhow!(
                     "pool record indexed by lock 0x{} has no participant for it: tx=0x{}",
@@ -970,7 +1033,12 @@ async fn get_address_activities(
     let store = state.store.clone();
     let ao_store = state.append_only_store.clone();
     let network = state.ckb_network.clone();
-    let lock_hash_clone = lock_hash.clone();
+    let lock32: [u8; 32] = lock_hash.as_slice().try_into().map_err(|_| {
+        ApiError::internal(format!(
+            "address activities expect a 32-byte lock hash, got {} bytes",
+            lock_hash.len()
+        ))
+    })?;
     // Pool rows are a page-one-only segment: a pool transaction can only land
     // in a future block, so it is later than every committed transaction in
     // canonical order. Keeping it out of cursors is what keeps pagination
@@ -1011,7 +1079,7 @@ async fn get_address_activities(
                         ao_store.as_ref(),
                         &network,
                         snapshot,
-                        &lock_hash_clone,
+                        &lock32,
                         filter.as_deref(),
                         &mut script_info_cache,
                         &mut token_cache,
@@ -1023,10 +1091,7 @@ async fn get_address_activities(
             };
 
             for actions in &page {
-                let Some(participant) = actions
-                    .participants
-                    .iter()
-                    .find(|p| p.id.as_bytes() == lock_hash_clone.as_slice())
+                let Some(participant) = actions.participants.iter().find(|p| p.id.matches(&lock32))
                 else {
                     continue;
                 };

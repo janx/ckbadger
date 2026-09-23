@@ -13,8 +13,10 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use arc_swap::ArcSwap;
-use ckbadger_indexer::db::build_tx_actions_with_production_detectors;
-use ckbadger_store::types::{AddrTxValue, TxActions};
+use ckbadger_indexer::db::{
+    addr_tx_rows, build_tx_actions_with_production_detectors_with_io, ParticipantIo,
+};
+use ckbadger_store::types::TxActions;
 use ckbadger_store::{read_view, CkbadgerStore};
 
 use super::resolve::{
@@ -592,6 +594,7 @@ impl PoolRefresher {
         self.mirror.publish(PoolSnapshot {
             records: previous.records.clone(),
             by_lock: previous.by_lock.clone(),
+            by_lock_prefix: previous.by_lock_prefix.clone(),
             status: MirrorStatus {
                 enabled: true,
                 healthy: false,
@@ -675,9 +678,9 @@ fn build_record(
         )
     })?;
 
-    let actions = match resolved.tx_view(&zero_block_hash, time_added_ms) {
+    let built = match resolved.tx_view(&zero_block_hash, time_added_ms) {
         Some(view) => {
-            let mut built = build_tx_actions_with_production_detectors(&[view], is_mainnet)
+            let mut built = build_tx_actions_with_production_detectors_with_io(&[view], is_mainnet)
                 .map_err(|e| format!("activity interpretation failed: {e}"))?;
             Some(built.pop().ok_or_else(|| {
                 "activity interpretation returned no actions for one transaction".to_string()
@@ -688,10 +691,11 @@ fn build_record(
         None => None,
     };
 
-    let participants = match actions.as_ref() {
-        Some(actions) => participants_from(actions, resolved)?,
+    let participants = match built.as_ref() {
+        Some(built) => participants_from(&built.actions, &built.participant_io)?,
         None => Vec::new(),
     };
+    let actions = built.map(|built| built.actions);
 
     let inputs_count = i16::try_from(resolved.inputs.len()).map_err(|_| {
         format!(
@@ -723,48 +727,20 @@ fn build_record(
     })
 }
 
-/// Per-participant `AddrTxValue`, built through the same constructor the
-/// indexer uses for committed `addr_txs` rows.
-fn participants_from(
+/// Per-participant `addr_txs` row, through the indexer's own derivation.
+///
+/// Not a second definition: [`addr_tx_rows`] is the single one, so a pool
+/// transaction and the same transaction once committed carry byte-identical
+/// `AddrTxValue`s — including for a party the protocol named that holds no cell.
+pub(super) fn participants_from(
     actions: &TxActions,
-    resolved: &ResolvedPoolTx,
+    io: &[ParticipantIo],
 ) -> Result<Vec<PoolParticipant>, String> {
-    let has_input: HashSet<&[u8]> = resolved
-        .inputs
-        .iter()
-        .filter_map(|input| input.cell.as_ref())
-        .map(|cell| cell.lock_script_hash.as_slice())
-        .collect();
-    let has_output: HashSet<&[u8]> = resolved
-        .outputs
-        .iter()
-        .map(|cell| cell.lock_script_hash.as_slice())
-        .collect();
-
-    actions
-        .participants
-        .iter()
-        .map(|participant| {
-            let lock_hash = <[u8; 32]>::try_from(participant.id.as_bytes())
-                .map_err(|_| "participant lock hash is not 32 bytes".to_string())?;
-            let capacity_change = i64::try_from(participant.ckb_delta).map_err(|_| {
-                format!(
-                    "participant ckb_delta {} exceeds i64 for lock 0x{}",
-                    participant.ckb_delta,
-                    hex::encode(lock_hash)
-                )
-            })?;
-            Ok(PoolParticipant {
-                lock_hash,
-                addr_tx: AddrTxValue::new(
-                    capacity_change,
-                    has_input.contains(participant.id.as_bytes()),
-                    has_output.contains(participant.id.as_bytes()),
-                    participant.tags,
-                ),
-            })
-        })
-        .collect()
+    Ok(addr_tx_rows(actions, io)
+        .map_err(|e| format!("pool participant rows: {e}"))?
+        .into_iter()
+        .map(|(id, addr_tx)| PoolParticipant { id, addr_tx })
+        .collect())
 }
 
 /// How completely a resolved transaction could be interpreted.

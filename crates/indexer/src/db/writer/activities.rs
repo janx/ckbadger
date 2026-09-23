@@ -429,6 +429,17 @@ pub fn build_tx_actions_with_production_detectors(
     build_tx_actions_for_block(txs, &production_detectors(is_mainnet))
 }
 
+/// Same as [`build_tx_actions_with_production_detectors`], keeping each
+/// participant's input/output presence so the caller can derive `addr_txs` rows
+/// through [`super::participant_rows::addr_tx_rows`] — the derivation the
+/// indexer's own write paths use.
+pub fn build_tx_actions_with_production_detectors_with_io(
+    txs: &[TxView<'_>],
+    is_mainnet: bool,
+) -> Result<Vec<BuiltTxActions>> {
+    build_tx_actions_for_block_with_io(txs, &production_detectors(is_mainnet))
+}
+
 /// Accumulator for per-owner position within one transaction.
 ///
 /// Public because it appears in [`ProtocolDetector::detect`]; its fields stay

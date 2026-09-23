@@ -1089,3 +1089,372 @@ async fn test_address_activities_report_a_disabled_mirror() {
     assert_eq!(json["pool"]["healthy"], false);
     assert_eq!(json["pool"]["count"], 0);
 }
+
+// ── Phase 1a: protocol-named participants ────────────────────────────────
+
+/// Seed one block header + tx index + `TxActions` at `(block, 0)`.
+fn seed_named_tx(
+    store: &std::sync::Arc<CkbadgerStore>,
+    block_number: i64,
+    tx_hash: &[u8],
+    actions: &ckbadger_store::types::TxActions,
+) {
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_tx_hash_map(tx_hash, block_number, 0);
+    batch.put_tx_index(
+        block_number,
+        0,
+        &TxIndexEntry {
+            is_cellbase: false,
+            timestamp: 1_700_000_000_000,
+            inputs_count: 1,
+            outputs_count: 1,
+            fee: 0,
+            tx_size: 100,
+            cycles: None,
+            semantic_tags: 0,
+        },
+    );
+    batch.put_block_header(
+        block_number,
+        &CachedBlockHeader {
+            hash: actions.block_hash.clone(),
+            parent_hash: vec![0u8; 32],
+            timestamp: 1_700_000_000_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+            uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
+            cycles: None,
+        },
+    );
+    batch.put_tx_actions(actions);
+    batch.commit().unwrap();
+    store
+        .update_sync_status(|s| {
+            s.tip_block_number = s.tip_block_number.max(block_number);
+        })
+        .unwrap();
+}
+
+#[tokio::test]
+async fn test_address_activities_include_named_participation_with_zero_ckb_delta() {
+    use ckbadger_store::types::{
+        participant_roles, AddrTxValue, ItemDelta, ParticipantDelta, ParticipantId,
+        ITEM_KIND_IDENTITY, TAG_IDENTITY,
+    };
+
+    let core_store = test_store();
+    let append_only_store = test_append_only_store();
+    let lock_hash = vec![0x42u8; 32];
+    let other = vec![0x11u8; 32];
+    let tx_hash = vec![0xaa; 32];
+    let block_hash = vec![0xbb; 32];
+    let mut prefix = [0u8; 20];
+    prefix.copy_from_slice(&lock_hash[..20]);
+
+    let actions = ckbadger_store::types::TxActions {
+        tx_hash: tx_hash.clone(),
+        block_hash: block_hash.clone(),
+        block_number: 10,
+        tx_index: 0,
+        timestamp: 1_700_000_000_000,
+        is_cellbase: false,
+        protocol_actions: vec![],
+        type_calls: vec![],
+        lock_calls: vec![],
+        participants: vec![
+            ParticipantDelta {
+                id: ParticipantId::lock(&other).unwrap(),
+                ckb_delta: -100,
+                used_delta: 0,
+                item_deltas: vec![],
+                tags: 0,
+                roles: 0,
+            },
+            ParticipantDelta {
+                id: ParticipantId::LockPrefix(prefix),
+                ckb_delta: 0,
+                used_delta: 0,
+                item_deltas: vec![ItemDelta {
+                    item_id: vec![0xEE; 20],
+                    kind: ITEM_KIND_IDENTITY,
+                    magnitude: 1,
+                    negative: false,
+                }],
+                tags: TAG_IDENTITY,
+                roles: participant_roles::OWNER_TO,
+            },
+        ],
+    };
+    seed_named_tx(&core_store, 10, &tx_hash, &actions);
+    let mut batch = StoreBatch::new(core_store.as_ref());
+    batch.put_addr_tx_by_prefix(
+        &prefix,
+        10,
+        0,
+        &tx_hash,
+        &AddrTxValue::new(0, false, false, TAG_IDENTITY),
+    );
+    batch.commit().unwrap();
+
+    let config = test_config_with_append_only(core_store.clone(), append_only_store.clone());
+    let app = create_router(config).await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/api/v1/addresses/0x{}/activities",
+                    hex::encode(&lock_hash)
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let rows = json["data"].as_array().unwrap();
+    assert_eq!(rows.len(), 1, "{json:?}");
+    assert_eq!(rows[0]["ckbDelta"], "0");
+    assert_eq!(rows[0]["usedDelta"], "0");
+    assert_eq!(rows[0]["itemDeltas"][0]["kind"], "identity");
+    assert_eq!(rows[0]["itemDeltas"][0]["delta"], 1);
+    assert_eq!(rows[0]["roles"][0], "owner_to");
+    let participants = rows[0]["participants"].as_array().unwrap();
+    assert_eq!(participants.len(), 1, "only the other party: {json:?}");
+    assert_eq!(
+        participants[0]["lockHash"],
+        format!("0x{}", hex::encode(&other))
+    );
+    assert!(participants[0]["address"].is_string());
+    assert!(participants[0]["lockHashPrefix"].is_null());
+}
+
+#[tokio::test]
+async fn test_address_activities_other_participants_carry_prefix_and_resolution() {
+    use ckbadger_store::types::{
+        participant_roles, AddrTxValue, LockScriptEntry, ParticipantDelta, ParticipantId,
+    };
+
+    let core_store = test_store();
+    let append_only_store = test_append_only_store();
+    let lock_hash = vec![0x42u8; 32];
+    let tx_hash = vec![0xaa; 32];
+    let block_hash = vec![0xbb; 32];
+    let named_prefix = [0x99u8; 20];
+
+    let actions = ckbadger_store::types::TxActions {
+        tx_hash: tx_hash.clone(),
+        block_hash: block_hash.clone(),
+        block_number: 10,
+        tx_index: 0,
+        timestamp: 1_700_000_000_000,
+        is_cellbase: false,
+        protocol_actions: vec![],
+        type_calls: vec![],
+        lock_calls: vec![],
+        participants: vec![
+            ParticipantDelta {
+                id: ParticipantId::lock(&lock_hash).unwrap(),
+                ckb_delta: -100,
+                used_delta: 0,
+                item_deltas: vec![],
+                tags: 0,
+                roles: 0,
+            },
+            ParticipantDelta {
+                id: ParticipantId::LockPrefix(named_prefix),
+                ckb_delta: 0,
+                used_delta: 0,
+                item_deltas: vec![],
+                tags: 0,
+                roles: participant_roles::OWNER_TO,
+            },
+        ],
+    };
+    seed_named_tx(&core_store, 10, &tx_hash, &actions);
+    let mut batch = StoreBatch::new(core_store.as_ref());
+    batch.put_addr_tx(
+        &lock_hash,
+        10,
+        0,
+        &tx_hash,
+        &AddrTxValue::new(-100, true, false, 0),
+    );
+    batch.commit().unwrap();
+
+    let uri = format!("/api/v1/addresses/0x{}/activities", hex::encode(&lock_hash));
+
+    // Unresolved: no lock script starts with this prefix.
+    let app = create_router(test_config_with_append_only(
+        core_store.clone(),
+        append_only_store.clone(),
+    ))
+    .await;
+    let response = app
+        .oneshot(Request::builder().uri(&uri).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let participant = &json["data"][0]["participants"][0];
+    assert!(participant["address"].is_null(), "{json:?}");
+    assert!(participant["lockHash"].is_null());
+    assert_eq!(
+        participant["lockHashPrefix"],
+        format!("0x{}", hex::encode(named_prefix))
+    );
+    assert_eq!(participant["roles"][0], "owner_to");
+
+    // Resolved: one lock script carries that prefix.
+    let mut resolved_hash = [0x99u8; 32];
+    resolved_hash[31] = 0x01;
+    let mut batch = StoreBatch::new(core_store.as_ref());
+    batch.put_lock_script(
+        &resolved_hash,
+        &LockScriptEntry {
+            code_hash: hex::decode(
+                "9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+            )
+            .unwrap(),
+            hash_type: 1,
+            args: vec![0x22; 20],
+        },
+    );
+    batch.commit().unwrap();
+    let app = create_router(test_config_with_append_only(
+        core_store.clone(),
+        append_only_store.clone(),
+    ))
+    .await;
+    let response = app
+        .oneshot(Request::builder().uri(&uri).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let participant = &json["data"][0]["participants"][0];
+    assert_eq!(
+        participant["lockHash"],
+        format!("0x{}", hex::encode(resolved_hash))
+    );
+    assert!(participant["address"].as_str().unwrap().starts_with("ck"));
+
+    // Ambiguous: a second lock script with the same prefix is an error, never a guess.
+    let mut second_hash = [0x99u8; 32];
+    second_hash[31] = 0x02;
+    let mut batch = StoreBatch::new(core_store.as_ref());
+    batch.put_lock_script(
+        &second_hash,
+        &LockScriptEntry {
+            code_hash: hex::decode(
+                "9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+            )
+            .unwrap(),
+            hash_type: 1,
+            args: vec![0x33; 20],
+        },
+    );
+    batch.commit().unwrap();
+    let app = create_router(test_config_with_append_only(
+        core_store.clone(),
+        append_only_store.clone(),
+    ))
+    .await;
+    let response = app
+        .oneshot(Request::builder().uri(&uri).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    assert!(
+        String::from_utf8_lossy(&body).contains("ambiguous"),
+        "{}",
+        String::from_utf8_lossy(&body)
+    );
+}
+
+#[tokio::test]
+async fn test_global_activities_expose_participant_ids_and_roles() {
+    use ckbadger_store::types::{participant_roles, ParticipantDelta, ParticipantId};
+
+    let core_store = test_store();
+    let append_only_store = test_append_only_store();
+    let lock_hash = vec![0x42u8; 32];
+    let tx_hash = vec![0xaa; 32];
+    let block_hash = vec![0xbb; 32];
+    let named_prefix = [0x99u8; 20];
+
+    let actions = ckbadger_store::types::TxActions {
+        tx_hash: tx_hash.clone(),
+        block_hash: block_hash.clone(),
+        block_number: 10,
+        tx_index: 0,
+        timestamp: 1_700_000_000_000,
+        is_cellbase: false,
+        protocol_actions: vec![],
+        type_calls: vec![],
+        lock_calls: vec![],
+        participants: vec![
+            ParticipantDelta {
+                id: ParticipantId::lock(&lock_hash).unwrap(),
+                ckb_delta: -100,
+                used_delta: 0,
+                item_deltas: vec![],
+                tags: 0,
+                roles: 0,
+            },
+            ParticipantDelta {
+                id: ParticipantId::LockPrefix(named_prefix),
+                ckb_delta: 0,
+                used_delta: 0,
+                item_deltas: vec![],
+                tags: 0,
+                roles: participant_roles::OWNER_TO | participant_roles::MANAGER_TO,
+            },
+        ],
+    };
+    seed_named_tx(&core_store, 10, &tx_hash, &actions);
+
+    let app = create_router(test_config_with_append_only(
+        core_store.clone(),
+        append_only_store.clone(),
+    ))
+    .await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/activities")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let participants = json["data"][0]["participants"].as_array().unwrap();
+    assert_eq!(participants.len(), 2, "{json:?}");
+    assert_eq!(
+        participants[0]["lockHash"],
+        format!("0x{}", hex::encode(&lock_hash))
+    );
+    assert!(participants[0]["lockHashPrefix"].is_null());
+    assert_eq!(participants[0]["roles"].as_array().unwrap().len(), 0);
+    assert!(participants[1]["lockHash"].is_null());
+    assert_eq!(
+        participants[1]["lockHashPrefix"],
+        format!("0x{}", hex::encode(named_prefix))
+    );
+    assert_eq!(participants[1]["roles"][0], "owner_to");
+    assert_eq!(participants[1]["roles"][1], "manager_to");
+}
