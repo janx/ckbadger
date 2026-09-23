@@ -3432,12 +3432,20 @@ impl CkbadgerStore {
 
         // 8b. Delete tx activity bundles for rolled-back blocks.
         // Activities are now in domain store, so we can delete directly.
+        //
+        // The same scan collects each rolled-back transaction's protocol-named
+        // participants: they hold no cell, so cells cannot enumerate them, and
+        // `TxActions` is the only record of who the protocol pointed at. Keys are
+        // block-descending, so this reads the rolled-back blocks and stops —
+        // there is no full-CF cost. Cellbase transactions have no CF_TX_ACTIONS
+        // row and never name parties, so cells remain their only source.
+        let mut prefix_participants: HashMap<Vec<u8>, Vec<[u8; 20]>> = HashMap::new();
         {
             let mut activities_removed = 0u64;
             let mut stage = RollbackStageProgress::new("delete_activities");
             let iter = self.iterator_cf(self.cf_tx_actions(), IteratorMode::Start);
             for item in iter {
-                let (key, _) = item.map_err(|e| {
+                let (key, value) = item.map_err(|e| {
                     anyhow::anyhow!(
                         "failed to iterate activities in rollback_to_block cleanup: {}",
                         e
@@ -3446,11 +3454,30 @@ impl CkbadgerStore {
                 if key.len() != keys::TX_ACTIONS_KEY_SIZE {
                     continue;
                 }
-                let (block_num, _tx_idx, _tx_hash) = keys::decode_tx_actions_key(&key);
+                let (block_num, _tx_idx, tx_hash) = keys::decode_tx_actions_key(&key);
                 if block_num <= rollback_to {
                     // Keys are in descending block_num order; all remaining entries
                     // are also <= rollback_to, so stop scanning.
                     break;
+                }
+                let tx_actions: TxActions = bincode::deserialize(&value).map_err(|e| {
+                    anyhow::anyhow!(
+                        "failed to deserialize TxActions while collecting rolled-back named participants: block_num={}, tx_hash=0x{}, {}",
+                        block_num,
+                        bytes_to_hex(&tx_hash),
+                        e
+                    )
+                })?;
+                let prefixes: Vec<[u8; 20]> = tx_actions
+                    .participants
+                    .iter()
+                    .filter_map(|p| match p.id {
+                        ParticipantId::LockPrefix(prefix) => Some(prefix),
+                        ParticipantId::Lock(_) => None,
+                    })
+                    .collect();
+                if !prefixes.is_empty() {
+                    prefix_participants.insert(tx_hash, prefixes);
                 }
                 batch.delete_cf(self.cf_tx_actions(), &key);
                 activities_removed += 1;
@@ -3541,6 +3568,123 @@ impl CkbadgerStore {
             stage.finish(addr_txs_removed);
             if addr_txs_removed > 0 {
                 info!(addr_txs_removed, "rollback: deleted addr_txs entries");
+            }
+        }
+
+        // 8c'. Delete addr_txs_by_prefix entries for rolled-back blocks.
+        //
+        // These rows are NOT counted into `addr_txs_count_deltas`: that map
+        // reverses `addr_balance.txs_count`, which only ever counted cell
+        // participations. `addr_prefix_stats` is restored by undo replay alone
+        // (`UndoSeqScope::AddrPrefixStats`); reversing it here as well would
+        // subtract the same participations twice.
+        let mut touched_prefixes: HashSet<[u8; 20]> = HashSet::new();
+        let mut deleted_prefix_keys: HashSet<Vec<u8>> = HashSet::new();
+        {
+            let mut removed = 0u64;
+            let mut stage = RollbackStageProgress::new("delete_addr_txs_by_prefix");
+            if use_tx_context {
+                for (tx_hash, prefixes) in &prefix_participants {
+                    let (block_num, tx_idx) =
+                        *rolled_back_tx_positions.get(tx_hash).ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "missing chain position for rolled-back tx while deleting addr_txs_by_prefix: tx_hash=0x{}, rollback_to={}",
+                                bytes_to_hex(tx_hash),
+                                rollback_to
+                            )
+                        })?;
+                    for prefix in prefixes {
+                        let key =
+                            keys::encode_addr_tx_by_prefix_key(prefix, block_num, tx_idx, tx_hash);
+                        if self.get_cf(self.cf_addr_txs_by_prefix(), &key)?.is_none() {
+                            anyhow::bail!(
+                                "missing addr_txs_by_prefix row for rolled-back participant: prefix=0x{}, block={}, tx_idx={}, tx_hash=0x{} — \
+                                 participant collection disagrees with the forward write path",
+                                bytes_to_hex(prefix),
+                                block_num,
+                                tx_idx,
+                                bytes_to_hex(tx_hash)
+                            );
+                        }
+                        batch.delete_cf(self.cf_addr_txs_by_prefix(), &key);
+                        touched_prefixes.insert(*prefix);
+                        deleted_prefix_keys.insert(key);
+                        removed += 1;
+                        stage.tick(removed);
+                    }
+                }
+            } else {
+                // No tx-contexts: same full-scan fallback the cell stages take.
+                let iter = self.iterator_cf(self.cf_addr_txs_by_prefix(), IteratorMode::Start);
+                for item in iter {
+                    let (key, _) = item.map_err(|e| {
+                        anyhow::anyhow!(
+                            "failed to iterate addr_txs_by_prefix in rollback_to_block cleanup: {}",
+                            e
+                        )
+                    })?;
+                    if key.len() != keys::ADDR_TX_BY_PREFIX_KEY_SIZE {
+                        anyhow::bail!(
+                            "addr_txs_by_prefix key is not {} bytes during rollback: len={}",
+                            keys::ADDR_TX_BY_PREFIX_KEY_SIZE,
+                            key.len()
+                        );
+                    }
+                    let (prefix, block_num, _tx_idx, _tx_hash) =
+                        keys::decode_addr_tx_by_prefix_key(&key);
+                    if block_num <= rollback_to {
+                        continue;
+                    }
+                    batch.delete_cf(self.cf_addr_txs_by_prefix(), &key);
+                    touched_prefixes.insert(prefix);
+                    deleted_prefix_keys.insert(key.to_vec());
+                    removed += 1;
+                    stage.tick(removed);
+                }
+            }
+            stage.finish(removed);
+            if removed > 0 {
+                info!(
+                    addr_txs_by_prefix_removed = removed,
+                    "rollback: deleted addr_txs_by_prefix entries"
+                );
+            }
+        }
+
+        // Consistency guard: whatever the undo replay left in the counter must
+        // still cover the prefix rows that survive this rollback. A counter
+        // below that means the pre-images and the rows disagree — say so with
+        // the prefix rather than serving an address a transaction count lower
+        // than the transactions it can already list.
+        for prefix in &touched_prefixes {
+            let Some(stats) = self.get_addr_prefix_stats(prefix)? else {
+                continue;
+            };
+            let mut surviving: i64 = 0;
+            for item in self.prefix_iterator_cf(self.cf_addr_txs_by_prefix(), prefix) {
+                let (key, _) = item.map_err(|e| {
+                    anyhow::anyhow!(
+                        "failed to iterate addr_txs_by_prefix while checking prefix counters: prefix=0x{}, {}",
+                        bytes_to_hex(prefix),
+                        e
+                    )
+                })?;
+                if !key.starts_with(prefix) {
+                    break;
+                }
+                if deleted_prefix_keys.contains(key.as_ref()) {
+                    continue;
+                }
+                surviving += 1;
+            }
+            if stats.txs_count < surviving {
+                anyhow::bail!(
+                    "addr_prefix_stats is below the surviving row count after rollback: prefix=0x{}, txs_count={}, surviving_rows={}, rollback_to={}",
+                    bytes_to_hex(prefix),
+                    stats.txs_count,
+                    surviving,
+                    rollback_to
+                );
             }
         }
 
