@@ -4648,6 +4648,8 @@ impl CkbadgerStore {
         // identity_by_collection index, and identity owner counts.
         let mut identity_aggs: HashMap<Vec<u8>, IdentityCollectionAggregate> = HashMap::new();
         let mut identity_owner_counts: HashMap<(Vec<u8>, Vec<u8>), i64> = HashMap::new();
+        // Which of those owner keys are 20-byte prefixes rather than lock hashes.
+        let mut identity_owner20_keys: HashSet<(Vec<u8>, Vec<u8>)> = HashSet::new();
 
         let iter = self.iterator_cf(self.cf_identity_data(), IteratorMode::Start);
         for item in iter {
@@ -4692,13 +4694,27 @@ impl CkbadgerStore {
                         batch.delete_cf(self.cf_stats_mnft(), &by_id_key);
                     }
                 }
-                // `.bit Cell` and did:ckb identities record their outpoints in
-                // the spore reverse index (DotBit has its own, handled above),
-                // so both must be cleaned up here or a rolled-back identity
-                // leaves orphaned lifecycle rows behind.
+                // A rolled-back `.cell` name must also lose its owner-index
+                // row, or an address keeps listing a name that no longer
+                // exists. The undo replay deletes it too; this is the path a
+                // rollback without undo entries takes.
+                if let IdentityExtra::DotCell { owner_hash20, .. } = &entry.extra {
+                    if identity_id.len() == owner_hash20.len() {
+                        batch.delete_cf(
+                            self.cf_dotcell_name_by_owner(),
+                            keys::encode_dotcell_name_by_owner_key(owner_hash20, &identity_id),
+                        );
+                    }
+                }
+                // `.bit Cell`, did:ckb and `.cell` identities record their
+                // outpoints in the spore reverse index (DotBit has its own,
+                // handled above), so all three must be cleaned up here or a
+                // rolled-back identity leaves orphaned lifecycle rows behind.
                 if matches!(
                     entry.standard,
-                    IdentityStandard::BitCell | IdentityStandard::DidCkb
+                    IdentityStandard::BitCell
+                        | IdentityStandard::DidCkb
+                        | IdentityStandard::DotCell
                 ) {
                     if identity_id.is_empty()
                         || identity_id.len() > keys::SPORE_OUTPOINT_BY_ID_MAX_ID_LEN
@@ -4785,8 +4801,24 @@ impl CkbadgerStore {
                         bytes_to_hex(&collection_id)
                     )
                 })?;
-                if let Some(owner_lock_hash) = entry.owner_lock_hash.as_ref() {
-                    let owner_key = (collection_id, owner_lock_hash.clone());
+                // `.cell` stores its owner as the 20-byte prefix the chain
+                // gives, not as a lock hash, so it is counted under its own
+                // key encoder. Reading `owner_lock_hash` for it would count
+                // nothing and zero the collection's holders.
+                let owner: Option<(Vec<u8>, bool)> = match &entry.extra {
+                    IdentityExtra::DotCell { owner_hash20, .. } => {
+                        Some((owner_hash20.to_vec(), true))
+                    }
+                    _ => entry
+                        .owner_lock_hash
+                        .as_ref()
+                        .map(|lock_hash| (lock_hash.clone(), false)),
+                };
+                if let Some((owner_bytes, is_prefix)) = owner {
+                    let owner_key = (collection_id, owner_bytes);
+                    if is_prefix {
+                        identity_owner20_keys.insert(owner_key.clone());
+                    }
                     let owner_count = identity_owner_counts.entry(owner_key).or_insert(0);
                     *owner_count = owner_count.checked_add(1).ok_or_else(|| {
                         anyhow::anyhow!(
@@ -4910,8 +4942,12 @@ impl CkbadgerStore {
 
         // Write rebuilt identity owner counts to CF_STATS_IDENTITY.
         let mut identity_holder_totals: HashMap<Vec<u8>, i64> = HashMap::new();
-        for ((collection_id, lock_hash), count) in &identity_owner_counts {
-            let owner_key = keys::encode_identity_owner_key(collection_id, lock_hash);
+        for (key @ (collection_id, owner), count) in &identity_owner_counts {
+            let owner_key = if identity_owner20_keys.contains(key) {
+                keys::encode_identity_owner20_key(collection_id, owner)
+            } else {
+                keys::encode_identity_owner_key(collection_id, owner)
+            };
             batch.put_cf(
                 self.cf_stats_identity(),
                 owner_key,

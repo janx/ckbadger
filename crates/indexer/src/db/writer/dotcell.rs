@@ -9,7 +9,9 @@ use anyhow::{anyhow, bail, Result};
 
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::keys;
-use ckbadger_store::store::{CF_DOTCELL_NAME_BY_OWNER, CF_DOTCELL_RING, CF_IDENTITY_DATA};
+use ckbadger_store::store::{
+    CF_DOTCELL_NAME_BY_OWNER, CF_DOTCELL_RING, CF_IDENTITY_DATA, CF_STATS_SPORE,
+};
 use ckbadger_store::types::{
     derive_dotcell_id, DotCellNameData, DotCellRecord, DotCellRingRoot, IdentityEntry,
     IdentityExtra, IdentityStandard, DOTCELL_SENTINEL_COLLECTION,
@@ -43,6 +45,45 @@ fn checked_dec(current: i64, label: &str, id: &[u8]) -> Result<i64> {
 }
 
 impl BatchWriter {
+    /// Write the outpoint reverse-index rows for a name cell, with undo
+    /// pre-images.
+    ///
+    /// The rollback's identity-repair stage cleans these rows by scanning
+    /// surviving `CF_IDENTITY_DATA` entries — but the undo replay runs first
+    /// and has already deleted the rolled-back identity by then, so the repair
+    /// never sees it. Recording the pre-images here makes the rollback exact
+    /// on its own, whatever order the two stages run in.
+    fn put_dotcell_outpoint_rows(
+        &self,
+        id: &[u8; 20],
+        tx_hash: &[u8],
+        output_index: i16,
+        block_number: i64,
+        batch: &mut StoreBatch,
+        state: &mut SporeBatchState,
+    ) {
+        for key in [
+            keys::encode_spore_outpoint_key(tx_hash, output_index).to_vec(),
+            keys::encode_spore_outpoint_by_id_key(id, tx_hash, output_index),
+        ] {
+            let previous = self
+                .store
+                .get_cf(self.store.cf_stats_spore(), &key)
+                .ok()
+                .flatten();
+            self.record_object_undo(
+                batch,
+                block_number,
+                CF_STATS_SPORE,
+                &key,
+                previous,
+                &state.undo_seq_by_block,
+            );
+        }
+        batch.put_spore_outpoint(tx_hash, output_index, id);
+        state.put_spore_outpoint(tx_hash, output_index, id);
+    }
+
     /// A network runs exactly one `.cell` namespace. Two would make bare
     /// 20-byte ids collide on identical labels, so a second one stops the sync
     /// rather than silently merging two name spaces into one collection.
@@ -114,8 +155,14 @@ impl BatchWriter {
             batch.put_dotcell_ring(namespace_args, &root);
             state.put_dotcell_ring(namespace_args, root);
             let root_id = dotcell_root_id();
-            batch.put_spore_outpoint(tx_hash, output_index, &root_id);
-            state.put_spore_outpoint(tx_hash, output_index, &root_id);
+            self.put_dotcell_outpoint_rows(
+                &root_id,
+                tx_hash,
+                output_index,
+                block_number,
+                batch,
+                state,
+            );
             return Ok(());
         }
 
@@ -174,8 +221,7 @@ impl BatchWriter {
         };
         batch.put_identity(&name.id, &entry);
         state.put_identity(&name.id, entry);
-        batch.put_spore_outpoint(tx_hash, output_index, &name.id);
-        state.put_spore_outpoint(tx_hash, output_index, &name.id);
+        self.put_dotcell_outpoint_rows(&name.id, tx_hash, output_index, block_number, batch, state);
 
         // Owner index. The row's value is empty, so its pre-image is
         // `Some(empty)` when the row existed and `None` when it did not.

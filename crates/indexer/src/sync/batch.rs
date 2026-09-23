@@ -5955,6 +5955,64 @@ mod tests {
             }
         }
 
+        /// The post-rollback DAO snapshot recompute reads block N-1 of the first
+        /// block of the affected day (RFC-0023). The fixture's own parent is
+        /// block 99, so its parent needs a header too — dated a day earlier so
+        /// block 99 stays that day's first block.
+        pub(super) fn seed_pre_parent_header(store: &CkbadgerStore) {
+            let mut dao = vec![0u8; 32];
+            dao[0..8].copy_from_slice(&3_360_000_000_000_000_000u64.to_le_bytes());
+            dao[8..16].copy_from_slice(&AR_DEPOSIT.to_le_bytes());
+            dao[24..32].copy_from_slice(&100_000_000_000_000u64.to_le_bytes());
+            let mut batch = ckbadger_store::batch::StoreBatch::new(store);
+            batch.put_block_header(
+                98,
+                &ckbadger_store::types::CachedBlockHeader {
+                    hash: block_hash(98).to_vec(),
+                    parent_hash: block_hash(97).to_vec(),
+                    timestamp: 1_699_900_000_000,
+                    epoch_number: 39,
+                    epoch_index: 1798,
+                    epoch_length: 1800,
+                    dao,
+                    transactions_count: 1,
+                    uncles_count: 0,
+                    proposals_count: 0,
+                    compact_target: 0,
+                    miner_lock_hash: None,
+                    cycles: None,
+                },
+            );
+            batch.commit().unwrap();
+        }
+
+        /// Stage 9b of the rollback adjusts the lock's `script_info` from the
+        /// cells it deletes; the fixture write path is handed empty script
+        /// deltas, so seed the row it will subtract from.
+        pub(super) fn seed_secp_script_info(store: &CkbadgerStore) {
+            seed_script_info(store, SECP_CODE_HASH);
+        }
+
+        pub(super) fn seed_script_info(store: &CkbadgerStore, code_hash_hex: &str) {
+            let code_hash = hex::decode(code_hash_hex.trim_start_matches("0x")).unwrap();
+            let mut batch = ckbadger_store::batch::StoreBatch::new(store);
+            batch.put_script_info(
+                &code_hash,
+                &ckbadger_store::types::ScriptInfo {
+                    code_hash: code_hash.clone(),
+                    hash_type: 1,
+                    lock_live_cells_count: 1_000,
+                    lock_owned_capacity_sum: 1_000_000_000_000_000,
+                    lock_owned_knowledge_sum: 1_000_000_000_000_000,
+                    type_live_cells_count: 1_000,
+                    type_owned_capacity_sum: 1_000_000_000_000_000,
+                    type_owned_knowledge_sum: 1_000_000_000_000_000,
+                    ..Default::default()
+                },
+            );
+            batch.commit().unwrap();
+        }
+
         pub(super) fn indexer_for_live_write_test(store: Arc<CkbadgerStore>) -> Indexer {
             // Live-path writers derive knowledge_size from DAO `U` minus the
             // genesis baseline; seed a baseline with zero virtual occupied
@@ -7145,51 +7203,8 @@ mod tests {
             store
                 .set_secondary_epoch_reward(61_369_863_013_698)
                 .unwrap();
-            // The post-rollback DAO snapshot recompute reads block N-1 of the
-            // first block of the affected day (RFC-0023). The fixture's own
-            // parent is block 99, so its parent needs a header too — dated a
-            // day earlier so block 99 stays the day's first block.
-            {
-                let mut dao = vec![0u8; 32];
-                dao[0..8].copy_from_slice(&3_360_000_000_000_000_000u64.to_le_bytes());
-                dao[8..16].copy_from_slice(&AR_DEPOSIT.to_le_bytes());
-                dao[24..32].copy_from_slice(&100_000_000_000_000u64.to_le_bytes());
-                let mut batch = ckbadger_store::batch::StoreBatch::new(store.as_ref());
-                batch.put_block_header(
-                    98,
-                    &ckbadger_store::types::CachedBlockHeader {
-                        hash: block_hash(98).to_vec(),
-                        parent_hash: block_hash(97).to_vec(),
-                        timestamp: 1_699_900_000_000,
-                        epoch_number: 39,
-                        epoch_index: 1798,
-                        epoch_length: 1800,
-                        dao,
-                        transactions_count: 1,
-                        uncles_count: 0,
-                        proposals_count: 0,
-                        compact_target: 0,
-                        miner_lock_hash: None,
-                        cycles: None,
-                    },
-                );
-                // Stage 9b of the rollback adjusts the lock's script_info from
-                // the cells it deletes; the fixture write path is handed empty
-                // script deltas, so seed the row it will subtract from.
-                let secp_code_hash = hex::decode(&SECP_CODE_HASH[2..]).unwrap();
-                batch.put_script_info(
-                    &secp_code_hash,
-                    &ckbadger_store::types::ScriptInfo {
-                        code_hash: secp_code_hash.clone(),
-                        hash_type: 1,
-                        lock_live_cells_count: 1_000,
-                        lock_owned_capacity_sum: 1_000_000_000_000_000,
-                        lock_owned_knowledge_sum: 1_000_000_000_000_000,
-                        ..Default::default()
-                    },
-                );
-                batch.commit().unwrap();
-            }
+            seed_pre_parent_header(store.as_ref());
+            seed_secp_script_info(store.as_ref());
 
             // Funding batch: cellbase only, so no participant is named yet.
             write_live_block(
@@ -7425,6 +7440,233 @@ mod tests {
 
         pub(crate) fn joaom_id() -> [u8; 20] {
             DotCellParser::derive_id("joaom")
+        }
+
+        /// Same chain plus the namespace's ring root, so a rollback has a
+        /// `dotcell_ring` row to restore as well.
+        pub(crate) fn dotcell_rollback_blocks() -> Vec<BlockResponseWithCycles> {
+            let funding = block(100, AR_DEPOSIT, vec![cellbase_tx(0xc0, FUNDING_CAPACITY)]);
+
+            // 101: the ring root and `maria`, each with its own-index witness.
+            let create_root_and_maria = TransactionView {
+                hash: format!("0x{}", hex::encode([0xe1u8; 32])),
+                version: "0x0".to_string(),
+                cell_deps: vec![],
+                header_deps: vec![],
+                inputs: vec![input(0xc0, 0)],
+                outputs: vec![
+                    name_output(192_00000000),
+                    name_output(NAME_CAPACITY),
+                    plain_output(FUNDING_CAPACITY - 192_00000000 - NAME_CAPACITY - 100_000_000),
+                ],
+                outputs_data: vec![
+                    fixture::T1_RING_ROOT.outputs[0].data.to_string(),
+                    fixture::T2_REGISTER_JOAOM.inputs[0].data.to_string(),
+                    "0x".to_string(),
+                ],
+                witnesses: vec![
+                    fixture::T1_RING_ROOT.witnesses[0].to_string(),
+                    fixture::T2_WITNESS_0.to_string(),
+                    String::new(),
+                ],
+            };
+
+            // 102: the registration.
+            let register_joaom = TransactionView {
+                hash: format!("0x{}", hex::encode([0xe2u8; 32])),
+                version: "0x0".to_string(),
+                cell_deps: vec![],
+                header_deps: vec![],
+                inputs: vec![input(0xe1, 1), input(0xe1, 2)],
+                outputs: vec![
+                    name_output(NAME_CAPACITY),
+                    name_output(NAME_CAPACITY),
+                    plain_output(FUNDING_CAPACITY - 192_00000000 - 3 * NAME_CAPACITY - 300_000_000),
+                ],
+                outputs_data: vec![
+                    fixture::T2_OUT0_DATA.to_string(),
+                    fixture::T2_OUT1_DATA.to_string(),
+                    "0x".to_string(),
+                ],
+                witnesses: vec![
+                    fixture::T2_WITNESS_0.to_string(),
+                    fixture::T2_WITNESS_1.to_string(),
+                    String::new(),
+                ],
+            };
+
+            vec![
+                funding,
+                block(
+                    101,
+                    AR_DEPOSIT,
+                    vec![cellbase_tx(0xc1, 100_000_000), create_root_and_maria],
+                ),
+                block(
+                    102,
+                    AR_DEPOSIT,
+                    vec![cellbase_tx(0xc2, 100_000_000), register_joaom],
+                ),
+            ]
+        }
+
+        #[tokio::test]
+        async fn rollback_restores_dotcell_identity_owner_index_and_ring_after_fork() {
+            use ckbadger_store::types::{IdentityExtra, DOTCELL_SENTINEL_COLLECTION};
+
+            let _guard =
+                crate::db::writer::activities::test_detector_override::without_extra_detectors();
+            let dir = tempfile::tempdir().unwrap();
+            let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+            let indexer = super::live_dao_fee::indexer_for_live_write_test(store.clone());
+            store
+                .set_secondary_epoch_reward(61_369_863_013_698)
+                .unwrap();
+            // The post-rollback DAO snapshot recompute reads block N-1 of the
+            // affected day's first block; date it a day earlier so block 99
+            // stays that first block.
+            super::live_dao_fee::seed_pre_parent_header(store.as_ref());
+            super::live_dao_fee::seed_secp_script_info(store.as_ref());
+            for code_hash in [
+                fixture::ACCOUNT_TYPE_CODE_HASH_TESTNET,
+                fixture::ACCOUNT_LOCK_CODE_HASH_TESTNET,
+            ] {
+                super::live_dao_fee::seed_script_info(store.as_ref(), code_hash);
+            }
+            for block in dotcell_rollback_blocks() {
+                super::live_dao_fee::write_live_block(&indexer, block)
+                    .await
+                    .unwrap();
+            }
+
+            let namespace: [u8; 20] =
+                crate::rpc::parse_hex_to_bytes(fixture::NAMESPACE_ARGS_TESTNET)
+                    .try_into()
+                    .unwrap();
+            let maria_owner: [u8; 20] =
+                crate::rpc::parse_hex_to_bytes("0x58e6c6f873af57732daae458be3c56c2c847b141")
+                    .try_into()
+                    .unwrap();
+            let joaom_owner: [u8; 20] =
+                crate::rpc::parse_hex_to_bytes("0x69e8165efb4cb3b2cd62300e7d16f41a1c65ceab")
+                    .try_into()
+                    .unwrap();
+            assert!(store.get_identity(&joaom_id()).unwrap().is_some());
+            assert!(store.get_dotcell_ring(&namespace).unwrap().is_some());
+
+            // Fork at 101: the registration is undone, the predecessor goes
+            // back to the `next` it had before it was relinked.
+            let undo = store.rollback_via_undo_log(store.as_ref(), 101).unwrap();
+            store
+                .rollback_to_block_with_tx_contexts(101, Some(store.as_ref()), undo.tx_contexts)
+                .unwrap();
+
+            assert!(
+                store.get_identity(&joaom_id()).unwrap().is_none(),
+                "the registered name is gone"
+            );
+            let maria = store.get_identity(&maria_id()).unwrap().expect("maria");
+            assert!(maria.is_live);
+            match &maria.extra {
+                IdentityExtra::DotCell {
+                    next_id,
+                    owner_hash20,
+                    ..
+                } => {
+                    assert_eq!(
+                        next_id.to_vec(),
+                        crate::rpc::parse_hex_to_bytes(
+                            "0x2cf2cdac7ab0e7b97f4b50475fb5ce1b32dfe711"
+                        ),
+                        "the ring relink is undone"
+                    );
+                    assert_eq!(*owner_hash20, maria_owner);
+                }
+                other => panic!("{other:?}"),
+            }
+            assert_eq!(
+                store
+                    .list_dotcell_names_by_owner20(&maria_owner, None, 10)
+                    .unwrap(),
+                vec![maria_id()]
+            );
+            assert!(
+                store
+                    .list_dotcell_names_by_owner20(&joaom_owner, None, 10)
+                    .unwrap()
+                    .is_empty(),
+                "the rolled-back owner holds nothing"
+            );
+            assert_eq!(
+                store
+                    .get_dotcell_owner20_count(&DOTCELL_SENTINEL_COLLECTION, &maria_owner)
+                    .unwrap(),
+                1
+            );
+            assert_eq!(
+                store
+                    .get_dotcell_owner20_count(&DOTCELL_SENTINEL_COLLECTION, &joaom_owner)
+                    .unwrap(),
+                0
+            );
+            let agg = store
+                .get_identity_collection_aggregate(&DOTCELL_SENTINEL_COLLECTION)
+                .unwrap()
+                .expect("aggregate survives");
+            assert_eq!(agg.total_count, 1);
+            assert_eq!(agg.live_count, 1);
+            assert_eq!(agg.holders_count, 1);
+            assert_eq!(agg.activities_count, 1);
+            assert_eq!(
+                store
+                    .list_identity_collection_activities(
+                        &DOTCELL_SENTINEL_COLLECTION,
+                        10,
+                        None,
+                        None
+                    )
+                    .unwrap()
+                    .len(),
+                1
+            );
+            assert!(
+                store
+                    .get_spore_id_by_outpoint(&[0xe2u8; 32], 1)
+                    .unwrap()
+                    .is_none(),
+                "the rolled-back name's outpoint row is gone"
+            );
+            let ring = store
+                .get_dotcell_ring(&namespace)
+                .unwrap()
+                .expect("the ring root was created at 101 and survives");
+            assert_eq!(ring.created_at_block, 101);
+
+            // Fork at 100: nothing `.cell` is left.
+            let undo = store.rollback_via_undo_log(store.as_ref(), 100).unwrap();
+            store
+                .rollback_to_block_with_tx_contexts(100, Some(store.as_ref()), undo.tx_contexts)
+                .unwrap();
+            assert!(store.get_identity(&maria_id()).unwrap().is_none());
+            assert!(store
+                .list_dotcell_names_by_owner20(&maria_owner, None, 10)
+                .unwrap()
+                .is_empty());
+            assert_eq!(
+                store.get_dotcell_ring(&namespace).unwrap(),
+                None,
+                "the ring row is deleted with the root cell that created it"
+            );
+            let agg = store
+                .get_identity_collection_aggregate(&DOTCELL_SENTINEL_COLLECTION)
+                .unwrap();
+            assert!(
+                agg.as_ref().is_none_or(|a| a.total_count == 0
+                    && a.live_count == 0
+                    && a.holders_count == 0
+                    && a.activities_count == 0),
+                "{agg:?}"
+            );
         }
 
         /// PROTO-007/009: a from-genesis rebuild and an incremental sync must
