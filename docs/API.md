@@ -42,7 +42,7 @@ output_index`; activity cursors encode `block_num:tx_idx`; spore/cluster list cu
 
 ## Modules
 
-`api_routes()` (`crates/api/src/routes/mod.rs:26`) merges 18 modules.
+`api_routes()` (`crates/api/src/routes/mod.rs:26`) merges 19 modules.
 Two files in `routes/` are helpers rather than mounted modules: `tx_lookup.rs`
 (imported by `transactions.rs`) and `proposal_window.rs` (the shared
 proposal-window scan used by `blocks.rs` and `graph.rs`).
@@ -720,6 +720,66 @@ disabled or empty state. A point lookup still returns not found.
 
 ---
 
-**Total endpoints: 127** across 18 modules. Confirm against
+### verify (crates/api/src/routes/verify.rs)
+
+| Method | Path                                | Handler                     | Purpose                                                          |
+| ------ | ----------------------------------- | --------------------------- | ---------------------------------------------------------------- |
+| POST   | `/api/v1/verify/entity-statistics`  | `export_entity_statistics`  | Bounded, read-only export of raw entity daily deltas for the verifier |
+
+A verification-only endpoint, not part of the public explorer surface. Every
+read happens inside the request's single read-view pin, so the anchor and the
+rows it labels come from one view; it reads no warmup cache, calls no RPC, and
+writes nothing.
+
+**Params**
+
+- `EntityStatisticsRequest` (JSON body) — `entities: [{kind, id}]` (≤ 16, `kind`
+  must be `token` in this delivery), optional `expectedAnchor: {blockNumber,
+  blockHash}`, optional `maxDailyRows` (≤ 8192, default 8192)
+
+**Responses**
+
+- `EntityStatisticsResponse`
+  - `anchor` — `{blockNumber, blockHash}` of the store's sync tip
+  - `state` — `{bulkSessionInProgress, rollbackCleanupInProgress,
+    liveCellSummaryInitialized, deepForkDetected, entityStatsUndoContract,
+    hourlyRetention}`. `entityStatsUndoContract` is `null` and `hourlyRetention`
+    is `"unknown"` until the write path publishes those keys — absence of
+    evidence, not an implied guarantee.
+  - `complete` — false whenever a write-path phase is in flight or any entity
+    could not be exported in full
+  - `anchorMismatch` — present only when `expectedAnchor` did not match:
+    `{expected, actual}`, with nothing exported
+  - `entities[]` — `{kind, id, present, rowCount, typeScript, complete,
+    currentCapacity, currentKnowledge, currentError, daily}`, where
+    `typeScript` is `{codeHash, hashType, args}` read from the same pin (so the
+    verifier can build a chain query without asking an endpoint that computes
+    aggregates), and `daily[]` is
+    `{date, capacityDelta, knowledgeDelta}` with every value an exact decimal
+    string in shannons. `present`/`rowCount`/`current*` are `null` when the
+    state withheld the numbers. `currentCapacity`/`currentKnowledge` accumulate
+    *every* stored row, not just the returned page; a token has no separately
+    stored current value, so these are the same checked accumulation the public
+    token endpoint performs. `currentError` carries why that accumulation
+    failed (a corrupt row series), with the daily rows still exported so the
+    offending day can be named.
+
+**Errors**
+
+- `400` — empty selection, more than 16 entities, `maxDailyRows` outside
+  `1..=8192`, an unsupported `kind`, or a malformed id
+- `503 initializing` — the indexer has not published a sync tip yet
+
+An `expectedAnchor` the store has moved past is not an error: the chain moved,
+so the response is `200` with `complete: false`, nothing exported, and
+`anchorMismatch` carrying both anchors so a client can re-pin.
+
+A request over a hard cap is refused rather than silently narrowed; a legal
+request that cannot be exported in full returns `complete: false` instead of a
+truncated list.
+
+---
+
+**Total endpoints: 128** across 19 modules. Confirm against
 `crates/api/src/routes/*.rs` for any field-level question; this skeleton is
 intentionally name-and-purpose only.

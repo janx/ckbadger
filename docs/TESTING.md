@@ -19,7 +19,7 @@ Data integrity verification. Calls the API and optionally the official CKB explo
 
 ```bash
 ckbadger verify --depth fast              # 7 checks, seconds
-ckbadger verify --depth sampling          # 57 checks, minutes
+ckbadger verify --depth sampling          # 58 checks, minutes
 ckbadger verify --list-checks             # List all checks
 ```
 
@@ -32,7 +32,7 @@ declaration order. Point `-C` at a network subdirectory (for example,
 | Tier                  | Checks | Runtime | What it validates                                                                                                                                                                                                                                                             |
 | --------------------- | ------ | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Fast** (F1-F7)      | 7      | seconds | API reachable, sync complete, genesis block, tip block, deep fork clear, DAO statistics sane, genesis-baseline burnt invariant                                                                                                                                                |
-| **Sampling** (S1-S24) | 24     | minutes | Block hash roundtrip, parent chain, address balance, chart validations (tx count, cells, supply, block time, epoch, HODL wave, knowledge composition, APC, inflation), supply invariants, RPC compare, tokens, spores, NFTs, holder consistency, DAO status index vs deposits |
+| **Sampling** (S1-S25) | 25     | minutes | Block hash roundtrip, parent chain, address balance, chart validations (tx count, cells, supply, block time, epoch, HODL wave, knowledge composition, APC, inflation), supply invariants, RPC compare, tokens, spores, NFTs, holder consistency, DAO status index vs deposits, entity capacity history vs chain |
 | **Explorer** (X1-X26) | 26     | minutes | Compare last 30 days against official CKB explorer API (tx count, DAO deposit, hash rate, difficulty, knowledge size, uncle rate, cell counts, supply, circulation, compensation, mining reward, normalized treasury)                                                         |
 
 Explorer `burnt` and `treasury_amount` are not compared raw: the official explorer leaves phase-1
@@ -67,7 +67,7 @@ unbounded scan.
 
 > **Scope:** `verify` covers only chain-derived data (the domain + append-only stores). The
 > **network store** (`net_nodes` / `net_stats` / `net_crawl`, written by the opt-in `ckbadger-crawler`) is
-> **outside** all 57 checks — it holds observational, non-chain p2p-crawler data that is
+> **outside** all 58 checks — it holds observational, non-chain p2p-crawler data that is
 > non-deterministic and not subject to chain-integrity invariants, so none of these checks apply
 > to it.
 
@@ -85,6 +85,7 @@ OPTIONS:
   --sample-count <N>       Samples for the sampling tier [default: 1000]
   --seed <N>               Deterministic sampling seed [default: 42]
   --tolerance <F>          Max explorer deviation, fraction [default: 0.001]
+  --entity <KIND:ID>       Verify this entity exactly (repeatable), e.g. token:0x…
   --api-url <URL>          Override the ckbadger API base URL
   --rpc-url <URL>          Override the CKB RPC URL
   --explorer-url <URL>     Override the explorer API URL
@@ -95,6 +96,110 @@ OPTIONS:
 rather than reporting an all-green run over zero checks. The four endpoint
 overrides describe one network, so they are rejected on an orchestrator root —
 run them against `-C <workdir>/<network>`.
+
+### Check Statuses and Exit Codes
+
+A check reports one of six statuses. The distinction the old pass/fail pair
+could not express is between *evidence of an inconsistency* and *absence of
+evidence*: a check that never ran, could not reach the data, or was given
+nothing to sample proves nothing, and is never rendered green.
+
+| Status          | Meaning                                                                            | Exit contribution |
+| --------------- | ---------------------------------------------------------------------------------- | ----------------- |
+| `pass`          | The check's whole declared scope was verified and agreed                           | 0                 |
+| `fail`          | A difference was proven                                                            | 1                 |
+| `inconclusive`  | Anchor moved, budget exhausted, adapter unsupported, or the source was incomplete  | 2                 |
+| `error`         | RPC/response schema, a cursor that did not advance, a bad parameter, or a local failure | 2            |
+| `skipped`       | The operator narrowed the scope (`--checks`, `--no-explorer`, no `--rpc-url`)      | 0                 |
+| `notApplicable` | Independently proven that the network holds no such object                         | 0                 |
+
+The process exit code merges every check of every selected network:
+**`fail` (1) > `error`/`inconclusive` (2) > `pass` (0)**. A skipped check no
+longer counts as a pass; it instead sets `scopeComplete: false`, which is
+reported separately from `status` — a run can be `fail` *and* incomplete at the
+same time, and that is not softened in either direction.
+
+Every selected network is verified and reports, even when an earlier one has
+already failed. `--format json` writes exactly one parseable document to stdout
+(progress and diagnostics go to stderr):
+
+```json
+{
+  "schemaVersion": 1,
+  "runId": "20260923T101500Z-abcdef12",
+  "status": "fail",
+  "scopeComplete": false,
+  "networks": [ { "network": "mainnet", "status": "fail", "scopeComplete": false, "checks": [ … ] } ]
+}
+```
+
+Each network's report is also persisted to
+`<network workdir>/perf/verify/<run-id>/report.json` — written to a temp file
+and renamed, so an interrupted run leaves no partial file that could be read as
+complete evidence.
+
+### Chain-derived Entity Verification (S25)
+
+`entity_capacity_history_matches_chain` recomputes one entity's whole history
+from the chain and compares it against the index, with **zero tolerance** —
+`--tolerance` belongs to the explorer comparisons and is not inherited here.
+
+- **Expected values are independent.** The oracle enumerates the entity's full
+  `[0, H]` history through the CKB node's own indexer (`get_transactions`,
+  exact script match, ungrouped, cursor-paged), resolves every input's prevout,
+  and recomputes capacity and occupied capacity from the cells. It never calls
+  the production writer, parser or `PROTOCOL_REGISTRY`.
+- **Three facets, one scan.** Per-day deltas and running prefix totals are
+  compared against the exported rows; the **current** facet compares the
+  chain's *live cell set* — outputs in `[0, H]` whose outpoint is never
+  consumed in that range — against the current capacity/occupied the index
+  itself reports. A token has no separately stored current value, so the index
+  side of that facet is the same checked accumulation the public
+  `/tokens/{hash}` endpoint performs, read under the export's pin; comparing it
+  against an independently computed live set is what makes the facet a real
+  diagnostic rather than a restatement of the daily rows. A failure names which
+  facet, which component (capacity or knowledge) and which day differed, and
+  offsetting per-day errors that leave the total correct still fail.
+  The collector cross-checks its own two passes: the live set and the
+  accumulated daily deltas are the same quantity computed two ways, and a
+  disagreement between them fails the run rather than publishing either.
+- **The source must qualify first.** `<network workdir>/verify-source.toml` is
+  the operator's declaration of what the node's index covers (genesis, node
+  version, index start block, filters). It is checked against the live node and
+  the case's anchor; anything missing or contradictory is `inconclusive`, never
+  a confident `fail`.
+- **Identity from the export.** The type script the chain query needs comes
+  from the export, not from `/tokens/{hash}`: that endpoint accumulates the
+  daily rows and so fails exactly when they are the thing under suspicion. The
+  export's script is accepted only once it hashes back to the requested id.
+- **Selection.** `--entity token:<type_hash>` (repeatable) picks entities
+  exactly. Without it, the check uses the known incident selectors plus the head
+  of the API's token directory. Budgets (16 entities, 200k records, 10k RPC
+  requests, 600 s) are initial values, not proven defaults; exhausting one is
+  `inconclusive`. Raise them with `--entity-max-rpc`, `--entity-max-records`
+  and `--entity-budget-seconds` rather than narrowing scope until a run fits —
+  the manifest records both the budget and the spend.
+- **Coverage is auditable.** `<run-id>/manifest.json` records the anchor, the
+  source profile, the budgets, what was spent, and every entity that was not
+  fully covered and why.
+
+```toml
+# work/mainnet/verify-source.toml
+genesisHash = "0x92b197aa1fba0f63633922c61c92375c9c074a93e85963554f5499fe1450d0e5"
+nodeVersion = "0.209.0 (d166e28 2026-07-29)"
+indexerVersion = "0.209.0 (d166e28 2026-07-29)"
+buildStartBlock = 0
+continuousFromGenesis = true
+provenance = "Operator confirmed the running, self-operated CKB indexer was continuously built from genesis."
+```
+
+`nodeVersion` and `indexerVersion` must agree — the node and its in-process
+indexer are one binary — and both are checked against the live node.
+
+> **Coverage limits.** Only the **token** family has an adapter in this
+> delivery. Script, Spore, cluster and object families, independent candidate
+> discovery, and the hourly-bucket contract are not covered; requesting them is
+> `inconclusive`, not a pass.
 
 ```bash
 ckbadger verify -C work/mainnet --depth sampling --checks dao_status_index_matches_deposits
@@ -122,8 +227,12 @@ HTTP failure, stale data is used with a warning.
 | Check trait & types        | `crates/indexer/src/verify/checks.rs`     |
 | API checks (F+S)           | `crates/indexer/src/verify/api_checks.rs` |
 | Explorer checks (X)        | `crates/indexer/src/verify/explorer.rs`   |
+| Chain-history oracle (S25) | `crates/indexer/src/verify/entity_history.rs` |
+| History source qualification | `crates/indexer/src/verify/source.rs`   |
+| Coverage manifest          | `crates/indexer/src/verify/manifest.rs`   |
 | Report rendering           | `crates/indexer/src/verify/report.rs`     |
 | LCG sampler                | `crates/indexer/src/verify/sampling.rs`   |
+| Typed export endpoint      | `crates/api/src/routes/verify.rs`         |
 
 ---
 

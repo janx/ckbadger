@@ -213,6 +213,193 @@ impl CkbRpcClient {
     }
 }
 
+// ---------------------------------------------------------------------------
+// CKB node indexer (`get_indexer_tip` / `get_transactions`) and node identity
+//
+// These are the verifier's independent view of chain history: an exact,
+// ungrouped script query over an explicit block range, paged by cursor. Hex
+// fields are parsed here so a malformed or unrecognized value is an error at
+// the boundary rather than a silently mistyped record downstream.
+// ---------------------------------------------------------------------------
+
+/// Which side of a transaction a history record refers to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IndexerIoType {
+    Input,
+    Output,
+}
+
+impl IndexerIoType {
+    fn parse(raw: &str) -> Result<Self> {
+        match raw {
+            "input" => Ok(IndexerIoType::Input),
+            "output" => Ok(IndexerIoType::Output),
+            other => Err(anyhow!(
+                "unrecognized io_type '{other}' in get_transactions response"
+            )),
+        }
+    }
+}
+
+/// `get_transactions` search key: exact script match, ungrouped, over a range.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct IndexerSearchKey {
+    pub script: Script,
+    pub script_type: &'static str,
+    pub script_search_mode: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filter: Option<IndexerSearchFilter>,
+    /// Always false: the verifier needs one record per input/output, not one
+    /// per transaction.
+    pub group_by_transaction: bool,
+}
+
+impl IndexerSearchKey {
+    /// Exact type-script query, optionally restricted to `[start, end)`.
+    pub fn exact_type(script: Script, block_range: Option<(u64, u64)>) -> Self {
+        Self {
+            script,
+            script_type: "type",
+            script_search_mode: "exact",
+            filter: block_range.map(|(start, end)| IndexerSearchFilter {
+                block_range: Some([format!("0x{start:x}"), format!("0x{end:x}")]),
+            }),
+            group_by_transaction: false,
+        }
+    }
+
+    /// Exact lock-script query, optionally restricted to `[start, end)`.
+    pub fn exact_lock(script: Script, block_range: Option<(u64, u64)>) -> Self {
+        Self {
+            script_type: "lock",
+            ..Self::exact_type(script, block_range)
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct IndexerSearchFilter {
+    /// `[start, end)` as hex block numbers.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub block_range: Option<[String; 2]>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IndexerTip {
+    pub block_number: u64,
+    pub block_hash: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IndexerTxRecord {
+    pub tx_hash: String,
+    pub block_number: u64,
+    pub tx_index: u32,
+    pub io_type: IndexerIoType,
+    pub io_index: u32,
+}
+
+#[derive(Debug, Clone)]
+pub struct IndexerTxPage {
+    pub objects: Vec<IndexerTxRecord>,
+    pub last_cursor: String,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+struct RawIndexerTip {
+    block_number: String,
+    block_hash: String,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+struct RawIndexerTxRecord {
+    tx_hash: String,
+    block_number: String,
+    tx_index: String,
+    io_type: String,
+    io_index: String,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+struct RawIndexerTxPage {
+    objects: Vec<RawIndexerTxRecord>,
+    last_cursor: String,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct NodeInfo {
+    pub version: String,
+}
+
+fn parse_indexer_hex_u32(hex: &str, field: &str) -> Result<u32> {
+    let stripped = hex.strip_prefix("0x").unwrap_or(hex);
+    u32::from_str_radix(stripped, 16)
+        .map_err(|e| anyhow!("failed to parse {field} '{hex}' as hex u32: {e}"))
+}
+
+impl CkbRpcClient {
+    /// Tip the node's own indexer has reached. Lower than the chain tip while
+    /// the index is still catching up, which is exactly what qualification
+    /// needs to see.
+    pub async fn get_indexer_tip(&self) -> Result<IndexerTip> {
+        let raw: RawIndexerTip = self.call("get_indexer_tip", ()).await?;
+        Ok(IndexerTip {
+            block_number: parse_hex_u64(&raw.block_number)?,
+            block_hash: raw.block_hash,
+        })
+    }
+
+    /// One page of the node indexer's transaction history for `search_key`.
+    ///
+    /// `after` is the previous page's `last_cursor`; `None` starts the walk.
+    pub async fn get_transactions(
+        &self,
+        search_key: &IndexerSearchKey,
+        order: &str,
+        limit: u32,
+        after: Option<&str>,
+    ) -> Result<IndexerTxPage> {
+        let raw: RawIndexerTxPage = self
+            .call(
+                "get_transactions",
+                (
+                    search_key,
+                    order,
+                    format!("0x{limit:x}"),
+                    after.map(str::to_owned),
+                ),
+            )
+            .await?;
+        let objects = raw
+            .objects
+            .into_iter()
+            .map(|record| {
+                Ok(IndexerTxRecord {
+                    block_number: parse_hex_u64(&record.block_number)?,
+                    tx_index: parse_indexer_hex_u32(&record.tx_index, "tx_index")?,
+                    io_type: IndexerIoType::parse(&record.io_type)?,
+                    io_index: parse_indexer_hex_u32(&record.io_index, "io_index")?,
+                    tx_hash: record.tx_hash,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(IndexerTxPage {
+            objects,
+            last_cursor: raw.last_cursor,
+        })
+    }
+
+    pub async fn get_header_by_number(&self, number: u64) -> Result<Option<HeaderView>> {
+        let hex_number = format!("0x{:x}", number);
+        self.call_optional("get_header_by_number", (hex_number,))
+            .await
+    }
+
+    pub async fn local_node_info(&self) -> Result<NodeInfo> {
+        self.call("local_node_info", ()).await
+    }
+}
+
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct TransactionWithStatus {
     pub transaction: Option<TransactionView>,
@@ -308,5 +495,148 @@ mod tests {
         let client = CkbRpcClient::new(server.uri());
         let result = client.get_transaction("0x22").await.unwrap();
         assert!(result.is_none());
+    }
+
+    fn type_search_key(code_hash: &str) -> IndexerSearchKey {
+        IndexerSearchKey::exact_type(
+            Script {
+                code_hash: code_hash.to_string(),
+                hash_type: "type".to_string(),
+                args: "0x".to_string(),
+            },
+            Some((0, 101)),
+        )
+    }
+
+    #[tokio::test]
+    async fn get_indexer_tip_parses_the_hex_height() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(body_partial_json(json!({"method":"get_indexer_tip"})))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "jsonrpc":"2.0","id":1,
+                "result": {"block_hash": "0xaa", "block_number": "0x1571b"}
+            })))
+            .mount(&server)
+            .await;
+
+        let tip = CkbRpcClient::new(server.uri())
+            .get_indexer_tip()
+            .await
+            .unwrap();
+        assert_eq!(tip.block_number, 87_835);
+        assert_eq!(tip.block_hash, "0xaa");
+    }
+
+    #[tokio::test]
+    async fn get_transactions_sends_an_exact_ungrouped_query_and_types_the_page() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(body_partial_json(json!({
+                "method": "get_transactions",
+                "params": [
+                    {
+                        "script": {"code_hash": "0xcc", "hash_type": "type", "args": "0x"},
+                        "script_type": "type",
+                        "script_search_mode": "exact",
+                        "group_by_transaction": false,
+                        "filter": {"block_range": ["0x0", "0x65"]}
+                    },
+                    "asc",
+                    "0x64",
+                    null
+                ]
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "jsonrpc":"2.0","id":1,
+                "result": {
+                    "objects": [{
+                        "block_number": "0x2",
+                        "io_index": "0x1",
+                        "io_type": "output",
+                        "tx_hash": "0xdd",
+                        "tx_index": "0x3"
+                    }],
+                    "last_cursor": "0xcursor1"
+                }
+            })))
+            .mount(&server)
+            .await;
+
+        let page = CkbRpcClient::new(server.uri())
+            .get_transactions(&type_search_key("0xcc"), "asc", 100, None)
+            .await
+            .unwrap();
+
+        assert_eq!(page.last_cursor, "0xcursor1");
+        assert_eq!(page.objects.len(), 1);
+        let record = &page.objects[0];
+        assert_eq!(record.tx_hash, "0xdd");
+        assert_eq!(record.block_number, 2);
+        assert_eq!(record.tx_index, 3);
+        assert_eq!(record.io_index, 1);
+        assert_eq!(record.io_type, IndexerIoType::Output);
+    }
+
+    #[tokio::test]
+    async fn an_unknown_io_type_is_an_error_not_a_guess() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(body_partial_json(json!({"method":"get_transactions"})))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "jsonrpc":"2.0","id":1,
+                "result": {
+                    "objects": [{
+                        "block_number": "0x2", "io_index": "0x1",
+                        "io_type": "sideways", "tx_hash": "0xdd", "tx_index": "0x3"
+                    }],
+                    "last_cursor": "0x"
+                }
+            })))
+            .mount(&server)
+            .await;
+
+        let error = CkbRpcClient::new(server.uri())
+            .get_transactions(&type_search_key("0xcc"), "asc", 100, None)
+            .await
+            .expect_err("an unrecognized io_type must not be silently classified");
+        assert!(error.to_string().contains("sideways"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn get_header_by_number_returns_none_on_null_result() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(body_partial_json(json!({"method":"get_header_by_number"})))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "jsonrpc":"2.0","id":1,"result":null
+            })))
+            .mount(&server)
+            .await;
+
+        let header = CkbRpcClient::new(server.uri())
+            .get_header_by_number(7)
+            .await
+            .unwrap();
+        assert!(header.is_none());
+    }
+
+    #[tokio::test]
+    async fn local_node_info_reports_the_node_version() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(body_partial_json(json!({"method":"local_node_info"})))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "jsonrpc":"2.0","id":1,
+                "result": {"version": "0.119.0 (abc 2026-01-01)", "node_id": "Qm", "active": true}
+            })))
+            .mount(&server)
+            .await;
+
+        let info = CkbRpcClient::new(server.uri())
+            .local_node_info()
+            .await
+            .unwrap();
+        assert_eq!(info.version, "0.119.0 (abc 2026-01-01)");
     }
 }

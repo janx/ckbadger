@@ -5,16 +5,22 @@
 
 pub mod api_checks;
 pub mod checks;
+pub mod entity_history;
 pub mod explorer;
+pub mod manifest;
 pub mod report;
 pub mod sampling;
+pub mod source;
 
 use std::path::PathBuf;
 use std::time::Instant;
 
 use indicatif::MultiProgress;
 
-use checks::{execute_check, Check, CheckContext, CheckTier, CompletedCheck, ProgressReporter};
+use checks::{
+    execute_check, Check, CheckContext, CheckStatus, CheckTier, CompletedCheck, ProgressReporter,
+};
+pub use report::{VerifyReport, VerifyRunReport};
 
 /// CLI arguments for the verify subcommand.
 #[derive(clap::Args, Debug)]
@@ -70,6 +76,70 @@ pub struct VerifyArgs {
     /// Directory for caching explorer API responses.
     #[arg(long)]
     pub cache_dir: Option<String>,
+
+    /// Shared id for this run, so every network's report lands under one
+    /// directory name and one envelope. Generated when absent.
+    #[arg(long)]
+    pub run_id: Option<String>,
+
+    /// Root under which `<run-id>/report.json` is persisted for this network
+    /// (production: `<network workdir>/perf/verify`). No file is written when
+    /// absent.
+    #[arg(long)]
+    pub evidence_dir: Option<String>,
+
+    /// Verify these entities exactly, as `<kind>:<id>` (repeatable), instead of
+    /// the chain-derived checks' default candidates.
+    #[arg(long = "entity", value_name = "KIND:ID")]
+    pub entities: Vec<String>,
+
+    /// The operator's history-source declaration for this network
+    /// (production: `<network workdir>/verify-source.toml`).
+    #[arg(long)]
+    pub verify_source: Option<String>,
+
+    /// RPC requests the chain-derived checks may spend for the whole run.
+    /// V3's initial value is not a proven default: raise it explicitly rather
+    /// than narrowing scope until a run fits.
+    #[arg(long, default_value_t = entity_history::MAX_RPC_REQUESTS)]
+    pub entity_max_rpc: usize,
+
+    /// History records the chain-derived checks may fold in for the whole run.
+    #[arg(long, default_value_t = entity_history::MAX_HISTORY_RECORDS)]
+    pub entity_max_records: usize,
+
+    /// Wall-clock seconds the chain-derived checks may spend for the whole run.
+    #[arg(long, default_value_t = entity_history::MAX_WALL_SECONDS)]
+    pub entity_budget_seconds: u64,
+}
+
+/// A verification run that did not end in `Pass`.
+///
+/// Carries the exit code the process must return, so the CLI's error mapping
+/// has one source for `Fail (1) > Error/Inconclusive (2)` rather than
+/// re-deriving it.
+#[derive(Debug)]
+pub struct VerifyOutcome {
+    pub status: CheckStatus,
+    pub exit_code: u8,
+    pub summary: String,
+}
+
+impl std::fmt::Display for VerifyOutcome {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "verification {}: {}", self.status, self.summary)
+    }
+}
+
+impl std::error::Error for VerifyOutcome {}
+
+/// A fresh run id: sortable, and unique across concurrent runs.
+pub fn new_run_id() -> String {
+    format!(
+        "{}-{}",
+        chrono::Utc::now().format("%Y%m%dT%H%M%SZ"),
+        &uuid::Uuid::new_v4().simple().to_string()[..8]
+    )
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -94,10 +164,17 @@ fn parse_format(s: &str) -> Result<OutputFormat, String> {
     }
 }
 
+/// The registry, for tests that assert properties across every check.
+#[cfg(test)]
+pub(crate) fn all_checks_for_test() -> Vec<Box<dyn Check>> {
+    all_checks()
+}
+
 /// Collect all registered checks.
 fn all_checks() -> Vec<Box<dyn Check>> {
     let mut checks: Vec<Box<dyn Check>> = Vec::new();
     checks.extend(api_checks::api_checks());
+    checks.push(Box::new(entity_history::EntityCapacityHistoryMatchesChain));
     checks.extend(explorer::explorer_checks());
     checks
 }
@@ -153,25 +230,28 @@ fn validate_check_selection(
     Ok(())
 }
 
-/// Main entry point for the verify subcommand.
-pub fn run(args: VerifyArgs) -> anyhow::Result<()> {
-    let all = all_checks();
+/// Print the check registry. Separate from [`run`], which always verifies.
+pub fn list_checks() {
+    let check_info: Vec<(String, String, String)> = all_checks()
+        .iter()
+        .map(|c| {
+            (
+                c.name().to_string(),
+                c.tier().to_string(),
+                c.description().to_string(),
+            )
+        })
+        .collect();
+    report::print_check_list(&check_info);
+}
 
-    // Handle --list-checks
-    if args.list_checks {
-        let check_info: Vec<(String, String, String)> = all
-            .iter()
-            .map(|c| {
-                (
-                    c.name().to_string(),
-                    c.tier().to_string(),
-                    c.description().to_string(),
-                )
-            })
-            .collect();
-        report::print_check_list(&check_info);
-        return Ok(());
-    }
+/// Verify one network and return its structured report.
+///
+/// Never prints the report and never bails on a failing check: the caller owns
+/// rendering and the exit code, so every selected network gets a report even
+/// when an earlier one already failed. Live progress still goes to stderr.
+pub fn run(args: VerifyArgs) -> anyhow::Result<VerifyReport> {
+    let all = all_checks();
 
     let explorer_url = if args.no_explorer {
         None
@@ -186,6 +266,15 @@ pub fn run(args: VerifyArgs) -> anyhow::Result<()> {
         Some(PathBuf::from(".verify-cache"))
     });
 
+    let run_id = args.run_id.clone().unwrap_or_else(new_run_id);
+    let evidence_root = args.evidence_dir.as_ref().map(PathBuf::from);
+    let entities = args
+        .entities
+        .iter()
+        .map(|raw| checks::EntitySelector::parse(raw))
+        .collect::<Result<Vec<_>, String>>()
+        .map_err(|error| anyhow::anyhow!("{error}"))?;
+
     let ctx = CheckContext {
         network,
         api_url: args.api_url.clone(),
@@ -198,21 +287,32 @@ pub fn run(args: VerifyArgs) -> anyhow::Result<()> {
         seed: args.seed,
         tolerance: args.tolerance,
         cache_dir,
+        entities,
+        verify_source_path: args.verify_source.as_ref().map(PathBuf::from),
+        evidence_dir: evidence_root.as_ref().map(|root| root.join(&run_id)),
+        entity_budget: checks::EntityBudget {
+            max_records: args.entity_max_records,
+            max_rpc_requests: args.entity_max_rpc,
+            wall_seconds: args.entity_budget_seconds,
+        },
+        source_profile: std::sync::Mutex::new(None),
     };
 
     validate_check_selection(&all, args.checks.as_deref(), args.depth)?;
 
-    let checks_to_run: Vec<&dyn Check> = all
+    // The declared scope is what `--depth` covers. Within it, `--checks` is an
+    // explicit narrowing: the checks it leaves out are reported as skipped with
+    // their reason, so a narrowed run is never described as a complete preset.
+    let in_scope: Vec<&dyn Check> = all
         .iter()
-        .filter(|c| {
-            runs_at_depth(c.as_ref(), args.depth)
-                && args
-                    .checks
-                    .as_ref()
-                    .is_none_or(|names| names.iter().any(|n| n == c.name()))
-        })
+        .filter(|c| runs_at_depth(c.as_ref(), args.depth))
         .map(|c| c.as_ref())
         .collect();
+    let selected = |check: &dyn Check| {
+        args.checks
+            .as_ref()
+            .is_none_or(|names| names.iter().any(|n| n == check.name()))
+    };
 
     let is_json = args.format == OutputFormat::Json;
     let mp = if is_json {
@@ -238,7 +338,15 @@ pub fn run(args: VerifyArgs) -> anyhow::Result<()> {
     let mut current_tier: Option<CheckTier> = None;
     let mut in_explorer_section = false;
 
-    for check in &checks_to_run {
+    for check in &in_scope {
+        if !selected(*check) {
+            results.push(CompletedCheck::excluded(
+                *check,
+                "not selected by --checks".to_string(),
+            ));
+            continue;
+        }
+
         let tier = check.tier();
         let is_explorer = check.requires_explorer();
 
@@ -266,26 +374,43 @@ pub fn run(args: VerifyArgs) -> anyhow::Result<()> {
         results.push(completed);
     }
 
-    let total_duration = start.elapsed();
+    let mut verify_report = VerifyReport::new(run_id, network, results, start.elapsed());
+    // Whatever history source the chain-derived checks qualified is what this
+    // report's expected values rest on, so it is reported alongside them.
+    verify_report.source = ctx
+        .source_profile
+        .lock()
+        .expect("verify source profile lock poisoned")
+        .take();
 
-    if is_json {
-        report::print_json_report(&results, total_duration);
-    } else {
-        report::print_failure_summary(&results);
-        report::print_summary(&results, total_duration);
-    }
-
-    let has_failures = results.iter().any(|r| !r.passed);
-    if has_failures {
-        let failed_count = results.iter().filter(|r| !r.passed).count();
-        anyhow::bail!(
-            "verification failed: {} of {} checks did not pass",
-            failed_count,
-            results.len()
+    // Persisting the evidence is part of the run: a report that could not be
+    // written is an Error, not a silently unrecorded pass.
+    if let Some(root) = evidence_root {
+        verify_report.evidence_path = Some(
+            report::report_path(&root, &verify_report.run_id)
+                .to_string_lossy()
+                .into_owned(),
         );
+        match report::write_network_report(&root, &verify_report) {
+            Ok(_) => {}
+            Err(error) => {
+                verify_report.evidence_path = None;
+                let reason = format!("verify report could not be persisted: {error:#}");
+                verify_report.checks.push(CompletedCheck {
+                    name: "report_persistence",
+                    description: "the run's report is written to disk before it is reported",
+                    tier: "fast".to_string(),
+                    status: CheckStatus::Error,
+                    status_reason: Some(reason.clone()),
+                    duration_ms: 0,
+                    result: Some(checks::CheckResult::error(reason)),
+                });
+                verify_report.refresh();
+            }
+        }
     }
 
-    Ok(())
+    Ok(verify_report)
 }
 
 #[cfg(test)]
