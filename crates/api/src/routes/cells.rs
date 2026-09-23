@@ -3313,9 +3313,15 @@ fn build_pool_transaction_rows(
         if store.get_tx_by_hash(&record.tx_hash)?.is_some() {
             continue;
         }
-        let Some(participant) = record.participant(lock_hash) else {
-            continue;
-        };
+        // `by_lock` is built from the record's participants, so one reached
+        // through it must have an entry for this lock.
+        let participant = record.participant(lock_hash).ok_or_else(|| {
+            anyhow::anyhow!(
+                "pool record indexed by lock 0x{} has no participant for it: tx=0x{}",
+                hex::encode(lock_hash),
+                hex::encode(record.tx_hash)
+            )
+        })?;
 
         pending_ckb_delta += participant.addr_tx.capacity_change as i128;
         rows.push(AddressTransactionResponse {

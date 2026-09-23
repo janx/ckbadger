@@ -825,6 +825,34 @@ describe('AddressDetailPage — unconfirmed transactions', () => {
     expect(screen.queryByText('Unconfirmed')).not.toBeInTheDocument();
   });
 
+  it('counts only committed rows in the pagination range', async () => {
+    vi.mocked(api.getAddressActivities).mockResolvedValue({
+      data: [
+        poolActivityRow(),
+        {
+          ...poolActivityRow(),
+          txHash: '0xc0de000000000000000000000000000000000000000000000000000000000001',
+          blockNumber: 12345,
+          txIndex: 0,
+          timestamp: '1700000000000',
+          poolStatus: undefined,
+          timeAddedToPool: undefined,
+          interpretation: undefined,
+        },
+      ],
+      limit: 50,
+      hasMore: true,
+      nextCursor: '12345:0',
+      pool: poolSummary,
+    });
+
+    render(<AddressDetailPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Showing 1-1 activities/)).toBeInTheDocument();
+    });
+  });
+
   it('marks an unconfirmed row in the transactions table instead of linking to a block', async () => {
     vi.mocked(api.getAddressTransactions).mockResolvedValue({
       data: [

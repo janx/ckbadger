@@ -862,20 +862,31 @@ pub(crate) fn build_pool_activity_rows(
         if store.get_tx_by_hash(&record.tx_hash)?.is_some() {
             continue;
         }
-        let Some(actions) = record.actions.as_ref() else {
-            continue;
-        };
+        // `by_lock` is built from a record's interpreted participants, so a
+        // record reached through it must have both. Either missing is a mirror
+        // invariant violation, not a row to skip quietly.
+        let actions = record.actions.as_ref().ok_or_else(|| {
+            anyhow::anyhow!(
+                "pool record indexed by lock 0x{} carries no interpretation: tx=0x{}",
+                hex::encode(lock_hash),
+                hex::encode(record.tx_hash)
+            )
+        })?;
         // The same filter → tag-bitmap mapping the committed index uses.
         if !CkbadgerStore::matches_activity_filter(actions, lock_hash, filter) {
             continue;
         }
-        let Some(participant) = actions
+        let participant = actions
             .participants
             .iter()
             .find(|p| p.lock_hash == lock_hash)
-        else {
-            continue;
-        };
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "pool record indexed by lock 0x{} has no participant for it: tx=0x{}",
+                    hex::encode(lock_hash),
+                    hex::encode(record.tx_hash)
+                )
+            })?;
 
         pending_ckb_delta += participant.ckb_delta;
         rows.push(build_activity_response(

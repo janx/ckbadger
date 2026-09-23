@@ -906,7 +906,10 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                     >
                       {activities?.data.map((activity: Activity, idx: number) => (
                         <ActivityEventGroup
-                          key={`${activity.txHash}-${activity.txIndex}`}
+                          // Keyed by txHash alone: when an unconfirmed row
+                          // commits it keeps its hash and gains a block, so the
+                          // same row updates in place instead of remounting.
+                          key={activity.txHash}
                           activity={activity}
                           formatTimeAgo={(ts) => formatTimeAgo(Number(ts))}
                           isFirst={idx === 0}
@@ -923,7 +926,13 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                           total={activities?.total ?? undefined}
                           totalLabel="activities"
                           pageSize={DEFAULT_PAGE_SIZE}
-                          currentCount={activities?.data?.length ?? 0}
+                          // The enumerated range is over COMMITTED rows; the
+                          // unconfirmed segment is not part of the paged set.
+                          // Counted from the rows themselves, so it cannot go
+                          // negative and needs no clamp to hide it if it did.
+                          currentCount={
+                            activities?.data?.filter((a) => a.poolStatus === undefined).length ?? 0
+                          }
                           hasMore={activities?.hasMore ?? false}
                           hasPrevious={activitiesPagination.hasPrevious}
                           page={activitiesPagination.page}

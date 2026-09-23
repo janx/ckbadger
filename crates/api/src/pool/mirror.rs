@@ -626,7 +626,7 @@ fn topological_order(
                     .previous_output
                     .tx_hash
                     .strip_prefix("0x")
-                    .unwrap_or("");
+                    .unwrap_or(&input.previous_output.tx_hash);
                 match hex::decode(parent)
                     .ok()
                     .and_then(|bytes| <[u8; 32]>::try_from(bytes.as_slice()).ok())

@@ -221,7 +221,9 @@ impl PoolSnapshot {
         status.awaiting_index = 0;
         status.partial = 0;
 
-        let mut by_lock: HashMap<[u8; 32], Vec<[u8; 32]>> = HashMap::new();
+        // Each entry carries its own sort key, so ordering never depends on a
+        // lookup that could miss and quietly sort by a default.
+        let mut by_lock: HashMap<[u8; 32], Vec<(u64, [u8; 32])>> = HashMap::new();
         let mut by_hash: HashMap<[u8; 32], Arc<PoolTxRecord>> =
             HashMap::with_capacity(records.len());
 
@@ -238,22 +240,23 @@ impl PoolSnapshot {
                 by_lock
                     .entry(participant.lock_hash)
                     .or_default()
-                    .push(record.tx_hash);
+                    .push((record.entry.time_added_to_pool_ms, record.tx_hash));
             }
             by_hash.insert(record.tx_hash, record);
         }
 
-        for hashes in by_lock.values_mut() {
-            hashes.sort_by(|a, b| {
-                let time_of = |hash: &[u8; 32]| {
-                    by_hash
-                        .get(hash)
-                        .map(|record| record.entry.time_added_to_pool_ms)
-                        .unwrap_or(0)
-                };
-                time_of(b).cmp(&time_of(a)).then_with(|| a.cmp(b))
-            });
-        }
+        let by_lock = by_lock
+            .into_iter()
+            .map(|(lock_hash, mut entries)| {
+                entries.sort_by(|(a_time, a_hash), (b_time, b_hash)| {
+                    b_time.cmp(a_time).then_with(|| a_hash.cmp(b_hash))
+                });
+                (
+                    lock_hash,
+                    entries.into_iter().map(|(_, hash)| hash).collect(),
+                )
+            })
+            .collect();
 
         Self {
             records: by_hash,
