@@ -447,6 +447,88 @@ async fn phase2_state_fields_report_absence_of_evidence() {
     assert_eq!(body["state"]["deepForkDetected"], false);
 }
 
+/// The export must read the pinned store, never the background warmup cache.
+///
+/// The public asset endpoints serve cached aggregates that were computed under
+/// a *different* read view. Labelling those with this request's anchor would
+/// hand the verifier numbers and an anchor that never coexisted — the exact
+/// incoherence the read pin exists to prevent.
+#[tokio::test]
+async fn the_export_ignores_the_warmup_cache() {
+    let store = test_store();
+    let hash = token_hash(0xc9);
+    seed_anchor(&store, 7_000, &token_hash(0x0c));
+    seed_token(&store, &hash, &[(20260101, 100, 50), (20260102, 40, 20)]);
+
+    let state = test_app_state(test_config(store));
+    // Warm the caches the way a running API would, then poison the token entry
+    // so a handler that consults it cannot accidentally agree with the store.
+    dispatch_initial_warmup(state.clone(), false).await;
+    assert!(
+        state.token_cache.load().is_some(),
+        "the cache must be populated, or this test proves nothing"
+    );
+    state
+        .token_cache
+        .store(std::sync::Arc::new(Some(vec![poisoned_token_entry(
+            &hex0x(&hash),
+        )])));
+
+    let app = axum::Router::new()
+        .nest("/api/v1", api_routes())
+        .layer(axum::middleware::from_fn(ckbadger_api::pin_read_view))
+        .with_state(state);
+
+    let (status, body) = post(
+        app,
+        serde_json::json!({ "entities": [{ "kind": "token", "id": hex0x(&hash) }] }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    let entity = &body["entities"][0];
+    assert_eq!(
+        entity["currentCapacity"], "140",
+        "the current total must come from the pinned store, not the cache"
+    );
+    assert_eq!(entity["currentKnowledge"], "70");
+    assert_eq!(entity["rowCount"], 2);
+    let daily = entity["daily"].as_array().unwrap();
+    assert_eq!(daily[0]["capacityDelta"], "100");
+    assert_eq!(daily[1]["capacityDelta"], "40");
+}
+
+/// A cache entry claiming wildly different totals for the same token.
+fn poisoned_token_entry(id: &str) -> ckbadger_api::warmup::CachedAssetEntry {
+    ckbadger_api::warmup::CachedAssetEntry {
+        id: id.to_string(),
+        asset_type: "token".to_string(),
+        standard: "xudt".to_string(),
+        name: Some("Stale".to_string()),
+        symbol: Some("STALE".to_string()),
+        icon_url: None,
+        holders_count: 0,
+        transfers_count: 0,
+        transfers_24h: 0,
+        decimals: Some(8),
+        total_supply: None,
+        maximum_supply: None,
+        content_type: None,
+        content_size: None,
+        cluster_id: None,
+        cluster_name: None,
+        owned_capacity: Some("999999999".to_string()),
+        owned_knowledge: Some("888888888".to_string()),
+        composition_tier: None,
+        onchain_ratio: None,
+        onchain_count: None,
+        type_code_hash: Some(hex0x(&[0xa1; 32])),
+        type_hash_type: Some("type".to_string()),
+        type_args: Some("0x01".to_string()),
+        description: None,
+    }
+}
+
 /// The endpoint reads; it must leave the store byte-identical.
 #[tokio::test]
 async fn the_export_writes_nothing() {

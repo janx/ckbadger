@@ -159,12 +159,15 @@ impl FacetDifference {
             Some(date) => format!("{} {}", self.facet.as_str(), date),
             None => self.facet.as_str().to_string(),
         };
+        // Both operands are already in the line, so a difference too wide for
+        // i128 says so rather than wrapping into a plausible-looking number.
+        let diff = match self.actual.checked_sub(self.expected) {
+            Some(diff) => diff.to_string(),
+            None => "overflow".to_string(),
+        };
         format!(
-            "{where_} {}: expected {} but the index has {} (diff {})",
-            self.component,
-            self.expected,
-            self.actual,
-            self.actual - self.expected
+            "{where_} {}: expected {} but the index has {} (diff {diff})",
+            self.component, self.expected, self.actual,
         )
     }
 }
@@ -506,7 +509,22 @@ fn parse_capacity_shannons(raw: &str) -> anyhow::Result<i128> {
 }
 
 /// The UTC+8 day key a block's timestamp falls in.
+///
+/// The shared helper answers 1970-01-01 for a timestamp it cannot represent,
+/// which would quietly fold a whole entity's history into one bogus day. The
+/// range is checked here first, because the helper is shared read-path code
+/// this verifier must not change.
 fn date_key(timestamp_ms: i64) -> anyhow::Result<u32> {
+    if timestamp_ms <= 0 {
+        anyhow::bail!(
+            "block timestamp {timestamp_ms} ms is not after the Unix epoch: no CKB block \
+             carries such a timestamp"
+        );
+    }
+    let seconds = timestamp_ms.div_euclid(1_000);
+    if chrono::DateTime::from_timestamp(seconds, 0).is_none() {
+        anyhow::bail!("block timestamp {timestamp_ms} ms is outside the representable date range");
+    }
     ckbadger_common::block_date_from_ms(timestamp_ms)
         .format("%Y%m%d")
         .to_string()
@@ -816,24 +834,35 @@ struct TokenListEntry {
 /// Default candidates: the known incident selectors plus the head of the API's
 /// token directory. The directory is a risk hint only — it can never prove its
 /// own completeness, which is why it does not decide the verdict.
-fn default_candidates(ctx: &CheckContext) -> Vec<EntitySelector> {
+///
+/// Returns the reason the directory contributed nothing, when it did not: a
+/// candidate set built from a directory that could not be read is narrower than
+/// the run claims, and swallowing that error hid it.
+fn default_candidates(ctx: &CheckContext) -> (Vec<EntitySelector>, Option<String>) {
     let mut candidates = incident_selectors(ctx.network);
     let listed: Result<Vec<TokenListEntry>, _> = super::checks::api_get(ctx, "tokens?limit=8");
-    if let Ok(entries) = listed {
-        for entry in entries {
-            if candidates.len() >= MAX_ENTITIES_PER_RUN {
-                break;
+    let uncovered = match listed {
+        Ok(entries) => {
+            for entry in entries {
+                if candidates.len() >= MAX_ENTITIES_PER_RUN {
+                    break;
+                }
+                let selector = EntitySelector {
+                    kind: "token".to_string(),
+                    id: entry.type_script_hash,
+                };
+                if !candidates.contains(&selector) {
+                    candidates.push(selector);
+                }
             }
-            let selector = EntitySelector {
-                kind: "token".to_string(),
-                id: entry.type_script_hash,
-            };
-            if !candidates.contains(&selector) {
-                candidates.push(selector);
-            }
+            None
         }
-    }
-    candidates
+        Err(error) => Some(format!(
+            "the token directory could not be listed ({error:#}), so only the known incident \
+             selectors were considered"
+        )),
+    };
+    (candidates, uncovered)
 }
 
 /// The chain-side phase: qualify the source, then enumerate each entity.
@@ -954,8 +983,12 @@ impl Check for EntityCapacityHistoryMatchesChain {
             .clone()
             .ok_or_else(|| anyhow!("entity history verification requires --rpc-url"))?;
 
+        let mut inconclusive: Vec<(EntitySelector, String)> = Vec::new();
+        let mut candidate_gap: Option<String> = None;
         let selectors: Vec<EntitySelector> = if ctx.entities.is_empty() {
-            default_candidates(ctx)
+            let (candidates, gap) = default_candidates(ctx);
+            candidate_gap = gap;
+            candidates
         } else {
             ctx.entities.clone()
         };
@@ -1015,16 +1048,19 @@ impl Check for EntityCapacityHistoryMatchesChain {
         // Resolving each selector to its full type script is a blocking API
         // read, so it happens before the chain work moves to its own thread.
         let mut scripts: Vec<(EntitySelector, Script)> = Vec::with_capacity(supported.len());
-        let mut inconclusive: Vec<String> = Vec::new();
         for selector in &supported {
             match export
                 .entities
                 .iter()
                 .find(|entity| entity.id.eq_ignore_ascii_case(&selector.id))
             {
-                None => inconclusive.push(format!("the export did not return {selector}")),
-                Some(exported) if !exported.complete => inconclusive.push(format!(
-                    "{selector}: the export of this entity is incomplete"
+                None => inconclusive.push((
+                    selector.clone(),
+                    "the export did not return this entity".to_string(),
+                )),
+                Some(exported) if !exported.complete => inconclusive.push((
+                    selector.clone(),
+                    "the export of this entity is incomplete".to_string(),
                 )),
                 Some(_) => {
                     scripts.push((selector.clone(), resolve_token_script(ctx, &selector.id)?))
@@ -1077,15 +1113,12 @@ impl Check for EntityCapacityHistoryMatchesChain {
         manifest.rpc_requests = work.rpc_requests;
         manifest.history_records = work.history_records;
 
-        for selector in &supported {
-            if let Some(reason) = inconclusive
-                .iter()
-                .find(|reason| reason.contains(&selector.to_string()))
-            {
-                manifest
-                    .entities
-                    .push(EntityCoverage::incomplete(selector, reason.clone()));
-            }
+        // Coverage is attached by identity: matching a selector to its reason by
+        // substring mis-attributes whenever one id contains another.
+        for (selector, reason) in &inconclusive {
+            manifest
+                .entities
+                .push(EntityCoverage::incomplete(selector, reason.clone()));
         }
 
         let mut findings: Vec<Finding> = Vec::new();
@@ -1100,21 +1133,21 @@ impl Check for EntityCapacityHistoryMatchesChain {
                 .expect("only exported entities reach the chain phase");
 
             if !outcome.complete {
-                inconclusive.push(format!(
-                    "{selector}: history not fully covered ({})",
+                let reason = format!(
+                    "history not fully covered ({})",
                     outcome.uncovered.join("; ")
-                ));
-                manifest.entities.push(EntityCoverage::incomplete(
-                    selector,
-                    outcome.uncovered.join("; "),
-                ));
+                );
+                manifest
+                    .entities
+                    .push(EntityCoverage::incomplete(selector, reason.clone()));
+                inconclusive.push((selector.clone(), reason));
                 continue;
             }
 
             let comparison = compare_token_history(&outcome.expectation, exported)?;
             let differences = comparison.differences;
             for reason in &comparison.uncovered {
-                inconclusive.push(format!("{selector}: {reason}"));
+                inconclusive.push((selector.clone(), reason.clone()));
             }
             checked += 1;
             manifest.entities.push(EntityCoverage::complete(
@@ -1148,24 +1181,32 @@ impl Check for EntityCapacityHistoryMatchesChain {
             manifest.write(dir)?;
         }
 
+        let uncovered = |reasons: &[(EntitySelector, String)]| {
+            reasons
+                .iter()
+                .map(|(selector, reason)| format!("{selector}: {reason}"))
+                .chain(candidate_gap.clone())
+                .collect::<Vec<_>>()
+                .join("; ")
+        };
+
         if !findings.is_empty() {
             let mut result = CheckResult::fail(checked, findings);
-            if !inconclusive.is_empty() {
-                result.detail = Some(format!("not covered: {}", inconclusive.join("; ")));
+            if !inconclusive.is_empty() || candidate_gap.is_some() {
+                result.detail = Some(format!("not covered: {}", uncovered(&inconclusive)));
             }
             return Ok(result);
         }
         if checked == 0 {
             return Ok(CheckResult::inconclusive(format!(
                 "no entity could be verified: {}",
-                inconclusive.join("; ")
+                uncovered(&inconclusive)
             )));
         }
-        if !inconclusive.is_empty() {
+        if !inconclusive.is_empty() || candidate_gap.is_some() {
             return Ok(CheckResult::inconclusive(format!(
-                "{checked} entity/entities matched the chain, but {} could not be covered: {}",
-                inconclusive.len(),
-                inconclusive.join("; ")
+                "{checked} entity/entities matched the chain, but the run is not complete: {}",
+                uncovered(&inconclusive)
             )));
         }
         Ok(CheckResult::pass_with_detail(
@@ -1685,6 +1726,32 @@ mod tests {
             "{:?}",
             second.uncovered
         );
+    }
+
+    /// The shared date helper answers 1970-01-01 for a timestamp it cannot
+    /// represent, which would fold a whole entity's history into one bogus day.
+    #[test]
+    fn a_timestamp_the_shared_helper_cannot_represent_is_refused() {
+        assert!(date_key(0).is_err(), "no CKB block predates the epoch");
+        assert!(date_key(-1).is_err());
+        assert!(date_key(i64::MAX).is_err());
+        // A real mainnet-era timestamp still resolves.
+        assert_eq!(date_key(1_789_146_000_000).unwrap(), 20260912);
+    }
+
+    #[test]
+    fn a_difference_too_wide_for_i128_renders_as_overflow_not_a_wrapped_number() {
+        let rendered = FacetDifference {
+            facet: Facet::Current,
+            component: "capacity",
+            date: None,
+            expected: i128::MIN,
+            actual: i128::MAX,
+        }
+        .render();
+        assert!(rendered.contains("overflow"), "{rendered}");
+        assert!(rendered.contains(&i128::MAX.to_string()), "{rendered}");
+        assert!(rendered.contains(&i128::MIN.to_string()), "{rendered}");
     }
 
     #[test]
