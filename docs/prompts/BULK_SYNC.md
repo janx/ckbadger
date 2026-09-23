@@ -57,6 +57,17 @@ Bulk sync is the high-throughput index building path used with a fresh store.
     fresh-store bulk-build engines concurrently. This is a resource invariant, not a fallback:
     failure of one network stops sequenced admission instead of silently skipping to another.
 
+12. **Bulk records no undo; the handoff tip is the rollback coverage floor**
+    Bulk sync writes no `reorg_undo_log_by_block` entries, so nothing it wrote can be rolled
+    back. At completion the indexer writes `sync_meta` → `entity_stats_undo_contract` with
+    `coverage_floor_block` = the **handoff tip**, the last block bulk actually wrote — never the
+    chain tip it was racing, which is higher by up to `bulk_sync_threshold` and would claim
+    coverage over blocks the store does not contain. Live sync then has `bulk_sync_threshold`
+    blocks in which to build undo coverage before a legal shallow fork could reach below the
+    floor, so `indexer.bulk_sync_threshold >= DEEP_FORK_DEPTH` (36) is validated at config load.
+    A rollback below the floor is rebuild-required, never repaired; see
+    [REORG_HANDLING.md](REORG_HANDLING.md).
+
 ## Design Implications
 
 - Keep bulk sync logic simple and write-throughput oriented.
