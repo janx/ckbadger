@@ -44,8 +44,9 @@ pub use indexer::Indexer;
 pub fn persist_bulk_sync_completion_status_for_test(
     store: &ckbadger_store::CkbadgerStore,
     chain_tip: u64,
+    handoff_tip: i64,
 ) -> anyhow::Result<()> {
-    indexer::persist_bulk_sync_completion_status(store, chain_tip)
+    indexer::persist_bulk_sync_completion_status(store, chain_tip, handoff_tip)
 }
 
 #[doc(hidden)]

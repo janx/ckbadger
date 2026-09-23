@@ -2861,14 +2861,126 @@ mod tests {
     };
     use crate::sync::bulk_build::build_object_collection_activity_rows;
     use crate::sync::bulk_build::facts::{
-        CellFacts, CellProtocolFacts, CellSemanticTag, ClusterProtocolFacts, DidCkbProtocolFacts,
-        DotbitProtocolFacts, MnftClassProtocolFacts, MnftIssuerProtocolFacts,
+        BitCellProtocolFacts, CellFacts, CellProtocolFacts, CellSemanticTag, ClusterProtocolFacts,
+        DidCkbProtocolFacts, DotbitProtocolFacts, MnftClassProtocolFacts, MnftIssuerProtocolFacts,
         MnftTokenProtocolFacts, OutPointKey, ResolvedInputFacts, ResolvedTxFacts,
         SporeProtocolFacts,
     };
     use crate::sync::bulk_build::unique_temp_test_dir;
     use crate::sync::types::InternId;
     use crate::sync::TEST_CELLBASE_WITNESS;
+
+    /// Review m9: bulk build and live sync must classify the SAME cell into the
+    /// same object collection, for all four object sub-protocols.
+    ///
+    /// The previous test compared the shared helper with itself and never
+    /// touched bulk's classifier, so it could not have caught the `.bit Cell`
+    /// asymmetry it was written for. This one runs the real bulk path — the
+    /// cell's parsed `CellProtocolFacts` through
+    /// `classify_nft_collection_from_protocol` — against the helper the live
+    /// creation and consume sides use, on the same bytes.
+    #[test]
+    fn bulk_and_live_classify_every_object_protocol_identically() {
+        use crate::parser::bit_cell::BIT_CELL_CODE_HASH_TESTNET;
+        use crate::parser::dotbit::DOTBIT_ACCOUNT_CELL_TYPE_ID;
+        use crate::rpc::parse_hex_to_bytes;
+        use crate::sync::dao_helpers::classify_object_collection_id;
+        use ckbadger_store::types::{
+            BIT_CELL_SENTINEL_COLLECTION, DID_CKB_SENTINEL_COLLECTION, DOTBIT_SENTINEL_COLLECTION,
+        };
+
+        let mnft_class_id = vec![0x5A; 24];
+        let mut mnft_args = mnft_class_id.clone();
+        mnft_args.extend_from_slice(&42u32.to_be_bytes());
+
+        /// `(label, type code hash, type args, bulk facts, expected collection id)`
+        type ClassificationCase = (
+            &'static str,
+            Vec<u8>,
+            Vec<u8>,
+            Option<CellProtocolFacts>,
+            Vec<u8>,
+        );
+
+        let cases: Vec<ClassificationCase> = vec![
+            (
+                "mNFT token",
+                parse_hex_to_bytes(MNFT_TOKEN_CODE_HASH),
+                mnft_args.clone(),
+                Some(CellProtocolFacts::MnftToken(MnftTokenProtocolFacts {
+                    token_id: mnft_args.clone(),
+                    class_id: mnft_class_id.clone(),
+                    token_index: 42,
+                    characteristic: Vec::new(),
+                    configure: 0,
+                    state: 0,
+                })),
+                mnft_class_id.clone(),
+            ),
+            (
+                ".bit account",
+                parse_hex_to_bytes(DOTBIT_ACCOUNT_CELL_TYPE_ID),
+                Vec::new(),
+                Some(CellProtocolFacts::Dotbit(DotbitProtocolFacts {
+                    account_id: [0x11; 20],
+                    account: None,
+                    next_account_id: None,
+                    expired_at: None,
+                    registered_at: None,
+                    status: None,
+                })),
+                DOTBIT_SENTINEL_COLLECTION.to_vec(),
+            ),
+            (
+                ".bit Cell",
+                parse_hex_to_bytes(BIT_CELL_CODE_HASH_TESTNET),
+                Vec::new(),
+                Some(CellProtocolFacts::BitCell(BitCellProtocolFacts {
+                    identity_id: [0x33; 32],
+                    account_id: [0x44; 20],
+                    account: "example.bit".to_string(),
+                    expired_at: 0,
+                })),
+                BIT_CELL_SENTINEL_COLLECTION.to_vec(),
+            ),
+            (
+                "did:ckb",
+                {
+                    let (output, _) = crate::parser::test_helpers::real_did_ckb::cell_32();
+                    parse_hex_to_bytes(&output.type_.as_ref().unwrap().code_hash)
+                },
+                Vec::new(),
+                Some(CellProtocolFacts::DidCkb(DidCkbProtocolFacts {
+                    did_id: vec![0x22; 32],
+                })),
+                DID_CKB_SENTINEL_COLLECTION.to_vec(),
+            ),
+        ];
+
+        for (label, code_hash, type_args, facts, expected) in cases {
+            let from_bulk = classify_nft_collection_from_protocol(&facts);
+            let from_live = classify_object_collection_id(&code_hash, &type_args);
+            assert_eq!(
+                from_bulk,
+                Some(expected.clone()),
+                "{label}: bulk classification"
+            );
+            assert_eq!(
+                from_live,
+                Some(expected),
+                "{label}: live classification (creation and consume share this helper)"
+            );
+            assert_eq!(
+                from_bulk, from_live,
+                "{label}: a rebuilt database must agree with an incrementally synced one"
+            );
+        }
+
+        // And the negative: a plain cell classifies to no collection on both
+        // sides, so neither invents a row for it.
+        assert_eq!(classify_nft_collection_from_protocol(&None), None);
+        assert_eq!(classify_object_collection_id(&[0x77; 32], &[]), None);
+    }
 
     macro_rules! cell_facts {
         ($($body:tt)*) => {

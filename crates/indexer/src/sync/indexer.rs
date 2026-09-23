@@ -315,9 +315,16 @@ pub(crate) fn take_bulk_sync_completion_transition(
     previously_bulk_sync_active && !currently_bulk_sync_active
 }
 
+/// Mark bulk build complete.
+///
+/// `chain_tip` is the tip bulk was racing towards; `handoff_tip` is the last
+/// block it actually WROTE. They differ by up to `bulk_sync_threshold`, because
+/// bulk stops once it is within that threshold of the tip and hands the rest to
+/// live sync.
 pub(crate) fn persist_bulk_sync_completion_status(
     store: &CkbadgerStore,
     chain_tip: u64,
+    handoff_tip: i64,
 ) -> Result<()> {
     let chain_tip_i64 = i64::try_from(chain_tip).map_err(|_| {
         anyhow!(
@@ -327,13 +334,23 @@ pub(crate) fn persist_bulk_sync_completion_status(
         )
     })?;
     // Bulk build never records undo entries (`BULK_SYNC.md`: bulk is empty-store
-    // only and never rolls back), so its completion block IS the coverage floor
-    // the live process starts from. Writing the contract here is what makes a
-    // freshly built store eligible for live writes at all.
+    // only and never rolls back), so the last block it WROTE is the coverage
+    // floor the live process starts from. It must be the handoff tip, not the
+    // chain tip: those differ by up to `bulk_sync_threshold`, and a floor above
+    // what the store contains would claim coverage over blocks bulk never wrote
+    // and make every early live reorg demand a rebuild. Writing the contract
+    // here is what makes a freshly built store eligible for live writes at all.
+    if handoff_tip > chain_tip_i64 {
+        bail!(
+            "bulk handoff tip is above the chain tip it was racing: handoff_tip={}, chain_tip={}",
+            handoff_tip,
+            chain_tip_i64
+        );
+    }
     store.put_entity_stats_undo_contract(&ckbadger_store::types::EntityStatsUndoContract {
         version: ckbadger_store::types::ENTITY_STATS_UNDO_CONTRACT_VERSION,
-        coverage_floor_block: chain_tip_i64,
-        updated_at_block: chain_tip_i64,
+        coverage_floor_block: handoff_tip,
+        updated_at_block: handoff_tip,
     })?;
     store.update_sync_status(|status| {
         status.mark_bulk_sync_completed(chain_tip_i64);
@@ -1533,12 +1550,12 @@ mod tests {
             .update_sync_status(|status| status.init_sync_start(128, true))
             .unwrap();
 
-        persist_bulk_sync_completion_status(&store, 256).unwrap();
+        persist_bulk_sync_completion_status(&store, 256, 200).unwrap();
         let first = store.get_sync_status().unwrap();
         assert!(first.bulk_sync_completed_at.is_some());
         assert_eq!(first.bulk_sync_completed_block, Some(256));
 
-        persist_bulk_sync_completion_status(&store, 512).unwrap();
+        persist_bulk_sync_completion_status(&store, 512, 500).unwrap();
         let second = store.get_sync_status().unwrap();
         assert_eq!(
             second.bulk_sync_completed_block,
@@ -1553,8 +1570,25 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();
 
-        let err = persist_bulk_sync_completion_status(&store, u64::MAX).unwrap_err();
+        let err = persist_bulk_sync_completion_status(&store, u64::MAX, 0).unwrap_err();
         assert!(err.to_string().contains("chain tip over i64 range"));
+    }
+
+    /// The coverage floor is a claim about blocks the store CONTAINS. A handoff
+    /// tip above the chain tip bulk was racing cannot be true, and writing it
+    /// would promise coverage over blocks nothing ever wrote.
+    #[test]
+    fn persist_bulk_sync_completion_status_rejects_a_handoff_above_the_chain_tip() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+
+        let err = persist_bulk_sync_completion_status(&store, 500, 501).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("bulk handoff tip is above the chain tip"),
+            "got: {err}"
+        );
+        assert!(store.get_entity_stats_undo_contract().unwrap().is_none());
     }
 
     #[test]

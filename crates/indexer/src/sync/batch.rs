@@ -1244,9 +1244,17 @@ pub const ENTITY_STATS_UNDO_RETAIN_BLOCKS: i64 = 1_000;
 /// Run one bounded hourly-retention step for each per-entity hourly family that
 /// has a retention policy, staging deletions and state into `batch`.
 ///
-/// Spore hourly buckets have no retention policy today and are deliberately not
-/// touched: inventing one would delete data no contract promises to expire (see
-/// `docs/STORE_SCHEMA.md`).
+/// Spore hourly buckets (`SPORE_HOURLY`) have no retention policy today and are
+/// deliberately not touched: inventing one would delete data no contract
+/// promises to expire. Identity collections (the `.bit` sentinels under
+/// `OBJECT_HOURLY`) are excluded for the same reason — only mNFT classes
+/// expire, which `stage_hourly_retention_step` decides from each collection's
+/// aggregate.
+///
+/// `docs/STORE_SCHEMA.md` does not document this yet; writing the
+/// `sync_meta` → `hourly_retention_state` section, and the note that
+/// `SPORE_HOURLY` never expires, is Phase 7 of
+/// `docs/superpowers/plans/2026-09-23-sync-correctness-and-performance-fix.md`.
 ///
 /// Bulk build is refused here rather than only at the call site: bulk has no
 /// reorg workflow and no undo entries, so it has nothing to protect the
@@ -1590,9 +1598,14 @@ impl Indexer {
             let chain_tip = self.progress.target();
             let sst_gb = stats.sst_files_size as f64 / (1024.0 * 1024.0 * 1024.0);
 
-            if let Err(e) =
-                persist_bulk_sync_completion_status(self.writer.store().as_ref(), chain_tip)
-            {
+            // `current` is the last block actually written; it is what the
+            // entity-stats coverage floor must record.
+            let handoff_tip = i64::try_from(current).unwrap_or(i64::MAX);
+            if let Err(e) = persist_bulk_sync_completion_status(
+                self.writer.store().as_ref(),
+                chain_tip,
+                handoff_tip,
+            ) {
                 warn!(
                     error = %e,
                     chain_tip,

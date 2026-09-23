@@ -3216,11 +3216,14 @@ mod tests {
     // Task 1.3 — `.bit Cell` create → consume classification symmetry
     // -----------------------------------------------------------------------
 
-    /// The live consume path must classify every object sub-protocol the
-    /// creation path classifies. `classify_object_collection_id` (outputs) and
-    /// bulk build's `classify_nft_collection_from_protocol` both cover mNFT,
-    /// `.bit account`, `.bit Cell` and did:ckb; the live input side listed only
-    /// three of the four.
+    /// The live CONSUME call site must delegate to the shared classifier.
+    ///
+    /// It used to carry its own predicate list that omitted `.bit Cell`, so a
+    /// consumed `.bit Cell` was never withdrawn from the sentinel collection's
+    /// daily row. Bulk-vs-live agreement across all four sub-protocols is
+    /// covered by
+    /// `bulk_build::owners::object::tests::bulk_and_live_classify_every_object_protocol_identically`;
+    /// this pins that `pipeline.rs`'s consume path reaches that same answer.
     #[test]
     fn live_consume_classifies_bit_cell_like_creation() {
         use crate::parser::bit_cell::{BIT_CELL_CODE_HASH_MAINNET, BIT_CELL_CODE_HASH_TESTNET};
@@ -3240,73 +3243,6 @@ mod tests {
                 "consume must classify `.bit Cell` exactly as creation does ({code_hash_hex})"
             );
         }
-    }
-
-    /// Task 2.8 Step 1: before deleting the consume side's `mnft_type_index`
-    /// lookup, prove the shared helper gives the same collection id for every
-    /// fixture the lookup would have answered.
-    ///
-    /// They agree by construction — the index value is `token.class_id`, which
-    /// `MnftParser` parses from `type_args[..24]`, and the helper returns
-    /// exactly those bytes — so the lookup was a second path to one answer,
-    /// with a strictly worse failure mode: it returns `None` for a cell the
-    /// index never captured, while the creation side still counted it.
-    #[test]
-    fn consumed_mnft_collection_matches_the_type_index() {
-        use crate::parser::mnft::MNFT_TOKEN_CODE_HASH;
-
-        let dir = tempfile::tempdir().unwrap();
-        let store = ckbadger_store::CkbadgerStore::open_domain(dir.path()).unwrap();
-        let code_hash = hex::decode(MNFT_TOKEN_CODE_HASH.trim_start_matches("0x")).unwrap();
-
-        for (label, class_id, token_index) in [
-            ("low ids", vec![0x00u8; 24], 0u32),
-            ("mixed", vec![0x5Au8; 24], 42),
-            ("high ids", vec![0xFFu8; 24], u32::MAX),
-        ] {
-            let mut type_args = class_id.clone();
-            type_args.extend_from_slice(&token_index.to_be_bytes());
-            let type_script_hash = {
-                let mut hash = [0u8; 32];
-                hash[..24].copy_from_slice(&class_id);
-                hash
-            };
-            // What the forward path would have written into the index.
-            store
-                .put_mnft_type_index_direct(
-                    &type_script_hash,
-                    &MnftTypeIndex {
-                        collection_id: class_id.clone(),
-                    },
-                )
-                .unwrap();
-
-            let from_index = store
-                .get_mnft_type_index(&type_script_hash)
-                .unwrap()
-                .map(|index| index.collection_id);
-            let from_helper = consumed_object_collection_id(&code_hash, Some(&type_args));
-            assert_eq!(
-                from_helper, from_index,
-                "{label}: the shared helper must agree with the index it replaces"
-            );
-            assert_eq!(from_helper, Some(class_id), "{label}");
-        }
-
-        // The failure mode the lookup had and the helper does not: a cell whose
-        // type index was never written is still classified on consumption, so
-        // the creation it matches is withdrawn.
-        let mut orphan_args = vec![0x77u8; 24];
-        orphan_args.extend_from_slice(&7u32.to_be_bytes());
-        assert!(
-            store.get_mnft_type_index(&[0x99u8; 32]).unwrap().is_none(),
-            "fixture: no index row for this cell"
-        );
-        assert_eq!(
-            consumed_object_collection_id(&code_hash, Some(&orphan_args)),
-            Some(vec![0x77u8; 24]),
-            "an un-indexed mNFT cell must still be withdrawn from its collection"
-        );
     }
 
     /// Create in block A, consume the same cell in block B on the same UTC+8
@@ -3346,96 +3282,6 @@ mod tests {
             "a `.bit Cell` created and consumed on the same day must leave a net-zero \
              object daily delta; a non-zero value is capacity that never comes back"
         );
-    }
-
-    /// Bulk build classifies all four object sub-protocols
-    /// (`classify_nft_collection_from_protocol`). Live consume must produce the
-    /// identical collection id for the same cell, or a rebuilt database
-    /// disagrees with an incrementally synced one.
-    #[test]
-    fn live_consume_matches_bulk_classification_for_every_object_protocol() {
-        use crate::parser::bit_cell::BIT_CELL_CODE_HASH_TESTNET;
-        use crate::parser::did_ckb::DidCkbParser;
-        use crate::parser::mnft::MNFT_TOKEN_CODE_HASH;
-        use ckbadger_store::types::{
-            BIT_CELL_SENTINEL_COLLECTION, DID_CKB_SENTINEL_COLLECTION, DOTBIT_SENTINEL_COLLECTION,
-        };
-
-        let dir = tempfile::tempdir().unwrap();
-        let store = ckbadger_store::CkbadgerStore::open_domain(dir.path()).unwrap();
-
-        // mNFT: bulk reads the class id straight out of the parsed facts, and
-        // the live creation side out of `type_args[..24]`.
-        let mnft_code = hex::decode(MNFT_TOKEN_CODE_HASH.trim_start_matches("0x")).unwrap();
-        let mnft_args = vec![0x5Au8; 24];
-        let mnft_type_hash = [0x79u8; 32];
-        store
-            .put_mnft_type_index_direct(
-                &mnft_type_hash,
-                &MnftTypeIndex {
-                    collection_id: mnft_args.clone(),
-                },
-            )
-            .unwrap();
-
-        let dotbit_code =
-            hex::decode(DOTBIT_ACCOUNT_CELL_TYPE_ID.trim_start_matches("0x")).unwrap();
-        let bit_cell_code =
-            hex::decode(BIT_CELL_CODE_HASH_TESTNET.trim_start_matches("0x")).unwrap();
-        let did_ckb_code = crate::parser::test_helpers::real_did_ckb::cell_32()
-            .0
-            .type_
-            .as_ref()
-            .map(|t| crate::rpc::parse_hex_to_bytes(&t.code_hash))
-            .expect("did:ckb fixture must carry a type script");
-        assert!(
-            DidCkbParser::is_type_script(&did_ckb_code),
-            "fixture must actually be a did:ckb type script"
-        );
-
-        let cases: [(&str, &[u8], &[u8], [u8; 32], Vec<u8>); 4] = [
-            (
-                "mNFT token",
-                &mnft_code,
-                &mnft_args,
-                mnft_type_hash,
-                mnft_args.clone(),
-            ),
-            (
-                ".bit account",
-                &dotbit_code,
-                &[],
-                [0x7Au8; 32],
-                DOTBIT_SENTINEL_COLLECTION.to_vec(),
-            ),
-            (
-                ".bit Cell",
-                &bit_cell_code,
-                &[],
-                [0x7Bu8; 32],
-                BIT_CELL_SENTINEL_COLLECTION.to_vec(),
-            ),
-            (
-                "did:ckb",
-                &did_ckb_code,
-                &[],
-                [0x7Cu8; 32],
-                DID_CKB_SENTINEL_COLLECTION.to_vec(),
-            ),
-        ];
-
-        for (label, code_hash, type_args, _type_script_hash, expected) in cases {
-            assert_eq!(
-                classify_object_collection_id(code_hash, type_args),
-                Some(expected.clone()),
-                "{label}: creation side"
-            );
-            assert_eq!(
-                consumed_object_collection_id(code_hash, Some(type_args)),
-                Some(expected),
-                "{label}: live consume side must match bulk and creation"
-            );
-        }
     }
 
     #[test]

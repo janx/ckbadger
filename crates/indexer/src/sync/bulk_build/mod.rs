@@ -101,6 +101,7 @@ impl BulkBuildEngine {
         persist_bulk_sync_completion_status(
             indexer.writer.store().as_ref(),
             indexer.progress.target(),
+            handoff_tip,
         )?;
         // No cancellation check here: once completion status is persisted, the
         // build is durable and clearing the marker is all that remains. Failing
@@ -3326,7 +3327,11 @@ pub(crate) fn materialize_bulk_stage_then_complete_sync_status_for_test(
             let was_bulk_sync_active = std::sync::atomic::AtomicBool::new(false);
             finalize_bulk_stage_handoff_state(&bulk_sync_allowed, &was_bulk_sync_active);
             if take_bulk_sync_completion_transition(&was_bulk_sync_active, false) {
-                persist_bulk_sync_completion_status(domain_store, chain_tip)?;
+                persist_bulk_sync_completion_status(
+                    domain_store,
+                    chain_tip,
+                    i64::try_from(chain_tip).unwrap(),
+                )?;
             }
 
             domain_store.get_sync_status()

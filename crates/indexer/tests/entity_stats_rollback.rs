@@ -653,10 +653,13 @@ async fn utc8_day_and_hour_boundary() {
 }
 
 #[tokio::test]
-async fn depth_1_and_36_ok_depth_37_deep_fork() {
+async fn depth_1_and_36_recover_exactly() {
     // Depth 1 and depth 36 are inside the shallow-fork window and must recover
-    // exactly; depth 37 is past DEEP_FORK_DEPTH and keeps its existing
-    // stop-and-alert semantics, which this matrix must not weaken.
+    // exactly. The depth gate itself lives in the CALLER
+    // (`sync/reorg.rs::handle_reorg`, `depth > DEEP_FORK_DEPTH`), not in
+    // `execute_reorg`, and needs RPC to decide — it is covered by
+    // `tests/reorg_handling.rs::test_deep_fork_flag`. Asserting it from here
+    // could only produce a near-unfalsifiable `is_err() || changed` check.
     for depth in [1i64, 36] {
         let original: Vec<Vec<BlockChanges>> = (1..=40i64)
             .map(|n| vec![blk(n).token(TOKEN_X, DAY, 1_000_000_000 * n as i128, 1_000_000)])
@@ -667,33 +670,11 @@ async fn depth_1_and_36_ok_depth_37_deep_fork() {
             .collect();
         let (replayed, direct) = run_scenario(&original, fork_point, &new_branch);
         assert_eq!(replayed, direct, "depth {depth} must recover exactly");
-    }
-
-    let (domain, append) = setup_split_stores();
-    let writer = BatchWriter::new(domain.clone(), append.clone());
-    for n in 1..=40i64 {
-        apply_commit(
-            &writer,
-            &domain,
-            &[blk(n).token(TOKEN_X, DAY, 1_000_000_000, 1_000_000)],
+        assert!(
+            !direct.is_empty(),
+            "depth {depth} fixture must produce rows"
         );
     }
-    let before = dump_entity_stats(&domain);
-    let result = writer
-        .execute_reorg(
-            append.as_ref(),
-            3,
-            &[0x03; 32],
-            40,
-            &[0x28; 32],
-            41,
-            &[0x29; 32],
-        )
-        .await;
-    assert!(
-        result.is_err() || dump_entity_stats(&domain) != before,
-        "a depth-37 fork must not be silently absorbed by the shallow path"
-    );
 }
 
 #[tokio::test]
@@ -1203,8 +1184,19 @@ async fn bulk_completion_writes_contract() {
     let (domain, _append) = setup_split_stores();
     assert!(domain.get_entity_stats_undo_contract().unwrap().is_none());
 
-    ckbadger_indexer::sync::persist_bulk_sync_completion_status_for_test(&domain, 22_500_000)
-        .unwrap();
+    // Bulk stops once it is within `bulk_sync_threshold` of the sampled chain
+    // tip, so the block it actually WROTE (the handoff tip) is below that tip.
+    // The floor is a statement about what exists in the store, so it has to be
+    // the handoff tip; taking the chain tip would claim coverage over blocks
+    // bulk never wrote and make every early live reorg demand a rebuild.
+    const SAMPLED_CHAIN_TIP: u64 = 22_500_000;
+    const HANDOFF_TIP: i64 = 22_499_000;
+    ckbadger_indexer::sync::persist_bulk_sync_completion_status_for_test(
+        &domain,
+        SAMPLED_CHAIN_TIP,
+        HANDOFF_TIP,
+    )
+    .unwrap();
 
     let contract = domain.get_entity_stats_undo_contract().unwrap().unwrap();
     assert_eq!(
@@ -1212,10 +1204,16 @@ async fn bulk_completion_writes_contract() {
         ckbadger_store::types::ENTITY_STATS_UNDO_CONTRACT_VERSION
     );
     assert_eq!(
-        contract.coverage_floor_block, 22_500_000,
-        "bulk records no undo entries, so its completion block IS the floor"
+        contract.coverage_floor_block, HANDOFF_TIP,
+        "bulk records no undo entries, so the last block it WROTE is the floor"
     );
-    assert_eq!(contract.updated_at_block, 22_500_000);
+    assert_eq!(contract.updated_at_block, HANDOFF_TIP);
+    assert!(
+        contract.coverage_floor_block
+            <= SAMPLED_CHAIN_TIP as i64 - ckbadger_indexer::config::DEEP_FORK_DEPTH as i64,
+        "the handoff must leave live at least DEEP_FORK_DEPTH blocks to build undo \
+         coverage over before a legal shallow fork can land"
+    );
     // And a store built that way now passes the startup gate.
     ckbadger_indexer::entry::ensure_entity_stats_undo_contract_on_startup(&domain).unwrap();
 }

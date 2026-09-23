@@ -102,6 +102,21 @@ impl Config {
         if self.bulk_memory_budget_gb == Some(0) {
             bail!("config: indexer.bulk_memory_budget_gb must be > 0 when set");
         }
+        // Bulk build records no undo entries and stops once it is within this
+        // threshold of the chain tip, so the entity-stats coverage floor lands
+        // at the last block it wrote. Live sync then has `bulk_sync_threshold`
+        // blocks in which to build undo coverage before a legal shallow fork
+        // (up to `DEEP_FORK_DEPTH`) can reach below the floor and demand a
+        // rebuild. A threshold under that depth leaves no such room.
+        if self.bulk_sync_threshold < DEEP_FORK_DEPTH {
+            bail!(
+                "config: indexer.bulk_sync_threshold ({}) must be >= DEEP_FORK_DEPTH ({}), \
+                 otherwise bulk can hand off with fewer blocks than a legal shallow fork spans \
+                 and the first reorg after handoff would demand a full rebuild",
+                self.bulk_sync_threshold,
+                DEEP_FORK_DEPTH
+            );
+        }
         Ok(())
     }
 }
@@ -109,6 +124,25 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The handoff must leave live at least a legal shallow fork's worth of
+    /// blocks to build undo coverage over, or the first reorg after bulk would
+    /// reach below the coverage floor and demand a rebuild.
+    #[test]
+    fn test_bulk_sync_threshold_below_deep_fork_depth_is_rejected() {
+        let mut config = make_valid_config();
+        config.bulk_sync_threshold = DEEP_FORK_DEPTH;
+        config
+            .validate()
+            .expect("exactly DEEP_FORK_DEPTH is allowed");
+
+        config.bulk_sync_threshold = DEEP_FORK_DEPTH - 1;
+        let err = config.validate().unwrap_err();
+        assert!(
+            err.to_string().contains("must be >= DEEP_FORK_DEPTH"),
+            "got: {err}"
+        );
+    }
 
     #[test]
     fn test_bulk_sync_threshold_is_twice_deep_fork_depth() {
