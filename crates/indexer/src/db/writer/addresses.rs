@@ -293,6 +293,11 @@ pub(crate) struct ScriptReferenceRollupState {
     pub(crate) reference_mappings: Vec<((Vec<u8>, u8), Option<Vec<u8>>)>,
     pub(crate) versions: Vec<(Vec<u8>, ScriptVersionInfo)>,
     pub(crate) families: Vec<(String, ScriptFamilyInfo)>,
+    /// The committed rows this rollup was computed FROM, so a caller can stage
+    /// only the rows whose value actually changed. Read once here rather than
+    /// re-read per row at write time.
+    pub(crate) existing_versions: HashMap<Vec<u8>, ScriptVersionInfo>,
+    pub(crate) existing_families: HashMap<String, ScriptFamilyInfo>,
 }
 
 pub(crate) fn build_script_reference_rollup_state(
@@ -300,11 +305,12 @@ pub(crate) fn build_script_reference_rollup_state(
     mut reference_mappings: Vec<((Vec<u8>, u8), Option<Vec<u8>>)>,
     reference_info_map: HashMap<(Vec<u8>, u8), ScriptReferenceInfo>,
 ) -> Result<ScriptReferenceRollupState> {
-    let existing_versions = store.list_script_versions()?;
-    let existing_families = store.list_script_families()?;
+    let existing_versions: HashMap<Vec<u8>, ScriptVersionInfo> =
+        store.list_script_versions()?.into_iter().collect();
+    let existing_families: HashMap<String, ScriptFamilyInfo> =
+        store.list_script_families()?.into_iter().collect();
 
-    let mut version_map: HashMap<Vec<u8>, ScriptVersionInfo> =
-        existing_versions.into_iter().collect();
+    let mut version_map: HashMap<Vec<u8>, ScriptVersionInfo> = existing_versions.clone();
     for version in version_map.values_mut() {
         clear_script_version_usage(version);
     }
@@ -404,7 +410,7 @@ pub(crate) fn build_script_reference_rollup_state(
         )?;
     }
 
-    let mut family_map: HashMap<String, ScriptFamilyInfo> = existing_families.into_iter().collect();
+    let mut family_map: HashMap<String, ScriptFamilyInfo> = existing_families.clone();
     for family in family_map.values_mut() {
         clear_script_family_usage(family);
     }
@@ -476,6 +482,8 @@ pub(crate) fn build_script_reference_rollup_state(
         reference_mappings,
         versions,
         families,
+        existing_versions,
+        existing_families,
     })
 }
 
@@ -1301,7 +1309,21 @@ impl BatchWriter {
             reference_info_map,
         )?;
 
+        // Stage ONLY the rows whose value changed. The rollup is still
+        // recomputed in full from the same single path — there is no
+        // empty-input early return, because a mapping can be changed by
+        // another writer in this same batch and the version/family totals
+        // still have to be re-derived. What changes is the write volume: a
+        // block that moves nothing writes nothing, instead of rewriting all
+        // 1,903 mappings + 1,556 versions + 56 families (~700 KB on testnet)
+        // and filling the `script_versions` write buffer every ~5.6 blocks.
         for ((reference_hash, hash_type), version_hash) in rollups.reference_mappings {
+            let committed = self
+                .store
+                .get_script_reference_version_hash(hash_type, &reference_hash)?;
+            if committed == version_hash {
+                continue;
+            }
             if let Some(version_hash) = version_hash {
                 batch.put_script_reference_to_version(hash_type, &reference_hash, &version_hash);
             } else {
@@ -1309,9 +1331,15 @@ impl BatchWriter {
             }
         }
         for (version_hash, info) in rollups.versions {
+            if rollups.existing_versions.get(&version_hash) == Some(&info) {
+                continue;
+            }
             batch.put_script_version(&version_hash, &info);
         }
         for (family_id, info) in rollups.families {
+            if rollups.existing_families.get(&family_id) == Some(&info) {
+                continue;
+            }
             batch.put_script_family(&family_id, &info);
         }
 
@@ -1884,6 +1912,140 @@ mod tests {
         assert_eq!(family.live_cells_count, 7);
         assert_eq!(family.owned_capacity_sum, 640);
         assert_eq!(family.owned_knowledge_sum, 392);
+    }
+
+    /// P3.4: the rollup is recomputed every batch, but only rows whose bytes
+    /// changed may be written.
+    ///
+    /// Before this, every live block rewrote the whole rollup: 1,903 reference
+    /// mappings + 1,556 versions + 56 families (~700 KB) on testnet, which by
+    /// itself filled the `script_versions` write buffer every ~5.6 blocks and
+    /// drove the atomic-flush storm.
+    #[test]
+    fn materialize_writes_only_changed_rollup_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone(), store.clone());
+
+        let family_id = "default-lock";
+        let version_hash = vec![0x41; 32];
+        let type_reference_hash = vec![0x51; 32];
+        let data_reference_hash = vec![0x61; 32];
+
+        store
+            .put_script_family_direct(
+                family_id,
+                &ckbadger_store::ScriptFamilyInfo {
+                    family_id: family_id.to_string(),
+                    name: "Default Lock".to_string(),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        store
+            .put_script_version(
+                &version_hash,
+                &ckbadger_store::ScriptVersionInfo {
+                    version_hash: version_hash.clone(),
+                    family_id: Some(family_id.to_string()),
+                    canonical_reference_hash: Some(type_reference_hash.clone()),
+                    canonical_hash_type: Some(1),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        store
+            .put_script_reference_info_direct(
+                1,
+                &type_reference_hash,
+                &ScriptReferenceInfo {
+                    reference_hash: type_reference_hash.clone(),
+                    hash_type: 1,
+                    type_cells_count: 2,
+                    type_live_cells_count: 1,
+                    type_capacity_sum: 200,
+                    type_owned_capacity_sum: 90,
+                    type_used_capacity_sum: 122,
+                    type_owned_knowledge_sum: 55,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        store
+            .put_script_reference_info_direct(
+                0,
+                &data_reference_hash,
+                &ScriptReferenceInfo {
+                    reference_hash: data_reference_hash.clone(),
+                    hash_type: 0,
+                    lock_cells_count: 3,
+                    lock_live_cells_count: 2,
+                    lock_capacity_sum: 300,
+                    lock_owned_capacity_sum: 180,
+                    lock_used_capacity_sum: 183,
+                    lock_owned_knowledge_sum: 110,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        store
+            .put_script_reference_to_version_direct(1, &type_reference_hash, &version_hash)
+            .unwrap();
+        store
+            .put_script_reference_to_version_direct(0, &data_reference_hash, &version_hash)
+            .unwrap();
+
+        // Baseline: the committed rollup now matches the reference info.
+        writer.refresh_script_reference_rollups().unwrap();
+
+        // Nothing changed -> nothing staged. No early return on empty input:
+        // the rollup is still recomputed, it just finds no differences.
+        let mut unchanged_batch = StoreBatch::new(&store);
+        writer
+            .materialize_script_versions_and_families(&HashMap::new(), &mut unchanged_batch)
+            .unwrap();
+        assert_eq!(
+            unchanged_batch.len(),
+            0,
+            "an unchanged rollup must stage zero writes"
+        );
+
+        let baseline_version = store.get_script_version(&version_hash).unwrap().unwrap();
+        assert_eq!(baseline_version.type_capacity_sum, 200);
+        let baseline_family = store.get_script_family(family_id).unwrap().unwrap();
+        assert_eq!(baseline_family.owned_capacity_sum, 90);
+
+        // One reference changes -> only the version and family rows it feeds.
+        // The reference->version mappings are unchanged and must not be
+        // rewritten.
+        let mut changed = store
+            .get_script_reference_info(1, &type_reference_hash)
+            .unwrap()
+            .unwrap();
+        changed.type_capacity_sum += 100;
+        changed.type_owned_capacity_sum += 100;
+        changed.type_owned_knowledge_sum += 40;
+        let mut updated_references = HashMap::new();
+        updated_references.insert((type_reference_hash.clone(), 1u8), changed);
+
+        let mut changed_batch = StoreBatch::new(&store);
+        writer
+            .materialize_script_versions_and_families(&updated_references, &mut changed_batch)
+            .unwrap();
+        assert_eq!(
+            changed_batch.len(),
+            2,
+            "only the affected version and family rows may be staged"
+        );
+        changed_batch.commit().unwrap();
+
+        let version = store.get_script_version(&version_hash).unwrap().unwrap();
+        assert_eq!(version.type_capacity_sum, 300);
+        assert_eq!(version.type_owned_capacity_sum, 190);
+        assert_eq!(version.type_owned_knowledge_sum, 95);
+        let family = store.get_script_family(family_id).unwrap().unwrap();
+        assert_eq!(family.owned_capacity_sum, 190);
+        assert_eq!(family.owned_knowledge_sum, 95);
     }
 
     #[test]

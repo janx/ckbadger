@@ -1,5 +1,5 @@
 use ckbadger_common::{CachedProposal, MemoryStatsData, SyncProgressData, SyncStatusData};
-use ckbadger_store::CkbadgerStore;
+use ckbadger_store::{CkbadgerStore, HeartbeatTick};
 use std::sync::Arc;
 use tracing::{info, warn};
 
@@ -23,16 +23,53 @@ impl CacheInvalidator {
         true
     }
 
-    pub async fn publish_sync_progress(&self, data: &SyncProgressData) {
-        match serde_json::to_vec(data) {
-            Ok(bytes) => {
-                if let Err(e) = self.store.put_sync_progress(&bytes) {
-                    warn!("Failed to write sync progress to store: {}", e);
-                }
-            }
+    /// Persist one progress-loop tick: the runtime heartbeat, sync progress and
+    /// — when this tick resampled them — memory stats, in a SINGLE store write.
+    ///
+    /// The loop runs every 3 s per network; three separate writes per tick were
+    /// three more rewrites of `sync_meta`, the CF whose per-block volume drove
+    /// the mainnet flush storm. `memory_stats = None` leaves the previous
+    /// sample in place.
+    // The tick's fields are exactly the keys it writes; grouping them into a
+    // second near-copy of `ckbadger_store::HeartbeatTick` would add a type
+    // without adding meaning.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn publish_heartbeat_tick(
+        &self,
+        run_id: &str,
+        current_block: i64,
+        target_block: i64,
+        stage: Option<&str>,
+        oom_events: Option<u64>,
+        oom_kill_events: Option<u64>,
+        sync_progress: &SyncProgressData,
+        memory_stats: Option<&MemoryStatsData>,
+    ) {
+        let sync_progress_bytes = match serde_json::to_vec(sync_progress) {
+            Ok(bytes) => bytes,
             Err(e) => {
                 warn!("Failed to serialize sync progress: {}", e);
+                return;
             }
+        };
+        let memory_stats_bytes = match memory_stats.map(serde_json::to_vec).transpose() {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                warn!("Failed to serialize memory stats: {}", e);
+                return;
+            }
+        };
+        if let Err(e) = self.store.commit_heartbeat_tick(HeartbeatTick {
+            run_id,
+            current_block,
+            target_block,
+            stage,
+            oom_events,
+            oom_kill_events,
+            sync_progress: &sync_progress_bytes,
+            memory_stats: memory_stats_bytes.as_deref(),
+        }) {
+            warn!(run_id, "Failed to persist heartbeat tick: {}", e);
         }
     }
 
@@ -124,24 +161,36 @@ impl CacheInvalidator {
             }
         }
     }
-
-    pub async fn publish_memory_stats(&self, data: &MemoryStatsData) {
-        match serde_json::to_vec(data) {
-            Ok(bytes) => {
-                if let Err(e) = self.store.put_memory_stats(&bytes) {
-                    warn!("Failed to write memory stats to store: {}", e);
-                }
-            }
-            Err(e) => {
-                warn!("Failed to serialize memory stats: {}", e);
-            }
-        }
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn sync_progress_fixture() -> SyncProgressData {
+        SyncProgressData {
+            current_block: 0,
+            target_block: 0,
+            last_batch_blocks: None,
+            blocks_per_second: 0.0,
+            ema_blocks_per_second: 0.0,
+            txs_per_second: None,
+            ema_txs_per_second: None,
+            eta_seconds: None,
+            eta_formatted: String::new(),
+            progress_percentage: 0.0,
+            updated_at: 0,
+            startup_phase: None,
+            is_direct_db_read: false,
+            db_write_ms: None,
+            db_commit_ms: None,
+            rpc_fetch_ms: None,
+            pipeline: None,
+            pipeline_reset_epoch: None,
+            pipeline_reset_reason: None,
+            bulk_build: None,
+        }
+    }
 
     fn make_test_invalidator() -> CacheInvalidator {
         let dir = tempfile::tempdir().unwrap();
@@ -179,7 +228,19 @@ mod tests {
             pipeline_reset_reason: None,
             bulk_build: None,
         };
-        invalidator.publish_sync_progress(&data).await;
+        store.mark_runtime_run_start("run-cache-1", 1000).unwrap();
+        invalidator
+            .publish_heartbeat_tick(
+                "run-cache-1",
+                1000,
+                10000,
+                Some("tip_sync"),
+                None,
+                None,
+                &data,
+                None,
+            )
+            .await;
 
         // Verify it was written
         let stored = store.get_sync_progress().unwrap();
@@ -187,6 +248,12 @@ mod tests {
         let parsed: SyncProgressData = serde_json::from_slice(&stored.unwrap()).unwrap();
         assert_eq!(parsed.current_block, 1000);
         assert_eq!(parsed.target_block, 10000);
+
+        let runtime = store.get_runtime_status().unwrap();
+        assert_eq!(runtime.last_heartbeat_block, 1000);
+        assert_eq!(runtime.last_heartbeat_target_block, 10000);
+        // A tick without a memory sample leaves the slot untouched.
+        assert!(store.get_memory_stats().unwrap().is_none());
     }
 
     #[tokio::test]
@@ -276,7 +343,19 @@ mod tests {
             updated_at: 1700000000,
             ..Default::default()
         };
-        invalidator.publish_memory_stats(&data).await;
+        store.mark_runtime_run_start("run-cache-2", 0).unwrap();
+        invalidator
+            .publish_heartbeat_tick(
+                "run-cache-2",
+                0,
+                0,
+                None,
+                None,
+                None,
+                &sync_progress_fixture(),
+                Some(&data),
+            )
+            .await;
 
         let stored = store.get_memory_stats().unwrap();
         assert!(stored.is_some());

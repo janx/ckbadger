@@ -160,6 +160,11 @@ pub(crate) struct BatchWriteMetrics {
     pub(crate) domain_commit_ms: f64,
     /// The whole window, from the first merge to the domain commit returning.
     pub(crate) commit_phase_total_ms: f64,
+    /// Bytes the HODL and cell-distribution trackers serialized into
+    /// `sync_meta` in this batch. Both write their WHOLE state every batch, so
+    /// this is the fixed per-batch cost of the "tracker state matches the
+    /// committed tip" recovery rule.
+    pub(crate) tracker_state_bytes: usize,
     pub(crate) txs: u64,
     pub(crate) cells: u64,
     pub(crate) inputs: u64,

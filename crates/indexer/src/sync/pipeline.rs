@@ -2847,6 +2847,7 @@ impl Indexer {
                             append_only_commit_synced_ms =
                                 format!("{:.1}", write_metrics.append_only_commit_synced_ms),
                             domain_commit_ms = format!("{:.1}", write_metrics.domain_commit_ms),
+                            tracker_state_bytes = write_metrics.tracker_state_bytes,
                             compaction_pending_mb = stats.compaction_pending_bytes / (1024 * 1024),
                             running_compactions = stats.num_running_compactions,
                             l0_total = stats.l0_files_count,

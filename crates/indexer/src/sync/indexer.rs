@@ -757,12 +757,40 @@ impl Indexer {
         &self.run_id
     }
 
-    pub fn record_runtime_heartbeat(
+    /// Persist one progress-loop tick as a single store write: the runtime
+    /// heartbeat, sync progress, and memory stats when this tick resampled
+    /// them (`None` keeps the previous sample).
+    pub async fn commit_heartbeat_tick(
         &self,
         current_block: u64,
         target_block: u64,
         stage: Option<&str>,
+        sync_progress: &ckbadger_common::SyncProgressData,
+        memory_stats: Option<&ckbadger_common::MemoryStatsData>,
     ) {
+        let Some((current_block_i64, target_block_i64)) =
+            self.heartbeat_block_numbers(current_block, target_block)
+        else {
+            return;
+        };
+        let cgroup = read_cgroup_memory_snapshot();
+        self.cache_invalidator
+            .publish_heartbeat_tick(
+                &self.run_id,
+                current_block_i64,
+                target_block_i64,
+                stage,
+                cgroup.oom_events,
+                cgroup.oom_kill_events,
+                sync_progress,
+                memory_stats,
+            )
+            .await;
+    }
+
+    /// `None` when either block number is outside i64 — the heartbeat is
+    /// skipped with a warning rather than written wrong.
+    fn heartbeat_block_numbers(&self, current_block: u64, target_block: u64) -> Option<(i64, i64)> {
         let current_block_i64 = match i64::try_from(current_block) {
             Ok(v) => v,
             Err(_) => {
@@ -771,7 +799,7 @@ impl Indexer {
                     current_block,
                     "Skipping runtime heartbeat: current_block exceeds i64 range"
                 );
-                return;
+                return None;
             }
         };
         let target_block_i64 = match i64::try_from(target_block) {
@@ -782,26 +810,10 @@ impl Indexer {
                     target_block,
                     "Skipping runtime heartbeat: target_block exceeds i64 range"
                 );
-                return;
+                return None;
             }
         };
-        let cgroup = read_cgroup_memory_snapshot();
-        if let Err(e) = self.writer.store().mark_runtime_heartbeat_with_diag(
-            &self.run_id,
-            current_block_i64,
-            target_block_i64,
-            stage,
-            cgroup.oom_events,
-            cgroup.oom_kill_events,
-        ) {
-            warn!(
-                run_id = %self.run_id,
-                current_block,
-                target_block,
-                error = %e,
-                "Failed to persist runtime heartbeat"
-            );
-        }
+        Some((current_block_i64, target_block_i64))
     }
 
     pub fn mark_runtime_shutdown(&self, reason: &str, exit_code: i32) {

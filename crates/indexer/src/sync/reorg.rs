@@ -93,7 +93,7 @@ impl Indexer {
         batch_cell_infos: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
         prefetched_balances: &HashMap<Vec<u8>, Option<AddressBalance>>,
         batch: &mut StoreBatch<'_>,
-    ) -> Result<crate::db::writer::hodl_wave::HodlWaveTracker> {
+    ) -> Result<(crate::db::writer::hodl_wave::HodlWaveTracker, usize)> {
         let mut tracker = self.hodl_tracker.lock().unwrap().clone();
 
         // Running map of live cell counts per lock_hash, initialized from DB.
@@ -179,8 +179,8 @@ impl Indexer {
             }
         }
 
-        batch.put_hodl_tracker_state(&tracker.to_state());
-        Ok(tracker)
+        let state_bytes = batch.put_hodl_tracker_state(&tracker.to_state());
+        Ok((tracker, state_bytes))
     }
 
     pub(crate) fn reconcile_cell_dist_tracker_with_tip(&self, tip_block: i64) -> Result<()> {
@@ -207,7 +207,10 @@ impl Indexer {
         batch_cell_infos: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
         prefetched_balances: &HashMap<Vec<u8>, Option<AddressBalance>>,
         batch: &mut StoreBatch<'_>,
-    ) -> Result<crate::db::writer::cell_distribution::CellDistributionTracker> {
+    ) -> Result<(
+        crate::db::writer::cell_distribution::CellDistributionTracker,
+        usize,
+    )> {
         let mut tracker = self.cell_dist_tracker.lock().unwrap().clone();
 
         // Running map of first_seen_block per address.
@@ -299,8 +302,8 @@ impl Indexer {
             }
         }
 
-        batch.put_cell_dist_tracker_state(&tracker.to_state());
-        Ok(tracker)
+        let state_bytes = batch.put_cell_dist_tracker_state(&tracker.to_state());
+        Ok((tracker, state_bytes))
     }
     // === get_chain_block_hash, get_chain_tip ===
 

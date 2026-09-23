@@ -469,6 +469,7 @@ pub async fn run_indexer_sync(mut config: Config) -> Result<()> {
         let mut last_progress_advanced_at = Instant::now();
         let mut last_writer_phase_seq = indexer_for_progress.writer_phase_seq();
         let mut last_writer_phase_advanced_at = Instant::now();
+        let mut last_memory_sample_at: Option<Instant> = None;
         let mut last_stall_warn_at: Option<Instant> = None;
         let mut suppressed_stall_warns: u64 = 0;
         let mut last_bulk_disk_state: Option<String> = None;
@@ -497,11 +498,6 @@ pub async fn run_indexer_sync(mut config: Config) -> Result<()> {
             });
             let bulk_build = indexer_for_progress.bulk_build_progress_snapshot();
             let bulk_disk = summarize_bulk_build_disk(bulk_build.as_ref());
-            indexer_for_progress.record_runtime_heartbeat(
-                progress.current(),
-                progress.target(),
-                Some(heartbeat_stage.as_str()),
-            );
             let sync_data = ckbadger_common::SyncProgressData {
                 current_block: progress.current(),
                 target_block: progress.target(),
@@ -536,58 +532,84 @@ pub async fn run_indexer_sync(mut config: Config) -> Result<()> {
                 pipeline_reset_reason: pipeline_reset.as_ref().map(|(_, reason)| reason.clone()),
                 bulk_build: bulk_build.clone(),
             };
+            // `get_memory_stats` sweeps ~8 properties across all 60 CFs of
+            // BOTH chain stores. That is far heavier than the tick it rides
+            // on, and nothing in live sync needs it at 3 s resolution — sync
+            // progress, which the TUI and API read, keeps the 3 s cadence.
+            // Bulk sync keeps sampling every tick: its perf heartbeat and the
+            // memory-pressure log are the whole point during a build.
+            let memory_stats = if should_sample_memory_stats(
+                indexer_for_progress.is_bulk_sync_active(),
+                last_memory_sample_at,
+                Instant::now(),
+                MEMORY_STATS_LIVE_SAMPLE_INTERVAL,
+            ) {
+                last_memory_sample_at = Some(Instant::now());
+                Some(indexer_for_progress.get_memory_stats())
+            } else {
+                None
+            };
+
+            // One write per tick: runtime heartbeat + sync progress (+ memory
+            // stats when this tick sampled them).
             indexer_for_progress
-                .cache_invalidator()
-                .publish_sync_progress(&sync_data)
+                .commit_heartbeat_tick(
+                    progress.current(),
+                    progress.target(),
+                    Some(heartbeat_stage.as_str()),
+                    &sync_data,
+                    memory_stats.as_ref(),
+                )
                 .await;
 
-            let memory_stats = indexer_for_progress.get_memory_stats();
-            indexer_for_progress
-                .cache_invalidator()
-                .publish_memory_stats(&memory_stats)
-                .await;
-            indexer_for_progress.record_bulk_sync_perf_heartbeat_sample(
-                progress.current(),
-                progress.target(),
-                memory_stats.compaction_pending_bytes / (1024 * 1024),
-                memory_stats.l0_files_count,
-                memory_stats.immutable_memtables,
-            );
+            // The perf heartbeat sample and the memory-pressure log only
+            // exist when this tick sampled memory stats; everything below
+            // (stall detection, queue pressure, progress logging) still runs
+            // every 3 s.
+            if let Some(memory_stats) = memory_stats.as_ref() {
+                indexer_for_progress.record_bulk_sync_perf_heartbeat_sample(
+                    progress.current(),
+                    progress.target(),
+                    memory_stats.compaction_pending_bytes / (1024 * 1024),
+                    memory_stats.l0_files_count,
+                    memory_stats.immutable_memtables,
+                );
 
-            info!(
-                run_id = %indexer_for_progress.run_id(),
-                memtable_mb = memory_stats.rocksdb_memtable_bytes / (1024 * 1024),
-                domain_memtable_mb =
-                    memory_stats.rocksdb_domain_memtable_bytes / (1024 * 1024),
-                append_only_memtable_mb =
-                    memory_stats.rocksdb_append_only_memtable_bytes / (1024 * 1024),
-                block_cache_mb = memory_stats.rocksdb_block_cache_bytes / (1024 * 1024),
-                table_readers_mb = memory_stats.rocksdb_table_readers_bytes / (1024 * 1024),
-                wbm_usage_mb = memory_stats.wbm_usage_bytes / (1024 * 1024),
-                wbm_budget_mb = memory_stats.wbm_budget_bytes / (1024 * 1024),
-                compaction_pending_mb = memory_stats.compaction_pending_bytes / (1024 * 1024),
-                domain_compaction_pending_mb =
-                    memory_stats.domain_compaction_pending_bytes / (1024 * 1024),
-                append_only_compaction_pending_mb =
-                    memory_stats.append_only_compaction_pending_bytes / (1024 * 1024),
-                running_compactions = memory_stats.num_running_compactions,
-                l0_files = memory_stats.l0_files_count,
-                l0_max = memory_stats.l0_files_max,
-                l0_worst_cf = memory_stats.l0_worst_cf,
-                imm_memtables = memory_stats.immutable_memtables,
-                sst_size_gb = format!(
-                    "{:.1}",
-                    memory_stats.sst_files_size as f64 / (1024.0 * 1024.0 * 1024.0)
-                ),
-                // Flush-storm signals (P3.3): file count and MANIFEST size are
-                // the standing cost of how often the DB flushes, and the
-                // MANIFEST is what an API secondary replays on open.
-                sst_files = memory_stats.sst_files_total,
-                manifest_mb = memory_stats.manifest_bytes / (1024 * 1024),
-                domain_manifest_mb = memory_stats.domain_manifest_bytes / (1024 * 1024),
-                flush_rounds_observed = memory_stats.flush_rounds_observed,
-                "RocksDB stats"
-            );
+                info!(
+                    run_id = %indexer_for_progress.run_id(),
+                    memtable_mb = memory_stats.rocksdb_memtable_bytes / (1024 * 1024),
+                    domain_memtable_mb =
+                        memory_stats.rocksdb_domain_memtable_bytes / (1024 * 1024),
+                    append_only_memtable_mb =
+                        memory_stats.rocksdb_append_only_memtable_bytes / (1024 * 1024),
+                    block_cache_mb = memory_stats.rocksdb_block_cache_bytes / (1024 * 1024),
+                    table_readers_mb = memory_stats.rocksdb_table_readers_bytes / (1024 * 1024),
+                    wbm_usage_mb = memory_stats.wbm_usage_bytes / (1024 * 1024),
+                    wbm_budget_mb = memory_stats.wbm_budget_bytes / (1024 * 1024),
+                    compaction_pending_mb = memory_stats.compaction_pending_bytes / (1024 * 1024),
+                    domain_compaction_pending_mb =
+                        memory_stats.domain_compaction_pending_bytes / (1024 * 1024),
+                    append_only_compaction_pending_mb =
+                        memory_stats.append_only_compaction_pending_bytes / (1024 * 1024),
+                    running_compactions = memory_stats.num_running_compactions,
+                    l0_files = memory_stats.l0_files_count,
+                    l0_max = memory_stats.l0_files_max,
+                    l0_worst_cf = memory_stats.l0_worst_cf,
+                    imm_memtables = memory_stats.immutable_memtables,
+                    sst_size_gb = format!(
+                        "{:.1}",
+                        memory_stats.sst_files_size as f64 / (1024.0 * 1024.0 * 1024.0)
+                    ),
+                    // Flush-storm signals (P3.3): file count and MANIFEST size are
+                    // the standing cost of how often the DB flushes, and the
+                    // MANIFEST is what an API secondary replays on open.
+                    sst_files = memory_stats.sst_files_total,
+                    manifest_mb = memory_stats.manifest_bytes / (1024 * 1024),
+                    domain_manifest_mb = memory_stats.domain_manifest_bytes / (1024 * 1024),
+                    flush_rounds_observed = memory_stats.flush_rounds_observed,
+                    "RocksDB stats"
+                );
+            }
 
             let fetch_fill_pct = queue_fill_pct(
                 pipeline_log.as_ref().and_then(|p| p.fetch_queue_depth),
@@ -1000,6 +1022,31 @@ fn queue_fill_pct(depth: Option<u64>, capacity: Option<u64>) -> Option<f64> {
     }
 }
 
+/// How often live sync resamples RocksDB memory stats. The sweep touches ~8
+/// properties on each of the 60 CFs of BOTH chain stores, which is far heavier
+/// than the 3 s tick it used to ride on; sync progress keeps its 3 s cadence.
+const MEMORY_STATS_LIVE_SAMPLE_INTERVAL: Duration = Duration::from_secs(30);
+
+/// Whether this tick should resample RocksDB memory stats.
+///
+/// Bulk sync samples every tick — its perf heartbeat and memory-pressure log
+/// are the point of a build. Live sync samples on the interval, and always on
+/// the first tick so the value is never missing.
+fn should_sample_memory_stats(
+    bulk_sync_active: bool,
+    last_sample_at: Option<Instant>,
+    now: Instant,
+    interval: Duration,
+) -> bool {
+    if bulk_sync_active {
+        return true;
+    }
+    match last_sample_at {
+        None => true,
+        Some(last) => now.duration_since(last) >= interval,
+    }
+}
+
 fn should_emit_rate_limited(
     last_emit_at: Option<Instant>,
     now: Instant,
@@ -1402,6 +1449,43 @@ mod tests {
             Some(now),
             now + Duration::from_secs(60),
             Duration::from_secs(60)
+        ));
+    }
+
+    /// P3.4: the 3 s tick must not drag the two-store, all-CF memory sweep
+    /// with it in live mode — while bulk sync, which needs it, keeps it.
+    #[test]
+    fn memory_stats_are_sampled_every_30s_in_live_and_every_tick_in_bulk() {
+        let now = Instant::now();
+        let interval = Duration::from_secs(30);
+
+        // First live tick: no sample yet, so take one.
+        assert!(should_sample_memory_stats(false, None, now, interval));
+        // 3 s later: sync progress still ticks, memory stats do not.
+        assert!(!should_sample_memory_stats(
+            false,
+            Some(now - Duration::from_secs(3)),
+            now,
+            interval
+        ));
+        assert!(!should_sample_memory_stats(
+            false,
+            Some(now - Duration::from_secs(29)),
+            now,
+            interval
+        ));
+        assert!(should_sample_memory_stats(
+            false,
+            Some(now - Duration::from_secs(30)),
+            now,
+            interval
+        ));
+        // Bulk sync samples every tick regardless.
+        assert!(should_sample_memory_stats(
+            true,
+            Some(now - Duration::from_secs(1)),
+            now,
+            interval
         ));
     }
 

@@ -2024,6 +2024,7 @@ impl Indexer {
         let append_only_commit_synced_ms: f64;
         let domain_commit_ms: f64;
         let commit_phase_total_ms: f64;
+        let tracker_state_bytes: usize;
         let mut batch_stats;
         // Post-batch DAO lifecycle view of everything this batch stages, used to
         // materialize completed-day snapshots exactly before the atomic commit.
@@ -4050,7 +4051,7 @@ impl Indexer {
             } else {
                 self.writer.read_address_balances(&lock_hash_refs)?
             };
-            let prepared_hodl_tracker = self.prepare_hodl_wave_batch(
+            let (prepared_hodl_tracker, hodl_state_bytes) = self.prepare_hodl_wave_batch(
                 all_parsed_blocks,
                 &all_tx_data,
                 &input_cell_info,
@@ -4058,15 +4059,21 @@ impl Indexer {
                 &prefetched_address_balances,
                 &mut data_batch,
             )?;
-            let prepared_cell_dist_tracker = self.prepare_cell_distribution_batch(
-                all_parsed_blocks,
-                &all_tx_data,
-                &input_cell_info,
-                &batch_cell_infos,
-                &prefetched_address_balances,
-                &mut data_batch,
-            )?;
+            let (prepared_cell_dist_tracker, cell_dist_state_bytes) = self
+                .prepare_cell_distribution_batch(
+                    all_parsed_blocks,
+                    &all_tx_data,
+                    &input_cell_info,
+                    &batch_cell_infos,
+                    &prefetched_address_balances,
+                    &mut data_batch,
+                )?;
             commit_prepare_ms = commit_started.elapsed().as_secs_f64() * 1000.0;
+            // Both trackers serialize their WHOLE state into `sync_meta` every
+            // batch (~220 KB mainnet / ~175 KB testnet per block in 2026-09).
+            // Reported so the share of the prepare phase it costs is a measured
+            // number, not a guess (P3.4 step 3).
+            tracker_state_bytes = hodl_state_bytes + cell_dist_state_bytes;
 
             // Merge script reference rollup writes into the same atomic batch,
             // eliminating the crash window between data_batch.commit() and a
@@ -4230,6 +4237,7 @@ impl Indexer {
             script_rollup_ms = format!("{:.1}", script_rollup_ms),
             append_only_commit_synced_ms = format!("{:.1}", append_only_commit_synced_ms),
             domain_commit_ms = format!("{:.1}", domain_commit_ms),
+            tracker_state_bytes,
             finalize_ms = format!("{:.1}", finalize_ms),
             txs = batch_tx_count,
             cells = batch_cell_count,
@@ -4245,6 +4253,7 @@ impl Indexer {
             append_only_commit_synced_ms,
             domain_commit_ms,
             commit_phase_total_ms,
+            tracker_state_bytes,
             txs: u64::try_from(batch_tx_count).expect("parsed batch tx count exceeds u64"),
             cells: u64::try_from(batch_cell_count).expect("parsed batch cell count exceeds u64"),
             inputs: u64::try_from(batch_input_count).expect("parsed batch input count exceeds u64"),
@@ -6247,6 +6256,87 @@ mod tests {
             assert!(
                 metrics.precompute_ms > 0.0,
                 "precompute_ms must carry the measured pre-batch phase: {metrics:?}"
+            );
+            // Both trackers serialize their whole state every batch; the cost
+            // of that rule is reported, not assumed.
+            let committed_len = |key: &[u8]| -> usize {
+                store
+                    .get_cf(store.cf_sync_meta(), key)
+                    .expect("read sync_meta")
+                    .expect("tracker state must be committed")
+                    .len()
+            };
+            let hodl_bytes = committed_len(ckbadger_store::keys::sync_meta_keys::HODL_TRACKER);
+            let cell_dist_bytes =
+                committed_len(ckbadger_store::keys::sync_meta_keys::CELL_DIST_TRACKER);
+            assert_eq!(
+                metrics.tracker_state_bytes,
+                hodl_bytes + cell_dist_bytes,
+                "tracker_state_bytes must be the bytes actually written: {metrics:?}"
+            );
+        }
+
+        /// P3.4 step 3 measurement: how much of the commit prepare phase is
+        /// the two trackers serializing their whole state into `sync_meta`.
+        ///
+        /// The decision rule from the plan is "change the persistence only if
+        /// this exceeds 20% of `commit_prepare_ms`". The smallest per-block
+        /// commit window measured in production was 1,100 ms (testnet, near
+        /// tip), so 20% of it is 220 ms; a production-scale state (2,495 date
+        /// entries, the number both trackers carried on 2026-09-22) must
+        /// serialize far below that. If it ever does not, this fails and the
+        /// decision has to be revisited rather than silently outgrown.
+        #[test]
+        fn tracker_state_serialization_is_a_minor_share_of_commit_prepare() {
+            use ckbadger_store::types::{CellDistributionTrackerState, HodlTrackerState};
+
+            const DATE_ENTRIES: usize = 2_495;
+            let capacity_by_date: Vec<(String, i128)> = (0..DATE_ENTRIES)
+                .map(|i| (format!("2026{:04}", i), 1_234_567_890_123_i128 + i as i128))
+                .collect();
+            let date_transitions: Vec<(i64, String)> = (0..DATE_ENTRIES)
+                .map(|i| (20_000_000 + i as i64, format!("2026{i:04}")))
+                .collect();
+            let hodl = HodlTrackerState {
+                capacity_by_date,
+                date_transitions: date_transitions.clone(),
+                holder_count: 1_234_567,
+                last_snapshot_date: Some("20260922".to_string()),
+                last_processed_block: Some(20_530_767),
+            };
+            let cell_dist = CellDistributionTrackerState {
+                count_by_bucket: [1, 2, 3, 4, 5, 6],
+                total_capacity_by_bucket: [1, 2, 3, 4, 5, 6],
+                date_transitions,
+                last_snapshot_date: Some("20260922".to_string()),
+                cohort_accum: (0..DATE_ENTRIES)
+                    .map(|i| (format!("2026-{:02}", i % 12 + 1), i as i128, i as i128))
+                    .collect(),
+                last_processed_block: Some(20_530_767),
+            };
+
+            let mut bytes = 0usize;
+            let mut best = std::time::Duration::MAX;
+            for _ in 0..5 {
+                let started = std::time::Instant::now();
+                let hodl_bytes = bincode::serialize(&hodl).unwrap();
+                let cell_dist_bytes = bincode::serialize(&cell_dist).unwrap();
+                let elapsed = started.elapsed();
+                bytes = hodl_bytes.len() + cell_dist_bytes.len();
+                best = best.min(elapsed);
+            }
+            eprintln!(
+                "tracker_state_bytes={bytes} serialize_us={} (date_entries={DATE_ENTRIES})",
+                best.as_micros()
+            );
+
+            const COMMIT_PREPARE_20_PCT_MS: u128 = 220;
+            assert!(bytes > 0);
+            assert!(
+                best.as_millis() < COMMIT_PREPARE_20_PCT_MS,
+                "tracker state serialization ({} ms for {bytes} bytes) reached 20% of the \
+                 smallest measured commit prepare window; revisit the P3.4 step 3 decision",
+                best.as_millis()
             );
         }
 
