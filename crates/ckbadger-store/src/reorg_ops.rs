@@ -6129,6 +6129,277 @@ mod tests {
             .unwrap();
     }
 
+    /// RED (Task 1.1): the eight entity daily/hourly stats families must not be
+    /// collateral damage of a shallow rollback.
+    ///
+    /// Blocks 4 and 5 are orphaned and never touched these buckets — there is
+    /// no `EntityStats` undo entry for them, which is exactly what "the orphan
+    /// did not modify this key" means. `rollback_to_block(3)` must therefore
+    /// leave every one of them byte-for-byte intact. Today
+    /// `should_delete_stats_for_replay` answers `date >= cutoff` /
+    /// `hour >= cutoff_hour` for all eight and `repair_cutoff_date_stats` has no
+    /// branch for them, so the whole cutoff bucket is deleted and the main-chain
+    /// contribution made before the fork point is lost for good — replay only
+    /// re-applies blocks after the fork point.
+    #[test]
+    fn test_shallow_rollback_preserves_untouched_entity_buckets() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+
+        // Five blocks inside one UTC+8 calendar day (20260922) and one hour.
+        // 2026-09-22 09:00 UTC+8 == 2026-09-22 01:00 UTC.
+        const TS_BASE: i64 = 1_790_038_800_000;
+        let ts = |n: i64| TS_BASE + n * 10_000;
+        let date = 20260922u32;
+        let hour = ts(3) / 3_600_000;
+
+        {
+            let mut batch = StoreBatch::new(&store);
+            for n in 1..=5i64 {
+                batch.put_block_header(
+                    n,
+                    &CachedBlockHeader {
+                        hash: {
+                            let mut h = vec![0u8; 32];
+                            h[0] = n as u8;
+                            h
+                        },
+                        parent_hash: vec![0u8; 32],
+                        timestamp: ts(n),
+                        epoch_number: 11,
+                        epoch_index: (n - 1) as i32,
+                        epoch_length: 1800,
+                        dao: vec![0; 32],
+                        transactions_count: 0,
+                        uncles_count: 0,
+                        proposals_count: 0,
+                        compact_target: 0x1a08a97e,
+                        miner_lock_hash: None,
+                        cycles: None,
+                    },
+                );
+            }
+            batch.commit().unwrap();
+        }
+        seed_epoch_row(
+            &store,
+            &EpochStats {
+                epoch_number: 11,
+                start_block: 1,
+                end_block: Some(5),
+                blocks_count: 5,
+                length: 1800,
+                start_timestamp: chrono::DateTime::from_timestamp_millis(ts(1)).unwrap(),
+                end_timestamp: None,
+                transactions_count: 0,
+            },
+        );
+
+        // One row per family, all written by blocks 1..=3 (i.e. at or before the
+        // fork point), all keyed on the cutoff day / cutoff hour.
+        let daily_value = |cap: i128, know: i128| {
+            bincode::serialize(&TokenDailyDelta {
+                owned_capacity_delta: cap,
+                owned_knowledge_delta: know,
+            })
+            .unwrap()
+        };
+        let hourly_value = |n: i64| n.to_le_bytes().to_vec();
+
+        let entity_rows: Vec<(Vec<u8>, Vec<u8>, &str)> = vec![
+            (
+                keys::encode_script_daily_key(&[0x11; 32], 1, false, date).to_vec(),
+                daily_value(700_000_000_000, 61_000_000_000),
+                "script_daily",
+            ),
+            (
+                keys::encode_token_daily_key(&[0x22; 32], date).to_vec(),
+                daily_value(143_234_681_921_302, 14_000_000_000),
+                "token_daily",
+            ),
+            (
+                keys::encode_cluster_daily_key(&[0x33; 32], date).to_vec(),
+                daily_value(12_345_678_900, 1_200_000_000),
+                "cluster_daily",
+            ),
+            (
+                keys::encode_spore_daily_key(&[0x44; 32], date).to_vec(),
+                daily_value(-9_876_543_210, -900_000_000),
+                "spore_daily",
+            ),
+            (
+                keys::encode_object_daily_key(&[0x55; 32], date).to_vec(),
+                daily_value(14_400_000_000, 13_000_000_000),
+                "object_daily",
+            ),
+            (
+                keys::encode_token_hourly_key(&[0x22; 32], hour),
+                hourly_value(7),
+                "token_hourly",
+            ),
+            (
+                keys::encode_spore_hourly_key(&[0x33; 32], hour),
+                hourly_value(3),
+                "spore_hourly",
+            ),
+            (
+                keys::encode_object_hourly_key(&[0x55; 32], hour),
+                hourly_value(11),
+                "object_hourly",
+            ),
+        ];
+
+        {
+            let mut batch = StoreBatch::new(&store);
+            for (key, value, _) in &entity_rows {
+                batch.put_stats(key, value);
+            }
+            // An append-only cell payload created before the fork point. Rollback
+            // must not touch `CF_CELLS` bytes.
+            batch.put_cell_raw_key(
+                &keys::encode_outpoint(&[0xAB; 32], 0),
+                &LiveCellInfo {
+                    capacity: 10_000_000_000,
+                    lock_script_hash: vec![0xC1; 32],
+                    lock_code_hash: vec![0xC2; 32],
+                    lock_hash_type: 1,
+                    lock_args: vec![0xC3; 20],
+                    type_script_hash: None,
+                    type_code_hash: None,
+                    type_hash_type: None,
+                    type_args: None,
+                    data_size: 0,
+                    occupied_capacity: 6_100_000_000,
+                    udt_amount: None,
+                    data_hash: None,
+                },
+                2,
+            );
+            batch.commit().unwrap();
+        }
+
+        let read_all = |store: &CkbadgerStore| -> Vec<Option<Vec<u8>>> {
+            entity_rows
+                .iter()
+                .map(|(key, _, _)| {
+                    let cf = store.cf_for_stats_key(key).unwrap();
+                    store.get_cf(cf, key).unwrap()
+                })
+                .collect()
+        };
+        let cell_key = keys::encode_outpoint(&[0xAB; 32], 0);
+        let cell_before = store.get_cf(store.cf_cells(), &cell_key).unwrap();
+
+        let before = read_all(&store);
+        for (row, (_, _, label)) in before.iter().zip(&entity_rows) {
+            assert!(row.is_some(), "fixture must seed {label}");
+        }
+
+        // Orphan blocks 4 and 5. No EntityStats undo entry exists for them,
+        // i.e. they never modified any of these keys.
+        store.rollback_to_block(3).unwrap();
+
+        let after = read_all(&store);
+        let mut lost = Vec::new();
+        for ((expected, actual), (_, _, label)) in before.iter().zip(&after).zip(&entity_rows) {
+            if expected != actual {
+                lost.push(*label);
+            }
+        }
+        assert!(
+            lost.is_empty(),
+            "shallow rollback destroyed entity buckets the orphaned blocks never touched: {lost:?}"
+        );
+
+        assert_eq!(
+            store.get_cf(store.cf_cells(), &cell_key).unwrap(),
+            cell_before,
+            "append-only CF_CELLS payload bytes must be unchanged by rollback"
+        );
+    }
+
+    /// Pin (Task 1.1 Step 3): the existing undo machinery already restores an
+    /// entity bucket byte-for-byte — both a previous value and a previous
+    /// absence. This is the mechanism Task 2.1–2.3 will feed; nothing new is
+    /// needed in `rollback_via_undo_log` itself.
+    #[test]
+    fn test_entity_bucket_undo_entries_restore_exact_previous_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+
+        let date = 20260922u32;
+        let hour = 1_790_038_800_000i64 / 3_600_000;
+        let token_key = keys::encode_token_daily_key(&[0x22; 32], date).to_vec();
+        let spore_hourly_key = keys::encode_spore_hourly_key(&[0x33; 32], hour);
+
+        let value_a = bincode::serialize(&TokenDailyDelta {
+            owned_capacity_delta: 100_000_000_000,
+            owned_knowledge_delta: 6_100_000_000,
+        })
+        .unwrap();
+        let value_b = bincode::serialize(&TokenDailyDelta {
+            owned_capacity_delta: 250_000_000_000,
+            owned_knowledge_delta: 14_200_000_000,
+        })
+        .unwrap();
+
+        {
+            let mut batch = StoreBatch::new(&store);
+            // Block 3 (survives) wrote A.
+            batch.put_stats(&token_key, &value_a);
+            batch.commit().unwrap();
+        }
+        {
+            let mut batch = StoreBatch::new(&store);
+            // Block 4 (orphan) changed A → B and recorded the pre-image.
+            batch.put_stats(&token_key, &value_b);
+            batch.put_reorg_undo_log_by_block(
+                4,
+                0x0004_0000_0000_0000,
+                &UndoLogEntry::KeyMutation {
+                    target_store: UndoLogStoreTarget::Domain,
+                    cf_name: crate::store::CF_STATS_TOKEN.to_string(),
+                    key: token_key.clone(),
+                    previous_value: Some(value_a.clone()),
+                },
+            );
+            // Block 5 (orphan) created the spore hourly bucket from nothing.
+            batch.put_stats(&spore_hourly_key, &4i64.to_le_bytes());
+            batch.put_reorg_undo_log_by_block(
+                5,
+                0x0004_0000_0000_0000,
+                &UndoLogEntry::KeyMutation {
+                    target_store: UndoLogStoreTarget::Domain,
+                    cf_name: crate::store::CF_STATS_SPORE.to_string(),
+                    key: spore_hourly_key.clone(),
+                    previous_value: None,
+                },
+            );
+            batch.commit().unwrap();
+        }
+
+        let result = store.rollback_via_undo_log(&store, 3).unwrap();
+        assert_eq!(result.undo_entries_applied, 2);
+        assert_eq!(result.domain_ops_applied, 2);
+
+        let token_cf = store.cf_for_stats_key(&token_key).unwrap();
+        assert_eq!(
+            store.get_cf(token_cf, &token_key).unwrap(),
+            Some(value_a),
+            "a mutated bucket must come back as the exact pre-block bytes"
+        );
+        let spore_cf = store.cf_for_stats_key(&spore_hourly_key).unwrap();
+        assert_eq!(
+            store.get_cf(spore_cf, &spore_hourly_key).unwrap(),
+            None,
+            "a bucket the orphan created must go back to not existing"
+        );
+        assert!(
+            !store.has_undo_log_entries_after(3).unwrap(),
+            "replayed undo entries must be consumed"
+        );
+    }
+
     fn read_epoch_row(store: &CkbadgerStore, epoch: i64) -> Option<EpochStats> {
         let key = keys::encode_stats_key(keys::STATS_PREFIX_EPOCH, &epoch.to_be_bytes());
         let cf = store.cf_for_stats_key(&key).unwrap();
