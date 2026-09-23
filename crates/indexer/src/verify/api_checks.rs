@@ -1193,6 +1193,11 @@ impl Check for BlockHashRoundtrip {
     fn name(&self) -> &'static str {
         "block_hash_roundtrip"
     }
+
+    /// Reads the sample count: at 0 it has nothing to select.
+    fn requires_sampling(&self) -> bool {
+        true
+    }
     fn description(&self) -> &'static str {
         "Block number → hash → number roundtrip consistency"
     }
@@ -1246,6 +1251,11 @@ pub struct BlockParentChain;
 impl Check for BlockParentChain {
     fn name(&self) -> &'static str {
         "block_parent_chain"
+    }
+
+    /// Reads the sample count: at 0 it has nothing to select.
+    fn requires_sampling(&self) -> bool {
+        true
     }
     fn description(&self) -> &'static str {
         "Block parentHash matches previous block hash"
@@ -1468,6 +1478,11 @@ pub struct AddressBalanceSpotCheck;
 impl Check for AddressBalanceSpotCheck {
     fn name(&self) -> &'static str {
         "address_balance_spot_check"
+    }
+
+    /// Reads the sample count: at 0 it has nothing to select.
+    fn requires_sampling(&self) -> bool {
+        true
     }
     fn description(&self) -> &'static str {
         "Bounded address samples match their exact live-cell balances"
@@ -2898,6 +2913,11 @@ impl Check for RpcBlockSpotCheck {
     fn name(&self) -> &'static str {
         "rpc_block_spot_check"
     }
+
+    /// Reads the sample count: at 0 it has nothing to select.
+    fn requires_sampling(&self) -> bool {
+        true
+    }
     fn description(&self) -> &'static str {
         "Compare block data against CKB RPC node"
     }
@@ -2972,6 +2992,11 @@ pub struct TokenActivityTransferBidirectional;
 impl Check for TokenActivityTransferBidirectional {
     fn name(&self) -> &'static str {
         "token_activity_transfer_bidirectional"
+    }
+
+    /// Reads the sample count: at 0 it has nothing to select.
+    fn requires_sampling(&self) -> bool {
+        true
     }
     fn description(&self) -> &'static str {
         "Token activity net delta matches token transfers (address/tx/token)"
@@ -3205,6 +3230,11 @@ impl Check for SporeOwnerRoundtrip {
     fn name(&self) -> &'static str {
         "spore_owner_roundtrip"
     }
+
+    /// Reads the sample count: at 0 it has nothing to select.
+    fn requires_sampling(&self) -> bool {
+        true
+    }
     fn description(&self) -> &'static str {
         "Spore cluster items roundtrip through owner endpoint"
     }
@@ -3362,6 +3392,11 @@ pub struct ObjectAssetCollectionConsistency;
 impl Check for ObjectAssetCollectionConsistency {
     fn name(&self) -> &'static str {
         "object_asset_collection_consistency"
+    }
+
+    /// Reads the sample count: at 0 it has nothing to select.
+    fn requires_sampling(&self) -> bool {
+        true
     }
     fn description(&self) -> &'static str {
         "Object list/detail/items totals are consistent"
@@ -4296,16 +4331,18 @@ impl Check for DaoStatusIndexMatchesDeposits {
         let reorged = tip_after.hash != tip_before.hash;
 
         let deposits_checked = observed.recorded.len() as u64;
-        if reorged && !findings.is_empty() {
-            return Ok(CheckResult::pass_with_detail(
+        if reorged {
+            // The anchor this walk was pinned to no longer exists, so neither
+            // the findings nor their absence say anything about the index. An
+            // anchor change is inconclusive on its own evidence — reporting a
+            // green line with the word INCONCLUSIVE inside it hid exactly that.
+            return Ok(CheckResult::inconclusive(format!(
+                "block {} changed hash during the walk (reorg); {} deposit(s) and {} finding(s) \
+                 discarded because the anchor moved — rerun",
+                tip_height,
                 deposits_checked,
-                format!(
-                    "INCONCLUSIVE: block {} changed hash during the walk (reorg); \
-                     {} finding(s) withheld because a reorg can move status backwards — rerun",
-                    tip_height,
-                    findings.len()
-                ),
-            ));
+                findings.len()
+            )));
         }
 
         if findings.is_empty() {
@@ -4482,6 +4519,11 @@ mod tests {
             seed: 42,
             tolerance: 0.001,
             cache_dir: None,
+            entities: Vec::new(),
+            verify_source_path: None,
+            evidence_dir: None,
+            entity_budget: Default::default(),
+            source_profile: std::sync::Mutex::new(None),
         }
     }
 
@@ -4598,7 +4640,7 @@ mod tests {
         let result = ChartAverageBlockTimeSane
             .run(&mock_ctx(&server), &ProgressReporter::new(None))
             .unwrap();
-        assert!(result.passed, "findings: {:?}", result.findings);
+        assert!(result.passed(), "findings: {:?}", result.findings);
     }
 
     /// S3 reads three independent endpoints (active-address candidates →
@@ -4696,7 +4738,7 @@ mod tests {
             .unwrap();
 
         assert!(
-            !result.passed,
+            !result.passed(),
             "a persistent mismatch at a static tip is a real bug"
         );
         assert!(result.items_failed > 0);
@@ -4713,7 +4755,7 @@ mod tests {
             .unwrap();
 
         assert!(
-            result.passed,
+            result.passed(),
             "a mismatch against a moving tip must not be reported as a failure: {:?}",
             result.findings
         );
@@ -4743,7 +4785,10 @@ mod tests {
         let result = ChartAverageBlockTimeSane
             .run(&mock_ctx(&server), &ProgressReporter::new(None))
             .unwrap();
-        assert!(!result.passed, "8000s per block must fail the sanity bound");
+        assert!(
+            !result.passed(),
+            "8000s per block must fail the sanity bound"
+        );
     }
 
     #[test]
@@ -4766,7 +4811,7 @@ mod tests {
         let result = ChartCellCountConsistency
             .run(&mock_ctx(&server), &ProgressReporter::new(None))
             .unwrap();
-        assert!(result.passed, "findings: {:?}", result.findings);
+        assert!(result.passed(), "findings: {:?}", result.findings);
     }
 
     #[test]
@@ -4789,7 +4834,7 @@ mod tests {
         let result = ChartCellCountConsistency
             .run(&mock_ctx(&server), &ProgressReporter::new(None))
             .unwrap();
-        assert!(!result.passed);
+        assert!(!result.passed());
         assert!(result.findings.iter().any(|finding| finding
             .details
             .iter()
@@ -4811,6 +4856,11 @@ mod tests {
             seed: 42,
             tolerance: 0.001,
             cache_dir: None,
+            entities: Vec::new(),
+            verify_source_path: None,
+            evidence_dir: None,
+            entity_budget: Default::default(),
+            source_profile: std::sync::Mutex::new(None),
         }
     }
 
@@ -4861,7 +4911,7 @@ mod tests {
         let progress = ProgressReporter::new(None);
         let result = GenesisBaselineBurntInvariant.run(&ctx, &progress).unwrap();
         assert!(
-            result.passed,
+            result.passed(),
             "expected pass, got findings: {:?}",
             result.findings
         );
@@ -4877,12 +4927,12 @@ mod tests {
         let ctx = mock_ctx(&server);
         let progress = ProgressReporter::new(None);
         let result = GenesisBaselineBurntInvariant.run(&ctx, &progress).unwrap();
-        assert!(!result.passed);
+        assert!(!result.passed());
         assert_eq!(result.findings.len(), 1);
         assert!(result.findings[0].details[0].contains("8.4B network invariant"));
 
         let sampling = BurntSupplyGenesisInvariant.run(&ctx, &progress).unwrap();
-        assert!(!sampling.passed, "completed-day mismatch must still fail");
+        assert!(!sampling.passed(), "completed-day mismatch must still fail");
         assert_eq!(sampling.items_checked, 1);
         assert_eq!(sampling.findings.len(), 1);
     }
@@ -4923,11 +4973,11 @@ mod tests {
         let progress = ProgressReporter::new(None);
 
         let fast = GenesisBaselineBurntInvariant.run(&ctx, &progress).unwrap();
-        assert!(fast.passed, "fast findings: {:?}", fast.findings);
+        assert!(fast.passed(), "fast findings: {:?}", fast.findings);
 
         let sampling = BurntSupplyGenesisInvariant.run(&ctx, &progress).unwrap();
         assert!(
-            sampling.passed,
+            sampling.passed(),
             "sampling findings: {:?}",
             sampling.findings
         );
@@ -4945,7 +4995,7 @@ mod tests {
         let ctx = test_ctx();
         let progress = ProgressReporter::new(None);
         let completed = execute_check(&check, &ctx, &progress);
-        assert!(completed.skipped);
+        assert!(completed.skipped());
     }
 
     #[test]
@@ -5033,6 +5083,11 @@ mod tests {
             seed: 42,
             tolerance: 0.001,
             cache_dir: None,
+            entities: Vec::new(),
+            verify_source_path: None,
+            evidence_dir: None,
+            entity_budget: Default::default(),
+            source_profile: std::sync::Mutex::new(None),
         };
 
         let response: CursorPageWithTotal<serde_json::Value> =
@@ -5224,7 +5279,11 @@ mod tests {
             .run(&ctx, &ProgressReporter::new(None))
             .expect("address balance check should run");
 
-        assert!(result.passed, "unexpected findings: {:?}", result.findings);
+        assert!(
+            result.passed(),
+            "unexpected findings: {:?}",
+            result.findings
+        );
         assert_eq!(result.items_checked, 1);
         assert_eq!(whale_cell_calls.load(Ordering::SeqCst), 0);
         assert_eq!(small_cell_calls.load(Ordering::SeqCst), 1);
@@ -5275,7 +5334,7 @@ mod tests {
             .run(&mock_ctx(&server), &ProgressReporter::new(None))
             .expect("address balance check should run");
 
-        assert!(!result.passed);
+        assert!(!result.passed());
         assert!(result.findings[0]
             .details
             .iter()
@@ -5348,7 +5407,7 @@ mod tests {
             .run(&mock_ctx(&server), &ProgressReporter::new(None))
             .expect("address balance check should run");
 
-        assert!(!result.passed);
+        assert!(!result.passed());
         // Two attempts (the mismatch triggers exactly one tip-aware re-read),
         // each stopping after its FIRST page: the second page is never fetched.
         assert_eq!(cell_calls.load(Ordering::SeqCst), 2);
@@ -5385,6 +5444,11 @@ mod tests {
             seed: 42,
             tolerance: 0.001,
             cache_dir: None,
+            entities: Vec::new(),
+            verify_source_path: None,
+            evidence_dir: None,
+            entity_budget: Default::default(),
+            source_profile: std::sync::Mutex::new(None),
         }
     }
 
@@ -5937,5 +6001,65 @@ mod tests {
     #[test]
     fn test_normalize_hex_key_handles_uppercase_prefix() {
         assert_eq!(normalize_hex_key("0XABcd"), "abcd");
+    }
+
+    fn block_body(number: i64, hash: &str) -> serde_json::Value {
+        json!({
+            "number": number,
+            "hash": hash,
+            "parentHash": format!("0x{}", "00".repeat(32)),
+            "transactionsCount": 0,
+        })
+    }
+
+    /// An anchor that moved mid-walk is `Inconclusive`, whether or not the walk
+    /// produced findings. The previous shape returned a *green* result whose
+    /// detail line began with the word INCONCLUSIVE, so a run over a reorging
+    /// chain exited 0 and counted as a passed check.
+    #[test]
+    fn dao_status_index_reports_an_anchor_change_as_inconclusive_not_pass() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let server = runtime.block_on(MockServer::start());
+        let before = format!("0x{}", "11".repeat(32));
+        let after = format!("0x{}", "22".repeat(32));
+
+        runtime.block_on(async {
+            Mock::given(method("GET"))
+                .and(path("/api/v1/statistics/network"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(network_stats_body(100)))
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/api/v1/blocks/100"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(block_body(100, &before)))
+                .up_to_n_times(1)
+                .with_priority(1)
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/api/v1/blocks/100"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(block_body(100, &after)))
+                .with_priority(2)
+                .mount(&server)
+                .await;
+            // No deposits at all: the walk itself finds nothing wrong.
+            Mock::given(method("GET"))
+                .and(path("/api/v1/dao/deposits"))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(json!({ "data": [], "nextCursor": null })),
+                )
+                .mount(&server)
+                .await;
+        });
+
+        let result = DaoStatusIndexMatchesDeposits
+            .run(&mock_ctx(&server), &ProgressReporter::new(None))
+            .expect("the check itself must not error on a reorg");
+
+        assert_eq!(result.status, CheckStatus::Inconclusive);
+        assert!(!result.passed(), "a moved anchor proves nothing");
+        let detail = result.detail.clone().unwrap_or_default();
+        assert!(detail.contains("changed hash during the walk"), "{detail}");
     }
 }

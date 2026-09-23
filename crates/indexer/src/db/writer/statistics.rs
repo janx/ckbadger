@@ -125,6 +125,15 @@ impl ExactDaoSnapshotCompensation {
     }
 }
 
+/// Outcome of one bounded hourly retention step.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HourlyRetentionStepResult {
+    pub deleted: u64,
+    pub scanned: usize,
+    /// `true` when the round reached the end of the family.
+    pub completed: bool,
+}
+
 impl BatchWriter {
     /// Upsert one chain-level hourly stats bucket.
     ///
@@ -777,35 +786,227 @@ impl BatchWriter {
         ckbadger_store::activity_addr_set_count(addrs.len(), &bucket_label)
     }
 
-    pub fn refresh_token_24h_transfers(&self) -> Result<u64> {
-        let now_ms = chrono::Utc::now().timestamp_millis();
-        let cutoff_hour = now_ms / 3_600_000 - 48; // Keep 48h, discard older
+    /// Hours of per-entity hourly transfer counters the read path relies on.
+    pub const HOURLY_RETENTION_WINDOW_HOURS: i64 = 48;
 
-        let tokens = self.store.list_tokens()?;
-        let mut total_deleted = 0u64;
-        for (type_hash, _) in &tokens {
-            total_deleted += self
-                .store
-                .cleanup_old_hourly_buckets(type_hash, cutoff_hour)?;
-        }
-        Ok(total_deleted)
+    /// Largest number of keys one retention step may delete.
+    pub const HOURLY_RETENTION_STEP_BUDGET: usize = 5_000;
+
+    /// The cutoff hour a retention round may delete below.
+    ///
+    /// Two bounds, and the lower one wins:
+    /// - the read contract: keep the last 48 hours;
+    /// - the rollback contract: every hourly key a retained `EntityStats` undo
+    ///   entry could restore must still exist. That is a BLOCK-derived bound,
+    ///   read from the header at `tip - ENTITY_STATS_UNDO_RETAIN_BLOCKS`. The
+    ///   old code assumed 36 blocks is always less than 48 hours; a stalled
+    ///   chain breaks that assumption and would let retention delete a bucket
+    ///   rollback still has to restore.
+    ///
+    /// `executed_cutoff_hour` is a floor: a clock that goes backwards must not
+    /// lower a boundary whose deletions already happened.
+    pub fn hourly_retention_cutoff_hour(
+        &self,
+        now_ms: i64,
+        committed_tip: i64,
+        already_executed: i64,
+    ) -> Result<i64> {
+        let by_clock = now_ms / 3_600_000 - Self::HOURLY_RETENTION_WINDOW_HOURS;
+        let undo_window_block = committed_tip - crate::sync::ENTITY_STATS_UNDO_RETAIN_BLOCKS;
+        let by_undo_window = if undo_window_block < 0 {
+            // The whole chain is still inside the undo window: there is no
+            // block old enough to bound anything, so only the clock applies.
+            i64::MIN
+        } else {
+            match self.store.get_block_header(undo_window_block)? {
+                Some(header) => header.timestamp / 3_600_000,
+                None => {
+                    // A canonical block at or below the tip with no header is
+                    // store corruption. Turning that into "delete nothing"
+                    // would hide it behind a retention sweep that quietly stops
+                    // working.
+                    bail!(
+                        "missing header for the entity-stats undo window block while computing \
+                         the hourly retention cutoff: block={}, committed_tip={}, retain_blocks={}",
+                        undo_window_block,
+                        committed_tip,
+                        crate::sync::ENTITY_STATS_UNDO_RETAIN_BLOCKS
+                    );
+                }
+            }
+        };
+        Ok(by_clock.min(by_undo_window).max(already_executed))
     }
 
-    pub fn refresh_mnft_24h_transfers(&self) -> Result<u64> {
-        let now_ms = chrono::Utc::now().timestamp_millis();
-        let cutoff_hour = now_ms / 3_600_000 - 48; // Keep 48h, discard older
+    /// Delete up to `HOURLY_RETENTION_STEP_BUDGET` expired keys of one hourly
+    /// family, staging both the deletions and the advanced state into `batch`.
+    ///
+    /// Runs inside the writer that owns every other chain-store write, so a
+    /// deletion can never race an undo replay that is restoring the same key.
+    pub fn stage_hourly_retention_step(
+        &self,
+        batch: &mut StoreBatch,
+        family: ckbadger_store::types::HourlyRetentionFamily,
+        cutoff_hour: i64,
+        now_ms: i64,
+    ) -> Result<HourlyRetentionStepResult> {
+        use ckbadger_store::types::{
+            HourlyRetentionFamily, HourlyRetentionState, HOURLY_RETENTION_POLICY_VERSION,
+        };
 
-        let collections = self.store.list_mnft_collection_aggregates()?;
-        let mut total_deleted = 0u64;
-        for (collection_id, agg) in collections {
-            if agg.standard == ObjectStandard::MnftClass {
-                total_deleted += self
-                    .store
-                    .cleanup_old_object_hourly_buckets(&collection_id, cutoff_hour)?;
+        let (cf, prefix) = match family {
+            HourlyRetentionFamily::Token => (
+                self.store.cf_stats_token(),
+                ckbadger_store::keys::STATS_PREFIX_TOKEN_HOURLY,
+            ),
+            HourlyRetentionFamily::Mnft => (
+                self.store.cf_stats_mnft(),
+                ckbadger_store::keys::STATS_PREFIX_OBJECT_HOURLY,
+            ),
+        };
+
+        let existing = self.store.get_hourly_retention_state(family)?;
+        let round_started_at = existing
+            .as_ref()
+            .filter(|state| state.cursor.is_some())
+            .map(|state| state.round_started_at)
+            .unwrap_or(now_ms);
+        let start_key = existing
+            .as_ref()
+            .and_then(|state| state.cursor.clone())
+            .unwrap_or_else(|| vec![prefix]);
+
+        let mut deleted = 0u64;
+        let mut scanned = 0usize;
+        let mut cursor: Option<Vec<u8>> = None;
+        // `OBJECT_HOURLY` also carries rows for Spore-cluster collections, which
+        // have NO retention policy. Only mNFT classes expire; a whole-prefix
+        // sweep would invent an expiry contract for Spore that nothing promises.
+        //
+        // The join has to go through `pad_id_32`: the hourly key stores the
+        // collection id zero-padded to 32 bytes, while `cf_mnft_collection_agg`
+        // is keyed by the RAW id — 24 bytes for every real mNFT class. Looking
+        // the padded key up directly always missed, so no mNFT hourly row was
+        // ever deleted while the retention state claimed the sweep had run.
+        // Two writers put rows under `OBJECT_HOURLY`: `mnft.rs` keyed by an mNFT
+        // class id (has an entry in `cf_mnft_collection_agg`) and `dotbit.rs`
+        // keyed by `DOTBIT_SENTINEL_COLLECTION` (has one in `cf_identity_agg`
+        // instead). Only mNFT classes expire; identity collections have no
+        // retention policy, exactly like Spore clusters.
+        let mut expiry_by_collection: HashMap<[u8; 32], bool> = HashMap::new();
+        if family == HourlyRetentionFamily::Mnft {
+            for (collection_id, agg) in self.store.list_mnft_collection_aggregates()? {
+                expiry_by_collection.insert(
+                    ckbadger_store::keys::pad_id_32(&collection_id),
+                    agg.standard == ObjectStandard::MnftClass,
+                );
+            }
+            for (collection_id, _) in self.store.list_identity_collection_aggregates()? {
+                expiry_by_collection
+                    .entry(ckbadger_store::keys::pad_id_32(&collection_id))
+                    .or_insert(false);
+            }
+        }
+        {
+            let iter = self.store.iterator_cf(
+                cf,
+                rocksdb::IteratorMode::From(&start_key, rocksdb::Direction::Forward),
+            );
+            for item in iter {
+                let (key, _) = item?;
+                if key.first() != Some(&prefix) {
+                    break;
+                }
+                if key.len() != 41 {
+                    bail!(
+                        "invalid {} hourly key length during retention: len={}, key=0x{}",
+                        family.as_str(),
+                        key.len(),
+                        hex::encode(&key)
+                    );
+                }
+                scanned += 1;
+                let hour = i64::from_be_bytes(key[33..41].try_into().map_err(|_| {
+                    anyhow::anyhow!(
+                        "failed to decode {} hourly bucket during retention: key=0x{}",
+                        family.as_str(),
+                        hex::encode(&key)
+                    )
+                })?);
+                let expires = match family {
+                    HourlyRetentionFamily::Token => true,
+                    HourlyRetentionFamily::Mnft => {
+                        let padded: [u8; 32] = key[1..33].try_into().map_err(|_| {
+                            anyhow::anyhow!(
+                                "object hourly key has no 32-byte collection id: key=0x{}",
+                                hex::encode(&key)
+                            )
+                        })?;
+                        // An hourly row whose collection has NO aggregate of
+                        // either kind is a broken invariant, not "does not
+                        // expire". Silently answering `false` is exactly how the
+                        // padding bug turned this sweep into a no-op.
+                        match expiry_by_collection.get(&padded) {
+                            Some(expires) => *expires,
+                            None => bail!(
+                                "object hourly bucket has no collection aggregate: \
+                                 collection_id=0x{}, hour_bucket={}, key=0x{}",
+                                hex::encode(padded),
+                                hour,
+                                hex::encode(&key)
+                            ),
+                        }
+                    }
+                };
+                if expires && hour < cutoff_hour {
+                    batch.delete_stats(&key);
+                    deleted += 1;
+                }
+                if deleted as usize >= Self::HOURLY_RETENTION_STEP_BUDGET
+                    || scanned >= Self::HOURLY_RETENTION_STEP_BUDGET * 4
+                {
+                    // Resume strictly after this key next round.
+                    let mut next = key.to_vec();
+                    next.push(0);
+                    cursor = Some(next);
+                    break;
+                }
             }
         }
 
-        Ok(total_deleted)
+        let completed = cursor.is_none();
+        let previous_executed = existing
+            .as_ref()
+            .map(|state| state.executed_cutoff_hour)
+            .unwrap_or(i64::MIN);
+        // `executed_cutoff_hour` is the store's claim about what it has ALREADY
+        // deleted, and a reader uses it to tell legitimate retention from
+        // corruption. A partial round has only swept up to `cursor`, so
+        // advancing it there would claim deletions that have not happened for
+        // every key past the cursor. It moves only when the round reaches the
+        // end of the family; `round_in_progress_cutoff_hour` records what the
+        // current round is working towards.
+        let executed_cutoff_hour = if completed {
+            cutoff_hour.max(previous_executed)
+        } else {
+            previous_executed
+        };
+        let state = HourlyRetentionState {
+            policy_version: HOURLY_RETENTION_POLICY_VERSION,
+            family,
+            executed_cutoff_hour,
+            round_in_progress_cutoff_hour: (!completed).then_some(cutoff_hour),
+            cursor,
+            round_started_at,
+            round_completed_at: completed.then_some(now_ms),
+        };
+        batch.put_hourly_retention_state(&state);
+
+        Ok(HourlyRetentionStepResult {
+            deleted,
+            scanned,
+            completed,
+        })
     }
 
     pub fn get_dao_deposits_at_block(&self, block_number: i64) -> Result<u128> {
@@ -2091,6 +2292,234 @@ mod tests {
         assert_eq!(snapshot.frozen_phase1_compensation, 99_00000000);
     }
 
+    /// Restores the invariant that `token_ops.rs`'s deleted
+    /// `test_cleanup_old_object_hourly_buckets_accepts_24_byte_collection_id`
+    /// used to hold: a collection id at its natural 24-byte width must still be
+    /// resolvable from its zero-padded hourly key.
+    ///
+    /// Retention joins `OBJECT_HOURLY` (id padded to 32 by
+    /// `encode_object_hourly_key`) to `cf_mnft_collection_agg` (keyed by the RAW
+    /// id). Padding the aggregate's id is the only correct direction; looking up
+    /// the 32-byte key verbatim missed every real mNFT class and turned the whole
+    /// sweep into a no-op that still advanced `executed_cutoff_hour`.
+    #[test]
+    fn test_hourly_retention_resolves_natural_width_collection_ids() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone(), store.clone());
+
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let current_hour = now_ms / 3_600_000;
+        let old_hour = current_hour - 100;
+
+        // Every width a real collection id can have.
+        let widths = [20usize, 24, 32];
+        let mut seed = StoreBatch::new(&store);
+        for (i, width) in widths.iter().enumerate() {
+            let collection_id = vec![0x30 + i as u8; *width];
+            seed.put_mnft_collection_aggregate(
+                &collection_id,
+                &MnftCollectionAggregate {
+                    standard: ObjectStandard::MnftClass,
+                    ..Default::default()
+                },
+            );
+            seed.put_mnft_hourly_transfer(&collection_id, old_hour, 9);
+            seed.put_mnft_hourly_transfer(&collection_id, current_hour, 3);
+        }
+        seed.commit().unwrap();
+
+        let mut batch = StoreBatch::new(&store);
+        let result = writer
+            .stage_hourly_retention_step(
+                &mut batch,
+                ckbadger_store::types::HourlyRetentionFamily::Mnft,
+                current_hour - 48,
+                now_ms,
+            )
+            .unwrap();
+        batch.commit().unwrap();
+        assert_eq!(
+            result.deleted,
+            widths.len() as u64,
+            "one expired bucket per collection, whatever its id width"
+        );
+
+        for (i, width) in widths.iter().enumerate() {
+            let collection_id = vec![0x30 + i as u8; *width];
+            let old_key = keys::encode_object_hourly_key(&collection_id, old_hour);
+            let new_key = keys::encode_object_hourly_key(&collection_id, current_hour);
+            assert!(
+                store.get_stats_key(&old_key).unwrap().is_none(),
+                "{width}-byte collection id: expired bucket must be deleted"
+            );
+            assert!(
+                store.get_stats_key(&new_key).unwrap().is_some(),
+                "{width}-byte collection id: in-window bucket must survive"
+            );
+        }
+    }
+
+    /// `executed_cutoff_hour` is the store's claim about what it has already
+    /// deleted. A partial round has only swept as far as its cursor, so
+    /// advancing the boundary there would claim deletions that never happened
+    /// for every key past it — and a verifier reading the boundary would score
+    /// those surviving buckets as corruption.
+    #[test]
+    fn test_partial_retention_round_does_not_advance_the_executed_boundary() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone(), store.clone());
+
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let current_hour = now_ms / 3_600_000;
+
+        // More expired buckets than one step's delete budget.
+        let overflow = BatchWriter::HOURLY_RETENTION_STEP_BUDGET + 10;
+        let type_hash = vec![0x5C; 32];
+        let mut seed = StoreBatch::new(&store);
+        for i in 0..overflow {
+            // All well past the 48h window, so every one of them expires.
+            seed.put_token_hourly_transfer(&type_hash, current_hour - 10_000 + i as i64, 1);
+        }
+        seed.commit().unwrap();
+
+        let mut batch = StoreBatch::new(&store);
+        let result = writer
+            .stage_hourly_retention_step(
+                &mut batch,
+                ckbadger_store::types::HourlyRetentionFamily::Token,
+                current_hour - 48,
+                now_ms,
+            )
+            .unwrap();
+        batch.commit().unwrap();
+        assert!(!result.completed, "fixture must overflow one step's budget");
+
+        let state = store
+            .get_hourly_retention_state(ckbadger_store::types::HourlyRetentionFamily::Token)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            state.executed_cutoff_hour,
+            i64::MIN,
+            "a partial round must not claim a boundary it has not reached"
+        );
+        assert_eq!(
+            state.round_in_progress_cutoff_hour,
+            Some(current_hour - 48),
+            "the in-flight target is recorded separately, as diagnostics only"
+        );
+        assert!(state.cursor.is_some());
+
+        // Finishing the round is what earns the boundary.
+        let mut rounds = 0;
+        loop {
+            let mut batch = StoreBatch::new(&store);
+            let result = writer
+                .stage_hourly_retention_step(
+                    &mut batch,
+                    ckbadger_store::types::HourlyRetentionFamily::Token,
+                    current_hour - 48,
+                    now_ms,
+                )
+                .unwrap();
+            batch.commit().unwrap();
+            rounds += 1;
+            assert!(rounds < 10, "the cursor must make progress");
+            if result.completed {
+                break;
+            }
+        }
+        let state = store
+            .get_hourly_retention_state(ckbadger_store::types::HourlyRetentionFamily::Token)
+            .unwrap()
+            .unwrap();
+        assert_eq!(state.executed_cutoff_hour, current_hour - 48);
+        assert_eq!(state.round_in_progress_cutoff_hour, None);
+        assert!(state.cursor.is_none());
+        assert!(state.round_completed_at.is_some());
+    }
+
+    /// `dotbit.rs` writes `OBJECT_HOURLY` rows under
+    /// `DOTBIT_SENTINEL_COLLECTION`, whose aggregate lives in `cf_identity_agg`,
+    /// not `cf_mnft_collection_agg`. On both production stores that sentinel is
+    /// the ONLY `OBJECT_HOURLY` entity (Task 0.3: `object_hourly entities=1`),
+    /// so treating "no mNFT aggregate" as a hard error would have made every
+    /// retention step fail on a real chain. Identity collections simply have no
+    /// retention policy, like Spore clusters.
+    #[test]
+    fn test_hourly_retention_keeps_identity_collection_buckets() {
+        use ckbadger_store::types::{IdentityCollectionAggregate, DOTBIT_SENTINEL_COLLECTION};
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone(), store.clone());
+
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let current_hour = now_ms / 3_600_000;
+        let old_hour = current_hour - 100;
+
+        let mut seed = StoreBatch::new(&store);
+        seed.put_identity_collection_aggregate(
+            &DOTBIT_SENTINEL_COLLECTION,
+            &IdentityCollectionAggregate::default(),
+        );
+        seed.put_mnft_hourly_transfer(&DOTBIT_SENTINEL_COLLECTION, old_hour, 4);
+        seed.commit().unwrap();
+
+        let mut batch = StoreBatch::new(&store);
+        let result = writer
+            .stage_hourly_retention_step(
+                &mut batch,
+                ckbadger_store::types::HourlyRetentionFamily::Mnft,
+                current_hour - 48,
+                now_ms,
+            )
+            .expect("an identity collection must not fail the sweep");
+        batch.commit().unwrap();
+
+        assert_eq!(result.deleted, 0);
+        let key = keys::encode_object_hourly_key(&DOTBIT_SENTINEL_COLLECTION, old_hour);
+        assert!(
+            store.get_stats_key(&key).unwrap().is_some(),
+            "no retention policy covers identity collections, so nothing may be deleted"
+        );
+    }
+
+    /// An `OBJECT_HOURLY` row whose collection has no aggregate at all is a
+    /// broken invariant. Answering "does not expire" is what let the padding bug
+    /// hide for a whole sweep; it must fail with the key instead.
+    #[test]
+    fn test_hourly_retention_fails_on_hourly_bucket_without_collection_aggregate() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone(), store.clone());
+
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let current_hour = now_ms / 3_600_000;
+        let orphan = vec![0x4A; 24];
+        let mut seed = StoreBatch::new(&store);
+        seed.put_mnft_hourly_transfer(&orphan, current_hour - 100, 5);
+        seed.commit().unwrap();
+
+        let mut batch = StoreBatch::new(&store);
+        let err = writer
+            .stage_hourly_retention_step(
+                &mut batch,
+                ckbadger_store::types::HourlyRetentionFamily::Mnft,
+                current_hour - 48,
+                now_ms,
+            )
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("object hourly bucket has no collection aggregate")
+                && err.to_string().contains("4a4a4a"),
+            "got: {err}"
+        );
+    }
+
     #[test]
     fn test_refresh_mnft_24h_transfers_cleans_only_mnft_collections() {
         let dir = tempfile::tempdir().unwrap();
@@ -2101,7 +2530,13 @@ mod tests {
         let current_hour = now_ms / 3_600_000;
         let old_hour = current_hour - 100;
 
-        let mnft_collection = vec![0x10; 32];
+        // Real mNFT class ids are 24 bytes (`parser/mnft.rs:201`,
+        // `type_args[..24]`), while `encode_object_hourly_key` zero-pads them to
+        // 32 and `cf_mnft_collection_agg` is keyed by the RAW id. A 32-byte-only
+        // fixture cannot see that mismatch; this is the case the deleted
+        // `test_cleanup_old_object_hourly_buckets_accepts_24_byte_collection_id`
+        // used to pin.
+        let mnft_collection = vec![0x10; 24];
         let spore_collection = vec![0x20; 32];
 
         let mut seed = StoreBatch::new(&store);
@@ -2124,8 +2559,20 @@ mod tests {
         seed.put_mnft_hourly_transfer(&spore_collection, old_hour, 7);
         seed.commit().unwrap();
 
-        let deleted = writer.refresh_mnft_24h_transfers().unwrap();
-        assert_eq!(deleted, 1);
+        // Same assertions, now against the single retention path: an mNFT class
+        // expires, a Spore cluster sharing the OBJECT_HOURLY prefix does not.
+        let mut batch = StoreBatch::new(&store);
+        let result = writer
+            .stage_hourly_retention_step(
+                &mut batch,
+                ckbadger_store::types::HourlyRetentionFamily::Mnft,
+                current_hour - 48,
+                now_ms,
+            )
+            .unwrap();
+        batch.commit().unwrap();
+        assert_eq!(result.deleted, 1);
+        assert!(result.completed);
 
         let mnft_old_key = keys::encode_object_hourly_key(&mnft_collection, old_hour);
         let mnft_new_key = keys::encode_object_hourly_key(&mnft_collection, current_hour);

@@ -9,6 +9,14 @@ use crate::keys;
 use crate::store::{CkbadgerStore, StoreWriteIntent};
 use crate::types::*;
 
+/// How many keys one append-only existence probe reads at a time.
+///
+/// The probe materialises the existing value of every key it asks for, so an
+/// unchunked probe over a replay window (14,000-17,000 cell payloads) would
+/// hold all of them at once. One `multi_get` per chunk keeps the batched-read
+/// win with bounded peak memory.
+const APPEND_PROBE_CHUNK_KEYS: usize = 4_096;
+
 #[derive(Debug)]
 struct AppendBatchOp {
     cf_name: &'static str,
@@ -185,7 +193,6 @@ impl<'a> StoreBatch<'a> {
             // probes to avoid read-before-write overhead on the hot append path.
             let skip_existing_probe = matches!(intent, StoreWriteIntent::BulkSyncAppendValidated);
             let mut seen_ops: HashMap<(&'static str, Vec<u8>), usize> = HashMap::new();
-            let mut filtered_batch = WriteBatch::default();
             for (idx, op) in self.append_ops.iter().enumerate() {
                 let dedupe_key = (op.cf_name, op.key.clone());
                 if let Some(first_idx) = seen_ops.insert(dedupe_key, idx) {
@@ -197,22 +204,75 @@ impl<'a> StoreBatch<'a> {
                         idx
                     );
                 }
+            }
+
+            // Existence probe for the replay-idempotency rule, as batched reads
+            // instead of a point read per key. During the 2026-09-22 catch-up
+            // this was 14,000-17,000 `get_cf` calls per batch against the 111 GB
+            // append-only store, inside the commit window. The rule itself is
+            // unchanged: same value skips, different value bails. Bulk sync is
+            // constrained to fresh-db rebuilds and skips the probe entirely.
+            //
+            // Chunked so peak memory is bounded by the chunk rather than by the
+            // batch: a replay window's worth of existing cell payloads would
+            // otherwise all be materialised at once.
+            let put_ops: Vec<&AppendBatchOp> = if skip_existing_probe {
+                Vec::new()
+            } else {
+                self.append_ops
+                    .iter()
+                    .filter(|op| op.value.is_some())
+                    .collect()
+            };
+            let mut probed: Vec<Option<Vec<u8>>> = Vec::with_capacity(put_ops.len());
+            for chunk in put_ops.chunks(APPEND_PROBE_CHUNK_KEYS) {
+                let probe_keys: Vec<(&ColumnFamily, &[u8])> = chunk
+                    .iter()
+                    .map(|op| (self.store.cf(op.cf_name), op.key.as_slice()))
+                    .collect();
+                for (result, op) in self.store.multi_get_cf(probe_keys).into_iter().zip(chunk) {
+                    probed.push(result.map_err(|e| {
+                        anyhow::anyhow!(
+                            "append-only existence probe failed: cf={}, key=0x{}, error={}",
+                            op.cf_name,
+                            bytes_to_hex(&op.key),
+                            e
+                        )
+                    })?);
+                }
+            }
+
+            let mut filtered_batch = WriteBatch::default();
+            let mut probe_index = 0usize;
+            for op in self.append_ops.iter() {
                 let cf = self.store.cf(op.cf_name);
                 if let Some(value) = op.value.as_deref() {
-                    if !skip_existing_probe {
-                        if let Some(existing) = self.store.get_cf(cf, &op.key)? {
-                            if existing.as_slice() == value {
-                                // Replay-safe idempotency: same key+value in append-only is already committed.
-                                continue;
-                            }
-                            anyhow::bail!(
-                                "append-only overwrite blocked: cf={}, key=0x{}, existing_len={}, new_len={}",
+                    let existing = if skip_existing_probe {
+                        None
+                    } else {
+                        let existing = probed.get(probe_index).ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "append-only existence probe result missing: cf={}, key=0x{}, index={}",
                                 op.cf_name,
                                 bytes_to_hex(&op.key),
-                                existing.len(),
-                                value.len()
-                            );
+                                probe_index
+                            )
+                        })?;
+                        probe_index += 1;
+                        existing.as_deref()
+                    };
+                    if let Some(existing) = existing {
+                        if existing == value {
+                            // Replay-safe idempotency: same key+value in append-only is already committed.
+                            continue;
                         }
+                        anyhow::bail!(
+                            "append-only overwrite blocked: cf={}, key=0x{}, existing_len={}, new_len={}",
+                            op.cf_name,
+                            bytes_to_hex(&op.key),
+                            existing.len(),
+                            value.len()
+                        );
                     }
                     filtered_batch.put_cf(cf, &op.key, value);
                 } else {
@@ -709,6 +769,29 @@ impl<'a> StoreBatch<'a> {
         let key = keys::encode_reorg_undo_log_key(block_num, seq);
         let value = bincode::serialize(entry).expect("serialize UndoLogEntry");
         self.put_cf(self.store.cf_reorg_undo_log_by_block(), key, &value);
+    }
+
+    /// Remove one undo-log entry by its full `block + seq` key.
+    pub fn delete_reorg_undo_log_key(&mut self, key: &[u8]) {
+        self.delete_cf(self.store.cf_reorg_undo_log_by_block(), key);
+    }
+
+    /// Persist one hourly family's retention state in the same atomic batch as
+    /// the deletions it describes.
+    pub fn put_hourly_retention_state(&mut self, state: &crate::types::HourlyRetentionState) {
+        let key = keys::encode_hourly_retention_state_key(state.family.as_str());
+        let value = bincode::serialize(state).expect("serialize HourlyRetentionState");
+        self.put_sync_meta(&key, &value);
+    }
+
+    /// Persist the entity-stats rollback coverage contract in the same atomic
+    /// batch as the writes it describes.
+    pub fn put_entity_stats_undo_contract(
+        &mut self,
+        contract: &crate::types::EntityStatsUndoContract,
+    ) {
+        let value = bincode::serialize(contract).expect("serialize EntityStatsUndoContract");
+        self.put_sync_meta(keys::sync_meta_keys::ENTITY_STATS_UNDO_CONTRACT, &value);
     }
 
     // ---- DAO ----
@@ -1381,13 +1464,18 @@ impl<'a> StoreBatch<'a> {
         self.put_cf(self.store.cf_stats_hodl(), &key, &value);
     }
 
-    pub fn put_hodl_tracker_state(&mut self, state: &HodlTrackerState) {
+    /// Stage the whole HODL tracker state. Returns the serialized byte count so
+    /// the writer can report how much of each commit window this fixed-size
+    /// `sync_meta` rewrite costs.
+    pub fn put_hodl_tracker_state(&mut self, state: &HodlTrackerState) -> usize {
         let value = bincode::serialize(state).expect("failed to serialize hodl tracker state");
+        let bytes = value.len();
         self.put_cf(
             self.store.cf_sync_meta(),
             keys::sync_meta_keys::HODL_TRACKER,
             &value,
         );
+        bytes
     }
 
     pub fn put_cell_distribution(&mut self, date: &str, snapshot: &DailyCellDistribution) {
@@ -1402,13 +1490,17 @@ impl<'a> StoreBatch<'a> {
         self.put_cf(self.store.cf_stats_hodl(), &key, &value);
     }
 
-    pub fn put_cell_dist_tracker_state(&mut self, state: &CellDistributionTrackerState) {
+    /// Stage the whole cell-distribution tracker state. Returns the serialized
+    /// byte count; see [`Self::put_hodl_tracker_state`].
+    pub fn put_cell_dist_tracker_state(&mut self, state: &CellDistributionTrackerState) -> usize {
         let value = bincode::serialize(state).expect("failed to serialize cell dist tracker state");
+        let bytes = value.len();
         self.put_cf(
             self.store.cf_sync_meta(),
             keys::sync_meta_keys::CELL_DIST_TRACKER,
             &value,
         );
+        bytes
     }
 
     // ---- Sync meta ----
@@ -2031,6 +2123,131 @@ mod tests {
         assert!(rows
             .iter()
             .any(|(_, _, entry)| entry.block_hash == vec![0x32; 32]));
+    }
+
+    /// P3.4: the append-only replay probe costs ONE `multi_get_cf`, not one
+    /// `get_cf` per key.
+    ///
+    /// During the 2026-09-22 catch-up each live batch probed 14,000-17,000
+    /// keys one at a time against the 111 GB append-only store, inside the
+    /// commit window. The semantics are unchanged (same value skips, different
+    /// value bails, duplicate key in one batch bails) — only the number of
+    /// round trips is.
+    #[test]
+    fn commit_inner_probe_uses_single_multi_get() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_append_only(dir.path()).unwrap();
+        let info = LiveCellInfo {
+            capacity: 10_000,
+            lock_script_hash: vec![1u8; 32],
+            lock_code_hash: vec![2u8; 32],
+            lock_hash_type: 1,
+            lock_args: vec![3u8; 20],
+            type_script_hash: None,
+            type_code_hash: None,
+            type_hash_type: None,
+            type_args: None,
+            data_size: 0,
+            occupied_capacity: 0,
+            udt_amount: None,
+            data_hash: None,
+        };
+
+        const CELLS: u8 = 64;
+        let mut batch = StoreBatch::new(&store);
+        for index in 0..CELLS {
+            batch.put_cell_payload_by_outpoint(&[index; 32], 0, &info);
+        }
+        store.reset_read_call_counters();
+        batch.commit().unwrap();
+
+        let (get_cf_calls, multi_get_cf_calls) = store.read_call_counts();
+        assert_eq!(
+            get_cf_calls, 0,
+            "the probe must not point-read one key at a time"
+        );
+        assert_eq!(
+            multi_get_cf_calls, 1,
+            "the probe must be a single multi_get for the whole batch"
+        );
+
+        // Same batch replayed: identical values are still skipped, still with
+        // one probe.
+        let mut replay = StoreBatch::new(&store);
+        for index in 0..CELLS {
+            replay.put_cell_payload_by_outpoint(&[index; 32], 0, &info);
+        }
+        store.reset_read_call_counters();
+        replay.commit().unwrap();
+        let (get_cf_calls, multi_get_cf_calls) = store.read_call_counts();
+        assert_eq!(get_cf_calls, 0);
+        assert_eq!(multi_get_cf_calls, 1);
+
+        for index in 0..CELLS {
+            let key = keys::encode_outpoint(&[index; 32], 0);
+            assert!(store.get_cf(store.cf_cells(), &key).unwrap().is_some());
+        }
+    }
+
+    /// A replay window can carry 14,000-17,000 cell payloads. Probing them in
+    /// one `multi_get` materialises every existing value at once; the probe is
+    /// chunked so peak memory is bounded by the chunk, not by the batch.
+    #[test]
+    fn commit_inner_probe_chunks_a_batch_larger_than_the_probe_chunk() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_append_only(dir.path()).unwrap();
+        let info = LiveCellInfo {
+            capacity: 10_000,
+            lock_script_hash: vec![1u8; 32],
+            lock_code_hash: vec![2u8; 32],
+            lock_hash_type: 1,
+            lock_args: vec![3u8; 20],
+            type_script_hash: None,
+            type_code_hash: None,
+            type_hash_type: None,
+            type_args: None,
+            data_size: 0,
+            occupied_capacity: 0,
+            udt_amount: None,
+            data_hash: None,
+        };
+
+        // One and a bit chunks' worth of distinct outpoints.
+        let cells = APPEND_PROBE_CHUNK_KEYS + 17;
+        let mut batch = StoreBatch::new(&store);
+        for index in 0..cells {
+            let mut tx_hash = [0u8; 32];
+            tx_hash[..4].copy_from_slice(&(index as u32).to_le_bytes());
+            batch.put_cell_payload_by_outpoint(&tx_hash, 0, &info);
+        }
+        store.reset_read_call_counters();
+        batch.commit().unwrap();
+
+        let (get_cf_calls, multi_get_cf_calls) = store.read_call_counts();
+        assert_eq!(get_cf_calls, 0);
+        assert_eq!(
+            multi_get_cf_calls, 2,
+            "{cells} keys must be probed in ceil({cells}/{APPEND_PROBE_CHUNK_KEYS}) batched reads"
+        );
+
+        // Replay is still idempotent across the chunk boundary.
+        let mut replay = StoreBatch::new(&store);
+        for index in 0..cells {
+            let mut tx_hash = [0u8; 32];
+            tx_hash[..4].copy_from_slice(&(index as u32).to_le_bytes());
+            replay.put_cell_payload_by_outpoint(&tx_hash, 0, &info);
+        }
+        replay.commit().unwrap();
+
+        // A changed value on the far side of the chunk boundary still bails.
+        let mut overwrite = StoreBatch::new(&store);
+        let mut tx_hash = [0u8; 32];
+        tx_hash[..4].copy_from_slice(&((cells - 1) as u32).to_le_bytes());
+        let mut changed = info.clone();
+        changed.capacity = 20_000;
+        overwrite.put_cell_payload_by_outpoint(&tx_hash, 0, &changed);
+        let err = overwrite.commit().unwrap_err();
+        assert!(err.to_string().contains("append-only overwrite blocked"));
     }
 
     #[test]

@@ -687,7 +687,7 @@ impl App {
     }
 
     fn detect_stale_state(&mut self) {
-        let stale_secs = stale_age_secs(self.memory_stats.as_ref());
+        let stale_secs = stale_age_secs(self.runtime_diag.as_ref());
         let stale_now = stale_secs.is_some_and(|secs| secs > 30);
         if let Some(secs) = stale_secs {
             if stale_now && !self.stale_warning_active {
@@ -921,7 +921,7 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(title, cols[0]);
 
     let now = Local::now();
-    let stale_secs = stale_age_secs(app.memory_stats.as_ref());
+    let stale_secs = stale_age_secs(app.runtime_diag.as_ref());
     let right = Paragraph::new(header_right_line(
         &app.build_version,
         stale_secs,
@@ -959,12 +959,17 @@ fn header_right_line(version: &str, stale_secs: Option<i64>, clock_text: &str) -
     ])
 }
 
-fn stale_age_secs(memory_stats: Option<&MemoryStatsData>) -> Option<i64> {
-    let m = memory_stats?;
-    if m.updated_at <= 0 {
-        return None;
-    }
-    Some((chrono::Utc::now().timestamp() - m.updated_at).max(0))
+/// Age of the indexer's last runtime heartbeat, in seconds.
+///
+/// The heartbeat is written on every 3 s progress tick (in the same batch as
+/// sync progress), so it is the single source of "is the writer alive". Memory
+/// stats are NOT: the sweep behind them reads ~8 properties across all 60 CFs
+/// of both chain stores, so live sync resamples them on a much slower cadence
+/// and their `updated_at` says nothing about liveness.
+///
+/// `None` means unknown — no diagnostics yet, or no heartbeat ever recorded.
+fn stale_age_secs(runtime_diag: Option<&RuntimeDiagData>) -> Option<i64> {
+    runtime_diag?.heartbeat_age_secs
 }
 
 fn stale_status(stale_secs: Option<i64>) -> (String, Color) {
@@ -6741,11 +6746,40 @@ mod tests {
     #[test]
     fn test_stale_age_secs_handles_missing_or_zero_timestamp() {
         assert_eq!(stale_age_secs(None), None);
-        let zero_ts = MemoryStatsData {
-            updated_at: 0,
+        // No heartbeat recorded yet (`last_heartbeat_at <= 0` in the store)
+        // reads as "unknown", not as "stale".
+        let no_heartbeat = RuntimeDiagData {
+            heartbeat_age_secs: None,
             ..Default::default()
         };
-        assert_eq!(stale_age_secs(Some(&zero_ts)), None);
+        assert_eq!(stale_age_secs(Some(&no_heartbeat)), None);
+    }
+
+    /// Liveness comes from the runtime heartbeat, which the indexer writes on
+    /// every 3 s tick. Memory stats are resampled far less often in live sync
+    /// (the sweep reads ~8 properties across all 60 CFs of both stores), so
+    /// reading THEIR age as liveness painted a healthy indexer amber and logged
+    /// a warning every ~30 s.
+    #[test]
+    fn stale_age_follows_the_runtime_heartbeat_not_the_memory_sample() {
+        let healthy = RuntimeDiagData {
+            active_run_id: Some("run-1".to_string()),
+            heartbeat_age_secs: Some(3),
+            ..Default::default()
+        };
+        assert_eq!(stale_age_secs(Some(&healthy)), Some(3));
+        let (text, color) = stale_status(stale_age_secs(Some(&healthy)));
+        assert_eq!(text, "stale 3s");
+        assert_ne!(color, AMBER, "a 3 s old heartbeat is not stale");
+
+        // A genuinely stopped writer still trips it.
+        let stopped = RuntimeDiagData {
+            active_run_id: Some("run-1".to_string()),
+            heartbeat_age_secs: Some(45),
+            ..Default::default()
+        };
+        let (_, color) = stale_status(stale_age_secs(Some(&stopped)));
+        assert_eq!(color, AMBER, "a 45 s old heartbeat is stale");
     }
 
     #[test]

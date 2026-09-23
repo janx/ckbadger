@@ -3,7 +3,7 @@ use tracing::{info, warn};
 
 use ckbadger_store::{keys, CkbadgerStore};
 
-use super::BatchWriter;
+use super::{BatchWriter, ContractRequirement};
 
 const STARTUP_CONTINUITY_SAMPLE_LIMIT: usize = 5;
 
@@ -218,6 +218,17 @@ impl BatchWriter {
                 } else {
                     start_block
                 };
+            // Same coverage check `execute_reorg` applies, and it matters more
+            // here: the branch above resets to -1 whenever the tip header is
+            // missing, and since the eight entity families are no longer deleted
+            // by the cutoff sweep they would survive a reset that wipes blocks,
+            // cells and indexes — the re-sync would then add the same deltas on
+            // top, undetectably, because the totals stay positive.
+            self.ensure_rollback_within_entity_stats_coverage(
+                rollback_target,
+                ContractRequirement::OptionalOnFreshStore,
+                "startup cleanup rollback target",
+            )?;
             // Revert entity mutations (Spore, mNFT, dotbit) from undo log FIRST
             // so that the subsequent canonical rollback rebuilds aggregates from
             // correct entity state.  This matches the normal reorg path ordering
@@ -336,6 +347,11 @@ impl BatchWriter {
 
         let cleanup_tip = start_block - 1;
 
+        self.ensure_rollback_within_entity_stats_coverage(
+            cleanup_tip,
+            ContractRequirement::OptionalOnFreshStore,
+            "batch range cleanup target",
+        )?;
         // Replay undo-log entries BEFORE domain rollback, matching the ordering
         // used by execute_reorg and init_sync_start. Entity mutations (Spore,
         // mNFT, dotbit) are reverted first so the subsequent domain rollback

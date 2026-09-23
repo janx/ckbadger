@@ -1353,3 +1353,99 @@ async fn test_get_token_holders_resolve_addresses_per_page_only() {
     );
     assert_eq!(second_json["hasMore"], false);
 }
+
+/// Task 5.1 — `/tokens/{hash}` after a REAL shallow fork.
+///
+/// Every token daily row here is produced by the production
+/// `BatchWriter::update_token_daily_deltas_batch` + `EntityStatsOverlay` write
+/// path (per-block undo pre-images, one final write per key), and the fork is
+/// undone by the production two-phase rollback. Seeding rows with
+/// `put_token_daily_delta` cannot pin this: without undo pre-images a rollback
+/// that deletes the whole day bucket is indistinguishable from a correct one.
+///
+/// RED before Task 2.4: `should_delete_stats_for_replay` deleted every
+/// `TOKEN_DAILY` row whose `date >= cutoff`, so the endpoint reported
+/// `totalCapacity: null` for a token whose pre-fork history was intact.
+#[tokio::test]
+async fn test_get_token_reports_pre_fork_capacity_after_real_writer_rollback() {
+    let store = test_store();
+    let type_hash = [0x5au8; 32];
+    let type_hash_hex = format!("0x{}", hex::encode(type_hash));
+
+    store
+        .put_token_direct(
+            &type_hash,
+            &TokenInfo {
+                type_code_hash: vec![0xAA; 32],
+                hash_type: 1,
+                type_args: vec![0x01; 20],
+                standard: "xudt".to_string(),
+                name: Some("Rollback Token".to_string()),
+                symbol: Some("RBK".to_string()),
+                decimals: Some(8),
+                max_supply: None,
+                first_seen_block: 1,
+                icon_url: None,
+                description: None,
+                transfers_count: 3,
+            },
+        )
+        .unwrap();
+
+    let writer = BatchWriter::new(store.clone(), store.clone());
+
+    // Blocks 1..=3 each mint one 100 CKB cell with 61 CKB occupied.
+    for block in 1..=3i64 {
+        commit_token_daily_blocks(
+            &writer,
+            &store,
+            &[(block, type_hash, 10_000_000_000, 6_100_000_000)],
+        );
+    }
+    let pre_fork = store
+        .get_token_daily_delta(&type_hash, WRITER_FIXTURE_DATE)
+        .unwrap()
+        .expect("three blocks of real writer output");
+    assert_eq!(pre_fork.owned_capacity_delta, 30_000_000_000);
+    assert_eq!(pre_fork.owned_knowledge_delta, 18_300_000_000);
+
+    // Block 4 is the orphan: same token, same UTC+8 day, different value.
+    commit_token_daily_blocks(
+        &writer,
+        &store,
+        &[(4, type_hash, 25_000_000_000, 13_000_000_000)],
+    );
+    assert_eq!(
+        store
+            .get_token_daily_delta(&type_hash, WRITER_FIXTURE_DATE)
+            .unwrap()
+            .unwrap()
+            .owned_capacity_delta,
+        55_000_000_000
+    );
+
+    rollback_entity_stats(&store, 3);
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/v1/tokens/{type_hash_hex}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        json["totalCapacity"], "30000000000",
+        "the three surviving blocks' capacity, not the orphan's 55000000000 \
+         and not the deleted-bucket null"
+    );
+    assert_eq!(json["totalCommonKnowledgeSize"], "18300000000");
+}

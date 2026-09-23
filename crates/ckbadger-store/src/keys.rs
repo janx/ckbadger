@@ -1237,7 +1237,14 @@ pub fn encode_identity_owner_prefix(collection_id: &[u8]) -> [u8; 32] {
 /// Zero-pad an ID to exactly 32 bytes. IDs shorter than 32 bytes (e.g. mNFT class_id = 24B)
 /// are right-padded with zeros. Panics if the ID exceeds 32 bytes to prevent silent key
 /// collisions from truncation.
-fn pad_id_32(id: &[u8]) -> [u8; 32] {
+/// Pad a variable-width entity id to the fixed 32 bytes every `*_daily` /
+/// `*_hourly` stats key uses.
+///
+/// Callers that join a stats key back to a CF keyed by the RAW id (for example
+/// `cf_mnft_collection_agg`, keyed by the 24-byte mNFT class id) must pad the
+/// raw id with this function rather than truncating the stats key — truncating
+/// guesses a width the key does not record.
+pub fn pad_id_32(id: &[u8]) -> [u8; 32] {
     assert!(
         id.len() <= 32,
         "pad_id_32: ID exceeds 32 bytes (got {}), which would cause key collisions from truncation",
@@ -1709,6 +1716,21 @@ pub mod sync_meta_keys {
     /// Presence marker distinguishing a pre-feature/rebuild-required store
     /// from corruption that removed both current and history records.
     pub const LIVE_CELL_SUMMARY_INITIALIZED: &[u8] = b"live_cell_summary:initialized";
+    /// Entity-stats rollback coverage contract (bincode
+    /// `EntityStatsUndoContract`). Its absence on a non-empty store means the
+    /// store predates per-block entity-stats undo and cannot be rolled back
+    /// correctly — the indexer refuses to write to it.
+    pub const ENTITY_STATS_UNDO_CONTRACT: &[u8] = b"entity_stats_undo_contract";
+    /// Per-family hourly retention state (bincode `HourlyRetentionState`).
+    /// The family name is appended: `hourly_retention_state:token`.
+    pub const HOURLY_RETENTION_STATE_PREFIX: &[u8] = b"hourly_retention_state:";
+}
+
+/// `sync_meta` key for one hourly family's retention state.
+pub fn encode_hourly_retention_state_key(family: &str) -> Vec<u8> {
+    let mut key = sync_meta_keys::HOURLY_RETENTION_STATE_PREFIX.to_vec();
+    key.extend_from_slice(family.as_bytes());
+    key
 }
 
 /// Block-end summary history used only for bounded shallow-reorg restoration.

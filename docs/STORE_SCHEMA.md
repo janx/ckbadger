@@ -119,6 +119,40 @@ model that future script schema refactors should follow.
 - `dao_by_lock_block`: key = `lock_script_hash(32B)` + block_desc + outpoint, supports per-address DAO deposit pagination.
 - `dao_by_status_block`: key = `status(i16 BE)` + block_desc + outpoint, supports status-filtered DAO queries (`deposited/withdrawing/withdrawn`).
 
+### `reorg_undo_log_by_block` Undo Scopes
+
+Key = `block_number(8B BE i64) + seq(8B BE u64)`. The sequence number carries its scope in the
+high bits: `seq = (scope << 48) | local`, where `local` counts entries within one block.
+
+| Scope         | Value    | Records                                                                |
+| ------------- | -------- | ---------------------------------------------------------------------- |
+| `TxContext`   | `0x0001` | Per-tx input/output shape used to derive cell and consumption rollback |
+| `DotBit`      | `0x0002` | `.bit` account/identity entity mutations                               |
+| `Object`      | `0x0003` | Spore, cluster and mNFT entity mutations                               |
+| `EntityStats` | `0x0004` | The eight per-entity daily/hourly stats buckets                        |
+
+The `local` counter is **per block and shared by every writer in one committed batch**
+(`SharedUndoSeq`). Spore, mNFT and `.bit` batch states used to own three private counters that all
+started at 0 and all stamped `Object`, so a second object write in the same block computed the
+identical undo key and silently overwrote the first entry's pre-image (POSTMORTEM IDX-008).
+
+**`EntityStats` scope.** The eight per-entity stats prefixes — `SCRIPT_DAILY` (`stats_script`),
+`TOKEN_DAILY` and `TOKEN_HOURLY` (`stats_token`), `CLUSTER_DAILY`, `SPORE_DAILY` and
+`SPORE_HOURLY` (`stats_spore`), `OBJECT_DAILY` and `OBJECT_HOURLY` (`stats_mnft`) — are restored
+**only** by undo replay. They are not in `STATS_REPLAY_CANDIDATE_PREFIXES` and the rollback cutoff
+sweep never deletes them (POSTMORTEM STATS-010). Each entry is a
+`KeyMutation { target_store: Domain, cf_name, key, previous_value }` holding that key's value at
+the **end of the previous block**, recorded once per `(block, key)` by `EntityStatsOverlay`
+(`crates/indexer/src/db/writer/entity_stats.rs`); `previous_value: None` means the row did not
+exist and rollback deletes it.
+
+**Bounded window.** Only the `EntityStats` scope is pruned during normal sync. Every live commit
+advances the coverage floor to `committed_tip - ENTITY_STATS_UNDO_RETAIN_BLOCKS` (1000 blocks,
+`crates/indexer/src/sync/batch.rs`) and deletes the `EntityStats` entries it leaves behind, staged
+into the same batch as the blocks, so the floor and the deletions it describes are never
+separately durable. The floor is monotonic. `TxContext`, `DotBit` and `Object` entries are never
+pruned — they are removed only when replayed. Bulk build records no undo entries at all.
+
 ### `sync_meta` Fixed Keys
 
 `sync_meta` belongs to the **domain store** and is written only by the indexer. Its fixed-key
@@ -136,6 +170,51 @@ virtual_occupied }`), derived from block 0 and used by supply, APC, and knowledg
   `live_cell_summary:history:<block_be_i64>`. Each value is a fixed-width 72-byte
   `LiveCellSummary` (`tip block/hash` + four `u64` counters). History retains up to 37 block-end
   snapshots (current plus the maximum 36-block automatic reorg depth).
+- entity-stats rollback coverage: `entity_stats_undo_contract`
+- hourly retention evidence: `hourly_retention_state:<family>`
+
+#### `entity_stats_undo_contract`
+
+Value is `EntityStatsUndoContract { version, coverage_floor_block, updated_at_block }`.
+`coverage_floor_block` is the lowest block a shallow reorg can still be undone to — `EntityStats`
+undo entries at or below it have been pruned; `updated_at_block` is the committed tip when that
+floor was last advanced, so a stale floor is distinguishable from a current one.
+
+Who writes it, and when:
+
+- **Bulk completion** writes it once, with `coverage_floor_block` = the **handoff tip**, the last
+  block bulk actually wrote — never the chain tip bulk was racing. The two differ by up to
+  `bulk_sync_threshold`, and a floor above what the store holds would claim coverage over blocks
+  that were never written. See `docs/prompts/BULK_SYNC.md` rule 12.
+- **Live sync** rewrites it in any commit that advances the floor, in the same batch as the
+  blocks. A fresh store that never ran bulk gets its first contract at its first live commit.
+
+All three rollback entry points — live reorg, startup cleanup, and partial-batch cleanup — refuse
+a target below `coverage_floor_block` with a rebuild-required error rather than rolling back
+buckets they cannot restore. A store with a tip but no contract is refused at startup: it was
+written by a build that deleted these buckets instead of undoing them, so there is no honest
+migration.
+
+#### `hourly_retention_state:<family>`
+
+One row per hourly family that has a retention policy — `hourly_retention_state:token` and
+`hourly_retention_state:mnft` — holding
+`HourlyRetentionState { policy_version, family, executed_cutoff_hour, round_in_progress_cutoff_hour, cursor, round_started_at, round_completed_at }`.
+
+- `executed_cutoff_hour` is the **only** trustworthy boundary: every bucket below it is gone,
+  every bucket above it is either present or was never written. It advances only when a round
+  reaches the end of its family, and is monotonic — a clock that goes backwards un-deletes
+  nothing.
+- `round_in_progress_cutoff_hour` and `cursor` describe an in-flight round and are diagnostic
+  only: below that cutoff, deletions have happened just up to `cursor`.
+- Deletions and the state row are staged into the same block batch by the writer, so the
+  persisted boundary always matches what was actually deleted.
+
+This row is the evidence that a missing hourly bucket is legitimate retention rather than
+corruption. A reader that cannot see it must report `unknown`, never "zero".
+`SPORE_HOURLY` has **no retention policy and no row** — its buckets are never expired. Identity
+(`.bit` sentinel) rows under `OBJECT_HOURLY` are excluded for the same reason; only mNFT classes
+expire, resolved through `cf_mnft_collection_agg` via the padded 32-byte collection id.
 
 The live-cell summary is mutable canonical state, so it belongs to the domain store. Normal sync
 updates it in the same atomic batch as block headers and `sync_status`; bulk-build keeps only the
@@ -337,6 +416,56 @@ Memory sizing is per network rather than a fixed host-wide peak:
 - `[indexer].bulk_memory_budget_gb` optionally caps whole-process `VmRSS + VmSwap` on Linux or
   process physical footprint on macOS during bulk build; otherwise the per-network RAM share is
   used.
+
+### Live Write Buffers and Flush Frequency
+
+`atomic_flush = 1` means any single CF hitting its write buffer switches memtables for the
+**whole** database, so the smallest per-CF buffer decides how often all 59 CFs flush together.
+
+- Per-CF write buffers come from the memory profile, in three tiers: `write_buffer_mega_bytes`
+  (base 256 MB, clamped 64 MB-1 GB), `write_buffer_high_bytes` (base 128 MB, clamped 32-512 MB)
+  and `write_buffer_low_bytes` (base 32 MB, clamped 8-128 MB), each scaled by
+  `wbm_normal_bytes / 8 GB`. `live_cf_write_buffer(name, profile)` is the one function used by both
+  the open-time CF options and the live profile restored by `apply_normal_compaction_options`, so
+  a CF cannot be opened at one size and live-tuned to another. Live sync no longer pins the tiers
+  to fixed 8/4/2 MB — that is what produced the 2026-09-22 flush storm (POSTMORTEM `IDX-007`).
+- `max_write_buffer_number` is unchanged: 4 for the mega and high tiers, 2 for the low tier.
+- The live WriteBufferManager cap is unchanged at **384 MB** (`LIVE_WBM_CAP_BYTES`, applied as
+  `min(wbm_normal_bytes, 384 MB)`). Total memtable memory stays governed by that cap rather than by
+  per-CF minimums, so raising the per-CF tiers does not raise the ceiling.
+- `max_manifest_file_size` is 64 MB (`configured_options`). The MANIFEST is an append-only log of
+  every version edit and RocksDB only rolls it once it exceeds this size; the 1 GB default never
+  rolled. The option matters to the **primary only** — a secondary never writes a MANIFEST, it
+  replays the primary's — so a secondary opens faster because the primary's MANIFEST is bounded,
+  not because the option takes effect on the secondary.
+
+### Append-Only Commit Probe
+
+A non-bulk commit to the append-only store probes every put key for an existing value to enforce
+replay idempotency. That probe is one `multi_get_cf` per 4,096-key chunk
+(`APPEND_PROBE_CHUNK_KEYS` in `batch.rs`), not one `get_cf` per key — during the 2026-09-22
+catch-up it was 14,000-17,000 point reads per batch, inside the commit window.
+
+The append-only invariants are unchanged: duplicate keys within one batch fail before the probe
+runs; an existing key with the same value is skipped; an existing key with a different value fails
+the batch; deletes still go through `validate_append_delete_by_cf_name`. The chunking exists so
+peak memory is bounded by the chunk rather than by the batch, because the probe materializes the
+existing value of every key it asks for. Bulk sync is constrained to fresh-DB rebuilds and skips
+the probe entirely.
+
+### Flush and MANIFEST Diagnostics
+
+`memory_stats()` reports two exact standing consequences of flush behaviour:
+
+| Field             | Meaning                                                                                                                                                                                                                                                                        |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `sst_files_total` | SST files summed over L0-L6 of every CF. Recomputed at most every 30 s (`SST_FILE_COUNT_MAX_AGE`): the sweep is ~420 property reads per store under the DB mutex, and `memory_stats()` is sampled every 3 s during bulk sync.                                                  |
+| `manifest_bytes`  | Size of the MANIFEST named by this store's `CURRENT` file; 0 when it cannot be read (a just-created directory, or a rotation between the two reads). `MemoryStatsData` additionally carries `domain_manifest_bytes`, since the domain MANIFEST is the one a secondary replays. |
+
+Flush **round** counts are deliberately not exposed. RocksDB has no cumulative flush property
+(`num-running-flushes` and `mem-table-flush-pending` are instantaneous values), so a sampled gauge
+cannot see a millisecond-scale flush. Flush rounds are counted from `flush_started` in the RocksDB
+LOG.
 
 ## Config Keys
 

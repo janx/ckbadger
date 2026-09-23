@@ -1558,6 +1558,74 @@ pub enum UndoLogEntry {
     TxContext(UndoTxContext),
 }
 
+/// What this store guarantees about rolling entity daily/hourly stats back.
+///
+/// `coverage_floor_block` is the lowest block a shallow reorg can still be
+/// undone to: `EntityStats` undo entries at or below it have been pruned. A
+/// rollback target below the floor is a hard error — there is no honest way to
+/// reconstruct those buckets, and fabricating one would be exactly the silent
+/// repair this whole change removes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EntityStatsUndoContract {
+    /// Format version of the entity-stats undo contract.
+    pub version: u32,
+    /// Lowest block still coverable by `EntityStats` undo entries.
+    pub coverage_floor_block: i64,
+    /// Committed tip when the floor was last advanced.
+    pub updated_at_block: i64,
+}
+
+/// Current contract version. Bump only alongside a format change that makes
+/// existing entries unreadable; the startup check then rejects older stores.
+pub const ENTITY_STATS_UNDO_CONTRACT_VERSION: u32 = 1;
+
+/// Which per-entity hourly family a retention state row describes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum HourlyRetentionFamily {
+    /// `TOKEN_HOURLY` in `CF_STATS_TOKEN`.
+    Token,
+    /// `OBJECT_HOURLY` in `CF_STATS_MNFT`.
+    Mnft,
+}
+
+impl HourlyRetentionFamily {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Token => "token",
+            Self::Mnft => "mnft",
+        }
+    }
+}
+
+/// What this store has actually deleted from one hourly family.
+///
+/// This is the evidence that a missing hourly bucket is legitimate retention
+/// rather than corruption. A verifier that cannot see it must report
+/// `unknown`, never "zero" — which is why the boundary is persisted rather
+/// than recomputed from the reader's wall clock.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HourlyRetentionState {
+    pub policy_version: u32,
+    pub family: HourlyRetentionFamily,
+    /// Highest cutoff hour whose deletions are COMPLETE for this family, i.e.
+    /// the boundary a reader may trust: every bucket below it is gone, every
+    /// bucket above it is either present or was never written. Advanced only
+    /// when a round reaches the end of the family, and monotonic — a clock that
+    /// goes backwards does not un-delete anything.
+    pub executed_cutoff_hour: i64,
+    /// Cutoff the in-flight round is sweeping towards, `None` when no round is
+    /// in flight. Deletions below it have happened only up to `cursor`, so this
+    /// is diagnostic: never use it as the retention boundary.
+    #[serde(default)]
+    pub round_in_progress_cutoff_hour: Option<i64>,
+    /// Where the current round stopped; `None` once the round is complete.
+    pub cursor: Option<Vec<u8>>,
+    pub round_started_at: i64,
+    pub round_completed_at: Option<i64>,
+}
+
+pub const HOURLY_RETENTION_POLICY_VERSION: u32 = 1;
+
 /// Memory/storage statistics for monitoring.
 #[derive(Debug, Clone, Default)]
 pub struct MemoryStats {
@@ -1593,6 +1661,21 @@ pub struct MemoryStats {
     pub l0_worst_cf: String,
     /// Total immutable memtables across all CFs (waiting for flush)
     pub immutable_memtables: u64,
+    /// Total SST files across every level of every CF. With `atomic_flush` one
+    /// flush round creates one file per written CF, so this is the direct
+    /// outcome of flush frequency (7,148 / 5,343 files on 2026-09-22).
+    pub sst_files_total: u64,
+    /// Size of the MANIFEST this DB is currently writing. A secondary replays
+    /// it on open, so an unbounded MANIFEST is what made the API domain
+    /// secondary take 596 s to open (51 MB MANIFEST).
+    ///
+    /// Flush ROUND counts are deliberately absent: RocksDB exposes no
+    /// cumulative flush counter (`num-running-flushes` and
+    /// `mem-table-flush-pending` are instantaneous gauges), so the
+    /// authoritative number is the `flush_started` events in the RocksDB LOG.
+    /// `sst_files_total` and `manifest_bytes` are the exact standing
+    /// consequences of flush frequency, and are what P3.3 compares.
+    pub manifest_bytes: u64,
     /// Top column families by estimated live data size: (name, bytes)
     pub top_cf_sizes: Vec<(String, u64)>,
     /// WriteBufferManager current usage in bytes

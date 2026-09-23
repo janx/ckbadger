@@ -25,7 +25,7 @@ use crate::parser::{
     BitCellParser, DidCkbParser, DotbitParser, MnftParser, SporeParser, UdtParser,
 };
 use crate::rpc::BlockResponseWithCycles;
-use ckbadger_store::types::{DOTBIT_SENTINEL_COLLECTION, SOLE_SPORES_SENTINEL_COLLECTION};
+use ckbadger_store::types::SOLE_SPORES_SENTINEL_COLLECTION;
 
 use ckb_store_reader::CkbChainReader;
 use rayon::prelude::*;
@@ -44,7 +44,10 @@ use super::indexer::{
 };
 use super::sync_mode::*;
 use super::token_helpers::*;
-use super::types::{AddressBalanceDelta, CachedCellInfo, ReorgAction, TxData};
+use super::types::{
+    AddressBalanceDelta, CachedCellInfo, EntityDailyChanges, EntityDateKey, ReorgAction,
+    ScriptDailyKey, TxData,
+};
 use crate::bulk_sync_perf::BatchSample;
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -723,6 +726,32 @@ fn parse_script_reference_hash_type(
     }
 }
 
+/// Collection id for a **consumed** object cell — the input side of the object
+/// daily deltas.
+///
+/// This must agree, protocol for protocol, with the two other classifiers:
+/// `dao_helpers::classify_object_collection_id` (the output/creation side) and
+/// `bulk_build::owners::object::classify_nft_collection_from_protocol` (bulk
+/// build). A protocol classified on creation but not on consumption leaves its
+/// collection's daily row permanently inflated by the consumed cell.
+pub(crate) fn consumed_object_collection_id(
+    type_code_hash: &[u8],
+    type_args: Option<&[u8]>,
+) -> Option<Vec<u8>> {
+    // ONE classifier for all three sides. The consume side used to carry its
+    // own predicate list that omitted `.bit Cell`, so every consumed `.bit Cell`
+    // left its capacity in the sentinel collection's daily row forever
+    // (mainnet: +45,699,990,586 shannons by 2026-09-23).
+    //
+    // It also resolved the mNFT collection through `mnft_type_index` rather
+    // than the type args. Both yield `type_args[..24]` — the index is written
+    // as `token.class_id`, which `MnftParser` parses from exactly those bytes
+    // (`parser/mnft.rs:201`) — but the lookup answers `None` for a cell the
+    // index never captured while creation still counted it. Pinned by
+    // `consumed_mnft_collection_matches_the_type_index`.
+    classify_object_collection_id(type_code_hash, type_args.unwrap_or(&[]))
+}
+
 impl Indexer {
     pub(crate) async fn run_pipeline(&self) -> Result<()> {
         use tokio::sync::mpsc;
@@ -743,13 +772,13 @@ impl Indexer {
             address_balance_changes: HashMap<Vec<u8>, AddressBalanceDelta>,
             script_usage_changes: ScriptUsageChanges,
             script_reference_usage_changes: ScriptReferenceUsageChanges,
-            script_daily_changes: HashMap<(Vec<u8>, u8, bool, u32), (i128, i128)>,
-            token_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)>,
+            script_daily_changes: EntityDailyChanges<ScriptDailyKey>,
+            token_daily_changes: EntityDailyChanges<EntityDateKey>,
             spore_type_index_changes: HashMap<Vec<u8>, SporeTypeIndex>,
-            spore_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)>,
-            cluster_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)>,
+            spore_daily_changes: EntityDailyChanges<EntityDateKey>,
+            cluster_daily_changes: EntityDailyChanges<EntityDateKey>,
             object_type_index_changes: HashMap<Vec<u8>, MnftTypeIndex>,
-            object_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)>,
+            object_daily_changes: EntityDailyChanges<EntityDateKey>,
             parser_perf_sample: ParserBatchPerfSample,
         }
 
@@ -1544,20 +1573,40 @@ impl Indexer {
                 let mut script_usage_changes: ScriptUsageChanges = HashMap::new();
                 let mut script_reference_usage_changes: ScriptReferenceUsageChanges =
                     HashMap::new();
-                let mut script_daily_changes: HashMap<(Vec<u8>, u8, bool, u32), (i128, i128)> =
-                    HashMap::new();
-                let mut token_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)> = HashMap::new();
+                // Entity daily deltas are accumulated PER BLOCK: a committed
+                // batch spans many blocks, and a shallow fork can land in the
+                // middle of one. Flattening them loses the block identity the
+                // undo log needs to restore a key's end-of-block-N value.
+                let mut script_daily_changes = EntityDailyChanges::<ScriptDailyKey>::new();
+                let mut token_daily_changes = EntityDailyChanges::<EntityDateKey>::new();
                 let mut spore_type_index_changes: HashMap<Vec<u8>, SporeTypeIndex> = HashMap::new();
-                let mut spore_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)> = HashMap::new();
-                let mut cluster_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)> =
-                    HashMap::new();
+                let mut spore_daily_changes = EntityDailyChanges::<EntityDateKey>::new();
+                let mut cluster_daily_changes = EntityDailyChanges::<EntityDateKey>::new();
                 let mut object_type_index_changes: HashMap<Vec<u8>, MnftTypeIndex> = HashMap::new();
-                let mut object_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)> =
-                    HashMap::new();
+                let mut object_daily_changes = EntityDailyChanges::<EntityDateKey>::new();
                 let mut spore_type_index_cache: HashMap<Vec<u8>, Option<SporeTypeIndex>> =
                     HashMap::new();
                 let mut object_type_index_cache: HashMap<Vec<u8>, Option<MnftTypeIndex>> =
                     HashMap::new();
+
+                // `EntityDailyChanges::add` fails fast on out-of-order blocks
+                // and on i128 overflow; the parser closure returns `()`, so it
+                // reports the reason and exits the worker like every other
+                // parser invariant violation.
+                macro_rules! accumulate_daily {
+                    ($changes:expr, $block:expr, $key:expr, $cap:expr, $know:expr) => {
+                        if let Err(e) = $changes.add($block, $key, $cap, $know) {
+                            record_worker_exit_reason(
+                                &parser_exit_reason_for_parser,
+                                format!(
+                                    "failed to accumulate entity daily delta for range {}-{}: {}",
+                                    start_block, end_block, e
+                                ),
+                            );
+                            return;
+                        }
+                    };
+                }
 
                 for tx_data in &all_tx_data {
                     let date_yyyymmdd = ckbadger_store::keys::timestamp_ms_to_date(
@@ -1678,16 +1727,18 @@ impl Indexer {
                         entry.3 += i128::from(cell.capacity);
                         entry.4 += i128::from(cell_occupied);
                         entry.5 += i128::from(cell_occupied);
-                        let daily_entry = script_daily_changes
-                            .entry((
+                        accumulate_daily!(
+                            script_daily_changes,
+                            tx_data.block_number,
+                            (
                                 cell.lock_code_hash.clone(),
                                 lock_hash_type,
                                 false,
                                 date_yyyymmdd,
-                            ))
-                            .or_insert((0, 0));
-                        daily_entry.0 += i128::from(cell.capacity);
-                        daily_entry.1 += i128::from(cell_occupied);
+                            ),
+                            i128::from(cell.capacity),
+                            i128::from(cell_occupied)
+                        );
                         if let Some(ref type_code_hash) = cell.type_code_hash {
                             let type_hash_type = match cell.type_hash_type {
                                 Some(hash_type) => match parse_script_reference_hash_type(
@@ -1741,16 +1792,13 @@ impl Indexer {
                             entry.3 += i128::from(cell.capacity);
                             entry.4 += i128::from(cell_occupied);
                             entry.5 += i128::from(cell_occupied);
-                            let daily_entry = script_daily_changes
-                                .entry((
-                                    type_code_hash.clone(),
-                                    type_hash_type,
-                                    true,
-                                    date_yyyymmdd,
-                                ))
-                                .or_insert((0, 0));
-                            daily_entry.0 += i128::from(cell.capacity);
-                            daily_entry.1 += i128::from(cell_occupied);
+                            accumulate_daily!(
+                                script_daily_changes,
+                                tx_data.block_number,
+                                (type_code_hash.clone(), type_hash_type, true, date_yyyymmdd,),
+                                i128::from(cell.capacity),
+                                i128::from(cell_occupied)
+                            );
                         }
                         if let (Some(ref type_script_hash), Some(ref type_code_hash)) =
                             (&cell.type_script_hash, &cell.type_code_hash)
@@ -1762,11 +1810,13 @@ impl Indexer {
                                 })
                                 .is_some()
                             {
-                                let daily_entry = token_daily_changes
-                                    .entry((type_script_hash.clone(), date_yyyymmdd))
-                                    .or_insert((0, 0));
-                                daily_entry.0 += i128::from(cell.capacity);
-                                daily_entry.1 += i128::from(cell_occupied);
+                                accumulate_daily!(
+                                    token_daily_changes,
+                                    tx_data.block_number,
+                                    (type_script_hash.clone(), date_yyyymmdd),
+                                    i128::from(cell.capacity),
+                                    i128::from(cell_occupied)
+                                );
                             }
                         }
                         if let (Some(type_script_hash), Some(type_code_hash), Some(type_args)) = (
@@ -1788,21 +1838,25 @@ impl Indexer {
                                     .insert(type_script_hash.clone(), Some(index.clone()));
                                 spore_type_index_changes.insert(type_script_hash.clone(), index);
 
-                                let spore_daily = spore_daily_changes
-                                    .entry((spore_id, date_yyyymmdd))
-                                    .or_insert((0, 0));
-                                spore_daily.0 += i128::from(cell.capacity);
-                                spore_daily.1 += i128::from(cell_occupied);
+                                accumulate_daily!(
+                                    spore_daily_changes,
+                                    tx_data.block_number,
+                                    (spore_id, date_yyyymmdd),
+                                    i128::from(cell.capacity),
+                                    i128::from(cell_occupied)
+                                );
 
                                 {
                                     let effective_cluster_id = cluster_id.unwrap_or_else(|| {
                                         SOLE_SPORES_SENTINEL_COLLECTION.to_vec()
                                     });
-                                    let cluster_daily = cluster_daily_changes
-                                        .entry((effective_cluster_id, date_yyyymmdd))
-                                        .or_insert((0, 0));
-                                    cluster_daily.0 += i128::from(cell.capacity);
-                                    cluster_daily.1 += i128::from(cell_occupied);
+                                    accumulate_daily!(
+                                        cluster_daily_changes,
+                                        tx_data.block_number,
+                                        (effective_cluster_id, date_yyyymmdd),
+                                        i128::from(cell.capacity),
+                                        i128::from(cell_occupied)
+                                    );
                                 }
                             }
                         }
@@ -1821,11 +1875,13 @@ impl Indexer {
                                     .insert(type_script_hash.clone(), Some(index.clone()));
                                 object_type_index_changes.insert(type_script_hash.clone(), index);
 
-                                let object_daily = object_daily_changes
-                                    .entry((collection_id, date_yyyymmdd))
-                                    .or_insert((0, 0));
-                                object_daily.0 += i128::from(cell.capacity);
-                                object_daily.1 += i128::from(cell_occupied);
+                                accumulate_daily!(
+                                    object_daily_changes,
+                                    tx_data.block_number,
+                                    (collection_id, date_yyyymmdd),
+                                    i128::from(cell.capacity),
+                                    i128::from(cell_occupied)
+                                );
                             }
                         }
                     }
@@ -1899,16 +1955,18 @@ impl Indexer {
                                 entry.1 -= 1;
                                 entry.3 -= i128::from(info.capacity);
                                 entry.5 -= i128::from(info.occupied_capacity);
-                                let daily_entry = script_daily_changes
-                                    .entry((
+                                accumulate_daily!(
+                                    script_daily_changes,
+                                    tx_data.block_number,
+                                    (
                                         info.lock_code_hash.clone(),
                                         lock_hash_type,
                                         false,
                                         date_yyyymmdd,
-                                    ))
-                                    .or_insert((0, 0));
-                                daily_entry.0 -= i128::from(info.capacity);
-                                daily_entry.1 -= i128::from(info.occupied_capacity);
+                                    ),
+                                    -i128::from(info.capacity),
+                                    -i128::from(info.occupied_capacity)
+                                );
                                 if let Some(ref type_code_hash) = info.type_code_hash {
                                     let type_hash_type = match info.type_hash_type {
                                         Some(hash_type) => match parse_script_reference_hash_type(
@@ -1956,16 +2014,18 @@ impl Indexer {
                                     entry.1 -= 1;
                                     entry.3 -= i128::from(info.capacity);
                                     entry.5 -= i128::from(info.occupied_capacity);
-                                    let daily_entry = script_daily_changes
-                                        .entry((
+                                    accumulate_daily!(
+                                        script_daily_changes,
+                                        tx_data.block_number,
+                                        (
                                             type_code_hash.clone(),
                                             type_hash_type,
                                             true,
                                             date_yyyymmdd,
-                                        ))
-                                        .or_insert((0, 0));
-                                    daily_entry.0 -= i128::from(info.capacity);
-                                    daily_entry.1 -= i128::from(info.occupied_capacity);
+                                        ),
+                                        -i128::from(info.capacity),
+                                        -i128::from(info.occupied_capacity)
+                                    );
                                 }
                                 if let (Some(ref type_script_hash), Some(ref type_code_hash)) =
                                     (&info.type_script_hash, &info.type_code_hash)
@@ -1977,11 +2037,13 @@ impl Indexer {
                                         })
                                         .is_some()
                                     {
-                                        let daily_entry = token_daily_changes
-                                            .entry((type_script_hash.clone(), date_yyyymmdd))
-                                            .or_insert((0, 0));
-                                        daily_entry.0 -= i128::from(info.capacity);
-                                        daily_entry.1 -= i128::from(info.occupied_capacity);
+                                        accumulate_daily!(
+                                            token_daily_changes,
+                                            tx_data.block_number,
+                                            (type_script_hash.clone(), date_yyyymmdd),
+                                            -i128::from(info.capacity),
+                                            -i128::from(info.occupied_capacity)
+                                        );
                                     }
                                 }
                                 if let (Some(type_script_hash), Some(type_code_hash)) =
@@ -2017,80 +2079,40 @@ impl Indexer {
                                             }
                                         };
                                         if let Some(index) = spore_index {
-                                            let spore_daily = spore_daily_changes
-                                                .entry((index.spore_id.clone(), date_yyyymmdd))
-                                                .or_insert((0, 0));
-                                            spore_daily.0 -= i128::from(info.capacity);
-                                            spore_daily.1 -= i128::from(info.occupied_capacity);
+                                            accumulate_daily!(
+                                                spore_daily_changes,
+                                                tx_data.block_number,
+                                                (index.spore_id.clone(), date_yyyymmdd),
+                                                -i128::from(info.capacity),
+                                                -i128::from(info.occupied_capacity)
+                                            );
 
                                             {
                                                 let effective_cluster_id =
                                                     index.cluster_id.unwrap_or_else(|| {
                                                         SOLE_SPORES_SENTINEL_COLLECTION.to_vec()
                                                     });
-                                                let cluster_daily = cluster_daily_changes
-                                                    .entry((effective_cluster_id, date_yyyymmdd))
-                                                    .or_insert((0, 0));
-                                                cluster_daily.0 -= i128::from(info.capacity);
-                                                cluster_daily.1 -=
-                                                    i128::from(info.occupied_capacity);
+                                                accumulate_daily!(
+                                                    cluster_daily_changes,
+                                                    tx_data.block_number,
+                                                    (effective_cluster_id, date_yyyymmdd),
+                                                    -i128::from(info.capacity),
+                                                    -i128::from(info.occupied_capacity)
+                                                );
                                             }
                                         }
                                     }
-                                    if DotbitParser::is_account_cell_type_script(type_code_hash)
-                                        || MnftParser::is_token_type_script(type_code_hash)
-                                        || DidCkbParser::is_type_script(type_code_hash)
-                                    {
-                                        let collection_id =
-                                            if DotbitParser::is_account_cell_type_script(
-                                                type_code_hash,
-                                            ) {
-                                                Some(DOTBIT_SENTINEL_COLLECTION.to_vec())
-                                            } else if DidCkbParser::is_type_script(type_code_hash) {
-                                                Some(DID_CKB_SENTINEL_COLLECTION.to_vec())
-                                            } else if let Some(cached) =
-                                                object_type_index_cache.get(type_script_hash)
-                                            {
-                                                cached.clone().map(|idx| idx.collection_id)
-                                            } else {
-                                                match load_optional_index_from_store(
-                                                    &mut object_type_index_cache,
-                                                    type_script_hash,
-                                                    "object_type",
-                                                    || {
-                                                        writer_for_parser
-                                                            .store()
-                                                            .get_mnft_type_index(type_script_hash)
-                                                    },
-                                                ) {
-                                                    Ok(loaded) => {
-                                                        loaded.map(|idx| idx.collection_id)
-                                                    }
-                                                    Err(e) => {
-                                                        error!(
-                                                            start_block,
-                                                            end_block,
-                                                            "Parser: failed to load object type index: {}",
-                                                            e
-                                                        );
-                                                        record_worker_exit_reason(
-                                                            &parser_exit_reason_for_parser,
-                                                            format!(
-                                                                "failed to load object type index for range {}-{}: {}",
-                                                                start_block, end_block, e
-                                                            ),
-                                                        );
-                                                        return;
-                                                    }
-                                                }
-                                            };
-                                        if let Some(collection_id) = collection_id {
-                                            let object_daily = object_daily_changes
-                                                .entry((collection_id, date_yyyymmdd))
-                                                .or_insert((0, 0));
-                                            object_daily.0 -= i128::from(info.capacity);
-                                            object_daily.1 -= i128::from(info.occupied_capacity);
-                                        }
+                                    if let Some(collection_id) = consumed_object_collection_id(
+                                        type_code_hash,
+                                        info.type_args.as_deref(),
+                                    ) {
+                                        accumulate_daily!(
+                                            object_daily_changes,
+                                            tx_data.block_number,
+                                            (collection_id, date_yyyymmdd),
+                                            -i128::from(info.capacity),
+                                            -i128::from(info.occupied_capacity)
+                                        );
                                     }
                                 }
                             }
@@ -2797,23 +2819,35 @@ impl Indexer {
                     let db_elapsed = db_start.elapsed();
                     self.perf.add_db_write(db_elapsed);
                     self.perf
-                        .add_db_commit(duration_from_millis(write_metrics.commit_ms));
+                        .add_db_commit(duration_from_millis(write_metrics.commit_ms()));
                     // Per-phase decomposition: precompute (CPU pre-batch),
                     // build (CPU batch construction), finalize (post-build
                     // including the inner db.write() commit). The health
                     // monitor subtracts commit_ms from finalize_ms to
                     // attribute the I/O vs CPU split inside finalize.
                     self.perf.add_write_phase_ms(
-                        write_metrics.prefetch_ms,
+                        write_metrics.precompute_ms,
                         write_metrics.write_ms,
                         write_metrics.finalize_ms,
+                    );
+                    self.perf.add_commit_phase_ms(
+                        write_metrics.commit_prepare_ms,
+                        write_metrics.script_rollup_ms,
+                        write_metrics.append_only_commit_synced_ms,
+                        write_metrics.domain_commit_ms,
                     );
 
                     if db_elapsed.as_secs() >= 5 {
                         let stats = self.writer.store().memory_stats();
                         warn!(
                             db_stage_ms = format!("{:.1}", db_elapsed.as_secs_f64() * 1000.0),
-                            commit_ms = format!("{:.1}", write_metrics.commit_ms),
+                            commit_ms = format!("{:.1}", write_metrics.commit_ms()),
+                            commit_prepare_ms = format!("{:.1}", write_metrics.commit_prepare_ms),
+                            script_rollup_ms = format!("{:.1}", write_metrics.script_rollup_ms),
+                            append_only_commit_synced_ms =
+                                format!("{:.1}", write_metrics.append_only_commit_synced_ms),
+                            domain_commit_ms = format!("{:.1}", write_metrics.domain_commit_ms),
+                            tracker_state_bytes = write_metrics.tracker_state_bytes,
                             compaction_pending_mb = stats.compaction_pending_bytes / (1024 * 1024),
                             running_compactions = stats.num_running_compactions,
                             l0_total = stats.l0_files_count,
@@ -2847,7 +2881,7 @@ impl Indexer {
                             - parse_tx_for_writer_depth.capacity();
                         self.pipeline_perf.record_write(
                             db_elapsed,
-                            write_metrics.commit_ms,
+                            write_metrics.commit_ms(),
                             recv_wait_ms,
                             writer_queue,
                             parse_tx_for_writer_depth.max_capacity(),
@@ -2866,13 +2900,17 @@ impl Indexer {
                             parse_ms: parser_perf_sample.parse_ms,
                             precompute_ms: parser_perf_sample.precompute_ms,
                             build_ms: write_metrics.write_ms,
-                            prefetch_ms: write_metrics.prefetch_ms,
+                            // The pipeline writer stage has no prefetch phase of
+                            // its own — the parser's DB prefetch is inside
+                            // `parse_ms`, and the writer's pre-batch CPU work is
+                            // `write_metrics.precompute_ms`, reported above.
+                            prefetch_ms: 0.0,
                             finalize_ms: write_metrics.finalize_ms,
                             ..BatchSample::new(
                                 u64::try_from(all_parsed_blocks.len())
                                     .expect("parsed block count exceeds u64"),
                                 db_elapsed.as_secs_f64(),
-                                write_metrics.commit_ms,
+                                write_metrics.commit_ms(),
                                 perf_stats.compaction_pending_bytes / (1024 * 1024),
                                 perf_stats.l0_files_count,
                                 perf_stats.immutable_memtables,
@@ -2891,7 +2929,7 @@ impl Indexer {
                             end_block,
                             blocks_remaining,
                             db_elapsed.as_secs_f64(),
-                            write_metrics.commit_ms,
+                            write_metrics.commit_ms(),
                             writer_queue,
                             recv_wait_ms,
                             mode
@@ -3189,6 +3227,78 @@ mod tests {
         TransactionView,
     };
     use crate::sync::TEST_CELLBASE_WITNESS;
+
+    // -----------------------------------------------------------------------
+    // Task 1.3 — `.bit Cell` create → consume classification symmetry
+    // -----------------------------------------------------------------------
+
+    /// The live CONSUME call site must delegate to the shared classifier.
+    ///
+    /// It used to carry its own predicate list that omitted `.bit Cell`, so a
+    /// consumed `.bit Cell` was never withdrawn from the sentinel collection's
+    /// daily row. Bulk-vs-live agreement across all four sub-protocols is
+    /// covered by
+    /// `bulk_build::owners::object::tests::bulk_and_live_classify_every_object_protocol_identically`;
+    /// this pins that `pipeline.rs`'s consume path reaches that same answer.
+    #[test]
+    fn live_consume_classifies_bit_cell_like_creation() {
+        use crate::parser::bit_cell::{BIT_CELL_CODE_HASH_MAINNET, BIT_CELL_CODE_HASH_TESTNET};
+        use ckbadger_store::types::BIT_CELL_SENTINEL_COLLECTION;
+
+        for code_hash_hex in [BIT_CELL_CODE_HASH_MAINNET, BIT_CELL_CODE_HASH_TESTNET] {
+            let code_hash = hex::decode(code_hash_hex.trim_start_matches("0x")).unwrap();
+            let created = classify_object_collection_id(&code_hash, &[]);
+            assert_eq!(
+                created,
+                Some(BIT_CELL_SENTINEL_COLLECTION.to_vec()),
+                "the creation side already classifies `.bit Cell` ({code_hash_hex})"
+            );
+            let consumed = consumed_object_collection_id(&code_hash, Some(&[]));
+            assert_eq!(
+                consumed, created,
+                "consume must classify `.bit Cell` exactly as creation does ({code_hash_hex})"
+            );
+        }
+    }
+
+    /// Create in block A, consume the same cell in block B on the same UTC+8
+    /// day: the object daily row for the `.bit Cell` sentinel must net to zero.
+    /// With the consume side blind to `.bit Cell`, the `+capacity/+occupied` of
+    /// the creation is never withdrawn.
+    #[test]
+    fn live_bit_cell_create_then_consume_nets_zero_object_daily() {
+        use crate::parser::bit_cell::BIT_CELL_CODE_HASH_TESTNET;
+        use ckbadger_store::types::BIT_CELL_SENTINEL_COLLECTION;
+
+        const DATE: u32 = 20_260_922;
+        const CAPACITY: i128 = 20_600_000_000;
+        const OCCUPIED: i128 = 14_100_000_000;
+
+        let code_hash = hex::decode(BIT_CELL_CODE_HASH_TESTNET.trim_start_matches("0x")).unwrap();
+
+        let mut object_daily: HashMap<(Vec<u8>, u32), (i128, i128)> = HashMap::new();
+
+        // Block A output — the live creation branch.
+        if let Some(collection_id) = classify_object_collection_id(&code_hash, &[]) {
+            let entry = object_daily.entry((collection_id, DATE)).or_insert((0, 0));
+            entry.0 += CAPACITY;
+            entry.1 += OCCUPIED;
+        }
+        // Block B input — the live consume branch.
+        let consumed = consumed_object_collection_id(&code_hash, Some(&[]));
+        if let Some(collection_id) = consumed {
+            let entry = object_daily.entry((collection_id, DATE)).or_insert((0, 0));
+            entry.0 -= CAPACITY;
+            entry.1 -= OCCUPIED;
+        }
+
+        assert_eq!(
+            object_daily.get(&(BIT_CELL_SENTINEL_COLLECTION.to_vec(), DATE)),
+            Some(&(0i128, 0i128)),
+            "a `.bit Cell` created and consumed on the same day must leave a net-zero \
+             object daily delta; a non-zero value is capacity that never comes back"
+        );
+    }
 
     #[test]
     fn bulk_semantic_tag_classifies_real_did_ckb_cells() {

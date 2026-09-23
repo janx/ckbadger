@@ -186,10 +186,7 @@ pub(super) fn blocks_behind_tip(chain_tip: u64, base_tip: i64, context: &str) ->
     })
 }
 
-pub(super) fn is_fresh_sync_tip_state(
-    sync_tip_block: i64,
-    sync_tip_hash: &Option<Vec<u8>>,
-) -> bool {
+pub fn is_fresh_sync_tip_state(sync_tip_block: i64, sync_tip_hash: &Option<Vec<u8>>) -> bool {
     sync_tip_block == 0 && sync_tip_hash.is_none()
 }
 
@@ -232,6 +229,121 @@ pub(super) fn select_startup_sync_path(
     } else {
         SyncPath::Pipeline
     }
+}
+
+/// Which RocksDB memtable representation the chain stores are opened with.
+///
+/// Fixed at DB open time (`StoreRuntimeConfig::vector_memtable`) and NOT
+/// changeable afterwards, so it is part of the startup decision rather than a
+/// runtime toggle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MemtableKind {
+    /// Ordered skiplist. Point reads hit a sorted structure, so live sync's
+    /// read-modify-write commit window stays cheap.
+    SkipList,
+    /// Unsorted VectorRep: O(1) append, sort deferred to flush. Only ever used
+    /// by a fresh bulk build, which appends without reading back.
+    Vector,
+}
+
+impl MemtableKind {
+    pub(crate) fn vector_memtable(self) -> bool {
+        matches!(self, Self::Vector)
+    }
+
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::SkipList => "SkipList",
+            Self::Vector => "Vector",
+        }
+    }
+}
+
+/// The single startup decision: execution path, freshness, lag and memtable.
+///
+/// Taken once, before the chain stores are opened for real, and then reused by
+/// `Indexer::new` and `Indexer::run`. Re-sampling the node tip later must never
+/// select a different mode than the one the stores were opened for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct StartupSyncDecision {
+    pub(crate) path: SyncPath,
+    pub(crate) fresh: bool,
+    /// Exact `chain_tip - sync_tip`. Negative when the node reports a tip below
+    /// ours (node restarted from a snapshot); reported as-is, never clamped.
+    pub(crate) blocks_behind: i64,
+    pub(crate) memtable: MemtableKind,
+}
+
+impl StartupSyncDecision {
+    pub(crate) fn is_bulk_build(self) -> bool {
+        matches!(self.path, SyncPath::BulkBuild)
+    }
+
+    pub(crate) fn path_str(self) -> &'static str {
+        match self.path {
+            SyncPath::BulkBuild => "BulkBuild",
+            SyncPath::Pipeline => "Pipeline",
+        }
+    }
+}
+
+/// Decide the sync path and the memtable in one place, from the store tip the
+/// writer will actually resume from (`block_headers`, not `sync_status`) and the
+/// node's chain tip.
+///
+/// Only a fresh store that is further behind than `bulk_sync_threshold` bulk
+/// builds, and only a bulk build gets VectorRep. Every other state — including a
+/// long-stopped store tens of thousands of blocks behind — is live sync on a
+/// skiplist, because bulk→live is a fresh process (`BULK_SYNC.md` rule 10) and a
+/// live process reads back what it writes.
+pub(crate) fn decide_startup_sync(
+    chain_tip: u64,
+    sync_tip_block: i64,
+    sync_tip_hash: &Option<Vec<u8>>,
+    bulk_sync_threshold: u64,
+) -> Result<StartupSyncDecision> {
+    let chain_tip_i64 = i64::try_from(chain_tip)
+        .map_err(|_| anyhow!("chain tip exceeds i64 range at startup: {}", chain_tip))?;
+    let blocks_behind = chain_tip_i64.checked_sub(sync_tip_block).ok_or_else(|| {
+        anyhow!(
+            "startup lag computation overflowed: chain_tip={}, sync_tip={}",
+            chain_tip_i64,
+            sync_tip_block
+        )
+    })?;
+    let fresh = is_fresh_sync_tip_state(sync_tip_block, sync_tip_hash);
+    let path = match u64::try_from(blocks_behind) {
+        // The normal case: we are behind the node, and the shared threshold
+        // rule decides.
+        Ok(lag) => {
+            select_startup_sync_path(lag, bulk_sync_threshold, sync_tip_block, sync_tip_hash)
+        }
+        // The node reports a tip BELOW ours (it restarted from a snapshot, or
+        // reorged). That is only possible on a non-fresh store — a fresh one
+        // has `sync_tip_block == 0`, so its lag is the chain tip and cannot be
+        // negative — and a non-fresh store is live sync at any lag. No lag
+        // value is invented for this branch.
+        Err(_) => {
+            if fresh {
+                bail!(
+                    "negative startup lag on a fresh store: chain_tip={}, sync_tip={}",
+                    chain_tip_i64,
+                    sync_tip_block
+                );
+            }
+            SyncPath::Pipeline
+        }
+    };
+    let memtable = match path {
+        SyncPath::BulkBuild => MemtableKind::Vector,
+        SyncPath::Pipeline => MemtableKind::SkipList,
+    };
+    Ok(StartupSyncDecision {
+        path,
+        fresh,
+        blocks_behind,
+        memtable,
+    })
 }
 
 #[doc(hidden)]
@@ -318,9 +430,16 @@ pub(crate) fn take_bulk_sync_completion_transition(
     previously_bulk_sync_active && !currently_bulk_sync_active
 }
 
+/// Mark bulk build complete.
+///
+/// `chain_tip` is the tip bulk was racing towards; `handoff_tip` is the last
+/// block it actually WROTE. They differ by up to `bulk_sync_threshold`, because
+/// bulk stops once it is within that threshold of the tip and hands the rest to
+/// live sync.
 pub(crate) fn persist_bulk_sync_completion_status(
     store: &CkbadgerStore,
     chain_tip: u64,
+    handoff_tip: i64,
 ) -> Result<()> {
     let chain_tip_i64 = i64::try_from(chain_tip).map_err(|_| {
         anyhow!(
@@ -328,6 +447,25 @@ pub(crate) fn persist_bulk_sync_completion_status(
             chain_tip,
             i64::MAX
         )
+    })?;
+    // Bulk build never records undo entries (`BULK_SYNC.md`: bulk is empty-store
+    // only and never rolls back), so the last block it WROTE is the coverage
+    // floor the live process starts from. It must be the handoff tip, not the
+    // chain tip: those differ by up to `bulk_sync_threshold`, and a floor above
+    // what the store contains would claim coverage over blocks bulk never wrote
+    // and make every early live reorg demand a rebuild. Writing the contract
+    // here is what makes a freshly built store eligible for live writes at all.
+    if handoff_tip > chain_tip_i64 {
+        bail!(
+            "bulk handoff tip is above the chain tip it was racing: handoff_tip={}, chain_tip={}",
+            handoff_tip,
+            chain_tip_i64
+        );
+    }
+    store.put_entity_stats_undo_contract(&ckbadger_store::types::EntityStatsUndoContract {
+        version: ckbadger_store::types::ENTITY_STATS_UNDO_CONTRACT_VERSION,
+        coverage_floor_block: handoff_tip,
+        updated_at_block: handoff_tip,
     })?;
     store.update_sync_status(|status| {
         status.mark_bulk_sync_completed(chain_tip_i64);
@@ -365,6 +503,10 @@ pub struct Indexer {
     pub(crate) last_cache_invalidation: tokio::sync::Mutex<u64>,
     pub(crate) was_bulk_sync_active: std::sync::atomic::AtomicBool,
     pub(crate) bulk_sync_allowed: AtomicBool,
+    /// The startup decision the chain stores were opened for. `run()` uses this
+    /// instead of re-sampling the node tip, so the execution path can never
+    /// disagree with the memtable the stores actually carry.
+    pub(crate) startup_decision: StartupSyncDecision,
     pub(crate) rebuild_pause_flag: Arc<std::sync::atomic::AtomicBool>,
     pub(crate) pipeline_reset_notify_flag: Arc<std::sync::atomic::AtomicBool>,
     pub(crate) pipeline_reset_reason_code: Arc<AtomicU8>,
@@ -385,14 +527,19 @@ pub struct Indexer {
     pub(crate) ckb_store: Option<Arc<CkbChainReader>>,
     pub(crate) hodl_tracker: std::sync::Mutex<HodlWaveTracker>,
     pub(crate) cell_dist_tracker: std::sync::Mutex<CellDistributionTracker>,
+    /// Set by the periodic task; consumed by the writer, which is the only
+    /// thing allowed to delete hourly buckets. A background task deleting them
+    /// directly could race an undo replay restoring the same key.
+    pub(crate) hourly_retention_requested: Arc<AtomicBool>,
 }
 
 impl Indexer {
-    pub async fn new(
+    pub(crate) async fn new(
         run_id: String,
         config: Config,
         store: Arc<CkbadgerStore>,
         append_only_store: Arc<CkbadgerStore>,
+        startup_decision: StartupSyncDecision,
     ) -> Result<Self> {
         let rpc = CkbRpcClient::new(&config.ckb_rpc_url);
         let cache_invalidator = CacheInvalidator::new(store.clone());
@@ -407,7 +554,7 @@ impl Indexer {
             cache_invalidator.clone(),
         );
 
-        let (tip_number, tip_hash) = repo.get_sync_tip().await?;
+        let (tip_number, _tip_hash) = repo.get_sync_tip().await?;
         let chain_tip = require_chain_tip_number(
             ckb_store
                 .as_ref()
@@ -424,9 +571,11 @@ impl Indexer {
         let udt_cell_cache = Arc::new(DashMap::with_capacity(UDT_CELL_CACHE_CAPACITY));
         let adaptive_batch_controller = Arc::new(LiveBatchController::new());
 
-        let bulk_sync_allowed = is_fresh_sync_tip_state(tip_number, &tip_hash);
-        let was_bulk =
-            bulk_sync_allowed && progress.blocks_remaining() > config.bulk_sync_threshold;
+        // The path was decided once at startup (`decide_startup_sync`), before
+        // the stores were opened with the matching memtable. Re-deriving it here
+        // from a second tip sample is exactly the divergence P3.1 removes.
+        let bulk_sync_allowed = startup_decision.is_bulk_build();
+        let was_bulk = bulk_sync_allowed;
         let hodl_tracker = match store.get_hodl_tracker_state()? {
             Some(state) => {
                 info!(
@@ -478,6 +627,7 @@ impl Indexer {
             last_cache_invalidation: tokio::sync::Mutex::new(0),
             was_bulk_sync_active: std::sync::atomic::AtomicBool::new(was_bulk),
             bulk_sync_allowed: AtomicBool::new(bulk_sync_allowed),
+            startup_decision,
             rebuild_pause_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             pipeline_reset_notify_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             pipeline_reset_reason_code: Arc::new(AtomicU8::new(PIPELINE_RESET_REASON_UNKNOWN)),
@@ -493,6 +643,7 @@ impl Indexer {
             ckb_store,
             hodl_tracker: std::sync::Mutex::new(hodl_tracker),
             cell_dist_tracker: std::sync::Mutex::new(cell_dist_tracker),
+            hourly_retention_requested: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -619,12 +770,40 @@ impl Indexer {
         &self.run_id
     }
 
-    pub fn record_runtime_heartbeat(
+    /// Persist one progress-loop tick as a single store write: the runtime
+    /// heartbeat, sync progress, and memory stats when this tick resampled
+    /// them (`None` keeps the previous sample).
+    pub async fn commit_heartbeat_tick(
         &self,
         current_block: u64,
         target_block: u64,
         stage: Option<&str>,
+        sync_progress: &ckbadger_common::SyncProgressData,
+        memory_stats: Option<&ckbadger_common::MemoryStatsData>,
     ) {
+        let Some((current_block_i64, target_block_i64)) =
+            self.heartbeat_block_numbers(current_block, target_block)
+        else {
+            return;
+        };
+        let cgroup = read_cgroup_memory_snapshot();
+        self.cache_invalidator
+            .publish_heartbeat_tick(
+                &self.run_id,
+                current_block_i64,
+                target_block_i64,
+                stage,
+                cgroup.oom_events,
+                cgroup.oom_kill_events,
+                sync_progress,
+                memory_stats,
+            )
+            .await;
+    }
+
+    /// `None` when either block number is outside i64 — the heartbeat is
+    /// skipped with a warning rather than written wrong.
+    fn heartbeat_block_numbers(&self, current_block: u64, target_block: u64) -> Option<(i64, i64)> {
         let current_block_i64 = match i64::try_from(current_block) {
             Ok(v) => v,
             Err(_) => {
@@ -633,7 +812,7 @@ impl Indexer {
                     current_block,
                     "Skipping runtime heartbeat: current_block exceeds i64 range"
                 );
-                return;
+                return None;
             }
         };
         let target_block_i64 = match i64::try_from(target_block) {
@@ -644,26 +823,10 @@ impl Indexer {
                     target_block,
                     "Skipping runtime heartbeat: target_block exceeds i64 range"
                 );
-                return;
+                return None;
             }
         };
-        let cgroup = read_cgroup_memory_snapshot();
-        if let Err(e) = self.writer.store().mark_runtime_heartbeat_with_diag(
-            &self.run_id,
-            current_block_i64,
-            target_block_i64,
-            stage,
-            cgroup.oom_events,
-            cgroup.oom_kill_events,
-        ) {
-            warn!(
-                run_id = %self.run_id,
-                current_block,
-                target_block,
-                error = %e,
-                "Failed to persist runtime heartbeat"
-            );
-        }
+        Some((current_block_i64, target_block_i64))
     }
 
     pub fn mark_runtime_shutdown(&self, reason: &str, exit_code: i32) {
@@ -953,6 +1116,19 @@ impl Indexer {
         self.perf.write_phase_snapshot_ms()
     }
 
+    /// Commit-window decomposition (commit_prepare_ms, script_rollup_ms,
+    /// append_only_commit_synced_ms, domain_commit_ms). Their sum is at most
+    /// the wide `db_commit_ms` from [`Self::perf_snapshot_ms`].
+    pub(crate) fn perf_commit_phase_snapshot_ms(&self) -> (f64, f64, f64, f64) {
+        self.perf.commit_phase_snapshot_ms()
+    }
+
+    /// Monotonic writer-phase heartbeat. Used by the progress watchdog to tell
+    /// "one long batch in flight" apart from "writer stuck".
+    pub fn writer_phase_seq(&self) -> u64 {
+        self.perf.writer_phase_seq()
+    }
+
     /// Cumulative parser cell-info lookup counters (used by health monitor).
     pub(crate) fn parser_cell_lookup_snapshot(&self) -> ParserCellLookupSnapshot {
         self.parser_cell_lookup_stats.snapshot()
@@ -1026,6 +1202,9 @@ impl Indexer {
             l0_files_max: chain_store_memory.l0_files_max,
             l0_worst_cf: chain_store_memory.l0_worst_cf,
             immutable_memtables: chain_store_memory.immutable_memtables,
+            sst_files_total: chain_store_memory.sst_files_total,
+            manifest_bytes: chain_store_memory.total_manifest_bytes,
+            domain_manifest_bytes: chain_store_memory.domain_manifest_bytes,
             top_cf_sizes: chain_store_memory.top_cf_sizes,
             wbm_usage_bytes: chain_store_memory.shared_wbm_usage_bytes,
             wbm_budget_bytes: chain_store_memory.shared_wbm_budget_bytes,
@@ -1047,23 +1226,27 @@ impl Indexer {
     pub async fn run(&self) -> Result<()> {
         let blocks_behind = self.progress.blocks_remaining();
         let (start_block, start_block_hash) = self.repo.get_sync_tip().await?;
-        let fresh_sync_tip = is_fresh_sync_tip_state(start_block, &start_block_hash);
-        let sync_path = select_startup_sync_path(
-            blocks_behind,
-            self.config.bulk_sync_threshold,
-            start_block,
-            &start_block_hash,
-        );
-        let bulk_sync_mode = matches!(sync_path, SyncPath::BulkBuild);
+        // Use the decision the stores were OPENED for. Re-selecting here on a
+        // second node-tip sample could pick BulkBuild in a process whose stores
+        // carry a skiplist (or the reverse) — the memtable cannot be changed
+        // after open, so the decision is made exactly once.
+        let decision = self.startup_decision;
+        let fresh_sync_tip = decision.fresh;
+        let sync_path = decision.path;
+        let bulk_sync_mode = decision.is_bulk_build();
         // Only allow bulk sync re-entry if we're actually taking the BulkBuild
         // path. A fresh DB near tip selects Pipeline; setting bulk_sync_allowed
         // =true in that case would cause a spurious fail-fast if lag later
         // crosses the threshold (the pipeline writer rejects bulk batches).
-        let bulk_sync_allowed = fresh_sync_tip && bulk_sync_mode;
+        let bulk_sync_allowed = bulk_sync_mode;
         self.bulk_sync_allowed
             .store(bulk_sync_allowed, Ordering::SeqCst);
         info!(
             run_id = %self.run_id,
+            sync_path = decision.path_str(),
+            fresh = decision.fresh,
+            decision_blocks_behind = decision.blocks_behind,
+            memtable = decision.memtable.as_str(),
             "Starting indexer ({} blocks behind, threshold={})",
             blocks_behind, self.config.bulk_sync_threshold
         );
@@ -1252,11 +1435,14 @@ impl Indexer {
         self.reconcile_cell_dist_tracker_with_tip(actual_start)?;
         self.start_bulk_sync_perf_run(bulk_sync_mode)?;
 
-        // Periodic 24h transfer refresh
-        let store_for_task = Arc::clone(self.writer.store());
-        let append_store_for_task = Arc::clone(&self.append_only_store);
+        // Periodic hourly-retention REQUEST. The task no longer deletes
+        // anything itself: expired hourly buckets are removed by the same
+        // writer that commits blocks and replays undo entries, inside the
+        // block batch, so a deletion can never race a rollback restoring the
+        // same key.
         let progress_for_task = Arc::clone(&self.progress);
         let bulk_sync_threshold = self.config.bulk_sync_threshold;
+        let retention_flag = Arc::clone(&self.hourly_retention_requested);
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(600));
             loop {
@@ -1264,21 +1450,12 @@ impl Indexer {
                 let blocks_remaining = progress_for_task.blocks_remaining();
                 if blocks_remaining > bulk_sync_threshold {
                     debug!(
-                        "Skipping token 24h refresh ({} blocks remaining > {} threshold)",
+                        "Skipping hourly retention request ({} blocks remaining > {} threshold)",
                         blocks_remaining, bulk_sync_threshold
                     );
                     continue;
                 }
-                let writer =
-                    BatchWriter::new(store_for_task.clone(), append_store_for_task.clone());
-                match writer.refresh_token_24h_transfers() {
-                    Ok(count) => info!("Refreshed 24h transfers for {} tokens", count),
-                    Err(e) => warn!("Failed to refresh token 24h transfers: {}", e),
-                }
-                match writer.refresh_mnft_24h_transfers() {
-                    Ok(count) => info!("Refreshed 24h transfers for {} object classes", count),
-                    Err(e) => warn!("Failed to refresh object 24h transfers: {}", e),
-                }
+                retention_flag.store(true, Ordering::Relaxed);
             }
         });
 
@@ -1407,6 +1584,65 @@ mod tests {
         assert_eq!(route, SyncPath::Pipeline);
     }
 
+    // ── P3.1 startup decision table ────────────────────────────────────────
+    //
+    // Every row fixes BOTH the execution path and the memtable the chain stores
+    // are opened with. A live process never uses VectorRep: bulk→live is a fresh
+    // process (BULK_SYNC.md rule 10), so the only VectorRep row is a fresh store
+    // that is actually going to bulk build.
+
+    #[test]
+    fn startup_decision_fresh_store_far_behind_builds_in_bulk_with_vector_memtable() {
+        let decision = decide_startup_sync(10_000, 0, &None, 1_000).unwrap();
+        assert_eq!(decision.path, SyncPath::BulkBuild);
+        assert!(decision.fresh);
+        assert_eq!(decision.blocks_behind, 10_000);
+        assert_eq!(decision.memtable, MemtableKind::Vector);
+    }
+
+    #[test]
+    fn startup_decision_fresh_store_near_tip_uses_pipeline_with_skiplist() {
+        let decision = decide_startup_sync(900, 0, &None, 1_000).unwrap();
+        assert_eq!(decision.path, SyncPath::Pipeline);
+        assert!(decision.fresh);
+        assert_eq!(decision.blocks_behind, 900);
+        assert_eq!(decision.memtable, MemtableKind::SkipList);
+    }
+
+    #[test]
+    fn startup_decision_existing_store_far_behind_stays_live_with_skiplist() {
+        // The 2026-09-22 shape: 76,827 blocks behind on a non-empty store.
+        let decision =
+            decide_startup_sync(22_502_980, 22_426_153, &Some(vec![0x11; 32]), 1_000).unwrap();
+        assert_eq!(decision.path, SyncPath::Pipeline);
+        assert!(!decision.fresh);
+        assert_eq!(decision.blocks_behind, 76_827);
+        assert_eq!(decision.memtable, MemtableKind::SkipList);
+    }
+
+    #[test]
+    fn startup_decision_after_durable_bulk_handoff_uses_pipeline_with_skiplist() {
+        // Fresh process right after bulk finalized: tip written, still exactly
+        // `bulk_sync_threshold` behind the tip bulk was racing towards.
+        let decision = decide_startup_sync(10_000, 9_000, &Some(vec![0x22; 32]), 1_000).unwrap();
+        assert_eq!(decision.path, SyncPath::Pipeline);
+        assert!(!decision.fresh);
+        assert_eq!(decision.blocks_behind, 1_000);
+        assert_eq!(decision.memtable, MemtableKind::SkipList);
+    }
+
+    #[test]
+    fn startup_decision_reports_a_node_behind_the_store_tip_without_clamping() {
+        // A node restarted from a snapshot can briefly report a tip below ours.
+        // That is a live-sync condition, not a startup failure: the lag is
+        // reported as the exact negative number, never clamped to 0.
+        let decision = decide_startup_sync(9_000, 10_000, &Some(vec![0x33; 32]), 1_000).unwrap();
+        assert_eq!(decision.path, SyncPath::Pipeline);
+        assert!(!decision.fresh);
+        assert_eq!(decision.blocks_behind, -1_000);
+        assert_eq!(decision.memtable, MemtableKind::SkipList);
+    }
+
     #[test]
     fn startup_fail_fast_when_incomplete_bulk_build_session_marker_exists() {
         let dir = tempfile::tempdir().unwrap();
@@ -1528,12 +1764,12 @@ mod tests {
             .update_sync_status(|status| status.init_sync_start(128, true))
             .unwrap();
 
-        persist_bulk_sync_completion_status(&store, 256).unwrap();
+        persist_bulk_sync_completion_status(&store, 256, 200).unwrap();
         let first = store.get_sync_status().unwrap();
         assert!(first.bulk_sync_completed_at.is_some());
         assert_eq!(first.bulk_sync_completed_block, Some(256));
 
-        persist_bulk_sync_completion_status(&store, 512).unwrap();
+        persist_bulk_sync_completion_status(&store, 512, 500).unwrap();
         let second = store.get_sync_status().unwrap();
         assert_eq!(
             second.bulk_sync_completed_block,
@@ -1548,8 +1784,25 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();
 
-        let err = persist_bulk_sync_completion_status(&store, u64::MAX).unwrap_err();
+        let err = persist_bulk_sync_completion_status(&store, u64::MAX, 0).unwrap_err();
         assert!(err.to_string().contains("chain tip over i64 range"));
+    }
+
+    /// The coverage floor is a claim about blocks the store CONTAINS. A handoff
+    /// tip above the chain tip bulk was racing cannot be true, and writing it
+    /// would promise coverage over blocks nothing ever wrote.
+    #[test]
+    fn persist_bulk_sync_completion_status_rejects_a_handoff_above_the_chain_tip() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+
+        let err = persist_bulk_sync_completion_status(&store, 500, 501).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("bulk handoff tip is above the chain tip"),
+            "got: {err}"
+        );
+        assert!(store.get_entity_stats_undo_contract().unwrap().is_none());
     }
 
     #[test]

@@ -2450,4 +2450,346 @@ does not take.
 
 ---
 
-_Last updated: 2026-09-06_
+### STATS-010: Shallow rollback deleted whole entity stats buckets, losing the surviving half
+
+**Date**: 2026-09-23
+
+**Symptom**: Per-entity daily and hourly statistics silently lost main-chain
+history wherever a shallow fork had touched the day. The testnet index could no
+longer start at all: `reconcile_token_daily_deltas_on_startup` fail-fasts on
+`20260915 owned_capacity=-14019999853193` — a running total that had gone
+negative because the positive days under it were gone.
+
+Measured against the chain, before any fix (`work/incident-archive/20260923/`):
+
+| Evidence                                           | Value                                                      |
+| -------------------------------------------------- | ---------------------------------------------------------- |
+| testnet iCKB `0xd485c227…`                         | short by **232,171,655,021,955** shannons                  |
+| — 2026-09-12                                       | whole day lost: 29,349,109,967,584                         |
+| — 2026-09-13                                       | whole day lost: 131,195,364,199,711                        |
+| — 2026-09-14                                       | 71,627,180,854,660 of 143,234,681,921,302 lost             |
+| mainnet Clown `0x3390b8cb…`                        | 2026-09-14 short by **14,400,000,000**                     |
+| mainnet `0x17e3a05e…2de8`                          | **+14,800,000,000** above live (a consume-day bucket lost) |
+| mismatched entities across the five daily families | mainnet **65**, testnet **128**                            |
+| shallow forks that re-triggered it on 2026-09-22   | **6**, `stats_removed` 12+2 and 23+4+2+9                   |
+
+The iCKB gap is exactly the three days deleted by three depth-1 forks (fork
+points 22,395,247 / 22,406,040 / 22,413,712); the surviving 2026-09-14 value is
+exactly that day's post-fork-point contribution, and the gap was still
+232,171,655,021,955 at the final tip 22,502,980.
+
+**Root Cause**: The rollback stats sweep visited 21 prefixes, and
+`repair_cutoff_date_stats` had repair branches for only six of them. The other
+fifteen fell through `_ => Ok(false)` (`reorg_ops.rs:834`) to `delete_cf`
+(`:3191`). For the eight per-entity families — `SCRIPT_DAILY`, `TOKEN_DAILY`,
+`CLUSTER_DAILY`, `SPORE_DAILY`, `OBJECT_DAILY`, `TOKEN_HOURLY`, `SPORE_HOURLY`,
+`OBJECT_HOURLY` — `should_delete_stats_for_replay` answered `date >= cutoff`
+(or `hour >= cutoff_hour`), so a depth-1 fork deleted the **entire** bucket for
+that day.
+
+A bucket is keyed `(entity, time bucket)` and carries contributions from both
+sides of the fork point. Replay only re-applies blocks **after** the fork point,
+so everything the bucket held from earlier in the same day was gone for good.
+The loss then propagated: cluster aggregates recompute capacity from the
+surviving `CLUSTER_DAILY` rows (`reorg_ops.rs:4683-4726`).
+
+The forward path could not have fixed it either. The parser flattened all five
+daily delta maps across the whole batch (`pipeline.rs:1547-1556`), erasing block
+identity, so nothing could say what a key was worth at the end of block N.
+
+**Why the tests missed it**: They asserted the bug.
+`test_should_delete_stats_for_replay_{token,script,cluster,spore,object}_daily_prefix`
+and `..._per_asset_hourly_prefixes` all asserted that the cutoff day's and
+cutoff hour's rows **are deleted** — the wrong behaviour, pinned as the
+expectation. And no test anywhere compared "roll back, then replay the new
+branch" against "sync the new branch directly", which is the only assertion that
+catches this class.
+
+**Fix**: One owner per prefix, and for these eight it is the undo log.
+
+- The eight prefixes left `STATS_REPLAY_CANDIDATE_PREFIXES` (21 → 13) and
+  `should_delete_stats_for_replay` now answers `false` for them at any date or
+  hour, so a future re-addition to the candidate set still cannot delete them.
+- The parser accumulates per block into `EntityDailyChanges<K>` in ascending
+  block order.
+- One `EntityStatsOverlay` per batch records, under the new
+  `UndoSeqScope::EntityStats`, the value at the **end of the previous block**
+  the first time a block touches a key, and writes each key exactly once in
+  `stage_final` — called after the last hourly write point and immediately
+  before the analytics batch merges, so rows, pre-images and the sync tip commit
+  atomically.
+- `sync_meta` → `entity_stats_undo_contract` states how far back this store can
+  still roll these families. The floor advances with each live commit and its
+  undo deletions are staged into the same batch; a rollback below it fails
+  rebuild-required at all three entry points instead of half-restoring. A
+  non-empty store without a contract is refused at startup — there is no honest
+  migration for data already missing.
+- Hourly retention moved into the writer, bounded by the undo window, so an
+  expiry sweep can never race a rollback restoring the same key.
+
+**Regressions that now pin it**: `crates/indexer/tests/entity_stats_rollback.rs`
+drives the real writers and `execute_reorg` —
+`rollback_then_replay_equals_direct` compares all eight families byte for byte
+against a second store that only ever saw the canonical chain, plus
+`token_daily_untouched_by_orphan_survives`,
+`consume_in_orphan_restores_capacity_and_occupied`,
+`multi_block_batch_rollback_to_middle`, `utc8_day_and_hour_boundary`,
+`hourly_token_spore_object_symmetry`, `two_consecutive_reorgs`,
+`append_only_bytes_unchanged`, `depth_1_and_36_recover_exactly`, and
+`ickb_three_day_gap_shape_is_preserved` (the incident's exact shape). In the
+store crate, `test_shallow_rollback_preserves_untouched_entity_buckets` and
+`test_stats_prefix_rollback_owner_table` (the executable ownership table, one
+owner per prefix) hold the line.
+
+**Lesson**: A time-bucket row is not owned by the blocks that happen to be
+rolled back — it is shared by both sides of the fork point, so "delete and let
+replay rebuild it" is only correct when replay actually covers everything the
+row contained. And when a test asserts a deletion, check what the deleted bytes
+were, not just that the code did what it currently does: these tests were green
+for the whole life of the bug because they encoded the defect as the contract.
+
+**Files**: `crates/ckbadger-store/src/reorg_ops.rs`,
+`crates/indexer/src/db/writer/entity_stats.rs`,
+`crates/indexer/src/sync/{types,batch,pipeline}.rs`,
+`crates/indexer/src/db/writer/{udt,addresses,spore,mnft,dotbit,statistics}.rs`
+
+---
+
+### IDX-007: Live sync opened every store for a build it was not doing
+
+**Date**: 2026-09-23
+
+**Symptom**: After eight days stopped, both networks took the live path to catch
+up — 76,827 blocks on mainnet, 85,564 on testnet — and were slow in a way
+nothing in the batch sizing explained: 84 min (mainnet) and 64 min (testnet) to
+reach the tip, `Sync progress stalled` 74 (mainnet) / 49 (testnet) times on the
+way, and — once caught up — testnet still spent 1.2-3.7 s committing a
+one-transaction block. The API came off worse than the indexer: opening the
+domain secondary took 596 s on testnet, ten minutes before it could serve a
+single read.
+
+Measured on 2026-09-22 (`work/run/logs/restart-sync-analysis-20260923.md`):
+
+| Signal                                 | testnet    | mainnet          |
+| -------------------------------------- | ---------- | ---------------- |
+| flushes in one day                     | **15,548** | **7,395**        |
+| compactions in one day                 | 4,919      | 2,072            |
+| SST files                              | 7,148      | 5,343            |
+| domain MANIFEST (never rolled)         | 51 MB      | —                |
+| API domain secondary open              | **596 s**  | 116 s            |
+| parser cell miss, inside this process  | —          | **13.15 ms/key** |
+| same files, separate secondary process | —          | 0.04-1.7 ms/key  |
+
+The domain store ran an all-CF atomic flush round about every 40 s, on memtables
+holding kilobytes. The mainnet parser spent 741 s on 56,334 cell-lookup misses
+during the catch-up; the same files read from a separate secondary process cost
+0.04-0.8 ms per cell without direct I/O and 1.7 ms cold with it.
+
+**Root Cause**: Three independent decisions, each defensible for bulk sync, all
+applied unconditionally to a process doing live sync.
+
+1. **VectorRep for every process.** `entry.rs:158` set
+   `vector_memtable = true` before opening the domain store, with no condition,
+   and the option applies to all CFs. VectorRep is an unsorted memtable: O(1)
+   append, and a `Get` that sorts the whole memtable under a write lock. Bulk
+   build never reads back what it writes, so it pays nothing; live sync reads
+   back keys it just wrote in every batch, so parser lookups and writer inserts
+   blocked each other. The repeatable release microbenchmark
+   (`cargo run --release -p ckbadger-store --example memtable_read_bench`,
+   20,000 rows then 512 point reads) puts the whole cost in the unflushed
+   memtable — the regime live sync reads in:
+
+   | regime  | skiplist    | vector       |
+   | ------- | ----------- | ------------ |
+   | hot     | **0.47 ms** | **4,915 ms** |
+   | flushed | 2.46 ms     | 3.06 ms      |
+   | reopen  | 1.29 ms     | 1.32 ms      |
+
+2. **A 2 MB buffer under `atomic_flush = 1`.** `apply_normal_compaction_options`
+   shrank the live per-CF write buffers to fixed 8/4/2 MB — while the same CFs
+   had been _opened_ at profile sizes (up to 392 MB). With atomic flush, the
+   smallest buffer in the database decides when the whole database switches
+   memtables, so 2 MB became a global setting. Two per-block full rewrites kept
+   hitting it: `materialize_script_versions_and_families` had no diff and
+   rewrote its whole rollup every block — on testnet 3,403 rows (1,903 reference
+   mappings + 1,556 versions + 56 families, ~700 KB), on mainnet 438 — and both
+   trackers serialized their entire state into `sync_meta` every batch
+   (~1.97 MB/block on mainnet). The result was a 26-CF flush round
+   every ~40 s on KB-sized memtables, and the SST and MANIFEST counts above.
+   `max_manifest_file_size` had never been set, so the 1 GB default never
+   rolled the MANIFEST — and a secondary replays the primary's MANIFEST on open,
+   which is the 596 s.
+
+3. **A commit timer that wrapped the reads.** `commit_started` was taken before
+   the address-balance `multi_get`, both tracker preparations, the full script
+   rollup, and an append-only existence probe that issued one `get_cf` per key
+   (14,000-17,000 per batch). The 66-383 s "commit" reported for a 5,000-block
+   batch was mostly reading, so the number pointed at RocksDB writes — where the
+   domain WAL was fsyncing zero times a day. The stall warning had the mirrored
+   problem: it watched only the committed tip, which a minutes-long batch cannot
+   advance, so it cried stall 74 (mainnet) / 49 (testnet) times while the
+   writer was working.
+
+**Why the tests missed it**: nothing asserted a _rate_. No test pinned which
+memtable a live store opens with, no test bounded flush rounds per byte written,
+and no test asserted that an unchanged rollup stages zero writes. The
+measurement that motivated the change — the original memtable microbench — was a
+debug-build, single-shot throwaway outside the tree, so there was nothing later
+runs could be compared against.
+
+**Fix**: Tasks 3.1-3.4 of the 2026-09-23 sync correctness and performance plan.
+
+- **3.1 — decide once, before opening.** `open_chain_stores_for_startup()`
+  probes with a skiplist, reads the bulk marker and the resume tip, calls
+  `decide_startup_sync()`, and only reopens with VectorRep when this process is
+  actually going to bulk build a fresh store. `Indexer::run` reuses that
+  decision instead of re-sampling the node tip. Pinned by
+  `startup_decision_fresh_store_far_behind_builds_in_bulk_with_vector_memtable`,
+  `startup_decision_fresh_store_near_tip_uses_pipeline_with_skiplist`,
+  `startup_decision_existing_store_far_behind_stays_live_with_skiplist`,
+  `startup_decision_after_durable_bulk_handoff_uses_pipeline_with_skiplist`,
+  `startup_decision_reports_a_node_behind_the_store_tip_without_clamping`, and
+  the four `startup_open_*` integration tests on real stores.
+- **3.2 — name what is being measured.** The commit window is five
+  non-overlapping fields (`commit_prepare_ms`, `script_rollup_ms`,
+  `append_only_commit_synced_ms`, `domain_commit_ms`, `commit_phase_total_ms`);
+  `write_commit_ms` stays as the wide window's old name and is the same stored
+  value. `precompute_ms` now carries a real measurement instead of a field the
+  pipeline writer never set. The stall warning needs a frozen tip **and** a
+  frozen writer-phase counter, which every commit part, the finalize step and
+  every block of the staging body bump. Pinned by
+  `live_batch_splits_the_commit_window_into_five_phases`,
+  `staging_body_marks_a_writer_phase_for_every_block_in_the_batch`,
+  `stall_warning_is_suppressed_while_the_writer_keeps_advancing_phases`,
+  `stall_warning_fires_when_the_writer_phase_heartbeat_also_stops`, and the CSV
+  schema tests `csv_header_declares_the_schema_version` /
+  `an_old_header_rotates_to_a_schema_suffixed_file`.
+- **3.3 — one source for the buffer size.** `live_cf_write_buffer(name, profile)`
+  serves both the open-time CF options and the live restore, so a CF can no
+  longer be opened at 392 MB and live-tuned to 2 MB; the 384 MB WBM cap still
+  governs total memtable memory. `max_manifest_file_size` is 64 MB on the
+  primary. `memory_stats()` gained `sst_files_total` (30 s cached) and
+  `manifest_bytes`. Pinned by
+  `live_options_never_set_cf_write_buffer_below_profile_low`,
+  `live_write_buffers_do_not_flush_once_per_small_batch` (red: 24 MB of writes
+  produced 9 L0 files against a ceiling of 4) and
+  `memory_stats_report_sst_count_and_manifest_size`.
+- **3.4 — stop rewriting what did not change.** The rollup stages only rows
+  whose value differs (no empty-input early return — the single computation path
+  still runs); the append-only probe is one `multi_get_cf` per 4,096-key chunk;
+  the 3-second loop commits one `StoreBatch` per tick and resamples the all-CF
+  memory sweep every 30 s in live mode. Pinned by
+  `materialize_writes_only_changed_rollup_rows` (red: 5 staged writes for an
+  unchanged rollup), `commit_inner_probe_uses_single_multi_get` (red: 64
+  `get_cf` calls), `commit_inner_probe_chunks_a_batch_larger_than_the_probe_chunk`,
+  the three `heartbeat_tick_*` tests,
+  `memory_stats_are_sampled_every_30s_in_live_and_every_tick_in_bulk`, and
+  `stale_age_follows_the_runtime_heartbeat_not_the_memory_sample`.
+- **Measured, not assumed.** `tracker_state_serialization_is_a_minor_share_of_commit_prepare`
+  put the whole-state tracker writes at 317,101 bytes and 1.67 ms — 0.15% of the
+  smallest observed per-block commit window — so that persistence was left
+  unchanged and `tracker_state_bytes` went into the log instead.
+
+**Still unattributed**: testnet's 1.1-2.7 s per-block commit window at the tip.
+Neither fsync, write volume, flush duration, rollup SST reads, tracker cloning,
+direct I/O nor another in-process reader explains it — all were ruled out before
+this work, and the residual does not correlate with memtable age (r=0.05) or
+block content. Task 3.5
+— replaying the same blocks against copies of the rebuilt stores with each
+memtable kind and diffing the five commit parts — needs the post-rebuild
+database and has not run.
+
+**Lesson**: an option chosen for one execution mode must be attached to that
+mode's decision, not to the process. All three parts of this are the same shape:
+VectorRep was right for the build and wrong for the reader, a 2 MB buffer is a
+local choice until `atomic_flush` makes it global, and a timer named `commit`
+measured everything that happened to sit before the commit. Rates need tests
+too: "does it still work" was green the whole time.
+
+**Files**: `crates/indexer/src/entry.rs`,
+`crates/indexer/src/sync/{indexer,batch,diagnostics}.rs`,
+`crates/indexer/src/health_monitor.rs`,
+`crates/indexer/src/db/writer/addresses.rs`,
+`crates/ckbadger-store/src/{store,batch,sync_ops}.rs`,
+`crates/ckbadger-store/examples/memtable_read_bench.rs`, `crates/tui/src/ui.rs`
+
+---
+
+### IDX-008: Three object writers, one undo sequence, second write overwrote the first
+
+**Date**: 2026-09-23
+
+**Symptom**: Two object entities written in the same block left only **one**
+undo entry for that block. The first entity's pre-image was gone before rollback
+ever ran, so a shallow reorg restored one of them and silently left the other at
+its orphan-block value.
+
+**Root Cause**: `SporeBatchState`, `MnftBatchState` and `DotbitBatchState` each
+owned a private `undo_seq_by_block: HashMap<i64, u64>` counting from 0, while
+`record_object_undo` (`db/writer.rs:59-82`) stamped all three with the same
+`UndoSeqScope::Object`. The undo key is `block + seq` with
+`seq = (scope << 48) | local`, so the second writer in a block computed exactly
+the key the first had used — `(block, (0x0003 << 48) | 0)` — and, inside the same
+`StoreBatch`, overwrote it.
+
+**Fix**: `SharedUndoSeq` (`crates/indexer/src/sync/undo.rs`) — one block-scoped
+counter per committed batch, handed to every writer that records an undo entry,
+including the new `EntityStats` scope. It is `Arc<Mutex<_>>` rather than
+`Rc<RefCell<_>>` because the batch write path is an async fn whose future must
+stay `Send`.
+
+**Regression**:
+`db::writer::undo_seq_tests::object_scope_undo_seq_is_shared_across_entity_batch_states`
+— a Spore cluster and an mNFT issuer in one block must leave two undo entries
+(it found 1).
+
+**Lesson**: A sequence number that must be unique across writers cannot be owned
+by a writer. Sharing the _scope_ while privately owning the _counter_ is the
+same key twice, and the loss is invisible until a reorg needs the entry.
+
+**Files**: `crates/indexer/src/sync/undo.rs`, `crates/indexer/src/db/writer.rs`
+
+---
+
+### IDX-009: Bulk completion recorded the chain tip as the coverage floor
+
+**Date**: 2026-09-23
+
+**Symptom**: After a bulk build, the entity-stats coverage floor named a block
+higher than the last block the store contained. The first shallow reorg after
+handoff whose fork point fell in that gap would be refused as rebuild-required,
+on a store that was in fact fine.
+
+**Root Cause**: `run_bulk_stage_until_pipeline_handoff` stops once
+`blocks_remaining <= bulk_sync_threshold`, so the handoff tip is normally below
+the chain tip it last sampled — by up to a whole threshold. The completion path
+wrote the sampled **chain tip** into `entity_stats_undo_contract`. The floor's
+whole meaning is "the lowest block this store can still undo", which is a
+statement about blocks the store **has**; naming a block bulk never wrote
+claimed coverage over nothing.
+
+**Fix**: The contract is written with `coverage_floor_block` = the handoff tip,
+and `persist_bulk_sync_completion_status` fails fast if the handoff tip is above
+the chain tip. Because bulk records no undo entries at all, live sync needs room
+to build coverage before a legal shallow fork can reach below that floor, so
+`Config::validate` now requires `indexer.bulk_sync_threshold >= DEEP_FORK_DEPTH`
+(36); the generated `config.toml` writes 1000.
+
+A fork below the floor immediately after handoff still demands a rebuild, and
+that is the correct answer rather than a defect: bulk wrote no pre-images, so the
+alternative is silently keeping entity statistics that are known to be wrong.
+
+**Regressions**: `bulk_completion_writes_contract` asserts the floor equals the
+handoff tip and sits at least `DEEP_FORK_DEPTH` below the sampled chain tip;
+`test_bulk_sync_threshold_below_deep_fork_depth_is_rejected` pins the config
+bound.
+
+**Lesson**: A coverage claim must be derived from what was actually written, not
+from the target that was being chased. When two tips are available at a handoff,
+the one that describes the artifact is the one the artifact ends at.
+
+**Files**: `crates/indexer/src/sync/indexer.rs`, `crates/indexer/src/config.rs`
+
+---
+
+_Last updated: 2026-09-23_

@@ -19,5 +19,12 @@ hex = { workspace = true }
 libc = { workspace = true }
 num_cpus = "1.17"
 
+[features]
+# Compile the read/write call counters used to prove that a hot path issues one
+# batched read instead of N point reads. Always on for this crate's own tests;
+# other crates opt in through their dev-dependencies, so it never reaches a
+# release build.
+read-call-counters = []
+
 [dev-dependencies]
 tempfile = { workspace = true }

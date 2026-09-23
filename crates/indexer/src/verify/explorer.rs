@@ -1096,18 +1096,11 @@ fn run_tolerance_explorer_check(
     }
 
     if checked == 0 {
-        return CheckResult {
-            passed: false,
-            items_checked: 0,
-            items_failed: 0,
-            detail: Some("no overlapping dates found between local and explorer data".to_string()),
-            findings: vec![Finding {
-                entity: "overlap".to_string(),
-                details: vec![
-                    "no overlapping dates found between local and explorer data".to_string()
-                ],
-            }],
-        };
+        // Nothing was compared, so nothing was proven either way: this is a
+        // gap in the source data, not a mismatch in ours.
+        return CheckResult::inconclusive(
+            "no overlapping dates found between local and explorer data",
+        );
     }
 
     if findings.is_empty() {
@@ -1206,18 +1199,11 @@ fn run_i128_relative_tolerance_explorer_check(
     }
 
     if checked == 0 {
-        return CheckResult {
-            passed: false,
-            items_checked: 0,
-            items_failed: 0,
-            detail: Some("no overlapping dates found between local and explorer data".to_string()),
-            findings: vec![Finding {
-                entity: "overlap".to_string(),
-                details: vec![
-                    "no overlapping dates found between local and explorer data".to_string()
-                ],
-            }],
-        };
+        // Nothing was compared, so nothing was proven either way: this is a
+        // gap in the source data, not a mismatch in ours.
+        return CheckResult::inconclusive(
+            "no overlapping dates found between local and explorer data",
+        );
     }
 
     if findings.is_empty() {
@@ -2706,6 +2692,11 @@ mod tests {
             seed: 42,
             tolerance: 0.001,
             cache_dir: None,
+            entities: Vec::new(),
+            verify_source_path: None,
+            evidence_dir: None,
+            entity_budget: Default::default(),
+            source_profile: std::sync::Mutex::new(None),
         }
     }
 
@@ -2820,12 +2811,12 @@ mod tests {
             .unwrap();
 
         assert!(
-            live_result.passed,
+            live_result.passed(),
             "testnet live-cell deltas match exactly; historical absolute gap must not fail: {:?}",
             live_result.findings
         );
         assert!(
-            dead_result.passed,
+            dead_result.passed(),
             "testnet dead-cell deltas match exactly; historical absolute gap must not fail: {:?}",
             dead_result.findings
         );
@@ -2846,8 +2837,8 @@ mod tests {
             .run(&ctx, &ProgressReporter::new(None))
             .unwrap();
 
-        assert!(!live_result.passed, "mainnet must retain its live anchor");
-        assert!(!dead_result.passed, "mainnet must retain its dead anchor");
+        assert!(!live_result.passed(), "mainnet must retain its live anchor");
+        assert!(!dead_result.passed(), "mainnet must retain its dead anchor");
         assert!(live_result.findings.iter().any(|finding| finding
             .details
             .iter()
@@ -2918,7 +2909,7 @@ mod tests {
                 &ProgressReporter::new(None),
             )
             .unwrap();
-        assert!(result.passed, "findings: {:?}", result.findings);
+        assert!(result.passed(), "findings: {:?}", result.findings);
     }
 
     /// X5 with a constant ~10% offset: every per-day delta matches exactly
@@ -2975,7 +2966,7 @@ mod tests {
             )
             .unwrap();
         assert!(
-            !result.passed,
+            !result.passed(),
             "a constant baseline offset must fail the absolute anchor"
         );
     }
@@ -3070,7 +3061,7 @@ mod tests {
                 &ProgressReporter::new(None),
             )
             .unwrap();
-        assert!(result.passed, "findings: {:?}", result.findings);
+        assert!(result.passed(), "findings: {:?}", result.findings);
     }
 
     #[test]
@@ -3183,7 +3174,7 @@ mod tests {
             |our, explorer| Some((our.parse::<i128>().ok()?, explorer.parse::<i128>().ok()?)),
         );
 
-        assert!(result.passed);
+        assert!(result.passed());
         assert_eq!(result.items_checked, 1);
     }
 
@@ -3215,7 +3206,7 @@ mod tests {
             |our, explorer| Some((our.parse::<i128>().ok()?, explorer.parse::<i128>().ok()?)),
         );
 
-        assert!(!result.passed, "constant offset must fail the anchor");
+        assert!(!result.passed(), "constant offset must fail the anchor");
         assert!(
             result
                 .findings
@@ -3252,7 +3243,7 @@ mod tests {
             |our, explorer| Some((our.parse::<i128>().ok()?, explorer.parse::<i128>().ok()?)),
         );
 
-        assert!(result.passed, "findings: {:?}", result.findings);
+        assert!(result.passed(), "findings: {:?}", result.findings);
     }
 
     #[test]
@@ -3279,7 +3270,7 @@ mod tests {
             |our, explorer| Some((our.parse::<i128>().ok()?, explorer.parse::<i128>().ok()?)),
         );
 
-        assert!(!result.passed);
+        assert!(!result.passed());
         assert_eq!(result.items_checked, 1);
         assert_eq!(result.items_failed, 1);
     }
@@ -3308,7 +3299,7 @@ mod tests {
             |our, explorer| Some((our.parse::<i128>().ok()?, explorer.parse::<i128>().ok()?)),
         );
 
-        assert!(!result.passed);
+        assert!(!result.passed());
         assert_eq!(result.items_checked, 1);
         assert_eq!(result.items_failed, 1);
         assert!(result.findings[0].details[0].contains("subtraction overflow"));
@@ -3338,7 +3329,7 @@ mod tests {
             |our, explorer| Some((our.parse().ok()?, explorer.parse().ok()?)),
         );
 
-        assert!(result.passed);
+        assert!(result.passed());
         assert_eq!(result.items_checked, 1);
     }
 
@@ -3366,7 +3357,7 @@ mod tests {
             |our, explorer| Some((our.parse().ok()?, explorer.parse().ok()?)),
         );
 
-        assert!(!result.passed);
+        assert!(!result.passed());
         assert_eq!(result.items_failed, 1);
     }
 
@@ -3381,7 +3372,7 @@ mod tests {
             1_000,
         );
 
-        assert!(result.passed);
+        assert!(result.passed());
     }
 
     #[test]
@@ -3408,7 +3399,7 @@ mod tests {
             |our, exp| Some((our.parse::<f64>().ok()?, exp.parse::<f64>().ok()?)),
         );
 
-        assert!(!result.passed);
+        assert!(!result.passed());
         assert_eq!(result.items_failed, 2);
     }
 
@@ -3570,9 +3561,9 @@ mod tests {
         let burnt = ExplorerBurnt.run(&ctx, &progress).unwrap();
         let latest = NervosDaoTreasuryAmount.run(&ctx, &progress).unwrap();
 
-        assert!(treasury.passed, "findings: {:?}", treasury.findings);
-        assert!(burnt.passed, "findings: {:?}", burnt.findings);
-        assert!(latest.passed, "findings: {:?}", latest.findings);
+        assert!(treasury.passed(), "findings: {:?}", treasury.findings);
+        assert!(burnt.passed(), "findings: {:?}", burnt.findings);
+        assert!(latest.passed(), "findings: {:?}", latest.findings);
     }
 
     #[test]
@@ -3685,9 +3676,9 @@ mod tests {
         let burnt = ExplorerBurnt.run(&ctx, &progress).unwrap();
         let latest = NervosDaoTreasuryAmount.run(&ctx, &progress).unwrap();
 
-        assert!(treasury.passed, "findings: {:?}", treasury.findings);
-        assert!(burnt.passed, "findings: {:?}", burnt.findings);
-        assert!(latest.passed, "findings: {:?}", latest.findings);
+        assert!(treasury.passed(), "findings: {:?}", treasury.findings);
+        assert!(burnt.passed(), "findings: {:?}", burnt.findings);
+        assert!(latest.passed(), "findings: {:?}", latest.findings);
     }
 
     #[test]
@@ -3708,5 +3699,42 @@ mod tests {
     #[test]
     fn test_parse_average_deposit_days_invalid() {
         assert_eq!(parse_average_deposit_days("invalid"), None);
+    }
+
+    /// No overlapping date means nothing was compared. Reporting that as a
+    /// failure blames ckbadger for a gap in the explorer's data; reporting it
+    /// as a pass would be worse. Both comparison shapes must say
+    /// `Inconclusive`.
+    #[test]
+    fn a_comparison_with_no_overlapping_dates_is_inconclusive_not_a_failure() {
+        let ours: HashMap<String, String> = [("1999-01-01".to_string(), "1".to_string())]
+            .into_iter()
+            .collect();
+        let theirs: HashMap<String, String> = [("1999-01-02".to_string(), "1".to_string())]
+            .into_iter()
+            .collect();
+        let progress = ProgressReporter::new(None);
+
+        let float_result = run_tolerance_explorer_check(
+            &ours,
+            &theirs,
+            &progress,
+            "test",
+            0.001,
+            |a: &str, b: &str| Some((a.parse::<f64>().ok()?, b.parse::<f64>().ok()?)),
+        );
+        assert_eq!(float_result.status, CheckStatus::Inconclusive);
+        assert_eq!(float_result.items_checked, 0);
+        assert!(float_result.findings.is_empty(), "nothing was compared");
+        assert!(float_result
+            .detail
+            .as_deref()
+            .unwrap_or_default()
+            .contains("no overlapping dates"));
+
+        let exact_result =
+            run_i128_relative_tolerance_explorer_check(&ours, &theirs, &progress, "test", 1, 1000);
+        assert_eq!(exact_result.status, CheckStatus::Inconclusive);
+        assert!(exact_result.findings.is_empty());
     }
 }

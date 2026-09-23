@@ -47,10 +47,12 @@ use super::nft_helpers::*;
 use super::sync_mode::*;
 use super::token_helpers::*;
 use super::types::{
-    AddressBalanceDelta, BatchWriteMetrics, CachedUdtCellInfo, DotbitTxActivityData, TxData,
-    UnresolvedLocalProbeSummary, UnresolvedRpcProbeSummary,
+    AddressBalanceDelta, BatchWriteMetrics, CachedUdtCellInfo, DotbitTxActivityData,
+    EntityDailyChanges, EntityDateKey, ScriptDailyKey, TxData, UnresolvedLocalProbeSummary,
+    UnresolvedRpcProbeSummary,
 };
 use super::undo::*;
+use crate::db::writer::entity_stats::SharedEntityStatsOverlay;
 
 /// Marks an invariant failure that occurred while constructing the atomic
 /// domain batch, before either store commit can run. Retrying or rolling back
@@ -1229,6 +1231,103 @@ pub(super) fn should_abort_unresolved_retry_on_epoch_change(
     batch_epoch != current_epoch
 }
 
+/// How many blocks behind the committed tip keep their `EntityStats` undo
+/// entries.
+///
+/// Must exceed `DEEP_FORK_DEPTH` (36) by a wide margin: a shallow fork is
+/// detected only once the indexer catches up, and one commit can span thousands
+/// of blocks, so the floor can jump by a whole batch at a time. 1000 blocks is
+/// ~2.7 hours of mainnet chain and costs one undo entry per touched
+/// (block, entity-stats key).
+pub const ENTITY_STATS_UNDO_RETAIN_BLOCKS: i64 = 1_000;
+
+/// Run one bounded hourly-retention step for each per-entity hourly family that
+/// has a retention policy, staging deletions and state into `batch`.
+///
+/// Spore hourly buckets (`SPORE_HOURLY`) have no retention policy today and are
+/// deliberately not touched: inventing one would delete data no contract
+/// promises to expire. Identity collections (the `.bit` sentinels under
+/// `OBJECT_HOURLY`) are excluded for the same reason — only mNFT classes
+/// expire, which `stage_hourly_retention_step` decides from each collection's
+/// aggregate.
+///
+/// `docs/STORE_SCHEMA.md` does not document this yet; writing the
+/// `sync_meta` → `hourly_retention_state` section, and the note that
+/// `SPORE_HOURLY` never expires, is Phase 7 of
+/// `docs/superpowers/plans/2026-09-23-sync-correctness-and-performance-fix.md`.
+///
+/// Bulk build is refused here rather than only at the call site: bulk has no
+/// reorg workflow and no undo entries, so it has nothing to protect the
+/// deletions against, and a maintenance write inside a bulk batch would break
+/// `BULK_SYNC.md`'s "bulk runs no maintenance" rule wherever it were called
+/// from.
+pub fn stage_hourly_retention(
+    writer: &BatchWriter,
+    batch: &mut StoreBatch,
+    committed_tip: i64,
+    now_ms: i64,
+) -> Result<()> {
+    use ckbadger_store::types::HourlyRetentionFamily;
+
+    if writer.store().is_bulk_sync_mode() {
+        return Ok(());
+    }
+
+    for family in [HourlyRetentionFamily::Token, HourlyRetentionFamily::Mnft] {
+        let already_executed = writer
+            .store()
+            .get_hourly_retention_state(family)?
+            .map(|state| state.executed_cutoff_hour)
+            .unwrap_or(i64::MIN);
+        let cutoff_hour =
+            writer.hourly_retention_cutoff_hour(now_ms, committed_tip, already_executed)?;
+        let result = writer.stage_hourly_retention_step(batch, family, cutoff_hour, now_ms)?;
+        if result.deleted > 0 || result.completed {
+            debug!(
+                family = family.as_str(),
+                cutoff_hour,
+                deleted = result.deleted,
+                scanned = result.scanned,
+                completed = result.completed,
+                "Hourly retention step staged"
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Stage the coverage-floor advance and the matching undo deletions.
+///
+/// Returns the number of undo entries staged for deletion.
+pub fn stage_entity_stats_undo_retention(
+    store: &CkbadgerStore,
+    batch: &mut StoreBatch,
+    committed_tip: i64,
+) -> Result<u64> {
+    let existing = store.get_entity_stats_undo_contract()?;
+    let current_floor = existing
+        .as_ref()
+        .map(|contract| contract.coverage_floor_block)
+        .unwrap_or(-1);
+    let target_floor = committed_tip - ENTITY_STATS_UNDO_RETAIN_BLOCKS;
+
+    if existing.is_some() && target_floor <= current_floor {
+        // Nothing to prune and nothing to promise that is not already
+        // promised. The floor never moves backwards: a shorter chain after a
+        // rollback does not resurrect entries this store already deleted.
+        return Ok(0);
+    }
+
+    let effective_floor = target_floor.max(current_floor);
+    let pruned = store.prune_entity_stats_undo_below(batch, current_floor, effective_floor)?;
+    batch.put_entity_stats_undo_contract(&ckbadger_store::types::EntityStatsUndoContract {
+        version: ckbadger_store::types::ENTITY_STATS_UNDO_CONTRACT_VERSION,
+        coverage_floor_block: effective_floor,
+        updated_at_block: committed_tip,
+    });
+    Ok(pruned)
+}
+
 pub(super) fn load_optional_index_from_store<T, F>(
     cache: &mut HashMap<Vec<u8>, Option<T>>,
     type_script_hash: &[u8],
@@ -1499,9 +1598,14 @@ impl Indexer {
             let chain_tip = self.progress.target();
             let sst_gb = stats.sst_files_size as f64 / (1024.0 * 1024.0 * 1024.0);
 
-            if let Err(e) =
-                persist_bulk_sync_completion_status(self.writer.store().as_ref(), chain_tip)
-            {
+            // `current` is the last block actually written; it is what the
+            // entity-stats coverage floor must record.
+            let handoff_tip = i64::try_from(current).unwrap_or(i64::MAX);
+            if let Err(e) = persist_bulk_sync_completion_status(
+                self.writer.store().as_ref(),
+                chain_tip,
+                handoff_tip,
+            ) {
                 warn!(
                     error = %e,
                     chain_tip,
@@ -1545,13 +1649,13 @@ impl Indexer {
         address_balance_changes: HashMap<Vec<u8>, AddressBalanceDelta>,
         script_usage_changes: ScriptUsageChanges,
         script_reference_usage_changes: ScriptReferenceUsageChanges,
-        script_daily_changes: HashMap<(Vec<u8>, u8, bool, u32), (i128, i128)>,
-        token_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)>,
+        script_daily_changes: EntityDailyChanges<ScriptDailyKey>,
+        token_daily_changes: EntityDailyChanges<EntityDateKey>,
         spore_type_index_changes: HashMap<Vec<u8>, SporeTypeIndex>,
-        spore_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)>,
-        cluster_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)>,
+        spore_daily_changes: EntityDailyChanges<EntityDateKey>,
+        cluster_daily_changes: EntityDailyChanges<EntityDateKey>,
         object_type_index_changes: HashMap<Vec<u8>, MnftTypeIndex>,
-        object_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)>,
+        object_daily_changes: EntityDailyChanges<EntityDateKey>,
         chain_tip: u64,
     ) -> Result<BatchWriteMetrics> {
         if all_parsed_blocks.is_empty() {
@@ -1911,7 +2015,16 @@ impl Indexer {
         let mut batch_new_addresses = 0i64;
 
         let t_write = Instant::now();
-        let mut write_commit_ms = 0.0_f64;
+        self.perf.mark_writer_phase();
+        // Commit-window split (P3.2). Assigned exactly once, in the finalize
+        // block below; declared without a value so a missing assignment is a
+        // compile error rather than a silent zero.
+        let commit_prepare_ms: f64;
+        let script_rollup_ms: f64;
+        let append_only_commit_synced_ms: f64;
+        let domain_commit_ms: f64;
+        let commit_phase_total_ms: f64;
+        let tracker_state_bytes: usize;
         let mut batch_stats;
         // Post-batch DAO lifecycle view of everything this batch stages, used to
         // materialize completed-day snapshots exactly before the atomic commit.
@@ -1922,14 +2035,18 @@ impl Indexer {
         let mut hourly_activity_accum: HashMap<String, DailyActivityStats> = HashMap::new();
         let mut hourly_activity_addrs: HashMap<String, HashSet<[u8; 32]>> = HashMap::new();
         let mut data_batch = StoreBatch::new(self.writer.store());
-        // Live sync: serial writes in a single batch
-        let mut append_undo_seq_by_block: HashMap<i64, u64> = HashMap::new();
+        // Live sync: serial writes in a single batch.
+        //
+        // ONE block-scoped undo sequence counter for the whole batch. Every
+        // writer that records an undo entry draws from it — TxContext, .bit,
+        // object and entity stats alike — so two entries for the same block can
+        // never compute the same undo key and silently overwrite each other
+        // (POSTMORTEM IDX-008).
+        let batch_undo_seq = SharedUndoSeq::default();
         if !all_tx_data.is_empty() {
-            put_tx_context_undo_entries(
-                &mut data_batch,
-                &mut append_undo_seq_by_block,
-                &all_tx_data,
-            )?;
+            batch_undo_seq.with(|undo_seq| {
+                put_tx_context_undo_entries(&mut data_batch, undo_seq, &all_tx_data)
+            })?;
         }
         if !txs_for_batch.is_empty() {
             self.writer
@@ -2050,44 +2167,60 @@ impl Indexer {
                 )?;
             }
         }
-        if !script_daily_changes.is_empty() {
-            self.writer.update_script_daily_deltas_batch(
-                &script_daily_changes,
-                &mut domain_analytics_batch,
-            )?;
-        }
-        if !token_daily_changes.is_empty() {
-            self.writer.update_token_daily_deltas_batch(
-                &token_daily_changes,
-                &mut domain_analytics_batch,
-            )?;
-        }
+        // ONE overlay for the batch. Every entity daily/hourly mutation goes
+        // through it, so each key is read once, carries one undo pre-image per
+        // block that moves it, and is written exactly once in `stage_final`.
+        let entity_stats = SharedEntityStatsOverlay::new();
+        entity_stats.with(|overlay| -> Result<()> {
+            batch_undo_seq.with(|undo_seq| {
+                self.writer.update_script_daily_deltas_batch(
+                    &script_daily_changes,
+                    overlay,
+                    undo_seq,
+                    &mut domain_analytics_batch,
+                )?;
+                self.writer.update_token_daily_deltas_batch(
+                    &token_daily_changes,
+                    overlay,
+                    undo_seq,
+                    &mut domain_analytics_batch,
+                )
+            })
+        })?;
         if !spore_type_index_changes.is_empty() {
             self.writer
                 .update_spore_type_index_batch(&spore_type_index_changes, &mut data_batch)?;
         }
-        if !spore_daily_changes.is_empty() {
-            self.writer.update_spore_daily_deltas_batch(
-                &spore_daily_changes,
-                &mut domain_analytics_batch,
-            )?;
-        }
+        entity_stats.with(|overlay| -> Result<()> {
+            batch_undo_seq.with(|undo_seq| {
+                self.writer.update_spore_daily_deltas_batch(
+                    &spore_daily_changes,
+                    overlay,
+                    undo_seq,
+                    &mut domain_analytics_batch,
+                )
+            })
+        })?;
         if !object_type_index_changes.is_empty() {
             self.writer
                 .update_object_type_index_batch(&object_type_index_changes, &mut data_batch)?;
         }
-        if !object_daily_changes.is_empty() {
-            self.writer.update_object_daily_deltas_batch(
-                &object_daily_changes,
-                &mut domain_analytics_batch,
-            )?;
-        }
-        if !cluster_daily_changes.is_empty() {
-            self.writer.update_cluster_daily_deltas_batch(
-                &cluster_daily_changes,
-                &mut domain_analytics_batch,
-            )?;
-        }
+        entity_stats.with(|overlay| -> Result<()> {
+            batch_undo_seq.with(|undo_seq| {
+                self.writer.update_object_daily_deltas_batch(
+                    &object_daily_changes,
+                    overlay,
+                    undo_seq,
+                    &mut domain_analytics_batch,
+                )?;
+                self.writer.update_cluster_daily_deltas_batch(
+                    &cluster_daily_changes,
+                    overlay,
+                    undo_seq,
+                    &mut domain_analytics_batch,
+                )
+            })
+        })?;
 
         // addr_tx writes are deferred until participant tags are known (see
         // tags_by_addr_tx construction during TxActions processing below).
@@ -2367,6 +2500,10 @@ impl Indexer {
 
             let mut block_tx_idx = 0usize;
             for (block_idx, block_response) in blocks.iter().enumerate() {
+                // Staging a 5,000-block batch takes minutes; the watchdog must
+                // see the writer moving through it, not just at the phase
+                // boundaries around it.
+                self.perf.mark_writer_phase();
                 let parsed = &all_parsed_blocks[block_idx];
                 let tx_count_for_block =
                     checked_tx_count(parsed.transactions_count, parsed.number)?;
@@ -2513,7 +2650,9 @@ impl Indexer {
                         .iter()
                         .map(|p| (p.number, p.timestamp.timestamp_millis()))
                         .collect();
-                    let mut udt_state = self.writer.new_udt_batch_state();
+                    let mut udt_state = self
+                        .writer
+                        .new_udt_batch_state(entity_stats.clone(), batch_undo_seq.clone());
                     self.writer.process_udt_transfers_batch_with_state(
                         &transfer_refs,
                         &max_supply_observations,
@@ -2558,9 +2697,15 @@ impl Indexer {
             let mut batch_mnft_last_output_tx_index: HashMap<Vec<u8>, usize> = HashMap::new();
             let mut batch_dotbit_outpoints: HashMap<(Vec<u8>, i16), Vec<u8>> = HashMap::new();
             let mut batch_dotbit_latest_create_order: HashMap<Vec<u8>, u64> = HashMap::new();
-            let mut spore_state = self.writer.new_spore_batch_state();
-            let mut dotbit_state = self.writer.new_dotbit_batch_state();
-            let mut mnft_state = self.writer.new_mnft_batch_state();
+            let mut spore_state = self
+                .writer
+                .new_spore_batch_state(entity_stats.clone(), batch_undo_seq.clone());
+            let mut dotbit_state = self
+                .writer
+                .new_dotbit_batch_state(entity_stats.clone(), batch_undo_seq.clone());
+            let mut mnft_state = self
+                .writer
+                .new_mnft_batch_state(entity_stats.clone(), batch_undo_seq.clone());
             let mut object_activity_acc = ObjectCollectionActivityAccumulator::new();
             let mut identity_activity_acc = ObjectCollectionActivityAccumulator::new();
             let mut dotbit_tx_activity_data: HashMap<[u8; 32], DotbitTxActivityData> =
@@ -2667,6 +2812,9 @@ impl Indexer {
             // --- Main pass: per-tx with inputs-before-outputs ---
             let mut block_tx_idx = 0usize;
             for (block_idx, block_response) in blocks.iter().enumerate() {
+                // Protocol state for one block: the longest stretch of the
+                // staging body. Beat the heartbeat per block here too.
+                self.perf.mark_writer_phase();
                 let parsed = &all_parsed_blocks[block_idx];
                 let tx_count_for_block =
                     checked_tx_count(parsed.transactions_count, parsed.number)?;
@@ -3153,7 +3301,7 @@ impl Indexer {
             // Apply cumulative capacity deltas to cluster aggregates
             if !cluster_daily_changes.is_empty() {
                 self.writer.apply_cluster_capacity_deltas(
-                    &cluster_daily_changes,
+                    &cluster_daily_changes.fold_total()?,
                     &mut data_batch,
                     &mut spore_state,
                 )?;
@@ -3322,12 +3470,14 @@ impl Indexer {
                         continue;
                     }
 
-                    put_tx_actions(
-                        &mut activity_batch,
-                        &mut append_undo_seq_by_block,
-                        tx_actions.block_number,
-                        tx_actions,
-                    );
+                    batch_undo_seq.with(|undo_seq| {
+                        put_tx_actions(
+                            &mut activity_batch,
+                            undo_seq,
+                            tx_actions.block_number,
+                            tx_actions,
+                        )
+                    });
 
                     // Process Fiber channel lifecycle events
                     crate::db::writer::fiber::process_fiber_channel_events(
@@ -3358,16 +3508,25 @@ impl Indexer {
                 entry.has_out,
                 tags,
             );
-            put_addr_tx(
-                &mut append_history_batch,
-                &mut append_undo_seq_by_block,
-                &entry.lock_hash,
-                entry.block_number,
-                entry.tx_index,
-                &entry.tx_hash,
-                &addr_tx_value,
-            );
+            batch_undo_seq.with(|undo_seq| {
+                put_addr_tx(
+                    &mut append_history_batch,
+                    undo_seq,
+                    &entry.lock_hash,
+                    entry.block_number,
+                    entry.tx_index,
+                    &entry.tx_hash,
+                    &addr_tx_value,
+                )
+            });
         }
+
+        // Every entity daily/hourly key this batch touched is written exactly
+        // once, here, with its final value. This must happen after the last
+        // hourly write point (the protocol batch states above) and before the
+        // analytics batch is merged, so the stats rows, their undo pre-images
+        // and the sync tip all land in one atomic domain commit.
+        entity_stats.stage_final(&mut domain_analytics_batch)?;
 
         // Merge all secondary domain batches into data_batch for atomic commit
         data_batch.merge_from(domain_analytics_batch);
@@ -3516,6 +3675,7 @@ impl Indexer {
 
         let mut block_tx_idx = 0usize;
         for parsed in all_parsed_blocks {
+            self.perf.mark_writer_phase();
             let block_date = ckbadger_common::block_date(parsed.timestamp);
             let tx_count_for_block = checked_tx_count(parsed.transactions_count, parsed.number)?;
             let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
@@ -3761,6 +3921,7 @@ impl Indexer {
 
         // Finalization: block headers + stats
         let t_finalize = Instant::now();
+        self.perf.mark_writer_phase();
         {
             let mut core_batch = StoreBatch::new(self.writer.store());
             self.writer
@@ -3849,7 +4010,45 @@ impl Indexer {
                 );
             }
 
+            // Advance the entity-stats undo coverage floor and drop the
+            // entries it leaves behind — in THIS batch, so the floor and its
+            // deletions are never separately durable. A fresh store gets its
+            // first contract here (bulk build writes its own at completion).
+            //
+            // Bulk build records no undo entries at all and has no reorg
+            // workflow, so it neither prunes nor needs a window.
+            if !bulk_sync_mode {
+                stage_entity_stats_undo_retention(
+                    self.writer.store(),
+                    &mut data_batch,
+                    last_block,
+                )?;
+            }
+
+            // One bounded hourly-retention step, if the periodic task asked for
+            // one. Deletions and the advanced retention state go into the same
+            // batch as the blocks, so the persisted boundary always matches
+            // what was actually deleted, and no background task can delete a
+            // bucket while a rollback is restoring it. Bulk build never runs
+            // this maintenance path.
+            if !bulk_sync_mode
+                && self
+                    .hourly_retention_requested
+                    .swap(false, Ordering::Relaxed)
+            {
+                stage_hourly_retention(
+                    &self.writer,
+                    &mut data_batch,
+                    last_block,
+                    Utc::now().timestamp_millis(),
+                )?;
+            }
+
+            // The commit window, split into five non-overlapping parts. Each
+            // part also beats the writer-phase heartbeat, so a multi-minute
+            // catch-up batch is visibly progressing instead of looking stalled.
             let commit_started = Instant::now();
+            self.perf.mark_writer_phase();
             // Live sync: merge headers and stats into the single data_batch
             // that already holds all domain writes, then commit atomically.
             data_batch.merge_from(core_batch);
@@ -3860,7 +4059,7 @@ impl Indexer {
             } else {
                 self.writer.read_address_balances(&lock_hash_refs)?
             };
-            let prepared_hodl_tracker = self.prepare_hodl_wave_batch(
+            let (prepared_hodl_tracker, hodl_state_bytes) = self.prepare_hodl_wave_batch(
                 all_parsed_blocks,
                 &all_tx_data,
                 &input_cell_info,
@@ -3868,17 +4067,27 @@ impl Indexer {
                 &prefetched_address_balances,
                 &mut data_batch,
             )?;
-            let prepared_cell_dist_tracker = self.prepare_cell_distribution_batch(
-                all_parsed_blocks,
-                &all_tx_data,
-                &input_cell_info,
-                &batch_cell_infos,
-                &prefetched_address_balances,
-                &mut data_batch,
-            )?;
+            let (prepared_cell_dist_tracker, cell_dist_state_bytes) = self
+                .prepare_cell_distribution_batch(
+                    all_parsed_blocks,
+                    &all_tx_data,
+                    &input_cell_info,
+                    &batch_cell_infos,
+                    &prefetched_address_balances,
+                    &mut data_batch,
+                )?;
+            commit_prepare_ms = commit_started.elapsed().as_secs_f64() * 1000.0;
+            // Both trackers serialize their WHOLE state into `sync_meta` every
+            // batch (~220 KB mainnet / ~175 KB testnet per block in 2026-09).
+            // Reported so the share of the prepare phase it costs is a measured
+            // number, not a guess (P3.4 step 3).
+            tracker_state_bytes = hodl_state_bytes + cell_dist_state_bytes;
+
             // Merge script reference rollup writes into the same atomic batch,
             // eliminating the crash window between data_batch.commit() and a
             // separate post-commit refresh.
+            let script_rollup_started = Instant::now();
+            self.perf.mark_writer_phase();
             self.writer
                 .materialize_script_versions_and_families(
                     &updated_script_references,
@@ -3890,6 +4099,7 @@ impl Indexer {
                         first_block, last_block
                     )
                 })?;
+            script_rollup_ms = script_rollup_started.elapsed().as_secs_f64() * 1000.0;
 
             debug!(
                 phase = "domain_atomic_commit",
@@ -3917,6 +4127,8 @@ impl Indexer {
             // harmless: if the domain batch is lost, the tip rolls back and the now
             // orphan payloads (content-addressed by outpoint, never referenced
             // without a marker) are re-written identically on re-sync.
+            let append_only_started = Instant::now();
+            self.perf.mark_writer_phase();
             if !cells_batch.is_empty() {
                 cells_batch.commit_synced().with_context(|| {
                     format!(
@@ -3925,14 +4137,24 @@ impl Indexer {
                     )
                 })?;
             }
+            append_only_commit_synced_ms = append_only_started.elapsed().as_secs_f64() * 1000.0;
+
+            // The last markable point before the batch leaves this process.
+            // A single `db.write()` cannot be marked from inside — RocksDB
+            // gives no progress callback — so a genuinely wedged commit still
+            // trips the watchdog, which is exactly what it is for.
+            let domain_commit_started = Instant::now();
+            self.perf.mark_writer_phase();
             data_batch.commit().with_context(|| {
                 format!(
                     "atomic domain commit failed for blocks {}-{}",
                     first_block, last_block
                 )
             })?;
+            domain_commit_ms = domain_commit_started.elapsed().as_secs_f64() * 1000.0;
+
             let commit_ms = commit_started.elapsed().as_secs_f64() * 1000.0;
-            write_commit_ms += commit_ms;
+            commit_phase_total_ms = commit_ms;
             if commit_ms >= BULK_PHASE_COMMIT_SLOW_WARN_MS {
                 warn!(
                     phase = "finalize_commit",
@@ -4018,7 +4240,16 @@ impl Indexer {
         info!(
             precompute_ms = format!("{:.1}", precompute_ms),
             write_ms = format!("{:.1}", write_ms),
-            write_commit_ms = format!("{:.1}", write_commit_ms),
+            // `write_commit_ms` is the wide window under its old name, so old
+            // and new logs compare directly; it is the same measurement as
+            // `commit_phase_total_ms`, not a second one.
+            write_commit_ms = format!("{:.1}", commit_phase_total_ms),
+            commit_phase_total_ms = format!("{:.1}", commit_phase_total_ms),
+            commit_prepare_ms = format!("{:.1}", commit_prepare_ms),
+            script_rollup_ms = format!("{:.1}", script_rollup_ms),
+            append_only_commit_synced_ms = format!("{:.1}", append_only_commit_synced_ms),
+            domain_commit_ms = format!("{:.1}", domain_commit_ms),
+            tracker_state_bytes,
             finalize_ms = format!("{:.1}", finalize_ms),
             txs = batch_tx_count,
             cells = batch_cell_count,
@@ -4026,10 +4257,15 @@ impl Indexer {
             "Batch write breakdown"
         );
         Ok(BatchWriteMetrics {
-            commit_ms: write_commit_ms,
             write_ms,
-            prefetch_ms: 0.0,
+            precompute_ms,
             finalize_ms,
+            commit_prepare_ms,
+            script_rollup_ms,
+            append_only_commit_synced_ms,
+            domain_commit_ms,
+            commit_phase_total_ms,
+            tracker_state_bytes,
             txs: u64::try_from(batch_tx_count).expect("parsed batch tx count exceeds u64"),
             cells: u64::try_from(batch_cell_count).expect("parsed batch cell count exceeds u64"),
             inputs: u64::try_from(batch_input_count).expect("parsed batch input count exceeds u64"),
@@ -5749,6 +5985,13 @@ mod tests {
                 last_cache_invalidation: tokio::sync::Mutex::new(0),
                 was_bulk_sync_active: AtomicBool::new(false),
                 bulk_sync_allowed: AtomicBool::new(false),
+                startup_decision: crate::sync::decide_startup_sync(
+                    0,
+                    99,
+                    &Some(vec![0x99; 32]),
+                    72,
+                )
+                .expect("live-write fixture startup decision"),
                 rebuild_pause_flag: Arc::new(AtomicBool::new(false)),
                 pipeline_reset_notify_flag: Arc::new(AtomicBool::new(false)),
                 pipeline_reset_reason_code: Arc::new(AtomicU8::new(0)),
@@ -5764,6 +6007,7 @@ mod tests {
                 ckb_store: None,
                 hodl_tracker: std::sync::Mutex::new(HodlWaveTracker::new()),
                 cell_dist_tracker: std::sync::Mutex::new(CellDistributionTracker::new()),
+                hourly_retention_requested: Arc::new(AtomicBool::new(false)),
             }
         }
 
@@ -5861,7 +6105,32 @@ mod tests {
             indexer: &Indexer,
             block: BlockResponseWithCycles,
         ) -> Result<()> {
-            let blocks = vec![block];
+            write_live_block_with_entity_changes(indexer, block, EntityDailyChanges::new())
+                .await
+                .map(|_metrics| ())
+        }
+
+        /// Same live write path, but with NON-EMPTY entity daily/hourly changes.
+        ///
+        /// Without this, no test drives `write_parsed_batch` with entity rows to
+        /// write, so deleting `entity_stats.stage_final` — the single place the
+        /// overlay's values reach RocksDB — would leave every test green while
+        /// silently dropping all eight families.
+        pub(super) async fn write_live_block_with_entity_changes(
+            indexer: &Indexer,
+            block: BlockResponseWithCycles,
+            token_daily_changes: EntityDailyChanges<EntityDateKey>,
+        ) -> Result<crate::sync::types::BatchWriteMetrics> {
+            write_live_blocks_with_entity_changes(indexer, vec![block], token_daily_changes).await
+        }
+
+        /// Same live write path with SEVERAL blocks in ONE batch — the shape a
+        /// live catch-up actually uses (up to 5,000 blocks per batch).
+        pub(super) async fn write_live_blocks_with_entity_changes(
+            indexer: &Indexer,
+            blocks: Vec<BlockResponseWithCycles>,
+            token_daily_changes: EntityDailyChanges<EntityDateKey>,
+        ) -> Result<crate::sync::types::BatchWriteMetrics> {
             let (all_parsed_blocks, mut all_tx_data, all_input_outpoints) =
                 parse_blocks_parallel(&blocks)?;
 
@@ -5924,7 +6193,7 @@ mod tests {
             )?;
 
             let chain_tip = u64::try_from(all_parsed_blocks.last().unwrap().number)?;
-            indexer
+            let metrics = indexer
                 .write_parsed_batch(
                     &blocks,
                     &all_parsed_blocks,
@@ -5934,17 +6203,345 @@ mod tests {
                     address_balance_changes,
                     HashMap::new(),
                     HashMap::new(),
+                    EntityDailyChanges::new(),
+                    token_daily_changes,
                     HashMap::new(),
+                    EntityDailyChanges::new(),
+                    EntityDailyChanges::new(),
                     HashMap::new(),
-                    HashMap::new(),
-                    HashMap::new(),
-                    HashMap::new(),
-                    HashMap::new(),
-                    HashMap::new(),
+                    EntityDailyChanges::new(),
                     chain_tip,
                 )
                 .await?;
-            Ok(())
+            Ok(metrics)
+        }
+
+        /// P3.2: the commit window is reported as five non-overlapping parts.
+        ///
+        /// Before this, one `write_commit_ms` covered merge + balance reads +
+        /// both trackers + the script rollup + both commits, so a 66-383 s
+        /// catch-up commit window could not be attributed to anything.
+        #[tokio::test]
+        async fn live_batch_splits_the_commit_window_into_five_phases() {
+            let dir = tempfile::tempdir().unwrap();
+            let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+            let indexer = indexer_for_live_write_test(store.clone());
+            store
+                .set_secondary_epoch_reward(61_369_863_013_698)
+                .unwrap();
+
+            let metrics = write_live_block_with_entity_changes(
+                &indexer,
+                block(100, AR_DEPOSIT, vec![cellbase_tx(0xc0, FUNDING_CAPACITY)]),
+                EntityDailyChanges::new(),
+            )
+            .await
+            .unwrap();
+
+            assert!(
+                metrics.commit_phase_total_ms > 0.0,
+                "the commit window must be measured: {metrics:?}"
+            );
+            let parts = metrics.commit_prepare_ms
+                + metrics.script_rollup_ms
+                + metrics.append_only_commit_synced_ms
+                + metrics.domain_commit_ms;
+            assert!(
+                parts <= metrics.commit_phase_total_ms + 1e-9,
+                "the parts must not exceed the whole: parts={parts}, total={}, {metrics:?}",
+                metrics.commit_phase_total_ms
+            );
+            for (name, value) in [
+                ("commit_prepare_ms", metrics.commit_prepare_ms),
+                ("script_rollup_ms", metrics.script_rollup_ms),
+                (
+                    "append_only_commit_synced_ms",
+                    metrics.append_only_commit_synced_ms,
+                ),
+                ("domain_commit_ms", metrics.domain_commit_ms),
+            ] {
+                assert!(value >= 0.0, "{name} must be non-negative: {metrics:?}");
+                assert!(
+                    value <= metrics.commit_phase_total_ms,
+                    "{name} must fit inside the commit window: {metrics:?}"
+                );
+            }
+            assert_eq!(
+                metrics.commit_ms(),
+                metrics.commit_phase_total_ms,
+                "write_commit_ms stays the wide-window alias of commit_phase_total_ms"
+            );
+            // The writer's own pre-batch CPU phase now reaches the metrics
+            // instead of the constant-zero `prefetch_ms` the health monitor
+            // was fed as `precompute_ms`.
+            assert!(
+                metrics.precompute_ms > 0.0,
+                "precompute_ms must carry the measured pre-batch phase: {metrics:?}"
+            );
+            // Both trackers serialize their whole state every batch; the cost
+            // of that rule is reported, not assumed.
+            let committed_len = |key: &[u8]| -> usize {
+                store
+                    .get_cf(store.cf_sync_meta(), key)
+                    .expect("read sync_meta")
+                    .expect("tracker state must be committed")
+                    .len()
+            };
+            let hodl_bytes = committed_len(ckbadger_store::keys::sync_meta_keys::HODL_TRACKER);
+            let cell_dist_bytes =
+                committed_len(ckbadger_store::keys::sync_meta_keys::CELL_DIST_TRACKER);
+            assert_eq!(
+                metrics.tracker_state_bytes,
+                hodl_bytes + cell_dist_bytes,
+                "tracker_state_bytes must be the bytes actually written: {metrics:?}"
+            );
+        }
+
+        /// P3.2 (review m1): the writer-phase heartbeat must beat inside the
+        /// staging body, not only at the six phase boundaries.
+        ///
+        /// A live catch-up batch of 5,000 blocks spends minutes between
+        /// `t_write` and `t_finalize`. If only the boundaries mark a phase, the
+        /// watchdog sees no writer progress for that whole stretch and warns
+        /// exactly where P3.2 was supposed to stop warning.
+        #[tokio::test]
+        async fn staging_body_marks_a_writer_phase_for_every_block_in_the_batch() {
+            let dir = tempfile::tempdir().unwrap();
+            let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+            let indexer = indexer_for_live_write_test(store.clone());
+            store
+                .set_secondary_epoch_reward(61_369_863_013_698)
+                .unwrap();
+
+            let before_one = indexer.writer_phase_seq();
+            write_live_blocks_with_entity_changes(
+                &indexer,
+                vec![block(
+                    100,
+                    AR_DEPOSIT,
+                    vec![cellbase_tx(0xc0, FUNDING_CAPACITY)],
+                )],
+                EntityDailyChanges::new(),
+            )
+            .await
+            .unwrap();
+            let one_block_marks = indexer.writer_phase_seq() - before_one;
+
+            let before_three = indexer.writer_phase_seq();
+            write_live_blocks_with_entity_changes(
+                &indexer,
+                vec![
+                    block(101, AR_DEPOSIT, vec![cellbase_tx(0xc1, FUNDING_CAPACITY)]),
+                    block(102, AR_DEPOSIT, vec![cellbase_tx(0xc2, FUNDING_CAPACITY)]),
+                    block(103, AR_DEPOSIT, vec![cellbase_tx(0xc3, FUNDING_CAPACITY)]),
+                ],
+                EntityDailyChanges::new(),
+            )
+            .await
+            .unwrap();
+            let three_block_marks = indexer.writer_phase_seq() - before_three;
+
+            assert!(
+                three_block_marks >= one_block_marks + 2,
+                "the heartbeat must beat per staged block: 1-block batch marked \
+                 {one_block_marks}, 3-block batch marked {three_block_marks}"
+            );
+        }
+
+        /// P3.4 step 3 measurement: how much of the commit prepare phase is
+        /// the two trackers serializing their whole state into `sync_meta`.
+        ///
+        /// The decision rule from the plan is "change the persistence only if
+        /// this exceeds 20% of `commit_prepare_ms`". The smallest per-block
+        /// commit window measured in production was 1,100 ms (testnet, near
+        /// tip), so 20% of it is 220 ms; a production-scale state (2,495 date
+        /// entries, the number both trackers carried on 2026-09-22) must
+        /// serialize far below that. If it ever does not, this fails and the
+        /// decision has to be revisited rather than silently outgrown.
+        #[test]
+        fn tracker_state_serialization_is_a_minor_share_of_commit_prepare() {
+            use ckbadger_store::types::{CellDistributionTrackerState, HodlTrackerState};
+
+            const DATE_ENTRIES: usize = 2_495;
+            let capacity_by_date: Vec<(String, i128)> = (0..DATE_ENTRIES)
+                .map(|i| (format!("2026{:04}", i), 1_234_567_890_123_i128 + i as i128))
+                .collect();
+            let date_transitions: Vec<(i64, String)> = (0..DATE_ENTRIES)
+                .map(|i| (20_000_000 + i as i64, format!("2026{i:04}")))
+                .collect();
+            let hodl = HodlTrackerState {
+                capacity_by_date,
+                date_transitions: date_transitions.clone(),
+                holder_count: 1_234_567,
+                last_snapshot_date: Some("20260922".to_string()),
+                last_processed_block: Some(20_530_767),
+            };
+            let cell_dist = CellDistributionTrackerState {
+                count_by_bucket: [1, 2, 3, 4, 5, 6],
+                total_capacity_by_bucket: [1, 2, 3, 4, 5, 6],
+                date_transitions,
+                last_snapshot_date: Some("20260922".to_string()),
+                cohort_accum: (0..DATE_ENTRIES)
+                    .map(|i| (format!("2026-{:02}", i % 12 + 1), i as i128, i as i128))
+                    .collect(),
+                last_processed_block: Some(20_530_767),
+            };
+
+            let mut bytes = 0usize;
+            let mut best = std::time::Duration::MAX;
+            for _ in 0..5 {
+                let started = std::time::Instant::now();
+                let hodl_bytes = bincode::serialize(&hodl).unwrap();
+                let cell_dist_bytes = bincode::serialize(&cell_dist).unwrap();
+                let elapsed = started.elapsed();
+                bytes = hodl_bytes.len() + cell_dist_bytes.len();
+                best = best.min(elapsed);
+            }
+            eprintln!(
+                "tracker_state_bytes={bytes} serialize_us={} (date_entries={DATE_ENTRIES})",
+                best.as_micros()
+            );
+
+            const COMMIT_PREPARE_20_PCT_MS: u128 = 220;
+            assert!(bytes > 0);
+            assert!(
+                best.as_millis() < COMMIT_PREPARE_20_PCT_MS,
+                "tracker state serialization ({} ms for {bytes} bytes) reached 20% of the \
+                 smallest measured commit prepare window; revisit the P3.4 step 3 decision",
+                best.as_millis()
+            );
+        }
+
+        /// Review m10: drive the real live write path with NON-EMPTY entity
+        /// changes, so the single place the overlay's values reach RocksDB —
+        /// `entity_stats.stage_final` in `write_parsed_batch` — is actually
+        /// exercised. Before this, every test passed empty `EntityDailyChanges`,
+        /// so deleting that call would have dropped all eight families silently.
+        #[tokio::test]
+        async fn live_batch_persists_entity_daily_and_hourly_rows_with_undo() {
+            const TYPE_ARGS: &str =
+                "0xa92deeb134132d493d340f2cc4e7b62f930bcd037f0fb7f06b48f931f36f9fc2";
+
+            let dir = tempfile::tempdir().unwrap();
+            let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+            let indexer = indexer_for_live_write_test(store.clone());
+            store
+                .set_secondary_epoch_reward(61_369_863_013_698)
+                .unwrap();
+
+            // Block 100 funds a cell through the live path, so the HODL tracker
+            // and address balances know about it — exactly how a real chain
+            // reaches the state block 101 consumes.
+            write_live_block(
+                &indexer,
+                block(100, AR_DEPOSIT, vec![cellbase_tx(0xc0, FUNDING_CAPACITY)]),
+            )
+            .await
+            .unwrap();
+
+            // Block 101 spends it into an sUDT mint: the UDT writer bumps
+            // TOKEN_HOURLY through the same overlay the daily writers use.
+            let sudt_type = crate::rpc::Script {
+                code_hash: crate::parser::udt::SUDT_CODE_HASH.to_string(),
+                hash_type: "type".to_string(),
+                args: TYPE_ARGS.to_string(),
+            };
+            let type_script_hash = crate::parser::ScriptParser::compute_script_hash(&sudt_type);
+            let mint_tx = TransactionView {
+                hash: format!("0x{}", hex::encode([0xe7; 32])),
+                version: "0x0".to_string(),
+                cell_deps: vec![],
+                header_deps: vec![],
+                inputs: vec![CellInput {
+                    since: "0x0".to_string(),
+                    previous_output: OutPoint {
+                        tx_hash: format!("0x{}", hex::encode([0xc0; 32])),
+                        index: "0x0".to_string(),
+                    },
+                }],
+                outputs: vec![CellOutput {
+                    capacity: format!("0x{:x}", FUNDING_CAPACITY - 100_000_000),
+                    lock: lock_script(),
+                    type_: Some(sudt_type),
+                }],
+                outputs_data: vec!["0x2a000000000000000000000000000000".to_string()],
+                witnesses: vec![],
+            };
+
+            // Same timestamp the `header` fixture gives block 101.
+            let date =
+                ckbadger_store::keys::timestamp_ms_to_date(1_700_000_000_000i64 + 101 * 1000);
+            let mut token_daily = EntityDailyChanges::<EntityDateKey>::new();
+            token_daily
+                .add(
+                    101,
+                    (type_script_hash.clone(), date),
+                    20_000_000_000,
+                    14_300_000_000,
+                )
+                .unwrap();
+
+            write_live_block_with_entity_changes(
+                &indexer,
+                block(101, AR_DEPOSIT, vec![cellbase_tx(0xc1, 100), mint_tx]),
+                token_daily,
+            )
+            .await
+            .unwrap();
+
+            // The daily row reached RocksDB with the exact value.
+            let daily = store
+                .get_token_daily_delta(&type_script_hash, date)
+                .unwrap()
+                .expect("token daily row must be persisted by stage_final");
+            assert_eq!(daily.owned_capacity_delta, 20_000_000_000);
+            assert_eq!(daily.owned_knowledge_delta, 14_300_000_000);
+
+            // And so did the hourly counter the UDT writer bumped.
+            let hourly_rows: Vec<(Vec<u8>, i64)> = store
+                .iterator_cf(
+                    store.cf_stats_token(),
+                    rocksdb::IteratorMode::From(
+                        &[ckbadger_store::keys::STATS_PREFIX_TOKEN_HOURLY],
+                        rocksdb::Direction::Forward,
+                    ),
+                )
+                .map(|item| item.unwrap())
+                .take_while(|(key, _)| {
+                    key.first() == Some(&ckbadger_store::keys::STATS_PREFIX_TOKEN_HOURLY)
+                })
+                .map(|(key, value)| {
+                    (
+                        key.to_vec(),
+                        i64::from_le_bytes(value[..8].try_into().unwrap()),
+                    )
+                })
+                .collect();
+            assert_eq!(
+                hourly_rows.len(),
+                1,
+                "the mint must leave exactly one TOKEN_HOURLY row, got {hourly_rows:?}"
+            );
+            assert_eq!(hourly_rows[0].1, 1);
+            assert_eq!(&hourly_rows[0].0[1..33], type_script_hash.as_slice());
+
+            // Both carry an EntityStats undo entry for block 101, so a shallow
+            // fork can take them back.
+            let mut entity_undo = 0usize;
+            for item in store.iterator_cf(
+                store.cf_reorg_undo_log_by_block(),
+                rocksdb::IteratorMode::Start,
+            ) {
+                let (key, _) = item.unwrap();
+                let (block_num, seq) = ckbadger_store::keys::decode_reorg_undo_log_key(&key);
+                if block_num == 101 && seq >> 48 == 0x0004 {
+                    entity_undo += 1;
+                }
+            }
+            assert_eq!(
+                entity_undo, 2,
+                "one undo entry each for the daily row and the hourly counter"
+            );
         }
 
         /// Blocks 100-102: funding cellbase, DAO deposit, withdraw request.

@@ -13,6 +13,10 @@ use ckbadger_store::CkbadgerStore;
 use crate::parser::media_source::analyze_renderer_tier;
 use crate::parser::mnft::{ParsedMnftClass, ParsedMnftIssuer, ParsedMnftToken};
 
+use super::entity_stats::{apply_daily_pair, EntityStatsOverlay, SharedEntityStatsOverlay};
+use crate::sync::types::{EntityDailyChanges, EntityDateKey};
+use crate::sync::undo::SharedUndoSeq;
+
 use super::BatchWriter;
 
 #[derive(Default)]
@@ -20,8 +24,8 @@ pub(crate) struct MnftBatchState {
     tokens: HashMap<Vec<u8>, Option<ObjectEntry>>,
     collection_aggs: HashMap<Vec<u8>, Option<MnftCollectionAggregate>>,
     collection_owner_counts: HashMap<(Vec<u8>, Vec<u8>), i64>,
-    hourly_transfers: HashMap<Vec<u8>, i64>,
-    pub(crate) undo_seq_by_block: HashMap<i64, u64>,
+    stats: SharedEntityStatsOverlay,
+    pub(crate) undo_seq_by_block: SharedUndoSeq,
 }
 
 impl MnftBatchState {
@@ -111,41 +115,19 @@ impl MnftBatchState {
         self.collection_owner_counts
             .insert((collection_id.to_vec(), lock_hash.to_vec()), 0);
     }
-
-    fn get_hourly_transfer(&mut self, store: &CkbadgerStore, key: &[u8]) -> Result<i64> {
-        if let Some(cached) = self.hourly_transfers.get(key) {
-            return Ok(*cached);
-        }
-        let loaded = match store.get_stats_key(key)? {
-            Some(v) => {
-                if v.len() != 8 {
-                    bail!(
-                        "invalid mNFT hourly transfer value length in stats CF: key=0x{}, len={}",
-                        hex::encode(key),
-                        v.len()
-                    );
-                }
-                i64::from_le_bytes(v[..8].try_into().map_err(|_| {
-                    anyhow::anyhow!(
-                        "failed to decode mNFT hourly transfer value as i64: key=0x{}",
-                        hex::encode(key)
-                    )
-                })?)
-            }
-            None => 0,
-        };
-        self.hourly_transfers.insert(key.to_vec(), loaded);
-        Ok(loaded)
-    }
-
-    fn put_hourly_transfer(&mut self, key: Vec<u8>, count: i64) {
-        self.hourly_transfers.insert(key, count);
-    }
 }
 
 impl BatchWriter {
-    pub(crate) fn new_mnft_batch_state(&self) -> MnftBatchState {
-        MnftBatchState::default()
+    pub(crate) fn new_mnft_batch_state(
+        &self,
+        stats: SharedEntityStatsOverlay,
+        undo_seq: SharedUndoSeq,
+    ) -> MnftBatchState {
+        MnftBatchState {
+            stats,
+            undo_seq_by_block: undo_seq,
+            ..Default::default()
+        }
     }
 
     fn apply_mnft_owner_transition(
@@ -292,7 +274,7 @@ impl BatchWriter {
             CF_MNFT_DATA,
             &issuer.issuer_id,
             existing.as_ref().and_then(|e| bincode::serialize(e).ok()),
-            &mut state.undo_seq_by_block,
+            &state.undo_seq_by_block,
         );
         let entry = ObjectEntry {
             standard: ObjectStandard::MnftIssuer,
@@ -329,7 +311,8 @@ impl BatchWriter {
         block_number: i64,
         batch: &mut StoreBatch,
     ) -> Result<()> {
-        let mut state = self.new_mnft_batch_state();
+        let entity_stats = SharedEntityStatsOverlay::new();
+        let mut state = self.new_mnft_batch_state(entity_stats.clone(), SharedUndoSeq::default());
         self.insert_mnft_class_with_state(
             class,
             tx_hash,
@@ -337,7 +320,8 @@ impl BatchWriter {
             block_number,
             batch,
             &mut state,
-        )
+        )?;
+        entity_stats.stage_final(batch)
     }
 
     pub(crate) fn insert_mnft_class_with_state(
@@ -356,7 +340,7 @@ impl BatchWriter {
             CF_MNFT_DATA,
             &class.class_id,
             existing.as_ref().and_then(|e| bincode::serialize(e).ok()),
-            &mut state.undo_seq_by_block,
+            &state.undo_seq_by_block,
         );
         let new_tier = analyze_renderer_tier(class.renderer.as_deref());
         let old_tier = existing.as_ref().and_then(|e| match &e.extra {
@@ -442,7 +426,8 @@ impl BatchWriter {
         timestamp_ms: i64,
         batch: &mut StoreBatch,
     ) -> Result<()> {
-        let mut state = self.new_mnft_batch_state();
+        let entity_stats = SharedEntityStatsOverlay::new();
+        let mut state = self.new_mnft_batch_state(entity_stats.clone(), SharedUndoSeq::default());
         self.insert_mnft_token_with_state(
             token,
             tx_hash,
@@ -451,7 +436,8 @@ impl BatchWriter {
             timestamp_ms,
             batch,
             &mut state,
-        )
+        )?;
+        entity_stats.stage_final(batch)
     }
 
     pub(crate) fn insert_mnft_token_with_state(
@@ -471,7 +457,7 @@ impl BatchWriter {
             CF_MNFT_DATA,
             &token.token_id,
             existing.as_ref().and_then(|e| bincode::serialize(e).ok()),
-            &mut state.undo_seq_by_block,
+            &state.undo_seq_by_block,
         );
         let was_live = existing.as_ref().is_some_and(|entry| entry.is_live);
         let old_owner = if was_live {
@@ -617,18 +603,23 @@ impl BatchWriter {
             // Re-insert (transfer) — increment hourly bucket for 24h tracking
             let hour_bucket = timestamp_ms / 3_600_000;
             let key = ckbadger_store::keys::encode_object_hourly_key(&token.class_id, hour_bucket);
-            let current = state.get_hourly_transfer(self.store.as_ref(), &key)?;
-            let next = current.checked_add(1).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "mnft hourly transfer overflow: class_id=0x{}, hour_bucket={}, current={}, token_id=0x{}",
-                    hex::encode(&token.class_id),
-                    hour_bucket,
-                    current,
-                    hex::encode(&token.token_id)
-                )
-            })?;
-            batch.put_mnft_hourly_transfer(&token.class_id, hour_bucket, next);
-            state.put_hourly_transfer(key, next);
+            state.stats.mutate_hourly(
+                self.store.as_ref(),
+                batch,
+                &state.undo_seq_by_block,
+                block_number,
+                &key,
+                1,
+                &|| {
+                    format!(
+                        "object_hourly class_id=0x{} hour_bucket={} block={} token_id=0x{}",
+                        hex::encode(&token.class_id),
+                        hour_bucket,
+                        block_number,
+                        hex::encode(&token.token_id)
+                    )
+                },
+            )?;
         }
         batch.put_mnft_token_outpoint(tx_hash, output_index, &token.token_id);
         Ok(())
@@ -642,8 +633,12 @@ impl BatchWriter {
         tx_hash: &[u8],
         batch: &mut StoreBatch,
     ) -> Result<Option<Vec<u8>>> {
-        let mut state = self.new_mnft_batch_state();
-        self.consume_mnft_token_with_state(token_id, block_number, tx_hash, batch, &mut state)
+        let entity_stats = SharedEntityStatsOverlay::new();
+        let mut state = self.new_mnft_batch_state(entity_stats.clone(), SharedUndoSeq::default());
+        let consumed =
+            self.consume_mnft_token_with_state(token_id, block_number, tx_hash, batch, &mut state)?;
+        entity_stats.stage_final(batch)?;
+        Ok(consumed)
     }
 
     pub(crate) fn consume_mnft_token_with_state(
@@ -669,7 +664,7 @@ impl BatchWriter {
                 CF_MNFT_DATA,
                 token_id,
                 bincode::serialize(&entry).ok(),
-                &mut state.undo_seq_by_block,
+                &state.undo_seq_by_block,
             );
             let collection_id = entry.collection_id.clone();
             let old_owner = entry.owner_lock_hash.clone();
@@ -772,51 +767,83 @@ impl BatchWriter {
         Ok(())
     }
 
+    /// Per-block object (mNFT / identity) daily capacity/knowledge deltas.
+    ///
+    /// Every mutation goes through the batch overlay, which records the value
+    /// as of the end of the previous block the first time a given block touches
+    /// a given key. That undo entry is the ONLY thing that restores these rows
+    /// after a shallow fork — `should_delete_stats_for_replay` no longer deletes
+    /// them (Task 2.4).
     pub fn update_object_daily_deltas_batch(
+        &self,
+        changes: &EntityDailyChanges<EntityDateKey>,
+        overlay: &mut EntityStatsOverlay,
+        undo_seq: &mut HashMap<i64, u64>,
+        batch: &mut StoreBatch,
+    ) -> Result<()> {
+        // One `multi_get` for every key this family touches, instead of a point
+        // read per key inside the loop. The overlay keeps whatever a previous
+        // writer already computed, so warming it can never resurrect a stale
+        // pre-batch value (`prefetch_never_overwrites_a_value_the_batch_computed`).
+        let mut prefetch_keys: Vec<Vec<u8>> = Vec::new();
+        for (_, map) in changes.by_block() {
+            for (key_parts, (capacity_delta, knowledge_delta)) in map {
+                if *capacity_delta == 0 && *knowledge_delta == 0 {
+                    continue;
+                }
+                let (collection_id, date_yyyymmdd) = key_parts;
+                prefetch_keys
+                    .push(keys::encode_object_daily_key(collection_id, *date_yyyymmdd).to_vec());
+            }
+        }
+        prefetch_keys.sort_unstable();
+        prefetch_keys.dedup();
+        overlay.prefetch(self.store.as_ref(), &prefetch_keys)?;
+
+        for (block, map) in changes.by_block() {
+            for (key_parts, (capacity_delta, knowledge_delta)) in map {
+                if *capacity_delta == 0 && *knowledge_delta == 0 {
+                    continue;
+                }
+                let (collection_id, date_yyyymmdd) = key_parts;
+                let key = keys::encode_object_daily_key(collection_id, *date_yyyymmdd).to_vec();
+                let ctx = || {
+                    format!(
+                        "object_daily collection_id=0x{} date={}",
+                        hex::encode(collection_id),
+                        date_yyyymmdd
+                    )
+                };
+                let prev = overlay.current(self.store.as_ref(), &key)?;
+                let next =
+                    apply_daily_pair(prev.as_deref(), *capacity_delta, *knowledge_delta, &ctx)?;
+                overlay.mutate(self.store.as_ref(), batch, undo_seq, *block, &key, next)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Test-only adapter: run a flat `(entity, delta)` map through the real
+    /// per-block writer as a single block, then stage the overlay.
+    ///
+    /// The value semantics these callers assert (accumulate, delete on net
+    /// zero, fail on a corrupt existing row) are unchanged by Task 2.3; the
+    /// per-block undo semantics are covered by `entity_stats`' own unit tests
+    /// and by `tests/entity_stats_rollback.rs`.
+    #[cfg(test)]
+    pub(crate) fn update_object_daily_deltas_batch_flat_for_test(
         &self,
         changes: &HashMap<(Vec<u8>, u32), (i128, i128)>,
         batch: &mut StoreBatch,
     ) -> Result<()> {
-        for ((collection_id, date), (capacity_delta, used_delta)) in changes {
-            if *capacity_delta == 0 && *used_delta == 0 {
-                continue;
-            }
-            let mut current = self
-                .store
-                .get_mnft_daily_delta(collection_id, *date)?
-                .unwrap_or_default();
-            current.owned_capacity_delta = current
-                .owned_capacity_delta
-                .checked_add(*capacity_delta)
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "object daily capacity delta overflow: collection_id=0x{}, date={}, current={}, delta={}",
-                        hex::encode(collection_id),
-                        date,
-                        current.owned_capacity_delta,
-                        capacity_delta
-                    )
-                })?;
-            current.owned_knowledge_delta = current
-                .owned_knowledge_delta
-                .checked_add(*used_delta)
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "object daily used delta overflow: collection_id=0x{}, date={}, current={}, delta={}",
-                        hex::encode(collection_id),
-                        date,
-                        current.owned_knowledge_delta,
-                        used_delta
-                    )
-                })?;
-            if current.owned_capacity_delta == 0 && current.owned_knowledge_delta == 0 {
-                let key = keys::encode_object_daily_key(collection_id, *date);
-                batch.delete_stats(&key);
-            } else {
-                batch.put_mnft_daily_delta(collection_id, *date, &current);
-            }
+        let mut by_block = EntityDailyChanges::new();
+        for (key, (capacity_delta, knowledge_delta)) in changes {
+            by_block.add(1, key.clone(), *capacity_delta, *knowledge_delta)?;
         }
-        Ok(())
+        let mut overlay = EntityStatsOverlay::new();
+        let mut undo_seq = HashMap::new();
+        self.update_object_daily_deltas_batch(&by_block, &mut overlay, &mut undo_seq, batch)?;
+        overlay.stage_final(batch)
     }
 }
 
@@ -881,7 +908,7 @@ mod tests {
         let mut daily_changes = HashMap::new();
         daily_changes.insert((collection_id.clone(), date), (100, 61));
         writer
-            .update_object_daily_deltas_batch(&daily_changes, &mut batch)
+            .update_object_daily_deltas_batch_flat_for_test(&daily_changes, &mut batch)
             .unwrap();
         batch.commit().unwrap();
 
@@ -904,7 +931,7 @@ mod tests {
         let mut daily_changes = HashMap::new();
         daily_changes.insert((collection_id.clone(), date), (-100, -61));
         writer
-            .update_object_daily_deltas_batch(&daily_changes, &mut batch)
+            .update_object_daily_deltas_batch_flat_for_test(&daily_changes, &mut batch)
             .unwrap();
         batch.commit().unwrap();
 
@@ -973,7 +1000,8 @@ mod tests {
         let tx_hash = vec![0x51; 32];
 
         let mut batch = StoreBatch::new(writer.store());
-        let mut state = writer.new_mnft_batch_state();
+        let mut state =
+            writer.new_mnft_batch_state(SharedEntityStatsOverlay::new(), SharedUndoSeq::default());
         writer
             .insert_mnft_class(&class, &tx_hash, 7, 1, &mut batch)
             .unwrap();
@@ -1017,7 +1045,8 @@ mod tests {
         seed.commit().unwrap();
 
         let mut batch = StoreBatch::new(writer.store());
-        let mut state = writer.new_mnft_batch_state();
+        let entity_stats = SharedEntityStatsOverlay::new();
+        let mut state = writer.new_mnft_batch_state(entity_stats.clone(), SharedUndoSeq::default());
         let transfer_a = sample_token(0x12, class.class_id.clone(), 0x55);
         let transfer_b = sample_token(0x12, class.class_id.clone(), 0x66);
         writer
@@ -1042,6 +1071,7 @@ mod tests {
                 &mut state,
             )
             .unwrap();
+        entity_stats.stage_final(&mut batch).unwrap();
         batch.commit().unwrap();
 
         let key = ckbadger_store::keys::encode_object_hourly_key(&class.class_id, hour_bucket);
@@ -1064,7 +1094,8 @@ mod tests {
 
         // Seed class with one token so the DB aggregate starts at 1.
         let mut seed = StoreBatch::new(writer.store());
-        let mut seed_state = writer.new_mnft_batch_state();
+        let mut seed_state =
+            writer.new_mnft_batch_state(SharedEntityStatsOverlay::new(), SharedUndoSeq::default());
         writer
             .insert_mnft_class_with_state(&class, &tx_hash, 7, 1, &mut seed, &mut seed_state)
             .unwrap();
@@ -1076,7 +1107,8 @@ mod tests {
         // In one uncommitted batch, add a new token then re-write class metadata.
         // Class upsert must not clobber collection counts already updated in this batch.
         let mut batch = StoreBatch::new(writer.store());
-        let mut state = writer.new_mnft_batch_state();
+        let mut state =
+            writer.new_mnft_batch_state(SharedEntityStatsOverlay::new(), SharedUndoSeq::default());
         writer
             .insert_mnft_token_with_state(&token_b, &tx_hash, 9, 2, 0, &mut batch, &mut state)
             .unwrap();
@@ -1101,7 +1133,8 @@ mod tests {
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         let store = Arc::new(store);
         let writer = BatchWriter::new(store.clone(), store.clone());
-        let mut state = writer.new_mnft_batch_state();
+        let state =
+            writer.new_mnft_batch_state(SharedEntityStatsOverlay::new(), SharedUndoSeq::default());
 
         let collection_id = vec![0x88; 24];
         let key = ckbadger_store::keys::encode_object_hourly_key(&collection_id, 1);
@@ -1109,10 +1142,13 @@ mod tests {
         seed.put_stats(&key, &[1, 2, 3, 4]);
         seed.commit().unwrap();
 
-        let err = state.get_hourly_transfer(writer.store(), &key).unwrap_err();
+        let err = state
+            .stats
+            .current_hourly(writer.store(), &key)
+            .unwrap_err();
         assert!(err
             .to_string()
-            .contains("invalid mNFT hourly transfer value length"));
+            .contains("invalid entity hourly transfer value length"));
     }
 
     #[test]
@@ -1128,7 +1164,8 @@ mod tests {
         let tx_hash = vec![0x51; 32];
 
         let mut seed = StoreBatch::new(writer.store());
-        let mut seed_state = writer.new_mnft_batch_state();
+        let mut seed_state =
+            writer.new_mnft_batch_state(SharedEntityStatsOverlay::new(), SharedUndoSeq::default());
         writer
             .insert_mnft_class_with_state(&class, &tx_hash, 7, 1, &mut seed, &mut seed_state)
             .unwrap();
@@ -1141,7 +1178,8 @@ mod tests {
         seed.commit().unwrap();
 
         let mut batch = StoreBatch::new(writer.store());
-        let mut state = writer.new_mnft_batch_state();
+        let mut state =
+            writer.new_mnft_batch_state(SharedEntityStatsOverlay::new(), SharedUndoSeq::default());
         writer
             .consume_mnft_token_with_state(&token_a.token_id, 2, &tx_hash, &mut batch, &mut state)
             .unwrap();
@@ -1209,7 +1247,8 @@ mod tests {
         let tx_hash = vec![0x51; 32];
 
         let mut batch = StoreBatch::new(writer.store());
-        let mut state = writer.new_mnft_batch_state();
+        let mut state =
+            writer.new_mnft_batch_state(SharedEntityStatsOverlay::new(), SharedUndoSeq::default());
         writer
             .insert_mnft_class_with_state(&class, &tx_hash, 7, 1, &mut batch, &mut state)
             .unwrap();

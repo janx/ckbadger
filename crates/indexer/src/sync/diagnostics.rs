@@ -133,6 +133,20 @@ pub(crate) struct PerfStats {
     pub(crate) last_precompute_us: AtomicU64,
     pub(crate) last_build_us: AtomicU64,
     pub(crate) last_finalize_us: AtomicU64,
+    // Commit window split (P3.2). `db_commit_us` above stays the wide window
+    // (== commit_phase_total); these four are its non-overlapping parts.
+    pub(crate) commit_prepare_us: AtomicU64,
+    pub(crate) script_rollup_us: AtomicU64,
+    pub(crate) append_only_commit_us: AtomicU64,
+    pub(crate) domain_commit_us: AtomicU64,
+    pub(crate) last_commit_prepare_us: AtomicU64,
+    pub(crate) last_script_rollup_us: AtomicU64,
+    pub(crate) last_append_only_commit_us: AtomicU64,
+    pub(crate) last_domain_commit_us: AtomicU64,
+    /// Monotonic counter bumped when the writer ENTERS a phase. The progress
+    /// watchdog compares it across ticks: a committed tip that has not moved
+    /// while this keeps climbing is a long batch in flight, not a stall.
+    pub(crate) writer_phase_seq: AtomicU64,
 }
 
 impl PerfStats {
@@ -164,6 +178,60 @@ impl PerfStats {
             .fetch_add(to_us(finalize_ms), Ordering::Relaxed);
     }
 
+    /// Bump the writer-phase heartbeat. Called when a writer phase STARTS.
+    pub(crate) fn mark_writer_phase(&self) {
+        self.writer_phase_seq.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn writer_phase_seq(&self) -> u64 {
+        self.writer_phase_seq.load(Ordering::Relaxed)
+    }
+
+    /// Accumulate the five-part commit window split of one completed
+    /// `write_parsed_batch`. All durations are in milliseconds.
+    pub(crate) fn add_commit_phase_ms(
+        &self,
+        commit_prepare_ms: f64,
+        script_rollup_ms: f64,
+        append_only_commit_synced_ms: f64,
+        domain_commit_ms: f64,
+    ) {
+        let to_us = |ms: f64| (ms.max(0.0) * 1000.0).round() as u64;
+        self.commit_prepare_us
+            .fetch_add(to_us(commit_prepare_ms), Ordering::Relaxed);
+        self.script_rollup_us
+            .fetch_add(to_us(script_rollup_ms), Ordering::Relaxed);
+        self.append_only_commit_us
+            .fetch_add(to_us(append_only_commit_synced_ms), Ordering::Relaxed);
+        self.domain_commit_us
+            .fetch_add(to_us(domain_commit_ms), Ordering::Relaxed);
+    }
+
+    /// Commit-window decomposition for the health monitor. Falls back to the
+    /// latest completed window when the current accumulator is empty.
+    /// Returns (commit_prepare_ms, script_rollup_ms, append_only_commit_ms,
+    /// domain_commit_ms).
+    pub(crate) fn commit_phase_snapshot_ms(&self) -> (f64, f64, f64, f64) {
+        let pick = |current: &AtomicU64, last: &AtomicU64| {
+            let v = current.load(Ordering::Relaxed);
+            let v = if v > 0 {
+                v
+            } else {
+                last.load(Ordering::Relaxed)
+            };
+            v as f64 / 1000.0
+        };
+        (
+            pick(&self.commit_prepare_us, &self.last_commit_prepare_us),
+            pick(&self.script_rollup_us, &self.last_script_rollup_us),
+            pick(
+                &self.append_only_commit_us,
+                &self.last_append_only_commit_us,
+            ),
+            pick(&self.domain_commit_us, &self.last_domain_commit_us),
+        )
+    }
+
     pub(crate) fn report_and_reset(&self) {
         let blocks = self.blocks_count.swap(0, Ordering::Relaxed);
         if blocks == 0 {
@@ -175,6 +243,10 @@ impl PerfStats {
         let precompute_us = self.precompute_us.swap(0, Ordering::Relaxed);
         let build_us = self.build_us.swap(0, Ordering::Relaxed);
         let finalize_us = self.finalize_us.swap(0, Ordering::Relaxed);
+        let commit_prepare_us = self.commit_prepare_us.swap(0, Ordering::Relaxed);
+        let script_rollup_us = self.script_rollup_us.swap(0, Ordering::Relaxed);
+        let append_only_commit_us = self.append_only_commit_us.swap(0, Ordering::Relaxed);
+        let domain_commit_us = self.domain_commit_us.swap(0, Ordering::Relaxed);
         self.last_fetch_us.store(fetch_us, Ordering::Relaxed);
         self.last_db_stage_write_us
             .store(db_stage_us, Ordering::Relaxed);
@@ -184,6 +256,14 @@ impl PerfStats {
             .store(precompute_us, Ordering::Relaxed);
         self.last_build_us.store(build_us, Ordering::Relaxed);
         self.last_finalize_us.store(finalize_us, Ordering::Relaxed);
+        self.last_commit_prepare_us
+            .store(commit_prepare_us, Ordering::Relaxed);
+        self.last_script_rollup_us
+            .store(script_rollup_us, Ordering::Relaxed);
+        self.last_append_only_commit_us
+            .store(append_only_commit_us, Ordering::Relaxed);
+        self.last_domain_commit_us
+            .store(domain_commit_us, Ordering::Relaxed);
 
         let fetch_ms = fetch_us as f64 / 1000.0;
         let db_stage_ms = db_stage_us as f64 / 1000.0;
@@ -192,7 +272,16 @@ impl PerfStats {
             blocks,
             fetch_ms = format!("{:.1}", fetch_ms),
             db_stage_ms = format!("{:.1}", db_stage_ms),
+            // db_commit_ms is the wide commit window; the four fields after it
+            // are its non-overlapping parts (P3.2).
             db_commit_ms = format!("{:.1}", db_commit_ms),
+            commit_prepare_ms = format!("{:.1}", commit_prepare_us as f64 / 1000.0),
+            script_rollup_ms = format!("{:.1}", script_rollup_us as f64 / 1000.0),
+            append_only_commit_synced_ms = format!("{:.1}", append_only_commit_us as f64 / 1000.0),
+            domain_commit_ms = format!("{:.1}", domain_commit_us as f64 / 1000.0),
+            precompute_ms = format!("{:.1}", precompute_us as f64 / 1000.0),
+            build_ms = format!("{:.1}", build_us as f64 / 1000.0),
+            finalize_ms = format!("{:.1}", finalize_us as f64 / 1000.0),
             "Batch perf"
         );
     }

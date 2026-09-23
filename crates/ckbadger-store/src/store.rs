@@ -4,6 +4,7 @@ use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 use tracing::{error, info, warn};
 
 use rocksdb::{
@@ -45,6 +46,16 @@ const MB: u64 = 1024 * 1024;
 /// less RAM, not more. So the invariant is "homogeneous per single-network stack",
 /// which every writer process satisfies exactly.
 static SHARED_BUDGET: OnceLock<(rocksdb::Cache, WriteBufferManager)> = OnceLock::new();
+
+/// Highest LSM level counted by `sst_files_total`. RocksDB's default
+/// `num_levels` is 7 (L0..L6); a level that does not exist simply reports no
+/// value.
+const MAX_LEVEL_FOR_FILE_COUNT: usize = 6;
+
+/// How long a computed SST file count stays fresh. Bulk sync samples
+/// `memory_stats()` every 3 s; the file count changes on the timescale of
+/// compactions, so it is recomputed at most this often.
+const SST_FILE_COUNT_MAX_AGE: Duration = Duration::from_secs(30);
 
 /// Serde default for `StoreRuntimeConfig::network_count`, applied when the field
 /// is absent. `NonZeroUsize` has no `Default`, so this must be named explicitly.
@@ -753,6 +764,9 @@ fn short_hex(bytes: &[u8], max_len: usize) -> String {
 pub struct CkbadgerStore {
     db: DB,
     store_class: StoreClass,
+    /// The path this handle opened. For a secondary this is the PRIMARY path,
+    /// whose MANIFEST the secondary replays on open and on every catch-up.
+    db_path: PathBuf,
     domain_path: PathBuf,
     append_path: PathBuf,
     /// Keep block cache alive for the lifetime of the store.
@@ -767,6 +781,21 @@ pub struct CkbadgerStore {
     is_secondary: bool,
     memory_profile: MemoryProfile,
     runtime_config: StoreRuntimeConfig,
+    /// `(measured_at, files)` for [`Self::sst_files_total_cached`].
+    sst_file_count_cache: Mutex<Option<(Instant, u64)>>,
+    /// Test-only read-call counters, so a test can prove a hot path issues one
+    /// batched read instead of N point reads. Never compiled into the binary.
+    #[cfg(any(test, feature = "read-call-counters"))]
+    read_calls: ReadCallCounters,
+}
+
+#[cfg(any(test, feature = "read-call-counters"))]
+#[derive(Default)]
+struct ReadCallCounters {
+    get_cf: std::sync::atomic::AtomicU64,
+    multi_get_cf: std::sync::atomic::AtomicU64,
+    put_cf: std::sync::atomic::AtomicU64,
+    write_batch: std::sync::atomic::AtomicU64,
 }
 
 impl CkbadgerStore {
@@ -942,6 +971,7 @@ impl CkbadgerStore {
         Ok(Self {
             db,
             store_class,
+            db_path,
             domain_path,
             append_path,
             block_cache: Mutex::new(block_cache),
@@ -950,6 +980,9 @@ impl CkbadgerStore {
             is_secondary: false,
             memory_profile,
             runtime_config,
+            sst_file_count_cache: Mutex::new(None),
+            #[cfg(any(test, feature = "read-call-counters"))]
+            read_calls: ReadCallCounters::default(),
         })
     }
 
@@ -1026,6 +1059,7 @@ impl CkbadgerStore {
         Ok(Self {
             db,
             store_class,
+            db_path,
             domain_path,
             append_path,
             block_cache: Mutex::new(block_cache),
@@ -1034,6 +1068,9 @@ impl CkbadgerStore {
             is_secondary: true,
             memory_profile,
             runtime_config,
+            sst_file_count_cache: Mutex::new(None),
+            #[cfg(any(test, feature = "read-call-counters"))]
+            read_calls: ReadCallCounters::default(),
         })
     }
 
@@ -1274,6 +1311,27 @@ impl CkbadgerStore {
         Self::HISTORICAL_APPEND_CFS.contains(&name)
     }
 
+    /// Per-CF write buffer for the live profile: `(max_write_buffer_number,
+    /// write_buffer_size)`.
+    ///
+    /// The single source for both the open-time CF options and the live
+    /// profile restored by [`Self::apply_normal_compaction_options`], so the
+    /// two can never disagree about a CF's tier.
+    ///
+    /// `atomic_flush = 1` means ANY CF hitting its buffer switches memtables
+    /// for the whole DB, so the smallest tier here sets the flush frequency of
+    /// all 59 CFs — which is why the tier comes from the memory profile and is
+    /// never hardcoded below it.
+    fn live_cf_write_buffer(name: &str, profile: &MemoryProfile) -> (i32, usize) {
+        if Self::is_mega_write_cf(name) {
+            (4, profile.write_buffer_mega_bytes)
+        } else if Self::is_high_write_cf(name) {
+            (4, profile.write_buffer_high_bytes)
+        } else {
+            (2, profile.write_buffer_low_bytes)
+        }
+    }
+
     fn default_block_options(block_cache: &rocksdb::Cache) -> rocksdb::BlockBasedOptions {
         let mut block_opts = rocksdb::BlockBasedOptions::default();
         block_opts.set_block_size(16 * 1024);
@@ -1298,6 +1356,14 @@ impl CkbadgerStore {
 
         // Favor throughput during bulk sync while still smoothing fsync pressure.
         opts.set_bytes_per_sync(4 * 1024 * 1024);
+
+        // Bound the MANIFEST. It is an append-only log of every version edit
+        // (every flush and compaction writes one), and RocksDB only rolls it
+        // when it exceeds this size — the 1 GB default never rolled, so the
+        // 2026-09-22 flush storm grew it to 51 MB and a secondary spent 596 s
+        // replaying it before serving a single read. 64 MB is the roll point;
+        // the live file stays far below it once flush frequency is sane.
+        opts.set_max_manifest_file_size(64 * MB as usize);
 
         opts.set_write_buffer_size(profile.write_buffer_high_bytes);
         opts.set_max_write_buffer_number(4);
@@ -1389,16 +1455,10 @@ impl CkbadgerStore {
             opts.set_memtable_factory(rocksdb::MemtableFactory::Vector);
         }
 
-        if Self::is_mega_write_cf(name) {
-            opts.set_write_buffer_size(profile.write_buffer_mega_bytes);
-            opts.set_max_write_buffer_number(4);
-        } else if Self::is_high_write_cf(name) {
-            opts.set_write_buffer_size(profile.write_buffer_high_bytes);
-            opts.set_max_write_buffer_number(4);
-        } else {
-            opts.set_write_buffer_size(profile.write_buffer_low_bytes);
-            opts.set_max_write_buffer_number(2);
-        }
+        let (max_write_buffer_number, write_buffer_size) =
+            Self::live_cf_write_buffer(name, profile);
+        opts.set_write_buffer_size(write_buffer_size);
+        opts.set_max_write_buffer_number(max_write_buffer_number);
 
         opts.set_level_zero_file_num_compaction_trigger(4);
         opts.set_level_zero_slowdown_writes_trigger(12);
@@ -1634,10 +1694,44 @@ impl CkbadgerStore {
     // ---- Raw DB operations ----
 
     pub fn get_cf(&self, cf: &ColumnFamily, key: &[u8]) -> anyhow::Result<Option<Vec<u8>>> {
+        #[cfg(any(test, feature = "read-call-counters"))]
+        self.read_calls.get_cf.fetch_add(1, Ordering::Relaxed);
         Ok(self.db.get_cf(cf, key)?)
     }
 
+    #[cfg(any(test, feature = "read-call-counters"))]
+    pub fn reset_read_call_counters(&self) {
+        self.read_calls.get_cf.store(0, Ordering::Relaxed);
+        self.read_calls.multi_get_cf.store(0, Ordering::Relaxed);
+    }
+
+    /// `(get_cf calls, multi_get_cf calls)` since the last reset.
+    #[cfg(any(test, feature = "read-call-counters"))]
+    pub fn read_call_counts(&self) -> (u64, u64) {
+        (
+            self.read_calls.get_cf.load(Ordering::Relaxed),
+            self.read_calls.multi_get_cf.load(Ordering::Relaxed),
+        )
+    }
+
+    #[cfg(any(test, feature = "read-call-counters"))]
+    pub fn reset_write_call_counters(&self) {
+        self.read_calls.put_cf.store(0, Ordering::Relaxed);
+        self.read_calls.write_batch.store(0, Ordering::Relaxed);
+    }
+
+    /// `(put_cf calls, write_batch calls)` since the last reset.
+    #[cfg(any(test, feature = "read-call-counters"))]
+    pub fn write_call_counts(&self) -> (u64, u64) {
+        (
+            self.read_calls.put_cf.load(Ordering::Relaxed),
+            self.read_calls.write_batch.load(Ordering::Relaxed),
+        )
+    }
+
     pub fn put_cf(&self, cf: &ColumnFamily, key: &[u8], value: &[u8]) -> anyhow::Result<()> {
+        #[cfg(any(test, feature = "read-call-counters"))]
+        self.read_calls.put_cf.fetch_add(1, Ordering::Relaxed);
         if self.is_append_only_store() {
             let cf_name = self.append_cf_name_for_handle(cf)?;
             self.validate_append_put_by_cf_name(cf_name, key, value, StoreWriteIntent::Normal)?;
@@ -1657,6 +1751,8 @@ impl CkbadgerStore {
         &self,
         keys: Vec<(&ColumnFamily, &[u8])>,
     ) -> Vec<Result<Option<Vec<u8>>, rocksdb::Error>> {
+        #[cfg(any(test, feature = "read-call-counters"))]
+        self.read_calls.multi_get_cf.fetch_add(1, Ordering::Relaxed);
         self.db.multi_get_cf(keys)
     }
 
@@ -1673,6 +1769,8 @@ impl CkbadgerStore {
         &self,
         keys: Vec<(&ColumnFamily, &[u8])>,
     ) -> Vec<Result<Option<Vec<u8>>, rocksdb::Error>> {
+        #[cfg(any(test, feature = "read-call-counters"))]
+        self.read_calls.multi_get_cf.fetch_add(1, Ordering::Relaxed);
         let n = keys.len();
         if n <= 1 {
             return self.db.multi_get_cf(keys);
@@ -1716,6 +1814,8 @@ impl CkbadgerStore {
         batch: WriteBatch,
         intent: StoreWriteIntent,
     ) -> anyhow::Result<()> {
+        #[cfg(any(test, feature = "read-call-counters"))]
+        self.read_calls.write_batch.fetch_add(1, Ordering::Relaxed);
         if self.is_append_only_store()
             && !matches!(
                 intent,
@@ -1889,6 +1989,62 @@ impl CkbadgerStore {
             | keys::STATS_PREFIX_DOTBIT_ACCOUNT_OUTPOINT
             | keys::STATS_PREFIX_DOTBIT_OUTPOINT_BY_ACCOUNT_ID
             | keys::STATS_PREFIX_OBJECT_COLLECTION_OWNER => Ok(self.cf_stats_mnft()),
+            _ => anyhow::bail!("unsupported stats prefix: 0x{:02x}", prefix),
+        }
+    }
+
+    /// Resolve a column family handle by its name, the way
+    /// `rollback_via_undo_log` does when replaying a `KeyMutation` entry.
+    pub fn cf_handle_by_name(&self, cf_name: &str) -> Option<&ColumnFamily> {
+        self.db.cf_handle(cf_name)
+    }
+
+    /// Resolve the stats CF **name** for a stats key prefix.
+    ///
+    /// `stats_cf_by_prefix` hands back a live `&ColumnFamily` handle, which an
+    /// undo-log entry cannot carry: `UndoLogEntry::KeyMutation` is CF-name
+    /// addressed so `rollback_via_undo_log` can re-resolve the handle in
+    /// whichever process replays it. Both must stay in step — a prefix that
+    /// resolves to a handle here but not to a name would silently lose its
+    /// pre-images.
+    pub fn stats_cf_name_by_prefix(prefix: u8) -> anyhow::Result<&'static str> {
+        match prefix {
+            keys::STATS_PREFIX_DAILY
+            | keys::STATS_PREFIX_HOURLY
+            | keys::STATS_PREFIX_EPOCH
+            | keys::STATS_PREFIX_MINER
+            | keys::STATS_PREFIX_BLOCK_TIME_DIST
+            | keys::STATS_PREFIX_EPOCH_TIME_DIST
+            | keys::STATS_PREFIX_DAILY_BLOCK
+            | keys::STATS_PREFIX_ACTIVITY_DAILY
+            | keys::STATS_PREFIX_ACTIVITY_HOURLY
+            | keys::STATS_PREFIX_ACTIVITY_DAILY_ADDR_SET
+            | keys::STATS_PREFIX_ACTIVITY_HOURLY_ADDR_SET => Ok(CF_STATS_CHAIN),
+            keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT
+            | keys::STATS_PREFIX_DAO_LATEST_STATS
+            | keys::STATS_PREFIX_DAO_TOP_DEPOSITORS => Ok(CF_STATS_DAO),
+            keys::STATS_PREFIX_HODL_WAVE
+            | keys::STATS_PREFIX_CELL_DISTRIBUTION
+            | keys::STATS_PREFIX_ADDR_COHORT => Ok(CF_STATS_HODL),
+            keys::STATS_PREFIX_SCRIPT_DAILY => Ok(CF_STATS_SCRIPT),
+            keys::STATS_PREFIX_TOKEN_TRANSFERS
+            | keys::STATS_PREFIX_TOKEN_HOURLY
+            | keys::STATS_PREFIX_TOKEN_DAILY => Ok(CF_STATS_TOKEN),
+            keys::STATS_PREFIX_CLUSTER_OWNER
+            | keys::STATS_PREFIX_SPORE_HOURLY
+            | keys::STATS_PREFIX_CLUSTER_DAILY
+            | keys::STATS_PREFIX_SPORE_DAILY
+            | keys::STATS_PREFIX_SPORE_OUTPOINT
+            | keys::STATS_PREFIX_SPORE_TYPE_INDEX
+            | keys::STATS_PREFIX_SPORE_OUTPOINT_BY_ID => Ok(CF_STATS_SPORE),
+            keys::STATS_PREFIX_OBJECT_HOURLY
+            | keys::STATS_PREFIX_OBJECT_DAILY
+            | keys::STATS_PREFIX_OBJECT_TYPE_INDEX
+            | keys::STATS_PREFIX_MNFT_CLASS_OUTPOINT
+            | keys::STATS_PREFIX_MNFT_TOKEN_OUTPOINT
+            | keys::STATS_PREFIX_DOTBIT_ACCOUNT_OUTPOINT
+            | keys::STATS_PREFIX_DOTBIT_OUTPOINT_BY_ACCOUNT_ID
+            | keys::STATS_PREFIX_OBJECT_COLLECTION_OWNER => Ok(CF_STATS_MNFT),
             _ => anyhow::bail!("unsupported stats prefix: 0x{:02x}", prefix),
         }
     }
@@ -2220,22 +2376,28 @@ impl CkbadgerStore {
             .expect("block_cache lock poisoned")
             .set_capacity(p.block_cache_normal_bytes);
 
+        // Per-CF write buffers come from the memory profile, the same tiering
+        // used at open time. They are NOT shrunk to fixed small values here:
+        // with `atomic_flush = 1` the smallest CF buffer decides how often the
+        // WHOLE database switches memtables, so an 8/4/2 MB live profile made
+        // `script_versions` (testnet ~2.0 MB/block) and `sync_meta` (mainnet
+        // ~1.97 MB/block) trigger a 26-CF flush every 5-9 blocks: 15,548 /
+        // 7,395 flushes on 2026-09-22, 7,148 / 5,343 SSTs and a 51 MB MANIFEST
+        // that cost the API secondary 596 s to open. Total memtable memory
+        // stays governed by the capped WBM above, not by per-CF minimums.
         for &cf_name in ALL_CFS {
             if let Some(cf) = self.db.cf_handle(cf_name) {
-                let (max_wb, wb_size) = if Self::is_mega_write_cf(cf_name) {
-                    ("4", "8388608") // 8 MB
-                } else if Self::is_high_write_cf(cf_name) {
-                    ("4", "4194304") // 4 MB
-                } else {
-                    ("2", "2097152") // 2 MB
-                };
+                let (max_write_buffer_number, write_buffer_size) =
+                    Self::live_cf_write_buffer(cf_name, p);
+                let max_wb = max_write_buffer_number.to_string();
+                let wb_size = write_buffer_size.to_string();
                 if let Err(e) = self.db.set_options_cf(
                     cf,
                     &[
                         ("level0_slowdown_writes_trigger", "12"),
                         ("level0_stop_writes_trigger", "24"),
-                        ("max_write_buffer_number", max_wb),
-                        ("write_buffer_size", wb_size),
+                        ("max_write_buffer_number", &max_wb),
+                        ("write_buffer_size", &wb_size),
                         ("max_bytes_for_level_base", &level_base_str),
                         ("target_file_size_base", &file_base_str),
                     ],
@@ -2247,6 +2409,9 @@ impl CkbadgerStore {
         info!(
             wbm_budget_mb = live_wbm / (1024 * 1024),
             block_cache_mb = p.block_cache_normal_bytes / (1024 * 1024),
+            write_buffer_mega_mb = p.write_buffer_mega_bytes / (1024 * 1024),
+            write_buffer_high_mb = p.write_buffer_high_bytes / (1024 * 1024),
+            write_buffer_low_mb = p.write_buffer_low_bytes / (1024 * 1024),
             flush_first,
             "Live compaction options applied: l0_slowdown=12, l0_stop=24"
         );
@@ -2479,10 +2644,71 @@ impl CkbadgerStore {
             l0_files_max,
             l0_worst_cf,
             immutable_memtables,
+            sst_files_total: self.sst_files_total_cached(SST_FILE_COUNT_MAX_AGE),
+            manifest_bytes: self.manifest_bytes(),
             top_cf_sizes: cf_sizes,
             wbm_usage_bytes: self.write_buffer_manager.get_usage(),
             wbm_budget_bytes: self.write_buffer_manager.get_buffer_size(),
         }
+    }
+
+    /// Total SST files across every level of every CF, recomputed at most once
+    /// per `max_age`.
+    ///
+    /// The sweep costs one property read per level per CF (7 × 60 ≈ 420 calls
+    /// per store, each under the DB mutex), while `memory_stats()` is sampled
+    /// every 3 s during bulk sync. The number moves on the timescale of
+    /// compactions, so a bounded-age cache gives the same signal without
+    /// putting that sweep on every sample.
+    fn sst_files_total_cached(&self, max_age: Duration) -> u64 {
+        let mut cache = self
+            .sst_file_count_cache
+            .lock()
+            .expect("sst_file_count_cache lock poisoned");
+        if let Some((measured_at, value)) = *cache {
+            if measured_at.elapsed() < max_age {
+                return value;
+            }
+        }
+        let value = self.count_sst_files();
+        *cache = Some((Instant::now(), value));
+        value
+    }
+
+    fn count_sst_files(&self) -> u64 {
+        let mut total = 0u64;
+        for &cf_name in ALL_CFS {
+            if let Some(cf) = self.db.cf_handle(cf_name) {
+                for level in 0..=MAX_LEVEL_FOR_FILE_COUNT {
+                    if let Ok(Some(v)) = self
+                        .db
+                        .property_int_value_cf(cf, &format!("rocksdb.num-files-at-level{level}"))
+                    {
+                        total += v;
+                    }
+                }
+            }
+        }
+        total
+    }
+
+    /// Size of the MANIFEST named by this DB's `CURRENT` file, in bytes.
+    ///
+    /// 0 when `CURRENT` or the MANIFEST it names cannot be read — a
+    /// just-created DB directory, or a secondary whose primary rotated the
+    /// MANIFEST between the two reads. This is a diagnostic gauge, never an
+    /// input to chain state.
+    pub fn manifest_bytes(&self) -> u64 {
+        let Ok(current) = std::fs::read_to_string(self.db_path.join("CURRENT")) else {
+            return 0;
+        };
+        let manifest_name = current.trim();
+        if manifest_name.is_empty() {
+            return 0;
+        }
+        std::fs::metadata(self.db_path.join(manifest_name))
+            .map(|meta| meta.len())
+            .unwrap_or(0)
     }
 
     /// Cheap snapshot of write-side flush activity. Used by the live-sync
@@ -2543,6 +2769,193 @@ pub struct FlushStats {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    // ── P3.3: live write buffers, flush storm, MANIFEST ────────────────
+
+    fn small_primary_profile() -> MemoryProfile {
+        // 2 GB budget: mega 64 MB, high 32 MB, low 8 MB (all above the 8/4/2 MB
+        // the live profile used to force).
+        MemoryProfile::compute(2 * GB, 8, 16, false)
+    }
+
+    /// The live profile must never shrink a CF's write buffer below the
+    /// profile's low tier. With `atomic_flush = 1` the SMALLEST per-CF buffer
+    /// decides how often the WHOLE DB switches memtables: a 2 MB low tier made
+    /// `script_versions` (testnet, ~2.0 MB rewritten per block) and `sync_meta`
+    /// (mainnet, ~1.97 MB per block) trigger a 26-CF flush every 5-9 blocks —
+    /// 15,548 / 7,395 flushes on 2026-09-22, 7,148 / 5,343 SSTs, 51 MB MANIFEST.
+    #[test]
+    fn live_options_never_set_cf_write_buffer_below_profile_low() {
+        let profile = small_primary_profile();
+        assert!(profile.write_buffer_low_bytes >= 8 * MB as usize);
+
+        for &cf_name in ALL_CFS {
+            let (max_write_buffer_number, write_buffer_size) =
+                CkbadgerStore::live_cf_write_buffer(cf_name, &profile);
+            assert!(
+                write_buffer_size >= profile.write_buffer_low_bytes,
+                "{cf_name}: live write_buffer_size {write_buffer_size} is below the profile low tier {}",
+                profile.write_buffer_low_bytes
+            );
+            let expected = if CkbadgerStore::is_mega_write_cf(cf_name) {
+                (4, profile.write_buffer_mega_bytes)
+            } else if CkbadgerStore::is_high_write_cf(cf_name) {
+                (4, profile.write_buffer_high_bytes)
+            } else {
+                (2, profile.write_buffer_low_bytes)
+            };
+            assert_eq!(
+                (max_write_buffer_number, write_buffer_size),
+                expected,
+                "{cf_name}: live tiering must match the open-time tiering"
+            );
+        }
+    }
+
+    /// Small live batches must not cost one flush round each.
+    ///
+    /// Writes 24 MB in ~0.5 MB batches into a low-tier CF after applying the
+    /// live profile, with auto-compaction off so L0 files count flush rounds
+    /// 1:1. The old hardcoded 2 MB low tier switched the memtable every ~4
+    /// batches (~12 rounds here) and, under `atomic_flush`, took every other
+    /// CF with it; the profile's 8 MB low tier must stay in single digits.
+    #[test]
+    fn live_write_buffers_do_not_flush_once_per_small_batch() {
+        let dir = TempDir::new().unwrap();
+        let runtime_config = StoreRuntimeConfig {
+            memory_budget_gb: Some(2),
+            direct_io_reads: false,
+            vector_memtable: false,
+            network_count: NonZeroUsize::MIN,
+        };
+        let store = CkbadgerStore::open_domain_with_runtime(dir.path(), runtime_config).unwrap();
+        store.apply_normal_compaction_options(false);
+        let profile = &store.memory_profile;
+        assert_eq!(profile.write_buffer_low_bytes, 8 * MB as usize);
+
+        // L0 files then count flush rounds directly instead of being merged
+        // away by compaction mid-test.
+        let cf = store.cf(CF_SYNC_META);
+        store
+            .db
+            .set_options_cf(cf, &[("disable_auto_compactions", "true")])
+            .unwrap();
+
+        const BATCHES: u32 = 48;
+        const KEYS_PER_BATCH: u32 = 8;
+        let payload = vec![0xAB_u8; 64 * 1024];
+        for batch_index in 0..BATCHES {
+            let mut batch = crate::batch::StoreBatch::new(&store);
+            for key_index in 0..KEYS_PER_BATCH {
+                let key = format!("p3.3-flush-probe-{batch_index:04}-{key_index:04}");
+                batch
+                    .put_raw_cf_by_name(CF_SYNC_META, key.as_bytes(), &payload)
+                    .unwrap();
+            }
+            batch.commit().unwrap();
+        }
+        let written_bytes = u64::from(BATCHES) * u64::from(KEYS_PER_BATCH) * (64 * 1024 + 32);
+
+        // Flushes are asynchronous: wait for quiescence before counting, and
+        // FAIL if it is not reached — counting mid-flush would silently under
+        // report rounds and make this test pass for the wrong reason.
+        let mut quiesced = false;
+        for _ in 0..200 {
+            let running = store
+                .db
+                .property_int_value("rocksdb.num-running-flushes")
+                .unwrap()
+                .unwrap_or(0);
+            let pending = store
+                .db
+                .property_int_value_cf(cf, "rocksdb.mem-table-flush-pending")
+                .unwrap()
+                .unwrap_or(0);
+            if running == 0 && pending == 0 {
+                quiesced = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        assert!(
+            quiesced,
+            "flushes never quiesced; the L0 count below would be meaningless"
+        );
+        let l0_files = store
+            .db
+            .property_int_value_cf(cf, "rocksdb.num-files-at-level0")
+            .unwrap()
+            .unwrap_or(0);
+
+        // One round per full write buffer, plus one for the tail.
+        let max_rounds = written_bytes / profile.write_buffer_low_bytes as u64 + 1;
+        assert!(
+            l0_files <= max_rounds,
+            "flush rounds must follow the profile's write buffer, not one per batch: \
+             l0_files={l0_files}, max_rounds={max_rounds}, written_bytes={written_bytes}, \
+             write_buffer_low={}",
+            profile.write_buffer_low_bytes
+        );
+    }
+
+    /// The per-level file sweep costs ~420 property reads per store, each
+    /// under the DB mutex, while bulk sync samples `memory_stats()` every 3 s.
+    /// The count is cached for a bounded age instead.
+    #[test]
+    fn sst_file_count_is_recomputed_at_most_once_per_max_age() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        let write_and_flush = |payload: &[u8], key: &str| {
+            let mut batch = crate::batch::StoreBatch::new(&store);
+            batch
+                .put_raw_cf_by_name(CF_SYNC_META, key.as_bytes(), payload)
+                .unwrap();
+            batch.commit().unwrap();
+            store.flush_all_memtables().unwrap();
+        };
+
+        write_and_flush(b"one", "p3.4-sst-cache-1");
+        let first = store.sst_files_total_cached(Duration::from_secs(30));
+        assert!(first >= 1, "a flushed store must have at least one SST");
+
+        // A second flush inside the window is not resampled...
+        write_and_flush(b"two", "p3.4-sst-cache-2");
+        assert_eq!(
+            store.sst_files_total_cached(Duration::from_secs(30)),
+            first,
+            "the count must be served from cache inside its max age"
+        );
+        // ...and is picked up as soon as the cached value is too old.
+        assert!(
+            store.sst_files_total_cached(Duration::ZERO) > first,
+            "an expired cache must recompute"
+        );
+    }
+
+    /// The flush-storm outcome signals must be visible in-process, not only in
+    /// the RocksDB LOG: SST file count and MANIFEST size are what made the API
+    /// domain secondary take 596 s to open.
+    #[test]
+    fn memory_stats_report_sst_count_and_manifest_size() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        let mut batch = crate::batch::StoreBatch::new(&store);
+        batch
+            .put_raw_cf_by_name(CF_SYNC_META, b"p3.3-manifest-probe", b"v")
+            .unwrap();
+        batch.commit().unwrap();
+        store.flush_all_memtables().unwrap();
+
+        let stats = store.memory_stats();
+        assert!(
+            stats.sst_files_total >= 1,
+            "a flushed store must report at least one SST file: {stats:?}"
+        );
+        assert!(
+            stats.manifest_bytes > 0,
+            "an open store must report its MANIFEST size: {stats:?}"
+        );
+    }
 
     #[test]
     fn test_all_cfs_accessible() {

@@ -1,10 +1,40 @@
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, bail, Result};
 
 use ckbadger_store::batch::StoreBatch;
 
 use super::types::{TxData, UndoSeqScope, UNDO_SEQ_LOCAL_MAX, UNDO_SEQ_SCOPE_SHIFT};
+
+/// The block-scoped undo sequence counter for one committed batch.
+///
+/// Every writer that records an undo entry for a block must draw from the SAME
+/// counter. The Spore, mNFT and .bit batch states used to own three private
+/// maps that all started at 0 and all stamped `UndoSeqScope::Object`, so two
+/// object writes in one block computed the identical undo key and the second
+/// overwrote the first inside the batch — the first entity's pre-image was gone
+/// before rollback ever ran (POSTMORTEM IDX-008, pinned by
+/// `db::writer::undo_seq_tests::object_scope_undo_seq_is_shared_across_entity_batch_states`).
+///
+/// `Arc<Mutex<_>>` rather than `Rc<RefCell<_>>`: the batch write path is an
+/// async fn whose future must stay `Send`.
+#[derive(Clone, Default)]
+pub(crate) struct SharedUndoSeq(Arc<Mutex<HashMap<i64, u64>>>);
+
+impl SharedUndoSeq {
+    pub(crate) fn next(&self, block_num: i64, scope: UndoSeqScope) -> u64 {
+        let mut guard = self.0.lock().expect("shared undo seq mutex poisoned");
+        next_undo_seq(&mut guard, block_num, scope)
+    }
+
+    /// Run `f` against the shared map itself, for callers that still take a
+    /// plain `&mut HashMap` (the entity stats overlay).
+    pub(crate) fn with<R>(&self, f: impl FnOnce(&mut HashMap<i64, u64>) -> R) -> R {
+        let mut guard = self.0.lock().expect("shared undo seq mutex poisoned");
+        f(&mut guard)
+    }
+}
 
 pub(crate) fn next_undo_seq(
     undo_seq_by_block: &mut HashMap<i64, u64>,

@@ -16,7 +16,7 @@ use crate::lifecycle::{
 use crate::network_guard::{establish_db_network_identity, verify_genesis_hash};
 use crate::rpc::CkbRpcClient;
 use crate::runtime_diag::{generate_run_id, read_cgroup_memory_snapshot};
-use crate::sync::Indexer;
+use crate::sync::{decide_startup_sync, Indexer, StartupSyncDecision};
 use crate::Config;
 
 /// Process exit code signalling an **unrecoverable** indexer error — one a
@@ -151,40 +151,47 @@ pub async fn run_indexer_sync(mut config: Config) -> Result<()> {
         .ok_or_else(|| anyhow::anyhow!("CKB node returned no genesis block (block 0)"))?;
     verify_genesis_hash(&config.network, &node_genesis)?;
 
-    // Use VectorRep memtable (O(1) insert) for the indexer. The indexer is
-    // the sole writer — no concurrent memtable access. Sort deferred to
-    // background memtable→SST flush. Safe for both bulk sync and live sync
-    // (live sync has low write rate, so deferred sort cost is negligible).
-    config.store_runtime_config.vector_memtable = true;
-
-    info!(
-        "Opening ckbadger domain store at: {}",
-        config.domain_data_path
-    );
-    let store = Arc::new(CkbadgerStore::open_domain_with_runtime(
+    // The memtable representation is fixed at DB open time and cannot be
+    // changed afterwards, so the sync path must be decided BEFORE the stores
+    // are opened for real. `open_chain_stores_for_startup` probes with the safe
+    // default (skiplist), decides once, and only reopens with VectorRep when
+    // this process is actually going to bulk build a fresh store.
+    let chain_tip = guard_rpc
+        .get_tip_block_number()
+        .await
+        .context("failed to fetch chain tip from CKB node for the startup decision")?;
+    let opened = open_chain_stores_for_startup(
         &config.domain_data_path,
-        config.store_runtime_config,
-    )?);
-
-    // A partial bulk artifact is never a supported startup state. Check it
-    // before network tagging, sync-status repair, runtime markers, or labels
-    // can mutate the domain store.
-    fail_fast_if_bulk_build_session_incomplete(store.as_ref())
-        .map_err(|error| annotate_rebuild_required(error, &store_location))?;
-
-    // This is the first domain-store mutation on startup. Existing tagged DBs
-    // must match; old untagged DBs must prove their chain through persisted
-    // block 0 before the canonical identity is written.
-    establish_db_network_identity(&store, &config.network, &node_genesis)?;
-
-    info!(
-        "Opening ckbadger append-only store at: {}",
-        config.append_only_data_path
-    );
-    let append_only_store = Arc::new(CkbadgerStore::open_append_only_with_runtime(
         &config.append_only_data_path,
         config.store_runtime_config,
-    )?);
+        chain_tip,
+        config.bulk_sync_threshold,
+    )
+    .map_err(|error| annotate_rebuild_required(error, &store_location))?;
+    let StartupStores {
+        store,
+        append_only_store,
+        decision: startup_decision,
+    } = opened;
+    // Keep the config honest about what the stores were actually opened with.
+    config.store_runtime_config.vector_memtable = startup_decision.memtable.vector_memtable();
+    info!(
+        network = %config.network,
+        build_version = %config.build_version,
+        sync_path = startup_decision.path_str(),
+        fresh = startup_decision.fresh,
+        blocks_behind = startup_decision.blocks_behind,
+        memtable = startup_decision.memtable.as_str(),
+        chain_tip,
+        bulk_sync_threshold = config.bulk_sync_threshold,
+        "Startup sync decision"
+    );
+
+    // This is the first domain-store mutation on startup, and it happens on the
+    // FINAL handle (the probe handle only reads). Existing tagged DBs must
+    // match; old untagged DBs must prove their chain through persisted block 0
+    // before the canonical identity is written.
+    establish_db_network_identity(&store, &config.network, &node_genesis)?;
     store.log_config();
 
     let mut sync_status = store.get_sync_status()?;
@@ -216,6 +223,11 @@ pub async fn run_indexer_sync(mut config: Config) -> Result<()> {
             "Forcing startup rollback cleanup to reconcile append-only state"
         );
     }
+    // Before any business write — and before label import, statistics and the
+    // token reconciliation below — refuse a non-empty store that predates the
+    // entity-stats undo contract. Such a store cannot roll a shallow fork back
+    // correctly, and writing more blocks into it only buries the problem.
+    ensure_entity_stats_undo_contract_on_startup(&store)?;
     reconcile_token_daily_deltas_on_startup(&store)?;
 
     let repo = Repository::new(store.clone());
@@ -414,6 +426,7 @@ pub async fn run_indexer_sync(mut config: Config) -> Result<()> {
         config.clone(),
         store.clone(),
         append_only_store.clone(),
+        startup_decision,
     )
     .await?;
     let indexer = Arc::new(indexer);
@@ -454,6 +467,9 @@ pub async fn run_indexer_sync(mut config: Config) -> Result<()> {
         let mut suppressed_queue_pressure_warns: u64 = 0;
         let mut last_progress_block: Option<u64> = None;
         let mut last_progress_advanced_at = Instant::now();
+        let mut last_writer_phase_seq = indexer_for_progress.writer_phase_seq();
+        let mut last_writer_phase_advanced_at = Instant::now();
+        let mut last_memory_sample_at: Option<Instant> = None;
         let mut last_stall_warn_at: Option<Instant> = None;
         let mut suppressed_stall_warns: u64 = 0;
         let mut last_bulk_disk_state: Option<String> = None;
@@ -482,11 +498,6 @@ pub async fn run_indexer_sync(mut config: Config) -> Result<()> {
             });
             let bulk_build = indexer_for_progress.bulk_build_progress_snapshot();
             let bulk_disk = summarize_bulk_build_disk(bulk_build.as_ref());
-            indexer_for_progress.record_runtime_heartbeat(
-                progress.current(),
-                progress.target(),
-                Some(heartbeat_stage.as_str()),
-            );
             let sync_data = ckbadger_common::SyncProgressData {
                 current_block: progress.current(),
                 target_block: progress.target(),
@@ -521,51 +532,83 @@ pub async fn run_indexer_sync(mut config: Config) -> Result<()> {
                 pipeline_reset_reason: pipeline_reset.as_ref().map(|(_, reason)| reason.clone()),
                 bulk_build: bulk_build.clone(),
             };
+            // `get_memory_stats` sweeps ~8 properties across all 60 CFs of
+            // BOTH chain stores. That is far heavier than the tick it rides
+            // on, and nothing in live sync needs it at 3 s resolution — sync
+            // progress, which the TUI and API read, keeps the 3 s cadence.
+            // Bulk sync keeps sampling every tick: its perf heartbeat and the
+            // memory-pressure log are the whole point during a build.
+            let memory_stats = if should_sample_memory_stats(
+                indexer_for_progress.is_bulk_sync_active(),
+                last_memory_sample_at,
+                Instant::now(),
+                MEMORY_STATS_LIVE_SAMPLE_INTERVAL,
+            ) {
+                last_memory_sample_at = Some(Instant::now());
+                Some(indexer_for_progress.get_memory_stats())
+            } else {
+                None
+            };
+
+            // One write per tick: runtime heartbeat + sync progress (+ memory
+            // stats when this tick sampled them).
             indexer_for_progress
-                .cache_invalidator()
-                .publish_sync_progress(&sync_data)
+                .commit_heartbeat_tick(
+                    progress.current(),
+                    progress.target(),
+                    Some(heartbeat_stage.as_str()),
+                    &sync_data,
+                    memory_stats.as_ref(),
+                )
                 .await;
 
-            let memory_stats = indexer_for_progress.get_memory_stats();
-            indexer_for_progress
-                .cache_invalidator()
-                .publish_memory_stats(&memory_stats)
-                .await;
-            indexer_for_progress.record_bulk_sync_perf_heartbeat_sample(
-                progress.current(),
-                progress.target(),
-                memory_stats.compaction_pending_bytes / (1024 * 1024),
-                memory_stats.l0_files_count,
-                memory_stats.immutable_memtables,
-            );
+            // The perf heartbeat sample and the memory-pressure log only
+            // exist when this tick sampled memory stats; everything below
+            // (stall detection, queue pressure, progress logging) still runs
+            // every 3 s.
+            if let Some(memory_stats) = memory_stats.as_ref() {
+                indexer_for_progress.record_bulk_sync_perf_heartbeat_sample(
+                    progress.current(),
+                    progress.target(),
+                    memory_stats.compaction_pending_bytes / (1024 * 1024),
+                    memory_stats.l0_files_count,
+                    memory_stats.immutable_memtables,
+                );
 
-            info!(
-                run_id = %indexer_for_progress.run_id(),
-                memtable_mb = memory_stats.rocksdb_memtable_bytes / (1024 * 1024),
-                domain_memtable_mb =
-                    memory_stats.rocksdb_domain_memtable_bytes / (1024 * 1024),
-                append_only_memtable_mb =
-                    memory_stats.rocksdb_append_only_memtable_bytes / (1024 * 1024),
-                block_cache_mb = memory_stats.rocksdb_block_cache_bytes / (1024 * 1024),
-                table_readers_mb = memory_stats.rocksdb_table_readers_bytes / (1024 * 1024),
-                wbm_usage_mb = memory_stats.wbm_usage_bytes / (1024 * 1024),
-                wbm_budget_mb = memory_stats.wbm_budget_bytes / (1024 * 1024),
-                compaction_pending_mb = memory_stats.compaction_pending_bytes / (1024 * 1024),
-                domain_compaction_pending_mb =
-                    memory_stats.domain_compaction_pending_bytes / (1024 * 1024),
-                append_only_compaction_pending_mb =
-                    memory_stats.append_only_compaction_pending_bytes / (1024 * 1024),
-                running_compactions = memory_stats.num_running_compactions,
-                l0_files = memory_stats.l0_files_count,
-                l0_max = memory_stats.l0_files_max,
-                l0_worst_cf = memory_stats.l0_worst_cf,
-                imm_memtables = memory_stats.immutable_memtables,
-                sst_size_gb = format!(
-                    "{:.1}",
-                    memory_stats.sst_files_size as f64 / (1024.0 * 1024.0 * 1024.0)
-                ),
-                "RocksDB stats"
-            );
+                info!(
+                    run_id = %indexer_for_progress.run_id(),
+                    memtable_mb = memory_stats.rocksdb_memtable_bytes / (1024 * 1024),
+                    domain_memtable_mb =
+                        memory_stats.rocksdb_domain_memtable_bytes / (1024 * 1024),
+                    append_only_memtable_mb =
+                        memory_stats.rocksdb_append_only_memtable_bytes / (1024 * 1024),
+                    block_cache_mb = memory_stats.rocksdb_block_cache_bytes / (1024 * 1024),
+                    table_readers_mb = memory_stats.rocksdb_table_readers_bytes / (1024 * 1024),
+                    wbm_usage_mb = memory_stats.wbm_usage_bytes / (1024 * 1024),
+                    wbm_budget_mb = memory_stats.wbm_budget_bytes / (1024 * 1024),
+                    compaction_pending_mb = memory_stats.compaction_pending_bytes / (1024 * 1024),
+                    domain_compaction_pending_mb =
+                        memory_stats.domain_compaction_pending_bytes / (1024 * 1024),
+                    append_only_compaction_pending_mb =
+                        memory_stats.append_only_compaction_pending_bytes / (1024 * 1024),
+                    running_compactions = memory_stats.num_running_compactions,
+                    l0_files = memory_stats.l0_files_count,
+                    l0_max = memory_stats.l0_files_max,
+                    l0_worst_cf = memory_stats.l0_worst_cf,
+                    imm_memtables = memory_stats.immutable_memtables,
+                    sst_size_gb = format!(
+                        "{:.1}",
+                        memory_stats.sst_files_size as f64 / (1024.0 * 1024.0 * 1024.0)
+                    ),
+                    // Flush-storm signals (P3.3): file count and MANIFEST size are
+                    // the standing cost of how often the DB flushes, and the
+                    // MANIFEST is what an API secondary replays on open.
+                    sst_files = memory_stats.sst_files_total,
+                    manifest_mb = memory_stats.manifest_bytes / (1024 * 1024),
+                    domain_manifest_mb = memory_stats.domain_manifest_bytes / (1024 * 1024),
+                    "RocksDB stats"
+                );
+            }
 
             let fetch_fill_pct = queue_fill_pct(
                 pipeline_log.as_ref().and_then(|p| p.fetch_queue_depth),
@@ -579,6 +622,12 @@ pub async fn run_indexer_sync(mut config: Config) -> Result<()> {
                 pipeline_log.as_ref().and_then(|p| p.writer_queue_depth),
                 pipeline_log.as_ref().and_then(|p| p.writer_queue_capacity),
             );
+
+            let writer_phase_seq = indexer_for_progress.writer_phase_seq();
+            if writer_phase_seq != last_writer_phase_seq {
+                last_writer_phase_seq = writer_phase_seq;
+                last_writer_phase_advanced_at = Instant::now();
+            }
 
             let current_block = progress.current();
             match last_progress_block {
@@ -606,6 +655,7 @@ pub async fn run_indexer_sync(mut config: Config) -> Result<()> {
                     let now = Instant::now();
                     if should_warn_progress_stall(
                         last_progress_advanced_at,
+                        last_writer_phase_advanced_at,
                         now,
                         current_block,
                         progress.target(),
@@ -622,6 +672,8 @@ pub async fn run_indexer_sync(mut config: Config) -> Result<()> {
                                 target = progress.target(),
                                 blocks_remaining = progress.blocks_remaining(),
                                 stalled_seconds = stalled_for.as_secs(),
+                                writer_phase_idle_seconds =
+                                    last_writer_phase_advanced_at.elapsed().as_secs(),
                                 bps = format!("{:.1}", bps),
                                 ema_bps = format!("{:.1}", ema_rate),
                                 db_stage_write_ms = ?(perf_db_stage_ms > 0.0).then_some(format!("{:.1}", perf_db_stage_ms)),
@@ -829,6 +881,97 @@ pub async fn run_indexer_sync(mut config: Config) -> Result<()> {
     run_result.map_err(|error| annotate_rebuild_required(error, &store_location))
 }
 
+/// Both chain stores, opened with the memtable the startup decision selected.
+pub(crate) struct StartupStores {
+    pub(crate) store: Arc<CkbadgerStore>,
+    pub(crate) append_only_store: Arc<CkbadgerStore>,
+    pub(crate) decision: StartupSyncDecision,
+}
+
+/// Open the two chain stores for this process, deciding the sync path exactly
+/// once on the way.
+///
+/// 1. Probe-open the domain store with the safe default (skiplist) and read
+///    only: the bulk-build session marker and the writer's resume tip
+///    (`block_headers`, the authoritative source `Repository::get_sync_tip`
+///    uses — never `sync_status`, which is repaired later in startup).
+/// 2. Decide path + memtable from that state and the node's chain tip.
+/// 3. Keep the probe handle when the decision is a skiplist; otherwise drop it
+///    (the handle is owned here, never shared, so the drop closes the DB) and
+///    reopen the domain store with VectorRep. Either way the append-only store
+///    is opened once, with the same decision.
+///
+/// The per-process RocksDB block cache and WriteBufferManager are a
+/// `OnceLock` (`SHARED_BUDGET`) sized from the runtime config, and
+/// `vector_memtable` is not an input to that sizing — so probing and reopening
+/// provisions exactly one budget, not two.
+pub(crate) fn open_chain_stores_for_startup(
+    domain_data_path: &str,
+    append_only_data_path: &str,
+    runtime_config: StoreRuntimeConfig,
+    chain_tip: u64,
+    bulk_sync_threshold: u64,
+) -> Result<StartupStores> {
+    let mut probe_config = runtime_config;
+    probe_config.vector_memtable = false;
+
+    info!(
+        path = domain_data_path,
+        "Probe-opening ckbadger domain store for the startup decision"
+    );
+    let probe_store = CkbadgerStore::open_domain_with_runtime(domain_data_path, probe_config)?;
+
+    // A partial bulk artifact is never a supported startup state. Check it
+    // before network tagging, sync-status repair, runtime markers, or labels
+    // can mutate the domain store.
+    fail_fast_if_bulk_build_session_incomplete(&probe_store)?;
+
+    let (sync_tip_block, sync_tip_hash) = match probe_store.get_sync_tip_block()? {
+        Some((block_number, header)) => (block_number, Some(header.hash)),
+        None => (0, None),
+    };
+    let decision = decide_startup_sync(
+        chain_tip,
+        sync_tip_block,
+        &sync_tip_hash,
+        bulk_sync_threshold,
+    )?;
+
+    let mut final_config = runtime_config;
+    final_config.vector_memtable = decision.memtable.vector_memtable();
+
+    let store = if final_config.vector_memtable {
+        drop(probe_store);
+        info!(
+            path = domain_data_path,
+            memtable = decision.memtable.as_str(),
+            "Reopening ckbadger domain store for the decided sync path"
+        );
+        Arc::new(CkbadgerStore::open_domain_with_runtime(
+            domain_data_path,
+            final_config,
+        )?)
+    } else {
+        Arc::new(probe_store)
+    };
+
+    info!(
+        path = append_only_data_path,
+        memtable = decision.memtable.as_str(),
+        "Opening ckbadger append-only store"
+    );
+    let append_only_store = Arc::new(CkbadgerStore::open_append_only_with_runtime(
+        append_only_data_path,
+        final_config,
+    )?);
+
+    Ok(StartupStores {
+        store,
+        append_only_store,
+        decision,
+    })
+}
+
 /// Identity of the chain stores this indexer process owns.
 fn store_location_from_config(config: &Config) -> StoreLocation {
     StoreLocation::new(
@@ -878,6 +1021,31 @@ fn queue_fill_pct(depth: Option<u64>, capacity: Option<u64>) -> Option<f64> {
     }
 }
 
+/// How often live sync resamples RocksDB memory stats. The sweep touches ~8
+/// properties on each of the 60 CFs of BOTH chain stores, which is far heavier
+/// than the 3 s tick it used to ride on; sync progress keeps its 3 s cadence.
+const MEMORY_STATS_LIVE_SAMPLE_INTERVAL: Duration = Duration::from_secs(30);
+
+/// Whether this tick should resample RocksDB memory stats.
+///
+/// Bulk sync samples every tick — its perf heartbeat and memory-pressure log
+/// are the point of a build. Live sync samples on the interval, and always on
+/// the first tick so the value is never missing.
+fn should_sample_memory_stats(
+    bulk_sync_active: bool,
+    last_sample_at: Option<Instant>,
+    now: Instant,
+    interval: Duration,
+) -> bool {
+    if bulk_sync_active {
+        return true;
+    }
+    match last_sample_at {
+        None => true,
+        Some(last) => now.duration_since(last) >= interval,
+    }
+}
+
 fn should_emit_rate_limited(
     last_emit_at: Option<Instant>,
     now: Instant,
@@ -889,8 +1057,17 @@ fn should_emit_rate_limited(
     }
 }
 
+/// Warn only when BOTH the committed tip and the writer's phase heartbeat have
+/// been still for the whole window.
+///
+/// A live catch-up batch of 5,000 blocks holds one `write_parsed_batch` call for
+/// minutes; its committed tip cannot move until the batch commits, so the tip
+/// alone reported 74 / 49 false stalls during the 2026-09-22 catch-up. The
+/// writer phase heartbeat moves on every phase it enters, so a genuinely wedged
+/// writer still trips this.
 fn should_warn_progress_stall(
     last_progress_advanced_at: Instant,
+    last_writer_phase_advanced_at: Instant,
     now: Instant,
     current_block: u64,
     target_block: u64,
@@ -898,6 +1075,7 @@ fn should_warn_progress_stall(
 ) -> bool {
     current_block < target_block
         && now.duration_since(last_progress_advanced_at) >= min_stall_duration
+        && now.duration_since(last_writer_phase_advanced_at) >= min_stall_duration
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1116,6 +1294,33 @@ fn bytes_to_hex(bytes: &[u8]) -> String {
     out
 }
 
+/// A non-empty chain store must declare how far back its entity daily/hourly
+/// stats can be rolled back.
+///
+/// An empty store has nothing to protect and gets its contract from whichever
+/// path fills it: bulk build writes it at its completion block, live sync at
+/// its first commit. A store with a tip but no contract was written by a
+/// binary that deleted entity stats buckets on rollback instead of undoing
+/// them, so its history is already wrong wherever a shallow fork touched it.
+/// There is no honest migration; the only correct outcome is a rebuild.
+pub fn ensure_entity_stats_undo_contract_on_startup(store: &CkbadgerStore) -> Result<()> {
+    if store.get_entity_stats_undo_contract()?.is_some() {
+        return Ok(());
+    }
+    let (tip, tip_hash) = store.get_sync_tip()?;
+    if crate::sync::is_fresh_sync_tip_state(tip, &tip_hash) {
+        // Fresh store: the first bulk completion or live commit writes it.
+        return Ok(());
+    }
+    Err(anyhow::Error::new(
+        crate::lifecycle::RebuildRequiredError::new(format!(
+            "chain store has tip {tip} but no entity stats undo contract: it was written by a \
+             build that deleted entity daily/hourly stats buckets on shallow rollback instead of \
+             undoing them, so those buckets are already missing main-chain contributions"
+        )),
+    ))
+}
+
 fn reconcile_token_daily_deltas_on_startup(store: &CkbadgerStore) -> Result<()> {
     let Some(invalid) = store.find_first_invalid_token_daily_delta()? else {
         return Ok(());
@@ -1246,11 +1451,50 @@ mod tests {
         ));
     }
 
+    /// P3.4: the 3 s tick must not drag the two-store, all-CF memory sweep
+    /// with it in live mode — while bulk sync, which needs it, keeps it.
+    #[test]
+    fn memory_stats_are_sampled_every_30s_in_live_and_every_tick_in_bulk() {
+        let now = Instant::now();
+        let interval = Duration::from_secs(30);
+
+        // First live tick: no sample yet, so take one.
+        assert!(should_sample_memory_stats(false, None, now, interval));
+        // 3 s later: sync progress still ticks, memory stats do not.
+        assert!(!should_sample_memory_stats(
+            false,
+            Some(now - Duration::from_secs(3)),
+            now,
+            interval
+        ));
+        assert!(!should_sample_memory_stats(
+            false,
+            Some(now - Duration::from_secs(29)),
+            now,
+            interval
+        ));
+        assert!(should_sample_memory_stats(
+            false,
+            Some(now - Duration::from_secs(30)),
+            now,
+            interval
+        ));
+        // Bulk sync samples every tick regardless.
+        assert!(should_sample_memory_stats(
+            true,
+            Some(now - Duration::from_secs(1)),
+            now,
+            interval
+        ));
+    }
+
     #[test]
     fn test_should_warn_progress_stall() {
         let now = Instant::now();
         let last_advanced = now - Duration::from_secs(75);
+        // Committed tip AND writer phases both stuck for longer than the window.
         assert!(should_warn_progress_stall(
+            last_advanced,
             last_advanced,
             now,
             100,
@@ -1259,6 +1503,7 @@ mod tests {
         ));
         assert!(!should_warn_progress_stall(
             now - Duration::from_secs(30),
+            last_advanced,
             now,
             100,
             200,
@@ -1266,8 +1511,82 @@ mod tests {
         ));
         assert!(!should_warn_progress_stall(
             last_advanced,
+            last_advanced,
             now,
             200,
+            200,
+            Duration::from_secs(60)
+        ));
+    }
+
+    /// A 5,000-block live catch-up batch spends minutes inside one
+    /// `write_parsed_batch` call, so the committed tip does not move — that is
+    /// work in progress, not a stall. 2026-09-22 logged 74 / 49 such false
+    /// "Sync progress stalled" warnings in one catch-up. The writer phase
+    /// heartbeat distinguishes the two; a genuinely stuck writer still warns.
+    #[test]
+    fn stall_warning_is_suppressed_while_the_writer_keeps_advancing_phases() {
+        let now = Instant::now();
+        assert!(!should_warn_progress_stall(
+            now - Duration::from_secs(300),
+            now - Duration::from_secs(5),
+            now,
+            100,
+            200,
+            Duration::from_secs(60)
+        ));
+    }
+
+    /// The watchdog loop as it actually runs: 3 s ticks, a committed tip that
+    /// cannot move until the batch commits, and a writer that marks a phase per
+    /// staged block. Two minutes of staging must produce no warning.
+    #[test]
+    fn a_long_staging_body_that_keeps_marking_phases_never_warns() {
+        let start = Instant::now();
+        let mut last_writer_phase_seq = 0u64;
+        let mut last_writer_phase_advanced_at = start;
+        let mut warned = false;
+
+        for tick in 1..=40u64 {
+            let now = start + Duration::from_secs(3 * tick);
+            // The writer marked at least one phase since the last tick.
+            let seq = tick;
+            if seq != last_writer_phase_seq {
+                last_writer_phase_seq = seq;
+                last_writer_phase_advanced_at = now;
+            }
+            warned |= should_warn_progress_stall(
+                start,
+                last_writer_phase_advanced_at,
+                now,
+                100,
+                200,
+                Duration::from_secs(60),
+            );
+        }
+        assert!(
+            !warned,
+            "a batch still staging blocks is progress, not a stall"
+        );
+
+        // The same loop with the writer wedged does warn.
+        let mut warned_when_wedged = false;
+        for tick in 1..=40u64 {
+            let now = start + Duration::from_secs(3 * tick);
+            warned_when_wedged |=
+                should_warn_progress_stall(start, start, now, 100, 200, Duration::from_secs(60));
+        }
+        assert!(warned_when_wedged);
+    }
+
+    #[test]
+    fn stall_warning_fires_when_the_writer_phase_heartbeat_also_stops() {
+        let now = Instant::now();
+        assert!(should_warn_progress_stall(
+            now - Duration::from_secs(300),
+            now - Duration::from_secs(61),
+            now,
+            100,
             200,
             Duration::from_secs(60)
         ));
@@ -1692,5 +2011,143 @@ mod tests {
         assert!(!config.store_runtime_config.direct_io_reads);
         assert_eq!(config.decoder_cache_path, "/data/decoder-cache");
         assert_eq!(config.dob_decode_dir, "/workdir/media");
+    }
+
+    // ── P3.1: the startup open decides the memtable once ───────────────────
+
+    fn startup_runtime_config() -> StoreRuntimeConfig {
+        // `vector_memtable: true` on the way in proves the caller's value never
+        // decides anything: the startup decision does.
+        StoreRuntimeConfig {
+            memory_budget_gb: Some(2),
+            direct_io_reads: false,
+            vector_memtable: true,
+            network_count: std::num::NonZeroUsize::MIN,
+        }
+    }
+
+    fn seed_domain_tip(domain_path: &std::path::Path, block_number: i64) {
+        use ckbadger_store::{types::CachedBlockHeader, StoreBatch};
+
+        let store =
+            CkbadgerStore::open_domain_with_runtime(domain_path, startup_runtime_config()).unwrap();
+        let header = CachedBlockHeader {
+            hash: vec![0x7f; 32],
+            parent_hash: vec![0u8; 32],
+            timestamp: 1_704_067_200_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+            uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
+            cycles: None,
+        };
+        let mut batch = StoreBatch::new(&store);
+        batch.put_block_header(block_number, &header);
+        batch.commit().unwrap();
+    }
+
+    #[test]
+    fn startup_open_uses_vector_memtable_only_for_a_fresh_bulk_build() {
+        let domain = tempfile::tempdir().unwrap();
+        let append_only = tempfile::tempdir().unwrap();
+
+        let opened = open_chain_stores_for_startup(
+            domain.path().to_str().unwrap(),
+            append_only.path().to_str().unwrap(),
+            startup_runtime_config(),
+            10_000,
+            1_000,
+        )
+        .unwrap();
+
+        assert_eq!(opened.decision.memtable.as_str(), "Vector");
+        assert!(opened.decision.fresh);
+        assert_eq!(opened.decision.blocks_behind, 10_000);
+        assert!(opened.store.runtime_config().vector_memtable);
+        assert!(opened.append_only_store.runtime_config().vector_memtable);
+        // The rest of the runtime config (and therefore the shared memory
+        // budget) survives the probe → reopen round trip untouched.
+        assert_eq!(opened.store.runtime_config().memory_budget_gb, Some(2));
+        assert!(!opened.store.runtime_config().direct_io_reads);
+    }
+
+    #[test]
+    fn startup_open_uses_skiplist_for_an_existing_store_far_behind_tip() {
+        let domain = tempfile::tempdir().unwrap();
+        let append_only = tempfile::tempdir().unwrap();
+        seed_domain_tip(domain.path(), 22_426_153);
+
+        let opened = open_chain_stores_for_startup(
+            domain.path().to_str().unwrap(),
+            append_only.path().to_str().unwrap(),
+            startup_runtime_config(),
+            22_502_980,
+            1_000,
+        )
+        .unwrap();
+
+        assert_eq!(opened.decision.memtable.as_str(), "SkipList");
+        assert!(!opened.decision.fresh);
+        assert_eq!(opened.decision.blocks_behind, 76_827);
+        assert!(!opened.store.runtime_config().vector_memtable);
+        assert!(!opened.append_only_store.runtime_config().vector_memtable);
+    }
+
+    #[test]
+    fn startup_open_uses_skiplist_for_a_fresh_store_near_tip() {
+        let domain = tempfile::tempdir().unwrap();
+        let append_only = tempfile::tempdir().unwrap();
+
+        let opened = open_chain_stores_for_startup(
+            domain.path().to_str().unwrap(),
+            append_only.path().to_str().unwrap(),
+            startup_runtime_config(),
+            900,
+            1_000,
+        )
+        .unwrap();
+
+        assert_eq!(opened.decision.memtable.as_str(), "SkipList");
+        assert!(opened.decision.fresh);
+        assert!(!opened.store.runtime_config().vector_memtable);
+    }
+
+    #[test]
+    fn startup_open_fails_fast_on_an_incomplete_bulk_build_session() {
+        let domain = tempfile::tempdir().unwrap();
+        let append_only = tempfile::tempdir().unwrap();
+        {
+            let store =
+                CkbadgerStore::open_domain_with_runtime(domain.path(), startup_runtime_config())
+                    .unwrap();
+            store
+                .set_bulk_build_session_marker(Some(
+                    &ckbadger_store::types::BulkBuildSessionMarker {
+                        run_id: "run-bulk-partial".to_string(),
+                        started_at: 1_710_000_000,
+                        start_block: 0,
+                    },
+                ))
+                .unwrap();
+        }
+
+        let err = match open_chain_stores_for_startup(
+            domain.path().to_str().unwrap(),
+            append_only.path().to_str().unwrap(),
+            startup_runtime_config(),
+            10_000,
+            1_000,
+        ) {
+            Ok(_) => panic!("an incomplete bulk build session must fail startup"),
+            Err(err) => err,
+        };
+
+        assert!(is_rebuild_required(&err), "{err:#}");
+        assert!(err.to_string().contains("incomplete bulk build session"));
     }
 }
