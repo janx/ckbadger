@@ -4,6 +4,8 @@
 
 use std::sync::Arc;
 
+use anyhow::Result;
+
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::types::{UndoLogEntry, UndoLogStoreTarget};
 use ckbadger_store::CkbadgerStore;
@@ -17,6 +19,64 @@ pub struct BatchWriter {
     pub(super) store: Arc<CkbadgerStore>,
     pub(super) append_only_store: Arc<CkbadgerStore>,
     pub(super) cache_invalidator: Option<CacheInvalidator>,
+}
+
+/// Whether a rollback entry point may proceed on a store that has no
+/// entity-stats coverage contract yet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ContractRequirement {
+    /// Live reorg: startup already refused any non-fresh store without a
+    /// contract, so its absence here is an invariant violation.
+    Required,
+    /// Startup / batch cleanup: a genuinely fresh store has not written its
+    /// first contract yet, and has no entity rows to protect either.
+    OptionalOnFreshStore,
+}
+
+impl BatchWriter {
+    /// Refuse any rollback that reaches below the entity-stats coverage floor.
+    ///
+    /// The eight entity daily/hourly families are restored ONLY by the undo
+    /// log, which is pruned behind that floor. Rolling back past it leaves
+    /// those rows in place while blocks, cells and indexes are removed, so the
+    /// re-sync adds the same deltas a second time — and nothing downstream can
+    /// see it, because `find_first_invalid_token_daily_delta` only catches
+    /// totals that go negative.
+    pub(crate) fn ensure_rollback_within_entity_stats_coverage(
+        &self,
+        rollback_target: i64,
+        requirement: ContractRequirement,
+        context: &str,
+    ) -> Result<()> {
+        let contract = match (self.store.get_entity_stats_undo_contract()?, requirement) {
+            (Some(contract), _) => contract,
+            (None, ContractRequirement::OptionalOnFreshStore) => return Ok(()),
+            (None, ContractRequirement::Required) => {
+                return Err(anyhow::Error::new(
+                    crate::lifecycle::RebuildRequiredError::new(format!(
+                        "{context} {rollback_target}: chain store has no entity stats undo \
+                         contract, so nothing states how far its entity daily/hourly stats can \
+                         be rolled back"
+                    )),
+                ));
+            }
+        };
+        if rollback_target < contract.coverage_floor_block {
+            return Err(anyhow::Error::new(
+                crate::lifecycle::RebuildRequiredError::new(format!(
+                    "entity stats undo coverage floor {} is above {context} {}; the eight entity \
+                     daily/hourly families cannot be restored that far back, and continuing would \
+                     leave them counted twice after re-sync (contract version {}, floor last \
+                     advanced at block {})",
+                    contract.coverage_floor_block,
+                    rollback_target,
+                    contract.version,
+                    contract.updated_at_block
+                )),
+            ));
+        }
+        Ok(())
+    }
 }
 
 impl BatchWriter {

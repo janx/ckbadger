@@ -1183,9 +1183,12 @@ async fn reorg_below_floor_fails_fast() {
         Err(err) => err,
     };
     assert!(
+        ckbadger_indexer::lifecycle::is_rebuild_required(&err),
+        "must be rebuild-required, got: {err:#}"
+    );
+    assert!(
         err.to_string().contains("coverage floor 200")
-            && err.to_string().contains("fork point 150")
-            && err.to_string().contains("rebuild required"),
+            && err.to_string().contains("reorg fork point 150"),
         "got: {err:#}"
     );
     assert_eq!(
@@ -1603,4 +1606,190 @@ async fn rollback_to_block_failure_leaves_undo_replay_visible_and_marker_set() {
         !domain.has_undo_log_entries_after(2).unwrap(),
         "consumed undo entries must not reappear and be applied twice"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Review M2 — every rollback entry point must honour the coverage floor
+// ---------------------------------------------------------------------------
+
+/// `execute_reorg` refuses a fork below the coverage floor, but the two startup
+/// cleanup entry points did not. They matter more, not less: the startup path
+/// resets to -1 whenever the tip header is missing, and since Task 2.4 the
+/// cutoff sweep no longer deletes the eight entity families while the undo log
+/// only covers the last 1000 blocks. Every entity row would therefore survive a
+/// "full reset" that wipes blocks, cells and indexes, and the re-sync would add
+/// the same deltas on top — a silent double count that
+/// `find_first_invalid_token_daily_delta` cannot see, because the totals stay
+/// positive.
+#[tokio::test]
+async fn startup_cleanup_below_coverage_floor_fails_fast() {
+    let (domain, append) = setup_split_stores();
+    let writer = BatchWriter::new(domain.clone(), append.clone());
+
+    apply_commit(
+        &writer,
+        &domain,
+        &[
+            blk(1).token(TOKEN_X, DAY, 9_000_000_000, 6_100_000_000),
+            blk(2).token(TOKEN_X, DAY, 3_000_000_000, 2_000_000_000),
+        ],
+    );
+    domain
+        .put_entity_stats_undo_contract(&ckbadger_store::types::EntityStatsUndoContract {
+            version: ckbadger_store::types::ENTITY_STATS_UNDO_CONTRACT_VERSION,
+            coverage_floor_block: 1_000,
+            updated_at_block: 2_000,
+        })
+        .unwrap();
+
+    // Partial data strictly after the startup tip, whose own header is missing:
+    // the startup path takes the partial-data branch and resets to -1.
+    let mut batch = StoreBatch::new(&domain);
+    batch.put_tx_index(
+        3_001,
+        0,
+        &ckbadger_store::types::TxIndexEntry {
+            is_cellbase: true,
+            timestamp: TS_DAY,
+            inputs_count: 0,
+            outputs_count: 1,
+            fee: 0,
+            tx_size: 128,
+            cycles: None,
+            semantic_tags: 0,
+        },
+    );
+    batch.commit().unwrap();
+
+    let before = dump_entity_stats(&domain);
+    assert!(!before.is_empty());
+
+    let err = writer
+        .init_sync_start_with_options(append.as_ref(), 3_000, false, true)
+        .expect_err("a cleanup below the coverage floor must fail fast");
+    assert!(
+        ckbadger_indexer::lifecycle::is_rebuild_required(&err),
+        "must be rebuild-required, got: {err:#}"
+    );
+    assert!(
+        err.to_string().contains("coverage floor 1000"),
+        "got: {err:#}"
+    );
+    assert_eq!(
+        dump_entity_stats(&domain),
+        before,
+        "a refused cleanup must not have modified any entity stats row"
+    );
+}
+
+#[tokio::test]
+async fn cleanup_batch_range_below_coverage_floor_fails_fast() {
+    let (domain, append) = setup_split_stores();
+    let writer = BatchWriter::new(domain.clone(), append.clone());
+
+    apply_commit(
+        &writer,
+        &domain,
+        &[blk(1).token(TOKEN_X, DAY, 9_000_000_000, 6_100_000_000)],
+    );
+    domain
+        .put_entity_stats_undo_contract(&ckbadger_store::types::EntityStatsUndoContract {
+            version: ckbadger_store::types::ENTITY_STATS_UNDO_CONTRACT_VERSION,
+            coverage_floor_block: 500,
+            updated_at_block: 1_500,
+        })
+        .unwrap();
+
+    let before = dump_entity_stats(&domain);
+    let err = writer
+        .cleanup_batch_range(append.as_ref(), 100, 200)
+        .expect_err("a batch-range cleanup below the coverage floor must fail fast");
+    assert!(
+        ckbadger_indexer::lifecycle::is_rebuild_required(&err),
+        "must be rebuild-required, got: {err:#}"
+    );
+    assert!(
+        err.to_string().contains("coverage floor 500"),
+        "got: {err:#}"
+    );
+    assert_eq!(dump_entity_stats(&domain), before);
+}
+
+/// The guard must not fire on the ordinary case: a cleanup target at or above
+/// the floor still runs, and a fresh store with no contract yet still runs.
+#[tokio::test]
+async fn cleanup_at_or_above_coverage_floor_still_runs() {
+    let (domain, append) = setup_split_stores();
+    let writer = BatchWriter::new(domain.clone(), append.clone());
+
+    apply_commit(
+        &writer,
+        &domain,
+        &[
+            blk(1).token(TOKEN_X, DAY, 9_000_000_000, 6_100_000_000),
+            blk(2).token(TOKEN_X, DAY, 3_000_000_000, 2_000_000_000),
+        ],
+    );
+    // No contract yet (fresh store mid-first-batch): cleanup proceeds.
+    writer
+        .cleanup_batch_range(append.as_ref(), 2, 2)
+        .expect("a store with no contract has nothing to protect");
+
+    domain
+        .put_entity_stats_undo_contract(&ckbadger_store::types::EntityStatsUndoContract {
+            version: ckbadger_store::types::ENTITY_STATS_UNDO_CONTRACT_VERSION,
+            coverage_floor_block: 1,
+            updated_at_block: 2,
+        })
+        .unwrap();
+    writer
+        .cleanup_batch_range(append.as_ref(), 2, 2)
+        .expect("a target exactly at the floor is inside coverage");
+}
+
+/// Review m5: a live reorg on a store with NO contract must refuse, not
+/// silently proceed. Startup already rejects any non-fresh store without one,
+/// so this is unreachable today — which is exactly why it should be stated
+/// rather than left as an `if let Some(..)` that quietly does nothing.
+#[tokio::test]
+async fn reorg_without_a_contract_fails_fast() {
+    let (domain, append) = setup_split_stores();
+    let writer = BatchWriter::new(domain.clone(), append.clone());
+
+    apply_commit(
+        &writer,
+        &domain,
+        &[
+            blk(1).token(TOKEN_X, DAY, 9_000_000_000, 6_100_000_000),
+            blk(2).token(TOKEN_X, DAY, 3_000_000_000, 2_000_000_000),
+        ],
+    );
+    assert!(domain.get_entity_stats_undo_contract().unwrap().is_none());
+
+    let before = dump_entity_stats(&domain);
+    let result = writer
+        .execute_reorg(
+            append.as_ref(),
+            1,
+            &[0x01; 32],
+            2,
+            &[0x02; 32],
+            3,
+            &[0x03; 32],
+        )
+        .await;
+    let err = match result {
+        Ok(_) => panic!("a reorg without a coverage contract must fail fast"),
+        Err(err) => err,
+    };
+    assert!(
+        ckbadger_indexer::lifecycle::is_rebuild_required(&err),
+        "must be rebuild-required, got: {err:#}"
+    );
+    assert!(
+        err.to_string()
+            .contains("has no entity stats undo contract"),
+        "got: {err:#}"
+    );
+    assert_eq!(dump_entity_stats(&domain), before);
 }

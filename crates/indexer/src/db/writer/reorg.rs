@@ -7,7 +7,7 @@ use ckbadger_store::keys::{self, sync_meta_keys};
 use ckbadger_store::types::{DeepForkInfo, ReorgEvent, ReorgEventKind};
 use ckbadger_store::CkbadgerStore;
 
-use super::BatchWriter;
+use super::{BatchWriter, ContractRequirement};
 
 /// Build the history key for an event detected now.
 ///
@@ -138,18 +138,11 @@ impl BatchWriter {
         // undo log is pruned behind a coverage floor. A fork point below that
         // floor cannot be undone — fail with the numbers rather than replay a
         // rollback that would silently leave those buckets wrong.
-        if let Some(contract) = self.store.get_entity_stats_undo_contract()? {
-            if fork_point < contract.coverage_floor_block {
-                return Err(anyhow!(
-                    "entity stats undo coverage floor {} is above fork point {}; rebuild required \
-                     (contract version {}, floor last advanced at block {})",
-                    contract.coverage_floor_block,
-                    fork_point,
-                    contract.version,
-                    contract.updated_at_block
-                ));
-            }
-        }
+        self.ensure_rollback_within_entity_stats_coverage(
+            fork_point,
+            ContractRequirement::Required,
+            "reorg fork point",
+        )?;
 
         // Revert domain mutations from undo-log first so that entity data
         // (Spore, mNFT, dotbit) is restored to pre-fork state before the
