@@ -3472,7 +3472,7 @@ impl Indexer {
                             &tx_actions.tx_hash,
                             &tx_actions.block_hash,
                             tx_actions.timestamp,
-                        )
+                        )?
                     {
                         identity_activity_batch.put_identity_collection_activity(
                             &DOTCELL_SENTINEL_COLLECTION,

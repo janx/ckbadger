@@ -340,14 +340,19 @@ pub(crate) fn action_name(kind: &DotCellTransitionKind) -> Option<&'static str> 
 /// The collection-level asset action one `dotcell:*` action means. Both sync
 /// paths derive the collection feed from the SAME already-written
 /// `protocol_actions` through this function.
-pub(crate) fn dotcell_asset_action(action: &str) -> Option<AssetAction> {
-    Some(match action {
+///
+/// The action strings are a closed set `action_name` produces, so an unknown
+/// one is an invariant violation — a transition kind that gained no mapping —
+/// and must stop the batch rather than quietly cost the collection one feed
+/// entry.
+pub(crate) fn dotcell_asset_action(action: &str) -> Result<AssetAction> {
+    Ok(match action {
         "register" | "register_subname" => AssetAction::Mint,
         "transfer" | "buy" => AssetAction::Transfer,
         "renew" => AssetAction::Renew,
         "list" | "cancel_sale" | "edit_records" | "edit_manager" | "touch" => AssetAction::Update,
         "recycle" => AssetAction::Recycle,
-        _ => return None,
+        other => bail!("unknown dotcell action {other:?}: no collection AssetAction maps to it"),
     })
 }
 
@@ -507,21 +512,23 @@ pub(crate) fn build_dotcell_tx_activity_entry(
     tx_hash: &[u8],
     block_hash: &[u8],
     timestamp_ms: i64,
-) -> Option<ObjectCollectionActivityEntry> {
+) -> Result<Option<ObjectCollectionActivityEntry>> {
     let mut asset_actions: Vec<AssetAction> = Vec::new();
     for action in actions.iter().filter(|a| a.protocol == "dotcell") {
-        if let Some(asset_action) = dotcell_asset_action(&action.action) {
-            if !asset_actions.contains(&asset_action) {
-                asset_actions.push(asset_action);
-            }
+        let asset_action = dotcell_asset_action(&action.action)
+            .map_err(|e| anyhow!("tx 0x{}: {e}", hex::encode(tx_hash)))?;
+        if !asset_actions.contains(&asset_action) {
+            asset_actions.push(asset_action);
         }
     }
-    (!asset_actions.is_empty()).then(|| ObjectCollectionActivityEntry {
-        tx_hash: tx_hash.to_vec(),
-        block_hash: block_hash.to_vec(),
-        timestamp_ms,
-        actions: asset_actions,
-    })
+    Ok(
+        (!asset_actions.is_empty()).then(|| ObjectCollectionActivityEntry {
+            tx_hash: tx_hash.to_vec(),
+            block_hash: block_hash.to_vec(),
+            timestamp_ms,
+            actions: asset_actions,
+        }),
+    )
 }
 
 pub(crate) struct DotCellDetector {
@@ -1324,16 +1331,21 @@ mod tests {
             ("edit_manager", Some(AssetAction::Update)),
             ("touch", Some(AssetAction::Update)),
             ("recycle", Some(AssetAction::Recycle)),
-            ("not_a_dotcell_action", None),
         ] {
-            assert_eq!(dotcell_asset_action(action), expected, "{action}");
+            assert_eq!(dotcell_asset_action(action).ok(), expected, "{action}");
         }
+        // The action strings are a closed set this module produces itself, so
+        // an unknown one is a bug (a transition kind that gained no mapping),
+        // not a transaction to file with one feed entry missing.
+        let err = dotcell_asset_action("not_a_dotcell_action").unwrap_err();
+        assert!(err.to_string().contains("not_a_dotcell_action"), "{err}");
     }
 
     #[test]
     fn collection_activity_entry_from_protocol_actions() {
         let actions = actions_for(&fixture::M2_REGISTER_SUPPORT);
         let entry = build_dotcell_tx_activity_entry(&actions, &[0xAA; 32], &[0xBB; 32], 1_234)
+            .expect("a known action maps")
             .expect("a register must reach the collection feed");
         assert_eq!(entry.actions, vec![AssetAction::Mint]);
         assert_eq!(entry.tx_hash, vec![0xAA; 32]);
@@ -1347,6 +1359,7 @@ mod tests {
                 &[0xBB; 32],
                 1_234
             )
+            .unwrap()
             .is_none(),
             "a ring root is not a collection event"
         );
@@ -1360,7 +1373,23 @@ mod tests {
             &[0xBB; 32],
             1_234
         )
+        .unwrap()
         .is_none());
+
+        // An unknown `dotcell:*` action stops the batch, naming the action and
+        // the transaction.
+        let err = build_dotcell_tx_activity_entry(
+            &[ckbadger_store::types::ProtocolAction::new(
+                "dotcell",
+                "teleport",
+                serde_json::json!({}),
+            )],
+            &[0xAA; 32],
+            &[0xBB; 32],
+            1_234,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("teleport"), "{err}");
     }
 
     #[test]

@@ -4364,7 +4364,7 @@ fn build_history_rows_for_block(
             &tx_actions.tx_hash,
             &tx_actions.block_hash,
             tx_actions.timestamp,
-        ) {
+        )? {
             let activity_key = keys::encode_object_collection_activity_key(
                 &DOTCELL_SENTINEL_COLLECTION,
                 tx_actions.block_number,
