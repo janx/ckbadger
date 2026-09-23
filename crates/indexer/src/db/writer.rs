@@ -189,6 +189,7 @@ pub(crate) mod fiber_detector;
 pub mod hodl_wave;
 mod mnft;
 pub(crate) mod object_activity_acc;
+pub(crate) mod participant_rows;
 mod reorg;
 pub(crate) mod rgbpp_detector;
 mod spore;

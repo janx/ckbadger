@@ -9,8 +9,8 @@ use std::sync::OnceLock;
 
 use ckbadger_store::types::{
     ItemDelta, LockCallEntry, ParticipantDelta, ParticipantId, ProtocolAction, TxActions,
-    TypeCallEntry, ITEM_KIND_IDENTITY, ITEM_KIND_OBJECT, ITEM_KIND_TOKEN, TAG_CELLBASE,
-    TAG_DAO, TAG_IDENTITY, TAG_LOCK_CALL, TAG_OBJECT, TAG_PROTOCOL, TAG_TOKEN, TAG_TYPE_CALL,
+    TypeCallEntry, ITEM_KIND_IDENTITY, ITEM_KIND_OBJECT, ITEM_KIND_TOKEN, TAG_CELLBASE, TAG_DAO,
+    TAG_IDENTITY, TAG_LOCK_CALL, TAG_OBJECT, TAG_PROTOCOL, TAG_TOKEN, TAG_TYPE_CALL,
 };
 
 use crate::parser::{bit_cell::BitCellParser, dotbit::DotbitParser, udt::UdtParser};
@@ -1292,28 +1292,29 @@ fn emit_identity_item_deltas<T: AsRef<[u8]>>(
     }
 }
 
-// Tests rewritten for TxActions/ItemDelta model.
+/// Owned fixtures for the builder tests, shared with `participant_rows`.
+///
+/// They live outside one test module because the single row derivation is
+/// proven equal to the old cell derivation over exactly these transactions.
 #[cfg(test)]
-#[allow(clippy::useless_vec)]
-mod tests {
-    use super::*;
-    use ckbadger_store::types::participant_roles;
+pub(crate) mod test_fixtures {
+    use super::{InputCellView, OutputCellView, TxView};
 
     /// Owned data for constructing test OutputCellView instances.
-    struct OwnedOutput {
-        lock_script_hash: Vec<u8>,
-        lock_code_hash: Vec<u8>,
-        lock_args: Vec<u8>,
-        type_code_hash: Option<Vec<u8>>,
-        type_hash_type: Option<i16>,
-        type_script_hash: Option<Vec<u8>>,
-        type_args: Option<Vec<u8>>,
-        data: Vec<u8>,
-        capacity: i64,
+    pub(crate) struct OwnedOutput {
+        pub(crate) lock_script_hash: Vec<u8>,
+        pub(crate) lock_code_hash: Vec<u8>,
+        pub(crate) lock_args: Vec<u8>,
+        pub(crate) type_code_hash: Option<Vec<u8>>,
+        pub(crate) type_hash_type: Option<i16>,
+        pub(crate) type_script_hash: Option<Vec<u8>>,
+        pub(crate) type_args: Option<Vec<u8>>,
+        pub(crate) data: Vec<u8>,
+        pub(crate) capacity: i64,
     }
 
     impl OwnedOutput {
-        fn view(&self) -> OutputCellView<'_> {
+        pub(crate) fn view(&self) -> OutputCellView<'_> {
             OutputCellView {
                 capacity: self.capacity,
                 lock_code_hash: &self.lock_code_hash,
@@ -1331,7 +1332,7 @@ mod tests {
         }
     }
 
-    fn make_output(
+    pub(crate) fn make_output(
         lock_hash_byte: u8,
         capacity: i64,
         type_code_hash: Option<Vec<u8>>,
@@ -1353,24 +1354,24 @@ mod tests {
     }
 
     /// Owned data for constructing test InputCellView instances.
-    struct OwnedInput {
-        lock_script_hash: Vec<u8>,
-        lock_code_hash: Vec<u8>,
-        lock_args: Vec<u8>,
-        type_code_hash: Option<Vec<u8>>,
-        type_script_hash: Option<Vec<u8>>,
-        type_args: Option<Vec<u8>>,
-        udt_amount: Option<u128>,
-        data: Vec<u8>,
-        capacity: i64,
-        occupied_capacity: i64,
-        type_hash_type: Option<i16>,
-        is_dao_withdraw_request: bool,
-        dao_compensation: Option<i64>,
+    pub(crate) struct OwnedInput {
+        pub(crate) lock_script_hash: Vec<u8>,
+        pub(crate) lock_code_hash: Vec<u8>,
+        pub(crate) lock_args: Vec<u8>,
+        pub(crate) type_code_hash: Option<Vec<u8>>,
+        pub(crate) type_script_hash: Option<Vec<u8>>,
+        pub(crate) type_args: Option<Vec<u8>>,
+        pub(crate) udt_amount: Option<u128>,
+        pub(crate) data: Vec<u8>,
+        pub(crate) capacity: i64,
+        pub(crate) occupied_capacity: i64,
+        pub(crate) type_hash_type: Option<i16>,
+        pub(crate) is_dao_withdraw_request: bool,
+        pub(crate) dao_compensation: Option<i64>,
     }
 
     impl OwnedInput {
-        fn view(&self) -> InputCellView<'_> {
+        pub(crate) fn view(&self) -> InputCellView<'_> {
             InputCellView {
                 previous_tx_hash: &[0u8; 32],
                 previous_output_index: 0,
@@ -1393,7 +1394,7 @@ mod tests {
         }
     }
 
-    fn make_input(lock_hash_byte: u8, capacity: i64, occupied: i64) -> OwnedInput {
+    pub(crate) fn make_input(lock_hash_byte: u8, capacity: i64, occupied: i64) -> OwnedInput {
         OwnedInput {
             lock_script_hash: vec![lock_hash_byte; 32],
             lock_code_hash: vec![0x11; 32],
@@ -1410,6 +1411,98 @@ mod tests {
             dao_compensation: None,
         }
     }
+
+    /// One owned transaction: the shapes the old cell-derived `addr_txs` writer
+    /// had to get right — plain transfer, self-transfer, fan-out to several
+    /// locks, and a cellbase (outputs only, no inputs).
+    pub(crate) struct OwnedTx {
+        pub(crate) name: &'static str,
+        pub(crate) tx_hash: [u8; 32],
+        pub(crate) is_cellbase: bool,
+        pub(crate) inputs: Vec<OwnedInput>,
+        pub(crate) outputs: Vec<OwnedOutput>,
+    }
+
+    impl OwnedTx {
+        pub(crate) fn view(&self) -> TxView<'_> {
+            TxView {
+                tx_hash: &self.tx_hash,
+                block_hash: &[0xBB; 32],
+                tx_index: 1,
+                block_number: 7,
+                timestamp: 0,
+                is_cellbase: self.is_cellbase,
+                inputs: self.inputs.iter().map(|i| i.view()).collect(),
+                outputs: self.outputs.iter().map(|o| o.view()).collect(),
+            }
+        }
+    }
+
+    pub(crate) fn legacy_fixture_txs() -> Vec<OwnedTx> {
+        vec![
+            OwnedTx {
+                name: "1-in-1-out transfer between two locks",
+                tx_hash: [0x01; 32],
+                is_cellbase: false,
+                inputs: vec![make_input(0x11, 100_000_000_000, 6_100_000_000)],
+                outputs: vec![make_output(0x22, 99_900_000_000, None, None, None, vec![])],
+            },
+            OwnedTx {
+                name: "self transfer (same lock on both sides)",
+                tx_hash: [0x02; 32],
+                is_cellbase: false,
+                inputs: vec![make_input(0x11, 100_000_000_000, 6_100_000_000)],
+                outputs: vec![make_output(0x11, 99_900_000_000, None, None, None, vec![])],
+            },
+            OwnedTx {
+                name: "one payer, three payees",
+                tx_hash: [0x03; 32],
+                is_cellbase: false,
+                inputs: vec![make_input(0x11, 300_000_000_000, 6_100_000_000)],
+                outputs: vec![
+                    make_output(0x22, 100_000_000_000, None, None, None, vec![]),
+                    make_output(0x33, 100_000_000_000, None, None, None, vec![]),
+                    make_output(0x44, 99_900_000_000, None, None, None, vec![]),
+                ],
+            },
+            OwnedTx {
+                name: "two payers merging into one payee",
+                tx_hash: [0x04; 32],
+                is_cellbase: false,
+                inputs: vec![
+                    make_input(0x11, 50_000_000_000, 6_100_000_000),
+                    make_input(0x22, 50_000_000_000, 6_100_000_000),
+                ],
+                outputs: vec![make_output(0x33, 99_900_000_000, None, None, None, vec![])],
+            },
+            OwnedTx {
+                name: "cellbase: outputs only",
+                tx_hash: [0x05; 32],
+                is_cellbase: true,
+                inputs: vec![],
+                outputs: vec![make_output(0x55, 106_500_000_000, None, None, None, vec![])],
+            },
+            OwnedTx {
+                name: "same lock appearing on two outputs",
+                tx_hash: [0x06; 32],
+                is_cellbase: false,
+                inputs: vec![make_input(0x11, 100_000_000_000, 6_100_000_000)],
+                outputs: vec![
+                    make_output(0x22, 40_000_000_000, None, None, None, vec![]),
+                    make_output(0x22, 59_900_000_000, None, None, None, vec![]),
+                ],
+            },
+        ]
+    }
+}
+
+// Tests rewritten for TxActions/ItemDelta model.
+#[cfg(test)]
+#[allow(clippy::useless_vec)]
+mod tests {
+    use super::test_fixtures::*;
+    use super::*;
+    use ckbadger_store::types::participant_roles;
 
     /// Helper: find participant by lock_hash byte pattern in a TxActions.
     fn find_participant(actions: &TxActions, lock_byte: u8) -> &ParticipantDelta {
