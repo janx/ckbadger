@@ -877,3 +877,134 @@ async fn hourly_token_spore_object_symmetry() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// Task 1.4 — the fixed-shape iCKB three-day gap
+// ---------------------------------------------------------------------------
+
+/// Reproduces the shape proved on testnet iCKB: three consecutive UTC+8 days
+/// each carrying main-chain contributions and each hit by a depth-1 fork whose
+/// orphan block contains nothing for this token, followed by a day of
+/// consumption. The three days' rows must equal the exact whole-day capacity
+/// increments, the running total must never go negative, and the store's own
+/// startup validator must find nothing wrong.
+#[tokio::test]
+async fn ickb_three_day_gap_shape_is_preserved() {
+    const DAY_1: u32 = 20_260_912;
+    const DAY_2: u32 = 20_260_913;
+    const DAY_3: u32 = 20_260_914;
+    const DAY_4: u32 = 20_260_915;
+    // 2026-09-12 10:00 UTC+8, then one day apart.
+    const TS_1: i64 = 1_789_005_600_000;
+    const DAY_MS: i64 = 86_400_000;
+
+    // Per-day whole-day increments (the "correct" column of the incident table).
+    const INC_1: i128 = 29_349_109_967_584;
+    const INC_2: i128 = 131_195_364_199_711;
+    const INC_3: i128 = 143_234_681_921_302;
+    // Day 3's contribution is split around its fork point, as it was on testnet.
+    const INC_3_BEFORE_FORK: i128 = 71_607_501_066_642;
+    const INC_3_AFTER_FORK: i128 = INC_3 - INC_3_BEFORE_FORK;
+
+    let (domain, append) = setup_split_stores();
+    let writer = BatchWriter::new(domain.clone(), append.clone());
+
+    let mut block = 1i64;
+    let mut push = |writer: &BatchWriter,
+                    domain: &CkbadgerStore,
+                    block: &mut i64,
+                    ts: i64,
+                    date: u32,
+                    cap: i128| {
+        apply_commit(
+            writer,
+            domain,
+            &[blk(*block).at(ts).token(TOKEN_X, date, cap, cap / 10)],
+        );
+        *block += 1;
+    };
+
+    for (day_index, (date, inc)) in [(DAY_1, INC_1), (DAY_2, INC_2)].iter().enumerate() {
+        let ts = TS_1 + day_index as i64 * DAY_MS;
+        push(&writer, &domain, &mut block, ts, *date, *inc);
+        // depth-1 fork: the orphan block carries no iCKB change at all
+        let fork_point = block - 1;
+        apply_commit(
+            &writer,
+            &domain,
+            &[blk(block)
+                .at(ts + 1_000)
+                .token(TOKEN_Y, *date, 1_000_000_000, 100_000_000)],
+        );
+        block += 1;
+        rollback(&domain, &append, fork_point);
+        block = fork_point + 1;
+    }
+
+    // Day 3: contributions before AND after the fork point.
+    let ts3 = TS_1 + 2 * DAY_MS;
+    push(&writer, &domain, &mut block, ts3, DAY_3, INC_3_BEFORE_FORK);
+    let fork_point = block - 1;
+    apply_commit(
+        &writer,
+        &domain,
+        &[blk(block)
+            .at(ts3 + 1_000)
+            .token(TOKEN_Y, DAY_3, 1_000_000_000, 100_000_000)],
+    );
+    block += 1;
+    rollback(&domain, &append, fork_point);
+    block = fork_point + 1;
+    push(
+        &writer,
+        &domain,
+        &mut block,
+        ts3 + 2_000,
+        DAY_3,
+        INC_3_AFTER_FORK,
+    );
+
+    // Day 4: a consumption day.
+    let ts4 = TS_1 + 3 * DAY_MS;
+    push(
+        &writer,
+        &domain,
+        &mut block,
+        ts4,
+        DAY_4,
+        -14_019_999_853_193,
+    );
+
+    let row = |date: u32| -> i128 {
+        domain
+            .get_token_daily_delta(&TOKEN_X, date)
+            .unwrap()
+            .map(|d| d.owned_capacity_delta)
+            .unwrap_or(0)
+    };
+    assert_eq!(row(DAY_1), INC_1, "20260912 whole-day increment");
+    assert_eq!(row(DAY_2), INC_2, "20260913 whole-day increment");
+    assert_eq!(row(DAY_3), INC_3, "20260914 whole-day increment");
+
+    let mut running = 0i128;
+    for date in [DAY_1, DAY_2, DAY_3, DAY_4] {
+        running += row(date);
+        assert!(
+            running >= 0,
+            "running total went negative at {date}: {running} — the 2026-09-15 \
+             `-14,019,999,853,193` that made the testnet store unstartable"
+        );
+    }
+    assert_eq!(
+        running,
+        INC_1 + INC_2 + INC_3 - 14_019_999_853_193,
+        "the surviving total must be the full three-day sum minus the consumption"
+    );
+    assert!(
+        domain
+            .find_first_invalid_token_daily_delta()
+            .unwrap()
+            .is_none(),
+        "the startup validator must find no negative running total"
+    );
+}
