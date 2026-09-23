@@ -168,11 +168,17 @@ from the chain and compares it against the index, with **zero tolerance** —
   version, index start block, filters). It is checked against the live node and
   the case's anchor; anything missing or contradictory is `inconclusive`, never
   a confident `fail`.
+- **Identity from the export.** The type script the chain query needs comes
+  from the export, not from `/tokens/{hash}`: that endpoint accumulates the
+  daily rows and so fails exactly when they are the thing under suspicion. The
+  export's script is accepted only once it hashes back to the requested id.
 - **Selection.** `--entity token:<type_hash>` (repeatable) picks entities
   exactly. Without it, the check uses the known incident selectors plus the head
   of the API's token directory. Budgets (16 entities, 200k records, 10k RPC
   requests, 600 s) are initial values, not proven defaults; exhausting one is
-  `inconclusive`.
+  `inconclusive`. Raise them with `--entity-max-rpc`, `--entity-max-records`
+  and `--entity-budget-seconds` rather than narrowing scope until a run fits —
+  the manifest records both the budget and the spend.
 - **Coverage is auditable.** `<run-id>/manifest.json` records the anchor, the
   source profile, the budgets, what was spent, and every entity that was not
   fully covered and why.

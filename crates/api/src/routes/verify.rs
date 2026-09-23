@@ -132,6 +132,20 @@ impl ExportState {
     }
 }
 
+/// The script that gives an entity its identity, as the index stores it.
+///
+/// Published so the verifier can build its chain query from the same pinned
+/// read as the rows, instead of asking a public endpoint that also computes
+/// aggregates — and therefore fails exactly when the aggregates are the thing
+/// under suspicion.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportedScript {
+    pub code_hash: String,
+    pub hash_type: String,
+    pub args: String,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DailyDeltaRow {
@@ -152,6 +166,10 @@ pub struct EntityStatistics {
     pub present: Option<bool>,
     /// Rows the store holds for this entity. `null` when withheld.
     pub row_count: Option<u64>,
+    /// The entity's identifying script. `null` when the entity is absent or
+    /// the state withheld the export.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub type_script: Option<ExportedScript>,
     /// True only when every stored row for this entity is in `daily`.
     pub complete: bool,
     /// The index's current live capacity for this entity, in shannons.
@@ -204,6 +222,20 @@ pub struct EntityStatisticsResponse {
 
 fn hex0x(bytes: &[u8]) -> String {
     format!("0x{}", hex::encode(bytes))
+}
+
+/// The wire name of a stored `hash_type` discriminant.
+///
+/// An unknown value is an error: guessing one would publish a script that
+/// hashes to something other than the entity it names.
+fn hash_type_name(hash_type: u8) -> anyhow::Result<&'static str> {
+    match hash_type {
+        0 => Ok("data"),
+        1 => Ok("type"),
+        2 => Ok("data1"),
+        4 => Ok("data2"),
+        other => Err(anyhow::anyhow!("unknown stored hash_type {other}")),
+    }
 }
 
 /// Validate the request against the server's hard caps before any store read.
@@ -345,6 +377,7 @@ async fn export_entity_statistics(
                     id: entity.id.clone(),
                     present: None,
                     row_count: None,
+                    type_script: None,
                     complete: false,
                     current_capacity: None,
                     current_knowledge: None,
@@ -354,7 +387,18 @@ async fn export_entity_statistics(
                 continue;
             }
 
-            let present = store.get_token(&entity.key)?.is_some();
+            let token = store.get_token(&entity.key)?;
+            let present = token.is_some();
+            let type_script = token
+                .as_ref()
+                .map(|info| {
+                    Ok::<_, anyhow::Error>(ExportedScript {
+                        code_hash: hex0x(&info.type_code_hash),
+                        hash_type: hash_type_name(info.hash_type)?.to_string(),
+                        args: hex0x(&info.type_args),
+                    })
+                })
+                .transpose()?;
             // One row per day this entity had activity, so the read is bounded
             // by chain age rather than by anything the request controls.
             // Streaming it would need a store-side iterator, which this
@@ -402,6 +446,7 @@ async fn export_entity_statistics(
                 id: entity.id.clone(),
                 present: Some(present),
                 row_count: Some(row_count),
+                type_script,
                 complete: daily.len() as u64 == row_count,
                 current_capacity,
                 current_knowledge,

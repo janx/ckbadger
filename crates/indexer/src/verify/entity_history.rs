@@ -226,11 +226,22 @@ pub struct ExportDailyRow {
 
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ExportedScript {
+    pub code_hash: String,
+    pub hash_type: String,
+    pub args: String,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ExportedEntity {
     pub kind: String,
     pub id: String,
     pub present: Option<bool>,
     pub row_count: Option<u64>,
+    /// The entity's identifying script, from the same pinned read as the rows.
+    #[serde(default)]
+    pub type_script: Option<ExportedScript>,
     pub complete: bool,
     /// The index's own current live totals, as decimal strings.
     #[serde(default)]
@@ -827,26 +838,25 @@ fn script_hash(script: &Script) -> anyhow::Result<String> {
     Ok(format!("0x{}", hex::encode(bytes)))
 }
 
-#[derive(serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct TokenScriptResponse {
-    type_code_hash: String,
-    type_hash_type: String,
-    type_args: String,
-}
-
-/// Resolve `token:<type_hash>` to its full type script.
+/// Resolve `token:<type_hash>` to its full type script, from the export.
 ///
-/// The API supplies the candidate script, but the selector is only accepted
-/// once the script hashes back to the requested id — so a wrong or stale script
+/// Deliberately not from the public token endpoint: that endpoint also
+/// accumulates the daily rows, so it fails with a 500 exactly when those rows
+/// are corrupt — which is the case this check exists to investigate. The
+/// export publishes the script from the same pinned read as the rows and
+/// computes nothing.
+///
+/// The export supplies the candidate, but the selector is only accepted once
+/// the script hashes back to the requested id, so a wrong or stale script
 /// cannot redirect the verification onto a different entity.
-fn resolve_token_script(ctx: &CheckContext, type_hash: &str) -> anyhow::Result<Script> {
-    let response: TokenScriptResponse =
-        super::checks::api_get(ctx, &format!("tokens/{type_hash}"))?;
+fn resolve_token_script(exported: &ExportedEntity, type_hash: &str) -> anyhow::Result<Script> {
+    let published = exported.type_script.as_ref().ok_or_else(|| {
+        anyhow!("the export published no type script for {type_hash}: it holds no such entity")
+    })?;
     let script = Script {
-        code_hash: response.type_code_hash,
-        hash_type: response.type_hash_type,
-        args: response.type_args,
+        code_hash: published.code_hash.clone(),
+        hash_type: published.hash_type.clone(),
+        args: published.args.clone(),
     };
     let computed = script_hash(&script)?;
     if !computed.eq_ignore_ascii_case(type_hash) {
@@ -1095,9 +1105,17 @@ impl Check for EntityCapacityHistoryMatchesChain {
                     selector.clone(),
                     "the export of this entity is incomplete".to_string(),
                 )),
-                Some(_) => {
-                    scripts.push((selector.clone(), resolve_token_script(ctx, &selector.id)?))
-                }
+                // An entity the index does not hold has no script to query
+                // history with. That is a coverage gap, not a tool failure:
+                // whether its absence is itself wrong is a different check.
+                Some(exported) if exported.type_script.is_none() => inconclusive.push((
+                    selector.clone(),
+                    "the index holds no such entity, so no chain query can be built".to_string(),
+                )),
+                Some(exported) => scripts.push((
+                    selector.clone(),
+                    resolve_token_script(exported, &selector.id)?,
+                )),
             }
         }
 
@@ -1280,6 +1298,7 @@ mod tests {
             id: "0xaa".to_string(),
             present: Some(true),
             row_count: Some(rows.len() as u64),
+            type_script: None,
             complete: true,
             current_capacity: current_capacity.map(|v| v.to_string()),
             current_knowledge: current_knowledge.map(|v| v.to_string()),

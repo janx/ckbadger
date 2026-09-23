@@ -136,6 +136,13 @@ async fn exports_raw_daily_deltas_as_exact_decimal_strings() {
 
     // The index's own current totals, so the verifier can compare them against
     // the chain's live set rather than against a restatement of these rows.
+    // The type script the selector names, from the same pinned read. The
+    // verifier needs it to query chain history and must not have to ask an
+    // endpoint that also computes aggregates.
+    assert_eq!(entity["typeScript"]["codeHash"], hex0x(&[0xa1; 32]));
+    assert_eq!(entity["typeScript"]["hashType"], "type");
+    assert_eq!(entity["typeScript"]["args"], "0x01");
+
     assert_eq!(entity["currentCapacity"], "9007199254740992");
     assert_eq!(entity["currentKnowledge"], "12344");
 
@@ -176,6 +183,10 @@ async fn an_accumulation_that_cannot_be_computed_is_reported_not_a_server_error(
         .unwrap_or_default()
         .contains("underflow"));
     assert_eq!(
+        entity["typeScript"]["hashType"], "type",
+        "identity survives a corrupt row series; only the totals do not"
+    );
+    assert_eq!(
         entity["daily"].as_array().unwrap().len(),
         2,
         "the rows that prove the corruption must still be exported"
@@ -200,6 +211,10 @@ async fn an_entity_with_no_index_row_reports_present_false() {
     assert_eq!(entity["rowCount"], 0);
     assert_eq!(entity["currentCapacity"], "0");
     assert_eq!(entity["currentKnowledge"], "0");
+    assert!(
+        entity["typeScript"].is_null(),
+        "an absent entity has no script to publish"
+    );
     assert_eq!(
         entity["complete"], true,
         "an absent entity is fully exported: the verifier decides whether absence is a failure"

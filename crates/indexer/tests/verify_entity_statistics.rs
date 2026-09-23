@@ -298,6 +298,7 @@ async fn mock_node_with_reorg(fixture: &ChainFixture, reorg_at_anchor: Option<u6
 /// chain's live cell set.
 fn export_body(
     type_hash: &str,
+    code_hash: &str,
     rows: &[(u32, i128, i128)],
     anchor: u64,
     complete: bool,
@@ -323,6 +324,7 @@ fn export_body(
             "id": type_hash,
             "present": true,
             "rowCount": rows.len(),
+            "typeScript": {"codeHash": code_hash, "hashType": "type", "args": "0x"},
             "complete": complete,
             "currentCapacity": current_capacity.to_string(),
             "currentKnowledge": current_knowledge.to_string(),
@@ -356,19 +358,20 @@ async fn mock_api_with_current(
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/api/v1/verify/entity-statistics"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(export_body(type_hash, rows, anchor, complete, current)),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(export_body(
+            type_hash, code_hash, rows, anchor, complete, current,
+        )))
         .mount(&server)
         .await;
+    // Deliberately NOT mounting /api/v1/tokens/{hash}: the check must build its
+    // chain query from the export alone. On the real testnet store that
+    // endpoint 500s on this very token, because it accumulates the corrupt rows
+    // the check exists to investigate.
     Mock::given(method("GET"))
         .and(path(format!("/api/v1/tokens/{type_hash}")))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "typeScriptHash": type_hash,
-            "typeCodeHash": code_hash,
-            "typeHashType": "type",
-            "typeArgs": "0x",
+        .respond_with(ResponseTemplate::new(500).set_body_json(json!({
+            "error": "internal_error",
+            "message": "owned capacity underflow while accumulating owned capacity",
         })))
         .mount(&server)
         .await;

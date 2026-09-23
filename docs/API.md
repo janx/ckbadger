@@ -750,8 +750,11 @@ writes nothing.
     could not be exported in full
   - `anchorMismatch` — present only when `expectedAnchor` did not match:
     `{expected, actual}`, with nothing exported
-  - `entities[]` — `{kind, id, present, rowCount, complete, currentCapacity,
-    currentKnowledge, currentError, daily}`, where `daily[]` is
+  - `entities[]` — `{kind, id, present, rowCount, typeScript, complete,
+    currentCapacity, currentKnowledge, currentError, daily}`, where
+    `typeScript` is `{codeHash, hashType, args}` read from the same pin (so the
+    verifier can build a chain query without asking an endpoint that computes
+    aggregates), and `daily[]` is
     `{date, capacityDelta, knowledgeDelta}` with every value an exact decimal
     string in shannons. `present`/`rowCount`/`current*` are `null` when the
     state withheld the numbers. `currentCapacity`/`currentKnowledge` accumulate
