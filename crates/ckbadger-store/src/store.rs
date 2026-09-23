@@ -447,6 +447,10 @@ pub const CF_LOCK_SCRIPTS: &str = "lock_scripts";
 pub const CF_ADDR_TXS_BY_PREFIX: &str = "addr_txs_by_prefix";
 /// Per-prefix participation counters for protocol-named parties holding no cell.
 pub const CF_ADDR_PREFIX_STATS: &str = "addr_prefix_stats";
+/// `.cell` names held by a 20-byte owner prefix: owner_hash20 + name_id -> empty.
+pub const CF_DOTCELL_NAME_BY_OWNER: &str = "dotcell_name_by_owner";
+/// One row per `.cell` namespace: the uniqueness ring's root cell.
+pub const CF_DOTCELL_RING: &str = "dotcell_ring";
 
 // Network crawler store column families (mutable / domain-like — NOT append-only).
 // These live in the standalone "network" store class, not in domain or append-only.
@@ -500,6 +504,8 @@ const CF_WRITE_POLICY_FINAL_SNAPSHOT: &[&str] = &[
     CF_CELL_BY_TYPE,
     CF_ADDR_BALANCE,
     CF_ADDR_PREFIX_STATS,
+    CF_DOTCELL_NAME_BY_OWNER,
+    CF_DOTCELL_RING,
     CF_DAO_DEPOSITS,
     CF_DAO_BY_WITHDRAW_TX,
     CF_DAO_BY_BLOCK,
@@ -641,6 +647,8 @@ pub const ALL_CFS: &[&str] = &[
     CF_LOCK_SCRIPTS,
     CF_ADDR_TXS_BY_PREFIX,
     CF_ADDR_PREFIX_STATS,
+    CF_DOTCELL_NAME_BY_OWNER,
+    CF_DOTCELL_RING,
 ];
 
 /// Column families intended for the domain mutable store.
@@ -707,6 +715,8 @@ pub const DOMAIN_CFS: &[&str] = &[
     CF_LOCK_SCRIPTS,
     CF_ADDR_TXS_BY_PREFIX,
     CF_ADDR_PREFIX_STATS,
+    CF_DOTCELL_NAME_BY_OWNER,
+    CF_DOTCELL_RING,
 ];
 
 /// Column families for the append-only store (immutable, hash-keyed cell payloads).
@@ -1705,6 +1715,12 @@ impl CkbadgerStore {
     }
     pub fn cf_addr_prefix_stats(&self) -> &ColumnFamily {
         self.cf(CF_ADDR_PREFIX_STATS)
+    }
+    pub fn cf_dotcell_name_by_owner(&self) -> &ColumnFamily {
+        self.cf(CF_DOTCELL_NAME_BY_OWNER)
+    }
+    pub fn cf_dotcell_ring(&self) -> &ColumnFamily {
+        self.cf(CF_DOTCELL_RING)
     }
 
     // ---- Raw DB operations ----
@@ -2984,7 +3000,7 @@ mod tests {
 
     #[test]
     fn test_domain_schema_has_no_ambiguous_fiber_funding_args_index() {
-        assert_eq!(DOMAIN_CFS.len(), 61);
+        assert_eq!(DOMAIN_CFS.len(), 63);
         assert!(!DOMAIN_CFS.contains(&"fiber_channel_by_funding_args"));
     }
 

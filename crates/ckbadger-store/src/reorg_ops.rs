@@ -4752,6 +4752,7 @@ impl CkbadgerStore {
                 IdentityStandard::DotBit => DOTBIT_SENTINEL_COLLECTION.to_vec(),
                 IdentityStandard::DidCkb => DID_CKB_SENTINEL_COLLECTION.to_vec(),
                 IdentityStandard::BitCell => BIT_CELL_SENTINEL_COLLECTION.to_vec(),
+                IdentityStandard::DotCell => DOTCELL_SENTINEL_COLLECTION.to_vec(),
             };
 
             // Rebuild identity_by_collection index
@@ -4767,6 +4768,7 @@ impl CkbadgerStore {
                         IdentityStandard::DotBit => Some(".bit".to_string()),
                         IdentityStandard::DidCkb => Some("did:ckb".to_string()),
                         IdentityStandard::BitCell => Some(".bit Cell".to_string()),
+                        IdentityStandard::DotCell => Some(".cell".to_string()),
                     },
                     ..Default::default()
                 });

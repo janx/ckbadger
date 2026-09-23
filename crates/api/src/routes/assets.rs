@@ -81,6 +81,7 @@ fn get_collection_aggregate(
                         ckbadger_store::types::IdentityStandard::DotBit => ObjectStandard::Spore,
                         ckbadger_store::types::IdentityStandard::BitCell => ObjectStandard::Spore,
                         ckbadger_store::types::IdentityStandard::DidCkb => ObjectStandard::Spore,
+                        ckbadger_store::types::IdentityStandard::DotCell => ObjectStandard::Spore,
                     },
                     total_count: id_agg.total_count,
                     live_count: id_agg.live_count,

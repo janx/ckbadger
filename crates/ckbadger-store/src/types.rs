@@ -795,6 +795,8 @@ pub enum IdentityStandard {
     BitCell,
     /// did:ckb decentralized identity.
     DidCkb,
+    /// `.cell` (Cells) name.
+    DotCell,
 }
 
 impl IdentityStandard {
@@ -804,6 +806,7 @@ impl IdentityStandard {
             IdentityStandard::DotBit => "dotbit",
             IdentityStandard::BitCell => "bit_cell",
             IdentityStandard::DidCkb => "did_ckb",
+            IdentityStandard::DotCell => "dotcell",
         }
     }
 
@@ -813,6 +816,7 @@ impl IdentityStandard {
             IdentityStandard::DotBit => "dotbit",
             IdentityStandard::BitCell => "bit_cell",
             IdentityStandard::DidCkb => "did_ckb",
+            IdentityStandard::DotCell => "dotcell",
         }
     }
 
@@ -822,6 +826,7 @@ impl IdentityStandard {
             IdentityStandard::DotBit => &DOTBIT_SENTINEL_COLLECTION,
             IdentityStandard::BitCell => &BIT_CELL_SENTINEL_COLLECTION,
             IdentityStandard::DidCkb => &DID_CKB_SENTINEL_COLLECTION,
+            IdentityStandard::DotCell => &DOTCELL_SENTINEL_COLLECTION,
         }
     }
 }
@@ -921,6 +926,26 @@ pub enum IdentityExtra {
     },
     /// did:ckb identity: reserved for future fields.
     DidCkb,
+    /// `.cell` name. Ownership is stored exactly as the chain stores it — two
+    /// 20-byte lock-hash prefixes — and `IdentityEntry.owner_lock_hash` stays
+    /// `None`, because the chain never gives a full hash here.
+    DotCell {
+        /// "alice" or "shop.alice"; `IdentityEntry.name` is this + ".cell".
+        label: String,
+        /// The deployment's type-script args.
+        namespace_args: [u8; 20],
+        layout_version: u8,
+        /// Unix seconds (u40 on chain).
+        expired_at: u64,
+        owner_hash20: [u8; 20],
+        manager_hash20: [u8; 20],
+        next_id: [u8; 20],
+        records_hash: [u8; 32],
+        /// Decoded from the creating transaction's witness, hash-verified.
+        records: Vec<DotCellRecord>,
+        /// `blake2b(label after the first '.')[..20]` for sub-names.
+        parent_id: Option<[u8; 20]>,
+    },
 }
 
 /// An Identity entry stored in the `identity_data` column family.
@@ -937,6 +962,21 @@ pub struct IdentityEntry {
     pub created_at_tx: Vec<u8>,
     /// Standard-specific payload (bincode-serialized, no JSON).
     pub extra: IdentityExtra,
+}
+
+/// The uniqueness-ring root of one `.cell` namespace (spec §1.4).
+///
+/// The root is protocol infrastructure — empty label, zero owner — so it is
+/// never an identity; this row is what lets verify walk the ring from the root
+/// without scanning every name.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DotCellRingRoot {
+    pub root_tx_hash: Vec<u8>,
+    pub root_output_index: i16,
+    /// The root cell's `next` — the first name in id order, or zero when the
+    /// ring holds no names.
+    pub first_id: [u8; 20],
+    pub created_at_block: i64,
 }
 
 /// Pre-aggregated cluster (DOB collection) data, maintained inline by the indexer.

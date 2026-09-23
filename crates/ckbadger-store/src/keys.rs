@@ -1300,6 +1300,98 @@ pub fn encode_identity_owner_prefix(collection_id: &[u8]) -> [u8; 32] {
     pad_id_32(collection_id)
 }
 
+/// Identity owner key for a collection whose chain-level owner is a 20-byte
+/// lock-hash **prefix** (`.cell`): collection_id(32B) + owner20 + 12 zero
+/// bytes, so it shares the fixed 64-byte `CF_STATS_IDENTITY` key width.
+///
+/// The padding is explicit, and the read side decodes it by collection rather
+/// than treating the segment as a lock hash — a 20-byte prefix padded to 32
+/// bytes is NOT a lock hash and must never be served as one.
+pub fn encode_identity_owner20_key(
+    collection_id: &[u8],
+    owner20: &[u8],
+) -> [u8; IDENTITY_OWNER_KEY_SIZE] {
+    assert_key_component_len(
+        "encode_identity_owner20_key",
+        "owner20",
+        owner20.len(),
+        DOTCELL_ID_LEN,
+    );
+    let mut key = [0u8; IDENTITY_OWNER_KEY_SIZE];
+    key[..32].copy_from_slice(&pad_id_32(collection_id));
+    key[32..52].copy_from_slice(owner20);
+    key
+}
+
+/// Read the 20-byte owner prefix back out of a 32-byte owner segment written
+/// by `encode_identity_owner20_key`.
+pub fn decode_identity_owner20(owner_segment: &[u8]) -> [u8; 20] {
+    assert_key_component_len(
+        "decode_identity_owner20",
+        "owner_segment",
+        owner_segment.len(),
+        HASH32_LEN,
+    );
+    assert!(
+        owner_segment[20..].iter().all(|byte| *byte == 0),
+        "decode_identity_owner20: owner segment 0x{} is not a 20-byte prefix padded with zeros",
+        hex::encode(owner_segment)
+    );
+    owner_segment[..20].try_into().expect("20 bytes")
+}
+
+// ---- `.cell` (DotCell) name-by-owner index ----
+
+/// A `.cell` name id, and the owner prefix the chain stores: both 20 bytes.
+pub const DOTCELL_ID_LEN: usize = 20;
+/// `dotcell_name_by_owner` key: owner_hash20(20B) + name_id(20B).
+pub const DOTCELL_NAME_BY_OWNER_KEY_SIZE: usize = 40;
+
+pub fn encode_dotcell_name_by_owner_key(
+    owner20: &[u8],
+    name_id: &[u8],
+) -> [u8; DOTCELL_NAME_BY_OWNER_KEY_SIZE] {
+    assert_key_component_len(
+        "encode_dotcell_name_by_owner_key",
+        "owner20",
+        owner20.len(),
+        DOTCELL_ID_LEN,
+    );
+    assert_key_component_len(
+        "encode_dotcell_name_by_owner_key",
+        "name_id",
+        name_id.len(),
+        DOTCELL_ID_LEN,
+    );
+    let mut key = [0u8; DOTCELL_NAME_BY_OWNER_KEY_SIZE];
+    key[..20].copy_from_slice(owner20);
+    key[20..].copy_from_slice(name_id);
+    key
+}
+
+pub fn encode_dotcell_name_by_owner_prefix(owner20: &[u8]) -> [u8; DOTCELL_ID_LEN] {
+    assert_key_component_len(
+        "encode_dotcell_name_by_owner_prefix",
+        "owner20",
+        owner20.len(),
+        DOTCELL_ID_LEN,
+    );
+    owner20.try_into().expect("20 bytes")
+}
+
+pub fn decode_dotcell_name_by_owner_key(key: &[u8]) -> ([u8; 20], [u8; 20]) {
+    assert_key_component_len(
+        "decode_dotcell_name_by_owner_key",
+        "key",
+        key.len(),
+        DOTCELL_NAME_BY_OWNER_KEY_SIZE,
+    );
+    (
+        key[..20].try_into().expect("20 bytes"),
+        key[20..40].try_into().expect("20 bytes"),
+    )
+}
+
 /// Zero-pad an ID to exactly 32 bytes. IDs shorter than 32 bytes (e.g. mNFT class_id = 24B)
 /// are right-padded with zeros. Panics if the ID exceeds 32 bytes to prevent silent key
 /// collisions from truncation.
@@ -3952,5 +4044,56 @@ mod addr_tx_by_prefix_key_tests {
     #[should_panic(expected = "prefix must be exactly 20 bytes")]
     fn addr_tx_by_prefix_key_rejects_wrong_prefix_width() {
         encode_addr_tx_by_prefix_key(&[0u8; 32], 1, 0, &[0u8; 32]);
+    }
+}
+
+#[cfg(test)]
+mod dotcell_key_tests {
+    use super::*;
+
+    #[test]
+    fn dotcell_name_by_owner_key_is_owner20_then_id20() {
+        let key = encode_dotcell_name_by_owner_key(&[0x11; 20], &[0x22; 20]);
+        assert_eq!(key.len(), DOTCELL_NAME_BY_OWNER_KEY_SIZE);
+        assert_eq!(&key[..20], &[0x11; 20]);
+        assert_eq!(&key[20..], &[0x22; 20]);
+        assert_eq!(
+            decode_dotcell_name_by_owner_key(&key),
+            ([0x11; 20], [0x22; 20])
+        );
+        assert_eq!(encode_dotcell_name_by_owner_prefix(&[0x11; 20]), [0x11; 20]);
+        assert!(key.starts_with(&encode_dotcell_name_by_owner_prefix(&[0x11; 20])));
+    }
+
+    #[test]
+    #[should_panic(expected = "name_id")]
+    fn dotcell_name_by_owner_key_rejects_a_32_byte_id() {
+        encode_dotcell_name_by_owner_key(&[0x11; 20], &[0x22; 32]);
+    }
+
+    #[test]
+    fn identity_owner20_key_pads_explicitly_and_roundtrips() {
+        let key =
+            encode_identity_owner20_key(&crate::types::DOTCELL_SENTINEL_COLLECTION, &[0x33; 20]);
+        assert_eq!(key.len(), IDENTITY_OWNER_KEY_SIZE);
+        assert_eq!(&key[..32], &crate::types::DOTCELL_SENTINEL_COLLECTION[..]);
+        assert_eq!(&key[32..52], &[0x33; 20]);
+        assert_eq!(&key[52..], &[0u8; 12]);
+        assert_eq!(decode_identity_owner20(&key[32..]), [0x33; 20]);
+        assert!(key.starts_with(&encode_identity_owner_prefix(
+            &crate::types::DOTCELL_SENTINEL_COLLECTION
+        )));
+    }
+
+    #[test]
+    #[should_panic(expected = "owner20")]
+    fn identity_owner20_key_rejects_32_bytes() {
+        encode_identity_owner20_key(&crate::types::DOTCELL_SENTINEL_COLLECTION, &[0u8; 32]);
+    }
+
+    #[test]
+    #[should_panic(expected = "not a 20-byte prefix padded with zeros")]
+    fn decode_identity_owner20_rejects_a_real_lock_hash() {
+        decode_identity_owner20(&[0x77; 32]);
     }
 }

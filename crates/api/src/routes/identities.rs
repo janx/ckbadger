@@ -392,6 +392,9 @@ async fn list_identity_collection_items(
             ckbadger_store::types::IdentityStandard::DidCkb => {
                 ckbadger_store::types::ObjectStandard::Spore
             }
+            ckbadger_store::types::IdentityStandard::DotCell => {
+                ckbadger_store::types::ObjectStandard::Spore
+            }
         },
         total_count: agg.total_count,
         live_count: agg.live_count,
