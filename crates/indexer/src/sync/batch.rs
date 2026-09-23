@@ -1,6 +1,6 @@
 #![allow(clippy::type_complexity)]
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::atomic::Ordering;
 use std::time::Instant;
 
@@ -1897,85 +1897,6 @@ impl Indexer {
             }
         }
 
-        // Compute per-tx address entries for addr_txs index.
-        // Defer AddrTxValue construction until participant tags are known: the
-        // actual write is performed after TxActions is built below, where
-        // `tags_by_addr_tx` provides the tag bitmask for `AddrTxValue.tags`.
-        // per_addr: lock_hash -> (output_cap_sum, input_cap_sum, has_outputs, has_inputs)
-        struct PendingAddrTx {
-            lock_hash: Vec<u8>,
-            block_number: i64,
-            tx_index: i32,
-            tx_hash: Vec<u8>,
-            capacity_change: i64,
-            has_in: bool,
-            has_out: bool,
-        }
-        let mut addr_tx_entries: Vec<PendingAddrTx> = Vec::new();
-        for tx_data in &all_tx_data {
-            let mut per_addr: HashMap<Vec<u8>, (i64, i64, bool, bool)> = HashMap::new();
-            for cell in &tx_data.cells {
-                let e = per_addr.entry(cell.lock_script_hash.clone()).or_default();
-                e.0 = e.0.checked_add(cell.capacity).ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "output capacity sum overflow for addr in tx block={}",
-                        tx_data.block_number
-                    )
-                })?;
-                e.2 = true;
-            }
-            if !tx_data.is_cellbase {
-                for input in &tx_data.inputs {
-                    let key = (
-                        input.previous_tx_hash.to_vec(),
-                        parsed_input_outpoint_index_i16(
-                            input.previous_output_index,
-                            "sync_indexer",
-                        )?,
-                    );
-                    let info = input_cell_info
-                        .get(&key)
-                        .or_else(|| batch_cell_infos.get(&key));
-                    let info = info.ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "missing input cell info for addr_txs: tx=0x{}, input_prev_tx=0x{}, output_index={}, block={}",
-                            hex::encode(tx_data.hash),
-                            hex::encode(input.previous_tx_hash),
-                            input.previous_output_index,
-                            tx_data.block_number
-                        )
-                    })?;
-                    let e = per_addr.entry(info.lock_script_hash.clone()).or_default();
-                    e.1 = e.1.checked_add(info.capacity).ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "input capacity sum overflow for addr in tx block={}",
-                            tx_data.block_number
-                        )
-                    })?;
-                    e.3 = true;
-                }
-            }
-            for (lock_hash, (out_cap, in_cap, has_out, has_in)) in per_addr {
-                let capacity_change = out_cap.checked_sub(in_cap).ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "capacity_change overflow: out={} in={} block={}",
-                        out_cap,
-                        in_cap,
-                        tx_data.block_number
-                    )
-                })?;
-                addr_tx_entries.push(PendingAddrTx {
-                    lock_hash,
-                    block_number: tx_data.block_number,
-                    tx_index: tx_data.tx_index,
-                    tx_hash: tx_data.hash.to_vec(),
-                    capacity_change,
-                    has_in,
-                    has_out,
-                });
-            }
-        }
-
         let block_refs: Vec<&crate::parser::block::ParsedBlock> =
             all_parsed_blocks.iter().collect();
         // Pass 4: Proposals (iterates all_parsed_blocks, spawns background cache task)
@@ -2221,9 +2142,6 @@ impl Indexer {
                 )
             })
         })?;
-
-        // addr_tx writes are deferred until participant tags are known (see
-        // tags_by_addr_tx construction during TxActions processing below).
 
         // Group A: DAO processing
         {
@@ -3335,16 +3253,22 @@ impl Indexer {
         )?;
 
         // Activity writes (live sync)
-        let protocol_detectors: Vec<Box<dyn crate::db::writer::activities::ProtocolDetector>> =
-            crate::db::writer::activities::production_detectors(self.config.is_mainnet())
-                .into_iter()
-                .filter(|d| d.might_apply_batch(&batch_lock_code_hashes, &batch_type_code_hashes))
-                .collect();
+        #[allow(unused_mut)]
+        let mut protocol_detectors: Vec<
+            Box<dyn crate::db::writer::activities::ProtocolDetector>,
+        > = crate::db::writer::activities::production_detectors(self.config.is_mainnet())
+            .into_iter()
+            .filter(|d| d.might_apply_batch(&batch_lock_code_hashes, &batch_type_code_hashes))
+            .collect();
+        #[cfg(test)]
+        protocol_detectors
+            .extend(crate::db::writer::activities::test_detector_override::extra_detectors());
         let mut activity_batch = StoreBatch::new(self.writer.store());
-        // Per-(block, tx_idx, lock_hash) participant tag bitmap. Populated as
-        // TxActions are built below, then consumed by the deferred addr_tx
-        // write loop so each `AddrTxValue.tags` matches its TxActions sibling.
-        let mut tags_by_addr_tx: HashMap<(i64, i32, Vec<u8>), u16> = HashMap::new();
+        // Standalone protocol-named participations, per 20-byte prefix:
+        // (first block in this batch that named it, count). The block is where
+        // the counter's undo pre-image is recorded, so rolling back to a block
+        // inside this batch reverses exactly what was written after it.
+        let mut prefix_tx_counts: BTreeMap<[u8; 20], (i64, i64)> = BTreeMap::new();
         {
             let mut block_tx_idx = 0usize;
             for parsed in all_parsed_blocks {
@@ -3398,23 +3322,55 @@ impl Indexer {
                     })
                     .collect::<Result<Vec<_>>>()?;
 
-                let tx_actions_list = crate::db::writer::activities::build_tx_actions_for_block(
+                let built_list = crate::db::writer::activities::build_tx_actions_for_block_with_io(
                     &tx_views,
                     &protocol_detectors,
                 )?;
 
-                for tx_actions in &tx_actions_list {
-                    // Capture participant tags so the deferred addr_tx writes
-                    // populate AddrTxValue.tags consistently with TxActions.
-                    for participant in &tx_actions.participants {
-                        tags_by_addr_tx.insert(
-                            (
-                                tx_actions.block_number,
-                                tx_actions.tx_index,
-                                participant.id.as_bytes().to_vec(),
-                            ),
-                            participant.tags,
-                        );
+                for built in &built_list {
+                    let tx_actions = &built.actions;
+                    // addr_txs rows follow the participants — the ONE derivation,
+                    // shared with bulk build and the tx-pool mirror. Cellbase is
+                    // included: it has participants (its output locks) even though
+                    // it gets no CF_TX_ACTIONS row.
+                    for (id, value) in crate::db::writer::participant_rows::addr_tx_rows(
+                        tx_actions,
+                        &built.participant_io,
+                    )? {
+                        match id {
+                            ParticipantId::Lock(hash) => batch_undo_seq.with(|undo_seq| {
+                                put_addr_tx(
+                                    &mut append_history_batch,
+                                    undo_seq,
+                                    &hash,
+                                    tx_actions.block_number,
+                                    tx_actions.tx_index,
+                                    &tx_actions.tx_hash,
+                                    &value,
+                                )
+                            }),
+                            ParticipantId::LockPrefix(prefix) => batch_undo_seq.with(|undo_seq| {
+                                put_addr_tx_by_prefix(
+                                    &mut append_history_batch,
+                                    undo_seq,
+                                    &prefix,
+                                    tx_actions.block_number,
+                                    tx_actions.tx_index,
+                                    &tx_actions.tx_hash,
+                                    &value,
+                                )
+                            }),
+                        }
+                    }
+                    for prefix in crate::db::writer::participant_rows::standalone_prefixes(
+                        tx_actions,
+                        &built.participant_io,
+                    ) {
+                        let entry = prefix_tx_counts
+                            .entry(prefix)
+                            .or_insert((tx_actions.block_number, 0));
+                        entry.0 = entry.0.min(tx_actions.block_number);
+                        entry.1 += 1;
                     }
 
                     // Accumulate daily activity stats
@@ -3478,36 +3434,54 @@ impl Indexer {
             }
         }
 
-        // Deferred addr_tx writes. Each entry pairs with a TxActions participant
-        // populated above; the participant's tag bitmap drives `AddrTxValue.tags`.
-        for entry in &addr_tx_entries {
-            let tags = *tags_by_addr_tx
-                .get(&(entry.block_number, entry.tx_index, entry.lock_hash.clone()))
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "missing participant tags for addr_tx: block={}, tx_idx={}, lock_hash=0x{}",
-                        entry.block_number,
-                        entry.tx_index,
-                        hex::encode(&entry.lock_hash)
+        // Per-prefix participation counters. Read-modify-write against the
+        // committed value, with the pre-image recorded on the first block in
+        // this batch that touched the key — the same contract EntityStats uses,
+        // so a rollback into the middle of a batch is exact.
+        let bulk_sync_active = self.is_bulk_sync_active();
+        for (prefix, (first_block, delta)) in &prefix_tx_counts {
+            let previous = self.writer.store().get_addr_prefix_stats(prefix)?;
+            let previous_bytes = previous
+                .as_ref()
+                .map(bincode::serialize)
+                .transpose()
+                .map_err(|e| {
+                    anyhow!(
+                        "failed to serialize AddrPrefixStats pre-image: prefix=0x{}, error={}",
+                        hex::encode(prefix),
+                        e
                     )
                 })?;
-            let addr_tx_value = ckbadger_store::types::AddrTxValue::new(
-                entry.capacity_change,
-                entry.has_in,
-                entry.has_out,
-                tags,
-            );
-            batch_undo_seq.with(|undo_seq| {
-                put_addr_tx(
-                    &mut append_history_batch,
-                    undo_seq,
-                    &entry.lock_hash,
-                    entry.block_number,
-                    entry.tx_index,
-                    &entry.tx_hash,
-                    &addr_tx_value,
-                )
-            });
+            let next = ckbadger_store::types::AddrPrefixStats {
+                txs_count: previous
+                    .map(|s| s.txs_count)
+                    .unwrap_or(0)
+                    .checked_add(*delta)
+                    .ok_or_else(|| {
+                        anyhow!(
+                            "addr_prefix_stats txs_count overflow: prefix=0x{}, delta={}",
+                            hex::encode(prefix),
+                            delta
+                        )
+                    })?,
+            };
+            if !bulk_sync_active {
+                let seq = batch_undo_seq.next(
+                    *first_block,
+                    crate::sync::types::UndoSeqScope::AddrPrefixStats,
+                );
+                domain_analytics_batch.put_reorg_undo_log_by_block(
+                    *first_block,
+                    seq,
+                    &ckbadger_store::types::UndoLogEntry::KeyMutation {
+                        target_store: ckbadger_store::types::UndoLogStoreTarget::Domain,
+                        cf_name: ckbadger_store::CF_ADDR_PREFIX_STATS.to_string(),
+                        key: prefix.to_vec(),
+                        previous_value: previous_bytes,
+                    },
+                );
+            }
+            domain_analytics_batch.put_addr_prefix_stats(prefix, &next);
         }
 
         // Every entity daily/hourly key this batch touched is written exactly
@@ -6745,6 +6719,314 @@ mod tests {
                 stored_fee(&store, [0xd3; 32]),
                 expected_fee,
                 "phase-2 tx with extra plain inputs must have its fee recomputed with compensation"
+            );
+        }
+
+        // ---- Phase 1a: participant-derived addr_txs rows ----
+
+        fn lock_script_b() -> Script {
+            Script {
+                code_hash: SECP_CODE_HASH.to_string(),
+                hash_type: "type".to_string(),
+                args: format!("0x{}", "02".repeat(20)),
+            }
+        }
+
+        fn lock_script_c() -> Script {
+            Script {
+                code_hash: SECP_CODE_HASH.to_string(),
+                hash_type: "type".to_string(),
+                args: format!("0x{}", "03".repeat(20)),
+            }
+        }
+
+        /// Spend `prev_tx`'s output 0 into `to`, keeping a 1 CKB fee.
+        fn transfer_tx(
+            hash_byte: u8,
+            prev_tx_hash_byte: u8,
+            capacity: u64,
+            to: Script,
+        ) -> TransactionView {
+            TransactionView {
+                hash: format!("0x{}", hex::encode([hash_byte; 32])),
+                version: "0x0".to_string(),
+                cell_deps: vec![],
+                header_deps: vec![],
+                inputs: vec![CellInput {
+                    since: "0x0".to_string(),
+                    previous_output: OutPoint {
+                        tx_hash: format!("0x{}", hex::encode([prev_tx_hash_byte; 32])),
+                        index: "0x0".to_string(),
+                    },
+                }],
+                outputs: vec![CellOutput {
+                    capacity: format!("0x{:x}", capacity),
+                    lock: to,
+                    type_: None,
+                }],
+                outputs_data: vec!["0x".to_string()],
+                witnesses: vec![],
+            }
+        }
+
+        /// The prefix the injected detector names. Deliberately unrelated to any
+        /// lock in the fixtures, so it stays a standalone participant.
+        const NAMED_PREFIX: [u8; 20] = [0x77; 20];
+
+        fn naming_detectors() -> Vec<Box<dyn crate::db::writer::activities::ProtocolDetector>> {
+            vec![Box::new(
+                crate::db::writer::activities::test_detectors::NamingDetector {
+                    id: ckbadger_store::types::ParticipantId::LockPrefix(NAMED_PREFIX),
+                    delta_negative: false,
+                    roles: ckbadger_store::types::participant_roles::OWNER_TO,
+                },
+            )]
+        }
+
+        fn addr_tx_keys(store: &CkbadgerStore) -> Vec<(Vec<u8>, i64, i32)> {
+            let mut out = Vec::new();
+            for item in store.iterator_cf(store.cf_addr_txs(), rocksdb::IteratorMode::Start) {
+                let (key, _) = item.unwrap();
+                let (lock_hash, block_num, tx_idx, _) =
+                    ckbadger_store::keys::decode_addr_tx_key(&key);
+                out.push((lock_hash, block_num, tx_idx));
+            }
+            out.sort();
+            out
+        }
+
+        fn prefix_rows(
+            store: &CkbadgerStore,
+        ) -> Vec<([u8; 20], i64, i32, ckbadger_store::types::AddrTxValue)> {
+            let mut out = Vec::new();
+            for item in
+                store.iterator_cf(store.cf_addr_txs_by_prefix(), rocksdb::IteratorMode::Start)
+            {
+                let (key, value) = item.unwrap();
+                let (prefix, block_num, tx_idx, _) =
+                    ckbadger_store::keys::decode_addr_tx_by_prefix_key(&key);
+                out.push((
+                    prefix,
+                    block_num,
+                    tx_idx,
+                    bincode::deserialize(&value).unwrap(),
+                ));
+            }
+            out.sort_by_key(|(p, b, t, _)| (*p, *b, *t));
+            out
+        }
+
+        /// Every `CF_ADDR_PREFIX_STATS` undo entry, as (block, previous_value).
+        fn prefix_stats_undo_entries(store: &CkbadgerStore) -> Vec<(i64, Option<Vec<u8>>)> {
+            let mut out = Vec::new();
+            for item in store.iterator_cf(
+                store.cf_reorg_undo_log_by_block(),
+                rocksdb::IteratorMode::Start,
+            ) {
+                let (key, value) = item.unwrap();
+                let (block_num, _seq) = ckbadger_store::keys::decode_reorg_undo_log_key(&key);
+                let entry: ckbadger_store::types::UndoLogEntry =
+                    bincode::deserialize(&value).unwrap();
+                if let ckbadger_store::types::UndoLogEntry::KeyMutation {
+                    cf_name,
+                    key: mutated_key,
+                    previous_value,
+                    ..
+                } = entry
+                {
+                    if cf_name == ckbadger_store::CF_ADDR_PREFIX_STATS {
+                        assert_eq!(mutated_key, NAMED_PREFIX.to_vec());
+                        out.push((block_num, previous_value));
+                    }
+                }
+            }
+            out.sort();
+            out
+        }
+
+        #[tokio::test]
+        async fn live_writes_rows_for_every_participant_and_counts_prefix_participations() {
+            let _guard =
+                crate::db::writer::activities::test_detector_override::install(naming_detectors);
+            let dir = tempfile::tempdir().unwrap();
+            let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+            let indexer = indexer_for_live_write_test(store.clone());
+            store
+                .set_secondary_epoch_reward(61_369_863_013_698)
+                .unwrap();
+
+            let lock_a = crate::parser::ScriptParser::compute_script_hash(&lock_script());
+            let lock_b = crate::parser::ScriptParser::compute_script_hash(&lock_script_b());
+
+            // Block 100 funds lock A through its cellbase.
+            write_live_block(
+                &indexer,
+                block(100, AR_DEPOSIT, vec![cellbase_tx(0xc0, FUNDING_CAPACITY)]),
+            )
+            .await
+            .unwrap();
+
+            // Block 101: cellbase + a transfer A -> B. The injected detector
+            // names a party that holds no cell anywhere in the transaction.
+            write_live_block(
+                &indexer,
+                block(
+                    101,
+                    AR_DEPOSIT,
+                    vec![
+                        cellbase_tx(0xc1, 100_000_000),
+                        transfer_tx(0xd1, 0xc0, FUNDING_CAPACITY - 100_000_000, lock_script_b()),
+                    ],
+                ),
+            )
+            .await
+            .unwrap();
+
+            assert_eq!(
+                addr_tx_keys(&store),
+                vec![
+                    (lock_a.clone(), 100, 0),
+                    (lock_a.clone(), 101, 0),
+                    (lock_a.clone(), 101, 1),
+                    (lock_b.clone(), 101, 1),
+                ],
+                "one addr_txs row per cell participant, cellbase included"
+            );
+
+            let prefix = prefix_rows(&store);
+            assert_eq!(prefix.len(), 1, "exactly the named party's row: {prefix:?}");
+            assert_eq!(
+                (prefix[0].0, prefix[0].1, prefix[0].2),
+                (NAMED_PREFIX, 101, 1)
+            );
+            assert_eq!(
+                prefix[0].3.flags,
+                ckbadger_store::types::AddrTxValue::TX_TYPE_NAMED
+            );
+            assert_eq!(prefix[0].3.capacity_change, 0);
+            assert_ne!(prefix[0].3.tags & ckbadger_store::types::TAG_IDENTITY, 0);
+            assert_ne!(prefix[0].3.tags & ckbadger_store::types::TAG_PROTOCOL, 0);
+
+            assert_eq!(
+                store
+                    .get_addr_prefix_stats(&NAMED_PREFIX)
+                    .unwrap()
+                    .unwrap()
+                    .txs_count,
+                1
+            );
+            assert_eq!(
+                store.get_addr_balance(&lock_a).unwrap().unwrap().txs_count,
+                3,
+                "addr_balance keeps counting only cell participations"
+            );
+            assert_eq!(
+                store
+                    .address_tx_count(&lock_a.clone().try_into().unwrap())
+                    .unwrap(),
+                3
+            );
+
+            // Unique-address sets never carry a named prefix.
+            let date =
+                ckbadger_store::keys::timestamp_ms_to_date(1_700_000_000_000i64 + 101 * 1000)
+                    .to_string();
+            let raw = store
+                .get_cf(
+                    store.cf_stats_chain(),
+                    &ckbadger_store::keys::encode_stats_key(
+                        ckbadger_store::keys::stats_prefix::ACTIVITY_DAILY_ADDR_SET,
+                        date.as_bytes(),
+                    ),
+                )
+                .unwrap()
+                .expect("daily addr set row");
+            assert!(
+                raw.len().is_multiple_of(32),
+                "addr set row must be whole hashes"
+            );
+            let set: std::collections::HashSet<[u8; 32]> = raw
+                .chunks_exact(32)
+                .map(|c| <[u8; 32]>::try_from(c).unwrap())
+                .collect();
+            let mut expected = std::collections::HashSet::new();
+            expected.insert(<[u8; 32]>::try_from(lock_a.as_slice()).unwrap());
+            expected.insert(<[u8; 32]>::try_from(lock_b.as_slice()).unwrap());
+            assert_eq!(set, expected);
+
+            assert_eq!(
+                prefix_stats_undo_entries(&store),
+                vec![(101, None)],
+                "the first write of a prefix counter records a None pre-image"
+            );
+        }
+
+        #[tokio::test]
+        async fn live_second_block_increments_prefix_stats_with_previous_value_in_undo() {
+            let _guard =
+                crate::db::writer::activities::test_detector_override::install(naming_detectors);
+            let dir = tempfile::tempdir().unwrap();
+            let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+            let indexer = indexer_for_live_write_test(store.clone());
+            store
+                .set_secondary_epoch_reward(61_369_863_013_698)
+                .unwrap();
+
+            write_live_block(
+                &indexer,
+                block(100, AR_DEPOSIT, vec![cellbase_tx(0xc0, FUNDING_CAPACITY)]),
+            )
+            .await
+            .unwrap();
+            write_live_block(
+                &indexer,
+                block(
+                    101,
+                    AR_DEPOSIT,
+                    vec![
+                        cellbase_tx(0xc1, 100_000_000),
+                        transfer_tx(0xd1, 0xc0, FUNDING_CAPACITY - 100_000_000, lock_script_b()),
+                    ],
+                ),
+            )
+            .await
+            .unwrap();
+            write_live_block(
+                &indexer,
+                block(
+                    102,
+                    AR_DEPOSIT,
+                    vec![
+                        cellbase_tx(0xc2, 100_000_000),
+                        transfer_tx(0xd2, 0xd1, FUNDING_CAPACITY - 200_000_000, lock_script_c()),
+                    ],
+                ),
+            )
+            .await
+            .unwrap();
+
+            assert_eq!(
+                store
+                    .get_addr_prefix_stats(&NAMED_PREFIX)
+                    .unwrap()
+                    .unwrap()
+                    .txs_count,
+                2
+            );
+            assert_eq!(
+                prefix_stats_undo_entries(&store),
+                vec![
+                    (101, None),
+                    (
+                        102,
+                        Some(
+                            bincode::serialize(&ckbadger_store::types::AddrPrefixStats {
+                                txs_count: 1
+                            })
+                            .unwrap()
+                        )
+                    ),
+                ]
             );
         }
     }

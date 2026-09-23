@@ -166,6 +166,22 @@ pub(crate) fn put_addr_tx(
     batch.put_addr_tx(lock_hash, block_num, tx_idx, tx_hash, value);
 }
 
+/// `addr_txs_by_prefix` row for a protocol-named party.
+///
+/// Domain store, append-only semantics, no undo entry: rollback deletes the row
+/// outright — exactly like [`put_addr_tx`].
+pub(crate) fn put_addr_tx_by_prefix(
+    batch: &mut StoreBatch<'_>,
+    _undo_seq_by_block: &mut HashMap<i64, u64>,
+    prefix: &[u8],
+    block_num: i64,
+    tx_idx: i32,
+    tx_hash: &[u8],
+    value: &ckbadger_store::types::AddrTxValue,
+) {
+    batch.put_addr_tx_by_prefix(prefix, block_num, tx_idx, tx_hash, value);
+}
+
 pub(crate) fn put_tx_actions(
     batch: &mut StoreBatch<'_>,
     _undo_seq_by_block: &mut HashMap<i64, u64>,

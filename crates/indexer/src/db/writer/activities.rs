@@ -273,6 +273,46 @@ pub struct BuiltTxActions {
     pub participant_io: Vec<ParticipantIo>,
 }
 
+/// Lets a test install extra detectors for the live and bulk write paths.
+///
+/// Phase 1a ships no production detector that names participants, so the only
+/// way to exercise the named-party write paths end to end is to inject one.
+/// Compiled only under `cfg(test)`; production assembles its detector list from
+/// [`production_detectors`] alone.
+#[cfg(test)]
+pub(crate) mod test_detector_override {
+    use super::ProtocolDetector;
+    use std::sync::{Mutex, MutexGuard};
+
+    type Factory = fn() -> Vec<Box<dyn ProtocolDetector>>;
+
+    static FACTORY: Mutex<Option<Factory>> = Mutex::new(None);
+    /// Held for the lifetime of a [`Guard`] so two tests never install at once.
+    static SERIAL: Mutex<()> = Mutex::new(());
+
+    pub(crate) struct Guard(#[allow(dead_code)] MutexGuard<'static, ()>);
+
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            *FACTORY.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        }
+    }
+
+    #[must_use = "the override is uninstalled when the guard drops"]
+    pub(crate) fn install(factory: Factory) -> Guard {
+        let serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        *FACTORY.lock().unwrap_or_else(|e| e.into_inner()) = Some(factory);
+        Guard(serial)
+    }
+
+    pub(crate) fn extra_detectors() -> Vec<Box<dyn ProtocolDetector>> {
+        match *FACTORY.lock().unwrap_or_else(|e| e.into_inner()) {
+            Some(factory) => factory(),
+            None => Vec::new(),
+        }
+    }
+}
+
 /// Detectors that exist only to drive the participant-model tests.
 ///
 /// Phase 1a ships no production detector that names participants, so the live
@@ -296,8 +336,8 @@ pub(crate) mod test_detectors {
     }
 
     impl ProtocolDetector for NamingDetector {
-        fn might_apply(&self, _tx: &TxView<'_>) -> bool {
-            true
+        fn might_apply(&self, tx: &TxView<'_>) -> bool {
+            !tx.is_cellbase
         }
 
         fn detect(
