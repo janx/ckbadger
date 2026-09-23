@@ -206,6 +206,62 @@ impl PoolSnapshot {
         }
     }
 
+    /// Build a snapshot from records: the participant index, its ordering, and
+    /// the status counts are derived here and nowhere else, so the refresh loop
+    /// and any test fixture produce the same shape.
+    ///
+    /// `by_lock` is newest `time_added_to_pool` first. A pool transaction can
+    /// only land in a future block, so it sorts above every committed row
+    /// regardless of block timestamps; the tx hash breaks ties so the order is
+    /// deterministic.
+    pub fn from_records(records: Vec<Arc<PoolTxRecord>>, status: MirrorStatus) -> Self {
+        let mut status = status;
+        status.pending = 0;
+        status.proposed = 0;
+        status.awaiting_index = 0;
+        status.partial = 0;
+
+        let mut by_lock: HashMap<[u8; 32], Vec<[u8; 32]>> = HashMap::new();
+        let mut by_hash: HashMap<[u8; 32], Arc<PoolTxRecord>> =
+            HashMap::with_capacity(records.len());
+
+        for record in records {
+            match record.pool_status {
+                PoolStatus::Pending => status.pending += 1,
+                PoolStatus::Proposed => status.proposed += 1,
+                PoolStatus::CommittedAwaitingIndex { .. } => status.awaiting_index += 1,
+            }
+            if record.interpretation.is_partial() {
+                status.partial += 1;
+            }
+            for participant in &record.participants {
+                by_lock
+                    .entry(participant.lock_hash)
+                    .or_default()
+                    .push(record.tx_hash);
+            }
+            by_hash.insert(record.tx_hash, record);
+        }
+
+        for hashes in by_lock.values_mut() {
+            hashes.sort_by(|a, b| {
+                let time_of = |hash: &[u8; 32]| {
+                    by_hash
+                        .get(hash)
+                        .map(|record| record.entry.time_added_to_pool_ms)
+                        .unwrap_or(0)
+                };
+                time_of(b).cmp(&time_of(a)).then_with(|| a.cmp(b))
+            });
+        }
+
+        Self {
+            records: by_hash,
+            by_lock,
+            status,
+        }
+    }
+
     pub fn records_for_lock(&self, lock_hash: &[u8]) -> Vec<Arc<PoolTxRecord>> {
         let Ok(lock_hash) = <[u8; 32]>::try_from(lock_hash) else {
             return Vec::new();

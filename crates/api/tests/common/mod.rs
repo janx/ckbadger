@@ -173,8 +173,20 @@ pub fn test_app_state(config: AppConfig) -> Arc<AppState> {
 }
 
 pub fn create_router_without_warmup(config: AppConfig) -> axum::Router {
-    let state = test_app_state(config);
+    router_from_state(test_app_state(config))
+}
 
+/// Mount the route stack over a state the test still holds — so it can install
+/// a tx-pool snapshot first — and warm the caches the way `create_router` does
+/// for tests, so warmup-gated endpoints answer instead of returning 503.
+pub async fn create_router_with_state(state: Arc<AppState>) -> axum::Router {
+    dispatch_initial_warmup(state.clone(), false).await;
+    router_from_state(state)
+}
+
+/// Mount the production route stack over a state the test still holds, so it
+/// can install a tx-pool snapshot (or any other in-memory state) first.
+pub fn router_from_state(state: Arc<AppState>) -> axum::Router {
     axum::Router::new()
         .nest("/api/v1", api_routes())
         // Same read-view pin production mounts, so integration tests exercise
@@ -491,6 +503,101 @@ pub fn make_test_tx_actions(
             tags,
         }],
     }
+}
+
+/// One mirrored pool transaction for this lock, interpreted and attributed.
+///
+/// Built through the same `AddrTxValue::new` constructor the indexer uses for
+/// committed rows, so a fixture cannot assert a `txType` the production path
+/// would not produce.
+pub fn make_test_pool_record(
+    tx_hash: &[u8],
+    lock_hash: &[u8],
+    ckb_delta: i128,
+    time_added_to_pool_ms: u64,
+    pool_status: ckbadger_api::pool::PoolStatus,
+) -> ckbadger_api::pool::PoolTxRecord {
+    make_test_pool_record_with(
+        tx_hash,
+        lock_hash,
+        ckb_delta,
+        time_added_to_pool_ms,
+        pool_status,
+        0,
+        ckbadger_api::pool::Interpretation::Complete,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn make_test_pool_record_with(
+    tx_hash: &[u8],
+    lock_hash: &[u8],
+    ckb_delta: i128,
+    time_added_to_pool_ms: u64,
+    pool_status: ckbadger_api::pool::PoolStatus,
+    tags: u16,
+    interpretation: ckbadger_api::pool::Interpretation,
+) -> ckbadger_api::pool::PoolTxRecord {
+    let actions = make_test_tx_actions(lock_hash, tx_hash, &[0u8; 32], 0, 0, ckb_delta, tags);
+    let capacity_change = i64::try_from(ckb_delta).expect("test ckb_delta fits i64");
+    ckbadger_api::pool::PoolTxRecord {
+        tx_hash: <[u8; 32]>::try_from(tx_hash).expect("tx hash is 32 bytes"),
+        pool_status,
+        entry: ckbadger_api::pool::PoolEntryMeta {
+            fee: 1_000,
+            size: 500,
+            cycles: 200_000,
+            ancestors_count: 0,
+            time_added_to_pool_ms,
+        },
+        outputs: vec![],
+        actions: Some(actions),
+        participants: vec![ckbadger_api::pool::PoolParticipant {
+            lock_hash: <[u8; 32]>::try_from(lock_hash).expect("lock hash is 32 bytes"),
+            addr_tx: AddrTxValue::new(
+                capacity_change,
+                capacity_change < 0,
+                capacity_change > 0,
+                tags,
+            ),
+        }],
+        inputs_count: 1,
+        outputs_count: 1,
+        semantic_tags: 0,
+        is_cellbase: false,
+        interpretation,
+        first_seen_ms: time_added_to_pool_ms as i64,
+        last_seen_ms: time_added_to_pool_ms as i64,
+    }
+}
+
+/// A healthy published snapshot holding exactly these records.
+pub fn healthy_pool_snapshot(
+    records: Vec<ckbadger_api::pool::PoolTxRecord>,
+) -> ckbadger_api::pool::PoolSnapshot {
+    ckbadger_api::pool::PoolSnapshot::from_records(
+        records.into_iter().map(Arc::new).collect(),
+        ckbadger_api::pool::MirrorStatus {
+            enabled: true,
+            healthy: true,
+            last_polled_at_ms: Some(1_700_000_000_000),
+            ..Default::default()
+        },
+    )
+}
+
+/// A snapshot from a mirror that cannot reach the node.
+pub fn unhealthy_pool_snapshot() -> ckbadger_api::pool::PoolSnapshot {
+    ckbadger_api::pool::PoolSnapshot::from_records(
+        vec![],
+        ckbadger_api::pool::MirrorStatus {
+            enabled: true,
+            healthy: false,
+            last_polled_at_ms: Some(1_700_000_000_000),
+            last_error: Some("connection refused".to_string()),
+            ..Default::default()
+        },
+    )
 }
 
 /// Create a participant delta for multi-participant TxActions.

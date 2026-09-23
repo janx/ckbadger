@@ -8,7 +8,9 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::response::{ok, ApiError, ApiResult};
+use crate::routes::address_presence::{address_presence, AddressPresence};
 use crate::routes::tx_lookup::fetch_transaction_lookup;
+use crate::utils::address::{parse_address_to_script, script_to_address};
 use crate::utils::{
     address_to_lock_script_hash, is_ckb_address, is_known_script_name, is_valid_block_number,
     resolve_script_by_hash, CurrentScriptVersionResolution,
@@ -443,16 +445,38 @@ async fn search(
             }
 
             if scope_allows(scope, &[SearchScope::Address]) {
-                if let Some(ab) = addr_bal {
-                    if ab.total_cells_count > 0 || ab.txs_count > 0 || ab.balance > 0 {
-                        results.push(SearchResult {
-                            result_type: "address".to_string(),
-                            id: hash_query.clone(),
-                            label: format!("Address ({} cells)", ab.total_cells_count),
-                            url: format!("/address/{}", hash_query),
-                            match_kind: "exact_hash".to_string(),
-                        });
+                // A bare 32-byte hash is ambiguous (block, tx, script, lock
+                // hash), so unlike a typed address it only becomes a result
+                // when some source actually knows it — but "knows it" is the
+                // same predicate the address branch uses.
+                let presence = match addr_bal {
+                    Some(ab) if ab.total_cells_count > 0 || ab.txs_count > 0 || ab.balance > 0 => {
+                        AddressPresence::OnChain {
+                            cells: ab.total_cells_count,
+                            txs: ab.txs_count,
+                        }
                     }
+                    _ => {
+                        let pending = if state.pool_mirror.enabled() {
+                            state.pool_mirror.load().pending_count_for_lock(&hash_bytes)
+                        } else {
+                            0
+                        };
+                        if pending > 0 {
+                            AddressPresence::PoolOnly { pending }
+                        } else {
+                            AddressPresence::None
+                        }
+                    }
+                };
+                if presence.is_known() {
+                    results.push(SearchResult {
+                        result_type: "address".to_string(),
+                        id: hash_query.clone(),
+                        label: presence.label(),
+                        url: format!("/address/{}", hash_query),
+                        match_kind: "exact_hash".to_string(),
+                    });
                 }
             }
 
@@ -546,26 +570,46 @@ async fn search(
         }
     }
 
-    // 3) CKB address lookup
+    // 3) CKB address lookup.
+    //
+    // Every decodable address yields exactly one result. An address page
+    // renders deterministically for any valid lock script, so "no matches
+    // found" for a typed address was never true — it only meant the indexer
+    // had not seen it yet, which is exactly the case a user searching a
+    // brand-new address is in. The label says which of the three states it is.
     if scope_allows(scope, &[SearchScope::Address]) && is_ckb_address(scoped_query) {
+        let script = parse_address_to_script(scoped_query)
+            .map_err(|e| ApiError::bad_request(format!("invalid CKB address: {}", e)))?;
+        // The canonical encoding for the serving network — the same
+        // `script_to_address` path `GET /addresses/{addr}` answers with, so the
+        // hit and the page agree on the address's identity (an uppercase input
+        // canonicalizes to lowercase, a foreign HRP to this network's).
+        let canonical = script_to_address(
+            &script.code_hash,
+            script.hash_type as i16,
+            &script.args,
+            &state.ckb_network,
+        )
+        .map_err(|e| ApiError::bad_request(format!("invalid CKB address: {}", e)))?;
         let lock_hash = address_to_lock_script_hash(scoped_query)
             .map_err(|e| ApiError::bad_request(format!("invalid CKB address: {}", e)))?;
+
         let store = state.store.clone();
-        let addr_balance = tokio::task::spawn_blocking(move || store.get_addr_balance(&lock_hash))
-            .await
-            .map_err(|e| ApiError::internal(e.to_string()))?
-            .map_err(|e| ApiError::internal(e.to_string()))?;
-        if let Some(ab) = addr_balance {
-            if ab.total_cells_count > 0 || ab.txs_count > 0 || ab.balance > 0 {
-                results.push(SearchResult {
-                    result_type: "address".to_string(),
-                    id: scoped_query.to_string(),
-                    label: format!("Address ({} cells)", ab.total_cells_count),
-                    url: format!("/address/{}", scoped_query),
-                    match_kind: "exact_address".to_string(),
-                });
-            }
-        }
+        let mirror = state.pool_mirror.clone();
+        let presence = tokio::task::spawn_blocking(move || {
+            address_presence(store.as_ref(), mirror.as_ref(), &lock_hash)
+        })
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+
+        results.push(SearchResult {
+            result_type: "address".to_string(),
+            id: canonical.clone(),
+            label: presence.label(),
+            url: format!("/address/{}", canonical),
+            match_kind: "exact_address".to_string(),
+        });
     }
 
     // 4) Cell outpoint lookup

@@ -1,6 +1,11 @@
 mod common;
 use common::*;
 
+/// A valid mainnet address that no fixture seeds. Used to assert what search
+/// answers for an address the chain has never seen.
+const UNUSED_ADDRESS: &str =
+    "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqdnnw7qkdnnclfkg59uzn8umtfd2kwxceqxwquc4";
+
 #[tokio::test]
 async fn test_search_empty_db() {
     let store = test_store();
@@ -436,4 +441,149 @@ async fn test_search_exact_script_hash_uses_reference_version_resolution() {
         format!("/script/{}", reference_hash_hex)
     );
     assert_eq!(script_result["label"], "Script SearchableScript");
+}
+
+/// Every decodable CKB address resolves to a page, so searching one always
+/// finds it — including the seconds before a transaction reaches the local
+/// node's pool, and including an address that has never been used.
+#[tokio::test]
+async fn test_search_valid_address_with_no_presence_returns_one_address_result() {
+    let store = test_store();
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/v1/search?q={UNUSED_ADDRESS}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let results = json["results"].as_array().unwrap();
+    assert_eq!(
+        results.len(),
+        1,
+        "a valid address must yield exactly one result so the search bar navigates: {json:?}"
+    );
+    assert_eq!(results[0]["resultType"], "address");
+    assert_eq!(results[0]["label"], "Address (no on-chain activity)");
+    assert_eq!(results[0]["url"], format!("/address/{UNUSED_ADDRESS}"));
+}
+
+/// An address whose only transaction is still in the node's pool is found, and
+/// says so.
+#[tokio::test]
+async fn test_search_pool_only_address_is_labelled_pending() {
+    let store = test_store();
+    let config = test_config(store);
+    let state = test_app_state(config);
+    let lock_hash = ckbadger_api::utils::address::address_to_lock_script_hash(UNUSED_ADDRESS)
+        .expect("fixture address decodes");
+    state
+        .pool_mirror
+        .publish(healthy_pool_snapshot(vec![make_test_pool_record(
+            &[0x01; 32],
+            &lock_hash,
+            10_000_000_000,
+            1_700_000_000_000,
+            ckbadger_api::pool::PoolStatus::Pending,
+        )]));
+    let app = create_router_with_state(state).await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/v1/search?q={UNUSED_ADDRESS}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let results = json["results"].as_array().unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0]["label"], "Address (0 cells, 1 pending)");
+}
+
+/// An address the chain knows is labelled by its cell count, as before.
+#[tokio::test]
+async fn test_search_on_chain_address_reports_its_cell_count() {
+    let store = test_store();
+    let lock_hash = ckbadger_api::utils::address::address_to_lock_script_hash(UNUSED_ADDRESS)
+        .expect("fixture address decodes");
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_addr_balance(
+        &lock_hash,
+        &ckbadger_store::types::AddressBalance {
+            balance: 10_000_000_000,
+            used_capacity: 6_100_000_000,
+            live_cells_count: 2,
+            total_cells_count: 3,
+            txs_count: 5,
+            first_seen_block: 1,
+            first_seen_tx: vec![0x01; 32],
+            last_activity_block: 9,
+            last_activity_tx: vec![0x02; 32],
+        },
+    );
+    batch.commit().unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/v1/search?q={UNUSED_ADDRESS}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let results = json["results"].as_array().unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0]["label"], "Address (3 cells)");
+}
+
+/// The result URL is the canonical encoding for the serving network, not the
+/// text the user typed — the same `script_to_address` path `GET /addresses/{addr}`
+/// answers with, so the search hit and the page agree on the address's identity.
+#[tokio::test]
+async fn test_search_address_result_url_is_the_canonical_encoding() {
+    let store = test_store();
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let shouted = UNUSED_ADDRESS.to_uppercase();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/v1/search?q={shouted}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let results = json["results"].as_array().unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(
+        results[0]["url"],
+        format!("/address/{UNUSED_ADDRESS}"),
+        "an uppercase input must canonicalize to the lowercase bech32m the page uses"
+    );
 }

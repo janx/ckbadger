@@ -1,4 +1,5 @@
 pub(crate) mod activities;
+pub(crate) mod address_presence;
 pub mod assets;
 mod blocks;
 pub(crate) mod cells;

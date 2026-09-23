@@ -566,62 +566,20 @@ impl PoolRefresher {
         entry_errors: Vec<PoolEntryError>,
         truncated: bool,
     ) {
-        let mut pending = 0usize;
-        let mut proposed = 0usize;
-        let mut awaiting_index = 0usize;
-        let mut partial = 0usize;
-        let mut by_lock: HashMap<[u8; 32], Vec<[u8; 32]>> = HashMap::new();
-
-        for record in self.records.values() {
-            match record.pool_status {
-                PoolStatus::Pending => pending += 1,
-                PoolStatus::Proposed => proposed += 1,
-                PoolStatus::CommittedAwaitingIndex { .. } => awaiting_index += 1,
-            }
-            if record.interpretation.is_partial() {
-                partial += 1;
-            }
-            for participant in &record.participants {
-                by_lock
-                    .entry(participant.lock_hash)
-                    .or_default()
-                    .push(record.tx_hash);
-            }
-        }
-
-        // Newest time_added_to_pool first — a pool transaction can only land in
-        // a future block, so it sorts above every committed row regardless of
-        // block timestamps.
-        for hashes in by_lock.values_mut() {
-            hashes.sort_by(|a, b| {
-                let time_of = |hash: &[u8; 32]| {
-                    self.records
-                        .get(hash)
-                        .map(|record| record.entry.time_added_to_pool_ms)
-                        .unwrap_or(0)
-                };
-                time_of(b).cmp(&time_of(a)).then_with(|| a.cmp(b))
-            });
-        }
-
-        self.mirror.publish(PoolSnapshot {
-            records: self.records.clone(),
-            by_lock,
-            status: MirrorStatus {
+        self.mirror.publish(PoolSnapshot::from_records(
+            self.records.values().cloned().collect(),
+            MirrorStatus {
                 enabled: true,
                 healthy: true,
                 last_polled_at_ms: Some(now_ms),
                 last_pool_updated_at: Some(info.last_txs_updated_at),
                 tip_number: Some(info.tip_number),
-                pending,
-                proposed,
-                awaiting_index,
-                partial,
                 truncated,
                 last_error: None,
                 entry_errors,
+                ..MirrorStatus::default()
             },
-        });
+        ));
     }
 
     /// Publish the records we still hold, marked unhealthy with the reason.
