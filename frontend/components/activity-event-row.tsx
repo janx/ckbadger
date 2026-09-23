@@ -594,24 +594,36 @@ function InlineItemDelta({ item }: { item: ItemDelta }) {
   }
 }
 
-/** Single participant line: address + CKB delta + item deltas (L1 + L2). */
+/** Single participant line: party + CKB delta + item deltas (L1 + L2). */
 export function ParticipantLine({ participant }: { participant: ParticipantInfo }) {
   const showCkb = participant.ckbDelta !== '0';
   const addr = participant.address;
-  const isCkbAddr = addr.startsWith('ckb1') || addr.startsWith('ckt1');
+  const isCkbAddr = addr !== null && (addr.startsWith('ckb1') || addr.startsWith('ckt1'));
 
   return (
     <div className="flex items-center justify-between gap-2">
-      <Link
-        href={`/address/${addr}`}
-        className={cn(
-          'shrink-0 font-mono text-xs transition-colors',
-          isCkbAddr ? 'text-jade/80 hover:text-jade' : 'text-text-dim hover:text-aqua'
-        )}
-        onClick={(e) => e.stopPropagation()}
-      >
-        {formatAddress(addr)}
-      </Link>
+      {addr !== null ? (
+        <Link
+          href={`/address/${addr}`}
+          className={cn(
+            'shrink-0 font-mono text-xs transition-colors',
+            isCkbAddr ? 'text-jade/80 hover:text-jade' : 'text-text-dim hover:text-aqua'
+          )}
+          onClick={(e) => e.stopPropagation()}
+        >
+          {formatAddress(addr)}
+        </Link>
+      ) : (
+        // A party the protocol named that no lock script resolves to: show the
+        // prefix the chain recorded, unlinked, rather than inventing an address.
+        <span
+          className="text-text-dim shrink-0 font-mono text-xs"
+          title={participant.lockHashPrefix ?? ''}
+        >
+          {formatAddress(participant.lockHashPrefix ?? '')}
+          <span className="text-text-dim/70 ml-1 text-[10px] uppercase">unresolved</span>
+        </span>
+      )}
       <div className="flex flex-wrap items-center justify-end gap-x-2 gap-y-0.5">
         {showCkb && <CkbDelta delta={participant.ckbDelta} />}
         {participant.itemDeltas.map((item, i) => (

@@ -317,6 +317,7 @@ describe('AddressDetailPage', () => {
           usedDelta: '0',
           isCellbase: false,
           participants: [],
+          roles: [],
           tags: 1,
           typeCalls: [],
           lockCalls: [],
@@ -372,6 +373,7 @@ describe('AddressDetailPage', () => {
           usedDelta: '0',
           isCellbase: false,
           participants: [],
+          roles: [],
           tags: 1,
           typeCalls: [],
           lockCalls: [],
@@ -573,6 +575,7 @@ describe('AddressDetailPage', () => {
           usedDelta: '0',
           isCellbase: false,
           participants: [],
+          roles: [],
           tags: 4,
           typeCalls: [],
           lockCalls: [],
@@ -613,6 +616,7 @@ describe('AddressDetailPage', () => {
           usedDelta: '0',
           isCellbase: false,
           participants: [],
+          roles: [],
           tags: 4,
           typeCalls: [],
           lockCalls: [],
@@ -653,6 +657,7 @@ describe('AddressDetailPage', () => {
           usedDelta: '0',
           isCellbase: false,
           participants: [],
+          roles: [],
           tags: 1,
           itemDeltas: [
             {
@@ -730,6 +735,7 @@ function poolActivityRow() {
     lockCalls: [],
     protocolActions: [],
     participants: [],
+    roles: [],
     tags: 0,
   };
 }

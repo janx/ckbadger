@@ -281,7 +281,8 @@ function renderActivityDetail(activity: GlobalActivity): string {
 function renderGlobalActivityRows(activities: GlobalActivity[]): unknown[][] {
   return activities.map((activity) => {
     const classified = classifyActivity(activity);
-    const addr = activity.participants[0]?.address ?? '';
+    const addr =
+      activity.participants[0]?.address ?? activity.participants[0]?.lockHashPrefix ?? '';
     const ckbDelta = activity.participants[0]?.ckbDelta ?? '0';
     return [
       activity.timestamp,

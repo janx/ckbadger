@@ -645,13 +645,30 @@ interface Activity {
   typeCalls: ActivityTypeCall[];
   lockCalls: ActivityLockCall[];
   protocolActions: ActivityProtocolAction[];
-  participants: string[];
+  /** The OTHER parties of this transaction. */
+  participants: ParticipantRef[];
+  /** Roles the protocol gave this participant, if any. */
+  roles: string[];
   tags: number;
 }
 
 /** Per-participant data within a global activity response. */
-interface ParticipantInfo {
-  address: string;
+/**
+ * One party of a transaction.
+ *
+ * A party a protocol named by the first 20 bytes of its lock hash may not be
+ * resolvable to a full lock hash, so `address` and `lockHash` are nullable and
+ * `lockHashPrefix` is what the chain actually recorded. An unresolved party is
+ * rendered as its prefix, never as a made-up address.
+ */
+interface ParticipantRef {
+  address: string | null;
+  lockHash: string | null;
+  lockHashPrefix: string | null;
+  roles: string[];
+}
+
+interface ParticipantInfo extends ParticipantRef {
   ckbDelta: string;
   usedDelta: string;
   itemDeltas: ItemDelta[];
@@ -1861,6 +1878,7 @@ export type {
   ActivityLockCall,
   ActivityProtocolAction,
   ParticipantInfo,
+  ParticipantRef,
   GlobalActivity,
   GlobalActivityFilter,
   ScriptCountEntry,
