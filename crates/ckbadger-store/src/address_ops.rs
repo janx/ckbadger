@@ -1,7 +1,7 @@
 //! Address balance operations.
 
 use crate::store::CkbadgerStore;
-use crate::types::{AddrTxValue, AddressBalance};
+use crate::types::{AddrPrefixStats, AddrTxValue, AddressBalance, LockScriptEntry};
 
 use crate::bytes_to_hex;
 
@@ -23,6 +23,14 @@ impl CkbadgerStore {
     }
 
     /// List transactions for an address (newest first).
+    ///
+    /// An address participates in a transaction in one of two ways: it held a
+    /// cell (`CF_ADDR_TXS`, keyed by the full lock hash) or a protocol named it
+    /// by its 20-byte lock-hash prefix (`CF_ADDR_TXS_BY_PREFIX`). The builder's
+    /// merge pass guarantees a (party, tx) pair lands in exactly one of the two,
+    /// so this is a plain descending merge of two already-descending scans — a
+    /// position present in both is an upstream invariant violation, not a
+    /// duplicate to dedupe away.
     #[allow(clippy::type_complexity)]
     pub fn list_addr_txs_recent(
         &self,
@@ -39,7 +47,47 @@ impl CkbadgerStore {
         if limit == 0 {
             return Ok(Vec::new());
         }
+        let by_lock = self.list_addr_txs_by_lock_recent(lock_hash, limit, cursor)?;
+        let by_prefix = self.list_addr_txs_by_prefix_recent(&lock_hash[..20], limit, cursor)?;
+        let mut out = Vec::with_capacity(limit);
+        let (mut i, mut j) = (0usize, 0usize);
+        while out.len() < limit && (i < by_lock.len() || j < by_prefix.len()) {
+            let take_lock = match (by_lock.get(i), by_prefix.get(j)) {
+                (Some(l), Some(p)) => {
+                    let (lp, pp) = ((l.0, l.1), (p.0, p.1));
+                    if lp == pp {
+                        anyhow::bail!(
+                            "address 0x{} has the same tx position in both addr_txs and addr_txs_by_prefix: block={}, tx_idx={} — builder merge invariant violated",
+                            bytes_to_hex(lock_hash),
+                            lp.0,
+                            lp.1
+                        );
+                    }
+                    lp > pp // descending: the higher block comes first
+                }
+                (Some(_), None) => true,
+                (None, Some(_)) => false,
+                (None, None) => break,
+            };
+            if take_lock {
+                out.push(by_lock[i].clone());
+                i += 1;
+            } else {
+                out.push(by_prefix[j].clone());
+                j += 1;
+            }
+        }
+        Ok(out)
+    }
 
+    /// The cell-participation half of [`Self::list_addr_txs_recent`].
+    #[allow(clippy::type_complexity)]
+    fn list_addr_txs_by_lock_recent(
+        &self,
+        lock_hash: &[u8],
+        limit: usize,
+        cursor: Option<(i64, i32)>,
+    ) -> anyhow::Result<Vec<(i64, i32, Vec<u8>, AddrTxValue)>> {
         // Descending position keys allow a simple forward prefix scan.
         let start_key = match cursor {
             Some((block_num, tx_idx)) => {
@@ -88,6 +136,181 @@ impl CkbadgerStore {
             }
         }
         Ok(results)
+    }
+
+    /// The protocol-named half of [`Self::list_addr_txs_recent`].
+    #[allow(clippy::type_complexity)]
+    pub fn list_addr_txs_by_prefix_recent(
+        &self,
+        prefix: &[u8],
+        limit: usize,
+        cursor: Option<(i64, i32)>,
+    ) -> anyhow::Result<Vec<(i64, i32, Vec<u8>, AddrTxValue)>> {
+        if prefix.len() != 20 {
+            anyhow::bail!(
+                "list_addr_txs_by_prefix_recent expects a 20-byte lock hash prefix, got {} bytes",
+                prefix.len()
+            );
+        }
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+
+        let start_key = match cursor {
+            Some((block_num, tx_idx)) => {
+                crate::keys::encode_addr_tx_by_prefix_seek_after_key(prefix, block_num, tx_idx)
+            }
+            None => prefix.to_vec(),
+        };
+
+        let iter = self.iterator_cf(
+            self.cf_addr_txs_by_prefix(),
+            rocksdb::IteratorMode::From(&start_key, rocksdb::Direction::Forward),
+        );
+
+        let mut results = Vec::new();
+        for item in iter {
+            let (key, value) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate addr_txs_by_prefix in list_addr_txs_by_prefix_recent: {}",
+                    e
+                )
+            })?;
+            if !key.starts_with(prefix) {
+                break;
+            }
+            if key.len() != crate::keys::ADDR_TX_BY_PREFIX_KEY_SIZE {
+                anyhow::bail!(
+                    "addr_txs_by_prefix key is not {} bytes: len={}, prefix=0x{}",
+                    crate::keys::ADDR_TX_BY_PREFIX_KEY_SIZE,
+                    key.len(),
+                    bytes_to_hex(prefix)
+                );
+            }
+            let (_, block_num, tx_idx, tx_hash) = crate::keys::decode_addr_tx_by_prefix_key(&key);
+            if value.is_empty() {
+                anyhow::bail!(
+                    "empty AddrTxValue for lock_hash_prefix=0x{}, block={}, tx_idx={} — re-sync required",
+                    bytes_to_hex(prefix),
+                    block_num,
+                    tx_idx,
+                );
+            }
+            let addr_tx_value: AddrTxValue = bincode::deserialize(&value).map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to deserialize AddrTxValue: lock_hash_prefix=0x{}, block={}, tx_idx={}, error={}",
+                    bytes_to_hex(prefix),
+                    block_num,
+                    tx_idx,
+                    e
+                )
+            })?;
+            results.push((block_num, tx_idx, tx_hash, addr_tx_value));
+            if results.len() >= limit {
+                break;
+            }
+        }
+        Ok(results)
+    }
+
+    pub fn get_addr_prefix_stats(&self, prefix: &[u8]) -> anyhow::Result<Option<AddrPrefixStats>> {
+        if prefix.len() != 20 {
+            anyhow::bail!(
+                "get_addr_prefix_stats expects a 20-byte lock hash prefix, got {} bytes",
+                prefix.len()
+            );
+        }
+        match self.get_cf(self.cf_addr_prefix_stats(), prefix)? {
+            Some(value) => Ok(Some(bincode::deserialize(&value).map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to deserialize AddrPrefixStats: prefix=0x{}, error={}",
+                    bytes_to_hex(prefix),
+                    e
+                )
+            })?)),
+            None => Ok(None),
+        }
+    }
+
+    /// How many transactions an address took part in.
+    ///
+    /// Cell participations are counted by `addr_balance.txs_count`; participations
+    /// a protocol named without the address holding a cell are counted by
+    /// `addr_prefix_stats`. This is the ONE place the two are added — every
+    /// consumer calls it rather than re-deriving the sum.
+    ///
+    /// `unwrap_or(0)` here means "no row yet", the honest zero for an address the
+    /// index has never seen; a row that exists but is malformed fails in
+    /// `bincode::deserialize` above rather than silently reading as zero.
+    pub fn address_tx_count(&self, lock_hash: &[u8; 32]) -> anyhow::Result<i64> {
+        let cell_part = self
+            .get_addr_balance(lock_hash)?
+            .map(|b| b.txs_count)
+            .unwrap_or(0);
+        let named_part = self
+            .get_addr_prefix_stats(&lock_hash[..20])?
+            .map(|s| s.txs_count)
+            .unwrap_or(0);
+        cell_part.checked_add(named_part).ok_or_else(|| {
+            anyhow::anyhow!(
+                "address_tx_count overflow: lock_hash=0x{}, cell_part={}, named_part={}",
+                bytes_to_hex(lock_hash),
+                cell_part,
+                named_part
+            )
+        })
+    }
+
+    /// Resolve a 20-byte lock-hash prefix to the full lock hash and its script.
+    ///
+    /// `CF_LOCK_SCRIPTS` holds every lock ever seen and is never deleted, so a
+    /// prefix seek over it is the complete answer: 0 hits → unresolved, 1 hit →
+    /// the party, 2+ → an error naming both hashes (a 2^-160 event; guessing
+    /// which one is meant would be inventing data).
+    pub fn resolve_lock_hash_prefix(
+        &self,
+        prefix: &[u8; 20],
+    ) -> anyhow::Result<Option<([u8; 32], LockScriptEntry)>> {
+        let mut hits: Vec<([u8; 32], LockScriptEntry)> = Vec::with_capacity(2);
+        for item in self.prefix_iterator_cf(self.cf_lock_scripts(), prefix) {
+            let (key, value) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate lock_scripts for prefix 0x{}: {}",
+                    bytes_to_hex(prefix),
+                    e
+                )
+            })?;
+            if !key.starts_with(prefix) {
+                break;
+            }
+            if key.len() != 32 {
+                anyhow::bail!(
+                    "lock_scripts key is not 32 bytes: len={}, key=0x{}",
+                    key.len(),
+                    bytes_to_hex(&key)
+                );
+            }
+            let entry: LockScriptEntry = bincode::deserialize(&value).map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to deserialize LockScriptEntry: lock_hash=0x{}, error={}",
+                    bytes_to_hex(&key),
+                    e
+                )
+            })?;
+            let hash: [u8; 32] = key[..]
+                .try_into()
+                .expect("lock_scripts key length checked above");
+            hits.push((hash, entry));
+            if hits.len() == 2 {
+                anyhow::bail!(
+                    "ambiguous lock hash prefix 0x{}: 0x{} and 0x{} both match",
+                    bytes_to_hex(prefix),
+                    bytes_to_hex(&hits[0].0),
+                    bytes_to_hex(&hits[1].0)
+                );
+            }
+        }
+        Ok(hits.pop())
     }
 }
 
@@ -229,5 +452,155 @@ mod tests {
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].3, val_sent);
         assert_eq!(rows[1].3, val_recv);
+    }
+}
+
+#[cfg(test)]
+mod prefix_participation_tests {
+    use super::*;
+    use crate::batch::StoreBatch;
+    use crate::types::{AddrPrefixStats, LockScriptEntry, TAG_IDENTITY};
+    use tempfile::tempdir;
+
+    #[test]
+    fn list_addr_txs_recent_merges_prefix_rows_in_descending_order() {
+        let dir = tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        let lock = [0x42u8; 32];
+        let prefix = &lock[..20];
+        let mut b = StoreBatch::new(&store);
+        b.put_addr_tx(
+            &lock,
+            10,
+            0,
+            &[0xA1; 32],
+            &AddrTxValue::new(5, false, true, 0),
+        );
+        b.put_addr_tx_by_prefix(
+            prefix,
+            11,
+            0,
+            &[0xA2; 32],
+            &AddrTxValue::new(0, false, false, TAG_IDENTITY),
+        );
+        b.put_addr_tx(
+            &lock,
+            12,
+            1,
+            &[0xA3; 32],
+            &AddrTxValue::new(-5, true, false, 0),
+        );
+        // 别人的前缀
+        b.put_addr_tx_by_prefix(
+            &[0x99; 20],
+            13,
+            0,
+            &[0xA4; 32],
+            &AddrTxValue::new(0, false, false, 0),
+        );
+        b.commit().unwrap();
+
+        let rows = store.list_addr_txs_recent(&lock, 10, None).unwrap();
+        let positions: Vec<(i64, i32)> = rows.iter().map(|(b, t, _, _)| (*b, *t)).collect();
+        assert_eq!(positions, vec![(12, 1), (11, 0), (10, 0)]);
+        assert_eq!(rows[1].3.tx_type_str(), "named");
+
+        // 游标同时作用于两路
+        let page = store
+            .list_addr_txs_recent(&lock, 10, Some((12, 1)))
+            .unwrap();
+        let positions: Vec<(i64, i32)> = page.iter().map(|(b, t, _, _)| (*b, *t)).collect();
+        assert_eq!(positions, vec![(11, 0), (10, 0)]);
+        // limit 截断在归并之后
+        assert_eq!(store.list_addr_txs_recent(&lock, 2, None).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn list_addr_txs_recent_rejects_same_position_in_both_indexes() {
+        let dir = tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        let lock = [0x42u8; 32];
+        let mut b = StoreBatch::new(&store);
+        b.put_addr_tx(
+            &lock,
+            10,
+            0,
+            &[0xA1; 32],
+            &AddrTxValue::new(5, false, true, 0),
+        );
+        b.put_addr_tx_by_prefix(
+            &lock[..20],
+            10,
+            0,
+            &[0xA1; 32],
+            &AddrTxValue::new(0, false, false, 0),
+        );
+        b.commit().unwrap();
+        let err = store.list_addr_txs_recent(&lock, 10, None).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("both addr_txs and addr_txs_by_prefix"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn address_tx_count_sums_lock_and_prefix_participations() {
+        let dir = tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        let lock = [0x42u8; 32];
+        let mut b = StoreBatch::new(&store);
+        b.put_addr_balance(
+            &lock,
+            &AddressBalance {
+                txs_count: 3,
+                ..Default::default()
+            },
+        );
+        b.put_addr_prefix_stats(&lock[..20], &AddrPrefixStats { txs_count: 2 });
+        b.commit().unwrap();
+        assert_eq!(store.address_tx_count(&lock).unwrap(), 5);
+        assert_eq!(store.address_tx_count(&[0x43u8; 32]).unwrap(), 0);
+    }
+
+    #[test]
+    fn resolve_lock_hash_prefix_zero_one_many() {
+        let dir = tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        let entry = LockScriptEntry {
+            code_hash: vec![0x11; 32],
+            hash_type: 1,
+            args: vec![0x22; 20],
+        };
+        let a = {
+            let mut h = [0x42u8; 32];
+            h[31] = 1;
+            h
+        };
+        let b2 = {
+            let mut h = [0x42u8; 32];
+            h[31] = 2;
+            h
+        };
+        let mut b = StoreBatch::new(&store);
+        b.put_lock_script(&a, &entry);
+        b.commit().unwrap();
+        assert!(store
+            .resolve_lock_hash_prefix(&[0x43u8; 20])
+            .unwrap()
+            .is_none());
+        let (hash, got) = store
+            .resolve_lock_hash_prefix(&a[..20].try_into().unwrap())
+            .unwrap()
+            .unwrap();
+        assert_eq!(hash, a);
+        assert_eq!(got.args, entry.args);
+        let mut b = StoreBatch::new(&store);
+        b.put_lock_script(&b2, &entry);
+        b.commit().unwrap();
+        let err = store
+            .resolve_lock_hash_prefix(&a[..20].try_into().unwrap())
+            .unwrap_err();
+        assert!(err.to_string().contains("ambiguous"), "{err}");
     }
 }
