@@ -320,6 +320,12 @@ async fn main() -> ExitCode {
 }
 
 fn exit_code_for_error(error: &anyhow::Error) -> u8 {
+    // A verification run already classified itself: `Fail (1) >
+    // Error/Inconclusive (2) > Pass (0)`. Re-deriving that here would give the
+    // suite two disagreeing definitions of "did it pass".
+    if let Some(outcome) = error.downcast_ref::<indexer_verify::VerifyOutcome>() {
+        return outcome.exit_code;
+    }
     if ckbadger_indexer::lifecycle::is_rebuild_required(error) {
         ckbadger_indexer::lifecycle::REBUILD_REQUIRED_EXIT_CODE
     } else {
@@ -335,8 +341,10 @@ async fn run_cli() -> Result<()> {
         .unwrap_or_else(|| std::env::current_dir().expect("cannot determine current directory"));
 
     // Print ASCII banner for all commands except TUI
-    // (TUI manages its own terminal and shows the version in the header).
-    if !matches!(cli.command, Command::Tui) {
+    // (TUI manages its own terminal and shows the version in the header), and
+    // except `verify --format json`, whose stdout must be exactly one
+    // machine-readable document.
+    if !matches!(cli.command, Command::Tui) && !verify_wants_json(&cli.command) {
         print_banner();
     }
 
@@ -1572,6 +1580,14 @@ mod tui_config_tests {
     }
 }
 
+/// Whether this verify invocation must keep stdout free for the JSON document.
+fn verify_wants_json(command: &Command) -> bool {
+    match command {
+        Command::Verify(args) => !args.list_checks && args.format.eq_ignore_ascii_case("json"),
+        _ => false,
+    }
+}
+
 async fn cmd_verify(workdir: &Path, args: &VerifyArgs) -> Result<()> {
     let depth = match args.depth.to_lowercase().as_str() {
         "fast" => indexer_verify::checks::CheckTier::Fast,
@@ -1586,18 +1602,20 @@ async fn cmd_verify(workdir: &Path, args: &VerifyArgs) -> Result<()> {
 
     let targets = resolve_verify_targets(workdir)?;
     reject_multi_network_overrides(&per_network_overrides(args), targets.len(), workdir)?;
-    let show_network = targets.len() > 1;
 
-    for (index, target) in targets.into_iter().enumerate() {
-        // The check registry is identical for every network, so list it once after
-        // all target configs have been validated.
-        if args.list_checks && index > 0 {
-            break;
-        }
-        if show_network && !args.list_checks {
-            println!("[{}] {}", target.network, target.workdir.display());
-        }
+    // The check registry is identical for every network, so list it once after
+    // all target configs have been validated.
+    if args.list_checks {
+        indexer_verify::list_checks();
+        return Ok(());
+    }
 
+    // One run id for the whole invocation, so both networks' evidence lands
+    // under the same directory name and the same envelope.
+    let run_id = indexer_verify::new_run_id();
+    let mut reports = Vec::with_capacity(targets.len());
+
+    for target in targets {
         let network = target.network.clone();
         let verify_args = indexer_verify::VerifyArgs {
             network: network.clone(),
@@ -1611,21 +1629,71 @@ async fn cmd_verify(workdir: &Path, args: &VerifyArgs) -> Result<()> {
             tolerance: args.tolerance,
             format,
             checks: args.checks.clone(),
-            list_checks: args.list_checks,
+            list_checks: false,
             cache_dir: Some(
                 args.cache_dir
                     .clone()
                     .unwrap_or_else(|| target.cache_dir.to_string_lossy().into_owned()),
             ),
+            run_id: Some(run_id.clone()),
+            evidence_dir: Some(
+                target
+                    .workdir
+                    .join("perf")
+                    .join("verify")
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
         };
 
-        tokio::task::spawn_blocking(move || indexer_verify::run(verify_args))
-            .await
-            .with_context(|| format!("verify task failed for network '{network}'"))?
-            .with_context(|| format!("verification failed for network '{network}'"))?;
+        // A network that cannot even start still gets a structured report:
+        // "both networks were checked" must never rest on an early return.
+        let report =
+            match tokio::task::spawn_blocking(move || indexer_verify::run(verify_args)).await {
+                Ok(Ok(report)) => report,
+                Ok(Err(error)) => indexer_verify::VerifyReport::for_failed_start(
+                    &run_id,
+                    &network,
+                    format!("{error:#}"),
+                ),
+                Err(join_error) => indexer_verify::VerifyReport::for_failed_start(
+                    &run_id,
+                    &network,
+                    format!("verify task failed: {join_error}"),
+                ),
+            };
+        reports.push(report);
     }
 
-    Ok(())
+    let run_report = indexer_verify::VerifyRunReport::new(run_id, reports);
+
+    match format {
+        indexer_verify::OutputFormat::Json => {
+            println!("{}", indexer_verify::report::render_json(&run_report))
+        }
+        indexer_verify::OutputFormat::Text => {
+            eprint!(
+                "{}",
+                indexer_verify::report::render_text_summary(&run_report)
+            )
+        }
+    }
+
+    let exit_code = run_report.exit_code();
+    if exit_code == 0 {
+        return Ok(());
+    }
+    Err(indexer_verify::VerifyOutcome {
+        status: run_report.status,
+        exit_code,
+        summary: run_report
+            .networks
+            .iter()
+            .map(|n| format!("{}={}", n.network, n.status))
+            .collect::<Vec<_>>()
+            .join(", "),
+    }
+    .into())
 }
 
 // ---------------------------------------------------------------------------

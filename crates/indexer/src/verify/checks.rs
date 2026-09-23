@@ -56,6 +56,91 @@ impl ProgressReporter {
     }
 }
 
+/// Outcome of one check, as reported and as merged into the process exit code.
+///
+/// The distinction the binary pass/fail pair could not express is between
+/// *evidence of a data inconsistency* and *absence of evidence*: a check that
+/// could not run, ran out of budget, or hit a transport error proves nothing
+/// about the data and must never be rendered as green.
+///
+/// - `Pass` — the whole declared scope of the check was verified and agreed.
+/// - `Fail` — a difference was proven. Exit code 1.
+/// - `Inconclusive` — chain/anchor moved, budget exhausted, adapter unsupported
+///   or the source data was incomplete. Exit code 2.
+/// - `Skipped` — the operator explicitly narrowed the scope (`--checks`,
+///   `--no-explorer`, no `--rpc-url`). Exit code 0, but the scope is incomplete.
+/// - `NotApplicable` — independently proven that the network has no such object.
+/// - `Error` — RPC/response schema, a cursor that does not advance, a bad
+///   parameter, or a local execution failure. Exit code 2.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CheckStatus {
+    Pass,
+    Fail,
+    Inconclusive,
+    Skipped,
+    NotApplicable,
+    Error,
+}
+
+impl CheckStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            CheckStatus::Pass => "pass",
+            CheckStatus::Fail => "fail",
+            CheckStatus::Inconclusive => "inconclusive",
+            CheckStatus::Skipped => "skipped",
+            CheckStatus::NotApplicable => "notApplicable",
+            CheckStatus::Error => "error",
+        }
+    }
+
+    /// Process exit code this status contributes: `Fail (1) > Error/Inconclusive (2) > 0`.
+    ///
+    /// The numeric value is not the merge order — see [`CheckStatus::severity`].
+    pub fn exit_code(self) -> u8 {
+        match self {
+            CheckStatus::Pass | CheckStatus::NotApplicable | CheckStatus::Skipped => 0,
+            CheckStatus::Fail => 1,
+            CheckStatus::Inconclusive | CheckStatus::Error => 2,
+        }
+    }
+
+    /// Merge rank: the highest-ranking status of any check becomes the run's.
+    ///
+    /// `Skipped` shares the lowest rank because an explicit narrowing is not a
+    /// verdict; it is reported through `scopeComplete` instead.
+    pub fn severity(self) -> u8 {
+        match self {
+            CheckStatus::Pass | CheckStatus::NotApplicable | CheckStatus::Skipped => 0,
+            CheckStatus::Inconclusive => 1,
+            CheckStatus::Error => 2,
+            CheckStatus::Fail => 3,
+        }
+    }
+
+    /// Whether this status covered the scope it claimed.
+    ///
+    /// `Skipped`, `Inconclusive` and `Error` all leave part of the declared
+    /// scope unverified, which is reported separately from the status itself.
+    pub fn is_complete(self) -> bool {
+        matches!(
+            self,
+            CheckStatus::Pass | CheckStatus::Fail | CheckStatus::NotApplicable
+        )
+    }
+
+    pub fn is_pass(self) -> bool {
+        self == CheckStatus::Pass
+    }
+}
+
+impl std::fmt::Display for CheckStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
 /// A single finding (mismatch or error) from a check.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct Finding {
@@ -67,11 +152,13 @@ pub struct Finding {
 
 /// Result of running a single check.
 #[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CheckResult {
-    pub passed: bool,
+    pub status: CheckStatus,
     pub items_checked: u64,
     pub items_failed: u64,
-    /// Optional detail message shown on the pass line.
+    /// Optional detail message shown on the result line. For a non-`Pass`
+    /// status this carries the reason or evidence for that status.
     pub detail: Option<String>,
     pub findings: Vec<Finding>,
 }
@@ -79,7 +166,7 @@ pub struct CheckResult {
 impl CheckResult {
     pub fn pass(items_checked: u64) -> Self {
         Self {
-            passed: true,
+            status: CheckStatus::Pass,
             items_checked,
             items_failed: 0,
             detail: None,
@@ -89,7 +176,7 @@ impl CheckResult {
 
     pub fn pass_with_detail(items_checked: u64, detail: impl Into<String>) -> Self {
         Self {
-            passed: true,
+            status: CheckStatus::Pass,
             items_checked,
             items_failed: 0,
             detail: Some(detail.into()),
@@ -100,26 +187,92 @@ impl CheckResult {
     pub fn fail(items_checked: u64, findings: Vec<Finding>) -> Self {
         let items_failed = findings.len() as u64;
         Self {
-            passed: false,
+            status: CheckStatus::Fail,
             items_checked,
             items_failed,
             detail: None,
             findings,
         }
     }
+
+    /// The check could not reach a verdict: the anchor moved, the budget ran
+    /// out, the adapter does not cover this family, or the source was
+    /// incomplete. `reason` must say which, so the run is auditable.
+    pub fn inconclusive(reason: impl Into<String>) -> Self {
+        Self {
+            status: CheckStatus::Inconclusive,
+            items_checked: 0,
+            items_failed: 0,
+            detail: Some(reason.into()),
+            findings: vec![],
+        }
+    }
+
+    /// Independently proven that the network holds no object of this kind.
+    /// `evidence` records the proof; an empty local list is never enough.
+    pub fn not_applicable(evidence: impl Into<String>) -> Self {
+        Self {
+            status: CheckStatus::NotApplicable,
+            items_checked: 0,
+            items_failed: 0,
+            detail: Some(evidence.into()),
+            findings: vec![],
+        }
+    }
+
+    /// Transport, schema, parameter or local execution failure — no statement
+    /// about the data.
+    pub fn error(message: impl Into<String>) -> Self {
+        Self {
+            status: CheckStatus::Error,
+            items_checked: 0,
+            items_failed: 0,
+            detail: Some(message.into()),
+            findings: vec![],
+        }
+    }
+
+    pub fn passed(&self) -> bool {
+        self.status.is_pass()
+    }
 }
 
 /// Completed check with metadata for reporting.
 #[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CompletedCheck {
     pub name: &'static str,
     pub description: &'static str,
     pub tier: String,
-    pub passed: bool,
-    pub skipped: bool,
-    pub skip_reason: Option<String>,
+    pub status: CheckStatus,
+    /// Why this check carries a non-`Pass` status. Required for every status
+    /// other than `Pass` and `Fail` (whose evidence is its findings).
+    pub status_reason: Option<String>,
     pub duration_ms: u64,
     pub result: Option<CheckResult>,
+}
+
+impl CompletedCheck {
+    pub fn passed(&self) -> bool {
+        self.status.is_pass()
+    }
+
+    pub fn skipped(&self) -> bool {
+        self.status == CheckStatus::Skipped
+    }
+
+    /// A check the operator explicitly excluded from an otherwise wider scope.
+    pub fn excluded(check: &dyn Check, reason: impl Into<String>) -> Self {
+        Self {
+            name: check.name(),
+            description: check.description(),
+            tier: check.tier().to_string(),
+            status: CheckStatus::Skipped,
+            status_reason: Some(reason.into()),
+            duration_ms: 0,
+            result: None,
+        }
+    }
 }
 
 /// Core trait every check implements.
@@ -133,6 +286,12 @@ pub trait Check: Send + Sync {
     fn requires_explorer(&self) -> bool {
         false
     }
+    /// Whether this check draws a sample. A sampling check run with
+    /// `--sample-count 0` has nothing to verify, which is a request error, not
+    /// a pass over an empty set.
+    fn requires_sampling(&self) -> bool {
+        self.tier() == CheckTier::Sampling
+    }
     /// Estimated total items (for progress bar length). None = use spinner instead.
     fn estimated_total(&self, _ctx: &CheckContext) -> Option<u64> {
         None
@@ -140,69 +299,74 @@ pub trait Check: Send + Sync {
     fn run(&self, ctx: &CheckContext, progress: &ProgressReporter) -> anyhow::Result<CheckResult>;
 }
 
-/// Run a check and wrap the result with timing and skip logic.
+/// Run a check and wrap the result with timing and its status.
+///
+/// A check that never ran is `Skipped`, a check that could not reach the data
+/// is `Error` — neither is a pass. Only the check's own verdict produces
+/// `Pass`/`Fail`.
 pub fn execute_check(
     check: &dyn Check,
     ctx: &CheckContext,
     progress: &ProgressReporter,
 ) -> CompletedCheck {
-    // Check skip conditions
+    let meta = |status: CheckStatus, reason: Option<String>, duration_ms, result| CompletedCheck {
+        name: check.name(),
+        description: check.description(),
+        tier: check.tier().to_string(),
+        status,
+        status_reason: reason,
+        duration_ms,
+        result,
+    };
+
     if check.requires_rpc() && ctx.rpc_url.is_none() {
-        return CompletedCheck {
-            name: check.name(),
-            description: check.description(),
-            tier: check.tier().to_string(),
-            passed: true,
-            skipped: true,
-            skip_reason: Some("--rpc-url not provided".to_string()),
-            duration_ms: 0,
-            result: None,
-        };
+        return meta(
+            CheckStatus::Skipped,
+            Some("--rpc-url not provided".to_string()),
+            0,
+            None,
+        );
     }
     if check.requires_explorer() && ctx.explorer_url.is_none() {
-        return CompletedCheck {
-            name: check.name(),
-            description: check.description(),
-            tier: check.tier().to_string(),
-            passed: true,
-            skipped: true,
-            skip_reason: Some("--no-explorer or explorer URL not set".to_string()),
-            duration_ms: 0,
-            result: None,
-        };
+        return meta(
+            CheckStatus::Skipped,
+            Some("--no-explorer or explorer URL not set".to_string()),
+            0,
+            None,
+        );
+    }
+    if check.requires_sampling() && ctx.sample_count == 0 {
+        let message = "--sample-count 0 leaves a sampling check nothing to verify".to_string();
+        return meta(
+            CheckStatus::Error,
+            Some(message.clone()),
+            0,
+            Some(CheckResult::error(message)),
+        );
     }
 
     let start = Instant::now();
     let result = check.run(ctx, progress);
-    let duration = start.elapsed();
+    let duration_ms = start.elapsed().as_millis() as u64;
 
     match result {
-        Ok(check_result) => CompletedCheck {
-            name: check.name(),
-            description: check.description(),
-            tier: check.tier().to_string(),
-            passed: check_result.passed,
-            skipped: false,
-            skip_reason: None,
-            duration_ms: duration.as_millis() as u64,
-            result: Some(check_result),
-        },
-        Err(e) => CompletedCheck {
-            name: check.name(),
-            description: check.description(),
-            tier: check.tier().to_string(),
-            passed: false,
-            skipped: false,
-            skip_reason: None,
-            duration_ms: duration.as_millis() as u64,
-            result: Some(CheckResult::fail(
-                0,
-                vec![Finding {
-                    entity: "error".to_string(),
-                    details: vec![format!("Check failed with error: {}", e)],
-                }],
-            )),
-        },
+        Ok(check_result) => {
+            let status = check_result.status;
+            let reason = match status {
+                CheckStatus::Pass | CheckStatus::Fail => None,
+                _ => check_result.detail.clone(),
+            };
+            meta(status, reason, duration_ms, Some(check_result))
+        }
+        Err(e) => {
+            let message = format!("check could not be completed: {e:#}");
+            meta(
+                CheckStatus::Error,
+                Some(message.clone()),
+                duration_ms,
+                Some(CheckResult::error(message)),
+            )
+        }
     }
 }
 
@@ -265,4 +429,203 @@ fn is_warmup_pending_body(body: &str) -> bool {
                 .map(str::to_owned)
         })
         .is_some_and(|error| error == "warmup_pending")
+}
+
+#[cfg(test)]
+mod status_model_tests {
+    use super::*;
+
+    fn ctx(rpc_url: Option<&str>, explorer_url: Option<&str>, sample_count: usize) -> CheckContext {
+        CheckContext {
+            network: "mainnet",
+            api_url: "http://127.0.0.1:1/api/v1".to_string(),
+            rpc_url: rpc_url.map(str::to_string),
+            explorer_url: explorer_url.map(str::to_string),
+            http: reqwest::blocking::Client::builder()
+                .timeout(std::time::Duration::from_millis(50))
+                .build()
+                .unwrap(),
+            sample_count,
+            seed: 42,
+            tolerance: 0.0,
+            cache_dir: None,
+        }
+    }
+
+    struct Stub {
+        tier: CheckTier,
+        rpc: bool,
+        explorer: bool,
+        outcome: fn() -> anyhow::Result<CheckResult>,
+    }
+
+    impl Check for Stub {
+        fn name(&self) -> &'static str {
+            "stub_check"
+        }
+        fn description(&self) -> &'static str {
+            "stub"
+        }
+        fn tier(&self) -> CheckTier {
+            self.tier
+        }
+        fn requires_rpc(&self) -> bool {
+            self.rpc
+        }
+        fn requires_explorer(&self) -> bool {
+            self.explorer
+        }
+        fn run(
+            &self,
+            _ctx: &CheckContext,
+            _progress: &ProgressReporter,
+        ) -> anyhow::Result<CheckResult> {
+            (self.outcome)()
+        }
+    }
+
+    fn stub(tier: CheckTier, outcome: fn() -> anyhow::Result<CheckResult>) -> Stub {
+        Stub {
+            tier,
+            rpc: false,
+            explorer: false,
+            outcome,
+        }
+    }
+
+    fn progress() -> ProgressReporter {
+        ProgressReporter::new(None)
+    }
+
+    #[test]
+    fn exit_codes_follow_the_severity_table() {
+        assert_eq!(CheckStatus::Pass.exit_code(), 0);
+        assert_eq!(CheckStatus::NotApplicable.exit_code(), 0);
+        assert_eq!(CheckStatus::Skipped.exit_code(), 0);
+        assert_eq!(CheckStatus::Fail.exit_code(), 1);
+        assert_eq!(CheckStatus::Inconclusive.exit_code(), 2);
+        assert_eq!(CheckStatus::Error.exit_code(), 2);
+    }
+
+    #[test]
+    fn only_pass_fail_and_not_applicable_complete_the_declared_scope() {
+        assert!(CheckStatus::Pass.is_complete());
+        assert!(CheckStatus::Fail.is_complete());
+        assert!(CheckStatus::NotApplicable.is_complete());
+        assert!(!CheckStatus::Skipped.is_complete());
+        assert!(!CheckStatus::Inconclusive.is_complete());
+        assert!(!CheckStatus::Error.is_complete());
+    }
+
+    #[test]
+    fn constructors_carry_their_status_and_evidence() {
+        assert_eq!(CheckResult::pass(3).status, CheckStatus::Pass);
+        assert_eq!(
+            CheckResult::fail(
+                3,
+                vec![Finding {
+                    entity: "e".into(),
+                    details: vec!["d".into()]
+                }]
+            )
+            .status,
+            CheckStatus::Fail
+        );
+
+        let inconclusive = CheckResult::inconclusive("anchor moved during the walk");
+        assert_eq!(inconclusive.status, CheckStatus::Inconclusive);
+        assert_eq!(
+            inconclusive.detail.as_deref(),
+            Some("anchor moved during the walk")
+        );
+        assert!(!inconclusive.passed());
+
+        let not_applicable = CheckResult::not_applicable("no Spore deployment on this network");
+        assert_eq!(not_applicable.status, CheckStatus::NotApplicable);
+        assert_eq!(
+            not_applicable.detail.as_deref(),
+            Some("no Spore deployment on this network")
+        );
+        assert!(!not_applicable.passed());
+
+        let error = CheckResult::error("cursor did not advance");
+        assert_eq!(error.status, CheckStatus::Error);
+        assert_eq!(error.detail.as_deref(), Some("cursor did not advance"));
+        assert!(!error.passed());
+    }
+
+    #[test]
+    fn a_skipped_check_no_longer_counts_as_a_pass() {
+        let check = Stub {
+            rpc: true,
+            ..stub(CheckTier::Fast, || Ok(CheckResult::pass(1)))
+        };
+        let completed = execute_check(&check, &ctx(None, None, 10), &progress());
+
+        assert_eq!(completed.status, CheckStatus::Skipped);
+        assert!(
+            !completed.passed(),
+            "a check that never ran must not be counted as passing"
+        );
+        assert!(completed
+            .status_reason
+            .as_deref()
+            .unwrap_or_default()
+            .contains("--rpc-url"));
+    }
+
+    #[test]
+    fn an_excluded_explorer_check_is_skipped_with_an_auditable_reason() {
+        let check = Stub {
+            explorer: true,
+            ..stub(CheckTier::Fast, || Ok(CheckResult::pass(1)))
+        };
+        let completed = execute_check(&check, &ctx(Some("http://rpc"), None, 10), &progress());
+
+        assert_eq!(completed.status, CheckStatus::Skipped);
+        assert!(!completed.passed());
+        assert!(completed
+            .status_reason
+            .as_deref()
+            .unwrap_or_default()
+            .contains("--no-explorer"));
+    }
+
+    #[test]
+    fn a_check_that_returns_err_is_an_error_not_a_data_failure() {
+        let check = stub(CheckTier::Fast, || {
+            Err(anyhow::anyhow!("connection refused"))
+        });
+        let completed = execute_check(&check, &ctx(None, None, 10), &progress());
+
+        assert_eq!(
+            completed.status,
+            CheckStatus::Error,
+            "a local/transport failure is not proof of a data inconsistency"
+        );
+        assert!(!completed.passed());
+        let reason = completed.status_reason.clone().unwrap_or_default();
+        assert!(reason.contains("connection refused"), "{reason}");
+    }
+
+    #[test]
+    fn a_sampling_check_with_zero_samples_is_a_parameter_error() {
+        let check = stub(CheckTier::Sampling, || Ok(CheckResult::pass(1)));
+        let completed = execute_check(&check, &ctx(None, None, 0), &progress());
+
+        assert_eq!(
+            completed.status,
+            CheckStatus::Error,
+            "sample_count=0 on a sampling check is a request error, never a pass"
+        );
+        let reason = completed.status_reason.clone().unwrap_or_default();
+        assert!(reason.contains("sample-count"), "{reason}");
+    }
+
+    #[test]
+    fn a_fast_check_is_unaffected_by_sample_count_zero() {
+        let check = stub(CheckTier::Fast, || Ok(CheckResult::pass(1)));
+        let completed = execute_check(&check, &ctx(None, None, 0), &progress());
+        assert_eq!(completed.status, CheckStatus::Pass);
+    }
 }
