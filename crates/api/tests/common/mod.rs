@@ -813,7 +813,6 @@ pub fn make_test_pool_record_with(
         is_cellbase: false,
         interpretation,
         first_seen_ms: time_added_to_pool_ms as i64,
-        last_seen_ms: time_added_to_pool_ms as i64,
     }
 }
 

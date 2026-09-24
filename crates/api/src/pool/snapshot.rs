@@ -119,7 +119,6 @@ pub struct PoolTxRecord {
     pub is_cellbase: bool,
     pub interpretation: Interpretation,
     pub first_seen_ms: i64,
-    pub last_seen_ms: i64,
 }
 
 impl PoolTxRecord {

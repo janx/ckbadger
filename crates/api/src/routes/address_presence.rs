@@ -139,7 +139,6 @@ mod tests {
             is_cellbase: false,
             interpretation: Interpretation::Complete,
             first_seen_ms: 1_700_000_000_000,
-            last_seen_ms: 1_700_000_000_000,
         });
         let mirror = PoolMirror::new(true);
         let snapshot = |healthy: bool| {

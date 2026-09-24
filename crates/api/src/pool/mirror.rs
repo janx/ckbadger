@@ -23,8 +23,8 @@ use ckbadger_store::types::TxActions;
 use ckbadger_store::{read_view, CkbadgerStore};
 
 use super::resolve::{
-    resolve_pool_tx, resolve_previous_outputs, PoolParentCells, ResolvedCell, ResolvedPoolTx,
-    TX_FETCH_CONCURRENCY,
+    fetch_bounded, resolve_pool_tx, resolve_previous_outputs, PoolParentCells, ResolvedCell,
+    ResolvedPoolTx,
 };
 use super::snapshot::{
     Interpretation, MirrorStatus, PartialReason, PoolEntryError, PoolParticipant, PoolSnapshot,
@@ -148,12 +148,42 @@ pub struct PoolRefresher {
     mirror: Arc<PoolMirror>,
     config: PoolRefresherConfig,
     records: HashMap<[u8; 32], Arc<PoolTxRecord>>,
-    /// Transactions whose interpretation failed. Kept so a systematically
-    /// broken transaction is not re-fetched every poll while it sits in the
-    /// pool; its error stays visible in the mirror status.
+    /// The pool membership the node reported last (`get_raw_tx_pool`),
+    /// reused as-is by working rounds in which `tx_pool_info` says nothing
+    /// moved — so a round that only retries still knows the whole pool.
+    pool: HashMap<[u8; 32], (PoolStatus, PoolEntryMeta)>,
+    /// Transactions whose interpretation failed deterministically. Kept so a
+    /// systematically broken transaction is not re-fetched every poll while it
+    /// sits in the pool; its error stays visible in the mirror status.
     failed: HashMap<[u8; 32], String>,
+    /// New transactions whose build failed for a reason that passes (the node
+    /// did not answer). Retried on a backoff, whether or not the pool moves.
+    retry: HashMap<[u8; 32], Backoff>,
+    /// Rounds run so far; the clock the backoff counts in.
+    round: u64,
     last_pool_updated_at: Option<u64>,
     last_tip_hash: Option<[u8; 32]>,
+    /// What the last working round found, republished by idle rounds.
+    last_truncated: bool,
+    last_entry_errors: Vec<PoolEntryError>,
+}
+
+/// The longest a transiently failed transaction waits for its next attempt.
+/// Attempts back off 2, 4, 8, 8… rounds.
+const RETRY_BACKOFF_MAX_EXPONENT: u32 = 3;
+
+/// When a transiently failed transaction is next attempted.
+#[derive(Debug, Clone, Copy)]
+struct Backoff {
+    /// Consecutive failures, counted up to the backoff cap.
+    failures: u32,
+    due_round: u64,
+}
+
+impl Backoff {
+    fn is_due(&self, round: u64) -> bool {
+        self.due_round <= round
+    }
 }
 
 /// Step 1 of the input-resolution order, over the records this round knows:
@@ -175,6 +205,16 @@ impl PoolParentCells for PoolParentsView<'_> {
     }
 }
 
+/// The record with `status`, sharing the allocation when nothing changed.
+fn with_status(record: Arc<PoolTxRecord>, status: PoolStatus) -> Arc<PoolTxRecord> {
+    if record.pool_status == status {
+        return record;
+    }
+    let mut updated = (*record).clone();
+    updated.pool_status = status;
+    Arc::new(updated)
+}
+
 impl PoolRefresher {
     pub fn new(
         source: Arc<dyn PoolSource>,
@@ -188,10 +228,30 @@ impl PoolRefresher {
             mirror,
             config,
             records: HashMap::new(),
+            pool: HashMap::new(),
             failed: HashMap::new(),
+            retry: HashMap::new(),
+            round: 0,
             last_pool_updated_at: None,
             last_tip_hash: None,
+            last_truncated: false,
+            last_entry_errors: Vec::new(),
         }
+    }
+
+    /// Whether this round rebuilds a record whose inputs were unresolvable:
+    /// not while it backs off, and never once its build failed for good.
+    fn wants_input_retry(&self, record: &PoolTxRecord, round: u64) -> bool {
+        record.needs_input_retry()
+            && !self.backing_off(&record.tx_hash, round)
+            && !self.failed.contains_key(&record.tx_hash)
+    }
+
+    /// Whether a transaction is waiting out a backoff this round.
+    fn backing_off(&self, hash: &[u8; 32], round: u64) -> bool {
+        self.retry
+            .get(hash)
+            .is_some_and(|backoff| !backoff.is_due(round))
     }
 
     /// One poll round.
@@ -200,6 +260,8 @@ impl PoolRefresher {
     /// carrying the reason, because "the mirror is broken" is information the
     /// UI must show, not an error to swallow.
     pub async fn refresh_once(&mut self) -> RefreshOutcome {
+        self.round += 1;
+        let round = self.round;
         let now_ms = chrono::Utc::now().timestamp_millis();
 
         let info = match self.source.tx_pool_info().await {
@@ -216,14 +278,23 @@ impl PoolRefresher {
 
         let pool_unchanged = self.last_pool_updated_at == Some(info.last_txs_updated_at)
             && self.last_tip_hash == Some(info.tip_hash);
-        let needs_retry = self.records.values().any(|r| r.needs_input_retry());
+        let needs_retry = self
+            .records
+            .values()
+            .any(|r| self.wants_input_retry(r, round));
         let awaiting_index = self
             .records
             .values()
             .any(|r| matches!(r.pool_status, PoolStatus::CommittedAwaitingIndex { .. }));
+        let retry_due = self.retry.values().any(|backoff| backoff.is_due(round));
 
-        if pool_unchanged && !needs_retry && !awaiting_index {
-            self.publish(now_ms, &info, Vec::new(), false);
+        if pool_unchanged && !needs_retry && !awaiting_index && !retry_due {
+            self.publish(
+                now_ms,
+                &info,
+                self.last_entry_errors.clone(),
+                self.last_truncated,
+            );
             return RefreshOutcome {
                 skipped: true,
                 tracked: self.records.len(),
@@ -233,20 +304,9 @@ impl PoolRefresher {
 
         let mut entry_errors: Vec<PoolEntryError> = Vec::new();
 
-        // Step 2. The pool set. Skipped when the node says nothing moved: the
+        // Step 2. The pool set. Reused when the node says nothing moved: the
         // membership cannot have changed, only our own records' resolution.
-        let current = if pool_unchanged {
-            self.records
-                .iter()
-                .filter(|(_, record)| {
-                    !matches!(
-                        record.pool_status,
-                        PoolStatus::CommittedAwaitingIndex { .. }
-                    )
-                })
-                .map(|(hash, record)| (*hash, (record.pool_status, record.entry)))
-                .collect::<HashMap<_, _>>()
-        } else {
+        if !pool_unchanged {
             match self.source.raw_tx_pool_verbose().await {
                 Ok(raw) => {
                     let mut current =
@@ -257,7 +317,7 @@ impl PoolRefresher {
                     for (hash, entry) in raw.proposed {
                         current.insert(hash, (PoolStatus::Proposed, entry));
                     }
-                    current
+                    self.pool = current;
                 }
                 Err(error) => {
                     self.publish_unhealthy(now_ms, &error);
@@ -268,66 +328,74 @@ impl PoolRefresher {
                     };
                 }
             }
-        };
+        }
+        // Moved out for the round and put back at its end; a round is never
+        // cancelled part-way (every node call is bounded instead).
+        let current = std::mem::take(&mut self.pool);
 
-        // Forget interpretation failures for transactions that have left the
-        // pool, so the same hash re-entering gets a fresh attempt.
+        // Forget what we know about transactions that have left the pool, so
+        // the same hash re-entering gets a fresh attempt.
         self.failed.retain(|hash, _| current.contains_key(hash));
+        self.retry.retain(|hash, _| current.contains_key(hash));
 
-        // Steps 4 and 5: carry existing records forward, resolve the ones that
-        // left the pool.
+        // Steps 4 and 5: carry existing records forward — the same allocation
+        // when nothing about them changed — and resolve the ones that left.
         let previous = std::mem::take(&mut self.records);
-        let mut next: HashMap<[u8; 32], Arc<PoolTxRecord>> = HashMap::with_capacity(current.len());
+        let mut next: HashMap<[u8; 32], Arc<PoolTxRecord>> = HashMap::with_capacity(previous.len());
         let mut gone: Vec<Arc<PoolTxRecord>> = Vec::new();
         for (hash, record) in previous {
             match current.get(&hash) {
+                Some((status, entry)) if record.entry == *entry => {
+                    next.insert(hash, with_status(record, *status));
+                }
                 Some((status, entry)) => {
                     let mut updated = (*record).clone();
                     updated.pool_status = *status;
                     updated.entry = *entry;
-                    updated.last_seen_ms = now_ms;
                     next.insert(hash, Arc::new(updated));
                 }
                 None => gone.push(record),
             }
         }
         let removed = self
-            .resolve_gone_records(gone, now_ms, &mut next, &mut entry_errors)
+            .resolve_gone_records(gone, &mut next, &mut entry_errors)
             .await;
 
-        // Step 3: new transactions, and retries of records whose inputs were
-        // not resolvable last round.
-        let mut to_build: Vec<[u8; 32]> = current
-            .keys()
-            .copied()
-            .filter(|hash| !next.contains_key(hash) && !self.failed.contains_key(hash))
-            .collect();
-        let retries: Vec<[u8; 32]> = next
-            .iter()
-            .filter(|(_, record)| record.needs_input_retry())
-            .map(|(hash, _)| *hash)
-            .collect();
-        to_build.extend(retries.iter().copied());
+        // Step 6, BEFORE any body is fetched: the tracking cap. A transaction
+        // outside it is never asked for.
+        let (in_scope, truncated) = self.tracked_scope(&current, &next);
+        next.retain(|hash, _| in_scope.contains(hash));
+
+        // Step 3: new transactions in scope — unless known-bad or backing off —
+        // and records whose inputs were not resolvable last round.
+        let mut targets: HashMap<[u8; 32], (PoolStatus, PoolEntryMeta)> = HashMap::new();
+        for (hash, (status, entry)) in &current {
+            if in_scope.contains(hash)
+                && !next.contains_key(hash)
+                && !self.failed.contains_key(hash)
+                && !self.backing_off(hash, round)
+            {
+                targets.insert(*hash, (*status, *entry));
+            }
+        }
+        for (hash, record) in &next {
+            if self.wants_input_retry(record, round) {
+                targets.insert(*hash, (record.pool_status, record.entry));
+            }
+        }
 
         let added = self
-            .build_records(
-                &to_build,
-                &retries.iter().copied().collect::<HashSet<_>>(),
-                &current,
-                now_ms,
-                &mut next,
-                &mut entry_errors,
-            )
+            .build_records(&targets, now_ms, round, &mut next, &mut entry_errors)
             .await;
 
         self.records = next;
-
-        // Step 6: the tracking cap. Newest by time added to pool are kept.
-        let truncated = self.enforce_cap();
+        self.pool = current;
 
         // Step 7: publish.
         self.last_pool_updated_at = Some(info.last_txs_updated_at);
         self.last_tip_hash = Some(info.tip_hash);
+        self.last_truncated = truncated;
+        self.last_entry_errors = entry_errors.clone();
         let entry_error_count = entry_errors.len();
         let tracked = self.records.len();
         self.publish(now_ms, &info, entry_errors, truncated);
@@ -342,15 +410,45 @@ impl PoolRefresher {
         }
     }
 
+    /// The newest `max_tracked_txs` by time added to pool among every pool
+    /// member and every record still held that is not one (committed, awaiting
+    /// index). Returns that set and whether anything was left out of it, which
+    /// every response then reports as `truncated`.
+    fn tracked_scope(
+        &self,
+        current: &HashMap<[u8; 32], (PoolStatus, PoolEntryMeta)>,
+        next: &HashMap<[u8; 32], Arc<PoolTxRecord>>,
+    ) -> (HashSet<[u8; 32]>, bool) {
+        let mut candidates: Vec<(u64, [u8; 32])> = current
+            .iter()
+            .map(|(hash, (_, entry))| (entry.time_added_to_pool_ms, *hash))
+            .collect();
+        candidates.extend(
+            next.iter()
+                .filter(|(hash, _)| !current.contains_key(*hash))
+                .map(|(hash, record)| (record.entry.time_added_to_pool_ms, *hash)),
+        );
+        let max = self.config.max_tracked_txs.get();
+        let truncated = candidates.len() > max;
+        if truncated {
+            // Newest first; tx hash breaks ties so the kept set is deterministic.
+            candidates.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+            candidates.truncate(max);
+        }
+        (
+            candidates.into_iter().map(|(_, hash)| hash).collect(),
+            truncated,
+        )
+    }
+
     /// Records whose transaction is no longer in the pool.
     ///
     /// Node status is authoritative for the transition; the local store is the
     /// ONE condition for dropping a committed record, so a transaction never
     /// vanishes from an address page between node commit and local index.
     async fn resolve_gone_records(
-        &mut self,
+        &self,
         gone: Vec<Arc<PoolTxRecord>>,
-        now_ms: i64,
         next: &mut HashMap<[u8; 32], Arc<PoolTxRecord>>,
         entry_errors: &mut Vec<PoolEntryError>,
     ) -> usize {
@@ -382,23 +480,32 @@ impl PoolRefresher {
         };
 
         let mut removed = 0usize;
+        let mut to_ask: Vec<Arc<PoolTxRecord>> = Vec::with_capacity(gone.len());
         for record in gone {
             if indexed.contains(&record.tx_hash) {
                 removed += 1;
-                continue;
+            } else {
+                to_ask.push(record);
             }
+        }
 
-            match self.source.get_transaction(&record.tx_hash).await {
+        let source = self.source.as_ref();
+        let lookups = fetch_bounded(
+            to_ask.iter().map(|record| record.tx_hash).collect(),
+            |hash| async move { source.get_transaction(&hash).await },
+        )
+        .await;
+        // `fetch_bounded` answers in key order, i.e. `to_ask` order.
+        for (record, (_, lookup)) in to_ask.into_iter().zip(lookups) {
+            match lookup {
                 Ok(Some(lookup)) => match lookup.status {
                     NodeTxStatus::Committed => match (lookup.block_number, lookup.block_hash) {
                         (Some(block_number), Some(block_hash)) => {
-                            let mut updated = (*record).clone();
-                            updated.pool_status = PoolStatus::CommittedAwaitingIndex {
+                            let status = PoolStatus::CommittedAwaitingIndex {
                                 block_number,
                                 block_hash,
                             };
-                            updated.last_seen_ms = now_ms;
-                            next.insert(updated.tx_hash, Arc::new(updated));
+                            next.insert(record.tx_hash, with_status(record, status));
                         }
                         _ => {
                             entry_errors.push(PoolEntryError {
@@ -409,16 +516,12 @@ impl PoolRefresher {
                             next.insert(record.tx_hash, record);
                         }
                     },
-                    NodeTxStatus::Pending | NodeTxStatus::Proposed => {
-                        // A reorg returned it to the pool.
-                        let mut updated = (*record).clone();
-                        updated.pool_status = if lookup.status == NodeTxStatus::Pending {
-                            PoolStatus::Pending
-                        } else {
-                            PoolStatus::Proposed
-                        };
-                        updated.last_seen_ms = now_ms;
-                        next.insert(updated.tx_hash, Arc::new(updated));
+                    // A reorg returned it to the pool.
+                    NodeTxStatus::Pending => {
+                        next.insert(record.tx_hash, with_status(record, PoolStatus::Pending));
+                    }
+                    NodeTxStatus::Proposed => {
+                        next.insert(record.tx_hash, with_status(record, PoolStatus::Proposed));
                     }
                     NodeTxStatus::Unknown | NodeTxStatus::Rejected => removed += 1,
                 },
@@ -437,51 +540,98 @@ impl PoolRefresher {
         removed
     }
 
+    /// A build that failed for a reason that passes: report it, and schedule
+    /// the next attempt 2, 4, then 8 rounds out (8 thereafter).
+    fn transient_failure(
+        &mut self,
+        hash: [u8; 32],
+        round: u64,
+        message: String,
+        entry_errors: &mut Vec<PoolEntryError>,
+    ) {
+        let failures = self.retry.get(&hash).map_or(1, |backoff| {
+            (backoff.failures + 1).min(RETRY_BACKOFF_MAX_EXPONENT)
+        });
+        self.retry.insert(
+            hash,
+            Backoff {
+                failures,
+                due_round: round + (1u64 << failures),
+            },
+        );
+        entry_errors.push(PoolEntryError {
+            tx_hash: hash,
+            message,
+        });
+    }
+
+    /// A build that failed on the transaction itself: it will fail the same
+    /// way on every attempt, so it is not attempted again while it stays in
+    /// the pool.
+    fn permanent_failure(
+        &mut self,
+        hash: [u8; 32],
+        message: String,
+        entry_errors: &mut Vec<PoolEntryError>,
+    ) {
+        self.retry.remove(&hash);
+        self.failed.insert(hash, message.clone());
+        entry_errors.push(PoolEntryError {
+            tx_hash: hash,
+            message,
+        });
+    }
+
     /// Fetch, resolve and interpret the given transactions.
     ///
-    /// `retries` are hashes already present in `next` whose inputs were not
-    /// resolvable last round; a rebuilt record replaces the old one.
+    /// A target already present in `next` is a record whose inputs were not
+    /// resolvable last round; a rebuilt record replaces it.
     async fn build_records(
         &mut self,
-        hashes: &[[u8; 32]],
-        retries: &HashSet<[u8; 32]>,
-        current: &HashMap<[u8; 32], (PoolStatus, PoolEntryMeta)>,
+        targets: &HashMap<[u8; 32], (PoolStatus, PoolEntryMeta)>,
         now_ms: i64,
+        round: u64,
         next: &mut HashMap<[u8; 32], Arc<PoolTxRecord>>,
         entry_errors: &mut Vec<PoolEntryError>,
     ) -> usize {
-        if hashes.is_empty() {
+        if targets.is_empty() {
             return 0;
         }
 
         // Fetch bodies with bounded concurrency.
+        let mut hashes: Vec<[u8; 32]> = targets.keys().copied().collect();
+        hashes.sort_unstable();
         let source = self.source.clone();
+        let lookups = fetch_bounded(hashes, |hash| {
+            let source = source.clone();
+            async move { source.get_transaction(&hash).await }
+        })
+        .await;
         let mut bodies: HashMap<[u8; 32], ckb_store_reader::RpcTransactionView> = HashMap::new();
-        for chunk in hashes.chunks(TX_FETCH_CONCURRENCY) {
-            let fetched = futures::future::join_all(chunk.iter().map(|hash| {
-                let source = source.clone();
-                async move { (*hash, source.get_transaction(hash).await) }
-            }))
-            .await;
-            for (hash, result) in fetched {
-                match result {
-                    Ok(Some(lookup)) => match lookup.transaction {
-                        Some(tx) => {
-                            bodies.insert(hash, tx);
-                        }
-                        None => entry_errors.push(PoolEntryError {
-                            tx_hash: hash,
-                            message: "node returned a pool transaction without a body".to_string(),
-                        }),
-                    },
-                    // Left the pool between `get_raw_tx_pool` and here: normal
-                    // churn, picked up (or not) by the next round.
-                    Ok(None) => {}
-                    Err(error) => entry_errors.push(PoolEntryError {
-                        tx_hash: hash,
-                        message: error,
-                    }),
+        for (hash, result) in lookups {
+            match result {
+                Ok(Some(lookup)) => match (lookup.transaction, lookup.status) {
+                    (Some(tx), _) => {
+                        bodies.insert(hash, tx);
+                    }
+                    // What a real node answers for a transaction that left the
+                    // pool between `get_raw_tx_pool` and here: normal churn,
+                    // picked up (or not) by the next round.
+                    (None, NodeTxStatus::Unknown | NodeTxStatus::Rejected) => {
+                        self.retry.remove(&hash);
+                    }
+                    (None, status) => self.transient_failure(
+                        hash,
+                        round,
+                        format!("node reported {status:?} for a pool transaction without its body"),
+                        entry_errors,
+                    ),
+                },
+                // Unknown to the node: the same churn.
+                Ok(None) => {
+                    self.retry.remove(&hash);
                 }
+                Err(error) => self.transient_failure(hash, round, error, entry_errors),
             }
         }
 
@@ -496,65 +646,56 @@ impl PoolRefresher {
             let Some(tx) = bodies.get(&hash) else {
                 continue;
             };
-            let Some((status, entry)) = current.get(&hash).copied() else {
+            let Some((status, entry)) = targets.get(&hash).copied() else {
                 continue;
             };
 
-            let parents = PoolParentsView {
-                tracked: next,
-                fresh: &fresh_outputs,
-            };
-            let previous_outputs =
-                match resolve_previous_outputs(self.source.as_ref(), tx, &parents).await {
-                    Ok(cells) => cells,
-                    Err(error) => {
-                        entry_errors.push(PoolEntryError {
-                            tx_hash: hash,
-                            message: error,
-                        });
-                        continue;
-                    }
+            let resolution = {
+                let parents = PoolParentsView {
+                    tracked: next,
+                    fresh: &fresh_outputs,
                 };
-
-            let resolved = match resolve_pool_tx(tx, &previous_outputs) {
-                Ok(resolved) => resolved,
+                resolve_previous_outputs(self.source.as_ref(), tx, &parents).await
+            };
+            let previous_outputs = match resolution {
+                Ok(cells) => cells,
                 Err(error) => {
-                    self.failed.insert(hash, error.clone());
-                    entry_errors.push(PoolEntryError {
-                        tx_hash: hash,
-                        message: error,
-                    });
+                    self.transient_failure(hash, round, error, entry_errors);
                     continue;
                 }
             };
 
-            let first_seen_ms = next
-                .get(&hash)
-                .map(|record| record.first_seen_ms)
-                .unwrap_or(now_ms);
+            let resolved = match resolve_pool_tx(tx, &previous_outputs) {
+                Ok(resolved) => resolved,
+                Err(error) => {
+                    self.permanent_failure(hash, error, entry_errors);
+                    continue;
+                }
+            };
+
+            let existing = next.get(&hash);
+            let is_retry = existing.is_some();
+            let first_seen_ms = match existing {
+                Some(record) => record.first_seen_ms,
+                None => now_ms,
+            };
 
             match build_record(
                 &resolved,
                 status,
                 entry,
                 first_seen_ms,
-                now_ms,
                 self.config.is_mainnet,
             ) {
                 Ok(record) => {
+                    self.retry.remove(&hash);
                     fresh_outputs.insert(hash, record.outputs.clone());
-                    if !retries.contains(&hash) {
+                    if !is_retry {
                         added += 1;
                     }
                     next.insert(hash, Arc::new(record));
                 }
-                Err(error) => {
-                    self.failed.insert(hash, error.clone());
-                    entry_errors.push(PoolEntryError {
-                        tx_hash: hash,
-                        message: error,
-                    });
-                }
+                Err(error) => self.permanent_failure(hash, error, entry_errors),
             }
         }
         added
@@ -587,28 +728,6 @@ impl PoolRefresher {
         })
         .await
         .map_err(|e| format!("pool store lookup task failed: {e}"))?
-    }
-
-    /// Keep the newest `max_tracked_txs` by time added to pool. Returns whether
-    /// anything was dropped, which every response then reports as `truncated`.
-    fn enforce_cap(&mut self) -> bool {
-        if self.records.len() <= self.config.max_tracked_txs.get() {
-            return false;
-        }
-        let mut ordered: Vec<([u8; 32], u64)> = self
-            .records
-            .iter()
-            .map(|(hash, record)| (*hash, record.entry.time_added_to_pool_ms))
-            .collect();
-        // Newest first; tx hash breaks ties so the kept set is deterministic.
-        ordered.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-        let keep: HashSet<[u8; 32]> = ordered
-            .into_iter()
-            .take(self.config.max_tracked_txs.get())
-            .map(|(hash, _)| hash)
-            .collect();
-        self.records.retain(|hash, _| keep.contains(hash));
-        true
     }
 
     fn publish(
@@ -715,7 +834,6 @@ fn build_record(
     status: PoolStatus,
     entry: PoolEntryMeta,
     first_seen_ms: i64,
-    now_ms: i64,
     is_mainnet: bool,
 ) -> Result<PoolTxRecord, String> {
     let interpretation = interpretation_of(resolved);
@@ -773,7 +891,6 @@ fn build_record(
         is_cellbase: resolved.is_cellbase,
         interpretation,
         first_seen_ms,
-        last_seen_ms: now_ms,
     })
 }
 

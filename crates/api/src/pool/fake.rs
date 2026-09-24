@@ -24,6 +24,11 @@ struct FakeState {
     /// Every call records itself and then never returns — a node whose TCP
     /// peer stopped answering without a FIN or RST.
     hang: bool,
+    /// Every `get_transaction` takes this long (tokio time), so tests can see
+    /// how many are in flight at once.
+    latency: Option<std::time::Duration>,
+    in_flight: usize,
+    max_in_flight: usize,
     calls: Vec<String>,
 }
 
@@ -46,6 +51,26 @@ impl FakePoolSource {
 
     pub fn set_transaction(&self, tx_hash: [u8; 32], lookup: PoolTxLookup) {
         self.lock().transactions.insert(tx_hash, Ok(Some(lookup)));
+    }
+
+    pub fn set_transaction_error(&self, tx_hash: [u8; 32], error: impl Into<String>) {
+        self.lock().transactions.insert(tx_hash, Err(error.into()));
+    }
+
+    /// Every later `get_transaction` takes `latency` of tokio time.
+    pub fn set_latency(&self, latency: std::time::Duration) {
+        self.lock().latency = Some(latency);
+    }
+
+    /// The most `get_transaction` calls that were ever in flight at once.
+    pub fn max_in_flight(&self) -> usize {
+        self.lock().max_in_flight
+    }
+
+    /// How many times `get_transaction` was asked for this hash.
+    pub fn transaction_calls(&self, tx_hash: &[u8; 32]) -> usize {
+        let call = format!("get_transaction:0x{}", hex::encode(tx_hash));
+        self.lock().calls.iter().filter(|c| **c == call).count()
     }
 
     /// A main-chain header, answerable by hash and by number.
@@ -102,6 +127,16 @@ impl PoolSource for FakePoolSource {
         if self.record(format!("get_transaction:0x{}", hex::encode(tx_hash))) {
             return std::future::pending().await;
         }
+        let latency = {
+            let mut state = self.lock();
+            state.in_flight += 1;
+            state.max_in_flight = state.max_in_flight.max(state.in_flight);
+            state.latency
+        };
+        if let Some(latency) = latency {
+            tokio::time::sleep(latency).await;
+        }
+        self.lock().in_flight -= 1;
         match self.lock().transactions.get(tx_hash) {
             Some(result) => result.clone(),
             None => Ok(None),

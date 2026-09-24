@@ -869,6 +869,277 @@ async fn a_hung_node_marks_the_snapshot_unhealthy_within_the_deadline() {
     assert_eq!(snapshot.records.len(), 1);
 }
 
+// ---------------------------------------------------------------------------
+// Round hygiene
+// ---------------------------------------------------------------------------
+
+/// A pending transaction spending `funding_byte`'s output 0, paying `payee`.
+fn funded_pool_tx(source: &FakePoolSource, hash_byte: u8, funding_byte: u8, payee: u8) {
+    source.set_transaction(
+        [funding_byte; 32],
+        committed_parent(funding_byte, 10_000_000_000, 0xAA),
+    );
+    source.set_transaction(
+        [hash_byte; 32],
+        lookup(
+            TxBuilder::new(hash_byte)
+                .input(&hex32(funding_byte), 0)
+                .output(9_900_000_000, payee)
+                .build(),
+            NodeTxStatus::Pending,
+        ),
+    );
+}
+
+/// A pending transaction the resolver cannot read (outputs/outputs_data
+/// disagree): a deterministic build failure.
+fn malformed_pool_tx(source: &FakePoolSource, hash_byte: u8, funding_byte: u8) {
+    source.set_transaction(
+        [funding_byte; 32],
+        committed_parent(funding_byte, 10_000_000_000, 0xAA),
+    );
+    let mut broken = TxBuilder::new(hash_byte)
+        .input(&hex32(funding_byte), 0)
+        .output(9_900_000_000, 0xCC)
+        .build();
+    broken.outputs_data.clear();
+    source.set_transaction([hash_byte; 32], lookup(broken, NodeTxStatus::Pending));
+}
+
+/// An idle round (pool unchanged, nothing to retry) republishes the snapshot;
+/// it must say what the last full round found, not that the mirror is
+/// untruncated and error-free.
+#[tokio::test]
+async fn idle_round_keeps_truncated_and_entry_errors() {
+    let (source, mirror, mut refresher) = setup(2);
+    funded_pool_tx(&source, 0x01, 0xF1, 0xB1);
+    funded_pool_tx(&source, 0x02, 0xF2, 0xB2);
+    funded_pool_tx(&source, 0x03, 0xF3, 0xB3);
+    malformed_pool_tx(&source, 0x04, 0xF4);
+    source.set_info(pool_info(1));
+    source.set_raw_pool(RawTxPool {
+        pending: (1u8..=4)
+            .map(|index| {
+                (
+                    [index; 32],
+                    entry(1_700_000_000_000 + u64::from(index) * 1_000),
+                )
+            })
+            .collect(),
+        proposed: vec![],
+    });
+
+    refresher.refresh_once().await;
+    let full = mirror.load();
+    assert!(full.status.truncated);
+    assert_eq!(full.status.entry_errors.len(), 1);
+
+    let outcome = refresher.refresh_once().await;
+    assert!(outcome.skipped, "{outcome:?}");
+    let idle = mirror.load();
+    assert!(idle.status.truncated, "an idle round must not untruncate");
+    assert_eq!(
+        idle.status.entry_errors, full.status.entry_errors,
+        "an idle round must not forget the entry errors"
+    );
+}
+
+/// A new pool transaction whose first build fails transiently (the node did
+/// not answer for it) is retried on a backoff of 2, 4, 8, 8… rounds — even
+/// while the pool itself does not change, which used to mean never.
+#[tokio::test]
+async fn transient_build_failure_is_retried_with_backoff() {
+    let (source, mirror, mut refresher) = setup(100);
+    source.set_info(pool_info(1));
+    source.set_raw_pool(RawTxPool {
+        pending: vec![([0x01; 32], entry(1_700_000_000_000))],
+        proposed: vec![],
+    });
+    source.set_transaction_error([0x01; 32], "node is busy");
+
+    let mut fetched_in_rounds = Vec::new();
+    for round in 1..=15u32 {
+        let before = source.transaction_calls(&[0x01; 32]);
+        refresher.refresh_once().await;
+        if source.transaction_calls(&[0x01; 32]) > before {
+            fetched_in_rounds.push(round);
+        }
+    }
+    assert_eq!(fetched_in_rounds, vec![1, 3, 7, 15]);
+
+    // The node answers again: the next due round (15 + 8) picks it up.
+    funded_pool_tx(&source, 0x01, 0xF1, 0xB1);
+    for _ in 16..=23 {
+        refresher.refresh_once().await;
+    }
+    assert!(mirror.load().records.contains_key(&[0x01; 32]));
+}
+
+/// A transaction whose interpretation failed deterministically is not
+/// re-fetched while it sits in the pool — including after rounds in which the
+/// pool did not change but another record was being retried.
+#[tokio::test]
+async fn failed_memo_survives_unchanged_rounds() {
+    let (source, _mirror, mut refresher) = setup(100);
+    malformed_pool_tx(&source, 0x01, 0xF1);
+    // A second transaction whose parent the node does not know yet: it stays
+    // partial, so unchanged-pool rounds still do work.
+    source.set_transaction(
+        [0x02; 32],
+        lookup(
+            TxBuilder::new(0x02)
+                .input(&hex32(0xF2), 0)
+                .output(9_900_000_000, 0xBB)
+                .build(),
+            NodeTxStatus::Pending,
+        ),
+    );
+    source.set_info(pool_info(1));
+    source.set_raw_pool(RawTxPool {
+        pending: vec![
+            ([0x01; 32], entry(1_700_000_001_000)),
+            ([0x02; 32], entry(1_700_000_002_000)),
+        ],
+        proposed: vec![],
+    });
+
+    refresher.refresh_once().await;
+    assert_eq!(source.transaction_calls(&[0x01; 32]), 1);
+    // Unchanged pool, but the partial record forces a working round.
+    let outcome = refresher.refresh_once().await;
+    assert!(!outcome.skipped);
+    // The pool changes (another round of churn elsewhere).
+    source.set_info(pool_info(2));
+    refresher.refresh_once().await;
+
+    assert_eq!(
+        source.transaction_calls(&[0x01; 32]),
+        1,
+        "a known-bad transaction must not be re-fetched while it stays in the pool"
+    );
+}
+
+/// A real node answers `get_transaction` for a transaction that left the pool
+/// between `get_raw_tx_pool` and the body fetch with
+/// `{transaction: null, tx_status: unknown}`. That is churn, not an error.
+#[tokio::test]
+async fn unknown_status_without_body_is_pool_churn_not_an_error() {
+    let (source, mirror, mut refresher) = setup(100);
+    source.set_info(pool_info(1));
+    source.set_raw_pool(RawTxPool {
+        pending: vec![([0x01; 32], entry(1_700_000_000_000))],
+        proposed: vec![],
+    });
+    source.set_transaction(
+        [0x01; 32],
+        PoolTxLookup {
+            status: NodeTxStatus::Unknown,
+            transaction: None,
+            block_number: None,
+            block_hash: None,
+        },
+    );
+
+    let outcome = refresher.refresh_once().await;
+    assert_eq!(outcome.entry_errors, 0, "{outcome:?}");
+    let snapshot = mirror.load();
+    assert!(snapshot.status.entry_errors.is_empty());
+    assert!(snapshot.records.is_empty());
+}
+
+/// A record whose pool status and entry did not change is carried into the
+/// next snapshot as the same allocation, not deep-cloned every round.
+#[tokio::test]
+async fn unchanged_records_are_not_cloned() {
+    let (source, mirror, mut refresher) = setup(100);
+    funded_pool_tx(&source, 0x01, 0xF1, 0xB1);
+    source.set_info(pool_info(1));
+    source.set_raw_pool(RawTxPool {
+        pending: vec![([0x01; 32], entry(1_700_000_000_000))],
+        proposed: vec![],
+    });
+    refresher.refresh_once().await;
+    let first = mirror.load().records[&[0x01; 32]].clone();
+
+    // The pool moved (so the round does work), but this entry did not.
+    source.set_info(pool_info(2));
+    refresher.refresh_once().await;
+    let second = mirror.load().records[&[0x01; 32]].clone();
+    assert!(Arc::ptr_eq(&first, &second));
+}
+
+/// The tracking cap is applied to the pool membership BEFORE any body is
+/// fetched: a transaction outside the cap is never asked for.
+#[tokio::test]
+async fn above_cap_txs_are_never_fetched() {
+    let (source, mirror, mut refresher) = setup(2);
+    for index in 1u8..=3 {
+        funded_pool_tx(&source, index, 0xF0 + index, 0xB0 + index);
+    }
+    source.set_info(pool_info(1));
+    source.set_raw_pool(RawTxPool {
+        pending: (1u8..=3)
+            .map(|index| {
+                (
+                    [index; 32],
+                    entry(1_700_000_000_000 + u64::from(index) * 1_000),
+                )
+            })
+            .collect(),
+        proposed: vec![],
+    });
+
+    refresher.refresh_once().await;
+    source.set_info(pool_info(2));
+    refresher.refresh_once().await;
+
+    assert_eq!(
+        source.transaction_calls(&[0x01; 32]),
+        0,
+        "the oldest transaction is beyond the cap and must never be fetched"
+    );
+    let snapshot = mirror.load();
+    assert!(snapshot.status.truncated);
+    assert_eq!(snapshot.records.len(), 2);
+}
+
+/// Records that left the pool are resolved with bounded concurrency, not one
+/// node round trip after another.
+#[tokio::test(start_paused = true)]
+async fn gone_records_resolve_concurrently() {
+    let (source, mirror, mut refresher) = setup(100);
+    for index in 1u8..=8 {
+        funded_pool_tx(&source, index, 0xF0 + index, 0xB0 + index);
+    }
+    source.set_info(pool_info(1));
+    source.set_raw_pool(RawTxPool {
+        pending: (1u8..=8)
+            .map(|index| ([index; 32], entry(1_700_000_000_000 + u64::from(index))))
+            .collect(),
+        proposed: vec![],
+    });
+    refresher.refresh_once().await;
+    assert_eq!(mirror.load().records.len(), 8);
+
+    // All eight are committed; none is indexed yet.
+    for index in 1u8..=8 {
+        let mut committed = lookup(TxBuilder::new(index).build(), NodeTxStatus::Committed);
+        committed.block_number = Some(5_000);
+        committed.block_hash = Some([0x55; 32]);
+        source.set_transaction([index; 32], committed);
+    }
+    source.set_info(pool_info(2));
+    source.set_raw_pool(RawTxPool::default());
+    source.set_latency(std::time::Duration::from_secs(1));
+    refresher.refresh_once().await;
+
+    assert_eq!(mirror.load().status.awaiting_index, 8);
+    assert!(
+        source.max_in_flight() > 1,
+        "gone records were resolved one at a time"
+    );
+}
+
 /// Single calculation path: one transaction interpreted through the live-sync
 /// `TxView` shape (input data withheld, UDT amount from the store) and through
 /// the pool resolver (input data from the node) must produce the SAME
@@ -1375,7 +1646,6 @@ fn pool_participants_come_from_the_shared_row_derivation() {
         is_cellbase: false,
         interpretation: Interpretation::Complete,
         first_seen_ms: 0,
-        last_seen_ms: 0,
     };
 
     // The matcher finds a party by either identity.
