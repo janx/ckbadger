@@ -3049,9 +3049,9 @@ mod activity_stats_tests {
     use std::sync::Arc;
 
     use ckbadger_store::types::{
-        DailyActivityStats, ItemDelta, ParticipantDelta, ProtocolAction, TxActions, TypeCallEntry,
-        ITEM_KIND_IDENTITY, ITEM_KIND_OBJECT, ITEM_KIND_TOKEN, TAG_DAO, TAG_IDENTITY, TAG_OBJECT,
-        TAG_TOKEN, TAG_TYPE_CALL,
+        DailyActivityStats, IdentityStandard, ItemDelta, ItemKind, ParticipantDelta,
+        ProtocolAction, TxActions, TypeCallEntry, TAG_DAO, TAG_IDENTITY, TAG_OBJECT, TAG_TOKEN,
+        TAG_TYPE_CALL,
     };
     use ckbadger_store::CkbadgerStore;
 
@@ -3181,7 +3181,7 @@ mod activity_stats_tests {
                 let mut p = make_participant(0, TAG_TOKEN);
                 p.item_deltas = vec![ItemDelta {
                     item_id: vec![0xAA; 32],
-                    kind: ITEM_KIND_TOKEN,
+                    kind: ItemKind::Token,
                     magnitude: 1000,
                     negative: false,
                 }];
@@ -3204,7 +3204,7 @@ mod activity_stats_tests {
                 let mut p = make_participant(0, TAG_OBJECT);
                 p.item_deltas = vec![ItemDelta {
                     item_id: vec![0xBB; 32],
-                    kind: ITEM_KIND_OBJECT,
+                    kind: ItemKind::Object,
                     magnitude: 1,
                     negative: false,
                 }];
@@ -3227,7 +3227,7 @@ mod activity_stats_tests {
                 let mut p = make_participant(0, TAG_IDENTITY);
                 p.item_deltas = vec![ItemDelta {
                     item_id: vec![0xCC; 32],
-                    kind: ITEM_KIND_IDENTITY,
+                    kind: ItemKind::Identity(IdentityStandard::DotBit),
                     magnitude: 1,
                     negative: false,
                 }];
@@ -3250,7 +3250,7 @@ mod activity_stats_tests {
                 let mut p = make_participant(-500_00000000, TAG_TOKEN | TAG_DAO);
                 p.item_deltas = vec![ItemDelta {
                     item_id: vec![0xAA; 32],
-                    kind: ITEM_KIND_TOKEN,
+                    kind: ItemKind::Token,
                     magnitude: 1000,
                     negative: false,
                 }];

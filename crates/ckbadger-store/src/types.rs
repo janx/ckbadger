@@ -1898,15 +1898,34 @@ pub const TAG_CELLBASE: u16 = 1 << 5;
 pub const TAG_TYPE_CALL: u16 = 1 << 6;
 pub const TAG_LOCK_CALL: u16 = 1 << 7;
 
-// ItemDelta kind discriminators.
-pub const ITEM_KIND_TOKEN: u8 = 0;
-pub const ITEM_KIND_OBJECT: u8 = 1;
-pub const ITEM_KIND_IDENTITY: u8 = 2;
+/// What kind of item an `ItemDelta` moves.
+///
+/// An identity delta carries the standard that names it: `.cell`, `.bit` and
+/// did:ckb ids can all be 20 bytes, so an identity id alone cannot say which
+/// item page it belongs to. The builder knows the standard at the moment it
+/// emits the delta, and this is where it keeps it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ItemKind {
+    Token,
+    Object,
+    Identity(IdentityStandard),
+}
+
+impl ItemKind {
+    /// The participant tag bit this kind of item sets.
+    pub fn tag(self) -> u16 {
+        match self {
+            Self::Token => TAG_TOKEN,
+            Self::Object => TAG_OBJECT,
+            Self::Identity(_) => TAG_IDENTITY,
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ItemDelta {
     pub item_id: Vec<u8>,
-    pub kind: u8,
+    pub kind: ItemKind,
     /// Absolute value of the delta. For a token item this is a UDT amount (u128); for
     /// object/identity items it is a small count. Stored only for non-zero deltas, so
     /// `magnitude` is always >= 1 when persisted.
@@ -2557,7 +2576,7 @@ mod tests {
     fn item_delta_preserves_full_u128_signed_magnitude() {
         let item = ItemDelta {
             item_id: vec![],
-            kind: ITEM_KIND_TOKEN,
+            kind: ItemKind::Token,
             magnitude: u128::MAX,
             negative: true,
         };
@@ -2597,7 +2616,7 @@ mod tests {
                 used_delta: 0,
                 item_deltas: vec![ItemDelta {
                     item_id: vec![0xBB; 32],
-                    kind: ITEM_KIND_TOKEN,
+                    kind: ItemKind::Token,
                     magnitude: 42,
                     negative: false,
                 }],
@@ -2679,15 +2698,41 @@ mod tests {
         assert_eq!(combined, ored, "tags have overlapping bits");
     }
 
+    /// Replaces the old `u8` discriminator test: every kind (and every
+    /// identity standard) must round-trip, encode distinctly and map to its tag.
     #[test]
-    fn test_item_kind_constants() {
-        assert_eq!(ITEM_KIND_TOKEN, 0);
-        assert_eq!(ITEM_KIND_OBJECT, 1);
-        assert_eq!(ITEM_KIND_IDENTITY, 2);
-        // All distinct
-        assert_ne!(ITEM_KIND_TOKEN, ITEM_KIND_OBJECT);
-        assert_ne!(ITEM_KIND_OBJECT, ITEM_KIND_IDENTITY);
-        assert_ne!(ITEM_KIND_TOKEN, ITEM_KIND_IDENTITY);
+    fn test_item_kinds_are_distinct_and_identity_keeps_its_standard() {
+        let kinds = [
+            ItemKind::Token,
+            ItemKind::Object,
+            ItemKind::Identity(IdentityStandard::DotBit),
+            ItemKind::Identity(IdentityStandard::BitCell),
+            ItemKind::Identity(IdentityStandard::DidCkb),
+            ItemKind::Identity(IdentityStandard::DotCell),
+        ];
+        let encoded: Vec<Vec<u8>> = kinds
+            .iter()
+            .map(|kind| bincode::serialize(kind).unwrap())
+            .collect();
+        for (i, kind) in kinds.iter().enumerate() {
+            let decoded: ItemKind = bincode::deserialize(&encoded[i]).unwrap();
+            assert_eq!(decoded, *kind);
+            for (j, other) in encoded.iter().enumerate() {
+                if i != j {
+                    assert_ne!(&encoded[i], other, "{kind:?} encodes like {:?}", kinds[j]);
+                }
+            }
+        }
+        assert_eq!(ItemKind::Token.tag(), TAG_TOKEN);
+        assert_eq!(ItemKind::Object.tag(), TAG_OBJECT);
+        for standard in [
+            IdentityStandard::DotBit,
+            IdentityStandard::BitCell,
+            IdentityStandard::DidCkb,
+            IdentityStandard::DotCell,
+        ] {
+            assert_eq!(ItemKind::Identity(standard).tag(), TAG_IDENTITY);
+        }
     }
 
     // ---- ObjectStandard ----
