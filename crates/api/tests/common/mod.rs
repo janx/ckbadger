@@ -123,8 +123,8 @@ pub fn test_config_with_ckb_db_path(
         // Tests drive the mirror explicitly (install a snapshot, or run one
         // refresh against wiremock); no background loop polls a node.
         pool_mirror_enabled: true,
-        pool_poll_interval_ms: 1000,
-        pool_max_tracked_txs: 50_000,
+        pool_poll_interval_ms: std::num::NonZeroU64::new(1000).unwrap(),
+        pool_max_tracked_txs: std::num::NonZeroUsize::new(50_000).unwrap(),
     }
 }
 
@@ -598,7 +598,7 @@ pub async fn refresh_pool_mirror_once(
         state.store.clone(),
         state.pool_mirror.clone(),
         ckbadger_api::pool::PoolRefresherConfig {
-            max_tracked_txs: 100,
+            max_tracked_txs: std::num::NonZeroUsize::new(100).unwrap(),
             is_mainnet: state.ckb_network == "mainnet",
         },
     );

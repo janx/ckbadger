@@ -12,12 +12,11 @@ use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::types::TxIndexEntry;
 use ckbadger_store::CkbadgerStore;
 
+use super::fake::FakePoolSource;
 use super::mirror::{PoolMirror, PoolRefresher, PoolRefresherConfig};
 use super::resolve::{resolve_pool_tx, ResolvedCell};
 use super::snapshot::{Interpretation, PartialReason, PoolStatus};
-use super::source::{
-    FakePoolSource, NodeHeader, NodeTxStatus, PoolEntryMeta, PoolTxLookup, RawTxPool, TxPoolInfo,
-};
+use super::source::{NodeHeader, NodeTxStatus, PoolEntryMeta, PoolTxLookup, RawTxPool, TxPoolInfo};
 
 /// secp256k1-blake160, a standard lock: the activity builder records no
 /// lock_call for it, keeping fixtures focused on positions.
@@ -208,7 +207,8 @@ fn refresher(
         store,
         mirror,
         PoolRefresherConfig {
-            max_tracked_txs,
+            max_tracked_txs: std::num::NonZeroUsize::new(max_tracked_txs)
+                .expect("tests track at least one transaction"),
             is_mainnet: true,
         },
     )

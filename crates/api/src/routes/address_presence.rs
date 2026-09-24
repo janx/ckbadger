@@ -59,10 +59,16 @@ pub fn address_presence(
         }
     }
 
+    // Pool presence only from a mirror that can currently see the node: an
+    // unhealthy snapshot keeps the records it last observed, and "n pending"
+    // read off a node we cannot reach is the claim its flag exists to stop.
     if mirror.enabled() {
-        let pending = mirror.load().pending_count_for_lock(lock_hash);
-        if pending > 0 {
-            return Ok(AddressPresence::PoolOnly { pending });
+        let snapshot = mirror.load();
+        if snapshot.status.healthy {
+            let pending = snapshot.pending_count_for_lock(lock_hash);
+            if pending > 0 {
+                return Ok(AddressPresence::PoolOnly { pending });
+            }
         }
     }
 
@@ -94,6 +100,71 @@ mod tests {
         assert!(AddressPresence::OnChain { cells: 0, txs: 1 }.is_known());
         assert!(AddressPresence::PoolOnly { pending: 2 }.is_known());
         assert!(!AddressPresence::None.is_known());
+    }
+
+    /// A snapshot from a mirror that cannot reach the node still holds the
+    /// records it last observed — but "1 pending" read off a dead node is
+    /// exactly the claim the unhealthy flag exists to prevent.
+    #[test]
+    fn unhealthy_mirror_never_claims_pending_presence() {
+        use crate::pool::{
+            Interpretation, MirrorStatus, PoolEntryMeta, PoolParticipant, PoolSnapshot, PoolStatus,
+            PoolTxRecord,
+        };
+        use ckbadger_store::types::{AddrTxValue, ParticipantId};
+        use std::sync::Arc;
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        let lock = [0xAA; 32];
+        let record = Arc::new(PoolTxRecord {
+            tx_hash: [0x01; 32],
+            pool_status: PoolStatus::Pending,
+            entry: PoolEntryMeta {
+                fee: 1_000,
+                size: 500,
+                cycles: 1,
+                ancestors_count: 0,
+                time_added_to_pool_ms: 1_700_000_000_000,
+            },
+            outputs: vec![],
+            actions: None,
+            participants: vec![PoolParticipant {
+                id: ParticipantId::Lock(lock),
+                addr_tx: AddrTxValue::new(100, false, true, 0),
+            }],
+            inputs_count: 1,
+            outputs_count: 1,
+            semantic_tags: 0,
+            is_cellbase: false,
+            interpretation: Interpretation::Complete,
+            first_seen_ms: 1_700_000_000_000,
+            last_seen_ms: 1_700_000_000_000,
+        });
+        let mirror = PoolMirror::new(true);
+        let snapshot = |healthy: bool| {
+            PoolSnapshot::from_records(
+                vec![record.clone()],
+                MirrorStatus {
+                    enabled: true,
+                    healthy,
+                    ..MirrorStatus::default()
+                },
+            )
+        };
+
+        mirror.publish(snapshot(true));
+        assert_eq!(
+            address_presence(&store, &mirror, &lock).unwrap(),
+            AddressPresence::PoolOnly { pending: 1 }
+        );
+
+        mirror.publish(snapshot(false));
+        assert_eq!(
+            address_presence(&store, &mirror, &lock).unwrap(),
+            AddressPresence::None,
+            "an unhealthy mirror must not claim pool presence"
+        );
     }
 
     #[test]

@@ -19,6 +19,8 @@ pub mod snapshot;
 pub mod source;
 
 #[cfg(test)]
+mod fake;
+#[cfg(test)]
 mod tests;
 
 pub use mirror::{
@@ -35,6 +37,6 @@ pub use snapshot::{
     PoolSummaryResponse, PoolTxRecord,
 };
 pub use source::{
-    FakePoolSource, HttpPoolSource, NodeHeader, NodeTxStatus, PoolEntryMeta, PoolSource,
-    PoolTxLookup, RawTxPool, TxPoolInfo,
+    HttpPoolSource, NodeHeader, NodeTxStatus, PoolEntryMeta, PoolSource, PoolTxLookup, RawTxPool,
+    TxPoolInfo,
 };

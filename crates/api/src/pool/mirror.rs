@@ -136,7 +136,7 @@ pub struct RefreshOutcome {
 }
 
 pub struct PoolRefresherConfig {
-    pub max_tracked_txs: usize,
+    pub max_tracked_txs: std::num::NonZeroUsize,
     pub is_mainnet: bool,
 }
 
@@ -592,7 +592,7 @@ impl PoolRefresher {
     /// Keep the newest `max_tracked_txs` by time added to pool. Returns whether
     /// anything was dropped, which every response then reports as `truncated`.
     fn enforce_cap(&mut self) -> bool {
-        if self.records.len() <= self.config.max_tracked_txs {
+        if self.records.len() <= self.config.max_tracked_txs.get() {
             return false;
         }
         let mut ordered: Vec<([u8; 32], u64)> = self
@@ -604,7 +604,7 @@ impl PoolRefresher {
         ordered.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
         let keep: HashSet<[u8; 32]> = ordered
             .into_iter()
-            .take(self.config.max_tracked_txs)
+            .take(self.config.max_tracked_txs.get())
             .map(|(hash, _)| hash)
             .collect();
         self.records.retain(|hash, _| keep.contains(hash));

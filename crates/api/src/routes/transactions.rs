@@ -629,7 +629,7 @@ fn compute_tx_fee_from_io(
     dao_compensation: u128,
     outputs_capacity: u128,
     is_cellbase: bool,
-    block_number: i64,
+    block_number: Option<i64>,
     tx_hash: &[u8],
 ) -> Result<u128, ApiRouteError> {
     if is_cellbase {
@@ -642,7 +642,7 @@ fn compute_tx_fee_from_io(
         .ok_or_else(|| {
             ApiError::internal(format!(
                 "transaction inputs/outputs invariant broken at block {}: tx_hash=0x{}, inputs_capacity={}, dao_compensation={}, outputs_capacity={}",
-                block_number,
+                block_number.map_or_else(|| "(in pool)".to_string(), |number| number.to_string()),
                 hex::encode(tx_hash),
                 inputs_capacity,
                 dao_compensation,
@@ -824,8 +824,12 @@ async fn get_transaction_detail(
                 }
             });
 
-        let io =
-            build_inputs_outputs_from_pool_tx(&resolved, &state.ckb_network, 0, virtual_occupied)?;
+        let io = build_inputs_outputs_from_pool_tx(
+            &resolved,
+            &state.ckb_network,
+            tx_lookup.block_number,
+            virtual_occupied,
+        )?;
 
         let pending_since = tx_lookup.time_added_to_pool.and_then(|timestamp| {
             chrono::DateTime::from_timestamp_millis(timestamp as i64).map(|dt| dt.to_rfc3339())
@@ -1021,10 +1025,14 @@ fn empty_inputs_outputs() -> TxIoBundle {
 /// pool resolver's fixed order of snapshot parent, then the parent transaction
 /// from the node — so the pending view and the address-page pool rows can
 /// never disagree about what a transaction spends.
+///
+/// `block_number` is the committing block of a committed-awaiting-index
+/// transaction and `None` for one still in the pool: only block 0's cells can
+/// be the genesis burn cell.
 fn build_inputs_outputs_from_pool_tx(
     resolved: &crate::pool::ResolvedPoolTx,
     network: &str,
-    block_number: i64,
+    block_number: Option<i64>,
     virtual_occupied: i128,
 ) -> Result<PendingTxIoBundle, ApiRouteError> {
     let mut inputs_capacity: u128 = 0;
@@ -1035,15 +1043,23 @@ fn build_inputs_outputs_from_pool_tx(
         .inputs
         .iter()
         .map(|input| -> Result<TransactionInputResponse, ApiRouteError> {
-            let previous_output = Some(PreviousOutput {
-                tx_hash: format!("0x{}", hex::encode(input.previous_tx_hash)),
-                index: i32::try_from(input.previous_output_index).map_err(|_| {
+            let index = if resolved.is_cellbase && input.cell.is_none() {
+                // The cellbase pseudo-input's 0xffffffff, rendered exactly as
+                // the committed path renders it (`as i32`, i.e. -1), so the
+                // same transaction reads the same before and after indexing.
+                input.previous_output_index as i32
+            } else {
+                i32::try_from(input.previous_output_index).map_err(|_| {
                     ApiError::internal(format!(
                         "previous output index {} exceeds i32 for tx 0x{}",
                         input.previous_output_index,
                         hex::encode(resolved.tx_hash)
                     ))
-                })?,
+                })?
+            };
+            let previous_output = Some(PreviousOutput {
+                tx_hash: format!("0x{}", hex::encode(input.previous_tx_hash)),
+                index,
             });
 
             let Some(cell) = input.cell.as_ref() else {
@@ -1189,7 +1205,7 @@ fn build_inputs_outputs_from_pool_tx(
                 })
                 .transpose()?;
 
-            let is_satoshi = block_number == 0
+            let is_satoshi = block_number == Some(0)
                 && ckbadger_common::burn_policy::burn_policy(network)
                     .is_some_and(|p| cell.lock_args.as_slice() == p.lock_args);
             let (cell_type, virtual_occupied_capacity) = if is_satoshi {
@@ -2509,24 +2525,25 @@ mod tests {
 
     #[test]
     fn test_compute_tx_fee_from_io_for_regular_tx() {
-        let fee = compute_tx_fee_from_io(1_000, 0, 950, false, 10, &[0x11; 32]).unwrap();
+        let fee = compute_tx_fee_from_io(1_000, 0, 950, false, Some(10), &[0x11; 32]).unwrap();
         assert_eq!(fee, 50);
     }
 
     #[test]
     fn test_compute_tx_fee_from_io_adds_dao_compensation_to_inputs() {
         // Outputs exceed raw inputs because the withdrawal pays compensation.
-        let fee = compute_tx_fee_from_io(1_000, 150, 1_100, false, 10, &[0x22; 32]).unwrap();
+        let fee = compute_tx_fee_from_io(1_000, 150, 1_100, false, None, &[0x22; 32]).unwrap();
         assert_eq!(fee, 50);
         // Compensation smaller than the fee: raw inputs still exceed outputs,
         // and the compensation must STILL be counted, not dropped.
-        let fee = compute_tx_fee_from_io(1_000, 10, 950, false, 10, &[0x22; 32]).unwrap();
+        let fee = compute_tx_fee_from_io(1_000, 10, 950, false, None, &[0x22; 32]).unwrap();
         assert_eq!(fee, 60);
     }
 
     #[test]
     fn test_compute_tx_fee_from_io_errors_when_non_dao_outputs_exceed_inputs() {
-        let err = compute_tx_fee_from_io(1_000, 0, 1_100, false, 10, &[0x33; 32]).unwrap_err();
+        let err =
+            compute_tx_fee_from_io(1_000, 0, 1_100, false, Some(10), &[0x33; 32]).unwrap_err();
         assert_eq!(err.0, axum::http::StatusCode::INTERNAL_SERVER_ERROR);
         assert!(err.1 .0.message.contains("inputs/outputs invariant broken"));
     }

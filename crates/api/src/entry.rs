@@ -42,8 +42,8 @@ pub struct ApiServiceConfig {
     pub crawler_enabled: bool,
     /// Mirror the node's tx pool in API process memory (`[api] pool_mirror_enabled`).
     pub pool_mirror_enabled: bool,
-    pub pool_poll_interval_ms: u64,
-    pub pool_max_tracked_txs: usize,
+    pub pool_poll_interval_ms: std::num::NonZeroU64,
+    pub pool_max_tracked_txs: std::num::NonZeroUsize,
 }
 
 const NETWORK_STORE_RETRY_INTERVAL: Duration = Duration::from_secs(1);

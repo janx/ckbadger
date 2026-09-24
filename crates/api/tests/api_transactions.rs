@@ -90,12 +90,12 @@ async fn test_transaction_detail_returns_pending_mempool_transaction() {
     );
 }
 
-/// A pending genesis (block 0) output whose lock args equal the Satoshi
-/// dead-address pubkey hash is tagged `genesis_special_burn` and reports the
-/// network's seeded `baseline.virtual_occupied` as `virtualUsedCapacity`,
-/// proving the burn policy + baseline flow through the tx-output builder.
+/// A POOL transaction paying the Satoshi dead-address pubkey hash is not the
+/// genesis burn cell: `genesis_special_burn` (and its `virtualUsedCapacity`)
+/// describe block 0's cells only. This test used to assert the opposite — the
+/// pool branch passed block number 0 for every uncommitted transaction.
 #[tokio::test]
-async fn test_pending_transaction_genesis_satoshi_output_tagged() {
+async fn pending_tx_paying_the_satoshi_address_is_not_a_genesis_burn() {
     let store = test_store();
     // Seed the synced-chain baseline; `seed_genesis_baseline` uses mainnet's
     // 8.4B burnt * 6/10 == 504e15 shannons, the value asserted below.
@@ -171,6 +171,53 @@ async fn test_pending_transaction_genesis_satoshi_output_tagged() {
 
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["outputs"][0]["cellType"], serde_json::Value::Null);
+    assert_eq!(
+        json["outputs"][0]["virtualCommonKnowledgeSize"],
+        serde_json::Value::Null
+    );
+}
+
+/// The genesis block's cellbase, committed but not yet indexed (the store is
+/// empty): its Satoshi output IS the genesis burn cell and carries the
+/// network's `baseline.virtual_occupied`; its pseudo-input spends no cell, so
+/// it is served (fee 0) rather than reported as unresolved.
+#[tokio::test]
+async fn committed_unindexed_genesis_cellbase_tags_the_satoshi_output() {
+    let store = test_store();
+    seed_genesis_baseline(&store);
+    let server = MockServer::start().await;
+    let hash = pending_tx_hash_hex();
+    let cellbase_input = format!("0x{}", "00".repeat(32));
+    let mut response = transaction_rpc_response(
+        &hash,
+        &[(&cellbase_input, u32::MAX)],
+        vec![serde_json::json!({
+            "capacity": "0x174876e800",
+            "lock": {
+                "code_hash": format!("0x{}", "11".repeat(32)),
+                "hash_type": "type",
+                "args": format!("0x{}", hex::encode(ckbadger_common::dao::SATOSHI_PUBKEY_HASH))
+            },
+            "type": null
+        })],
+        vec!["0x".to_string()],
+        "committed",
+        Some((0, &format!("0x{}", "92".repeat(32)))),
+    );
+    response["result"]["cycles"] = serde_json::json!("0x0");
+    mount_transaction_rpc(&server, response).await;
+
+    let mut config = test_config(store);
+    config.ckb_rpc_url = server.uri();
+    let app = create_router(config).await;
+
+    let (status, json) = get_json(&app, &format!("/transactions/{hash}/detail")).await;
+    assert_eq!(status, StatusCode::OK, "{json:?}");
+    assert_eq!(json["isCellbase"], true);
+    assert_eq!(json["blockNumber"], 0);
+    assert_eq!(json["fee"], "0");
+    assert_eq!(json["interpretation"]["status"], "complete");
     assert_eq!(json["outputs"][0]["cellType"], "genesis_special_burn");
     assert_eq!(
         json["outputs"][0]["virtualCommonKnowledgeSize"],
