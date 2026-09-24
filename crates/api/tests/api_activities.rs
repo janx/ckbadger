@@ -1220,6 +1220,19 @@ async fn test_address_activities_include_named_participation_with_zero_ckb_delta
         &tx_hash,
         &AddrTxValue::new(0, false, false, TAG_IDENTITY),
     );
+    // `other` holds a cell in this transaction, so the chain view knows its
+    // lock script (CF_LOCK_SCRIPTS is written at every cell creation).
+    batch.put_lock_script(
+        &other,
+        &ckbadger_store::types::LockScriptEntry {
+            code_hash: hex::decode(
+                "9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+            )
+            .unwrap(),
+            hash_type: 1,
+            args: vec![0x11; 20],
+        },
+    );
     batch.commit().unwrap();
 
     let config = test_config_with_append_only(core_store.clone(), append_only_store.clone());
@@ -1714,4 +1727,175 @@ async fn address_pending_summary_is_not_served_from_the_detail_cache() {
         second["pendingSummary"],
         serde_json::json!({ "txCount": 1, "capacityDelta": "700" })
     );
+}
+
+// ── 5.9: one lock → address resolver ─────────────────────────────────────
+
+/// Seed one committed tx at block 10 in which `lock_hash` pays `other`.
+fn seed_two_party_tx(store: &Arc<CkbadgerStore>, lock_hash: &[u8; 32], other: &[u8; 32]) {
+    use ckbadger_store::types::{ParticipantDelta, ParticipantId};
+    let tx_hash = vec![0xaa; 32];
+    let actions = TxActions {
+        tx_hash: tx_hash.clone(),
+        block_hash: vec![0xbb; 32],
+        block_number: 10,
+        tx_index: 0,
+        timestamp: 1_700_000_000_000,
+        is_cellbase: false,
+        protocol_actions: vec![],
+        type_calls: vec![],
+        lock_calls: vec![],
+        participants: vec![
+            ParticipantDelta {
+                id: ParticipantId::Lock(*lock_hash),
+                ckb_delta: -100,
+                used_delta: 0,
+                item_deltas: vec![],
+                tags: 0,
+                roles: 0,
+            },
+            ParticipantDelta {
+                id: ParticipantId::Lock(*other),
+                ckb_delta: 100,
+                used_delta: 0,
+                item_deltas: vec![],
+                tags: 0,
+                roles: 0,
+            },
+        ],
+    };
+    seed_named_tx(store, 10, &tx_hash, &actions);
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_addr_tx(
+        lock_hash,
+        10,
+        0,
+        &tx_hash,
+        &AddrTxValue::new(-100, true, false, 0),
+    );
+    batch.commit().unwrap();
+}
+
+/// A party whose lock script the store does not know is reported by its lock
+/// hash with no address — never with the hex lock hash posing as an address.
+#[tokio::test]
+async fn unknown_lock_participant_is_unresolved_not_a_fabricated_address() {
+    let store = test_store();
+    let lock_hash = [0x42u8; 32];
+    let other = [0x11u8; 32];
+    seed_two_party_tx(&store, &lock_hash, &other);
+    let app = create_router(test_config(store)).await;
+
+    let (status, json) = get_json(
+        &app,
+        &format!("/addresses/0x{}/activities", hex::encode(lock_hash)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let party = &json["data"][0]["participants"][0];
+    assert_eq!(party["lockHash"], format!("0x{}", hex::encode(other)));
+    assert!(party["address"].is_null(), "{json}");
+}
+
+/// A lock script the store holds but cannot encode (a hash_type no chain
+/// allows) is store corruption, reported with the lock — not rendered as a
+/// guess or dropped.
+#[tokio::test]
+async fn corrupt_lock_script_entry_is_a_500_naming_the_lock() {
+    let store = test_store();
+    let lock_hash = [0x42u8; 32];
+    let other = [0x11u8; 32];
+    seed_two_party_tx(&store, &lock_hash, &other);
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_lock_script(
+        &other,
+        &ckbadger_store::types::LockScriptEntry {
+            code_hash: vec![0x9b; 32],
+            hash_type: 7,
+            args: vec![0x11; 20],
+        },
+    );
+    batch.commit().unwrap();
+    let app = create_router(test_config(store)).await;
+
+    let (status, json) = get_json(
+        &app,
+        &format!("/addresses/0x{}/activities", hex::encode(lock_hash)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{json}");
+    assert!(
+        json["message"]
+            .as_str()
+            .unwrap()
+            .contains(&hex::encode(other)),
+        "{json}"
+    );
+}
+
+/// A pending transaction paying a lock no committed cell has ever used: the
+/// recipient's address comes from the script the pool transaction itself
+/// carries, the same encoder the chain view uses, not from a store lookup
+/// that cannot know the lock yet.
+#[tokio::test]
+async fn pending_tx_paying_a_never_seen_lock_shows_its_real_address() {
+    use ckbadger_store::types::{ParticipantDelta, ParticipantId};
+
+    let secp =
+        hex::decode("9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8").unwrap();
+    let args = vec![0x5e; 20];
+    let cell = ckbadger_api::pool::ResolvedCell::new(
+        100_000_000_000,
+        secp.clone(),
+        1,
+        args.clone(),
+        None,
+        vec![],
+    )
+    .unwrap();
+    let recipient: [u8; 32] = cell.lock_script_hash.clone().try_into().unwrap();
+    let expected =
+        ckbadger_api::utils::address::script_to_address(&secp, 1, &args, "mainnet").unwrap();
+
+    let mut record = make_test_pool_record(
+        &[0xf7; 32],
+        &POOL_LOCK_HASH,
+        -100_000_000_000,
+        1_700_000_500_000,
+        ckbadger_api::pool::PoolStatus::Pending,
+    );
+    record.outputs = vec![cell];
+    record
+        .actions
+        .as_mut()
+        .unwrap()
+        .participants
+        .push(ParticipantDelta {
+            id: ParticipantId::Lock(recipient),
+            ckb_delta: 100_000_000_000,
+            used_delta: 0,
+            item_deltas: vec![],
+            tags: 0,
+            roles: 0,
+        });
+
+    let mut config = test_config(test_store());
+    config.ckb_network = "mainnet".to_string();
+    let state = test_app_state(config);
+    state
+        .pool_mirror
+        .publish(healthy_pool_snapshot(vec![record]));
+    let app = create_router_with_state(state).await;
+
+    let (status, json) = get_json(
+        &app,
+        &format!("/addresses/0x{}/activities", hex::encode(POOL_LOCK_HASH)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let row = &json["data"][0];
+    assert_eq!(row["poolStatus"], "pending", "{json}");
+    let party = &row["participants"][0];
+    assert_eq!(party["lockHash"], format!("0x{}", hex::encode(recipient)));
+    assert_eq!(party["address"], expected, "{json}");
 }

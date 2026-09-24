@@ -25,6 +25,7 @@ use crate::cache::InMemoryCache;
 use crate::response::{
     default_limit, ok, ApiError, ApiResult, ApiRouteError, CursorPaginatedResponse,
 };
+use crate::utils::address::{encode_lock_address, resolve_lock_address};
 use crate::utils::hash::parse_fixed_hex;
 use crate::utils::{accumulate_owned_capacity, parse_asset_id_max32};
 use crate::AppState;
@@ -936,13 +937,16 @@ impl DotCellPartyResolver<'_> {
                 None,
             ));
         };
-        let address = ckbadger_common::address::script_to_address(
-            &entry.code_hash,
-            entry.hash_type,
-            &entry.args,
-            self.network,
-        )
-        .ok();
+        let address = Some(
+            encode_lock_address(
+                &lock_hash,
+                &entry.code_hash,
+                entry.hash_type,
+                &entry.args,
+                self.network,
+            )
+            .map_err(|e| ApiError::internal(format!("{e:#}")))?,
+        );
         let script_name = self
             .store
             .get_script_info(&entry.code_hash)
@@ -964,21 +968,13 @@ impl DotCellPartyResolver<'_> {
 
     /// Resolve a full 32-byte lock hash (a sale's seller).
     fn resolve_full(&self, lock_hash: &[u8; 32]) -> Result<PartyRef, ApiRouteError> {
-        let entry = self
-            .store
-            .get_lock_script(lock_hash)
-            .map_err(|e| ApiError::internal(e.to_string()))?;
-        let (address, script_name) = match entry {
-            Some(entry) => (
-                ckbadger_common::address::script_to_address(
-                    &entry.code_hash,
-                    entry.hash_type,
-                    &entry.args,
-                    self.network,
-                )
-                .ok(),
+        let resolved = resolve_lock_address(self.store, lock_hash, self.network)
+            .map_err(|e| ApiError::internal(format!("{e:#}")))?;
+        let (address, script_name) = match resolved {
+            Some(resolved) => (
+                Some(resolved.address),
                 self.store
-                    .get_script_info(&entry.code_hash)
+                    .get_script_info(&resolved.entry.code_hash)
                     .map_err(|e| ApiError::internal(e.to_string()))?
                     .and_then(|info| info.name),
             ),

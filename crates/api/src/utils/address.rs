@@ -169,9 +169,103 @@ pub fn is_ckb_address(s: &str) -> bool {
 
 pub use ckbadger_common::script_to_address;
 
+/// The address of a lock script, as the chain encodes it.
+///
+/// The ONE lock → address encoding for every response that names a party.
+/// Every lock script that exists on chain is encodable, so a failure here
+/// means the script (a stored `CF_LOCK_SCRIPTS` row, or a mirrored pool cell)
+/// is corrupt: an error naming the lock hash, never a guessed or fabricated
+/// address.
+pub fn encode_lock_address(
+    lock_hash: &[u8],
+    code_hash: &[u8],
+    hash_type: i16,
+    args: &[u8],
+    network: &str,
+) -> anyhow::Result<String> {
+    script_to_address(code_hash, hash_type, args, network).map_err(|e| {
+        anyhow::anyhow!(
+            "lock script cannot be encoded as an address: lock_hash=0x{}, hash_type={hash_type}, error={e}",
+            hex::encode(lock_hash)
+        )
+    })
+}
+
+/// A lock hash the chain view knows, with its script and address.
+#[derive(Debug, Clone)]
+pub struct ResolvedLockAddress {
+    pub entry: ckbadger_store::types::LockScriptEntry,
+    pub address: String,
+}
+
+/// Resolve a full lock hash through `CF_LOCK_SCRIPTS`.
+///
+/// One error semantic for every party resolver: a store read failure is an
+/// error; a lock the store has never seen is `Ok(None)` (reported as
+/// unresolved); a stored script that cannot be encoded is an error
+/// ([`encode_lock_address`]).
+pub fn resolve_lock_address(
+    store: &ckbadger_store::CkbadgerStore,
+    lock_hash: &[u8],
+    network: &str,
+) -> anyhow::Result<Option<ResolvedLockAddress>> {
+    let Some(entry) = store.get_lock_script(lock_hash)? else {
+        return Ok(None);
+    };
+    let address = encode_lock_address(
+        lock_hash,
+        &entry.code_hash,
+        entry.hash_type,
+        &entry.args,
+        network,
+    )?;
+    Ok(Some(ResolvedLockAddress { entry, address }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resolve_lock_address_distinguishes_unknown_from_corrupt() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = ckbadger_store::CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        let secp = hex::decode("9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8")
+            .unwrap();
+        let mut batch = ckbadger_store::batch::StoreBatch::new(&store);
+        batch.put_lock_script(
+            &[0x01; 32],
+            &ckbadger_store::types::LockScriptEntry {
+                code_hash: secp.clone(),
+                hash_type: 1,
+                args: vec![0x11; 20],
+            },
+        );
+        batch.put_lock_script(
+            &[0x02; 32],
+            &ckbadger_store::types::LockScriptEntry {
+                code_hash: secp.clone(),
+                hash_type: 9,
+                args: vec![0x11; 20],
+            },
+        );
+        batch.commit().unwrap();
+
+        let known = resolve_lock_address(&store, &[0x01; 32], "mainnet")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            known.address,
+            script_to_address(&secp, 1, &[0x11; 20], "mainnet").unwrap()
+        );
+        assert!(resolve_lock_address(&store, &[0x03; 32], "mainnet")
+            .unwrap()
+            .is_none());
+        let err = resolve_lock_address(&store, &[0x02; 32], "mainnet")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains(&"02".repeat(32)), "{err}");
+    }
 
     #[test]
     fn test_full_address_encoding() {

@@ -4601,3 +4601,41 @@ async fn dotcell_children_are_live_only_and_paged() {
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
 }
+
+/// A `.cell` owner prefix that resolves to a stored lock script the chain
+/// could never have produced is store corruption: a 500 naming the lock, the
+/// same semantics every other lock → address resolution has.
+#[tokio::test]
+async fn dotcell_owner_with_an_unencodable_lock_script_is_a_500() {
+    let store = test_store();
+    seed_dotcell_name(
+        &store,
+        hex20(SUPPORT_ID),
+        "support",
+        hex20(SUPPORT_OWNER20),
+        dotcell_extra("support", hex20(SUPPORT_OWNER20), hex20(SUPPORT_OWNER20)),
+        true,
+        1_700_000_000_000,
+    );
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_lock_script(
+        &hex32(SUPPORT_OWNER_LOCK_HASH),
+        &ckbadger_store::types::LockScriptEntry {
+            code_hash: vec![0x9b; 32],
+            hash_type: 7,
+            args: vec![0xE1; 20],
+        },
+    );
+    batch.commit().unwrap();
+    let app = create_router(test_config(store)).await;
+
+    let (status, body) = dotcell_get(app, "/api/v1/assets/identities/dotcell/items/support").await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+    assert!(
+        body["message"]
+            .as_str()
+            .unwrap()
+            .contains(SUPPORT_OWNER_LOCK_HASH.trim_start_matches("0x")),
+        "{body}"
+    );
+}
