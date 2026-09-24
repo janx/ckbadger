@@ -295,24 +295,41 @@ impl DotCellParser {
     /// the witness at that output's own index. A name output with no witness
     /// there is an error: the records payload is chain state, and the hash in
     /// the cell says it exists.
+    ///
+    /// Every error names `tx=0x…, output_index=N` in the same words as the
+    /// bulk path's `parse_protocol_facts`, so one malformed cell is located
+    /// identically whichever sync mode meets it.
     pub fn parse_name_cells_with_output_indices(
         tx: &TransactionView,
     ) -> Result<Vec<(usize, DotCellNameData, Vec<DotCellRecord>)>> {
         let mut out = Vec::new();
         for (index, (output, data_hex)) in tx.outputs.iter().zip(&tx.outputs_data).enumerate() {
-            let Some(name) = Self::parse_name_cell(output, data_hex)? else {
+            let Some(name) = Self::parse_name_cell(output, data_hex).map_err(|e| {
+                anyhow!(
+                    "dotcell name cell parse failed: tx={}, output_index={}: {e}",
+                    tx.hash,
+                    index
+                )
+            })?
+            else {
                 continue;
             };
             let witness = tx.witnesses.get(index).ok_or_else(|| {
                 anyhow!(
-                    "dotcell name output {} of tx {} has no witness at its own index (witnesses={})",
-                    index,
+                    "dotcell name cell has no witness at its output index: tx={}, output_index={} (witnesses={})",
                     tx.hash,
+                    index,
                     tx.witnesses.len()
                 )
             })?;
-            let records = Self::parse_witness_records(witness, &name.records_hash)
-                .map_err(|e| anyhow!("tx {} output {}: {e}", tx.hash, index))?;
+            let records =
+                Self::parse_witness_records(witness, &name.records_hash).map_err(|e| {
+                    anyhow!(
+                        "dotcell records: tx={}, output_index={}: {e}",
+                        tx.hash,
+                        index
+                    )
+                })?;
             out.push((index, name, records));
         }
         Ok(out)
@@ -589,6 +606,43 @@ mod tests {
         tx.witnesses.truncate(1);
         let err = DotCellParser::parse_name_cells_with_output_indices(&tx).unwrap_err();
         assert!(err.to_string().contains("witness"), "{err}");
+    }
+
+    /// Every live-side failure names the cell the way bulk's
+    /// `parse_protocol_facts` does: `tx=0x…, output_index=N`.
+    #[test]
+    fn live_output_scan_locates_every_failure_like_bulk() {
+        let base = fixture::T2_REGISTER_JOAOM.transaction();
+        let locator = format!("tx={}, output_index=1", base.hash);
+
+        let mut no_witness = base.clone();
+        no_witness.witnesses.truncate(1);
+        let err = DotCellParser::parse_name_cells_with_output_indices(&no_witness).unwrap_err();
+        assert!(
+            err.to_string().starts_with(&format!(
+                "dotcell name cell has no witness at its output index: {locator}"
+            )),
+            "{err}"
+        );
+
+        let mut bad_layout = base.clone();
+        bad_layout.outputs_data[1] = format!("0x04{}", &bad_layout.outputs_data[1][4..]);
+        let err = DotCellParser::parse_name_cells_with_output_indices(&bad_layout).unwrap_err();
+        assert!(
+            err.to_string()
+                .starts_with(&format!("dotcell name cell parse failed: {locator}: ")),
+            "{err}"
+        );
+        assert!(err.to_string().contains("layout version 4"), "{err}");
+
+        let mut wrong_records = base;
+        wrong_records.witnesses.swap(0, 1);
+        let err = DotCellParser::parse_name_cells_with_output_indices(&wrong_records).unwrap_err();
+        assert!(
+            err.to_string().starts_with("dotcell records: tx=0x"),
+            "{err}"
+        );
+        assert!(err.to_string().contains("output_index=0"), "{err}");
     }
 
     #[test]

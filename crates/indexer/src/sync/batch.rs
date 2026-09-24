@@ -71,6 +71,33 @@ impl PreCommitInvariantError {
     }
 }
 
+/// A `.cell` name cell the live writer indexes: output index, decoded name,
+/// records from the witness at that output's own index.
+type LiveDotCellNameCell = (
+    usize,
+    crate::parser::DotCellNameData,
+    Vec<crate::parser::dotcell::DotCellRecord>,
+);
+
+/// The `.cell` name cells a transaction creates, for the live writer.
+///
+/// A failure here is a deterministic property of committed chain data that
+/// the strict decoder rejects (spec §Fail Fast: layout version, records hash,
+/// own-index witness, UTF-8 label). Bulk build stops on the same block, so
+/// live must stop the same way — a pre-commit invariant, never the
+/// cleanup-and-retry path that would re-fetch and re-reject the block forever.
+fn live_dotcell_name_cells(
+    tx: &crate::rpc::TransactionView,
+    block_number: i64,
+) -> Result<Vec<LiveDotCellNameCell>> {
+    DotCellParser::parse_name_cells_with_output_indices(tx).map_err(|source| {
+        anyhow::Error::new(PreCommitInvariantError::new(
+            "dotcell name cell",
+            anyhow!("block={block_number}, {source:#}"),
+        ))
+    })
+}
+
 pub(super) fn collect_missing_input_outpoints<T>(
     all_input_outpoints: &[(Vec<u8>, i16)],
     input_cell_info: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
@@ -3095,8 +3122,7 @@ impl Indexer {
                     // as a Transfer, while a `.cell` transaction's meaning comes
                     // from the state diff (`DotCellDetector`). The feed entry is
                     // derived from the written protocol actions below.
-                    for (output_index, name, records) in
-                        DotCellParser::parse_name_cells_with_output_indices(tx)?
+                    for (output_index, name, records) in live_dotcell_name_cells(tx, parsed.number)?
                     {
                         let output_index_i16 = checked_usize_to_i16(
                             output_index,
@@ -5806,6 +5832,26 @@ mod tests {
         assert!(msg.contains("run through bulk build engine first"));
     }
 
+    #[test]
+    fn dotcell_parse_error_on_live_path_is_a_precommit_invariant() {
+        let mut tx = crate::parser::test_helpers::real_dotcell::T2_REGISTER_JOAOM.transaction();
+        tx.witnesses.truncate(1);
+        let err = live_dotcell_name_cells(&tx, 22_365_400).unwrap_err();
+        let invariant = err
+            .downcast_ref::<PreCommitInvariantError>()
+            .expect("a DotCell parse failure is a pre-commit invariant");
+        assert_eq!(invariant.component, "dotcell name cell");
+        let msg = format!("{err:#}");
+        assert!(msg.contains("block=22365400"), "{msg}");
+        assert!(
+            msg.contains(&format!("tx={}, output_index=1", tx.hash)),
+            "{msg}"
+        );
+
+        let clean = crate::parser::test_helpers::real_dotcell::T2_REGISTER_JOAOM.transaction();
+        assert_eq!(live_dotcell_name_cells(&clean, 1).unwrap().len(), 2);
+    }
+
     // ── Live write-path DAO phase-2 fee regression tests ─────────────────
     //
     // Drives the real live-sync write path (parse → parser fee pass →
@@ -7802,6 +7848,65 @@ mod tests {
             assert_eq!(
                 live_by_prefix, bulk.addr_txs_by_prefix,
                 "addr_txs_by_prefix rows differ"
+            );
+        }
+
+        /// The registration chain with the new name's own-index witness
+        /// dropped: a name cell whose records the strict decoder cannot find.
+        fn registration_blocks_missing_the_new_names_witness() -> Vec<BlockResponseWithCycles> {
+            let mut blocks = dotcell_registration_blocks();
+            let register = &mut blocks[2].block.transactions[1];
+            assert_eq!(register.hash, format!("0x{}", hex::encode([0xd2u8; 32])));
+            register.witnesses.truncate(1);
+            blocks
+        }
+
+        /// #10: a DotCell parse failure is deterministic. Live must stop the way
+        /// bulk does — a pre-commit invariant, no cleanup, no retry — and both
+        /// must say where: the same tx/output locator.
+        #[tokio::test]
+        async fn a_dotcell_parse_error_stops_live_like_bulk_with_the_same_locator() {
+            let _guard =
+                crate::db::writer::activities::test_detector_override::without_extra_detectors();
+            let blocks = registration_blocks_missing_the_new_names_witness();
+            let locator = format!("tx=0x{}, output_index=1", hex::encode([0xd2u8; 32]));
+
+            let bulk_err = crate::sync::materialize_bulk_artifacts_for_test(&blocks)
+                .expect_err("bulk build must stop on the malformed name cell");
+            let bulk_msg = format!("{bulk_err:#}");
+            assert!(bulk_msg.contains(&locator), "bulk: {bulk_msg}");
+
+            let dir = tempfile::tempdir().unwrap();
+            let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+            let indexer = super::live_dao_fee::indexer_for_live_write_test(store.clone());
+            store
+                .set_secondary_epoch_reward(61_369_863_013_698)
+                .unwrap();
+            let mut blocks = blocks.into_iter();
+            for block in blocks.by_ref().take(2) {
+                super::live_dao_fee::write_live_block(&indexer, block)
+                    .await
+                    .unwrap();
+            }
+            let live_err = super::live_dao_fee::write_live_block(&indexer, blocks.next().unwrap())
+                .await
+                .expect_err("live sync must stop on the malformed name cell");
+            assert!(
+                live_err.downcast_ref::<PreCommitInvariantError>().is_some(),
+                "a deterministic parse failure must be a pre-commit invariant: {live_err:#}"
+            );
+            assert_eq!(
+                crate::sync::pipeline::classify_batch_write_failure(&live_err),
+                crate::sync::pipeline::BatchWriteFailurePolicy::FailFastPreCommitInvariant,
+                "live must not clean up and retry a block bulk rejects"
+            );
+            let live_msg = format!("{live_err:#}");
+            assert!(live_msg.contains(&locator), "live: {live_msg}");
+            assert!(live_msg.contains("block=102"), "live: {live_msg}");
+            assert_eq!(
+                store.get_sync_status().unwrap().tip_block_number,
+                101,
+                "nothing of the rejected block was committed"
             );
         }
 

@@ -119,12 +119,12 @@ struct ParserBatchPerfSample {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum BatchWriteFailurePolicy {
+pub(super) enum BatchWriteFailurePolicy {
     FailFastPreCommitInvariant,
     CleanupAndRetry,
 }
 
-fn classify_batch_write_failure(error: &anyhow::Error) -> BatchWriteFailurePolicy {
+pub(super) fn classify_batch_write_failure(error: &anyhow::Error) -> BatchWriteFailurePolicy {
     if error.downcast_ref::<PreCommitInvariantError>().is_some() {
         BatchWriteFailurePolicy::FailFastPreCommitInvariant
     } else {
