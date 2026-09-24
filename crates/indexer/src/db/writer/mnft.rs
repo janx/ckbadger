@@ -289,7 +289,10 @@ impl BatchWriter {
             block_number,
             CF_MNFT_DATA,
             &issuer.issuer_id,
-            existing.as_ref().and_then(|e| bincode::serialize(e).ok()),
+            existing
+                .as_ref()
+                .map(|e| super::undo_pre_image(e, "mNFT issuer", &issuer.issuer_id, block_number))
+                .transpose()?,
             &state.undo_seq_by_block,
         );
         let entry = ObjectEntry {
@@ -334,7 +337,10 @@ impl BatchWriter {
             block_number,
             CF_MNFT_DATA,
             &class.class_id,
-            existing.as_ref().and_then(|e| bincode::serialize(e).ok()),
+            existing
+                .as_ref()
+                .map(|e| super::undo_pre_image(e, "mNFT class", &class.class_id, block_number))
+                .transpose()?,
             &state.undo_seq_by_block,
         );
         let new_tier = analyze_renderer_tier(class.renderer.as_deref());
@@ -488,7 +494,10 @@ impl BatchWriter {
             block_number,
             CF_MNFT_DATA,
             &token.token_id,
-            existing.as_ref().and_then(|e| bincode::serialize(e).ok()),
+            existing
+                .as_ref()
+                .map(|e| super::undo_pre_image(e, "mNFT token", &token.token_id, block_number))
+                .transpose()?,
             &state.undo_seq_by_block,
         );
         let was_live = existing.as_ref().is_some_and(|entry| entry.is_live);
@@ -686,7 +695,12 @@ impl BatchWriter {
                 block_number,
                 CF_MNFT_DATA,
                 token_id,
-                bincode::serialize(&entry).ok(),
+                Some(super::undo_pre_image(
+                    &entry,
+                    "mNFT token",
+                    token_id,
+                    block_number,
+                )?),
                 &state.undo_seq_by_block,
             );
             let collection_id = entry.collection_id.clone();

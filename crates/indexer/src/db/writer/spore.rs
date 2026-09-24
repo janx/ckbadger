@@ -558,7 +558,12 @@ impl BatchWriter {
             block_number,
             CF_SPORE_DATA,
             &cluster.cluster_id,
-            existing.as_ref().and_then(|e| bincode::serialize(e).ok()),
+            existing
+                .as_ref()
+                .map(|e| {
+                    super::undo_pre_image(e, "Spore cluster", &cluster.cluster_id, block_number)
+                })
+                .transpose()?,
             &state.undo_seq_by_block,
         );
         let entry = ObjectEntry {
@@ -616,7 +621,10 @@ impl BatchWriter {
             block_number,
             CF_IDENTITY_DATA,
             &did.did_id,
-            existing.as_ref().and_then(|e| bincode::serialize(e).ok()),
+            existing
+                .as_ref()
+                .map(|e| super::undo_pre_image(e, "did:ckb identity", &did.did_id, block_number))
+                .transpose()?,
             &state.undo_seq_by_block,
         );
         let was_live = existing.as_ref().is_some_and(|e| e.is_live);
@@ -730,7 +738,10 @@ impl BatchWriter {
             block_number,
             CF_SPORE_DATA,
             &spore.spore_id,
-            existing.as_ref().and_then(|e| bincode::serialize(e).ok()),
+            existing
+                .as_ref()
+                .map(|e| super::undo_pre_image(e, "Spore", &spore.spore_id, block_number))
+                .transpose()?,
             &state.undo_seq_by_block,
         );
         let was_live = existing.as_ref().is_some_and(|e| e.is_live);
@@ -981,7 +992,10 @@ impl BatchWriter {
             identity_id,
             existing
                 .as_ref()
-                .and_then(|entry| bincode::serialize(entry).ok()),
+                .map(|entry| {
+                    super::undo_pre_image(entry, ".bit Cell identity", identity_id, block_number)
+                })
+                .transpose()?,
             &state.undo_seq_by_block,
         );
         let was_live = existing.as_ref().is_some_and(|entry| entry.is_live);
@@ -1091,7 +1105,12 @@ impl BatchWriter {
                 block_number,
                 CF_IDENTITY_DATA,
                 spore_id,
-                bincode::serialize(&identity).ok(),
+                Some(super::undo_pre_image(
+                    &identity,
+                    "identity",
+                    spore_id,
+                    block_number,
+                )?),
                 &state.undo_seq_by_block,
             );
             let old_owner = identity.owner_lock_hash.clone();
@@ -1139,7 +1158,12 @@ impl BatchWriter {
                 block_number,
                 CF_SPORE_DATA,
                 spore_id,
-                bincode::serialize(&entry).ok(),
+                Some(super::undo_pre_image(
+                    &entry,
+                    "Spore",
+                    spore_id,
+                    block_number,
+                )?),
                 &state.undo_seq_by_block,
             );
 

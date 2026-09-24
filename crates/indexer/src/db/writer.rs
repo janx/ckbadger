@@ -141,6 +141,26 @@ impl BatchWriter {
     }
 }
 
+/// The bytes an undo entry restores for a row that exists.
+///
+/// A serialization failure is an error, never "the row did not exist":
+/// recorded as `None`, it would make the rollback DELETE a row that had a
+/// value — the same class a failed pre-image READ was fixed for (a5241239).
+pub(crate) fn undo_pre_image<T: serde::Serialize + ?Sized>(
+    value: &T,
+    what: &str,
+    id: &[u8],
+    block_number: i64,
+) -> Result<Vec<u8>> {
+    bincode::serialize(value).map_err(|e| {
+        anyhow::anyhow!(
+            "failed to serialize the {what} undo pre-image: id=0x{}, block={}, {e}",
+            hex::encode(id),
+            block_number
+        )
+    })
+}
+
 /// Guard for identity item ids that are recorded in the spore-outpoint reverse
 /// index (`SPORE_OUTPOINT_BY_ID`), which backs the per-item lifecycle feed
 /// (`/assets/identities/*/items/{id}/activities`).
@@ -376,6 +396,97 @@ mod undo_seq_tests {
                 !production.contains("SharedUndoSeq::default()"),
                 "{name} mints its own undo sequence outside test code"
             );
+        }
+    }
+
+    /// A value that cannot be serialized fails the write with its entity and
+    /// block, instead of becoming a `None` pre-image that tells rollback the
+    /// row did not exist.
+    #[test]
+    fn undo_pre_image_serialization_failure_is_an_error_with_context() {
+        struct Poisoned;
+        impl serde::Serialize for Poisoned {
+            fn serialize<S: serde::Serializer>(&self, _: S) -> Result<S::Ok, S::Error> {
+                Err(serde::ser::Error::custom("poisoned value"))
+            }
+        }
+        let err = super::undo_pre_image(&Poisoned, "mNFT token", &[0xAB; 4], 777).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("mNFT token undo pre-image"), "{msg}");
+        assert!(msg.contains("id=0xabababab"), "{msg}");
+        assert!(msg.contains("block=777"), "{msg}");
+        assert!(msg.contains("poisoned value"), "{msg}");
+
+        assert_eq!(
+            super::undo_pre_image(&42u32, "x", &[1], 1).unwrap(),
+            bincode::serialize(&42u32).unwrap()
+        );
+    }
+
+    /// No writer module turns a failed pre-image serialization into an absent
+    /// row (`bincode::serialize(..).ok()`) in production code.
+    #[test]
+    fn no_writer_module_drops_a_pre_image_serialization_error() {
+        let modules: [(&str, &str); 24] = [
+            ("activities.rs", include_str!("writer/activities.rs")),
+            ("addresses.rs", include_str!("writer/addresses.rs")),
+            (
+                "cell_distribution.rs",
+                include_str!("writer/cell_distribution.rs"),
+            ),
+            ("cells.rs", include_str!("writer/cells.rs")),
+            ("chain.rs", include_str!("writer/chain.rs")),
+            ("dao.rs", include_str!("writer/dao.rs")),
+            ("dotbit.rs", include_str!("writer/dotbit.rs")),
+            (
+                "dotcell_detector.rs",
+                include_str!("writer/dotcell_detector.rs"),
+            ),
+            ("dotcell.rs", include_str!("writer/dotcell.rs")),
+            ("entity_stats.rs", include_str!("writer/entity_stats.rs")),
+            (
+                "fiber_detector.rs",
+                include_str!("writer/fiber_detector.rs"),
+            ),
+            ("fiber.rs", include_str!("writer/fiber.rs")),
+            ("hodl_wave.rs", include_str!("writer/hodl_wave.rs")),
+            ("mnft.rs", include_str!("writer/mnft.rs")),
+            (
+                "object_activity_acc.rs",
+                include_str!("writer/object_activity_acc.rs"),
+            ),
+            (
+                "participant_rows.rs",
+                include_str!("writer/participant_rows.rs"),
+            ),
+            ("reorg.rs", include_str!("writer/reorg.rs")),
+            (
+                "rgbpp_detector.rs",
+                include_str!("writer/rgbpp_detector.rs"),
+            ),
+            ("spore.rs", include_str!("writer/spore.rs")),
+            (
+                "stablepp_detector.rs",
+                include_str!("writer/stablepp_detector.rs"),
+            ),
+            ("statistics.rs", include_str!("writer/statistics.rs")),
+            ("sync.rs", include_str!("writer/sync.rs")),
+            ("udt.rs", include_str!("writer/udt.rs")),
+            (
+                "utxoswap_detector.rs",
+                include_str!("writer/utxoswap_detector.rs"),
+            ),
+        ];
+        for (name, src) in modules {
+            let test_code_starts = src.find("#[cfg(test)]\nmod ").unwrap_or(src.len());
+            for (i, line) in src[..test_code_starts].lines().enumerate() {
+                assert!(
+                    !(line.contains("serialize(") && line.contains(".ok()")),
+                    "{name}:{} drops a serialization error: {}",
+                    i + 1,
+                    line.trim()
+                );
+            }
         }
     }
 

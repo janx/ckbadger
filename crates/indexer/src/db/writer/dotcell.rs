@@ -142,7 +142,10 @@ impl BatchWriter {
             block_number,
             CF_IDENTITY_DATA,
             &name.id,
-            existing.as_ref().and_then(|e| bincode::serialize(e).ok()),
+            existing
+                .as_ref()
+                .map(|e| super::undo_pre_image(e, ".cell identity", &name.id, block_number))
+                .transpose()?,
             &state.undo_seq_by_block,
         );
         let was_live = existing.as_ref().is_some_and(|e| e.is_live);
