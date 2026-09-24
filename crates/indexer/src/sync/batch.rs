@@ -7398,6 +7398,84 @@ mod tests {
             );
         }
 
+        /// Plan Task 5.7: `cleanup_batch_range` replayed the undo log (which
+        /// consumes the tx-context entries) and then asked for the canonical
+        /// rollback WITHOUT the contexts that replay returned, so every
+        /// CleanupAndRetry fell back to whole-CF scans. It must hand them over,
+        /// exactly like `execute_reorg`.
+        #[tokio::test]
+        async fn cleanup_batch_range_reuses_the_undo_tx_contexts_instead_of_scanning() {
+            let _guard =
+                crate::db::writer::activities::test_detector_override::without_extra_detectors();
+            let dir = tempfile::tempdir().unwrap();
+            let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+            let indexer = indexer_for_live_write_test(store.clone());
+            store
+                .set_secondary_epoch_reward(61_369_863_013_698)
+                .unwrap();
+            seed_pre_parent_header(store.as_ref());
+            seed_secp_script_info(store.as_ref());
+
+            // Address history the cleanup has no business reading: 300 rows of
+            // unrelated locks, all below the cleanup range.
+            const NOISE: u64 = 300;
+            {
+                let mut batch = ckbadger_store::batch::StoreBatch::new(store.as_ref());
+                for i in 0..NOISE {
+                    let mut lock = [0x90u8; 32];
+                    lock[..8].copy_from_slice(&i.to_le_bytes());
+                    batch.put_addr_tx(
+                        &lock,
+                        50,
+                        0,
+                        &[0x51; 32],
+                        &ckbadger_store::types::AddrTxValue::new(1, false, true, 0),
+                    );
+                }
+                batch.commit().unwrap();
+            }
+
+            for b in [
+                block(100, AR_DEPOSIT, vec![cellbase_tx(0xc0, FUNDING_CAPACITY)]),
+                block(
+                    101,
+                    AR_DEPOSIT,
+                    vec![
+                        cellbase_tx(0xc1, 100_000_000),
+                        transfer_tx(0xd1, 0xc0, FUNDING_CAPACITY - 100_000_000, lock_script_b()),
+                    ],
+                ),
+                block(
+                    102,
+                    AR_DEPOSIT,
+                    vec![
+                        cellbase_tx(0xc2, 100_000_000),
+                        transfer_tx(0xd2, 0xd1, FUNDING_CAPACITY - 200_000_000, lock_script_c()),
+                    ],
+                ),
+            ] {
+                write_live_block(&indexer, b).await.unwrap();
+            }
+
+            let result = indexer
+                .writer
+                .cleanup_batch_range(store.as_ref(), 102, 102)
+                .expect("cleanup of the last batch");
+            assert_eq!(result.blocks_removed, 1);
+            assert!(
+                result.addr_txs_scanned < NOISE,
+                "the cleanup read {} CF_ADDR_TXS rows; with the replayed tx contexts it reads \
+                 only the rolled-back participants' rows, not the {NOISE} unrelated ones",
+                result.addr_txs_scanned
+            );
+            assert!(
+                !addr_tx_keys(&store)
+                    .iter()
+                    .any(|(_, block, _)| *block > 101),
+                "block 102's rows are gone"
+            );
+        }
+
         /// A lock the injected detector names by its FULL hash. Deliberately a
         /// lock no fixture cell uses.
         fn lock_named_hash() -> [u8; 32] {
