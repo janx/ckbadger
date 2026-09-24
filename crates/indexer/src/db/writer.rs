@@ -310,6 +310,75 @@ mod undo_seq_tests {
         );
     }
 
+    /// Plan Task 5.5 (IDX-008 class): a writer that mints its own
+    /// `SharedUndoSeq::default()` numbers its undo entries from 0 beside the
+    /// batch's counter, so two such writes in one block collide and the second
+    /// pre-image overwrites the first. Only `write_parsed_batch` creates the
+    /// counter; writer modules take it. Every occurrence in a writer module
+    /// must therefore sit in test code, i.e. after the module's first
+    /// `#[cfg(test)] mod` (test modules close each file).
+    #[test]
+    fn no_writer_module_mints_its_own_undo_sequence() {
+        let modules: [(&str, &str); 24] = [
+            ("activities.rs", include_str!("writer/activities.rs")),
+            ("addresses.rs", include_str!("writer/addresses.rs")),
+            (
+                "cell_distribution.rs",
+                include_str!("writer/cell_distribution.rs"),
+            ),
+            ("cells.rs", include_str!("writer/cells.rs")),
+            ("chain.rs", include_str!("writer/chain.rs")),
+            ("dao.rs", include_str!("writer/dao.rs")),
+            ("dotbit.rs", include_str!("writer/dotbit.rs")),
+            (
+                "dotcell_detector.rs",
+                include_str!("writer/dotcell_detector.rs"),
+            ),
+            ("dotcell.rs", include_str!("writer/dotcell.rs")),
+            ("entity_stats.rs", include_str!("writer/entity_stats.rs")),
+            (
+                "fiber_detector.rs",
+                include_str!("writer/fiber_detector.rs"),
+            ),
+            ("fiber.rs", include_str!("writer/fiber.rs")),
+            ("hodl_wave.rs", include_str!("writer/hodl_wave.rs")),
+            ("mnft.rs", include_str!("writer/mnft.rs")),
+            (
+                "object_activity_acc.rs",
+                include_str!("writer/object_activity_acc.rs"),
+            ),
+            (
+                "participant_rows.rs",
+                include_str!("writer/participant_rows.rs"),
+            ),
+            ("reorg.rs", include_str!("writer/reorg.rs")),
+            (
+                "rgbpp_detector.rs",
+                include_str!("writer/rgbpp_detector.rs"),
+            ),
+            ("spore.rs", include_str!("writer/spore.rs")),
+            (
+                "stablepp_detector.rs",
+                include_str!("writer/stablepp_detector.rs"),
+            ),
+            ("statistics.rs", include_str!("writer/statistics.rs")),
+            ("sync.rs", include_str!("writer/sync.rs")),
+            ("udt.rs", include_str!("writer/udt.rs")),
+            (
+                "utxoswap_detector.rs",
+                include_str!("writer/utxoswap_detector.rs"),
+            ),
+        ];
+        for (name, src) in modules {
+            let test_code_starts = src.find("#[cfg(test)]\nmod ").unwrap_or(src.len());
+            let production = &src[..test_code_starts];
+            assert!(
+                !production.contains("SharedUndoSeq::default()"),
+                "{name} mints its own undo sequence outside test code"
+            );
+        }
+    }
+
     /// Plan Task 5.3: rollback replays a block's undo entries scope-major, which
     /// is exact only while every key the block mutates is recorded by ONE scope.
     /// One block written by the DotBit, Object and EntityStats scopes at once

@@ -605,27 +605,6 @@ impl BatchWriter {
         Ok(())
     }
 
-    pub fn insert_dotbit_account(
-        &self,
-        account_output: &ParsedDotbitAccountOutput,
-        tx_hash: &[u8],
-        block_number: i64,
-        timestamp_ms: i64,
-        batch: &mut StoreBatch,
-    ) -> Result<()> {
-        let entity_stats = SharedEntityStatsOverlay::new();
-        let mut state = self.new_dotbit_batch_state(entity_stats.clone(), SharedUndoSeq::default());
-        self.insert_dotbit_account_with_state(
-            account_output,
-            tx_hash,
-            block_number,
-            timestamp_ms,
-            batch,
-            &mut state,
-        )?;
-        entity_stats.stage_final(batch)
-    }
-
     pub(crate) fn insert_dotbit_account_with_state(
         &self,
         account_output: &ParsedDotbitAccountOutput,
@@ -813,26 +792,6 @@ impl BatchWriter {
         Ok(())
     }
 
-    pub fn consume_dotbit_account(
-        &self,
-        account_id: &[u8],
-        block_number: i64,
-        tx_hash: &[u8],
-        batch: &mut StoreBatch,
-    ) -> Result<Option<Vec<u8>>> {
-        let entity_stats = SharedEntityStatsOverlay::new();
-        let mut state = self.new_dotbit_batch_state(entity_stats.clone(), SharedUndoSeq::default());
-        let consumed = self.consume_dotbit_account_with_state(
-            account_id,
-            block_number,
-            tx_hash,
-            batch,
-            &mut state,
-        )?;
-        entity_stats.stage_final(batch)?;
-        Ok(consumed)
-    }
-
     /// Consume a .bit account. Returns `Some(DOTBIT_SENTINEL_COLLECTION)` if consumed.
     pub(crate) fn consume_dotbit_account_with_state(
         &self,
@@ -960,6 +919,59 @@ mod tests {
     };
     use std::sync::Arc;
 
+    /// One batch's .bit writer state, built the way `write_parsed_batch`
+    /// builds it (one overlay, ONE undo sequence), around a single write.
+    fn in_one_batch<R>(
+        writer: &BatchWriter,
+        batch: &mut StoreBatch,
+        f: impl FnOnce(&mut StoreBatch, &mut DotbitBatchState) -> Result<R>,
+    ) -> Result<R> {
+        let entity_stats = SharedEntityStatsOverlay::new();
+        let mut state =
+            writer.new_dotbit_batch_state(entity_stats.clone(), SharedUndoSeq::default());
+        let out = f(batch, &mut state)?;
+        entity_stats.stage_final(batch)?;
+        Ok(out)
+    }
+
+    fn insert_account(
+        writer: &BatchWriter,
+        account_output: &ParsedDotbitAccountOutput,
+        tx_hash: &[u8],
+        block_number: i64,
+        timestamp_ms: i64,
+        batch: &mut StoreBatch,
+    ) -> Result<()> {
+        in_one_batch(writer, batch, |batch, state| {
+            writer.insert_dotbit_account_with_state(
+                account_output,
+                tx_hash,
+                block_number,
+                timestamp_ms,
+                batch,
+                state,
+            )
+        })
+    }
+
+    fn consume_account(
+        writer: &BatchWriter,
+        account_id: &[u8],
+        block_number: i64,
+        tx_hash: &[u8],
+        batch: &mut StoreBatch,
+    ) -> Result<Option<Vec<u8>>> {
+        in_one_batch(writer, batch, |batch, state| {
+            writer.consume_dotbit_account_with_state(
+                account_id,
+                block_number,
+                tx_hash,
+                batch,
+                state,
+            )
+        })
+    }
+
     fn test_split_stores() -> (Arc<CkbadgerStore>, Arc<CkbadgerStore>) {
         let domain_dir = tempfile::tempdir().unwrap();
         let append_dir = tempfile::tempdir().unwrap();
@@ -1042,9 +1054,7 @@ mod tests {
         let tx_hash = vec![0x41; 32];
 
         let mut batch = StoreBatch::new(writer.store());
-        writer
-            .insert_dotbit_account(&account, &tx_hash, 1, 0, &mut batch)
-            .unwrap();
+        insert_account(&writer, &account, &tx_hash, 1, 0, &mut batch).unwrap();
         batch.commit().unwrap();
 
         let loaded = writer
@@ -1091,21 +1101,29 @@ mod tests {
         let tx_hash = vec![0x41; 32];
 
         let mut batch = StoreBatch::new(writer.store());
-        writer
-            .insert_dotbit_account(&account, &tx_hash, 1, 0, &mut batch)
-            .unwrap();
+        insert_account(&writer, &account, &tx_hash, 1, 0, &mut batch).unwrap();
         batch.commit().unwrap();
 
         let mut batch = StoreBatch::new(writer.store());
-        writer
-            .consume_dotbit_account(&account.account.account_id, 2, &tx_hash, &mut batch)
-            .unwrap();
+        consume_account(
+            &writer,
+            &account.account.account_id,
+            2,
+            &tx_hash,
+            &mut batch,
+        )
+        .unwrap();
         batch.commit().unwrap();
 
         let mut batch = StoreBatch::new(writer.store());
-        let err = writer
-            .consume_dotbit_account(&account.account.account_id, 3, &tx_hash, &mut batch)
-            .unwrap_err();
+        let err = consume_account(
+            &writer,
+            &account.account.account_id,
+            3,
+            &tx_hash,
+            &mut batch,
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("already consumed"));
     }
 
@@ -1527,33 +1545,31 @@ mod tests {
         let reactivate_tx_hash = vec![0xC1; 32];
 
         let mut create_batch = StoreBatch::new(domain.as_ref());
-        writer
-            .insert_dotbit_account(
-                &make_test_account(&account_id, &owner, "alice.bit"),
-                &initial_tx_hash,
-                100,
-                100_000,
-                &mut create_batch,
-            )
-            .unwrap();
+        insert_account(
+            &writer,
+            &make_test_account(&account_id, &owner, "alice.bit"),
+            &initial_tx_hash,
+            100,
+            100_000,
+            &mut create_batch,
+        )
+        .unwrap();
         create_batch.commit().unwrap();
 
         let mut consume_batch = StoreBatch::new(domain.as_ref());
-        writer
-            .consume_dotbit_account(&account_id, 120, &[0xD1; 32], &mut consume_batch)
-            .unwrap();
+        consume_account(&writer, &account_id, 120, &[0xD1; 32], &mut consume_batch).unwrap();
         consume_batch.commit().unwrap();
 
         let mut reactivate_batch = StoreBatch::new(domain.as_ref());
-        writer
-            .insert_dotbit_account(
-                &make_test_account(&account_id, &owner, "alice.bit"),
-                &reactivate_tx_hash,
-                200,
-                200_000,
-                &mut reactivate_batch,
-            )
-            .unwrap();
+        insert_account(
+            &writer,
+            &make_test_account(&account_id, &owner, "alice.bit"),
+            &reactivate_tx_hash,
+            200,
+            200_000,
+            &mut reactivate_batch,
+        )
+        .unwrap();
         reactivate_batch.commit().unwrap();
 
         let mut append_batch = StoreBatch::new(append.as_ref());

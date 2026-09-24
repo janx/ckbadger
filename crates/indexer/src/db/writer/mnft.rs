@@ -319,27 +319,6 @@ impl BatchWriter {
         Ok(())
     }
 
-    pub fn insert_mnft_class(
-        &self,
-        class: &ParsedMnftClass,
-        tx_hash: &[u8],
-        output_index: i16,
-        block_number: i64,
-        batch: &mut StoreBatch,
-    ) -> Result<()> {
-        let entity_stats = SharedEntityStatsOverlay::new();
-        let mut state = self.new_mnft_batch_state(entity_stats.clone(), SharedUndoSeq::default());
-        self.insert_mnft_class_with_state(
-            class,
-            tx_hash,
-            output_index,
-            block_number,
-            batch,
-            &mut state,
-        )?;
-        entity_stats.stage_final(batch)
-    }
-
     pub(crate) fn insert_mnft_class_with_state(
         &self,
         class: &ParsedMnftClass,
@@ -491,29 +470,6 @@ impl BatchWriter {
     ) -> Result<Option<Vec<u8>>> {
         self.store
             .get_mnft_class_id_by_outpoint(tx_hash, output_index)
-    }
-
-    pub fn insert_mnft_token(
-        &self,
-        token: &ParsedMnftToken,
-        tx_hash: &[u8],
-        output_index: i16,
-        block_number: i64,
-        timestamp_ms: i64,
-        batch: &mut StoreBatch,
-    ) -> Result<()> {
-        let entity_stats = SharedEntityStatsOverlay::new();
-        let mut state = self.new_mnft_batch_state(entity_stats.clone(), SharedUndoSeq::default());
-        self.insert_mnft_token_with_state(
-            token,
-            tx_hash,
-            output_index,
-            block_number,
-            timestamp_ms,
-            batch,
-            &mut state,
-        )?;
-        entity_stats.stage_final(batch)
     }
 
     pub(crate) fn insert_mnft_token_with_state(
@@ -706,22 +662,6 @@ impl BatchWriter {
             batch,
             state,
         )
-    }
-
-    /// Consume an mNFT token. Returns the collection_id (class_id) if consumed.
-    pub fn consume_mnft_token(
-        &self,
-        token_id: &[u8],
-        block_number: i64,
-        tx_hash: &[u8],
-        batch: &mut StoreBatch,
-    ) -> Result<Option<Vec<u8>>> {
-        let entity_stats = SharedEntityStatsOverlay::new();
-        let mut state = self.new_mnft_batch_state(entity_stats.clone(), SharedUndoSeq::default());
-        let consumed =
-            self.consume_mnft_token_with_state(token_id, block_number, tx_hash, batch, &mut state)?;
-        entity_stats.stage_final(batch)?;
-        Ok(consumed)
     }
 
     pub(crate) fn consume_mnft_token_with_state(
@@ -937,6 +877,21 @@ mod tests {
     use ckbadger_store::store::CkbadgerStore;
     use std::sync::Arc;
 
+    /// Run `f` against one batch's writer state, built the way
+    /// `write_parsed_batch` builds it: one entity-stats overlay and ONE undo
+    /// sequence for every write in the batch, staged at the end.
+    fn in_one_batch<R>(
+        writer: &BatchWriter,
+        batch: &mut StoreBatch,
+        f: impl FnOnce(&mut StoreBatch, &mut MnftBatchState) -> Result<R>,
+    ) -> Result<R> {
+        let entity_stats = SharedEntityStatsOverlay::new();
+        let mut state = writer.new_mnft_batch_state(entity_stats.clone(), SharedUndoSeq::default());
+        let out = f(batch, &mut state)?;
+        entity_stats.stage_final(batch)?;
+        Ok(out)
+    }
+
     fn sample_class() -> ParsedMnftClass {
         ParsedMnftClass {
             class_id: vec![0x11; 24],
@@ -1037,12 +992,11 @@ mod tests {
         let tx_hash = vec![0x51; 32];
 
         let mut batch = StoreBatch::new(writer.store());
-        writer
-            .insert_mnft_class(&class, &tx_hash, 7, 1, &mut batch)
-            .unwrap();
-        writer
-            .insert_mnft_token(&token, &tx_hash, 8, 1, 0, &mut batch)
-            .unwrap();
+        in_one_batch(&writer, &mut batch, |batch, state| {
+            writer.insert_mnft_class_with_state(&class, &tx_hash, 7, 1, batch, state)?;
+            writer.insert_mnft_token_with_state(&token, &tx_hash, 8, 1, 0, batch, state)
+        })
+        .unwrap();
         batch.commit().unwrap();
 
         let loaded_class = writer
@@ -1086,7 +1040,7 @@ mod tests {
         let mut state =
             writer.new_mnft_batch_state(SharedEntityStatsOverlay::new(), SharedUndoSeq::default());
         writer
-            .insert_mnft_class(&class, &tx_hash, 7, 1, &mut batch)
+            .insert_mnft_class_with_state(&class, &tx_hash, 7, 1, &mut batch, &mut state)
             .unwrap();
         writer
             .insert_mnft_token_with_state(&token_a, &tx_hash, 8, 1, 0, &mut batch, &mut state)
@@ -1119,12 +1073,11 @@ mod tests {
         let hour_bucket = 3_600_000_i64 / 3_600_000;
 
         let mut seed = StoreBatch::new(writer.store());
-        writer
-            .insert_mnft_class(&class, &tx_hash, 7, 1, &mut seed)
-            .unwrap();
-        writer
-            .insert_mnft_token(&token, &tx_hash, 8, 1, 0, &mut seed)
-            .unwrap();
+        in_one_batch(&writer, &mut seed, |batch, state| {
+            writer.insert_mnft_class_with_state(&class, &tx_hash, 7, 1, batch, state)?;
+            writer.insert_mnft_token_with_state(&token, &tx_hash, 8, 1, 0, batch, state)
+        })
+        .unwrap();
         seed.commit().unwrap();
 
         let mut batch = StoreBatch::new(writer.store());
@@ -1293,12 +1246,11 @@ mod tests {
         let tx_hash = vec![0x51; 32];
 
         let mut batch = StoreBatch::new(writer.store());
-        writer
-            .insert_mnft_class(&class, &tx_hash, 7, 1, &mut batch)
-            .unwrap();
-        writer
-            .insert_mnft_token(&token, &tx_hash, 8, 1, 0, &mut batch)
-            .unwrap();
+        in_one_batch(&writer, &mut batch, |batch, state| {
+            writer.insert_mnft_class_with_state(&class, &tx_hash, 7, 1, batch, state)?;
+            writer.insert_mnft_token_with_state(&token, &tx_hash, 8, 1, 0, batch, state)
+        })
+        .unwrap();
         batch.commit().unwrap();
 
         let mut agg = writer
@@ -1312,9 +1264,10 @@ mod tests {
         batch.commit().unwrap();
 
         let mut batch = StoreBatch::new(writer.store());
-        let err = writer
-            .consume_mnft_token(&token.token_id, 2, &tx_hash, &mut batch)
-            .unwrap_err();
+        let err = in_one_batch(&writer, &mut batch, |batch, state| {
+            writer.consume_mnft_token_with_state(&token.token_id, 2, &tx_hash, batch, state)
+        })
+        .unwrap_err();
         assert!(err.to_string().contains("live_count underflow"));
     }
 
@@ -1341,15 +1294,17 @@ mod tests {
         batch.commit().unwrap();
 
         let mut batch = StoreBatch::new(writer.store());
-        writer
-            .consume_mnft_token(&token.token_id, 2, &tx_hash, &mut batch)
-            .unwrap();
+        in_one_batch(&writer, &mut batch, |batch, state| {
+            writer.consume_mnft_token_with_state(&token.token_id, 2, &tx_hash, batch, state)
+        })
+        .unwrap();
         batch.commit().unwrap();
 
         let mut batch = StoreBatch::new(writer.store());
-        let err = writer
-            .consume_mnft_token(&token.token_id, 3, &tx_hash, &mut batch)
-            .unwrap_err();
+        let err = in_one_batch(&writer, &mut batch, |batch, state| {
+            writer.consume_mnft_token_with_state(&token.token_id, 3, &tx_hash, batch, state)
+        })
+        .unwrap_err();
         assert!(err.to_string().contains("already consumed"));
     }
 }
