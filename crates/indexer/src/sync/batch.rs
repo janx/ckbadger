@@ -7398,6 +7398,104 @@ mod tests {
             );
         }
 
+        /// A lock the injected detector names by its FULL hash. Deliberately a
+        /// lock no fixture cell uses.
+        fn lock_named_hash() -> [u8; 32] {
+            [0x7b; 32]
+        }
+
+        fn naming_full_lock_detectors(
+        ) -> Vec<Box<dyn crate::db::writer::activities::ProtocolDetector>> {
+            vec![Box::new(
+                crate::db::writer::activities::test_detectors::NamingDetector {
+                    id: ckbadger_store::types::ParticipantId::Lock(lock_named_hash()),
+                    delta_negative: false,
+                    roles: ckbadger_store::types::participant_roles::OWNER_TO,
+                },
+            )]
+        }
+
+        /// Plan Task 5.4 — ANALYSIS ONLY, pins today's behaviour (no protocol
+        /// names a party by its full lock hash yet; `.cell` uses prefixes).
+        ///
+        /// A party named as `ParticipantId::Lock(X)` that holds no cell in the
+        /// transaction becomes a standalone `Lock` participant with a zero CKB
+        /// position, and gets a `CF_ADDR_TXS` row — while nothing counts that
+        /// participation: `addr_balance(X)` does not exist (address deltas are
+        /// cell-derived) and `addr_prefix_stats` counts `LockPrefix` rows only.
+        /// Rolling the block back then reverses X's `txs_count` by the deleted
+        /// `CF_ADDR_TXS` row, which the forward path never added: see the
+        /// report for the proposed rule.
+        #[tokio::test]
+        async fn a_lock_named_party_with_no_cell_gets_an_uncounted_addr_tx_row() {
+            let _guard = crate::db::writer::activities::test_detector_override::install(
+                naming_full_lock_detectors,
+            );
+            let dir = tempfile::tempdir().unwrap();
+            let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+            let indexer = indexer_for_live_write_test(store.clone());
+            store
+                .set_secondary_epoch_reward(61_369_863_013_698)
+                .unwrap();
+            seed_pre_parent_header(store.as_ref());
+            seed_secp_script_info(store.as_ref());
+            write_live_block(
+                &indexer,
+                block(100, AR_DEPOSIT, vec![cellbase_tx(0xc0, FUNDING_CAPACITY)]),
+            )
+            .await
+            .unwrap();
+            write_live_block(
+                &indexer,
+                block(
+                    101,
+                    AR_DEPOSIT,
+                    vec![
+                        cellbase_tx(0xc1, 100_000_000),
+                        transfer_tx(0xd1, 0xc0, FUNDING_CAPACITY - 100_000_000, lock_script_b()),
+                    ],
+                ),
+            )
+            .await
+            .unwrap();
+
+            let named = lock_named_hash().to_vec();
+            let actions = store
+                .get_tx_actions(101, 1, &[0xd1u8; 32])
+                .unwrap()
+                .expect("tx actions");
+            let party = actions
+                .participants
+                .iter()
+                .find(|p| p.id == ckbadger_store::types::ParticipantId::Lock(lock_named_hash()))
+                .expect("the named lock is a standalone participant");
+            assert_eq!(party.ckb_delta, 0);
+            assert!(
+                addr_tx_keys(&store).contains(&(named.clone(), 101, 1)),
+                "it gets a CF_ADDR_TXS row"
+            );
+            assert!(
+                store.get_addr_balance(&named).unwrap().is_none(),
+                "no addr_balance counts that row"
+            );
+            assert!(prefix_rows(&store).is_empty(), "and it is not a prefix row");
+
+            // PINNED DEFECT (latent: no production detector names a full lock
+            // today). Rollback derives the CF_ADDR_TXS keys to delete from the
+            // rolled-back cells' locks; X holds none, so its row survives,
+            // pointing at an orphaned block. Changing this is plan 5.4's
+            // follow-up, not this test's job: update the assertion with it.
+            let undo = store.rollback_via_undo_log(store.as_ref(), 100).unwrap();
+            store
+                .rollback_to_block_with_tx_contexts(100, Some(store.as_ref()), undo.tx_contexts)
+                .expect("today the rollback itself succeeds");
+            assert!(
+                addr_tx_keys(&store).contains(&(named.clone(), 101, 1)),
+                "today: the Lock-named row outlives the rollback of its block"
+            );
+            assert!(store.get_addr_balance(&named).unwrap().is_none());
+        }
+
         #[tokio::test]
         async fn live_writes_rows_for_every_participant_and_counts_prefix_participations() {
             let _guard =
