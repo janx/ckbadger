@@ -7057,6 +7057,94 @@ mod tests {
             out
         }
 
+        /// A detector that names lock A's 20-byte prefix in every non-cellbase
+        /// transaction, whether or not A holds a cell there.
+        fn naming_lock_a_detectors() -> Vec<Box<dyn crate::db::writer::activities::ProtocolDetector>>
+        {
+            let lock_a = crate::parser::ScriptParser::compute_script_hash(&lock_script());
+            vec![Box::new(
+                crate::db::writer::activities::test_detectors::NamingDetector {
+                    id: ckbadger_store::types::ParticipantId::prefix(&lock_a[..20])
+                        .expect("20-byte prefix"),
+                    delta_negative: false,
+                    roles: ckbadger_store::types::participant_roles::OWNER_TO,
+                },
+            )]
+        }
+
+        /// R2 forward pin (plan Task 1.4): `addr_balance.last_activity` moves only
+        /// on cell participation. Being NAMED by a protocol in a transaction in
+        /// which the address holds no cell leaves it where it was — the rule the
+        /// stage 9a rollback repair must reproduce. (The address deltas come
+        /// from the harness's mirror of the parser's cell-derived pass; what
+        /// this pins is that the write path adds nothing from named rows.)
+        #[tokio::test]
+        async fn named_only_participation_does_not_move_last_activity() {
+            let _guard = crate::db::writer::activities::test_detector_override::install(
+                naming_lock_a_detectors,
+            );
+            let dir = tempfile::tempdir().unwrap();
+            let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+            let indexer = indexer_for_live_write_test(store.clone());
+            store
+                .set_secondary_epoch_reward(61_369_863_013_698)
+                .unwrap();
+            let lock_a = crate::parser::ScriptParser::compute_script_hash(&lock_script());
+            let prefix_a: [u8; 20] = lock_a[..20].try_into().unwrap();
+
+            // Block 100: the cellbase funds A, and A's cell moves on to B.
+            write_live_block(
+                &indexer,
+                block(
+                    100,
+                    AR_DEPOSIT,
+                    vec![
+                        cellbase_tx(0xc0, FUNDING_CAPACITY),
+                        transfer_tx(0xd0, 0xc0, FUNDING_CAPACITY - 100_000_000, lock_script_b()),
+                    ],
+                ),
+            )
+            .await
+            .unwrap();
+            // Block 101: the cellbase pays A (a cell participation, tx 0); then
+            // B -> C, where A holds no cell but is named by the detector (tx 1).
+            write_live_block(
+                &indexer,
+                block(
+                    101,
+                    AR_DEPOSIT,
+                    vec![
+                        cellbase_tx(0xc1, 100_000_000),
+                        transfer_tx(0xd1, 0xd0, FUNDING_CAPACITY - 200_000_000, lock_script_c()),
+                    ],
+                ),
+            )
+            .await
+            .unwrap();
+
+            assert!(
+                prefix_rows(&store)
+                    .iter()
+                    .any(|(p, b, t, _)| (*p, *b, *t) == (prefix_a, 101, 1)),
+                "A is a named participant of 0xd1: {:?}",
+                prefix_rows(&store)
+            );
+            let balance = store.get_addr_balance(&lock_a).unwrap().expect("A");
+            assert_eq!(
+                (
+                    balance.last_activity_block,
+                    balance.last_activity_tx.clone()
+                ),
+                (101, vec![0xc1u8; 32]),
+                "last_activity is A's last CELL participation, not the naming tx 0xd1"
+            );
+            assert_ne!(balance.last_activity_tx, vec![0xd1u8; 32]);
+            assert_eq!(
+                balance.txs_count, 3,
+                "txs_count counts cell participations only"
+            );
+        }
+
         #[tokio::test]
         async fn live_writes_rows_for_every_participant_and_counts_prefix_participations() {
             let _guard =
