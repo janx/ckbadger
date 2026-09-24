@@ -6,7 +6,6 @@ use ckbadger_store::types::{
 use ckbadger_store::CkbadgerStore;
 use serde::Deserialize;
 use std::collections::HashMap;
-use std::path::Path;
 use std::sync::LazyLock;
 
 fn non_empty_name(name: Option<&str>) -> Option<String> {
@@ -25,12 +24,7 @@ struct NftTiersDoc {
 }
 
 static OBJECT_COMPOSITION_TIER_OVERRIDES: LazyLock<HashMap<String, String>> =
-    LazyLock::new(
-        || match load_and_validate_object_composition_tier_overrides() {
-            Ok(overrides) => overrides,
-            Err(e) => panic!("object_composition_tier_overrides initialization failed: {e}"),
-        },
-    );
+    LazyLock::new(default_object_composition_tier_overrides);
 
 const VALID_TIERS: &[&str] = &[
     "btc_ckb",
@@ -40,43 +34,23 @@ const VALID_TIERS: &[&str] = &[
     "unknown",
 ];
 
+/// `docs/metadata/object-tiers.toml`, bundled at compile time. The one source
+/// of composition-tier overrides: a deployed binary has no `docs/` tree to
+/// read, and a hand-typed copy of this table for that case drifted (it never
+/// learned `.cell`).
+const BUNDLED_OBJECT_TIERS: &str = include_str!("../../../../docs/metadata/object-tiers.toml");
+
+/// The composition-tier overrides every binary carries: the bundled document,
+/// validated. A malformed document or an unknown tier is an error, not a
+/// silently smaller table.
 fn default_object_composition_tier_overrides() -> HashMap<String, String> {
-    let mut defaults = HashMap::new();
-    for standard in [
-        ".bit",
-        "dotbit",
-        ".bit-cell",
-        "bit-cell",
-        "bit_cell",
-        "did:ckb",
-        "did_ckb",
-    ] {
-        defaults.insert(
-            normalize_standard_alias_key(standard),
-            "pure_ckb".to_string(),
-        );
-    }
-    defaults
+    parse_object_composition_tier_overrides(BUNDLED_OBJECT_TIERS)
+        .unwrap_or_else(|e| panic!("bundled docs/metadata/object-tiers.toml is invalid: {e}"))
 }
 
-fn load_and_validate_object_composition_tier_overrides() -> Result<HashMap<String, String>> {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/metadata/object-tiers.toml");
-    let content = match std::fs::read_to_string(&path) {
-        Ok(content) => content,
-        Err(_) => {
-            // File may not exist in deployed binaries (CARGO_MANIFEST_DIR is
-            // baked at compile time). Fall back to hardcoded defaults.
-            return Ok(default_object_composition_tier_overrides());
-        }
-    };
-
-    let parsed: NftTiersDoc = toml::from_str(&content).map_err(|e| {
-        anyhow!(
-            "malformed docs/metadata/object-tiers.toml at {}: {}",
-            path.display(),
-            e
-        )
-    })?;
+fn parse_object_composition_tier_overrides(content: &str) -> Result<HashMap<String, String>> {
+    let parsed: NftTiersDoc = toml::from_str(content)
+        .map_err(|e| anyhow!("malformed docs/metadata/object-tiers.toml: {e}"))?;
 
     let mut overrides = HashMap::new();
     for (standard, tier) in parsed.overrides {
@@ -392,6 +366,54 @@ mod tests {
             resolve_object_collection_composition_tier_override("m-nft"),
             None
         );
+    }
+
+    /// What a binary knows with no `docs/` tree beside it — every deployed
+    /// binary. That table must be the bundled document itself: a hand-typed
+    /// copy of it silently missed `.cell` when the document gained it.
+    #[test]
+    fn tiers_without_a_filesystem_are_the_bundled_document() {
+        let overrides = default_object_composition_tier_overrides();
+        for standard in ckbadger_store::types::IDENTITY_STANDARDS {
+            assert_eq!(
+                overrides
+                    .get(&normalize_standard_alias_key(standard.asset_standard()))
+                    .map(String::as_str),
+                Some("pure_ckb"),
+                "identity standard `{}` has no bundled tier",
+                standard.asset_standard()
+            );
+        }
+        assert_eq!(
+            overrides.get(".cell").map(String::as_str),
+            Some("pure_ckb"),
+            "the display-name key the document lists"
+        );
+        let document: NftTiersDoc =
+            toml::from_str(include_str!("../../../../docs/metadata/object-tiers.toml")).unwrap();
+        assert_eq!(
+            overrides.len(),
+            document
+                .overrides
+                .keys()
+                .map(|key| normalize_standard_alias_key(key))
+                .collect::<std::collections::HashSet<_>>()
+                .len(),
+            "exactly the document's keys, nothing added"
+        );
+    }
+
+    #[test]
+    fn tier_document_rejects_unknown_tiers_and_malformed_toml() {
+        let parsed =
+            parse_object_composition_tier_overrides("[overrides]\n\"Bit-Cell\" = \" Pure_CKB \"\n")
+                .unwrap();
+        assert_eq!(parsed.get("bit_cell").map(String::as_str), Some("pure_ckb"));
+        let err = parse_object_composition_tier_overrides("[overrides]\n\".cell\" = \"gold\"\n")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("'gold'"), "{err}");
+        assert!(parse_object_composition_tier_overrides("[overrides\n").is_err());
     }
 
     #[test]
