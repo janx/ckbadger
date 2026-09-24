@@ -111,10 +111,13 @@ fn cached_object_collection_match(
 /// Mirrors `getIdentityCollectionHref` / `getMnftClassDetailHref` in
 /// `frontend/lib/detail-routes.ts`.
 fn object_collection_href(standard: &str, collection_hex: &str) -> String {
+    if let Some(identity) = ckbadger_store::types::identity_alias(standard) {
+        return format!(
+            "/identities/{}",
+            ckbadger_store::types::identity_route_slug(identity)
+        );
+    }
     match standard {
-        "dotbit" => "/identities/dotbit".to_string(),
-        "did_ckb" => "/identities/did:ckb".to_string(),
-        "bit_cell" => format!("/identities/{}", collection_hex),
         "m-nft" => format!("/classes/{}", collection_hex),
         _ => format!("/objects/{}", collection_hex),
     }
@@ -122,27 +125,11 @@ fn object_collection_href(standard: &str, collection_hex: &str) -> String {
 
 /// The `.cell` label a query names, if it could be one.
 ///
-/// The grammar is spec §1.2: `[a-z0-9-]`, at most one dot (a sub-name), at
-/// most 40 characters. The `.cell` suffix is optional — `alice` and
-/// `alice.cell` are the same name — and the empty label is the ring root, not
-/// an identity.
+/// Free text: a query that is not a label is simply not a `.cell` hit, so the
+/// grammar's rejection means "no", not an error. The grammar itself is the one
+/// the item endpoints use (spec §1.2).
 fn dotcell_label_from_query(query: &str) -> Option<String> {
-    let label = query
-        .trim()
-        .to_ascii_lowercase()
-        .strip_suffix(".cell")
-        .map(str::to_string)
-        .unwrap_or_else(|| query.trim().to_ascii_lowercase());
-    if label.is_empty() || label.chars().count() > 40 || label.matches('.').count() > 1 {
-        return None;
-    }
-    if !label
-        .chars()
-        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '.')
-    {
-        return None;
-    }
-    Some(label)
+    super::identities::parse_dotcell_label(query.trim()).ok()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -395,18 +382,19 @@ async fn search(
                 scope,
                 &[SearchScope::Spore, SearchScope::Cluster, SearchScope::Asset],
             );
+            let mirror = state.pool_mirror.clone();
             #[allow(clippy::type_complexity)]
             let hash_results: (
                 Option<(i64, i32)>,
                 Option<i64>,
-                Option<ckbadger_store::AddressBalance>,
+                Option<AddressPresence>,
                 Option<ckbadger_store::TokenInfo>,
                 Option<ckbadger_store::ObjectEntry>,
                 Option<String>,
             ) = tokio::task::spawn_blocking(move || -> anyhow::Result<(
                 Option<(i64, i32)>,
                 Option<i64>,
-                Option<ckbadger_store::AddressBalance>,
+                Option<AddressPresence>,
                 Option<ckbadger_store::TokenInfo>,
                 Option<ckbadger_store::ObjectEntry>,
                 Option<String>,
@@ -421,8 +409,9 @@ async fn search(
                 } else {
                     None
                 };
-                let addr_bal = if check_addr {
-                    store.get_addr_balance(&hash_c)?
+                // The one presence rule, shared with the typed-address branch.
+                let presence = if check_addr {
+                    Some(address_presence(store.as_ref(), mirror.as_ref(), &hash_c)?)
                 } else {
                     None
                 };
@@ -449,13 +438,13 @@ async fn search(
                     }
                     _ => None,
                 };
-                Ok((tx_loc, block_num, addr_bal, token, spore, spore_cluster_name))
+                Ok((tx_loc, block_num, presence, token, spore, spore_cluster_name))
             })
             .await
             .map_err(|e| ApiError::internal(e.to_string()))?
             .map_err(|e| ApiError::internal(e.to_string()))?;
 
-            let (tx_loc, block_num_result, addr_bal, token_info, spore_entry, spore_cluster_name) =
+            let (tx_loc, block_num_result, presence, token_info, spore_entry, spore_cluster_name) =
                 hash_results;
 
             if scope_allows(scope, &[SearchScope::Transaction]) {
@@ -497,28 +486,13 @@ async fn search(
             if scope_allows(scope, &[SearchScope::Address]) {
                 // A bare 32-byte hash is ambiguous (block, tx, script, lock
                 // hash), so unlike a typed address it only becomes a result
-                // when some source actually knows it — but "knows it" is the
-                // same predicate the address branch uses.
-                let presence = match addr_bal {
-                    Some(ab) if ab.total_cells_count > 0 || ab.txs_count > 0 || ab.balance > 0 => {
-                        AddressPresence::OnChain {
-                            cells: ab.total_cells_count,
-                            txs: ab.txs_count,
-                        }
-                    }
-                    _ => {
-                        let pending = if state.pool_mirror.enabled() {
-                            state.pool_mirror.load().pending_count_for_lock(&hash_bytes)
-                        } else {
-                            0
-                        };
-                        if pending > 0 {
-                            AddressPresence::PoolOnly { pending }
-                        } else {
-                            AddressPresence::None
-                        }
-                    }
-                };
+                // when some source actually knows it — and "knows it" is
+                // `address_presence`, the predicate the address branch uses.
+                let presence = presence.ok_or_else(|| {
+                    ApiError::internal(
+                        "address presence was not resolved for an address-scoped hash search",
+                    )
+                })?;
                 if presence.is_known() {
                     results.push(SearchResult {
                         result_type: "address".to_string(),
@@ -1072,7 +1046,11 @@ mod tests {
         );
         assert_eq!(
             object_collection_href("bit_cell", "0xfeed"),
-            "/identities/0xfeed"
+            "/identities/bit-cell"
+        );
+        assert_eq!(
+            object_collection_href("dotcell", "0xfeed"),
+            "/identities/dotcell"
         );
         // Anything else keeps the object route (32-byte collections).
         let spore_collection = format!("0x{}", "cd".repeat(32));

@@ -16,9 +16,10 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use anyhow::{anyhow, bail, Result};
 use ckbadger_store::types::{
     participant_roles::{MANAGER_TO, OWNER_FROM, OWNER_TO},
-    AssetAction, ItemDelta, ObjectCollectionActivityEntry, ParticipantId, ProtocolAction,
-    ITEM_KIND_IDENTITY,
+    AssetAction, IdentityStandard, ItemDelta, ItemKind, ObjectCollectionActivityEntry,
+    ParticipantId, ProtocolAction,
 };
+use tracing::debug;
 
 use crate::parser::dotcell::{DotCellNameData, DotCellParser};
 use crate::parser::registry::{ProtocolScript, PROTOCOL_REGISTRY};
@@ -100,6 +101,13 @@ fn hex0x(bytes: &[u8]) -> String {
 /// bytes of its own script hash — which is exactly what a listed name stores
 /// as its owner. Offer cells appear as outputs when listing and as inputs when
 /// buying or cancelling, so both sides are scanned.
+///
+/// A cell under the Sale Lock CODE hash is a sale instance only when its args
+/// have a sale's shape (`seller32 ‖ price u64`). CKB never runs a lock script
+/// when a cell is created, so anyone can create a Sale-Lock-coded cell with
+/// any args in any transaction: that is the input domain, not a broken
+/// invariant (PROTO-011). Such a cell is simply not an instance; a name whose
+/// owner prefix points at it classifies as an ordinary transfer.
 fn sale_instances(tx: &TxView<'_>) -> Result<HashMap<[u8; 20], ([u8; 32], u64)>> {
     let mut instances = HashMap::new();
     let cells = tx
@@ -123,13 +131,18 @@ fn sale_instances(tx: &TxView<'_>) -> Result<HashMap<[u8; 20], ([u8; 32], u64)>>
         if !DotCellParser::is_sale_lock(code_hash) {
             continue;
         }
-        let (seller, price) = DotCellParser::parse_sale_lock_args(args).map_err(|e| {
-            anyhow!(
-                "tx 0x{}: sale lock script hash 0x{}: {e}",
-                hex::encode(tx.tx_hash),
-                hex::encode(script_hash)
-            )
-        })?;
+        let (seller, price) = match DotCellParser::parse_sale_lock_args(args) {
+            Ok(parsed) => parsed,
+            Err(e) => {
+                debug!(
+                    tx_hash = %hex::encode(tx.tx_hash),
+                    script_hash = %hex::encode(script_hash),
+                    args_len = args.len(),
+                    "Sale-Lock-coded cell is not a sale instance: {e}"
+                );
+                continue;
+            }
+        };
         if script_hash.len() < 20 {
             bail!(
                 "tx 0x{}: sale lock script hash is {} bytes",
@@ -449,7 +462,7 @@ pub(crate) fn named_participants_for(transitions: &[DotCellTransition]) -> Vec<N
     fn delta(id: &[u8; 20], negative: bool) -> ItemDelta {
         ItemDelta {
             item_id: id.to_vec(),
-            kind: ITEM_KIND_IDENTITY,
+            kind: ItemKind::Identity(IdentityStandard::DotCell),
             magnitude: 1,
             negative,
         }
@@ -608,7 +621,7 @@ mod tests {
     use crate::rpc::parse_hex_to_bytes;
     use ckbadger_store::types::{
         participant_roles::{MANAGER_TO, OWNER_FROM, OWNER_TO},
-        AssetAction, ItemDelta, ParticipantId, ITEM_KIND_IDENTITY,
+        AssetAction, IdentityStandard, ItemDelta, ItemKind, ParticipantId,
     };
 
     // ── Fixture → TxView bridge ────────────────────────────────────────────
@@ -727,7 +740,7 @@ mod tests {
     fn identity_plus(id: &[u8; 20]) -> ItemDelta {
         ItemDelta {
             item_id: id.to_vec(),
-            kind: ITEM_KIND_IDENTITY,
+            kind: ItemKind::Identity(IdentityStandard::DotCell),
             magnitude: 1,
             negative: false,
         }
@@ -736,7 +749,7 @@ mod tests {
     fn identity_minus(id: &[u8; 20]) -> ItemDelta {
         ItemDelta {
             item_id: id.to_vec(),
-            kind: ITEM_KIND_IDENTITY,
+            kind: ItemKind::Identity(IdentityStandard::DotCell),
             magnitude: 1,
             negative: true,
         }
@@ -1312,6 +1325,142 @@ mod tests {
         assert_eq!(
             actions[0].metadata.to_value().unwrap()["changes"],
             serde_json::json!(["owner", "manager", "records"])
+        );
+    }
+
+    /// A `.cell` id is 20 bytes, like a `.bit` account id and a short did:ckb
+    /// id, so every identity delta the detector emits must say it is `.cell`.
+    #[test]
+    fn every_dotcell_item_delta_names_the_dotcell_standard() {
+        let mut seen = 0;
+        for f in [
+            &fixture::M2_REGISTER_SUPPORT,
+            &fixture::M3_TRANSFER_ABUSE,
+            &fixture::M4_TRANSFER_APT,
+            &fixture::M5_LIST_SATOSHI,
+            &fixture::T3_REGISTER_SUBNAME,
+            &fixture::T7_BUY_CARTAOPROVA,
+            &fixture::T8_CANCEL_CARTAOPROVA,
+        ] {
+            for participant in built_participants(f) {
+                for delta in &participant.item_deltas {
+                    assert_eq!(
+                        delta.kind,
+                        ItemKind::Identity(IdentityStandard::DotCell),
+                        "{}: {delta:?}",
+                        f.tx_hash
+                    );
+                    seen += 1;
+                }
+            }
+        }
+        assert!(seen >= 7, "the fixtures must actually move names: {seen}");
+    }
+
+    // ── Sale Lock cells that are not sale instances ───────────────────────
+
+    /// A cell under the Sale Lock CODE hash with whatever args its creator
+    /// chose. CKB never runs a lock script when a cell is created, so anyone
+    /// can put such a cell in any transaction.
+    fn sale_lock_coded_cell(args: Vec<u8>) -> OwnedCell {
+        let lock = crate::rpc::Script {
+            code_hash: fixture::SALE_LOCK_CODE_HASH_MAINNET.to_string(),
+            hash_type: "type".to_string(),
+            args: format!("0x{}", hex::encode(&args)),
+        };
+        OwnedCell {
+            capacity: 61_00000000,
+            lock_script_hash: ScriptParser::compute_script_hash(&lock),
+            lock_code_hash: parse_hex_to_bytes(fixture::SALE_LOCK_CODE_HASH_MAINNET),
+            lock_args: args,
+            type_code_hash: None,
+            type_args: None,
+            type_script_hash: None,
+            data: Vec::new(),
+            dotcell: None,
+        }
+    }
+
+    /// PROTO-011: a Sale-Lock-coded output whose args are not 40 bytes is not
+    /// a sale instance. It must neither halt the sync nor change what the
+    /// transaction means.
+    #[test]
+    fn junk_sale_lock_output_is_not_an_instance_and_does_not_error() {
+        let clean = OwnedTx::from_fixture(&fixture::M2_REGISTER_SUPPORT);
+        let expected = classify_dotcell_transitions(&clean.view()).expect("clean registration");
+
+        let mut junk = OwnedTx::from_fixture(&fixture::M2_REGISTER_SUPPORT);
+        junk.outputs.push(sale_lock_coded_cell(Vec::new()));
+        junk.outputs.push(sale_lock_coded_cell(vec![0x5a; 39]));
+        let view = junk.view();
+
+        let transitions =
+            classify_dotcell_transitions(&view).expect("junk Sale Lock cells are not an error");
+        assert_eq!(
+            transitions, expected,
+            "junk Sale Lock cells must not change the classification"
+        );
+
+        let detector = DotCellDetector::new();
+        let accum = OwnerAccum::default();
+        let actions = detector
+            .detect(&view, &[], &accum, &[], &[], &[])
+            .expect("detect must not error on junk Sale Lock cells");
+        let shape = |actions: &[ProtocolAction]| {
+            actions
+                .iter()
+                .map(|a| {
+                    (
+                        a.protocol.clone(),
+                        a.action.clone(),
+                        a.metadata.to_value().expect("metadata json"),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(shape(&actions), shape(&protocol_actions_for(&expected)));
+        let named = detector
+            .name_participants(&view)
+            .expect("name_participants must not error on junk Sale Lock cells");
+        assert_eq!(named, named_participants_for(&expected));
+    }
+
+    /// An owner prefix that points at a Sale-Lock-coded script whose args are
+    /// not a sale's shape is an ordinary transfer to that prefix: nothing is
+    /// for sale, because no sale instance exists.
+    #[test]
+    fn a_listing_whose_sale_lock_args_are_malformed_classifies_as_transfer() {
+        let owner = [0x44u8; 20];
+        let offer = sale_lock_coded_cell(vec![0x5a; 39]);
+        let junk_sale20: [u8; 20] = offer.lock_script_hash[..20].try_into().unwrap();
+        let owned = synthetic_tx(
+            vec![synthetic_cell(
+                name_data("junk", owner, owner, 1_800_000_000, [0u8; 20], [0u8; 32]),
+                true,
+            )],
+            vec![
+                synthetic_cell(
+                    name_data(
+                        "junk",
+                        junk_sale20,
+                        owner,
+                        1_800_000_000,
+                        [0u8; 20],
+                        [0u8; 32],
+                    ),
+                    false,
+                ),
+                offer,
+            ],
+        );
+        let ts = classify_dotcell_transitions(&owned.view()).expect("not an error");
+        assert_eq!(ts.len(), 1);
+        assert_eq!(
+            ts[0].kind,
+            DotCellTransitionKind::Transfer {
+                from20: owner,
+                to20: junk_sale20
+            }
         );
     }
 

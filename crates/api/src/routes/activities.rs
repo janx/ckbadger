@@ -5,8 +5,8 @@ use axum::{
 };
 use ckbadger_store::{
     types::{
-        participant_roles, ItemDelta, LockCallEntry, ParticipantDelta, ParticipantId, ScriptInfo,
-        TxActions, TypeCallEntry, ITEM_KIND_IDENTITY, ITEM_KIND_OBJECT, ITEM_KIND_TOKEN,
+        participant_roles, ItemDelta, ItemKind, LockCallEntry, ParticipantDelta, ParticipantId,
+        ScriptInfo, TxActions, TypeCallEntry,
     },
     CkbadgerStore,
 };
@@ -14,36 +14,54 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
 
+use crate::pool::ResolvedCell;
 use crate::response::{
     default_limit, hash_type_to_str, ok, ApiError, ApiResult, ApiRouteError,
     CursorPaginatedResponse,
 };
-use crate::utils::address::{address_to_lock_script_hash, compute_script_hash, script_to_address};
+use crate::routes::address_pool;
+use crate::utils::address::{
+    address_to_lock_script_hash, compute_script_hash, encode_lock_address, resolve_lock_address,
+};
 use crate::utils::{is_ckb_address, parse_hash32, parse_optional_block_tx_cursor};
 use crate::AppState;
 
-/// Resolve a lock_hash to a CKB address using the persistent lock script mapping.
-/// Falls back to hex-encoded lock_hash if no mapping exists.
-fn resolve_lock_hash_address(
+/// A party's address, from wherever its lock script is known.
+///
+/// A committed row's parties hold (or held) cells the indexer wrote, so the
+/// chain view's `CF_LOCK_SCRIPTS` knows every one of them. A tx-pool row may
+/// pay a lock no committed cell has used yet; that script is in the pool
+/// transaction's own outputs, which the mirror holds, and is encoded from
+/// there — a store miss for a brand-new lock is not "unknown". Either way the
+/// address comes from `encode_lock_address`, the one encoder; a lock known to
+/// neither is unresolved (`None`), never a fabricated address.
+fn resolve_party_address(
     store: &CkbadgerStore,
-    _ao_store: &CkbadgerStore,
     network: &str,
-    lock_hash: &[u8],
-    cache: &mut HashMap<Vec<u8>, String>,
-) -> String {
-    if let Some(cached) = cache.get(lock_hash) {
-        return cached.clone();
-    }
-    let address = store
-        .get_lock_script(lock_hash)
-        .ok()
+    lock_hash: &[u8; 32],
+    pool_outputs: Option<&[ResolvedCell]>,
+    cache: &mut HashMap<Vec<u8>, Option<String>>,
+) -> anyhow::Result<Option<String>> {
+    if let Some(cell) = pool_outputs
+        .into_iter()
         .flatten()
-        .and_then(|entry| {
-            script_to_address(&entry.code_hash, entry.hash_type, &entry.args, network).ok()
-        })
-        .unwrap_or_else(|| format!("0x{}", hex::encode(lock_hash)));
+        .find(|cell| cell.lock_script_hash.as_slice() == lock_hash)
+    {
+        return encode_lock_address(
+            lock_hash,
+            &cell.lock_code_hash,
+            cell.lock_hash_type,
+            &cell.lock_args,
+            network,
+        )
+        .map(Some);
+    }
+    if let Some(cached) = cache.get(lock_hash.as_slice()) {
+        return Ok(cached.clone());
+    }
+    let address = resolve_lock_address(store, lock_hash, network)?.map(|resolved| resolved.address);
     cache.insert(lock_hash.to_vec(), address.clone());
-    address
+    Ok(address)
 }
 
 /// One party of a transaction as the API reports it.
@@ -63,26 +81,30 @@ pub struct ParticipantRef {
 
 fn participant_ref(
     store: &CkbadgerStore,
-    ao_store: &CkbadgerStore,
     network: &str,
     participant: &ParticipantDelta,
-    cache: &mut HashMap<Vec<u8>, String>,
+    pool_outputs: Option<&[ResolvedCell]>,
+    cache: &mut HashMap<Vec<u8>, Option<String>>,
 ) -> anyhow::Result<ParticipantRef> {
     let roles = participant_roles::names(participant.roles);
     match participant.id {
         ParticipantId::Lock(hash) => Ok(ParticipantRef {
-            address: Some(resolve_lock_hash_address(
-                store, ao_store, network, &hash, cache,
-            )),
+            address: resolve_party_address(store, network, &hash, pool_outputs, cache)?,
             lock_hash: Some(format!("0x{}", hex::encode(hash))),
             lock_hash_prefix: None,
             roles,
         }),
+        // A protocol-named prefix resolves at read time through the chain
+        // view (spec §3), and only when exactly one known lock has it.
         ParticipantId::LockPrefix(prefix) => match store.resolve_lock_hash_prefix(&prefix)? {
-            Some((hash, _entry)) => Ok(ParticipantRef {
-                address: Some(resolve_lock_hash_address(
-                    store, ao_store, network, &hash, cache,
-                )),
+            Some((hash, entry)) => Ok(ParticipantRef {
+                address: Some(encode_lock_address(
+                    &hash,
+                    &entry.code_hash,
+                    entry.hash_type,
+                    &entry.args,
+                    network,
+                )?),
                 lock_hash: Some(format!("0x{}", hex::encode(hash))),
                 lock_hash_prefix: Some(format!("0x{}", hex::encode(prefix))),
                 roles,
@@ -167,7 +189,15 @@ pub enum ItemDeltaResponse {
     #[serde(rename = "object", rename_all = "camelCase")]
     Object { object_id: String, delta: i8 },
     #[serde(rename = "identity", rename_all = "camelCase")]
-    Identity { identity_id: String, delta: i8 },
+    Identity {
+        identity_id: String,
+        delta: i8,
+        /// The identity's standard, as the builder recorded it on the delta,
+        /// in its one wire value (`IdentityStandard::asset_standard`:
+        /// `dotbit | bit_cell | did_ckb | dotcell`). The frontend links the
+        /// item to its standard's page with it.
+        standard: &'static str,
+    },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -248,7 +278,7 @@ fn convert_item_delta(
     store: &CkbadgerStore,
 ) -> anyhow::Result<ItemDeltaResponse> {
     match item.kind {
-        ITEM_KIND_TOKEN => {
+        ItemKind::Token => {
             let (symbol, decimals) = lookup_token_info(store, token_cache, &item.item_id);
             Ok(ItemDeltaResponse::Token {
                 type_script_hash: format!("0x{}", hex::encode(&item.item_id)),
@@ -257,25 +287,22 @@ fn convert_item_delta(
                 decimals,
             })
         }
-        ITEM_KIND_OBJECT => Ok(ItemDeltaResponse::Object {
+        ItemKind::Object => Ok(ItemDeltaResponse::Object {
             object_id: format!("0x{}", hex::encode(&item.item_id)),
             delta: discrete_item_delta(item)?,
         }),
-        ITEM_KIND_IDENTITY => Ok(ItemDeltaResponse::Identity {
+        ItemKind::Identity(standard) => Ok(ItemDeltaResponse::Identity {
             identity_id: format!("0x{}", hex::encode(&item.item_id)),
             delta: discrete_item_delta(item)?,
+            standard: standard.asset_standard(),
         }),
-        kind => anyhow::bail!(
-            "unknown activity item kind {kind} for item 0x{}",
-            hex::encode(&item.item_id)
-        ),
     }
 }
 
 fn discrete_item_delta(item: &ItemDelta) -> anyhow::Result<i8> {
     if item.magnitude != 1 {
         anyhow::bail!(
-            "activity discrete-item invariant violated: kind={} item=0x{} magnitude={} (expected 1)",
+            "activity discrete-item invariant violated: kind={:?} item=0x{} magnitude={} (expected 1)",
             item.kind,
             hex::encode(&item.item_id),
             item.magnitude
@@ -574,10 +601,13 @@ fn convert_protocol_action(
 /// Its presence is what turns the chain-position fields null: a transaction the
 /// pool holds has no block to report, and reporting the mirror's provisional
 /// zeros would let a caller mistake it for genesis.
-pub(crate) struct PoolRowMeta {
+pub(crate) struct PoolRowMeta<'a> {
     pub status: String,
     pub time_added_to_pool: String,
     pub interpretation: crate::pool::InterpretationResponse,
+    /// The pool transaction's own outputs: the lock scripts of parties it
+    /// pays, which the chain view may not know yet.
+    pub outputs: &'a [ResolvedCell],
 }
 
 /// Build an address-scoped activity response from a TxActions for a specific participant.
@@ -587,14 +617,13 @@ pub(crate) struct PoolRowMeta {
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub(crate) fn build_activity_response(
     store: &CkbadgerStore,
-    ao_store: &CkbadgerStore,
     network: &str,
     actions: &TxActions,
     participant: &ParticipantDelta,
     script_info_cache: &mut HashMap<Vec<u8>, Option<ScriptInfo>>,
     token_cache: &mut HashMap<Vec<u8>, Option<(Option<String>, Option<u8>)>>,
-    address_cache: &mut HashMap<Vec<u8>, String>,
-    pool: Option<PoolRowMeta>,
+    address_cache: &mut HashMap<Vec<u8>, Option<String>>,
+    pool: Option<PoolRowMeta<'_>>,
 ) -> anyhow::Result<ActivityResponse> {
     let item_deltas = participant
         .item_deltas
@@ -606,7 +635,15 @@ pub(crate) fn build_activity_response(
         .participants
         .iter()
         .filter(|p| p.id != participant.id)
-        .map(|p| participant_ref(store, ao_store, network, p, address_cache))
+        .map(|p| {
+            participant_ref(
+                store,
+                network,
+                p,
+                pool.as_ref().map(|meta| meta.outputs),
+                address_cache,
+            )
+        })
         .collect::<anyhow::Result<Vec<_>>>()?;
 
     Ok(ActivityResponse {
@@ -638,11 +675,11 @@ pub(crate) fn build_activity_response(
 #[allow(clippy::type_complexity)]
 pub(crate) fn build_global_activity_response(
     store: &CkbadgerStore,
-    ao_store: &CkbadgerStore,
+    _ao_store: &CkbadgerStore,
     network: &str,
     actions: &TxActions,
     script_info_cache: &mut HashMap<Vec<u8>, Option<ScriptInfo>>,
-    address_cache: &mut HashMap<Vec<u8>, String>,
+    address_cache: &mut HashMap<Vec<u8>, Option<String>>,
 ) -> anyhow::Result<GlobalActivityResponse> {
     let mut token_cache: HashMap<Vec<u8>, Option<(Option<String>, Option<u8>)>> = HashMap::new();
 
@@ -650,7 +687,7 @@ pub(crate) fn build_global_activity_response(
         .participants
         .iter()
         .map(|p| {
-            let reference = participant_ref(store, ao_store, network, p, address_cache)?;
+            let reference = participant_ref(store, network, p, None, address_cache)?;
             let item_deltas = p
                 .item_deltas
                 .iter()
@@ -890,46 +927,30 @@ fn list_canonical_global_activities_page(
     Ok(out)
 }
 
-/// How many tx-pool rows one address's page one may carry.
-///
-/// A bound, not a sample: beyond it the response reports `truncated` so a
-/// caller is never shown a silently partial pool segment.
-pub(crate) const POOL_ROWS_PER_ADDRESS: usize = 200;
-
-/// Build this lock's tx-pool segment: the rows, and the summary describing them.
+/// Build this lock's tx-pool rows for page one, and the summary describing
+/// them: the shared page-one segment, narrowed by this feed's filter.
 ///
 /// Blocking (reads the store for dedup and for script/address resolution).
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub(crate) fn build_pool_activity_rows(
     store: &CkbadgerStore,
-    ao_store: &CkbadgerStore,
     network: &str,
     snapshot: &crate::pool::PoolSnapshot,
-    lock_hash: &[u8],
+    lock_hash: &[u8; 32],
     filter: Option<&str>,
     script_info_cache: &mut HashMap<Vec<u8>, Option<ScriptInfo>>,
     token_cache: &mut HashMap<Vec<u8>, Option<(Option<String>, Option<u8>)>>,
-    address_cache: &mut HashMap<Vec<u8>, String>,
+    address_cache: &mut HashMap<Vec<u8>, Option<String>>,
 ) -> anyhow::Result<(Vec<ActivityResponse>, crate::pool::PoolSummaryResponse)> {
-    let lock32: &[u8; 32] = lock_hash.try_into().map_err(|_| {
-        anyhow::anyhow!(
-            "build_pool_activity_rows expects a 32-byte lock hash, got {} bytes",
-            lock_hash.len()
-        )
-    })?;
-    let (records, truncated) = pool_records_for_page(snapshot, lock_hash);
+    let segment = address_pool::page_one_segment(store, snapshot, lock_hash)?;
 
-    let mut rows = Vec::with_capacity(records.len());
-    let mut pending_ckb_delta: i128 = 0;
-    for record in records {
-        // One dedup rule, committed wins: a transaction this request's pinned
-        // store view already has is served from the committed segment.
-        if store.get_tx_by_hash(&record.tx_hash)?.is_some() {
-            continue;
-        }
+    let mut rows = Vec::with_capacity(segment.rows.len());
+    let mut served = Vec::with_capacity(segment.rows.len());
+    for row in &segment.rows {
+        let record = &row.record;
         // `by_lock` is built from a record's interpreted participants, so a
-        // record reached through it must have both. Either missing is a mirror
-        // invariant violation, not a row to skip quietly.
+        // record reached through it must have an interpretation. A missing one
+        // is a mirror invariant violation, not a row to skip quietly.
         let actions = record.actions.as_ref().ok_or_else(|| {
             anyhow::anyhow!(
                 "pool record indexed by lock 0x{} carries no interpretation: tx=0x{}",
@@ -944,7 +965,7 @@ pub(crate) fn build_pool_activity_rows(
         let participant = actions
             .participants
             .iter()
-            .find(|p| p.id.matches(lock32))
+            .find(|p| p.id.matches(lock_hash))
             .ok_or_else(|| {
                 anyhow::anyhow!(
                     "pool record indexed by lock 0x{} has no participant for it: tx=0x{}",
@@ -953,10 +974,8 @@ pub(crate) fn build_pool_activity_rows(
                 )
             })?;
 
-        pending_ckb_delta += participant.ckb_delta;
         rows.push(build_activity_response(
             store,
-            ao_store,
             network,
             actions,
             participant,
@@ -970,44 +989,14 @@ pub(crate) fn build_pool_activity_rows(
                 )?)
                 .map_err(|e| anyhow::anyhow!("{e}"))?,
                 interpretation: crate::pool::InterpretationResponse::from(&record.interpretation),
+                outputs: &record.outputs,
             }),
         )?);
+        served.push(row);
     }
 
-    let summary = pool_summary(snapshot, rows.len(), pending_ckb_delta, truncated);
+    let summary = address_pool::pool_summary(snapshot, served, segment.truncated)?;
     Ok((rows, summary))
-}
-
-/// This lock's pool records for page one, newest first, capped — and whether
-/// anything was left out.
-pub(crate) fn pool_records_for_page(
-    snapshot: &crate::pool::PoolSnapshot,
-    lock_hash: &[u8],
-) -> (Vec<std::sync::Arc<crate::pool::PoolTxRecord>>, bool) {
-    let mut records = snapshot.records_for_lock(lock_hash);
-    let over_cap = records.len() > POOL_ROWS_PER_ADDRESS;
-    records.truncate(POOL_ROWS_PER_ADDRESS);
-    (records, over_cap || snapshot.status.truncated)
-}
-
-/// The `pool` object for a page-one response.
-pub(crate) fn pool_summary(
-    snapshot: &crate::pool::PoolSnapshot,
-    count: usize,
-    pending_ckb_delta: i128,
-    truncated: bool,
-) -> crate::pool::PoolSummaryResponse {
-    crate::pool::PoolSummaryResponse {
-        enabled: snapshot.status.enabled,
-        healthy: snapshot.status.healthy,
-        last_polled_at: snapshot
-            .status
-            .last_polled_at_ms
-            .and_then(|ms| crate::pool::pool_timestamp_rfc3339(ms).ok()),
-        count,
-        pending_ckb_delta: pending_ckb_delta.to_string(),
-        truncated,
-    }
 }
 
 async fn get_address_activities(
@@ -1031,7 +1020,6 @@ async fn get_address_activities(
 
     let filter = params.filter.clone();
     let store = state.store.clone();
-    let ao_store = state.append_only_store.clone();
     let network = state.ckb_network.clone();
     let lock32: [u8; 32] = lock_hash.as_slice().try_into().map_err(|_| {
         ApiError::internal(format!(
@@ -1076,7 +1064,6 @@ async fn get_address_activities(
                 Some(snapshot) => {
                     let (rows, summary) = build_pool_activity_rows(
                         store.as_ref(),
-                        ao_store.as_ref(),
                         &network,
                         snapshot,
                         &lock32,
@@ -1097,7 +1084,6 @@ async fn get_address_activities(
                 };
                 activities.push(build_activity_response(
                     store.as_ref(),
-                    ao_store.as_ref(),
                     &network,
                     actions,
                     participant,
@@ -1247,7 +1233,7 @@ mod tests {
     fn discrete_item_delta_requires_exact_unit_magnitude() {
         let item = ItemDelta {
             item_id: vec![0xAA; 32],
-            kind: ITEM_KIND_OBJECT,
+            kind: ItemKind::Object,
             magnitude: 2,
             negative: false,
         };
@@ -1260,7 +1246,7 @@ mod tests {
     fn discrete_item_delta_preserves_sign() {
         let mut item = ItemDelta {
             item_id: vec![0xBB; 32],
-            kind: ITEM_KIND_IDENTITY,
+            kind: ItemKind::Identity(ckbadger_store::types::IdentityStandard::DotCell),
             magnitude: 1,
             negative: false,
         };
@@ -1606,11 +1592,17 @@ mod tests {
         let identity = ItemDeltaResponse::Identity {
             identity_id: "0xabcdef".to_string(),
             delta: -1,
+            standard: ckbadger_store::types::IdentityStandard::DotCell.asset_standard(),
         };
         let json = serde_json::to_string(&identity).unwrap();
         assert!(
             json.contains("\"identityId\""),
             "missing identityId: {}",
+            json
+        );
+        assert!(
+            json.contains("\"standard\":\"dotcell\""),
+            "missing standard: {}",
             json
         );
         assert!(

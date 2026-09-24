@@ -524,6 +524,25 @@ async fn test_address_transactions_reads_from_derived_store() {
             semantic_tags: 0,
         },
     );
+    // A canonical transaction's block has a header; the list reads its time.
+    core_batch.put_block_header(
+        10,
+        &CachedBlockHeader {
+            hash: vec![0xba; 32],
+            parent_hash: vec![0u8; 32],
+            timestamp: 1_700_000_000_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+            uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
+            cycles: None,
+        },
+    );
     core_batch.commit().unwrap();
     core_store
         .update_sync_status(|s| {
@@ -1145,8 +1164,8 @@ fn seed_named_tx(
 #[tokio::test]
 async fn test_address_activities_include_named_participation_with_zero_ckb_delta() {
     use ckbadger_store::types::{
-        participant_roles, AddrTxValue, ItemDelta, ParticipantDelta, ParticipantId,
-        ITEM_KIND_IDENTITY, TAG_IDENTITY,
+        participant_roles, AddrTxValue, ItemDelta, ItemKind, ParticipantDelta, ParticipantId,
+        TAG_IDENTITY,
     };
 
     let core_store = test_store();
@@ -1183,7 +1202,7 @@ async fn test_address_activities_include_named_participation_with_zero_ckb_delta
                 used_delta: 0,
                 item_deltas: vec![ItemDelta {
                     item_id: vec![0xEE; 20],
-                    kind: ITEM_KIND_IDENTITY,
+                    kind: ItemKind::Identity(IdentityStandard::DotCell),
                     magnitude: 1,
                     negative: false,
                 }],
@@ -1200,6 +1219,19 @@ async fn test_address_activities_include_named_participation_with_zero_ckb_delta
         0,
         &tx_hash,
         &AddrTxValue::new(0, false, false, TAG_IDENTITY),
+    );
+    // `other` holds a cell in this transaction, so the chain view knows its
+    // lock script (CF_LOCK_SCRIPTS is written at every cell creation).
+    batch.put_lock_script(
+        &other,
+        &ckbadger_store::types::LockScriptEntry {
+            code_hash: hex::decode(
+                "9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+            )
+            .unwrap(),
+            hash_type: 1,
+            args: vec![0x11; 20],
+        },
     );
     batch.commit().unwrap();
 
@@ -1226,6 +1258,7 @@ async fn test_address_activities_include_named_participation_with_zero_ckb_delta
     assert_eq!(rows[0]["usedDelta"], "0");
     assert_eq!(rows[0]["itemDeltas"][0]["kind"], "identity");
     assert_eq!(rows[0]["itemDeltas"][0]["delta"], 1);
+    assert_eq!(rows[0]["itemDeltas"][0]["standard"], "dotcell");
     assert_eq!(rows[0]["roles"][0], "owner_to");
     let participants = rows[0]["participants"].as_array().unwrap();
     assert_eq!(participants.len(), 1, "only the other party: {json:?}");
@@ -1457,4 +1490,542 @@ async fn test_global_activities_expose_participant_ids_and_roles() {
     );
     assert_eq!(participants[1]["roles"][0], "owner_to");
     assert_eq!(participants[1]["roles"][1], "manager_to");
+}
+
+// ── Task 2.8: timestamps propagate, one pool segment, pendingSummary ─────
+
+async fn fetch_json(app: axum::Router, uri: &str) -> (StatusCode, serde_json::Value) {
+    let response = app
+        .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json = serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null);
+    (status, json)
+}
+
+/// The pool summary's `lastPolledAt` is the mirror's own clock. A value that
+/// cannot be rendered is a mirror invariant violation, reported with the value
+/// — not a `null` that reads as "never polled".
+#[tokio::test]
+async fn pool_summary_unrenderable_last_polled_at_is_a_500() {
+    let store = test_store();
+    let state = test_app_state(test_config(store));
+    state
+        .pool_mirror
+        .publish(ckbadger_api::pool::PoolSnapshot::from_records(
+            vec![Arc::new(make_test_pool_record(
+                &[0xf1; 32],
+                &POOL_LOCK_HASH,
+                -500,
+                1_700_000_500_000,
+                ckbadger_api::pool::PoolStatus::Pending,
+            ))],
+            ckbadger_api::pool::MirrorStatus {
+                enabled: true,
+                healthy: true,
+                last_polled_at_ms: Some(i64::MAX),
+                ..Default::default()
+            },
+        ));
+    let app = create_router_with_state(state).await;
+
+    for uri in [
+        format!(
+            "/api/v1/addresses/0x{}/activities",
+            hex::encode(POOL_LOCK_HASH)
+        ),
+        format!(
+            "/api/v1/addresses/0x{}/transactions",
+            hex::encode(POOL_LOCK_HASH)
+        ),
+    ] {
+        let (status, json) = fetch_json(app.clone(), &uri).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{uri}: {json}");
+        let message = json["message"].as_str().unwrap();
+        assert!(message.contains("last_polled_at"), "{uri}: {message}");
+        assert!(message.contains(&i64::MAX.to_string()), "{uri}: {message}");
+    }
+}
+
+/// A canonical committed row whose block header is missing is store
+/// corruption: the transaction list reports it with the block, instead of
+/// serving the row with an empty timestamp.
+#[tokio::test]
+async fn address_transactions_missing_block_header_is_a_500_naming_the_block() {
+    let store = test_store();
+    let lock_hash = [0x4au8; 32];
+    let tx_hash = [0x5bu8; 32];
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_tx_hash_map(&tx_hash, 4242, 0);
+    batch.put_tx_index(
+        4242,
+        0,
+        &TxIndexEntry {
+            is_cellbase: false,
+            timestamp: 1_700_000_000_000,
+            inputs_count: 1,
+            outputs_count: 1,
+            fee: 100,
+            tx_size: 300,
+            cycles: None,
+            semantic_tags: 0,
+        },
+    );
+    batch.put_addr_tx(
+        &lock_hash,
+        4242,
+        0,
+        &tx_hash,
+        &AddrTxValue::new(-100, true, false, 0),
+    );
+    batch.commit().unwrap();
+    let mut config = test_config(store);
+    config.pool_mirror_enabled = false;
+    let app = create_router(config).await;
+
+    let (status, json) = fetch_json(
+        app,
+        &format!(
+            "/api/v1/addresses/0x{}/transactions",
+            hex::encode(lock_hash)
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{json}");
+    let message = json["message"].as_str().unwrap();
+    assert!(message.contains("4242"), "{message}");
+    assert!(message.contains("header"), "{message}");
+}
+
+/// The address detail's `pendingSummary` counts every pool row of the address
+/// — the same segment the lists serve on page one, committed-wins included —
+/// and no activity filter reaches it, so the header cannot disagree with
+/// itself between tabs.
+#[tokio::test]
+async fn address_pending_summary_is_independent_of_the_activity_filter() {
+    use ckbadger_store::types::TAG_TOKEN;
+
+    let store = test_store();
+    let committed_tx = [0xc1; 32];
+    seed_committed_activity(&store, &POOL_LOCK_HASH, &committed_tx, 10, 0, 100, 0);
+    let state = test_app_state(test_config(store));
+    state.pool_mirror.publish(healthy_pool_snapshot(vec![
+        make_test_pool_record_with(
+            &[0xf1; 32],
+            &POOL_LOCK_HASH,
+            -500,
+            1_700_000_500_000,
+            ckbadger_api::pool::PoolStatus::Pending,
+            TAG_TOKEN,
+            ckbadger_api::pool::Interpretation::Complete,
+        ),
+        make_test_pool_record(
+            &[0xf2; 32],
+            &POOL_LOCK_HASH,
+            300,
+            1_700_000_600_000,
+            ckbadger_api::pool::PoolStatus::Proposed,
+        ),
+        // Already indexed: served by the committed segment, counted nowhere here.
+        make_test_pool_record(
+            &committed_tx,
+            &POOL_LOCK_HASH,
+            100,
+            1_700_000_400_000,
+            ckbadger_api::pool::PoolStatus::CommittedAwaitingIndex {
+                block_number: 10,
+                block_hash: [0xba; 32],
+            },
+        ),
+    ]));
+    let app = create_router_with_state(state).await;
+    let addr = format!("/api/v1/addresses/0x{}", hex::encode(POOL_LOCK_HASH));
+
+    let (status, detail) = fetch_json(app.clone(), &addr).await;
+    assert_eq!(status, StatusCode::OK, "{detail}");
+    assert_eq!(
+        detail["pendingSummary"],
+        serde_json::json!({ "txCount": 2, "capacityDelta": "-200" })
+    );
+
+    // A filter on a list narrows the list's own `pool` summary …
+    let (_, filtered) = fetch_json(app.clone(), &format!("{addr}/activities?filter=token")).await;
+    assert_eq!(filtered["pool"]["count"], 1);
+    assert_eq!(filtered["pool"]["pendingCkbDelta"], "-500");
+    // … the transaction list agrees with the unfiltered segment …
+    let (_, txs) = fetch_json(app.clone(), &format!("{addr}/transactions")).await;
+    assert_eq!(txs["pool"]["count"], 2);
+    assert_eq!(txs["pool"]["pendingCkbDelta"], "-200");
+    // … and the detail's summary is the same whatever the page asks for.
+    let (_, again) = fetch_json(app, &format!("{addr}?filter=token")).await;
+    assert_eq!(again["pendingSummary"], detail["pendingSummary"]);
+}
+
+/// No pool view, no pending summary: the key is present and `null`, never a
+/// `0` that reads as "nothing pending".
+#[tokio::test]
+async fn address_pending_summary_is_null_without_a_healthy_mirror() {
+    let addr = format!("/api/v1/addresses/0x{}", hex::encode(POOL_LOCK_HASH));
+
+    let state = test_app_state(test_config(test_store()));
+    state.pool_mirror.publish(unhealthy_pool_snapshot());
+    let app = create_router_with_state(state).await;
+    let (status, json) = fetch_json(app, &addr).await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert!(
+        json.as_object().unwrap().contains_key("pendingSummary"),
+        "{json}"
+    );
+    assert!(json["pendingSummary"].is_null(), "{json}");
+
+    let mut config = test_config(test_store());
+    config.pool_mirror_enabled = false;
+    let app = create_router(config).await;
+    let (status, json) = fetch_json(app, &addr).await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert!(
+        json.as_object().unwrap().contains_key("pendingSummary"),
+        "{json}"
+    );
+    assert!(json["pendingSummary"].is_null(), "{json}");
+
+    // A healthy mirror with nothing for this address is a real zero.
+    let state = test_app_state(test_config(test_store()));
+    state.pool_mirror.publish(healthy_pool_snapshot(vec![]));
+    let app = create_router_with_state(state).await;
+    let (_, json) = fetch_json(app, &addr).await;
+    assert_eq!(
+        json["pendingSummary"],
+        serde_json::json!({ "txCount": 0, "capacityDelta": "0" })
+    );
+}
+
+/// The detail response is cached; the pending summary is not — a pool
+/// transaction that arrives after the first request shows on the next one.
+#[tokio::test]
+async fn address_pending_summary_is_not_served_from_the_detail_cache() {
+    let state = test_app_state(test_config(test_store()));
+    state.pool_mirror.publish(healthy_pool_snapshot(vec![]));
+    let app = create_router_with_state(state.clone()).await;
+    let addr = format!("/api/v1/addresses/0x{}", hex::encode(POOL_LOCK_HASH));
+
+    let (_, first) = fetch_json(app.clone(), &addr).await;
+    assert_eq!(first["pendingSummary"]["txCount"], 0);
+
+    state
+        .pool_mirror
+        .publish(healthy_pool_snapshot(vec![make_test_pool_record(
+            &[0xf1; 32],
+            &POOL_LOCK_HASH,
+            700,
+            1_700_000_500_000,
+            ckbadger_api::pool::PoolStatus::Pending,
+        )]));
+    let (_, second) = fetch_json(app, &addr).await;
+    assert_eq!(
+        second["pendingSummary"],
+        serde_json::json!({ "txCount": 1, "capacityDelta": "700" })
+    );
+}
+
+// ── 5.9: one lock → address resolver ─────────────────────────────────────
+
+/// Seed one committed tx at block 10 in which `lock_hash` pays `other`.
+fn seed_two_party_tx(store: &Arc<CkbadgerStore>, lock_hash: &[u8; 32], other: &[u8; 32]) {
+    use ckbadger_store::types::{ParticipantDelta, ParticipantId};
+    let tx_hash = vec![0xaa; 32];
+    let actions = TxActions {
+        tx_hash: tx_hash.clone(),
+        block_hash: vec![0xbb; 32],
+        block_number: 10,
+        tx_index: 0,
+        timestamp: 1_700_000_000_000,
+        is_cellbase: false,
+        protocol_actions: vec![],
+        type_calls: vec![],
+        lock_calls: vec![],
+        participants: vec![
+            ParticipantDelta {
+                id: ParticipantId::Lock(*lock_hash),
+                ckb_delta: -100,
+                used_delta: 0,
+                item_deltas: vec![],
+                tags: 0,
+                roles: 0,
+            },
+            ParticipantDelta {
+                id: ParticipantId::Lock(*other),
+                ckb_delta: 100,
+                used_delta: 0,
+                item_deltas: vec![],
+                tags: 0,
+                roles: 0,
+            },
+        ],
+    };
+    seed_named_tx(store, 10, &tx_hash, &actions);
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_addr_tx(
+        lock_hash,
+        10,
+        0,
+        &tx_hash,
+        &AddrTxValue::new(-100, true, false, 0),
+    );
+    batch.commit().unwrap();
+}
+
+/// A party whose lock script the store does not know is reported by its lock
+/// hash with no address — never with the hex lock hash posing as an address.
+#[tokio::test]
+async fn unknown_lock_participant_is_unresolved_not_a_fabricated_address() {
+    let store = test_store();
+    let lock_hash = [0x42u8; 32];
+    let other = [0x11u8; 32];
+    seed_two_party_tx(&store, &lock_hash, &other);
+    let app = create_router(test_config(store)).await;
+
+    let (status, json) = get_json(
+        &app,
+        &format!("/addresses/0x{}/activities", hex::encode(lock_hash)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let party = &json["data"][0]["participants"][0];
+    assert_eq!(party["lockHash"], format!("0x{}", hex::encode(other)));
+    assert!(party["address"].is_null(), "{json}");
+}
+
+/// A lock script the store holds but cannot encode (a hash_type no chain
+/// allows) is store corruption, reported with the lock — not rendered as a
+/// guess or dropped.
+#[tokio::test]
+async fn corrupt_lock_script_entry_is_a_500_naming_the_lock() {
+    let store = test_store();
+    let lock_hash = [0x42u8; 32];
+    let other = [0x11u8; 32];
+    seed_two_party_tx(&store, &lock_hash, &other);
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_lock_script(
+        &other,
+        &ckbadger_store::types::LockScriptEntry {
+            code_hash: vec![0x9b; 32],
+            hash_type: 7,
+            args: vec![0x11; 20],
+        },
+    );
+    batch.commit().unwrap();
+    let app = create_router(test_config(store)).await;
+
+    let (status, json) = get_json(
+        &app,
+        &format!("/addresses/0x{}/activities", hex::encode(lock_hash)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{json}");
+    assert!(
+        json["message"]
+            .as_str()
+            .unwrap()
+            .contains(&hex::encode(other)),
+        "{json}"
+    );
+}
+
+/// A pending transaction paying a lock no committed cell has ever used: the
+/// recipient's address comes from the script the pool transaction itself
+/// carries, the same encoder the chain view uses, not from a store lookup
+/// that cannot know the lock yet.
+#[tokio::test]
+async fn pending_tx_paying_a_never_seen_lock_shows_its_real_address() {
+    use ckbadger_store::types::{ParticipantDelta, ParticipantId};
+
+    let secp =
+        hex::decode("9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8").unwrap();
+    let args = vec![0x5e; 20];
+    let cell = ckbadger_api::pool::ResolvedCell::new(
+        100_000_000_000,
+        secp.clone(),
+        1,
+        args.clone(),
+        None,
+        vec![],
+    )
+    .unwrap();
+    let recipient: [u8; 32] = cell.lock_script_hash.clone().try_into().unwrap();
+    let expected =
+        ckbadger_api::utils::address::script_to_address(&secp, 1, &args, "mainnet").unwrap();
+
+    let mut record = make_test_pool_record(
+        &[0xf7; 32],
+        &POOL_LOCK_HASH,
+        -100_000_000_000,
+        1_700_000_500_000,
+        ckbadger_api::pool::PoolStatus::Pending,
+    );
+    record.outputs = vec![cell];
+    record
+        .actions
+        .as_mut()
+        .unwrap()
+        .participants
+        .push(ParticipantDelta {
+            id: ParticipantId::Lock(recipient),
+            ckb_delta: 100_000_000_000,
+            used_delta: 0,
+            item_deltas: vec![],
+            tags: 0,
+            roles: 0,
+        });
+
+    let mut config = test_config(test_store());
+    config.ckb_network = "mainnet".to_string();
+    let state = test_app_state(config);
+    state
+        .pool_mirror
+        .publish(healthy_pool_snapshot(vec![record]));
+    let app = create_router_with_state(state).await;
+
+    let (status, json) = get_json(
+        &app,
+        &format!("/addresses/0x{}/activities", hex::encode(POOL_LOCK_HASH)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let row = &json["data"][0];
+    assert_eq!(row["poolStatus"], "pending", "{json}");
+    let party = &row["participants"][0];
+    assert_eq!(party["lockHash"], format!("0x{}", hex::encode(recipient)));
+    assert_eq!(party["address"], expected, "{json}");
+}
+
+// ── 2.6b: identity item deltas name their standard ──────────────────────
+
+/// Every identity item delta carries its standard, as the builder recorded
+/// it, in the standard's one wire value (`IdentityStandard::asset_standard`):
+/// the frontend links the item to its page with it. No store lookup — the
+/// four identities below exist nowhere in the store.
+#[tokio::test]
+async fn identity_item_deltas_name_their_standard() {
+    use ckbadger_store::types::{
+        ItemDelta, ItemKind, ParticipantDelta, ParticipantId, TAG_IDENTITY,
+    };
+
+    let store = test_store();
+    let lock_hash = [0x42u8; 32];
+    let tx_hash = vec![0xab; 32];
+    let identity = |standard, byte| ItemDelta {
+        item_id: vec![byte; 20],
+        kind: ItemKind::Identity(standard),
+        magnitude: 1,
+        negative: false,
+    };
+    let actions = TxActions {
+        tx_hash: tx_hash.clone(),
+        block_hash: vec![0xbb; 32],
+        block_number: 10,
+        tx_index: 0,
+        timestamp: 1_700_000_000_000,
+        is_cellbase: false,
+        protocol_actions: vec![],
+        type_calls: vec![],
+        lock_calls: vec![],
+        participants: vec![ParticipantDelta {
+            id: ParticipantId::Lock(lock_hash),
+            ckb_delta: 0,
+            used_delta: 0,
+            item_deltas: vec![
+                identity(IdentityStandard::DotBit, 0x01),
+                identity(IdentityStandard::BitCell, 0x02),
+                identity(IdentityStandard::DidCkb, 0x03),
+                identity(IdentityStandard::DotCell, 0x04),
+            ],
+            tags: TAG_IDENTITY,
+            roles: 0,
+        }],
+    };
+    seed_named_tx(&store, 10, &tx_hash, &actions);
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_addr_tx(
+        &lock_hash,
+        10,
+        0,
+        &tx_hash,
+        &AddrTxValue::new(0, true, true, TAG_IDENTITY),
+    );
+    batch.commit().unwrap();
+    let app = create_router(test_config(store)).await;
+
+    let (status, json) = get_json(
+        &app,
+        &format!("/addresses/0x{}/activities", hex::encode(lock_hash)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let deltas = json["data"][0]["itemDeltas"].as_array().unwrap();
+    let standards: Vec<&str> = deltas
+        .iter()
+        .map(|d| d["standard"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        standards,
+        ["dotbit", "bit_cell", "did_ckb", "dotcell"],
+        "{json}"
+    );
+
+    let (_, global) = get_json(&app, "/activities").await;
+    assert_eq!(
+        global["data"][0]["participants"][0]["itemDeltas"][3]["standard"], "dotcell",
+        "{global}"
+    );
+}
+
+/// A pending `.cell` registration: the name is not in the store yet, and the
+/// pool row still names its standard — carried by the item delta the mirror's
+/// builder produced, not looked up.
+#[tokio::test]
+async fn pending_dotcell_registration_item_delta_carries_its_standard() {
+    use ckbadger_store::types::{ItemDelta, ItemKind, TAG_IDENTITY};
+
+    let mut record = make_test_pool_record_with(
+        &[0xf9; 32],
+        &POOL_LOCK_HASH,
+        -24_000_000_000,
+        1_700_000_500_000,
+        ckbadger_api::pool::PoolStatus::Pending,
+        TAG_IDENTITY,
+        ckbadger_api::pool::Interpretation::Complete,
+    );
+    let new_name = ckbadger_store::types::derive_dotcell_id("brandnew");
+    record.actions.as_mut().unwrap().participants[0]
+        .item_deltas
+        .push(ItemDelta {
+            item_id: new_name.to_vec(),
+            kind: ItemKind::Identity(IdentityStandard::DotCell),
+            magnitude: 1,
+            negative: false,
+        });
+
+    let state = test_app_state(test_config(test_store()));
+    state
+        .pool_mirror
+        .publish(healthy_pool_snapshot(vec![record]));
+    let app = create_router_with_state(state).await;
+
+    let (status, json) = get_json(
+        &app,
+        &format!("/addresses/0x{}/activities", hex::encode(POOL_LOCK_HASH)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let row = &json["data"][0];
+    assert_eq!(row["poolStatus"], "pending", "{json}");
+    assert_eq!(row["itemDeltas"][0]["kind"], "identity");
+    assert_eq!(
+        row["itemDeltas"][0]["identityId"],
+        format!("0x{}", hex::encode(new_name))
+    );
+    assert_eq!(row["itemDeltas"][0]["standard"], "dotcell", "{json}");
 }

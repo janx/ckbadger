@@ -6,9 +6,8 @@ use axum::{
 use ckbadger_common::TokenBalance;
 use ckbadger_store::{
     types::{
-        IdentityStandard, MnftCollectionAggregate, ObjectCollectionActivityEntry,
-        BIT_CELL_SENTINEL_COLLECTION, DID_CKB_SENTINEL_COLLECTION, DOTBIT_SENTINEL_COLLECTION,
-        DOTCELL_SENTINEL_COLLECTION,
+        identity_alias, identity_sentinel_for, identity_sentinel_standard, IdentityStandard,
+        MnftCollectionAggregate, ObjectCollectionActivityEntry,
     },
     CkbadgerStore,
 };
@@ -32,9 +31,7 @@ use crate::warmup::CachedAssetEntry;
 use crate::AppState;
 
 fn is_identity_sentinel(collection_id: &[u8]) -> bool {
-    collection_id == DOTBIT_SENTINEL_COLLECTION
-        || collection_id == BIT_CELL_SENTINEL_COLLECTION
-        || collection_id == DID_CKB_SENTINEL_COLLECTION
+    identity_sentinel_standard(collection_id).is_some()
 }
 
 /// Which store a collection's aggregate — and therefore its item rows — comes
@@ -967,15 +964,8 @@ fn format_yyyymmdd_for_chart(date_yyyymmdd: u32) -> String {
 fn decode_object_collection_id(
     raw: &str,
 ) -> Result<Vec<u8>, (axum::http::StatusCode, Json<ApiError>)> {
-    let normalized = raw.to_ascii_lowercase();
-    if normalized == "dotbit" || normalized == ".bit" {
-        return Ok(DOTBIT_SENTINEL_COLLECTION.to_vec());
-    }
-    if normalized == "did:ckb" || normalized == "did_ckb" {
-        return Ok(DID_CKB_SENTINEL_COLLECTION.to_vec());
-    }
-    if matches!(normalized.as_str(), "bit_cell" | "bit-cell" | ".bit-cell") {
-        return Ok(BIT_CELL_SENTINEL_COLLECTION.to_vec());
+    if let Some(standard) = identity_alias(raw) {
+        return Ok(identity_sentinel_for(standard).to_vec());
     }
     parse_asset_id_max32(raw, "object collection ID")
 }
@@ -2172,18 +2162,12 @@ pub(crate) fn list_identity_items_inner(
     status_filter: NftItemStatusFilter,
     agg: &MnftCollectionAggregate,
 ) -> ApiResult<CursorPaginatedResponse<CollectionItemResponse>> {
-    let identity_standard = match collection_id_bytes {
-        id if id == DOTBIT_SENTINEL_COLLECTION => IdentityStandard::DotBit,
-        id if id == BIT_CELL_SENTINEL_COLLECTION => IdentityStandard::BitCell,
-        id if id == DID_CKB_SENTINEL_COLLECTION => IdentityStandard::DidCkb,
-        id if id == DOTCELL_SENTINEL_COLLECTION => IdentityStandard::DotCell,
-        _ => {
-            return Err(ApiError::internal(format!(
-                "unsupported identity collection sentinel: collection_id=0x{}",
-                hex::encode(collection_id_bytes)
-            )))
-        }
-    };
+    let identity_standard = identity_sentinel_standard(collection_id_bytes).ok_or_else(|| {
+        ApiError::internal(format!(
+            "unsupported identity collection sentinel: collection_id=0x{}",
+            hex::encode(collection_id_bytes)
+        ))
+    })?;
 
     let mut matched_items: Vec<(Vec<u8>, ckbadger_store::types::IdentityEntry)> =
         Vec::with_capacity((limit + 1) as usize);

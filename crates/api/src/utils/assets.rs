@@ -1,7 +1,7 @@
 use anyhow::{anyhow, bail, Result};
 use ckbadger_store::types::{
-    ObjectStandard, BIT_CELL_SENTINEL_COLLECTION, DID_CKB_SENTINEL_COLLECTION,
-    DOTBIT_SENTINEL_COLLECTION, DOTCELL_SENTINEL_COLLECTION, SOLE_SPORES_SENTINEL_COLLECTION,
+    identity_alias, identity_display_name, identity_sentinel_standard, ObjectStandard,
+    SOLE_SPORES_SENTINEL_COLLECTION,
 };
 use ckbadger_store::CkbadgerStore;
 use serde::Deserialize;
@@ -204,28 +204,20 @@ pub fn resolve_dob_collection_name(
 
 /// Resolve the display-level standard for a collection, overriding for
 /// sentinel identity collections whose `MnftCollectionAggregate.standard`
-/// cannot represent dotbit/did:ckb (those live in `IdentityStandard`).
+/// cannot represent an identity standard (those live in `IdentityStandard`,
+/// resolved through the store's one identity table).
 pub fn resolve_collection_standard(collection_id: &[u8], agg_standard: &str) -> String {
-    if collection_id == DOTBIT_SENTINEL_COLLECTION {
-        return "dotbit".to_string();
+    match identity_sentinel_standard(collection_id) {
+        Some(standard) => standard.asset_standard().to_string(),
+        None => agg_standard.to_string(),
     }
-    if collection_id == DID_CKB_SENTINEL_COLLECTION {
-        return "did_ckb".to_string();
-    }
-    if collection_id == BIT_CELL_SENTINEL_COLLECTION {
-        return "bit_cell".to_string();
-    }
-    if collection_id == DOTCELL_SENTINEL_COLLECTION {
-        return "dotcell".to_string();
-    }
-    agg_standard.to_string()
 }
 
 /// Resolve an object collection display name.
 ///
 /// Priority:
 /// 1) non-empty aggregate name
-/// 2) standard fallback (currently ".bit" for dotbit)
+/// 2) an identity standard's display name from the store's identity table
 pub fn resolve_object_collection_name(
     standard: &str,
     aggregate_name: Option<&str>,
@@ -234,17 +226,7 @@ pub fn resolve_object_collection_name(
         return Some(name);
     }
 
-    if standard.eq_ignore_ascii_case("dotbit") {
-        return Some(".bit".to_string());
-    }
-    if standard.eq_ignore_ascii_case("did_ckb") || standard.eq_ignore_ascii_case("did:ckb") {
-        return Some("did:ckb".to_string());
-    }
-    if standard.eq_ignore_ascii_case("bit_cell") || standard.eq_ignore_ascii_case("bit-cell") {
-        return Some(".bit Cell".to_string());
-    }
-
-    None
+    identity_alias(standard).map(|standard| identity_display_name(standard).to_string())
 }
 
 #[cfg(test)]

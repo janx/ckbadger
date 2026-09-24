@@ -27,30 +27,43 @@ use crate::ApiError;
 /// Byte length of every CKB hash exposed through the API (blake2b-256).
 pub const HASH32_LEN: usize = 32;
 
+/// Parse a user-supplied fixed-width hex value, with or without a `0x` prefix.
+///
+/// The one parser every fixed-width identifier goes through: a 32-byte hash, a
+/// 20-byte lock-hash prefix, a 20-byte `.cell` name id. `noun` says what the
+/// width is in the error ("hash", "lock hash prefix", …); `field` names the
+/// request parameter.
+///
+/// Returns `400 Bad Request` for non-hex input and for any length other than
+/// exactly `N` bytes, reporting both the expectation and what was received.
+pub fn parse_fixed_hex<const N: usize>(
+    raw: &str,
+    field: &str,
+    noun: &str,
+) -> Result<[u8; N], ApiRouteError> {
+    let stripped = raw.strip_prefix("0x").unwrap_or(raw);
+    let hex_chars = N * 2;
+
+    let bytes = hex::decode(stripped).map_err(|e| {
+        ApiError::bad_request(format!(
+            "Invalid {field}: expected a {N}-byte hex {noun} ({hex_chars} hex characters, optional 0x prefix), got invalid hex ({e})"
+        ))
+    })?;
+
+    <[u8; N]>::try_from(bytes.as_slice()).map_err(|_| {
+        ApiError::bad_request(format!(
+            "Invalid {field}: expected {N} bytes ({hex_chars} hex characters, optional 0x prefix), got {} bytes",
+            bytes.len()
+        ))
+    })
+}
+
 /// Parse a user-supplied 32-byte hash, with or without a `0x` prefix.
 ///
 /// `field` names the request parameter and is echoed in the error so callers
 /// can tell which of several hashes in one request was rejected.
-///
-/// Returns `400 Bad Request` for non-hex input and for any length other than
-/// exactly 32 bytes, reporting both the expectation and what was received.
 pub fn parse_hash32(raw: &str, field: &str) -> Result<Vec<u8>, ApiRouteError> {
-    let stripped = raw.strip_prefix("0x").unwrap_or(raw);
-
-    let bytes = hex::decode(stripped).map_err(|e| {
-        ApiError::bad_request(format!(
-            "Invalid {field}: expected a 32-byte hex hash (64 hex characters, optional 0x prefix), got invalid hex ({e})"
-        ))
-    })?;
-
-    if bytes.len() != HASH32_LEN {
-        return Err(ApiError::bad_request(format!(
-            "Invalid {field}: expected {HASH32_LEN} bytes (64 hex characters, optional 0x prefix), got {} bytes",
-            bytes.len()
-        )));
-    }
-
-    Ok(bytes)
+    parse_fixed_hex::<HASH32_LEN>(raw, field, "hash").map(|bytes| bytes.to_vec())
 }
 
 /// Parse a user-supplied 20-byte lock-hash prefix, with or without `0x`.
@@ -61,23 +74,7 @@ pub fn parse_hash32(raw: &str, field: &str) -> Result<Vec<u8>, ApiRouteError> {
 /// prefix scan into other parties' rows, a longer one would be truncated into
 /// somebody else's key.
 pub fn parse_lock_hash_prefix20(raw: &str, field: &str) -> Result<Vec<u8>, ApiRouteError> {
-    const PREFIX20_LEN: usize = 20;
-    let stripped = raw.strip_prefix("0x").unwrap_or(raw);
-
-    let bytes = hex::decode(stripped).map_err(|e| {
-        ApiError::bad_request(format!(
-            "Invalid {field}: expected a 20-byte hex lock hash prefix (40 hex characters, optional 0x prefix), got invalid hex ({e})"
-        ))
-    })?;
-
-    if bytes.len() != PREFIX20_LEN {
-        return Err(ApiError::bad_request(format!(
-            "Invalid {field}: expected {PREFIX20_LEN} bytes (40 hex characters, optional 0x prefix), got {} bytes",
-            bytes.len()
-        )));
-    }
-
-    Ok(bytes)
+    parse_fixed_hex::<20>(raw, field, "lock hash prefix").map(|bytes| bytes.to_vec())
 }
 
 /// Parse a user-supplied asset identifier that is *not* a 32-byte hash.
@@ -173,6 +170,26 @@ mod tests {
         let err = parse_hash32("0xabc", "lock_hash").unwrap_err();
         assert_eq!(err.0, StatusCode::BAD_REQUEST);
         assert!(message(err).contains("invalid hex"));
+    }
+
+    #[test]
+    fn test_parse_fixed_hex_names_its_width_and_noun() {
+        assert_eq!(
+            parse_fixed_hex::<20>(&format!("0x{}", "ab".repeat(20)), "name id", "name id").unwrap(),
+            [0xab; 20]
+        );
+        let msg = message(parse_fixed_hex::<20>("0x1234", ".cell cursor", "name id").unwrap_err());
+        assert!(msg.contains(".cell cursor"), "{msg}");
+        assert!(
+            msg.contains("expected 20 bytes (40 hex characters"),
+            "{msg}"
+        );
+        assert!(msg.contains("got 2 bytes"), "{msg}");
+        let msg = message(parse_fixed_hex::<20>("0xzz", "prefix", "lock hash prefix").unwrap_err());
+        assert!(
+            msg.contains("expected a 20-byte hex lock hash prefix (40 hex characters"),
+            "{msg}"
+        );
     }
 
     #[test]
