@@ -182,6 +182,24 @@ impl BatchFailureTracker {
     }
 }
 
+/// The ONE membership rule of per-token capacity history (`TOKEN_DAILY`,
+/// plan R3): a cell belongs to the token whose sUDT/xUDT type script it
+/// carries, whatever its data holds. An owner-mode cell whose data is too
+/// short for a u128 amount still occupies the token's capacity and counts.
+/// Returns the token's type script hash for a member cell.
+///
+/// Bulk build reaches the same set through `CellSemanticTag::{Sudt, Xudt}`,
+/// which `classify_type_script_semantic_tag` derives from the same
+/// `UdtParser::is_udt_code_hash_bytes` test.
+pub(crate) fn token_daily_member<'a>(
+    type_script_hash: Option<&'a [u8]>,
+    type_code_hash: Option<&[u8]>,
+    type_hash_type: Option<i16>,
+) -> Option<&'a [u8]> {
+    UdtParser::is_udt_code_hash_bytes(type_code_hash?, type_hash_type?)?;
+    type_script_hash
+}
+
 /// Classify a cell's type script into a semantic tag.
 ///
 /// The ONE place the type-script → `CellSemanticTag` mapping lives. Every
@@ -1831,24 +1849,18 @@ impl Indexer {
                                 i128::from(cell_occupied)
                             );
                         }
-                        if let (Some(ref type_script_hash), Some(ref type_code_hash)) =
-                            (&cell.type_script_hash, &cell.type_code_hash)
-                        {
-                            if cell
-                                .type_hash_type
-                                .and_then(|ht| {
-                                    UdtParser::is_udt_code_hash_bytes(type_code_hash, ht)
-                                })
-                                .is_some()
-                            {
-                                accumulate_daily!(
-                                    token_daily_changes,
-                                    tx_data.block_number,
-                                    (type_script_hash.clone(), date_yyyymmdd),
-                                    i128::from(cell.capacity),
-                                    i128::from(cell_occupied)
-                                );
-                            }
+                        if let Some(type_script_hash) = token_daily_member(
+                            cell.type_script_hash.as_deref(),
+                            cell.type_code_hash.as_deref(),
+                            cell.type_hash_type,
+                        ) {
+                            accumulate_daily!(
+                                token_daily_changes,
+                                tx_data.block_number,
+                                (type_script_hash.to_vec(), date_yyyymmdd),
+                                i128::from(cell.capacity),
+                                i128::from(cell_occupied)
+                            );
                         }
                         if let (Some(type_script_hash), Some(type_code_hash), Some(type_args)) = (
                             cell.type_script_hash.as_ref(),
@@ -2058,24 +2070,18 @@ impl Indexer {
                                         -i128::from(info.occupied_capacity)
                                     );
                                 }
-                                if let (Some(ref type_script_hash), Some(ref type_code_hash)) =
-                                    (&info.type_script_hash, &info.type_code_hash)
-                                {
-                                    if info
-                                        .type_hash_type
-                                        .and_then(|ht| {
-                                            UdtParser::is_udt_code_hash_bytes(type_code_hash, ht)
-                                        })
-                                        .is_some()
-                                    {
-                                        accumulate_daily!(
-                                            token_daily_changes,
-                                            tx_data.block_number,
-                                            (type_script_hash.clone(), date_yyyymmdd),
-                                            -i128::from(info.capacity),
-                                            -i128::from(info.occupied_capacity)
-                                        );
-                                    }
+                                if let Some(type_script_hash) = token_daily_member(
+                                    info.type_script_hash.as_deref(),
+                                    info.type_code_hash.as_deref(),
+                                    info.type_hash_type,
+                                ) {
+                                    accumulate_daily!(
+                                        token_daily_changes,
+                                        tx_data.block_number,
+                                        (type_script_hash.to_vec(), date_yyyymmdd),
+                                        -i128::from(info.capacity),
+                                        -i128::from(info.occupied_capacity)
+                                    );
                                 }
                                 if let (Some(type_script_hash), Some(type_code_hash)) =
                                     (info.type_script_hash.as_ref(), info.type_code_hash.as_ref())

@@ -6439,6 +6439,103 @@ mod tests {
             blocks: Vec<BlockResponseWithCycles>,
             token_daily_changes: EntityDailyChanges<EntityDateKey>,
         ) -> Result<crate::sync::types::BatchWriteMetrics> {
+            write_live_blocks_inner(
+                indexer,
+                blocks,
+                FixtureTokenDaily::Given(token_daily_changes),
+            )
+            .await
+        }
+
+        /// Same live write path, with `TOKEN_DAILY` changes derived from the
+        /// batch's cells by the parser's own membership rule
+        /// (`pipeline::token_daily_member`), as the real parser stage does.
+        pub(super) async fn write_live_blocks_with_parser_token_daily(
+            indexer: &Indexer,
+            blocks: Vec<BlockResponseWithCycles>,
+        ) -> Result<crate::sync::types::BatchWriteMetrics> {
+            write_live_blocks_inner(indexer, blocks, FixtureTokenDaily::FromCells).await
+        }
+
+        enum FixtureTokenDaily {
+            Given(EntityDailyChanges<EntityDateKey>),
+            FromCells,
+        }
+
+        /// The parser stage's `TOKEN_DAILY` accumulation: every member cell a
+        /// transaction creates adds, every member cell it consumes subtracts.
+        fn token_daily_from_cells(
+            all_tx_data: &[TxData],
+            input_cell_info: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
+            batch_cell_infos: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
+        ) -> Result<EntityDailyChanges<EntityDateKey>> {
+            let mut changes = EntityDailyChanges::<EntityDateKey>::new();
+            for tx_data in all_tx_data {
+                let date = ckbadger_store::keys::timestamp_ms_to_date(
+                    tx_data.timestamp.timestamp_millis(),
+                );
+                for cell in &tx_data.cells {
+                    if let Some(type_hash) = crate::sync::pipeline::token_daily_member(
+                        cell.type_script_hash.as_deref(),
+                        cell.type_code_hash.as_deref(),
+                        cell.type_hash_type,
+                    ) {
+                        let occupied = occupied_capacity_shannons_i64(
+                            cell.lock_args.len(),
+                            cell.type_args.as_ref().map(|args| args.len()),
+                            cell.data_size,
+                        );
+                        changes.add(
+                            tx_data.block_number,
+                            (type_hash.to_vec(), date),
+                            i128::from(cell.capacity),
+                            i128::from(occupied),
+                        )?;
+                    }
+                }
+                if tx_data.is_cellbase {
+                    continue;
+                }
+                for input in &tx_data.inputs {
+                    let key = (
+                        input.previous_tx_hash.to_vec(),
+                        parsed_input_outpoint_index_i16(
+                            input.previous_output_index,
+                            "fixture token daily",
+                        )?,
+                    );
+                    let info = input_cell_info
+                        .get(&key)
+                        .or_else(|| batch_cell_infos.get(&key))
+                        .ok_or_else(|| {
+                            anyhow!(
+                                "fixture input cell missing: outpoint=0x{}:{}",
+                                hex::encode(&key.0),
+                                key.1
+                            )
+                        })?;
+                    if let Some(type_hash) = crate::sync::pipeline::token_daily_member(
+                        info.type_script_hash.as_deref(),
+                        info.type_code_hash.as_deref(),
+                        info.type_hash_type,
+                    ) {
+                        changes.add(
+                            tx_data.block_number,
+                            (type_hash.to_vec(), date),
+                            -i128::from(info.capacity),
+                            -i128::from(info.occupied_capacity),
+                        )?;
+                    }
+                }
+            }
+            Ok(changes)
+        }
+
+        async fn write_live_blocks_inner(
+            indexer: &Indexer,
+            blocks: Vec<BlockResponseWithCycles>,
+            token_daily: FixtureTokenDaily,
+        ) -> Result<crate::sync::types::BatchWriteMetrics> {
             let (all_parsed_blocks, mut all_tx_data, all_input_outpoints) =
                 parse_blocks_parallel(&blocks)?;
 
@@ -6499,6 +6596,12 @@ mod tests {
                 &input_cell_info,
                 &batch_cell_infos,
             )?;
+            let token_daily_changes = match token_daily {
+                FixtureTokenDaily::Given(changes) => changes,
+                FixtureTokenDaily::FromCells => {
+                    token_daily_from_cells(&all_tx_data, &input_cell_info, &batch_cell_infos)?
+                }
+            };
 
             let chain_tip = u64::try_from(all_parsed_blocks.last().unwrap().number)?;
             let metrics = indexer
@@ -8373,6 +8476,162 @@ mod tests {
                 account_lock_party.item_deltas.is_empty(),
                 "the protocol's own lock never owns the names it holds"
             );
+        }
+    }
+
+    /// `TOKEN_DAILY` membership (#11, R3): every cell of the token's type
+    /// script counts toward its capacity history, amount or not, on both paths.
+    mod token_daily_parity {
+        use super::live_dao_fee::{
+            block, cellbase_tx, indexer_for_live_write_test, lock_script, lock_script_b,
+            write_live_block, write_live_blocks_with_parser_token_daily, AR_DEPOSIT,
+            FUNDING_CAPACITY,
+        };
+        use super::*;
+        use crate::parser::udt::XUDT_CODE_HASH_TYPE;
+        use crate::rpc::{CellInput, CellOutput, OutPoint, Script, TransactionView};
+        use ckbadger_store::TokenDailyDelta;
+
+        fn xudt_type() -> Script {
+            Script {
+                code_hash: XUDT_CODE_HASH_TYPE.to_string(),
+                hash_type: "type".to_string(),
+                args: format!("0x{}", "5c".repeat(32)),
+            }
+        }
+
+        fn input(prev_hash_byte: u8, index: u32) -> CellInput {
+            CellInput {
+                since: "0x0".to_string(),
+                previous_output: OutPoint {
+                    tx_hash: format!("0x{}", hex::encode([prev_hash_byte; 32])),
+                    index: format!("0x{index:x}"),
+                },
+            }
+        }
+
+        fn xudt_output(capacity: u64, lock: Script) -> CellOutput {
+            CellOutput {
+                capacity: format!("0x{capacity:x}"),
+                lock,
+                type_: Some(xudt_type()),
+            }
+        }
+
+        fn amount_data(amount: u128) -> String {
+            format!("0x{}", hex::encode(amount.to_le_bytes()))
+        }
+
+        /// An owner-mode xUDT cell: 8 bytes of data, too short for an amount.
+        const OWNER_MODE_DATA: &str = "0x0102030405060708";
+
+        /// 100 funds lock A; 101 mints 1000 units to A beside an owner-mode
+        /// cell of the same token; 102 moves both to B.
+        fn blocks() -> Vec<BlockResponseWithCycles> {
+            let mint = TransactionView {
+                hash: format!("0x{}", hex::encode([0xf1u8; 32])),
+                version: "0x0".to_string(),
+                cell_deps: vec![],
+                header_deps: vec![],
+                inputs: vec![input(0xc0, 0)],
+                outputs: vec![
+                    xudt_output(200_00000000, lock_script()),
+                    xudt_output(150_00000000, lock_script()),
+                    CellOutput {
+                        capacity: format!("0x{:x}", FUNDING_CAPACITY - 351_00000000),
+                        lock: lock_script(),
+                        type_: None,
+                    },
+                ],
+                outputs_data: vec![
+                    amount_data(1000),
+                    OWNER_MODE_DATA.to_string(),
+                    "0x".to_string(),
+                ],
+                witnesses: vec![],
+            };
+            let transfer = TransactionView {
+                hash: format!("0x{}", hex::encode([0xf2u8; 32])),
+                version: "0x0".to_string(),
+                cell_deps: vec![],
+                header_deps: vec![],
+                inputs: vec![input(0xf1, 0), input(0xf1, 1)],
+                outputs: vec![
+                    xudt_output(199_00000000, lock_script_b()),
+                    xudt_output(150_00000000, lock_script_b()),
+                ],
+                outputs_data: vec![amount_data(1000), OWNER_MODE_DATA.to_string()],
+                witnesses: vec![],
+            };
+            vec![
+                block(100, AR_DEPOSIT, vec![cellbase_tx(0xc0, FUNDING_CAPACITY)]),
+                block(101, AR_DEPOSIT, vec![cellbase_tx(0xc1, 100_000_000), mint]),
+                block(
+                    102,
+                    AR_DEPOSIT,
+                    vec![cellbase_tx(0xc2, 100_000_000), transfer],
+                ),
+            ]
+        }
+
+        fn token_daily_rows(rows: &crate::sync::bulk_build::TokenRawRows) -> Vec<TokenDailyDelta> {
+            rows.stats_token
+                .iter()
+                .filter(|(key, _)| {
+                    key.first() == Some(&ckbadger_store::keys::STATS_PREFIX_TOKEN_DAILY)
+                })
+                .map(|(_, value)| bincode::deserialize(value).unwrap())
+                .collect()
+        }
+
+        #[tokio::test]
+        async fn owner_mode_udt_cells_count_in_token_daily_on_both_paths() {
+            let _guard =
+                crate::db::writer::activities::test_detector_override::without_extra_detectors();
+            let blocks = blocks();
+            let bulk = crate::sync::materialize_bulk_artifacts_for_test(&blocks).expect("bulk");
+
+            let dir = tempfile::tempdir().unwrap();
+            let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+            let indexer = indexer_for_live_write_test(store.clone());
+            store
+                .set_secondary_epoch_reward(61_369_863_013_698)
+                .unwrap();
+            write_live_block(&indexer, blocks[0].clone()).await.unwrap();
+            for b in &blocks[1..] {
+                write_live_blocks_with_parser_token_daily(&indexer, vec![b.clone()])
+                    .await
+                    .unwrap();
+            }
+            let live = crate::sync::bulk_build::collect_token_raw_rows(store.as_ref()).unwrap();
+
+            assert!(
+                !bulk.token_rows.tokens.is_empty(),
+                "the fixture must create a token row"
+            );
+            assert_eq!(live.tokens, bulk.token_rows.tokens, "CF_TOKENS rows differ");
+            assert_eq!(
+                live.stats_token, bulk.token_rows.stats_token,
+                "CF_STATS_TOKEN rows (transfers, TOKEN_HOURLY, TOKEN_DAILY) differ"
+            );
+
+            // Daily cumulative == Current: the daily rows add up to the live
+            // cells of the token's type script, read from the cell set itself.
+            let type_hash = crate::parser::ScriptParser::compute_script_hash(&xudt_type());
+            let (mut current_capacity, mut current_occupied) = (0i128, 0i128);
+            for outpoint in bulk.live_cells.keys() {
+                let cell = &bulk.cell_payloads[outpoint];
+                if cell.type_script_hash.as_deref() == Some(type_hash.as_slice()) {
+                    current_capacity += i128::from(cell.capacity);
+                    current_occupied += i128::from(cell.occupied_capacity);
+                }
+            }
+            assert_eq!(current_capacity, 349_00000000, "both B cells are live");
+            let daily = token_daily_rows(&bulk.token_rows);
+            let cumulative_capacity: i128 = daily.iter().map(|d| d.owned_capacity_delta).sum();
+            let cumulative_occupied: i128 = daily.iter().map(|d| d.owned_knowledge_delta).sum();
+            assert_eq!(cumulative_capacity, current_capacity);
+            assert_eq!(cumulative_occupied, current_occupied);
         }
     }
 
