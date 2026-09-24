@@ -1609,10 +1609,13 @@ mod tests {
         let before = domain.get_identity(&account_id).unwrap().unwrap();
         assert!(before.is_live, "reactivation should make the account live");
 
+        // Production order (`execute_reorg`, `init_sync_start`,
+        // `cleanup_batch_range`): undo replay first, then the canonical
+        // rollback with the tx contexts the replay returned.
+        let undo = domain.rollback_via_undo_log(append.as_ref(), 150).unwrap();
         domain
-            .rollback_to_block_with_append_only_store(150, Some(append.as_ref()))
+            .rollback_to_block_with_tx_contexts(150, Some(append.as_ref()), undo.tx_contexts)
             .unwrap();
-        domain.rollback_via_undo_log(append.as_ref(), 150).unwrap();
 
         let restored = domain.get_identity(&account_id).unwrap().unwrap();
         assert!(
