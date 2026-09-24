@@ -183,7 +183,16 @@ pub(crate) async fn fetch_transaction_lookup(
     url: &str,
     hash: &str,
 ) -> Result<Option<TransactionLookup>, String> {
-    let client = crate::utils::shared_http_client();
+    fetch_transaction_lookup_with(crate::utils::shared_http_client(), url, hash).await
+}
+
+/// [`fetch_transaction_lookup`] over a caller-chosen client — the tx-pool
+/// source uses its own, bounded one.
+pub(crate) async fn fetch_transaction_lookup_with(
+    client: &reqwest::Client,
+    url: &str,
+    hash: &str,
+) -> Result<Option<TransactionLookup>, String> {
     let request = RpcRequest {
         jsonrpc: "2.0",
         method: "get_transaction",
@@ -196,10 +205,10 @@ pub(crate) async fn fetch_transaction_lookup(
         .json(&request)
         .send()
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(describe_http_error)?
         .json::<RpcResponse<TransactionWithStatusResponse>>()
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(describe_http_error)?;
 
     if let Some(error) = response.error {
         return Err(format!("RPC error {}: {}", error.code, error.message));
@@ -248,6 +257,16 @@ pub(crate) async fn fetch_transaction_lookup(
         block_number,
         block_hash,
     }))
+}
+
+/// A transport error, saying "timed out" when a client deadline expired (the
+/// plain `Display` of a reqwest timeout names only the URL).
+pub(crate) fn describe_http_error(error: reqwest::Error) -> String {
+    if error.is_timeout() {
+        format!("timed out: {error}")
+    } else {
+        error.to_string()
+    }
 }
 
 pub(crate) fn pending_transaction_resource_error(

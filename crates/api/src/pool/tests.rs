@@ -822,6 +822,53 @@ async fn test_rpc_failure_publishes_an_unhealthy_snapshot_not_an_empty_pool() {
     );
 }
 
+/// A node whose TCP peer stops answering (no FIN, no RST) must not freeze the
+/// mirror with its last snapshot still published as healthy. Every node call
+/// is bounded: the round returns within the deadline, the snapshot says the
+/// pool view is unavailable, and the records last observed are kept.
+#[tokio::test(start_paused = true)]
+async fn a_hung_node_marks_the_snapshot_unhealthy_within_the_deadline() {
+    let (source, mirror, mut refresher) = setup(100);
+    let tx = TxBuilder::new(0x01)
+        .input(&hex32(0xF0), 0)
+        .output(9_900_000_000, 0xBB)
+        .build();
+    source.set_info(pool_info(1));
+    source.set_raw_pool(RawTxPool {
+        pending: vec![([0x01; 32], entry(1_700_000_000_000))],
+        proposed: vec![],
+    });
+    source.set_transaction([0xF0; 32], committed_parent(0xF0, 10_000_000_000, 0xAA));
+    source.set_transaction([0x01; 32], lookup(tx, NodeTxStatus::Pending));
+    refresher.refresh_once().await;
+    assert!(mirror.load().status.healthy);
+    assert_eq!(mirror.load().records.len(), 1);
+
+    source.set_hang(true);
+    let started = tokio::time::Instant::now();
+    let outcome =
+        tokio::time::timeout(std::time::Duration::from_secs(16), refresher.refresh_once())
+            .await
+            .expect("a round against a hung node must return within the RPC deadline");
+    assert!(started.elapsed() <= std::time::Duration::from_secs(16));
+
+    let error = outcome.error.expect("the round failed as a whole");
+    assert!(error.contains("timed out"), "{error}");
+    assert_eq!(outcome.tracked, 1, "the records last observed are kept");
+    let snapshot = mirror.load();
+    assert!(!snapshot.status.healthy);
+    assert!(
+        snapshot
+            .status
+            .last_error
+            .as_deref()
+            .is_some_and(|error| error.contains("timed out")),
+        "{:?}",
+        snapshot.status.last_error
+    );
+    assert_eq!(snapshot.records.len(), 1);
+}
+
 /// Single calculation path: one transaction interpreted through the live-sync
 /// `TxView` shape (input data withheld, UDT amount from the store) and through
 /// the pool resolver (input data from the node) must produce the SAME

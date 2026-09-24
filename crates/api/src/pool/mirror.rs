@@ -10,9 +10,12 @@
 //! identically before and after commit; only its truth status changes.
 
 use std::collections::{HashMap, HashSet};
+use std::future::Future;
 use std::sync::Arc;
+use std::time::Duration;
 
 use arc_swap::ArcSwap;
+use async_trait::async_trait;
 use ckbadger_indexer::db::{
     addr_tx_rows, build_tx_actions_with_production_detectors_with_io, ParticipantIo,
 };
@@ -27,7 +30,57 @@ use super::snapshot::{
     Interpretation, MirrorStatus, PartialReason, PoolEntryError, PoolParticipant, PoolSnapshot,
     PoolStatus, PoolTxRecord,
 };
-use super::source::{NodeTxStatus, PoolEntryMeta, PoolSource, TxPoolInfo};
+use super::source::{
+    NodeHeader, NodeTxStatus, PoolEntryMeta, PoolSource, PoolTxLookup, RawTxPool, TxPoolInfo,
+};
+
+/// Upper bound on any single node call the refresher makes.
+///
+/// Bounded per CALL, not per round: a round moves the working set out of the
+/// refresher (`std::mem::take(&mut self.records)`) and back in at the end, so
+/// cancelling a whole round mid-way would lose every record. A call that
+/// times out is an `Err` like any other — the round fails over to
+/// `publish_unhealthy`, or the one entry is reported — so health is decided by
+/// the refresher alone, and the refresher always finishes.
+pub const POOL_RPC_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Run one node call under [`POOL_RPC_TIMEOUT`]; an elapsed deadline becomes
+/// the same `Err` shape as a failed call.
+async fn timed<T>(
+    method: &str,
+    call: impl Future<Output = Result<T, String>>,
+) -> Result<T, String> {
+    tokio::time::timeout(POOL_RPC_TIMEOUT, call)
+        .await
+        .map_err(|_| format!("{method} timed out after {}s", POOL_RPC_TIMEOUT.as_secs()))?
+}
+
+/// The refresher's view of the node: every call through it — its own, and the
+/// ones the shared resolver makes on its behalf — is [`timed`].
+struct BoundedSource(Arc<dyn PoolSource>);
+
+#[async_trait]
+impl PoolSource for BoundedSource {
+    async fn tx_pool_info(&self) -> Result<TxPoolInfo, String> {
+        timed("tx_pool_info", self.0.tx_pool_info()).await
+    }
+
+    async fn raw_tx_pool_verbose(&self) -> Result<RawTxPool, String> {
+        timed("get_raw_tx_pool", self.0.raw_tx_pool_verbose()).await
+    }
+
+    async fn get_transaction(&self, tx_hash: &[u8; 32]) -> Result<Option<PoolTxLookup>, String> {
+        timed("get_transaction", self.0.get_transaction(tx_hash)).await
+    }
+
+    async fn get_header(&self, block_hash: &[u8; 32]) -> Result<Option<NodeHeader>, String> {
+        timed("get_header", self.0.get_header(block_hash)).await
+    }
+
+    async fn get_header_by_number(&self, number: u64) -> Result<Option<NodeHeader>, String> {
+        timed("get_header_by_number", self.0.get_header_by_number(number)).await
+    }
+}
 
 /// The published mirror. Cloneable handle; readers take a snapshot with
 /// [`PoolMirror::load`] and never block the refresh loop.
@@ -130,7 +183,7 @@ impl PoolRefresher {
         config: PoolRefresherConfig,
     ) -> Self {
         Self {
-            source,
+            source: Arc::new(BoundedSource(source)),
             store,
             mirror,
             config,
