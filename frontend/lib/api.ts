@@ -511,6 +511,16 @@ interface LockScriptInfo {
   deprecated: boolean;
 }
 
+/**
+ * An address's unconfirmed state as a whole: every pool transaction touching
+ * it, independent of which list, tab, page or filter is being viewed.
+ */
+interface AddressPendingSummary {
+  txCount: number;
+  /** Signed net change in shannons, as a decimal string, if every one commits. Never added to Balance. */
+  capacityDelta: string;
+}
+
 interface Address {
   lockScriptHash: string;
   address?: string;
@@ -520,6 +530,8 @@ interface Address {
   transactionsCount: number;
   lockScript?: Script;
   lockScriptInfo?: LockScriptInfo;
+  /** Null when the tx-pool mirror is disabled or cannot reach the node: nothing may be claimed then. */
+  pendingSummary: AddressPendingSummary | null;
 }
 
 interface TopAddress {
@@ -1948,6 +1960,7 @@ export type {
   PaginatedResponse,
   PoolSummary,
   PoolStatus,
+  AddressPendingSummary,
   PoolInterpretation,
   MempoolInfo,
   MempoolTransaction,

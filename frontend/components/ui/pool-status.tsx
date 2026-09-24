@@ -83,6 +83,18 @@ export function PoolInterpretationNotice({
 }
 
 /**
+ * Shown when the list's unconfirmed segment is capped: some of this address's
+ * pool transactions are not among the rows shown.
+ */
+export function PoolTruncatedNotice() {
+  return (
+    <div className="border-base-border bg-base-surface/50 text-text-dim border-b px-4 py-2 font-mono text-xs">
+      More unconfirmed transactions than shown.
+    </div>
+  );
+}
+
+/**
  * Shown when the mirror cannot reach the node. An empty pool segment would read
  * as "nothing unconfirmed", which is a claim we cannot make.
  */

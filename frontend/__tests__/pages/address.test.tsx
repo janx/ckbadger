@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { render } from '../utils/test-utils';
 import AddressDetailPage from '@/app/address/[addr]/client-page';
 import { api } from '@/lib/api';
@@ -47,7 +47,8 @@ const mockAddressWithLockScriptInfo = {
     name: 'Default Lock',
     scriptKind: 'lock',
     deprecated: false,
-  },
+  }, // The mirror reports nothing for these addresses.
+  pendingSummary: null,
 };
 
 const mockAddressWithoutLockScriptInfo = {
@@ -62,7 +63,8 @@ const mockAddressWithoutLockScriptInfo = {
     hashType: 'data',
     args: '0x1234',
   },
-  lockScriptInfo: undefined,
+  lockScriptInfo: undefined, // The mirror reports nothing for these addresses.
+  pendingSummary: null,
 };
 
 const mockAddressWithDeprecatedScript = {
@@ -82,7 +84,8 @@ const mockAddressWithDeprecatedScript = {
     name: 'Old Lock v1',
     scriptKind: 'lock',
     deprecated: true,
-  },
+  }, // The mirror reports nothing for these addresses.
+  pendingSummary: null,
 };
 
 const emptyTokens = {
@@ -200,6 +203,39 @@ describe('AddressDetailPage', () => {
       '/mainnet/identities/dotcell/0x62d71147ac82b83c8531126cacb0d2f072bfd94a'
     );
     expect(screen.getByText('Names (1)')).toBeInTheDocument();
+  });
+
+  it('pages through the .cell names instead of counting one page as all of them', async () => {
+    vi.mocked(api.getAddress).mockResolvedValue(mockAddressWithLockScriptInfo);
+    const name = (n: number) => ({
+      identityId: `0x${n.toString(16).padStart(40, '0')}`,
+      label: `name${n}`,
+      name: `name${n}.cell`,
+      expiredAt: 1821507678,
+    });
+    vi.mocked(api.getAddressDotCellNames).mockImplementation(async (_addr, params) =>
+      params?.cursor
+        ? { data: [name(3)], limit: 50, hasMore: false, nextCursor: null }
+        : { data: [name(1), name(2)], limit: 50, hasMore: true, nextCursor: name(2).identityId }
+    );
+
+    render(<AddressDetailPage />);
+
+    const names = await screen.findByTestId('address-dotcell-names');
+    expect(await within(names).findByRole('link', { name: 'name1.cell' })).toBeInTheDocument();
+    // One page of a longer list is not a count of the list.
+    expect(screen.queryByText(/^Names \(/)).not.toBeInTheDocument();
+
+    fireEvent.click(within(names).getByRole('button', { name: 'Next' }));
+
+    await waitFor(() => {
+      expect(api.getAddressDotCellNames).toHaveBeenCalledWith(
+        mockAddressWithLockScriptInfo.lockScriptHash,
+        { limit: 50, cursor: name(2).identityId }
+      );
+    });
+    expect(await within(names).findByRole('link', { name: 'name3.cell' })).toBeInTheDocument();
+    expect(within(names).getByRole('button', { name: 'Previous' })).toBeEnabled();
   });
 
   it('omits the Names section for an address that owns no .cell name', async () => {
@@ -813,6 +849,10 @@ describe('AddressDetailPage — unconfirmed transactions', () => {
   });
 
   it('shows an Unconfirmed stat separate from Balance, never folded into it', async () => {
+    vi.mocked(api.getAddress).mockResolvedValue({
+      ...mockAddressWithLockScriptInfo,
+      pendingSummary: { txCount: 1, capacityDelta: '-50000000000' },
+    });
     vi.mocked(api.getAddressActivities).mockResolvedValue({
       data: [poolActivityRow()],
       limit: 50,
@@ -830,6 +870,161 @@ describe('AddressDetailPage — unconfirmed transactions', () => {
     // separate "pending" amount and is never summed into the balance.
     expect(screen.getByText('Balance')).toBeInTheDocument();
     expect(screen.getByText(/^-500\.00000000 CKB pending$/)).toBeInTheDocument();
+  });
+
+  // The header describes the address, not the list below it: it comes from the
+  // address summary, so no tab, page or activity filter can change or hide it.
+  const addressWithPending = {
+    ...mockAddressWithLockScriptInfo,
+    pendingSummary: { txCount: 2, capacityDelta: '-50000000000' },
+  };
+
+  async function expectPendingHeader() {
+    await waitFor(() => {
+      expect(screen.getByText('Unconfirmed')).toBeInTheDocument();
+    });
+    expect(screen.getByText('2 tx')).toBeInTheDocument();
+    expect(screen.getByText(/^-500\.00000000 CKB pending$/)).toBeInTheDocument();
+  }
+
+  it('keeps the pending header on the Cells tab', async () => {
+    vi.mocked(api.getAddress).mockResolvedValue(addressWithPending);
+
+    render(<AddressDetailPage />);
+    await expectPendingHeader();
+
+    fireEvent.click(screen.getByRole('button', { name: /Live Cells/ }));
+    await waitFor(() => {
+      expect(screen.getByText('No live cells')).toBeInTheDocument();
+    });
+    await expectPendingHeader();
+  });
+
+  it('keeps the pending header on page two of the activity list', async () => {
+    vi.mocked(api.getAddress).mockResolvedValue(addressWithPending);
+    vi.mocked(api.getAddressActivities).mockImplementation(async (_addr, params) => ({
+      data: [
+        {
+          ...poolActivityRow(),
+          txHash: params?.cursor
+            ? '0xc0de000000000000000000000000000000000000000000000000000000000002'
+            : '0xc0de000000000000000000000000000000000000000000000000000000000001',
+          blockNumber: 12345,
+          txIndex: 0,
+          timestamp: '1700000000000',
+          poolStatus: undefined,
+          timeAddedToPool: undefined,
+          interpretation: undefined,
+        },
+      ],
+      limit: 50,
+      hasMore: !params?.cursor,
+      nextCursor: params?.cursor ? null : '12345:0',
+      // Only page one carries the pool segment.
+      ...(params?.cursor ? {} : { pool: { ...poolSummary, count: 0, pendingCkbDelta: '0' } }),
+    }));
+
+    render(<AddressDetailPage />);
+    await expectPendingHeader();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Next' }));
+    await waitFor(() => {
+      expect(api.getAddressActivities).toHaveBeenCalledWith(
+        mockAddressWithLockScriptInfo.lockScriptHash,
+        expect.objectContaining({ cursor: '12345:0' })
+      );
+    });
+    await expectPendingHeader();
+  });
+
+  it('keeps the pending header when the activity filter matches none of the pool rows', async () => {
+    vi.mocked(api.getAddress).mockResolvedValue(addressWithPending);
+    vi.mocked(api.getAddressActivities).mockImplementation(async (_addr, params) =>
+      params?.filter === 'token'
+        ? {
+            data: [],
+            limit: 50,
+            hasMore: false,
+            nextCursor: null,
+            pool: { ...poolSummary, count: 0, pendingCkbDelta: '0' },
+          }
+        : {
+            data: [poolActivityRow()],
+            limit: 50,
+            hasMore: false,
+            nextCursor: null,
+            pool: { ...poolSummary, count: 1, pendingCkbDelta: '-20000000000' },
+          }
+    );
+
+    render(<AddressDetailPage />);
+    await expectPendingHeader();
+
+    fireEvent.change(screen.getByLabelText('Filter'), { target: { value: 'token' } });
+    await waitFor(() => {
+      expect(api.getAddressActivities).toHaveBeenCalledWith(
+        mockAddressWithLockScriptInfo.lockScriptHash,
+        expect.objectContaining({ filter: 'token' })
+      );
+    });
+    await waitFor(() => {
+      expect(screen.getByText('No Token activities on this page')).toBeInTheDocument();
+    });
+    await expectPendingHeader();
+  });
+
+  it('shows no pending amount when the pending transactions net to zero', async () => {
+    vi.mocked(api.getAddress).mockResolvedValue({
+      ...mockAddressWithLockScriptInfo,
+      pendingSummary: { txCount: 1, capacityDelta: '0' },
+    });
+
+    render(<AddressDetailPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Unconfirmed')).toBeInTheDocument();
+    });
+    expect(screen.getByText('1 tx')).toBeInTheDocument();
+    expect(screen.queryByText(/CKB pending/)).not.toBeInTheDocument();
+  });
+
+  it('shows no pending header when the address summary carries none', async () => {
+    vi.mocked(api.getAddress).mockResolvedValue({
+      ...mockAddressWithLockScriptInfo,
+      pendingSummary: null,
+    });
+    // Even if a list segment reports pool rows, the header follows the summary.
+    vi.mocked(api.getAddressActivities).mockResolvedValue({
+      data: [poolActivityRow()],
+      limit: 50,
+      hasMore: false,
+      nextCursor: null,
+      pool: poolSummary,
+    });
+
+    render(<AddressDetailPage />);
+
+    await waitFor(() => {
+      expect(screen.getAllByText(/in pool for 5m/).length).toBeGreaterThan(0);
+    });
+    expect(screen.queryByText('Unconfirmed')).not.toBeInTheDocument();
+    expect(screen.queryByText(/CKB pending/)).not.toBeInTheDocument();
+  });
+
+  it('reports a capped unconfirmed segment in the list it belongs to', async () => {
+    vi.mocked(api.getAddressActivities).mockResolvedValue({
+      data: [poolActivityRow()],
+      limit: 50,
+      hasMore: false,
+      nextCursor: null,
+      pool: { ...poolSummary, truncated: true },
+    });
+
+    render(<AddressDetailPage />);
+
+    expect(
+      await screen.findByText('More unconfirmed transactions than shown.')
+    ).toBeInTheDocument();
   });
 
   it('renders the pool badge instead of a block link for an unconfirmed activity', async () => {
@@ -954,5 +1149,48 @@ describe('AddressDetailPage — unconfirmed transactions', () => {
       .getAllByRole('link')
       .filter((link) => link.getAttribute('href')?.includes('/blocks/'));
     expect(blockLinks).toHaveLength(0);
+  });
+
+  it('gives the mobile transaction row the same pool badge and partial notice as desktop', async () => {
+    vi.mocked(api.getAddressTransactions).mockResolvedValue({
+      data: [
+        {
+          txHash: '0xfeed000000000000000000000000000000000000000000000000000000000003',
+          blockNumber: null,
+          txType: 'sent' as const,
+          capacityChange: '-50000000000',
+          timestamp: null,
+          poolStatus: 'proposed' as const,
+          timeAddedToPool: new Date(Date.now() - 2 * 60 * 1000).toISOString(),
+          interpretation: {
+            status: 'partial' as const,
+            reasons: [{ code: 'dao_compensation_unavailable' }],
+          },
+          inputsCount: 1,
+          outputsCount: 2,
+          fee: '1000',
+          isCellbase: false,
+          txSize: 500,
+          cycles: 200000,
+          scriptLabels: [],
+        },
+      ],
+      limit: 50,
+      hasMore: false,
+      nextCursor: null,
+      pool: { ...poolSummary, count: 1 },
+    });
+
+    render(<AddressDetailPage />);
+    await waitFor(() => {
+      expect(screen.getAllByText('Transactions').length).toBeGreaterThan(0);
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Transactions/ }));
+
+    const mobileRow = await screen.findByTestId('address-tx-row-mobile');
+    expect(within(mobileRow).getByText('Proposed')).toBeInTheDocument();
+    expect(
+      within(mobileRow).getByText('partial: DAO compensation not yet known')
+    ).toBeInTheDocument();
   });
 });

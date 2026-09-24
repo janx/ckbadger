@@ -3,6 +3,7 @@ import { render, screen } from '../utils/test-utils';
 import {
   PoolStatusBadge,
   PoolInterpretationNotice,
+  PoolTruncatedNotice,
   PoolUnavailableNotice,
   TimeInPool,
   poolStatusLabel,
@@ -70,5 +71,12 @@ describe('PoolUnavailableNotice', () => {
   it('says the view is unavailable rather than implying an empty pool', () => {
     render(<PoolUnavailableNotice />);
     expect(screen.getByText(/pool view unavailable/i)).toBeInTheDocument();
+  });
+});
+
+describe('PoolTruncatedNotice', () => {
+  it('says the unconfirmed segment is incomplete', () => {
+    render(<PoolTruncatedNotice />);
+    expect(screen.getByText('More unconfirmed transactions than shown.')).toBeInTheDocument();
   });
 });
