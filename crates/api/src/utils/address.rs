@@ -53,7 +53,7 @@ pub fn parse_address_to_script(address: &str) -> Result<AddressLockScript, Strin
     }
 
     let hash_type = payload[33];
-    if !matches!(hash_type, 0x00 | 0x01 | 0x02 | 0x04) {
+    if ckbadger_common::hash_type_label(hash_type).is_none() {
         return Err(format!(
             "Invalid hash_type byte: 0x{:02x} (RFC-0021 allows 0x00 data, 0x01 type, 0x02 data1, 0x04 data2)",
             hash_type

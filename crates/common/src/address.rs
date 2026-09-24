@@ -27,13 +27,13 @@ pub fn script_to_address(
         _ => Hrp::parse("ckt").expect("'ckt' is a valid HRP"),
     };
 
-    let hash_type_byte = match hash_type {
-        0 => 0x00,
-        1 => 0x01,
-        2 => 0x02,
-        4 => 0x04,
-        _ => return Err(format!("Unknown hash_type: {}", hash_type)),
-    };
+    // The byte comes from the workspace's one hash_type table: a value that
+    // table does not know (3, negatives, anything above 4) is not a CKB
+    // hash_type and cannot be encoded into an address.
+    let hash_type_byte = u8::try_from(hash_type)
+        .ok()
+        .filter(|byte| crate::hash_type_label(*byte).is_some())
+        .ok_or_else(|| format!("Unknown hash_type: {}", hash_type))?;
 
     // RFC-0021 full payload: 0x00 | code_hash (32) | hash_type (1) | args
     let mut payload = Vec::with_capacity(1 + 32 + 1 + args.len());
@@ -75,5 +75,20 @@ mod tests {
     fn test_rejects_bad_code_hash_and_hash_type() {
         assert!(script_to_address(&[0u8; 31], 1, &[], "mainnet").is_err());
         assert!(script_to_address(&[0u8; 32], 3, &[], "mainnet").is_err());
+        assert!(script_to_address(&[0u8; 32], -1, &[], "mainnet").is_err());
+        assert!(script_to_address(&[0u8; 32], 256, &[], "mainnet").is_err());
+    }
+
+    /// Every hash_type the workspace table knows encodes, and the byte in the
+    /// payload is the table's byte — `data2` is 4, never 3.
+    #[test]
+    fn test_encodes_every_known_hash_type_with_its_table_byte() {
+        for (label, byte) in [("data", 0u8), ("type", 1), ("data1", 2), ("data2", 4)] {
+            assert_eq!(crate::hash_type_from_label(label), Some(byte));
+            let address = script_to_address(&[0u8; 32], i16::from(byte), &[], "mainnet")
+                .unwrap_or_else(|e| panic!("{label} must encode: {e}"));
+            let (_, payload) = bech32::decode(&address).unwrap();
+            assert_eq!(payload[33], byte, "{label}");
+        }
     }
 }
