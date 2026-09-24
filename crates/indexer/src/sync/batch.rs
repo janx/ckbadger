@@ -7729,6 +7729,82 @@ mod tests {
             );
         }
 
+        /// The registration chain, with two Sale-Lock-coded outputs whose args
+        /// are not a sale's 40 bytes appended to the registration. The chain
+        /// accepts them: a lock script does not run when a cell is created.
+        fn registration_blocks_with_junk_sale_lock_outputs() -> Vec<BlockResponseWithCycles> {
+            let mut blocks = dotcell_registration_blocks();
+            let register = &mut blocks[2].block.transactions[1];
+            assert_eq!(register.hash, format!("0x{}", hex::encode([0xd2u8; 32])));
+            for args in [String::from("0x"), format!("0x{}", "5a".repeat(39))] {
+                register.outputs.push(CellOutput {
+                    capacity: format!("0x{:x}", 61_00000000u64),
+                    lock: Script {
+                        code_hash: fixture::SALE_LOCK_CODE_HASH_TESTNET.to_string(),
+                        hash_type: "type".to_string(),
+                        args,
+                    },
+                    type_: None,
+                });
+                register.outputs_data.push("0x".to_string());
+            }
+            blocks
+        }
+
+        /// PROTO-011: a junk Sale Lock output halted both sync paths at its
+        /// block, forever, on every node. Both must index the block, and agree.
+        #[tokio::test]
+        async fn junk_sale_lock_outputs_index_identically_on_both_paths() {
+            let _guard =
+                crate::db::writer::activities::test_detector_override::without_extra_detectors();
+            let blocks = registration_blocks_with_junk_sale_lock_outputs();
+
+            let bulk = crate::sync::materialize_bulk_artifacts_for_test(&blocks)
+                .expect("bulk build must index a block with junk Sale Lock outputs");
+
+            let dir = tempfile::tempdir().unwrap();
+            let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+            let indexer = super::live_dao_fee::indexer_for_live_write_test(store.clone());
+            store
+                .set_secondary_epoch_reward(61_369_863_013_698)
+                .unwrap();
+            for block in blocks {
+                super::live_dao_fee::write_live_block(&indexer, block)
+                    .await
+                    .expect("live sync must index a block with junk Sale Lock outputs");
+            }
+
+            let live_actions = store
+                .get_tx_actions(102, 1, &[0xd2u8; 32])
+                .unwrap()
+                .expect("live tx actions for the registration");
+            let bulk_actions = bulk
+                .tx_actions_map
+                .values()
+                .find(|actions| actions.tx_hash == [0xd2u8; 32])
+                .expect("bulk tx actions for the registration");
+            assert_eq!(
+                bincode::serialize(&live_actions).unwrap(),
+                bincode::serialize(bulk_actions).unwrap(),
+                "the two sync paths must write the same tx_actions row"
+            );
+            let register: Vec<_> = live_actions
+                .protocol_actions
+                .iter()
+                .filter(|a| a.protocol == "dotcell")
+                .map(|a| a.action.clone())
+                .collect();
+            assert_eq!(register, vec!["register".to_string()]);
+
+            let (live_by_lock, live_by_prefix) =
+                super::participant_rows_parity::live_rows(store.as_ref());
+            assert_eq!(live_by_lock, bulk.addr_txs, "addr_txs rows differ");
+            assert_eq!(
+                live_by_prefix, bulk.addr_txs_by_prefix,
+                "addr_txs_by_prefix rows differ"
+            );
+        }
+
         /// In bulk, an input cell reaches the activity builder with `data: &[]`.
         /// The consumed name's state has to come from the protocol facts the
         /// creating cell stored, or every relink reads as a fresh registration.
@@ -7966,7 +8042,7 @@ mod tests {
         }
 
         #[allow(clippy::type_complexity)]
-        fn live_rows(
+        pub(super) fn live_rows(
             store: &CkbadgerStore,
         ) -> (
             BTreeMap<(Vec<u8>, i64, i32, Vec<u8>), AddrTxValue>,
