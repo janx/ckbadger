@@ -56,6 +56,66 @@ pub(crate) fn next_undo_seq(
     ((scope as u64) << UNDO_SEQ_SCOPE_SHIFT) | local_seq
 }
 
+/// One `(block, cf, key)` whose pre-image more than one undo scope recorded.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct UndoScopeOverlap {
+    pub(crate) block: i64,
+    pub(crate) cf_name: String,
+    pub(crate) key: Vec<u8>,
+    /// The scope ids (`UndoSeqScope as u64`) that recorded it, ascending.
+    pub(crate) scopes: Vec<u64>,
+}
+
+/// Every key mutation in `from_block..=to_block` that more than one undo scope
+/// recorded a pre-image for.
+///
+/// The undo key is `block ‖ (scope << 48 | local seq)`, so rollback replays one
+/// block's entries scope-major (highest scope first), not in the order they
+/// were written across scopes. That is exact only while each key a block
+/// mutates is recorded by ONE scope: then its entries all sit in one scope and
+/// replay LIFO within it. This is the check for that invariant; the live write
+/// path runs it on every committed batch in debug builds.
+pub(crate) fn undo_scope_overlaps(
+    store: &ckbadger_store::CkbadgerStore,
+    from_block: i64,
+    to_block: i64,
+) -> Result<Vec<UndoScopeOverlap>> {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    let start = ckbadger_store::keys::encode_reorg_undo_log_key(from_block, 0);
+    let mut recorded: BTreeMap<(i64, String, Vec<u8>), BTreeSet<u64>> = BTreeMap::new();
+    for item in store.iterator_cf(
+        store.cf_reorg_undo_log_by_block(),
+        rocksdb::IteratorMode::From(&start, rocksdb::Direction::Forward),
+    ) {
+        let (key, value) = item?;
+        let (block, seq) = ckbadger_store::keys::decode_reorg_undo_log_key(&key);
+        if block > to_block {
+            break;
+        }
+        let entry: ckbadger_store::types::UndoLogEntry =
+            bincode::deserialize(&value).map_err(|e| {
+                anyhow!("undo log entry at block {block} seq {seq} is not decodable: {e}")
+            })?;
+        if let ckbadger_store::types::UndoLogEntry::KeyMutation { cf_name, key, .. } = entry {
+            recorded
+                .entry((block, cf_name, key))
+                .or_default()
+                .insert(seq >> UNDO_SEQ_SCOPE_SHIFT);
+        }
+    }
+    Ok(recorded
+        .into_iter()
+        .filter(|(_, scopes)| scopes.len() > 1)
+        .map(|((block, cf_name, key), scopes)| UndoScopeOverlap {
+            block,
+            cf_name,
+            key,
+            scopes: scopes.into_iter().collect(),
+        })
+        .collect())
+}
+
 #[cfg(test)]
 pub(crate) fn put_append_delete_undo_entry(
     domain_batch: &mut StoreBatch<'_>,
@@ -222,6 +282,44 @@ mod tests {
     use ckbadger_store::batch::StoreBatch;
     use ckbadger_store::keys;
     use ckbadger_store::CkbadgerStore;
+
+    #[test]
+    fn undo_scope_overlaps_reports_a_key_recorded_by_two_scopes() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        let entry = |key: &[u8]| ckbadger_store::types::UndoLogEntry::KeyMutation {
+            target_store: ckbadger_store::types::UndoLogStoreTarget::Domain,
+            cf_name: ckbadger_store::CF_IDENTITY_AGG.to_string(),
+            key: key.to_vec(),
+            previous_value: None,
+        };
+        let seq = SharedUndoSeq::default();
+        let mut batch = StoreBatch::new(&store);
+        // Block 7: the same key under DotBit and Object — an overlap.
+        batch.put_reorg_undo_log_by_block(7, seq.next(7, UndoSeqScope::DotBit), &entry(b"shared"));
+        batch.put_reorg_undo_log_by_block(7, seq.next(7, UndoSeqScope::Object), &entry(b"shared"));
+        // Block 7: one key per scope, twice under one scope — fine.
+        batch.put_reorg_undo_log_by_block(7, seq.next(7, UndoSeqScope::Object), &entry(b"obj"));
+        batch.put_reorg_undo_log_by_block(7, seq.next(7, UndoSeqScope::Object), &entry(b"obj"));
+        // Block 8: the same key again, but in another block — fine.
+        batch.put_reorg_undo_log_by_block(
+            8,
+            seq.next(8, UndoSeqScope::EntityStats),
+            &entry(b"shared"),
+        );
+        batch.commit().unwrap();
+
+        assert_eq!(
+            undo_scope_overlaps(&store, 7, 8).unwrap(),
+            vec![UndoScopeOverlap {
+                block: 7,
+                cf_name: ckbadger_store::CF_IDENTITY_AGG.to_string(),
+                key: b"shared".to_vec(),
+                scopes: vec![UndoSeqScope::DotBit as u64, UndoSeqScope::Object as u64],
+            }]
+        );
+        assert!(undo_scope_overlaps(&store, 8, 8).unwrap().is_empty());
+    }
 
     fn dummy_dao_cell(capacity: i64, is_deposit: bool) -> crate::parser::cell::ParsedCell {
         crate::parser::cell::ParsedCell {

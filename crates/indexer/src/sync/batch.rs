@@ -4308,6 +4308,22 @@ impl Indexer {
             })?;
             retention_request.served();
             domain_commit_ms = domain_commit_started.elapsed().as_secs_f64() * 1000.0;
+            // Debug-build invariant (plan Task 5.3): rollback replays a block's
+            // undo entries scope-major, which is exact only while each key the
+            // block mutates is recorded by one scope.
+            #[cfg(debug_assertions)]
+            {
+                let overlaps = crate::sync::undo::undo_scope_overlaps(
+                    self.writer.store(),
+                    first_block,
+                    last_block,
+                )?;
+                assert!(
+                    overlaps.is_empty(),
+                    "undo scopes overlap in blocks {first_block}-{last_block}; rollback would \
+                     replay these keys out of write order: {overlaps:?}"
+                );
+            }
 
             let commit_ms = commit_started.elapsed().as_secs_f64() * 1000.0;
             commit_phase_total_ms = commit_ms;

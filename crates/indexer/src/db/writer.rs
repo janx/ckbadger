@@ -309,4 +309,113 @@ mod undo_seq_tests {
              `*BatchState`s number the `Object` scope independently from 0 and collide"
         );
     }
+
+    /// Plan Task 5.3: rollback replays a block's undo entries scope-major, which
+    /// is exact only while every key the block mutates is recorded by ONE scope.
+    /// One block written by the DotBit, Object and EntityStats scopes at once
+    /// (a .bit registration, which also bumps the .bit hourly bucket, beside an
+    /// mNFT issuer) must keep them disjoint.
+    #[test]
+    fn one_block_across_dotbit_object_and_entity_stats_scopes_records_disjoint_keys() {
+        use crate::parser::dotbit::{ParsedDotbitAccount, ParsedDotbitAccountOutput};
+        use crate::sync::types::UndoSeqScope;
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone(), store.clone());
+
+        const BLOCK: i64 = 5_151;
+        let mut batch = StoreBatch::new(store.as_ref());
+        let batch_undo_seq = SharedUndoSeq::default();
+        let entity_stats = SharedEntityStatsOverlay::new();
+        let mut dotbit_state =
+            writer.new_dotbit_batch_state(entity_stats.clone(), batch_undo_seq.clone());
+        let mut mnft_state =
+            writer.new_mnft_batch_state(entity_stats.clone(), batch_undo_seq.clone());
+
+        writer
+            .insert_dotbit_account_with_state(
+                &ParsedDotbitAccountOutput {
+                    output_index: 0,
+                    account: ParsedDotbitAccount {
+                        account_id: vec![0x61; 20],
+                        account: Some("scopes.bit".to_string()),
+                        type_script_hash: vec![0x62; 32],
+                        next_account_id: None,
+                        expired_at: Some(1_900_000_000),
+                        registered_at: Some(1_700_000_000),
+                        status: Some(0),
+                        owner_lock_hash: vec![0x63; 32],
+                    },
+                },
+                &[0xD1; 32],
+                BLOCK,
+                1_700_000_000_000,
+                &mut batch,
+                &mut dotbit_state,
+            )
+            .unwrap();
+        writer
+            .insert_mnft_issuer(
+                &ParsedMnftIssuer {
+                    issuer_id: vec![0x55; 20],
+                    type_script_hash: vec![0x56; 32],
+                    name: Some("issuer".to_string()),
+                    info: None,
+                    class_count: 0,
+                    set_count: 0,
+                    owner_lock_hash: vec![0x57; 32],
+                },
+                &[0xBB; 32],
+                0,
+                BLOCK,
+                &mut batch,
+                &mut mnft_state,
+            )
+            .unwrap();
+        // An mNFT class transfer bumps its hourly bucket through the shared
+        // entity-stats overlay: the EntityStats scope.
+        entity_stats
+            .mutate_hourly(
+                store.as_ref(),
+                &mut batch,
+                &batch_undo_seq,
+                BLOCK,
+                &ckbadger_store::keys::encode_object_hourly_key(&[0x55; 24], 472_222),
+                1,
+                &|| "task 5.3 object hourly".to_string(),
+            )
+            .unwrap();
+        entity_stats.stage_final(&mut batch).unwrap();
+        batch.commit().unwrap();
+
+        let start = ckbadger_store::keys::encode_reorg_undo_log_key(BLOCK, 0);
+        let mut scopes = std::collections::BTreeSet::new();
+        for item in store.iterator_cf(
+            store.cf_reorg_undo_log_by_block(),
+            rocksdb::IteratorMode::From(&start, rocksdb::Direction::Forward),
+        ) {
+            let (key, _) = item.unwrap();
+            let (block, seq) = ckbadger_store::keys::decode_reorg_undo_log_key(&key);
+            if block != BLOCK {
+                break;
+            }
+            scopes.insert(seq >> 48);
+        }
+        assert_eq!(
+            scopes,
+            [
+                UndoSeqScope::DotBit as u64,
+                UndoSeqScope::Object as u64,
+                UndoSeqScope::EntityStats as u64
+            ]
+            .into_iter()
+            .collect(),
+            "the block must exercise all three key-mutation scopes"
+        );
+        assert_eq!(
+            crate::sync::undo::undo_scope_overlaps(store.as_ref(), BLOCK, BLOCK).unwrap(),
+            Vec::new()
+        );
+    }
 }
