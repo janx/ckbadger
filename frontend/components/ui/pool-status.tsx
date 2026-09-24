@@ -51,8 +51,6 @@ function reasonText(reason: { code: string; detail?: string }): string {
       return reason.detail
         ? `input not yet resolvable (${reason.detail})`
         : 'an input is not yet resolvable';
-    case 'dao_compensation_unavailable':
-      return 'DAO compensation not yet known';
     default:
       // An unrecognised reason is shown verbatim rather than dropped: the
       // point of the field is that nothing goes unexplained.

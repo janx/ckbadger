@@ -47,11 +47,25 @@ describe('PoolInterpretationNotice', () => {
       <PoolInterpretationNotice
         interpretation={{
           status: 'partial',
-          reasons: [{ code: 'dao_compensation_unavailable' }],
+          reasons: [{ code: 'unresolved_input' }],
         }}
       />
     );
-    expect(screen.getByText(/DAO compensation not yet known/)).toBeInTheDocument();
+    expect(screen.getByText('partial: an input is not yet resolvable')).toBeInTheDocument();
+  });
+
+  it('shows a code it has no wording for verbatim rather than dropping it', () => {
+    // DAO phase-2 compensation is computed exactly now, so the API no longer
+    // sends `dao_compensation_unavailable`; were it to, it is not special.
+    render(
+      <PoolInterpretationNotice
+        interpretation={{
+          status: 'partial',
+          reasons: [{ code: 'dao_compensation_unavailable' }, { code: 'x', detail: 'y' }],
+        }}
+      />
+    );
+    expect(screen.getByText('partial: dao_compensation_unavailable; x (y)')).toBeInTheDocument();
   });
 
   it('names the outpoint it could not resolve', () => {

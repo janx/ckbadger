@@ -325,7 +325,12 @@ export const handlers = [
           timeAddedToPool: '2026-09-23T12:00:00+00:00',
           interpretation: {
             status: 'partial',
-            reasons: [{ code: 'dao_compensation_unavailable' }],
+            reasons: [
+              {
+                code: 'unresolved_input',
+                detail: '0xabababababababababababababababababababababababababababababababab:0',
+              },
+            ],
           },
           ckbDelta: '-50000000000',
           usedDelta: '0',

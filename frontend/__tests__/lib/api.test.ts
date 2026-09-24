@@ -1599,7 +1599,7 @@ describe('api', () => {
       expect(poolRow.poolStatus).toBe('pending');
       expect(poolRow.timeAddedToPool).toBe('2026-09-23T12:00:00+00:00');
       expect(poolRow.interpretation?.status).toBe('partial');
-      expect(poolRow.interpretation?.reasons?.[0].code).toBe('dao_compensation_unavailable');
+      expect(poolRow.interpretation?.reasons?.[0].code).toBe('unresolved_input');
 
       // The committed row keeps its chain position and carries no pool fields.
       const committedRow = page.data[1];

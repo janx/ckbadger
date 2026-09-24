@@ -1164,7 +1164,7 @@ describe('AddressDetailPage — unconfirmed transactions', () => {
           timeAddedToPool: new Date(Date.now() - 2 * 60 * 1000).toISOString(),
           interpretation: {
             status: 'partial' as const,
-            reasons: [{ code: 'dao_compensation_unavailable' }],
+            reasons: [{ code: 'unresolved_input', detail: '0xabc:1' }],
           },
           inputsCount: 1,
           outputsCount: 2,
@@ -1190,7 +1190,7 @@ describe('AddressDetailPage — unconfirmed transactions', () => {
     const mobileRow = await screen.findByTestId('address-tx-row-mobile');
     expect(within(mobileRow).getByText('Proposed')).toBeInTheDocument();
     expect(
-      within(mobileRow).getByText('partial: DAO compensation not yet known')
+      within(mobileRow).getByText('partial: input not yet resolvable (0xabc:1)')
     ).toBeInTheDocument();
   });
 });

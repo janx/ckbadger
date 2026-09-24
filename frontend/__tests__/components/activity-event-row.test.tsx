@@ -404,13 +404,13 @@ describe('ActivityEventGroup — tx-pool rows', () => {
         activity={makePoolActivity({
           interpretation: {
             status: 'partial',
-            reasons: [{ code: 'dao_compensation_unavailable' }],
+            reasons: [{ code: 'unresolved_input', detail: '0xabc:1' }],
           },
         })}
         formatTimeAgo={mockFormatTimeAgo}
       />
     );
-    expect(screen.getAllByText(/DAO compensation not yet known/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/input not yet resolvable \(0xabc:1\)/).length).toBeGreaterThan(0);
   });
 
   it('keeps rendering a committed row with its block link', () => {
