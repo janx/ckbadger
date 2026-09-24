@@ -116,6 +116,20 @@ nothing to sample proves nothing, and is never rendered green.
 | `skipped`       | The operator narrowed the scope (`--checks`, `--no-explorer`, no `--rpc-url`)           | 0                 |
 | `notApplicable` | Independently proven that the network holds no such object                              | 0                 |
 
+Three rules decide which of these a check may report:
+
+- **Only a 404 is evidence of absence.** A check whose subject may legitimately
+  not exist on a network (a protocol with no deployment there) reads it
+  through `api_get_or_not_found`: an HTTP 404 on that resource is
+  `notApplicable`. Every other API failure — a 5xx, a transport error, a body
+  that does not decode — is `error`, never a pass over zero items.
+- **Uncovered scope is `inconclusive`.** Anything the operator asked for that
+  the check cannot verify — an `--entity` family without an adapter, an
+  exhausted budget — keeps the check from `pass`, whatever the rest found.
+- **An empty sample verifies nothing.** A check that sizes its sample from
+  `--sample-count` declares it (`requires_sampling`), and `--sample-count 0`
+  makes it `error` instead of a pass over an empty selection.
+
 The process exit code merges every check of every selected network:
 **`fail` (1) > `error`/`inconclusive` (2) > `pass` (0)**. A skipped check no
 longer counts as a pass; it instead sets `scopeComplete: false`, which is
@@ -144,8 +158,12 @@ complete evidence.
 ### `.cell` (DotCell) Names (S27-S30)
 
 Four Sampling checks, store-vs-store except the last, which reads cells and
-witnesses back from the node. On a network with no `.cell` deployment each one
-passes with `no .cell collection on this network`.
+witnesses back from the node. Applicability is decided by the collection route:
+a 404 from `GET assets/identities/dotcell` makes each check `notApplicable` (no
+`.cell` deployment on this network); any other failure of that read is `error`.
+`dotcell_records_hash_parity` samples `--sample-count` names (at most 20), and
+`dotcell_owner_index_consistency` reads each resolvable owner's whole
+`/dotcell-names` list, page by page, before comparing it with the counter.
 
 | Check                             | What it proves                                                                                                                                                     |
 | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -194,13 +212,28 @@ from the chain and compares it against the index, with **zero tolerance** —
   from the export, not from `/tokens/{hash}`: that endpoint accumulates the
   daily rows and so fails exactly when they are the thing under suspicion. The
   export's script is accepted only once it hashes back to the requested id.
+- **Membership.** A token's history is **every cell whose type script is the
+  token's** (exact code hash, hash type and args), with no data-length filter:
+  an owner-mode or short-data cell that carries no parsable amount still moves
+  the token's capacity and occupied capacity. The live and the bulk writer
+  apply this same rule to `TOKEN_DAILY`; amount-dependent facets (supply,
+  holders) are counted separately and never gate capacity membership. The
+  oracle states the rule independently rather than borrowing the writers'
+  parser, so a writer that drifts from it fails here.
 - **Selection.** `--entity token:<type_hash>` (repeatable) picks entities
-  exactly. Without it, the check uses the known incident selectors plus the head
-  of the API's token directory. Budgets (16 entities, 200k records, 10k RPC
-  requests, 600 s) are initial values, not proven defaults; exhausting one is
-  `inconclusive`. Raise them with `--entity-max-rpc`, `--entity-max-records`
-  and `--entity-budget-seconds` rather than narrowing scope until a run fits —
-  the manifest records both the budget and the spend.
+  exactly; ids are canonicalized to `0x` + lowercase hex, and an id that is not
+  whole bytes of hex is rejected. Without it, the check uses the known incident
+  selectors plus the head of the API's token directory (`GET /tokens?limit=8`,
+  read from its cursor envelope). A selector of a family this delivery does not
+  cover is listed in the manifest as uncovered and makes the run
+  `inconclusive`, whatever the other selectors found. Budgets (16 entities,
+  200k records, 10k RPC requests, 600 s) are initial values, not proven
+  defaults; exhausting one is `inconclusive`. Raise them with
+  `--entity-max-rpc`, `--entity-max-records` and `--entity-budget-seconds`
+  rather than narrowing scope until a run fits — the manifest records both the
+  budget and the spend. Every node call is charged, source qualification and
+  the post-walk anchor re-verification included, so the manifest's
+  `rpcRequests` is exactly the number of requests the node received.
 - **Coverage is auditable.** `<run-id>/manifest.json` records the anchor, the
   source profile, the budgets, what was spent, and every entity that was not
   fully covered and why.

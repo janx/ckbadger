@@ -4031,23 +4031,24 @@ impl CkbadgerStore {
                     ab.live_cells_count
                 );
             }
-            // Repair last_activity from the latest surviving addr_tx entry.
-            // addr_txs keys are descending by block within a lock_hash prefix,
-            // so seeking just past the fork point lands directly on that entry —
-            // one seek per affected address, no scan of the address's history.
-            // The deletions above are still only staged in `batch`, but they all
-            // sit before this cursor, so the store view cannot return one.
+            // Repair last_activity from the latest surviving CELL participation.
+            // Both forward paths set last_activity from cell participation
+            // only, so the repair reads `addr_txs` alone — never the
+            // protocol-named `addr_txs_by_prefix` rows. addr_txs keys are
+            // descending by block within a lock_hash prefix, so seeking to the
+            // fork point lands directly on that entry — one seek per affected
+            // address, no scan of the address's history. The deletions above
+            // are still only staged in `batch`, but they all sit before this
+            // cursor, so the store view cannot return one.
             if ab.last_activity_block > rollback_to {
                 let latest_surviving = if rollback_to < 0 {
                     None
                 } else {
                     addr_txs_scanned += 1;
-                    self.list_addr_txs_recent(lock_hash, 1, Some((rollback_to, i32::MAX)))?
-                        .into_iter()
-                        .next()
+                    self.latest_cell_addr_tx_at_or_below(lock_hash, rollback_to)?
                 };
                 match latest_surviving {
-                    Some((surv_block, _, surv_tx, _)) => {
+                    Some((surv_block, _, surv_tx)) => {
                         ab.last_activity_block = surv_block;
                         ab.last_activity_tx = surv_tx;
                     }
@@ -4775,6 +4776,21 @@ impl CkbadgerStore {
             let idx_key = keys::encode_identity_by_collection_key(&collection_id, &identity_id);
             batch.put_cf(self.cf_identity_by_collection(), idx_key, []);
             secondary_keys_written += 1;
+            // A `.cell` sub-name is also listed under its parent, keyed by the
+            // parent's padded id — exactly what the forward writers file
+            // (live `db/writer/dotcell.rs`, bulk `owners/object.rs`). The range
+            // delete above removed those rows too, so every surviving sub-name
+            // (live or not; readers filter liveness) gets its row back here.
+            if let IdentityExtra::DotCell {
+                parent_id: Some(parent),
+                ..
+            } = &entry.extra
+            {
+                let parent_key =
+                    keys::encode_identity_by_collection_key(&keys::pad_id_32(parent), &identity_id);
+                batch.put_cf(self.cf_identity_by_collection(), parent_key, []);
+                secondary_keys_written += 1;
+            }
 
             let agg = identity_aggs
                 .entry(collection_id.clone())
@@ -7850,6 +7866,156 @@ mod tests {
             "addr_txs rollback read {} keys with {} unrelated entries in the CF — \
              cost must not scale with chain history",
             result.addr_txs_scanned, noise_count
+        );
+    }
+
+    /// Review #4 (R2): `addr_balance.last_activity` counts only transactions in
+    /// which the address held a cell — bulk (`owners/address.rs`) and live
+    /// (`addresses.rs`) set it from cell participation alone. Stage 9a's repair
+    /// used to read `list_addr_txs_recent`, which also merges the protocol-NAMED
+    /// rows of `CF_ADDR_TXS_BY_PREFIX`, so a reorg could land `last_activity` on
+    /// a named-only tx — a state no forward path produces.
+    #[test]
+    fn rollback_last_activity_ignores_prefix_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+
+        let addr_a = vec![0xAAu8; 32];
+        let lock_code_hash = vec![0x11u8; 32];
+        let tx1 = vec![0x31u8; 32]; // block 1: creates A's first cell
+        let tx3 = vec![0x33u8; 32]; // block 3: names A by prefix, A holds no cell
+        let tx5 = vec![0x35u8; 32]; // block 5: creates A's second cell (rolled back)
+
+        let header = |n: u8| CachedBlockHeader {
+            hash: vec![n; 32],
+            parent_hash: vec![n.wrapping_sub(1); 32],
+            timestamp: 1_700_000_000_000 + i64::from(n) * 10_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+            uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
+            cycles: None,
+        };
+        let cellbase_index = |timestamp: i64| TxIndexEntry {
+            is_cellbase: true,
+            timestamp,
+            inputs_count: 0,
+            outputs_count: 1,
+            fee: 0,
+            tx_size: 1,
+            cycles: None,
+            semantic_tags: 0,
+        };
+        let make_cell = |capacity: i64| LiveCellInfo {
+            capacity,
+            lock_script_hash: addr_a.clone(),
+            lock_code_hash: lock_code_hash.clone(),
+            lock_hash_type: 1,
+            lock_args: vec![],
+            type_script_hash: None,
+            type_code_hash: None,
+            type_hash_type: None,
+            type_args: None,
+            data_size: 0,
+            occupied_capacity: capacity,
+            udt_amount: None,
+            data_hash: None,
+        };
+
+        let mut batch = StoreBatch::new(&store);
+        for n in 1..=5u8 {
+            batch.put_block_header(i64::from(n), &header(n));
+        }
+        batch.put_tx_index(1, 0, &cellbase_index(header(1).timestamp));
+        batch.put_tx_hash_map(&tx1, 1, 0);
+        put_canonical_tx(&mut batch, 3, 0, &tx3);
+        batch.put_tx_index(5, 0, &cellbase_index(header(5).timestamp));
+        batch.put_tx_hash_map(&tx5, 5, 0);
+
+        batch.put_cell(&tx1, 0, &make_cell(400), 1);
+        batch.put_cell(&tx5, 0, &make_cell(200), 5);
+        batch.put_reorg_undo_log_by_block(
+            5,
+            0,
+            &UndoLogEntry::TxContext(UndoTxContext {
+                tx_hash: tx5.clone(),
+                outputs_count: 1,
+                inputs: vec![UndoInputOutPoint {
+                    tx_hash: vec![0u8; 32],
+                    output_index: -1,
+                }],
+            }),
+        );
+
+        let val = AddrTxValue::new(0, true, true, 0);
+        batch.put_addr_tx(&addr_a, 1, 0, &tx1, &val);
+        batch.put_addr_tx_by_prefix(&addr_a[..20], 3, 0, &tx3, &val);
+        batch.put_addr_tx(&addr_a, 5, 0, &tx5, &val);
+        batch.put_addr_prefix_stats(&addr_a[..20], &AddrPrefixStats { txs_count: 1 });
+        batch.put_addr_balance(
+            &addr_a,
+            &AddressBalance {
+                balance: 600,
+                used_capacity: 600,
+                live_cells_count: 2,
+                total_cells_count: 2,
+                txs_count: 2,
+                first_seen_block: 1,
+                first_seen_tx: tx1.clone(),
+                last_activity_block: 5,
+                last_activity_tx: tx5.clone(),
+            },
+        );
+        batch.put_script_info(
+            &lock_code_hash,
+            &ScriptInfo {
+                code_hash: lock_code_hash.clone(),
+                hash_type: 1,
+                lock_live_cells_count: 2,
+                lock_owned_capacity_sum: 600,
+                lock_owned_knowledge_sum: 600,
+                ..Default::default()
+            },
+        );
+        batch.commit().unwrap();
+        seed_sync_status(&store, 5, &header(5).hash, 3, 2, 0);
+
+        let cell_key = keys::encode_outpoint(&tx1, 0);
+        let cell_before = store.get_cf(store.cf_cells(), &cell_key).unwrap();
+        assert!(
+            cell_before.is_some(),
+            "fixture must seed a CF_CELLS payload"
+        );
+
+        store.rollback_to_block(4).unwrap();
+
+        let ab = store.get_addr_balance(&addr_a).unwrap().unwrap();
+        assert_eq!(ab.txs_count, 1);
+        assert_eq!(
+            (ab.last_activity_block, ab.last_activity_tx.clone()),
+            (1, tx1.clone()),
+            "last_activity must be repaired from cell participation only, never from the \
+             block-3 prefix (named-only) row"
+        );
+        // The named-only row itself is below the fork point and survives.
+        assert_eq!(
+            store
+                .list_addr_txs_by_prefix_recent(&addr_a[..20], 10, None)
+                .unwrap()
+                .into_iter()
+                .map(|(block, idx, hash, _)| (block, idx, hash))
+                .collect::<Vec<_>>(),
+            vec![(3, 0, tx3.clone())]
+        );
+        assert_eq!(
+            store.get_cf(store.cf_cells(), &cell_key).unwrap(),
+            cell_before,
+            "append-only CF_CELLS payload bytes must be unchanged by rollback"
         );
     }
 
@@ -12007,6 +12173,196 @@ mod tests {
             bincode::serialize(&untouched).unwrap(),
             bincode::serialize(&expected).unwrap(),
             "a date no rolled-back block touched must be left exactly as written"
+        );
+    }
+
+    /// A `.cell` identity as the forward writers persist it, for rollback
+    /// fixtures that must seed a name and (optionally) its parent.
+    fn dotcell_identity(
+        label: &str,
+        created_at_block: i64,
+        parent_id: Option<[u8; 20]>,
+    ) -> IdentityEntry {
+        IdentityEntry {
+            standard: IdentityStandard::DotCell,
+            owner_lock_hash: None,
+            name: Some(format!("{label}.cell")),
+            is_live: true,
+            created_at_block,
+            created_at_tx: vec![created_at_block as u8; 32],
+            extra: IdentityExtra::DotCell {
+                label: label.to_string(),
+                namespace_args: [0x5A; 20],
+                layout_version: 3,
+                expired_at: 1_900_000_000,
+                owner_hash20: [0x0E; 20],
+                manager_hash20: [0x0E; 20],
+                next_id: [0; 20],
+                records_hash: [0; 32],
+                records: Vec::new(),
+                parent_id,
+            },
+        }
+    }
+
+    fn identity_by_collection_rows(store: &CkbadgerStore) -> std::collections::BTreeSet<Vec<u8>> {
+        store
+            .iterator_cf(store.cf_identity_by_collection(), IteratorMode::Start)
+            .map(|item| item.unwrap().0.to_vec())
+            .collect()
+    }
+
+    /// Review #2: stage 10 range-deletes `CF_IDENTITY_BY_COLLECTION` and must
+    /// rebuild exactly what the forward writers (`db/writer/dotcell.rs`, bulk
+    /// `owners/object.rs`) write — the sentinel row for every surviving
+    /// identity AND the `.cell` parent->child row for every surviving sub-name
+    /// (live or not; read paths filter liveness). A rolled-back sub-name emits
+    /// neither.
+    #[test]
+    fn rollback_rebuilds_dotcell_parent_child_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+
+        let alice_id = [0xA1u8; 20];
+        let child_id = [0xB2u8; 20];
+        let alice = dotcell_identity("alice", 10, None);
+        let child = dotcell_identity("shop.alice", 12, Some(alice_id));
+        // A recycled sub-name registered before either fork point: the index
+        // lists every child ever registered, so its parent row stays.
+        let recycled_id = [0xC3u8; 20];
+        let recycled = IdentityEntry {
+            is_live: false,
+            ..dotcell_identity("old.alice", 5, Some(alice_id))
+        };
+
+        let sentinel_row =
+            |id: &[u8]| keys::encode_identity_by_collection_key(&DOTCELL_SENTINEL_COLLECTION, id);
+        let parent_row =
+            |id: &[u8]| keys::encode_identity_by_collection_key(&keys::pad_id_32(&alice_id), id);
+
+        let cell_key = keys::encode_outpoint(&[0xAB; 32], 0);
+        {
+            let mut batch = StoreBatch::new(&store);
+            // Blocks 1..=16 inside one day, so both rollback targets have a header.
+            for n in 1..=16i64 {
+                batch.put_block_header(
+                    n,
+                    &CachedBlockHeader {
+                        hash: {
+                            let mut h = vec![0u8; 32];
+                            h[0] = n as u8;
+                            h
+                        },
+                        parent_hash: vec![0u8; 32],
+                        timestamp: 1_790_038_800_000 + n * 10_000,
+                        epoch_number: 11,
+                        epoch_index: (n - 1) as i32,
+                        epoch_length: 1800,
+                        dao: vec![0; 32],
+                        transactions_count: 0,
+                        uncles_count: 0,
+                        proposals_count: 0,
+                        compact_target: 0x1a08a97e,
+                        miner_lock_hash: None,
+                        cycles: None,
+                    },
+                );
+            }
+            batch.put_identity(&alice_id, &alice);
+            batch.put_identity(&child_id, &child);
+            batch.put_identity_by_collection(&DOTCELL_SENTINEL_COLLECTION, &alice_id);
+            batch.put_identity_by_collection(&DOTCELL_SENTINEL_COLLECTION, &child_id);
+            batch.put_identity_by_collection(&keys::pad_id_32(&alice_id), &child_id);
+            batch.put_identity(&recycled_id, &recycled);
+            batch.put_identity_by_collection(&DOTCELL_SENTINEL_COLLECTION, &recycled_id);
+            batch.put_identity_by_collection(&keys::pad_id_32(&alice_id), &recycled_id);
+            batch.put_cell_raw_key(
+                &cell_key,
+                &LiveCellInfo {
+                    capacity: 10_000_000_000,
+                    lock_script_hash: vec![0xC1; 32],
+                    lock_code_hash: vec![0xC2; 32],
+                    lock_hash_type: 1,
+                    lock_args: vec![0xC3; 20],
+                    type_script_hash: None,
+                    type_code_hash: None,
+                    type_hash_type: None,
+                    type_args: None,
+                    data_size: 0,
+                    occupied_capacity: 6_100_000_000,
+                    udt_amount: None,
+                    data_hash: None,
+                },
+                2,
+            );
+            batch.commit().unwrap();
+        }
+        seed_epoch_row(
+            &store,
+            &EpochStats {
+                epoch_number: 11,
+                start_block: 1,
+                end_block: Some(16),
+                blocks_count: 16,
+                length: 1800,
+                start_timestamp: chrono::DateTime::from_timestamp_millis(1_790_038_810_000)
+                    .unwrap(),
+                end_timestamp: None,
+                transactions_count: 0,
+            },
+        );
+        let cell_before = store.get_cf(store.cf_cells(), &cell_key).unwrap();
+        assert!(
+            cell_before.is_some(),
+            "fixture must seed a CF_CELLS payload"
+        );
+
+        // Both names survive: every forward row must come back.
+        store.rollback_to_block(15).unwrap();
+        let expected: std::collections::BTreeSet<Vec<u8>> = [
+            sentinel_row(&alice_id),
+            sentinel_row(&child_id),
+            sentinel_row(&recycled_id),
+            parent_row(&child_id),
+            parent_row(&recycled_id),
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(
+            identity_by_collection_rows(&store),
+            expected,
+            "a rollback that orphans no .cell tx must rebuild the sentinel rows and the \
+             parent->child row the forward writers wrote"
+        );
+        assert_eq!(
+            store
+                .list_identity_ids_by_collection(&keys::pad_id_32(&alice_id), None, 200)
+                .unwrap(),
+            vec![child_id.to_vec(), recycled_id.to_vec()],
+            "the parent's child list (live or not) must survive the rollback"
+        );
+
+        // The sub-name's registration block is orphaned: it and its parent row go.
+        store.rollback_to_block(11).unwrap();
+        assert!(store.get_identity(&child_id).unwrap().is_none());
+        assert!(store.get_identity(&alice_id).unwrap().is_some());
+        let expected: std::collections::BTreeSet<Vec<u8>> = [
+            sentinel_row(&alice_id),
+            sentinel_row(&recycled_id),
+            parent_row(&recycled_id),
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(
+            identity_by_collection_rows(&store),
+            expected,
+            "a rolled-back sub-name must emit neither its sentinel row nor its parent row"
+        );
+
+        assert_eq!(
+            store.get_cf(store.cf_cells(), &cell_key).unwrap(),
+            cell_before,
+            "append-only CF_CELLS payload bytes must be unchanged by rollback"
         );
     }
 }

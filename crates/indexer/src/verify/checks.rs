@@ -45,9 +45,29 @@ impl EntitySelector {
         }
         Ok(Self {
             kind: kind.to_string(),
-            id: id.to_string(),
+            id: canonical_entity_id(raw, id)?,
         })
     }
+}
+
+/// Every entity id is hex bytes, and the index and its export key them as
+/// `0x` + lowercase. A bare or upper-case id is the same entity, so it is
+/// canonicalized here; anything that is not whole bytes of hex is rejected
+/// rather than left to match nothing.
+fn canonical_entity_id(raw: &str, id: &str) -> Result<String, String> {
+    let digits = id
+        .strip_prefix("0x")
+        .or_else(|| id.strip_prefix("0X"))
+        .unwrap_or(id);
+    if digits.is_empty()
+        || !digits.len().is_multiple_of(2)
+        || !digits.bytes().all(|b| b.is_ascii_hexdigit())
+    {
+        return Err(format!(
+            "entity selector '{raw}' must carry a hex id of whole bytes, e.g. token:0x…"
+        ));
+    }
+    Ok(format!("0x{}", digits.to_ascii_lowercase()))
 }
 
 impl std::fmt::Display for EntitySelector {
@@ -432,13 +452,20 @@ pub fn execute_check(
 const WARMUP_PENDING_MAX_ATTEMPTS: usize = 30;
 const WARMUP_PENDING_RETRY_DELAY_MS: u64 = 1_000;
 
-/// HTTP GET with exponential-backoff retry on 429 (Too Many Requests)
-/// and warmup-pending retry on 503.
-/// Shared by api_checks and explorer modules.
-pub(super) fn api_get<T: serde::de::DeserializeOwned>(
+/// What one API GET produced: the decoded body, or a 404 carrying its detail.
+enum ApiGetOutcome<T> {
+    Found(T),
+    NotFound { detail: String },
+}
+
+/// The one GET path every API read goes through: exponential-backoff retry on
+/// 429 (Too Many Requests) and warmup-pending retry on 503. A 404 is returned
+/// as [`ApiGetOutcome::NotFound`]; every other non-2xx, transport or decode
+/// failure is an error.
+fn api_get_outcome<T: serde::de::DeserializeOwned>(
     ctx: &CheckContext,
     path: &str,
-) -> anyhow::Result<T> {
+) -> anyhow::Result<ApiGetOutcome<T>> {
     let url = format!(
         "{}/{}",
         ctx.api_url.trim_end_matches('/'),
@@ -473,11 +500,45 @@ pub(super) fn api_get<T: serde::de::DeserializeOwned>(
                 // multi-byte sequence and panic while reporting an error.
                 format!(": {}", body.chars().take(512).collect::<String>())
             };
+            if status == reqwest::StatusCode::NOT_FOUND {
+                return Ok(ApiGetOutcome::NotFound { detail });
+            }
             anyhow::bail!("GET {} returned {}{}", path, status, detail);
         }
-        return Ok(resp.json()?);
+        return Ok(ApiGetOutcome::Found(resp.json()?));
     }
     unreachable!()
+}
+
+/// HTTP GET whose every non-2xx answer — 404 included — is an error.
+/// Shared by api_checks and explorer modules.
+pub(super) fn api_get<T: serde::de::DeserializeOwned>(
+    ctx: &CheckContext,
+    path: &str,
+) -> anyhow::Result<T> {
+    match api_get_outcome(ctx, path)? {
+        ApiGetOutcome::Found(value) => Ok(value),
+        ApiGetOutcome::NotFound { detail } => anyhow::bail!(
+            "GET {} returned {}{}",
+            path,
+            reqwest::StatusCode::NOT_FOUND,
+            detail
+        ),
+    }
+}
+
+/// HTTP GET for a resource whose absence is itself a statement: `Ok(None)` on
+/// HTTP 404 ONLY. A 5xx, a transport failure or a body that does not decode is
+/// still an error — folding those into "absent" is how a broken API reads as a
+/// network without the protocol.
+pub(super) fn api_get_or_not_found<T: serde::de::DeserializeOwned>(
+    ctx: &CheckContext,
+    path: &str,
+) -> anyhow::Result<Option<T>> {
+    match api_get_outcome(ctx, path)? {
+        ApiGetOutcome::Found(value) => Ok(Some(value)),
+        ApiGetOutcome::NotFound { .. } => Ok(None),
+    }
 }
 
 /// HTTP POST with a JSON body, for the typed verify export.
@@ -765,10 +826,83 @@ mod status_model_tests {
             "token_activity_transfer_bidirectional",
             "spore_owner_roundtrip",
             "object_asset_collection_consistency",
+            "participant_rows_consistency",
+            "dotcell_records_hash_parity",
         ];
         let mut declared = declared;
         declared.sort_unstable();
         expected.sort_unstable();
         assert_eq!(declared, expected);
+    }
+
+    /// `api_get_or_not_found` turns exactly one answer into "absent": HTTP 404.
+    /// A 5xx, a body that does not decode and an unreachable API all stay
+    /// errors, so a broken API can never read as a missing resource.
+    #[test]
+    fn api_get_or_not_found_maps_only_a_404_to_none() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let server = runtime.block_on(MockServer::start());
+        runtime.block_on(async {
+            let get = |route: &str, response: ResponseTemplate| {
+                Mock::given(method("GET"))
+                    .and(path(format!("/api/v1/{route}")))
+                    .respond_with(response)
+            };
+            get("found", ResponseTemplate::new(200).set_body_json(7))
+                .mount(&server)
+                .await;
+            get("missing", ResponseTemplate::new(404))
+                .mount(&server)
+                .await;
+            get("broken", ResponseTemplate::new(500))
+                .mount(&server)
+                .await;
+            get(
+                "garbled",
+                ResponseTemplate::new(200).set_body_string("not json"),
+            )
+            .mount(&server)
+            .await;
+        });
+        let served = CheckContext {
+            api_url: format!("{}/api/v1", server.uri()),
+            ..ctx(None, None, 1)
+        };
+
+        assert_eq!(
+            api_get_or_not_found::<u32>(&served, "found").unwrap(),
+            Some(7)
+        );
+        assert_eq!(
+            api_get_or_not_found::<u32>(&served, "missing").unwrap(),
+            None
+        );
+        let err = api_get_or_not_found::<u32>(&served, "broken").unwrap_err();
+        assert!(format!("{err:#}").contains("500"), "{err:#}");
+        assert!(api_get_or_not_found::<u32>(&served, "garbled").is_err());
+
+        // The plain reader still treats a 404 as an error, with its status.
+        let err = api_get::<u32>(&served, "missing").unwrap_err();
+        assert!(format!("{err:#}").contains("404"), "{err:#}");
+
+        // Nothing listens on port 1: a transport failure is an error too.
+        assert!(api_get_or_not_found::<u32>(&ctx(None, None, 1), "found").is_err());
+    }
+
+    /// `--entity` ids are canonical `0x` + lowercase hex whatever the operator
+    /// typed; ids that are not whole bytes of hex are rejected.
+    #[test]
+    fn entity_selector_ids_are_canonical_hex() {
+        let canonical = EntitySelector::parse("token:0xabcd").unwrap();
+        assert_eq!(canonical.id, "0xabcd");
+        for raw in ["token:ABCD", "token:abcd", "token:0XAbCd", "token:0xABCD"] {
+            assert_eq!(EntitySelector::parse(raw).unwrap(), canonical, "{raw}");
+        }
+        for raw in ["token:0x", "token:abc", "token:0xzz", "token:dotbit"] {
+            assert!(EntitySelector::parse(raw).is_err(), "{raw}");
+        }
     }
 }
