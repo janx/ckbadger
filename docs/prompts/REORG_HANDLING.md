@@ -149,6 +149,15 @@ CFs with delta-based state (e.g. `addr_balance`, `script_info`, `token_holders`,
 - Value: `UndoLogEntry { target_store, cf_name, key, previous_value }`
 - Rollback replays entries for `block > rollback_to` in reverse order
 
+The **outpoint reverse index** in `CF_STATS_SPORE` (`outpoint -> id` and
+`id -> outpoint`, written by Spore, did:ckb, `.bit Cell` and `.cell` through
+`BatchWriter::put_object_outpoint_rows`) belongs to this column, not to the
+repair stage. The repair cleans those rows only for entries it can still see
+with `created_at_block > rollback_to`: a rolled-back mint's entry is already
+gone by then (undo replay runs first), and a rolled-back TRANSFER leaves the
+item alive, so it is never a delete candidate while its stale outpoint row
+remains. See POSTMORTEM PROTO-010.
+
 ### Direct Deletion (for activity/event CFs)
 
 Activity and event CFs are rolled back via full-CF scan and direct deletion of entries belonging to rolled-back blocks:
