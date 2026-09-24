@@ -12,6 +12,8 @@
 //! when the chain says a Sale Lock script instance owns it.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Mutex;
 
 use anyhow::{anyhow, bail, Result};
 use ckbadger_store::types::{
@@ -21,7 +23,7 @@ use ckbadger_store::types::{
 };
 use tracing::debug;
 
-use crate::parser::dotcell::{DotCellNameData, DotCellParser};
+use crate::parser::dotcell::{DotCellNameData, DotCellParser, DOTCELL_GRACE_SECONDS};
 use crate::parser::registry::{ProtocolScript, PROTOCOL_REGISTRY};
 
 use ckbadger_store::types::{LockCallEntry, TypeCallEntry};
@@ -59,6 +61,12 @@ pub(crate) enum DotCellTransitionKind {
         buyer20: [u8; 20],
     },
     Transfer {
+        from20: [u8; 20],
+        to20: [u8; 20],
+    },
+    /// A new owner took a name whose expiry plus the 30-day grace had passed:
+    /// a new holding (collection Mint), not a transfer from the lapsed owner.
+    Takeover {
         from20: [u8; 20],
         to20: [u8; 20],
     },
@@ -155,6 +163,28 @@ fn sale_instances(tx: &TxView<'_>) -> Result<HashMap<[u8; 20], ([u8; 32], u64)>>
         instances.insert(hash20, (seller, price));
     }
     Ok(instances)
+}
+
+/// Whether an owner change is a takeover of a lapsed name: the previous
+/// expiry plus the 30-day grace the contract enforces lies strictly before the
+/// block's time. The ONE definition, shared by the classifier and both
+/// writers (which restart `created_at` on a takeover).
+pub(crate) fn is_expired_takeover(
+    previous_expired_at: u64,
+    previous_owner20: &[u8; 20],
+    next_owner20: &[u8; 20],
+    block_timestamp_ms: i64,
+) -> Result<bool> {
+    if previous_owner20 == next_owner20 {
+        return Ok(false);
+    }
+    let block_seconds = u64::try_from(block_timestamp_ms)
+        .map_err(|_| anyhow!("negative block timestamp {block_timestamp_ms} ms"))?
+        / 1000;
+    let grace_end = previous_expired_at
+        .checked_add(DOTCELL_GRACE_SECONDS)
+        .ok_or_else(|| anyhow!("dotcell expiry {previous_expired_at} + grace overflows"))?;
+    Ok(grace_end < block_seconds)
 }
 
 /// Diff the `.cell` names on both sides of a transaction.
@@ -265,68 +295,126 @@ pub(crate) fn classify_dotcell_transitions(tx: &TxView<'_>) -> Result<Vec<DotCel
                     changes.push("next");
                 }
 
-                let kind = if !changes.is_empty() && changes.iter().all(|c| *c == "next") {
-                    DotCellTransitionKind::RingLink
+                let kinds = if !changes.is_empty() && changes.iter().all(|c| *c == "next") {
+                    vec![DotCellTransitionKind::RingLink]
                 } else if previous.owner_hash20 != name.owner_hash20 {
-                    if let Some((seller32, price)) = sales.get(&name.owner_hash20) {
-                        DotCellTransitionKind::List {
-                            from_owner20: previous.owner_hash20,
-                            sale_hash20: name.owner_hash20,
-                            seller32: *seller32,
-                            price: *price,
-                        }
-                    } else if let Some((seller32, price)) = sales.get(&previous.owner_hash20) {
-                        if name.owner_hash20[..] == seller32[..20] {
-                            DotCellTransitionKind::CancelSale {
-                                sale_hash20: previous.owner_hash20,
-                                seller32: *seller32,
-                                price: *price,
-                                to_owner20: name.owner_hash20,
-                            }
-                        } else {
-                            DotCellTransitionKind::Buy {
-                                sale_hash20: previous.owner_hash20,
-                                seller32: *seller32,
-                                price: *price,
-                                buyer20: name.owner_hash20,
-                            }
-                        }
-                    } else {
-                        DotCellTransitionKind::Transfer {
-                            from20: previous.owner_hash20,
-                            to20: name.owner_hash20,
-                        }
-                    }
+                    owner_change_kinds(previous, name, &sales, tx.timestamp)?
                 } else if previous.expired_at != name.expired_at {
-                    DotCellTransitionKind::Renew {
+                    vec![DotCellTransitionKind::Renew {
                         from: previous.expired_at,
                         to: name.expired_at,
-                    }
+                    }]
                 } else if previous.records_hash != name.records_hash {
-                    DotCellTransitionKind::EditRecords
+                    vec![DotCellTransitionKind::EditRecords]
                 } else if previous.manager_hash20 != name.manager_hash20 {
-                    DotCellTransitionKind::EditManager {
+                    vec![DotCellTransitionKind::EditManager {
                         from20: previous.manager_hash20,
                         to20: name.manager_hash20,
-                    }
+                    }]
                 } else {
-                    DotCellTransitionKind::Touch
+                    vec![DotCellTransitionKind::Touch]
                 };
 
-                DotCellTransition {
-                    id,
-                    label: name.label.clone(),
-                    kind,
-                    manager_changed_to: (previous.manager_hash20 != name.manager_hash20)
-                        .then_some(name.manager_hash20),
-                    changes,
+                // One transaction can move a name through two owners (buy and
+                // re-list). Every step carries the tx's whole list of changes;
+                // the manager the tx hands the name to is named once, on the
+                // step that leaves it there.
+                let manager_changed_to =
+                    (previous.manager_hash20 != name.manager_hash20).then_some(name.manager_hash20);
+                let last = kinds.len() - 1;
+                for (i, kind) in kinds.into_iter().enumerate() {
+                    out.push(DotCellTransition {
+                        id,
+                        label: name.label.clone(),
+                        kind,
+                        manager_changed_to: if i == last { manager_changed_to } else { None },
+                        changes: changes.clone(),
+                    });
                 }
+                continue;
             }
             (None, None) => unreachable!("id came from one of the two maps"),
         };
         out.push(transition);
     }
     Ok(out)
+}
+
+/// What an owner change means, from chain facts only (spec §5, plan R7).
+///
+/// - lapsed past expiry + grace: `Takeover`
+/// - from one sale instance to another in one tx: the intermediate owner is
+///   the new sale's seller (`B.seller32[..20]`); reaching it from sale A is a
+///   `CancelSale` when it is A's own seller, a `Buy` otherwise, and it then
+///   `List`s the name under sale B
+/// - to a sale instance: `List`; from one: `CancelSale` back to the seller's
+///   prefix, else `Buy`
+/// - otherwise `Transfer`
+///
+/// Known limitation, by the spec's owner-prefix definition: a seller who
+/// cancels to ANOTHER lock of their own is indistinguishable on chain from a
+/// sale to that lock, and is recorded as a `Buy`.
+fn owner_change_kinds(
+    previous: &DotCellNameData,
+    name: &DotCellNameData,
+    sales: &HashMap<[u8; 20], ([u8; 32], u64)>,
+    block_timestamp_ms: i64,
+) -> Result<Vec<DotCellTransitionKind>> {
+    if is_expired_takeover(
+        previous.expired_at,
+        &previous.owner_hash20,
+        &name.owner_hash20,
+        block_timestamp_ms,
+    )? {
+        return Ok(vec![DotCellTransitionKind::Takeover {
+            from20: previous.owner_hash20,
+            to20: name.owner_hash20,
+        }]);
+    }
+    let from_sale = sales.get(&previous.owner_hash20);
+    let to_sale = sales.get(&name.owner_hash20);
+    let leave_sale = |sale_hash20: [u8; 20], (seller32, price): ([u8; 32], u64), to20: [u8; 20]| {
+        if to20[..] == seller32[..20] {
+            DotCellTransitionKind::CancelSale {
+                sale_hash20,
+                seller32,
+                price,
+                to_owner20: to20,
+            }
+        } else {
+            DotCellTransitionKind::Buy {
+                sale_hash20,
+                seller32,
+                price,
+                buyer20: to20,
+            }
+        }
+    };
+    Ok(match (from_sale, to_sale) {
+        (Some(&from), Some(&(seller32, price))) => {
+            let intermediate: [u8; 20] = seller32[..20].try_into().expect("20 bytes");
+            vec![
+                leave_sale(previous.owner_hash20, from, intermediate),
+                DotCellTransitionKind::List {
+                    from_owner20: intermediate,
+                    sale_hash20: name.owner_hash20,
+                    seller32,
+                    price,
+                },
+            ]
+        }
+        (None, Some(&(seller32, price))) => vec![DotCellTransitionKind::List {
+            from_owner20: previous.owner_hash20,
+            sale_hash20: name.owner_hash20,
+            seller32,
+            price,
+        }],
+        (Some(&from), None) => vec![leave_sale(previous.owner_hash20, from, name.owner_hash20)],
+        (None, None) => vec![DotCellTransitionKind::Transfer {
+            from20: previous.owner_hash20,
+            to20: name.owner_hash20,
+        }],
+    })
 }
 
 /// The `dotcell:*` action name, or `None` for ring infrastructure.
@@ -342,6 +430,7 @@ pub(crate) fn action_name(kind: &DotCellTransitionKind) -> Option<&'static str> 
         CancelSale { .. } => "cancel_sale",
         Buy { .. } => "buy",
         Transfer { .. } => "transfer",
+        Takeover { .. } => "takeover",
         Renew { .. } => "renew",
         EditRecords => "edit_records",
         EditManager { .. } => "edit_manager",
@@ -360,7 +449,7 @@ pub(crate) fn action_name(kind: &DotCellTransitionKind) -> Option<&'static str> 
 /// entry.
 pub(crate) fn dotcell_asset_action(action: &str) -> Result<AssetAction> {
     Ok(match action {
-        "register" | "register_subname" => AssetAction::Mint,
+        "register" | "register_subname" | "takeover" => AssetAction::Mint,
         "transfer" | "buy" => AssetAction::Transfer,
         "renew" => AssetAction::Renew,
         "list" | "cancel_sale" | "edit_records" | "edit_manager" | "touch" => AssetAction::Update,
@@ -430,7 +519,7 @@ pub(crate) fn protocol_actions_for(transitions: &[DotCellTransition]) -> Vec<Pro
                     fields.insert("seller".into(), hex0x(seller32).into());
                     fields.insert("price".into(), price.to_string().into());
                 }
-                Transfer { from20, to20 } => {
+                Transfer { from20, to20 } | Takeover { from20, to20 } => {
                     fields.insert("from".into(), hex0x(from20).into());
                     fields.insert("to".into(), hex0x(to20).into());
                 }
@@ -479,7 +568,7 @@ pub(crate) fn named_participants_for(transitions: &[DotCellTransition]) -> Vec<N
         };
         match &t.kind {
             Register { owner20, .. } => push(*owner20, vec![delta(&t.id, false)], OWNER_TO),
-            Transfer { from20, to20 } => {
+            Transfer { from20, to20 } | Takeover { from20, to20 } => {
                 push(*from20, vec![delta(&t.id, true)], OWNER_FROM);
                 push(*to20, vec![delta(&t.id, false)], OWNER_TO);
             }
@@ -514,7 +603,30 @@ pub(crate) fn named_participants_for(transitions: &[DotCellTransition]) -> Vec<N
             push(manager, Vec::new(), MANAGER_TO);
         }
     }
+    drop_net_zero_item_deltas(&mut out);
     out
+}
+
+/// Layer 2 records position changes only. A party that received a name and
+/// passed it on in the same transaction (buy, then re-list) holds exactly what
+/// it held before: its +1 and -1 for that name cancel, while its roles stay.
+fn drop_net_zero_item_deltas(named: &mut [NamedParticipant]) {
+    let mut net: HashMap<(ParticipantId, Vec<u8>), i128> = HashMap::new();
+    for n in named.iter() {
+        for d in &n.item_deltas {
+            let signed = if d.negative {
+                -(d.magnitude as i128)
+            } else {
+                d.magnitude as i128
+            };
+            *net.entry((n.id, d.item_id.clone())).or_default() += signed;
+        }
+    }
+    for n in named.iter_mut() {
+        let id = n.id;
+        n.item_deltas
+            .retain(|d| net.get(&(id, d.item_id.clone())).copied() != Some(0));
+    }
 }
 
 /// The `.cell` collection feed entry for one transaction, derived from the
@@ -546,6 +658,18 @@ pub(crate) fn build_dotcell_tx_activity_entry(
 
 pub(crate) struct DotCellDetector {
     account_code_hashes: HashSet<[u8; 32]>,
+    /// The builder asks a detector once per participating owner (`detect`)
+    /// and once more for its named parties, all for the same transaction.
+    /// The classification is kept for the transaction it was computed for,
+    /// keyed by (tx hash, block hash) because a takeover depends on the block.
+    last: Mutex<Option<ClassifiedTx>>,
+    classifications: AtomicUsize,
+}
+
+struct ClassifiedTx {
+    tx_hash: Vec<u8>,
+    block_hash: Vec<u8>,
+    transitions: Vec<DotCellTransition>,
 }
 
 impl DotCellDetector {
@@ -565,7 +689,36 @@ impl DotCellDetector {
         }
         Self {
             account_code_hashes,
+            last: Mutex::new(None),
+            classifications: AtomicUsize::new(0),
         }
+    }
+
+    /// The transaction's transitions, classified once however many times the
+    /// builder asks.
+    fn transitions(&self, tx: &TxView<'_>) -> Result<Vec<DotCellTransition>> {
+        let mut last = self
+            .last
+            .lock()
+            .map_err(|_| anyhow!("dotcell detector classification cache is poisoned"))?;
+        if let Some(cached) = last.as_ref() {
+            if cached.tx_hash == tx.tx_hash && cached.block_hash == tx.block_hash {
+                return Ok(cached.transitions.clone());
+            }
+        }
+        let transitions = classify_dotcell_transitions(tx)?;
+        self.classifications.fetch_add(1, Ordering::Relaxed);
+        *last = Some(ClassifiedTx {
+            tx_hash: tx.tx_hash.to_vec(),
+            block_hash: tx.block_hash.to_vec(),
+            transitions: transitions.clone(),
+        });
+        Ok(transitions)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn classifications(&self) -> usize {
+        self.classifications.load(Ordering::Relaxed)
     }
 }
 
@@ -601,11 +754,11 @@ impl ProtocolDetector for DotCellDetector {
         // Tx-level: the builder asks once per participating owner and dedups
         // by (protocol, action, metadata). Each action's metadata carries the
         // name id, so two names in one tx never collapse into one.
-        Ok(protocol_actions_for(&classify_dotcell_transitions(tx)?))
+        Ok(protocol_actions_for(&self.transitions(tx)?))
     }
 
     fn name_participants(&self, tx: &TxView<'_>) -> Result<Vec<NamedParticipant>> {
-        Ok(named_participants_for(&classify_dotcell_transitions(tx)?))
+        Ok(named_participants_for(&self.transitions(tx)?))
     }
 }
 
@@ -1462,6 +1615,283 @@ mod tests {
                 to20: junk_sale20
             }
         );
+    }
+
+    // ── Rules for shapes the chain has not produced yet (plan R7) ─────────
+
+    fn sale_args(seller: [u8; 32], price: u64) -> Vec<u8> {
+        let mut args = seller.to_vec();
+        args.extend_from_slice(&price.to_le_bytes());
+        args
+    }
+
+    fn hash20_of(cell: &OwnedCell) -> [u8; 20] {
+        cell.lock_script_hash[..20].try_into().unwrap()
+    }
+
+    /// Owner goes from sale A's instance to sale B's in one transaction:
+    /// somebody bought the name and listed it again. The buy is not lost.
+    #[test]
+    fn buy_and_relist_in_one_tx_yields_buy_then_list() {
+        let seller_a = [0xa1u8; 32];
+        let seller_b = [0xb1u8; 32];
+        let offer_a = sale_lock_coded_cell(sale_args(seller_a, 10_000));
+        let offer_b = sale_lock_coded_cell(sale_args(seller_b, 25_000));
+        let (sale_a, sale_b) = (hash20_of(&offer_a), hash20_of(&offer_b));
+        let buyer20: [u8; 20] = seller_b[..20].try_into().unwrap();
+        let owned = synthetic_tx(
+            vec![
+                synthetic_cell(
+                    name_data(
+                        "resold",
+                        sale_a,
+                        sale_a,
+                        1_800_000_000,
+                        [0u8; 20],
+                        [0u8; 32],
+                    ),
+                    true,
+                ),
+                offer_a,
+            ],
+            vec![
+                synthetic_cell(
+                    name_data(
+                        "resold",
+                        sale_b,
+                        sale_b,
+                        1_800_000_000,
+                        [0u8; 20],
+                        [0u8; 32],
+                    ),
+                    false,
+                ),
+                offer_b,
+            ],
+        );
+        let ts = classify_dotcell_transitions(&owned.view()).unwrap();
+        assert_eq!(
+            ts.iter().map(|t| t.kind.clone()).collect::<Vec<_>>(),
+            vec![
+                DotCellTransitionKind::Buy {
+                    sale_hash20: sale_a,
+                    seller32: seller_a,
+                    price: 10_000,
+                    buyer20,
+                },
+                DotCellTransitionKind::List {
+                    from_owner20: buyer20,
+                    sale_hash20: sale_b,
+                    seller32: seller_b,
+                    price: 25_000,
+                },
+            ]
+        );
+        assert_eq!(
+            protocol_actions_for(&ts)
+                .iter()
+                .map(|a| a.action.as_str())
+                .collect::<Vec<_>>(),
+            vec!["buy", "list"]
+        );
+
+        let id = DotCellParser::derive_id("resold");
+        let named = named_participants_for(&ts);
+        let find = |p: [u8; 20]| {
+            named
+                .iter()
+                .find(|n| n.id == ParticipantId::LockPrefix(p))
+                .unwrap_or_else(|| panic!("0x{} is named", hex::encode(p)))
+        };
+        assert_eq!(find(sale_a).item_deltas, vec![identity_minus(&id)]);
+        assert_eq!(find(sale_a).roles, OWNER_FROM);
+        assert_eq!(find(sale_b).item_deltas, vec![identity_plus(&id)]);
+        assert_ne!(find(sale_b).roles & OWNER_TO, 0);
+        // The buyer received the name and handed it to the new sale in the
+        // same transaction: both roles, and no net change in what they hold.
+        let buyer_entries: Vec<_> = named
+            .iter()
+            .filter(|n| n.id == ParticipantId::LockPrefix(buyer20))
+            .collect();
+        assert!(
+            buyer_entries.iter().all(|n| n.item_deltas.is_empty()),
+            "{named:?}"
+        );
+        assert_eq!(
+            buyer_entries.iter().fold(0, |roles, n| roles | n.roles) & (OWNER_TO | OWNER_FROM),
+            OWNER_TO | OWNER_FROM
+        );
+
+        // Through the builder the buyer is one participant holding no cell.
+        let built = build_tx_actions_for_block_with_io(
+            &[owned.view()],
+            &[Box::new(DotCellDetector::new()) as Box<dyn ProtocolDetector>],
+        )
+        .expect("build");
+        let buyer: Vec<_> = built[0]
+            .actions
+            .participants
+            .iter()
+            .filter(|p| p.id == ParticipantId::LockPrefix(buyer20))
+            .collect();
+        assert_eq!(buyer.len(), 1, "one participant per party");
+        assert!(buyer[0].item_deltas.is_empty());
+        assert_eq!(buyer[0].ckb_delta, 0);
+    }
+
+    /// The same shape where the intermediate owner is the old seller is a
+    /// re-pricing: cancel, then list.
+    #[test]
+    fn cancel_and_relist_in_one_tx_yields_cancel_then_list() {
+        let seller = [0xa1u8; 32];
+        let offer_a = sale_lock_coded_cell(sale_args(seller, 10_000));
+        let offer_b = sale_lock_coded_cell(sale_args(seller, 20_000));
+        let (sale_a, sale_b) = (hash20_of(&offer_a), hash20_of(&offer_b));
+        let seller20: [u8; 20] = seller[..20].try_into().unwrap();
+        let owned = synthetic_tx(
+            vec![
+                synthetic_cell(
+                    name_data(
+                        "reprice",
+                        sale_a,
+                        sale_a,
+                        1_800_000_000,
+                        [0u8; 20],
+                        [0u8; 32],
+                    ),
+                    true,
+                ),
+                offer_a,
+            ],
+            vec![
+                synthetic_cell(
+                    name_data(
+                        "reprice",
+                        sale_b,
+                        sale_b,
+                        1_800_000_000,
+                        [0u8; 20],
+                        [0u8; 32],
+                    ),
+                    false,
+                ),
+                offer_b,
+            ],
+        );
+        let kinds: Vec<_> = classify_dotcell_transitions(&owned.view())
+            .unwrap()
+            .into_iter()
+            .map(|t| t.kind)
+            .collect();
+        assert_eq!(
+            kinds,
+            vec![
+                DotCellTransitionKind::CancelSale {
+                    sale_hash20: sale_a,
+                    seller32: seller,
+                    price: 10_000,
+                    to_owner20: seller20,
+                },
+                DotCellTransitionKind::List {
+                    from_owner20: seller20,
+                    sale_hash20: sale_b,
+                    seller32: seller,
+                    price: 20_000,
+                },
+            ]
+        );
+    }
+
+    /// Past expiry plus the 30-day grace the contract enforces, a name is
+    /// free for anyone: a new owner taking it is a takeover (a new holding,
+    /// Mint semantics), not a transfer from the lapsed owner.
+    #[test]
+    fn expired_name_takeover_is_a_takeover_not_a_transfer() {
+        let lapsed = [0x44u8; 20];
+        let taker = [0x55u8; 20];
+        // The synthetic tx's block time is 1_700_000_000 s.
+        let expired_at = 1_700_000_000 - DOTCELL_GRACE_SECONDS - 1;
+        let tx_with_expiry = |expired_at: u64| {
+            synthetic_tx(
+                vec![synthetic_cell(
+                    name_data("lapsed", lapsed, lapsed, expired_at, [0u8; 20], [0u8; 32]),
+                    true,
+                )],
+                vec![synthetic_cell(
+                    name_data("lapsed", taker, taker, 1_900_000_000, [0u8; 20], [0u8; 32]),
+                    false,
+                )],
+            )
+        };
+        let ts = classify_dotcell_transitions(&tx_with_expiry(expired_at).view()).unwrap();
+        assert_eq!(ts.len(), 1);
+        assert_eq!(
+            ts[0].kind,
+            DotCellTransitionKind::Takeover {
+                from20: lapsed,
+                to20: taker
+            }
+        );
+        let actions = protocol_actions_for(&ts);
+        assert_eq!(actions[0].action, "takeover");
+        assert_eq!(
+            dotcell_asset_action(&actions[0].action).unwrap(),
+            AssetAction::Mint
+        );
+        let id = DotCellParser::derive_id("lapsed");
+        let named = named_participants_for(&ts);
+        let find = |p: [u8; 20]| {
+            named
+                .iter()
+                .find(|n| n.id == ParticipantId::LockPrefix(p))
+                .unwrap()
+        };
+        assert_eq!(find(lapsed).item_deltas, vec![identity_minus(&id)]);
+        assert_eq!(find(lapsed).roles, OWNER_FROM);
+        assert_eq!(find(taker).item_deltas, vec![identity_plus(&id)]);
+        assert_ne!(find(taker).roles & OWNER_TO, 0);
+
+        // Exactly at the end of the grace period it is still the owner's.
+        let at_grace_end = 1_700_000_000 - DOTCELL_GRACE_SECONDS;
+        let ts = classify_dotcell_transitions(&tx_with_expiry(at_grace_end).view()).unwrap();
+        assert_eq!(
+            ts[0].kind,
+            DotCellTransitionKind::Transfer {
+                from20: lapsed,
+                to20: taker
+            }
+        );
+    }
+
+    #[test]
+    fn classification_runs_once_per_tx() {
+        let owned = OwnedTx::from_fixture(&fixture::M3_TRANSFER_ABUSE);
+        let detector = DotCellDetector::new();
+        let built = build_tx_actions_for_block_with_io(
+            &[owned.view()],
+            &[Box::new(detector) as Box<dyn ProtocolDetector>],
+        )
+        .expect("build");
+        assert!(
+            built[0].actions.participants.len() >= 2,
+            "the builder asks the detector once per participating owner"
+        );
+
+        let detector = DotCellDetector::new();
+        let view = owned.view();
+        let accum = OwnerAccum::default();
+        for _ in 0..3 {
+            detector.detect(&view, &[], &accum, &[], &[], &[]).unwrap();
+        }
+        detector.name_participants(&view).unwrap();
+        assert_eq!(
+            detector.classifications(),
+            1,
+            "detect x3 + name_participants on one tx classify it once"
+        );
+        let other = OwnedTx::from_fixture(&fixture::M2_REGISTER_SUPPORT);
+        detector.name_participants(&other.view()).unwrap();
+        assert_eq!(detector.classifications(), 2, "a new tx is classified anew");
     }
 
     // ── Mapping and plumbing ──────────────────────────────────────────────

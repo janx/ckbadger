@@ -3228,6 +3228,7 @@ impl Indexer {
                             &tx_data.hash,
                             output_index_i16,
                             parsed.number,
+                            ts_ms,
                             &mut data_batch,
                             &mut spore_state,
                         )?;
@@ -8232,6 +8233,140 @@ mod tests {
                 101,
                 "nothing of the rejected block was committed"
             );
+        }
+
+        /// A name cell's data from parts, with an empty records payload.
+        fn synthetic_name_data(label: &str, owner: [u8; 20], expiry: u64) -> String {
+            let mut data = vec![3u8];
+            data.extend_from_slice(&DotCellParser::records_hash(&[0, 0]));
+            data.extend_from_slice(&[0u8; 20]);
+            data.extend_from_slice(&expiry.to_le_bytes()[..5]);
+            data.extend_from_slice(&owner);
+            data.extend_from_slice(&owner);
+            data.extend_from_slice(label.as_bytes());
+            format!("0x{}", hex::encode(data))
+        }
+
+        /// `WitnessArgs { lock: None, input_type: None, output_type: payload }`.
+        fn witness_with_records(payload: &[u8]) -> String {
+            let total = 16 + 4 + payload.len();
+            let mut witness = Vec::with_capacity(total);
+            witness.extend_from_slice(&(total as u32).to_le_bytes());
+            for _ in 0..3 {
+                witness.extend_from_slice(&16u32.to_le_bytes());
+            }
+            witness.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+            witness.extend_from_slice(payload);
+            format!("0x{}", hex::encode(witness))
+        }
+
+        /// 101 registers `lapsed` with an expiry long past (plus grace) by
+        /// block 102's time; 102 hands it to a new owner: a takeover.
+        fn takeover_blocks() -> Vec<BlockResponseWithCycles> {
+            let lapsed_owner = [0x44u8; 20];
+            let taker = [0x55u8; 20];
+            let register = TransactionView {
+                hash: format!("0x{}", hex::encode([0xe5u8; 32])),
+                version: "0x0".to_string(),
+                cell_deps: vec![],
+                header_deps: vec![],
+                inputs: vec![input(0xc0, 0)],
+                outputs: vec![
+                    name_output(NAME_CAPACITY),
+                    plain_output(FUNDING_CAPACITY - NAME_CAPACITY - 100_000_000),
+                ],
+                outputs_data: vec![
+                    synthetic_name_data("lapsed", lapsed_owner, 1_000_000),
+                    "0x".to_string(),
+                ],
+                witnesses: vec![witness_with_records(&[0, 0]), String::new()],
+            };
+            let take = TransactionView {
+                hash: format!("0x{}", hex::encode([0xe6u8; 32])),
+                version: "0x0".to_string(),
+                cell_deps: vec![],
+                header_deps: vec![],
+                inputs: vec![input(0xe5, 0), input(0xe5, 1)],
+                outputs: vec![
+                    name_output(NAME_CAPACITY),
+                    plain_output(FUNDING_CAPACITY - NAME_CAPACITY - 200_000_000),
+                ],
+                outputs_data: vec![
+                    synthetic_name_data("lapsed", taker, 1_900_000_000),
+                    "0x".to_string(),
+                ],
+                witnesses: vec![witness_with_records(&[0, 0]), String::new()],
+            };
+            vec![
+                block(100, AR_DEPOSIT, vec![cellbase_tx(0xc0, FUNDING_CAPACITY)]),
+                block(
+                    101,
+                    AR_DEPOSIT,
+                    vec![cellbase_tx(0xc1, 100_000_000), register],
+                ),
+                block(102, AR_DEPOSIT, vec![cellbase_tx(0xc2, 100_000_000), take]),
+            ]
+        }
+
+        /// R7: a takeover is a new holding. Both paths record `takeover`, feed a
+        /// Mint, and restart the name's `created_at` at the takeover.
+        #[tokio::test]
+        async fn takeover_restarts_created_at_on_both_paths() {
+            use ckbadger_store::types::AssetAction;
+
+            let _guard =
+                crate::db::writer::activities::test_detector_override::without_extra_detectors();
+            let blocks = takeover_blocks();
+            let bulk = crate::sync::materialize_bulk_artifacts_for_test(&blocks).expect("bulk");
+
+            let dir = tempfile::tempdir().unwrap();
+            let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+            let indexer = super::live_dao_fee::indexer_for_live_write_test(store.clone());
+            store
+                .set_secondary_epoch_reward(61_369_863_013_698)
+                .unwrap();
+            for block in blocks {
+                super::live_dao_fee::write_live_block(&indexer, block)
+                    .await
+                    .unwrap();
+            }
+
+            let id = DotCellParser::derive_id("lapsed");
+            let entry = store.get_identity(&id).unwrap().expect("lapsed.cell");
+            assert_eq!(
+                entry.created_at_block, 102,
+                "a takeover starts a new holding"
+            );
+            assert_eq!(entry.created_at_tx, vec![0xe6u8; 32]);
+            let actions = store
+                .get_tx_actions(102, 1, &[0xe6u8; 32])
+                .unwrap()
+                .expect("takeover tx actions");
+            assert_eq!(
+                actions
+                    .protocol_actions
+                    .iter()
+                    .filter(|a| a.protocol == "dotcell")
+                    .map(|a| a.action.as_str())
+                    .collect::<Vec<_>>(),
+                vec!["takeover"]
+            );
+            let feed = store
+                .list_identity_collection_activities(&DOTCELL_SENTINEL_COLLECTION, 10, None, None)
+                .unwrap();
+            assert!(
+                feed.iter()
+                    .all(|(_, _, entry)| entry.actions == vec![AssetAction::Mint]),
+                "{feed:?}"
+            );
+
+            let live = crate::sync::bulk_build::collect_dotcell_artifacts(store.as_ref()).unwrap();
+            assert_eq!(live.identity_data, bulk.dotcell.identity_data);
+            assert_eq!(
+                live.collection_activities,
+                bulk.dotcell.collection_activities
+            );
+            assert_eq!(live.identity_agg, bulk.dotcell.identity_agg);
         }
 
         /// The persisted identity delta says which standard it belongs to, on
