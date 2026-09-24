@@ -217,7 +217,9 @@ from the chain and compares it against the index, with **zero tolerance** —
   an owner-mode or short-data cell that carries no parsable amount still moves
   the token's capacity and occupied capacity. The live and the bulk writer
   apply this same rule to `TOKEN_DAILY`; amount-dependent facets (supply,
-  holders) are counted separately and never gate capacity membership. The
+  holders, transfer counts, `TOKEN_HOURLY` and the token row itself) still
+  require a parsable u128 amount on both paths and never gate capacity
+  membership. The
   oracle states the rule independently rather than borrowing the writers'
   parser, so a writer that drifts from it fails here.
 - **Selection.** `--entity token:<type_hash>` (repeatable) picks entities
