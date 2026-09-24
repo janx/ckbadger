@@ -467,11 +467,13 @@ where it previously issued three separate `put_cf` calls per tick. A run-identit
 to the runtime-status part alone: sync progress and memory stats are still staged, so one bad run
 id cannot make the indexer look dead to every reader.
 
-The sweep behind `get_memory_stats()` reads ~8 RocksDB properties across all 60 CFs of **both**
-chain stores. Live sync resamples it every 30 s (`MEMORY_STATS_LIVE_SAMPLE_INTERVAL`), while
-`SYNC_PROGRESS` — what the TUI and API read — keeps the 3-second cadence. Bulk sync still samples
-every tick: its perf heartbeat and memory-pressure log are the point of a build. The `RocksDB
-stats` log line only appears on ticks that sampled.
+The sweep behind `get_memory_stats()` reads ~8 RocksDB properties across every column family of
+**both** chain stores — `ckbadger_store::ALL_CFS`, the 63 domain CFs plus the append-only `cells`
+(the 3 network-store CFs belong to the crawler's store and are not swept). Live sync resamples it
+every 30 s (`MEMORY_STATS_LIVE_SAMPLE_INTERVAL`), while `SYNC_PROGRESS` — what the TUI and API
+read — keeps the 3-second cadence. Bulk sync still samples every tick: its perf heartbeat and
+memory-pressure log are the point of a build. The `RocksDB stats` log line only appears on ticks
+that sampled.
 
 `Sync progress stalled` now requires **two** frozen signals across the whole 60-second window: the
 committed tip has not moved **and** the writer-phase counter has not moved. A live catch-up batch
