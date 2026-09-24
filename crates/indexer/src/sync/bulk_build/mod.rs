@@ -3256,6 +3256,32 @@ pub struct DotCellArtifacts {
 }
 
 #[doc(hidden)]
+/// Every token row both sync paths write, raw: `CF_TOKENS` and the whole
+/// `CF_STATS_TOKEN` (transfer counts, `TOKEN_HOURLY`, `TOKEN_DAILY`). Scanned
+/// whole rather than per listed token, so a token that has daily rows but no
+/// token row still shows up.
+#[doc(hidden)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TokenRawRows {
+    pub tokens: BTreeMap<Vec<u8>, Vec<u8>>,
+    pub stats_token: BTreeMap<Vec<u8>, Vec<u8>>,
+}
+
+pub(crate) fn collect_token_raw_rows(domain_store: &CkbadgerStore) -> Result<TokenRawRows> {
+    let scan = |cf: &rocksdb::ColumnFamily| -> Result<BTreeMap<Vec<u8>, Vec<u8>>> {
+        let mut out = BTreeMap::new();
+        for item in domain_store.iterator_cf(cf, IteratorMode::Start) {
+            let (key, value) = item?;
+            out.insert(key.to_vec(), value.to_vec());
+        }
+        Ok(out)
+    };
+    Ok(TokenRawRows {
+        tokens: scan(domain_store.cf_tokens())?,
+        stats_token: scan(domain_store.cf_stats_token())?,
+    })
+}
+
 pub(crate) fn collect_dotcell_artifacts(domain_store: &CkbadgerStore) -> Result<DotCellArtifacts> {
     fn scan(
         store: &CkbadgerStore,
@@ -3329,6 +3355,8 @@ pub struct BulkArtifactSnapshot {
     /// Every row a `.cell` name touches, raw. Compared byte-for-byte against
     /// the live write path's rows.
     pub dotcell: DotCellArtifacts,
+    /// `CF_TOKENS` and `CF_STATS_TOKEN`, raw, for the same comparison.
+    pub token_rows: TokenRawRows,
     pub daily_activity_stats: HashMap<String, DailyActivityStats>,
     pub hourly_activity_stats: HashMap<String, DailyActivityStats>,
     /// Chain-level hourly buckets, keyed by their UTC `%Y%m%d%H` strings.
@@ -3704,6 +3732,7 @@ fn collect_bulk_artifact_snapshot(
     ) = collect_cell_snapshot(domain_store, append_store)?;
     let (addr_txs, addr_txs_by_prefix, addr_prefix_stats) = collect_addr_tx_snapshot(domain_store)?;
     let dotcell = collect_dotcell_artifacts(domain_store)?;
+    let token_rows = collect_token_raw_rows(domain_store)?;
     let bulk_build_session_marker = domain_store.get_bulk_build_session_marker()?;
     let live_cell_summary = domain_store.get_live_cell_summary()?;
     let hodl_tracker_state = domain_store.get_hodl_tracker_state()?;
@@ -3727,6 +3756,7 @@ fn collect_bulk_artifact_snapshot(
         addr_txs_by_prefix,
         addr_prefix_stats,
         dotcell,
+        token_rows,
         daily_activity_stats,
         hourly_activity_stats,
         hourly_chain_stats,

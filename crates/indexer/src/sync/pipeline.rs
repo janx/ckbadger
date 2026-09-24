@@ -119,17 +119,85 @@ struct ParserBatchPerfSample {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum BatchWriteFailurePolicy {
+pub(super) enum BatchWriteFailurePolicy {
     FailFastPreCommitInvariant,
     CleanupAndRetry,
 }
 
-fn classify_batch_write_failure(error: &anyhow::Error) -> BatchWriteFailurePolicy {
+pub(super) fn classify_batch_write_failure(error: &anyhow::Error) -> BatchWriteFailurePolicy {
     if error.downcast_ref::<PreCommitInvariantError>().is_some() {
         BatchWriteFailurePolicy::FailFastPreCommitInvariant
     } else {
         BatchWriteFailurePolicy::CleanupAndRetry
     }
+}
+
+/// What the writer does after a batch failed and was cleaned up.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RetryDecision {
+    Retry,
+    /// The same range failed this many times in a row: stop.
+    Escalate {
+        attempts: u32,
+    },
+}
+
+/// Bounds the cleanup-and-retry path.
+///
+/// `CleanupAndRetry` exists for failures a second attempt can clear (a commit
+/// that failed after the append-only store was written, a cache that went
+/// stale). A deterministic error — one the classifier does not recognise yet —
+/// fails identically on every attempt of the same range, and an unbounded
+/// retry turned it into a silent loop that also kept the stall watchdog quiet
+/// (every attempt beats the writer heartbeat). Three consecutive failures of
+/// one start block are treated as deterministic. The count restarts when a
+/// batch commits or the writer moves to a different start block.
+#[derive(Debug, Default)]
+struct BatchFailureTracker {
+    last_start_block: Option<u64>,
+    consecutive: u32,
+}
+
+impl BatchFailureTracker {
+    const MAX_CONSECUTIVE_FAILURES: u32 = 3;
+
+    fn record_failure(&mut self, start_block: u64) -> RetryDecision {
+        if self.last_start_block == Some(start_block) {
+            self.consecutive += 1;
+        } else {
+            self.last_start_block = Some(start_block);
+            self.consecutive = 1;
+        }
+        if self.consecutive >= Self::MAX_CONSECUTIVE_FAILURES {
+            RetryDecision::Escalate {
+                attempts: self.consecutive,
+            }
+        } else {
+            RetryDecision::Retry
+        }
+    }
+
+    fn record_success(&mut self) {
+        *self = Self::default();
+    }
+}
+
+/// The ONE membership rule of per-token capacity history (`TOKEN_DAILY`,
+/// plan R3): a cell belongs to the token whose sUDT/xUDT type script it
+/// carries, whatever its data holds. An owner-mode cell whose data is too
+/// short for a u128 amount still occupies the token's capacity and counts.
+/// Returns the token's type script hash for a member cell.
+///
+/// Bulk build reaches the same set through `CellSemanticTag::{Sudt, Xudt}`,
+/// which `classify_type_script_semantic_tag` derives from the same
+/// `UdtParser::is_udt_code_hash_bytes` test.
+pub(crate) fn token_daily_member<'a>(
+    type_script_hash: Option<&'a [u8]>,
+    type_code_hash: Option<&[u8]>,
+    type_hash_type: Option<i16>,
+) -> Option<&'a [u8]> {
+    UdtParser::is_udt_code_hash_bytes(type_code_hash?, type_hash_type?)?;
+    type_script_hash
 }
 
 /// Classify a cell's type script into a semantic tag.
@@ -1781,24 +1849,18 @@ impl Indexer {
                                 i128::from(cell_occupied)
                             );
                         }
-                        if let (Some(ref type_script_hash), Some(ref type_code_hash)) =
-                            (&cell.type_script_hash, &cell.type_code_hash)
-                        {
-                            if cell
-                                .type_hash_type
-                                .and_then(|ht| {
-                                    UdtParser::is_udt_code_hash_bytes(type_code_hash, ht)
-                                })
-                                .is_some()
-                            {
-                                accumulate_daily!(
-                                    token_daily_changes,
-                                    tx_data.block_number,
-                                    (type_script_hash.clone(), date_yyyymmdd),
-                                    i128::from(cell.capacity),
-                                    i128::from(cell_occupied)
-                                );
-                            }
+                        if let Some(type_script_hash) = token_daily_member(
+                            cell.type_script_hash.as_deref(),
+                            cell.type_code_hash.as_deref(),
+                            cell.type_hash_type,
+                        ) {
+                            accumulate_daily!(
+                                token_daily_changes,
+                                tx_data.block_number,
+                                (type_script_hash.to_vec(), date_yyyymmdd),
+                                i128::from(cell.capacity),
+                                i128::from(cell_occupied)
+                            );
                         }
                         if let (Some(type_script_hash), Some(type_code_hash), Some(type_args)) = (
                             cell.type_script_hash.as_ref(),
@@ -2008,24 +2070,18 @@ impl Indexer {
                                         -i128::from(info.occupied_capacity)
                                     );
                                 }
-                                if let (Some(ref type_script_hash), Some(ref type_code_hash)) =
-                                    (&info.type_script_hash, &info.type_code_hash)
-                                {
-                                    if info
-                                        .type_hash_type
-                                        .and_then(|ht| {
-                                            UdtParser::is_udt_code_hash_bytes(type_code_hash, ht)
-                                        })
-                                        .is_some()
-                                    {
-                                        accumulate_daily!(
-                                            token_daily_changes,
-                                            tx_data.block_number,
-                                            (type_script_hash.clone(), date_yyyymmdd),
-                                            -i128::from(info.capacity),
-                                            -i128::from(info.occupied_capacity)
-                                        );
-                                    }
+                                if let Some(type_script_hash) = token_daily_member(
+                                    info.type_script_hash.as_deref(),
+                                    info.type_code_hash.as_deref(),
+                                    info.type_hash_type,
+                                ) {
+                                    accumulate_daily!(
+                                        token_daily_changes,
+                                        tx_data.block_number,
+                                        (type_script_hash.to_vec(), date_yyyymmdd),
+                                        -i128::from(info.capacity),
+                                        -i128::from(info.occupied_capacity)
+                                    );
                                 }
                                 if let (Some(type_script_hash), Some(type_code_hash)) =
                                     (info.type_script_hash.as_ref(), info.type_code_hash.as_ref())
@@ -2286,6 +2342,7 @@ impl Indexer {
         let committed_tip_for_cache_for_writer = Arc::clone(&committed_tip_for_cache);
         let mut consecutive_idle_timeouts: u64 = 0;
         let mut pipeline_batch_index: u64 = 0;
+        let mut batch_failure_tracker = BatchFailureTracker::default();
 
         // Resolve disk device once for per-batch I/O delta tracking
         let disk_device = crate::sys_info::detect_disk_device(&self.config.domain_data_path);
@@ -2670,7 +2727,10 @@ impl Indexer {
                         )
                         .await
                     {
-                        Ok(metrics) => metrics,
+                        Ok(metrics) => {
+                            batch_failure_tracker.record_success();
+                            metrics
+                        }
                         Err(e) => {
                             let failure_policy = classify_batch_write_failure(&e);
                             let incident_reason = match failure_policy {
@@ -2777,6 +2837,25 @@ impl Indexer {
                                         )
                                     });
                                 }
+                            }
+                            // The store is back at `start_block - 1` and consistent.
+                            // A range that keeps failing after a clean rollback is
+                            // not transient: stop instead of looping.
+                            if let RetryDecision::Escalate { attempts } =
+                                batch_failure_tracker.record_failure(start_block)
+                            {
+                                return Err(e).with_context(|| {
+                                    format!(
+                                        "live sync stopped: range {}-{} (chain_tip={}) failed {} consecutive \
+                                         cleanup/retry attempts, each rolled back cleanly to below block {}; \
+                                         treating the error as deterministic. Fix the indexer, then restart",
+                                        start_block,
+                                        end_block,
+                                        chain_tip,
+                                        attempts,
+                                        start_block
+                                    )
+                                });
                             }
                             // Clear in-process caches to prevent stale entries from the
                             // failed batch being used during retry. Without this, outputs
@@ -3336,6 +3415,50 @@ mod tests {
         assert_eq!(
             classify_batch_write_failure(&error),
             BatchWriteFailurePolicy::FailFastPreCommitInvariant
+        );
+    }
+
+    #[test]
+    fn batch_failure_tracker_escalates_on_third_identical_range() {
+        let mut tracker = BatchFailureTracker::default();
+        assert_eq!(tracker.record_failure(500), RetryDecision::Retry);
+        assert_eq!(tracker.record_failure(500), RetryDecision::Retry);
+        assert_eq!(
+            tracker.record_failure(500),
+            RetryDecision::Escalate { attempts: 3 },
+            "the third consecutive failure of one range is deterministic, not transient"
+        );
+    }
+
+    #[test]
+    fn batch_failure_tracker_resets_when_range_advances() {
+        let mut tracker = BatchFailureTracker::default();
+        assert_eq!(tracker.record_failure(500), RetryDecision::Retry);
+        assert_eq!(tracker.record_failure(500), RetryDecision::Retry);
+        // The batch at 500 committed on the next attempt; the range moved on.
+        tracker.record_success();
+        assert_eq!(tracker.record_failure(700), RetryDecision::Retry);
+        assert_eq!(tracker.record_failure(700), RetryDecision::Retry);
+        // A different start block is a different failure, even without a
+        // success in between (e.g. a reorg moved the writer).
+        assert_eq!(tracker.record_failure(650), RetryDecision::Retry);
+        assert_eq!(tracker.record_failure(650), RetryDecision::Retry);
+        assert_eq!(
+            tracker.record_failure(650),
+            RetryDecision::Escalate { attempts: 3 }
+        );
+    }
+
+    #[test]
+    fn batch_failure_tracker_success_clears_a_partial_count() {
+        let mut tracker = BatchFailureTracker::default();
+        assert_eq!(tracker.record_failure(500), RetryDecision::Retry);
+        assert_eq!(tracker.record_failure(500), RetryDecision::Retry);
+        tracker.record_success();
+        assert_eq!(
+            tracker.record_failure(500),
+            RetryDecision::Retry,
+            "failures separated by a committed batch are not consecutive"
         );
     }
 
