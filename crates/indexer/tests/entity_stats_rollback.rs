@@ -20,7 +20,7 @@ use std::sync::Arc;
 use ckbadger_indexer::db::{apply_hourly_increment, BatchWriter, EntityStatsOverlay};
 use ckbadger_indexer::sync::types::{EntityDailyChanges, EntityDateKey, ScriptDailyKey};
 use ckbadger_store::batch::StoreBatch;
-use ckbadger_store::types::EpochStats;
+use ckbadger_store::types::{EpochStats, HourlyRetentionFamily};
 use ckbadger_store::{keys, CachedBlockHeader, CkbadgerStore, LiveCellInfo};
 use rocksdb::{Direction, IteratorMode};
 
@@ -1399,6 +1399,109 @@ async fn retention_never_runs_in_bulk_mode() {
         assert!(domain.get_stats_key(key).unwrap().is_some());
     }
     domain.set_bulk_sync_mode(false);
+}
+
+/// Plan Task 5.8: a round that needs several steps must stamp
+/// `executed_cutoff_hour` with the cutoff it STARTED with. Every step sweeps
+/// its own key range; if a later step used a later cutoff, the store would
+/// claim deletions that the earlier steps never made.
+#[tokio::test]
+async fn a_multi_step_round_stamps_the_cutoff_it_started_with() {
+    let (domain, append) = setup_split_stores();
+    let writer = BatchWriter::new(domain.clone(), append.clone());
+
+    let now_ms = TS_DAY;
+    let start_cutoff = now_ms / 3_600_000 - BatchWriter::HOURLY_RETENTION_WINDOW_HOURS;
+    {
+        // A recent undo-window header, so the 48h clock bound is the binding one.
+        let mut batch = StoreBatch::new(&domain);
+        batch.put_block_header(
+            5_000 - ckbadger_indexer::sync::ENTITY_STATS_UNDO_RETAIN_BLOCKS,
+            &make_header(4_000, now_ms),
+        );
+        batch.commit().unwrap();
+    }
+    // First in key order: a bucket inside the window at round start, which a
+    // clock ten hours later would call expired.
+    let early_token = [0x01u8; 32];
+    let survivor = keys::encode_token_hourly_key(&early_token, start_cutoff + 5);
+    {
+        let mut batch = StoreBatch::new(&domain);
+        batch.put_stats(&survivor, &1i64.to_le_bytes());
+        batch.commit().unwrap();
+    }
+    // Then more expired buckets than one step may delete.
+    let budget = BatchWriter::HOURLY_RETENTION_STEP_BUDGET as i64;
+    seed_token_hourly(&domain, start_cutoff - 100, budget + 1);
+
+    let mut batch = StoreBatch::new(&domain);
+    ckbadger_indexer::sync::stage_hourly_retention(&writer, &mut batch, 5_000, now_ms).unwrap();
+    batch.commit().unwrap();
+    let state = domain
+        .get_hourly_retention_state(HourlyRetentionFamily::Token)
+        .unwrap()
+        .unwrap();
+    assert!(state.cursor.is_some(), "the fixture needs a second step");
+    assert_eq!(state.round_in_progress_cutoff_hour, Some(start_cutoff));
+
+    // The next step runs ten hours later.
+    let later = now_ms + 10 * 3_600_000;
+    let mut batch = StoreBatch::new(&domain);
+    ckbadger_indexer::sync::stage_hourly_retention(&writer, &mut batch, 5_000, later).unwrap();
+    batch.commit().unwrap();
+    let state = domain
+        .get_hourly_retention_state(HourlyRetentionFamily::Token)
+        .unwrap()
+        .unwrap();
+    assert!(state.cursor.is_none(), "the round completed");
+    assert_eq!(
+        state.executed_cutoff_hour, start_cutoff,
+        "the completed round claims the cutoff every one of its steps swept with"
+    );
+    // The claim is true: nothing below it survives.
+    assert!(domain.get_stats_key(&survivor).unwrap().is_some());
+    let iter = domain.iterator_cf(
+        domain.cf_stats_token(),
+        IteratorMode::From(&[keys::STATS_PREFIX_TOKEN_HOURLY], Direction::Forward),
+    );
+    for item in iter {
+        let (key, _) = item.unwrap();
+        if key.first() != Some(&keys::STATS_PREFIX_TOKEN_HOURLY) {
+            break;
+        }
+        let hour = i64::from_be_bytes(key[33..41].try_into().unwrap());
+        assert!(
+            hour >= state.executed_cutoff_hour,
+            "bucket at hour {hour} survived below the executed cutoff {}",
+            state.executed_cutoff_hour
+        );
+    }
+}
+
+/// Plan Task 5.8: while the whole chain is inside the undo window no block
+/// bounds the cutoff. The step is skipped; no state is written, and in
+/// particular no `i64::MIN` "executed" cutoff is persisted as if it were one.
+#[tokio::test]
+async fn a_chain_shorter_than_the_undo_window_skips_retention() {
+    let (domain, append) = setup_split_stores();
+    let writer = BatchWriter::new(domain.clone(), append.clone());
+
+    let now_ms = TS_DAY;
+    let expired = seed_token_hourly(&domain, now_ms / 3_600_000 - 500, 3);
+
+    let mut batch = StoreBatch::new(&domain);
+    ckbadger_indexer::sync::stage_hourly_retention(&writer, &mut batch, 500, now_ms).unwrap();
+    batch.commit().unwrap();
+
+    for family in [HourlyRetentionFamily::Token, HourlyRetentionFamily::Mnft] {
+        assert!(
+            domain.get_hourly_retention_state(family).unwrap().is_none(),
+            "{family:?}: no retention state before a block bounds the cutoff"
+        );
+    }
+    for key in expired {
+        assert!(domain.get_stats_key(&key).unwrap().is_some());
+    }
 }
 
 #[tokio::test]

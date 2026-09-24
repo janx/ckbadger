@@ -1303,15 +1303,38 @@ pub fn stage_hourly_retention(
     if writer.store().is_bulk_sync_mode() {
         return Ok(());
     }
+    if BatchWriter::hourly_retention_undo_window_block(committed_tip).is_none() {
+        debug!(
+            committed_tip,
+            "Hourly retention skipped: the chain is still inside the entity-stats undo window, \
+             so no block bounds the cutoff"
+        );
+        return Ok(());
+    }
 
     for family in [HourlyRetentionFamily::Token, HourlyRetentionFamily::Mnft] {
-        let already_executed = writer
-            .store()
-            .get_hourly_retention_state(family)?
-            .map(|state| state.executed_cutoff_hour)
-            .unwrap_or(i64::MIN);
-        let cutoff_hour =
-            writer.hourly_retention_cutoff_hour(now_ms, committed_tip, already_executed)?;
+        let existing = writer.store().get_hourly_retention_state(family)?;
+        // A round that needs several steps sweeps with the cutoff it started
+        // with: each step covers its own key range, so a later step using a
+        // later cutoff would make the completed round claim deletions the
+        // earlier steps never made.
+        let cutoff_hour = match existing.as_ref() {
+            Some(state) if state.cursor.is_some() => {
+                state.round_in_progress_cutoff_hour.ok_or_else(|| {
+                    anyhow!(
+                        "{} hourly retention round has a cursor but no pinned cutoff",
+                        family.as_str()
+                    )
+                })?
+            }
+            _ => {
+                let already_executed = existing
+                    .as_ref()
+                    .map(|state| state.executed_cutoff_hour)
+                    .unwrap_or(i64::MIN);
+                writer.hourly_retention_cutoff_hour(now_ms, committed_tip, already_executed)?
+            }
+        };
         let result = writer.stage_hourly_retention_step(batch, family, cutoff_hour, now_ms)?;
         if result.deleted > 0 || result.completed {
             debug!(
