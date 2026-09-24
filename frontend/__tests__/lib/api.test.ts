@@ -1037,6 +1037,8 @@ describe('api', () => {
             nextId: '0x1e3a88ca5cc39f1bd38c091b53e33b7c29ebd019',
             parent: null,
             children: [],
+            childrenHasMore: false,
+            childrenNextCursor: null,
             liveOutPoint: { txHash: `0x${'7'.repeat(64)}`, index: 0 },
           });
         })
@@ -1051,6 +1053,34 @@ describe('api', () => {
       expect(byName.manager.lockHash).toBeNull();
       expect(byName.manager.address).toBeNull();
       expect(byName.manager.hashPrefix).toBe('0x1e3a88ca5cc39f1bd38c091b53e33b7c29ebd019');
+    });
+
+    it('fetches a page of .cell sub-names from the children endpoint', async () => {
+      const childId = '0x2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e';
+      server.use(
+        http.get(
+          '/api/:network/v1/assets/identities/dotcell/items/:idOrName/children',
+          ({ request, params }) => {
+            const url = new URL(request.url);
+            expect(params.idOrName).toBe('support.cell');
+            expect(url.searchParams.get('limit')).toBe('50');
+            expect(url.searchParams.get('cursor')).toBe(childId);
+            return HttpResponse.json({
+              data: [{ identityId: childId, label: 'blog.support', name: 'blog.support.cell' }],
+              limit: 50,
+              hasMore: false,
+              nextCursor: null,
+            });
+          }
+        )
+      );
+
+      const page = await api.getDotCellItemChildren('support.cell', {
+        limit: 50,
+        cursor: childId,
+      });
+      expect(page.data.map((child) => child.name)).toEqual(['blog.support.cell']);
+      expect(page.hasMore).toBe(false);
     });
 
     it('fetches .cell item activities with query params', async () => {

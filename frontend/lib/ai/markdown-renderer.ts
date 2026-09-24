@@ -1536,6 +1536,16 @@ export async function renderMarkdownPage(
           ]
         ),
         '',
+        // The detail carries one page of sub-names; the rest page through
+        // `…/items/{id}/children` from this cursor.
+        markdownTable(
+          ['field', 'value'],
+          [
+            ['childrenHasMore', item.childrenHasMore],
+            ['childrenNextCursor', item.childrenNextCursor ?? '-'],
+          ]
+        ),
+        '',
         '## Activities',
         '',
         markdownTable(

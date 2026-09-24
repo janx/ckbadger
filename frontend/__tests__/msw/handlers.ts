@@ -612,7 +612,18 @@ export const handlers = [
       nextId: '0x62d71147ac82b83c8531126cacb0d2f072bfd94a',
       parent: null,
       children: [],
+      childrenHasMore: false,
+      childrenNextCursor: null,
       liveOutPoint: { txHash: `0x${'7'.repeat(64)}`, index: 0 },
+    });
+  }),
+
+  http.get(`${API_BASE}/assets/identities/dotcell/items/:idOrName/children`, () => {
+    return HttpResponse.json({
+      data: [],
+      limit: 50,
+      hasMore: false,
+      nextCursor: null,
     });
   }),
 

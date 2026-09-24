@@ -707,6 +707,8 @@ describe('renderMarkdownPage', () => {
       nextId: '0x1e3a88ca5cc39f1bd38c091b53e33b7c29ebd019',
       parent: null,
       children: [],
+      childrenHasMore: false,
+      childrenNextCursor: null,
       liveOutPoint: { txHash: `0x${'7'.repeat(64)}`, index: 0 },
     } as any);
     vi.mocked(api.getDotCellItemActivities).mockResolvedValue({
@@ -746,6 +748,63 @@ describe('renderMarkdownPage', () => {
         action: undefined,
       }
     );
+  });
+
+  it('says when the .cell sub-names listed are only the first page', async () => {
+    const childId = '0x2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e';
+    vi.mocked(api.getDotCellItemDetail).mockResolvedValue({
+      identityId: '0x62d71147ac82b83c8531126cacb0d2f072bfd94a',
+      label: 'support',
+      name: 'support.cell',
+      isLive: true,
+      createdAtBlock: 18_000_000,
+      createdAtTx: `0x${'7'.repeat(64)}`,
+      layoutVersion: 3,
+      namespaceArgs: `0x${'5'.repeat(64)}`,
+      expiredAt: 1_821_507_678,
+      state: 'active',
+      graceEndsAt: 1_824_099_678,
+      owner: {
+        hashPrefix: '0x1e3a88ca5cc39f1bd38c091b53e33b7c29ebd019',
+        lockHash: null,
+        address: null,
+        scriptName: null,
+      },
+      manager: {
+        hashPrefix: '0x1e3a88ca5cc39f1bd38c091b53e33b7c29ebd019',
+        lockHash: null,
+        address: null,
+        scriptName: null,
+      },
+      sale: null,
+      records: [],
+      recordsHash: `0x${'0'.repeat(64)}`,
+      nextId: '0x1e3a88ca5cc39f1bd38c091b53e33b7c29ebd019',
+      parent: null,
+      children: [{ identityId: childId, label: 'blog.support', name: 'blog.support.cell' }],
+      childrenHasMore: true,
+      childrenNextCursor: childId,
+      liveOutPoint: { txHash: `0x${'7'.repeat(64)}`, index: 0 },
+    } as any);
+    vi.mocked(api.getDotCellItemActivities).mockResolvedValue({
+      data: [],
+      limit: 20,
+      hasMore: false,
+      nextCursor: null,
+    } as any);
+
+    const result = await renderMarkdownPage({
+      page: parseMarkdownSourcePath(
+        '/identities/dotcell/0x62d71147ac82b83c8531126cacb0d2f072bfd94a'
+      ),
+      searchParams: new URLSearchParams(),
+      origin: 'http://localhost:3000',
+    });
+
+    expect(result.status).toBe(200);
+    expect(result.body).toContain('blog.support.cell');
+    expect(result.body).toContain('| childrenHasMore | true |');
+    expect(result.body).toContain(`| childrenNextCursor | ${childId} |`);
   });
 
   it('renders peers markdown with the reachability caveat when the crawler is off', async () => {

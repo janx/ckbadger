@@ -1289,7 +1289,11 @@ interface DotCellItem {
   recordsHash: string;
   nextId: string;
   parent: DotCellNameRef | null;
+  /** The first page of live sub-names; the rest page through `getDotCellItemChildren`. */
   children: DotCellNameRef[];
+  childrenHasMore: boolean;
+  /** Cursor for the next page of sub-names; null when `children` is the whole list. */
+  childrenNextCursor: string | null;
   liveOutPoint: DotCellOutPoint | null;
 }
 
@@ -2879,6 +2883,20 @@ export const api = {
   /** `idOrName` accepts a 20-byte `0x…` name id, `alice`, or `alice.cell`. */
   getDotCellItemDetail: (idOrName: string): Promise<DotCellItem> => {
     return fetchApi(`/assets/identities/dotcell/items/${encodeURIComponent(idOrName)}`);
+  },
+
+  /** A page of a `.cell` name's live sub-names, after `cursor`. */
+  getDotCellItemChildren: (
+    idOrName: string,
+    params: CursorQueryParams = {}
+  ): Promise<CursorPaginatedResponse<DotCellNameRef>> => {
+    const query = new URLSearchParams();
+    if (params.limit) query.set('limit', String(params.limit));
+    if (params.cursor) query.set('cursor', params.cursor);
+    const suffix = query.toString();
+    return fetchApi(
+      `/assets/identities/dotcell/items/${encodeURIComponent(idOrName)}/children${suffix ? `?${suffix}` : ''}`
+    );
   },
 
   getDotCellItemActivities: (

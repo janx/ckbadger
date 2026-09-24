@@ -2,7 +2,7 @@
 
 import Link from '@/components/ui/link';
 import { usePathname, useRouter, useSearchParams } from '@/src/navigation';
-import { useQuery } from '@tanstack/react-query';
+import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { useCallback, useEffect, useState } from 'react';
 
 import { Header } from '@/components/layout/header';
@@ -18,7 +18,7 @@ import {
   TerminalPanelFooter,
   TerminalPanelHeader,
 } from '@/components/ui/terminal-panel';
-import { api, type DotCellOutPoint, type DotCellState } from '@/lib/api';
+import { api, type DotCellItem, type DotCellOutPoint, type DotCellState } from '@/lib/api';
 import {
   formatActivityTimestamp,
   formatExpiry,
@@ -47,6 +47,75 @@ function cellHref(outPoint: DotCellOutPoint): string {
 
 function nameHref(identityId: string): string {
   return getIdentityItemDetailHref('dotcell', identityId);
+}
+
+/**
+ * A name's live sub-names: the first page arrives with the detail, the rest are
+ * appended a page at a time from the children endpoint on request.
+ */
+function DotCellChildren({ item }: { item: DotCellItem }) {
+  if (item.childrenHasMore !== (item.childrenNextCursor !== null)) {
+    throw new Error(
+      `.cell name ${item.identityId}: childrenHasMore=${item.childrenHasMore} disagrees with childrenNextCursor=${item.childrenNextCursor}`
+    );
+  }
+  const [wantsMore, setWantsMore] = useState(false);
+  const more = useInfiniteQuery({
+    queryKey: ['dotcell-item-children', item.identityId, item.childrenNextCursor],
+    queryFn: ({ pageParam }) => {
+      if (pageParam === null) {
+        throw new Error(`.cell name ${item.identityId}: no sub-name cursor to page from`);
+      }
+      return api.getDotCellItemChildren(item.identityId, {
+        limit: DEFAULT_PAGE_SIZE,
+        cursor: pageParam,
+      });
+    },
+    initialPageParam: item.childrenNextCursor,
+    getNextPageParam: (lastPage) => lastPage.nextCursor,
+    enabled: wantsMore,
+    retry: false,
+  });
+
+  const appended = more.data ? more.data.pages.flatMap((page) => page.data) : [];
+  const children = [...item.children, ...appended];
+  const hasMore = more.data ? more.hasNextPage : item.childrenHasMore;
+
+  return (
+    <DataField
+      // The endpoint declares no total, so a count is shown only once the
+      // whole list is on screen.
+      label={hasMore ? 'Children' : `Children (${children.length})`}
+      layout="vertical"
+      valueClassName="w-full"
+    >
+      <ul className="space-y-1">
+        {children.map((child) => (
+          <li key={child.identityId}>
+            <Link
+              href={nameHref(child.identityId)}
+              className="text-emphasis font-mono hover:underline"
+            >
+              {child.name}
+            </Link>
+          </li>
+        ))}
+      </ul>
+      {more.isError && (
+        <p className="text-negative mt-2 font-mono text-xs">Failed to load more sub-names</p>
+      )}
+      {hasMore && (
+        <button
+          type="button"
+          disabled={more.isFetching}
+          onClick={() => (wantsMore ? void more.fetchNextPage() : setWantsMore(true))}
+          className="hover:border-jade hover:text-jade border-base-border bg-base-elevated text-text mt-2 rounded border px-3 py-1 font-mono text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          Show more sub-names
+        </button>
+      )}
+    </DataField>
+  );
 }
 
 export function DotCellItemDetail({ identityId: routeIdentityId }: Props) {
@@ -393,26 +462,7 @@ function DotCellItemDetailView({ itemRef }: { itemRef: string }) {
                       </Link>
                     </DataField>
                   )}
-                  {detail.children.length > 0 && (
-                    <DataField
-                      label={`Children (${detail.children.length})`}
-                      layout="vertical"
-                      valueClassName="w-full"
-                    >
-                      <ul className="space-y-1">
-                        {detail.children.map((child) => (
-                          <li key={child.identityId}>
-                            <Link
-                              href={nameHref(child.identityId)}
-                              className="text-emphasis font-mono hover:underline"
-                            >
-                              {child.name}
-                            </Link>
-                          </li>
-                        ))}
-                      </ul>
-                    </DataField>
-                  )}
+                  {detail.children.length > 0 && <DotCellChildren item={detail} />}
                 </DataGrid>
               )}
             </TerminalPanelContent>
