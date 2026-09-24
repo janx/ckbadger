@@ -50,12 +50,19 @@ function nameHref(identityId: string): string {
 }
 
 export function DotCellItemDetail({ identityId: routeIdentityId }: Props) {
-  const pathname = usePathname();
-  const router = useRouter();
-  const searchParams = useSearchParams();
   // A `.cell` reference may be an id or a name, and the API accepts both, so
   // the route value goes to the API untouched.
   const itemRef = decodeURIComponent(routeIdentityId);
+  // Parent, sub-name and ring-successor links change only the route parameter,
+  // so the router keeps this element mounted. Keying on the name gives each one
+  // its own activity paging instead of inheriting the previous name's cursor.
+  return <DotCellItemDetailView key={itemRef} itemRef={itemRef} />;
+}
+
+function DotCellItemDetailView({ itemRef }: { itemRef: string }) {
+  const pathname = usePathname();
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const [activityCursor, setActivityCursor] = useState<string | undefined>(() =>
     parseActivityCursor(searchParams.get('activity_cursor'))
   );

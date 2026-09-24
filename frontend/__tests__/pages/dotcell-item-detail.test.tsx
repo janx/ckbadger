@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 
 import DotCellItemDetailPage from '@/app/identities/dotcell/[identityId]/client-page';
 import { api } from '@/lib/api';
@@ -21,10 +21,11 @@ vi.mock('@/components/layout/header', () => ({
 
 const mockReplace = vi.fn();
 let mockSearchParams = new URLSearchParams();
+let mockPathname = '';
 
 vi.mock('@/src/navigation', () => ({
   useParams: () => ({ identityId: SUPPORT_ID }),
-  usePathname: () => `/identities/dotcell/${SUPPORT_ID}`,
+  usePathname: () => mockPathname,
   useRouter: () => ({ replace: mockReplace }),
   useSearchParams: () => mockSearchParams,
 }));
@@ -139,6 +140,7 @@ describe('DotCellItemDetailPage', () => {
     vi.clearAllMocks();
     mockReplace.mockReset();
     mockSearchParams = new URLSearchParams();
+    mockPathname = `/identities/dotcell/${SUPPORT_ID}`;
     vi.mocked(api.getDotCellItemActivities).mockResolvedValue({
       data: [],
       limit: 50,
@@ -331,6 +333,68 @@ describe('DotCellItemDetailPage', () => {
     expect(screen.queryByTestId('dotcell-sale')).not.toBeInTheDocument();
     expect(screen.getByText('No records set.')).toBeInTheDocument();
     expect(screen.getByText('No sub-names.')).toBeInTheDocument();
+  });
+
+  it('starts a newly navigated-to name on its first activity page', async () => {
+    // Parent -> sub-name navigation keeps the same route element mounted; only
+    // the route parameter changes. The activity page of the name left behind
+    // must not follow the user to the next one.
+    const ALICE_ID = '0x4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f70';
+    const SHOP_ALICE_ID = '0x5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f7081';
+    vi.mocked(api.getDotCellItemDetail).mockImplementation(async (ref: string) =>
+      ref === 'alice'
+        ? (buildDetail({
+            identityId: ALICE_ID,
+            label: 'alice',
+            name: 'alice.cell',
+            children: [{ identityId: SHOP_ALICE_ID, label: 'shop.alice', name: 'shop.alice.cell' }],
+          }) as any)
+        : (buildDetail({
+            identityId: SHOP_ALICE_ID,
+            label: 'shop.alice',
+            name: 'shop.alice.cell',
+            parent: { identityId: ALICE_ID, label: 'alice', name: 'alice.cell' },
+          }) as any)
+    );
+    vi.mocked(api.getDotCellItemActivities).mockResolvedValue({
+      data: [],
+      limit: 50,
+      hasMore: true,
+      nextCursor: 'alice-page-2',
+    } as any);
+
+    mockPathname = '/identities/dotcell/alice';
+    const { rerender } = render(<DotCellItemDetailPage identityId="alice" />);
+    await waitFor(() => {
+      expect(api.getDotCellItemActivities).toHaveBeenCalledWith(ALICE_ID, { limit: 50 });
+    });
+    fireEvent.click(await screen.findByRole('button', { name: 'Next' }));
+    await waitFor(() => {
+      expect(api.getDotCellItemActivities).toHaveBeenCalledWith(ALICE_ID, {
+        limit: 50,
+        cursor: 'alice-page-2',
+      });
+    });
+    expect(screen.getByText('Page 2')).toBeInTheDocument();
+
+    // Follow the sub-name link: new path, no query string.
+    mockPathname = '/identities/dotcell/shop.alice';
+    mockSearchParams = new URLSearchParams();
+    mockReplace.mockClear();
+    vi.mocked(api.getDotCellItemActivities).mockClear();
+    rerender(<DotCellItemDetailPage identityId="shop.alice" />);
+
+    await waitFor(() => {
+      expect(api.getDotCellItemActivities).toHaveBeenCalledWith(SHOP_ALICE_ID, { limit: 50 });
+    });
+    expect(await screen.findByText('Page 1')).toBeInTheDocument();
+    expect(api.getDotCellItemActivities).not.toHaveBeenCalledWith(
+      SHOP_ALICE_ID,
+      expect.objectContaining({ cursor: expect.anything() })
+    );
+    expect(mockReplace.mock.calls.some(([url]) => String(url).includes('activity_cursor'))).toBe(
+      false
+    );
   });
 
   it('renders a not-found panel when the name is unknown', async () => {
