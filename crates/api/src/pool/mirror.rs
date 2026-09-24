@@ -27,8 +27,8 @@ use super::resolve::{
     ResolvedPoolTx,
 };
 use super::snapshot::{
-    Interpretation, MirrorStatus, PartialReason, PoolEntryError, PoolParticipant, PoolSnapshot,
-    PoolStatus, PoolTxRecord,
+    Interpretation, MirrorStatus, PartialReason, PoolEntryError, PoolLockScript, PoolParticipant,
+    PoolSnapshot, PoolStatus, PoolTxRecord,
 };
 use super::source::{
     NodeHeader, NodeTxStatus, PoolEntryMeta, PoolSource, PoolTxLookup, RawTxPool, TxPoolInfo,
@@ -865,6 +865,28 @@ fn build_record(
     };
     let actions = built.map(|built| built.actions);
 
+    let mut input_locks: Vec<PoolLockScript> = Vec::new();
+    for cell in resolved
+        .inputs
+        .iter()
+        .filter_map(|input| input.cell.as_ref())
+    {
+        let lock_hash = <[u8; 32]>::try_from(cell.lock_script_hash.as_slice()).map_err(|_| {
+            format!(
+                "resolved input lock hash is {} bytes, not 32",
+                cell.lock_script_hash.len()
+            )
+        })?;
+        if input_locks.iter().all(|lock| lock.lock_hash != lock_hash) {
+            input_locks.push(PoolLockScript {
+                lock_hash,
+                code_hash: cell.lock_code_hash.clone(),
+                hash_type: cell.lock_hash_type,
+                args: cell.lock_args.clone(),
+            });
+        }
+    }
+
     let inputs_count = i16::try_from(resolved.inputs.len()).map_err(|_| {
         format!(
             "pool tx has {} inputs, exceeding i16",
@@ -883,6 +905,7 @@ fn build_record(
         pool_status: status,
         entry,
         outputs: resolved.outputs.clone(),
+        input_locks,
         actions,
         participants,
         inputs_count,

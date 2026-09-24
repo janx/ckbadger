@@ -416,6 +416,57 @@ fn committed_parent(hash_byte: u8, capacity: u64, lock_args: u8) -> PoolTxLookup
     }
 }
 
+/// A pool row names every party, including a sender whose lock appears only
+/// as the output of another PENDING transaction — a lock no committed cell
+/// and no `CF_LOCK_SCRIPTS` row has yet. The record carries the spent cells'
+/// lock scripts, so that sender's address is encodable from the record alone.
+#[tokio::test]
+async fn chained_spend_from_a_never_seen_lock_exposes_its_lock_script() {
+    let (source, mirror, mut refresher) = setup(100);
+    let parent = TxBuilder::new(0x01)
+        .input(&hex32(0xF0), 0)
+        .output(9_900_000_000, 0xBB)
+        .build();
+    let child = TxBuilder::new(0x02)
+        .input(&hex32(0x01), 0)
+        .output(9_800_000_000, 0xCC)
+        .build();
+    source.set_info(pool_info(1));
+    source.set_raw_pool(RawTxPool {
+        pending: vec![
+            ([0x01; 32], entry(1_700_000_001_000)),
+            ([0x02; 32], entry(1_700_000_002_000)),
+        ],
+        proposed: vec![],
+    });
+    source.set_transaction([0xF0; 32], committed_parent(0xF0, 10_000_000_000, 0xAA));
+    source.set_transaction([0x01; 32], lookup(parent, NodeTxStatus::Pending));
+    source.set_transaction([0x02; 32], lookup(child, NodeTxStatus::Pending));
+    refresher.refresh_once().await;
+
+    let snapshot = mirror.load();
+    let child_record = snapshot.records.get(&[0x02; 32]).expect("child tracked");
+    let sender = lock_hash(SECP_LOCK_CODE_HASH, 0xBB);
+    assert!(
+        child_record.participant(&sender).is_some(),
+        "the never-seen lock is a party of the child"
+    );
+    let expected = super::snapshot::PoolLockScript {
+        lock_hash: sender,
+        code_hash: hex::decode(SECP_LOCK_CODE_HASH.trim_start_matches("0x")).unwrap(),
+        hash_type: 1,
+        args: vec![0xBB; 20],
+    };
+    assert_eq!(child_record.input_locks, vec![expected.clone()]);
+    assert_eq!(child_record.lock_script(&sender), Some(expected));
+    // Output locks answer through the same accessor.
+    let payee = lock_hash(SECP_LOCK_CODE_HASH, 0xCC);
+    assert_eq!(
+        child_record.lock_script(&payee).map(|lock| lock.args),
+        Some(vec![0xCC; 20])
+    );
+}
+
 /// One round, three shapes of input: a chained pool spend (C spends B:0, both
 /// pending), a spend of a committed parent (B spends F:0), and a transaction
 /// that committed between `get_raw_tx_pool` and `get_transaction` — its input
@@ -1638,6 +1689,7 @@ fn pool_participants_come_from_the_shared_row_derivation() {
             time_added_to_pool_ms: 0,
         },
         outputs: vec![],
+        input_locks: vec![],
         actions: Some(actions),
         participants,
         inputs_count: 1,

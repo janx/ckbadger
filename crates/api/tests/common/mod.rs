@@ -796,6 +796,7 @@ pub fn make_test_pool_record_with(
             time_added_to_pool_ms,
         },
         outputs: vec![],
+        input_locks: vec![],
         actions: Some(actions),
         participants: vec![ckbadger_api::pool::PoolParticipant {
             id: ckbadger_store::types::ParticipantId::lock(lock_hash)

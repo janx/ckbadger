@@ -33,8 +33,8 @@ pub use resolve::{
 };
 pub use snapshot::{
     pool_timestamp_rfc3339, Interpretation, InterpretationReasonResponse, InterpretationResponse,
-    MirrorStatus, PartialReason, PoolEntryError, PoolParticipant, PoolSnapshot, PoolStatus,
-    PoolSummaryResponse, PoolTxRecord,
+    MirrorStatus, PartialReason, PoolEntryError, PoolLockScript, PoolParticipant, PoolSnapshot,
+    PoolStatus, PoolSummaryResponse, PoolTxRecord,
 };
 pub use source::{
     HttpPoolSource, NodeHeader, NodeTxStatus, PoolEntryMeta, PoolSource, PoolTxLookup, RawTxPool,

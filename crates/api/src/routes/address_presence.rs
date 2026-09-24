@@ -128,6 +128,7 @@ mod tests {
                 time_added_to_pool_ms: 1_700_000_000_000,
             },
             outputs: vec![],
+            input_locks: vec![],
             actions: None,
             participants: vec![PoolParticipant {
                 id: ParticipantId::Lock(lock),

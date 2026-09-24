@@ -97,6 +97,16 @@ pub struct PoolParticipant {
     pub addr_tx: AddrTxValue,
 }
 
+/// A lock script exactly as the node reported it: enough to encode its
+/// owner's address without a store lookup.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PoolLockScript {
+    pub lock_hash: [u8; 32],
+    pub code_hash: Vec<u8>,
+    pub hash_type: i16,
+    pub args: Vec<u8>,
+}
+
 /// One mirrored transaction.
 #[derive(Debug, Clone)]
 pub struct PoolTxRecord {
@@ -108,6 +118,12 @@ pub struct PoolTxRecord {
     /// resolve its inputs without asking the node for a cell that does not
     /// exist on chain yet.
     pub outputs: Vec<ResolvedCell>,
+    /// The lock scripts of the cells this transaction spends — one per
+    /// distinct lock, in input order, for every input that resolved. With
+    /// `outputs` this covers every party that holds a cell in the
+    /// transaction, including a sender whose lock exists so far only as the
+    /// output of another pending transaction (no store row has it yet).
+    pub input_locks: Vec<PoolLockScript>,
     /// The interpretation, built by the indexer's activity builder. `None` when
     /// an input could not be resolved: a position derived from a partial input
     /// set would be wrong, and a wrong number is worse than a missing one.
@@ -129,6 +145,26 @@ impl PoolTxRecord {
     /// would spend RPC on an answer that cannot change.
     pub fn needs_input_retry(&self) -> bool {
         self.actions.is_none()
+    }
+
+    /// The full lock script behind `lock_hash`, from this transaction's own
+    /// cells (outputs first, then spent inputs).
+    pub fn lock_script(&self, lock_hash: &[u8; 32]) -> Option<PoolLockScript> {
+        self.outputs
+            .iter()
+            .find(|cell| cell.lock_script_hash.as_slice() == lock_hash.as_slice())
+            .map(|cell| PoolLockScript {
+                lock_hash: *lock_hash,
+                code_hash: cell.lock_code_hash.clone(),
+                hash_type: cell.lock_hash_type,
+                args: cell.lock_args.clone(),
+            })
+            .or_else(|| {
+                self.input_locks
+                    .iter()
+                    .find(|lock| lock.lock_hash == *lock_hash)
+                    .cloned()
+            })
     }
 
     /// This lock's participation, through the one participant matcher: a
