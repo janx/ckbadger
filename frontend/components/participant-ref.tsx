@@ -15,9 +15,14 @@ function compactLabel(value: string): string {
 /**
  * One transaction party — the ONE place a party is rendered.
  *
- * Resolved: the address, linked like any other. Unresolved: the 20-byte
- * lock-hash prefix the protocol named, marked as such and NOT linked — no page
- * exists for a party we cannot name, and inventing one would be a lie.
+ * It shows the most specific identity the API gave:
+ * - an address, linked like any other;
+ * - else a full lock hash (a lock whose script this store does not know, so it
+ *   encodes to no address), linked to the address page by hash;
+ * - else the 20-byte lock-hash prefix a protocol named, marked unresolved and
+ *   NOT linked — no page exists for a party we cannot name, and inventing one
+ *   would be a lie.
+ * A party with none of the three is an API contract violation and throws.
  *
  * `compact` is the per-participant line inside an activity row; the default is
  * the standalone form.
@@ -58,7 +63,32 @@ export function ParticipantRefView({
     );
   }
 
-  const prefix = participant.lockHashPrefix ?? '';
+  const lockHash = participant.lockHash;
+  if (lockHash !== null) {
+    return (
+      <span className={cn('inline-flex shrink-0 items-center gap-1.5', className)}>
+        <Link
+          href={`/address/${lockHash}`}
+          className={cn(
+            'text-text-dim hover:text-aqua font-mono transition-colors',
+            compact ? 'shrink-0 text-xs' : 'text-sm'
+          )}
+          title={lockHash}
+          onClick={(e) => e.stopPropagation()}
+        >
+          {compact ? compactLabel(lockHash) : truncateHash(lockHash, 10, 6)}
+        </Link>
+        {roles && <span className="text-text-dim font-mono text-[10px]">{roles}</span>}
+      </span>
+    );
+  }
+
+  const prefix = participant.lockHashPrefix;
+  if (prefix === null) {
+    throw new Error(
+      `Transaction party has no address, lock hash or lock-hash prefix (roles: ${roles ?? 'none'})`
+    );
+  }
   return (
     <span className={cn('inline-flex shrink-0 items-center gap-1.5', className)}>
       <span
