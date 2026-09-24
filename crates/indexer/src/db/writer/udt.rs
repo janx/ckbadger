@@ -208,30 +208,6 @@ impl BatchWriter {
 
     /// Process a batch of UDT transfers: upsert tokens and update holder balances.
     /// `block_timestamps` maps block_number → timestamp_ms for hourly bucket computation.
-    #[allow(private_interfaces)]
-    pub fn process_udt_transfers_batch(
-        &self,
-        transfers: &[(&ParsedUdtTransfer, &[u8], i64)],
-        max_supply_observations: &HashMap<Vec<u8>, u128>,
-        onchain_token_info: &HashMap<Vec<u8>, crate::sync::token_helpers::OnchainTokenInfo>,
-        block_timestamps: &HashMap<i64, i64>,
-        batch: &mut StoreBatch,
-    ) -> Result<()> {
-        // Standalone convenience path: its own overlay, staged into the same
-        // batch so the hourly counters it computes are actually written.
-        let entity_stats = SharedEntityStatsOverlay::new();
-        let mut state = self.new_udt_batch_state(entity_stats.clone(), SharedUndoSeq::default());
-        self.process_udt_transfers_batch_with_state(
-            transfers,
-            max_supply_observations,
-            onchain_token_info,
-            block_timestamps,
-            batch,
-            &mut state,
-        )?;
-        entity_stats.stage_final(batch)
-    }
-
     pub(crate) fn process_udt_transfers_batch_with_state(
         &self,
         transfers: &[(&ParsedUdtTransfer, &[u8], i64)],
@@ -651,6 +627,29 @@ mod tests {
     use ckbadger_store::types::{LiveCellInfo, TokenInfo};
     use ckbadger_store::CkbadgerStore;
 
+    /// One batch's UDT writer state, built the way `write_parsed_batch` builds
+    /// it (one overlay, ONE undo sequence), around one transfer pass.
+    fn process_transfers_in_one_batch(
+        writer: &BatchWriter,
+        transfers: &[(&ParsedUdtTransfer, &[u8], i64)],
+        max_supply_observations: &HashMap<Vec<u8>, u128>,
+        onchain_token_info: &HashMap<Vec<u8>, crate::sync::token_helpers::OnchainTokenInfo>,
+        block_timestamps: &HashMap<i64, i64>,
+        batch: &mut StoreBatch,
+    ) -> Result<()> {
+        let entity_stats = SharedEntityStatsOverlay::new();
+        let mut state = writer.new_udt_batch_state(entity_stats.clone(), SharedUndoSeq::default());
+        writer.process_udt_transfers_batch_with_state(
+            transfers,
+            max_supply_observations,
+            onchain_token_info,
+            block_timestamps,
+            batch,
+            &mut state,
+        )?;
+        entity_stats.stage_final(batch)
+    }
+
     #[test]
     fn test_update_token_daily_deltas_batch_accumulates_and_deletes_zero_net() {
         let dir = tempfile::tempdir().unwrap();
@@ -1025,15 +1024,15 @@ mod tests {
         max_supply_observations.insert(type_hash.clone(), 1_000u128);
 
         let mut batch = StoreBatch::new(&store);
-        writer
-            .process_udt_transfers_batch(
-                &transfers,
-                &max_supply_observations,
-                &HashMap::new(),
-                &block_timestamps,
-                &mut batch,
-            )
-            .unwrap();
+        process_transfers_in_one_batch(
+            &writer,
+            &transfers,
+            &max_supply_observations,
+            &HashMap::new(),
+            &block_timestamps,
+            &mut batch,
+        )
+        .unwrap();
         batch.commit().unwrap();
 
         let updated = store.get_token(&type_hash).unwrap().unwrap();
@@ -1087,15 +1086,15 @@ mod tests {
         let transfers = vec![(&transfer, tx_hash.as_slice(), 101i64)];
 
         let mut batch = StoreBatch::new(&store);
-        writer
-            .process_udt_transfers_batch(
-                &transfers,
-                &HashMap::new(),
-                &HashMap::new(),
-                &block_timestamps,
-                &mut batch,
-            )
-            .unwrap();
+        process_transfers_in_one_batch(
+            &writer,
+            &transfers,
+            &HashMap::new(),
+            &HashMap::new(),
+            &block_timestamps,
+            &mut batch,
+        )
+        .unwrap();
         batch.commit().unwrap();
 
         let updated = store.get_token(&type_hash).unwrap().unwrap();
@@ -1161,15 +1160,15 @@ mod tests {
         let transfers = vec![(&transfer, tx_hash.as_slice(), 101i64)];
 
         let mut batch = StoreBatch::new(&store);
-        writer
-            .process_udt_transfers_batch(
-                &transfers,
-                &HashMap::new(),
-                &HashMap::new(),
-                &block_timestamps,
-                &mut batch,
-            )
-            .unwrap();
+        process_transfers_in_one_batch(
+            &writer,
+            &transfers,
+            &HashMap::new(),
+            &HashMap::new(),
+            &block_timestamps,
+            &mut batch,
+        )
+        .unwrap();
         batch.commit().unwrap();
 
         assert_eq!(
@@ -1254,15 +1253,15 @@ mod tests {
         block_timestamps.insert(302i64, 3_601_000i64);
 
         let mut batch = StoreBatch::new(&store);
-        writer
-            .process_udt_transfers_batch(
-                &transfers,
-                &HashMap::new(),
-                &HashMap::new(),
-                &block_timestamps,
-                &mut batch,
-            )
-            .unwrap();
+        process_transfers_in_one_batch(
+            &writer,
+            &transfers,
+            &HashMap::new(),
+            &HashMap::new(),
+            &block_timestamps,
+            &mut batch,
+        )
+        .unwrap();
         batch.commit().unwrap();
 
         let hour0_key = ckbadger_store::keys::encode_token_hourly_key(&type_hash, 0);
@@ -1389,15 +1388,15 @@ mod tests {
         max_supply_observations.insert(type_hash.clone(), 1_000_000u128);
 
         let mut batch = StoreBatch::new(&store);
-        writer
-            .process_udt_transfers_batch(
-                &transfers,
-                &max_supply_observations,
-                &HashMap::new(),
-                &block_timestamps,
-                &mut batch,
-            )
-            .unwrap();
+        process_transfers_in_one_batch(
+            &writer,
+            &transfers,
+            &max_supply_observations,
+            &HashMap::new(),
+            &block_timestamps,
+            &mut batch,
+        )
+        .unwrap();
         batch.commit().unwrap();
 
         let updated = store.get_token(&type_hash).unwrap().unwrap();
@@ -1441,15 +1440,15 @@ mod tests {
         let transfers = vec![(&transfer, tx_hash.as_slice(), 4_743_232i64)];
 
         let mut batch = StoreBatch::new(&store);
-        writer
-            .process_udt_transfers_batch(
-                &transfers,
-                &HashMap::new(),
-                &HashMap::new(),
-                &block_timestamps,
-                &mut batch,
-            )
-            .expect("mint above i128::MAX must not wrap/underflow");
+        process_transfers_in_one_batch(
+            &writer,
+            &transfers,
+            &HashMap::new(),
+            &HashMap::new(),
+            &block_timestamps,
+            &mut batch,
+        )
+        .expect("mint above i128::MAX must not wrap/underflow");
         batch.commit().unwrap();
 
         assert_eq!(
@@ -1511,15 +1510,15 @@ mod tests {
         let max_supply_observations = HashMap::new();
 
         let mut batch = StoreBatch::new(&store);
-        let err = writer
-            .process_udt_transfers_batch(
-                &transfers,
-                &max_supply_observations,
-                &HashMap::new(),
-                &block_timestamps,
-                &mut batch,
-            )
-            .unwrap_err();
+        let err = process_transfers_in_one_batch(
+            &writer,
+            &transfers,
+            &max_supply_observations,
+            &HashMap::new(),
+            &block_timestamps,
+            &mut batch,
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("token holder balance underflow"));
     }
 
@@ -1576,15 +1575,15 @@ mod tests {
         let max_supply_observations = HashMap::new();
 
         let mut batch = StoreBatch::new(&store);
-        writer
-            .process_udt_transfers_batch(
-                &transfers,
-                &max_supply_observations,
-                &HashMap::new(),
-                &block_timestamps,
-                &mut batch,
-            )
-            .unwrap();
+        process_transfers_in_one_batch(
+            &writer,
+            &transfers,
+            &max_supply_observations,
+            &HashMap::new(),
+            &block_timestamps,
+            &mut batch,
+        )
+        .unwrap();
         batch.commit().unwrap();
 
         let (holders_count, total_supply) = store.aggregate_token_holder_stats(&type_hash).unwrap();
@@ -1621,15 +1620,15 @@ mod tests {
         let max_supply_observations = HashMap::new();
 
         let mut batch = StoreBatch::new(&store);
-        let err = writer
-            .process_udt_transfers_batch(
-                &transfers,
-                &max_supply_observations,
-                &HashMap::new(),
-                &block_timestamps,
-                &mut batch,
-            )
-            .unwrap_err();
+        let err = process_transfers_in_one_batch(
+            &writer,
+            &transfers,
+            &max_supply_observations,
+            &HashMap::new(),
+            &block_timestamps,
+            &mut batch,
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("missing block timestamp"));
     }
 

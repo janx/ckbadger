@@ -141,6 +141,26 @@ impl BatchWriter {
     }
 }
 
+/// The bytes an undo entry restores for a row that exists.
+///
+/// A serialization failure is an error, never "the row did not exist":
+/// recorded as `None`, it would make the rollback DELETE a row that had a
+/// value — the same class a failed pre-image READ was fixed for (a5241239).
+pub(crate) fn undo_pre_image<T: serde::Serialize + ?Sized>(
+    value: &T,
+    what: &str,
+    id: &[u8],
+    block_number: i64,
+) -> Result<Vec<u8>> {
+    bincode::serialize(value).map_err(|e| {
+        anyhow::anyhow!(
+            "failed to serialize the {what} undo pre-image: id=0x{}, block={}, {e}",
+            hex::encode(id),
+            block_number
+        )
+    })
+}
+
 /// Guard for identity item ids that are recorded in the spore-outpoint reverse
 /// index (`SPORE_OUTPOINT_BY_ID`), which backs the per-item lifecycle feed
 /// (`/assets/identities/*/items/{id}/activities`).
@@ -231,7 +251,7 @@ mod undo_seq_tests {
     /// `undo_seq_by_block` that starts at 0, and both hand it to
     /// `record_object_undo`, which stamps every entry with the same
     /// `UndoSeqScope::Object`. Two object writes in one block therefore compute
-    /// the identical undo key `(block, (0x0003 << 48) | 0)` and the second
+    /// the identical undo key `(block, UndoSeqScope::Object.seq_base() | 0)` and the second
     /// silently overwrites the first inside the same `StoreBatch` — one
     /// entity's pre-image is lost before rollback ever runs.
     ///
@@ -307,6 +327,278 @@ mod undo_seq_tests {
             "two object writes in one block recorded {entries} undo entries; each \
              `record_object_undo` call must keep its own pre-image, but the two \
              `*BatchState`s number the `Object` scope independently from 0 and collide"
+        );
+    }
+
+    /// Plan Task 5.5 (IDX-008 class): a writer that mints its own
+    /// `SharedUndoSeq::default()` numbers its undo entries from 0 beside the
+    /// batch's counter, so two such writes in one block collide and the second
+    /// pre-image overwrites the first. Only `write_parsed_batch` creates the
+    /// counter; writer modules take it. Every occurrence in a writer module
+    /// must therefore sit in test code, i.e. after the module's first
+    /// `#[cfg(test)] mod` (test modules close each file).
+    #[test]
+    fn no_writer_module_mints_its_own_undo_sequence() {
+        let modules: [(&str, &str); 24] = [
+            ("activities.rs", include_str!("writer/activities.rs")),
+            ("addresses.rs", include_str!("writer/addresses.rs")),
+            (
+                "cell_distribution.rs",
+                include_str!("writer/cell_distribution.rs"),
+            ),
+            ("cells.rs", include_str!("writer/cells.rs")),
+            ("chain.rs", include_str!("writer/chain.rs")),
+            ("dao.rs", include_str!("writer/dao.rs")),
+            ("dotbit.rs", include_str!("writer/dotbit.rs")),
+            (
+                "dotcell_detector.rs",
+                include_str!("writer/dotcell_detector.rs"),
+            ),
+            ("dotcell.rs", include_str!("writer/dotcell.rs")),
+            ("entity_stats.rs", include_str!("writer/entity_stats.rs")),
+            (
+                "fiber_detector.rs",
+                include_str!("writer/fiber_detector.rs"),
+            ),
+            ("fiber.rs", include_str!("writer/fiber.rs")),
+            ("hodl_wave.rs", include_str!("writer/hodl_wave.rs")),
+            ("mnft.rs", include_str!("writer/mnft.rs")),
+            (
+                "object_activity_acc.rs",
+                include_str!("writer/object_activity_acc.rs"),
+            ),
+            (
+                "participant_rows.rs",
+                include_str!("writer/participant_rows.rs"),
+            ),
+            ("reorg.rs", include_str!("writer/reorg.rs")),
+            (
+                "rgbpp_detector.rs",
+                include_str!("writer/rgbpp_detector.rs"),
+            ),
+            ("spore.rs", include_str!("writer/spore.rs")),
+            (
+                "stablepp_detector.rs",
+                include_str!("writer/stablepp_detector.rs"),
+            ),
+            ("statistics.rs", include_str!("writer/statistics.rs")),
+            ("sync.rs", include_str!("writer/sync.rs")),
+            ("udt.rs", include_str!("writer/udt.rs")),
+            (
+                "utxoswap_detector.rs",
+                include_str!("writer/utxoswap_detector.rs"),
+            ),
+        ];
+        for (name, src) in modules {
+            let test_code_starts = src.find("#[cfg(test)]\nmod ").unwrap_or(src.len());
+            let production = &src[..test_code_starts];
+            assert!(
+                !production.contains("SharedUndoSeq::default()"),
+                "{name} mints its own undo sequence outside test code"
+            );
+        }
+    }
+
+    /// A value that cannot be serialized fails the write with its entity and
+    /// block, instead of becoming a `None` pre-image that tells rollback the
+    /// row did not exist.
+    #[test]
+    fn undo_pre_image_serialization_failure_is_an_error_with_context() {
+        struct Poisoned;
+        impl serde::Serialize for Poisoned {
+            fn serialize<S: serde::Serializer>(&self, _: S) -> Result<S::Ok, S::Error> {
+                Err(serde::ser::Error::custom("poisoned value"))
+            }
+        }
+        let err = super::undo_pre_image(&Poisoned, "mNFT token", &[0xAB; 4], 777).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("mNFT token undo pre-image"), "{msg}");
+        assert!(msg.contains("id=0xabababab"), "{msg}");
+        assert!(msg.contains("block=777"), "{msg}");
+        assert!(msg.contains("poisoned value"), "{msg}");
+
+        assert_eq!(
+            super::undo_pre_image(&42u32, "x", &[1], 1).unwrap(),
+            bincode::serialize(&42u32).unwrap()
+        );
+    }
+
+    /// No writer module turns a failed pre-image serialization into an absent
+    /// row (`bincode::serialize(..).ok()`) in production code.
+    #[test]
+    fn no_writer_module_drops_a_pre_image_serialization_error() {
+        let modules: [(&str, &str); 24] = [
+            ("activities.rs", include_str!("writer/activities.rs")),
+            ("addresses.rs", include_str!("writer/addresses.rs")),
+            (
+                "cell_distribution.rs",
+                include_str!("writer/cell_distribution.rs"),
+            ),
+            ("cells.rs", include_str!("writer/cells.rs")),
+            ("chain.rs", include_str!("writer/chain.rs")),
+            ("dao.rs", include_str!("writer/dao.rs")),
+            ("dotbit.rs", include_str!("writer/dotbit.rs")),
+            (
+                "dotcell_detector.rs",
+                include_str!("writer/dotcell_detector.rs"),
+            ),
+            ("dotcell.rs", include_str!("writer/dotcell.rs")),
+            ("entity_stats.rs", include_str!("writer/entity_stats.rs")),
+            (
+                "fiber_detector.rs",
+                include_str!("writer/fiber_detector.rs"),
+            ),
+            ("fiber.rs", include_str!("writer/fiber.rs")),
+            ("hodl_wave.rs", include_str!("writer/hodl_wave.rs")),
+            ("mnft.rs", include_str!("writer/mnft.rs")),
+            (
+                "object_activity_acc.rs",
+                include_str!("writer/object_activity_acc.rs"),
+            ),
+            (
+                "participant_rows.rs",
+                include_str!("writer/participant_rows.rs"),
+            ),
+            ("reorg.rs", include_str!("writer/reorg.rs")),
+            (
+                "rgbpp_detector.rs",
+                include_str!("writer/rgbpp_detector.rs"),
+            ),
+            ("spore.rs", include_str!("writer/spore.rs")),
+            (
+                "stablepp_detector.rs",
+                include_str!("writer/stablepp_detector.rs"),
+            ),
+            ("statistics.rs", include_str!("writer/statistics.rs")),
+            ("sync.rs", include_str!("writer/sync.rs")),
+            ("udt.rs", include_str!("writer/udt.rs")),
+            (
+                "utxoswap_detector.rs",
+                include_str!("writer/utxoswap_detector.rs"),
+            ),
+        ];
+        for (name, src) in modules {
+            let test_code_starts = src.find("#[cfg(test)]\nmod ").unwrap_or(src.len());
+            for (i, line) in src[..test_code_starts].lines().enumerate() {
+                assert!(
+                    !(line.contains("serialize(") && line.contains(".ok()")),
+                    "{name}:{} drops a serialization error: {}",
+                    i + 1,
+                    line.trim()
+                );
+            }
+        }
+    }
+
+    /// Plan Task 5.3: rollback replays a block's undo entries scope-major, which
+    /// is exact only while every key the block mutates is recorded by ONE scope.
+    /// One block written by the DotBit, Object and EntityStats scopes at once
+    /// (a .bit registration, which also bumps the .bit hourly bucket, beside an
+    /// mNFT issuer) must keep them disjoint.
+    #[test]
+    fn one_block_across_dotbit_object_and_entity_stats_scopes_records_disjoint_keys() {
+        use crate::parser::dotbit::{ParsedDotbitAccount, ParsedDotbitAccountOutput};
+        use crate::sync::types::UndoSeqScope;
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone(), store.clone());
+
+        const BLOCK: i64 = 5_151;
+        let mut batch = StoreBatch::new(store.as_ref());
+        let batch_undo_seq = SharedUndoSeq::default();
+        let entity_stats = SharedEntityStatsOverlay::new();
+        let mut dotbit_state =
+            writer.new_dotbit_batch_state(entity_stats.clone(), batch_undo_seq.clone());
+        let mut mnft_state =
+            writer.new_mnft_batch_state(entity_stats.clone(), batch_undo_seq.clone());
+
+        writer
+            .insert_dotbit_account_with_state(
+                &ParsedDotbitAccountOutput {
+                    output_index: 0,
+                    account: ParsedDotbitAccount {
+                        account_id: vec![0x61; 20],
+                        account: Some("scopes.bit".to_string()),
+                        type_script_hash: vec![0x62; 32],
+                        next_account_id: None,
+                        expired_at: Some(1_900_000_000),
+                        registered_at: Some(1_700_000_000),
+                        status: Some(0),
+                        owner_lock_hash: vec![0x63; 32],
+                    },
+                },
+                &[0xD1; 32],
+                BLOCK,
+                1_700_000_000_000,
+                &mut batch,
+                &mut dotbit_state,
+            )
+            .unwrap();
+        writer
+            .insert_mnft_issuer(
+                &ParsedMnftIssuer {
+                    issuer_id: vec![0x55; 20],
+                    type_script_hash: vec![0x56; 32],
+                    name: Some("issuer".to_string()),
+                    info: None,
+                    class_count: 0,
+                    set_count: 0,
+                    owner_lock_hash: vec![0x57; 32],
+                },
+                &[0xBB; 32],
+                0,
+                BLOCK,
+                &mut batch,
+                &mut mnft_state,
+            )
+            .unwrap();
+        // An mNFT class transfer bumps its hourly bucket through the shared
+        // entity-stats overlay: the EntityStats scope.
+        entity_stats
+            .mutate_hourly(
+                store.as_ref(),
+                &mut batch,
+                &batch_undo_seq,
+                BLOCK,
+                &ckbadger_store::keys::encode_object_hourly_key(&[0x55; 24], 472_222),
+                1,
+                &|| "task 5.3 object hourly".to_string(),
+            )
+            .unwrap();
+        entity_stats.stage_final(&mut batch).unwrap();
+        batch.commit().unwrap();
+
+        let start = ckbadger_store::keys::encode_reorg_undo_log_key(BLOCK, 0);
+        let mut scopes = std::collections::BTreeSet::new();
+        for item in store.iterator_cf(
+            store.cf_reorg_undo_log_by_block(),
+            rocksdb::IteratorMode::From(&start, rocksdb::Direction::Forward),
+        ) {
+            let (key, _) = item.unwrap();
+            let (block, seq) = ckbadger_store::keys::decode_reorg_undo_log_key(&key);
+            if block != BLOCK {
+                break;
+            }
+            scopes.insert(seq);
+        }
+        for scope in [
+            UndoSeqScope::DotBit,
+            UndoSeqScope::Object,
+            UndoSeqScope::EntityStats,
+        ] {
+            assert!(
+                scopes.iter().any(|seq| scope.owns(*seq)),
+                "the block must exercise the {scope:?} scope"
+            );
+        }
+        assert!(
+            !scopes.iter().any(|seq| UndoSeqScope::TxContext.owns(*seq)),
+            "writer-level fixture: no tx contexts"
+        );
+        assert_eq!(
+            crate::sync::undo::undo_scope_overlaps(store.as_ref(), BLOCK, BLOCK).unwrap(),
+            Vec::new()
         );
     }
 }

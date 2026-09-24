@@ -1303,15 +1303,38 @@ pub fn stage_hourly_retention(
     if writer.store().is_bulk_sync_mode() {
         return Ok(());
     }
+    if BatchWriter::hourly_retention_undo_window_block(committed_tip).is_none() {
+        debug!(
+            committed_tip,
+            "Hourly retention skipped: the chain is still inside the entity-stats undo window, \
+             so no block bounds the cutoff"
+        );
+        return Ok(());
+    }
 
     for family in [HourlyRetentionFamily::Token, HourlyRetentionFamily::Mnft] {
-        let already_executed = writer
-            .store()
-            .get_hourly_retention_state(family)?
-            .map(|state| state.executed_cutoff_hour)
-            .unwrap_or(i64::MIN);
-        let cutoff_hour =
-            writer.hourly_retention_cutoff_hour(now_ms, committed_tip, already_executed)?;
+        let existing = writer.store().get_hourly_retention_state(family)?;
+        // A round that needs several steps sweeps with the cutoff it started
+        // with: each step covers its own key range, so a later step using a
+        // later cutoff would make the completed round claim deletions the
+        // earlier steps never made.
+        let cutoff_hour = match existing.as_ref() {
+            Some(state) if state.cursor.is_some() => {
+                state.round_in_progress_cutoff_hour.ok_or_else(|| {
+                    anyhow!(
+                        "{} hourly retention round has a cursor but no pinned cutoff",
+                        family.as_str()
+                    )
+                })?
+            }
+            _ => {
+                let already_executed = existing
+                    .as_ref()
+                    .map(|state| state.executed_cutoff_hour)
+                    .unwrap_or(i64::MIN);
+                writer.hourly_retention_cutoff_hour(now_ms, committed_tip, already_executed)?
+            }
+        };
         let result = writer.stage_hourly_retention_step(batch, family, cutoff_hour, now_ms)?;
         if result.deleted > 0 || result.completed {
             debug!(
@@ -3228,6 +3251,7 @@ impl Indexer {
                             &tx_data.hash,
                             output_index_i16,
                             parsed.number,
+                            ts_ms,
                             &mut data_batch,
                             &mut spore_state,
                         )?;
@@ -4307,6 +4331,22 @@ impl Indexer {
             })?;
             retention_request.served();
             domain_commit_ms = domain_commit_started.elapsed().as_secs_f64() * 1000.0;
+            // Debug-build invariant (plan Task 5.3): rollback replays a block's
+            // undo entries scope-major, which is exact only while each key the
+            // block mutates is recorded by one scope.
+            #[cfg(debug_assertions)]
+            {
+                let overlaps = crate::sync::undo::undo_scope_overlaps(
+                    self.writer.store(),
+                    first_block,
+                    last_block,
+                )?;
+                assert!(
+                    overlaps.is_empty(),
+                    "undo scopes overlap in blocks {first_block}-{last_block}; rollback would \
+                     replay these keys out of write order: {overlaps:?}"
+                );
+            }
 
             let commit_ms = commit_started.elapsed().as_secs_f64() * 1000.0;
             commit_phase_total_ms = commit_ms;
@@ -6945,7 +6985,7 @@ mod tests {
             ) {
                 let (key, _) = item.unwrap();
                 let (block_num, seq) = ckbadger_store::keys::decode_reorg_undo_log_key(&key);
-                if block_num == 101 && seq >> 48 == 0x0004 {
+                if block_num == 101 && crate::sync::types::UndoSeqScope::EntityStats.owns(seq) {
                     entity_undo += 1;
                 }
             }
@@ -7379,6 +7419,182 @@ mod tests {
                 balance.txs_count, 3,
                 "txs_count counts cell participations only"
             );
+        }
+
+        /// Plan Task 5.7: `cleanup_batch_range` replayed the undo log (which
+        /// consumes the tx-context entries) and then asked for the canonical
+        /// rollback WITHOUT the contexts that replay returned, so every
+        /// CleanupAndRetry fell back to whole-CF scans. It must hand them over,
+        /// exactly like `execute_reorg`.
+        #[tokio::test]
+        async fn cleanup_batch_range_reuses_the_undo_tx_contexts_instead_of_scanning() {
+            let _guard =
+                crate::db::writer::activities::test_detector_override::without_extra_detectors();
+            let dir = tempfile::tempdir().unwrap();
+            let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+            let indexer = indexer_for_live_write_test(store.clone());
+            store
+                .set_secondary_epoch_reward(61_369_863_013_698)
+                .unwrap();
+            seed_pre_parent_header(store.as_ref());
+            seed_secp_script_info(store.as_ref());
+
+            // Address history the cleanup has no business reading: 300 rows of
+            // unrelated locks, all below the cleanup range.
+            const NOISE: u64 = 300;
+            {
+                let mut batch = ckbadger_store::batch::StoreBatch::new(store.as_ref());
+                for i in 0..NOISE {
+                    let mut lock = [0x90u8; 32];
+                    lock[..8].copy_from_slice(&i.to_le_bytes());
+                    batch.put_addr_tx(
+                        &lock,
+                        50,
+                        0,
+                        &[0x51; 32],
+                        &ckbadger_store::types::AddrTxValue::new(1, false, true, 0),
+                    );
+                }
+                batch.commit().unwrap();
+            }
+
+            for b in [
+                block(100, AR_DEPOSIT, vec![cellbase_tx(0xc0, FUNDING_CAPACITY)]),
+                block(
+                    101,
+                    AR_DEPOSIT,
+                    vec![
+                        cellbase_tx(0xc1, 100_000_000),
+                        transfer_tx(0xd1, 0xc0, FUNDING_CAPACITY - 100_000_000, lock_script_b()),
+                    ],
+                ),
+                block(
+                    102,
+                    AR_DEPOSIT,
+                    vec![
+                        cellbase_tx(0xc2, 100_000_000),
+                        transfer_tx(0xd2, 0xd1, FUNDING_CAPACITY - 200_000_000, lock_script_c()),
+                    ],
+                ),
+            ] {
+                write_live_block(&indexer, b).await.unwrap();
+            }
+
+            let result = indexer
+                .writer
+                .cleanup_batch_range(store.as_ref(), 102, 102)
+                .expect("cleanup of the last batch");
+            assert_eq!(result.blocks_removed, 1);
+            assert!(
+                result.addr_txs_scanned < NOISE,
+                "the cleanup read {} CF_ADDR_TXS rows; with the replayed tx contexts it reads \
+                 only the rolled-back participants' rows, not the {NOISE} unrelated ones",
+                result.addr_txs_scanned
+            );
+            assert!(
+                !addr_tx_keys(&store)
+                    .iter()
+                    .any(|(_, block, _)| *block > 101),
+                "block 102's rows are gone"
+            );
+        }
+
+        /// A lock the injected detector names by its FULL hash. Deliberately a
+        /// lock no fixture cell uses.
+        fn lock_named_hash() -> [u8; 32] {
+            [0x7b; 32]
+        }
+
+        fn naming_full_lock_detectors(
+        ) -> Vec<Box<dyn crate::db::writer::activities::ProtocolDetector>> {
+            vec![Box::new(
+                crate::db::writer::activities::test_detectors::NamingDetector {
+                    id: ckbadger_store::types::ParticipantId::Lock(lock_named_hash()),
+                    delta_negative: false,
+                    roles: ckbadger_store::types::participant_roles::OWNER_TO,
+                },
+            )]
+        }
+
+        /// Plan Task 5.4 — ANALYSIS ONLY, pins today's behaviour (no protocol
+        /// names a party by its full lock hash yet; `.cell` uses prefixes).
+        ///
+        /// A party named as `ParticipantId::Lock(X)` that holds no cell in the
+        /// transaction becomes a standalone `Lock` participant with a zero CKB
+        /// position, and gets a `CF_ADDR_TXS` row — while nothing counts that
+        /// participation: `addr_balance(X)` does not exist (address deltas are
+        /// cell-derived) and `addr_prefix_stats` counts `LockPrefix` rows only.
+        /// Rolling the block back then reverses X's `txs_count` by the deleted
+        /// `CF_ADDR_TXS` row, which the forward path never added: see the
+        /// report for the proposed rule.
+        #[tokio::test]
+        async fn a_lock_named_party_with_no_cell_gets_an_uncounted_addr_tx_row() {
+            let _guard = crate::db::writer::activities::test_detector_override::install(
+                naming_full_lock_detectors,
+            );
+            let dir = tempfile::tempdir().unwrap();
+            let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+            let indexer = indexer_for_live_write_test(store.clone());
+            store
+                .set_secondary_epoch_reward(61_369_863_013_698)
+                .unwrap();
+            seed_pre_parent_header(store.as_ref());
+            seed_secp_script_info(store.as_ref());
+            write_live_block(
+                &indexer,
+                block(100, AR_DEPOSIT, vec![cellbase_tx(0xc0, FUNDING_CAPACITY)]),
+            )
+            .await
+            .unwrap();
+            write_live_block(
+                &indexer,
+                block(
+                    101,
+                    AR_DEPOSIT,
+                    vec![
+                        cellbase_tx(0xc1, 100_000_000),
+                        transfer_tx(0xd1, 0xc0, FUNDING_CAPACITY - 100_000_000, lock_script_b()),
+                    ],
+                ),
+            )
+            .await
+            .unwrap();
+
+            let named = lock_named_hash().to_vec();
+            let actions = store
+                .get_tx_actions(101, 1, &[0xd1u8; 32])
+                .unwrap()
+                .expect("tx actions");
+            let party = actions
+                .participants
+                .iter()
+                .find(|p| p.id == ckbadger_store::types::ParticipantId::Lock(lock_named_hash()))
+                .expect("the named lock is a standalone participant");
+            assert_eq!(party.ckb_delta, 0);
+            assert!(
+                addr_tx_keys(&store).contains(&(named.clone(), 101, 1)),
+                "it gets a CF_ADDR_TXS row"
+            );
+            assert!(
+                store.get_addr_balance(&named).unwrap().is_none(),
+                "no addr_balance counts that row"
+            );
+            assert!(prefix_rows(&store).is_empty(), "and it is not a prefix row");
+
+            // PINNED DEFECT (latent: no production detector names a full lock
+            // today). Rollback derives the CF_ADDR_TXS keys to delete from the
+            // rolled-back cells' locks; X holds none, so its row survives,
+            // pointing at an orphaned block. Changing this is plan 5.4's
+            // follow-up, not this test's job: update the assertion with it.
+            let undo = store.rollback_via_undo_log(store.as_ref(), 100).unwrap();
+            store
+                .rollback_to_block_with_tx_contexts(100, Some(store.as_ref()), undo.tx_contexts)
+                .expect("today the rollback itself succeeds");
+            assert!(
+                addr_tx_keys(&store).contains(&(named.clone(), 101, 1)),
+                "today: the Lock-named row outlives the rollback of its block"
+            );
+            assert!(store.get_addr_balance(&named).unwrap().is_none());
         }
 
         #[tokio::test]
@@ -8234,6 +8450,214 @@ mod tests {
             );
         }
 
+        /// `dotcell_rollback_blocks` plus block 103, which consumes the ring
+        /// root and re-creates it byte-identical.
+        fn ring_root_recreation_blocks() -> Vec<BlockResponseWithCycles> {
+            let mut blocks = dotcell_rollback_blocks();
+            let recreate_root = TransactionView {
+                hash: format!("0x{}", hex::encode([0xe7u8; 32])),
+                version: "0x0".to_string(),
+                cell_deps: vec![],
+                header_deps: vec![],
+                inputs: vec![input(0xe1, 0)],
+                outputs: vec![name_output(192_00000000 - 100_000)],
+                outputs_data: vec![fixture::T1_RING_ROOT.outputs[0].data.to_string()],
+                witnesses: vec![fixture::T1_RING_ROOT.witnesses[0].to_string()],
+            };
+            blocks.push(block(
+                103,
+                AR_DEPOSIT,
+                vec![cellbase_tx(0xc3, 100_000_000), recreate_root],
+            ));
+            blocks
+        }
+
+        /// 5.2: bulk sees the consumed root's state, live does not; the tx must
+        /// still mean the same thing on both paths (ring infrastructure: no
+        /// action, no feed entry, no participant row).
+        #[tokio::test]
+        async fn ring_root_recreation_indexes_identically_on_both_paths() {
+            let _guard =
+                crate::db::writer::activities::test_detector_override::without_extra_detectors();
+            let blocks = ring_root_recreation_blocks();
+            let bulk = crate::sync::materialize_bulk_artifacts_for_test(&blocks).expect("bulk");
+
+            let dir = tempfile::tempdir().unwrap();
+            let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+            let indexer = super::live_dao_fee::indexer_for_live_write_test(store.clone());
+            store
+                .set_secondary_epoch_reward(61_369_863_013_698)
+                .unwrap();
+            for block in blocks {
+                super::live_dao_fee::write_live_block(&indexer, block)
+                    .await
+                    .unwrap();
+            }
+
+            let live_actions = store
+                .get_tx_actions(103, 1, &[0xe7u8; 32])
+                .unwrap()
+                .expect("live tx actions");
+            let bulk_actions = bulk
+                .tx_actions_map
+                .values()
+                .find(|actions| actions.tx_hash == [0xe7u8; 32])
+                .expect("bulk tx actions");
+            assert!(
+                bulk_actions
+                    .protocol_actions
+                    .iter()
+                    .all(|a| a.protocol != "dotcell"),
+                "the ring root emits no .cell action: {:?}",
+                bulk_actions.protocol_actions
+            );
+            assert_eq!(
+                bincode::serialize(&live_actions).unwrap(),
+                bincode::serialize(bulk_actions).unwrap()
+            );
+            let live = crate::sync::bulk_build::collect_dotcell_artifacts(store.as_ref()).unwrap();
+            assert_eq!(
+                live.collection_activities,
+                bulk.dotcell.collection_activities
+            );
+            assert_eq!(live.identity_agg, bulk.dotcell.identity_agg);
+            assert_eq!(live.ring, bulk.dotcell.ring);
+        }
+
+        /// A name cell's data from parts, with an empty records payload.
+        fn synthetic_name_data(label: &str, owner: [u8; 20], expiry: u64) -> String {
+            let mut data = vec![3u8];
+            data.extend_from_slice(&DotCellParser::records_hash(&[0, 0]));
+            data.extend_from_slice(&[0u8; 20]);
+            data.extend_from_slice(&expiry.to_le_bytes()[..5]);
+            data.extend_from_slice(&owner);
+            data.extend_from_slice(&owner);
+            data.extend_from_slice(label.as_bytes());
+            format!("0x{}", hex::encode(data))
+        }
+
+        /// `WitnessArgs { lock: None, input_type: None, output_type: payload }`.
+        fn witness_with_records(payload: &[u8]) -> String {
+            let total = 16 + 4 + payload.len();
+            let mut witness = Vec::with_capacity(total);
+            witness.extend_from_slice(&(total as u32).to_le_bytes());
+            for _ in 0..3 {
+                witness.extend_from_slice(&16u32.to_le_bytes());
+            }
+            witness.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+            witness.extend_from_slice(payload);
+            format!("0x{}", hex::encode(witness))
+        }
+
+        /// 101 registers `lapsed` with an expiry long past (plus grace) by
+        /// block 102's time; 102 hands it to a new owner: a takeover.
+        fn takeover_blocks() -> Vec<BlockResponseWithCycles> {
+            let lapsed_owner = [0x44u8; 20];
+            let taker = [0x55u8; 20];
+            let register = TransactionView {
+                hash: format!("0x{}", hex::encode([0xe5u8; 32])),
+                version: "0x0".to_string(),
+                cell_deps: vec![],
+                header_deps: vec![],
+                inputs: vec![input(0xc0, 0)],
+                outputs: vec![
+                    name_output(NAME_CAPACITY),
+                    plain_output(FUNDING_CAPACITY - NAME_CAPACITY - 100_000_000),
+                ],
+                outputs_data: vec![
+                    synthetic_name_data("lapsed", lapsed_owner, 1_000_000),
+                    "0x".to_string(),
+                ],
+                witnesses: vec![witness_with_records(&[0, 0]), String::new()],
+            };
+            let take = TransactionView {
+                hash: format!("0x{}", hex::encode([0xe6u8; 32])),
+                version: "0x0".to_string(),
+                cell_deps: vec![],
+                header_deps: vec![],
+                inputs: vec![input(0xe5, 0), input(0xe5, 1)],
+                outputs: vec![
+                    name_output(NAME_CAPACITY),
+                    plain_output(FUNDING_CAPACITY - NAME_CAPACITY - 200_000_000),
+                ],
+                outputs_data: vec![
+                    synthetic_name_data("lapsed", taker, 1_900_000_000),
+                    "0x".to_string(),
+                ],
+                witnesses: vec![witness_with_records(&[0, 0]), String::new()],
+            };
+            vec![
+                block(100, AR_DEPOSIT, vec![cellbase_tx(0xc0, FUNDING_CAPACITY)]),
+                block(
+                    101,
+                    AR_DEPOSIT,
+                    vec![cellbase_tx(0xc1, 100_000_000), register],
+                ),
+                block(102, AR_DEPOSIT, vec![cellbase_tx(0xc2, 100_000_000), take]),
+            ]
+        }
+
+        /// R7: a takeover is a new holding. Both paths record `takeover`, feed a
+        /// Mint, and restart the name's `created_at` at the takeover.
+        #[tokio::test]
+        async fn takeover_restarts_created_at_on_both_paths() {
+            use ckbadger_store::types::AssetAction;
+
+            let _guard =
+                crate::db::writer::activities::test_detector_override::without_extra_detectors();
+            let blocks = takeover_blocks();
+            let bulk = crate::sync::materialize_bulk_artifacts_for_test(&blocks).expect("bulk");
+
+            let dir = tempfile::tempdir().unwrap();
+            let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+            let indexer = super::live_dao_fee::indexer_for_live_write_test(store.clone());
+            store
+                .set_secondary_epoch_reward(61_369_863_013_698)
+                .unwrap();
+            for block in blocks {
+                super::live_dao_fee::write_live_block(&indexer, block)
+                    .await
+                    .unwrap();
+            }
+
+            let id = DotCellParser::derive_id("lapsed");
+            let entry = store.get_identity(&id).unwrap().expect("lapsed.cell");
+            assert_eq!(
+                entry.created_at_block, 102,
+                "a takeover starts a new holding"
+            );
+            assert_eq!(entry.created_at_tx, vec![0xe6u8; 32]);
+            let actions = store
+                .get_tx_actions(102, 1, &[0xe6u8; 32])
+                .unwrap()
+                .expect("takeover tx actions");
+            assert_eq!(
+                actions
+                    .protocol_actions
+                    .iter()
+                    .filter(|a| a.protocol == "dotcell")
+                    .map(|a| a.action.as_str())
+                    .collect::<Vec<_>>(),
+                vec!["takeover"]
+            );
+            let feed = store
+                .list_identity_collection_activities(&DOTCELL_SENTINEL_COLLECTION, 10, None, None)
+                .unwrap();
+            assert!(
+                feed.iter()
+                    .all(|(_, _, entry)| entry.actions == vec![AssetAction::Mint]),
+                "{feed:?}"
+            );
+
+            let live = crate::sync::bulk_build::collect_dotcell_artifacts(store.as_ref()).unwrap();
+            assert_eq!(live.identity_data, bulk.dotcell.identity_data);
+            assert_eq!(
+                live.collection_activities,
+                bulk.dotcell.collection_activities
+            );
+            assert_eq!(live.identity_agg, bulk.dotcell.identity_agg);
+        }
+
         /// The persisted identity delta says which standard it belongs to, on
         /// both sync paths: an API reading the row can link the item without a
         /// store lookup that a pending registration would not satisfy.
@@ -8699,7 +9123,7 @@ mod tests {
             ) {
                 let (key, _) = item.unwrap();
                 let (block, seq) = ckbadger_store::keys::decode_reorg_undo_log_key(&key);
-                if seq >> 48 == crate::sync::types::UndoSeqScope::EntityStats as u64 {
+                if crate::sync::types::UndoSeqScope::EntityStats.owns(seq) {
                     out.push(block);
                 }
             }
