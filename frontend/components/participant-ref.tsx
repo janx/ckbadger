@@ -3,19 +3,13 @@
 import { Address } from '@/components/ui/address';
 import Link from '@/components/ui/link';
 import type { ParticipantRef } from '@/lib/api';
-import { cn } from '@/lib/utils';
-
-function truncateHex(value: string, startChars = 10, endChars = 6): string {
-  return value.length > startChars + endChars
-    ? `${value.slice(0, startChars)}…${value.slice(-endChars)}`
-    : value;
-}
+import { cn, truncateHash } from '@/lib/utils';
 
 function compactLabel(value: string): string {
   if (value.startsWith('ckb1') || value.startsWith('ckt1')) {
     return `${value.slice(0, 8)}...${value.slice(-6)}`;
   }
-  return truncateHex(value, 8, 6);
+  return truncateHash(value, 8, 6);
 }
 
 /**
@@ -71,7 +65,7 @@ export function ParticipantRefView({
         className={cn('text-text-dim font-mono', compact ? 'text-xs' : 'text-sm')}
         title={prefix}
       >
-        {compact ? compactLabel(prefix) : truncateHex(prefix)}
+        {compact ? compactLabel(prefix) : truncateHash(prefix, 10, 6)}
       </span>
       <span
         className={cn(

@@ -3,7 +3,7 @@ import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 
 import DotCellItemDetailPage from '@/app/identities/dotcell/[identityId]/client-page';
 import { api } from '@/lib/api';
-import { render } from '../utils/test-utils';
+import { render } from '@/__tests__/utils/test-utils';
 
 vi.mock('@/lib/api', () => ({
   api: {

@@ -1,6 +1,7 @@
 import { render, screen } from '@testing-library/react';
 import { ParticipantRefView } from '@/components/participant-ref';
 import type { ParticipantRef } from '@/lib/api';
+import { truncateHash } from '@/lib/utils';
 
 function makeRef(overrides: Partial<ParticipantRef> = {}): ParticipantRef {
   return {
@@ -28,6 +29,12 @@ describe('ParticipantRefView', () => {
     expect(screen.getByText(/unresolved/i)).toBeInTheDocument();
     // The full prefix stays reachable even though the label is shortened.
     expect(screen.getByTitle(prefix)).toBeInTheDocument();
+  });
+
+  it('shortens an unresolved prefix the way every other hash is shortened', () => {
+    const prefix = '0x1e3a88ca5cc39f1bd38c091b53e33b7c29ebd019';
+    render(<ParticipantRefView participant={makeRef({ lockHashPrefix: prefix })} />);
+    expect(screen.getByTitle(prefix)).toHaveTextContent(truncateHash(prefix, 10, 6));
   });
 
   it('shows the protocol roles it was given', () => {

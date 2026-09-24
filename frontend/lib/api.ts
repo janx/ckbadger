@@ -553,7 +553,8 @@ interface AddressTransaction {
   txHash: string;
   /** Null while the transaction is still in the node's pool: it has no block yet. */
   blockNumber: number | null;
-  txType: 'received' | 'sent' | 'internal';
+  /** `named`: a protocol named this address as a party (by lock-hash prefix) without it holding a cell. */
+  txType: 'received' | 'sent' | 'internal' | 'named';
   capacityChange: string;
   /** Block time. Null for a pool row, which carries `timeAddedToPool` instead. */
   timestamp: string | null;
