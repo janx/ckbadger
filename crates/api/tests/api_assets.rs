@@ -4351,3 +4351,253 @@ async fn dotcell_capacity_history_chart_resolves_the_alias() {
         assert_eq!(body["data"][0]["values"]["unused"], "4000000000", "{alias}");
     }
 }
+
+/// A malformed `.cell` holder row (an owner segment that is not a 20-byte
+/// prefix padded with zeros) is a store invariant violation the API reports as
+/// a 500 naming the row. It must never reach an `assert!` inside the handler:
+/// the release profile aborts on panic, so that took the whole API down.
+#[tokio::test]
+async fn dotcell_malformed_holder_row_is_a_500_not_an_abort() {
+    let store = test_store();
+    seed_dotcell_name(
+        &store,
+        hex20(SUPPORT_ID),
+        "support",
+        hex20(SUPPORT_OWNER20),
+        dotcell_extra("support", hex20(SUPPORT_OWNER20), hex20(SUPPORT_OWNER20)),
+        true,
+        1_700_000_000_000,
+    );
+    {
+        // A full 32-byte lock hash where the chain only ever gives 20 bytes.
+        let mut batch = StoreBatch::new(store.as_ref());
+        batch.put_identity_owner_count(
+            &ckbadger_store::types::DOTCELL_SENTINEL_COLLECTION,
+            &[0x77; 32],
+            5,
+        );
+        batch.commit().unwrap();
+    }
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let (status, body) =
+        dotcell_get(app.clone(), "/api/v1/assets/identities/dotcell/holders").await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+    let message = body["message"].as_str().unwrap();
+    assert!(
+        message.contains(&hex::encode(
+            ckbadger_store::types::DOTCELL_SENTINEL_COLLECTION
+        )),
+        "names the collection: {message}"
+    );
+    assert!(
+        message.contains(&"77".repeat(32)),
+        "names the segment: {message}"
+    );
+
+    // The process is still serving.
+    let (status, _) = dotcell_get(app, "/api/v1/assets/identities/dotcell").await;
+    assert_eq!(status, StatusCode::OK);
+}
+
+/// Search lowercases a `.cell` label, so the item endpoint must too: the link
+/// a search hit produces, and any name typed with capitals, resolves.
+#[tokio::test]
+async fn dotcell_item_ref_is_case_insensitive() {
+    let store = test_store();
+    seed_dotcell_name(
+        &store,
+        hex20(SUPPORT_ID),
+        "support",
+        hex20(SUPPORT_OWNER20),
+        dotcell_extra("support", hex20(SUPPORT_OWNER20), hex20(SUPPORT_OWNER20)),
+        true,
+        1_700_000_000_000,
+    );
+    {
+        // The registration transaction, so the per-item feed can place it.
+        let mut batch = StoreBatch::new(store.as_ref());
+        batch.put_tx_hash_map(&[0xD1; 32], 20_518_306, 0);
+        batch.put_tx_index(
+            20_518_306,
+            0,
+            &TxIndexEntry {
+                is_cellbase: false,
+                timestamp: 1_700_000_000_000,
+                inputs_count: 1,
+                outputs_count: 2,
+                fee: 0,
+                tx_size: 400,
+                cycles: None,
+                semantic_tags: 0,
+            },
+        );
+        batch.commit().unwrap();
+    }
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    for reference in ["SUPPORT.cell", "Support", "support.CELL"] {
+        let (status, body) = dotcell_get(
+            app.clone(),
+            &format!("/api/v1/assets/identities/dotcell/items/{reference}"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{reference}: {body}");
+        assert_eq!(body["identityId"], SUPPORT_ID, "{reference}");
+        let (status, body) = dotcell_get(
+            app.clone(),
+            &format!("/api/v1/assets/identities/dotcell/items/{reference}/activities"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{reference} activities: {body}");
+    }
+}
+
+/// Seed one `.cell` sub-name under `parent_id`, with its parent→child row.
+fn seed_dotcell_child(
+    store: &Arc<CkbadgerStore>,
+    parent_id: [u8; 20],
+    label: &str,
+    is_live: bool,
+) -> [u8; 20] {
+    let child_id = ckbadger_store::types::derive_dotcell_id(label);
+    let extra = match dotcell_extra(label, hex20(SUPPORT_OWNER20), hex20(SUPPORT_OWNER20)) {
+        IdentityExtra::DotCell {
+            label,
+            namespace_args,
+            layout_version,
+            expired_at,
+            owner_hash20,
+            manager_hash20,
+            next_id,
+            records_hash,
+            records,
+            ..
+        } => IdentityExtra::DotCell {
+            label,
+            namespace_args,
+            layout_version,
+            expired_at,
+            owner_hash20,
+            manager_hash20,
+            next_id,
+            records_hash,
+            records,
+            parent_id: Some(parent_id),
+        },
+        other => other,
+    };
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_identity(
+        &child_id,
+        &IdentityEntry {
+            standard: IdentityStandard::DotCell,
+            owner_lock_hash: None,
+            name: Some(format!("{label}.cell")),
+            is_live,
+            created_at_block: 20_518_307,
+            created_at_tx: vec![0xD2; 32],
+            extra,
+        },
+    );
+    batch.put_identity_by_collection(&ckbadger_store::keys::pad_id_32(&parent_id), &child_id);
+    batch.put_identity_by_collection(
+        &ckbadger_store::types::DOTCELL_SENTINEL_COLLECTION,
+        &child_id,
+    );
+    batch.commit().unwrap();
+    child_id
+}
+
+/// The parent→child index keeps every sub-name ever registered (a recycled one
+/// included); the API lists the live ones, a page at a time, and says when
+/// there are more — never a silent cut at 200.
+#[tokio::test]
+async fn dotcell_children_are_live_only_and_paged() {
+    let store = test_store();
+    let parent_id = ckbadger_store::types::derive_dotcell_id("alice");
+    seed_dotcell_name(
+        &store,
+        parent_id,
+        "alice",
+        hex20(SUPPORT_OWNER20),
+        dotcell_extra("alice", hex20(SUPPORT_OWNER20), hex20(SUPPORT_OWNER20)),
+        true,
+        1_700_000_000_000,
+    );
+    let recycled = seed_dotcell_child(&store, parent_id, "gone.alice", false);
+    let mut live: Vec<String> = (0..201)
+        .map(|i| {
+            let id = seed_dotcell_child(&store, parent_id, &format!("s{i}.alice"), true);
+            format!("0x{}", hex::encode(id))
+        })
+        .collect();
+    live.sort();
+    let recycled_hex = format!("0x{}", hex::encode(recycled));
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    // The detail carries the first page and says there is more.
+    let (status, body) =
+        dotcell_get(app.clone(), "/api/v1/assets/identities/dotcell/items/alice").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let children = body["children"].as_array().unwrap();
+    assert_eq!(children.len(), 50);
+    assert_eq!(body["childrenHasMore"], true);
+    assert_eq!(body["childrenNextCursor"], children[49]["identityId"]);
+
+    // The children endpoint pages the rest: 200, then the last one.
+    let (status, first) = dotcell_get(
+        app.clone(),
+        "/api/v1/assets/identities/dotcell/items/alice/children?limit=200",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{first}");
+    let first_rows = first["data"].as_array().unwrap();
+    assert_eq!(first_rows.len(), 200);
+    assert_eq!(first["hasMore"], true);
+    let cursor = first["nextCursor"].as_str().unwrap().to_string();
+
+    let (status, second) = dotcell_get(
+        app.clone(),
+        &format!(
+            "/api/v1/assets/identities/dotcell/items/alice/children?limit=200&cursor={cursor}"
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{second}");
+    let second_rows = second["data"].as_array().unwrap();
+    assert_eq!(second_rows.len(), 1);
+    assert_eq!(second["hasMore"], false);
+    assert_eq!(second["nextCursor"], serde_json::Value::Null);
+
+    let mut seen: Vec<String> = first_rows
+        .iter()
+        .chain(second_rows)
+        .map(|row| row["identityId"].as_str().unwrap().to_string())
+        .collect();
+    assert!(
+        !seen.contains(&recycled_hex),
+        "a recycled sub-name is not a child"
+    );
+    seen.sort();
+    assert_eq!(seen, live, "every live child exactly once");
+
+    // The limit is bounded, and a malformed cursor is the caller's error.
+    let (status, capped) = dotcell_get(
+        app.clone(),
+        "/api/v1/assets/identities/dotcell/items/alice/children?limit=5000",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(capped["data"].as_array().unwrap().len(), 200);
+    let (status, _) = dotcell_get(
+        app,
+        "/api/v1/assets/identities/dotcell/items/alice/children?cursor=0x1234",
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}

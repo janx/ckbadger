@@ -16,6 +16,36 @@ impl CkbadgerStore {
         }
     }
 
+    /// Read many identity entries with one `multi_get`, in `ids` order. A
+    /// missing id is `None`; an undecodable row is an error naming the id.
+    pub fn get_identities(&self, ids: &[Vec<u8>]) -> anyhow::Result<Vec<Option<IdentityEntry>>> {
+        let cf = self.cf_identity_data();
+        let values = self.multi_get_cf(ids.iter().map(|id| (cf, id.as_slice())).collect());
+        ids.iter()
+            .zip(values)
+            .map(|(id, value)| {
+                let value = value.map_err(|e| {
+                    anyhow::anyhow!(
+                        "rocksdb multi_get failed in get_identities: identity_id=0x{}, error={}",
+                        bytes_to_hex(id),
+                        e
+                    )
+                })?;
+                value
+                    .map(|bytes| {
+                        bincode::deserialize::<IdentityEntry>(&bytes).map_err(|e| {
+                            anyhow::anyhow!(
+                                "failed to deserialize identity entry in get_identities: identity_id=0x{}, error={}",
+                                bytes_to_hex(id),
+                                e
+                            )
+                        })
+                    })
+                    .transpose()
+            })
+            .collect()
+    }
+
     /// List all identities.
     pub fn list_identities(&self, limit: usize) -> anyhow::Result<Vec<(Vec<u8>, IdentityEntry)>> {
         let iter = self.iterator_cf(self.cf_identity_data(), rocksdb::IteratorMode::Start);
@@ -360,6 +390,45 @@ mod tests {
         assert_eq!(result.name.as_deref(), Some("example.bit"));
         assert!(result.is_live);
         assert_eq!(result.created_at_block, 100);
+    }
+
+    #[test]
+    fn test_get_identities_reads_in_order_with_one_multi_get() {
+        let (_dir, store) = test_store();
+        let make = |name: &str| IdentityEntry {
+            standard: IdentityStandard::DotBit,
+            owner_lock_hash: Some(vec![0x11; 32]),
+            name: Some(name.to_string()),
+            is_live: true,
+            created_at_block: 100,
+            created_at_tx: vec![0x22; 32],
+            extra: IdentityExtra::DotBit {
+                expired_at: None,
+                registered_at: None,
+                status: None,
+            },
+        };
+        let mut batch = StoreBatch::new(&store);
+        batch.put_identity(&[0x02; 20], &make("b.bit"));
+        batch.put_identity(&[0x01; 20], &make("a.bit"));
+        batch.commit().unwrap();
+
+        store.reset_read_call_counters();
+        let ids = vec![vec![0x02; 20], vec![0x03; 20], vec![0x01; 20]];
+        let entries = store.get_identities(&ids).unwrap();
+        assert_eq!(
+            store.read_call_counts(),
+            (0, 1),
+            "one multi_get, no point reads"
+        );
+        let names: Vec<Option<String>> = entries
+            .into_iter()
+            .map(|entry| entry.and_then(|entry| entry.name))
+            .collect();
+        assert_eq!(
+            names,
+            vec![Some("b.bit".to_string()), None, Some("a.bit".to_string())]
+        );
     }
 
     #[test]

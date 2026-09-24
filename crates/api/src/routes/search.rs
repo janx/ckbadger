@@ -125,27 +125,11 @@ fn object_collection_href(standard: &str, collection_hex: &str) -> String {
 
 /// The `.cell` label a query names, if it could be one.
 ///
-/// The grammar is spec §1.2: `[a-z0-9-]`, at most one dot (a sub-name), at
-/// most 40 characters. The `.cell` suffix is optional — `alice` and
-/// `alice.cell` are the same name — and the empty label is the ring root, not
-/// an identity.
+/// Free text: a query that is not a label is simply not a `.cell` hit, so the
+/// grammar's rejection means "no", not an error. The grammar itself is the one
+/// the item endpoints use (spec §1.2).
 fn dotcell_label_from_query(query: &str) -> Option<String> {
-    let label = query
-        .trim()
-        .to_ascii_lowercase()
-        .strip_suffix(".cell")
-        .map(str::to_string)
-        .unwrap_or_else(|| query.trim().to_ascii_lowercase());
-    if label.is_empty() || label.chars().count() > 40 || label.matches('.').count() > 1 {
-        return None;
-    }
-    if !label
-        .chars()
-        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '.')
-    {
-        return None;
-    }
-    Some(label)
+    super::identities::parse_dotcell_label(query.trim()).ok()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -1325,19 +1325,34 @@ pub fn encode_identity_owner20_key(
 
 /// Read the 20-byte owner prefix back out of a 32-byte owner segment written
 /// by `encode_identity_owner20_key`.
+///
+/// Fallible, for read paths serving stored rows: a malformed segment is a store
+/// invariant violation to report with the segment, and a read handler must not
+/// turn it into a panic (the release profile aborts on panic).
+pub fn try_decode_identity_owner20(owner_segment: &[u8]) -> anyhow::Result<[u8; 20]> {
+    if owner_segment.len() != HASH32_LEN {
+        anyhow::bail!(
+            "identity owner segment must be exactly {HASH32_LEN} bytes, got {}: 0x{}",
+            owner_segment.len(),
+            hex::encode(owner_segment)
+        );
+    }
+    if !owner_segment[20..].iter().all(|byte| *byte == 0) {
+        anyhow::bail!(
+            "owner segment 0x{} is not a 20-byte prefix padded with zeros",
+            hex::encode(owner_segment)
+        );
+    }
+    Ok(owner_segment[..20]
+        .try_into()
+        .expect("length checked above"))
+}
+
+/// [`try_decode_identity_owner20`] for callers holding a segment they encoded
+/// themselves, where a malformed one is a bug in the caller.
 pub fn decode_identity_owner20(owner_segment: &[u8]) -> [u8; 20] {
-    assert_key_component_len(
-        "decode_identity_owner20",
-        "owner_segment",
-        owner_segment.len(),
-        HASH32_LEN,
-    );
-    assert!(
-        owner_segment[20..].iter().all(|byte| *byte == 0),
-        "decode_identity_owner20: owner segment 0x{} is not a 20-byte prefix padded with zeros",
-        hex::encode(owner_segment)
-    );
-    owner_segment[..20].try_into().expect("20 bytes")
+    try_decode_identity_owner20(owner_segment)
+        .unwrap_or_else(|e| panic!("decode_identity_owner20: {e:#}"))
 }
 
 // ---- `.cell` (DotCell) name-by-owner index ----
@@ -4095,5 +4110,26 @@ mod dotcell_key_tests {
     #[should_panic(expected = "not a 20-byte prefix padded with zeros")]
     fn decode_identity_owner20_rejects_a_real_lock_hash() {
         decode_identity_owner20(&[0x77; 32]);
+    }
+
+    #[test]
+    fn try_decode_identity_owner20_reports_a_malformed_segment() {
+        let mut segment = [0u8; 32];
+        segment[..20].copy_from_slice(&[0x33; 20]);
+        assert_eq!(try_decode_identity_owner20(&segment).unwrap(), [0x33; 20]);
+
+        let err = try_decode_identity_owner20(&[0x77; 32])
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("not a 20-byte prefix padded with zeros"),
+            "{err}"
+        );
+        assert!(err.contains(&"77".repeat(32)), "{err}");
+
+        let err = try_decode_identity_owner20(&[0x33; 20])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("exactly 32 bytes, got 20"), "{err}");
     }
 }

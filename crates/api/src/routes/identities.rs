@@ -25,8 +25,10 @@ use crate::cache::InMemoryCache;
 use crate::response::{
     default_limit, ok, ApiError, ApiResult, ApiRouteError, CursorPaginatedResponse,
 };
+use crate::utils::hash::parse_fixed_hex;
 use crate::utils::{accumulate_owned_capacity, parse_asset_id_max32};
 use crate::AppState;
+use ckbadger_indexer::parser::dotcell::DOTCELL_GRACE_SECONDS;
 
 /// Decode an identity collection ID from a URL path segment.
 ///
@@ -258,7 +260,13 @@ async fn list_identity_collection_holders(
     let mut rows: Vec<CollectionHolderResponse> = Vec::with_capacity(page.len());
     for (owner_segment, count) in page {
         if is_dotcell {
-            let owner20 = ckbadger_store::keys::decode_identity_owner20(owner_segment);
+            let owner20 = ckbadger_store::keys::try_decode_identity_owner20(owner_segment)
+                .map_err(|e| {
+                    ApiError::internal(format!(
+                        "malformed .cell holder row: collection_id=0x{}, {e:#}",
+                        hex::encode(&collection_id_bytes)
+                    ))
+                })?;
             let party = resolver.resolve(&owner20)?;
             rows.push(CollectionHolderResponse {
                 lock_script_hash: party.lock_hash,
@@ -796,7 +804,11 @@ pub struct DotCellItemResponse {
     pub records_hash: String,
     pub next_id: String,
     pub parent: Option<DotCellNameRef>,
+    /// The first page of live sub-names; the rest are paged through
+    /// `…/items/{id_or_name}/children` from `children_next_cursor`.
     pub children: Vec<DotCellNameRef>,
+    pub children_has_more: bool,
+    pub children_next_cursor: Option<String>,
     pub live_out_point: Option<DotCellOutPointResponse>,
 }
 
@@ -809,64 +821,71 @@ pub struct DotCellRingResponse {
     pub live_count: i64,
 }
 
-/// Accept a 20-byte hex id, a bare label, or `label.cell`.
+/// Parse a `.cell` name as a user typed it: case-insensitive, with or without
+/// the `.cell` suffix, returning the canonical lowercase label.
 ///
 /// A name id is `blake2b(label)[..20]`, so a label needs no scan — but an
 /// arbitrary string must not be hashed into a lookup either, or every typo
 /// becomes a 404 on a name that could never exist. The grammar (spec §1.2) is
-/// `[a-z0-9-]`, at most one dot, at most 40 characters.
-fn decode_dotcell_item_ref(raw: &str) -> Result<([u8; 20], Option<String>), ApiRouteError> {
-    if let Some(hex_part) = raw.strip_prefix("0x") {
-        if hex_part.len() == 40 {
-            let bytes = hex::decode(hex_part)
-                .map_err(|_| ApiError::bad_request("Invalid .cell name id: not hex"))?;
-            return Ok((bytes.try_into().expect("20 bytes"), None));
-        }
-        return Err(ApiError::bad_request(
-            "Invalid .cell name id: expected 20 hex-encoded bytes",
-        ));
-    }
-
-    let label = raw.strip_suffix(".cell").unwrap_or(raw).to_string();
+/// `[a-z0-9-]`, at most one dot, at most 40 characters; the empty label is the
+/// ring root, not an identity. The one grammar check for the item endpoints and
+/// search alike.
+pub(super) fn parse_dotcell_label(raw: &str) -> Result<String, &'static str> {
+    let lowered = raw.to_ascii_lowercase();
+    let label = lowered.strip_suffix(".cell").unwrap_or(&lowered);
     if label.is_empty() {
-        return Err(ApiError::bad_request(
-            "Empty .cell label: the empty name is the ring root, not an identity",
-        ));
+        return Err("Empty .cell label: the empty name is the ring root, not an identity");
     }
     if label.chars().count() > 40 {
-        return Err(ApiError::bad_request(
-            "Invalid .cell label: at most 40 characters",
-        ));
+        return Err("Invalid .cell label: at most 40 characters");
     }
     if label.matches('.').count() > 1 {
-        return Err(ApiError::bad_request(
-            "Invalid .cell label: at most one dot (a sub-name)",
-        ));
+        return Err("Invalid .cell label: at most one dot (a sub-name)");
     }
     if !label
         .chars()
         .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '.')
     {
-        return Err(ApiError::bad_request(
-            "Invalid .cell label: only a-z, 0-9, - and one dot",
-        ));
+        return Err("Invalid .cell label: only a-z, 0-9, - and one dot");
     }
-    Ok((
-        ckbadger_store::types::derive_dotcell_id(&label),
-        Some(label),
-    ))
+    Ok(label.to_string())
 }
 
-/// The 30-day grace period the contract enforces after expiry (spec §1.2).
-const DOTCELL_GRACE_SECONDS: u64 = 2_592_000;
+/// Accept a 20-byte hex id (`0x…`), a bare label, or `label.cell`.
+fn decode_dotcell_item_ref(raw: &str) -> Result<[u8; 20], ApiRouteError> {
+    if raw.starts_with("0x") {
+        return parse_fixed_hex::<20>(raw, ".cell name id", "name id");
+    }
+    let label = parse_dotcell_label(raw).map_err(ApiError::bad_request)?;
+    Ok(ckbadger_store::types::derive_dotcell_id(&label))
+}
 
-fn dotcell_state(is_live: bool, expired_at: u64, tip_seconds: u64) -> &'static str {
+/// When a name's grace period ends: expiry plus the 30-day grace the contract
+/// enforces (the parser's one constant). Expiry is a u40 on chain, so an
+/// overflow here is a corrupt stored entry, reported rather than clamped.
+fn dotcell_grace_ends_at(identity_id: &[u8], expired_at: u64) -> Result<u64, ApiRouteError> {
+    expired_at
+        .checked_add(DOTCELL_GRACE_SECONDS)
+        .ok_or_else(|| {
+            ApiError::internal(format!(
+            ".cell expiry overflows the grace period: identity_id=0x{}, expired_at={expired_at}",
+            hex::encode(identity_id)
+        ))
+        })
+}
+
+fn dotcell_state(
+    is_live: bool,
+    expired_at: u64,
+    grace_ends_at: u64,
+    tip_seconds: u64,
+) -> &'static str {
     if !is_live {
         return "recycled";
     }
     if tip_seconds < expired_at {
         "active"
-    } else if tip_seconds < expired_at.saturating_add(DOTCELL_GRACE_SECONDS) {
+    } else if tip_seconds < grace_ends_at {
         "grace"
     } else {
         "free"
@@ -1031,7 +1050,7 @@ async fn get_dotcell_item_detail(
     State(state): State<Arc<AppState>>,
     Path(id_or_name): Path<String>,
 ) -> ApiResult<DotCellItemResponse> {
-    let (identity_id, _label) = decode_dotcell_item_ref(&id_or_name)?;
+    let identity_id = decode_dotcell_item_ref(&id_or_name)?;
     let store = state.store.clone();
     let entry = tokio::task::spawn_blocking(move || store.get_identity(&identity_id))
         .await
@@ -1142,22 +1161,8 @@ async fn get_dotcell_item_detail(
         None => None,
     };
 
-    let child_ids = store
-        .list_identity_ids_by_collection(&ckbadger_store::keys::pad_id_32(&identity_id), None, 200)
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-    let mut children = Vec::with_capacity(child_ids.len());
-    for child_id in child_ids {
-        let child = store
-            .get_identity(&child_id)
-            .map_err(|e| ApiError::internal(e.to_string()))?
-            .ok_or_else(|| {
-                ApiError::internal(format!(
-                    ".cell sub-name index points at a missing identity: identity_id=0x{}",
-                    hex::encode(&child_id)
-                ))
-            })?;
-        children.push(dotcell_name_ref(&child_id, &child)?);
-    }
+    let children =
+        dotcell_children_page(store, &identity_id, None, DOTCELL_CHILDREN_DEFAULT_LIMIT)?;
 
     let live_out_point = if entry.is_live {
         let outpoints = get_live_bit_cell_outpoints_by_identity_ids(
@@ -1174,6 +1179,8 @@ async fn get_dotcell_item_detail(
     } else {
         None
     };
+
+    let grace_ends_at = dotcell_grace_ends_at(&identity_id, expired_at)?;
 
     // Expiry state is measured against the chain's own clock.
     let tip_seconds = store
@@ -1196,8 +1203,8 @@ async fn get_dotcell_item_detail(
         layout_version,
         namespace_args: format!("0x{}", hex::encode(namespace_args)),
         expired_at,
-        state: dotcell_state(entry.is_live, expired_at, tip_seconds),
-        grace_ends_at: expired_at.saturating_add(DOTCELL_GRACE_SECONDS),
+        state: dotcell_state(entry.is_live, expired_at, grace_ends_at, tip_seconds),
+        grace_ends_at,
         owner,
         manager,
         sale,
@@ -1205,9 +1212,131 @@ async fn get_dotcell_item_detail(
         records_hash: format!("0x{}", hex::encode(records_hash)),
         next_id: format!("0x{}", hex::encode(next_id)),
         parent,
-        children,
+        children: children.rows,
+        children_has_more: children.next_cursor.is_some(),
+        children_next_cursor: children.next_cursor,
         live_out_point,
     })
+}
+
+/// Sub-names one detail response carries, and the default page of the
+/// children endpoint.
+const DOTCELL_CHILDREN_DEFAULT_LIMIT: usize = 50;
+/// The most sub-names one children page carries.
+const DOTCELL_CHILDREN_MAX_LIMIT: usize = 200;
+
+fn default_dotcell_children_limit() -> i64 {
+    DOTCELL_CHILDREN_DEFAULT_LIMIT as i64
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DotCellChildrenParams {
+    #[serde(default = "default_dotcell_children_limit")]
+    limit: i64,
+    cursor: Option<String>,
+}
+
+/// One page of a name's live sub-names, and the cursor to the next page.
+struct DotCellChildrenPage {
+    rows: Vec<DotCellNameRef>,
+    next_cursor: Option<String>,
+}
+
+/// A page of `parent_id`'s live sub-names, in id order, after `cursor`.
+///
+/// The parent→child index holds every sub-name ever registered under the
+/// parent, a recycled one included (the same semantics as the sentinel index,
+/// and what the reorg rebuild reproduces); liveness is decided here, on read.
+/// Entries are read a chunk at a time with one `multi_get` each.
+fn dotcell_children_page(
+    store: &CkbadgerStore,
+    parent_id: &[u8; 20],
+    cursor: Option<[u8; 20]>,
+    limit: usize,
+) -> Result<DotCellChildrenPage, ApiRouteError> {
+    let parent_key = ckbadger_store::keys::pad_id_32(parent_id);
+    let chunk = (limit + 1).max(64);
+    let mut rows: Vec<DotCellNameRef> = Vec::with_capacity(limit + 1);
+    let mut scan_cursor: Option<Vec<u8>> = cursor.map(|id| id.to_vec());
+
+    'scan: loop {
+        let ids = store
+            .list_identity_ids_by_collection(&parent_key, scan_cursor.as_deref(), chunk)
+            .map_err(|e| ApiError::internal(e.to_string()))?;
+        let entries = store
+            .get_identities(&ids)
+            .map_err(|e| ApiError::internal(e.to_string()))?;
+        for (child_id, entry) in ids.iter().zip(entries) {
+            let child = entry.ok_or_else(|| {
+                ApiError::internal(format!(
+                    ".cell sub-name index points at a missing identity: parent_id=0x{}, identity_id=0x{}",
+                    hex::encode(parent_id),
+                    hex::encode(child_id)
+                ))
+            })?;
+            if child.standard != ckbadger_store::types::IdentityStandard::DotCell {
+                return Err(ApiError::internal(format!(
+                    ".cell sub-name index points at a {} identity: parent_id=0x{}, identity_id=0x{}",
+                    child.standard.as_str(),
+                    hex::encode(parent_id),
+                    hex::encode(child_id)
+                )));
+            }
+            if !child.is_live {
+                continue;
+            }
+            rows.push(dotcell_name_ref(child_id, &child)?);
+            if rows.len() > limit {
+                break 'scan;
+            }
+        }
+        if ids.len() < chunk {
+            break;
+        }
+        scan_cursor = ids.last().cloned();
+    }
+
+    let has_more = rows.len() > limit;
+    rows.truncate(limit);
+    let next_cursor = if has_more {
+        rows.last().map(|row| row.identity_id.clone())
+    } else {
+        None
+    };
+    Ok(DotCellChildrenPage { rows, next_cursor })
+}
+
+async fn list_dotcell_item_children(
+    State(state): State<Arc<AppState>>,
+    Path(id_or_name): Path<String>,
+    Query(params): Query<DotCellChildrenParams>,
+) -> ApiResult<CursorPaginatedResponse<DotCellNameRef>> {
+    let limit = params.limit.clamp(1, DOTCELL_CHILDREN_MAX_LIMIT as i64) as usize;
+    let parent_id = decode_dotcell_item_ref(&id_or_name)?;
+    let cursor = params
+        .cursor
+        .as_deref()
+        .map(|raw| parse_fixed_hex::<20>(raw, ".cell children cursor", "name id"))
+        .transpose()?;
+    let store = state.store.clone();
+    let page = tokio::task::spawn_blocking(move || -> Result<_, ApiRouteError> {
+        let parent = store
+            .get_identity(&parent_id)
+            .map_err(|e| ApiError::internal(e.to_string()))?
+            .ok_or_else(|| ApiError::not_found(".cell name not found"))?;
+        if parent.standard != ckbadger_store::types::IdentityStandard::DotCell {
+            return Err(ApiError::bad_request("Item is not a .cell name"));
+        }
+        dotcell_children_page(store.as_ref(), &parent_id, cursor, limit)
+    })
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))??;
+
+    ok(CursorPaginatedResponse::without_total(
+        page.rows,
+        limit as i64,
+        page.next_cursor,
+    ))
 }
 
 async fn list_dotcell_item_activities(
@@ -1217,7 +1346,7 @@ async fn list_dotcell_item_activities(
 ) -> ApiResult<CursorPaginatedResponse<MnftItemActivityResponse>> {
     let limit = params.limit.clamp(1, 100);
     let action_filter = normalize_activity_action_filter(params.action.as_deref())?;
-    let (identity_id, _label) = decode_dotcell_item_ref(&id_or_name)?;
+    let identity_id = decode_dotcell_item_ref(&id_or_name)?;
     let cursor = params
         .cursor
         .as_deref()
@@ -1292,6 +1421,10 @@ pub fn routes() -> Router<Arc<AppState>> {
             get(list_dotcell_item_activities),
         )
         .route(
+            "/assets/identities/dotcell/items/{id_or_name}/children",
+            get(list_dotcell_item_children),
+        )
+        .route(
             "/assets/identities/dotbit/items/{identity_id}",
             get(get_dotbit_item_detail),
         )
@@ -1359,6 +1492,41 @@ mod tests {
 
         let bit_cell_alt = decode_identity_collection_id(".bit-cell").unwrap();
         assert_eq!(bit_cell_alt, BIT_CELL_SENTINEL_COLLECTION.to_vec());
+    }
+
+    #[test]
+    fn parse_dotcell_label_is_case_insensitive_and_keeps_the_grammar() {
+        assert_eq!(parse_dotcell_label("ALICE.cell").unwrap(), "alice");
+        assert_eq!(
+            parse_dotcell_label("Shop.Alice.CELL").unwrap(),
+            "shop.alice"
+        );
+        assert_eq!(parse_dotcell_label("my-name").unwrap(), "my-name");
+        assert!(parse_dotcell_label(".cell").is_err(), "the ring root");
+        assert!(parse_dotcell_label("a.b.c").is_err(), "two dots");
+        assert!(parse_dotcell_label("under_score").is_err());
+        assert!(parse_dotcell_label(&"a".repeat(41)).is_err());
+    }
+
+    #[test]
+    fn dotcell_item_ref_accepts_an_id_or_a_name() {
+        let id = format!("0x{}", "ab".repeat(20));
+        assert_eq!(decode_dotcell_item_ref(&id).unwrap(), [0xab; 20]);
+        assert_eq!(
+            decode_dotcell_item_ref("Support.cell").unwrap(),
+            ckbadger_store::types::derive_dotcell_id("support")
+        );
+        assert!(decode_dotcell_item_ref("0x1234").is_err());
+        assert!(decode_dotcell_item_ref("0xzz").is_err());
+    }
+
+    #[test]
+    fn dotcell_grace_uses_the_parser_constant_and_reports_overflow() {
+        assert_eq!(
+            dotcell_grace_ends_at(&[0x01; 20], 1_000).unwrap(),
+            1_000 + DOTCELL_GRACE_SECONDS
+        );
+        assert!(dotcell_grace_ends_at(&[0x01; 20], u64::MAX).is_err());
     }
 
     #[test]
