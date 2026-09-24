@@ -930,8 +930,9 @@ async fn qualify_and_collect(
     scripts: &[(EntitySelector, Script)],
     budget: &mut RunBudget,
 ) -> anyhow::Result<ChainWork> {
-    budget.charge_request();
-    let qualification = qualify_source(client, declaration, declaration_path, anchor).await?;
+    // Qualification charges each node call it makes.
+    let qualification =
+        qualify_source(client, budget, declaration, declaration_path, anchor).await?;
     if matches!(qualification, SourceQualification::Inconclusive(_)) {
         return Ok(ChainWork {
             qualification,
@@ -955,7 +956,7 @@ async fn qualify_and_collect(
     // and a reorg underneath it would have the node enumerating a different
     // chain than the export describes. Re-verifying it here is what keeps a
     // moved chain from being reported as a proven inconsistency.
-    if let Some(reason) = reverify_anchor(client, anchor).await? {
+    if let Some(reason) = reverify_anchor(client, budget, anchor).await? {
         return Ok(ChainWork {
             qualification: SourceQualification::Inconclusive(reason),
             outcomes: Vec::new(),

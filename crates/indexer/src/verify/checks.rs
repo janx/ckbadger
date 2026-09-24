@@ -45,9 +45,29 @@ impl EntitySelector {
         }
         Ok(Self {
             kind: kind.to_string(),
-            id: id.to_string(),
+            id: canonical_entity_id(raw, id)?,
         })
     }
+}
+
+/// Every entity id is hex bytes, and the index and its export key them as
+/// `0x` + lowercase. A bare or upper-case id is the same entity, so it is
+/// canonicalized here; anything that is not whole bytes of hex is rejected
+/// rather than left to match nothing.
+fn canonical_entity_id(raw: &str, id: &str) -> Result<String, String> {
+    let digits = id
+        .strip_prefix("0x")
+        .or_else(|| id.strip_prefix("0X"))
+        .unwrap_or(id);
+    if digits.is_empty()
+        || !digits.len().is_multiple_of(2)
+        || !digits.bytes().all(|b| b.is_ascii_hexdigit())
+    {
+        return Err(format!(
+            "entity selector '{raw}' must carry a hex id of whole bytes, e.g. token:0x…"
+        ));
+    }
+    Ok(format!("0x{}", digits.to_ascii_lowercase()))
 }
 
 impl std::fmt::Display for EntitySelector {
@@ -806,6 +826,8 @@ mod status_model_tests {
             "token_activity_transfer_bidirectional",
             "spore_owner_roundtrip",
             "object_asset_collection_consistency",
+            "participant_rows_consistency",
+            "dotcell_records_hash_parity",
         ];
         let mut declared = declared;
         declared.sort_unstable();
@@ -868,5 +890,19 @@ mod status_model_tests {
 
         // Nothing listens on port 1: a transport failure is an error too.
         assert!(api_get_or_not_found::<u32>(&ctx(None, None, 1), "found").is_err());
+    }
+
+    /// `--entity` ids are canonical `0x` + lowercase hex whatever the operator
+    /// typed; ids that are not whole bytes of hex are rejected.
+    #[test]
+    fn entity_selector_ids_are_canonical_hex() {
+        let canonical = EntitySelector::parse("token:0xabcd").unwrap();
+        assert_eq!(canonical.id, "0xabcd");
+        for raw in ["token:ABCD", "token:abcd", "token:0XAbCd", "token:0xABCD"] {
+            assert_eq!(EntitySelector::parse(raw).unwrap(), canonical, "{raw}");
+        }
+        for raw in ["token:0x", "token:abc", "token:0xzz", "token:dotbit"] {
+            assert!(EntitySelector::parse(raw).is_err(), "{raw}");
+        }
     }
 }

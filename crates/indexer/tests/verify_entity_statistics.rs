@@ -858,6 +858,76 @@ async fn token_plus_spore_selectors_end_inconclusive_and_name_the_spore_one() {
     assert_eq!(token_entry["complete"], true);
 }
 
+/// The manifest's `rpcRequests` is what the run spent against its RPC budget.
+/// Every node call — source qualification and the post-walk anchor
+/// re-verification included — must be charged, or the budget under-reports
+/// the spend it exists to bound.
+#[tokio::test(flavor = "multi_thread")]
+async fn rpc_budget_spend_equals_the_requests_the_node_received() {
+    let code_hash = hash_of(0xc0de);
+    let type_hash = type_hash_of(&code_hash);
+    let fixture = standard_fixture(&code_hash);
+    let rows = fixture.daily_rows();
+
+    let node = mock_node(&fixture).await;
+    let api = mock_api(&type_hash, &code_hash, &rows, 100, true).await;
+    let dir = tempfile::tempdir().unwrap();
+    let declaration_path = declaration(dir.path(), NODE_VERSION);
+    let evidence = dir.path().join("evidence");
+
+    let mut wiring = wiring(&api, &node, &declaration_path, &type_hash);
+    wiring.evidence_dir = Some(evidence.clone());
+    let result = run_check(wiring).await;
+    assert_eq!(result.status, CheckStatus::Pass, "{:?}", result.detail);
+
+    let manifest: Value =
+        serde_json::from_str(&std::fs::read_to_string(evidence.join("manifest.json")).unwrap())
+            .unwrap();
+    let received = node.received_requests().await.unwrap().len();
+    assert!(received > 0);
+    assert_eq!(
+        manifest["rpcRequests"].as_u64().unwrap() as usize,
+        received,
+        "the budget must charge exactly one request per RPC the node received"
+    );
+}
+
+/// `--entity` ids are hex; a bare or upper-case id names the same entity as its
+/// canonical `0x` + lowercase form, and the export is keyed by the latter.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_bare_uppercase_entity_id_selects_the_same_entity() {
+    let code_hash = hash_of(0xc0de);
+    let type_hash = type_hash_of(&code_hash);
+    let fixture = standard_fixture(&code_hash);
+    let rows = fixture.daily_rows();
+
+    let node = mock_node(&fixture).await;
+    let api = mock_api(&type_hash, &code_hash, &rows, 100, true).await;
+    let dir = tempfile::tempdir().unwrap();
+    let declaration_path = declaration(dir.path(), NODE_VERSION);
+
+    let bare = format!(
+        "token:{}",
+        type_hash.trim_start_matches("0x").to_uppercase()
+    );
+    let selector = EntitySelector::parse(&bare).unwrap();
+    assert_eq!(
+        selector,
+        EntitySelector::parse(&format!("token:{type_hash}")).unwrap()
+    );
+
+    let mut wiring = wiring(&api, &node, &declaration_path, &type_hash);
+    wiring.entities = vec![selector];
+    let result = run_check(wiring).await;
+    assert_eq!(
+        result.status,
+        CheckStatus::Pass,
+        "{:?} {:?}",
+        result.detail,
+        result.findings
+    );
+}
+
 #[test]
 fn an_entity_selector_names_its_family_and_id() {
     let id = hash_of(7);
