@@ -1057,6 +1057,15 @@ impl Check for EntityCapacityHistoryMatchesChain {
                     .join(", ")
             )));
         }
+        // A requested selector this delivery cannot verify is an uncovered
+        // entity like any other: it is named in the verdict and the manifest,
+        // and the run can never end Pass while it stands.
+        inconclusive.extend(unsupported.into_iter().map(|selector| {
+            (
+                selector,
+                "family not covered by this delivery (token only)".to_string(),
+            )
+        }));
 
         // The export is one request per case, so its anchor and rows are one
         // pinned view.
