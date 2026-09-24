@@ -592,6 +592,9 @@ interface AssetTransferParams {
   category?: 'token' | 'object' | 'identity' | 'dao';
 }
 
+/** The identity standards, spelled as the indexer's `IdentityStandard::as_str()` puts them on the wire. */
+type IdentityStandard = 'dotbit' | 'bit_cell' | 'did_ckb' | 'dotcell';
+
 type ItemDelta =
   | {
       kind: 'token';
@@ -601,7 +604,7 @@ type ItemDelta =
       decimals?: number | null;
     }
   | { kind: 'object'; objectId: string; delta: number }
-  | { kind: 'identity'; identityId: string; delta: number };
+  | { kind: 'identity'; standard: IdentityStandard; identityId: string; delta: number };
 
 interface ActivityTypeCall {
   typeCodeHash: string;
@@ -1980,6 +1983,7 @@ export type {
   HardforkTimelineResponse,
   HardforkActivation,
   Activity,
+  IdentityStandard,
   ItemDelta,
   ActivityTypeCall,
   ActivityLockCall,

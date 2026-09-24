@@ -303,6 +303,7 @@ export const handlers = [
       lockCalls: [],
       protocolActions: [],
       participants: [],
+      roles: [],
       tags: 0,
     };
     if (cursor) {
@@ -334,6 +335,7 @@ export const handlers = [
           lockCalls: [],
           protocolActions: [],
           participants: [],
+          roles: [],
           tags: 0,
         },
         committed,

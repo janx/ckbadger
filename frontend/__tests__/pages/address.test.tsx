@@ -634,6 +634,7 @@ describe('AddressDetailPage', () => {
           itemDeltas: [
             {
               kind: 'identity',
+              standard: 'dotbit',
               identityId: '0x1111111111111111111111111111111111111111',
               delta: 1,
             },
@@ -675,6 +676,7 @@ describe('AddressDetailPage', () => {
           itemDeltas: [
             {
               kind: 'identity',
+              standard: 'did_ckb',
               identityId: '0x2222222222222222222222222222222222222222222222222222222222222222',
               delta: 1,
             },
