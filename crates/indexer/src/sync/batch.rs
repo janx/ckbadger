@@ -7805,6 +7805,55 @@ mod tests {
             );
         }
 
+        /// The persisted identity delta says which standard it belongs to, on
+        /// both sync paths: an API reading the row can link the item without a
+        /// store lookup that a pending registration would not satisfy.
+        #[tokio::test]
+        async fn persisted_dotcell_item_deltas_carry_their_standard_on_both_paths() {
+            use ckbadger_store::types::{IdentityStandard, ItemKind, TxActions};
+
+            let _guard =
+                crate::db::writer::activities::test_detector_override::without_extra_detectors();
+            let blocks = dotcell_registration_blocks();
+            let bulk = crate::sync::materialize_bulk_artifacts_for_test(&blocks).expect("bulk");
+
+            let dir = tempfile::tempdir().unwrap();
+            let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+            let indexer = super::live_dao_fee::indexer_for_live_write_test(store.clone());
+            store
+                .set_secondary_epoch_reward(61_369_863_013_698)
+                .unwrap();
+            for block in blocks {
+                super::live_dao_fee::write_live_block(&indexer, block)
+                    .await
+                    .unwrap();
+            }
+
+            let identity_kinds = |actions: &TxActions| -> Vec<(Vec<u8>, ItemKind)> {
+                actions
+                    .participants
+                    .iter()
+                    .flat_map(|p| p.item_deltas.iter())
+                    .map(|d| (d.item_id.clone(), d.kind))
+                    .collect()
+            };
+            let expected = vec![(
+                joaom_id().to_vec(),
+                ItemKind::Identity(IdentityStandard::DotCell),
+            )];
+            let live = store
+                .get_tx_actions(102, 1, &[0xd2u8; 32])
+                .unwrap()
+                .expect("live tx actions");
+            assert_eq!(identity_kinds(&live), expected, "live row");
+            let bulk_actions = bulk
+                .tx_actions_map
+                .values()
+                .find(|actions| actions.tx_hash == [0xd2u8; 32])
+                .expect("bulk tx actions");
+            assert_eq!(identity_kinds(bulk_actions), expected, "bulk row");
+        }
+
         /// In bulk, an input cell reaches the activity builder with `data: &[]`.
         /// The consumed name's state has to come from the protocol facts the
         /// creating cell stored, or every relink reads as a fresh registration.

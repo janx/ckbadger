@@ -16,8 +16,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use anyhow::{anyhow, bail, Result};
 use ckbadger_store::types::{
     participant_roles::{MANAGER_TO, OWNER_FROM, OWNER_TO},
-    AssetAction, ItemDelta, ObjectCollectionActivityEntry, ParticipantId, ProtocolAction,
-    ITEM_KIND_IDENTITY,
+    AssetAction, IdentityStandard, ItemDelta, ItemKind, ObjectCollectionActivityEntry,
+    ParticipantId, ProtocolAction,
 };
 use tracing::debug;
 
@@ -462,7 +462,7 @@ pub(crate) fn named_participants_for(transitions: &[DotCellTransition]) -> Vec<N
     fn delta(id: &[u8; 20], negative: bool) -> ItemDelta {
         ItemDelta {
             item_id: id.to_vec(),
-            kind: ITEM_KIND_IDENTITY,
+            kind: ItemKind::Identity(IdentityStandard::DotCell),
             magnitude: 1,
             negative,
         }
@@ -621,7 +621,7 @@ mod tests {
     use crate::rpc::parse_hex_to_bytes;
     use ckbadger_store::types::{
         participant_roles::{MANAGER_TO, OWNER_FROM, OWNER_TO},
-        AssetAction, ItemDelta, ParticipantId, ITEM_KIND_IDENTITY,
+        AssetAction, IdentityStandard, ItemDelta, ItemKind, ParticipantId,
     };
 
     // ── Fixture → TxView bridge ────────────────────────────────────────────
@@ -740,7 +740,7 @@ mod tests {
     fn identity_plus(id: &[u8; 20]) -> ItemDelta {
         ItemDelta {
             item_id: id.to_vec(),
-            kind: ITEM_KIND_IDENTITY,
+            kind: ItemKind::Identity(IdentityStandard::DotCell),
             magnitude: 1,
             negative: false,
         }
@@ -749,7 +749,7 @@ mod tests {
     fn identity_minus(id: &[u8; 20]) -> ItemDelta {
         ItemDelta {
             item_id: id.to_vec(),
-            kind: ITEM_KIND_IDENTITY,
+            kind: ItemKind::Identity(IdentityStandard::DotCell),
             magnitude: 1,
             negative: true,
         }
@@ -1326,6 +1326,35 @@ mod tests {
             actions[0].metadata.to_value().unwrap()["changes"],
             serde_json::json!(["owner", "manager", "records"])
         );
+    }
+
+    /// A `.cell` id is 20 bytes, like a `.bit` account id and a short did:ckb
+    /// id, so every identity delta the detector emits must say it is `.cell`.
+    #[test]
+    fn every_dotcell_item_delta_names_the_dotcell_standard() {
+        let mut seen = 0;
+        for f in [
+            &fixture::M2_REGISTER_SUPPORT,
+            &fixture::M3_TRANSFER_ABUSE,
+            &fixture::M4_TRANSFER_APT,
+            &fixture::M5_LIST_SATOSHI,
+            &fixture::T3_REGISTER_SUBNAME,
+            &fixture::T7_BUY_CARTAOPROVA,
+            &fixture::T8_CANCEL_CARTAOPROVA,
+        ] {
+            for participant in built_participants(f) {
+                for delta in &participant.item_deltas {
+                    assert_eq!(
+                        delta.kind,
+                        ItemKind::Identity(IdentityStandard::DotCell),
+                        "{}: {delta:?}",
+                        f.tx_hash
+                    );
+                    seen += 1;
+                }
+            }
+        }
+        assert!(seen >= 7, "the fixtures must actually move names: {seen}");
     }
 
     // ── Sale Lock cells that are not sale instances ───────────────────────
