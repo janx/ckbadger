@@ -3,7 +3,7 @@ use std::collections::HashMap;
 
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::keys;
-use ckbadger_store::store::CF_MNFT_DATA;
+use ckbadger_store::store::{CF_MNFT_DATA, CF_STATS_MNFT};
 use ckbadger_store::types::{
     CompositionTier, MnftCollectionAggregate, MnftTypeIndex, ObjectEntry, ObjectExtra,
     ObjectStandard,
@@ -18,6 +18,22 @@ use crate::sync::types::{EntityDailyChanges, EntityDateKey};
 use crate::sync::undo::SharedUndoSeq;
 
 use super::BatchWriter;
+
+/// Which mNFT outpoint reverse index a row belongs to.
+#[derive(Debug, Clone, Copy)]
+enum MnftOutpointKind {
+    Class,
+    Token,
+}
+
+impl MnftOutpointKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Class => "class",
+            Self::Token => "token",
+        }
+    }
+}
 
 #[derive(Default)]
 pub(crate) struct MnftBatchState {
@@ -404,7 +420,67 @@ impl BatchWriter {
             }
         }
         state.put_collection_aggregate(&class.class_id, agg, batch);
-        batch.put_mnft_class_outpoint(tx_hash, output_index, &class.class_id);
+        self.put_mnft_outpoint_row(
+            MnftOutpointKind::Class,
+            &class.class_id,
+            tx_hash,
+            output_index,
+            block_number,
+            batch,
+            state,
+        )
+    }
+
+    /// Write one mNFT outpoint reverse-index row (`outpoint -> class id` or
+    /// `outpoint -> token id` in `CF_STATS_MNFT`) with its undo pre-image.
+    ///
+    /// Same contract as the Spore/identity `put_object_outpoint_rows`: the
+    /// undo log is the only rollback owner of these rows. The stats sweep
+    /// never touches outpoint prefixes, so without a pre-image a rolled-back
+    /// mint or transfer leaves an orphan row pointing at a transaction that no
+    /// longer exists, and the item's lifecycle feed 500s on it.
+    fn put_mnft_outpoint_row(
+        &self,
+        kind: MnftOutpointKind,
+        id: &[u8],
+        tx_hash: &[u8],
+        output_index: i16,
+        block_number: i64,
+        batch: &mut StoreBatch,
+        state: &MnftBatchState,
+    ) -> Result<()> {
+        let key = match kind {
+            MnftOutpointKind::Class => keys::encode_mnft_class_outpoint_key(tx_hash, output_index),
+            MnftOutpointKind::Token => keys::encode_mnft_token_outpoint_key(tx_hash, output_index),
+        };
+        // A failed read is NOT "the row did not exist": recording `None` for it
+        // would make the rollback delete a row that had a value.
+        let previous = self
+            .store
+            .get_cf(self.store.cf_stats_mnft(), &key)
+            .map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to read the mNFT {} outpoint pre-image: id=0x{}, outpoint=0x{}:{}, block={}, {}",
+                    kind.as_str(),
+                    hex::encode(id),
+                    hex::encode(tx_hash),
+                    output_index,
+                    block_number,
+                    e
+                )
+            })?;
+        self.record_object_undo(
+            batch,
+            block_number,
+            CF_STATS_MNFT,
+            &key,
+            previous,
+            &state.undo_seq_by_block,
+        );
+        match kind {
+            MnftOutpointKind::Class => batch.put_mnft_class_outpoint(tx_hash, output_index, id),
+            MnftOutpointKind::Token => batch.put_mnft_token_outpoint(tx_hash, output_index, id),
+        }
         Ok(())
     }
 
@@ -621,8 +697,15 @@ impl BatchWriter {
                 },
             )?;
         }
-        batch.put_mnft_token_outpoint(tx_hash, output_index, &token.token_id);
-        Ok(())
+        self.put_mnft_outpoint_row(
+            MnftOutpointKind::Token,
+            &token.token_id,
+            tx_hash,
+            output_index,
+            block_number,
+            batch,
+            state,
+        )
     }
 
     /// Consume an mNFT token. Returns the collection_id (class_id) if consumed.
