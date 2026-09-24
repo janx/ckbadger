@@ -176,6 +176,58 @@ async fn test_pending_transaction_genesis_satoshi_output_tagged() {
     );
 }
 
+/// A pool transaction paying a `data2` lock (any VM2 script) is attributed to
+/// that lock's address, and `/tx` renders the lock with the label the node
+/// used. The mirror once mapped `data2` to byte 3 — CKB's wire value is 4 — so
+/// it hashed the lock into a script hash no address has: the payee's page
+/// showed nothing pending and `/tx` 500'd on the unknown byte.
+#[tokio::test]
+async fn pending_tx_with_data2_lock_is_attributed_to_its_address() {
+    let store = test_store();
+    seed_genesis_baseline(&store);
+    let server = MockServer::start().await;
+    let hash = pending_tx_hash_hex();
+
+    let mut response_json = pending_transaction_rpc_response(&hash, "pending");
+    response_json["result"]["transaction"]["outputs"][0]["lock"]["hash_type"] =
+        serde_json::json!("data2");
+    Mock::given(method("POST"))
+        .and(body_partial_json(
+            serde_json::json!({ "method": "get_transaction" }),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(response_json))
+        .mount(&server)
+        .await;
+    mount_live_cell_rpc(&server, "0x174876e974", &format!("0x{}", "33".repeat(20))).await;
+    mount_tx_pool_rpc(&server, &[(&hash, pending_tx_pool_timestamp_hex())]).await;
+
+    let mut config = test_config(store);
+    config.ckb_rpc_url = server.uri();
+    let state = test_app_state(config);
+    let outcome = refresh_pool_mirror_once(&state, &server.uri()).await;
+    assert_eq!(outcome.error, None);
+    assert_eq!(outcome.entry_errors, 0, "{outcome:?}");
+    let app = create_router_with_state(state).await;
+
+    let payee = ckbadger_common::script_to_address(&[0x11; 32], 4, &[0x22; 20], "mainnet")
+        .expect("data2 is a valid full-address hash_type");
+    let (status, json) = get_json(&app, &format!("/addresses/{payee}/activities")).await;
+    assert_eq!(status, StatusCode::OK, "{json:?}");
+    let rows = json["data"].as_array().unwrap();
+    assert_eq!(
+        rows.len(),
+        1,
+        "the data2 payee must see its pending tx: {json:?}"
+    );
+    assert_eq!(rows[0]["txHash"], hash);
+    assert_eq!(rows[0]["poolStatus"], "pending");
+
+    let (status, json) = get_json(&app, &format!("/transactions/{hash}/detail")).await;
+    assert_eq!(status, StatusCode::OK, "{json:?}");
+    assert_eq!(json["outputs"][0]["lock"]["hashType"], "data2");
+    assert_eq!(json["outputs"][0]["address"], payee);
+}
+
 /// An input the node does not report as live is left unresolved and SAID to be
 /// unresolved. No zero capacity, no store fallback, no invented fee.
 #[tokio::test]

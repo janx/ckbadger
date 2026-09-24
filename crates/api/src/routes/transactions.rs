@@ -569,16 +569,14 @@ fn hash_type_byte_to_i16(byte: u8) -> i16 {
 }
 
 fn parse_hash_type_label_to_i16(hash_type: &str) -> Result<i16, ApiRouteError> {
-    match hash_type {
-        "data" => Ok(0),
-        "type" => Ok(1),
-        "data1" => Ok(2),
-        "data2" => Ok(4),
-        other => Err(ApiError::internal(format!(
-            "unknown script hash_type label in CKB store: '{}'",
-            other
-        ))),
-    }
+    ckbadger_common::hash_type_from_label(hash_type)
+        .map(i16::from)
+        .ok_or_else(|| {
+            ApiError::internal(format!(
+                "unknown script hash_type label in CKB store: '{}'",
+                hash_type
+            ))
+        })
 }
 
 fn decode_hex_bytes_with_context(

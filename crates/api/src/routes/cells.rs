@@ -2118,13 +2118,7 @@ async fn list_live_cells(
 }
 
 fn parse_hash_type(hash_type: &str) -> Option<u8> {
-    match hash_type {
-        "data" => Some(0),
-        "type" => Some(1),
-        "data1" => Some(2),
-        "data2" => Some(4),
-        _ => None,
-    }
+    ckbadger_common::hash_type_from_label(hash_type)
 }
 
 fn load_script_infos_cached(

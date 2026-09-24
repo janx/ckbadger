@@ -436,6 +436,76 @@ pub async fn mount_pending_transaction_rpc(server: &MockServer, hash: &str, stat
         .await;
 }
 
+/// The node's `tx_pool_info` and verbose `get_raw_tx_pool`, holding exactly
+/// these pending transactions (`(tx_hash, time_added_to_pool_hex)`).
+pub async fn mount_tx_pool_rpc(server: &MockServer, pending: &[(&str, &str)]) {
+    Mock::given(method("POST"))
+        .and(body_partial_json(
+            serde_json::json!({ "method": "tx_pool_info" }),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+                "tip_hash": format!("0x{}", "77".repeat(32)),
+                "tip_number": "0x3e8",
+                "last_txs_updated_at": "0x1",
+                "pending": format!("0x{:x}", pending.len()),
+                "proposed": "0x0",
+                "orphan": "0x0"
+            }
+        })))
+        .mount(server)
+        .await;
+
+    let entries: serde_json::Map<String, serde_json::Value> = pending
+        .iter()
+        .map(|(hash, timestamp)| {
+            (
+                hash.to_string(),
+                serde_json::json!({
+                    "cycles": "0x5208",
+                    "size": "0x1f4",
+                    "fee": "0x174",
+                    "ancestors_count": "0x0",
+                    "ancestors_size": "0x1f4",
+                    "ancestors_cycles": "0x5208",
+                    "timestamp": timestamp
+                }),
+            )
+        })
+        .collect();
+    Mock::given(method("POST"))
+        .and(body_partial_json(
+            serde_json::json!({ "method": "get_raw_tx_pool" }),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": { "pending": entries, "proposed": {} }
+        })))
+        .mount(server)
+        .await;
+}
+
+/// Run ONE tx-pool mirror round against the node at `rpc_url`, publishing into
+/// `state`'s mirror exactly as the background loop would.
+pub async fn refresh_pool_mirror_once(
+    state: &Arc<AppState>,
+    rpc_url: &str,
+) -> ckbadger_api::pool::RefreshOutcome {
+    let mut refresher = ckbadger_api::pool::PoolRefresher::new(
+        Arc::new(ckbadger_api::pool::HttpPoolSource::new(rpc_url)),
+        state.store.clone(),
+        state.pool_mirror.clone(),
+        ckbadger_api::pool::PoolRefresherConfig {
+            max_tracked_txs: 100,
+            is_mainnet: state.ckb_network == "mainnet",
+        },
+    );
+    refresher.refresh_once().await
+}
+
 pub fn insert_committed_transaction(store: &Arc<CkbadgerStore>, tx_hash: &[u8]) {
     let mut batch = StoreBatch::new(store.as_ref());
     batch.put_block_header(

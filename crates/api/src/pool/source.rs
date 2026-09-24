@@ -197,15 +197,12 @@ pub fn parse_hex_hash32(value: &str, field: &str) -> Result<[u8; 32], String> {
 }
 
 /// CKB `hash_type` label to the numeric form the store and the activity builder
-/// use. Unknown labels are an error, not a default.
+/// use, through the workspace's one table (`ckbadger_common::hash_type`).
+/// Unknown labels are an error, not a default.
 pub fn parse_hash_type(label: &str) -> Result<i16, String> {
-    match label {
-        "data" => Ok(0),
-        "type" => Ok(1),
-        "data1" => Ok(2),
-        "data2" => Ok(3),
-        other => Err(format!("unknown script hash_type '{other}' from node")),
-    }
+    ckbadger_common::hash_type_from_label(label)
+        .map(i16::from)
+        .ok_or_else(|| format!("unknown script hash_type '{label}' from node"))
 }
 
 impl RawScript {
@@ -500,7 +497,7 @@ mod tests {
         assert_eq!(parse_hash_type("data").unwrap(), 0);
         assert_eq!(parse_hash_type("type").unwrap(), 1);
         assert_eq!(parse_hash_type("data1").unwrap(), 2);
-        assert_eq!(parse_hash_type("data2").unwrap(), 3);
+        assert_eq!(parse_hash_type("data2").unwrap(), 4);
         let error = parse_hash_type("bogus").unwrap_err();
         assert!(
             error.contains("bogus"),
